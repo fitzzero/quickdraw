@@ -1,4 +1,4 @@
-# @quickdraw/core
+# @fitzzero/quickdraw-core
 
 Fast fullstack patterns for real-time applications with Socket.io and TanStack Query.
 
@@ -13,7 +13,7 @@ Fast fullstack patterns for real-time applications with Socket.io and TanStack Q
 ## Installation
 
 ```bash
-pnpm add @quickdraw/core
+pnpm add @fitzzero/quickdraw-core
 ```
 
 ## Quick Start
@@ -21,7 +21,7 @@ pnpm add @quickdraw/core
 ### Server Setup
 
 ```typescript
-import { createQuickdrawServer, BaseService } from '@quickdraw/core/server';
+import { createQuickdrawServer, BaseService } from '@fitzzero/quickdraw-core/server';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
@@ -62,7 +62,7 @@ const { io, httpServer } = createQuickdrawServer({
 
 ```tsx
 // app/layout.tsx
-import { QuickdrawProvider } from '@quickdraw/core/client';
+import { QuickdrawProvider } from '@fitzzero/quickdraw-core/client';
 
 export default function RootLayout({ children }) {
   return (
@@ -76,7 +76,7 @@ export default function RootLayout({ children }) {
 }
 
 // app/chat/page.tsx
-import { useService, useSubscription } from '@quickdraw/core/client';
+import { useService, useSubscription } from '@fitzzero/quickdraw-core/client';
 
 function ChatPage({ chatId }: { chatId: string }) {
   // Subscribe to real-time updates
@@ -103,7 +103,7 @@ function ChatPage({ chatId }: { chatId: string }) {
 ### Socket Inputs
 
 ```tsx
-import { SocketTextField } from '@quickdraw/core/client';
+import { SocketTextField } from '@fitzzero/quickdraw-core/client';
 
 function ChatTitleEditor({ chat, updateChat }) {
   return (
@@ -123,7 +123,7 @@ function ChatTitleEditor({ chat, updateChat }) {
 
 ```typescript
 // Shared types (both server and client)
-import { ServiceResponse, AccessLevel, ServiceMethodMap } from '@quickdraw/core';
+import { ServiceResponse, AccessLevel, ServiceMethodMap } from '@fitzzero/quickdraw-core';
 
 // Server
 import { 
@@ -134,10 +134,10 @@ import {
   verifyJWT,
   discordProvider,
   googleProvider,
-} from '@quickdraw/core/server';
+} from '@fitzzero/quickdraw-core/server';
 
 // Server testing
-import { createTestServer, connectAsUser, emitWithAck } from '@quickdraw/core/server/testing';
+import { createTestServer, connectAsUser, emitWithAck } from '@fitzzero/quickdraw-core/server/testing';
 
 // Client
 import {
@@ -150,10 +150,24 @@ import {
   SocketSelect,
   SocketSlider,
   SocketSwitch,
-} from '@quickdraw/core/client';
+} from '@fitzzero/quickdraw-core/client';
 
 // Client testing
-import { createMockSocket, createTestWrapper } from '@quickdraw/core/client/testing';
+import { createMockSocket, createTestWrapper } from '@fitzzero/quickdraw-core/client/testing';
+```
+
+## Local Development
+
+This package is developed alongside [quickdraw-chat](https://github.com/fitzzero/quickdraw-chat), a reference implementation.
+
+### Using pnpm link
+
+```bash
+# In quickdraw-chat, the package is linked:
+"@fitzzero/quickdraw-core": "link:../../../quickdraw"
+
+# Changes to quickdraw-core are instantly available after rebuild
+pnpm build  # or pnpm dev for watch mode
 ```
 
 ## Type Definitions
@@ -162,7 +176,7 @@ Define your service methods in a shared types file:
 
 ```typescript
 // shared/types.ts
-import type { ServiceMethodMap } from '@quickdraw/core';
+import type { ServiceMethodMap } from '@fitzzero/quickdraw-core';
 
 export type ChatServiceMethods = ServiceMethodMap<{
   createChat: {
@@ -252,7 +266,7 @@ Stored in entity's `acl` JSON field (when `hasEntryACL: true`):
 ### Server Integration Tests
 
 ```typescript
-import { createTestServer, connectAsUser, emitWithAck } from '@quickdraw/core/server/testing';
+import { createTestServer, connectAsUser, emitWithAck } from '@fitzzero/quickdraw-core/server/testing';
 
 describe('ChatService', () => {
   let server;
@@ -278,7 +292,7 @@ describe('ChatService', () => {
 ### Client Component Tests
 
 ```typescript
-import { createTestWrapper, createMockSocket, mockSuccessEmit } from '@quickdraw/core/client/testing';
+import { createTestWrapper, createMockSocket, mockSuccessEmit } from '@fitzzero/quickdraw-core/client/testing';
 
 test('renders chat', () => {
   const mockSocket = createMockSocket();

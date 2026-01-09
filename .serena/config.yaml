@@ -1,0 +1,35 @@
+# Serena configuration for @fitzzero/quickdraw-core
+# https://oraios.github.io/serena
+
+project:
+  name: quickdraw-core
+  description: Fast fullstack patterns for real-time applications with Socket.io and TanStack Query
+
+# Language servers
+language_servers:
+  typescript:
+    enabled: true
+    root_files:
+      - tsconfig.json
+      - package.json
+
+# Indexing configuration
+indexing:
+  # Include patterns
+  include_patterns:
+    - "src/**/*.ts"
+    - "src/**/*.tsx"
+  
+  # Exclude patterns
+  exclude_patterns:
+    - "**/node_modules/**"
+    - "**/dist/**"
+    - "**/coverage/**"
+    - "**/*.test.ts"
+    - "**/*.test.tsx"
+
+# Performance settings
+performance:
+  parallel_workers: 4
+  max_file_size_kb: 500
+  incremental_indexing: true

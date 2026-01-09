@@ -1,5 +1,5 @@
 {
-  "name": "@quickdraw/core",
+  "name": "@fitzzero/quickdraw-core",
   "version": "0.1.0",
   "description": "Fast fullstack patterns for real-time applications with Socket.io and TanStack Query",
   "type": "module",
