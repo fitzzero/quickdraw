@@ -12,6 +12,10 @@ import type {
   BaseServiceOptions,
   InstallAdminMethodsOptions,
   PrismaDelegate,
+  AdminListPayload,
+  AdminListResponse,
+  AdminSetACLPayload,
+  AdminSubscribersResponse,
 } from "./types";
 
 /**
@@ -444,17 +448,275 @@ export abstract class BaseService<
   }
 
   // ===========================================================================
-  // Admin Methods (Scaffolding)
+  // Admin Methods
   // ===========================================================================
 
   /**
    * Install standard admin CRUD methods.
    * Call this in derived class constructor to expose admin endpoints.
+   * 
+   * @example
+   * ```typescript
+   * this.installAdminMethods({
+   *   expose: { list: true, get: true, create: true, update: true, delete: true },
+   *   access: {
+   *     list: "Admin",
+   *     get: "Admin",
+   *     create: "Admin",
+   *     update: "Admin",
+   *     delete: "Admin",
+   *     setEntryACL: "Admin",
+   *     getSubscribers: "Admin",
+   *     reemit: "Admin",
+   *     unsubscribeAll: "Admin",
+   *   },
+   * });
+   * ```
    */
-  protected installAdminMethods(_options: InstallAdminMethodsOptions): void {
-    // Implementation will be added in base-service-rewrite todo
-    // This is a placeholder to establish the API
-    this.logger.debug("Admin methods installation placeholder");
+  protected installAdminMethods(options: InstallAdminMethodsOptions): void {
+    const { expose, access } = options;
+
+    if (expose.list) {
+      this.publicMethods.set("adminList", {
+        name: "adminList",
+        access: access.list,
+        handler: async (payload: unknown, _context: ServiceMethodContext) => {
+          return await this.adminList(payload as AdminListPayload);
+        },
+      } as ServiceMethodDefinition<unknown, unknown>);
+    }
+
+    if (expose.get) {
+      this.publicMethods.set("adminGet", {
+        name: "adminGet",
+        access: access.get,
+        handler: async (payload: unknown, _context: ServiceMethodContext) => {
+          return await this.adminGet((payload as { id: string }).id);
+        },
+        resolveEntryId: (payload: unknown) => (payload as { id: string }).id,
+      } as ServiceMethodDefinition<unknown, unknown>);
+    }
+
+    if (expose.create) {
+      this.publicMethods.set("adminCreate", {
+        name: "adminCreate",
+        access: access.create,
+        handler: async (payload: unknown, _context: ServiceMethodContext) => {
+          return await this.adminCreate((payload as { data: TCreateInput }).data);
+        },
+      } as ServiceMethodDefinition<unknown, unknown>);
+    }
+
+    if (expose.update) {
+      this.publicMethods.set("adminUpdate", {
+        name: "adminUpdate",
+        access: access.update,
+        handler: async (payload: unknown, _context: ServiceMethodContext) => {
+          const { id, data } = payload as { id: string; data: TUpdateInput };
+          return await this.adminUpdate(id, data);
+        },
+        resolveEntryId: (payload: unknown) => (payload as { id: string }).id,
+      } as ServiceMethodDefinition<unknown, unknown>);
+    }
+
+    if (expose.delete) {
+      this.publicMethods.set("adminDelete", {
+        name: "adminDelete",
+        access: access.delete,
+        handler: async (payload: unknown, _context: ServiceMethodContext) => {
+          return await this.adminDelete((payload as { id: string }).id);
+        },
+        resolveEntryId: (payload: unknown) => (payload as { id: string }).id,
+      } as ServiceMethodDefinition<unknown, unknown>);
+    }
+
+    if (expose.setEntryACL) {
+      this.publicMethods.set("adminSetEntryACL", {
+        name: "adminSetEntryACL",
+        access: access.setEntryACL,
+        handler: async (payload: unknown, _context: ServiceMethodContext) => {
+          return await this.adminSetEntryACL(payload as AdminSetACLPayload);
+        },
+        resolveEntryId: (payload: unknown) => (payload as { entryId: string }).entryId,
+      } as ServiceMethodDefinition<unknown, unknown>);
+    }
+
+    if (expose.getSubscribers) {
+      this.publicMethods.set("adminGetSubscribers", {
+        name: "adminGetSubscribers",
+        access: access.getSubscribers,
+        handler: async (payload: unknown, _context: ServiceMethodContext) => {
+          return this.adminGetSubscribers((payload as { entryId: string }).entryId);
+        },
+        resolveEntryId: (payload: unknown) => (payload as { entryId: string }).entryId,
+      } as ServiceMethodDefinition<unknown, unknown>);
+    }
+
+    if (expose.reemit) {
+      this.publicMethods.set("adminReemit", {
+        name: "adminReemit",
+        access: access.reemit,
+        handler: async (payload: unknown, _context: ServiceMethodContext) => {
+          return await this.adminReemit((payload as { entryId: string }).entryId);
+        },
+        resolveEntryId: (payload: unknown) => (payload as { entryId: string }).entryId,
+      } as ServiceMethodDefinition<unknown, unknown>);
+    }
+
+    if (expose.unsubscribeAll) {
+      this.publicMethods.set("adminUnsubscribeAll", {
+        name: "adminUnsubscribeAll",
+        access: access.unsubscribeAll,
+        handler: async (payload: unknown, _context: ServiceMethodContext) => {
+          return this.adminUnsubscribeAll((payload as { entryId: string }).entryId);
+        },
+        resolveEntryId: (payload: unknown) => (payload as { entryId: string }).entryId,
+      } as ServiceMethodDefinition<unknown, unknown>);
+    }
+
+    this.logger.info(`Installed admin methods: ${Object.keys(expose).filter(k => expose[k as keyof typeof expose]).join(", ")}`);
+  }
+
+  /**
+   * Admin method: List entities with pagination and filters.
+   */
+  protected async adminList(payload: AdminListPayload): Promise<AdminListResponse<TEntity>> {
+    const { page = 1, pageSize = 20, where, orderBy } = payload;
+    const skip = (page - 1) * pageSize;
+
+    const [items, total] = await Promise.all([
+      this.getDelegate().findMany({
+        where,
+        orderBy,
+        skip,
+        take: pageSize,
+      }),
+      this.getDelegate().count({ where }),
+    ]);
+
+    return {
+      items,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
+  }
+
+  /**
+   * Admin method: Get a single entity by ID.
+   */
+  protected async adminGet(id: string): Promise<TEntity | null> {
+    return await this.findById(id);
+  }
+
+  /**
+   * Admin method: Create an entity.
+   */
+  protected async adminCreate(data: TCreateInput): Promise<TEntity> {
+    return await this.create(data);
+  }
+
+  /**
+   * Admin method: Update an entity.
+   */
+  protected async adminUpdate(id: string, data: TUpdateInput): Promise<TEntity | null> {
+    return await this.update(id, data);
+  }
+
+  /**
+   * Admin method: Delete an entity.
+   */
+  protected async adminDelete(id: string): Promise<{ success: boolean; id: string }> {
+    const deleted = await this.delete(id);
+    return { success: deleted, id };
+  }
+
+  /**
+   * Admin method: Set entry-level ACL.
+   */
+  protected async adminSetEntryACL(
+    payload: AdminSetACLPayload
+  ): Promise<TEntity | null> {
+    const { entryId, acl } = payload;
+    
+    try {
+      // Update the ACL field on the entity
+      const entity = await this.getDelegate().update({
+        where: { id: entryId } as { id: string },
+        data: { acl } as unknown as TUpdateInput,
+      });
+      
+      // Emit update to subscribers so they receive the new ACL
+      this.emitUpdate(entryId, entity);
+      
+      this.logger.info(`Updated ACL for entity ${entryId}`);
+      return entity;
+    } catch (error) {
+      this.logger.error(`Failed to set ACL for ${entryId}`, { error: error instanceof Error ? error.message : String(error) });
+      return null;
+    }
+  }
+
+  /**
+   * Admin method: Get active subscribers for an entity.
+   */
+  protected adminGetSubscribers(entryId: string): AdminSubscribersResponse {
+    const subs = this.subscribers.get(entryId);
+    if (!subs) {
+      return { entryId, subscribers: [], count: 0 };
+    }
+
+    const subscribers = Array.from(subs).map((socket) => ({
+      socketId: socket.id,
+      userId: socket.userId ?? null,
+    }));
+
+    return {
+      entryId,
+      subscribers,
+      count: subscribers.length,
+    };
+  }
+
+  /**
+   * Admin method: Re-emit current entity state to all subscribers.
+   * Useful when you've made direct DB changes or need to force-refresh clients.
+   */
+  protected async adminReemit(entryId: string): Promise<{ success: boolean; subscriberCount: number }> {
+    const entity = await this.findById(entryId);
+    if (!entity) {
+      return { success: false, subscriberCount: 0 };
+    }
+
+    const subs = this.subscribers.get(entryId);
+    const count = subs?.size ?? 0;
+    
+    this.emitUpdate(entryId, entity);
+    
+    this.logger.info(`Re-emitted entity ${entryId} to ${count} subscribers`);
+    return { success: true, subscriberCount: count };
+  }
+
+  /**
+   * Admin method: Unsubscribe all sockets from an entity.
+   */
+  protected adminUnsubscribeAll(entryId: string): { success: boolean; unsubscribedCount: number } {
+    const subs = this.subscribers.get(entryId);
+    const count = subs?.size ?? 0;
+
+    if (subs) {
+      // Notify subscribers they're being unsubscribed
+      const eventName = `${this.serviceName}:unsubscribed:${entryId}`;
+      for (const socket of subs) {
+        socket.emit(eventName, { reason: "admin_action" });
+      }
+      
+      this.subscribers.delete(entryId);
+    }
+
+    this.logger.info(`Unsubscribed ${count} sockets from entity ${entryId}`);
+    return { success: true, unsubscribedCount: count };
   }
 
   // ===========================================================================

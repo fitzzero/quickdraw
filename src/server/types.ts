@@ -119,6 +119,39 @@ export interface InstallAdminMethodsOptions {
 }
 
 // ============================================================================
+// Admin Method Payload/Response Types
+// ============================================================================
+
+export interface AdminListPayload {
+  page?: number;
+  pageSize?: number;
+  where?: Record<string, unknown>;
+  orderBy?: Record<string, "asc" | "desc">;
+}
+
+export interface AdminListResponse<TEntity> {
+  items: TEntity[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+export interface AdminSetACLPayload {
+  entryId: string;
+  acl: Array<{ userId: string; level: AccessLevel }>;
+}
+
+export interface AdminSubscribersResponse {
+  entryId: string;
+  subscribers: Array<{
+    socketId: string;
+    userId: string | null;
+  }>;
+  count: number;
+}
+
+// ============================================================================
 // Prisma Integration Types
 // ============================================================================
 

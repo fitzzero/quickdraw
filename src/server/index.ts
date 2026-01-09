@@ -10,6 +10,10 @@ export type {
   BaseServiceOptions,
   InstallAdminMethodsOptions,
   PrismaDelegate,
+  AdminListPayload,
+  AdminListResponse,
+  AdminSetACLPayload,
+  AdminSubscribersResponse,
 } from "./types";
 
 // Core classes (will be implemented in subsequent todos)
