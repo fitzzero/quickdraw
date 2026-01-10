@@ -235,31 +235,111 @@ export type ChatServiceMethods = ServiceMethodMap<{
 
 ## Access Control
 
-Quickdraw supports two levels of access control:
+Quickdraw provides flexible ACL with two complementary levels:
 
 ### Service-level ACL
 
-Stored in `user.serviceAccess` JSON field:
-```json
-{ "chatService": "Admin", "userService": "Read" }
+Blanket permissions across all entries in a service. Stored in `user.serviceAccess`:
+
+```typescript
+// User model must satisfy QuickdrawUser interface
+interface QuickdrawUser {
+  id: string;
+  serviceAccess?: Record<string, AccessLevel> | null;
+}
+
+// Example: Admin access to all chats
+user.serviceAccess = { chatService: "Admin", userService: "Read" };
 ```
 
 ### Entry-level ACL
 
-Stored in entity's `acl` JSON field (when `hasEntryACL: true`):
-```json
-[
-  { "userId": "user-1", "level": "Admin" },
-  { "userId": "user-2", "level": "Read" }
-]
+Per-entity permissions. Quickdraw supports two patterns:
+
+#### Pattern 1: JSON ACL (Simple)
+
+Store ACL directly on the entity. Best for:
+- Simple ownership models (owner + collaborators)
+- When you don't need to query "all entities user X can access" efficiently
+- Minimal schema complexity
+
+```typescript
+// Entity must satisfy ACLEntity interface
+interface ACLEntity {
+  id: string;
+  acl?: ACL | null;  // ACL = Array<{ userId: string; level: AccessLevel }>
+}
+
+// Prisma schema
+model Document {
+  id    String @id @default(cuid())
+  acl   Json?  // Stores [{ userId: "...", level: "Read" }]
+}
+
+// Service - uses default checkEntryACL (no override needed)
+class DocumentService extends BaseService<Document, ...> {
+  constructor(prisma: PrismaClient) {
+    super({ serviceName: "documentService", hasEntryACL: true });
+    this.setDelegate(prisma.document);
+  }
+}
 ```
+
+#### Pattern 2: Membership Table (Complex)
+
+Separate table for memberships. Best for:
+- Querying "all entities user X can access" efficiently
+- Complex role hierarchies
+- Additional membership metadata (join date, invited by, etc.)
+
+```typescript
+// Prisma schema
+model Chat {
+  id      String       @id
+  members ChatMember[]
+}
+
+model ChatMember {
+  chatId String
+  userId String
+  level  String  // "Read" | "Moderate" | "Admin"
+  
+  @@unique([chatId, userId])
+}
+
+// Service - override checkEntryACL to use membership table
+class ChatService extends BaseService<Chat, ...> {
+  protected override async checkEntryACL(
+    userId: string,
+    chatId: string,
+    requiredLevel: AccessLevel
+  ): Promise<boolean> {
+    const member = await this.prisma.chatMember.findUnique({
+      where: { chatId_userId: { chatId, userId } },
+    });
+    if (!member) return false;
+    return this.isLevelSufficient(member.level as AccessLevel, requiredLevel);
+  }
+}
+```
+
+### Access Check Order
+
+When a method is called, `ensureAccessForMethod` checks in this order:
+
+1. **Service-level**: `socket.serviceAccess[serviceName] >= requiredLevel` → Allow
+2. **Custom override**: `checkAccess()` returns true → Allow (use for self-access patterns)
+3. **Entry-level**: `checkEntryACL()` returns true → Allow (JSON ACL or membership table)
+4. **Deny** if none of the above
 
 ### Access Levels
 
-- **Public**: No authentication required
-- **Read**: Authenticated users (default for subscriptions)
-- **Moderate**: Edit access (update, moderate content)
-- **Admin**: Full access (delete, manage ACL)
+| Level | Value | Typical Use |
+|-------|-------|-------------|
+| Public | 0 | No authentication required |
+| Read | 1 | View data, subscribe to updates |
+| Moderate | 2 | Edit content, manage members |
+| Admin | 3 | Delete, manage ACL, full control |
 
 ## Testing
 

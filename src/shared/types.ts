@@ -14,6 +14,74 @@ export type ACE = {
 export type ACL = ACE[];
 
 // ============================================================================
+// Entity and User Interfaces for ACL
+// ============================================================================
+
+/**
+ * Interface for entities that support entry-level ACL stored as JSON.
+ *
+ * Use this pattern when:
+ * - You want simple ACL without a separate membership table
+ * - Access patterns are straightforward (read/write permissions)
+ * - You don't need to query "all entities user X can access" efficiently
+ *
+ * The default `checkEntryACL` in BaseService expects entities to have this shape.
+ *
+ * @example
+ * ```prisma
+ * model Document {
+ *   id    String @id @default(cuid())
+ *   title String
+ *   acl   Json?  // Stores ACL array
+ * }
+ * ```
+ *
+ * @example
+ * ```typescript
+ * class DocumentService extends BaseService<Document & ACLEntity, ...> {
+ *   constructor(prisma: PrismaClient) {
+ *     super({ serviceName: 'documentService', hasEntryACL: true });
+ *     this.setDelegate(prisma.document);
+ *     // Default checkEntryACL will work automatically
+ *   }
+ * }
+ * ```
+ */
+export interface ACLEntity {
+  id: string;
+  acl?: ACL | null;
+}
+
+/**
+ * Interface for users with service-level access control.
+ *
+ * The `serviceAccess` field maps service names to access levels, granting
+ * blanket permissions across all entries in that service.
+ *
+ * @example
+ * ```prisma
+ * model User {
+ *   id            String @id @default(cuid())
+ *   serviceAccess Json?  // { "chatService": "Admin", "documentService": "Read" }
+ * }
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // User with Admin access to chatService can perform any operation
+ * // on any chat, regardless of entry-level ACL
+ * const user: QuickdrawUser = {
+ *   id: "user-123",
+ *   serviceAccess: { chatService: "Admin" }
+ * };
+ * ```
+ */
+export interface QuickdrawUser {
+  id: string;
+  serviceAccess?: Record<string, AccessLevel> | null;
+}
+
+// ============================================================================
 // Service Response Types
 // ============================================================================
 

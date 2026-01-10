@@ -5,6 +5,8 @@ export type {
   AccessLevel,
   ACE,
   ACL,
+  ACLEntity,
+  QuickdrawUser,
   ServiceResponse,
   ServiceMethodDefinition,
   ServiceMethodContext,
