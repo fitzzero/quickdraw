@@ -40,6 +40,42 @@ export function createMockSocket(): MockSocket {
 }
 
 /**
+ * Create a mock subscription registry for testing.
+ */
+function createMockSubscriptionRegistry() {
+  const subscriptions = new Map<string, { refCount: number; cleanup?: () => void }>();
+  
+  return {
+    acquire: (key: string) => {
+      const existing = subscriptions.get(key);
+      if (existing) {
+        existing.refCount++;
+        return { isNew: false, entry: existing };
+      }
+      const entry = { refCount: 1 };
+      subscriptions.set(key, entry);
+      return { isNew: true, entry };
+    },
+    release: (key: string) => {
+      const entry = subscriptions.get(key);
+      if (!entry) return false;
+      entry.refCount--;
+      if (entry.refCount <= 0) {
+        entry.cleanup?.();
+        subscriptions.delete(key);
+        return true;
+      }
+      return false;
+    },
+    setCleanup: (key: string, cleanup: () => void) => {
+      const entry = subscriptions.get(key);
+      if (entry) entry.cleanup = cleanup;
+    },
+    clear: () => subscriptions.clear(),
+  };
+}
+
+/**
  * Create a mock QuickdrawSocketContextValue for testing.
  */
 export function createMockSocketContext(
@@ -54,6 +90,7 @@ export function createMockSocketContext(
     serviceAccess: {},
     connect: () => {},
     disconnect: () => {},
+    subscriptionRegistry: createMockSubscriptionRegistry(),
     ...overrides,
   };
 }

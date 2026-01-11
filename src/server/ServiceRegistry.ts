@@ -19,6 +19,7 @@ import type {
  * - Wires methods to Socket.io events with standardized naming
  * - Handles subscription lifecycle
  * - Provides consistent error handling and logging
+ * - Uses a single connection handler for all services (memory efficient)
  *
  * @example
  * ```typescript
@@ -31,11 +32,62 @@ export class ServiceRegistry implements ServiceRegistryInstance {
   private readonly io: SocketIOServer;
   private readonly services: Map<string, BaseServiceInstance> = new Map();
   private readonly logger: Logger;
+  private connectionHandlerInstalled = false;
+
+  // Store method metadata for deferred registration
+  private readonly methodRegistry: Map<
+    string,
+    {
+      serviceName: string;
+      method: ServiceMethodDefinition<unknown, unknown>;
+      service: BaseServiceInstance;
+    }
+  > = new Map();
 
   constructor(io: SocketIOServer, options?: { logger?: Logger }) {
     this.io = io;
     this.logger = options?.logger?.child({ service: "ServiceRegistry" }) ??
       consoleLogger.child({ service: "ServiceRegistry" });
+  }
+
+  /**
+   * Install the single connection handler that wires all registered services.
+   * This is called lazily on first service registration.
+   */
+  private installConnectionHandler(): void {
+    if (this.connectionHandlerInstalled) return;
+    this.connectionHandlerInstalled = true;
+
+    this.io.on("connection", (socket) => {
+      const quickdrawSocket = socket as QuickdrawSocket;
+      this.setupSocketListeners(quickdrawSocket);
+    });
+
+    this.logger.info("Installed single connection handler for all services");
+  }
+
+  /**
+   * Set up all event listeners for a newly connected socket.
+   */
+  private setupSocketListeners(socket: QuickdrawSocket): void {
+    // Register method listeners for all registered services
+    for (const [eventName, { method, service }] of this.methodRegistry) {
+      this.registerMethodListener(socket, eventName, method, service);
+    }
+
+    // Register subscription/unsubscription listeners for all services
+    for (const [serviceName, service] of this.services) {
+      this.registerSubscriptionListener(
+        socket,
+        `${serviceName}:subscribe`,
+        service
+      );
+      this.registerUnsubscriptionListener(
+        socket,
+        `${serviceName}:unsubscribe`,
+        service
+      );
+    }
   }
 
   /**
@@ -48,12 +100,15 @@ export class ServiceRegistry implements ServiceRegistryInstance {
     this.services.set(serviceName, service);
     this.logger.info(`Registered service: ${serviceName}`);
 
-    // Auto-discover and wire public methods
+    // Auto-discover and store method metadata
     this.discoverServiceMethods(serviceName, service);
+
+    // Ensure connection handler is installed
+    this.installConnectionHandler();
   }
 
   /**
-   * Discover and register all public methods from a service.
+   * Discover and store all public methods from a service.
    */
   private discoverServiceMethods(
     serviceName: string,
@@ -65,30 +120,13 @@ export class ServiceRegistry implements ServiceRegistryInstance {
       const eventName = `${serviceName}:${method.name}`;
       this.logger.info(`Registering socket event: ${eventName}`);
 
-      // Register on connection
-      this.io.on("connection", (socket) => {
-        this.registerMethodListener(
-          socket as QuickdrawSocket,
-          eventName,
-          method,
-          service
-        );
+      // Store method metadata for deferred registration on connection
+      this.methodRegistry.set(eventName, {
+        serviceName,
+        method,
+        service,
       });
     }
-
-    // Register subscription handlers
-    this.io.on("connection", (socket) => {
-      this.registerSubscriptionListener(
-        socket as QuickdrawSocket,
-        `${serviceName}:subscribe`,
-        service
-      );
-      this.registerUnsubscriptionListener(
-        socket as QuickdrawSocket,
-        `${serviceName}:unsubscribe`,
-        service
-      );
-    });
   }
 
   /**

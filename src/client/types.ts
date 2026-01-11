@@ -6,14 +6,8 @@ import type { AccessLevel, ServiceResponse } from "../shared/types";
 // Socket Context Types
 // ============================================================================
 
-export interface QuickdrawSocketContextValue {
-  socket: Socket | null;
-  isConnected: boolean;
-  userId: string | null;
-  serviceAccess: Record<string, AccessLevel>;
-  connect: (token?: string) => void;
-  disconnect: () => void;
-}
+// QuickdrawSocketContextValue is defined at the bottom of this file
+// after SubscriptionRegistry is defined
 
 // ============================================================================
 // Provider Types
@@ -51,6 +45,10 @@ export interface QuickdrawProviderProps {
 export interface UseServiceOptions<TResponse> {
   onSuccess?: (data: TResponse) => void;
   onError?: (error: string) => void;
+  /**
+   * Request timeout in milliseconds (default: 10000)
+   */
+  timeout?: number;
   /**
    * TanStack Query mutation options
    */
@@ -137,3 +135,56 @@ export interface SocketEmitOptions {
 }
 
 export type SocketCallback<T> = (response: ServiceResponse<T>) => void;
+
+// ============================================================================
+// Subscription Registry Types
+// ============================================================================
+
+/**
+ * Tracks an active subscription with reference counting for deduplication.
+ */
+export interface SubscriptionEntry {
+  refCount: number;
+  cleanup?: () => void;
+}
+
+/**
+ * Registry for tracking active subscriptions per socket instance.
+ * This prevents memory leaks and race conditions with HMR/reconnects.
+ */
+export interface SubscriptionRegistry {
+  /**
+   * Get or create a subscription entry, incrementing ref count.
+   * Returns true if this is a new subscription, false if joining existing.
+   */
+  acquire: (key: string) => { isNew: boolean; entry: SubscriptionEntry };
+  
+  /**
+   * Release a subscription, decrementing ref count.
+   * Returns true if subscription was fully released (ref count reached 0).
+   */
+  release: (key: string) => boolean;
+  
+  /**
+   * Set the cleanup function for a subscription.
+   */
+  setCleanup: (key: string, cleanup: () => void) => void;
+  
+  /**
+   * Clear all subscriptions (called on disconnect/socket change).
+   */
+  clear: () => void;
+}
+
+/**
+ * Extended socket context value with subscription registry.
+ */
+export interface QuickdrawSocketContextValue {
+  socket: Socket | null;
+  isConnected: boolean;
+  userId: string | null;
+  serviceAccess: Record<string, AccessLevel>;
+  connect: (token?: string) => void;
+  disconnect: () => void;
+  subscriptionRegistry: SubscriptionRegistry;
+}

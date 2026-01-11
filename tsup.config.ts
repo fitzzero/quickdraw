@@ -20,6 +20,9 @@ export default defineConfig({
     "socket.io-client",
     "@prisma/client",
     "express",
+    // Optional peer dependencies for horizontal scaling
+    "redis",
+    "@socket.io/redis-adapter",
   ],
   treeshake: true,
   splitting: false,

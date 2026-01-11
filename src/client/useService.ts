@@ -9,59 +9,38 @@ import type { UseServiceOptions, UseServiceResult } from "./types";
 /**
  * Hook for invoking service methods via Socket.io with TanStack Query integration.
  *
- * @typeParam TServiceMethods - Map of service method definitions
- * @typeParam TService - Service name
- * @typeParam TMethod - Method name
+ * This hook supports two usage patterns:
  *
- * @example
+ * 1. **Simple usage** - Just pass service/method names with explicit payload/response types:
  * ```tsx
- * // Define your service methods type
- * type ChatServiceMethods = {
- *   createChat: { payload: { title: string }; response: { id: string } };
- *   updateTitle: { payload: { id: string; title: string }; response: { id: string; title: string } };
- * };
+ * const createChat = useService<{ title: string }, { id: string }>(
+ *   'chatService',
+ *   'createChat'
+ * );
+ * ```
  *
- * // In your component
- * function CreateChatButton() {
- *   const createChat = useService<ChatServiceMethods, 'chatService', 'createChat'>(
- *     'chatService',
- *     'createChat',
- *     {
- *       onSuccess: (data) => {
- *         router.push(`/chat/${data.id}`);
- *       },
- *     }
- *   );
- *
- *   return (
- *     <button
- *       onClick={() => createChat.mutate({ title: 'New Chat' })}
- *       disabled={createChat.isPending}
- *     >
- *       {createChat.isPending ? 'Creating...' : 'Create Chat'}
- *     </button>
- *   );
+ * 2. **Type-safe usage** - Pass a service methods map for full type inference:
+ * ```tsx
+ * // In your app, create a typed wrapper:
+ * function useTypedService<
+ *   TService extends keyof ServiceMethodsMap,
+ *   TMethod extends keyof ServiceMethodsMap[TService] & string,
+ * >(serviceName: TService, methodName: TMethod, options?: ...) {
+ *   type Methods = ServiceMethodsMap[TService];
+ *   type Payload = Methods[TMethod] extends { payload: infer P } ? P : never;
+ *   type Response = Methods[TMethod] extends { response: infer R } ? R : never;
+ *   return useService<Payload, Response>(serviceName, methodName, options);
  * }
  * ```
+ *
+ * @typeParam TPayload - The payload type for the method
+ * @typeParam TResponse - The response type for the method
  */
-export function useService<
-  TServiceMethods extends Record<
-    string,
-    Record<string, { payload: unknown; response: unknown }>
-  >,
-  TService extends keyof TServiceMethods & string,
-  TMethod extends keyof TServiceMethods[TService] & string,
->(
-  serviceName: TService,
-  methodName: TMethod,
-  options?: UseServiceOptions<TServiceMethods[TService][TMethod]["response"]>
-): UseServiceResult<
-  TServiceMethods[TService][TMethod]["payload"],
-  TServiceMethods[TService][TMethod]["response"]
-> {
-  type TPayload = TServiceMethods[TService][TMethod]["payload"];
-  type TResponse = TServiceMethods[TService][TMethod]["response"];
-
+export function useService<TPayload = unknown, TResponse = unknown>(
+  serviceName: string,
+  methodName: string,
+  options?: UseServiceOptions<TResponse>
+): UseServiceResult<TPayload, TResponse> {
   const { socket, isConnected } = useQuickdrawSocket();
   const [error, setError] = React.useState<string | null>(null);
 
@@ -82,7 +61,7 @@ export function useService<
         const eventName = `${serviceName}:${methodName}`;
         const timeout = setTimeout(() => {
           reject(new Error("Request timeout"));
-        }, 10000);
+        }, options?.timeout ?? 10000);
 
         socket.emit(
           eventName,
@@ -129,7 +108,10 @@ export function useService<
  *
  * @example
  * ```tsx
- * const { execute, loading, error, data } = useServiceMethod('chatService', 'createChat');
+ * const { execute, loading, error, data } = useServiceMethod<
+ *   { title: string },
+ *   { id: string }
+ * >('chatService', 'createChat');
  *
  * const handleCreate = async () => {
  *   const result = await execute({ title: 'New Chat' });
@@ -180,7 +162,7 @@ export function useServiceMethod<TPayload = unknown, TResponse = unknown>(
           setLoading(false);
           optionsRef.current?.onError?.(errorMsg);
           resolve(null);
-        }, 10000);
+        }, options?.timeout ?? 10000);
 
         socket.emit(
           eventName,
@@ -203,7 +185,7 @@ export function useServiceMethod<TPayload = unknown, TResponse = unknown>(
         );
       });
     },
-    [socket, isConnected, serviceName, methodName]
+    [socket, isConnected, serviceName, methodName, options?.timeout]
   );
 
   return {

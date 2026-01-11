@@ -114,8 +114,17 @@ export abstract class BaseService<
   // ===========================================================================
 
   /**
+   * Get the Socket.io room name for an entry.
+   * Used for room-based broadcasting across services.
+   */
+  public getRoomName(entryId: string): string {
+    return `${this.serviceName}:${entryId}`;
+  }
+
+  /**
    * Subscribe a socket to an entity's updates.
    * Returns the current entity data if access is granted, null otherwise.
+   * Also joins the socket to the entity's Socket.io room for cross-service events.
    */
   public async subscribe(
     entryId: string,
@@ -144,7 +153,11 @@ export abstract class BaseService<
     }
     this.subscribers.get(entryId)!.add(socket);
 
-    this.logger.debug(`User ${socket.userId} subscribed to ${entryId}`);
+    // Join Socket.io room for room-based broadcasting
+    const roomName = this.getRoomName(entryId);
+    void socket.join(roomName);
+
+    this.logger.debug(`User ${socket.userId} subscribed to ${entryId} (room: ${roomName})`);
 
     // Return current entity data, filtered based on subscriber's access level
     const entity = await this.findById(entryId);
@@ -164,6 +177,10 @@ export abstract class BaseService<
         this.subscribers.delete(entryId);
       }
     }
+
+    // Leave Socket.io room
+    const roomName = this.getRoomName(entryId);
+    void socket.leave(roomName);
   }
 
   /**
@@ -173,11 +190,58 @@ export abstract class BaseService<
     for (const [entryId, sockets] of this.subscribers.entries()) {
       if (sockets.has(socket)) {
         sockets.delete(socket);
+        // Leave Socket.io room
+        const roomName = this.getRoomName(entryId);
+        void socket.leave(roomName);
         if (sockets.size === 0) {
           this.subscribers.delete(entryId);
         }
       }
     }
+  }
+
+  /**
+   * Emit a custom event to all subscribers of an entry via Socket.io rooms.
+   * This is useful for cross-service events (e.g., message service notifying chat subscribers).
+   * 
+   * @param roomName - The Socket.io room name (use getRoomName for service rooms)
+   * @param eventName - The event name to emit
+   * @param data - The data to emit
+   * 
+   * @example
+   * ```typescript
+   * // In MessageService, notify chat subscribers of a new message
+   * this.emitToRoom(
+   *   `chatService:${message.chatId}`,
+   *   'chat:message',
+   *   messageDTO
+   * );
+   * ```
+   */
+  protected emitToRoom(roomName: string, eventName: string, data: unknown): void {
+    // Get any socket from subscribers to access the io instance
+    const anySocket = this.getAnySubscriberSocket();
+    if (!anySocket) {
+      this.logger.debug(`No sockets available to emit to room ${roomName}`);
+      return;
+    }
+
+    // Emit to the room via the socket's server reference
+    anySocket.to(roomName).emit(eventName, data);
+    this.logger.debug(`Emitted ${eventName} to room ${roomName}`);
+  }
+
+  /**
+   * Get any active socket for room-based operations.
+   */
+  private getAnySubscriberSocket(): QuickdrawSocket | null {
+    for (const sockets of this.subscribers.values()) {
+      const first = sockets.values().next();
+      if (!first.done) {
+        return first.value;
+      }
+    }
+    return null;
   }
 
   /**

@@ -7,7 +7,62 @@ import type { AccessLevel } from "../shared/types";
 import type {
   QuickdrawSocketContextValue,
   QuickdrawProviderProps,
+  SubscriptionRegistry,
+  SubscriptionEntry,
 } from "./types";
+
+// ============================================================================
+// Subscription Registry Implementation
+// ============================================================================
+
+/**
+ * Creates a new subscription registry instance.
+ * Each socket connection should have its own registry.
+ */
+function createSubscriptionRegistry(): SubscriptionRegistry {
+  const subscriptions = new Map<string, SubscriptionEntry>();
+
+  return {
+    acquire(key: string) {
+      const existing = subscriptions.get(key);
+      if (existing) {
+        existing.refCount++;
+        return { isNew: false, entry: existing };
+      }
+
+      const entry: SubscriptionEntry = { refCount: 1 };
+      subscriptions.set(key, entry);
+      return { isNew: true, entry };
+    },
+
+    release(key: string) {
+      const entry = subscriptions.get(key);
+      if (!entry) return false;
+
+      entry.refCount--;
+      if (entry.refCount <= 0) {
+        entry.cleanup?.();
+        subscriptions.delete(key);
+        return true;
+      }
+      return false;
+    },
+
+    setCleanup(key: string, cleanup: () => void) {
+      const entry = subscriptions.get(key);
+      if (entry) {
+        entry.cleanup = cleanup;
+      }
+    },
+
+    clear() {
+      for (const entry of subscriptions.values()) {
+        entry.cleanup?.();
+      }
+      subscriptions.clear();
+    },
+  };
+}
 
 // ============================================================================
 // Socket Context
@@ -33,17 +88,24 @@ export function useQuickdrawSocket(): QuickdrawSocketContextValue {
 // Provider Component
 // ============================================================================
 
-const defaultQueryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 1000 * 60 * 5, // 5 minutes
-      retry: 1,
+/**
+ * Creates a QueryClient instance.
+ * Using a factory function instead of module-level instantiation
+ * to avoid SSR hydration issues.
+ */
+function createQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 1000 * 60 * 5, // 5 minutes
+        retry: 1,
+      },
+      mutations: {
+        retry: 0,
+      },
     },
-    mutations: {
-      retry: 0,
-    },
-  },
-});
+  });
+}
 
 /**
  * Provider component that sets up TanStack Query and Socket.io connection.
@@ -66,16 +128,25 @@ const defaultQueryClient = new QueryClient({
 export function QuickdrawProvider({
   children,
   serverUrl,
-  queryClient = defaultQueryClient,
+  queryClient,
   authToken,
   autoConnect = !!authToken,
 }: QuickdrawProviderProps): React.ReactElement {
+  // Create QueryClient lazily to avoid SSR issues
+  const [defaultQueryClient] = React.useState(() => createQueryClient());
+  const actualQueryClient = queryClient ?? defaultQueryClient;
+
   const [socket, setSocket] = React.useState<Socket | null>(null);
   const [isConnected, setIsConnected] = React.useState(false);
   const [userId, setUserId] = React.useState<string | null>(null);
   const [serviceAccess, setServiceAccess] = React.useState<
     Record<string, AccessLevel>
   >({});
+
+  // Create subscription registry - recreated when socket changes
+  const subscriptionRegistryRef = React.useRef<SubscriptionRegistry>(
+    createSubscriptionRegistry()
+  );
 
   // Store authToken in ref to avoid reconnecting on every render
   const authTokenRef = React.useRef(authToken);
@@ -86,6 +157,10 @@ export function QuickdrawProvider({
   const connect = React.useCallback(
     (token?: string) => {
       const authToUse = token ?? authTokenRef.current;
+
+      // Clear old subscriptions when creating new socket
+      subscriptionRegistryRef.current.clear();
+      subscriptionRegistryRef.current = createSubscriptionRegistry();
 
       const newSocket = io(serverUrl, {
         auth: authToUse ? { token: authToUse } : undefined,
@@ -99,6 +174,8 @@ export function QuickdrawProvider({
 
       newSocket.on("disconnect", () => {
         setIsConnected(false);
+        // Clear subscriptions on disconnect - they'll be re-established on reconnect
+        subscriptionRegistryRef.current.clear();
       });
 
       // Listen for auth info from server
@@ -121,6 +198,8 @@ export function QuickdrawProvider({
 
   const disconnect = React.useCallback(() => {
     if (socket) {
+      // Clear subscriptions before disconnecting
+      subscriptionRegistryRef.current.clear();
       socket.disconnect();
       setSocket(null);
       setIsConnected(false);
@@ -137,6 +216,7 @@ export function QuickdrawProvider({
 
     return () => {
       if (socket) {
+        subscriptionRegistryRef.current.clear();
         socket.disconnect();
       }
     };
@@ -161,12 +241,13 @@ export function QuickdrawProvider({
       serviceAccess,
       connect,
       disconnect,
+      subscriptionRegistry: subscriptionRegistryRef.current,
     }),
     [socket, isConnected, userId, serviceAccess, connect, disconnect]
   );
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={actualQueryClient}>
       <QuickdrawSocketContext.Provider value={contextValue}>
         {children}
       </QuickdrawSocketContext.Provider>

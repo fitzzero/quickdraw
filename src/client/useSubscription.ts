@@ -6,23 +6,15 @@ import type { ServiceResponse } from "../shared/types";
 import { useQuickdrawSocket } from "./QuickdrawProvider";
 import type { UseSubscriptionOptions, UseSubscriptionResult } from "./types";
 
-// Global subscription state for deduplication
-const activeSubscriptions = new Map<
-  string,
-  {
-    refCount: number;
-    cleanup?: () => void;
-  }
->();
-
 /**
  * Hook for subscribing to real-time entity updates with TanStack Query integration.
  *
  * Features:
  * - Automatic subscription management
  * - TanStack Query cache integration for optimistic updates
- * - Subscription deduplication across components
+ * - Subscription deduplication across components (via context-based registry)
  * - Automatic reconnection handling
+ * - HMR/Fast Refresh safe (no module-level state)
  *
  * @typeParam TData - The entity type
  *
@@ -52,7 +44,7 @@ export function useSubscription<TData extends { id: string }>(
   entryId: string | null,
   options: UseSubscriptionOptions<TData> = {}
 ): UseSubscriptionResult<TData> {
-  const { socket, isConnected } = useQuickdrawSocket();
+  const { socket, isConnected, subscriptionRegistry } = useQuickdrawSocket();
   const queryClient = useQueryClient();
   const [isSubscribed, setIsSubscribed] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -67,7 +59,10 @@ export function useSubscription<TData extends { id: string }>(
 
   // Subscription key for deduplication
   const subscriptionKey = entryId ? `${serviceName}:${entryId}` : null;
-  const queryKey = [serviceName, "subscription", entryId];
+  const queryKey = React.useMemo(
+    () => [serviceName, "subscription", entryId],
+    [serviceName, entryId]
+  );
 
   // Store callbacks in refs to avoid unnecessary effect reruns
   const onDataRef = React.useRef(onData);
@@ -94,17 +89,14 @@ export function useSubscription<TData extends { id: string }>(
       return;
     }
 
-    // Check if already subscribed (deduplication)
-    const existing = activeSubscriptions.get(subscriptionKey);
-    if (existing) {
-      existing.refCount++;
+    // Try to acquire subscription (with deduplication)
+    const { isNew } = subscriptionRegistry.acquire(subscriptionKey);
+
+    if (!isNew) {
+      // Already subscribed by another component, just track ref count
       setIsSubscribed(true);
       return () => {
-        existing.refCount--;
-        if (existing.refCount === 0) {
-          existing.cleanup?.();
-          activeSubscriptions.delete(subscriptionKey);
-        }
+        subscriptionRegistry.release(subscriptionKey);
       };
     }
 
@@ -153,28 +145,17 @@ export function useSubscription<TData extends { id: string }>(
       }
     );
 
-    // Cleanup function
+    // Set cleanup function in registry
     const cleanup = () => {
       socket.off(updateEvent, handleUpdate);
       socket.emit(`${serviceName}:unsubscribe`, { entryId });
       setIsSubscribed(false);
     };
 
-    // Track subscription
-    activeSubscriptions.set(subscriptionKey, {
-      refCount: 1,
-      cleanup,
-    });
+    subscriptionRegistry.setCleanup(subscriptionKey, cleanup);
 
     return () => {
-      const sub = activeSubscriptions.get(subscriptionKey);
-      if (sub) {
-        sub.refCount--;
-        if (sub.refCount === 0) {
-          sub.cleanup?.();
-          activeSubscriptions.delete(subscriptionKey);
-        }
-      }
+      subscriptionRegistry.release(subscriptionKey);
     };
   }, [
     socket,
@@ -186,6 +167,7 @@ export function useSubscription<TData extends { id: string }>(
     requiredLevel,
     queryClient,
     queryKey,
+    subscriptionRegistry,
   ]);
 
   // Manual subscribe/unsubscribe functions
