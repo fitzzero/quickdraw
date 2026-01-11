@@ -1,6 +1,6 @@
 {
   "name": "@fitzzero/quickdraw-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Fast fullstack patterns for real-time applications with Socket.io and TanStack Query",
   "type": "module",
   "main": "./dist/shared/index.js",
