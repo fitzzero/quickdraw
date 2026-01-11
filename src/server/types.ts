@@ -71,6 +71,8 @@ export interface BaseServiceInstance {
     entryId?: string
   ) => Promise<void>;
   getPublicMethods: () => ServiceMethodDefinition<unknown, unknown>[];
+  /** Set Socket.io server instance for room-based broadcasts */
+  setIo?: (io: SocketIOServer) => void;
 }
 
 /**
@@ -163,7 +165,7 @@ export interface PrismaDelegate<
   TEntity,
   TCreateInput,
   TUpdateInput,
-  TWhereUniqueInput = { id: string },
+  TWhereUniqueInput = { id: string }
 > {
   findUnique: (args: {
     where: TWhereUniqueInput;

@@ -1,3 +1,4 @@
+import type { Server as SocketIOServer } from "socket.io";
 import type { z } from "zod";
 import type {
   AccessLevel,
@@ -58,7 +59,7 @@ export abstract class BaseService<
   TServiceMethods extends Record<
     string,
     { payload: unknown; response: unknown }
-  > = Record<string, { payload: unknown; response: unknown }>,
+  > = Record<string, { payload: unknown; response: unknown }>
 > {
   public readonly serviceName: string;
   protected readonly hasEntryACL: boolean;
@@ -73,6 +74,9 @@ export abstract class BaseService<
     | PrismaDelegate<TEntity, TCreateInput, TUpdateInput>
     | undefined;
 
+  // Socket.io server instance for room-based broadcasts
+  protected io: SocketIOServer | null = null;
+
   // Collection of public methods for registry discovery
   private readonly publicMethods: Map<
     string,
@@ -83,7 +87,8 @@ export abstract class BaseService<
     this.serviceName = options.serviceName;
     this.hasEntryACL = options.hasEntryACL ?? false;
     this.defaultACL = options.defaultACL ?? [];
-    this.logger = options.logger?.child({ service: this.serviceName }) ??
+    this.logger =
+      options.logger?.child({ service: this.serviceName }) ??
       consoleLogger.child({ service: this.serviceName });
   }
 
@@ -95,6 +100,14 @@ export abstract class BaseService<
     delegate: PrismaDelegate<TEntity, TCreateInput, TUpdateInput>
   ): void {
     this.delegate = delegate;
+  }
+
+  /**
+   * Set the Socket.io server instance for room-based broadcasts.
+   * Called automatically by ServiceRegistry during registration.
+   */
+  public setIo(io: SocketIOServer): void {
+    this.io = io;
   }
 
   /**
@@ -157,7 +170,9 @@ export abstract class BaseService<
     const roomName = this.getRoomName(entryId);
     void socket.join(roomName);
 
-    this.logger.debug(`User ${socket.userId} subscribed to ${entryId} (room: ${roomName})`);
+    this.logger.debug(
+      `User ${socket.userId} subscribed to ${entryId} (room: ${roomName})`
+    );
 
     // Return current entity data, filtered based on subscriber's access level
     const entity = await this.findById(entryId);
@@ -203,11 +218,11 @@ export abstract class BaseService<
   /**
    * Emit a custom event to all subscribers of an entry via Socket.io rooms.
    * This is useful for cross-service events (e.g., message service notifying chat subscribers).
-   * 
+   *
    * @param roomName - The Socket.io room name (use getRoomName for service rooms)
    * @param eventName - The event name to emit
    * @param data - The data to emit
-   * 
+   *
    * @example
    * ```typescript
    * // In MessageService, notify chat subscribers of a new message
@@ -218,17 +233,29 @@ export abstract class BaseService<
    * );
    * ```
    */
-  protected emitToRoom(roomName: string, eventName: string, data: unknown): void {
-    // Get any socket from subscribers to access the io instance
+  protected emitToRoom(
+    roomName: string,
+    eventName: string,
+    data: unknown
+  ): void {
+    // Preferred: use io instance directly (sends to ALL in room including sender)
+    if (this.io) {
+      this.io.to(roomName).emit(eventName, data);
+      this.logger.debug(`Emitted ${eventName} to room ${roomName}`);
+      return;
+    }
+
+    // Fallback: use any subscriber socket (excludes that socket from broadcast)
     const anySocket = this.getAnySubscriberSocket();
     if (!anySocket) {
       this.logger.debug(`No sockets available to emit to room ${roomName}`);
       return;
     }
 
-    // Emit to the room via the socket's server reference
     anySocket.to(roomName).emit(eventName, data);
-    this.logger.debug(`Emitted ${eventName} to room ${roomName}`);
+    this.logger.debug(
+      `Emitted ${eventName} to room ${roomName} (via socket fallback)`
+    );
   }
 
   /**
@@ -448,9 +475,7 @@ export abstract class BaseService<
     socket: QuickdrawSocket,
     entryId: string
   ): boolean {
-    return (
-      socket.userId === entryId || this.hasServiceAccess(socket, "Admin")
-    );
+    return socket.userId === entryId || this.hasServiceAccess(socket, "Admin");
   }
 
   /**
@@ -570,7 +595,9 @@ export abstract class BaseService<
     ) => Promise<TServiceMethods[K]["response"]>,
     options?: {
       schema?: z.ZodType<TServiceMethods[K]["payload"]>;
-      resolveEntryId?: (payload: TServiceMethods[K]["payload"]) => string | null;
+      resolveEntryId?: (
+        payload: TServiceMethods[K]["payload"]
+      ) => string | null;
     }
   ): ServiceMethodDefinition<
     TServiceMethods[K]["payload"],
@@ -611,7 +638,7 @@ export abstract class BaseService<
   /**
    * Install standard admin CRUD methods.
    * Call this in derived class constructor to expose admin endpoints.
-   * 
+   *
    * @example
    * ```typescript
    * this.installAdminMethods({
@@ -659,7 +686,9 @@ export abstract class BaseService<
         name: "adminCreate",
         access: access.create,
         handler: async (payload: unknown, _context: ServiceMethodContext) => {
-          return await this.adminCreate((payload as { data: TCreateInput }).data);
+          return await this.adminCreate(
+            (payload as { data: TCreateInput }).data
+          );
         },
       } as ServiceMethodDefinition<unknown, unknown>);
     }
@@ -694,7 +723,8 @@ export abstract class BaseService<
         handler: async (payload: unknown, _context: ServiceMethodContext) => {
           return await this.adminSetEntryACL(payload as AdminSetACLPayload);
         },
-        resolveEntryId: (payload: unknown) => (payload as { entryId: string }).entryId,
+        resolveEntryId: (payload: unknown) =>
+          (payload as { entryId: string }).entryId,
       } as ServiceMethodDefinition<unknown, unknown>);
     }
 
@@ -703,9 +733,12 @@ export abstract class BaseService<
         name: "adminGetSubscribers",
         access: access.getSubscribers,
         handler: async (payload: unknown, _context: ServiceMethodContext) => {
-          return this.adminGetSubscribers((payload as { entryId: string }).entryId);
+          return this.adminGetSubscribers(
+            (payload as { entryId: string }).entryId
+          );
         },
-        resolveEntryId: (payload: unknown) => (payload as { entryId: string }).entryId,
+        resolveEntryId: (payload: unknown) =>
+          (payload as { entryId: string }).entryId,
       } as ServiceMethodDefinition<unknown, unknown>);
     }
 
@@ -714,9 +747,12 @@ export abstract class BaseService<
         name: "adminReemit",
         access: access.reemit,
         handler: async (payload: unknown, _context: ServiceMethodContext) => {
-          return await this.adminReemit((payload as { entryId: string }).entryId);
+          return await this.adminReemit(
+            (payload as { entryId: string }).entryId
+          );
         },
-        resolveEntryId: (payload: unknown) => (payload as { entryId: string }).entryId,
+        resolveEntryId: (payload: unknown) =>
+          (payload as { entryId: string }).entryId,
       } as ServiceMethodDefinition<unknown, unknown>);
     }
 
@@ -725,19 +761,28 @@ export abstract class BaseService<
         name: "adminUnsubscribeAll",
         access: access.unsubscribeAll,
         handler: async (payload: unknown, _context: ServiceMethodContext) => {
-          return this.adminUnsubscribeAll((payload as { entryId: string }).entryId);
+          return this.adminUnsubscribeAll(
+            (payload as { entryId: string }).entryId
+          );
         },
-        resolveEntryId: (payload: unknown) => (payload as { entryId: string }).entryId,
+        resolveEntryId: (payload: unknown) =>
+          (payload as { entryId: string }).entryId,
       } as ServiceMethodDefinition<unknown, unknown>);
     }
 
-    this.logger.info(`Installed admin methods: ${Object.keys(expose).filter(k => expose[k as keyof typeof expose]).join(", ")}`);
+    this.logger.info(
+      `Installed admin methods: ${Object.keys(expose)
+        .filter((k) => expose[k as keyof typeof expose])
+        .join(", ")}`
+    );
   }
 
   /**
    * Admin method: List entities with pagination and filters.
    */
-  protected async adminList(payload: AdminListPayload): Promise<AdminListResponse<TEntity>> {
+  protected async adminList(
+    payload: AdminListPayload
+  ): Promise<AdminListResponse<TEntity>> {
     const { page = 1, pageSize = 20, where, orderBy } = payload;
     const skip = (page - 1) * pageSize;
 
@@ -777,14 +822,19 @@ export abstract class BaseService<
   /**
    * Admin method: Update an entity.
    */
-  protected async adminUpdate(id: string, data: TUpdateInput): Promise<TEntity | null> {
+  protected async adminUpdate(
+    id: string,
+    data: TUpdateInput
+  ): Promise<TEntity | null> {
     return await this.update(id, data);
   }
 
   /**
    * Admin method: Delete an entity.
    */
-  protected async adminDelete(id: string): Promise<{ success: boolean; id: string }> {
+  protected async adminDelete(
+    id: string
+  ): Promise<{ success: boolean; id: string }> {
     const deleted = await this.delete(id);
     return { success: deleted, id };
   }
@@ -796,21 +846,23 @@ export abstract class BaseService<
     payload: AdminSetACLPayload
   ): Promise<TEntity | null> {
     const { entryId, acl } = payload;
-    
+
     try {
       // Update the ACL field on the entity
       const entity = await this.getDelegate().update({
         where: { id: entryId } as { id: string },
         data: { acl } as unknown as TUpdateInput,
       });
-      
+
       // Emit update to subscribers so they receive the new ACL
       this.emitUpdate(entryId, entity);
-      
+
       this.logger.info(`Updated ACL for entity ${entryId}`);
       return entity;
     } catch (error) {
-      this.logger.error(`Failed to set ACL for ${entryId}`, { error: error instanceof Error ? error.message : String(error) });
+      this.logger.error(`Failed to set ACL for ${entryId}`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
       return null;
     }
   }
@@ -840,7 +892,9 @@ export abstract class BaseService<
    * Admin method: Re-emit current entity state to all subscribers.
    * Useful when you've made direct DB changes or need to force-refresh clients.
    */
-  protected async adminReemit(entryId: string): Promise<{ success: boolean; subscriberCount: number }> {
+  protected async adminReemit(
+    entryId: string
+  ): Promise<{ success: boolean; subscriberCount: number }> {
     const entity = await this.findById(entryId);
     if (!entity) {
       return { success: false, subscriberCount: 0 };
@@ -848,9 +902,9 @@ export abstract class BaseService<
 
     const subs = this.subscribers.get(entryId);
     const count = subs?.size ?? 0;
-    
+
     this.emitUpdate(entryId, entity);
-    
+
     this.logger.info(`Re-emitted entity ${entryId} to ${count} subscribers`);
     return { success: true, subscriberCount: count };
   }
@@ -858,7 +912,10 @@ export abstract class BaseService<
   /**
    * Admin method: Unsubscribe all sockets from an entity.
    */
-  protected adminUnsubscribeAll(entryId: string): { success: boolean; unsubscribedCount: number } {
+  protected adminUnsubscribeAll(entryId: string): {
+    success: boolean;
+    unsubscribedCount: number;
+  } {
     const subs = this.subscribers.get(entryId);
     const count = subs?.size ?? 0;
 
@@ -868,7 +925,7 @@ export abstract class BaseService<
       for (const socket of subs) {
         socket.emit(eventName, { reason: "admin_action" });
       }
-      
+
       this.subscribers.delete(entryId);
     }
 

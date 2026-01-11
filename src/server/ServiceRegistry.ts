@@ -46,7 +46,8 @@ export class ServiceRegistry implements ServiceRegistryInstance {
 
   constructor(io: SocketIOServer, options?: { logger?: Logger }) {
     this.io = io;
-    this.logger = options?.logger?.child({ service: "ServiceRegistry" }) ??
+    this.logger =
+      options?.logger?.child({ service: "ServiceRegistry" }) ??
       consoleLogger.child({ service: "ServiceRegistry" });
   }
 
@@ -98,6 +99,12 @@ export class ServiceRegistry implements ServiceRegistryInstance {
     service: BaseServiceInstance
   ): void {
     this.services.set(serviceName, service);
+
+    // Pass io instance to service for room-based broadcasts
+    if (service.setIo) {
+      service.setIo(this.io);
+    }
+
     this.logger.info(`Registered service: ${serviceName}`);
 
     // Auto-discover and store method metadata
@@ -300,7 +307,8 @@ export class ServiceRegistry implements ServiceRegistryInstance {
           });
           callback?.({
             success: false,
-            error: error instanceof Error ? error.message : "Subscription failed",
+            error:
+              error instanceof Error ? error.message : "Subscription failed",
           });
         }
       }
@@ -335,7 +343,8 @@ export class ServiceRegistry implements ServiceRegistryInstance {
           });
           callback?.({
             success: false,
-            error: error instanceof Error ? error.message : "Unsubscription failed",
+            error:
+              error instanceof Error ? error.message : "Unsubscription failed",
           });
         }
       }
