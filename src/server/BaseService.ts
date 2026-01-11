@@ -146,9 +146,11 @@ export abstract class BaseService<
 
     this.logger.debug(`User ${socket.userId} subscribed to ${entryId}`);
 
-    // Return current entity data
+    // Return current entity data, filtered based on subscriber's access level
     const entity = await this.findById(entryId);
-    return entity;
+    if (!entity) return null;
+
+    return this.filterEntityForSubscriber(entity, socket, entryId) as TEntity;
   }
 
   /**
@@ -180,15 +182,24 @@ export abstract class BaseService<
 
   /**
    * Emit an update to all subscribers of an entity.
+   * Uses tier-based pre-filtering: computes filtered versions once,
+   * then selects the appropriate version per subscriber.
    */
   protected emitUpdate(entryId: string, data: Partial<TEntity>): void {
-    const eventName = `${this.serviceName}:update:${entryId}`;
     const subs = this.subscribers.get(entryId);
+    if (!subs || subs.size === 0) return;
 
-    if (subs) {
-      for (const socket of subs) {
-        socket.emit(eventName, data);
-      }
+    const eventName = `${this.serviceName}:update:${entryId}`;
+
+    // Pre-compute filtered versions (O(1) regardless of subscriber count)
+    const fullData = data;
+    const publicData = this.stripProtectedFields(data);
+
+    for (const socket of subs) {
+      const payload = this.hasElevatedAccess(socket, entryId)
+        ? fullData
+        : publicData;
+      socket.emit(eventName, payload);
     }
   }
 
@@ -334,6 +345,88 @@ export abstract class BaseService<
     }
 
     throw new Error("Insufficient permissions");
+  }
+
+  // ===========================================================================
+  // Protected Fields Filtering
+  // ===========================================================================
+
+  /**
+   * Get the list of fields that should be stripped for non-elevated subscribers.
+   * Override in derived classes to customize which fields are protected.
+   *
+   * @example
+   * ```typescript
+   * protected override getProtectedFields(): (keyof User)[] {
+   *   return ['email', 'serviceAccess', 'discordId'];
+   * }
+   * ```
+   */
+  protected getProtectedFields(): (keyof TEntity)[] {
+    return ["email", "serviceAccess"] as (keyof TEntity)[];
+  }
+
+  /**
+   * Check if a socket has elevated access to an entity (receives full data).
+   * Default: owner (socket.userId === entryId) or service-level Admin.
+   * Override in derived classes for custom logic.
+   *
+   * @example
+   * ```typescript
+   * protected override hasElevatedAccess(socket: QuickdrawSocket, entryId: string): boolean {
+   *   // Friends can see more data
+   *   return super.hasElevatedAccess(socket, entryId) ||
+   *          this.isFriend(socket.userId, entryId);
+   * }
+   * ```
+   */
+  protected hasElevatedAccess(
+    socket: QuickdrawSocket,
+    entryId: string
+  ): boolean {
+    return (
+      socket.userId === entryId || this.hasServiceAccess(socket, "Admin")
+    );
+  }
+
+  /**
+   * Strip protected fields from an entity.
+   * Used internally by filterEntityForSubscriber.
+   */
+  protected stripProtectedFields<T extends Partial<TEntity>>(entity: T): T {
+    const protectedFields = this.getProtectedFields();
+    const result = { ...entity };
+    for (const field of protectedFields) {
+      delete result[field as keyof T];
+    }
+    return result;
+  }
+
+  /**
+   * Filter entity data based on subscriber's access level.
+   * Override for complex filtering logic (e.g., multiple tiers).
+   *
+   * @example
+   * ```typescript
+   * protected override filterEntityForSubscriber(
+   *   entity: Partial<TEntity>,
+   *   socket: QuickdrawSocket,
+   *   entryId: string
+   * ): Partial<TEntity> {
+   *   if (this.hasElevatedAccess(socket, entryId)) return entity;
+   *   if (this.isFriend(socket.userId, entryId)) return this.stripForFriends(entity);
+   *   return this.stripProtectedFields(entity);
+   * }
+   * ```
+   */
+  protected filterEntityForSubscriber(
+    entity: Partial<TEntity>,
+    socket: QuickdrawSocket,
+    entryId: string
+  ): Partial<TEntity> {
+    return this.hasElevatedAccess(socket, entryId)
+      ? entity
+      : this.stripProtectedFields(entity);
   }
 
   // ===========================================================================
