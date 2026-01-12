@@ -6,6 +6,7 @@ import type {
   ServiceMethodContext,
   Logger,
   ACL,
+  AdminServiceMeta,
 } from "../shared/types";
 import { consoleLogger } from "../shared/types";
 import type {
@@ -18,6 +19,10 @@ import type {
   AdminSetACLPayload,
   AdminSubscribersResponse,
 } from "./types";
+import {
+  zodToAdminFields,
+  mergeWithDefaultFields,
+} from "./utils/zodToAdminFields";
 
 /**
  * Base class for all quickdraw services.
@@ -82,6 +87,9 @@ export abstract class BaseService<
     string,
     ServiceMethodDefinition<unknown, unknown>
   > = new Map();
+
+  // Admin metadata configuration (set by installAdminMethods)
+  private adminMeta: AdminServiceMeta | null = null;
 
   constructor(options: BaseServiceOptions) {
     this.serviceName = options.serviceName;
@@ -654,11 +662,68 @@ export abstract class BaseService<
    *     reemit: "Admin",
    *     unsubscribeAll: "Admin",
    *   },
+   *   schema: createEntitySchema,
+   *   displayName: "Entities",
    * });
    * ```
    */
   protected installAdminMethods(options: InstallAdminMethodsOptions): void {
-    const { expose, access } = options;
+    const {
+      expose,
+      access,
+      schema,
+      displayName,
+      tableColumns,
+      hiddenFields,
+      fieldOverrides,
+    } = options;
+
+    // Build admin metadata if schema is provided
+    if (schema) {
+      const schemaFields = zodToAdminFields(schema, {
+        hiddenFields,
+        tableColumns,
+        fieldOverrides,
+      });
+
+      // Merge with default entity fields (id, createdAt, updatedAt)
+      const fields = mergeWithDefaultFields(schemaFields);
+
+      this.adminMeta = {
+        serviceName: this.serviceName,
+        displayName: displayName ?? this.toDisplayName(this.serviceName),
+        fields,
+      };
+    } else {
+      // Even without a schema, provide basic meta
+      this.adminMeta = {
+        serviceName: this.serviceName,
+        displayName: displayName ?? this.toDisplayName(this.serviceName),
+        fields: [],
+      };
+    }
+
+    // Determine if adminMeta should be exposed (default: true if any CRUD method is exposed)
+    const shouldExposeMeta =
+      expose.meta ??
+      (expose.list ||
+        expose.get ||
+        expose.create ||
+        expose.update ||
+        expose.delete);
+
+    if (shouldExposeMeta) {
+      this.publicMethods.set("adminMeta", {
+        name: "adminMeta",
+        access: access.meta ?? access.list,
+        handler: async (
+          _payload: unknown,
+          _context: ServiceMethodContext
+        ): Promise<AdminServiceMeta> => {
+          return this.getAdminMeta();
+        },
+      } as ServiceMethodDefinition<unknown, unknown>);
+    }
 
     if (expose.list) {
       this.publicMethods.set("adminList", {
@@ -770,11 +835,41 @@ export abstract class BaseService<
       } as ServiceMethodDefinition<unknown, unknown>);
     }
 
-    this.logger.info(
-      `Installed admin methods: ${Object.keys(expose)
-        .filter((k) => expose[k as keyof typeof expose])
-        .join(", ")}`
+    const installedMethods = Object.keys(expose).filter(
+      (k) => expose[k as keyof typeof expose]
     );
+    if (shouldExposeMeta) installedMethods.push("meta");
+
+    this.logger.info(`Installed admin methods: ${installedMethods.join(", ")}`);
+  }
+
+  /**
+   * Convert service name to display name.
+   * e.g., "chatService" -> "Chats", "userService" -> "Users"
+   */
+  private toDisplayName(serviceName: string): string {
+    return (
+      serviceName
+        // Remove "Service" suffix
+        .replace(/Service$/i, "")
+        // Add space before capitals
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
+        // Capitalize first letter
+        .replace(/^./, (c) => c.toUpperCase()) + "s"
+    );
+  }
+
+  /**
+   * Get admin metadata for this service.
+   * Returns the configured metadata or throws if not configured.
+   */
+  public getAdminMeta(): AdminServiceMeta {
+    if (!this.adminMeta) {
+      throw new Error(
+        `Admin methods not installed for ${this.serviceName}. Call installAdminMethods() first.`
+      );
+    }
+    return this.adminMeta;
   }
 
   /**

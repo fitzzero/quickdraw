@@ -200,6 +200,70 @@ export type AdminUnsubscribeAllPayload = { id: string };
 export type AdminUnsubscribeAllResponse = { id: string; unsubscribed: number };
 
 // ============================================================================
+// Admin Field Configuration Types
+// ============================================================================
+
+/**
+ * Supported field types for admin UI generation.
+ */
+export type AdminFieldType =
+  | "string"
+  | "number"
+  | "boolean"
+  | "date"
+  | "enum"
+  | "json"
+  | "relation";
+
+/**
+ * Configuration for a single field in the admin UI.
+ * Derived from Zod schemas with optional overrides.
+ */
+export interface AdminFieldConfig {
+  /** Field name (property key on the entity) */
+  name: string;
+  /** Field type for rendering appropriate input */
+  type: AdminFieldType;
+  /** Human-readable label */
+  label: string;
+  /** Whether the field is required for creation */
+  required: boolean;
+  /** Whether the field can be edited (false for id, createdAt, etc.) */
+  editable: boolean;
+  /** Whether to show this field as a table column */
+  showInTable: boolean;
+  /** Whether the table can be sorted by this field */
+  sortable: boolean;
+  /** For enum fields, the allowed values */
+  enumValues?: string[];
+  /** For relation fields, the related service name */
+  relationService?: string;
+}
+
+/**
+ * Service metadata for admin UI generation.
+ * Returned by the adminMeta method.
+ */
+export interface AdminServiceMeta {
+  /** Internal service name (e.g., "chatService") */
+  serviceName: string;
+  /** Human-readable display name (e.g., "Chats") */
+  displayName: string;
+  /** Field configurations derived from schema */
+  fields: AdminFieldConfig[];
+}
+
+/**
+ * Payload for adminMeta method (no parameters needed)
+ */
+export type AdminMetaPayload = Record<string, never>;
+
+/**
+ * Response type for adminMeta method
+ */
+export type AdminMetaResponse = AdminServiceMeta;
+
+// ============================================================================
 // Subscription Types
 // ============================================================================
 

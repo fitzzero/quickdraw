@@ -49,3 +49,11 @@ export {
   type ValidateEnvOptions,
   type EnvValidationResult,
 } from "./utils/env";
+
+// Admin utilities
+export {
+  zodToAdminFields,
+  getDefaultEntityFields,
+  mergeWithDefaultFields,
+  type ZodToAdminFieldsOptions,
+} from "./utils/zodToAdminFields";

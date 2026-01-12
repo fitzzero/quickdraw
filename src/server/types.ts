@@ -1,9 +1,11 @@
 import type { Socket, Server as SocketIOServer } from "socket.io";
 import type { Server as HTTPServer } from "http";
+import type { z } from "zod";
 import type {
   AccessLevel,
   ServiceMethodDefinition,
   Logger,
+  AdminFieldConfig,
 } from "../shared/types";
 
 // ============================================================================
@@ -119,6 +121,8 @@ export interface InstallAdminMethodsOptions {
     getSubscribers?: boolean;
     reemit?: boolean;
     unsubscribeAll?: boolean;
+    /** Enable adminMeta method for UI generation. Default: true if any other admin method is exposed */
+    meta?: boolean;
   };
   access: {
     list: AccessLevel;
@@ -130,7 +134,19 @@ export interface InstallAdminMethodsOptions {
     getSubscribers: AccessLevel;
     reemit: AccessLevel;
     unsubscribeAll: AccessLevel;
+    /** Access level for adminMeta. Default: same as list */
+    meta?: AccessLevel;
   };
+  /** Zod schema for deriving field metadata (typically the create schema) */
+  schema?: z.ZodTypeAny;
+  /** Human-readable display name for the service (e.g., "Chats") */
+  displayName?: string;
+  /** Override which fields appear in table (by default all non-json fields) */
+  tableColumns?: string[];
+  /** Fields to hide from admin UI entirely */
+  hiddenFields?: string[];
+  /** Override specific field configurations */
+  fieldOverrides?: Partial<Record<string, Partial<AdminFieldConfig>>>;
 }
 
 // ============================================================================
