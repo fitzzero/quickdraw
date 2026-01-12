@@ -148,15 +148,12 @@ export function QuickdrawProvider({
     createSubscriptionRegistry()
   );
 
-  // Store authToken in ref to avoid reconnecting on every render
-  const authTokenRef = React.useRef(authToken);
-  React.useEffect(() => {
-    authTokenRef.current = authToken;
-  }, [authToken]);
+  // Track previous authToken to detect changes
+  const prevAuthTokenRef = React.useRef<string | undefined>(authToken);
 
   const connect = React.useCallback(
     (token?: string) => {
-      const authToUse = token ?? authTokenRef.current;
+      const authToUse = token;
 
       // Clear old subscriptions when creating new socket
       subscriptionRegistryRef.current.clear();
@@ -225,8 +222,16 @@ export function QuickdrawProvider({
 
   // Reconnect when authToken changes
   React.useEffect(() => {
-    if (socket && authToken !== authTokenRef.current) {
-      disconnect();
+    const prevToken = prevAuthTokenRef.current;
+    
+    // Update ref BEFORE any logic so next render has correct previous value
+    prevAuthTokenRef.current = authToken;
+    
+    // If token actually changed, reconnect
+    if (authToken !== prevToken) {
+      if (socket) {
+        disconnect();
+      }
       if (authToken) {
         connect(authToken);
       }
