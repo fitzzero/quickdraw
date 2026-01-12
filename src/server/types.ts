@@ -41,6 +41,19 @@ export interface QuickdrawServerOptions {
     ) => Promise<string | undefined>;
   };
   logger?: Logger;
+  /**
+   * Automatic method logging configuration.
+   * Logs all service method calls, success/failure, timing, and errors.
+   * @default { enabled: true, logPayloads: false }
+   */
+  methodLogging?: {
+    /** Enable automatic method logging. Default: true */
+    enabled?: boolean;
+    /** Log request payloads (may contain sensitive data). Default: false */
+    logPayloads?: boolean;
+    /** Log response data (may contain sensitive data). Default: false */
+    logResponses?: boolean;
+  };
 }
 
 export interface QuickdrawServerResult {

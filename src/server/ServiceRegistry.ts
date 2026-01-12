@@ -28,10 +28,26 @@ import type {
  * registry.registerService('userService', userService);
  * ```
  */
+export interface ServiceRegistryOptions {
+  logger?: Logger;
+  /**
+   * Automatic method logging configuration.
+   * @default { enabled: true, logPayloads: false, logResponses: false }
+   */
+  methodLogging?: {
+    enabled?: boolean;
+    logPayloads?: boolean;
+    logResponses?: boolean;
+  };
+}
+
 export class ServiceRegistry implements ServiceRegistryInstance {
   private readonly io: SocketIOServer;
   private readonly services: Map<string, BaseServiceInstance> = new Map();
   private readonly logger: Logger;
+  private readonly methodLoggingEnabled: boolean;
+  private readonly logPayloads: boolean;
+  private readonly logResponses: boolean;
   private connectionHandlerInstalled = false;
 
   // Store method metadata for deferred registration
@@ -44,11 +60,23 @@ export class ServiceRegistry implements ServiceRegistryInstance {
     }
   > = new Map();
 
-  constructor(io: SocketIOServer, options?: { logger?: Logger }) {
+  constructor(io: SocketIOServer, options?: ServiceRegistryOptions) {
     this.io = io;
     this.logger =
       options?.logger?.child({ service: "ServiceRegistry" }) ??
       consoleLogger.child({ service: "ServiceRegistry" });
+    
+    // Method logging configuration (enabled by default)
+    this.methodLoggingEnabled = options?.methodLogging?.enabled ?? true;
+    this.logPayloads = options?.methodLogging?.logPayloads ?? false;
+    this.logResponses = options?.methodLogging?.logResponses ?? false;
+
+    if (this.methodLoggingEnabled) {
+      this.logger.info("Automatic method logging enabled", {
+        logPayloads: this.logPayloads,
+        logResponses: this.logResponses,
+      });
+    }
   }
 
   /**
@@ -201,17 +229,23 @@ export class ServiceRegistry implements ServiceRegistryInstance {
           // Check access
           await service.ensureAccessForMethod(method.access, socket, entryId);
 
-          // Log start
-          this.logger.info(
-            `User ${userIdShort} ${serviceName}.${methodName} -> start`,
-            {
+          // Log start (if enabled)
+          if (this.methodLoggingEnabled) {
+            const logContext: Record<string, unknown> = {
               category: "request_processing",
               serviceName,
               methodName,
               userId: socket.userId,
               socketId: socket.id,
+            };
+            if (this.logPayloads) {
+              logContext.payload = validatedPayload;
             }
-          );
+            this.logger.info(
+              `User ${userIdShort} ${serviceName}.${methodName} -> start`,
+              logContext
+            );
+          }
 
           // Execute handler
           const result = await method.handler(validatedPayload, {
@@ -220,18 +254,25 @@ export class ServiceRegistry implements ServiceRegistryInstance {
             serviceAccess: socket.serviceAccess ?? {},
           });
 
-          const durationMs = Date.now() - startedAt;
-          this.logger.info(
-            `User ${userIdShort} ${serviceName}.${methodName} -> success`,
-            {
+          // Log success (if enabled)
+          if (this.methodLoggingEnabled) {
+            const durationMs = Date.now() - startedAt;
+            const logContext: Record<string, unknown> = {
               category: "request_processing",
               outcome: "success",
               durationMs,
               serviceName,
               methodName,
               userId: socket.userId,
+            };
+            if (this.logResponses) {
+              logContext.response = result;
             }
-          );
+            this.logger.info(
+              `User ${userIdShort} ${serviceName}.${methodName} -> success`,
+              logContext
+            );
+          }
 
           const successResponse: ServiceResponse<unknown> = {
             success: true,
@@ -239,15 +280,24 @@ export class ServiceRegistry implements ServiceRegistryInstance {
           };
           callback?.(successResponse);
         } catch (error) {
+          // Always log errors, even if methodLogging is disabled
           const durationMs = Date.now() - startedAt;
+          const logContext: Record<string, unknown> = {
+            category: "request_processing",
+            outcome: "fail",
+            durationMs,
+            serviceName,
+            methodName,
+            userId: socket.userId,
+            socketId: socket.id,
+            error: error instanceof Error ? error.message : "Unknown error",
+          };
+          if (this.logPayloads) {
+            logContext.payload = payload;
+          }
           this.logger.error(
             `User ${userIdShort} ${serviceName}.${methodName} -> fail`,
-            {
-              category: "request_processing",
-              outcome: "fail",
-              durationMs,
-              error: error instanceof Error ? error.message : "Unknown error",
-            }
+            logContext
           );
 
           const errorResponse: ServiceResponse<unknown> = {

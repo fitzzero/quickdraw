@@ -18,7 +18,7 @@ export type {
 
 // Core classes
 export { BaseService } from "./BaseService";
-export { ServiceRegistry } from "./ServiceRegistry";
+export { ServiceRegistry, type ServiceRegistryOptions } from "./ServiceRegistry";
 export { createQuickdrawServer } from "./createServer";
 
 // Redis adapter for horizontal scaling
@@ -40,3 +40,12 @@ export {
 
 // Auth utilities
 export * from "./auth";
+
+// Environment validation utilities
+export {
+  validateEnv,
+  checkEnv,
+  requireEnv,
+  type ValidateEnvOptions,
+  type EnvValidationResult,
+} from "./utils/env";

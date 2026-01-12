@@ -61,8 +61,11 @@ export function createQuickdrawServer(
     },
   });
 
-  // Create service registry
-  const registry = new ServiceRegistry(io, { logger });
+  // Create service registry with method logging configuration
+  const registry = new ServiceRegistry(io, { 
+    logger,
+    methodLogging: options.methodLogging,
+  });
 
   // Apply authentication middleware
   io.use(async (socket, next) => {
@@ -125,6 +128,52 @@ export function createQuickdrawServer(
       `Registered services: ${registry.getServices().join(", ")}`
     );
   });
+
+  // Graceful shutdown handler
+  const shutdown = async (signal: string) => {
+    serverLogger.info(`Received ${signal}, starting graceful shutdown...`);
+
+    // Stop accepting new connections
+    httpServer.close(() => {
+      serverLogger.info("HTTP server closed");
+    });
+
+    // Close all Socket.io connections gracefully
+    const sockets = await io.fetchSockets();
+    serverLogger.info(`Closing ${sockets.length} active socket connections...`);
+
+    for (const socket of sockets) {
+      const quickdrawSocket = socket as unknown as QuickdrawSocket;
+      
+      // Unsubscribe from all services
+      for (const service of registry.getServiceInstances()) {
+        try {
+          service.unsubscribeSocket(quickdrawSocket);
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+
+      // Disconnect socket
+      socket.disconnect(true);
+    }
+
+    // Close Socket.io server
+    io.close(() => {
+      serverLogger.info("Socket.io server closed");
+      process.exit(0);
+    });
+
+    // Force exit after timeout
+    setTimeout(() => {
+      serverLogger.error("Graceful shutdown timeout, forcing exit");
+      process.exit(1);
+    }, 10000); // 10 second timeout
+  };
+
+  // Register shutdown handlers
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 
   return { io, httpServer, registry };
 }
