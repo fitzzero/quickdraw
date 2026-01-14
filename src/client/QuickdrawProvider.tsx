@@ -151,8 +151,14 @@ export function QuickdrawProvider({
   // Track previous authToken to detect changes
   const prevAuthTokenRef = React.useRef<string | undefined>(authToken);
 
+  // Track socket synchronously to prevent double connections from concurrent effects
+  const socketRef = React.useRef<Socket | null>(null);
+
   const connect = React.useCallback(
     (token?: string) => {
+      // Prevent double connections - check ref synchronously since state updates are async
+      if (socketRef.current) return;
+
       const authToUse = token;
 
       // Clear old subscriptions when creating new socket
@@ -188,37 +194,40 @@ export function QuickdrawProvider({
         console.error("Socket connection error:", error.message);
       });
 
+      socketRef.current = newSocket;
       setSocket(newSocket);
     },
     [serverUrl]
   );
 
   const disconnect = React.useCallback(() => {
-    if (socket) {
+    if (socketRef.current) {
       // Clear subscriptions before disconnecting
       subscriptionRegistryRef.current.clear();
-      socket.disconnect();
+      socketRef.current.disconnect();
+      socketRef.current = null;
       setSocket(null);
       setIsConnected(false);
       setUserId(null);
       setServiceAccess({});
     }
-  }, [socket]);
+  }, []);
 
   // Auto-connect on mount if enabled
   React.useEffect(() => {
-    if (autoConnect && !socket) {
-      connect();
+    if (autoConnect && !socketRef.current) {
+      connect(authToken);
     }
 
     return () => {
-      if (socket) {
+      if (socketRef.current) {
         subscriptionRegistryRef.current.clear();
-        socket.disconnect();
+        socketRef.current.disconnect();
+        socketRef.current = null;
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoConnect]);
+  }, [autoConnect, authToken]);
 
   // Reconnect when authToken changes
   React.useEffect(() => {
@@ -229,14 +238,14 @@ export function QuickdrawProvider({
     
     // If token actually changed, reconnect
     if (authToken !== prevToken) {
-      if (socket) {
+      if (socketRef.current) {
         disconnect();
       }
       if (authToken) {
         connect(authToken);
       }
     }
-  }, [authToken, socket, disconnect, connect]);
+  }, [authToken, disconnect, connect]);
 
   const contextValue = React.useMemo<QuickdrawSocketContextValue>(
     () => ({
