@@ -2,7 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.1.0] - Unreleased
+## [1.2.0] - 2026-01-17
+
+### Added
+
+- `useServiceQuery` hook for read operations with TanStack Query caching
+  - Automatic request deduplication across components
+  - Configurable `staleTime` and `gcTime` for cache management
+  - `skipCache` option to force fresh fetch
+  - `enabled` option for conditional fetching
+  - Background refetching when data becomes stale
+- `UseServiceQueryOptions` and `UseServiceQueryResult` types
+
+### Fixed
+
+- `useService` and `useServiceMethod` now return memoized objects to prevent infinite render loops when used in `useCallback`/`useEffect` dependencies
+
+## [1.1.0] - Previous
+
+### Added
+
+- Subscription registry for deduplication across components
+- HMR/Fast Refresh safe subscription handling
+
+## [0.1.0] - Initial
 
 ### Added
 

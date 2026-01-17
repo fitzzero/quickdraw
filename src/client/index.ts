@@ -5,6 +5,7 @@ export { QuickdrawProvider, useQuickdrawSocket } from "./QuickdrawProvider";
 
 // Hooks
 export { useService, useServiceMethod } from "./useService";
+export { useServiceQuery } from "./useServiceQuery";
 export { useSubscription } from "./useSubscription";
 
 // Types
@@ -13,6 +14,8 @@ export type {
   QuickdrawProviderProps,
   UseServiceOptions,
   UseServiceResult,
+  UseServiceQueryOptions,
+  UseServiceQueryResult,
   UseSubscriptionOptions,
   UseSubscriptionResult,
   ClientServiceMethodMap,

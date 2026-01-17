@@ -91,15 +91,28 @@ export function useService<TPayload = unknown, TResponse = unknown>(
     retryDelay: options?.retryDelay,
   });
 
-  return {
-    mutate: mutation.mutate,
-    mutateAsync: mutation.mutateAsync,
-    isPending: mutation.isPending,
-    isError: mutation.isError,
-    error,
-    data: mutation.data,
-    reset: mutation.reset,
-  };
+  // Memoize return object to prevent new references on every render
+  // This fixes infinite loop issues when the hook's return value is used in dependencies
+  return React.useMemo(
+    () => ({
+      mutate: mutation.mutate,
+      mutateAsync: mutation.mutateAsync,
+      isPending: mutation.isPending,
+      isError: mutation.isError,
+      error,
+      data: mutation.data,
+      reset: mutation.reset,
+    }),
+    [
+      mutation.mutate,
+      mutation.mutateAsync,
+      mutation.isPending,
+      mutation.isError,
+      mutation.data,
+      mutation.reset,
+      error,
+    ]
+  );
 }
 
 /**
@@ -188,11 +201,15 @@ export function useServiceMethod<TPayload = unknown, TResponse = unknown>(
     [socket, isConnected, serviceName, methodName, options?.timeout]
   );
 
-  return {
-    execute,
-    loading,
-    error,
-    data,
-    isReady: !!socket && isConnected,
-  };
+  // Memoize return object to prevent new references on every render
+  return React.useMemo(
+    () => ({
+      execute,
+      loading,
+      error,
+      data,
+      isReady: !!socket && isConnected,
+    }),
+    [execute, loading, error, data, socket, isConnected]
+  );
 }

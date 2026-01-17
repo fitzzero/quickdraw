@@ -109,6 +109,102 @@ export interface UseSubscriptionResult<TData> {
 }
 
 // ============================================================================
+// Service Query Hook Types
+// ============================================================================
+
+/**
+ * Options for the useServiceQuery hook.
+ */
+export interface UseServiceQueryOptions<TResponse> {
+  /**
+   * Whether to automatically fetch on mount (default: true)
+   */
+  enabled?: boolean;
+  /**
+   * How long data stays fresh in milliseconds (default: 5 minutes)
+   * During this time, cached data is returned without refetching.
+   */
+  staleTime?: number;
+  /**
+   * How long unused data stays in cache in milliseconds (default: 10 minutes)
+   * After this time, inactive queries are garbage collected.
+   * Note: TanStack Query v5 renamed this to `gcTime`.
+   */
+  gcTime?: number;
+  /**
+   * Whether to refetch when component mounts (default: true if data is stale)
+   */
+  refetchOnMount?: boolean | "always";
+  /**
+   * Whether to refetch when window regains focus (default: false)
+   */
+  refetchOnWindowFocus?: boolean | "always";
+  /**
+   * Force a fresh fetch, bypassing cache (default: false)
+   * Useful when you know the cache is invalidated.
+   */
+  skipCache?: boolean;
+  /**
+   * Request timeout in milliseconds (default: 10000)
+   */
+  timeout?: number;
+  /**
+   * Callback when data is successfully fetched
+   */
+  onSuccess?: (data: TResponse) => void;
+  /**
+   * Callback on error
+   */
+  onError?: (error: string) => void;
+  /**
+   * Number of retry attempts on failure (default: 1)
+   */
+  retry?: boolean | number;
+  /**
+   * Delay between retries in milliseconds
+   */
+  retryDelay?: number;
+}
+
+/**
+ * Return type for the useServiceQuery hook.
+ */
+export interface UseServiceQueryResult<TResponse> {
+  /**
+   * The fetched/cached data, or undefined if not yet loaded.
+   */
+  data: TResponse | undefined;
+  /**
+   * True during initial load (no cached data available).
+   */
+  isLoading: boolean;
+  /**
+   * True when any fetch is in progress (including background refetch).
+   */
+  isFetching: boolean;
+  /**
+   * True if the query has errored.
+   */
+  isError: boolean;
+  /**
+   * Error message if the query failed.
+   */
+  error: string | null;
+  /**
+   * True if the data is considered stale (past staleTime).
+   */
+  isStale: boolean;
+  /**
+   * True if the query has successfully fetched data at least once.
+   */
+  isSuccess: boolean;
+  /**
+   * Manually trigger a refetch.
+   */
+  refetch: () => Promise<TResponse | undefined>;
+}
+
+// ============================================================================
 // Service Method Map Types
 // ============================================================================
 
