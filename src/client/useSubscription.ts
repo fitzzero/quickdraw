@@ -72,15 +72,16 @@ export function useSubscription<TData extends { id: string }>(
     onErrorRef.current = onError;
   }, [onData, onError]);
 
-  // Query for initial data and cache management
+  // Query for cache management - enabled for reactivity to setQueryData calls
+  // Data comes from socket subscriptions, not from queryFn
   const query = useQuery<TData | null>({
     queryKey,
-    queryFn: async () => {
-      // Data is populated via subscription, not direct fetch
-      return null;
-    },
-    enabled: false, // We manage data via socket
+    queryFn: () => queryClient.getQueryData<TData | null>(queryKey) ?? null,
     staleTime,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    // Query is enabled so components react to setQueryData updates from other subscribers
   });
 
   // Handle subscription lifecycle
@@ -196,12 +197,15 @@ export function useSubscription<TData extends { id: string }>(
     setIsSubscribed(false);
   }, [socket, entryId, serviceName]);
 
-  // Get current data from query cache
-  const data = queryClient.getQueryData<TData | null>(queryKey) ?? null;
+  // Get data from query (reactive - re-renders when setQueryData is called)
+  const data = query.data ?? null;
+
+  // Check if we're waiting for the socket to connect before we can subscribe
+  const isWaitingForConnection = enabled && !!entryId && (!socket || !isConnected);
 
   return {
     data,
-    isLoading: query.isLoading || (!data && isSubscribed),
+    isLoading: query.isLoading || (!data && isSubscribed) || (!data && isWaitingForConnection),
     isError: !!error,
     error,
     isSubscribed,
