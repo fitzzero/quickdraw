@@ -61,10 +61,9 @@ export abstract class BaseService<
   TEntity extends { id: string },
   TCreateInput extends Record<string, unknown>,
   TUpdateInput extends Record<string, unknown>,
-  TServiceMethods extends Record<
-    string,
-    { payload: unknown; response: unknown }
-  > = Record<string, { payload: unknown; response: unknown }>
+  TServiceMethods extends {
+    [K in keyof TServiceMethods]: { payload: unknown; response: unknown };
+  } = Record<string, { payload: unknown; response: unknown }>,
 > {
   public readonly serviceName: string;
   protected readonly hasEntryACL: boolean;
@@ -637,6 +636,38 @@ export abstract class BaseService<
    */
   public getPublicMethods(): ServiceMethodDefinition<unknown, unknown>[] {
     return Array.from(this.publicMethods.values());
+  }
+
+  /**
+   * Verify that all expected service methods have been defined via defineMethod().
+   * Call at the end of initMethods() to catch missing implementations at boot time.
+   *
+   * @param expectedMethods - Array of method names that should have been defined
+   * @throws Error if any expected methods are missing
+   *
+   * @example
+   * ```typescript
+   * private initMethods(): void {
+   *   this.defineMethod("createChat", "Read", ...);
+   *   this.defineMethod("deleteChat", "Admin", ...);
+   *   this.verifyAllMethods(["createChat", "deleteChat"]);
+   * }
+   * ```
+   */
+  protected verifyAllMethods(
+    expectedMethods: readonly (keyof TServiceMethods & string)[]
+  ): void {
+    const missing: string[] = [];
+    for (const method of expectedMethods) {
+      if (!this.publicMethods.has(method)) {
+        missing.push(method);
+      }
+    }
+    if (missing.length > 0) {
+      throw new Error(
+        `${this.serviceName}: Missing method implementations: ${missing.join(", ")}`
+      );
+    }
   }
 
   // ===========================================================================
