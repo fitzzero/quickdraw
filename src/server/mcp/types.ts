@@ -60,7 +60,7 @@ export interface McpServiceInstance {
   getPublicMethods?: () => McpMethodDefinition[];
   ensureAccessForMethod?: (
     access: AccessLevel,
-    ctx: McpSocketContext,
+    ctx: unknown,
     entryId?: string,
   ) => Promise<void>;
 }

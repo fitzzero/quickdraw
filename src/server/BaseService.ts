@@ -266,6 +266,24 @@ export abstract class BaseService<
   }
 
   /**
+   * Emit a custom event to a specific user's room.
+   * Users join `user:{userId}` on connection (set up in auth middleware).
+   * Useful for targeted notifications like permission changes or direct messages.
+   *
+   * @example
+   * ```typescript
+   * this.emitToUserRoom(userId, "budget:shared", { budgetId, sharedBy });
+   * ```
+   */
+  protected emitToUserRoom(
+    userId: string,
+    eventName: string,
+    data: unknown
+  ): void {
+    this.emitToRoom(`user:${userId}`, eventName, data);
+  }
+
+  /**
    * Get any active socket for room-based operations.
    */
   private getAnySubscriberSocket(): QuickdrawSocket | null {
