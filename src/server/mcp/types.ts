@@ -1,4 +1,13 @@
 import type { AccessLevel, Logger } from "../../shared/types";
+import type { BaseServiceInstance } from "../types";
+
+/**
+ * Re-export BaseServiceInstance as the expected service type for MCP.
+ * This ensures services that extend BaseService are directly compatible.
+ */
+export type McpServiceInstance = BaseServiceInstance;
+export type { ServiceMethodDefinition as McpMethodDefinition } from "../../shared/types";
+export type { ServiceMethodContext as McpMethodContext } from "../../shared/types";
 
 export interface McpRegistryOptions {
   hydrateUserContext: (userId: string) => Promise<{
@@ -54,43 +63,6 @@ export interface McpRegistryInstance {
     userId: string,
   ): Promise<unknown>;
   getServices(): string[];
-}
-
-export interface McpServiceInstance {
-  getPublicMethods?: () => McpMethodDefinition[];
-  ensureAccessForMethod?: (
-    access: AccessLevel,
-    ctx: unknown,
-    entryId?: string,
-  ) => Promise<void>;
-}
-
-export interface McpMethodDefinition {
-  name: string;
-  access: AccessLevel;
-  handler: (payload: unknown, context: McpMethodContext) => Promise<unknown>;
-  schema?: {
-    safeParse: (data: unknown) => {
-      success: boolean;
-      data?: unknown;
-      error?: { message: string };
-    };
-  };
-  resolveEntryId?: (payload: unknown) => string | null;
-}
-
-export interface McpMethodContext {
-  userId: string;
-  socketId: string;
-  serviceAccess: Record<string, AccessLevel>;
-}
-
-export interface McpSocketContext {
-  id: string;
-  userId?: string;
-  serviceAccess?: Record<string, AccessLevel>;
-  connected: boolean;
-  disconnected: boolean;
 }
 
 export interface GenerateToolMetadataOptions {

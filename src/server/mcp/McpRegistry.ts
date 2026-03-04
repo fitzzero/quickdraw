@@ -1,12 +1,12 @@
 import { consoleLogger } from "../../shared/types";
 import type { Logger } from "../../shared/types";
+import type { QuickdrawSocket } from "../types";
 import type {
   McpRegistryOptions,
   McpRegistryInstance,
   McpServiceInstance,
   McpMethodDefinition,
   McpToolDefinition,
-  McpSocketContext,
   ServiceToolSpec,
 } from "./types";
 
@@ -38,7 +38,7 @@ export class McpRegistry implements McpRegistryInstance {
   ): void {
     this.services.set(serviceName, serviceInstance);
 
-    const methods = serviceInstance.getPublicMethods?.() ?? [];
+    const methods = serviceInstance.getPublicMethods();
     const methodMap = new Map<string, McpMethodDefinition>();
     for (const method of methods) {
       methodMap.set(method.name, method);
@@ -81,13 +81,13 @@ export class McpRegistry implements McpRegistryInstance {
     const { instance, method } = this.resolveServiceMethod(serviceName, methodName);
 
     const { serviceAccess } = await this.hydrateUserContext(userId);
-    const ctx: McpSocketContext = {
+    const ctx = {
       id: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       userId,
       serviceAccess,
       connected: true,
       disconnected: false,
-    };
+    } as unknown as QuickdrawSocket;
 
     const entryId = this.resolveEntryId(method, payload);
     const logTag = `${serviceName}.${methodName}`;
@@ -105,13 +105,11 @@ export class McpRegistry implements McpRegistryInstance {
     try {
       const validatedPayload = this.validatePayload(method, payload);
 
-      if (instance.ensureAccessForMethod) {
-        await instance.ensureAccessForMethod(
-          method.access,
-          ctx as never,
-          entryId,
-        );
-      }
+      await instance.ensureAccessForMethod(
+        method.access,
+        ctx,
+        entryId,
+      );
 
       const result = await method.handler(validatedPayload, {
         userId,
