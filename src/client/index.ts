@@ -24,3 +24,27 @@ export type {
 
 // Socket inputs
 export * from "./inputs";
+
+// Client utilities (auth, formatting, navigation)
+export {
+  formatCurrency,
+  formatNumber,
+  formatDate,
+  formatDateTime,
+  truncate,
+  formatPercent,
+  getAuthToken,
+  setAuthToken,
+  clearAuthToken,
+  parseJWTPayload,
+  getOAuthUrl,
+  logout,
+  logoutAllDevices,
+  findNavItemByHref,
+  findParentNavItem,
+  buildBreadcrumbs,
+  routeRequiresAuth,
+  type JWTPayload,
+  type NavItem,
+  type BreadcrumbItem,
+} from "./utils";

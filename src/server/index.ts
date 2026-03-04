@@ -57,3 +57,25 @@ export {
   mergeWithDefaultFields,
   type ZodToAdminFieldsOptions,
 } from "./utils/zodToAdminFields";
+
+// MCP (Model Context Protocol) bridge
+export {
+  McpRegistry,
+  createMcpStdioServer,
+  bootstrapMcpServer,
+  createMcpRoutes,
+  generateToolMetadata,
+  type McpRegistryOptions,
+  type McpStdioServerOptions,
+  type McpHttpRoutesOptions,
+  type McpRegistryInstance,
+  type McpServiceInstance,
+  type McpMethodDefinition,
+  type McpMethodContext,
+  type McpToolDefinition,
+  type ServiceToolSpec,
+  type MethodSpec,
+  type GenerateToolMetadataOptions,
+  type ServiceInfo,
+  type ServiceMethodInfo,
+} from "./mcp";
