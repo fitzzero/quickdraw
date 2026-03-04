@@ -26,10 +26,14 @@
     "./client/testing": {
       "import": "./dist/client/testing.js",
       "types": "./dist/client/testing.d.ts"
+    },
+    "./eslint-plugin": {
+      "import": "./eslint-plugin-quickdraw/index.mjs"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "eslint-plugin-quickdraw"
   ],
   "scripts": {
     "build": "tsup",
