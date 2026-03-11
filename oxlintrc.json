@@ -1,12 +1,45 @@
 {
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "import"],
+  "jsPlugins": [
+    {
+      "name": "quickdraw",
+      "specifier": "./eslint-plugin-quickdraw/index.mjs"
+    }
+  ],
   "rules": {
     "no-unused-vars": "warn",
     "no-console": "warn",
     "no-debugger": "error",
     "eqeqeq": "error",
     "no-var": "error",
-    "prefer-const": "warn"
+    "prefer-const": "warn",
+    "complexity": ["warn", { "max": 15 }],
+    "max-lines": [
+      "warn",
+      { "max": 400, "skipBlankLines": true, "skipComments": true }
+    ],
+    "max-lines-per-function": [
+      "warn",
+      { "max": 80, "skipBlankLines": true, "skipComments": true }
+    ]
   },
+  "overrides": [
+    {
+      "files": ["**/services/**/*.ts"],
+      "rules": {
+        "quickdraw/no-direct-prisma-mutations": "warn",
+        "quickdraw/require-zod-schema": "warn",
+        "quickdraw/no-service-method-record": "error",
+        "quickdraw/no-unsafe-payload-cast": "warn"
+      }
+    },
+    {
+      "files": ["**/services/**/index.ts"],
+      "rules": {
+        "quickdraw/no-direct-prisma-mutations": "off"
+      }
+    }
+  ],
   "ignorePatterns": ["node_modules", "dist"]
 }
