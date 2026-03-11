@@ -101,7 +101,7 @@ export const server = [
     },
     plugins: { quickdraw: quickdrawPlugin },
     rules: {
-      "quickdraw/no-direct-prisma-mutations": "warn",
+      "quickdraw/no-cross-service-mutations": "warn",
       "quickdraw/require-zod-schema": "warn",
       "quickdraw/no-service-method-record": "error",
       "quickdraw/no-unsafe-payload-cast": "warn",
@@ -119,12 +119,6 @@ export const server = [
       "@typescript-eslint/no-unsafe-argument": "warn",
       "@typescript-eslint/no-redundant-type-constituents": "off",
       "@typescript-eslint/no-unnecessary-type-assertion": "off",
-    },
-  },
-  {
-    files: ["**/services/**/index.ts"],
-    rules: {
-      "quickdraw/no-direct-prisma-mutations": "off",
     },
   },
 ];
