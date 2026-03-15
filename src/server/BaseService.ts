@@ -717,9 +717,12 @@ export abstract class BaseService<
   /**
    * Define a public method that will be exposed via Socket.io.
    *
+   * Can be called from external helper functions to split method definitions
+   * across multiple files while keeping full type safety.
+   *
    * @typeParam K - Method name from the service methods map
    */
-  protected defineMethod<K extends keyof TServiceMethods & string>(
+  public defineMethod<K extends keyof TServiceMethods & string>(
     name: K,
     access: AccessLevel,
     handler: (
