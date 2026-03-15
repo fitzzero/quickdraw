@@ -332,7 +332,9 @@ export abstract class BaseService<
 
   /**
    * Emit a custom event to all subscribers of an entry via Socket.io rooms.
-   * This is useful for cross-service events (e.g., message service notifying chat subscribers).
+   * Useful for cross-service events (e.g., message service notifying chat subscribers).
+   *
+   * Can be called from external method composition files.
    *
    * @param roomName - The Socket.io room name (use getRoomName for service rooms)
    * @param eventName - The event name to emit
@@ -348,7 +350,7 @@ export abstract class BaseService<
    * );
    * ```
    */
-  protected emitToRoom(
+  public emitToRoom(
     roomName: string,
     eventName: string,
     data: unknown
@@ -378,12 +380,14 @@ export abstract class BaseService<
    * Users join `user:{userId}` on connection (set up in auth middleware).
    * Useful for targeted notifications like permission changes or direct messages.
    *
+   * Can be called from external method composition files.
+   *
    * @example
    * ```typescript
    * this.emitToUserRoom(userId, "budget:shared", { budgetId, sharedBy });
    * ```
    */
-  protected emitToUserRoom(
+  public emitToUserRoom(
     userId: string,
     eventName: string,
     data: unknown
@@ -408,8 +412,10 @@ export abstract class BaseService<
    * Emit an update to all subscribers of an entity.
    * Uses tier-based pre-filtering: computes filtered versions once,
    * then selects the appropriate version per subscriber.
+   *
+   * Can be called from external method composition files.
    */
-  protected emitUpdate(entryId: string, data: Partial<TEntity>): void {
+  public emitUpdate(entryId: string, data: Partial<TEntity>): void {
     const subs = this.subscribers.get(entryId);
     if (!subs || subs.size === 0) return;
 
@@ -513,8 +519,10 @@ export abstract class BaseService<
 
   /**
    * Compare access levels.
+   *
+   * Can be called from external method composition files for custom access checks.
    */
-  protected isLevelSufficient(
+  public isLevelSufficient(
     userLevel: AccessLevel,
     requiredLevel: AccessLevel
   ): boolean {
