@@ -111,6 +111,11 @@ export class ServiceRegistry implements ServiceRegistryInstance {
         `${serviceName}:subscribe`,
         service
       );
+      this.registerBatchSubscriptionListener(
+        socket,
+        `${serviceName}:batchSubscribe`,
+        service
+      );
       this.registerUnsubscriptionListener(
         socket,
         `${serviceName}:unsubscribe`,
@@ -359,6 +364,68 @@ export class ServiceRegistry implements ServiceRegistryInstance {
             success: false,
             error:
               error instanceof Error ? error.message : "Subscription failed",
+          });
+        }
+      }
+    );
+  }
+
+  /**
+   * Register batch subscription listener for a service.
+   * Handles subscribing to multiple entities in a single event.
+   */
+  private registerBatchSubscriptionListener(
+    socket: QuickdrawSocket,
+    eventName: string,
+    service: BaseServiceInstance
+  ): void {
+    socket.on(
+      eventName,
+      async (
+        payload: { entryIds: string[]; requiredLevel?: string },
+        callback?: (
+          response: ServiceResponse<Record<string, unknown>>
+        ) => void
+      ) => {
+        try {
+          if (!socket.userId) {
+            callback?.({
+              success: false,
+              error: "Authentication required",
+              code: 401,
+            });
+            return;
+          }
+
+          if (
+            !Array.isArray(payload.entryIds) ||
+            payload.entryIds.length === 0
+          ) {
+            callback?.({
+              success: false,
+              error: "entryIds must be a non-empty array",
+              code: 400,
+            });
+            return;
+          }
+
+          const data = await service.batchSubscribe(
+            payload.entryIds,
+            socket,
+            (payload.requiredLevel as "Read" | "Moderate" | "Admin") ?? "Read"
+          );
+
+          callback?.({ success: true, data });
+        } catch (error) {
+          this.logger.error(`Error in batch subscription ${eventName}:`, {
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
+          callback?.({
+            success: false,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Batch subscription failed",
           });
         }
       }

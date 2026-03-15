@@ -4,11 +4,14 @@ import * as React from "react";
 import { io, Socket } from "socket.io-client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AccessLevel } from "../shared/types";
+import type { ServiceResponse } from "../shared/types";
 import type {
   QuickdrawSocketContextValue,
   QuickdrawProviderProps,
   SubscriptionRegistry,
   SubscriptionEntry,
+  SubscriptionBatcher,
+  BatchSubscribeCallback,
 } from "./types";
 
 // ============================================================================
@@ -60,6 +63,105 @@ function createSubscriptionRegistry(): SubscriptionRegistry {
         entry.cleanup?.();
       }
       subscriptions.clear();
+    },
+  };
+}
+
+// ============================================================================
+// Subscription Batcher Implementation
+// ============================================================================
+
+interface PendingBatchEntry {
+  entryId: string;
+  requiredLevel: AccessLevel;
+  callback: BatchSubscribeCallback;
+}
+
+/**
+ * Creates a subscription batcher that collects subscribe requests within
+ * the same microtask and sends them as a single batchSubscribe event per service.
+ */
+function createSubscriptionBatcher(
+  socketRef: { current: Socket | null }
+): SubscriptionBatcher {
+  const pending = new Map<string, PendingBatchEntry[]>();
+  let flushScheduled = false;
+
+  function flush(): void {
+    flushScheduled = false;
+    const socket = socketRef.current;
+    if (!socket) {
+      for (const entries of pending.values()) {
+        for (const entry of entries) {
+          entry.callback({ success: false, error: "Socket not connected" });
+        }
+      }
+      pending.clear();
+      return;
+    }
+
+    for (const [serviceName, entries] of pending) {
+      if (entries.length === 0) continue;
+      const entryIds = entries.map((e) => e.entryId);
+      const requiredLevel = entries[0]!.requiredLevel;
+
+      socket.emit(
+        `${serviceName}:batchSubscribe`,
+        { entryIds, requiredLevel },
+        (response: ServiceResponse<Record<string, unknown>>) => {
+          if (response.success && response.data) {
+            const dataMap = response.data as Record<string, unknown>;
+            for (const entry of entries) {
+              const entityData = dataMap[entry.entryId];
+              if (entityData) {
+                entry.callback({
+                  success: true,
+                  data: entityData as Record<string, unknown>,
+                });
+              } else {
+                entry.callback({
+                  success: false,
+                  error: "Access denied or entry not found",
+                  code: 403,
+                });
+              }
+            }
+          } else {
+            const errMsg = !response.success
+              ? response.error
+              : "Batch subscription failed";
+            for (const entry of entries) {
+              entry.callback({
+                success: false,
+                error: errMsg,
+              });
+            }
+          }
+        }
+      );
+    }
+
+    pending.clear();
+  }
+
+  return {
+    enqueue(
+      serviceName: string,
+      entryId: string,
+      requiredLevel: AccessLevel,
+      callback: BatchSubscribeCallback
+    ): void {
+      let entries = pending.get(serviceName);
+      if (!entries) {
+        entries = [];
+        pending.set(serviceName, entries);
+      }
+      entries.push({ entryId, requiredLevel, callback });
+
+      if (!flushScheduled) {
+        flushScheduled = true;
+        queueMicrotask(flush);
+      }
     },
   };
 }
@@ -131,6 +233,7 @@ export function QuickdrawProvider({
   queryClient,
   authToken,
   autoConnect = !!authToken,
+  withCredentials = true,
 }: QuickdrawProviderProps): React.ReactElement {
   // Create QueryClient lazily to avoid SSR issues
   const [defaultQueryClient] = React.useState(() => createQueryClient());
@@ -154,6 +257,11 @@ export function QuickdrawProvider({
   // Track socket synchronously to prevent double connections from concurrent effects
   const socketRef = React.useRef<Socket | null>(null);
 
+  // Subscription batcher - uses socketRef so it always has the current socket
+  const subscriptionBatcherRef = React.useRef<SubscriptionBatcher>(
+    createSubscriptionBatcher(socketRef)
+  );
+
   const connect = React.useCallback(
     (token?: string) => {
       // Prevent double connections - check ref synchronously since state updates are async
@@ -167,6 +275,7 @@ export function QuickdrawProvider({
 
       const newSocket = io(serverUrl, {
         auth: authToUse ? { token: authToUse } : undefined,
+        withCredentials,
         transports: ["websocket", "polling"],
         autoConnect: true,
       });
@@ -197,7 +306,7 @@ export function QuickdrawProvider({
       socketRef.current = newSocket;
       setSocket(newSocket);
     },
-    [serverUrl]
+    [serverUrl, withCredentials]
   );
 
   const disconnect = React.useCallback(() => {
@@ -256,6 +365,7 @@ export function QuickdrawProvider({
       connect,
       disconnect,
       subscriptionRegistry: subscriptionRegistryRef.current,
+      subscriptionBatcher: subscriptionBatcherRef.current,
     }),
     [socket, isConnected, userId, serviceAccess, connect, disconnect]
   );

@@ -78,6 +78,11 @@ export interface BaseServiceInstance {
     socket: QuickdrawSocket,
     requiredLevel?: AccessLevel
   ) => Promise<Record<string, unknown> | null>;
+  batchSubscribe: (
+    entryIds: string[],
+    socket: QuickdrawSocket,
+    requiredLevel?: AccessLevel
+  ) => Promise<Record<string, Record<string, unknown> | null>>;
   unsubscribe: (entryId: string, socket: QuickdrawSocket) => void;
   unsubscribeSocket: (socket: QuickdrawSocket) => void;
   ensureAccessForMethod: (

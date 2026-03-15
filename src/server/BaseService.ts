@@ -189,6 +189,114 @@ export abstract class BaseService<
   }
 
   /**
+   * Subscribe a socket to multiple entities at once.
+   * Batches ACL checks and entity fetches for efficiency.
+   * Override `checkBatchSubscriptionAccess` and `findByIds` in derived classes
+   * for optimized batch queries (e.g., single findMany instead of N findUnique).
+   *
+   * Default implementation runs individual checks/fetches in parallel via Promise.all.
+   */
+  public async batchSubscribe(
+    entryIds: string[],
+    socket: QuickdrawSocket,
+    requiredLevel: AccessLevel = "Read"
+  ): Promise<Record<string, TEntity | null>> {
+    if (!socket.userId || entryIds.length === 0) {
+      return {};
+    }
+
+    const accessMap = await this.checkBatchSubscriptionAccess(
+      socket.userId,
+      entryIds,
+      requiredLevel,
+      socket
+    );
+
+    const allowedIds = entryIds.filter((id) => accessMap.get(id) === true);
+
+    const entities = allowedIds.length > 0
+      ? await this.findByIds(allowedIds)
+      : [];
+
+    const entityMap = new Map<string, TEntity>();
+    for (const entity of entities) {
+      entityMap.set(entity.id, entity);
+    }
+
+    const results: Record<string, TEntity | null> = {};
+
+    for (const entryId of entryIds) {
+      const entity = entityMap.get(entryId);
+      if (!entity || !accessMap.get(entryId)) {
+        results[entryId] = null;
+        continue;
+      }
+
+      if (!this.subscribers.has(entryId)) {
+        this.subscribers.set(entryId, new Set());
+      }
+      this.subscribers.get(entryId)!.add(socket);
+
+      const roomName = this.getRoomName(entryId);
+      void socket.join(roomName);
+
+      results[entryId] = this.filterEntityForSubscriber(
+        entity,
+        socket,
+        entryId
+      ) as TEntity;
+    }
+
+    this.logger.debug(
+      `User ${socket.userId} batch-subscribed to ${allowedIds.length}/${entryIds.length} entities`
+    );
+
+    return results;
+  }
+
+  /**
+   * Batch ACL check for multiple entities.
+   * Override in derived classes for efficient batch queries
+   * (e.g., one findMany + one membership check per project instead of per entity).
+   *
+   * Default: checks each entity individually in parallel.
+   */
+  protected async checkBatchSubscriptionAccess(
+    userId: string,
+    entryIds: string[],
+    requiredLevel: AccessLevel,
+    socket: QuickdrawSocket
+  ): Promise<Map<string, boolean>> {
+    const results = new Map<string, boolean>();
+    await Promise.all(
+      entryIds.map(async (id) => {
+        const allowed = await this.checkSubscriptionAccess(
+          userId,
+          id,
+          requiredLevel,
+          socket
+        );
+        results.set(id, allowed);
+      })
+    );
+    return results;
+  }
+
+  /**
+   * Batch entity fetch by IDs.
+   * Override in derived classes for efficient batch queries
+   * (e.g., one findMany with includes instead of N findUnique).
+   *
+   * Default: fetches each entity individually in parallel.
+   */
+  protected async findByIds(ids: string[]): Promise<TEntity[]> {
+    const results = await Promise.all(
+      ids.map((id) => this.findById(id))
+    );
+    return results.filter((e) => e !== null) as TEntity[];
+  }
+
+  /**
    * Unsubscribe a socket from an entity's updates.
    */
   public unsubscribe(entryId: string, socket: QuickdrawSocket): void {

@@ -33,6 +33,11 @@ export interface QuickdrawProviderProps {
    * Auto-connect on mount (default: true if authToken provided)
    */
   autoConnect?: boolean;
+  /**
+   * Send cookies with cross-origin socket.io requests (default: true).
+   * Required for httpOnly cookie-based authentication.
+   */
+  withCredentials?: boolean;
 }
 
 // ============================================================================
@@ -273,6 +278,30 @@ export interface SubscriptionRegistry {
 }
 
 /**
+ * Callback for a batched subscription request.
+ */
+export type BatchSubscribeCallback<TData = Record<string, unknown>> = (
+  response: ServiceResponse<TData>
+) => void;
+
+/**
+ * Batches multiple subscription requests within the same microtask
+ * into a single `batchSubscribe` socket event per service.
+ */
+export interface SubscriptionBatcher {
+  /**
+   * Enqueue a subscription request. Requests are grouped by serviceName
+   * and flushed on the next microtask as a single batchSubscribe event.
+   */
+  enqueue: (
+    serviceName: string,
+    entryId: string,
+    requiredLevel: AccessLevel,
+    callback: BatchSubscribeCallback
+  ) => void;
+}
+
+/**
  * Extended socket context value with subscription registry.
  */
 export interface QuickdrawSocketContextValue {
@@ -283,4 +312,5 @@ export interface QuickdrawSocketContextValue {
   connect: (token?: string) => void;
   disconnect: () => void;
   subscriptionRegistry: SubscriptionRegistry;
+  subscriptionBatcher: SubscriptionBatcher;
 }

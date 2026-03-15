@@ -42,6 +42,7 @@ function createMockContext(socket: ReturnType<typeof createMockSocket>, isConnec
       setCleanup: vi.fn(),
       clear: vi.fn(),
     },
+    subscriptionBatcher: { enqueue: vi.fn() },
   };
 }
 

@@ -44,7 +44,8 @@ export function useSubscription<TData extends { id: string }>(
   entryId: string | null,
   options: UseSubscriptionOptions<TData> = {}
 ): UseSubscriptionResult<TData> {
-  const { socket, isConnected, subscriptionRegistry } = useQuickdrawSocket();
+  const { socket, isConnected, subscriptionRegistry, subscriptionBatcher } =
+    useQuickdrawSocket();
   const queryClient = useQueryClient();
   const [isSubscribed, setIsSubscribed] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -102,7 +103,6 @@ export function useSubscription<TData extends { id: string }>(
     }
 
     // Create new subscription
-    const subscribeEvent = `${serviceName}:subscribe`;
     const updateEvent = `${serviceName}:update:${entryId}`;
 
     // Handle incoming updates
@@ -128,16 +128,20 @@ export function useSubscription<TData extends { id: string }>(
     // Subscribe to updates
     socket.on(updateEvent, handleUpdate);
 
-    // Send subscription request
-    socket.emit(
-      subscribeEvent,
-      { entryId, requiredLevel },
-      (response: ServiceResponse<TData>) => {
+    // Use batcher to collect subscribe requests within the same microtask
+    subscriptionBatcher.enqueue(
+      serviceName,
+      entryId,
+      requiredLevel,
+      (response) => {
         if (response.success && response.data) {
-          queryClient.setQueryData<TData | null>(queryKey, response.data);
+          queryClient.setQueryData<TData | null>(
+            queryKey,
+            response.data as TData
+          );
           setIsSubscribed(true);
           setError(null);
-          onDataRef.current?.(response.data);
+          onDataRef.current?.(response.data as TData);
         } else if (!response.success) {
           setError(response.error);
           setIsSubscribed(false);
@@ -169,6 +173,7 @@ export function useSubscription<TData extends { id: string }>(
     queryClient,
     queryKey,
     subscriptionRegistry,
+    subscriptionBatcher,
   ]);
 
   // Manual subscribe/unsubscribe functions
