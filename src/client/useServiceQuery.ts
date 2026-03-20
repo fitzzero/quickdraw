@@ -77,6 +77,7 @@ export function useServiceQuery<TPayload = unknown, TResponse = unknown>(
     timeout = 10000,
     retry = 1,
     retryDelay,
+    invalidateOn,
   } = options ?? {};
 
   // Create stable query key based on service, method, and payload
@@ -120,6 +121,44 @@ export function useServiceQuery<TPayload = unknown, TResponse = unknown>(
       queryClient.invalidateQueries({ queryKey });
     }
   }, [skipCache, enabled, queryClient, queryKey]);
+
+  // Stable key for the invalidateOn array so the effect only re-runs
+  // when the actual event names change, not on every render.
+  const invalidateOnKey = invalidateOn?.join("\0");
+  const stableInvalidateOn = React.useMemo(
+    () => invalidateOn,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [invalidateOnKey]
+  );
+
+  // Listen for socket events that should trigger a refetch.
+  // Debounces rapid-fire events within 100ms into a single invalidation.
+  React.useEffect(() => {
+    if (!socket || !isConnected || !stableInvalidateOn?.length || !enabled) {
+      return;
+    }
+
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const handleInvalidate = () => {
+      if (debounceTimer) return;
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        queryClient.invalidateQueries({ queryKey });
+      }, 100);
+    };
+
+    for (const eventName of stableInvalidateOn) {
+      socket.on(eventName, handleInvalidate);
+    }
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      for (const eventName of stableInvalidateOn) {
+        socket.off(eventName, handleInvalidate);
+      }
+    };
+  }, [socket, isConnected, stableInvalidateOn, enabled, queryClient, queryKey]);
 
   const query = useQuery<TResponse, Error>({
     queryKey,

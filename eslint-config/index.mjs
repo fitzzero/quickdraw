@@ -127,6 +127,7 @@ export const client = [
   ...nextVitals,
   ...base,
   {
+    plugins: { quickdraw: quickdrawPlugin },
     rules: {
       "react/react-in-jsx-scope": "off",
       "react/prop-types": "off",
@@ -144,6 +145,9 @@ export const client = [
       "@typescript-eslint/no-unsafe-argument": "warn",
       "@typescript-eslint/no-redundant-type-constituents": "off",
       "@typescript-eslint/no-unnecessary-type-arguments": "off",
+
+      "quickdraw/no-raw-socket-on": "warn",
+      "quickdraw/no-raw-socket-emit": "warn",
     },
   },
 ];

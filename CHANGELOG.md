@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-03-20
+
+### Added
+
+- `useRoomEvents` hook for lifecycle-managed custom socket event listeners
+  - Handles `socket.on`/`socket.off` cleanup automatically
+  - Re-attaches listeners on reconnect
+  - Handler functions stored in refs to avoid effect churn
+  - Pair with `useSubscription` (room membership) for room-scoped events
+- `invalidateOn` option for `useServiceQuery`
+  - Listens for socket events and auto-refetches the query
+  - Debounces rapid-fire events within 100ms
+  - Ideal for keeping list queries in sync with real-time changes
+- `UseRoomEventsOptions` type
+- ESLint rule `no-raw-socket-on` — flags `socket.on()` in components, suggests `useRoomEvents`
+- ESLint rule `no-raw-socket-emit` — flags `socket.emit()` in components, suggests `useService`/`useServiceQuery`
+- Quickdraw ESLint plugin now included in `client` config with socket rules enabled as warnings
+
 ## [1.2.0] - 2026-01-17
 
 ### Added

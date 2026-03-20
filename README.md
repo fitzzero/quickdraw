@@ -76,15 +76,23 @@ export default function RootLayout({ children }) {
 }
 
 // app/chat/page.tsx
-import { useService, useSubscription } from '@fitzzero/quickdraw-core/client';
+import { useService, useSubscription, useRoomEvents } from '@fitzzero/quickdraw-core/client';
 
 function ChatPage({ chatId }: { chatId: string }) {
-  // Subscribe to real-time updates
+  // Subscribe to real-time entity updates
   const { data: chat, isLoading } = useSubscription('chatService', chatId);
   
   // Mutation hook
   const updateTitle = useService('chatService', 'updateTitle', {
     onSuccess: () => console.log('Title updated!'),
+  });
+  
+  // Listen for custom events broadcast to the chat room
+  const [typing, setTyping] = useState(false);
+  useRoomEvents({
+    'chat:message': (msg) => appendMessage(msg),
+    'agent_typing_start': () => setTyping(true),
+    'agent_typing_stop': () => setTyping(false),
   });
   
   if (isLoading) return <div>Loading...</div>;
@@ -119,6 +127,46 @@ function ChatTitleEditor({ chat, updateChat }) {
 }
 ```
 
+### Custom Room Events
+
+When your server broadcasts custom events to subscription rooms via `emitToRoom`, use `useRoomEvents` on the client to listen with proper lifecycle management:
+
+```tsx
+import { useSubscription, useRoomEvents } from '@fitzzero/quickdraw-core/client';
+
+function ProjectBoard({ projectId }: { projectId: string }) {
+  const { data: project } = useSubscription('projectService', projectId);
+  const [tasks, setTasks] = useState<Task[]>([]);
+
+  // Lifecycle-managed event listeners — cleanup handled automatically
+  useRoomEvents({
+    'task:created': (task: Task) => setTasks(prev => [...prev, task]),
+    'task:deleted': ({ id }: { id: string }) => setTasks(prev => prev.filter(t => t.id !== id)),
+  });
+
+  return <Board tasks={tasks} />;
+}
+```
+
+### Auto-Invalidating Queries
+
+For list queries that should refresh when related events fire, use `invalidateOn`:
+
+```tsx
+import { useServiceQuery } from '@fitzzero/quickdraw-core/client';
+
+function TaskList({ projectId }: { projectId: string }) {
+  // Auto-refetches when tasks are created, deleted, or change status
+  const { data: tasks } = useServiceQuery('taskService', 'listTasks', { projectId }, {
+    invalidateOn: ['task:created', 'task:deleted', 'task:statusUpdate'],
+  });
+
+  return <ul>{tasks?.map(t => <li key={t.id}>{t.title}</li>)}</ul>;
+}
+```
+
+Rapid-fire events within 100ms are debounced into a single refetch.
+
 ## Package Exports
 
 ```typescript
@@ -144,7 +192,9 @@ import {
   QuickdrawProvider,
   useQuickdrawSocket,
   useService,
+  useServiceQuery,
   useSubscription,
+  useRoomEvents,
   SocketCheckbox,
   SocketTextField,
   SocketSelect,

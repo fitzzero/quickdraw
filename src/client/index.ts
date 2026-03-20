@@ -7,6 +7,7 @@ export { QuickdrawProvider, useQuickdrawSocket } from "./QuickdrawProvider";
 export { useService, useServiceMethod } from "./useService";
 export { useServiceQuery } from "./useServiceQuery";
 export { useSubscription } from "./useSubscription";
+export { useRoomEvents } from "./useRoomEvents";
 
 // Types
 export type {
@@ -18,6 +19,7 @@ export type {
   UseServiceQueryResult,
   UseSubscriptionOptions,
   UseSubscriptionResult,
+  UseRoomEventsOptions,
   ClientServiceMethodMap,
   SubscriptionDataMap,
 } from "./types";

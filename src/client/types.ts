@@ -114,6 +114,21 @@ export interface UseSubscriptionResult<TData> {
 }
 
 // ============================================================================
+// Room Events Hook Types
+// ============================================================================
+
+/**
+ * Options for the useRoomEvents hook.
+ */
+export interface UseRoomEventsOptions {
+  /**
+   * Whether to listen for events (default: true).
+   * Set to false to temporarily disable all listeners.
+   */
+  enabled?: boolean;
+}
+
+// ============================================================================
 // Service Query Hook Types
 // ============================================================================
 
@@ -169,6 +184,22 @@ export interface UseServiceQueryOptions<TResponse> {
    * Delay between retries in milliseconds
    */
   retryDelay?: number;
+  /**
+   * Socket event names that should trigger an automatic refetch.
+   * When any of these events fire on the socket, the query is refetched.
+   * Useful for keeping list queries in sync with real-time changes.
+   *
+   * Rapid-fire events within the same 100ms window are debounced into a single refetch.
+   *
+   * @example
+   * ```tsx
+   * // Refetch the task list when tasks are created, deleted, or change status
+   * useServiceQuery("taskService", "listTasks", { projectId }, {
+   *   invalidateOn: ["task:created", "task:deleted", "task:statusUpdate"],
+   * });
+   * ```
+   */
+  invalidateOn?: string[];
 }
 
 /**
