@@ -192,6 +192,31 @@ describe("batchSubscribe", () => {
     expect(update.name).toBe("Updated Entity 4");
   });
 
+  it("should receive updates for entities that were missing at subscription time", async () => {
+    const result = await client.emit<
+      { entryIds: string[]; requiredLevel: string },
+      Record<string, TestEntity | null>
+    >("testService:batchSubscribe", {
+      entryIds: ["future-entity"],
+      requiredLevel: "Read",
+    });
+
+    expect(result["future-entity"]).toBeNull();
+
+    const updatePromise = new Promise<Partial<TestEntity>>((resolve) => {
+      client.socket.on("testService:update:future-entity", resolve);
+    });
+
+    const io = server.result.io as SocketIOServer;
+    io.to("testService:future-entity").emit(
+      "testService:update:future-entity",
+      { id: "future-entity", name: "Created Later" }
+    );
+
+    const update = await updatePromise;
+    expect(update.name).toBe("Created Later");
+  });
+
   it("should use overridden batch methods when available", async () => {
     batchService.batchAccessCallCount = 0;
     batchService.batchFindCallCount = 0;

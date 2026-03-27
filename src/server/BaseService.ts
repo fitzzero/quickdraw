@@ -223,6 +223,17 @@ export abstract class BaseService<
       entityMap.set(entity.id, entity);
     }
 
+    // Join rooms for all ACL-allowed IDs, matching subscribe()'s behavior
+    // of joining before entity resolution so clients receive future updates
+    // even for entities that don't exist yet at subscription time.
+    for (const entryId of allowedIds) {
+      if (!this.subscribers.has(entryId)) {
+        this.subscribers.set(entryId, new Set());
+      }
+      this.subscribers.get(entryId)!.add(socket);
+      void socket.join(this.getRoomName(entryId));
+    }
+
     const results: Record<string, TEntity | null> = {};
 
     for (const entryId of entryIds) {
@@ -231,14 +242,6 @@ export abstract class BaseService<
         results[entryId] = null;
         continue;
       }
-
-      if (!this.subscribers.has(entryId)) {
-        this.subscribers.set(entryId, new Set());
-      }
-      this.subscribers.get(entryId)!.add(socket);
-
-      const roomName = this.getRoomName(entryId);
-      void socket.join(roomName);
 
       results[entryId] = this.filterEntityForSubscriber(
         entity,
