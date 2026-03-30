@@ -56,6 +56,7 @@ export function useSubscription<TData extends { id: string }>(
     onError,
     requiredLevel = "Read",
     staleTime = Infinity, // Subscriptions should stay fresh via socket updates
+    refetchOnWindowFocus = false,
   } = options;
 
   // Subscription key for deduplication
@@ -129,31 +130,61 @@ export function useSubscription<TData extends { id: string }>(
     socket.on(updateEvent, handleUpdate);
 
     // Use batcher to collect subscribe requests within the same microtask
+    const handleBatchResponse = (response: { success: boolean; data?: Record<string, unknown>; error?: string }) => {
+      if (response.success && response.data) {
+        queryClient.setQueryData<TData | null>(
+          queryKey,
+          response.data as TData
+        );
+        setIsSubscribed(true);
+        setError(null);
+        onDataRef.current?.(response.data as TData);
+      } else if (!response.success) {
+        setError(response.error ?? "Subscription failed");
+        setIsSubscribed(false);
+        onErrorRef.current?.(response.error ?? "Subscription failed");
+      }
+    };
+
     subscriptionBatcher.enqueue(
       serviceName,
       entryId,
       requiredLevel,
-      (response) => {
-        if (response.success && response.data) {
-          queryClient.setQueryData<TData | null>(
-            queryKey,
-            response.data as TData
-          );
-          setIsSubscribed(true);
-          setError(null);
-          onDataRef.current?.(response.data as TData);
-        } else if (!response.success) {
-          setError(response.error);
-          setIsSubscribed(false);
-          onErrorRef.current?.(response.error);
-        }
-      }
+      handleBatchResponse
     );
+
+    // Visibility-based re-fetch: when the tab becomes visible, re-subscribe
+    // through the batcher to catch any updates missed while hidden.
+    // Debounced to coalesce rapid visibility toggles.
+    let visibilityDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+
+      if (visibilityDebounceTimer) clearTimeout(visibilityDebounceTimer);
+      visibilityDebounceTimer = setTimeout(() => {
+        visibilityDebounceTimer = null;
+        subscriptionBatcher.enqueue(
+          serviceName,
+          entryId,
+          requiredLevel,
+          handleBatchResponse
+        );
+      }, 200);
+    };
+
+    if (refetchOnWindowFocus) {
+      document.addEventListener("visibilitychange", handleVisibilityChange);
+    }
 
     // Set cleanup function in registry
     const cleanup = () => {
       socket.off(updateEvent, handleUpdate);
       socket.emit(`${serviceName}:unsubscribe`, { entryId });
+      if (visibilityDebounceTimer) clearTimeout(visibilityDebounceTimer);
+      if (refetchOnWindowFocus) {
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+      }
       setIsSubscribed(false);
     };
 
@@ -174,6 +205,7 @@ export function useSubscription<TData extends { id: string }>(
     queryKey,
     subscriptionRegistry,
     subscriptionBatcher,
+    refetchOnWindowFocus,
   ]);
 
   // Manual subscribe/unsubscribe functions

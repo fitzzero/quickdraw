@@ -98,6 +98,17 @@ export interface UseSubscriptionOptions<TData> {
    * Stale time for TanStack Query cache (default: Infinity for subscriptions)
    */
   staleTime?: number;
+  /**
+   * Re-fetch entity data through the batcher when the tab becomes visible,
+   * catching any updates that may have been missed while the tab was hidden.
+   *
+   * Only one visibility listener is created per unique subscription
+   * (deduplicated by the subscription registry), so multiple components
+   * subscribing to the same entity won't cause redundant fetches.
+   *
+   * @default false
+   */
+  refetchOnWindowFocus?: boolean;
 }
 
 /**
