@@ -112,9 +112,10 @@ import {
 | Read      | `useServiceQuery` | `listExpenses`, `getUser`, `search`, `findById`       |
 | Write     | `useService`      | `createExpense`, `updateUser`, `delete`, `bulkUpdate` |
 
-## Update Serena Memories
+## Update Agent Context
 
-Update any `client-patterns` or `quickdraw-core` memory files to reflect:
+Update any agent context files that document client patterns (e.g. `CLAUDE.md`
+or `.claude/rules/` in your project) to reflect:
 
 1. Remove the "useService Stability Warning" section about infinite loops
 2. Add documentation for `useServiceQuery` as the preferred hook for read operations

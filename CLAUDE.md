@@ -61,3 +61,9 @@ verify + commit against a published version.
 2. `npm publish` (runs `prepublishOnly` → `bun run build`; `files` ships
    `dist`, `eslint-plugin-quickdraw`, `eslint-config`, `oxlint.base.jsonc`).
 3. Consumers: `bun update @fitzzero/quickdraw-core` and bump `^` ranges.
+
+## Domain-Specific Context
+
+Service/hook patterns (BaseService, defineMethod, ACL, client hooks) are in
+`.claude/rules/` with path-targeted scoping — they load automatically when you
+work on matching files.
