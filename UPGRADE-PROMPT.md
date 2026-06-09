@@ -24,17 +24,26 @@ Change `useService` to `useServiceQuery` for any read-only methods:
 const listExpenses = useService("expenseService", "listExpenses", { onSuccess: setExpenses });
 const listExpensesMutateRef = useRef(listExpenses.mutate);
 listExpensesMutateRef.current = listExpenses.mutate;
-const loadExpenses = useCallback(() => { listExpensesMutateRef.current({ pageSize: 100 }); }, []);
-useEffect(() => { if (userId) loadExpenses(); }, [userId, loadExpenses]);
+const loadExpenses = useCallback(() => {
+  listExpensesMutateRef.current({ pageSize: 100 });
+}, []);
+useEffect(() => {
+  if (userId) loadExpenses();
+}, [userId, loadExpenses]);
 ```
 
 **AFTER (query-style for reads):**
 
 ```typescript
-const { data: expenses, isLoading, refetch } = useServiceQuery(
-  "expenseService", "listExpenses",
+const {
+  data: expenses,
+  isLoading,
+  refetch,
+} = useServiceQuery(
+  "expenseService",
+  "listExpenses",
   { pageSize: 100, ...filters },
-  { enabled: !!userId }
+  { enabled: !!userId },
 );
 ```
 
@@ -63,10 +72,10 @@ listExpensesMutateRef.current = listExpenses.mutate;
 ### 4. Update type imports if using them
 
 ```typescript
-import { 
+import {
   useServiceQuery,
   type UseServiceQueryOptions,
-  type UseServiceQueryResult 
+  type UseServiceQueryResult,
 } from "@fitzzero/quickdraw-core/client";
 ```
 
@@ -74,34 +83,34 @@ import {
 
 ### Options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `enabled` | `true` | Auto-fetch on mount |
-| `staleTime` | 5 min | How long data stays fresh |
-| `gcTime` | 10 min | Cache retention for unused data |
+| Option      | Default | Description                     |
+| ----------- | ------- | ------------------------------- |
+| `enabled`   | `true`  | Auto-fetch on mount             |
+| `staleTime` | 5 min   | How long data stays fresh       |
+| `gcTime`    | 10 min  | Cache retention for unused data |
 | `skipCache` | `false` | Force fresh fetch, bypass cache |
-| `onSuccess` | - | Success callback |
-| `onError` | - | Error callback |
+| `onSuccess` | -       | Success callback                |
+| `onError`   | -       | Error callback                  |
 
 ### Returns
 
-| Property | Description |
-|----------|-------------|
-| `data` | The cached/fetched data |
-| `isLoading` | Initial load in progress |
+| Property     | Description                                  |
+| ------------ | -------------------------------------------- |
+| `data`       | The cached/fetched data                      |
+| `isLoading`  | Initial load in progress                     |
 | `isFetching` | Any fetch in progress (including background) |
-| `isStale` | Data is past staleTime |
-| `isSuccess` | Query has succeeded |
-| `isError` | Query has errored |
-| `error` | Error message if failed |
-| `refetch()` | Manual refetch function |
+| `isStale`    | Data is past staleTime                       |
+| `isSuccess`  | Query has succeeded                          |
+| `isError`    | Query has errored                            |
+| `error`      | Error message if failed                      |
+| `refetch()`  | Manual refetch function                      |
 
 ## When to use which hook
 
-| Operation | Hook | Examples |
-|-----------|------|----------|
-| Read | `useServiceQuery` | `listExpenses`, `getUser`, `search`, `findById` |
-| Write | `useService` | `createExpense`, `updateUser`, `delete`, `bulkUpdate` |
+| Operation | Hook              | Examples                                              |
+| --------- | ----------------- | ----------------------------------------------------- |
+| Read      | `useServiceQuery` | `listExpenses`, `getUser`, `search`, `findById`       |
+| Write     | `useService`      | `createExpense`, `updateUser`, `delete`, `bulkUpdate` |
 
 ## Update Serena Memories
 

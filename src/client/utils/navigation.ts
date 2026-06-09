@@ -20,10 +20,7 @@ export interface BreadcrumbItem {
 /**
  * Find a nav item by its href (exact match, searching children recursively).
  */
-export function findNavItemByHref(
-  items: NavItem[],
-  href: string,
-): NavItem | undefined {
+export function findNavItemByHref(items: NavItem[], href: string): NavItem | undefined {
   for (const item of items) {
     if (item.href === href) return item;
     if (item.children) {
@@ -37,10 +34,7 @@ export function findNavItemByHref(
 /**
  * Find the parent nav item containing a child with the given href.
  */
-export function findParentNavItem(
-  items: NavItem[],
-  href: string,
-): NavItem | undefined {
+export function findParentNavItem(items: NavItem[], href: string): NavItem | undefined {
   for (const item of items) {
     if (item.children) {
       const childMatch = item.children.find((c) => c.href === href);
@@ -55,10 +49,7 @@ export function findParentNavItem(
 /**
  * Build breadcrumb items from a pathname using the provided navigation config.
  */
-export function buildBreadcrumbs(
-  pathname: string,
-  navigation: NavItem[],
-): BreadcrumbItem[] {
+export function buildBreadcrumbs(pathname: string, navigation: NavItem[]): BreadcrumbItem[] {
   const breadcrumbs: BreadcrumbItem[] = [];
 
   if (pathname === "/") {

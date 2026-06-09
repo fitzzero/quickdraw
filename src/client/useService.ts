@@ -39,7 +39,7 @@ import type { UseServiceOptions, UseServiceResult } from "./types";
 export function useService<TPayload = unknown, TResponse = unknown>(
   serviceName: string,
   methodName: string,
-  options?: UseServiceOptions<TResponse>
+  options?: UseServiceOptions<TResponse>,
 ): UseServiceResult<TPayload, TResponse> {
   const { socket, isConnected } = useQuickdrawSocket();
   const [error, setError] = React.useState<string | null>(null);
@@ -63,19 +63,15 @@ export function useService<TPayload = unknown, TResponse = unknown>(
           reject(new Error("Request timeout"));
         }, options?.timeout ?? 10000);
 
-        socket.emit(
-          eventName,
-          payload,
-          (response: ServiceResponse<TResponse>) => {
-            clearTimeout(timeout);
+        socket.emit(eventName, payload, (response: ServiceResponse<TResponse>) => {
+          clearTimeout(timeout);
 
-            if (response.success) {
-              resolve(response.data);
-            } else {
-              reject(new Error(response.error));
-            }
+          if (response.success) {
+            resolve(response.data);
+          } else {
+            reject(new Error(response.error));
           }
-        );
+        });
       });
     },
     onSuccess: (data) => {
@@ -111,7 +107,7 @@ export function useService<TPayload = unknown, TResponse = unknown>(
       mutation.data,
       mutation.reset,
       error,
-    ]
+    ],
   );
 }
 
@@ -137,7 +133,7 @@ export function useService<TPayload = unknown, TResponse = unknown>(
 export function useServiceMethod<TPayload = unknown, TResponse = unknown>(
   serviceName: string,
   methodName: string,
-  options?: UseServiceOptions<TResponse>
+  options?: UseServiceOptions<TResponse>,
 ): {
   execute: (payload: TPayload) => Promise<TResponse | null>;
   loading: boolean;
@@ -177,28 +173,24 @@ export function useServiceMethod<TPayload = unknown, TResponse = unknown>(
           resolve(null);
         }, options?.timeout ?? 10000);
 
-        socket.emit(
-          eventName,
-          payload,
-          (response: ServiceResponse<TResponse>) => {
-            clearTimeout(timeout);
-            setLoading(false);
+        socket.emit(eventName, payload, (response: ServiceResponse<TResponse>) => {
+          clearTimeout(timeout);
+          setLoading(false);
 
-            if (response.success) {
-              setError(null);
-              setData(response.data);
-              optionsRef.current?.onSuccess?.(response.data);
-              resolve(response.data);
-            } else {
-              setError(response.error);
-              optionsRef.current?.onError?.(response.error);
-              resolve(null);
-            }
+          if (response.success) {
+            setError(null);
+            setData(response.data);
+            optionsRef.current?.onSuccess?.(response.data);
+            resolve(response.data);
+          } else {
+            setError(response.error);
+            optionsRef.current?.onError?.(response.error);
+            resolve(null);
           }
-        );
+        });
       });
     },
-    [socket, isConnected, serviceName, methodName, options?.timeout]
+    [socket, isConnected, serviceName, methodName, options?.timeout],
   );
 
   // Memoize return object to prevent new references on every render
@@ -210,6 +202,6 @@ export function useServiceMethod<TPayload = unknown, TResponse = unknown>(
       data,
       isReady: !!socket && isConnected,
     }),
-    [execute, loading, error, data, socket, isConnected]
+    [execute, loading, error, data, socket, isConnected],
   );
 }

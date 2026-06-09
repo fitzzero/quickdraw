@@ -19,10 +19,7 @@ import type {
   AdminSetACLPayload,
   AdminSubscribersResponse,
 } from "./types";
-import {
-  zodToAdminFields,
-  mergeWithDefaultFields,
-} from "./utils/zodToAdminFields";
+import { zodToAdminFields, mergeWithDefaultFields } from "./utils/zodToAdminFields";
 
 /**
  * Base class for all quickdraw services.
@@ -74,18 +71,14 @@ export abstract class BaseService<
   protected readonly subscribers: Map<string, Set<QuickdrawSocket>> = new Map();
 
   // Prisma delegate for DB operations
-  protected delegate:
-    | PrismaDelegate<TEntity, TCreateInput, TUpdateInput>
-    | undefined;
+  protected delegate: PrismaDelegate<TEntity, TCreateInput, TUpdateInput> | undefined;
 
   // Socket.io server instance for room-based broadcasts
   protected io: SocketIOServer | null = null;
 
   // Collection of public methods for registry discovery
-  private readonly publicMethods: Map<
-    string,
-    ServiceMethodDefinition<unknown, unknown>
-  > = new Map();
+  private readonly publicMethods: Map<string, ServiceMethodDefinition<unknown, unknown>> =
+    new Map();
 
   // Admin metadata configuration (set by installAdminMethods)
   private adminMeta: AdminServiceMeta | null = null;
@@ -103,9 +96,7 @@ export abstract class BaseService<
    * Set the Prisma delegate for this service.
    * Must be called in the constructor of derived classes.
    */
-  protected setDelegate(
-    delegate: PrismaDelegate<TEntity, TCreateInput, TUpdateInput>
-  ): void {
+  protected setDelegate(delegate: PrismaDelegate<TEntity, TCreateInput, TUpdateInput>): void {
     this.delegate = delegate;
   }
 
@@ -123,7 +114,7 @@ export abstract class BaseService<
   protected getDelegate(): PrismaDelegate<TEntity, TCreateInput, TUpdateInput> {
     if (!this.delegate) {
       throw new Error(
-        `Delegate not set for service ${this.serviceName}. Call setDelegate() in constructor.`
+        `Delegate not set for service ${this.serviceName}. Call setDelegate() in constructor.`,
       );
     }
     return this.delegate;
@@ -149,7 +140,7 @@ export abstract class BaseService<
   public async subscribe(
     entryId: string,
     socket: QuickdrawSocket,
-    requiredLevel: AccessLevel = "Read"
+    requiredLevel: AccessLevel = "Read",
   ): Promise<TEntity | null> {
     if (!socket.userId) {
       return null;
@@ -160,7 +151,7 @@ export abstract class BaseService<
       socket.userId,
       entryId,
       requiredLevel,
-      socket
+      socket,
     );
 
     if (!allowed) {
@@ -177,9 +168,7 @@ export abstract class BaseService<
     const roomName = this.getRoomName(entryId);
     void socket.join(roomName);
 
-    this.logger.debug(
-      `User ${socket.userId} subscribed to ${entryId} (room: ${roomName})`
-    );
+    this.logger.debug(`User ${socket.userId} subscribed to ${entryId} (room: ${roomName})`);
 
     // Return current entity data, filtered based on subscriber's access level
     const entity = await this.findById(entryId);
@@ -199,7 +188,7 @@ export abstract class BaseService<
   public async batchSubscribe(
     entryIds: string[],
     socket: QuickdrawSocket,
-    requiredLevel: AccessLevel = "Read"
+    requiredLevel: AccessLevel = "Read",
   ): Promise<Record<string, TEntity | null>> {
     if (!socket.userId || entryIds.length === 0) {
       return {};
@@ -209,14 +198,12 @@ export abstract class BaseService<
       socket.userId,
       entryIds,
       requiredLevel,
-      socket
+      socket,
     );
 
     const allowedIds = entryIds.filter((id) => accessMap.get(id) === true);
 
-    const entities = allowedIds.length > 0
-      ? await this.findByIds(allowedIds)
-      : [];
+    const entities = allowedIds.length > 0 ? await this.findByIds(allowedIds) : [];
 
     const entityMap = new Map<string, TEntity>();
     for (const entity of entities) {
@@ -243,15 +230,11 @@ export abstract class BaseService<
         continue;
       }
 
-      results[entryId] = this.filterEntityForSubscriber(
-        entity,
-        socket,
-        entryId
-      ) as TEntity;
+      results[entryId] = this.filterEntityForSubscriber(entity, socket, entryId) as TEntity;
     }
 
     this.logger.debug(
-      `User ${socket.userId} batch-subscribed to ${allowedIds.length}/${entryIds.length} entities`
+      `User ${socket.userId} batch-subscribed to ${allowedIds.length}/${entryIds.length} entities`,
     );
 
     return results;
@@ -268,19 +251,14 @@ export abstract class BaseService<
     userId: string,
     entryIds: string[],
     requiredLevel: AccessLevel,
-    socket: QuickdrawSocket
+    socket: QuickdrawSocket,
   ): Promise<Map<string, boolean>> {
     const results = new Map<string, boolean>();
     await Promise.all(
       entryIds.map(async (id) => {
-        const allowed = await this.checkSubscriptionAccess(
-          userId,
-          id,
-          requiredLevel,
-          socket
-        );
+        const allowed = await this.checkSubscriptionAccess(userId, id, requiredLevel, socket);
         results.set(id, allowed);
-      })
+      }),
     );
     return results;
   }
@@ -293,9 +271,7 @@ export abstract class BaseService<
    * Default: fetches each entity individually in parallel.
    */
   protected async findByIds(ids: string[]): Promise<TEntity[]> {
-    const results = await Promise.all(
-      ids.map((id) => this.findById(id))
-    );
+    const results = await Promise.all(ids.map((id) => this.findById(id)));
     return results.filter((e) => e !== null) as TEntity[];
   }
 
@@ -353,11 +329,7 @@ export abstract class BaseService<
    * );
    * ```
    */
-  public emitToRoom(
-    roomName: string,
-    eventName: string,
-    data: unknown
-  ): void {
+  public emitToRoom(roomName: string, eventName: string, data: unknown): void {
     // Preferred: use io instance directly (sends to ALL in room including sender)
     if (this.io) {
       this.io.to(roomName).emit(eventName, data);
@@ -373,9 +345,7 @@ export abstract class BaseService<
     }
 
     anySocket.to(roomName).emit(eventName, data);
-    this.logger.debug(
-      `Emitted ${eventName} to room ${roomName} (via socket fallback)`
-    );
+    this.logger.debug(`Emitted ${eventName} to room ${roomName} (via socket fallback)`);
   }
 
   /**
@@ -390,11 +360,7 @@ export abstract class BaseService<
    * this.emitToUserRoom(userId, "budget:shared", { budgetId, sharedBy });
    * ```
    */
-  public emitToUserRoom(
-    userId: string,
-    eventName: string,
-    data: unknown
-  ): void {
+  public emitToUserRoom(userId: string, eventName: string, data: unknown): void {
     this.emitToRoom(`user:${userId}`, eventName, data);
   }
 
@@ -429,9 +395,7 @@ export abstract class BaseService<
     const publicData = this.stripProtectedFields(data);
 
     for (const socket of subs) {
-      const payload = this.hasElevatedAccess(socket, entryId)
-        ? fullData
-        : publicData;
+      const payload = this.hasElevatedAccess(socket, entryId) ? fullData : publicData;
       socket.emit(eventName, payload);
     }
   }
@@ -448,7 +412,7 @@ export abstract class BaseService<
     userId: string,
     entryId: string,
     requiredLevel: AccessLevel,
-    socket: QuickdrawSocket
+    socket: QuickdrawSocket,
   ): Promise<boolean> {
     // First check service-level access
     if (this.hasServiceAccess(socket, requiredLevel)) {
@@ -471,10 +435,7 @@ export abstract class BaseService<
   /**
    * Check if a socket has service-level access.
    */
-  protected hasServiceAccess(
-    socket: QuickdrawSocket,
-    requiredLevel: AccessLevel
-  ): boolean {
+  protected hasServiceAccess(socket: QuickdrawSocket, requiredLevel: AccessLevel): boolean {
     const userLevel = socket.serviceAccess?.[this.serviceName];
     if (!userLevel) return false;
     return this.isLevelSufficient(userLevel, requiredLevel);
@@ -488,7 +449,7 @@ export abstract class BaseService<
     _userId: string,
     _entryId: string,
     _requiredLevel: AccessLevel,
-    _socket: QuickdrawSocket
+    _socket: QuickdrawSocket,
   ): boolean {
     // Default: deny (override in derived classes)
     return false;
@@ -500,7 +461,7 @@ export abstract class BaseService<
   protected async checkEntryACL(
     userId: string,
     entryId: string,
-    requiredLevel: AccessLevel
+    requiredLevel: AccessLevel,
   ): Promise<boolean> {
     try {
       const entity = await this.getDelegate().findUnique({
@@ -525,10 +486,7 @@ export abstract class BaseService<
    *
    * Can be called from external method composition files for custom access checks.
    */
-  public isLevelSufficient(
-    userLevel: AccessLevel,
-    requiredLevel: AccessLevel
-  ): boolean {
+  public isLevelSufficient(userLevel: AccessLevel, requiredLevel: AccessLevel): boolean {
     const order: Record<AccessLevel, number> = {
       Public: 0,
       Read: 1,
@@ -545,7 +503,7 @@ export abstract class BaseService<
   public async ensureAccessForMethod(
     requiredLevel: AccessLevel,
     socket: QuickdrawSocket,
-    entryId?: string
+    entryId?: string,
   ): Promise<void> {
     if (requiredLevel === "Public") {
       return;
@@ -565,10 +523,7 @@ export abstract class BaseService<
       if (this.checkAccess(socket.userId, entryId, requiredLevel, socket)) {
         return;
       }
-      if (
-        this.hasEntryACL &&
-        (await this.checkEntryACL(socket.userId, entryId, requiredLevel))
-      ) {
+      if (this.hasEntryACL && (await this.checkEntryACL(socket.userId, entryId, requiredLevel))) {
         return;
       }
       throw new Error("Insufficient permissions");
@@ -615,10 +570,7 @@ export abstract class BaseService<
    * }
    * ```
    */
-  protected hasElevatedAccess(
-    socket: QuickdrawSocket,
-    entryId: string
-  ): boolean {
+  protected hasElevatedAccess(socket: QuickdrawSocket, entryId: string): boolean {
     return socket.userId === entryId || this.hasServiceAccess(socket, "Admin");
   }
 
@@ -655,11 +607,9 @@ export abstract class BaseService<
   protected filterEntityForSubscriber(
     entity: Partial<TEntity>,
     socket: QuickdrawSocket,
-    entryId: string
+    entryId: string,
   ): Partial<TEntity> {
-    return this.hasElevatedAccess(socket, entryId)
-      ? entity
-      : this.stripProtectedFields(entity);
+    return this.hasElevatedAccess(socket, entryId) ? entity : this.stripProtectedFields(entity);
   }
 
   // ===========================================================================
@@ -688,10 +638,7 @@ export abstract class BaseService<
   /**
    * Update an entity and emit to subscribers.
    */
-  protected async update(
-    id: string,
-    data: TUpdateInput
-  ): Promise<TEntity | null> {
+  protected async update(id: string, data: TUpdateInput): Promise<TEntity | null> {
     try {
       const entity = await this.getDelegate().update({
         where: { id } as { id: string },
@@ -738,18 +685,13 @@ export abstract class BaseService<
     access: AccessLevel,
     handler: (
       payload: TServiceMethods[K]["payload"],
-      context: ServiceMethodContext
+      context: ServiceMethodContext,
     ) => Promise<TServiceMethods[K]["response"]>,
     options?: {
       schema?: z.ZodType<TServiceMethods[K]["payload"]>;
-      resolveEntryId?: (
-        payload: TServiceMethods[K]["payload"]
-      ) => string | null;
-    }
-  ): ServiceMethodDefinition<
-    TServiceMethods[K]["payload"],
-    TServiceMethods[K]["response"]
-  > {
+      resolveEntryId?: (payload: TServiceMethods[K]["payload"]) => string | null;
+    },
+  ): ServiceMethodDefinition<TServiceMethods[K]["payload"], TServiceMethods[K]["response"]> {
     const definition: ServiceMethodDefinition<
       TServiceMethods[K]["payload"],
       TServiceMethods[K]["response"]
@@ -758,16 +700,13 @@ export abstract class BaseService<
       access,
       handler: handler as (
         payload: TServiceMethods[K]["payload"],
-        context: ServiceMethodContext
+        context: ServiceMethodContext,
       ) => Promise<TServiceMethods[K]["response"]>,
       schema: options?.schema,
       resolveEntryId: options?.resolveEntryId,
     };
 
-    this.publicMethods.set(
-      name,
-      definition as ServiceMethodDefinition<unknown, unknown>
-    );
+    this.publicMethods.set(name, definition as ServiceMethodDefinition<unknown, unknown>);
     return definition;
   }
 
@@ -794,9 +733,7 @@ export abstract class BaseService<
    * }
    * ```
    */
-  protected verifyAllMethods(
-    expectedMethods: readonly (keyof TServiceMethods & string)[]
-  ): void {
+  protected verifyAllMethods(expectedMethods: readonly (keyof TServiceMethods & string)[]): void {
     const missing: string[] = [];
     for (const method of expectedMethods) {
       if (!this.publicMethods.has(method)) {
@@ -804,9 +741,7 @@ export abstract class BaseService<
       }
     }
     if (missing.length > 0) {
-      throw new Error(
-        `${this.serviceName}: Missing method implementations: ${missing.join(", ")}`
-      );
+      throw new Error(`${this.serviceName}: Missing method implementations: ${missing.join(", ")}`);
     }
   }
 
@@ -839,15 +774,8 @@ export abstract class BaseService<
    * ```
    */
   protected installAdminMethods(options: InstallAdminMethodsOptions): void {
-    const {
-      expose,
-      access,
-      schema,
-      displayName,
-      tableColumns,
-      hiddenFields,
-      fieldOverrides,
-    } = options;
+    const { expose, access, schema, displayName, tableColumns, hiddenFields, fieldOverrides } =
+      options;
 
     // Build admin metadata if schema is provided
     if (schema) {
@@ -876,12 +804,7 @@ export abstract class BaseService<
 
     // Determine if adminMeta should be exposed (default: true if any CRUD method is exposed)
     const shouldExposeMeta =
-      expose.meta ??
-      (expose.list ||
-        expose.get ||
-        expose.create ||
-        expose.update ||
-        expose.delete);
+      expose.meta ?? (expose.list || expose.get || expose.create || expose.update || expose.delete);
 
     if (shouldExposeMeta) {
       this.publicMethods.set("adminMeta", {
@@ -889,7 +812,7 @@ export abstract class BaseService<
         access: access.meta ?? access.list,
         handler: async (
           _payload: unknown,
-          _context: ServiceMethodContext
+          _context: ServiceMethodContext,
         ): Promise<AdminServiceMeta> => {
           return this.getAdminMeta();
         },
@@ -922,9 +845,7 @@ export abstract class BaseService<
         name: "adminCreate",
         access: access.create,
         handler: async (payload: unknown, _context: ServiceMethodContext) => {
-          return await this.adminCreate(
-            (payload as { data: TCreateInput }).data
-          );
+          return await this.adminCreate((payload as { data: TCreateInput }).data);
         },
       } as ServiceMethodDefinition<unknown, unknown>);
     }
@@ -959,8 +880,7 @@ export abstract class BaseService<
         handler: async (payload: unknown, _context: ServiceMethodContext) => {
           return await this.adminSetEntryACL(payload as AdminSetACLPayload);
         },
-        resolveEntryId: (payload: unknown) =>
-          (payload as { entryId: string }).entryId,
+        resolveEntryId: (payload: unknown) => (payload as { entryId: string }).entryId,
       } as ServiceMethodDefinition<unknown, unknown>);
     }
 
@@ -969,12 +889,9 @@ export abstract class BaseService<
         name: "adminGetSubscribers",
         access: access.getSubscribers,
         handler: async (payload: unknown, _context: ServiceMethodContext) => {
-          return this.adminGetSubscribers(
-            (payload as { entryId: string }).entryId
-          );
+          return this.adminGetSubscribers((payload as { entryId: string }).entryId);
         },
-        resolveEntryId: (payload: unknown) =>
-          (payload as { entryId: string }).entryId,
+        resolveEntryId: (payload: unknown) => (payload as { entryId: string }).entryId,
       } as ServiceMethodDefinition<unknown, unknown>);
     }
 
@@ -983,12 +900,9 @@ export abstract class BaseService<
         name: "adminReemit",
         access: access.reemit,
         handler: async (payload: unknown, _context: ServiceMethodContext) => {
-          return await this.adminReemit(
-            (payload as { entryId: string }).entryId
-          );
+          return await this.adminReemit((payload as { entryId: string }).entryId);
         },
-        resolveEntryId: (payload: unknown) =>
-          (payload as { entryId: string }).entryId,
+        resolveEntryId: (payload: unknown) => (payload as { entryId: string }).entryId,
       } as ServiceMethodDefinition<unknown, unknown>);
     }
 
@@ -997,18 +911,13 @@ export abstract class BaseService<
         name: "adminUnsubscribeAll",
         access: access.unsubscribeAll,
         handler: async (payload: unknown, _context: ServiceMethodContext) => {
-          return this.adminUnsubscribeAll(
-            (payload as { entryId: string }).entryId
-          );
+          return this.adminUnsubscribeAll((payload as { entryId: string }).entryId);
         },
-        resolveEntryId: (payload: unknown) =>
-          (payload as { entryId: string }).entryId,
+        resolveEntryId: (payload: unknown) => (payload as { entryId: string }).entryId,
       } as ServiceMethodDefinition<unknown, unknown>);
     }
 
-    const installedMethods = Object.keys(expose).filter(
-      (k) => expose[k as keyof typeof expose]
-    );
+    const installedMethods = Object.keys(expose).filter((k) => expose[k as keyof typeof expose]);
     if (shouldExposeMeta) installedMethods.push("meta");
 
     this.logger.info(`Installed admin methods: ${installedMethods.join(", ")}`);
@@ -1037,7 +946,7 @@ export abstract class BaseService<
   public getAdminMeta(): AdminServiceMeta {
     if (!this.adminMeta) {
       throw new Error(
-        `Admin methods not installed for ${this.serviceName}. Call installAdminMethods() first.`
+        `Admin methods not installed for ${this.serviceName}. Call installAdminMethods() first.`,
       );
     }
     return this.adminMeta;
@@ -1046,9 +955,7 @@ export abstract class BaseService<
   /**
    * Admin method: List entities with pagination and filters.
    */
-  protected async adminList(
-    payload: AdminListPayload
-  ): Promise<AdminListResponse<TEntity>> {
+  protected async adminList(payload: AdminListPayload): Promise<AdminListResponse<TEntity>> {
     const { page = 1, pageSize = 20, where, orderBy } = payload;
     const skip = (page - 1) * pageSize;
 
@@ -1088,19 +995,14 @@ export abstract class BaseService<
   /**
    * Admin method: Update an entity.
    */
-  protected async adminUpdate(
-    id: string,
-    data: TUpdateInput
-  ): Promise<TEntity | null> {
+  protected async adminUpdate(id: string, data: TUpdateInput): Promise<TEntity | null> {
     return await this.update(id, data);
   }
 
   /**
    * Admin method: Delete an entity.
    */
-  protected async adminDelete(
-    id: string
-  ): Promise<{ success: boolean; id: string }> {
+  protected async adminDelete(id: string): Promise<{ success: boolean; id: string }> {
     const deleted = await this.delete(id);
     return { success: deleted, id };
   }
@@ -1108,9 +1010,7 @@ export abstract class BaseService<
   /**
    * Admin method: Set entry-level ACL.
    */
-  protected async adminSetEntryACL(
-    payload: AdminSetACLPayload
-  ): Promise<TEntity | null> {
+  protected async adminSetEntryACL(payload: AdminSetACLPayload): Promise<TEntity | null> {
     const { entryId, acl } = payload;
 
     try {
@@ -1159,7 +1059,7 @@ export abstract class BaseService<
    * Useful when you've made direct DB changes or need to force-refresh clients.
    */
   protected async adminReemit(
-    entryId: string
+    entryId: string,
   ): Promise<{ success: boolean; subscriberCount: number }> {
     const entity = await this.findById(entryId);
     if (!entity) {

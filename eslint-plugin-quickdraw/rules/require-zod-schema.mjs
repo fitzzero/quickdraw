@@ -16,45 +16,40 @@ export default {
   create(context) {
     return {
       CallExpression(node) {
-        const callee = node.callee
-        if (callee.type !== "MemberExpression") return
-        if (callee.property.type !== "Identifier") return
-        if (callee.property.name !== "defineMethod") return
-        if (callee.object.type !== "ThisExpression") return
+        const callee = node.callee;
+        if (callee.type !== "MemberExpression") return;
+        if (callee.property.type !== "Identifier") return;
+        if (callee.property.name !== "defineMethod") return;
+        if (callee.object.type !== "ThisExpression") return;
 
-        const methodNameArg = node.arguments[0]
+        const methodNameArg = node.arguments[0];
         const methodName =
-          methodNameArg?.type === "Literal"
-            ? String(methodNameArg.value)
-            : "unknown"
+          methodNameArg?.type === "Literal" ? String(methodNameArg.value) : "unknown";
 
-        const optionsArg = node.arguments[3]
+        const optionsArg = node.arguments[3];
 
         if (!optionsArg) {
           context.report({
             node,
             messageId: "missingSchema",
             data: { methodName },
-          })
-          return
+          });
+          return;
         }
 
         if (optionsArg.type === "ObjectExpression") {
           const hasSchema = optionsArg.properties.some(
-            (p) =>
-              p.type === "Property" &&
-              p.key.type === "Identifier" &&
-              p.key.name === "schema"
-          )
+            (p) => p.type === "Property" && p.key.type === "Identifier" && p.key.name === "schema",
+          );
           if (!hasSchema) {
             context.report({
               node,
               messageId: "missingSchema",
               data: { methodName },
-            })
+            });
           }
         }
       },
-    }
+    };
   },
-}
+};

@@ -44,7 +44,7 @@ export interface OAuthTokenResponse {
 export function createOAuthURL(
   provider: OAuthProvider,
   config: OAuthConfig,
-  state?: string
+  state?: string,
 ): string {
   const params = new URLSearchParams({
     client_id: config.clientId,
@@ -70,7 +70,7 @@ export function createOAuthURL(
 export async function exchangeOAuthCode<TUser>(
   provider: OAuthProvider<TUser>,
   config: OAuthConfig,
-  code: string
+  code: string,
 ): Promise<{ tokens: OAuthTokenResponse; user: TUser }> {
   // Exchange code for tokens
   const tokenResponse = await fetch(provider.tokenUrl, {

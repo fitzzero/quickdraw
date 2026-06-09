@@ -44,7 +44,7 @@ export function createMockSocket(): MockSocket {
  */
 function createMockSubscriptionRegistry() {
   const subscriptions = new Map<string, { refCount: number; cleanup?: () => void }>();
-  
+
   return {
     acquire: (key: string) => {
       const existing = subscriptions.get(key);
@@ -79,7 +79,7 @@ function createMockSubscriptionRegistry() {
  * Create a mock QuickdrawSocketContextValue for testing.
  */
 export function createMockSocketContext(
-  overrides: Partial<QuickdrawSocketContextValue> = {}
+  overrides: Partial<QuickdrawSocketContextValue> = {},
 ): QuickdrawSocketContextValue {
   const mockSocket = createMockSocket();
 
@@ -99,11 +99,9 @@ export function createMockSocketContext(
 /**
  * Mock socket emit that resolves with a successful response.
  */
-export function mockSuccessEmit<T>(data: T): (
-  _event: string,
-  _payload: unknown,
-  callback?: (response: ServiceResponse<T>) => void
-) => void {
+export function mockSuccessEmit<T>(
+  data: T,
+): (_event: string, _payload: unknown, callback?: (response: ServiceResponse<T>) => void) => void {
   return (_event, _payload, callback) => {
     callback?.({ success: true, data });
   };
@@ -114,11 +112,11 @@ export function mockSuccessEmit<T>(data: T): (
  */
 export function mockErrorEmit(
   error: string,
-  code?: number
+  code?: number,
 ): (
   _event: string,
   _payload: unknown,
-  callback?: (response: ServiceResponse<unknown>) => void
+  callback?: (response: ServiceResponse<unknown>) => void,
 ) => void {
   return (_event, _payload, callback) => {
     const response: ServiceResponse<unknown> = { success: false, error };
@@ -183,7 +181,7 @@ export interface TestWrapperProps {
  * ```
  */
 export function createTestWrapper(
-  options: Omit<TestWrapperProps, "children"> = {}
+  options: Omit<TestWrapperProps, "children"> = {},
 ): ({ children }: { children: React.ReactNode }) => React.ReactElement {
   const socketContext = createMockSocketContext(options.socketContext);
   const queryClient = options.queryClient ?? createMockQueryClient();

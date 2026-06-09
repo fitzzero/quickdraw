@@ -7,7 +7,10 @@ export interface SocketSelectProps<
   TEntry,
   TAllowedUpdate,
   TKey extends keyof TAllowedUpdate,
-> extends Omit<React.SelectHTMLAttributes<HTMLSelectElement>, "value" | "onChange" | "onError" | "property"> {
+> extends Omit<
+  React.SelectHTMLAttributes<HTMLSelectElement>,
+  "value" | "onChange" | "onError" | "property"
+> {
   state: TEntry | null;
   update: (patch: Partial<TAllowedUpdate>) => Promise<TEntry | undefined | null>;
   property: TKey;
@@ -36,11 +39,9 @@ export interface SocketSelectProps<
  * </SocketSelect>
  * ```
  */
-export function SocketSelect<
-  TEntry,
-  TAllowedUpdate,
-  TKey extends keyof TAllowedUpdate,
->(props: SocketSelectProps<TEntry, TAllowedUpdate, TKey>): React.ReactElement {
+export function SocketSelect<TEntry, TAllowedUpdate, TKey extends keyof TAllowedUpdate>(
+  props: SocketSelectProps<TEntry, TAllowedUpdate, TKey>,
+): React.ReactElement {
   const {
     state,
     update,
@@ -75,7 +76,7 @@ export function SocketSelect<
     (event: React.ChangeEvent<HTMLSelectElement>) => {
       onLocalChange(event.target.value);
     },
-    [onLocalChange]
+    [onLocalChange],
   );
 
   return (

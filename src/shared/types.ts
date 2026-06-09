@@ -97,16 +97,10 @@ export type ServiceResponse<T = unknown> =
  * Defines the shape of a service method including its payload and response types.
  * Used to create a type-safe contract between server and client.
  */
-export interface ServiceMethodDefinition<
-  TPayload = unknown,
-  TResponse = unknown,
-> {
+export interface ServiceMethodDefinition<TPayload = unknown, TResponse = unknown> {
   name: string;
   access: AccessLevel;
-  handler: (
-    payload: TPayload,
-    context: ServiceMethodContext
-  ) => Promise<TResponse>;
+  handler: (payload: TPayload, context: ServiceMethodContext) => Promise<TResponse>;
   schema?: z.ZodType<TPayload>;
   resolveEntryId?: (payload: TPayload) => string | null;
 }
@@ -138,9 +132,7 @@ export interface ServiceMethodContext {
  * }>;
  * ```
  */
-export type ServiceMethodMap<
-  T extends Record<string, { payload: unknown; response: unknown }>,
-> = T;
+export type ServiceMethodMap<T extends Record<string, { payload: unknown; response: unknown }>> = T;
 
 // ============================================================================
 // Admin Method Types (Generic shapes for all services)

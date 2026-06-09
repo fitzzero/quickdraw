@@ -43,17 +43,18 @@ src/
 
 ## Export Paths
 
-| Import Path | Contents |
-|-------------|----------|
-| `@fitzzero/quickdraw-core` | Shared types (AccessLevel, ServiceResponse, etc.) |
-| `@fitzzero/quickdraw-core/server` | BaseService, ServiceRegistry, createQuickdrawServer, auth utilities |
-| `@fitzzero/quickdraw-core/client` | QuickdrawProvider, useService, useSubscription, Socket inputs |
-| `@fitzzero/quickdraw-core/server/testing` | createTestServer, connectAsUser, emitWithAck |
-| `@fitzzero/quickdraw-core/client/testing` | createMockSocket, createTestWrapper |
+| Import Path                               | Contents                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------- |
+| `@fitzzero/quickdraw-core`                | Shared types (AccessLevel, ServiceResponse, etc.)                   |
+| `@fitzzero/quickdraw-core/server`         | BaseService, ServiceRegistry, createQuickdrawServer, auth utilities |
+| `@fitzzero/quickdraw-core/client`         | QuickdrawProvider, useService, useSubscription, Socket inputs       |
+| `@fitzzero/quickdraw-core/server/testing` | createTestServer, connectAsUser, emitWithAck                        |
+| `@fitzzero/quickdraw-core/client/testing` | createMockSocket, createTestWrapper                                 |
 
 ## Peer Dependencies
 
 The package uses peer dependencies to avoid bundling framework code:
+
 - `react` >= 18.0.0 (optional, for client)
 - `socket.io` >= 4.0.0 (optional, for server)
 - `socket.io-client` >= 4.0.0 (optional, for client)
@@ -63,6 +64,7 @@ The package uses peer dependencies to avoid bundling framework code:
 ## Build Output
 
 Built with tsup to `dist/` with:
+
 - ESM modules (.js)
 - TypeScript declarations (.d.ts)
 - Source maps (.js.map)

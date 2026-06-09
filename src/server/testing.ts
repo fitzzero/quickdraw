@@ -26,10 +26,7 @@ export interface TestServer {
  */
 export interface TestClient {
   socket: Socket;
-  emit: <TPayload, TResponse>(
-    event: string,
-    payload: TPayload
-  ) => Promise<TResponse>;
+  emit: <TPayload, TResponse>(event: string, payload: TPayload) => Promise<TResponse>;
   close: () => void;
 }
 
@@ -62,9 +59,7 @@ export function getAvailablePort(): number {
  * await server.stop();
  * ```
  */
-export async function createTestServer(
-  options: CreateTestServerOptions
-): Promise<TestServer> {
+export async function createTestServer(options: CreateTestServerOptions): Promise<TestServer> {
   const port = getAvailablePort();
 
   const result = createQuickdrawServer({
@@ -103,10 +98,7 @@ export async function createTestServer(
 /**
  * Connect to a test server as a specific user.
  */
-export async function connectAsUser(
-  port: number,
-  userId: string
-): Promise<TestClient> {
+export async function connectAsUser(port: number, userId: string): Promise<TestClient> {
   const socket = ioClient(`http://localhost:${port}`, {
     auth: { userId },
     transports: ["websocket"],
@@ -144,7 +136,7 @@ export function emitWithAck<TPayload, TResponse>(
   socket: Socket,
   event: string,
   payload: TPayload,
-  timeoutMs: number = 5000
+  timeoutMs: number = 5000,
 ): Promise<TResponse> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -169,7 +161,7 @@ export function emitWithAck<TPayload, TResponse>(
 export function waitForEvent<T>(
   socket: Socket,
   event: string,
-  timeoutMs: number = 5000
+  timeoutMs: number = 5000,
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {

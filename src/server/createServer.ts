@@ -2,11 +2,7 @@ import express from "express";
 import { createServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import { consoleLogger } from "../shared/types";
-import type {
-  QuickdrawSocket,
-  QuickdrawServerOptions,
-  QuickdrawServerResult,
-} from "./types";
+import type { QuickdrawSocket, QuickdrawServerOptions, QuickdrawServerResult } from "./types";
 import { ServiceRegistry } from "./ServiceRegistry";
 
 /**
@@ -34,9 +30,7 @@ import { ServiceRegistry } from "./ServiceRegistry";
  * });
  * ```
  */
-export function createQuickdrawServer(
-  options: QuickdrawServerOptions
-): QuickdrawServerResult {
+export function createQuickdrawServer(options: QuickdrawServerOptions): QuickdrawServerResult {
   const logger = options.logger ?? consoleLogger;
   const serverLogger = logger.child({ service: "QuickdrawServer" });
 
@@ -62,7 +56,7 @@ export function createQuickdrawServer(
   });
 
   // Create service registry with method logging configuration
-  const registry = new ServiceRegistry(io, { 
+  const registry = new ServiceRegistry(io, {
     logger,
     methodLogging: options.methodLogging,
   });
@@ -124,9 +118,7 @@ export function createQuickdrawServer(
   // Start listening
   httpServer.listen(options.port, "0.0.0.0", () => {
     serverLogger.info(`Server listening on port ${options.port}`);
-    serverLogger.info(
-      `Registered services: ${registry.getServices().join(", ")}`
-    );
+    serverLogger.info(`Registered services: ${registry.getServices().join(", ")}`);
   });
 
   // Graceful shutdown handler
@@ -144,7 +136,7 @@ export function createQuickdrawServer(
 
     for (const socket of sockets) {
       const quickdrawSocket = socket as unknown as QuickdrawSocket;
-      
+
       // Unsubscribe from all services
       for (const service of registry.getServiceInstances()) {
         try {

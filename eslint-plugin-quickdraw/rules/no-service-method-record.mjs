@@ -26,10 +26,10 @@ export default {
             context.report({
               node: member,
               messageId: "noServiceMethodRecord",
-            })
+            });
           }
         }
       },
-    }
+    };
   },
-}
+};

@@ -5,6 +5,8 @@ export default defineConfig({
     "shared/index": "src/shared/index.ts",
     "server/index": "src/server/index.ts",
     "server/testing": "src/server/testing.ts",
+    "server/testing-prisma": "src/server/testing-prisma.ts",
+    "server/express/index": "src/server/express/index.ts",
     "client/index": "src/client/index.ts",
     "client/testing": "src/client/testing.tsx",
   },
@@ -23,6 +25,10 @@ export default defineConfig({
     // Optional peer dependencies for horizontal scaling
     "redis",
     "@socket.io/redis-adapter",
+    // Optional peer dependencies for express rate limiting + test databases
+    "express-rate-limit",
+    "@electric-sql/pglite",
+    "pg",
   ],
   treeshake: true,
   splitting: false,

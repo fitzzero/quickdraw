@@ -54,7 +54,7 @@ export function useServiceQuery<TPayload = unknown, TResponse = unknown>(
   serviceName: string,
   methodName: string,
   payload: TPayload,
-  options?: UseServiceQueryOptions<TResponse>
+  options?: UseServiceQueryOptions<TResponse>,
 ): UseServiceQueryResult<TResponse> {
   const { socket, isConnected } = useQuickdrawSocket();
   const queryClient = useQueryClient();
@@ -84,7 +84,7 @@ export function useServiceQuery<TPayload = unknown, TResponse = unknown>(
   // Using JSON.stringify ensures same payload = same cache entry
   const queryKey = React.useMemo(
     () => [serviceName, methodName, JSON.stringify(payload)],
-    [serviceName, methodName, payload]
+    [serviceName, methodName, payload],
   );
 
   // Query function that calls the service via socket
@@ -99,19 +99,15 @@ export function useServiceQuery<TPayload = unknown, TResponse = unknown>(
         reject(new Error("Request timeout"));
       }, timeout);
 
-      socket.emit(
-        eventName,
-        payload,
-        (response: ServiceResponse<TResponse>) => {
-          clearTimeout(timeoutId);
+      socket.emit(eventName, payload, (response: ServiceResponse<TResponse>) => {
+        clearTimeout(timeoutId);
 
-          if (response.success) {
-            resolve(response.data);
-          } else {
-            reject(new Error(response.error));
-          }
+        if (response.success) {
+          resolve(response.data);
+        } else {
+          reject(new Error(response.error));
         }
-      );
+      });
     });
   }, [socket, isConnected, serviceName, methodName, payload, timeout]);
 
@@ -128,7 +124,7 @@ export function useServiceQuery<TPayload = unknown, TResponse = unknown>(
   const stableInvalidateOn = React.useMemo(
     () => invalidateOn,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [invalidateOnKey]
+    [invalidateOnKey],
   );
 
   // Listen for socket events that should trigger a refetch.
@@ -215,6 +211,6 @@ export function useServiceQuery<TPayload = unknown, TResponse = unknown>(
       query.isSuccess,
       error,
       refetch,
-    ]
+    ],
   );
 }

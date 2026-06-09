@@ -28,7 +28,10 @@ function createMockSocket() {
 }
 
 // Helper to create mock context
-function createMockContext(socket: ReturnType<typeof createMockSocket>, isConnected = true): QuickdrawSocketContextValue {
+function createMockContext(
+  socket: ReturnType<typeof createMockSocket>,
+  isConnected = true,
+): QuickdrawSocketContextValue {
   return {
     socket: socket as unknown as Socket,
     isConnected,
@@ -48,11 +51,13 @@ function createMockContext(socket: ReturnType<typeof createMockSocket>, isConnec
 
 // Helper to create test wrapper
 function createWrapper(context: QuickdrawSocketContextValue, queryClient?: QueryClient) {
-  const client = queryClient ?? new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, gcTime: 0 },
-    },
-  });
+  const client =
+    queryClient ??
+    new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+      },
+    });
 
   return function Wrapper({ children }: { children: React.ReactNode }) {
     return (
@@ -80,17 +85,20 @@ describe("useServiceQuery", () => {
 
   it("should fetch data on mount when enabled", async () => {
     const mockData = { items: [{ id: "1", name: "Test" }] };
-    
+
     mockSocket.emit.mockImplementation(
-      (_event: string, _payload: unknown, callback: (response: ServiceResponse<typeof mockData>) => void) => {
+      (
+        _event: string,
+        _payload: unknown,
+        callback: (response: ServiceResponse<typeof mockData>) => void,
+      ) => {
         callback({ success: true, data: mockData });
-      }
+      },
     );
 
-    const { result } = renderHook(
-      () => useServiceQuery("testService", "getData", { page: 1 }),
-      { wrapper: createWrapper(mockContext) }
-    );
+    const { result } = renderHook(() => useServiceQuery("testService", "getData", { page: 1 }), {
+      wrapper: createWrapper(mockContext),
+    });
 
     expect(result.current.isLoading).toBe(true);
 
@@ -103,14 +111,14 @@ describe("useServiceQuery", () => {
     expect(mockSocket.emit).toHaveBeenCalledWith(
       "testService:getData",
       { page: 1 },
-      expect.any(Function)
+      expect.any(Function),
     );
   });
 
   it("should not fetch when enabled is false", async () => {
     const { result } = renderHook(
       () => useServiceQuery("testService", "getData", { page: 1 }, { enabled: false }),
-      { wrapper: createWrapper(mockContext) }
+      { wrapper: createWrapper(mockContext) },
     );
 
     // Wait a tick to ensure no fetch was triggered
@@ -123,23 +131,30 @@ describe("useServiceQuery", () => {
 
   it("should handle errors correctly", async () => {
     const errorMessage = "Something went wrong";
-    
+
     mockSocket.emit.mockImplementation(
-      (_event: string, _payload: unknown, callback: (response: ServiceResponse<unknown>) => void) => {
+      (
+        _event: string,
+        _payload: unknown,
+        callback: (response: ServiceResponse<unknown>) => void,
+      ) => {
         callback({ success: false, error: errorMessage });
-      }
+      },
     );
 
     const onError = vi.fn();
 
     const { result } = renderHook(
       () => useServiceQuery("testService", "getData", {}, { onError, retry: false }),
-      { wrapper: createWrapper(mockContext) }
+      { wrapper: createWrapper(mockContext) },
     );
 
-    await waitFor(() => {
-      expect(result.current.isError).toBe(true);
-    }, { timeout: 3000 });
+    await waitFor(
+      () => {
+        expect(result.current.isError).toBe(true);
+      },
+      { timeout: 3000 },
+    );
 
     expect(result.current.error).toBe(errorMessage);
     expect(onError).toHaveBeenCalledWith(errorMessage);
@@ -150,14 +165,18 @@ describe("useServiceQuery", () => {
     const onSuccess = vi.fn();
 
     mockSocket.emit.mockImplementation(
-      (_event: string, _payload: unknown, callback: (response: ServiceResponse<typeof mockData>) => void) => {
+      (
+        _event: string,
+        _payload: unknown,
+        callback: (response: ServiceResponse<typeof mockData>) => void,
+      ) => {
         callback({ success: true, data: mockData });
-      }
+      },
     );
 
     const { result } = renderHook(
       () => useServiceQuery("testService", "getData", {}, { onSuccess }),
-      { wrapper: createWrapper(mockContext) }
+      { wrapper: createWrapper(mockContext) },
     );
 
     await waitFor(() => {
@@ -176,15 +195,19 @@ describe("useServiceQuery", () => {
     });
 
     mockSocket.emit.mockImplementation(
-      (_event: string, _payload: unknown, callback: (response: ServiceResponse<typeof mockData>) => void) => {
+      (
+        _event: string,
+        _payload: unknown,
+        callback: (response: ServiceResponse<typeof mockData>) => void,
+      ) => {
         callback({ success: true, data: mockData });
-      }
+      },
     );
 
     // First render
     const { result: result1 } = renderHook(
       () => useServiceQuery("testService", "getData", { id: "1" }),
-      { wrapper: createWrapper(mockContext, queryClient) }
+      { wrapper: createWrapper(mockContext, queryClient) },
     );
 
     await waitFor(() => {
@@ -196,7 +219,7 @@ describe("useServiceQuery", () => {
     // Second render with same payload - should use cache
     const { result: result2 } = renderHook(
       () => useServiceQuery("testService", "getData", { id: "1" }),
-      { wrapper: createWrapper(mockContext, queryClient) }
+      { wrapper: createWrapper(mockContext, queryClient) },
     );
 
     // Should immediately have data from cache
@@ -216,16 +239,20 @@ describe("useServiceQuery", () => {
 
     let callCount = 0;
     mockSocket.emit.mockImplementation(
-      (_event: string, payload: { id: string }, callback: (response: ServiceResponse<{ id: string }>) => void) => {
+      (
+        _event: string,
+        payload: { id: string },
+        callback: (response: ServiceResponse<{ id: string }>) => void,
+      ) => {
         callCount++;
         callback({ success: true, data: payload.id === "1" ? mockData1 : mockData2 });
-      }
+      },
     );
 
     // First query
     const { result: result1 } = renderHook(
       () => useServiceQuery("testService", "getData", { id: "1" }),
-      { wrapper: createWrapper(mockContext, queryClient) }
+      { wrapper: createWrapper(mockContext, queryClient) },
     );
 
     await waitFor(() => {
@@ -237,7 +264,7 @@ describe("useServiceQuery", () => {
     // Second query with different payload - should fetch
     const { result: result2 } = renderHook(
       () => useServiceQuery("testService", "getData", { id: "2" }),
-      { wrapper: createWrapper(mockContext, queryClient) }
+      { wrapper: createWrapper(mockContext, queryClient) },
     );
 
     await waitFor(() => {
@@ -252,15 +279,19 @@ describe("useServiceQuery", () => {
     let fetchCount = 0;
 
     mockSocket.emit.mockImplementation(
-      (_event: string, _payload: unknown, callback: (response: ServiceResponse<{ count: number }>) => void) => {
+      (
+        _event: string,
+        _payload: unknown,
+        callback: (response: ServiceResponse<{ count: number }>) => void,
+      ) => {
         fetchCount++;
         callback({ success: true, data: { count: fetchCount } });
-      }
+      },
     );
 
     const { result } = renderHook(
       () => useServiceQuery("testService", "getData", {}, { staleTime: 60000 }),
-      { wrapper: createWrapper(mockContext) }
+      { wrapper: createWrapper(mockContext) },
     );
 
     await waitFor(() => {
@@ -285,10 +316,9 @@ describe("useServiceQuery", () => {
   it("should not fetch when socket is not connected", async () => {
     const disconnectedContext = createMockContext(mockSocket, false);
 
-    const { result } = renderHook(
-      () => useServiceQuery("testService", "getData", {}),
-      { wrapper: createWrapper(disconnectedContext) }
-    );
+    const { result } = renderHook(() => useServiceQuery("testService", "getData", {}), {
+      wrapper: createWrapper(disconnectedContext),
+    });
 
     // Wait a tick
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -301,14 +331,18 @@ describe("useServiceQuery", () => {
     const mockData = { id: "123" };
 
     mockSocket.emit.mockImplementation(
-      (_event: string, _payload: unknown, callback: (response: ServiceResponse<typeof mockData>) => void) => {
+      (
+        _event: string,
+        _payload: unknown,
+        callback: (response: ServiceResponse<typeof mockData>) => void,
+      ) => {
         callback({ success: true, data: mockData });
-      }
+      },
     );
 
     const { result } = renderHook(
       () => useServiceQuery("testService", "getData", {}, { staleTime: 60000 }),
-      { wrapper: createWrapper(mockContext) }
+      { wrapper: createWrapper(mockContext) },
     );
 
     await waitFor(() => {

@@ -7,7 +7,10 @@ export interface SocketSliderProps<
   TEntry,
   TAllowedUpdate,
   TKey extends keyof TAllowedUpdate,
-> extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "type" | "onError" | "property"> {
+> extends Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "value" | "onChange" | "type" | "onError" | "property"
+> {
   state: TEntry | null;
   update: (patch: Partial<TAllowedUpdate>) => Promise<TEntry | undefined | null>;
   property: TKey;
@@ -35,11 +38,9 @@ export interface SocketSliderProps<
  * />
  * ```
  */
-export function SocketSlider<
-  TEntry,
-  TAllowedUpdate,
-  TKey extends keyof TAllowedUpdate,
->(props: SocketSliderProps<TEntry, TAllowedUpdate, TKey>): React.ReactElement {
+export function SocketSlider<TEntry, TAllowedUpdate, TKey extends keyof TAllowedUpdate>(
+  props: SocketSliderProps<TEntry, TAllowedUpdate, TKey>,
+): React.ReactElement {
   const {
     state,
     update,
@@ -73,7 +74,7 @@ export function SocketSlider<
     (event: React.ChangeEvent<HTMLInputElement>) => {
       onLocalChange(Number(event.target.value));
     },
-    [onLocalChange]
+    [onLocalChange],
   );
 
   return (

@@ -6,8 +6,7 @@ import type { Socket } from "socket.io-client";
 import type { QuickdrawSocketContextValue, SubscriptionRegistry } from "./types";
 import { useSubscription } from "./useSubscription";
 
-const QuickdrawSocketContext =
-  React.createContext<QuickdrawSocketContextValue | null>(null);
+const QuickdrawSocketContext = React.createContext<QuickdrawSocketContextValue | null>(null);
 
 vi.mock("./QuickdrawProvider", () => ({
   useQuickdrawSocket: () => React.useContext(QuickdrawSocketContext),
@@ -74,7 +73,7 @@ function createMockRegistry(): SubscriptionRegistry & {
 
 function createMockContext(
   socket: ReturnType<typeof createMockSocket>,
-  overrides: Partial<QuickdrawSocketContextValue> = {}
+  overrides: Partial<QuickdrawSocketContextValue> = {},
 ): QuickdrawSocketContextValue {
   return {
     socket: socket as unknown as Socket,
@@ -141,13 +140,10 @@ describe("useSubscription - refetchOnWindowFocus", () => {
     const context = createMockContext(mockSocket);
     const wrapper = createWrapper(context);
 
-    renderHook(
-      () => useSubscription("chatService", "chat-1"),
-      { wrapper }
-    );
+    renderHook(() => useSubscription("chatService", "chat-1"), { wrapper });
 
     const visibilityCalls = addEventSpy.mock.calls.filter(
-      ([event]) => event === "visibilitychange"
+      ([event]) => event === "visibilitychange",
     );
     expect(visibilityCalls).toHaveLength(0);
   });
@@ -161,11 +157,11 @@ describe("useSubscription - refetchOnWindowFocus", () => {
         useSubscription("chatService", "chat-1", {
           refetchOnWindowFocus: true,
         }),
-      { wrapper }
+      { wrapper },
     );
 
     const visibilityCalls = addEventSpy.mock.calls.filter(
-      ([event]) => event === "visibilitychange"
+      ([event]) => event === "visibilitychange",
     );
     expect(visibilityCalls).toHaveLength(1);
   });
@@ -179,7 +175,7 @@ describe("useSubscription - refetchOnWindowFocus", () => {
         useSubscription("chatService", "chat-1", {
           refetchOnWindowFocus: true,
         }),
-      { wrapper }
+      { wrapper },
     );
 
     const batcherEnqueue = context.subscriptionBatcher.enqueue as ReturnType<typeof vi.fn>;
@@ -200,7 +196,7 @@ describe("useSubscription - refetchOnWindowFocus", () => {
       "chatService",
       "chat-1",
       "Read",
-      expect.any(Function)
+      expect.any(Function),
     );
   });
 
@@ -213,7 +209,7 @@ describe("useSubscription - refetchOnWindowFocus", () => {
         useSubscription("chatService", "chat-1", {
           refetchOnWindowFocus: true,
         }),
-      { wrapper }
+      { wrapper },
     );
 
     const batcherEnqueue = context.subscriptionBatcher.enqueue as ReturnType<typeof vi.fn>;
@@ -238,7 +234,7 @@ describe("useSubscription - refetchOnWindowFocus", () => {
         useSubscription("chatService", "chat-1", {
           refetchOnWindowFocus: true,
         }),
-      { wrapper }
+      { wrapper },
     );
 
     const batcherEnqueue = context.subscriptionBatcher.enqueue as ReturnType<typeof vi.fn>;
@@ -247,19 +243,27 @@ describe("useSubscription - refetchOnWindowFocus", () => {
     // Rapid toggles: visible -> hidden -> visible -> hidden -> visible
     setVisibilityState("visible");
     fireVisibilityChange();
-    act(() => { vi.advanceTimersByTime(50); });
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
 
     setVisibilityState("hidden");
     fireVisibilityChange();
-    act(() => { vi.advanceTimersByTime(50); });
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
 
     setVisibilityState("visible");
     fireVisibilityChange();
-    act(() => { vi.advanceTimersByTime(50); });
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
 
     setVisibilityState("hidden");
     fireVisibilityChange();
-    act(() => { vi.advanceTimersByTime(50); });
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
 
     setVisibilityState("visible");
     fireVisibilityChange();
@@ -283,29 +287,20 @@ describe("useSubscription - refetchOnWindowFocus", () => {
     const hookOptions = { refetchOnWindowFocus: true as const };
 
     // First component subscribing to the same entity - gets isNew: true
-    renderHook(
-      () => useSubscription("chatService", "chat-1", hookOptions),
-      { wrapper }
-    );
+    renderHook(() => useSubscription("chatService", "chat-1", hookOptions), { wrapper });
 
     // Second component subscribing to same entity - gets isNew: false
-    renderHook(
-      () => useSubscription("chatService", "chat-1", hookOptions),
-      { wrapper }
-    );
+    renderHook(() => useSubscription("chatService", "chat-1", hookOptions), { wrapper });
 
     const visibilityCalls = addEventSpy.mock.calls.filter(
-      ([event]) => event === "visibilitychange"
+      ([event]) => event === "visibilitychange",
     );
 
     // Only one listener registered (by the owner), not two
     expect(visibilityCalls).toHaveLength(1);
 
     // Verify both acquired the same key
-    expect(registry._acquireCalls).toEqual([
-      "chatService:chat-1",
-      "chatService:chat-1",
-    ]);
+    expect(registry._acquireCalls).toEqual(["chatService:chat-1", "chatService:chat-1"]);
   });
 
   it("deduplication: one batcher call per entity on visibility change, not per component", () => {
@@ -319,15 +314,9 @@ describe("useSubscription - refetchOnWindowFocus", () => {
     const wrapper = createWrapper(context);
     const hookOptions = { refetchOnWindowFocus: true as const };
 
-    renderHook(
-      () => useSubscription("chatService", "chat-1", hookOptions),
-      { wrapper }
-    );
+    renderHook(() => useSubscription("chatService", "chat-1", hookOptions), { wrapper });
 
-    renderHook(
-      () => useSubscription("chatService", "chat-1", hookOptions),
-      { wrapper }
-    );
+    renderHook(() => useSubscription("chatService", "chat-1", hookOptions), { wrapper });
 
     const initialCallCount = batcherEnqueue.mock.calls.length;
 
@@ -351,18 +340,16 @@ describe("useSubscription - refetchOnWindowFocus", () => {
         useSubscription("chatService", "chat-1", {
           refetchOnWindowFocus: true,
         }),
-      { wrapper }
+      { wrapper },
     );
 
-    const visibilityAdds = addEventSpy.mock.calls.filter(
-      ([event]) => event === "visibilitychange"
-    );
+    const visibilityAdds = addEventSpy.mock.calls.filter(([event]) => event === "visibilitychange");
     expect(visibilityAdds).toHaveLength(1);
 
     unmount();
 
     const visibilityRemoves = removeEventSpy.mock.calls.filter(
-      ([event]) => event === "visibilitychange"
+      ([event]) => event === "visibilitychange",
     );
     expect(visibilityRemoves).toHaveLength(1);
   });
@@ -376,11 +363,11 @@ describe("useSubscription - refetchOnWindowFocus", () => {
         useSubscription("chatService", null, {
           refetchOnWindowFocus: true,
         }),
-      { wrapper }
+      { wrapper },
     );
 
     const visibilityCalls = addEventSpy.mock.calls.filter(
-      ([event]) => event === "visibilitychange"
+      ([event]) => event === "visibilitychange",
     );
     expect(visibilityCalls).toHaveLength(0);
   });
@@ -395,11 +382,11 @@ describe("useSubscription - refetchOnWindowFocus", () => {
           refetchOnWindowFocus: true,
           enabled: false,
         }),
-      { wrapper }
+      { wrapper },
     );
 
     const visibilityCalls = addEventSpy.mock.calls.filter(
-      ([event]) => event === "visibilitychange"
+      ([event]) => event === "visibilitychange",
     );
     expect(visibilityCalls).toHaveLength(0);
   });

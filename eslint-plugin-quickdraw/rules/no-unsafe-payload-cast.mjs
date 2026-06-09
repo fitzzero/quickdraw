@@ -17,12 +17,12 @@ export default {
   create(context) {
     return {
       TSAsExpression(node) {
-        const typeAnnotation = node.typeAnnotation
-        if (typeAnnotation.type !== "TSTypeReference") return
-        if (typeAnnotation.typeName?.type !== "TSQualifiedName") return
+        const typeAnnotation = node.typeAnnotation;
+        if (typeAnnotation.type !== "TSTypeReference") return;
+        if (typeAnnotation.typeName?.type !== "TSQualifiedName") return;
 
-        const left = typeAnnotation.typeName.left
-        const right = typeAnnotation.typeName.right
+        const left = typeAnnotation.typeName.left;
+        const right = typeAnnotation.typeName.right;
 
         if (
           left.type === "Identifier" &&
@@ -33,9 +33,9 @@ export default {
           context.report({
             node,
             messageId: "noUnsafePayloadCast",
-          })
+          });
         }
       },
-    }
+    };
   },
-}
+};

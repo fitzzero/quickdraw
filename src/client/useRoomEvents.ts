@@ -40,7 +40,7 @@ import type { UseRoomEventsOptions } from "./types";
  */
 export function useRoomEvents(
   handlers: Record<string, (data: never) => void>,
-  options?: UseRoomEventsOptions
+  options?: UseRoomEventsOptions,
 ): void {
   const { socket, isConnected } = useQuickdrawSocket();
   const { enabled = true } = options ?? {};
@@ -59,7 +59,7 @@ export function useRoomEvents(
   const stableEventNames = React.useMemo(
     () => eventNames,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [eventNamesKey]
+    [eventNamesKey],
   );
 
   React.useEffect(() => {

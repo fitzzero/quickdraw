@@ -301,18 +301,18 @@ export interface SubscriptionRegistry {
    * Returns true if this is a new subscription, false if joining existing.
    */
   acquire: (key: string) => { isNew: boolean; entry: SubscriptionEntry };
-  
+
   /**
    * Release a subscription, decrementing ref count.
    * Returns true if subscription was fully released (ref count reached 0).
    */
   release: (key: string) => boolean;
-  
+
   /**
    * Set the cleanup function for a subscription.
    */
   setCleanup: (key: string, cleanup: () => void) => void;
-  
+
   /**
    * Clear all subscriptions (called on disconnect/socket change).
    */
@@ -323,7 +323,7 @@ export interface SubscriptionRegistry {
  * Callback for a batched subscription request.
  */
 export type BatchSubscribeCallback<TData = Record<string, unknown>> = (
-  response: ServiceResponse<TData>
+  response: ServiceResponse<TData>,
 ) => void;
 
 /**
@@ -339,7 +339,7 @@ export interface SubscriptionBatcher {
     serviceName: string,
     entryId: string,
     requiredLevel: AccessLevel,
-    callback: BatchSubscribeCallback
+    callback: BatchSubscribeCallback,
   ) => void;
 }
 

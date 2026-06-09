@@ -71,8 +71,7 @@ export const base = [
       "no-restricted-syntax": [
         "error",
         {
-          selector:
-            'TSAsExpression[typeAnnotation.typeName.name="unknown"] > TSAsExpression',
+          selector: 'TSAsExpression[typeAnnotation.typeName.name="unknown"] > TSAsExpression',
           message:
             "Avoid double `as unknown as` casts. Use proper generics, type guards, or extend the type system.",
         },

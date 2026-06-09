@@ -42,10 +42,9 @@ import type { UseSubscriptionOptions, UseSubscriptionResult } from "./types";
 export function useSubscription<TData extends { id: string }>(
   serviceName: string,
   entryId: string | null,
-  options: UseSubscriptionOptions<TData> = {}
+  options: UseSubscriptionOptions<TData> = {},
 ): UseSubscriptionResult<TData> {
-  const { socket, isConnected, subscriptionRegistry, subscriptionBatcher } =
-    useQuickdrawSocket();
+  const { socket, isConnected, subscriptionRegistry, subscriptionBatcher } = useQuickdrawSocket();
   const queryClient = useQueryClient();
   const [isSubscribed, setIsSubscribed] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -63,7 +62,7 @@ export function useSubscription<TData extends { id: string }>(
   const subscriptionKey = entryId ? `${serviceName}:${entryId}` : null;
   const queryKey = React.useMemo(
     () => [serviceName, "subscription", entryId],
-    [serviceName, entryId]
+    [serviceName, entryId],
   );
 
   // Store callbacks in refs to avoid unnecessary effect reruns
@@ -130,12 +129,13 @@ export function useSubscription<TData extends { id: string }>(
     socket.on(updateEvent, handleUpdate);
 
     // Use batcher to collect subscribe requests within the same microtask
-    const handleBatchResponse = (response: { success: boolean; data?: Record<string, unknown>; error?: string }) => {
+    const handleBatchResponse = (response: {
+      success: boolean;
+      data?: Record<string, unknown>;
+      error?: string;
+    }) => {
       if (response.success && response.data) {
-        queryClient.setQueryData<TData | null>(
-          queryKey,
-          response.data as TData
-        );
+        queryClient.setQueryData<TData | null>(queryKey, response.data as TData);
         setIsSubscribed(true);
         setError(null);
         onDataRef.current?.(response.data as TData);
@@ -146,12 +146,7 @@ export function useSubscription<TData extends { id: string }>(
       }
     };
 
-    subscriptionBatcher.enqueue(
-      serviceName,
-      entryId,
-      requiredLevel,
-      handleBatchResponse
-    );
+    subscriptionBatcher.enqueue(serviceName, entryId, requiredLevel, handleBatchResponse);
 
     // Visibility-based re-fetch: when the tab becomes visible, re-subscribe
     // through the batcher to catch any updates missed while hidden.
@@ -164,12 +159,7 @@ export function useSubscription<TData extends { id: string }>(
       if (visibilityDebounceTimer) clearTimeout(visibilityDebounceTimer);
       visibilityDebounceTimer = setTimeout(() => {
         visibilityDebounceTimer = null;
-        subscriptionBatcher.enqueue(
-          serviceName,
-          entryId,
-          requiredLevel,
-          handleBatchResponse
-        );
+        subscriptionBatcher.enqueue(serviceName, entryId, requiredLevel, handleBatchResponse);
       }, 200);
     };
 
@@ -223,7 +213,7 @@ export function useSubscription<TData extends { id: string }>(
         } else if (!response.success) {
           setError(response.error);
         }
-      }
+      },
     );
   }, [socket, isConnected, entryId, serviceName, requiredLevel, queryClient, queryKey]);
 

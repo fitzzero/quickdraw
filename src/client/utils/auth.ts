@@ -63,10 +63,7 @@ export function parseJWTPayload(token: string): JWTPayload | null {
 /**
  * Build an OAuth redirect URL for a given provider.
  */
-export function getOAuthUrl(
-  provider: string,
-  apiUrl?: string,
-): string {
+export function getOAuthUrl(provider: string, apiUrl?: string): string {
   const base = apiUrl ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
   return `${base}/auth/${provider}`;
 }

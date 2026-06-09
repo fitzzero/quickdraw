@@ -1,19 +1,19 @@
 /**
  * Rate limiting middleware for Socket.io events.
- * 
+ *
  * Provides per-socket rate limiting to prevent abuse and ensure
  * fair resource usage across clients.
- * 
+ *
  * @example
  * ```typescript
  * import { createRateLimiter, applyRateLimitMiddleware } from '@fitzzero/quickdraw-core/server';
- * 
+ *
  * // Create a rate limiter
  * const rateLimiter = createRateLimiter({
  *   windowMs: 60000, // 1 minute window
  *   maxRequests: 100, // 100 requests per window
  * });
- * 
+ *
  * // Apply to Socket.io server
  * applyRateLimitMiddleware(io, rateLimiter);
  * ```
@@ -31,28 +31,28 @@ export interface RateLimitOptions {
    * Time window in milliseconds (default: 60000 = 1 minute)
    */
   windowMs?: number;
-  
+
   /**
    * Maximum number of requests per window (default: 100)
    */
   maxRequests?: number;
-  
+
   /**
    * Events to exclude from rate limiting (e.g., ['ping', 'pong'])
    */
   excludeEvents?: string[];
-  
+
   /**
    * Custom key generator for grouping requests.
    * Default uses socket.id.
    */
   keyGenerator?: (socket: Socket, eventName: string) => string;
-  
+
   /**
    * Callback when rate limit is exceeded.
    */
   onRateLimitExceeded?: (socket: Socket, eventName: string) => void;
-  
+
   /**
    * Logger instance
    */
@@ -76,22 +76,22 @@ export interface RateLimiter {
    * Returns true if allowed, false if rate limited.
    */
   check: (key: string) => boolean;
-  
+
   /**
    * Get remaining requests for a key.
    */
   getRemaining: (key: string) => number;
-  
+
   /**
    * Get time until rate limit resets for a key.
    */
   getResetTime: (key: string) => number;
-  
+
   /**
    * Clear all rate limit entries (useful for testing).
    */
   clear: () => void;
-  
+
   /**
    * Configuration options.
    */
@@ -100,17 +100,17 @@ export interface RateLimiter {
 
 /**
  * Create a rate limiter instance.
- * 
+ *
  * @param options - Rate limiter configuration
  * @returns Rate limiter instance
- * 
+ *
  * @example
  * ```typescript
  * const limiter = createRateLimiter({
  *   windowMs: 60000,
  *   maxRequests: 100,
  * });
- * 
+ *
  * if (limiter.check('user-123')) {
  *   // Request allowed
  * } else {
@@ -119,11 +119,7 @@ export interface RateLimiter {
  * ```
  */
 export function createRateLimiter(options: RateLimitOptions = {}): RateLimiter {
-  const {
-    windowMs = 60000,
-    maxRequests = 100,
-    excludeEvents = [],
-  } = options;
+  const { windowMs = 60000, maxRequests = 100, excludeEvents = [] } = options;
 
   const entries = new Map<string, RateLimitEntry>();
 
@@ -200,18 +196,18 @@ export function createRateLimiter(options: RateLimitOptions = {}): RateLimiter {
 
 /**
  * Apply rate limiting middleware to a Socket.io server.
- * 
+ *
  * This intercepts all incoming events and checks them against
  * the rate limiter before allowing them to proceed.
- * 
+ *
  * @param io - Socket.io server instance
  * @param rateLimiter - Rate limiter instance
  * @param options - Additional options
- * 
+ *
  * @example
  * ```typescript
  * const rateLimiter = createRateLimiter({ maxRequests: 100 });
- * 
+ *
  * applyRateLimitMiddleware(io, rateLimiter, {
  *   keyGenerator: (socket) => socket.userId ?? socket.id,
  *   onRateLimitExceeded: (socket, event) => {
@@ -223,19 +219,22 @@ export function createRateLimiter(options: RateLimitOptions = {}): RateLimiter {
 export function applyRateLimitMiddleware(
   io: SocketIOServer,
   rateLimiter: RateLimiter,
-  options: Pick<RateLimitOptions, "keyGenerator" | "onRateLimitExceeded" | "logger"> = {}
+  options: Pick<RateLimitOptions, "keyGenerator" | "onRateLimitExceeded" | "logger"> = {},
 ): void {
-  const logger = options.logger?.child({ service: "RateLimiter" }) ??
+  const logger =
+    options.logger?.child({ service: "RateLimiter" }) ??
     consoleLogger.child({ service: "RateLimiter" });
 
   const keyGenerator = options.keyGenerator ?? ((socket) => socket.id);
-  const onRateLimitExceeded = options.onRateLimitExceeded ?? ((socket, eventName) => {
-    socket.emit("error", {
-      code: "RATE_LIMITED",
-      message: `Rate limit exceeded for event: ${eventName}`,
-      retryAfter: rateLimiter.getResetTime(keyGenerator(socket, eventName)),
+  const onRateLimitExceeded =
+    options.onRateLimitExceeded ??
+    ((socket, eventName) => {
+      socket.emit("error", {
+        code: "RATE_LIMITED",
+        message: `Rate limit exceeded for event: ${eventName}`,
+        retryAfter: rateLimiter.getResetTime(keyGenerator(socket, eventName)),
+      });
     });
-  });
 
   const { excludeEvents } = rateLimiter.options;
 
@@ -261,7 +260,7 @@ export function applyRateLimitMiddleware(
       } else {
         logger.warn(`Rate limit exceeded for socket ${socket.id} on event ${eventName}`);
         onRateLimitExceeded(socket, eventName);
-        
+
         // Don't call next() - this drops the event
         // If there's a callback, call it with an error
         const lastArg = args[args.length - 1];
@@ -277,17 +276,17 @@ export function applyRateLimitMiddleware(
   });
 
   logger.info(
-    `Rate limiting enabled: ${rateLimiter.options.maxRequests} requests per ${rateLimiter.options.windowMs}ms`
+    `Rate limiting enabled: ${rateLimiter.options.maxRequests} requests per ${rateLimiter.options.windowMs}ms`,
   );
 }
 
 /**
  * Create a tiered rate limiter with different limits for different event types.
- * 
+ *
  * @param tiers - Map of event patterns to rate limit options
  * @param defaultOptions - Default options for events not matching any tier
  * @returns Rate limiter that applies different limits based on event name
- * 
+ *
  * @example
  * ```typescript
  * const tieredLimiter = createTieredRateLimiter(
@@ -306,7 +305,7 @@ export function applyRateLimitMiddleware(
  */
 export function createTieredRateLimiter(
   tiers: Record<string, RateLimitOptions>,
-  defaultOptions: RateLimitOptions = {}
+  defaultOptions: RateLimitOptions = {},
 ): {
   check: (key: string, eventName: string) => boolean;
   getRemaining: (key: string, eventName: string) => number;
@@ -319,11 +318,9 @@ export function createTieredRateLimiter(
   for (const [pattern, options] of Object.entries(tiers)) {
     const limiter = createRateLimiter({ ...defaultOptions, ...options });
     tierLimiters.set(pattern, limiter);
-    
+
     // Convert glob-like pattern to regex
-    const regexPattern = pattern
-      .replace(/\*/g, ".*")
-      .replace(/\?/g, ".");
+    const regexPattern = pattern.replace(/\*/g, ".*").replace(/\?/g, ".");
     tierPatterns.push({
       pattern: new RegExp(`^${regexPattern}$`),
       limiter,

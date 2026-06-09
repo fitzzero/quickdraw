@@ -19,7 +19,7 @@ const DEFAULT_EXPIRATION = "7d";
 export async function createJWT(
   payload: Omit<JWTPayload, "exp" | "iat">,
   secret: string,
-  expiresIn: string = DEFAULT_EXPIRATION
+  expiresIn: string = DEFAULT_EXPIRATION,
 ): Promise<string> {
   const secretKey = new TextEncoder().encode(secret);
 
@@ -39,10 +39,7 @@ export async function createJWT(
  * @param secret - The secret key for verification
  * @returns The decoded payload, or null if invalid
  */
-export async function verifyJWT(
-  token: string,
-  secret: string
-): Promise<JWTPayload | null> {
+export async function verifyJWT(token: string, secret: string): Promise<JWTPayload | null> {
   try {
     const secretKey = new TextEncoder().encode(secret);
     const { payload } = await jose.jwtVerify(token, secretKey);

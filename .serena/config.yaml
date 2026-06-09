@@ -19,7 +19,7 @@ indexing:
   include_patterns:
     - "src/**/*.ts"
     - "src/**/*.tsx"
-  
+
   # Exclude patterns
   exclude_patterns:
     - "**/node_modules/**"

@@ -35,39 +35,41 @@ Use `defineMethod` for Socket.io-exposed methods:
 
 ```typescript
 this.defineMethod(
-  "methodName",           // Socket event: "serviceName:methodName"
-  "Read",                 // Access level: Public, Read, Moderate, Admin
+  "methodName", // Socket event: "serviceName:methodName"
+  "Read", // Access level: Public, Read, Moderate, Admin
   async (payload, ctx) => {
     // ctx.userId - authenticated user ID
     // ctx.socketId - socket connection ID
     // ctx.serviceAccess - user's service-level permissions
-    return { /* response */ };
+    return {
+      /* response */
+    };
   },
   {
-    schema: zodSchema,    // Optional Zod validation
-    resolveEntryId: (p) => p.id,  // For entry-level ACL
-  }
+    schema: zodSchema, // Optional Zod validation
+    resolveEntryId: (p) => p.id, // For entry-level ACL
+  },
 );
 ```
 
 ### Access Levels
 
-| Level | Description |
-|-------|-------------|
-| `Public` | No authentication required |
-| `Read` | Authenticated users |
-| `Moderate` | Edit access |
-| `Admin` | Full access (delete, manage ACL) |
+| Level      | Description                      |
+| ---------- | -------------------------------- |
+| `Public`   | No authentication required       |
+| `Read`     | Authenticated users              |
+| `Moderate` | Edit access                      |
+| `Admin`    | Full access (delete, manage ACL) |
 
 ### CRUD Methods
 
 Use inherited methods for database operations (auto-emit to subscribers):
 
 ```typescript
-await this.create(data);     // Create and emit
+await this.create(data); // Create and emit
 await this.update(id, data); // Update and emit
-await this.delete(id);       // Delete and emit
-await this.findById(id);     // Read only
+await this.delete(id); // Delete and emit
+await this.findById(id); // Read only
 ```
 
 ## ServiceRegistry Pattern
@@ -88,8 +90,12 @@ For mutations (calling service methods):
 
 ```typescript
 const createChat = useService("chatService", "createChat", {
-  onSuccess: (data) => { /* handle success */ },
-  onError: (error) => { /* handle error */ },
+  onSuccess: (data) => {
+    /* handle success */
+  },
+  onError: (error) => {
+    /* handle error */
+  },
 });
 
 createChat.mutate({ title: "New Chat" });

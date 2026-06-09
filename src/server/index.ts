@@ -50,6 +50,9 @@ export {
   type EnvValidationResult,
 } from "./utils/env";
 
+// Encryption utilities (AES-256-GCM, requires ENCRYPTION_KEY)
+export { encrypt, decrypt, isEncrypted, decryptIfEncrypted, tryDecrypt } from "./utils/encryption";
+
 // Admin utilities
 export {
   zodToAdminFields,

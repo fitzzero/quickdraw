@@ -7,7 +7,10 @@ export interface SocketSwitchProps<
   TEntry,
   TAllowedUpdate,
   TKey extends keyof TAllowedUpdate,
-> extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "checked" | "onChange" | "type" | "onError" | "property"> {
+> extends Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "checked" | "onChange" | "type" | "onError" | "property"
+> {
   state: TEntry | null;
   update: (patch: Partial<TAllowedUpdate>) => Promise<TEntry | undefined | null>;
   property: TKey;
@@ -33,11 +36,9 @@ export interface SocketSwitchProps<
  * />
  * ```
  */
-export function SocketSwitch<
-  TEntry,
-  TAllowedUpdate,
-  TKey extends keyof TAllowedUpdate,
->(props: SocketSwitchProps<TEntry, TAllowedUpdate, TKey>): React.ReactElement {
+export function SocketSwitch<TEntry, TAllowedUpdate, TKey extends keyof TAllowedUpdate>(
+  props: SocketSwitchProps<TEntry, TAllowedUpdate, TKey>,
+): React.ReactElement {
   const {
     state,
     update,
@@ -72,7 +73,7 @@ export function SocketSwitch<
     (event: React.ChangeEvent<HTMLInputElement>) => {
       onLocalChange(event.target.checked);
     },
-    [onLocalChange]
+    [onLocalChange],
   );
 
   // Role="switch" for accessibility

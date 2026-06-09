@@ -81,9 +81,7 @@ interface PendingBatchEntry {
  * Creates a subscription batcher that collects subscribe requests within
  * the same microtask and sends them as a single batchSubscribe event per service.
  */
-function createSubscriptionBatcher(
-  socketRef: { current: Socket | null }
-): SubscriptionBatcher {
+function createSubscriptionBatcher(socketRef: { current: Socket | null }): SubscriptionBatcher {
   const pending = new Map<string, PendingBatchEntry[]>();
   let flushScheduled = false;
 
@@ -127,9 +125,7 @@ function createSubscriptionBatcher(
               }
             }
           } else {
-            const errMsg = !response.success
-              ? response.error
-              : "Batch subscription failed";
+            const errMsg = !response.success ? response.error : "Batch subscription failed";
             for (const entry of entries) {
               entry.callback({
                 success: false,
@@ -137,7 +133,7 @@ function createSubscriptionBatcher(
               });
             }
           }
-        }
+        },
       );
     }
 
@@ -149,7 +145,7 @@ function createSubscriptionBatcher(
       serviceName: string,
       entryId: string,
       requiredLevel: AccessLevel,
-      callback: BatchSubscribeCallback
+      callback: BatchSubscribeCallback,
     ): void {
       let entries = pending.get(serviceName);
       if (!entries) {
@@ -170,8 +166,7 @@ function createSubscriptionBatcher(
 // Socket Context
 // ============================================================================
 
-const QuickdrawSocketContext =
-  React.createContext<QuickdrawSocketContextValue | null>(null);
+const QuickdrawSocketContext = React.createContext<QuickdrawSocketContextValue | null>(null);
 
 /**
  * Hook to access the quickdraw socket context.
@@ -179,9 +174,7 @@ const QuickdrawSocketContext =
 export function useQuickdrawSocket(): QuickdrawSocketContextValue {
   const context = React.useContext(QuickdrawSocketContext);
   if (!context) {
-    throw new Error(
-      "useQuickdrawSocket must be used within a QuickdrawProvider"
-    );
+    throw new Error("useQuickdrawSocket must be used within a QuickdrawProvider");
   }
   return context;
 }
@@ -242,14 +235,10 @@ export function QuickdrawProvider({
   const [socket, setSocket] = React.useState<Socket | null>(null);
   const [isConnected, setIsConnected] = React.useState(false);
   const [userId, setUserId] = React.useState<string | null>(null);
-  const [serviceAccess, setServiceAccess] = React.useState<
-    Record<string, AccessLevel>
-  >({});
+  const [serviceAccess, setServiceAccess] = React.useState<Record<string, AccessLevel>>({});
 
   // Create subscription registry - recreated when socket changes
-  const subscriptionRegistryRef = React.useRef<SubscriptionRegistry>(
-    createSubscriptionRegistry()
-  );
+  const subscriptionRegistryRef = React.useRef<SubscriptionRegistry>(createSubscriptionRegistry());
 
   // Track previous authToken to detect changes
   const prevAuthTokenRef = React.useRef<string | undefined>(authToken);
@@ -259,7 +248,7 @@ export function QuickdrawProvider({
 
   // Subscription batcher - uses socketRef so it always has the current socket
   const subscriptionBatcherRef = React.useRef<SubscriptionBatcher>(
-    createSubscriptionBatcher(socketRef)
+    createSubscriptionBatcher(socketRef),
   );
 
   const connect = React.useCallback(
@@ -296,7 +285,7 @@ export function QuickdrawProvider({
         (info: { userId: string; serviceAccess: Record<string, AccessLevel> }) => {
           setUserId(info.userId);
           setServiceAccess(info.serviceAccess);
-        }
+        },
       );
 
       newSocket.on("connect_error", (error) => {
@@ -306,7 +295,7 @@ export function QuickdrawProvider({
       socketRef.current = newSocket;
       setSocket(newSocket);
     },
-    [serverUrl, withCredentials]
+    [serverUrl, withCredentials],
   );
 
   const disconnect = React.useCallback(() => {
@@ -341,10 +330,10 @@ export function QuickdrawProvider({
   // Reconnect when authToken changes
   React.useEffect(() => {
     const prevToken = prevAuthTokenRef.current;
-    
+
     // Update ref BEFORE any logic so next render has correct previous value
     prevAuthTokenRef.current = authToken;
-    
+
     // If token actually changed, reconnect
     if (authToken !== prevToken) {
       if (socketRef.current) {
@@ -367,7 +356,7 @@ export function QuickdrawProvider({
       subscriptionRegistry: subscriptionRegistryRef.current,
       subscriptionBatcher: subscriptionBatcherRef.current,
     }),
-    [socket, isConnected, userId, serviceAccess, connect, disconnect]
+    [socket, isConnected, userId, serviceAccess, connect, disconnect],
   );
 
   return (

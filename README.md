@@ -21,31 +21,36 @@ pnpm add @fitzzero/quickdraw-core
 ### Server Setup
 
 ```typescript
-import { createQuickdrawServer, BaseService } from '@fitzzero/quickdraw-core/server';
-import { PrismaClient } from '@prisma/client';
+import { createQuickdrawServer, BaseService } from "@fitzzero/quickdraw-core/server";
+import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
 // Define your service
-class ChatService extends BaseService<Chat, Prisma.ChatCreateInput, Prisma.ChatUpdateInput, ChatServiceMethods> {
+class ChatService extends BaseService<
+  Chat,
+  Prisma.ChatCreateInput,
+  Prisma.ChatUpdateInput,
+  ChatServiceMethods
+> {
   constructor() {
-    super({ serviceName: 'chatService', hasEntryACL: true });
+    super({ serviceName: "chatService", hasEntryACL: true });
     this.setDelegate(prisma.chat);
-    
+
     // Define public methods
-    this.createChat = this.defineMethod('createChat', 'Read', async (payload, ctx) => {
+    this.createChat = this.defineMethod("createChat", "Read", async (payload, ctx) => {
       const chat = await this.create({ title: payload.title, ownerId: ctx.userId });
       return { id: chat.id };
     });
   }
-  
-  createChat: ReturnType<typeof this.defineMethod<'createChat'>>;
+
+  createChat: ReturnType<typeof this.defineMethod<"createChat">>;
 }
 
 // Start server
 const { io, httpServer } = createQuickdrawServer({
   port: 4000,
-  cors: { origin: 'http://localhost:3000' },
+  cors: { origin: "http://localhost:3000" },
   services: {
     chatService: new ChatService(),
   },
@@ -62,45 +67,42 @@ const { io, httpServer } = createQuickdrawServer({
 
 ```tsx
 // app/layout.tsx
-import { QuickdrawProvider } from '@fitzzero/quickdraw-core/client';
+import { QuickdrawProvider } from "@fitzzero/quickdraw-core/client";
 
 export default function RootLayout({ children }) {
   return (
-    <QuickdrawProvider
-      serverUrl="http://localhost:4000"
-      authToken={getAuthToken()}
-    >
+    <QuickdrawProvider serverUrl="http://localhost:4000" authToken={getAuthToken()}>
       {children}
     </QuickdrawProvider>
   );
 }
 
 // app/chat/page.tsx
-import { useService, useSubscription, useRoomEvents } from '@fitzzero/quickdraw-core/client';
+import { useService, useSubscription, useRoomEvents } from "@fitzzero/quickdraw-core/client";
 
 function ChatPage({ chatId }: { chatId: string }) {
   // Subscribe to real-time entity updates
-  const { data: chat, isLoading } = useSubscription('chatService', chatId);
-  
+  const { data: chat, isLoading } = useSubscription("chatService", chatId);
+
   // Mutation hook
-  const updateTitle = useService('chatService', 'updateTitle', {
-    onSuccess: () => console.log('Title updated!'),
+  const updateTitle = useService("chatService", "updateTitle", {
+    onSuccess: () => console.log("Title updated!"),
   });
-  
+
   // Listen for custom events broadcast to the chat room
   const [typing, setTyping] = useState(false);
   useRoomEvents({
-    'chat:message': (msg) => appendMessage(msg),
-    'agent_typing_start': () => setTyping(true),
-    'agent_typing_stop': () => setTyping(false),
+    "chat:message": (msg) => appendMessage(msg),
+    agent_typing_start: () => setTyping(true),
+    agent_typing_stop: () => setTyping(false),
   });
-  
+
   if (isLoading) return <div>Loading...</div>;
-  
+
   return (
     <div>
       <h1>{chat?.title}</h1>
-      <button onClick={() => updateTitle.mutate({ id: chatId, title: 'New Title' })}>
+      <button onClick={() => updateTitle.mutate({ id: chatId, title: "New Title" })}>
         Update Title
       </button>
     </div>
@@ -111,7 +113,7 @@ function ChatPage({ chatId }: { chatId: string }) {
 ### Socket Inputs
 
 ```tsx
-import { SocketTextField } from '@fitzzero/quickdraw-core/client';
+import { SocketTextField } from "@fitzzero/quickdraw-core/client";
 
 function ChatTitleEditor({ chat, updateChat }) {
   return (
@@ -132,16 +134,16 @@ function ChatTitleEditor({ chat, updateChat }) {
 When your server broadcasts custom events to subscription rooms via `emitToRoom`, use `useRoomEvents` on the client to listen with proper lifecycle management:
 
 ```tsx
-import { useSubscription, useRoomEvents } from '@fitzzero/quickdraw-core/client';
+import { useSubscription, useRoomEvents } from "@fitzzero/quickdraw-core/client";
 
 function ProjectBoard({ projectId }: { projectId: string }) {
-  const { data: project } = useSubscription('projectService', projectId);
+  const { data: project } = useSubscription("projectService", projectId);
   const [tasks, setTasks] = useState<Task[]>([]);
 
   // Lifecycle-managed event listeners — cleanup handled automatically
   useRoomEvents({
-    'task:created': (task: Task) => setTasks(prev => [...prev, task]),
-    'task:deleted': ({ id }: { id: string }) => setTasks(prev => prev.filter(t => t.id !== id)),
+    "task:created": (task: Task) => setTasks((prev) => [...prev, task]),
+    "task:deleted": ({ id }: { id: string }) => setTasks((prev) => prev.filter((t) => t.id !== id)),
   });
 
   return <Board tasks={tasks} />;
@@ -153,15 +155,26 @@ function ProjectBoard({ projectId }: { projectId: string }) {
 For list queries that should refresh when related events fire, use `invalidateOn`:
 
 ```tsx
-import { useServiceQuery } from '@fitzzero/quickdraw-core/client';
+import { useServiceQuery } from "@fitzzero/quickdraw-core/client";
 
 function TaskList({ projectId }: { projectId: string }) {
   // Auto-refetches when tasks are created, deleted, or change status
-  const { data: tasks } = useServiceQuery('taskService', 'listTasks', { projectId }, {
-    invalidateOn: ['task:created', 'task:deleted', 'task:statusUpdate'],
-  });
+  const { data: tasks } = useServiceQuery(
+    "taskService",
+    "listTasks",
+    { projectId },
+    {
+      invalidateOn: ["task:created", "task:deleted", "task:statusUpdate"],
+    },
+  );
 
-  return <ul>{tasks?.map(t => <li key={t.id}>{t.title}</li>)}</ul>;
+  return (
+    <ul>
+      {tasks?.map((t) => (
+        <li key={t.id}>{t.title}</li>
+      ))}
+    </ul>
+  );
 }
 ```
 
@@ -171,21 +184,49 @@ Rapid-fire events within 100ms are debounced into a single refetch.
 
 ```typescript
 // Shared types (both server and client)
-import { ServiceResponse, AccessLevel, ServiceMethodMap } from '@fitzzero/quickdraw-core';
+import { ServiceResponse, AccessLevel, ServiceMethodMap } from "@fitzzero/quickdraw-core";
 
 // Server
-import { 
-  BaseService, 
-  ServiceRegistry, 
+import {
+  BaseService,
+  ServiceRegistry,
   createQuickdrawServer,
   createJWT,
   verifyJWT,
   discordProvider,
   googleProvider,
-} from '@fitzzero/quickdraw-core/server';
+  // Auth & security (3.7+)
+  createMockOAuthProvider,
+  registerMockOAuthProvider,
+  isMockOAuthEnabled,
+  validateRedirectOrigin,
+  setSessionCookie,
+  clearSessionCookie,
+  createRequireAuth,
+  encrypt,
+  decrypt,
+} from "@fitzzero/quickdraw-core/server";
+
+// Express rate-limit presets (3.7+, requires the optional express-rate-limit peer)
+import {
+  createAuthLimiter,
+  createWebhookLimiter,
+  createPublicApiLimiter,
+} from "@fitzzero/quickdraw-core/server/express";
 
 // Server testing
-import { createTestServer, connectAsUser, emitWithAck } from '@fitzzero/quickdraw-core/server/testing';
+import {
+  createTestServer,
+  connectAsUser,
+  emitWithAck,
+} from "@fitzzero/quickdraw-core/server/testing";
+
+// Dual-mode Prisma test databases (3.7+, optional peers: @electric-sql/pglite, pg)
+import {
+  createPrismaTestGlobalSetup,
+  resetDatabase,
+  workerDatabaseUrl,
+} from "@fitzzero/quickdraw-core/server/testing/prisma";
 
 // Client
 import {
@@ -200,10 +241,10 @@ import {
   SocketSelect,
   SocketSlider,
   SocketSwitch,
-} from '@fitzzero/quickdraw-core/client';
+} from "@fitzzero/quickdraw-core/client";
 
 // Client testing
-import { createMockSocket, createTestWrapper } from '@fitzzero/quickdraw-core/client/testing';
+import { createMockSocket, createTestWrapper } from "@fitzzero/quickdraw-core/client/testing";
 ```
 
 ## Local Development
@@ -226,7 +267,7 @@ Define your service methods in a shared types file:
 
 ```typescript
 // shared/types.ts
-import type { ServiceMethodMap } from '@fitzzero/quickdraw-core';
+import type { ServiceMethodMap } from "@fitzzero/quickdraw-core";
 
 export type ChatServiceMethods = ServiceMethodMap<{
   createChat: {
@@ -238,7 +279,7 @@ export type ChatServiceMethods = ServiceMethodMap<{
     response: { id: string; title: string };
   };
   inviteUser: {
-    payload: { id: string; userId: string; level: 'Read' | 'Moderate' | 'Admin' };
+    payload: { id: string; userId: string; level: "Read" | "Moderate" | "Admin" };
     response: { id: string };
   };
 }>;
@@ -309,6 +350,7 @@ Per-entity permissions. Quickdraw supports two patterns:
 #### Pattern 1: JSON ACL (Simple)
 
 Store ACL directly on the entity. Best for:
+
 - Simple ownership models (owner + collaborators)
 - When you don't need to query "all entities user X can access" efficiently
 - Minimal schema complexity
@@ -338,6 +380,7 @@ class DocumentService extends BaseService<Document, ...> {
 #### Pattern 2: Membership Table (Complex)
 
 Separate table for memberships. Best for:
+
 - Querying "all entities user X can access" efficiently
 - Complex role hierarchies
 - Additional membership metadata (join date, invited by, etc.)
@@ -353,7 +396,7 @@ model ChatMember {
   chatId String
   userId String
   level  String  // "Read" | "Moderate" | "Admin"
-  
+
   @@unique([chatId, userId])
 }
 
@@ -384,35 +427,41 @@ When a method is called, `ensureAccessForMethod` checks in this order:
 
 ### Access Levels
 
-| Level | Value | Typical Use |
-|-------|-------|-------------|
-| Public | 0 | No authentication required |
-| Read | 1 | View data, subscribe to updates |
-| Moderate | 2 | Edit content, manage members |
-| Admin | 3 | Delete, manage ACL, full control |
+| Level    | Value | Typical Use                      |
+| -------- | ----- | -------------------------------- |
+| Public   | 0     | No authentication required       |
+| Read     | 1     | View data, subscribe to updates  |
+| Moderate | 2     | Edit content, manage members     |
+| Admin    | 3     | Delete, manage ACL, full control |
 
 ## Testing
 
 ### Server Integration Tests
 
 ```typescript
-import { createTestServer, connectAsUser, emitWithAck } from '@fitzzero/quickdraw-core/server/testing';
+import {
+  createTestServer,
+  connectAsUser,
+  emitWithAck,
+} from "@fitzzero/quickdraw-core/server/testing";
 
-describe('ChatService', () => {
+describe("ChatService", () => {
   let server;
-  
+
   beforeAll(async () => {
     server = await createTestServer({
       services: { chatService: new ChatService() },
-      seedDb: async () => { /* seed test data */ },
+      seedDb: async () => {
+        /* seed test data */
+      },
     });
   });
-  
+
   afterAll(() => server.stop());
-  
-  it('creates chat', async () => {
-    const client = await server.connectAs('user-id');
-    const chat = await client.emit('chatService:createChat', { title: 'Test' });
+
+  it("creates chat", async () => {
+    const client = await server.connectAs("user-id");
+    const chat = await client.emit("chatService:createChat", { title: "Test" });
     expect(chat.id).toBeDefined();
     client.close();
   });
@@ -427,10 +476,10 @@ import { createTestWrapper, createMockSocket, mockSuccessEmit } from '@fitzzero/
 test('renders chat', () => {
   const mockSocket = createMockSocket();
   mockSocket.emit.mockImplementation(mockSuccessEmit({ title: 'Test Chat' }));
-  
+
   const wrapper = createTestWrapper({ socketContext: { socket: mockSocket } });
   render(<ChatView chatId="123" />, { wrapper });
-  
+
   expect(screen.getByText('Test Chat')).toBeInTheDocument();
 });
 ```

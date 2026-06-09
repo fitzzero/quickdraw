@@ -9,10 +9,7 @@ import type { McpHttpRoutesOptions } from "./types";
  *   GET  /mcp/tools   - List available MCP tools
  *   POST /mcp/invoke  - Invoke a tool with Bearer JWT auth
  */
-export function createMcpRoutes(
-  router: Router,
-  options: McpHttpRoutesOptions,
-): Router {
+export function createMcpRoutes(router: Router, options: McpHttpRoutesOptions): Router {
   const { registry, verifyToken } = options;
   const logger =
     options.logger?.child({ service: "McpHttpRoutes" }) ??
@@ -27,9 +24,7 @@ export function createMcpRoutes(
     try {
       const authHeader = req.headers.authorization;
       if (!authHeader?.startsWith("Bearer ")) {
-        res
-          .status(401)
-          .json({ error: "Missing or invalid Authorization header" });
+        res.status(401).json({ error: "Missing or invalid Authorization header" });
         return;
       }
 
@@ -55,16 +50,10 @@ export function createMcpRoutes(
         return;
       }
 
-      const result = await registry.invoke(
-        service,
-        method,
-        toolPayload,
-        tokenPayload.userId,
-      );
+      const result = await registry.invoke(service, method, toolPayload, tokenPayload.userId);
       res.json({ success: true, data: result });
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Internal error";
+      const message = error instanceof Error ? error.message : "Internal error";
       logger.error("MCP HTTP invoke error", { error: message });
       res.status(500).json({ error: message });
     }

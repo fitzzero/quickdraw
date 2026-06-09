@@ -4,35 +4,27 @@ import type { AdminFieldConfig, AdminFieldType } from "../../shared/types";
 /**
  * Fields that are automatically marked as non-editable.
  */
-const NON_EDITABLE_FIELDS = new Set([
-  "id",
-  "createdAt",
-  "updatedAt",
-  "created_at",
-  "updated_at",
-]);
+const NON_EDITABLE_FIELDS = new Set(["id", "createdAt", "updatedAt", "created_at", "updated_at"]);
 
 /**
  * Fields that should be hidden from admin UI by default.
  */
-const DEFAULT_HIDDEN_FIELDS = new Set([
-  "acl",
-  "serviceAccess",
-  "service_access",
-]);
+const DEFAULT_HIDDEN_FIELDS = new Set(["acl", "serviceAccess", "service_access"]);
 
 /**
  * Convert a field name to a human-readable label.
  * e.g., "createdAt" -> "Created At", "user_id" -> "User Id"
  */
 function toLabel(fieldName: string): string {
-  return fieldName
-    // Handle camelCase
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    // Handle snake_case
-    .replace(/_/g, " ")
-    // Capitalize first letter of each word
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return (
+    fieldName
+      // Handle camelCase
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      // Handle snake_case
+      .replace(/_/g, " ")
+      // Capitalize first letter of each word
+      .replace(/\b\w/g, (c) => c.toUpperCase())
+  );
 }
 
 /**
@@ -42,11 +34,7 @@ function getFieldType(zodType: z.ZodTypeAny): AdminFieldType {
   const typeName = zodType._def.typeName;
 
   // Unwrap optional, nullable, default, etc.
-  if (
-    typeName === "ZodOptional" ||
-    typeName === "ZodNullable" ||
-    typeName === "ZodDefault"
-  ) {
+  if (typeName === "ZodOptional" || typeName === "ZodNullable" || typeName === "ZodDefault") {
     const inner = zodType._def.innerType as z.ZodTypeAny;
     return getFieldType(inner);
   }
@@ -79,11 +67,7 @@ function getEnumValues(zodType: z.ZodTypeAny): string[] | undefined {
   const typeName = zodType._def.typeName;
 
   // Unwrap optional, nullable, default, etc.
-  if (
-    typeName === "ZodOptional" ||
-    typeName === "ZodNullable" ||
-    typeName === "ZodDefault"
-  ) {
+  if (typeName === "ZodOptional" || typeName === "ZodNullable" || typeName === "ZodDefault") {
     const inner = zodType._def.innerType as z.ZodTypeAny;
     return getEnumValues(inner);
   }
@@ -94,9 +78,7 @@ function getEnumValues(zodType: z.ZodTypeAny): string[] | undefined {
 
   if (typeName === "ZodNativeEnum") {
     const enumObj = zodType._def.values as Record<string, string | number>;
-    return Object.values(enumObj).filter(
-      (v): v is string => typeof v === "string"
-    );
+    return Object.values(enumObj).filter((v): v is string => typeof v === "string");
   }
 
   return undefined;
@@ -155,7 +137,7 @@ export interface ZodToAdminFieldsOptions {
  */
 export function zodToAdminFields(
   schema: z.ZodTypeAny,
-  options: ZodToAdminFieldsOptions = {}
+  options: ZodToAdminFieldsOptions = {},
 ): AdminFieldConfig[] {
   const { hiddenFields = [], tableColumns, fieldOverrides = {} } = options;
 
@@ -173,11 +155,7 @@ export function zodToAdminFields(
     }
 
     // Unwrap effects, transformations, etc.
-    if (
-      typeName === "ZodEffects" ||
-      typeName === "ZodOptional" ||
-      typeName === "ZodNullable"
-    ) {
+    if (typeName === "ZodEffects" || typeName === "ZodOptional" || typeName === "ZodNullable") {
       currentSchema = currentSchema._def.schema || currentSchema._def.innerType;
       continue;
     }
@@ -274,18 +252,14 @@ export function getDefaultEntityFields(): AdminFieldConfig[] {
  */
 export function mergeWithDefaultFields(
   schemaFields: AdminFieldConfig[],
-  options: { includeDefaults?: string[] } = {}
+  options: { includeDefaults?: string[] } = {},
 ): AdminFieldConfig[] {
   const { includeDefaults = ["id", "createdAt"] } = options;
-  const defaultFields = getDefaultEntityFields().filter((f) =>
-    includeDefaults.includes(f.name)
-  );
+  const defaultFields = getDefaultEntityFields().filter((f) => includeDefaults.includes(f.name));
 
   // Remove any fields from schemaFields that are in defaultFields
   const defaultNames = new Set(defaultFields.map((f) => f.name));
-  const filteredSchemaFields = schemaFields.filter(
-    (f) => !defaultNames.has(f.name)
-  );
+  const filteredSchemaFields = schemaFields.filter((f) => !defaultNames.has(f.name));
 
   return [...defaultFields, ...filteredSchemaFields];
 }

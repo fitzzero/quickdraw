@@ -32,10 +32,7 @@ export class McpRegistry implements McpRegistryInstance {
     this.customToolSpecs = specs;
   }
 
-  registerService(
-    serviceName: string,
-    serviceInstance: McpServiceInstance,
-  ): void {
+  registerService(serviceName: string, serviceInstance: McpServiceInstance): void {
     this.services.set(serviceName, serviceInstance);
 
     const methods = serviceInstance.getPublicMethods();
@@ -58,7 +55,9 @@ export class McpRegistry implements McpRegistryInstance {
     if (this.customToolSpecs) {
       return this.customToolSpecs
         .filter((s) => this.services.has(s.name))
-        .map((svc) => this.buildToolDefinition(svc.name, svc.description, svc.methodNames, hasDefaultUser));
+        .map((svc) =>
+          this.buildToolDefinition(svc.name, svc.description, svc.methodNames, hasDefaultUser),
+        );
     }
 
     const tools: McpToolDefinition[] = [];
@@ -105,11 +104,7 @@ export class McpRegistry implements McpRegistryInstance {
     try {
       const validatedPayload = this.validatePayload(method, payload);
 
-      await instance.ensureAccessForMethod(
-        method.access,
-        ctx,
-        entryId,
-      );
+      await instance.ensureAccessForMethod(method.access, ctx, entryId);
 
       const result = await method.handler(validatedPayload, {
         userId,
@@ -167,26 +162,18 @@ export class McpRegistry implements McpRegistryInstance {
     return { instance, method };
   }
 
-  private validatePayload(
-    method: McpMethodDefinition,
-    payload: unknown,
-  ): unknown {
+  private validatePayload(method: McpMethodDefinition, payload: unknown): unknown {
     if (method.schema) {
       const result = method.schema.safeParse(payload);
       if (!result.success) {
-        throw new Error(
-          `Validation error: ${result.error?.message ?? "invalid payload"}`,
-        );
+        throw new Error(`Validation error: ${result.error?.message ?? "invalid payload"}`);
       }
       return result.data;
     }
     return payload;
   }
 
-  private resolveEntryId(
-    method: McpMethodDefinition,
-    payload: unknown,
-  ): string | undefined {
+  private resolveEntryId(method: McpMethodDefinition, payload: unknown): string | undefined {
     if (method.resolveEntryId) {
       return method.resolveEntryId(payload) ?? undefined;
     }
@@ -216,8 +203,7 @@ export class McpRegistry implements McpRegistryInstance {
           },
           payload: {
             type: "object",
-            description:
-              "Method-specific payload (see method listing in description for fields)",
+            description: "Method-specific payload (see method listing in description for fields)",
           },
           userId: {
             type: "string",
@@ -231,13 +217,9 @@ export class McpRegistry implements McpRegistryInstance {
     };
   }
 
-  private buildDescription(
-    serviceName: string,
-    methodNames: string[],
-  ): string {
+  private buildDescription(serviceName: string, methodNames: string[]): string {
     const displayName =
-      serviceName.replace(/Service$/i, "").replace(/([a-z])([A-Z])/g, "$1 $2") +
-      "Service";
+      serviceName.replace(/Service$/i, "").replace(/([a-z])([A-Z])/g, "$1 $2") + "Service";
     const methodList = methodNames.map((m) => `- ${m}`).join("\n");
     return `${displayName} service.\n\nMethods:\n${methodList}`;
   }

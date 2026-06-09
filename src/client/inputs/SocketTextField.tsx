@@ -7,7 +7,10 @@ export interface SocketTextFieldProps<
   TEntry,
   TAllowedUpdate,
   TKey extends keyof TAllowedUpdate,
-> extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "onError" | "property"> {
+> extends Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "value" | "onChange" | "onError" | "property"
+> {
   state: TEntry | null;
   update: (patch: Partial<TAllowedUpdate>) => Promise<TEntry | undefined | null>;
   property: TKey;
@@ -34,11 +37,9 @@ export interface SocketTextFieldProps<
  * />
  * ```
  */
-export function SocketTextField<
-  TEntry,
-  TAllowedUpdate,
-  TKey extends keyof TAllowedUpdate,
->(props: SocketTextFieldProps<TEntry, TAllowedUpdate, TKey>): React.ReactElement {
+export function SocketTextField<TEntry, TAllowedUpdate, TKey extends keyof TAllowedUpdate>(
+  props: SocketTextFieldProps<TEntry, TAllowedUpdate, TKey>,
+): React.ReactElement {
   const {
     state,
     update,
@@ -56,11 +57,7 @@ export function SocketTextField<
   const defaultFormat = React.useCallback((v: unknown) => String(v ?? ""), []);
   const defaultParse = React.useCallback((v: unknown) => String(v), []);
 
-  const { value, onLocalChange, onBlur, inFlight } = useSocketInput<
-    TEntry,
-    TAllowedUpdate,
-    TKey
-  >({
+  const { value, onLocalChange, onBlur, inFlight } = useSocketInput<TEntry, TAllowedUpdate, TKey>({
     state,
     property,
     update,
@@ -76,7 +73,7 @@ export function SocketTextField<
     (event: React.ChangeEvent<HTMLInputElement>) => {
       onLocalChange(event.target.value);
     },
-    [onLocalChange]
+    [onLocalChange],
   );
 
   return (

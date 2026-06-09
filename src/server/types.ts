@@ -39,7 +39,7 @@ export interface QuickdrawServerOptions {
      */
     authenticate?: (
       socket: QuickdrawSocket,
-      auth: Record<string, unknown>
+      auth: Record<string, unknown>,
     ) => Promise<string | undefined>;
   };
   logger?: Logger;
@@ -76,19 +76,19 @@ export interface BaseServiceInstance {
   subscribe: (
     entryId: string,
     socket: QuickdrawSocket,
-    requiredLevel?: AccessLevel
+    requiredLevel?: AccessLevel,
   ) => Promise<Record<string, unknown> | null>;
   batchSubscribe: (
     entryIds: string[],
     socket: QuickdrawSocket,
-    requiredLevel?: AccessLevel
+    requiredLevel?: AccessLevel,
   ) => Promise<Record<string, Record<string, unknown> | null>>;
   unsubscribe: (entryId: string, socket: QuickdrawSocket) => void;
   unsubscribeSocket: (socket: QuickdrawSocket) => void;
   ensureAccessForMethod: (
     requiredLevel: AccessLevel,
     socket: QuickdrawSocket,
-    entryId?: string
+    entryId?: string,
   ) => Promise<void>;
   getPublicMethods: () => ServiceMethodDefinition<unknown, unknown>[];
   /** Set Socket.io server instance for room-based broadcasts */
@@ -199,7 +199,7 @@ export interface PrismaDelegate<
   TEntity,
   TCreateInput,
   TUpdateInput,
-  TWhereUniqueInput = { id: string }
+  TWhereUniqueInput = { id: string },
 > {
   findUnique: (args: {
     where: TWhereUniqueInput;
@@ -212,10 +212,7 @@ export interface PrismaDelegate<
     take?: number;
   }) => Promise<TEntity[]>;
   create: (args: { data: TCreateInput }) => Promise<TEntity>;
-  update: (args: {
-    where: TWhereUniqueInput;
-    data: TUpdateInput;
-  }) => Promise<TEntity>;
+  update: (args: { where: TWhereUniqueInput; data: TUpdateInput }) => Promise<TEntity>;
   delete: (args: { where: TWhereUniqueInput }) => Promise<TEntity>;
   count: (args?: { where?: Record<string, unknown> }) => Promise<number>;
 }

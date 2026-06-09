@@ -25,11 +25,7 @@ function seedStore(): void {
 }
 
 // Mock Prisma delegate
-const mockDelegate: PrismaDelegate<
-  TestEntity,
-  TestCreateInput,
-  TestUpdateInput
-> = {
+const mockDelegate: PrismaDelegate<TestEntity, TestCreateInput, TestUpdateInput> = {
   findUnique: async (args) => {
     const id = (args.where as { id: string }).id;
     return store.get(id) ?? null;
@@ -66,7 +62,7 @@ class TestService extends BaseService<
     _userId: string,
     _entryId: string,
     _requiredLevel: AccessLevel,
-    _socket: QuickdrawSocket
+    _socket: QuickdrawSocket,
   ): boolean {
     return true;
   }
@@ -91,7 +87,7 @@ class BatchOptimizedService extends BaseService<
     _userId: string,
     _entryId: string,
     _requiredLevel: AccessLevel,
-    _socket: QuickdrawSocket
+    _socket: QuickdrawSocket,
   ): boolean {
     return true;
   }
@@ -100,7 +96,7 @@ class BatchOptimizedService extends BaseService<
     _userId: string,
     entryIds: string[],
     _requiredLevel: AccessLevel,
-    _socket: QuickdrawSocket
+    _socket: QuickdrawSocket,
   ): Promise<Map<string, boolean>> {
     this.batchAccessCallCount++;
     const results = new Map<string, boolean>();
@@ -208,10 +204,10 @@ describe("batchSubscribe", () => {
     });
 
     const io = server.result.io as SocketIOServer;
-    io.to("testService:future-entity").emit(
-      "testService:update:future-entity",
-      { id: "future-entity", name: "Created Later" }
-    );
+    io.to("testService:future-entity").emit("testService:update:future-entity", {
+      id: "future-entity",
+      name: "Created Later",
+    });
 
     const update = await updatePromise;
     expect(update.name).toBe("Created Later");
@@ -240,13 +236,13 @@ describe("batchSubscribe", () => {
 
   it("should reject with error for empty entryIds", async () => {
     await expect(
-      client.emit<
-        { entryIds: string[]; requiredLevel: string },
-        Record<string, TestEntity | null>
-      >("testService:batchSubscribe", {
-        entryIds: [],
-        requiredLevel: "Read",
-      })
+      client.emit<{ entryIds: string[]; requiredLevel: string }, Record<string, TestEntity | null>>(
+        "testService:batchSubscribe",
+        {
+          entryIds: [],
+          requiredLevel: "Read",
+        },
+      ),
     ).rejects.toThrow("entryIds must be a non-empty array");
   });
 });

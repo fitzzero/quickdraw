@@ -7,7 +7,10 @@ export interface SocketCheckboxProps<
   TEntry,
   TAllowedUpdate,
   TKey extends keyof TAllowedUpdate,
-> extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "checked" | "onChange" | "type" | "onError" | "property"> {
+> extends Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "checked" | "onChange" | "type" | "onError" | "property"
+> {
   state: TEntry | null;
   update: (patch: Partial<TAllowedUpdate>) => Promise<TEntry | undefined | null>;
   property: TKey;
@@ -32,11 +35,9 @@ export interface SocketCheckboxProps<
  * />
  * ```
  */
-export function SocketCheckbox<
-  TEntry,
-  TAllowedUpdate,
-  TKey extends keyof TAllowedUpdate,
->(props: SocketCheckboxProps<TEntry, TAllowedUpdate, TKey>): React.ReactElement {
+export function SocketCheckbox<TEntry, TAllowedUpdate, TKey extends keyof TAllowedUpdate>(
+  props: SocketCheckboxProps<TEntry, TAllowedUpdate, TKey>,
+): React.ReactElement {
   const {
     state,
     update,
@@ -70,7 +71,7 @@ export function SocketCheckbox<
     (event: React.ChangeEvent<HTMLInputElement>) => {
       onLocalChange(event.target.checked);
     },
-    [onLocalChange]
+    [onLocalChange],
   );
 
   return (

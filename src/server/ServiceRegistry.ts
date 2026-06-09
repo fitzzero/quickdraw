@@ -1,15 +1,7 @@
 import type { Server as SocketIOServer } from "socket.io";
-import type {
-  ServiceResponse,
-  ServiceMethodDefinition,
-  Logger,
-} from "../shared/types";
+import type { ServiceResponse, ServiceMethodDefinition, Logger } from "../shared/types";
 import { consoleLogger } from "../shared/types";
-import type {
-  QuickdrawSocket,
-  BaseServiceInstance,
-  ServiceRegistryInstance,
-} from "./types";
+import type { QuickdrawSocket, BaseServiceInstance, ServiceRegistryInstance } from "./types";
 
 /**
  * Central registry for auto-discovering and registering service methods as Socket.io events.
@@ -65,7 +57,7 @@ export class ServiceRegistry implements ServiceRegistryInstance {
     this.logger =
       options?.logger?.child({ service: "ServiceRegistry" }) ??
       consoleLogger.child({ service: "ServiceRegistry" });
-    
+
     // Method logging configuration (enabled by default)
     this.methodLoggingEnabled = options?.methodLogging?.enabled ?? true;
     this.logPayloads = options?.methodLogging?.logPayloads ?? false;
@@ -106,31 +98,16 @@ export class ServiceRegistry implements ServiceRegistryInstance {
 
     // Register subscription/unsubscription listeners for all services
     for (const [serviceName, service] of this.services) {
-      this.registerSubscriptionListener(
-        socket,
-        `${serviceName}:subscribe`,
-        service
-      );
-      this.registerBatchSubscriptionListener(
-        socket,
-        `${serviceName}:batchSubscribe`,
-        service
-      );
-      this.registerUnsubscriptionListener(
-        socket,
-        `${serviceName}:unsubscribe`,
-        service
-      );
+      this.registerSubscriptionListener(socket, `${serviceName}:subscribe`, service);
+      this.registerBatchSubscriptionListener(socket, `${serviceName}:batchSubscribe`, service);
+      this.registerUnsubscriptionListener(socket, `${serviceName}:unsubscribe`, service);
     }
   }
 
   /**
    * Register a service and auto-discover its public methods.
    */
-  public registerService(
-    serviceName: string,
-    service: BaseServiceInstance
-  ): void {
+  public registerService(serviceName: string, service: BaseServiceInstance): void {
     this.services.set(serviceName, service);
 
     // Pass io instance to service for room-based broadcasts
@@ -150,10 +127,7 @@ export class ServiceRegistry implements ServiceRegistryInstance {
   /**
    * Discover and store all public methods from a service.
    */
-  private discoverServiceMethods(
-    serviceName: string,
-    service: BaseServiceInstance
-  ): void {
+  private discoverServiceMethods(serviceName: string, service: BaseServiceInstance): void {
     const methods = service.getPublicMethods();
 
     for (const method of methods) {
@@ -176,14 +150,11 @@ export class ServiceRegistry implements ServiceRegistryInstance {
     socket: QuickdrawSocket,
     eventName: string,
     method: ServiceMethodDefinition<unknown, unknown>,
-    service: BaseServiceInstance
+    service: BaseServiceInstance,
   ): void {
     socket.on(
       eventName,
-      async (
-        payload: unknown,
-        callback?: (response: ServiceResponse<unknown>) => void
-      ) => {
+      async (payload: unknown, callback?: (response: ServiceResponse<unknown>) => void) => {
         const startedAt = Date.now();
         const [serviceName, methodName] = eventName.split(":");
         const userIdShort = socket.userId?.slice(0, 8) ?? "anon";
@@ -248,7 +219,7 @@ export class ServiceRegistry implements ServiceRegistryInstance {
             }
             this.logger.info(
               `User ${userIdShort} ${serviceName}.${methodName} -> start`,
-              logContext
+              logContext,
             );
           }
 
@@ -275,7 +246,7 @@ export class ServiceRegistry implements ServiceRegistryInstance {
             }
             this.logger.info(
               `User ${userIdShort} ${serviceName}.${methodName} -> success`,
-              logContext
+              logContext,
             );
           }
 
@@ -300,10 +271,7 @@ export class ServiceRegistry implements ServiceRegistryInstance {
           if (this.logPayloads) {
             logContext.payload = payload;
           }
-          this.logger.error(
-            `User ${userIdShort} ${serviceName}.${methodName} -> fail`,
-            logContext
-          );
+          this.logger.error(`User ${userIdShort} ${serviceName}.${methodName} -> fail`, logContext);
 
           const errorResponse: ServiceResponse<unknown> = {
             success: false,
@@ -312,7 +280,7 @@ export class ServiceRegistry implements ServiceRegistryInstance {
           };
           callback?.(errorResponse);
         }
-      }
+      },
     );
   }
 
@@ -322,13 +290,13 @@ export class ServiceRegistry implements ServiceRegistryInstance {
   private registerSubscriptionListener(
     socket: QuickdrawSocket,
     eventName: string,
-    service: BaseServiceInstance
+    service: BaseServiceInstance,
   ): void {
     socket.on(
       eventName,
       async (
         payload: { entryId: string; requiredLevel?: string },
-        callback?: (response: ServiceResponse<unknown>) => void
+        callback?: (response: ServiceResponse<unknown>) => void,
       ) => {
         try {
           if (!socket.userId) {
@@ -343,7 +311,7 @@ export class ServiceRegistry implements ServiceRegistryInstance {
           const data = await service.subscribe(
             payload.entryId,
             socket,
-            (payload.requiredLevel as "Read" | "Moderate" | "Admin") ?? "Read"
+            (payload.requiredLevel as "Read" | "Moderate" | "Admin") ?? "Read",
           );
 
           if (data === null) {
@@ -362,11 +330,10 @@ export class ServiceRegistry implements ServiceRegistryInstance {
           });
           callback?.({
             success: false,
-            error:
-              error instanceof Error ? error.message : "Subscription failed",
+            error: error instanceof Error ? error.message : "Subscription failed",
           });
         }
-      }
+      },
     );
   }
 
@@ -377,15 +344,13 @@ export class ServiceRegistry implements ServiceRegistryInstance {
   private registerBatchSubscriptionListener(
     socket: QuickdrawSocket,
     eventName: string,
-    service: BaseServiceInstance
+    service: BaseServiceInstance,
   ): void {
     socket.on(
       eventName,
       async (
         payload: { entryIds: string[]; requiredLevel?: string },
-        callback?: (
-          response: ServiceResponse<Record<string, unknown>>
-        ) => void
+        callback?: (response: ServiceResponse<Record<string, unknown>>) => void,
       ) => {
         try {
           if (!socket.userId) {
@@ -397,10 +362,7 @@ export class ServiceRegistry implements ServiceRegistryInstance {
             return;
           }
 
-          if (
-            !Array.isArray(payload.entryIds) ||
-            payload.entryIds.length === 0
-          ) {
+          if (!Array.isArray(payload.entryIds) || payload.entryIds.length === 0) {
             callback?.({
               success: false,
               error: "entryIds must be a non-empty array",
@@ -412,7 +374,7 @@ export class ServiceRegistry implements ServiceRegistryInstance {
           const data = await service.batchSubscribe(
             payload.entryIds,
             socket,
-            (payload.requiredLevel as "Read" | "Moderate" | "Admin") ?? "Read"
+            (payload.requiredLevel as "Read" | "Moderate" | "Admin") ?? "Read",
           );
 
           callback?.({ success: true, data });
@@ -422,13 +384,10 @@ export class ServiceRegistry implements ServiceRegistryInstance {
           });
           callback?.({
             success: false,
-            error:
-              error instanceof Error
-                ? error.message
-                : "Batch subscription failed",
+            error: error instanceof Error ? error.message : "Batch subscription failed",
           });
         }
-      }
+      },
     );
   }
 
@@ -438,15 +397,13 @@ export class ServiceRegistry implements ServiceRegistryInstance {
   private registerUnsubscriptionListener(
     socket: QuickdrawSocket,
     eventName: string,
-    service: BaseServiceInstance
+    service: BaseServiceInstance,
   ): void {
     socket.on(
       eventName,
       (
         payload: { entryId: string },
-        callback?: (
-          response: ServiceResponse<{ unsubscribed: true; entryId: string }>
-        ) => void
+        callback?: (response: ServiceResponse<{ unsubscribed: true; entryId: string }>) => void,
       ) => {
         try {
           service.unsubscribe(payload.entryId, socket);
@@ -460,11 +417,10 @@ export class ServiceRegistry implements ServiceRegistryInstance {
           });
           callback?.({
             success: false,
-            error:
-              error instanceof Error ? error.message : "Unsubscription failed",
+            error: error instanceof Error ? error.message : "Unsubscription failed",
           });
         }
-      }
+      },
     );
   }
 

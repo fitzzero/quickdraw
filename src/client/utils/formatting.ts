@@ -76,10 +76,7 @@ export function formatDateTime(
 /**
  * Truncate a string to a maximum length.
  */
-export function truncate(
-  value: string | null | undefined,
-  maxLength = 50,
-): string {
+export function truncate(value: string | null | undefined, maxLength = 50): string {
   if (!value) return "-";
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength - 3)}...`;

@@ -77,12 +77,8 @@ export interface UseSocketInputResult<T> {
  * Hook for managing input state that syncs with the server.
  * Handles optimistic updates, debouncing, and conflict resolution.
  */
-export function useSocketInput<
-  TEntry,
-  TAllowedUpdate,
-  TKey extends keyof TAllowedUpdate,
->(
-  options: UseSocketInputOptions<TEntry, TAllowedUpdate, TKey>
+export function useSocketInput<TEntry, TAllowedUpdate, TKey extends keyof TAllowedUpdate>(
+  options: UseSocketInputOptions<TEntry, TAllowedUpdate, TKey>,
 ): UseSocketInputResult<unknown> {
   const {
     state,
@@ -175,7 +171,7 @@ export function useSocketInput<
       }
       // For "blur" mode, we just update local state and wait for blur
     },
-    [commitMode, parse, property, update, onSuccess, onError, debounceMs, commit]
+    [commitMode, parse, property, update, onSuccess, onError, debounceMs, commit],
   );
 
   // Handle blur

@@ -31,9 +31,7 @@ export function createMcpStdioServer(options: McpStdioServerOptions): void {
     });
   }
 
-  async function handleRequest(
-    request: JsonRpcRequest,
-  ): Promise<JsonRpcResponse | null> {
+  async function handleRequest(request: JsonRpcRequest): Promise<JsonRpcResponse | null> {
     const { id, method, params } = request;
 
     try {
@@ -79,18 +77,10 @@ export function createMcpStdioServer(options: McpStdioServerOptions): void {
           }
 
           const userId =
-            (args?.userId as string) ??
-            defaultUserId ??
-            process.env.MCP_USER_ID ??
-            "mcp-anonymous";
+            (args?.userId as string) ?? defaultUserId ?? process.env.MCP_USER_ID ?? "mcp-anonymous";
           const payload = args?.payload;
 
-          const result = await registry.invoke(
-            serviceName,
-            methodName,
-            payload,
-            userId,
-          );
+          const result = await registry.invoke(serviceName, methodName, payload, userId);
 
           return {
             jsonrpc: "2.0",

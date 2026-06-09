@@ -24,6 +24,7 @@ This package is linked locally to quickdraw-chat for real-time development:
 Changes to quickdraw-core are immediately reflected in quickdraw-chat after rebuild.
 
 **Workflow:**
+
 1. Make changes in quickdraw-core
 2. Run `pnpm build` (or have `pnpm dev` running)
 3. Changes are instantly available in quickdraw-chat
@@ -65,6 +66,7 @@ Package is published as `@fitzzero/quickdraw-core` on npm.
 ## Testing
 
 Tests use Vitest. Run with:
+
 ```bash
 pnpm test           # Single run
 pnpm test:watch     # Watch mode
