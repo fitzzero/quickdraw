@@ -1,6 +1,6 @@
 {
   "name": "@fitzzero/quickdraw-core",
-  "version": "3.8.0",
+  "version": "3.9.0",
   "description": "Fast fullstack patterns for real-time applications with Socket.io and TanStack Query",
   "keywords": [
     "fullstack",
@@ -15,7 +15,8 @@
   "files": [
     "dist",
     "eslint-plugin-quickdraw",
-    "eslint-config"
+    "eslint-config",
+    "oxlint.base.jsonc"
   ],
   "type": "module",
   "main": "./dist/shared/index.js",

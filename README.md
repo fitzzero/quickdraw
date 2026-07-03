@@ -352,18 +352,52 @@ import {
 import { createMockSocket, createTestWrapper } from "@fitzzero/quickdraw-core/client/testing";
 ```
 
+## Linting
+
+The package ships a shared oxlint base config, `oxlint.base.jsonc` — the
+framework's lint best practices (strict type-safety, complexity budgets, and
+the `quickdraw` plugin rules pre-wired for `services/**` and client code).
+Extend it from your root `.oxlintrc.json` so best practices update with the
+package:
+
+```jsonc
+{
+  "extends": ["./node_modules/@fitzzero/quickdraw-core/oxlint.base.jsonc"],
+  // plugins are NOT purely inherited: omitting this array unions oxlint's
+  // default plugin set into the merge — mirror the base's list.
+  "plugins": ["typescript", "import", "react", "nextjs", "jsx_a11y"],
+  // ignorePatterns, env, globals, and settings are not inherited — declare here.
+  "ignorePatterns": ["**/dist/**", "**/node_modules/**"],
+  "overrides": [
+    // Project-specific relaxations win over the base (overrides concatenate,
+    // consumer last), e.g. allow specific cross-service mutations:
+    {
+      "files": ["**/services/**/*.ts"],
+      "rules": {
+        "quickdraw/no-cross-service-mutations": [
+          "error",
+          { "allowedModels": { "chat": ["chatMember"] } },
+        ],
+      },
+    },
+  ],
+}
+```
+
+The base config also loads `./eslint-plugin` (the `quickdraw` rules) via
+`jsPlugins` — no separate wiring needed. The `./eslint-config` export (ESLint
+flat config) is legacy; prefer the oxlint base.
+
 ## Local Development
 
 This package is developed alongside [quickdraw-chat](https://github.com/fitzzero/quickdraw-chat), a reference implementation.
 
-### Using pnpm link
+quickdraw-chat consumes the published npm package. For local iteration
+against a checkout, use `bun link` (or point lint `extends` at the sibling
+path), and always re-verify against a published version before releasing:
 
 ```bash
-# In quickdraw-chat, the package is linked:
-"@fitzzero/quickdraw-core": "link:../../../quickdraw"
-
-# Changes to quickdraw-core are instantly available after rebuild
-pnpm build  # or pnpm dev for watch mode
+bun run build  # or bun run dev for watch mode
 ```
 
 ## Type Definitions
