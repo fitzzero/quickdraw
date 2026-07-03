@@ -1,0 +1,29 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "extends": ["./oxlint.base.jsonc"],
+  "plugins": ["typescript", "import", "react", "nextjs", "jsx_a11y"],
+  "rules": {
+    "no-console": "warn",
+    "no-inline-comments": "warn",
+    "no-negated-condition": "warn",
+    "no-promise-executor-return": "warn",
+    "no-warning-comments": "warn",
+    "eqeqeq": "warn",
+    "require-await": "warn",
+    "complexity": "warn",
+    "max-classes-per-file": "warn",
+    "max-lines": ["warn", { "max": 500, "skipBlankLines": true, "skipComments": true }],
+    "max-lines-per-function": ["warn", { "max": 80, "skipBlankLines": true, "skipComments": true }],
+    "typescript/no-non-null-assertion": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["src/client/**"],
+      "rules": {
+        "quickdraw/no-raw-socket-emit": "off",
+        "quickdraw/no-raw-socket-on": "off"
+      }
+    }
+  ],
+  "ignorePatterns": ["node_modules", "dist", "coverage"]
+}
