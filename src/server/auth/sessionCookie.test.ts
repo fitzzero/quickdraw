@@ -53,7 +53,8 @@ describe("session cookie", () => {
       sameSite: "lax",
       path: "/",
     });
-    expect(calls[0].options.maxAge).toBeGreaterThan(0);
+    // Default lifetime matches the default JWT expiry (7 days)
+    expect(calls[0].options.maxAge).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
   it("sets a none+secure cookie in production with COOKIE_DOMAIN", () => {
