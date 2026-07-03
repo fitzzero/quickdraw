@@ -180,6 +180,111 @@ function TaskList({ projectId }: { projectId: string }) {
 
 Rapid-fire events within 100ms are debounced into a single refetch.
 
+### Channels (High-Frequency Traffic)
+
+Methods are request/response: ack'd, ACL-checked against the database, and
+counted by the global rate limiter. **Channels** are their fire-and-forget
+counterpart for traffic where per-message overhead matters and losing a
+message is fine — game input, cursor positions, typing indicators, telemetry.
+
+Channel messages have no ack and no response. Each message is validated
+(zod schema required), access-checked entirely in memory (zero DB reads on
+the hot path), and governed by a per-socket, per-channel token bucket instead
+of the global limiter. Excess messages are silently dropped; sustained extreme
+flooding disconnects the socket.
+
+**Server** — define channels next to methods; broadcast tick data back with
+`emitToRoomVolatile` (backpressured clients drop frames instead of queueing):
+
+```typescript
+type GameServiceChannels = ServiceChannelMap<{
+  input: { seq: number; dx: number; dy: number; boost: boolean };
+}>;
+
+class GameService extends BaseService<
+  GameWorld,
+  Prisma.GameWorldCreateInput,
+  Prisma.GameWorldUpdateInput,
+  GameServiceMethods,
+  GameServiceChannels // 5th type param
+> {
+  constructor(prisma: PrismaClient) {
+    super({ serviceName: "gameService" });
+    this.setDelegate(prisma.gameWorld);
+
+    this.defineChannel(
+      "input",
+      "Read",
+      (payload, ctx) => this.sim.applyInput(ctx.userId, payload),
+      {
+        schema: gameInputSchema,
+        ratePerSecond: 30, // default 30
+        burst: 60, // default 2x rate
+        requireRoom: () => this.getRoomName(WORLD_ID), // entry-level gate
+      },
+    );
+  }
+
+  // In a 20Hz tick loop:
+  broadcastSnapshot(snapshot: WorldSnapshot): void {
+    this.emitToRoomVolatile(this.getRoomName(WORLD_ID), "game:snapshot", snapshot);
+  }
+}
+```
+
+Exempt channel traffic from the global rate limiter (channels self-limit):
+
+```typescript
+import { CHANNEL_EVENT_PREFIX } from "@fitzzero/quickdraw-core";
+
+const rateLimiter = createRateLimiter({
+  maxRequests: 100,
+  excludePrefixes: [CHANNEL_EVENT_PREFIX],
+});
+```
+
+**Client** — send with `useChannelSend`; receive broadcasts with the existing
+`useRoomEvents` (volatile room emits arrive as ordinary events):
+
+```tsx
+import { useSubscription, useRoomEvents, useChannelSend } from "@fitzzero/quickdraw-core/client";
+
+function GameView({ worldId }: { worldId: string }) {
+  useSubscription("gameService", worldId); // room membership gates the channel
+  const { send, isReady } = useChannelSend<GameInput>("gameService", "input");
+
+  useRoomEvents({
+    "game:snapshot": (snap: WorldSnapshot) => applySnapshot(snap),
+  });
+
+  // e.g. called from a fixed-timestep loop
+  const onTick = (input: GameInput) => send(input);
+}
+```
+
+**Access model** (all synchronous, in-memory):
+
+| Check                    | Behavior                                                                                                                                                       |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authentication           | Always required — anonymous messages dropped, even at `"Public"` access                                                                                        |
+| `"Public"` / `"Read"`    | Any authenticated user passes the service gate                                                                                                                 |
+| `"Moderate"` / `"Admin"` | Requires that level in the socket's `serviceAccess`                                                                                                            |
+| `requireRoom`            | Socket must already be in the resolved room — membership was ACL-checked at subscribe time, so this inherits entry ACL semantics without a DB read per message |
+
+Channels route as the Socket.io event `channel:<serviceName>:<channelName>`
+(helper: `channelEventName(serviceName, channelName)`), which also makes them
+easy to speak from non-JS clients (game engines, native apps).
+
+When to use which:
+
+|                | Method                    | Channel                  |
+| -------------- | ------------------------- | ------------------------ |
+| Response       | ack with data/error       | none (fire-and-forget)   |
+| Frequency      | occasional (user actions) | tick rate (10-60Hz)      |
+| Loss tolerance | must not lose             | next message supersedes  |
+| ACL            | full async check incl. DB | in-memory only           |
+| Rate limit     | global limiter            | per-channel token bucket |
+
 ## Package Exports
 
 ```typescript

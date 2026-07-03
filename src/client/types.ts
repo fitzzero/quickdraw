@@ -38,11 +38,31 @@ export interface QuickdrawProviderProps {
    * Required for httpOnly cookie-based authentication.
    */
   withCredentials?: boolean;
+  /**
+   * Custom Socket.io path (default: "/socket.io").
+   * Needed when the server sits behind a path-rewriting proxy — e.g.
+   * Discord Activities route everything through "/.proxy", so the client
+   * must connect with path "/.proxy/api/socket.io".
+   */
+  socketPath?: string;
 }
 
 // ============================================================================
 // Hook Types
 // ============================================================================
+
+/**
+ * Return type for the useChannelSend hook.
+ */
+export interface UseChannelSendResult<TPayload> {
+  /**
+   * Send a fire-and-forget channel message. No ack, no response; dropped
+   * silently if the socket is not connected (channels tolerate loss by design).
+   */
+  send: (payload: TPayload) => void;
+  /** True when the socket is connected and sends will go out. */
+  isReady: boolean;
+}
 
 /**
  * Options for the useService hook.

@@ -227,6 +227,7 @@ export function QuickdrawProvider({
   authToken,
   autoConnect = !!authToken,
   withCredentials = true,
+  socketPath,
 }: QuickdrawProviderProps): React.ReactElement {
   // Create QueryClient lazily to avoid SSR issues
   const [defaultQueryClient] = React.useState(() => createQueryClient());
@@ -267,6 +268,7 @@ export function QuickdrawProvider({
         withCredentials,
         transports: ["websocket", "polling"],
         autoConnect: true,
+        ...(socketPath ? { path: socketPath } : {}),
       });
 
       newSocket.on("connect", () => {
@@ -295,7 +297,7 @@ export function QuickdrawProvider({
       socketRef.current = newSocket;
       setSocket(newSocket);
     },
-    [serverUrl, withCredentials],
+    [serverUrl, withCredentials, socketPath],
   );
 
   const disconnect = React.useCallback(() => {

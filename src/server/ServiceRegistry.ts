@@ -1,7 +1,20 @@
 import type { Server as SocketIOServer } from "socket.io";
-import type { ServiceResponse, ServiceMethodDefinition, Logger } from "../shared/types";
-import { consoleLogger } from "../shared/types";
+import type {
+  ServiceResponse,
+  ServiceMethodDefinition,
+  ServiceChannelDefinition,
+  Logger,
+} from "../shared/types";
+import { consoleLogger, channelEventName } from "../shared/types";
 import type { QuickdrawSocket, BaseServiceInstance, ServiceRegistryInstance } from "./types";
+
+/**
+ * Channel abuse guard: if a socket's dropped-message count within this window
+ * exceeds ratePerSecond × CHANNEL_ABUSE_MULTIPLIER, the socket is disconnected.
+ * At 30 msg/s this means sustained sending above ~10× the allowed rate.
+ */
+const CHANNEL_ABUSE_WINDOW_MS = 10_000;
+const CHANNEL_ABUSE_MULTIPLIER = 100;
 
 /**
  * Central registry for auto-discovering and registering service methods as Socket.io events.
@@ -52,6 +65,16 @@ export class ServiceRegistry implements ServiceRegistryInstance {
     }
   > = new Map();
 
+  // Store channel metadata for deferred registration
+  private readonly channelRegistry: Map<
+    string,
+    {
+      serviceName: string;
+      channel: ServiceChannelDefinition<unknown>;
+      service: BaseServiceInstance;
+    }
+  > = new Map();
+
   constructor(io: SocketIOServer, options?: ServiceRegistryOptions) {
     this.io = io;
     this.logger =
@@ -96,6 +119,11 @@ export class ServiceRegistry implements ServiceRegistryInstance {
       this.registerMethodListener(socket, eventName, method, service);
     }
 
+    // Register channel listeners for all registered services
+    for (const [eventName, { channel, service }] of this.channelRegistry) {
+      this.registerChannelListener(socket, eventName, channel, service);
+    }
+
     // Register subscription/unsubscription listeners for all services
     for (const [serviceName, service] of this.services) {
       this.registerSubscriptionListener(socket, `${serviceName}:subscribe`, service);
@@ -120,6 +148,9 @@ export class ServiceRegistry implements ServiceRegistryInstance {
     // Auto-discover and store method metadata
     this.discoverServiceMethods(serviceName, service);
 
+    // Auto-discover and store channel metadata
+    this.discoverServiceChannels(serviceName, service);
+
     // Ensure connection handler is installed
     this.installConnectionHandler();
   }
@@ -141,6 +172,94 @@ export class ServiceRegistry implements ServiceRegistryInstance {
         service,
       });
     }
+  }
+
+  /**
+   * Discover and store all channels from a service.
+   */
+  private discoverServiceChannels(serviceName: string, service: BaseServiceInstance): void {
+    const channels = service.getPublicChannels?.() ?? [];
+
+    for (const channel of channels) {
+      const eventName = channelEventName(serviceName, channel.name);
+      this.logger.info(
+        `Registering channel event: ${eventName} (${channel.ratePerSecond}/s, burst ${channel.burst})`,
+      );
+
+      this.channelRegistry.set(eventName, {
+        serviceName,
+        channel,
+        service,
+      });
+    }
+  }
+
+  /**
+   * Register a channel as a socket event listener.
+   *
+   * This is the hot path for high-frequency traffic: no ack, no async access
+   * checks, no per-message logging. Order of operations per message:
+   * token bucket → schema validation → in-memory access check → handler.
+   * Any failure silently drops the message; sustained extreme flooding
+   * disconnects the socket.
+   */
+  private registerChannelListener(
+    socket: QuickdrawSocket,
+    eventName: string,
+    channel: ServiceChannelDefinition<unknown>,
+    service: BaseServiceInstance,
+  ): void {
+    // Per-socket, per-channel token bucket state lives in this closure.
+    let tokens = channel.burst;
+    let lastRefillAt = Date.now();
+    let abuseWindowStart = lastRefillAt;
+    let droppedInWindow = 0;
+
+    socket.on(eventName, (payload: unknown) => {
+      const now = Date.now();
+
+      // Refill continuously, capped at burst capacity
+      tokens = Math.min(
+        channel.burst,
+        tokens + ((now - lastRefillAt) / 1000) * channel.ratePerSecond,
+      );
+      lastRefillAt = now;
+
+      if (tokens < 1) {
+        if (now - abuseWindowStart > CHANNEL_ABUSE_WINDOW_MS) {
+          abuseWindowStart = now;
+          droppedInWindow = 0;
+        }
+        droppedInWindow++;
+        if (droppedInWindow > channel.ratePerSecond * CHANNEL_ABUSE_MULTIPLIER) {
+          this.logger.warn(
+            `Disconnecting socket ${socket.id} for sustained channel flooding on ${eventName}`,
+            { userId: socket.userId, droppedInWindow },
+          );
+          socket.disconnect(true);
+        }
+        return;
+      }
+      tokens -= 1;
+
+      const parsed = channel.schema.safeParse(payload);
+      if (!parsed.success) return;
+
+      if (!service.checkChannelAccess?.(channel, socket, parsed.data)) return;
+
+      try {
+        channel.handler(parsed.data, {
+          userId: socket.userId!,
+          socketId: socket.id,
+          serviceAccess: socket.serviceAccess ?? {},
+        });
+      } catch (error) {
+        this.logger.error(`Channel handler error for ${eventName}`, {
+          userId: socket.userId,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    });
   }
 
   /**
