@@ -43,6 +43,13 @@ export interface RateLimitOptions {
   excludeEvents?: string[];
 
   /**
+   * Event-name prefixes to exclude from rate limiting.
+   * Pass `[CHANNEL_EVENT_PREFIX]` ("channel:") so channel traffic bypasses
+   * the global limiter — channels enforce their own per-socket token buckets.
+   */
+  excludePrefixes?: string[];
+
+  /**
    * Custom key generator for grouping requests.
    * Default uses socket.id.
    */
@@ -95,7 +102,9 @@ export interface RateLimiter {
   /**
    * Configuration options.
    */
-  options: Required<Pick<RateLimitOptions, "windowMs" | "maxRequests" | "excludeEvents">>;
+  options: Required<
+    Pick<RateLimitOptions, "windowMs" | "maxRequests" | "excludeEvents" | "excludePrefixes">
+  >;
 }
 
 /**
@@ -119,7 +128,7 @@ export interface RateLimiter {
  * ```
  */
 export function createRateLimiter(options: RateLimitOptions = {}): RateLimiter {
-  const { windowMs = 60000, maxRequests = 100, excludeEvents = [] } = options;
+  const { windowMs = 60000, maxRequests = 100, excludeEvents = [], excludePrefixes = [] } = options;
 
   const entries = new Map<string, RateLimitEntry>();
 
@@ -190,6 +199,7 @@ export function createRateLimiter(options: RateLimitOptions = {}): RateLimiter {
       windowMs,
       maxRequests,
       excludeEvents,
+      excludePrefixes,
     },
   };
 }
@@ -236,13 +246,19 @@ export function applyRateLimitMiddleware(
       });
     });
 
-  const { excludeEvents } = rateLimiter.options;
+  const { excludeEvents, excludePrefixes } = rateLimiter.options;
 
   io.on("connection", (socket) => {
     // Use Socket.io's built-in middleware for incoming packets
     socket.use(([eventName, ...args], next) => {
       // Skip excluded events
       if (excludeEvents.includes(eventName)) {
+        next();
+        return;
+      }
+
+      // Skip excluded prefixes (e.g., "channel:" — channels self-limit)
+      if (excludePrefixes.some((prefix) => eventName.startsWith(prefix))) {
         next();
         return;
       }

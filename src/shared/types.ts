@@ -135,6 +135,93 @@ export interface ServiceMethodContext {
 export type ServiceMethodMap<T extends Record<string, { payload: unknown; response: unknown }>> = T;
 
 // ============================================================================
+// Service Channel Types (high-frequency, fire-and-forget events)
+// ============================================================================
+
+/**
+ * Channels are the high-frequency counterpart to service methods.
+ *
+ * Where methods are request/response (ack'd, ACL-checked against the database,
+ * counted by the global rate limiter), channels are fire-and-forget: no ack,
+ * no response, validated and access-checked entirely in memory, and governed
+ * by a per-channel token bucket instead of the global limiter. Use them for
+ * traffic where per-message overhead matters and losing a message is fine —
+ * game input, cursor positions, typing indicators, telemetry.
+ *
+ * Wire format: channels route as the Socket.io event
+ * `channel:<serviceName>:<channelName>` (see {@link channelEventName}).
+ * Clients should emit them volatile; servers broadcast tick data back with
+ * `emitToRoomVolatile` so backpressured clients drop frames instead of
+ * queueing them.
+ *
+ * Access model (all checks synchronous, zero DB reads):
+ * - Authentication is always required — anonymous sockets are dropped silently.
+ * - `"Public"` / `"Read"` access: any authenticated user passes the service gate.
+ * - `"Moderate"` / `"Admin"`: requires that level in the socket's in-memory
+ *   `serviceAccess`.
+ * - Entry-level access is expressed via `requireRoom`: the payload resolves to
+ *   a room name and the socket must already be in that room. Room membership
+ *   was ACL-checked at subscribe time, so this inherits full entry ACL
+ *   semantics without touching the database on the hot path.
+ */
+export interface ServiceChannelDefinition<TPayload = unknown> {
+  name: string;
+  access: AccessLevel;
+  handler: (payload: TPayload, context: ServiceChannelContext) => void;
+  /** Required — channel payloads are untrusted high-frequency input. */
+  schema: z.ZodType<TPayload>;
+  /** Sustained messages per second allowed per socket. */
+  ratePerSecond: number;
+  /** Bucket capacity — short bursts above ratePerSecond up to this size. */
+  burst: number;
+  /**
+   * Resolve a room the socket must already be a member of (typically the
+   * service room joined via subscribe). Return null to skip the check.
+   */
+  requireRoom?: (payload: TPayload) => string | null;
+}
+
+/**
+ * Context provided to channel handlers. Unlike ServiceMethodContext,
+ * userId is always present — unauthenticated channel messages are dropped
+ * before the handler runs.
+ */
+export interface ServiceChannelContext {
+  userId: string;
+  socketId: string;
+  serviceAccess: Record<string, AccessLevel>;
+}
+
+/**
+ * Type helper for defining service channel maps (payload-only — channels
+ * have no response).
+ *
+ * @example
+ * ```typescript
+ * type GameServiceChannels = ServiceChannelMap<{
+ *   input: { seq: number; dx: number; dy: number; boost: boolean };
+ * }>;
+ * ```
+ */
+export type ServiceChannelMap<T extends Record<string, unknown>> = T;
+
+/**
+ * The Socket.io event name a channel routes as.
+ * Shared by the server registry, the React client, and non-JS clients
+ * (e.g. the Godot addon) so the wire contract lives in one place.
+ */
+export function channelEventName(serviceName: string, channelName: string): string {
+  return `channel:${serviceName}:${channelName}`;
+}
+
+/**
+ * Prefix for all channel events — pass to the rate limiter's
+ * `excludePrefixes` so channel traffic bypasses the global request limiter
+ * (channels enforce their own per-socket token buckets).
+ */
+export const CHANNEL_EVENT_PREFIX = "channel:";
+
+// ============================================================================
 // Admin Method Types (Generic shapes for all services)
 // ============================================================================
 

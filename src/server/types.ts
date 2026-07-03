@@ -4,6 +4,7 @@ import type { z } from "zod";
 import type {
   AccessLevel,
   ServiceMethodDefinition,
+  ServiceChannelDefinition,
   Logger,
   AdminFieldConfig,
 } from "../shared/types";
@@ -91,6 +92,14 @@ export interface BaseServiceInstance {
     entryId?: string,
   ) => Promise<void>;
   getPublicMethods: () => ServiceMethodDefinition<unknown, unknown>[];
+  /** Get channels for registry discovery (services without channels may omit) */
+  getPublicChannels?: () => ServiceChannelDefinition<unknown>[];
+  /** Synchronous in-memory access check for channel messages */
+  checkChannelAccess?: (
+    channel: ServiceChannelDefinition<unknown>,
+    socket: QuickdrawSocket,
+    payload: unknown,
+  ) => boolean;
   /** Set Socket.io server instance for room-based broadcasts */
   setIo?: (io: SocketIOServer) => void;
 }

@@ -11,6 +11,9 @@ export type {
   ServiceMethodDefinition,
   ServiceMethodContext,
   ServiceMethodMap,
+  ServiceChannelDefinition,
+  ServiceChannelContext,
+  ServiceChannelMap,
   AdminListPayload,
   AdminListResponse,
   AdminGetPayload,
@@ -37,4 +40,4 @@ export type {
   Logger,
 } from "./types";
 
-export { consoleLogger } from "./types";
+export { consoleLogger, channelEventName, CHANNEL_EVENT_PREFIX } from "./types";

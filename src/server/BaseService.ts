@@ -4,6 +4,8 @@ import type {
   AccessLevel,
   ServiceMethodDefinition,
   ServiceMethodContext,
+  ServiceChannelDefinition,
+  ServiceChannelContext,
   Logger,
   ACL,
   AdminServiceMeta,
@@ -35,6 +37,7 @@ import { zodToAdminFields, mergeWithDefaultFields } from "./utils/zodToAdminFiel
  * @typeParam TCreateInput - The create input type
  * @typeParam TUpdateInput - The update input type
  * @typeParam TServiceMethods - Service method definitions map
+ * @typeParam TChannels - Service channel payload map (high-frequency fire-and-forget events)
  *
  * @example
  * ```typescript
@@ -61,6 +64,7 @@ export abstract class BaseService<
   TServiceMethods extends {
     [K in keyof TServiceMethods]: { payload: unknown; response: unknown };
   } = Record<string, { payload: unknown; response: unknown }>,
+  TChannels extends Record<string, unknown> = Record<string, unknown>,
 > {
   public readonly serviceName: string;
   protected readonly hasEntryACL: boolean;
@@ -79,6 +83,9 @@ export abstract class BaseService<
   // Collection of public methods for registry discovery
   private readonly publicMethods: Map<string, ServiceMethodDefinition<unknown, unknown>> =
     new Map();
+
+  // Collection of channels for registry discovery
+  private readonly publicChannels: Map<string, ServiceChannelDefinition<unknown>> = new Map();
 
   // Admin metadata configuration (set by installAdminMethods)
   private adminMeta: AdminServiceMeta | null = null;
@@ -346,6 +353,38 @@ export abstract class BaseService<
 
     anySocket.to(roomName).emit(eventName, data);
     this.logger.debug(`Emitted ${eventName} to room ${roomName} (via socket fallback)`);
+  }
+
+  /**
+   * Emit a custom event to a room using Socket.io's volatile flag.
+   *
+   * Volatile events are dropped for clients whose connection is backpressured
+   * instead of being buffered — exactly what you want for high-frequency state
+   * that is superseded by the next emit (game snapshots, cursor positions).
+   * Never use this for events a client must not miss.
+   *
+   * Intentionally does no per-call logging: this is a hot path, typically
+   * called at tick rate (10–60Hz).
+   *
+   * @example
+   * ```typescript
+   * // In a 20Hz game loop
+   * this.emitToRoomVolatile(
+   *   this.getRoomName(worldId),
+   *   'game:snapshot',
+   *   snapshot
+   * );
+   * ```
+   */
+  public emitToRoomVolatile(roomName: string, eventName: string, data: unknown): void {
+    if (this.io) {
+      this.io.to(roomName).volatile.emit(eventName, data);
+      return;
+    }
+
+    const anySocket = this.getAnySubscriberSocket();
+    if (!anySocket) return;
+    anySocket.to(roomName).volatile.emit(eventName, data);
   }
 
   /**
@@ -715,6 +754,113 @@ export abstract class BaseService<
    */
   public getPublicMethods(): ServiceMethodDefinition<unknown, unknown>[] {
     return Array.from(this.publicMethods.values());
+  }
+
+  // ===========================================================================
+  // Channel Definition (high-frequency, fire-and-forget events)
+  // ===========================================================================
+
+  /**
+   * Define a channel: a fire-and-forget event for high-frequency traffic
+   * (game input, cursor positions, typing indicators).
+   *
+   * Channels differ from methods:
+   * - No ack, no response — the handler returns void and errors are logged,
+   *   never sent to the client.
+   * - Exempt from the global rate limiter; each channel enforces its own
+   *   per-socket token bucket (`ratePerSecond`/`burst`). Excess messages are
+   *   silently dropped; sustained extreme abuse disconnects the socket.
+   * - Access checks are fully synchronous and in-memory: authentication is
+   *   always required; "Moderate"/"Admin" check the socket's serviceAccess;
+   *   entry-level access is expressed via `requireRoom` (the socket must
+   *   already be in that room, which was ACL-gated at subscribe time).
+   * - `schema` is required — channel payloads are untrusted input arriving
+   *   at tick rate.
+   *
+   * Routes as the Socket.io event `channel:<serviceName>:<name>`.
+   *
+   * @example
+   * ```typescript
+   * this.defineChannel(
+   *   "input",
+   *   "Read",
+   *   (payload, ctx) => this.sim.applyInput(ctx.userId, payload),
+   *   {
+   *     schema: gameInputSchema,
+   *     ratePerSecond: 30,
+   *     requireRoom: () => this.getRoomName(GLOBAL_WORLD_ID),
+   *   },
+   * );
+   * ```
+   */
+  public defineChannel<K extends keyof TChannels & string>(
+    name: K,
+    access: AccessLevel,
+    handler: (payload: TChannels[K], context: ServiceChannelContext) => void,
+    options: {
+      schema: z.ZodType<TChannels[K]>;
+      /** Sustained messages/second per socket. Default: 30 */
+      ratePerSecond?: number;
+      /** Bucket capacity for bursts. Default: 2 × ratePerSecond */
+      burst?: number;
+      /** Room the socket must already be in (null result skips the check). */
+      requireRoom?: (payload: TChannels[K]) => string | null;
+    },
+  ): ServiceChannelDefinition<TChannels[K]> {
+    const ratePerSecond = options.ratePerSecond ?? 30;
+    const definition: ServiceChannelDefinition<TChannels[K]> = {
+      name,
+      access,
+      handler,
+      schema: options.schema,
+      ratePerSecond,
+      burst: options.burst ?? ratePerSecond * 2,
+      requireRoom: options.requireRoom,
+    };
+
+    this.publicChannels.set(name, definition as ServiceChannelDefinition<unknown>);
+    return definition;
+  }
+
+  /**
+   * Get all channels for registry discovery.
+   */
+  public getPublicChannels(): ServiceChannelDefinition<unknown>[] {
+    return Array.from(this.publicChannels.values());
+  }
+
+  /**
+   * Synchronous, in-memory access check for a channel message.
+   * Called by the registry on the hot path — must not touch the database.
+   * Returns false to silently drop the message.
+   */
+  public checkChannelAccess(
+    channel: ServiceChannelDefinition<unknown>,
+    socket: QuickdrawSocket,
+    payload: unknown,
+  ): boolean {
+    // Channels always require authentication, even at "Public" access —
+    // fire-and-forget input from anonymous sockets is never useful and
+    // would bypass the per-user accountability of the token bucket.
+    if (!socket.userId) return false;
+
+    // "Public"/"Read": any authenticated user passes the service gate
+    // (mirrors ensureAccessForMethod's treatment of non-entry-scoped reads).
+    // "Moderate"/"Admin": require that service-level access.
+    if (
+      channel.access !== "Public" &&
+      channel.access !== "Read" &&
+      !this.hasServiceAccess(socket, channel.access)
+    ) {
+      return false;
+    }
+
+    if (channel.requireRoom) {
+      const roomName = channel.requireRoom(payload);
+      if (roomName && !socket.rooms.has(roomName)) return false;
+    }
+
+    return true;
   }
 
   /**

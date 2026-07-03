@@ -8,6 +8,7 @@ export { useService, useServiceMethod } from "./useService";
 export { useServiceQuery } from "./useServiceQuery";
 export { useSubscription } from "./useSubscription";
 export { useRoomEvents } from "./useRoomEvents";
+export { useChannelSend } from "./useChannelSend";
 
 // Types
 export type {
@@ -20,6 +21,7 @@ export type {
   UseSubscriptionOptions,
   UseSubscriptionResult,
   UseRoomEventsOptions,
+  UseChannelSendResult,
   ClientServiceMethodMap,
   SubscriptionDataMap,
 } from "./types";
