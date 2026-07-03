@@ -64,7 +64,7 @@ export abstract class BaseService<
   TServiceMethods extends {
     [K in keyof TServiceMethods]: { payload: unknown; response: unknown };
   } = Record<string, { payload: unknown; response: unknown }>,
-  TChannels extends Record<string, unknown> = Record<string, unknown>,
+  TChannels extends { [K in keyof TChannels]: unknown } = Record<string, unknown>,
 > {
   public readonly serviceName: string;
   protected readonly hasEntryACL: boolean;
