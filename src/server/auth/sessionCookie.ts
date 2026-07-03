@@ -7,7 +7,10 @@
 
 export const SESSION_COOKIE = "session";
 
-const DEFAULT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+// Matches the default JWT expiry ("7d" in jwt.ts) — a cookie that outlives
+// its JWT just keeps sending a token the server will reject. Pass maxAgeMs
+// if your JWT lifetime differs.
+const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface CookieSettings {
   httpOnly: boolean;
@@ -26,7 +29,7 @@ export interface CookieResponse {
 export interface SessionCookieOptions {
   /** Cookie name. Default: "session". */
   cookieName?: string;
-  /** Lifetime in ms. Default: 30 days. */
+  /** Lifetime in ms. Default: 7 days (matches the default JWT expiry). */
   maxAgeMs?: number;
   /** Cookie domain. Defaults to process.env.COOKIE_DOMAIN. */
   domain?: string;
