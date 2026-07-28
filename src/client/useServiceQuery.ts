@@ -4,6 +4,7 @@ import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ServiceResponse } from "../shared/types";
 import { useQuickdrawSocket } from "./QuickdrawProvider";
+import { ServiceCallError } from "./serviceError";
 import type { UseServiceQueryOptions, UseServiceQueryResult } from "./types";
 
 /**
@@ -56,7 +57,7 @@ export function useServiceQuery<TPayload = unknown, TResponse = unknown>(
   payload: TPayload,
   options?: UseServiceQueryOptions<TResponse>,
 ): UseServiceQueryResult<TResponse> {
-  const { socket, isConnected } = useQuickdrawSocket();
+  const { socket, isConnected, isRateLimited, reportRateLimited } = useQuickdrawSocket();
   const queryClient = useQueryClient();
   const [error, setError] = React.useState<string | null>(null);
 
@@ -78,6 +79,8 @@ export function useServiceQuery<TPayload = unknown, TResponse = unknown>(
     retry = 1,
     retryDelay,
     invalidateOn,
+    refetchInterval,
+    refetchIntervalInBackground,
   } = options ?? {};
 
   // Create stable query key based on service, method, and payload
@@ -105,11 +108,17 @@ export function useServiceQuery<TPayload = unknown, TResponse = unknown>(
         if (response.success) {
           resolve(response.data);
         } else {
-          reject(new Error(response.error));
+          // A 429 means the limiter is tripped — pause all reads, because
+          // rejected events still count against the budget and would
+          // re-trip it indefinitely.
+          if (response.code === 429) {
+            reportRateLimited();
+          }
+          reject(new ServiceCallError(response.error, response.code));
         }
       });
     });
-  }, [socket, isConnected, serviceName, methodName, payload, timeout]);
+  }, [socket, isConnected, serviceName, methodName, payload, timeout, reportRateLimited]);
 
   // Handle skipCache by invalidating before query runs
   React.useEffect(() => {
@@ -159,13 +168,17 @@ export function useServiceQuery<TPayload = unknown, TResponse = unknown>(
   const query = useQuery<TResponse, Error>({
     queryKey,
     queryFn,
-    enabled: enabled && !!socket && isConnected,
+    // Reads pause while the server reports us rate-limited; they resume
+    // (and refetch as needed) when the backoff window elapses.
+    enabled: enabled && !!socket && isConnected && !isRateLimited,
     staleTime,
     gcTime,
     refetchOnMount,
     refetchOnWindowFocus,
     retry,
     retryDelay,
+    refetchInterval,
+    refetchIntervalInBackground,
   });
 
   // Handle success/error callbacks

@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useQuickdrawSocket } from "./QuickdrawProvider";
-import type { UseRoomEventsOptions } from "./types";
+import type { QuickdrawRoomEventHandlers, UseRoomEventsOptions } from "./types";
 
 /**
  * Hook for listening to custom socket events with managed lifecycle.
@@ -10,6 +10,11 @@ import type { UseRoomEventsOptions } from "./types";
  * Handles `socket.on`/`socket.off` cleanup, reconnection re-attachment,
  * and connection-awareness. Each component gets its own listeners (no dedup needed).
  * Room scoping is handled server-side via `emitToRoom`.
+ *
+ * Event names and payloads are typed via the augmentable `QuickdrawEventMap`
+ * (from the package root): augmented names get payload checking and
+ * autocomplete; unlisted names still work, untyped — nothing breaks if the
+ * map stays empty.
  *
  * Pair with `useSubscription` to ensure the socket is in the correct room:
  * `useSubscription` manages room membership, `useRoomEvents` manages event listeners.
@@ -39,7 +44,7 @@ import type { UseRoomEventsOptions } from "./types";
  * ```
  */
 export function useRoomEvents(
-  handlers: Record<string, (data: never) => void>,
+  handlers: QuickdrawRoomEventHandlers,
   options?: UseRoomEventsOptions,
 ): void {
   const { socket, isConnected } = useQuickdrawSocket();
@@ -54,7 +59,7 @@ export function useRoomEvents(
 
   // Memoize the sorted event names so the effect only re-runs when the
   // set of listened events actually changes, not on every render.
-  const eventNames = Object.keys(handlers);
+  const eventNames = Object.keys(handlers).filter((name) => handlers[name] != null);
   const eventNamesKey = eventNames.join("\0");
   const stableEventNames = React.useMemo(
     () => eventNames,

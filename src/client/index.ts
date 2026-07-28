@@ -10,10 +10,14 @@ export { useSubscription } from "./useSubscription";
 export { useRoomEvents } from "./useRoomEvents";
 export { useChannelSend } from "./useChannelSend";
 
+// Errors
+export { ServiceCallError } from "./serviceError";
+
 // Types
 export type {
   QuickdrawSocketContextValue,
   QuickdrawProviderProps,
+  QuickdrawRoomEventHandlers,
   UseServiceOptions,
   UseServiceResult,
   UseServiceQueryOptions,

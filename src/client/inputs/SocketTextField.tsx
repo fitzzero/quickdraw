@@ -51,6 +51,8 @@ export function SocketTextField<TEntry, TAllowedUpdate, TKey extends keyof TAllo
     onSuccess,
     onError,
     disabled,
+    type = "text",
+    onBlur: consumerOnBlur,
     ...inputProps
   } = props;
 
@@ -76,13 +78,23 @@ export function SocketTextField<TEntry, TAllowedUpdate, TKey extends keyof TAllo
     [onLocalChange],
   );
 
+  // Chain the commit-on-blur handler with the consumer's onBlur — spreading
+  // inputProps before the controlled onBlur used to silently swallow it.
+  const handleBlur = React.useCallback(
+    (event: React.FocusEvent<HTMLInputElement>) => {
+      onBlur();
+      consumerOnBlur?.(event);
+    },
+    [onBlur, consumerOnBlur],
+  );
+
   return (
     <input
       {...inputProps}
-      type="text"
+      type={type}
       value={String(value)}
       onChange={handleChange}
-      onBlur={onBlur}
+      onBlur={handleBlur}
       disabled={Boolean(disabled) || inFlight}
     />
   );

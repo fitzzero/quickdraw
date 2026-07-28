@@ -1,6 +1,6 @@
 import type { Socket } from "socket.io-client";
 import type { QueryClient } from "@tanstack/react-query";
-import type { AccessLevel, ServiceResponse } from "../shared/types";
+import type { AccessLevel, QuickdrawEventMap, ServiceResponse } from "../shared/types";
 
 // ============================================================================
 // Socket Context Types
@@ -45,6 +45,18 @@ export interface QuickdrawProviderProps {
    * must connect with path "/.proxy/api/socket.io".
    */
   socketPath?: string;
+  /**
+   * What to do with TanStack Query caches when the socket reconnects.
+   *
+   * Subscriptions and collections heal themselves on reconnect
+   * (re-subscribe / re-snapshot), but plain `useServiceQuery` reads keep
+   * stale data — room events emitted during the outage are gone for good.
+   * `"invalidate-queries"` (the default) invalidates all queries on
+   * reconnect so active reads refetch. Set `"none"` to opt out.
+   *
+   * @default "invalidate-queries"
+   */
+  reconnectBehavior?: "invalidate-queries" | "none";
 }
 
 // ============================================================================
@@ -159,6 +171,17 @@ export interface UseRoomEventsOptions {
   enabled?: boolean;
 }
 
+/**
+ * Handler map for useRoomEvents, typed via the augmentable
+ * `QuickdrawEventMap`: known event names get their mapped payload type
+ * (with autocomplete), unknown names degrade to the untyped handler shape.
+ */
+export type QuickdrawRoomEventHandlers = {
+  [E in keyof QuickdrawEventMap]?: (data: QuickdrawEventMap[E]) => void;
+} & {
+  [event: string]: ((data: never) => void) | undefined;
+};
+
 // ============================================================================
 // Service Query Hook Types
 // ============================================================================
@@ -231,6 +254,16 @@ export interface UseServiceQueryOptions<TResponse> {
    * ```
    */
   invalidateOn?: string[];
+  /**
+   * Refetch on a fixed interval (milliseconds), passed through to TanStack
+   * Query. `false`/undefined disables interval refetching.
+   */
+  refetchInterval?: number | false;
+  /**
+   * Continue interval refetching while the tab is in the background.
+   * Only meaningful with `refetchInterval`.
+   */
+  refetchIntervalInBackground?: boolean;
 }
 
 /**
@@ -309,6 +342,13 @@ export type SocketCallback<T> = (response: ServiceResponse<T>) => void;
 export interface SubscriptionEntry {
   refCount: number;
   cleanup?: () => void;
+  /**
+   * Shared per-subscription state slot. The first acquirer (the owner) may
+   * stash a controller object here so later acquirers of the same key can
+   * drive the shared pipeline (used by useCollection for snapshot/loadMore
+   * dedup across components).
+   */
+  controller?: unknown;
 }
 
 /**
@@ -375,4 +415,16 @@ export interface QuickdrawSocketContextValue {
   disconnect: () => void;
   subscriptionRegistry: SubscriptionRegistry;
   subscriptionBatcher: SubscriptionBatcher;
+  /**
+   * True while the server has reported this client rate-limited.
+   * `useServiceQuery` pauses reads while set — rejected events still count
+   * against the budget and would re-trip the limiter indefinitely.
+   */
+  isRateLimited: boolean;
+  /**
+   * Report a rate-limit rejection (used internally by hooks; callable by
+   * app code that talks to the socket directly). Pauses reads for
+   * `retryAfterMs` (or a 5s default when the server didn't say).
+   */
+  reportRateLimited: (retryAfterMs?: number) => void;
 }
