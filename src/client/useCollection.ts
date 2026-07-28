@@ -169,8 +169,8 @@ export function useCollection<TItem extends { id: string }>(
           {
             collection,
             scopeId,
-            ...(cursor !== null ? { cursor } : {}),
-            ...(limit !== undefined ? { limit } : {}),
+            ...(cursor === null ? {} : { cursor }),
+            ...(limit === undefined ? {} : { limit }),
           },
           (response: ServiceResponse<CollectionSnapshotResponse<TItem>>) => {
             if (settled) return;

@@ -267,7 +267,6 @@ export class CollectionManager<TEntity extends { id: string }> {
         for (const scopeId of scopes) {
           this.emitDelta(name, scopeId, { type: "removed", id: event.before.id, rev: Date.now() });
         }
-        return;
       }
     }
   }
@@ -310,11 +309,7 @@ export class CollectionManager<TEntity extends { id: string }> {
    * nodes (`socketsLeave` is adapter-safe). With `userId`, only that user's
    * sockets are kicked; without, the whole room is cleared.
    */
-  public async kickFromCollection(
-    collection: string,
-    scopeId: string,
-    userId?: string,
-  ): Promise<void> {
+  public kickFromCollection(collection: string, scopeId: string, userId?: string): void {
     const io = this.getIo();
     if (!io) {
       this.logger.debug(`No io instance; cannot kick from ${this.serviceName}:${collection}`);

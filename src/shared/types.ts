@@ -434,7 +434,9 @@ export interface QuickdrawEventMap {}
  * Event names accepted by `emitToRoom`/`useRoomEvents`: keys of the
  * augmented {@link QuickdrawEventMap} (with autocomplete) plus any string.
  */
-export type QuickdrawEventName = (keyof QuickdrawEventMap & string) | (string & {});
+export type QuickdrawEventName =
+  | (keyof QuickdrawEventMap & string)
+  | (string & Record<never, never>);
 
 /**
  * Payload type for a room event: the mapped type when the name is in

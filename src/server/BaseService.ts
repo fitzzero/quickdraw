@@ -1148,13 +1148,12 @@ export abstract class BaseService<
   /**
    * Force sockets out of a collection scope room (adapter-safe ACL
    * revocation). With `userId`, only that user's sockets; without, everyone.
+   * Promise-shaped for forward compatibility with adapters that resolve
+   * membership asynchronously.
    */
-  public async kickFromCollection(
-    collection: string,
-    scopeId: string,
-    userId?: string,
-  ): Promise<void> {
-    await this.collections.kickFromCollection(collection, scopeId, userId);
+  public kickFromCollection(collection: string, scopeId: string, userId?: string): Promise<void> {
+    this.collections.kickFromCollection(collection, scopeId, userId);
+    return Promise.resolve();
   }
 
   // ===========================================================================
