@@ -1,6 +1,11 @@
 import type { Socket } from "socket.io-client";
 import type { QueryClient } from "@tanstack/react-query";
-import type { AccessLevel, QuickdrawEventMap, ServiceResponse } from "../shared/types";
+import type {
+  AccessLevel,
+  CollectionDelta,
+  QuickdrawEventMap,
+  ServiceResponse,
+} from "../shared/types";
 
 // ============================================================================
 // Socket Context Types
@@ -181,6 +186,51 @@ export type QuickdrawRoomEventHandlers = {
 } & {
   [event: string]: ((data: never) => void) | undefined;
 };
+
+// ============================================================================
+// Collection Hook Types
+// ============================================================================
+
+/**
+ * Options for the useCollection hook.
+ */
+export interface UseCollectionOptions<TItem extends { id: string }> {
+  /** Whether to subscribe (default: true). */
+  enabled?: boolean;
+  /** Snapshot page size. Default comes from the server definition. */
+  limit?: number;
+  /**
+   * Client-side ordering. Omit to keep server snapshot order (new `added`
+   * items land per `insertPosition`). Should be referentially stable.
+   */
+  compare?: (a: TItem, b: TItem) => number;
+  /** Where `added` items land when no `compare` is set. Default "end". */
+  insertPosition?: "start" | "end";
+  /** Called for every delta received (informational; cache updates are automatic). */
+  onDelta?: (delta: CollectionDelta<TItem>) => void;
+  /** Called when a snapshot or page request fails. */
+  onError?: (error: string) => void;
+}
+
+/**
+ * Return type for the useCollection hook.
+ */
+export interface UseCollectionResult<TItem> {
+  /** Ordered, deduped items of the scope. */
+  items: TItem[];
+  byId: ReadonlyMap<string, TItem>;
+  /** Server-reported scope size (null before the first snapshot). */
+  totalCount: number | null;
+  isLoading: boolean;
+  isError: boolean;
+  error: string | null;
+  hasMore: boolean;
+  isLoadingMore: boolean;
+  /** Fetch the next page (cursor reuse of the subscribe event). */
+  loadMore: () => Promise<void>;
+  /** Manual re-snapshot (also what `reset` deltas trigger, debounced 100ms). */
+  refresh: () => Promise<void>;
+}
 
 // ============================================================================
 // Service Query Hook Types

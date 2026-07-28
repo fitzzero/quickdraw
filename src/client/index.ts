@@ -7,8 +7,19 @@ export { QuickdrawProvider, useQuickdrawSocket } from "./QuickdrawProvider";
 export { useService, useServiceMethod } from "./useService";
 export { useServiceQuery } from "./useServiceQuery";
 export { useSubscription } from "./useSubscription";
+export { useCollection } from "./useCollection";
 export { useRoomEvents } from "./useRoomEvents";
 export { useChannelSend } from "./useChannelSend";
+
+// Collection cache (pure merge module — exported for advanced cache access)
+export {
+  applySnapshot,
+  applyPage,
+  applyDelta,
+  applyDeltas,
+  createEmptyEntry,
+  type CollectionCacheEntry,
+} from "./collectionCache";
 
 // Errors
 export { ServiceCallError } from "./serviceError";
@@ -24,6 +35,8 @@ export type {
   UseServiceQueryResult,
   UseSubscriptionOptions,
   UseSubscriptionResult,
+  UseCollectionOptions,
+  UseCollectionResult,
   UseRoomEventsOptions,
   UseChannelSendResult,
   ClientServiceMethodMap,
