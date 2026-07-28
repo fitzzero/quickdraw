@@ -3,6 +3,7 @@
 // Types
 export type {
   QuickdrawSocket,
+  QuickdrawIdentity,
   QuickdrawServerOptions,
   QuickdrawServerResult,
   BaseServiceInstance,
@@ -18,8 +19,16 @@ export type {
 
 // Core classes
 export { BaseService } from "./BaseService";
+export { BaseRpcService } from "./BaseRpcService";
 export { ServiceRegistry, type ServiceRegistryOptions } from "./ServiceRegistry";
 export { createQuickdrawServer } from "./createServer";
+
+// Collections (scope-keyed list subscriptions)
+export {
+  CollectionManager,
+  type CollectionDefinition,
+  type CollectionWriteEvent,
+} from "./collections";
 
 // Redis adapter for horizontal scaling
 export {

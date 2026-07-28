@@ -84,6 +84,8 @@ function createMockContext(
     disconnect: vi.fn(),
     subscriptionRegistry: createMockRegistry(),
     subscriptionBatcher: { enqueue: vi.fn() },
+    isRateLimited: false,
+    reportRateLimited: vi.fn(),
     ...overrides,
   };
 }

@@ -228,6 +228,7 @@ export function QuickdrawProvider({
   autoConnect = !!authToken,
   withCredentials = true,
   socketPath,
+  reconnectBehavior = "invalidate-queries",
 }: QuickdrawProviderProps): React.ReactElement {
   // Create QueryClient lazily to avoid SSR issues
   const [defaultQueryClient] = React.useState(() => createQueryClient());
@@ -237,6 +238,7 @@ export function QuickdrawProvider({
   const [isConnected, setIsConnected] = React.useState(false);
   const [userId, setUserId] = React.useState<string | null>(null);
   const [serviceAccess, setServiceAccess] = React.useState<Record<string, AccessLevel>>({});
+  const [isRateLimited, setIsRateLimited] = React.useState(false);
 
   // Create subscription registry - recreated when socket changes
   const subscriptionRegistryRef = React.useRef<SubscriptionRegistry>(createSubscriptionRegistry());
@@ -251,6 +253,39 @@ export function QuickdrawProvider({
   const subscriptionBatcherRef = React.useRef<SubscriptionBatcher>(
     createSubscriptionBatcher(socketRef),
   );
+
+  // Reconnect detection + options read through refs so `connect` stays stable
+  const hasEverConnectedRef = React.useRef(false);
+  const reconnectBehaviorRef = React.useRef(reconnectBehavior);
+  reconnectBehaviorRef.current = reconnectBehavior;
+  const queryClientRef = React.useRef(actualQueryClient);
+  queryClientRef.current = actualQueryClient;
+
+  // Rate-limit backoff: while the server reports us limited, reads pause.
+  // The window extends on repeat reports; a timer flips the flag back.
+  const rateLimitUntilRef = React.useRef(0);
+  const rateLimitTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const reportRateLimited = React.useCallback((retryAfterMs?: number) => {
+    const backoffMs = Math.min(Math.max(retryAfterMs ?? 5000, 250), 5 * 60 * 1000);
+    const until = Date.now() + backoffMs;
+    if (until <= rateLimitUntilRef.current) return;
+
+    rateLimitUntilRef.current = until;
+    setIsRateLimited(true);
+    if (rateLimitTimerRef.current) clearTimeout(rateLimitTimerRef.current);
+    rateLimitTimerRef.current = setTimeout(() => {
+      rateLimitTimerRef.current = null;
+      rateLimitUntilRef.current = 0;
+      setIsRateLimited(false);
+    }, backoffMs);
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (rateLimitTimerRef.current) clearTimeout(rateLimitTimerRef.current);
+    };
+  }, []);
 
   const connect = React.useCallback(
     (token?: string) => {
@@ -273,6 +308,14 @@ export function QuickdrawProvider({
 
       newSocket.on("connect", () => {
         setIsConnected(true);
+        // Reconnects (of this socket or a replacement) leave plain query
+        // reads stale — room events emitted during the outage are gone.
+        // Invalidate so active queries refetch; subscriptions and
+        // collections re-establish themselves via the registry cycle.
+        if (hasEverConnectedRef.current && reconnectBehaviorRef.current === "invalidate-queries") {
+          void queryClientRef.current.invalidateQueries();
+        }
+        hasEverConnectedRef.current = true;
       });
 
       newSocket.on("disconnect", () => {
@@ -284,11 +327,18 @@ export function QuickdrawProvider({
       // Listen for auth info from server
       newSocket.on(
         "auth:info",
-        (info: { userId: string; serviceAccess: Record<string, AccessLevel> }) => {
+        (info: { userId: string | null; serviceAccess: Record<string, AccessLevel> }) => {
           setUserId(info.userId);
-          setServiceAccess(info.serviceAccess);
+          setServiceAccess(info.serviceAccess ?? {});
         },
       );
+
+      // Server-reported rate limiting (default onRateLimitExceeded shape)
+      newSocket.on("error", (payload: { code?: string; retryAfter?: number } | undefined) => {
+        if (payload && payload.code === "RATE_LIMITED") {
+          reportRateLimited(payload.retryAfter);
+        }
+      });
 
       newSocket.on("connect_error", (error) => {
         console.error("Socket connection error:", error.message);
@@ -297,7 +347,7 @@ export function QuickdrawProvider({
       socketRef.current = newSocket;
       setSocket(newSocket);
     },
-    [serverUrl, withCredentials, socketPath],
+    [serverUrl, withCredentials, socketPath, reportRateLimited],
   );
 
   const disconnect = React.useCallback(() => {
@@ -357,8 +407,19 @@ export function QuickdrawProvider({
       disconnect,
       subscriptionRegistry: subscriptionRegistryRef.current,
       subscriptionBatcher: subscriptionBatcherRef.current,
+      isRateLimited,
+      reportRateLimited,
     }),
-    [socket, isConnected, userId, serviceAccess, connect, disconnect],
+    [
+      socket,
+      isConnected,
+      userId,
+      serviceAccess,
+      connect,
+      disconnect,
+      isRateLimited,
+      reportRateLimited,
+    ],
   );
 
   return (

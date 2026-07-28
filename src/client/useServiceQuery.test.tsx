@@ -46,6 +46,8 @@ function createMockContext(
       clear: vi.fn(),
     },
     subscriptionBatcher: { enqueue: vi.fn() },
+    isRateLimited: false,
+    reportRateLimited: vi.fn(),
   };
 }
 
@@ -356,5 +358,80 @@ describe("useServiceQuery", () => {
     expect(result.current.isError).toBe(false);
     expect(result.current.error).toBeNull();
     expect(typeof result.current.refetch).toBe("function");
+  });
+
+  it("passes refetchInterval through to TanStack Query", async () => {
+    let fetchCount = 0;
+
+    mockSocket.emit.mockImplementation(
+      (
+        _event: string,
+        _payload: unknown,
+        callback: (response: ServiceResponse<{ count: number }>) => void,
+      ) => {
+        fetchCount++;
+        callback({ success: true, data: { count: fetchCount } });
+      },
+    );
+
+    const { result } = renderHook(
+      () =>
+        useServiceQuery("testService", "getData", {}, { staleTime: 60000, refetchInterval: 200 }),
+      { wrapper: createWrapper(mockContext) },
+    );
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+    expect(fetchCount).toBe(1);
+
+    // The interval refetches even though staleTime hasn't elapsed
+    await waitFor(
+      () => {
+        expect(fetchCount).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 3000 },
+    );
+  });
+
+  it("pauses reads while rate-limited and reports 429 responses", async () => {
+    const reportRateLimited = vi.fn();
+
+    mockSocket.emit.mockImplementation(
+      (
+        _event: string,
+        _payload: unknown,
+        callback: (response: ServiceResponse<unknown>) => void,
+      ) => {
+        callback({ success: false, error: "Rate limit exceeded", code: 429 });
+      },
+    );
+
+    const limitedAfterReport = createMockContext(mockSocket);
+    limitedAfterReport.reportRateLimited = reportRateLimited;
+
+    const { result } = renderHook(
+      () => useServiceQuery("testService", "getData", {}, { retry: false }),
+      { wrapper: createWrapper(limitedAfterReport) },
+    );
+
+    await waitFor(() => {
+      expect(result.current.isError).toBe(true);
+    });
+
+    // The 429 is reported to the provider so it can open the backoff window
+    expect(reportRateLimited).toHaveBeenCalled();
+
+    // While the provider reports the client limited, queries do not fetch
+    mockSocket.emit.mockClear();
+    const limitedContext = createMockContext(mockSocket);
+    limitedContext.isRateLimited = true;
+
+    renderHook(() => useServiceQuery("testService", "otherMethod", {}), {
+      wrapper: createWrapper(limitedContext),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mockSocket.emit).not.toHaveBeenCalled();
   });
 });

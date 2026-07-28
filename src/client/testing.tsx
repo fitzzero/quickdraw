@@ -92,6 +92,8 @@ export function createMockSocketContext(
     disconnect: () => {},
     subscriptionRegistry: createMockSubscriptionRegistry(),
     subscriptionBatcher: { enqueue: () => {} },
+    isRateLimited: false,
+    reportRateLimited: () => {},
     ...overrides,
   };
 }

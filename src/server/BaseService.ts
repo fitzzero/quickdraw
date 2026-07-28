@@ -9,18 +9,24 @@ import type {
   Logger,
   ACL,
   AdminServiceMeta,
+  AdminListPayload,
+  AdminListResponse,
+  AdminSetACLPayload,
+  AdminSubscribersResponse,
+  QuickdrawEventName,
+  QuickdrawEventData,
+  CollectionSubscribePayload,
+  CollectionSnapshotResponse,
+  CollectionUnsubscribePayload,
 } from "../shared/types";
-import { consoleLogger } from "../shared/types";
+import { consoleLogger, serviceRoom, serviceFullRoom, userRoom } from "../shared/types";
 import type {
   QuickdrawSocket,
   BaseServiceOptions,
   InstallAdminMethodsOptions,
   PrismaDelegate,
-  AdminListPayload,
-  AdminListResponse,
-  AdminSetACLPayload,
-  AdminSubscribersResponse,
 } from "./types";
+import { CollectionManager, type CollectionDefinition } from "./collections";
 import { zodToAdminFields, mergeWithDefaultFields } from "./utils/zodToAdminFields";
 
 /**
@@ -38,6 +44,8 @@ import { zodToAdminFields, mergeWithDefaultFields } from "./utils/zodToAdminFiel
  * @typeParam TUpdateInput - The update input type
  * @typeParam TServiceMethods - Service method definitions map
  * @typeParam TChannels - Service channel payload map (high-frequency fire-and-forget events)
+ * @typeParam TDto - The wire shape emitted to subscribers (defaults to TEntity; see `toDto`)
+ * @typeParam TCollections - Collection map: name -> { item } (see `defineCollection`)
  *
  * @example
  * ```typescript
@@ -65,13 +73,19 @@ export abstract class BaseService<
     [K in keyof TServiceMethods]: { payload: unknown; response: unknown };
   } = Record<string, { payload: unknown; response: unknown }>,
   TChannels extends { [K in keyof TChannels]: unknown } = Record<string, unknown>,
+  TDto extends { id: string } = TEntity,
+  TCollections extends {
+    [K in keyof TCollections]: { item: { id: string } };
+  } = Record<string, { item: { id: string } }>,
 > {
   public readonly serviceName: string;
   protected readonly hasEntryACL: boolean;
   protected readonly defaultACL: ACL;
   protected readonly logger: Logger;
 
-  // Subscription tracking: entryId -> Set of sockets
+  // Subscription tracking: entryId -> Set of sockets.
+  // Retained for admin introspection (adminGetSubscribers) only — emission
+  // is room-based and never reads this map.
   protected readonly subscribers: Map<string, Set<QuickdrawSocket>> = new Map();
 
   // Prisma delegate for DB operations
@@ -87,6 +101,9 @@ export abstract class BaseService<
   // Collection of channels for registry discovery
   private readonly publicChannels: Map<string, ServiceChannelDefinition<unknown>> = new Map();
 
+  // Scope-keyed collections (definitions, snapshot dispatch, delta emission)
+  private readonly collections: CollectionManager<TEntity>;
+
   // Admin metadata configuration (set by installAdminMethods)
   private adminMeta: AdminServiceMeta | null = null;
 
@@ -97,6 +114,12 @@ export abstract class BaseService<
     this.logger =
       options.logger?.child({ service: this.serviceName }) ??
       consoleLogger.child({ service: this.serviceName });
+    this.collections = new CollectionManager<TEntity>({
+      serviceName: this.serviceName,
+      getIo: () => this.io,
+      logger: this.logger,
+      defaultToItem: (entity) => this.toDto(entity),
+    });
   }
 
   /**
@@ -134,21 +157,27 @@ export abstract class BaseService<
   /**
    * Get the Socket.io room name for an entry.
    * Used for room-based broadcasting across services.
+   * Static counterpart: `serviceRoom(serviceName, entryId)` from the root export.
    */
   public getRoomName(entryId: string): string {
-    return `${this.serviceName}:${entryId}`;
+    return serviceRoom(this.serviceName, entryId);
   }
 
   /**
    * Subscribe a socket to an entity's updates.
-   * Returns the current entity data if access is granted, null otherwise.
-   * Also joins the socket to the entity's Socket.io room for cross-service events.
+   * Returns the current entity data (as the wire DTO, filtered for the
+   * subscriber's tier) if access is granted, null otherwise.
+   *
+   * Joins the entity's Socket.io room; subscribers with elevated access
+   * additionally join `{room}:full` so `emitUpdate` can address the two
+   * tiers as rooms (adapter-safe). The tier is fixed here, at subscribe
+   * time — an access change takes effect on re-subscribe.
    */
   public async subscribe(
     entryId: string,
     socket: QuickdrawSocket,
     requiredLevel: AccessLevel = "Read",
-  ): Promise<TEntity | null> {
+  ): Promise<Partial<TDto> | null> {
     if (!socket.userId) {
       return null;
     }
@@ -165,15 +194,18 @@ export abstract class BaseService<
       return null;
     }
 
-    // Add to subscribers
+    // Add to subscribers (admin introspection only)
     if (!this.subscribers.has(entryId)) {
       this.subscribers.set(entryId, new Set());
     }
     this.subscribers.get(entryId)!.add(socket);
 
-    // Join Socket.io room for room-based broadcasting
+    // Join Socket.io room(s) for room-based broadcasting
     const roomName = this.getRoomName(entryId);
     void socket.join(roomName);
+    if (this.hasElevatedAccess(socket, entryId)) {
+      void socket.join(serviceFullRoom(this.serviceName, entryId));
+    }
 
     this.logger.debug(`User ${socket.userId} subscribed to ${entryId} (room: ${roomName})`);
 
@@ -181,7 +213,7 @@ export abstract class BaseService<
     const entity = await this.findById(entryId);
     if (!entity) return null;
 
-    return this.filterEntityForSubscriber(entity, socket, entryId) as TEntity;
+    return this.filterEntityForSubscriber(await this.toDto(entity), socket, entryId);
   }
 
   /**
@@ -196,7 +228,7 @@ export abstract class BaseService<
     entryIds: string[],
     socket: QuickdrawSocket,
     requiredLevel: AccessLevel = "Read",
-  ): Promise<Record<string, TEntity | null>> {
+  ): Promise<Record<string, Partial<TDto> | null>> {
     if (!socket.userId || entryIds.length === 0) {
       return {};
     }
@@ -212,9 +244,9 @@ export abstract class BaseService<
 
     const entities = allowedIds.length > 0 ? await this.findByIds(allowedIds) : [];
 
-    const entityMap = new Map<string, TEntity>();
+    const dtoMap = new Map<string, TDto>();
     for (const entity of entities) {
-      entityMap.set(entity.id, entity);
+      dtoMap.set(entity.id, await this.toDto(entity));
     }
 
     // Join rooms for all ACL-allowed IDs, matching subscribe()'s behavior
@@ -226,18 +258,21 @@ export abstract class BaseService<
       }
       this.subscribers.get(entryId)!.add(socket);
       void socket.join(this.getRoomName(entryId));
+      if (this.hasElevatedAccess(socket, entryId)) {
+        void socket.join(serviceFullRoom(this.serviceName, entryId));
+      }
     }
 
-    const results: Record<string, TEntity | null> = {};
+    const results: Record<string, Partial<TDto> | null> = {};
 
     for (const entryId of entryIds) {
-      const entity = entityMap.get(entryId);
-      if (!entity || !accessMap.get(entryId)) {
+      const dto = dtoMap.get(entryId);
+      if (!dto || !accessMap.get(entryId)) {
         results[entryId] = null;
         continue;
       }
 
-      results[entryId] = this.filterEntityForSubscriber(entity, socket, entryId) as TEntity;
+      results[entryId] = this.filterEntityForSubscriber(dto, socket, entryId);
     }
 
     this.logger.debug(
@@ -294,9 +329,9 @@ export abstract class BaseService<
       }
     }
 
-    // Leave Socket.io room
-    const roomName = this.getRoomName(entryId);
-    void socket.leave(roomName);
+    // Leave Socket.io rooms (base + elevated tier)
+    void socket.leave(this.getRoomName(entryId));
+    void socket.leave(serviceFullRoom(this.serviceName, entryId));
   }
 
   /**
@@ -306,9 +341,9 @@ export abstract class BaseService<
     for (const [entryId, sockets] of this.subscribers.entries()) {
       if (sockets.has(socket)) {
         sockets.delete(socket);
-        // Leave Socket.io room
-        const roomName = this.getRoomName(entryId);
-        void socket.leave(roomName);
+        // Leave Socket.io rooms
+        void socket.leave(this.getRoomName(entryId));
+        void socket.leave(serviceFullRoom(this.serviceName, entryId));
         if (sockets.size === 0) {
           this.subscribers.delete(entryId);
         }
@@ -326,33 +361,33 @@ export abstract class BaseService<
    * @param eventName - The event name to emit
    * @param data - The data to emit
    *
+   * Event names and payloads are typed via the augmentable
+   * `QuickdrawEventMap` — with no augmentation this degrades to
+   * `string`/`unknown` exactly as before.
+   *
    * @example
    * ```typescript
    * // In MessageService, notify chat subscribers of a new message
    * this.emitToRoom(
-   *   `chatService:${message.chatId}`,
+   *   serviceRoom('chatService', message.chatId),
    *   'chat:message',
    *   messageDTO
    * );
    * ```
    */
-  public emitToRoom(roomName: string, eventName: string, data: unknown): void {
-    // Preferred: use io instance directly (sends to ALL in room including sender)
-    if (this.io) {
-      this.io.to(roomName).emit(eventName, data);
-      this.logger.debug(`Emitted ${eventName} to room ${roomName}`);
+  public emitToRoom<E extends QuickdrawEventName>(
+    roomName: string,
+    eventName: E,
+    data: QuickdrawEventData<E & string>,
+  ): void {
+    if (!this.io) {
+      this.logger.debug(
+        `No io instance (service not registered); dropping ${eventName} to room ${roomName}`,
+      );
       return;
     }
-
-    // Fallback: use any subscriber socket (excludes that socket from broadcast)
-    const anySocket = this.getAnySubscriberSocket();
-    if (!anySocket) {
-      this.logger.debug(`No sockets available to emit to room ${roomName}`);
-      return;
-    }
-
-    anySocket.to(roomName).emit(eventName, data);
-    this.logger.debug(`Emitted ${eventName} to room ${roomName} (via socket fallback)`);
+    this.io.to(roomName).emit(eventName, data);
+    this.logger.debug(`Emitted ${eventName} to room ${roomName}`);
   }
 
   /**
@@ -376,15 +411,13 @@ export abstract class BaseService<
    * );
    * ```
    */
-  public emitToRoomVolatile(roomName: string, eventName: string, data: unknown): void {
-    if (this.io) {
-      this.io.to(roomName).volatile.emit(eventName, data);
-      return;
-    }
-
-    const anySocket = this.getAnySubscriberSocket();
-    if (!anySocket) return;
-    anySocket.to(roomName).volatile.emit(eventName, data);
+  public emitToRoomVolatile<E extends QuickdrawEventName>(
+    roomName: string,
+    eventName: E,
+    data: QuickdrawEventData<E & string>,
+  ): void {
+    if (!this.io) return;
+    this.io.to(roomName).volatile.emit(eventName, data);
   }
 
   /**
@@ -399,44 +432,37 @@ export abstract class BaseService<
    * this.emitToUserRoom(userId, "budget:shared", { budgetId, sharedBy });
    * ```
    */
-  public emitToUserRoom(userId: string, eventName: string, data: unknown): void {
-    this.emitToRoom(`user:${userId}`, eventName, data);
-  }
-
-  /**
-   * Get any active socket for room-based operations.
-   */
-  private getAnySubscriberSocket(): QuickdrawSocket | null {
-    for (const sockets of this.subscribers.values()) {
-      const first = sockets.values().next();
-      if (!first.done) {
-        return first.value;
-      }
-    }
-    return null;
+  public emitToUserRoom<E extends QuickdrawEventName>(
+    userId: string,
+    eventName: E,
+    data: QuickdrawEventData<E & string>,
+  ): void {
+    this.emitToRoom(userRoom(userId), eventName, data);
   }
 
   /**
    * Emit an update to all subscribers of an entity.
-   * Uses tier-based pre-filtering: computes filtered versions once,
-   * then selects the appropriate version per subscriber.
+   *
+   * Room-based and therefore Redis-adapter-safe: elevated subscribers (in
+   * `{room}:full`, joined at subscribe time) receive the payload unfiltered;
+   * everyone else in the entity room receives it with protected fields
+   * stripped. Wire format and audience match the pre-4.0 per-socket path,
+   * but updates now cross nodes.
    *
    * Can be called from external method composition files.
    */
-  public emitUpdate(entryId: string, data: Partial<TEntity>): void {
-    const subs = this.subscribers.get(entryId);
-    if (!subs || subs.size === 0) return;
+  public emitUpdate(entryId: string, data: Partial<TDto>): void {
+    if (!this.io) {
+      this.logger.debug(`No io instance (service not registered); dropping update for ${entryId}`);
+      return;
+    }
 
     const eventName = `${this.serviceName}:update:${entryId}`;
+    const room = this.getRoomName(entryId);
+    const fullRoom = serviceFullRoom(this.serviceName, entryId);
 
-    // Pre-compute filtered versions (O(1) regardless of subscriber count)
-    const fullData = data;
-    const publicData = this.stripProtectedFields(data);
-
-    for (const socket of subs) {
-      const payload = this.hasElevatedAccess(socket, entryId) ? fullData : publicData;
-      socket.emit(eventName, payload);
-    }
+    this.io.to(fullRoom).emit(eventName, data);
+    this.io.to(room).except(fullRoom).emit(eventName, this.stripProtectedFields(data));
   }
 
   // ===========================================================================
@@ -577,8 +603,18 @@ export abstract class BaseService<
   }
 
   // ===========================================================================
-  // Protected Fields Filtering
+  // DTO Mapping & Protected Fields Filtering
   // ===========================================================================
+
+  /**
+   * Map a raw row to the wire DTO. Default: identity.
+   * May fetch (e.g. Prisma includes). Used by the CRUD trio's auto-emission,
+   * by `subscribe`/`batchSubscribe` initial payloads, and as the default
+   * `toItem` for collections.
+   */
+  protected toDto(entity: TEntity): TDto | Promise<TDto> {
+    return entity as unknown as TDto;
+  }
 
   /**
    * Get the list of fields that should be stripped for non-elevated subscribers.
@@ -586,13 +622,13 @@ export abstract class BaseService<
    *
    * @example
    * ```typescript
-   * protected override getProtectedFields(): (keyof User)[] {
+   * protected override getProtectedFields(): (keyof UserDto)[] {
    *   return ['email', 'serviceAccess', 'discordId'];
    * }
    * ```
    */
-  protected getProtectedFields(): (keyof TEntity)[] {
-    return ["email", "serviceAccess"] as (keyof TEntity)[];
+  protected getProtectedFields(): (keyof TDto)[] {
+    return ["email", "serviceAccess"] as (keyof TDto)[];
   }
 
   /**
@@ -614,10 +650,10 @@ export abstract class BaseService<
   }
 
   /**
-   * Strip protected fields from an entity.
-   * Used internally by filterEntityForSubscriber.
+   * Strip protected fields from a DTO.
+   * Used internally by filterEntityForSubscriber and emitUpdate.
    */
-  protected stripProtectedFields<T extends Partial<TEntity>>(entity: T): T {
+  protected stripProtectedFields<T extends Partial<TDto>>(entity: T): T {
     const protectedFields = this.getProtectedFields();
     const result = { ...entity };
     for (const field of protectedFields) {
@@ -627,16 +663,20 @@ export abstract class BaseService<
   }
 
   /**
-   * Filter entity data based on subscriber's access level.
+   * Filter DTO data based on subscriber's access level.
    * Override for complex filtering logic (e.g., multiple tiers).
+   *
+   * Note: this shapes the *initial* subscribe payload only. Live emits are
+   * two-tier by room (`emitUpdate`) — full for elevated subscribers,
+   * protected-fields-stripped for everyone else.
    *
    * @example
    * ```typescript
    * protected override filterEntityForSubscriber(
-   *   entity: Partial<TEntity>,
+   *   entity: Partial<UserDto>,
    *   socket: QuickdrawSocket,
    *   entryId: string
-   * ): Partial<TEntity> {
+   * ): Partial<UserDto> {
    *   if (this.hasElevatedAccess(socket, entryId)) return entity;
    *   if (this.isFriend(socket.userId, entryId)) return this.stripForFriends(entity);
    *   return this.stripProtectedFields(entity);
@@ -644,11 +684,70 @@ export abstract class BaseService<
    * ```
    */
   protected filterEntityForSubscriber(
-    entity: Partial<TEntity>,
+    entity: Partial<TDto>,
     socket: QuickdrawSocket,
     entryId: string,
-  ): Partial<TEntity> {
+  ): Partial<TDto> {
     return this.hasElevatedAccess(socket, entryId) ? entity : this.stripProtectedFields(entity);
+  }
+
+  // ===========================================================================
+  // Write Lifecycle Hooks
+  // ===========================================================================
+  // Overridable extension points around the CRUD trio — the home for
+  // cross-cutting side effects (audit logging, denormalized counters, search
+  // indexing) without overriding create/update/delete wholesale. Collections
+  // are notified automatically between emit and the after* hook.
+  //
+  // Semantics: before* hooks may veto by throwing (nothing is written);
+  // after* hooks run once the write has committed, so a throw propagates to
+  // the caller but cannot undo the write.
+
+  /** Transform or validate create input. Runs before the insert. */
+  protected async beforeCreate(data: TCreateInput): Promise<TCreateInput> {
+    return data;
+  }
+
+  /** Runs after a create has committed and been emitted. */
+  protected async afterCreate(_entity: TEntity): Promise<void> {}
+
+  /**
+   * Transform or validate update input. `before` is the pre-write row when
+   * the service has collections or overrides an update/delete hook
+   * (otherwise null — the extra fetch is skipped).
+   */
+  protected async beforeUpdate(
+    _id: string,
+    data: TUpdateInput,
+    _before: TEntity | null,
+  ): Promise<TUpdateInput> {
+    return data;
+  }
+
+  /** Runs after an update has committed and been emitted. */
+  protected async afterUpdate(_before: TEntity | null, _after: TEntity): Promise<void> {}
+
+  /** Runs before the delete. Throw to veto (delete() then returns false). */
+  protected async beforeDelete(_before: TEntity): Promise<void> {}
+
+  /** Runs after a delete has committed and been emitted. */
+  protected async afterDelete(_before: TEntity): Promise<void> {}
+
+  /**
+   * Whether writes need the pre-write row: true when the service has
+   * collections (scope diffing needs `before`) or overrides one of the
+   * update/delete hooks that receive it.
+   */
+  private needsBeforeEntity(): boolean {
+    if (this.collections.size > 0) return true;
+    const base = BaseService.prototype as unknown as Record<string, unknown>;
+    const self = this as unknown as Record<string, unknown>;
+    return (
+      self.beforeUpdate !== base.beforeUpdate ||
+      self.afterUpdate !== base.afterUpdate ||
+      self.beforeDelete !== base.beforeDelete ||
+      self.afterDelete !== base.afterDelete
+    );
   }
 
   // ===========================================================================
@@ -665,46 +764,66 @@ export abstract class BaseService<
   }
 
   /**
-   * Create an entity and emit to subscribers.
+   * Create an entity, emit to subscribers, and notify collections.
    */
   protected async create(data: TCreateInput): Promise<TEntity> {
-    const entity = await this.getDelegate().create({ data });
-    this.emitUpdate(entity.id, entity);
+    const prepared = await this.beforeCreate(data);
+    const entity = await this.getDelegate().create({ data: prepared });
+    this.emitUpdate(entity.id, await this.toDto(entity));
+    await this.collections.notify({ type: "create", after: entity });
+    await this.afterCreate(entity);
     this.logger.info(`Created entity ${entity.id}`);
     return entity;
   }
 
   /**
-   * Update an entity and emit to subscribers.
+   * Update an entity, emit to subscribers, and notify collections.
+   * Returns null when the write fails (e.g. the row does not exist).
    */
   protected async update(id: string, data: TUpdateInput): Promise<TEntity | null> {
+    const before = this.needsBeforeEntity() ? await this.findById(id) : null;
+    const prepared = await this.beforeUpdate(id, data, before);
+
+    let entity: TEntity;
     try {
-      const entity = await this.getDelegate().update({
+      entity = await this.getDelegate().update({
         where: { id } as { id: string },
-        data,
+        data: prepared,
       });
-      this.emitUpdate(id, entity);
-      this.logger.info(`Updated entity ${id}`);
-      return entity;
     } catch {
       return null;
     }
+
+    this.emitUpdate(id, await this.toDto(entity));
+    await this.collections.notify({ type: "update", before, after: entity });
+    await this.afterUpdate(before, entity);
+    this.logger.info(`Updated entity ${id}`);
+    return entity;
   }
 
   /**
-   * Delete an entity and emit deletion event to subscribers.
+   * Delete an entity, emit the deletion event, and notify collections.
+   * Returns false when the write fails or a beforeDelete hook throws.
    */
   protected async delete(id: string): Promise<boolean> {
+    const before = this.needsBeforeEntity() ? await this.findById(id) : null;
+
     try {
+      if (before) await this.beforeDelete(before);
       await this.getDelegate().delete({
         where: { id } as { id: string },
       });
-      this.emitUpdate(id, { id, deleted: true } as unknown as Partial<TEntity>);
-      this.logger.info(`Deleted entity ${id}`);
-      return true;
     } catch {
       return false;
     }
+
+    this.emitUpdate(id, { id, deleted: true } as unknown as Partial<TDto>);
+    if (before) {
+      await this.collections.notify({ type: "delete", before });
+      await this.afterDelete(before);
+    }
+    this.logger.info(`Deleted entity ${id}`);
+    return true;
   }
 
   // ===========================================================================
@@ -889,6 +1008,150 @@ export abstract class BaseService<
     if (missing.length > 0) {
       throw new Error(`${this.serviceName}: Missing method implementations: ${missing.join(", ")}`);
     }
+  }
+
+  // ===========================================================================
+  // Collections (scope-keyed list subscriptions)
+  // ===========================================================================
+
+  /**
+   * Declare a collection: rows of this service grouped by a scope id derived
+   * from the row. Declared in the constructor next to defineMethod /
+   * defineChannel; discovered by ServiceRegistry the same way.
+   *
+   * Once declared, the CRUD trio emits `added`/`updated`/`removed` deltas to
+   * the scope rooms automatically — including scope moves (a row whose scope
+   * changes is removed-from-old + added-to-new) and predicate entry/exit
+   * (`resolveScopeId` returning null). Hand-rolled write paths use the
+   * emitCollection* choke points instead.
+   *
+   * @example
+   * ```typescript
+   * type TaskCollections = { cardsByProject: { item: TaskCardDTO } };
+   *
+   * this.defineCollection("cardsByProject", {
+   *   resolveScopeId: (task) => task.projectId,
+   *   checkScopeAccess: (userId, projectId) => this.isProjectMember(userId, projectId),
+   *   snapshot: (projectId, { cursor, limit }) => this.getCardPage(projectId, cursor, limit),
+   *   toItem: (task) => this.buildCardDTO(task.id),
+   * });
+   * ```
+   */
+  protected defineCollection<K extends keyof TCollections & string>(
+    name: K,
+    config: CollectionDefinition<TEntity, TCollections[K]["item"]>,
+  ): void {
+    this.collections.define(name, config as CollectionDefinition<TEntity, { id: string }>);
+  }
+
+  /**
+   * Get all collection definitions for registry discovery.
+   */
+  public getCollections(): Map<string, CollectionDefinition<TEntity, { id: string }>> {
+    return this.collections.getAll();
+  }
+
+  /**
+   * Handle a `{service}:collection:subscribe` (called by ServiceRegistry).
+   * Cursor-less calls join the scope room and return the first page (with
+   * `ids` when the snapshot provides them); cursor-bearing calls are pure
+   * paging. Returns null on access denial or unknown collection.
+   */
+  public async subscribeCollection(
+    payload: CollectionSubscribePayload,
+    socket: QuickdrawSocket,
+  ): Promise<CollectionSnapshotResponse<{ id: string }> | null> {
+    return await this.collections.subscribe(payload, socket);
+  }
+
+  /**
+   * Handle a `{service}:collection:unsubscribe` (called by ServiceRegistry).
+   */
+  public unsubscribeCollection(
+    payload: CollectionUnsubscribePayload,
+    socket: QuickdrawSocket,
+  ): void {
+    this.collections.unsubscribe(payload, socket);
+  }
+
+  /**
+   * Notify all collections of a write this service performed outside the
+   * CRUD trio, with full scope-move diffing. Prefer the emitCollection*
+   * choke points when you already know the delta shape.
+   */
+  protected async notifyCollections(
+    event:
+      | { type: "create"; after: TEntity }
+      | { type: "update"; before: TEntity | null; after: TEntity }
+      | { type: "delete"; before: TEntity },
+  ): Promise<void> {
+    await this.collections.notify(event);
+  }
+
+  /**
+   * Emit an `updated` delta for an item to a scope room (client upserts —
+   * added-vs-updated is cosmetic). The choke point for hand-rolled write
+   * paths that already hold the item DTO.
+   *
+   * Can be called from external method composition files.
+   */
+  public emitCollectionUpsert<K extends keyof TCollections & string>(
+    collection: K,
+    scopeId: string,
+    item: TCollections[K]["item"],
+  ): void {
+    this.collections.emitUpsert(collection, scopeId, item);
+  }
+
+  /**
+   * Emit a `removed` delta (id-only) to a scope room.
+   *
+   * Can be called from external method composition files.
+   */
+  public emitCollectionRemove<K extends keyof TCollections & string>(
+    collection: K,
+    scopeId: string,
+    id: string,
+  ): void {
+    this.collections.emitRemove(collection, scopeId, id);
+  }
+
+  /**
+   * Emit a scope move: `removed` from the old scope + `added` to the new.
+   *
+   * Can be called from external method composition files.
+   */
+  public emitCollectionMove<K extends keyof TCollections & string>(
+    collection: K,
+    fromScopeId: string,
+    toScopeId: string,
+    item: TCollections[K]["item"],
+  ): void {
+    this.collections.emitMove(collection, fromScopeId, toScopeId, item);
+  }
+
+  /**
+   * Tell subscribers to re-snapshot the scope (debounced client-side) — the
+   * honest fallback for bulk operations and mass reorders.
+   *
+   * Can be called from external method composition files.
+   */
+  public emitCollectionReset<K extends keyof TCollections & string>(
+    collection: K,
+    scopeId: string,
+  ): void {
+    this.collections.emitReset(collection, scopeId);
+  }
+
+  /**
+   * Force sockets out of a collection scope room (adapter-safe ACL
+   * revocation). With `userId`, only that user's sockets; without, everyone.
+   * Promise-shaped for forward compatibility with adapters that resolve
+   * membership asynchronously.
+   */
+  public kickFromCollection(collection: string, scopeId: string, userId?: string): Promise<void> {
+    this.collections.kickFromCollection(collection, scopeId, userId);
+    return Promise.resolve();
   }
 
   // ===========================================================================
@@ -1167,7 +1430,7 @@ export abstract class BaseService<
       });
 
       // Emit update to subscribers so they receive the new ACL
-      this.emitUpdate(entryId, entity);
+      this.emitUpdate(entryId, await this.toDto(entity));
 
       this.logger.info(`Updated ACL for entity ${entryId}`);
       return entity;
@@ -1215,7 +1478,7 @@ export abstract class BaseService<
     const subs = this.subscribers.get(entryId);
     const count = subs?.size ?? 0;
 
-    this.emitUpdate(entryId, entity);
+    this.emitUpdate(entryId, await this.toDto(entity));
 
     this.logger.info(`Re-emitted entity ${entryId} to ${count} subscribers`);
     return { success: true, subscriberCount: count };
@@ -1223,6 +1486,8 @@ export abstract class BaseService<
 
   /**
    * Admin method: Unsubscribe all sockets from an entity.
+   * Room-based (adapter-safe): clears the entity's rooms across all nodes.
+   * The reported count covers this node's introspection map only.
    */
   protected adminUnsubscribeAll(entryId: string): {
     success: boolean;
@@ -1231,15 +1496,16 @@ export abstract class BaseService<
     const subs = this.subscribers.get(entryId);
     const count = subs?.size ?? 0;
 
-    if (subs) {
-      // Notify subscribers they're being unsubscribed
-      const eventName = `${this.serviceName}:unsubscribed:${entryId}`;
-      for (const socket of subs) {
-        socket.emit(eventName, { reason: "admin_action" });
-      }
+    const room = this.getRoomName(entryId);
+    const fullRoom = serviceFullRoom(this.serviceName, entryId);
 
-      this.subscribers.delete(entryId);
-    }
+    // Notify subscribers they're being unsubscribed, then evict them from
+    // the rooms cluster-wide so they stop receiving updates.
+    this.emitToRoom(room, `${this.serviceName}:unsubscribed:${entryId}`, {
+      reason: "admin_action",
+    });
+    this.io?.in(room).socketsLeave([room, fullRoom]);
+    this.subscribers.delete(entryId);
 
     this.logger.info(`Unsubscribed ${count} sockets from entity ${entryId}`);
     return { success: true, unsubscribedCount: count };

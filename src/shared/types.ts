@@ -224,59 +224,54 @@ export const CHANNEL_EVENT_PREFIX = "channel:";
 // ============================================================================
 // Admin Method Types (Generic shapes for all services)
 // ============================================================================
+// One canonical shape per admin method, matching what BaseService actually
+// sends and receives on the wire. (Before 4.0 these were declared twice —
+// here and in server/types.ts — with different shapes; the server shapes won.)
 
 export type AdminListPayload = {
   page?: number;
   pageSize?: number;
-  sort?: {
-    field?: string;
-    direction?: "asc" | "desc";
-  };
-  filter?: {
-    id?: string;
-    ids?: string[];
-    createdAfter?: string;
-    createdBefore?: string;
-    updatedAfter?: string;
-    updatedBefore?: string;
-  } & Record<string, unknown>;
+  where?: Record<string, unknown>;
+  orderBy?: Record<string, "asc" | "desc">;
 };
 
 export type AdminListResponse<T> = {
-  rows: T[];
+  items: T[];
+  total: number;
   page: number;
   pageSize: number;
-  total: number;
+  totalPages: number;
 };
 
 export type AdminGetPayload = { id: string };
 
-export type AdminCreatePayload<TInsert> = { data: Partial<TInsert> };
+export type AdminCreatePayload<TCreate> = { data: TCreate };
 
-export type AdminUpdatePayload<TInsert> = {
+export type AdminUpdatePayload<TUpdate> = {
   id: string;
-  data: Partial<TInsert>;
+  data: TUpdate;
 };
 
 export type AdminDeletePayload = { id: string };
-export type AdminDeleteResponse = { id: string; deleted: true };
+export type AdminDeleteResponse = { success: boolean; id: string };
 
-export type AdminSetEntryACLPayload = {
-  id: string;
+export type AdminSetACLPayload = {
+  entryId: string;
   acl: ACL;
 };
 
-export type AdminGetSubscribersPayload = { id: string };
-export type AdminGetSubscribersResponse = {
-  id: string;
-  subscribers: Array<{ socketId: string; userId?: string }>;
+export type AdminGetSubscribersPayload = { entryId: string };
+export type AdminSubscribersResponse = {
+  entryId: string;
+  subscribers: Array<{ socketId: string; userId: string | null }>;
+  count: number;
 };
 
-export type AdminReemitPayload = { id: string };
-export type AdminReemitResponse = { emitted: boolean };
+export type AdminReemitPayload = { entryId: string };
+export type AdminReemitResponse = { success: boolean; subscriberCount: number };
 
-export type AdminUnsubscribeAllPayload = { id: string };
-export type AdminUnsubscribeAllResponse = { id: string; unsubscribed: number };
+export type AdminUnsubscribeAllPayload = { entryId: string };
+export type AdminUnsubscribeAllResponse = { success: boolean; unsubscribedCount: number };
 
 // ============================================================================
 // Admin Field Configuration Types
@@ -354,6 +349,164 @@ export type SubscribePayload = {
 export type UnsubscribePayload = {
   entryId: string;
 };
+
+// ============================================================================
+// Room Naming (shared between server emitters and client listeners)
+// ============================================================================
+
+/**
+ * The Socket.io room for an entity subscription: `{serviceName}:{entryId}`.
+ *
+ * Static counterpart to `BaseService.getRoomName` — usable from shared
+ * modules and when emitting into *another* service's room without holding
+ * its instance.
+ */
+export function serviceRoom(serviceName: string, entryId: string): string {
+  return `${serviceName}:${entryId}`;
+}
+
+/**
+ * The room subscribers of an elevated (unfiltered) entity tier join in
+ * addition to {@link serviceRoom}. Emission targets it via
+ * `io.to(fullRoom)` + `io.to(room).except(fullRoom)`.
+ */
+export function serviceFullRoom(serviceName: string, entryId: string): string {
+  return `${serviceRoom(serviceName, entryId)}:full`;
+}
+
+/**
+ * The room for a collection scope:
+ * `{serviceName}:collection:{collection}:{scopeId}`.
+ * Entity ids are cuids, so this never collides with {@link serviceRoom}.
+ */
+export function collectionRoom(serviceName: string, collection: string, scopeId: string): string {
+  return `${serviceName}:collection:${collection}:${scopeId}`;
+}
+
+/**
+ * The event name collection deltas are emitted as. Identical to the room
+ * name by design — one event per scope room, no id parsing client-side.
+ */
+export function collectionEventName(
+  serviceName: string,
+  collection: string,
+  scopeId: string,
+): string {
+  return collectionRoom(serviceName, collection, scopeId);
+}
+
+/**
+ * The per-user room every authenticated socket joins on connection:
+ * `user:{userId}`. Used for targeted notifications and adapter-safe
+ * revocation (`kickFromCollection`).
+ */
+export function userRoom(userId: string): string {
+  return `user:${userId}`;
+}
+
+// ============================================================================
+// Typed Room Events
+// ============================================================================
+
+/**
+ * Augmentable map of custom room event names to their payload types.
+ * Empty by default — `emitToRoom` and `useRoomEvents` degrade gracefully to
+ * `string` names and `unknown` payloads until an app augments it:
+ *
+ * @example
+ * ```typescript
+ * // In your app's shared types
+ * declare module "@fitzzero/quickdraw-core" {
+ *   interface QuickdrawEventMap {
+ *     "chat:memberUpdate": { chatId: string; userId: string };
+ *     "presence:changed": { userId: string; online: boolean };
+ *   }
+ * }
+ * ```
+ *
+ * Collection deltas and `{service}:update:{id}` events need no entries here —
+ * they are framework-generated and typed end-to-end by the service generics.
+ */
+// oxlint-disable-next-line typescript/no-empty-interface, typescript/no-empty-object-type
+export interface QuickdrawEventMap {}
+
+/**
+ * Event names accepted by `emitToRoom`/`useRoomEvents`: keys of the
+ * augmented {@link QuickdrawEventMap} (with autocomplete) plus any string.
+ */
+export type QuickdrawEventName =
+  | (keyof QuickdrawEventMap & string)
+  | (string & Record<never, never>);
+
+/**
+ * Payload type for a room event: the mapped type when the name is in
+ * {@link QuickdrawEventMap}, `unknown` otherwise.
+ */
+export type QuickdrawEventData<E extends string> = E extends keyof QuickdrawEventMap
+  ? QuickdrawEventMap[E]
+  : unknown;
+
+// ============================================================================
+// Collection Subscription Types (wire protocol)
+// ============================================================================
+
+/**
+ * One page of a collection snapshot, returned by a collection's `snapshot`
+ * query and by the `{service}:collection:subscribe` ack.
+ */
+export interface CollectionSnapshotPage<TItem> {
+  items: TItem[];
+  nextCursor: string | null;
+  totalCount: number;
+  /**
+   * Full membership id list for the scope (ids only, cheap select).
+   * Returned on cursor-less (first-page / re-snapshot) requests so clients
+   * can prune rows deleted while disconnected. Omit for unbounded scopes
+   * (e.g. long chat histories) — the client then merges without pruning.
+   */
+  ids?: string[];
+  /**
+   * Set by the server when the scope's id list exceeded the cap (5,000) and
+   * `ids` was dropped — the client degrades to no-prune merges.
+   */
+  idsTruncated?: boolean;
+}
+
+/** Snapshot page plus the revision captured before the query ran. */
+export type CollectionSnapshotResponse<TItem> = CollectionSnapshotPage<TItem> & { rev: number };
+
+/**
+ * Payload for `{service}:collection:subscribe`. Cursor-less calls join the
+ * scope room and may include `ids`; cursor-bearing calls are pure paging —
+ * no room join, no `ids`.
+ */
+export type CollectionSubscribePayload = {
+  collection: string;
+  scopeId: string;
+  cursor?: string | null;
+  limit?: number;
+};
+
+/** Payload for `{service}:collection:unsubscribe`. */
+export type CollectionUnsubscribePayload = {
+  collection: string;
+  scopeId: string;
+};
+
+/**
+ * A collection change, emitted to the scope room under the event name
+ * {@link collectionEventName}.
+ *
+ * `rev` is per-item last-writer-wins: clients ignore an `added`/`updated`
+ * older than what they hold for that id, and snapshot items only overwrite
+ * cached items whose rev predates the snapshot rev. Revisions are epoch
+ * milliseconds (`Date.now()` at emit, or the collection's `revOf`).
+ */
+export type CollectionDelta<TItem extends { id: string }> =
+  | { type: "added"; item: TItem; rev: number }
+  | { type: "updated"; item: TItem; rev: number }
+  | { type: "removed"; id: string; rev: number }
+  | { type: "reset"; rev: number };
 
 // ============================================================================
 // Utility Types
