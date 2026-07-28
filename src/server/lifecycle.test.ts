@@ -296,4 +296,24 @@ describe("room-based emitUpdate (two-tier)", () => {
     owner.socket.off(eventName, handler);
     expect(received).toBe(0);
   });
+
+  it("batchSubscribe joins the :full room for elevated subscribers", async () => {
+    // Re-subscribe both, this time via batchSubscribe
+    await owner.emit("profileService:batchSubscribe", { entryIds: ["user-owner"] });
+    await viewer.emit("profileService:batchSubscribe", { entryIds: ["user-owner"] });
+
+    const eventName = "profileService:update:user-owner";
+    const ownerUpdate = waitForEvent<Partial<Profile>>(owner.socket, eventName);
+    const viewerUpdate = waitForEvent<Partial<Profile>>(viewer.socket, eventName);
+
+    await service.updateProfile("user-owner", {
+      name: "Batch Tier",
+      email: "batch@example.com",
+    });
+
+    const [ownerPayload, viewerPayload] = await Promise.all([ownerUpdate, viewerUpdate]);
+    expect(ownerPayload.email).toBe("batch@example.com");
+    expect(viewerPayload.email).toBeUndefined();
+    expect(viewerPayload.name).toBe("Batch Tier");
+  });
 });
