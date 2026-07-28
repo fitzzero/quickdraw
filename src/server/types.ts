@@ -7,6 +7,9 @@ import type {
   ServiceChannelDefinition,
   Logger,
   AdminFieldConfig,
+  CollectionSubscribePayload,
+  CollectionSnapshotResponse,
+  CollectionUnsubscribePayload,
 } from "../shared/types";
 
 // ============================================================================
@@ -19,11 +22,30 @@ import type {
 export interface QuickdrawSocket extends Socket {
   userId?: string;
   serviceAccess?: Record<string, AccessLevel>;
+  /** Principal type from the structured identity (e.g. "user", "taskToken"). */
+  principalType?: string;
+  /** Arbitrary verified claims stamped by `authenticate`. */
+  claims?: Record<string, unknown>;
 }
 
 // ============================================================================
 // Server Configuration Types
 // ============================================================================
+
+/**
+ * Structured result of socket authentication. Lets `authenticate` express
+ * multiple principal types (user JWT, task token, deployment-runner token…)
+ * instead of only a userId.
+ *
+ * Everything is stamped onto the socket: `userId`, `principalType`, `claims`,
+ * and `serviceAccess` (when omitted, `loadServiceAccess(userId)` is consulted).
+ */
+export interface QuickdrawIdentity {
+  userId?: string;
+  principalType?: string;
+  claims?: Record<string, unknown>;
+  serviceAccess?: Record<string, AccessLevel>;
+}
 
 export interface QuickdrawServerOptions {
   port: number;
@@ -36,12 +58,21 @@ export interface QuickdrawServerOptions {
   auth?: {
     /**
      * Custom authentication function.
-     * Return the userId if authenticated, or throw/return undefined to reject.
+     * Return a userId string or a structured {@link QuickdrawIdentity} if
+     * authenticated; throw or return undefined to reject.
      */
     authenticate?: (
       socket: QuickdrawSocket,
       auth: Record<string, unknown>,
-    ) => Promise<string | undefined>;
+    ) => Promise<string | QuickdrawIdentity | undefined>;
+    /**
+     * Load service-level access for an authenticated user (e.g. from the
+     * user record). Used when the identity result does not carry
+     * `serviceAccess` itself. Defaults to empty access.
+     */
+    loadServiceAccess?: (
+      userId: string,
+    ) => Promise<Record<string, AccessLevel> | null | undefined>;
   };
   logger?: Logger;
   /**
@@ -100,6 +131,13 @@ export interface BaseServiceInstance {
     socket: QuickdrawSocket,
     payload: unknown,
   ) => boolean;
+  /** Handle a collection subscribe (services without collections may omit) */
+  subscribeCollection?: (
+    payload: CollectionSubscribePayload,
+    socket: QuickdrawSocket,
+  ) => Promise<CollectionSnapshotResponse<{ id: string }> | null>;
+  /** Handle a collection unsubscribe (services without collections may omit) */
+  unsubscribeCollection?: (payload: CollectionUnsubscribePayload, socket: QuickdrawSocket) => void;
   /** Set Socket.io server instance for room-based broadcasts */
   setIo?: (io: SocketIOServer) => void;
 }
@@ -166,35 +204,15 @@ export interface InstallAdminMethodsOptions {
 // ============================================================================
 // Admin Method Payload/Response Types
 // ============================================================================
+// Canonical shapes live in shared/types.ts (used by both client and server);
+// re-exported here so `.../server` import sites keep working.
 
-export interface AdminListPayload {
-  page?: number;
-  pageSize?: number;
-  where?: Record<string, unknown>;
-  orderBy?: Record<string, "asc" | "desc">;
-}
-
-export interface AdminListResponse<TEntity> {
-  items: TEntity[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-}
-
-export interface AdminSetACLPayload {
-  entryId: string;
-  acl: Array<{ userId: string; level: AccessLevel }>;
-}
-
-export interface AdminSubscribersResponse {
-  entryId: string;
-  subscribers: Array<{
-    socketId: string;
-    userId: string | null;
-  }>;
-  count: number;
-}
+export type {
+  AdminListPayload,
+  AdminListResponse,
+  AdminSetACLPayload,
+  AdminSubscribersResponse,
+} from "../shared/types";
 
 // ============================================================================
 // Prisma Integration Types

@@ -1,16 +1,32 @@
 import express from "express";
 import { createServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
-import { consoleLogger } from "../shared/types";
-import type { QuickdrawSocket, QuickdrawServerOptions, QuickdrawServerResult } from "./types";
+import { consoleLogger, userRoom } from "../shared/types";
+import type {
+  QuickdrawIdentity,
+  QuickdrawSocket,
+  QuickdrawServerOptions,
+  QuickdrawServerResult,
+} from "./types";
 import { ServiceRegistry } from "./ServiceRegistry";
 
 /**
  * Create a fully configured quickdraw server with one function call.
  *
+ * Authentication: `authenticate` may return a plain userId string or a
+ * structured {@link QuickdrawIdentity} (`{ userId?, principalType?, claims?,
+ * serviceAccess? }`) for non-trivial principal models (task tokens, runner
+ * tokens…). Service-level access comes from the identity's `serviceAccess`,
+ * or from `loadServiceAccess(userId)` when the identity omits it.
+ *
+ * On connection, authenticated sockets join `user:{userId}` (so
+ * `emitToUserRoom` and user-targeted kicks work out of the box) and every
+ * socket receives an `auth:info` event with
+ * `{ userId, serviceAccess, principalType }`.
+ *
  * @example
  * ```typescript
- * import { createQuickdrawServer } from '@quickdraw/core/server';
+ * import { createQuickdrawServer } from '@fitzzero/quickdraw-core/server';
  * import { ChatService, UserService } from './services';
  *
  * const { io, httpServer, registry } = createQuickdrawServer({
@@ -22,9 +38,13 @@ import { ServiceRegistry } from "./ServiceRegistry";
  *   },
  *   auth: {
  *     authenticate: async (socket, auth) => {
- *       // Verify JWT and return userId
  *       const payload = await verifyJWT(auth.token);
- *       return payload.userId;
+ *       if (!payload) return undefined;
+ *       return { userId: payload.userId, principalType: "user" };
+ *     },
+ *     loadServiceAccess: async (userId) => {
+ *       const user = await prisma.user.findUnique({ where: { id: userId } });
+ *       return user?.serviceAccess as Record<string, AccessLevel> | null;
  *     },
  *   },
  * });
@@ -68,12 +88,20 @@ export function createQuickdrawServer(options: QuickdrawServerOptions): Quickdra
     try {
       if (options.auth?.authenticate) {
         const auth = socket.handshake.auth as Record<string, unknown>;
-        const userId = await options.auth.authenticate(quickdrawSocket, auth);
-        quickdrawSocket.userId = userId;
+        const result = await options.auth.authenticate(quickdrawSocket, auth);
+        const identity: QuickdrawIdentity | undefined =
+          typeof result === "string" ? { userId: result } : result;
 
-        // TODO: Load service access from user record
-        // For now, default to empty service access
-        quickdrawSocket.serviceAccess = {};
+        quickdrawSocket.userId = identity?.userId;
+        quickdrawSocket.principalType = identity?.principalType;
+        quickdrawSocket.claims = identity?.claims;
+
+        let serviceAccess = identity?.serviceAccess;
+        if (!serviceAccess && identity?.userId && options.auth.loadServiceAccess) {
+          serviceAccess =
+            (await options.auth.loadServiceAccess(identity.userId)) ?? undefined;
+        }
+        quickdrawSocket.serviceAccess = serviceAccess ?? {};
       }
       next();
     } catch (error) {
@@ -96,6 +124,20 @@ export function createQuickdrawServer(options: QuickdrawServerOptions): Quickdra
     serverLogger.info("Socket connected", {
       socketId: quickdrawSocket.id,
       userId: quickdrawSocket.userId,
+    });
+
+    // Authenticated sockets join their user room (targeted notifications,
+    // adapter-safe revocation via kickFromCollection).
+    if (quickdrawSocket.userId) {
+      void quickdrawSocket.join(userRoom(quickdrawSocket.userId));
+    }
+
+    // Tell the client who it is — QuickdrawProvider listens for this to
+    // populate its userId/serviceAccess context.
+    quickdrawSocket.emit("auth:info", {
+      userId: quickdrawSocket.userId ?? null,
+      serviceAccess: quickdrawSocket.serviceAccess ?? {},
+      principalType: quickdrawSocket.principalType,
     });
 
     quickdrawSocket.on("disconnect", () => {

@@ -3,6 +3,8 @@ import type {
   ServiceResponse,
   ServiceMethodDefinition,
   ServiceChannelDefinition,
+  CollectionSubscribePayload,
+  CollectionUnsubscribePayload,
   Logger,
 } from "../shared/types";
 import { consoleLogger, channelEventName } from "../shared/types";
@@ -129,6 +131,7 @@ export class ServiceRegistry implements ServiceRegistryInstance {
       this.registerSubscriptionListener(socket, `${serviceName}:subscribe`, service);
       this.registerBatchSubscriptionListener(socket, `${serviceName}:batchSubscribe`, service);
       this.registerUnsubscriptionListener(socket, `${serviceName}:unsubscribe`, service);
+      this.registerCollectionListeners(socket, serviceName, service);
     }
   }
 
@@ -544,6 +547,83 @@ export class ServiceRegistry implements ServiceRegistryInstance {
   }
 
   /**
+   * Register collection subscribe/unsubscribe listeners for a service.
+   *
+   * `{service}:collection:subscribe` doubles as the paging call: a
+   * cursor-bearing payload skips the room join and just returns a page.
+   */
+  private registerCollectionListeners(
+    socket: QuickdrawSocket,
+    serviceName: string,
+    service: BaseServiceInstance,
+  ): void {
+    socket.on(
+      `${serviceName}:collection:subscribe`,
+      async (payload: CollectionSubscribePayload, callback?: (r: ServiceResponse) => void) => {
+        try {
+          if (!socket.userId) {
+            callback?.({ success: false, error: "Authentication required", code: 401 });
+            return;
+          }
+          if (!isValidCollectionPayload(payload) || !isValidSubscribeExtras(payload)) {
+            callback?.({ success: false, error: "Invalid collection payload", code: 400 });
+            return;
+          }
+          if (!service.subscribeCollection) {
+            callback?.({ success: false, error: "Service has no collections", code: 404 });
+            return;
+          }
+
+          const data = await service.subscribeCollection(payload, socket);
+          if (data === null) {
+            callback?.({
+              success: false,
+              error: "Access denied or unknown collection",
+              code: 403,
+            });
+            return;
+          }
+
+          callback?.({ success: true, data });
+        } catch (error) {
+          this.logger.error(`Error in collection subscription ${serviceName}:`, {
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
+          callback?.({
+            success: false,
+            error: error instanceof Error ? error.message : "Collection subscription failed",
+          });
+        }
+      },
+    );
+
+    socket.on(
+      `${serviceName}:collection:unsubscribe`,
+      (
+        payload: CollectionUnsubscribePayload,
+        callback?: (r: ServiceResponse<{ unsubscribed: true }>) => void,
+      ) => {
+        try {
+          if (!isValidCollectionPayload(payload)) {
+            callback?.({ success: false, error: "Invalid collection payload", code: 400 });
+            return;
+          }
+          service.unsubscribeCollection?.(payload, socket);
+          callback?.({ success: true, data: { unsubscribed: true } });
+        } catch (error) {
+          this.logger.error(`Error in collection unsubscription ${serviceName}:`, {
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
+          callback?.({
+            success: false,
+            error: error instanceof Error ? error.message : "Collection unsubscription failed",
+          });
+        }
+      },
+    );
+  }
+
+  /**
    * Get list of registered service names.
    */
   public getServices(): string[] {
@@ -556,4 +636,22 @@ export class ServiceRegistry implements ServiceRegistryInstance {
   public getServiceInstances(): BaseServiceInstance[] {
     return Array.from(this.services.values());
   }
+}
+
+/** Structural check shared by collection subscribe and unsubscribe payloads. */
+function isValidCollectionPayload(
+  payload: unknown,
+): payload is { collection: string; scopeId: string } {
+  if (!payload || typeof payload !== "object") return false;
+  const p = payload as Record<string, unknown>;
+  return typeof p.collection === "string" && typeof p.scopeId === "string";
+}
+
+/** Optional subscribe fields: cursor (string | null) and limit (number). */
+function isValidSubscribeExtras(payload: CollectionSubscribePayload): boolean {
+  const cursorOk =
+    payload.cursor === undefined || payload.cursor === null || typeof payload.cursor === "string";
+  const limitOk =
+    payload.limit === undefined || (typeof payload.limit === "number" && payload.limit > 0);
+  return cursorOk && limitOk;
 }
