@@ -11,15 +11,22 @@ the `quickdraw-chat` template (sibling checkout at `../quickdraw-chat`).
 
 ```
 src/
-├── shared/    # Types exported from the package root (AccessLevel, ACL, ServiceResponse, …)
-├── server/    # ./server export: BaseService, ServiceRegistry, createServer, channels,
+├── shared/    # Types exported from the package root (AccessLevel, ACL, ServiceResponse,
+│              #   room helpers, QuickdrawEventMap, collection wire types, …)
+├── server/    # ./server export: BaseService (+ BaseRpcService), ServiceRegistry,
+│              #   createServer, collections (CollectionManager), channels,
 │              #   auth/ (OAuth+JWT+mock provider), express/ (rate limits), mcp/, redis
 └── client/    # ./client export: QuickdrawProvider, useService, useServiceQuery,
-               #   useSubscription, useChannelSend, useRoomEvents, inputs/ (socket-synced MUI)
+               #   useSubscription, useCollection (+ pure collectionCache),
+               #   useChannelSend, useRoomEvents, inputs/ (socket-synced MUI)
 eslint-plugin-quickdraw/  # ./eslint-plugin export — framework lint rules (.mjs, shipped verbatim)
 oxlint.base.jsonc         # Shared oxlint base config consumers extend (shipped verbatim)
 eslint-config/            # Legacy ESLint flat config export — prefer oxlint.base.jsonc
 ```
+
+Large consumer services split as abstract `*ServiceCore` + method modules
+wired by a thin concrete subclass — documented in README "Splitting Large
+Services"; keep that section accurate when touching `defineMethod`.
 
 Export map lives in `package.json` (`.` / `./server` / `./client` /
 `./server/testing` / `./server/testing/prisma` / `./server/express` /

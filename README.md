@@ -5,6 +5,7 @@ Fast fullstack patterns for real-time applications with Socket.io and TanStack Q
 ## Features
 
 - **Server Core**: BaseService class with typed CRUD, ACL-based access control, and real-time subscriptions
+- **Collections**: declare a scope-keyed list once, get live add/update/remove deltas, pagination, and reconnect healing — no hand-wired events
 - **Client Core**: TanStack Query integration with Socket.io for real-time state management
 - **Socket Inputs**: Pre-built form components that sync with server state
 - **Custom OAuth**: JWT-based authentication with Discord and Google providers
@@ -110,6 +111,88 @@ function ChatPage({ chatId }: { chatId: string }) {
 }
 ```
 
+### Collections (Live Lists)
+
+Entity subscriptions cover single rows; **collections** cover lists. A
+collection is "rows of this service, grouped by a scope id derived from the
+row" — declare it once and the framework handles emission (multi-node-safe),
+pagination, and reconnect correctness. No more `task:created` /
+`task:deleted` mirror events, `invalidateOn` refetches, or hand-rolled
+merge-by-id state.
+
+**Server** — declare next to your methods; the CRUD trio emits deltas
+automatically (scope moves and predicate entry/exit included):
+
+```typescript
+type MessageCollections = { byChat: { item: MessageDTO } };
+
+class MessageService extends BaseService<
+  Message,
+  Prisma.MessageCreateInput,
+  Prisma.MessageUpdateInput,
+  MessageServiceMethods,
+  Record<string, unknown>, // channels
+  MessageDTO, // TDto — wire shape
+  MessageCollections // TCollections
+> {
+  constructor(prisma: PrismaClient) {
+    super({ serviceName: "messageService" });
+    this.setDelegate(prisma.message);
+
+    this.defineCollection("byChat", {
+      resolveScopeId: (message) => message.chatId,
+      checkScopeAccess: (userId, chatId) => this.isChatMember(userId, chatId),
+      // Server-ordered first page + reconnect re-snapshot. Omit `ids` for
+      // unbounded histories like this one; return it for bounded scopes so
+      // reconnecting clients prune rows deleted while offline.
+      snapshot: async (chatId, { cursor, limit }) => this.getMessagePage(chatId, cursor, limit),
+      toItem: (message) => this.toDto(message),
+    });
+  }
+}
+```
+
+**Client** — one hook per list; live deltas, `loadMore` paging, and
+re-snapshot-on-reconnect are built in:
+
+```tsx
+import { useCollection } from "@fitzzero/quickdraw-core/client";
+
+function ChatWindow({ chatId }: { chatId: string }) {
+  const {
+    items: messages,
+    isLoading,
+    hasMore,
+    loadMore,
+  } = useCollection<MessageDTO>("messageService", "byChat", chatId, {
+    compare: (a, b) => a.createdAt.localeCompare(b.createdAt),
+  });
+
+  return <MessageList messages={messages} onScrollTop={hasMore ? loadMore : undefined} />;
+}
+```
+
+Scopes don't have to be parent entities — `resolveScopeId` may return a
+`string[]` to fan out (e.g. a chat appearing in every member's `myChats`
+collection, scope = user id), or `null` to exclude a row (predicate
+filtering). For hand-rolled write paths, one-line choke points keep deltas
+flowing: `emitCollectionUpsert` / `emitCollectionRemove` /
+`emitCollectionMove` / `emitCollectionReset`, plus `kickFromCollection` for
+adapter-safe ACL revocation.
+
+ACL is deliberately simple: items are **scope-visible** — anyone who passes
+`checkScopeAccess` sees every item in full (strip sensitive fields in
+`toItem`/`snapshot`). If visibility varies per user within a scope, that's
+not a collection — use separate scopes or entity subscriptions.
+
+When to use which:
+
+| Hook              | Use for                                                       |
+| ----------------- | ------------------------------------------------------------- |
+| `useSubscription` | One entity, field-tiered (detail panels)                      |
+| `useCollection`   | Live lists of a scope (boards, feeds, chat histories)         |
+| `useServiceQuery` | Genuinely query-shaped reads (search, cross-scope aggregates) |
+
 ### Socket Inputs
 
 ```tsx
@@ -131,54 +214,71 @@ function ChatTitleEditor({ chat, updateChat }) {
 
 ### Custom Room Events
 
-When your server broadcasts custom events to subscription rooms via `emitToRoom`, use `useRoomEvents` on the client to listen with proper lifecycle management:
+For genuinely custom, ephemeral events (typing indicators, presence pulses —
+things that aren't rows), broadcast with `emitToRoom` and listen with
+`useRoomEvents`:
 
 ```tsx
 import { useSubscription, useRoomEvents } from "@fitzzero/quickdraw-core/client";
 
-function ProjectBoard({ projectId }: { projectId: string }) {
-  const { data: project } = useSubscription("projectService", projectId);
-  const [tasks, setTasks] = useState<Task[]>([]);
+function ChatView({ chatId }: { chatId: string }) {
+  const { data: chat } = useSubscription("chatService", chatId);
+  const [typing, setTyping] = useState<string | null>(null);
 
   // Lifecycle-managed event listeners — cleanup handled automatically
   useRoomEvents({
-    "task:created": (task: Task) => setTasks((prev) => [...prev, task]),
-    "task:deleted": ({ id }: { id: string }) => setTasks((prev) => prev.filter((t) => t.id !== id)),
+    "chat:typing": ({ userName }: { userName: string }) => setTyping(userName),
+    "chat:typingStop": () => setTyping(null),
   });
 
-  return <Board tasks={tasks} />;
+  return <Chat chat={chat} typing={typing} />;
 }
 ```
 
+Event names and payloads can be typed end-to-end by augmenting
+`QuickdrawEventMap` from the package root — `emitToRoom` and `useRoomEvents`
+then check payloads and autocomplete names (and degrade to
+`string`/`unknown` if you never augment it):
+
+```typescript
+declare module "@fitzzero/quickdraw-core" {
+  interface QuickdrawEventMap {
+    "chat:typing": { userName: string };
+    "chat:typingStop": Record<string, never>;
+  }
+}
+```
+
+Don't hand-emit row lifecycle events (`task:created`, `task:deleted`, …) —
+that's what collections automate; the shipped
+`quickdraw/no-manual-collection-events` lint rule flags them.
+
 ### Auto-Invalidating Queries
 
-For list queries that should refresh when related events fire, use `invalidateOn`:
+For genuinely query-shaped reads (search results, cross-scope aggregates)
+that should refresh when related events fire, use `invalidateOn`:
 
 ```tsx
 import { useServiceQuery } from "@fitzzero/quickdraw-core/client";
 
-function TaskList({ projectId }: { projectId: string }) {
-  // Auto-refetches when tasks are created, deleted, or change status
-  const { data: tasks } = useServiceQuery(
+function SearchResults({ query }: { query: string }) {
+  const { data: results } = useServiceQuery(
     "taskService",
-    "listTasks",
-    { projectId },
+    "searchTasks",
+    { query },
     {
-      invalidateOn: ["task:created", "task:deleted", "task:statusUpdate"],
+      invalidateOn: ["task:statusUpdate"],
+      refetchInterval: 60_000, // optional periodic refresh
     },
   );
 
-  return (
-    <ul>
-      {tasks?.map((t) => (
-        <li key={t.id}>{t.title}</li>
-      ))}
-    </ul>
-  );
+  return <Results items={results} />;
 }
 ```
 
-Rapid-fire events within 100ms are debounced into a single refetch.
+Rapid-fire events within 100ms are debounced into a single refetch. For
+plain scope lists, prefer `useCollection` — it replaces the
+`invalidateOn` + refetch cycle with true deltas.
 
 ### Channels (High-Frequency Traffic)
 
@@ -285,17 +385,89 @@ When to use which:
 | ACL            | full async check incl. DB | in-memory only           |
 | Rate limit     | global limiter            | per-channel token bucket |
 
+## Splitting Large Services
+
+Real services grow past what one file should hold. The proven pattern —
+battle-tested in the framework's largest consumer without import cycles — is
+an abstract `*ServiceCore` plus method modules wired by a thin concrete
+subclass:
+
+```typescript
+// services/task/service-core.ts — state, ACL overrides, helpers. No methods.
+export abstract class TaskServiceCore extends BaseService<
+  Task,
+  Prisma.TaskCreateInput,
+  Prisma.TaskUpdateInput,
+  TaskServiceMethods,
+  TaskChannels,
+  TaskDTO,
+  TaskCollections
+> {
+  constructor(protected readonly prisma: PrismaClient) {
+    super({ serviceName: "taskService" });
+    this.setDelegate(prisma.task);
+  }
+
+  public buildCardDTO(taskId: string): Promise<TaskCardDTO> {
+    /* ... */
+  }
+}
+
+// services/task/methods/create-task.ts — one module per method (or cluster).
+// defineMethod is public precisely so modules can register on the instance.
+export function registerCreateTask(service: TaskService): void {
+  service.defineMethod(
+    "createTask",
+    "Read",
+    async (payload, ctx) => {
+      // ...
+    },
+    { schema: createTaskSchema },
+  );
+}
+
+// services/task/index.ts — the concrete subclass wires the modules.
+export class TaskService extends TaskServiceCore {
+  constructor(prisma: PrismaClient) {
+    super(prisma);
+    registerCreateTask(this);
+    registerUpdateTask(this);
+    // ...
+    this.verifyAllMethods(["createTask", "updateTask" /* ... */]);
+  }
+}
+```
+
+Core → modules → concrete class is a DAG: the core never imports the modules,
+the modules never import each other. `verifyAllMethods` catches a forgotten
+`register*` call at boot. The public choke points (`emitUpdate`,
+`emitCollectionUpsert`, `emitToRoom`, `isLevelSufficient`, …) exist so method
+modules outside the class stay fully capable.
+
 ## Package Exports
 
 ```typescript
 // Shared types (both server and client)
-import { ServiceResponse, AccessLevel, ServiceMethodMap } from "@fitzzero/quickdraw-core";
+import {
+  ServiceResponse,
+  AccessLevel,
+  ServiceMethodMap,
+  // Room helpers + typed events (4.0)
+  serviceRoom,
+  collectionRoom,
+  userRoom,
+  type QuickdrawEventMap,
+  type CollectionDelta,
+} from "@fitzzero/quickdraw-core";
 
 // Server
 import {
   BaseService,
+  BaseRpcService, // 4.0: method-only services, no delegate/CRUD
   ServiceRegistry,
   createQuickdrawServer,
+  type CollectionDefinition, // 4.0
+  type QuickdrawIdentity, // 4.0: structured authenticate result
   createJWT,
   verifyJWT,
   discordProvider,
@@ -340,7 +512,9 @@ import {
   useService,
   useServiceQuery,
   useSubscription,
+  useCollection, // 4.0: live scope-keyed lists
   useRoomEvents,
+  ServiceCallError, // 4.0: hook errors carry the server code
   SocketCheckbox,
   SocketTextField,
   SocketSelect,
@@ -436,6 +610,7 @@ export type ChatServiceMethods = ServiceMethodMap<{
 │                                                                 │
 │  useService() ──────────────────────────────────────────────┐   │
 │  useSubscription() ─────────────────────────────────────────┤   │
+│  useCollection() ───────────────────────────────────────────┤   │
 │  SocketTextField, SocketCheckbox, ... ──────────────────────┤   │
 │                                                             │   │
 └─────────────────────────────────────────────────────────────│───┘
@@ -450,10 +625,11 @@ export type ChatServiceMethods = ServiceMethodMap<{
 │      ├── Auto-discovers public methods                          │
 │      └── Wires methods to Socket.io events                      │
 │                                                                 │
-│  BaseService<Entity, CreateInput, UpdateInput, ServiceMethods>  │
+│  BaseService<Entity, Create, Update, Methods, …, Dto, Colls>    │
 │  ├── defineMethod() - Type-safe method definition               │
+│  ├── defineCollection() - Live lists with automatic deltas      │
 │  ├── subscribe() / unsubscribe() - Real-time subscriptions      │
-│  ├── create() / update() / delete() - CRUD with auto-emit       │
+│  ├── create() / update() / delete() - CRUD, auto-emit + hooks   │
 │  └── checkAccess() - ACL enforcement                            │
 │                                                                 │
 │  Auth Utilities                                                 │

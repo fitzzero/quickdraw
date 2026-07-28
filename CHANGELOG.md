@@ -2,6 +2,127 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.0.0] - 2026-07-28
+
+The collection-subscriptions major (RFCs 0001 + 0002, `docs/rfcs/`). See
+`UPGRADE-PROMPT.md` for the 3.x → 4.0 migration guide.
+
+### Added
+
+- **Collection subscriptions** — the missing primitive for live lists. A
+  collection is "rows of this service, grouped by a scope id derived from the
+  row"; membership is a pure function of the row:
+  - `defineCollection(name, { resolveScopeId, checkScopeAccess, snapshot, toItem?, defaultLimit?, revOf? })`
+    declared in the constructor next to `defineMethod`/`defineChannel`, with a
+    new `TCollections` generic on `BaseService`. `resolveScopeId` may return
+    `null` (predicate filtering) or `string[]` (fan-out scopes).
+  - The CRUD trio emits `added`/`updated`/`removed` deltas to scope rooms
+    automatically, including scope moves (removed-from-old + added-to-new) and
+    predicate entry/exit — no more hand-typed `*:created/deleted` events.
+  - Manual choke points for hand-rolled write paths: `emitCollectionUpsert`,
+    `emitCollectionRemove`, `emitCollectionMove`, `emitCollectionReset`, plus
+    adapter-safe `kickFromCollection(collection, scopeId, userId?)`.
+  - Wire protocol: `{service}:collection:subscribe` (cursor-less calls join the
+    scope room and may carry a full membership `ids` list, capped at 5,000 with
+    `idsTruncated`; cursor-bearing calls are pure paging) and
+    `{service}:collection:unsubscribe`. Deltas carry per-item last-writer-wins
+    `rev`s; reconnect correctness comes from re-snapshot + `ids` pruning, not
+    an event log.
+  - Client: `useCollection(serviceName, collection, scopeId, options)` →
+    `{ items, byId, totalCount, isLoading, hasMore, loadMore, refresh, … }`,
+    riding the existing ref-counted subscription registry (dedup across
+    components, re-snapshot on reconnect). Merge logic lives in the pure,
+    exhaustively tested `collectionCache` module: id-keyed upserts, rev LWW,
+    removal tombstones, delta buffering during in-flight snapshots, cursored
+    page merge that never prunes.
+  - ACL model: collection items are _scope-visible_ — anyone passing
+    `checkScopeAccess` sees every item in full. Strip sensitive fields in
+    `toItem`/`snapshot`; per-subscriber tiering inside a collection is
+    deliberately unsupported.
+- **Write lifecycle hooks** on `BaseService`: `beforeCreate`/`afterCreate`,
+  `beforeUpdate`/`afterUpdate`, `beforeDelete`/`afterDelete`. `before*` may
+  veto by throwing; `delete()` finally sees the deleted row. The pre-write
+  fetch happens only when a service has collections or overrides an
+  update/delete hook.
+- **`TDto` generic + `toDto()`** — services whose wire shape differs from the
+  Prisma row declare it once; `emitUpdate(id, data: Partial<TDto>)` kills the
+  `dto as unknown as Partial<TEntity>` cast. `toDto` feeds auto-emission,
+  subscribe payloads, and default collection items.
+- **Richer socket auth** in `createQuickdrawServer`: `authenticate` may return
+  a structured `QuickdrawIdentity` (`{ userId?, principalType?, claims?,
+serviceAccess? }`) for multi-principal apps; new `loadServiceAccess(userId)`
+  callback replaces the long-standing empty-serviceAccess TODO; the server now
+  actually emits `auth:info` (`{ userId, serviceAccess, principalType }`); and
+  authenticated sockets join `user:{userId}` so `emitToUserRoom` works out of
+  the box.
+- **`BaseRpcService`** — first-class delegate-less services (methods,
+  channels, ACL, room emits; no CRUD, no subscriptions). Replaces the
+  `BaseService<never, never, never, TMethods>` contortion.
+- **Typed room events**: augmentable `QuickdrawEventMap` types
+  `emitToRoom`/`emitToRoomVolatile`/`emitToUserRoom` and `useRoomEvents`, with
+  graceful degradation to `string`/`unknown` while the map is empty.
+- **Static room helpers** from the package root: `serviceRoom`,
+  `serviceFullRoom`, `collectionRoom`, `collectionEventName`, `userRoom` —
+  usable from shared modules and when emitting into another service's rooms.
+- **Client query fixes**: `useServiceQuery` passes through `refetchInterval` /
+  `refetchIntervalInBackground`; rate-limit backoff (server `RATE_LIMITED`
+  reports and 429 acks pause all reads until the window elapses — rejected
+  events would otherwise re-trip the limiter forever); hook errors carry the
+  server code via `ServiceCallError`; `reconnectBehavior:
+"invalidate-queries"` (opt-out) on `QuickdrawProvider` heals plain query
+  reads after reconnects.
+- **ESLint plugin**: new `quickdraw/no-manual-collection-events` (warn in the
+  base config's services override) flags hand-emitted
+  `*:created/deleted/updated/reordered` events; the existing
+  `no-direct-prisma-mutations` rule is now registered.
+
+### Changed (breaking)
+
+- **`emitUpdate` is room-based and two-tier.** Elevated subscribers join
+  `{service}:{id}:full` at subscribe time; full payloads go to the full room,
+  protected-fields-stripped payloads to everyone else. This fixes entity
+  updates never crossing nodes under the Redis adapter. Consequences:
+  - The per-socket emission fallback is removed — `emitUpdate`, `emitToRoom`,
+    and `emitToRoomVolatile` require the service to be registered (`setIo`).
+  - The subscriber's tier is fixed at subscribe time (a `serviceAccess` change
+    takes effect on re-subscribe), and live emits have exactly two tiers; a
+    custom `filterEntityForSubscriber` still shapes initial subscribe payloads.
+  - `emitUpdate(entryId, data)` takes `Partial<TDto>` (was `Partial<TEntity>`).
+- **`subscribe`/`batchSubscribe` return DTO-shaped data**
+  (`Partial<TDto> | null`), mapped through `toDto` and filtered per tier.
+  `filterEntityForSubscriber`/`getProtectedFields`/`stripProtectedFields`
+  retype from `TEntity` to `TDto`.
+- **Admin types deduped to one canonical shape each** (the shapes the server
+  actually sends): `AdminListPayload {page?, pageSize?, where?, orderBy?}`,
+  `AdminListResponse {items, total, page, pageSize, totalPages}`,
+  `AdminSetACLPayload {entryId, acl}` (replacing `AdminSetEntryACLPayload`),
+  `AdminSubscribersResponse {entryId, subscribers, count}`, and
+  `{entryId}`-keyed payloads + truthful responses for
+  getSubscribers/reemit/unsubscribeAll. The divergent aspirational variants in
+  the root export are gone.
+- `adminUnsubscribeAll` evicts subscribers via rooms (adapter-safe,
+  cluster-wide) instead of only clearing the local map.
+- `create()`/`update()` emit `toDto(entity)` instead of the raw entity.
+
+### Fixed
+
+- Entity updates now propagate across nodes with the Redis adapter (the
+  `subscribers`-map iteration never did; it remains only for
+  `adminGetSubscribers` introspection).
+- `useServiceQuery` no longer silently ignores `refetchInterval`.
+- The client `auth:info` listener finally has a server counterpart.
+- `SocketTextField` no longer swallows a consumer-provided `type` or `onBlur`
+  (the defaults-after-options footgun class from the option-merge audit).
+
+## [3.9.1] - 2026-07-03
+
+### Fixed
+
+- Session cookies default `maxAge` to 7 days (was 30), matching the default
+  JWT expiry — a cookie that outlives its JWT just keeps sending a token the
+  server rejects. Pass `maxAgeMs` to `setSessionCookie` if your JWT lifetime
+  differs. (Backfilled entry; 3.9.1 shipped without one.)
+
 ## [3.9.0] - 2026-07-03
 
 ### Added
