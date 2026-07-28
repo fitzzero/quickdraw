@@ -77,6 +77,9 @@
         "quickdraw/require-zod-schema": "error",
         "quickdraw/no-service-method-record": "error",
         "quickdraw/no-unsafe-payload-cast": "error",
+        // Warn while migrating hand-emitted *:created/deleted/updated/
+        // reordered events to defineCollection; flip to error afterwards.
+        "quickdraw/no-manual-collection-events": "warn",
       },
     },
     // Client/React code: relax server-oriented strictness, enforce the
