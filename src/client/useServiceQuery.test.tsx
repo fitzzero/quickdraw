@@ -376,12 +376,7 @@ describe("useServiceQuery", () => {
 
     const { result } = renderHook(
       () =>
-        useServiceQuery(
-          "testService",
-          "getData",
-          {},
-          { staleTime: 60000, refetchInterval: 200 },
-        ),
+        useServiceQuery("testService", "getData", {}, { staleTime: 60000, refetchInterval: 200 }),
       { wrapper: createWrapper(mockContext) },
     );
 

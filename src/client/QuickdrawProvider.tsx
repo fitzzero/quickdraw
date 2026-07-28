@@ -334,14 +334,11 @@ export function QuickdrawProvider({
       );
 
       // Server-reported rate limiting (default onRateLimitExceeded shape)
-      newSocket.on(
-        "error",
-        (payload: { code?: string; retryAfter?: number } | undefined) => {
-          if (payload && payload.code === "RATE_LIMITED") {
-            reportRateLimited(payload.retryAfter);
-          }
-        },
-      );
+      newSocket.on("error", (payload: { code?: string; retryAfter?: number } | undefined) => {
+        if (payload && payload.code === "RATE_LIMITED") {
+          reportRateLimited(payload.retryAfter);
+        }
+      });
 
       newSocket.on("connect_error", (error) => {
         console.error("Socket connection error:", error.message);
@@ -413,7 +410,16 @@ export function QuickdrawProvider({
       isRateLimited,
       reportRateLimited,
     }),
-    [socket, isConnected, userId, serviceAccess, connect, disconnect, isRateLimited, reportRateLimited],
+    [
+      socket,
+      isConnected,
+      userId,
+      serviceAccess,
+      connect,
+      disconnect,
+      isRateLimited,
+      reportRateLimited,
+    ],
   );
 
   return (

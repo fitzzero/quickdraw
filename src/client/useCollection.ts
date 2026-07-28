@@ -2,11 +2,7 @@
 
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type {
-  CollectionDelta,
-  CollectionSnapshotResponse,
-  ServiceResponse,
-} from "../shared/types";
+import type { CollectionDelta, CollectionSnapshotResponse, ServiceResponse } from "../shared/types";
 import { collectionRoom } from "../shared/types";
 import {
   applyDeltas,
@@ -16,11 +12,7 @@ import {
   type CollectionCacheEntry,
 } from "./collectionCache";
 import { useQuickdrawSocket } from "./QuickdrawProvider";
-import type {
-  SubscriptionEntry,
-  UseCollectionOptions,
-  UseCollectionResult,
-} from "./types";
+import type { SubscriptionEntry, UseCollectionOptions, UseCollectionResult } from "./types";
 
 const RESET_DEBOUNCE_MS = 100;
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -80,7 +72,14 @@ export function useCollection<TItem extends { id: string }>(
   const queryClient = useQueryClient();
   const [isLoadingMore, setIsLoadingMore] = React.useState(false);
 
-  const { enabled = true, limit, compare, insertPosition = "end", onDelta, onError } = options ?? {};
+  const {
+    enabled = true,
+    limit,
+    compare,
+    insertPosition = "end",
+    onDelta,
+    onError,
+  } = options ?? {};
 
   // Callbacks and merge options read through refs so the owner closure and
   // per-component listeners never need re-subscribing on identity changes.

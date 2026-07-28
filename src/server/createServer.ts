@@ -98,8 +98,7 @@ export function createQuickdrawServer(options: QuickdrawServerOptions): Quickdra
 
         let serviceAccess = identity?.serviceAccess;
         if (!serviceAccess && identity?.userId && options.auth.loadServiceAccess) {
-          serviceAccess =
-            (await options.auth.loadServiceAccess(identity.userId)) ?? undefined;
+          serviceAccess = (await options.auth.loadServiceAccess(identity.userId)) ?? undefined;
         }
         quickdrawSocket.serviceAccess = serviceAccess ?? {};
       }

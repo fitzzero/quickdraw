@@ -3,11 +3,7 @@ import { renderHook, waitFor, act } from "@testing-library/react";
 import * as React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Socket } from "socket.io-client";
-import type {
-  CollectionDelta,
-  CollectionSnapshotResponse,
-  ServiceResponse,
-} from "../shared/types";
+import type { CollectionDelta, CollectionSnapshotResponse, ServiceResponse } from "../shared/types";
 import { collectionRoom } from "../shared/types";
 import type { QuickdrawSocketContextValue, SubscriptionRegistry } from "./types";
 import { useCollection } from "./useCollection";

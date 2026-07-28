@@ -453,9 +453,7 @@ export abstract class BaseService<
    */
   public emitUpdate(entryId: string, data: Partial<TDto>): void {
     if (!this.io) {
-      this.logger.debug(
-        `No io instance (service not registered); dropping update for ${entryId}`,
-      );
+      this.logger.debug(`No io instance (service not registered); dropping update for ${entryId}`);
       return;
     }
 

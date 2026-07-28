@@ -39,9 +39,7 @@ export interface CollectionDefinition<TEntity, TItem extends { id: string }> {
    * (static predicate filtering). An array supports fan-out scopes
    * (e.g. a chat appearing in every member's "myChats").
    */
-  resolveScopeId: (
-    entity: TEntity,
-  ) => string | string[] | null | Promise<string | string[] | null>;
+  resolveScopeId: (entity: TEntity) => string | string[] | null | Promise<string | string[] | null>;
 
   /** ACL for joining the scope room. Runs once at subscribe time. */
   checkScopeAccess: (

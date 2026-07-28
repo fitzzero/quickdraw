@@ -70,9 +70,7 @@ export interface QuickdrawServerOptions {
      * user record). Used when the identity result does not carry
      * `serviceAccess` itself. Defaults to empty access.
      */
-    loadServiceAccess?: (
-      userId: string,
-    ) => Promise<Record<string, AccessLevel> | null | undefined>;
+    loadServiceAccess?: (userId: string) => Promise<Record<string, AccessLevel> | null | undefined>;
   };
   logger?: Logger;
   /**

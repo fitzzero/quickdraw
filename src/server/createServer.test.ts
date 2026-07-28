@@ -167,8 +167,8 @@ describe("createQuickdrawServer auth identity", () => {
     const pong = await client.emit<Record<string, never>, { pong: true }>("pingService:ping", {});
     expect(pong).toEqual({ pong: true });
 
-    await expect(
-      client.emit("pingService:subscribe", { entryId: "anything" }),
-    ).rejects.toThrow("Access denied or entry not found");
+    await expect(client.emit("pingService:subscribe", { entryId: "anything" })).rejects.toThrow(
+      "Access denied or entry not found",
+    );
   });
 });
