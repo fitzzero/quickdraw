@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.1.0] - 2026-08-01
+
+Client portability groundwork for non-DOM runtimes (React Native, workers).
+The client package's only browser touchpoints are now the optional
+`localStorage` token helpers in `utils/auth` — the provider and every hook
+run without `document`/`window`.
+
+### Added
+
+- `QuickdrawProvider` accepts a `transports` prop (default
+  `["websocket", "polling"]`, socket.io's browser behavior). React Native
+  clients should pass `["websocket"]` — the polling fallback assumes browser
+  XHR semantics. Applies whenever the socket is (re)created, including
+  `authToken`-change reconnects.
+
+### Fixed
+
+- `useSubscription` with `refetchOnWindowFocus: true` no longer crashes in
+  runtimes without `document` (React Native, workers) — the visibility
+  listener is inert there; reconnect re-subscription already covers the
+  app-resume case.
+
 ## [4.0.0] - 2026-07-28
 
 The collection-subscriptions major (RFCs 0001 + 0002, `docs/rfcs/`). See
