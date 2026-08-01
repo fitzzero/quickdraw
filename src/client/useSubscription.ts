@@ -151,6 +151,10 @@ export function useSubscription<TData extends { id: string }>(
     // Visibility-based re-fetch: when the tab becomes visible, re-subscribe
     // through the batcher to catch any updates missed while hidden.
     // Debounced to coalesce rapid visibility toggles.
+    // Inert in non-DOM runtimes (React Native, workers): there is no
+    // `document` to observe, and reconnect re-subscription already covers
+    // the app-resume case there.
+    const listenForVisibility = refetchOnWindowFocus && typeof document !== "undefined";
     let visibilityDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
     const handleVisibilityChange = () => {
@@ -163,7 +167,7 @@ export function useSubscription<TData extends { id: string }>(
       }, 200);
     };
 
-    if (refetchOnWindowFocus) {
+    if (listenForVisibility) {
       document.addEventListener("visibilitychange", handleVisibilityChange);
     }
 
@@ -172,7 +176,7 @@ export function useSubscription<TData extends { id: string }>(
       socket.off(updateEvent, handleUpdate);
       socket.emit(`${serviceName}:unsubscribe`, { entryId });
       if (visibilityDebounceTimer) clearTimeout(visibilityDebounceTimer);
-      if (refetchOnWindowFocus) {
+      if (listenForVisibility) {
         document.removeEventListener("visibilitychange", handleVisibilityChange);
       }
       setIsSubscribed(false);

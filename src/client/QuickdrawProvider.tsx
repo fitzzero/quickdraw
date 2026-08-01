@@ -229,6 +229,7 @@ export function QuickdrawProvider({
   withCredentials = true,
   socketPath,
   reconnectBehavior = "invalidate-queries",
+  transports,
 }: QuickdrawProviderProps): React.ReactElement {
   // Create QueryClient lazily to avoid SSR issues
   const [defaultQueryClient] = React.useState(() => createQueryClient());
@@ -255,9 +256,13 @@ export function QuickdrawProvider({
   );
 
   // Reconnect detection + options read through refs so `connect` stays stable
+  // (an inline `transports` array literal would otherwise churn `connect` —
+  // and with it the context value — on every render)
   const hasEverConnectedRef = React.useRef(false);
   const reconnectBehaviorRef = React.useRef(reconnectBehavior);
   reconnectBehaviorRef.current = reconnectBehavior;
+  const transportsRef = React.useRef(transports);
+  transportsRef.current = transports;
   const queryClientRef = React.useRef(actualQueryClient);
   queryClientRef.current = actualQueryClient;
 
@@ -301,7 +306,7 @@ export function QuickdrawProvider({
       const newSocket = io(serverUrl, {
         auth: authToUse ? { token: authToUse } : undefined,
         withCredentials,
-        transports: ["websocket", "polling"],
+        transports: transportsRef.current ?? ["websocket", "polling"],
         autoConnect: true,
         ...(socketPath ? { path: socketPath } : {}),
       });

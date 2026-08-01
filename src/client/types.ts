@@ -62,6 +62,16 @@ export interface QuickdrawProviderProps {
    * @default "invalidate-queries"
    */
   reconnectBehavior?: "invalidate-queries" | "none";
+  /**
+   * Socket.io transports to negotiate, in order.
+   * The default matches socket.io's browser behavior. React Native clients
+   * should pass `["websocket"]` — the polling fallback assumes browser XHR
+   * semantics and adds no value there.
+   * Applies when the socket is (re)created; changing it alone does not
+   * reconnect an existing socket.
+   * @default ["websocket", "polling"]
+   */
+  transports?: Array<"websocket" | "polling">;
 }
 
 // ============================================================================
