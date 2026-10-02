@@ -1,0 +1,13 @@
+{
+  "name": "@fitzzero/quickdraw-skills",
+  "version": "5.0.0-alpha.0",
+  "private": true,
+  "description": "Agent rules and skills for quickdraw apps, plus the `quickdraw-skills link` command (placeholder)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fitzzero/quickdraw.git",
+    "directory": "packages/skills"
+  },
+  "type": "module"
+}
