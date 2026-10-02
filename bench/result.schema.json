@@ -1,0 +1,641 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["baseline", "run"]
+    },
+    "label": {
+      "type": "string"
+    },
+    "quick": {
+      "type": "boolean"
+    },
+    "command": {
+      "type": "string"
+    },
+    "createdAt": {
+      "type": "string"
+    },
+    "totalDurationMs": {
+      "type": "number"
+    },
+    "app": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "quickdrawCore": {
+          "type": "string"
+        },
+        "versions": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "dbPoolMax": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "logging": {
+          "type": "string"
+        }
+      },
+      "required": ["name", "quickdrawCore", "versions", "dbPoolMax", "logging"],
+      "additionalProperties": false
+    },
+    "machine": {
+      "type": "object",
+      "properties": {
+        "hostname": {
+          "type": "string"
+        },
+        "cpuModel": {
+          "type": "string"
+        },
+        "nproc": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "kernel": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "totalMemoryGb": {
+          "type": "number"
+        },
+        "cpuGovernor": {
+          "type": ["string", "null"]
+        },
+        "cpuBoost": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": [
+        "hostname",
+        "cpuModel",
+        "nproc",
+        "kernel",
+        "os",
+        "totalMemoryGb",
+        "cpuGovernor",
+        "cpuBoost"
+      ],
+      "additionalProperties": false
+    },
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "node": {
+          "type": "string"
+        },
+        "bun": {
+          "type": ["string", "null"]
+        },
+        "docker": {
+          "type": ["string", "null"]
+        },
+        "postgres": {
+          "type": ["string", "null"]
+        },
+        "socketIoClient": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["node", "bun", "docker", "postgres", "socketIoClient"],
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "server": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string"
+            },
+            "cpus": {
+              "type": "string"
+            },
+            "cpuCount": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "detail": {
+              "type": "string"
+            }
+          },
+          "required": ["method", "cpus", "cpuCount", "detail"],
+          "additionalProperties": false
+        },
+        "loadgen": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string"
+            },
+            "cpus": {
+              "type": "string"
+            },
+            "cpuCount": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "detail": {
+              "type": "string"
+            }
+          },
+          "required": ["method", "cpus", "cpuCount", "detail"],
+          "additionalProperties": false
+        },
+        "postgres": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string"
+            },
+            "cpus": {
+              "type": "string"
+            },
+            "cpuCount": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "detail": {
+              "type": "string"
+            }
+          },
+          "required": ["method", "cpus", "cpuCount", "detail"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["server", "loadgen", "postgres"],
+      "additionalProperties": false
+    },
+    "workload": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "order": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "notMeasured": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "scenarios": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": ["board-steady", "board-burst", "reconnect-storm", "fat-read"]
+          },
+          "description": {
+            "type": "string"
+          },
+          "parameters": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "repetitions": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "startedAt": {
+                  "type": "string"
+                },
+                "loadAverage": {
+                  "type": "object",
+                  "properties": {
+                    "one": {
+                      "type": "number"
+                    },
+                    "five": {
+                      "type": "number"
+                    },
+                    "fifteen": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["one", "five", "fifteen"],
+                  "additionalProperties": false
+                },
+                "completed": {
+                  "type": "boolean"
+                },
+                "outcome": {
+                  "type": "string"
+                },
+                "windowMs": {
+                  "type": "number"
+                },
+                "requests": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "sent": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "succeeded": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "timeout": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "error": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "abandoned": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "unanswered": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "late": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "sent",
+                      "succeeded",
+                      "timeout",
+                      "error",
+                      "abandoned",
+                      "unanswered",
+                      "late"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "failedRequests": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "latencyMs": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "count": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "p50": {
+                        "type": ["number", "null"]
+                      },
+                      "p95": {
+                        "type": ["number", "null"]
+                      },
+                      "p99": {
+                        "type": ["number", "null"]
+                      },
+                      "max": {
+                        "type": ["number", "null"]
+                      },
+                      "mean": {
+                        "type": ["number", "null"]
+                      }
+                    },
+                    "required": ["count", "p50", "p95", "p99", "max", "mean"],
+                    "additionalProperties": false
+                  }
+                },
+                "deliveryMs": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "count": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "p50": {
+                        "type": ["number", "null"]
+                      },
+                      "p95": {
+                        "type": ["number", "null"]
+                      },
+                      "p99": {
+                        "type": ["number", "null"]
+                      },
+                      "max": {
+                        "type": ["number", "null"]
+                      },
+                      "mean": {
+                        "type": ["number", "null"]
+                      }
+                    },
+                    "required": ["count", "p50", "p95", "p99", "max", "mean"],
+                    "additionalProperties": false
+                  }
+                },
+                "server": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "windowMs": {
+                          "type": "number"
+                        },
+                        "cpuUserSeconds": {
+                          "type": "number"
+                        },
+                        "cpuSystemSeconds": {
+                          "type": "number"
+                        },
+                        "cpuSeconds": {
+                          "type": "number"
+                        },
+                        "eventLoopDelayMs": {
+                          "type": "object",
+                          "properties": {
+                            "p50": {
+                              "type": "number"
+                            },
+                            "p99": {
+                              "type": "number"
+                            },
+                            "max": {
+                              "type": "number"
+                            },
+                            "mean": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["p50", "p99", "max", "mean"],
+                          "additionalProperties": false
+                        },
+                        "bytesSent": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "bytesReceived": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "sqlStatements": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "snapshotsServed": {
+                          "type": "object",
+                          "properties": {
+                            "collection": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "collectionPages": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "entity": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["collection", "collectionPages", "entity"],
+                          "additionalProperties": false
+                        },
+                        "handlerRuns": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "inFlight": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "rssPeakMb": {
+                          "type": "number"
+                        },
+                        "connections": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "windowMs",
+                        "cpuUserSeconds",
+                        "cpuSystemSeconds",
+                        "cpuSeconds",
+                        "eventLoopDelayMs",
+                        "bytesSent",
+                        "bytesReceived",
+                        "sqlStatements",
+                        "snapshotsServed",
+                        "handlerRuns",
+                        "inFlight",
+                        "rssPeakMb",
+                        "connections"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "serverError": {
+                  "type": ["string", "null"]
+                },
+                "loadgen": {
+                  "type": "object",
+                  "properties": {
+                    "cpuSeconds": {
+                      "type": "number"
+                    },
+                    "eventLoopDelayP99Ms": {
+                      "type": "number"
+                    },
+                    "eventLoopDelayMaxMs": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["cpuSeconds", "eventLoopDelayP99Ms", "eventLoopDelayMaxMs"],
+                  "additionalProperties": false
+                },
+                "scenario": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": ["number", "null"]
+                  }
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "index",
+                "startedAt",
+                "loadAverage",
+                "completed",
+                "outcome",
+                "windowMs",
+                "requests",
+                "failedRequests",
+                "latencyMs",
+                "deliveryMs",
+                "server",
+                "serverError",
+                "loadgen",
+                "scenario",
+                "errors"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "summary": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "type": ["number", "null"]
+                  }
+                },
+                "median": {
+                  "type": ["number", "null"]
+                },
+                "min": {
+                  "type": ["number", "null"]
+                },
+                "max": {
+                  "type": ["number", "null"]
+                },
+                "spreadPct": {
+                  "type": ["number", "null"]
+                }
+              },
+              "required": ["values", "median", "min", "max", "spreadPct"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["name", "description", "parameters", "repetitions", "summary"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "kind",
+    "label",
+    "quick",
+    "command",
+    "createdAt",
+    "totalDurationMs",
+    "app",
+    "machine",
+    "runtime",
+    "limits",
+    "workload",
+    "order",
+    "notes",
+    "notMeasured",
+    "scenarios"
+  ],
+  "additionalProperties": false
+}

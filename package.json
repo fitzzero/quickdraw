@@ -8,7 +8,9 @@
     "url": "git+https://github.com/fitzzero/quickdraw.git"
   },
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "bench",
+    "bench/apps/*"
   ],
   "type": "module",
   "scripts": {
