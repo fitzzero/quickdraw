@@ -1,0 +1,13 @@
+{
+  "name": "@fitzzero/quickdraw-codemod",
+  "version": "5.0.0-alpha.0",
+  "private": true,
+  "description": "Transforms that move a quickdraw 4.x app to 5.0 (placeholder)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fitzzero/quickdraw.git",
+    "directory": "packages/codemod"
+  },
+  "type": "module"
+}

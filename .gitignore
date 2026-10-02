@@ -1,8 +1,16 @@
 # Dependencies
 node_modules/
 
-# Build output
+# Build output (every workspace package builds to its own dist/)
 dist/
+
+# Turborepo cache
+.turbo/
+
+# Benchmark harness: ad-hoc results, server logs and the generated workload;
+# each bench app's generated Prisma client
+bench/results/
+bench/apps/*/generated/
 
 # Test coverage
 coverage/

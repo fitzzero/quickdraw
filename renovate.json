@@ -1,0 +1,56 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "schedule": ["before 6am on monday"],
+  "timezone": "America/Los_Angeles",
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 5,
+  "rangeStrategy": "bump",
+  "packageRules": [
+    {
+      "description": "Group all non-major updates into a single weekly PR",
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "all non-major dependencies",
+      "groupSlug": "all-minor-patch"
+    },
+    {
+      "description": "Shared Claude skills should track latest: immediate PR",
+      "matchPackageNames": ["@rallycry/conveyor-skills"],
+      "groupName": "conveyor-skills",
+      "schedule": ["at any time"],
+      "prPriority": 10
+    },
+    {
+      "description": "Prisma pieces move together (client and CLI must stay in lockstep)",
+      "matchPackageNames": ["prisma", "@prisma/client", "@electric-sql/pglite"],
+      "groupName": "prisma"
+    },
+    {
+      "description": "Toolchain packages move together so versions cannot split across majors",
+      "matchPackageNames": [
+        "vitest",
+        "@vitest/coverage-v8",
+        "typescript",
+        "@typescript/native-preview",
+        "@types/node",
+        "turbo",
+        "oxlint",
+        "oxfmt"
+      ],
+      "groupName": "toolchain",
+      "groupSlug": "toolchain"
+    },
+    {
+      "description": "React and its types move together",
+      "matchPackageNames": ["react", "react-dom", "@types/react", "@types/react-dom"],
+      "groupName": "react"
+    }
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "vulnerabilityAlerts": {
+    "labels": ["security"]
+  }
+}
