@@ -6,7 +6,10 @@
 // Node resolves each one through the export map exactly as a consumer would,
 // and then checks the output shape:
 //
-// - each export provides a known symbol;
+// - each export provides its known symbols, and the root export's declarations
+//   provide every public type;
+// - the root export is browser-safe: its whole import graph is the package's
+//   own files, with no Node built-in and no dependency;
 // - `./client` opens with the "use client" directive and no other export does;
 // - every source module is emitted into exactly one output file (entries share
 //   chunks; with `splitting` off each entry would carry its own copy);
@@ -23,15 +26,103 @@ const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = join(packageDir, "dist");
 const pkg = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
 
-/** One symbol each export must provide, and whether the export is client code. */
+/** The symbols each export must provide, and whether the export is client code. */
 const expectations = {
-  ".": { symbol: "QUICKDRAW_VERSION", client: false },
-  "./server": { symbol: "createRateLimiter", client: false },
-  "./server/auth": { symbol: "createJWT", client: false },
-  "./server/express": { symbol: "createJsonRateLimiter", client: false },
-  "./client": { symbol: "formatCurrency", client: true },
-  "./testing/prisma": { symbol: "createPrismaTestGlobalSetup", client: false },
+  ".": {
+    symbols: [
+      "QUICKDRAW_VERSION",
+      "consoleLogger",
+      "validate",
+      "isStandardSchema",
+      "hasJsonSchema",
+      "query",
+      "mutation",
+      "nullable",
+      "listOf",
+      "via",
+      "DEFAULT_COLLECTION_LIMIT",
+      "DEFAULT_COLLECTION_MAX_LIMIT",
+      "defineContract",
+      "entityRoom",
+      "collectionRoom",
+      "topicRoom",
+      "userRoom",
+      "CLIENT_EVENTS",
+      "SERVER_EVENTS",
+    ],
+    client: false,
+  },
+  "./server": { symbols: ["createRateLimiter"], client: false },
+  "./server/auth": { symbols: ["createJWT"], client: false },
+  "./server/express": { symbols: ["createJsonRateLimiter"], client: false },
+  "./client": { symbols: ["formatCurrency"], client: true },
+  "./testing/prisma": { symbols: ["createPrismaTestGlobalSetup"], client: false },
 };
+
+/** The type-only names the root export's declarations must provide. */
+const rootTypes = [
+  "AccessLevel",
+  "ACE",
+  "ACL",
+  "Logger",
+  "StandardTypedV1",
+  "StandardSchemaV1",
+  "StandardJSONSchemaV1",
+  "StandardSchemaWithJSON",
+  "InferInput",
+  "InferOutput",
+  "ValidationIssue",
+  "ValidationResult",
+  "MethodKind",
+  "EntityProjection",
+  "NullableProjection",
+  "ProjectionList",
+  "ProjectionRef",
+  "MethodOutput",
+  "Watch",
+  "QueryDef",
+  "MutationDef",
+  "MethodDef",
+  "ViaScope",
+  "SortDirection",
+  "OrderBy",
+  "Viewer",
+  "ViewPredicate",
+  "CollectionWhere",
+  "CollectionDef",
+  "RowSchema",
+  "StreamDef",
+  "ChannelDef",
+  "EventDef",
+  "ContractDefinition",
+  "Contract",
+  "AnyContract",
+  "IndexRow",
+  "ReservedMethodName",
+  "ContractMap",
+  "ServiceNameOf",
+  "EntityOf",
+  "ProjectionName",
+  "ProjectionOf",
+  "MethodName",
+  "MethodOf",
+  "KindOf",
+  "InputOf",
+  "ParsedInputOf",
+  "OutputOf",
+  "CollectionName",
+  "CollectionOf",
+  "ItemOf",
+  "ScopeOf",
+  "IndexFieldOf",
+  "IndexRowOf",
+  "ViewName",
+  "StreamItemOf",
+  "ChannelPayloadOf",
+  "EventPayloadOf",
+  "ClientEventName",
+  "ServerEventName",
+];
 
 const USE_CLIENT = /^(["'])use client\1;?/;
 
@@ -44,7 +135,7 @@ assert.deepEqual(
 
 for (const exportPath of exportPaths) {
   const target = pkg.exports[exportPath];
-  const { symbol, client } = expectations[exportPath];
+  const { symbols, client } = expectations[exportPath];
 
   for (const file of [target.types, target.import]) {
     assert.ok(existsSync(join(packageDir, file)), `${exportPath}: ${file} is missing`);
@@ -52,7 +143,9 @@ for (const exportPath of exportPaths) {
 
   const specifier = exportPath === "." ? pkg.name : `${pkg.name}${exportPath.slice(1)}`;
   const module = await import(specifier);
-  assert.notEqual(module[symbol], undefined, `${specifier} does not export ${symbol}`);
+  for (const symbol of symbols) {
+    assert.notEqual(module[symbol], undefined, `${specifier} does not export ${symbol}`);
+  }
 
   const code = readFileSync(join(packageDir, target.import), "utf8");
   assert.equal(
@@ -61,8 +154,56 @@ for (const exportPath of exportPaths) {
     `${target.import} ${client ? "must" : "must not"} begin with "use client"`,
   );
 
-  console.log(`ok ${specifier} exports ${symbol}${client ? ' and begins with "use client"' : ""}`);
+  const exported = symbols.length === 1 ? symbols[0] : `${symbols.length} symbols`;
+  console.log(
+    `ok ${specifier} exports ${exported}${client ? ' and begins with "use client"' : ""}`,
+  );
 }
+
+// The names in the root declarations' `export { ... }` lists, without `type`
+// and taking the exported name of `local as exported`.
+const rootDeclarations = readFileSync(join(packageDir, pkg.exports["."].types), "utf8");
+const declaredNames = new Set(
+  [...rootDeclarations.matchAll(/^export \{([^}]*)\}/gm)].flatMap(([, list]) =>
+    list
+      .split(",")
+      .map((entry) =>
+        entry
+          .trim()
+          .replace(/^type\s+/, "")
+          .split(/\s+as\s+/)
+          .at(-1),
+      )
+      .filter(Boolean),
+  ),
+);
+const missingTypes = rootTypes.filter((name) => !declaredNames.has(name));
+assert.deepEqual(missingTypes, [], `${pkg.exports["."].types} does not export these types`);
+console.log(`ok ${pkg.name} declares ${rootTypes.length} public types`);
+
+// Browser code imports the root export, so its import graph may hold only the
+// package's own files: no Node built-in, no dependency, no server module.
+const IMPORT_SPECIFIER = /\bfrom\s*["']([^"']+)["']|\bimport\s*\(?\s*["']([^"']+)["']/g;
+const rootGraph = new Set();
+const pending = [join(packageDir, pkg.exports["."].import)];
+const externalImports = [];
+while (pending.length > 0) {
+  const file = pending.pop();
+  if (rootGraph.has(file)) {
+    continue;
+  }
+  rootGraph.add(file);
+  for (const match of readFileSync(file, "utf8").matchAll(IMPORT_SPECIFIER)) {
+    const imported = match[1] ?? match[2];
+    if (imported.startsWith("./") || imported.startsWith("../")) {
+      pending.push(resolve(dirname(file), imported));
+    } else {
+      externalImports.push(`${relative(packageDir, file)} imports ${imported}`);
+    }
+  }
+}
+assert.deepEqual(externalImports, [], "the root export must not import packages or Node built-ins");
+console.log(`ok ${pkg.name} imports only its own ${rootGraph.size} files, so it runs in a browser`);
 
 const sourceMaps = readdirSync(distDir, { recursive: true })
   .map(String)
