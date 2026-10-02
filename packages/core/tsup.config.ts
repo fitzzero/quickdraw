@@ -17,6 +17,7 @@ export default defineConfig({
     "server/auth/index": "src/server/auth/index.ts",
     "server/express/index": "src/server/express/index.ts",
     "client/index": "src/client/index.ts",
+    parser: "src/protocol/parser.ts",
     "testing/prisma": "src/testing/prisma.ts",
   },
   format: ["esm"],

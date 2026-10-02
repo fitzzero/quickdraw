@@ -42,6 +42,10 @@
       "types": "./dist/client/index.d.ts",
       "import": "./dist/client/index.js"
     },
+    "./parser": {
+      "types": "./dist/parser.d.ts",
+      "import": "./dist/parser.js"
+    },
     "./testing/prisma": {
       "types": "./dist/testing/prisma.d.ts",
       "import": "./dist/testing/prisma.js"
@@ -62,7 +66,8 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "jose": "^6.0.0"
+    "jose": "^6.0.0",
+    "socket.io-parser": "^4.2.4"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.16",
