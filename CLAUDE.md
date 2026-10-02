@@ -7,6 +7,13 @@ fullstack patterns: Socket.IO services with ACL (`BaseService` +
 bridge, and React client hooks (TanStack Query). The reference consumer is
 the `quickdraw-chat` template (sibling checkout at `../quickdraw-chat`).
 
+## 5.0 in progress
+
+`dev` is the 5.0 integration branch; `main` stays on 4.1 until 5.0 is
+released. `docs/rfcs/0003-v5.md` is the design every 5.0 card implements, and
+`docs/rfcs/0003-v5-audit.md` is the audit and rationale behind it. Where a
+card's plan and the RFC disagree, follow the RFC and say so in the PR.
+
 ## Layout
 
 ```
