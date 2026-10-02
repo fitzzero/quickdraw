@@ -29,6 +29,8 @@ packages/
 │                #   verbatim) + oxlint.base.jsonc, the shared base config
 ├── skills/      # @fitzzero/quickdraw-skills — private placeholder
 └── codemod/     # @fitzzero/quickdraw-codemod — private placeholder
+bench/           # load harness (private workspace) + bench/apps/* + committed baselines;
+                 #   a release tool, not a CI gate (bench/README.md, docs/benchmarks.md)
 docs/rfcs/       # design records; 0003-v5.md is the 5.0 design
 tsconfig.base.json  # shared compiler flags; each package's tsconfig.json extends it
 ```

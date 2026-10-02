@@ -25,5 +25,5 @@
       }
     }
   ],
-  "ignorePatterns": ["node_modules", "dist", "coverage", "**/legacy-src/**"]
+  "ignorePatterns": ["node_modules", "dist", "coverage", "**/legacy-src/**", "**/generated/**"]
 }
