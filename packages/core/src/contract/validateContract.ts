@@ -16,7 +16,16 @@ type Fail = (message: string) => never;
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
-const RESERVED_NAMES: ReadonlySet<string> = new Set(["subscribe", "unsubscribe", "call"]);
+// `useEntity`, `useEntities` and `admin` are members the client proxy places
+// beside a service's methods and collections (RFC 0003 sections 11 and 12.4).
+const RESERVED_NAMES: ReadonlySet<string> = new Set([
+  "subscribe",
+  "unsubscribe",
+  "call",
+  "useEntity",
+  "useEntities",
+  "admin",
+]);
 
 const DEFINITION_KEYS: ReadonlySet<string> = new Set([
   "entity",

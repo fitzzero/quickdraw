@@ -167,8 +167,18 @@ type DefinitionContext<Entity, Projections, Items, Indexes> = {
 // `never` and print that instead.
 // ---------------------------------------------------------------------------
 
-/** Method names the protocol reserves, besides any name starting with `$`. */
-export type ReservedMethodName = "subscribe" | "unsubscribe" | "call";
+/**
+ * Member names the protocol and the client proxy reserve, besides any name
+ * starting with `$`: `useEntity`, `useEntities` and `admin` sit beside a
+ * service's methods and collections on `qd.<service>`.
+ */
+export type ReservedMethodName =
+  | "subscribe"
+  | "unsubscribe"
+  | "call"
+  | "useEntity"
+  | "useEntities"
+  | "admin";
 
 type Problem<Text extends string> = `defineContract: ${Text}`;
 

@@ -183,7 +183,7 @@ describe("the method and collection builders", () => {
 });
 
 describe("definition-time checks", () => {
-  it.each(["subscribe", "unsubscribe", "call", "$internal"])(
+  it.each(["subscribe", "unsubscribe", "call", "useEntity", "useEntities", "admin", "$internal"])(
     "rejects the reserved method name %s, naming the method",
     (name) => {
       const defineReserved = (): AnyContract =>
