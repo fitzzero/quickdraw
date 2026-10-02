@@ -15,7 +15,9 @@
 //   chunks; with `splitting` off each entry would carry its own copy);
 // - no dependency is bundled (every source path is the package's own);
 // - the Redis helper's dynamic imports of its optional peers resolve from the
-//   built output (both are devDependencies, so they are installed here).
+//   built output (both are devDependencies, so they are installed here);
+// - the built JSON parser (`./parser`) writes what the stock socket.io-parser
+//   encoder writes, reports the size, and refuses a binary argument.
 
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -49,6 +51,18 @@ const expectations = {
       "userRoom",
       "CLIENT_EVENTS",
       "SERVER_EVENTS",
+      "ERROR_CODES",
+      "QuickdrawError",
+      "httpStatus",
+      "isErrorCode",
+      "toWire",
+      "fromWire",
+      "PROTOCOL_VERSION",
+      "PROTOCOL_MISMATCH",
+      "isQdHandshake",
+      "isProtocolMismatch",
+      "isCallEnvelope",
+      "isCancel",
     ],
     client: false,
   },
@@ -56,6 +70,7 @@ const expectations = {
   "./server/auth": { symbols: ["createJWT"], client: false },
   "./server/express": { symbols: ["createJsonRateLimiter"], client: false },
   "./client": { symbols: ["formatCurrency"], client: true },
+  "./parser": { symbols: ["createJsonParser"], client: false },
   "./testing/prisma": { symbols: ["createPrismaTestGlobalSetup"], client: false },
 };
 
@@ -122,6 +137,62 @@ const rootTypes = [
   "EventPayloadOf",
   "ClientEventName",
   "ServerEventName",
+  // protocol/errors.ts
+  "ErrorCode",
+  "WireError",
+  "WireIssue",
+  "ValidationErrorData",
+  "RateLimitedErrorData",
+  // protocol/version.ts
+  "QdHandshake",
+  "HandshakeAuth",
+  "ProtocolMismatch",
+  "HelloLimits",
+  "HelloFrame",
+  // protocol/envelope.ts
+  "Revision",
+  "Version",
+  "CallId",
+  "Ok",
+  "Failure",
+  "CallEnvelope",
+  "CallSuccess",
+  "CallNotModified",
+  "CallReply",
+  "CancelFrame",
+  "EntitySubscribe",
+  "EntityRow",
+  "EntityNotModified",
+  "EntityResult",
+  "EntitySubscribeReply",
+  "EntityUnsubscribe",
+  "EntityUpdate",
+  "EntityPatch",
+  "EntityRemove",
+  "EntityFrame",
+  "CollectionScopeRef",
+  "CollectionSubscribe",
+  "WireIndexRow",
+  "CollectionSnapshot",
+  "CollectionResumed",
+  "CollectionSubscribeReply",
+  "CollectionItemsRequest",
+  "CollectionItemsReply",
+  "CollectionDelta",
+  "CollectionFrame",
+  "WatchFrame",
+  "ChangedFrame",
+  "StreamSubscribe",
+  "StreamSubscribeReply",
+  "StreamFrame",
+  "ChannelFrame",
+  "EventFrame",
+  "RevokeReason",
+  "RevokedFrame",
+  "RotateFrame",
+  "AccessFrame",
+  "ClientToServerEvents",
+  "ServerToClientEvents",
 ];
 
 const USE_CLIENT = /^(["'])use client\1;?/;
@@ -229,3 +300,25 @@ console.log(`ok ${emittedIn.size} source modules, each emitted once, no bundled 
 const { isRedisAdapterAvailable } = await import(`${pkg.name}/server`);
 assert.equal(await isRedisAdapterAvailable(), true, "the Redis helper could not import its peers");
 console.log("ok the Redis helper imports redis and @socket.io/redis-adapter");
+
+// The JSON parser is built on a method that socket.io-parser's declarations
+// mark private, so check the built output against the installed stock encoder.
+const { createJsonParser } = await import(`${pkg.name}/parser`);
+const stockParser = await import("socket.io-parser");
+const reported = [];
+const jsonParser = createJsonParser({ onEncoded: (_packet, bytes) => reported.push(bytes) });
+const sample = {
+  type: stockParser.PacketType.ACK,
+  nsp: "/admin",
+  id: 7,
+  data: [{ ok: true, d: { text: "héllo 🎉", list: [1, null, { deep: true }] }, v: 3 }],
+};
+const written = new jsonParser.Encoder().encode(sample);
+assert.deepEqual(written, new stockParser.Encoder().encode(sample), "the JSON encoder must match");
+assert.deepEqual(reported, [Buffer.byteLength(written[0], "utf8")], "onEncoded reports bytes");
+assert.throws(
+  () => new jsonParser.Encoder().encode({ type: 2, nsp: "/", data: ["x", new Uint8Array(1)] }),
+  TypeError,
+);
+assert.equal(jsonParser.Decoder, stockParser.Decoder, "the JSON parser decodes with the stock one");
+console.log("ok the built JSON parser writes what the stock encoder writes and refuses binary");

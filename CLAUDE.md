@@ -60,7 +60,8 @@ wired by a thin concrete subclass — documented in README "Splitting Large
 Services" (4.1); keep that section accurate when touching `defineMethod`.
 
 Each package's export map lives in its own `package.json`. Core's has `.`,
-`./server`, `./server/auth`, `./server/express`, `./client` and
+`./server`, `./server/auth`, `./server/express`, `./client`, `./parser` (the
+JSON-only Socket.IO parser, kept out of the dependency-free root) and
 `./testing/prisma` so far, with one tsup entry per export and shared chunks
 (`splitting`); `packages/core/scripts/dist-smoke.mjs` checks the built output,
 including the `"use client"` that must open `dist/client/index.js`. Tests sit
