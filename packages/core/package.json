@@ -26,6 +26,26 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    },
+    "./server/auth": {
+      "types": "./dist/server/auth/index.d.ts",
+      "import": "./dist/server/auth/index.js"
+    },
+    "./server/express": {
+      "types": "./dist/server/express/index.d.ts",
+      "import": "./dist/server/express/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js"
+    },
+    "./testing/prisma": {
+      "types": "./dist/testing/prisma.d.ts",
+      "import": "./dist/testing/prisma.js"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -41,9 +61,13 @@
     "test:coverage": "vitest run --coverage",
     "prepublishOnly": "bun run build"
   },
+  "dependencies": {
+    "jose": "^6.0.0"
+  },
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.16",
     "@prisma/client": "^7.0.0",
+    "@socket.io/redis-adapter": "^8.3.0",
     "@tanstack/react-query": "^5.20.0",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/react": "^16.0.0",
@@ -54,12 +78,12 @@
     "@vitest/coverage-v8": "^4.0.17",
     "express": "^4.18.2",
     "express-rate-limit": "^8.3.1",
-    "jose": "^6.0.0",
     "jsdom": "^24.0.0",
     "pg": "^8.13.0",
     "prisma": "^7.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "redis": "^6.3.0",
     "socket.io": "^4.8.4",
     "socket.io-client": "^4.8.4",
     "tsup": "^8.0.2",
@@ -67,9 +91,49 @@
     "zod": "^4.2.0"
   },
   "peerDependencies": {
+    "@electric-sql/pglite": "^0.3.16 || ^0.4.0 || ^0.5.0",
+    "@socket.io/redis-adapter": "^8.0.0",
+    "@tanstack/react-query": "^5.20.0",
+    "express": "^4.18.0 || ^5.0.0",
+    "express-rate-limit": "^8.0.0",
+    "pg": "^8.13.0",
+    "react": "^19.0.0",
+    "redis": "^4.6.0 || ^5.0.0 || ^6.0.0",
+    "socket.io": "^4.8.0",
+    "socket.io-client": "^4.8.0",
     "zod": "^3.25.0 || ^4.0.0"
   },
   "peerDependenciesMeta": {
+    "@electric-sql/pglite": {
+      "optional": true
+    },
+    "@socket.io/redis-adapter": {
+      "optional": true
+    },
+    "@tanstack/react-query": {
+      "optional": true
+    },
+    "express": {
+      "optional": true
+    },
+    "express-rate-limit": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "redis": {
+      "optional": true
+    },
+    "socket.io": {
+      "optional": true
+    },
+    "socket.io-client": {
+      "optional": true
+    },
     "zod": {
       "optional": true
     }
