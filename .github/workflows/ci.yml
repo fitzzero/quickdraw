@@ -101,6 +101,13 @@ jobs:
 
       - run: bun run build
 
+      # Imports every export of the built core package through its export map,
+      # and checks that only ./client opens with "use client", that entries
+      # share chunks instead of duplicating modules, and that no dependency is
+      # bundled.
+      - name: Smoke-test the built core package
+        run: node packages/core/scripts/dist-smoke.mjs
+
       # Checks what npm would receive from every package that is not
       # `"private": true`. publint runs on all of them. arethetypeswrong runs
       # only on packages that ship type declarations: @fitzzero/quickdraw-lint

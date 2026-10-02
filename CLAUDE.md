@@ -22,8 +22,8 @@ A bun workspace monorepo driven by turbo (`turbo.json`). Packages per
 ```
 packages/
 ├── core/        # @fitzzero/quickdraw-core — the framework (5.0, being rebuilt)
-│   ├── src/         # 5.0 sources; built by tsup → dist/. Exports only
-│   │                #   QUICKDRAW_VERSION until packs B–E fill it in
+│   ├── src/         # 5.0 sources; built by tsup → dist/. Holds the 4.1 modules
+│   │                #   5.0 keeps unchanged until packs B–E add the new core
 │   └── legacy-src/  # the 4.1 tree, kept as a porting reference (see below)
 ├── lint/        # @fitzzero/quickdraw-lint — oxlint plugin (plugin/, .mjs shipped
 │                #   verbatim) + oxlint.base.jsonc, the shared base config
@@ -57,8 +57,12 @@ Large consumer services split as abstract `*ServiceCore` + method modules
 wired by a thin concrete subclass — documented in README "Splitting Large
 Services" (4.1); keep that section accurate when touching `defineMethod`.
 
-Each package's export map lives in its own `package.json`; core's currently
-has `.` only. Tests sit next to sources (`*.test.ts(x)`) and are typechecked.
+Each package's export map lives in its own `package.json`. Core's has `.`,
+`./server`, `./server/auth`, `./server/express`, `./client` and
+`./testing/prisma` so far, with one tsup entry per export and shared chunks
+(`splitting`); `packages/core/scripts/dist-smoke.mjs` checks the built output,
+including the `"use client"` that must open `dist/client/index.js`. Tests sit
+next to sources (`*.test.ts(x)`) and are typechecked.
 Core's vitest config has two projects: `node` (`*.test.ts`) and `dom`
 (`*.test.tsx`, jsdom).
 
@@ -79,8 +83,9 @@ bun run format:check   # oxfmt --check . (repo-wide)
 Husky hooks: pre-commit runs `bun run format:check`; pre-push runs
 `bun run typecheck && bun run lint`. Node 24 (`.nvmrc`, `engines`).
 CI (`.github/workflows/ci.yml`) runs lint, format:check, typecheck, build
-(plus publint and arethetypeswrong), test and a secret scan on every pull
-request, whatever its base branch, and on pushes to `main` and `dev`.
+(plus the dist smoke test, publint and arethetypeswrong), test and a secret
+scan on every pull request, whatever its base branch, and on pushes to `main`
+and `dev`.
 
 ## Linting
 
