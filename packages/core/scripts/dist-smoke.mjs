@@ -17,7 +17,10 @@
 // - the Redis helper's dynamic imports of its optional peers resolve from the
 //   built output (both are devDependencies, so they are installed here);
 // - the built JSON parser (`./parser`) writes what the stock socket.io-parser
-//   encoder writes, reports the size, and refuses a binary argument.
+//   encoder writes, reports the size, and refuses a binary argument;
+// - the built method runtime (`./server`) defines a service from a contract,
+//   runs a call through the dispatcher and its in-process caller, and answers
+//   invalid input with VALIDATION.
 
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -66,7 +69,20 @@ const expectations = {
     ],
     client: false,
   },
-  "./server": { symbols: ["createRateLimiter"], client: false },
+  "./server": {
+    symbols: [
+      "initQuickdraw",
+      "createDispatcher",
+      "custom",
+      "createBasicAccessEngine",
+      "meetsLevel",
+      "serviceGrant",
+      "toCallReply",
+      "DEFAULT_LIMITS",
+      "createRateLimiter",
+    ],
+    client: false,
+  },
   "./server/auth": { symbols: ["createJWT"], client: false },
   "./server/express": { symbols: ["createJsonRateLimiter"], client: false },
   "./client": { symbols: ["formatCurrency"], client: true },
@@ -322,3 +338,54 @@ assert.throws(
 );
 assert.equal(jsonParser.Decoder, stockParser.Decoder, "the JSON parser decodes with the stock one");
 console.log("ok the built JSON parser writes what the stock encoder writes and refuses binary");
+
+// The method runtime across the built entries: a contract from the root, a
+// service and a dispatcher from ./server, called in process and on the wire.
+const core = await import(pkg.name);
+const server = await import(`${pkg.name}/server`);
+const text = {
+  "~standard": {
+    version: 1,
+    vendor: "smoke",
+    validate: (value) =>
+      typeof value === "string" ? { value } : { issues: [{ message: "Expected a string" }] },
+  },
+};
+const echo = core.defineContract("echoService", {
+  methods: { say: core.query({ input: text, output: text }) },
+});
+const app = server.initQuickdraw();
+const echoService = app.defineService(echo, {
+  methods: { say: { access: "public", handler: ({ input }) => input.toUpperCase() } },
+});
+const records = [];
+const quiet = { debug() {}, info() {}, warn() {}, error() {}, child: () => quiet };
+const dispatcher = server.createDispatcher({
+  services: [echoService],
+  logger: quiet,
+  onCall: (record) => records.push(record),
+});
+assert.equal(await dispatcher.caller(null).echoService.say("hi"), "HI");
+const invalid = await dispatcher.call({
+  service: "echoService",
+  method: "say",
+  input: 3,
+  principal: null,
+  transport: "socket",
+});
+assert.deepEqual(server.toCallReply(invalid), {
+  ok: false,
+  e: {
+    code: "VALIDATION",
+    message: "Invalid input for echoService.say",
+    data: { issues: [{ path: [], message: "Expected a string" }] },
+  },
+});
+assert.deepEqual(
+  records.map((record) => [record.transport, record.outcome]),
+  [
+    ["internal", "ok"],
+    ["socket", "VALIDATION"],
+  ],
+);
+console.log("ok the built dispatcher runs a call in process and validates input on the wire");
