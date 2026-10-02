@@ -55,6 +55,10 @@ export function formatNumber(value: number | null): string {
   return value.toFixed(magnitude >= 100 ? 0 : magnitude >= 10 ? 1 : 2);
 }
 
+function formatPercent(value: number): string {
+  return `${value.toFixed(Math.abs(value) >= 100 ? 0 : 1)}%`;
+}
+
 function orderedKeys(summary: ScenarioResult["summary"]): string[] {
   const keys = Object.keys(summary);
   return GROUPS.flatMap((prefix) => keys.filter((key) => key.startsWith(prefix)).sort());
@@ -78,7 +82,7 @@ function renderScenario(scenario: ScenarioResult): string {
   for (const key of orderedKeys(scenario.summary)) {
     const entry = scenario.summary[key];
     if (!entry) continue;
-    const spread = entry.spreadPct === null ? "n/a" : `${formatNumber(entry.spreadPct)}%`;
+    const spread = entry.spreadPct === null ? "n/a" : formatPercent(entry.spreadPct);
     lines.push(
       `| ${metricLabel(key)} | ${formatNumber(entry.median)} | ${formatNumber(entry.min)} | ${formatNumber(entry.max)} | ${spread} |`,
     );
@@ -150,7 +154,7 @@ function renderLoad(result: BenchResult): string {
     limits.loadgen.cpuCount -
     limits.postgres.cpuCount;
   const summary =
-    `During the measured windows, other processes used ${spanOf(other, percent)} of the ` +
+    `During the measured windows, other processes and kernel threads used ${spanOf(other, percent)} of the ` +
     `${limits.server.cpuCount} cpus the server was pinned to, and the ${restCpus} cpus the ` +
     `benchmark did not use were ${spanOf(rest, percent)} busy. The 1-minute load average at the ` +
     `start of each run was ${spanOf(loads, (v) => v.toFixed(2))}; it includes the benchmark's ` +
@@ -172,6 +176,27 @@ function renderLoad(result: BenchResult): string {
   ].join("\n");
 }
 
+function renderSummary(result: BenchResult, repetitions: number): string {
+  const rows = result.scenarios.map((scenario) => {
+    const medianOf = (key: string): string => formatNumber(scenario.summary[key]?.median ?? null);
+    const p95 = Object.keys(scenario.summary)
+      .filter((key) => key.startsWith("latency.") && key.endsWith(".p95"))
+      .map((key) => `${shortEvent(key.slice("latency.".length, -".p95".length))} ${medianOf(key)}`)
+      .join(", ");
+    return (
+      `| ${scenario.name} | ${p95} | ${medianOf("requests.failed")} | ${medianOf("server.cpuSeconds")} | ` +
+      `${medianOf("server.eventLoopDelayP99Ms")} | ${medianOf("server.bytesSentMb")} | ${medianOf("server.sqlStatements")} |`
+    );
+  });
+  return [
+    `Medians of ${repetitions} repetition${repetitions === 1 ? "" : "s"}; each scenario's table below has every metric with its spread.`,
+    "",
+    "| Scenario | p95 latency (ms) | Failed requests | Server CPU (s) | Event-loop delay p99 (ms) | Sent (MB) | SQL statements |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ...rows,
+  ].join("\n");
+}
+
 export function renderMarkdown(result: BenchResult, jsonName: string): string {
   const title =
     result.kind === "baseline"
@@ -186,6 +211,8 @@ export function renderMarkdown(result: BenchResult, jsonName: string): string {
         ? "Each scenario ran once, so there is no spread to read."
         : `Every number is the median of ${repetitions} repetitions.`) +
       ` The full data is in \`${jsonName}\`; the measurement rules are in docs/benchmarks.md.`,
+    "## Summary",
+    renderSummary(result, repetitions),
     "## Setup",
     renderSetup(result),
     "## Machine load",

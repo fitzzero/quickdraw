@@ -38,7 +38,9 @@ Output:
 | `result.schema.json`       | JSON Schema for result files, generated from `src/result-schema.ts`         | yes       |
 
 After changing `src/result-schema.ts`, run `bun run --filter bench schema`;
-`src/report.test.ts` fails until the committed schema matches.
+`src/report.test.ts` fails until the committed schema matches. After changing
+how reports are written, re-render one from its JSON without rerunning
+anything: `bun run --filter bench report -- baselines/4.1.0.json reports/4.1.0.md`.
 
 ## Layout
 
