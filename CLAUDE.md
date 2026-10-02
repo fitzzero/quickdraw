@@ -78,6 +78,9 @@ bun run format:check   # oxfmt --check . (repo-wide)
 
 Husky hooks: pre-commit runs `bun run format:check`; pre-push runs
 `bun run typecheck && bun run lint`. Node 24 (`.nvmrc`, `engines`).
+CI (`.github/workflows/ci.yml`) runs lint, format:check, typecheck, build
+(plus publint and arethetypeswrong), test and a secret scan on every pull
+request, whatever its base branch, and on pushes to `main` and `dev`.
 
 ## Linting
 
@@ -100,16 +103,13 @@ point the sibling checkout at this repo temporarily (e.g. `bun link`, or for
 lint-config work just extend `../quickdraw/packages/lint/oxlint.base.jsonc`), but always
 verify + commit against a published version.
 
-## Publishing (manual, done by the user)
+## Publishing (done by the owner)
 
 Publishing is owner-triggered; agents never bump for release, push tags or
-publish. Each public package publishes from its own directory:
-
-1. Bump `version` in the package's package.json + CHANGELOG entry.
-2. `npm publish` from `packages/core` (runs `prepublishOnly` → `bun run build`;
-   `files` ships `dist`) or `packages/lint` (`files` ships `plugin` and
-   `oxlint.base.jsonc`). `skills` and `codemod` are private for now.
-3. Consumers: `bun update @fitzzero/quickdraw-core` and bump `^` ranges.
+publish. The owner pushes a `<package>-v<version>` tag (printed by
+`scripts/release-tag.sh`) and `.github/workflows/publish.yml` publishes that
+package with npm trusted publishing. The steps, the dist-tag rule and the
+one-time npm setup are in `docs/releasing.md`.
 
 ## Domain-Specific Context
 
