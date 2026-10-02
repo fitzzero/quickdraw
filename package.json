@@ -72,7 +72,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build",
+    "prepare": "conveyor-skills link"
   },
   "dependencies": {
     "jose": "^5.2.0",
@@ -81,6 +82,7 @@
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.16",
     "@prisma/client": "^5.10.0",
+    "@rallycry/conveyor-skills": "^1.0.13",
     "@tanstack/react-query": "^5.20.0",
     "@testing-library/react": "^14.2.0",
     "@types/express": "^4.17.21",
