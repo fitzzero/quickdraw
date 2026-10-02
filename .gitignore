@@ -1,8 +1,11 @@
 # Dependencies
 node_modules/
 
-# Build output
+# Build output (every workspace package builds to its own dist/)
 dist/
+
+# Turborepo cache
+.turbo/
 
 # Test coverage
 coverage/

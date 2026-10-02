@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
-  "extends": ["./oxlint.base.jsonc"],
+  "extends": ["./packages/lint/oxlint.base.jsonc"],
   "plugins": ["typescript", "import", "react", "nextjs", "jsx_a11y"],
   "rules": {
     "no-console": "warn",
@@ -18,12 +18,12 @@
   },
   "overrides": [
     {
-      "files": ["src/client/**"],
+      "files": ["**/src/client/**"],
       "rules": {
         "quickdraw/no-raw-socket-emit": "off",
         "quickdraw/no-raw-socket-on": "off"
       }
     }
   ],
-  "ignorePatterns": ["node_modules", "dist", "coverage"]
+  "ignorePatterns": ["node_modules", "dist", "coverage", "**/legacy-src/**"]
 }

@@ -3,7 +3,7 @@
 // Consume from a project by extending it in your root .oxlintrc.json:
 //
 //   {
-//     "extends": ["./node_modules/@fitzzero/quickdraw-core/oxlint.base.jsonc"],
+//     "extends": ["./node_modules/@fitzzero/quickdraw-lint/oxlint.base.jsonc"],
 //     ...project-specific config
 //   }
 //
@@ -28,7 +28,7 @@
   "jsPlugins": [
     {
       "name": "quickdraw",
-      "specifier": "./eslint-plugin-quickdraw/index.mjs",
+      "specifier": "./plugin/index.mjs",
     },
   ],
   "rules": {

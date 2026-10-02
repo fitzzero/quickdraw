@@ -1,0 +1,32 @@
+{
+  "name": "@fitzzero/quickdraw-lint",
+  "version": "5.0.0-alpha.0",
+  "description": "oxlint plugin and shared base config for quickdraw apps",
+  "keywords": [
+    "lint",
+    "oxlint",
+    "quickdraw"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fitzzero/quickdraw.git",
+    "directory": "packages/lint"
+  },
+  "files": [
+    "plugin",
+    "oxlint.base.jsonc"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./plugin/index.mjs",
+    "./oxlint.base.jsonc": "./oxlint.base.jsonc",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
