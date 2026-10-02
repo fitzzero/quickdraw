@@ -1,3 +1,4 @@
+import type { MachineNoise } from "../env/noise";
 import type { RecordedWindow, Recorder } from "../recorder";
 import type { Workload } from "../workload";
 
@@ -38,6 +39,8 @@ export interface Measurement extends RecordedWindow {
   /** Why `server` is null, when it is. */
   serverError: string | null;
   loadgen: LoadgenMetrics;
+  /** Other work on the machine during the window (null off Linux). */
+  noise: MachineNoise | null;
 }
 
 export interface ScenarioContext {

@@ -546,6 +546,33 @@
                   "required": ["cpuSeconds", "eventLoopDelayP99Ms", "eventLoopDelayMaxMs"],
                   "additionalProperties": false
                 },
+                "noise": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "otherWorkOnServerCpusPct": {
+                          "type": "number"
+                        },
+                        "interruptsOnServerCpusPct": {
+                          "type": "number"
+                        },
+                        "restOfMachineBusyPct": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "otherWorkOnServerCpusPct",
+                        "interruptsOnServerCpusPct",
+                        "restOfMachineBusyPct"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "scenario": {
                   "type": "object",
                   "propertyNames": {
@@ -576,6 +603,7 @@
                 "server",
                 "serverError",
                 "loadgen",
+                "noise",
                 "scenario",
                 "errors"
               ],

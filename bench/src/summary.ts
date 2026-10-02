@@ -52,6 +52,10 @@ export function flatten(rep: Repetition): Flat {
   flattenRequests(rep, out);
   flattenServer(rep, out);
   out["loadgen.cpuSeconds"] = round(rep.loadgen.cpuSeconds);
+  out["noise.otherWorkOnServerCpusPct"] = rep.noise
+    ? round(rep.noise.otherWorkOnServerCpusPct, 2)
+    : null;
+  out["noise.restOfMachineBusyPct"] = rep.noise ? round(rep.noise.restOfMachineBusyPct, 2) : null;
   out["loadgen.eventLoopDelayP99Ms"] = round(rep.loadgen.eventLoopDelayP99Ms);
   for (const [name, value] of Object.entries(rep.scenario)) {
     out[`scenario.${name}`] = value === null ? null : round(value);

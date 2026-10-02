@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { AppServer, seed, type AppInfo } from "./env/app";
 import { loadAverage } from "./env/machine";
 import { assertPortFree } from "./env/ports";
-import { measure, serverInFlight } from "./measure";
+import { measure, serverInFlight, type CpuSets } from "./measure";
 import { Recorder } from "./recorder";
 import type { Repetition } from "./result-schema";
 import type { Scenario, ScenarioContext, ScenarioRun } from "./scenarios";
@@ -22,6 +22,7 @@ export interface RunSetup {
   logDirectory: string;
   port: number;
   serverCpus: string;
+  cpuSets: CpuSets;
   quick: boolean;
   log(message: string): void;
   /** Called with the running server so a signal handler can stop it. */
@@ -56,6 +57,7 @@ function toRepetition(
     server: m.server,
     serverError: m.serverError,
     loadgen: m.loadgen,
+    noise: m.noise,
     scenario: run.metrics,
     errors: m.errors,
   };
@@ -83,6 +85,7 @@ function notRun(
     server: null,
     serverError: "no measurement window was opened",
     loadgen: { cpuSeconds: 0, eventLoopDelayP99Ms: 0, eventLoopDelayMaxMs: 0 },
+    noise: null,
     scenario: {},
     errors: [message],
   };
@@ -113,7 +116,7 @@ export async function runOnce(
       workload: setup.workload,
       recorder,
       log: setup.log,
-      measure: async (work) => await measure(server, recorder, work),
+      measure: async (work) => await measure(server, recorder, setup.cpuSets, work),
       serverInFlight: async () => await serverInFlight(server),
     };
     const load = loadAverage();

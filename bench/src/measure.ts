@@ -1,5 +1,6 @@
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { AppServer } from "./env/app";
+import { watchNoise } from "./env/noise";
 import type { Recorder } from "./recorder";
 import type { LoadgenMetrics, Measurement, ServerMetrics } from "./scenarios";
 
@@ -29,20 +30,29 @@ function startLoadgen(): { stop(): LoadgenMetrics } {
   };
 }
 
+/** The cpus the server is pinned to, and every cpu the benchmark uses (server, load generator, Postgres). */
+export interface CpuSets {
+  server: number[];
+  bench: number[];
+}
+
 /** Reset the server's counters, run the work, then collect client and server numbers. */
 export async function measure(
   server: AppServer,
   recorder: Recorder,
+  cpus: CpuSets,
   work: () => Promise<void>,
 ): Promise<Measurement> {
   await server.resetMetrics();
   const loadgen = startLoadgen();
+  const noise = watchNoise(server.pid, cpus.server, cpus.bench);
   recorder.start();
   const startedAt = performance.now();
   await work();
   const windowMs = performance.now() - startedAt;
   const recorded = recorder.stop();
   const loadgenMetrics = loadgen.stop();
+  const machineNoise = noise.stop();
   let metrics: ServerMetrics | null = null;
   let serverError: string | null = null;
   try {
@@ -54,7 +64,14 @@ export async function measure(
         ? `GET /bench/metrics failed: ${error instanceof Error ? error.message : String(error)}`
         : `the server process exited with code ${exit}`;
   }
-  return { windowMs, server: metrics, serverError, loadgen: loadgenMetrics, ...recorded };
+  return {
+    windowMs,
+    server: metrics,
+    serverError,
+    loadgen: loadgenMetrics,
+    noise: machineNoise,
+    ...recorded,
+  };
 }
 
 /** Handlers still running on the server, or null when it cannot answer. */

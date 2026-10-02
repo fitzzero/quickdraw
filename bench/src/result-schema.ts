@@ -68,6 +68,13 @@ const repetition = z.object({
     eventLoopDelayP99Ms: z.number(),
     eventLoopDelayMaxMs: z.number(),
   }),
+  noise: z
+    .object({
+      otherWorkOnServerCpusPct: z.number(),
+      interruptsOnServerCpusPct: z.number(),
+      restOfMachineBusyPct: z.number(),
+    })
+    .nullable(),
   scenario: z.record(z.string(), nullableNumber),
   errors: z.array(z.string()),
 });

@@ -55,6 +55,11 @@ function repetition(index: number, p95: number, cpuSeconds: number): Repetition 
     },
     serverError: null,
     loadgen: { cpuSeconds: 2, eventLoopDelayP99Ms: 11, eventLoopDelayMaxMs: 15 },
+    noise: {
+      otherWorkOnServerCpusPct: index / 2,
+      interruptsOnServerCpusPct: 2,
+      restOfMachineBusyPct: 4,
+    },
     scenario: { writesIssued: 600, drainSeconds: 0.3 },
     errors: ["taskService:updateTask: Insufficient permissions"],
   };
@@ -158,5 +163,7 @@ describe("summary", () => {
     expect(markdown).toContain("### board-steady");
     expect(markdown).toContain("| updateTask p95 (ms) | 12 | 10 | 14 | 33.3% |");
     expect(markdown).toContain("load average");
+    expect(markdown).toContain("other processes used 0.5% to 1.5% (median 1.0%)");
+    expect(markdown).toContain("| board-steady#2 | 20:02:00 | 1.20 | 1.0% | 4.0% |");
   });
 });

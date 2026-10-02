@@ -14,6 +14,7 @@ export const NOTES = [
   "Delivery is the time from a writer emitting updateTask to a viewer receiving that change (collection delta or entity update), on the load generator's single clock.",
   "Server CPU is process.cpuUsage() of the server process over the window. Event-loop delay is how late a 10 ms perf_hooks.monitorEventLoopDelay timer fired (the histogram value minus its 10 ms interval). Bytes are TCP bytes the server wrote, including HTTP and WebSocket framing.",
   "SQL statements are Prisma query events. Prisma batches findUnique calls made in the same tick into one statement, so the 60 per-row access checks and reads of a batchSubscribe cost a handful of statements rather than 180.",
+  "Machine noise comes from /proc: the time other processes spent on the server's pinned cpus during each window (those cpus' busy time minus the server process's own), and how busy the cpus the benchmark did not use were. Interrupt time on the server's cpus, mostly the benchmark's own network traffic, is kept apart in the result file.",
   "Every run starts a fresh server process on a freshly seeded database. The server logs with 4.1's defaults (two info lines per method call) to a file on local disk.",
   "Writes are open-loop: they are issued on schedule whether or not earlier writes have been answered, so a slow server cannot reduce the offered load.",
 ];

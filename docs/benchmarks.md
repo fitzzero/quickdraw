@@ -14,7 +14,9 @@ in `bench/reports/4.1.0.md`.
    cpus with the same method in every run that will be compared (by default
    `taskset -c 2,3`: two cores). The load generator and Postgres get cpus of
    their own (10,11 and 6-9 by default), so neither competes with the server.
-   Every result file records the limits that were used.
+   Use cpus on separate physical cores (on reaper0, a 12-core Ryzen 9 7900,
+   cpus 2 and 3 are two cores whose SMT siblings are 14 and 15). Every result
+   file records the limits that were used.
 2. **Baseline, change, baseline.** Compare versions on one machine in one
    sitting: run the old version, then the new one, then the old one again.
    If the two old runs disagree by more than their own spread, the machine was

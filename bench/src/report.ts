@@ -1,7 +1,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, relative } from "node:path";
 import { SCHEMA_FILE } from "./paths";
-import { resultSchema, type BenchResult, type ScenarioResult } from "./result-schema";
+import {
+  resultSchema,
+  type BenchResult,
+  type Repetition,
+  type ScenarioResult,
+} from "./result-schema";
 import { median, round } from "./stats";
 
 /**
@@ -9,7 +14,12 @@ import { median, round } from "./stats";
  * and a Markdown report a reviewer can read without opening the JSON.
  */
 
-const GROUPS = ["scenario.", "latency.", "delivery.", "requests.", "server.", "loadgen."];
+const GROUPS = ["scenario.", "latency.", "delivery.", "requests.", "server.", "loadgen.", "noise."];
+
+const NOISE_LABELS: Record<string, string> = {
+  otherWorkOnServerCpusPct: "other work on the server cpus (%)",
+  restOfMachineBusyPct: "rest of the machine busy (%)",
+};
 
 function shortEvent(event: string): string {
   return event.replace(/^taskService:/, "");
@@ -29,6 +39,8 @@ export function metricLabel(key: string): string {
         : `${shortEvent(rest[0] ?? "")} ${rest[1] ?? ""}`;
     case "loadgen":
       return `load generator ${rest.join(" ")}`;
+    case "noise":
+      return NOISE_LABELS[rest[0] ?? ""] ?? rest.join(" ");
     case "scenario":
       return rest.join(".");
     default:
@@ -110,16 +122,54 @@ function renderSetup(result: BenchResult): string {
   );
 }
 
+function percent(value: number): string {
+  return `${value.toFixed(1)}%`;
+}
+
+function spanOf(values: number[], format: (value: number) => string): string {
+  if (values.length === 0) return "not measured";
+  const mid = median(values) ?? 0;
+  return `${format(Math.min(...values))} to ${format(Math.max(...values))} (median ${format(mid)})`;
+}
+
 function renderLoad(result: BenchResult): string {
-  const loads = result.scenarios.flatMap((s) => s.repetitions.map((r) => r.loadAverage.one));
-  const low = Math.min(...loads);
-  const high = Math.max(...loads);
-  return (
-    `The 1-minute load average at the start of the ${loads.length} runs was between ` +
-    `${low.toFixed(2)} and ${high.toFixed(2)} (median ${formatNumber(median(loads))}) on a ` +
-    `${result.machine.nproc}-CPU machine. The pinned cores were not reserved for the benchmark: ` +
-    "other processes on the machine could still be scheduled on them."
+  const byRun = new Map<string, Repetition>(
+    result.scenarios.flatMap((s) => s.repetitions.map((r) => [`${s.name}#${r.index}`, r] as const)),
   );
+  const runs = result.order.flatMap((key) => {
+    const rep = byRun.get(key);
+    return rep ? [{ key, rep }] : [];
+  });
+  const other = runs.flatMap(({ rep }) => (rep.noise ? [rep.noise.otherWorkOnServerCpusPct] : []));
+  const rest = runs.flatMap(({ rep }) => (rep.noise ? [rep.noise.restOfMachineBusyPct] : []));
+  const loads = runs.map(({ rep }) => rep.loadAverage.one);
+  const { limits } = result;
+  const restCpus =
+    result.machine.nproc -
+    limits.server.cpuCount -
+    limits.loadgen.cpuCount -
+    limits.postgres.cpuCount;
+  const summary =
+    `During the measured windows, other processes used ${spanOf(other, percent)} of the ` +
+    `${limits.server.cpuCount} cpus the server was pinned to, and the ${restCpus} cpus the ` +
+    `benchmark did not use were ${spanOf(rest, percent)} busy. The 1-minute load average at the ` +
+    `start of each run was ${spanOf(loads, (v) => v.toFixed(2))}; it includes the benchmark's ` +
+    "own previous run. Nothing reserved the pinned cpus for the benchmark.";
+  const rows = runs.map(({ key, rep }) => {
+    const noise = rep.noise;
+    return (
+      `| ${key} | ${rep.startedAt.slice(11, 19)} | ${rep.loadAverage.one.toFixed(2)} | ` +
+      `${noise ? percent(noise.otherWorkOnServerCpusPct) : "n/a"} | ` +
+      `${noise ? percent(noise.restOfMachineBusyPct) : "n/a"} |`
+    );
+  });
+  return [
+    summary,
+    "",
+    "| Run | Started (UTC) | Load average, 1 min | Other work on server cpus | Rest of machine busy |",
+    "| --- | --- | ---: | ---: | ---: |",
+    ...rows,
+  ].join("\n");
 }
 
 export function renderMarkdown(result: BenchResult, jsonName: string): string {

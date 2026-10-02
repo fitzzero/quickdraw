@@ -2,7 +2,7 @@ import { assemble, type AssembleInput } from "./assemble";
 import type { Options } from "./cli";
 import type { AppInfo, AppServer } from "./env/app";
 import { ensureDatabase, stopDatabase, type Database } from "./env/database";
-import { describeMachine, runtimeVersions } from "./env/machine";
+import { describeMachine, expandCpus, runtimeVersions } from "./env/machine";
 import { log } from "./log";
 import { prepare } from "./prepare";
 import { writeResult } from "./report";
@@ -65,6 +65,12 @@ export async function orchestrate(options: Options): Promise<void> {
       databaseUrl: database.url,
       port: options.port,
       serverCpus: options.serverCpus,
+      cpuSets: {
+        server: expandCpus(options.serverCpus),
+        bench: [options.serverCpus, options.loadgenCpus, database.cpus ?? options.pgCpus].flatMap(
+          expandCpus,
+        ),
+      },
       quick: options.quick,
       log,
       track: (running) => {
