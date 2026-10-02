@@ -1,0 +1,174 @@
+name: CI
+
+# `pull_request` deliberately has no `branches` filter: pack children open pull
+# requests into `ft/...` feature branches, and those need CI as much as pull
+# requests into `dev` or `main` do.
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+# Every job sets up the same toolchain: Node from .nvmrc, bun at the version
+# pinned by the root package.json `packageManager` field, then a frozen install.
+# `--ignore-scripts` also skips the root `prepare` script (husky and
+# conveyor-skills link), which CI does not need.
+jobs:
+  # The secret scan blocks and reports verified secrets only, so it has almost
+  # no false positives. The dependency audit is advisory and never fails the job.
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # trufflehog scans the commits between the pull request's base and
+          # head (or a push's before and after), so it needs the full history.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan the diff for secrets
+        uses: trufflesecurity/trufflehog@v3.97.9
+        with:
+          extra_args: --results=verified
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Dependency audit (advisory)
+        run: bun audit
+        continue-on-error: true
+
+  lint-and-typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      - run: bun run lint
+
+      - run: bun run format:check
+
+      - run: bun run typecheck
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      - run: bun run build
+
+      # Checks what npm would receive from every package that is not
+      # `"private": true`. publint runs on all of them. arethetypeswrong runs
+      # only on packages that ship type declarations: @fitzzero/quickdraw-lint
+      # ships plain .mjs with no types, so attw has nothing to check there. The
+      # packages are ESM-only, so attw uses its esm-only profile (node10 and
+      # require() resolution are not supported targets).
+      - name: Check the published package shape
+        run: |
+          for manifest in packages/*/package.json; do
+            dir="$(dirname "$manifest")"
+            name="$(jq -r .name "$manifest")"
+            if [ "$(jq -r '.private // false' "$manifest")" = true ]; then
+              echo "Skipping $name: private"
+              continue
+            fi
+
+            echo "::group::publint $name"
+            (cd "$dir" && bunx publint@^0.3.25)
+            echo "::endgroup::"
+
+            if jq -e '(.types // .typings) != null or ([.exports | .. | objects | has("types")] | any)' "$manifest" > /dev/null; then
+              echo "::group::arethetypeswrong $name"
+              (cd "$dir" && bunx @arethetypeswrong/cli@^0.18.5 --pack --profile esm-only)
+              echo "::endgroup::"
+            else
+              echo "Skipping arethetypeswrong for $name: it ships no type declarations"
+            fi
+          done
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Postgres for the integration tests later packs add; nothing connects to it
+    # yet, and local runs default to PGlite. turbo.json lists DATABASE_URL in the
+    # test task's `env`, without which turbo's strict env mode would hide it
+    # from vitest.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: quickdraw_test
+          POSTGRES_USER: quickdraw
+          POSTGRES_PASSWORD: quickdraw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U quickdraw -d quickdraw_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://quickdraw:quickdraw@localhost:5432/quickdraw_test
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      - run: bun run test
+
+      - name: Test scripts/release-tag.sh
+        run: bash scripts/release-tag.test.sh

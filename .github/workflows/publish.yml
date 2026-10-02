@@ -1,0 +1,183 @@
+name: Publish
+
+# Owner-triggered: nothing here runs on merge. The owner pushes a release tag
+# printed by scripts/release-tag.sh (`<package>-v<version>`), or runs this
+# workflow by hand, and it publishes that one package at that version to npm
+# with trusted publishing (OIDC) and provenance. No npm token is stored
+# anywhere. docs/releasing.md has the steps and the one-time npm setup.
+on:
+  push:
+    tags:
+      - core-v*
+      - lint-v*
+      - skills-v*
+      - codemod-v*
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package to publish (its directory under packages/)
+        required: true
+        type: choice
+        options: [core, lint, skills, codemod]
+      version:
+        description: Version to publish; must equal that package's package.json version on the chosen ref
+        required: true
+        type: string
+
+# One run per package version at a time, and a publish is never cancelled midway.
+concurrency:
+  group: publish-${{ github.event_name == 'workflow_dispatch' && format('{0}-v{1}', inputs.package, inputs.version) || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing (OIDC) and provenance
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
+          # No dependency cache in a job that can publish (cache poisoning).
+          package-manager-cache: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Resolve and validate the release
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_PACKAGE: ${{ inputs.package }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          export LC_ALL=C
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            pkg="$INPUT_PACKAGE"
+            version="$INPUT_VERSION"
+          else
+            # The tag prefix names the package: core-v5.0.0-alpha.1 is core.
+            case "$REF_NAME" in
+              core-v*) pkg=core ;;
+              lint-v*) pkg=lint ;;
+              skills-v*) pkg=skills ;;
+              codemod-v*) pkg=codemod ;;
+              *)
+                echo "::error::Tag '$REF_NAME' does not start with core-v, lint-v, skills-v or codemod-v"
+                exit 1
+                ;;
+            esac
+            version="${REF_NAME#"$pkg"-v}"
+          fi
+          case "$pkg" in
+            core | lint | skills | codemod) dir="packages/$pkg" ;;
+            *)
+              echo "::error::Unknown package '$pkg'"
+              exit 1
+              ;;
+          esac
+
+          # Semantic Versioning 2.0.0, prerelease allowed (5.0.0-alpha.1,
+          # 5.0.0-rc.0). Build metadata (+...) is refused: npm drops it, so the
+          # published version would not match the tag. scripts/release-tag.sh
+          # uses the same pattern.
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
+          if ! [[ "$version" =~ $semver ]]; then
+            echo "::error::'$version' is not a semantic version (MAJOR.MINOR.PATCH with an optional -prerelease)"
+            exit 1
+          fi
+
+          name="$(jq -r .name "$dir/package.json")"
+          manifest_version="$(jq -r .version "$dir/package.json")"
+          if [ "$manifest_version" != "$version" ]; then
+            echo "::error::$dir/package.json is at version $manifest_version, not $version"
+            exit 1
+          fi
+          if [ "$(jq -r '.private // false' "$dir/package.json")" = true ]; then
+            echo "::error::$name is private and cannot be published"
+            exit 1
+          fi
+
+          # The dist-tag rule: a version with a prerelease part publishes under
+          # `next`, anything else under `latest`. MAJOR.MINOR.PATCH are digits
+          # and build metadata was refused above, so any '-' starts a prerelease.
+          case "$version" in
+            *-*) dist_tag=next ;;
+            *) dist_tag=latest ;;
+          esac
+
+          {
+            echo "dir=$dir"
+            echo "name=$name"
+            echo "version=$version"
+            echo "dist-tag=$dist_tag"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing $name@$version from $dir under the '$dist_tag' dist-tag"
+
+      - name: Require npm 11.5.1 or newer (trusted publishing)
+        run: |
+          current="$(npm --version)"
+          lowest="$(printf '%s\n' 11.5.1 "$current" | sort -V | head -n 1)"
+          if [ "$lowest" != 11.5.1 ]; then
+            echo "::error::npm $current is too old for trusted publishing; 11.5.1 or newer is required"
+            exit 1
+          fi
+          echo "npm $current"
+
+      - name: Skip a version that is already on npm
+        id: registry
+        env:
+          NAME: ${{ steps.release.outputs.name }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if [ "$(npm view "$NAME@$VERSION" version 2> /dev/null)" = "$VERSION" ]; then
+            echo "$NAME@$VERSION is already on npm; nothing to publish"
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install
+        if: steps.registry.outputs.published == 'false'
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Build
+        if: steps.registry.outputs.published == 'false'
+        run: bun run build
+
+      - name: Publish to npm
+        if: steps.registry.outputs.published == 'false'
+        working-directory: ${{ steps.release.outputs.dir }}
+        env:
+          DIST_TAG: ${{ steps.release.outputs.dist-tag }}
+        run: |
+          # npm exchanges this job's OIDC token for a short-lived publish token
+          # (trusted publishing), so no NPM_TOKEN secret is involved.
+          args=(--access public --provenance)
+          # A prerelease must never become `latest`, so it gets `--tag next`. A
+          # release gets no --tag: `latest` is npm's default, and while it is
+          # implicit npm refuses to move `latest` back to a version lower than
+          # one already published (publish an old-major hotfix by hand instead).
+          if [ "$DIST_TAG" = next ]; then
+            args+=(--tag next)
+          fi
+          if ! npm publish "${args[@]}"; then
+            echo "::error::npm publish failed. A package that has never been published, or whose trusted publisher is not set up on npmjs.com yet, fails here: see docs/releasing.md"
+            exit 1
+          fi
