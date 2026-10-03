@@ -2,8 +2,9 @@
 // server: a user with two sockets stays online until both close, and is then
 // remembered as last seen; `count` and `users` follow joins and leaves;
 // `qd:presence` tells each socket in an app room who is there; `ctx.rooms`
-// refuses the framework's rooms, joins nothing without a socket, and caps a
-// socket's rooms; behind a cluster adapter the answers come from every node.
+// and presence refuse the framework's rooms; `ctx.rooms` joins nothing
+// without a socket, and caps a socket's rooms; behind a cluster adapter the
+// answers come from every node.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { PresenceFrame } from "../../protocol/envelope";
@@ -114,19 +115,28 @@ describe("presence", () => {
     expect(await presence.count("elsewhere")).toBe(0);
   });
 
-  it("reads the framework's rooms from the adapter", async () => {
+  it("refuses the framework's rooms: who is in one would tell who subscribes to a row", async () => {
     const app = await start();
     const cy = await app.connect(as(board.cy));
-    await cy.call.taskService.get({ id: board.t1 });
     const reply = await cy.socket.timeout(5000).emitWithAck("qd:sub", {
       s: "taskService",
       ids: [board.t1],
     });
     expect(reply).toMatchObject({ ok: true });
-    expect(await app.server.presence.users(`qd:e:taskService:${board.t1}@Read`)).toEqual([
-      board.cy,
-    ]);
-    expect(await app.server.presence.users(`user:${board.cy}`)).toEqual([board.cy]);
+    const { presence } = app.server;
+    for (const ask of [
+      presence.users(`qd:e:taskService:${board.t1}@Read`),
+      presence.count(`qd:e:taskService:${board.t1}@Read`),
+      presence.users(`user:${board.cy}`),
+      presence.count(`user:${board.cy}`),
+    ]) {
+      await expect(ask).rejects.toMatchObject({
+        code: "VALIDATION",
+        message: expect.stringContaining("is reserved"),
+      });
+    }
+    // A user's own online state is still known, by user id.
+    expect(await presence.isOnline(board.cy)).toBe(true);
   });
 
   it("rejects an argument that is not a name", async () => {

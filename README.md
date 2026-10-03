@@ -820,8 +820,9 @@ const here = usePresence(`board:${projectId}`); // user ids, after enterBoard jo
   The socket rate limiter does not count channels.
 - Presence: `isOnline`, `lastSeen` (now while online, else when the user's
   last socket on this process disconnected), `count` and `users` (each user
-  once, anonymous sockets left out) come from this process's sockets, and
-  from every node's (`fetchSockets`) behind a Redis adapter.
+  once, anonymous sockets left out; app rooms only, so a `qd:` or `user:`
+  room is `VALIDATION`) come from this process's sockets, and from every
+  node's (`fetchSockets`) behind a Redis adapter.
   `ctx.rooms.join(room)` and `leave` put the calling socket in an app room
   (calls without a socket get `false`; names starting with `qd:` or `user:`
   are refused with `VALIDATION`; at most 100 per socket), and the room's

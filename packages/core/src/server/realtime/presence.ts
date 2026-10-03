@@ -9,14 +9,18 @@
 // `PRESENCE_MAX_LAST_SEEN` users seen last. Both live in `Map`s, so a user id
 // or room named `__proto__` is an ordinary key.
 //
+// `count` and `users` answer for app rooms only: a framework room (`qd:`,
+// `user:`) is `VALIDATION`, as for `ctx.rooms.join`.
+//
 // The answers come from this process's rooms while the server runs the
 // in-memory adapter it was created with. Behind a cluster adapter (Redis)
 // other nodes' sockets are not visible here, so `isOnline`, `count` and
 // `users` ask every node through `io.in(room).fetchSockets()`; `lastSeen`
 // still knows only this process's disconnects.
 
-import { userRoom } from "../../contract/names";
+import { RESERVED_ROOM_PREFIXES, userRoom } from "../../contract/names";
 import type { Hub } from "../emit/hub";
+import { unreadable } from "../transports/ack";
 import type { QuickdrawIo } from "../transports/types";
 import type { Presence } from "./types";
 
@@ -143,6 +147,21 @@ function checkName(member: string, value: unknown): asserts value is string {
   }
 }
 
+/**
+ * Throws `VALIDATION` for a framework room (`qd:` entity, collection, topic
+ * and stream rooms, `user:` rooms), as `ctx.rooms.join` does: who sits in
+ * one would tell who is subscribed to a row, or which sockets a user has.
+ * Presence answers for app rooms only.
+ */
+function checkRoom(member: string, room: unknown): asserts room is string {
+  checkName(member, room);
+  if (RESERVED_ROOM_PREFIXES.some((prefix) => room.startsWith(prefix))) {
+    throw unreadable(
+      `presence.${member}: room "${room}" is reserved; presence answers for app rooms, not for rooms starting with ${RESERVED_ROOM_PREFIXES.join(" or ")}`,
+    );
+  }
+}
+
 /** The presence API of one dispatcher, answered from its server's sockets (none before a server attaches). */
 export function createPresence(hub: Hub, records: PresenceRecords): Presence {
   const isOnline = async (userId: string): Promise<boolean> => {
@@ -157,7 +176,7 @@ export function createPresence(hub: Hub, records: PresenceRecords): Presence {
     return (await io.in(userRoom(userId)).fetchSockets()).length > 0;
   };
   const users = async (room: string): Promise<string[]> => {
-    checkName("users", room);
+    checkRoom("users", room);
     return await usersInRoom(hub, records, room);
   };
   return Object.freeze({
@@ -167,7 +186,7 @@ export function createPresence(hub: Hub, records: PresenceRecords): Presence {
       return (await isOnline(userId)) ? Date.now() : (records.lastSeen(userId) ?? null);
     },
     async count(room: string): Promise<number> {
-      checkName("count", room);
+      checkRoom("count", room);
       return (await usersInRoom(hub, records, room)).length;
     },
     users,
