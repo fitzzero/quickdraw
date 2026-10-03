@@ -10,8 +10,8 @@ import { defineConfig } from "tsup";
 // `src/client/index.ts` also opens `dist/client/index.js`; `tsup`'s rollup
 // `treeshake` pass would strip it, so it stays off. The directive of any other
 // module is dropped when it is bundled, which is why `./utils` (no directive)
-// may share chunks with `./client`. `scripts/dist-smoke.mjs` checks the built
-// output.
+// may share chunks with `./client`, and `./testing/client` (test helpers, no
+// directive) too. `scripts/dist-smoke.mjs` checks the built output.
 export default defineConfig({
   entry: {
     index: "src/index.ts",
@@ -25,6 +25,7 @@ export default defineConfig({
     "prisma/index": "src/prisma/index.ts",
     "testing/index": "src/testing/index.ts",
     "testing/prisma": "src/testing/prisma.ts",
+    "testing/client": "src/testing/client.tsx",
   },
   format: ["esm"],
   dts: true,
