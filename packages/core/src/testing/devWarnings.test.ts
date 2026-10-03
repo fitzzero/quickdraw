@@ -30,6 +30,7 @@ const contract = defineContract("probeService", {
     kit: query({ input: scope, output: count }),
     big: query({ input: z.object({ size: z.number() }), output: z.string() }),
     nested: mutation({ input: scope, output: z.string() }),
+    flags: mutation({ input: z.object({ id: z.string() }), output: z.string() }),
   },
 });
 
@@ -86,6 +87,17 @@ const service = qd.defineService(contract, {
         (
           await db.task.create({
             data: { projectId: input.projectId, title: "nested", labels: { create: [] } },
+          })
+        ).id,
+    },
+    // A JSON column whose keys are named like relation operations: not a nested write.
+    flags: {
+      access: "authenticated",
+      handler: async ({ input, db }) =>
+        (
+          await db.task.update({
+            where: { id: input.id },
+            data: { details: { create: true, update: true, delete: false } },
           })
         ).id,
     },
@@ -222,6 +234,14 @@ describe("createTestApp({ strictWarnings: true })", () => {
     // Every time, not once: the next call fails too.
     await expect(probe.oneByOne({ ids: taskIds })).rejects.toMatchObject({ code: "INTERNAL" });
     expect(await probe.together({ ids: taskIds })).toBe(12);
+  });
+
+  it("lets a JSON value with keys named like relation operations through (the review's jsonNested)", async () => {
+    const { probe } = await start({ strictWarnings: true });
+    const [id = ""] = taskIds;
+    expect(await probe.flags({ id })).toBe(id);
+    const stored = await h.prisma.task.findUnique({ where: { id } });
+    expect(stored?.details).toEqual({ create: true, update: true, delete: false });
   });
 
   it("rejects an in-process call whose reply was oversized, once it was recorded", async () => {

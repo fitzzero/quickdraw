@@ -2,8 +2,12 @@
 // client only as the parent row's write, so the related rows' changes are
 // never sent (RFC 0003 section 5.2). The runtime warns in development; this
 // rule catches the same shapes before they run. Like the runtime check it
-// reads shapes, not the schema: `set` counts only when it is given objects
-// (a relation), not a scalar or a scalar list.
+// reads shapes, not the schema, and judges each key by its value: a relation
+// operation takes rows, so a key holding a literal (`{ create: true }` in a
+// JSON column) is not one, while any other expression may be rows; `delete`
+// and `disconnect` also take `true` (a to-one relation), not `false`; `set`
+// counts only when it is given objects (a relation), not a scalar or a scalar
+// list.
 
 import { getProperty, keyName, unwrap } from "../lib/ast.mjs";
 import { CLIENTS_OPTION, TRACKED_CLIENTS, modelCall } from "../lib/prisma.mjs";
@@ -22,7 +26,10 @@ const NESTED_KEYS = new Set([
   "deleteMany",
 ]);
 
-/** Whether a `set` value takes rows to connect (objects) rather than a scalar. */
+/** Relation operations that also take `true` (a to-one relation); the others take rows. */
+const FLAG_KEYS = new Set(["delete", "disconnect"]);
+
+/** Whether a set value takes rows to connect (objects) rather than a scalar. */
 function isRelationSet(value) {
   const node = unwrap(value);
   if (node.type === "ObjectExpression") {
@@ -34,6 +41,29 @@ function isRelationSet(value) {
   );
 }
 
+/** Whether `node` is written as a literal value (a string, number, boolean or null), never rows. */
+function isLiteral(node) {
+  if (node.type === "Literal" || node.type === "TemplateLiteral") {
+    return true;
+  }
+  if (node.type === "UnaryExpression") {
+    return isLiteral(unwrap(node.argument));
+  }
+  return node.type === "Identifier" && node.name === "undefined";
+}
+
+/** Whether the key `name` holding `value` is a relation operation (as the runtime's `prisma/nested.ts` judges it). */
+function writesRelation(name, value) {
+  const node = unwrap(value);
+  if (name === "set") {
+    return isRelationSet(node);
+  }
+  if (!isLiteral(node)) {
+    return true;
+  }
+  return FLAG_KEYS.has(name) && node.type === "Literal" && node.value === true;
+}
+
 /** The nested operation a field's value performs, if any. */
 function nestedOperation(value) {
   for (const property of value.properties) {
@@ -41,10 +71,8 @@ function nestedOperation(value) {
       continue;
     }
     const name = keyName(property);
-    if (name !== undefined && NESTED_KEYS.has(name)) {
-      if (name !== "set" || isRelationSet(property.value)) {
-        return name;
-      }
+    if (name !== undefined && NESTED_KEYS.has(name) && writesRelation(name, property.value)) {
+      return name;
     }
   }
   return undefined;

@@ -30,6 +30,29 @@ describe("findNestedWrites", () => {
     ).toEqual([{ field: "labels", operation: "set" }]);
   });
 
+  it("judges each key by its value: a JSON column's literal flags are not relation operations", () => {
+    // The review's jsonNested case.
+    expect(
+      findNestedWrites({
+        details: { create: true, update: true, delete: false },
+        settings: { connect: "x", upsert: 1, deleteMany: null, disconnect: false, createMany: 0 },
+      }),
+    ).toEqual([]);
+    expect(
+      findNestedWrites({
+        owner: { delete: true },
+        members: { delete: [{ id: "m1" }] },
+        labels: { connect: [] },
+        project: { update: { name: "x" } },
+      }),
+    ).toEqual([
+      { field: "owner", operation: "delete" },
+      { field: "members", operation: "delete" },
+      { field: "labels", operation: "connect" },
+      { field: "project", operation: "update" },
+    ]);
+  });
+
   it("ignores scalars, atomic operations, dates, arrays and anything that is not data", () => {
     expect(
       findNestedWrites({

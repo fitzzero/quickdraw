@@ -32,6 +32,16 @@ run("no-nested-write", {
       `,
     },
     {
+      // The review's bad4 case: a JSON column whose keys are named like relation operations.
+      name: "a JSON value whose operation-named keys hold literals is not a nested write",
+      filename: SERVICE,
+      code: `
+        db.task.update({ where: { id: input.id }, data: { details: { create: true, update: true, delete: false } } });
+        db.task.create({ data: { projectId, details: { connect: "x", upsert: 1, deleteMany: null, disconnect: false } } });
+        db.task.update({ where: { id }, data: { details: { update: \`v\${n}\`, createMany: -1, set: "s" } } });
+      `,
+    },
+    {
       name: "the untracked client is not this rule's concern (a seed script)",
       filename: "packages/db/src/seed.ts",
       code: `prisma.task.create({ data: { title, labels: { create: [{ name: "bug" }] } } });`,
@@ -79,6 +89,32 @@ run("no-nested-write", {
           messageId: "nestedWrite",
           data: { field: "members", operation: "deleteMany", model: "project" },
         },
+      ],
+    },
+    {
+      name: "delete and disconnect given true (a to-one relation) or a filter",
+      filename: SERVICE,
+      code: `
+        db.task.update({ where: { id }, data: { assignee: { disconnect: true } } });
+        db.project.update({ where: { id }, data: { members: { delete: [{ id: memberId }] } } });
+      `,
+      errors: [
+        {
+          messageId: "nestedWrite",
+          data: { field: "assignee", operation: "disconnect", model: "task" },
+        },
+        {
+          messageId: "nestedWrite",
+          data: { field: "members", operation: "delete", model: "project" },
+        },
+      ],
+    },
+    {
+      name: "an operation given a value built elsewhere may be rows",
+      filename: SERVICE,
+      code: `db.task.create({ data: { projectId, labels: { create: input.labels } } });`,
+      errors: [
+        { messageId: "nestedWrite", data: { field: "labels", operation: "create", model: "task" } },
       ],
     },
     {
