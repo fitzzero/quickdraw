@@ -170,7 +170,8 @@ type DefinitionContext<Entity, Projections, Items, Indexes> = {
 /**
  * Member names the protocol and the client proxy reserve, besides any name
  * starting with `$`: `useEntity`, `useEntities` and `admin` sit beside a
- * service's methods and collections on `qd.<service>`.
+ * service's methods and collections on `qd.<service>`, and `then` would make
+ * a service's caller look like a promise to `await`.
  */
 export type ReservedMethodName =
   | "subscribe"
@@ -178,7 +179,8 @@ export type ReservedMethodName =
   | "call"
   | "useEntity"
   | "useEntities"
-  | "admin";
+  | "admin"
+  | "then";
 
 type Problem<Text extends string> = `defineContract: ${Text}`;
 

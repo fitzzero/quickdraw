@@ -203,19 +203,25 @@ describe("the method and collection builders", () => {
 });
 
 describe("definition-time checks", () => {
-  it.each(["subscribe", "unsubscribe", "call", "useEntity", "useEntities", "admin", "$internal"])(
-    "rejects the reserved method name %s, naming the method",
-    (name) => {
-      const defineReserved = (): AnyContract =>
-        define("taskService", {
-          ...entityOnly,
-          methods: { [name]: query({ input: idInput, output: "entity" }) },
-        });
-      expect(defineReserved).toThrow(
-        `defineContract("taskService"): method "${name}" uses a reserved name`,
-      );
-    },
-  );
+  it.each([
+    "subscribe",
+    "unsubscribe",
+    "call",
+    "useEntity",
+    "useEntities",
+    "admin",
+    "then",
+    "$internal",
+  ])("rejects the reserved method name %s, naming the method", (name) => {
+    const defineReserved = (): AnyContract =>
+      define("taskService", {
+        ...entityOnly,
+        methods: { [name]: query({ input: idInput, output: "entity" }) },
+      });
+    expect(defineReserved).toThrow(
+      `defineContract("taskService"): method "${name}" uses a reserved name`,
+    );
+  });
 
   it("rejects a collection item that is not a projection", () => {
     expect(withCollection({ item: "summary" })).toThrow(
@@ -286,6 +292,9 @@ describe("definition-time checks", () => {
     expect(() =>
       define("taskService", { ...entityOnly, collections: { $all: byProject } }),
     ).toThrow('collection "$all" uses a reserved name');
+    expect(() =>
+      define("taskService", { ...entityOnly, collections: { then: byProject } }),
+    ).toThrow('collection "then" uses a reserved name');
   });
 
   it("requires an entity for projections, fields, collections and the entity projection", () => {

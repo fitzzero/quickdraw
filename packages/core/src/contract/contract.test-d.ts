@@ -454,6 +454,8 @@ describe("methods that fail to compile", () => {
         subscribe: query({ input: idInput, output: "entity" }),
         // @ts-expect-error -- names starting with $ are reserved
         $internal: query({ input: idInput, output: "entity" }),
+        // @ts-expect-error -- then would make the service's caller look like a promise
+        then: query({ input: idInput, output: "entity" }),
       },
     });
   });

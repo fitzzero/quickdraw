@@ -18,6 +18,8 @@ type UnknownRecord = Readonly<Record<string, unknown>>;
 
 // `useEntity`, `useEntities` and `admin` are members the client proxy places
 // beside a service's methods and collections (RFC 0003 sections 11 and 12.4).
+// `then` would make a service's caller look like a promise: `await` and
+// `Promise.resolve` would call it, so the callers answer `undefined` for it.
 const RESERVED_NAMES: ReadonlySet<string> = new Set([
   "subscribe",
   "unsubscribe",
@@ -25,6 +27,7 @@ const RESERVED_NAMES: ReadonlySet<string> = new Set([
   "useEntity",
   "useEntities",
   "admin",
+  "then",
 ]);
 
 const DEFINITION_KEYS: ReadonlySet<string> = new Set([
