@@ -93,6 +93,25 @@ describe('share: "caller"', () => {
     expect((await Promise.all(calls)).map(codeOf)).toEqual(["ok", "ok", "ok", "ok"]);
     expect(handler).toHaveBeenCalledTimes(4);
   });
+
+  it("runs once per MCP context too, so a scoped token never joins another session's run", async () => {
+    const { service, runs, handler } = sharing("caller");
+    const { call } = setup([service]);
+    const list = (mcp?: { readonly scopes: readonly string[] }) =>
+      call({ method: "list", input: { projectId: "p1" }, transport: "mcp", mcp });
+    const calls = [
+      list({ scopes: ["read"] }),
+      list({ scopes: ["read"] }),
+      list({ scopes: ["read", "write"] }),
+      list(),
+    ];
+    await tick();
+    for (const run of runs) {
+      run.resolve(cards);
+    }
+    expect((await Promise.all(calls)).map(codeOf)).toEqual(["ok", "ok", "ok", "ok"]);
+    expect(handler).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe('share: "all"', () => {

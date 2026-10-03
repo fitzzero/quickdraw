@@ -33,6 +33,8 @@ export interface Principal {
  * - `principal`: the app's principal type, extending {@link Principal}.
  * - `context`: the fields `initQuickdraw({ context })` adds to every handler's `ctx`.
  * - `contracts`: the app's contracts (`{ task, project }`), which type `qd.caller`.
+ * - `mcp`: the fields the MCP bridge's `context` option gives calls that
+ *   arrive over MCP, which handlers read as `ctx.mcp` (token scopes, for example).
  *
  * @example
  * export const qd = initQuickdraw<{ db: AppPrisma; principal: AppPrincipal }>();
@@ -42,6 +44,7 @@ export interface QuickdrawTypes {
   readonly principal?: Principal;
   readonly context?: object;
   readonly contracts?: ContractMap;
+  readonly mcp?: object;
 }
 
 /** The database client handlers receive: `QuickdrawTypes["db"]`, or `unknown` when none is declared. */
@@ -60,6 +63,16 @@ export type ContextExtensionOf<T extends QuickdrawTypes> = T extends {
 }
   ? Extension
   : Record<never, never>;
+
+/** `ctx.mcp` when the app's types declare no `mcp`: fields of any value. */
+export type McpContext = Readonly<Record<string, unknown>>;
+
+/** The fields of `ctx.mcp`: `QuickdrawTypes["mcp"]`, or {@link McpContext} when none is declared. */
+export type McpContextOf<T extends QuickdrawTypes> = T extends {
+  readonly mcp: infer Fields extends object;
+}
+  ? Fields
+  : McpContext;
 
 /** How a call reached the dispatcher (RFC 0003 section 10). */
 export type Transport = "socket" | "http" | "mcp" | "internal" | "legacy";

@@ -25,6 +25,8 @@ export type {
   ContextExtensionOf,
   DbOf,
   MaybePromise,
+  McpContext,
+  McpContextOf,
   Principal,
   PrincipalOf,
   QuickdrawTypes,

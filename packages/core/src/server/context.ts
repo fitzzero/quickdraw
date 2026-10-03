@@ -10,6 +10,8 @@ import { QuickdrawError } from "../protocol/errors";
 import type {
   ContextExtensionOf,
   DbOf,
+  McpContext,
+  McpContextOf,
   Principal,
   PrincipalOf,
   QuickdrawTypes,
@@ -36,8 +38,11 @@ export type ContextServices = Readonly<Record<never, never>>;
  */
 export type ContextRooms = Readonly<Record<never, never>>;
 
-/** The fields of `ctx` the framework provides, whatever the app adds. */
-export interface BaseContext<P = Principal> {
+/**
+ * The fields of `ctx` the framework provides, whatever the app adds. `M` is
+ * the type of `ctx.mcp`.
+ */
+export interface BaseContext<P = Principal, M = McpContext> {
   /**
    * Who is calling. `null` only in a `"public"` method called without
    * credentials; every other access form guarantees a principal.
@@ -54,6 +59,12 @@ export interface BaseContext<P = Principal> {
   readonly requestId: string;
   /** How the call arrived. */
   readonly transport: Transport;
+  /**
+   * The fields the MCP bridge's `context` option produced for this call, such
+   * as the scopes of the agent's token; typed by `QuickdrawTypes["mcp"]`.
+   * `undefined` unless the call arrived over MCP.
+   */
+  readonly mcp?: M;
   /**
    * Records writes the tracked database client cannot see: raw SQL and
    * database cascades (RFC 0003 section 5.2). Tracked writes arrive with a
@@ -78,7 +89,7 @@ export type HandlerContext<T extends QuickdrawTypes, P = PrincipalOf<T>> = Omit<
   ContextExtensionOf<T>,
   keyof BaseContext
 > &
-  BaseContext<P>;
+  BaseContext<P, McpContextOf<T>>;
 
 /** What a handler receives: the parsed input, the call's context and the app's database client. */
 export interface HandlerArgs<T extends QuickdrawTypes, Input, P = PrincipalOf<T>> {
@@ -98,7 +109,7 @@ export type ContextExtender = (base: AnyContext) => object;
 /** The per-call fields the dispatcher fills in. */
 export type ContextFields = Pick<
   AnyContext,
-  "principal" | "signal" | "log" | "requestId" | "transport"
+  "principal" | "signal" | "log" | "requestId" | "transport" | "mcp"
 >;
 
 /** A signal that never aborts, for calls that cannot be cancelled. */

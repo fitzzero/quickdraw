@@ -481,6 +481,38 @@ describe("the handler's ctx", () => {
     expect(ctx).toMatchObject({ tenant: "tenant-of-alice", requestId: "real" });
   });
 
+  it("gives ctx.mcp the request's MCP fields, also to the app's context, and leaves it out otherwise", async () => {
+    const app = initQuickdraw<{
+      principal: typeof alice;
+      mcp: { readonly scopes: readonly string[] };
+      context: { writer: boolean };
+    }>({
+      context: (base) => ({ writer: base.mcp?.scopes.includes("write") ?? false }),
+    });
+    const seen: Record<string, unknown>[] = [];
+    const service = app.defineService(task, {
+      methods: {
+        ...taskDefaults,
+        count: {
+          access: custom((check) => check.mcp === undefined || check.mcp.scopes.length > 0),
+          handler: ({ ctx }) => {
+            seen.push({ ...ctx });
+            return 0;
+          },
+        },
+      },
+    });
+    const { call } = setup([service]);
+    const input = { projectId: "p1" };
+    await call({ method: "count", input, transport: "mcp", mcp: { scopes: ["write"] } });
+    await call({ method: "count", input });
+    const refused = await call({ method: "count", input, transport: "mcp", mcp: { scopes: [] } });
+    expect(seen[0]).toMatchObject({ transport: "mcp", mcp: { scopes: ["write"] }, writer: true });
+    expect(seen[1]).toMatchObject({ transport: "socket", writer: false });
+    expect(seen[1]).not.toHaveProperty("mcp");
+    expect(failure(refused).code).toBe("FORBIDDEN");
+  });
+
   it("throws INTERNAL from ctx.touch, ctx.services and ctx.rooms until later cards add them", async () => {
     const attempts: Record<string, () => unknown> = {};
     const service = qd.defineService(task, {

@@ -180,6 +180,26 @@ describe("the method and collection builders", () => {
       Object.isFrozen(watched) && Object.isFrozen(via({ model: "m", entry: "e", scope: "s" })),
     ).toBe(true);
   });
+
+  it("keep a describe text, and leave it out when there is none", () => {
+    const described = query({ input: idInput, output: "entity", describe: "Reads one task." });
+    expect(described).toEqual({
+      kind: "query",
+      input: idInput,
+      output: "entity",
+      describe: "Reads one task.",
+    });
+    expect(mutation({ input: idInput, output: "entity", describe: "Renames a task." })).toEqual({
+      kind: "mutation",
+      input: idInput,
+      output: "entity",
+      describe: "Renames a task.",
+    });
+    expect(mutation({ input: idInput, output: "entity" })).not.toHaveProperty("describe");
+    const contract = define("taskService", { ...entityOnly, methods: { get: described } });
+    expect(contract.methods.get?.describe).toBe("Reads one task.");
+    expect(Object.isFrozen(described)).toBe(true);
+  });
 });
 
 describe("definition-time checks", () => {
@@ -248,6 +268,14 @@ describe("definition-time checks", () => {
     expect(withMethod({ kind: "query", input: idInput, output: "entity", cache: true })).toThrow(
       'method "m" has an unknown option "cache"',
     );
+  });
+
+  it("rejects a describe text that is not a non-empty string", () => {
+    for (const text of ["", 42, ["Reads"]]) {
+      expect(
+        withMethod({ kind: "query", input: idInput, output: "entity", describe: text }),
+      ).toThrow('defineContract("taskService"): method "m": describe must be a non-empty string');
+    }
   });
 
   it("rejects collection names that clash with a method or are reserved", () => {

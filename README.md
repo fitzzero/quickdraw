@@ -84,6 +84,62 @@ socket still receives `auth:info` on connect, and each service, method and
 principal kind that calls through the shim is logged once at `warn`, so the
 remaining 4.x clients can be found.
 
+### MCP bridge
+
+`@fitzzero/quickdraw-core/server/mcp` serves the services to AI agents as MCP
+tools generated from their contracts at startup: one tool per method, named
+`{service}_{method}`, described by the method's `describe` text
+(`query({ input, output, describe: "Reads one task by its id." })`), with the
+input schema's JSON Schema as its arguments and `readOnlyHint` on every query.
+That needs Zod 4.2 or later for the input schemas: a method whose schema cannot
+describe itself as JSON Schema stops the registry at startup, naming the method,
+unless it is excluded. Every tool call goes through the dispatcher with
+transport `"mcp"`, so input validation, access checks and limits apply exactly
+as on a socket.
+
+```typescript
+import {
+  createMcpHttpRouter,
+  createMcpRegistry,
+  createMcpStdioServer,
+} from "@fitzzero/quickdraw-core/server/mcp";
+
+// qd = initQuickdraw<{ db; principal; mcp: { scopes: string[] } }>() types ctx.mcp
+const registry = createMcpRegistry({
+  services: [taskService, projectService],
+  dispatcher: server.dispatcher,
+  // who a stdio session or an HTTP bearer token stands for; nothing = anonymous
+  principal: async (request): Promise<AppPrincipal | null> =>
+    verifyAgentToken(request.transport === "http" ? request.token : process.env.AGENT_TOKEN),
+  context: async (request) => ({ scopes: await scopesOf(request) }), // ctx.mcp in handlers
+  exclude: ["taskService.purge"], // or include: [...]; name: (service, method) => ...
+  customTools: [
+    {
+      name: "summarize",
+      description: "Summarizes the caller's open tasks.",
+      inputSchema: z.object({ projectId: z.string() }), // validated before the handler runs
+      handler: async ({ arguments: args, caller }) => summarize(args, caller), // caller acts as the agent
+    },
+  ],
+});
+
+app.use(createMcpHttpRouter({ registry })); // GET /mcp/tools, POST /mcp/invoke
+createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" }); // in an MCP client's process
+```
+
+- **stdio** speaks the JSON-RPC wire format 4.1 did (protocol version
+  2024-11-05). One process is one session: its queries share one concurrency
+  lane, and `notifications/cancelled` cancels a call. Start its module through
+  `bootstrapMcpServer(new URL("./mcp-server.js", import.meta.url))`, which
+  sends console output to stderr so only the protocol reaches stdout.
+- **HTTP** keeps 4.1's routes: `POST /mcp/invoke` takes `{ name, arguments }`
+  or 4.1's `{ service, method, payload }` and answers `{ success: true, data }`,
+  or `{ success: false, error, code, data? }` with the code's HTTP status.
+- A failed call reaches the agent as a tool error carrying the code
+  (`FORBIDDEN`, `VALIDATION` with the issues, and so on). Changed from 4.1:
+  tools are per method rather than per service, the agent can no longer pick
+  its user with a `userId` argument, and `generateToolMetadata` is gone.
+
 ### Testing
 
 `@fitzzero/quickdraw-core/testing` boots the real server on a free port:

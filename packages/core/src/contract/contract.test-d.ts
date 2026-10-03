@@ -502,6 +502,34 @@ describe("methods that fail to compile", () => {
     // @ts-expect-error -- a plain object is not a schema
     query({ input: { id: "string" }, output: "entity" });
   });
+
+  test("a describe text that is not a string", () => {
+    const described = query({ input: idInput, output: "entity", describe: "Reads one task." });
+    expectTypeOf(described.describe).toEqualTypeOf<string | undefined>();
+    expectTypeOf(mutation({ input: idInput, output: "entity" }).describe).toEqualTypeOf<
+      string | undefined
+    >();
+    const contract = defineContract("described", {
+      entity: taskSchema,
+      methods: {
+        get: described,
+        rename: mutation({ input: renameSchema, output: "entity", describe: "Renames a task." }),
+      },
+    });
+    expectTypeOf(contract.methods.get.describe).toEqualTypeOf<string | undefined>();
+    query({
+      input: idInput,
+      output: "entity",
+      // @ts-expect-error -- describe is text for people and agents
+      describe: 42,
+    });
+    mutation({
+      input: idInput,
+      output: "entity",
+      // @ts-expect-error -- and so is a mutation's
+      describe: ["Renames"],
+    });
+  });
 });
 
 describe("collections that fail to compile", () => {
