@@ -10,7 +10,14 @@ import type {
 } from "@tanstack/react-query";
 import { describe, expectTypeOf, test } from "vitest";
 import { z } from "zod";
-import { defineContract, mutation, type QuickdrawError } from "../index";
+import {
+  defineContract,
+  mutation,
+  type EntityOf,
+  type ItemOf,
+  type QuickdrawError,
+} from "../index";
+import { taskContract as indexedTasks } from "../server/collections/__tests__/fixture";
 import { task, type TaskRow } from "../server/__tests__/fixtures";
 import {
   createInvalidationCoordinator,
@@ -22,6 +29,7 @@ import {
   type MethodQueryKey,
   type OverlayStore,
   type QuickdrawProviderProps,
+  type UseEntityResult,
 } from "./index";
 import { counter } from "./__tests__/fixtures";
 import { taskContract as board } from "./__tests__/live";
@@ -202,6 +210,48 @@ describe("optimistic mutations", () => {
     type Rename = ReturnType<typeof useRename>;
     expectTypeOf<Rename["mutate"]>().returns.toBeVoid();
     expectTypeOf<Rename["mutateAsync"]>().returns.toEqualTypeOf<Promise<TaskRow>>();
+  });
+});
+
+describe("live members", () => {
+  const live = createQuickdrawClient({ task: indexedTasks });
+  type Entity = EntityOf<typeof indexedTasks>;
+  type Tile = ItemOf<typeof indexedTasks, "board">;
+
+  test("useEntity and useEntities are typed by the contract's entity", () => {
+    const useOne = () => live.task.useEntity("t1");
+    expectTypeOf<ReturnType<typeof useOne>>().toEqualTypeOf<UseEntityResult<Entity>>();
+    expectTypeOf<ReturnType<typeof useOne>["data"]>().toEqualTypeOf<Entity | undefined>();
+    const useMany = () => live.task.useEntities(["t1", "t2"], { enabled: false });
+    expectTypeOf<ReturnType<typeof useMany>["data"]>().toEqualTypeOf<
+      readonly (Entity | undefined)[]
+    >();
+    expectTypeOf(live.task.useEntity).toBeCallableWith(null);
+    // @ts-expect-error an id is a string
+    void (() => live.task.useEntity(1));
+  });
+
+  test("useCollection is typed by the scope, the item, the index fields and the views", () => {
+    const useBoard = () => live.task.board.useCollection("p1", { view: "mine", load: "all" });
+    type Board = ReturnType<typeof useBoard>;
+    expectTypeOf<Board["items"]>().toEqualTypeOf<readonly Tile[]>();
+    expectTypeOf<Board["index"]>().toEqualTypeOf<
+      readonly Pick<Tile, "id" | "status" | "ordinal" | "assigneeId">[] | undefined
+    >();
+    expectTypeOf<Board["byId"]>().toEqualTypeOf<ReadonlyMap<string, Tile>>();
+    expectTypeOf<Board["loadItems"]>().toEqualTypeOf<(ids: readonly string[]) => Promise<void>>();
+    // @ts-expect-error not a view of the board
+    void (() => live.task.board.useCollection("p1", { view: "theirs" }));
+    // @ts-expect-error byProject declares no views
+    void (() => live.task.byProject.useCollection("p1", { view: "mine" }));
+    // @ts-expect-error only "all" may be asked for
+    void (() => live.task.board.useCollection("p1", { load: "some" }));
+    expectTypeOf(live.task.board.useCollection).toBeCallableWith(null);
+  });
+
+  test("a contract without an entity has no entity members", () => {
+    // @ts-expect-error the counter has no entity
+    void qd.counter.useEntity;
   });
 });
 

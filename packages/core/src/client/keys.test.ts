@@ -1,9 +1,16 @@
-// Method query keys (RFC 0003 section 11.5) and their prefixes, as TanStack
-// Query matches them.
+// Query keys (RFC 0003 section 11.5), of method calls, live entities and live
+// collection scopes, and their prefixes, as TanStack Query matches them.
 
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import { KEY_ROOT, methodKey, methodKeyPrefix, serviceKeyPrefix } from "./keys";
+import {
+  KEY_ROOT,
+  collectionKey,
+  entityKey,
+  methodKey,
+  methodKeyPrefix,
+  serviceKeyPrefix,
+} from "./keys";
 
 describe("method keys", () => {
   it("are [qd, service, m, method, input], holding the input itself", () => {
@@ -38,5 +45,25 @@ describe("method keys", () => {
     expect(matching(methodKeyPrefix("taskService", "get"))).toBe(2);
     expect(matching(serviceKeyPrefix("taskService"))).toBe(3);
     expect(matching([KEY_ROOT])).toBe(4);
+  });
+});
+
+describe("live keys", () => {
+  it("are [qd, service, e, id] and [qd, service, c, collection, scope], under the service's prefix", () => {
+    expect(entityKey("taskService", "t1")).toEqual(["qd", "taskService", "e", "t1"]);
+    expect(collectionKey("taskService", "byProject", "p1")).toEqual([
+      "qd",
+      "taskService",
+      "c",
+      "byProject",
+      "p1",
+    ]);
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(entityKey("taskService", "t1"), "row");
+    queryClient.setQueryData(collectionKey("taskService", "byProject", "p1"), "scope");
+    queryClient.setQueryData(methodKey("taskService", "get", { id: "t1" }), "result");
+    expect(
+      queryClient.getQueryCache().findAll({ queryKey: serviceKeyPrefix("taskService") }),
+    ).toHaveLength(3);
   });
 });

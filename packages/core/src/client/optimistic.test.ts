@@ -144,6 +144,30 @@ describe("a finished call", () => {
     overlays.observe("taskService", "t1", 1);
     expect(overlays.applyOverlay("taskService", row)).toBe(row);
   });
+
+  it("finishes when the reply arrives, so a frame handled before the call's promise settles still ends it", async () => {
+    const client = new QueryClient();
+    const overlays = overlaysOf(client);
+    overlays.observe("taskService", "t1", 5);
+    const reply = deferred<unknown>();
+    const done = mutateOptimistically(
+      client,
+      task,
+      undefined,
+      { id: "t1", title: "New" },
+      (replied) => {
+        // The reply arrives, and in the same task the flush's frame after it.
+        queueMicrotask(() => {
+          replied({ ...row, title: "New" });
+          overlays.observe("taskService", "t1", 6);
+          reply.resolve({ ...row, title: "New" });
+        });
+        return reply.promise;
+      },
+    );
+    await done;
+    expect(overlays.applyOverlay("taskService", row)).toBe(row);
+  });
 });
 
 describe("a custom optimistic update", () => {

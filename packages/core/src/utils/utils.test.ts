@@ -35,7 +35,9 @@ describe("./utils", () => {
       [
         "KEY_ROOT",
         "buildBreadcrumbs",
+        "collectionKey",
         "createServerCaller",
+        "entityKey",
         "findNavItemByHref",
         "findParentNavItem",
         "formatCurrency",

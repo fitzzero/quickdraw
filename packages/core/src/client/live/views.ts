@@ -23,13 +23,23 @@ import { loadedIds, type CollectionItem, type CollectionState } from "./collecti
 /** A view's predicate, as the client runs it. */
 export type RowPredicate = (row: Readonly<Record<string, unknown>>, who: Viewer) => boolean;
 
-/** The predicate of view `name` of a collection; `undefined` for no view or a name it does not declare. */
+/** A view the collection does not declare selects nothing, rather than everything. */
+const NO_MEMBERS: RowPredicate = () => false;
+
+/**
+ * The predicate of view `name` of a collection: `undefined` for no view, and
+ * one that selects nothing for a name the collection does not declare (the
+ * client's types refuse such a name; a caller without them gets no rows).
+ */
 export function viewPredicate(
   def: Pick<CollectionDef, "views">,
   name: string | undefined,
 ): RowPredicate | undefined {
-  if (name === undefined || def.views === undefined || !Object.hasOwn(def.views, name)) {
+  if (name === undefined) {
     return undefined;
+  }
+  if (def.views === undefined || !Object.hasOwn(def.views, name)) {
+    return NO_MEMBERS;
   }
   return def.views[name] as ViewPredicate<unknown> as RowPredicate;
 }
