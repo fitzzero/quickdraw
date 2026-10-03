@@ -2,8 +2,11 @@ import { defineConfig } from "vitest/config";
 
 // Three projects: `.test.ts` runs under node, `.test.tsx` (React hooks and
 // components) under jsdom, and `.test-d.ts` (type tests) is type-checked, never
-// run. Only `src/` is collected; `legacy-src/` (the 4.1 reference tree) and its
-// tests are never run.
+// run. Tests are collected from `src/` and from `test/` (the end-to-end suite
+// in `test/e2e/`, which renders the real client hooks against a real server
+// in the test process; jsdom needs no setting for that: the server listens on
+// a Node socket, and the client connects over jsdom's WebSocket).
+// `legacy-src/` (the 4.1 reference tree) and its tests are never run.
 export default defineConfig({
   test: {
     // Kept from 4.1: @testing-library/react registers its automatic cleanup
@@ -21,7 +24,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: "node",
-          include: ["src/**/*.test.ts"],
+          include: ["src/**/*.test.ts", "test/**/*.test.ts"],
           environment: "node",
         },
       },
@@ -29,7 +32,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: "dom",
-          include: ["src/**/*.test.tsx"],
+          include: ["src/**/*.test.tsx", "test/**/*.test.tsx"],
           environment: "jsdom",
         },
       },
