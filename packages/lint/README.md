@@ -55,9 +55,11 @@ correct code; each rule's file says what it leaves alone.
 | `no-manual-refetch`                                                            | a quickdraw query's `refetch()` right after (or in the callbacks of) a quickdraw mutation, and `invalidateQueries`/`refetchQueries`/`resetQueries` on a quickdraw key            | client code            |
 | `no-raw-socket`                                                                | `socket.emit`, `socket.on`, `socket.off` and the other raw Socket.IO calls                                                                                                       | client code            |
 | `no-v4-api`                                                                    | every 4.x API 5.0 removed or moved; each message names the replacement                                                                                                           | everywhere             |
+| `no-unused-baseline`                                                           | an allowance in the baseline file that no violation uses any more (below)                                                                                                        | baselined files        |
 | `no-raw-button-strings`, `no-raw-tooltip-strings`, `no-raw-typography-strings` | raw strings in MUI `Button`, `Typography` and `Tooltip` titles (`oxlint.template.jsonc`)                                                                                         | `*.tsx`, `*.jsx`       |
 
-The base config turns on all but the last three, at `error`.
+The base config turns on all but the last three, at `error`, except
+`no-unused-baseline`, which warns.
 
 ### Which files a rule checks
 
@@ -111,24 +113,36 @@ bunx quickdraw-lint baseline            # writes .quickdraw-lint-baseline.json
 ```
 
 `quickdraw-lint baseline` runs oxlint with your config (`-c` to pick one;
-paths after the options, the current directory by default) and records how
-many times each quickdraw rule reports in each file. A rule given the file
-reports nothing in a file until the file holds more violations than recorded,
-and then only the ones beyond the count (the last ones in the file). Commit
-the file; run the command again after fixing old violations so the counts go
-down. A single rule takes the file as an option instead of the setting:
+paths after the options, the current directory by default) and records a
+fingerprint for every quickdraw violation: the rule, the file, and a hash of
+the violating line's trimmed text. A rule given the file reports a violation
+only when its fingerprint is not recorded, or occurs more often than
+recorded. So fixing an old violation and adding a new one in the same file
+reports the new one, at its line, while edits elsewhere in the file (which
+move lines without changing them) disturb nothing. A violation that a disable
+comment covers is not recorded and uses no allowance. Commit the file.
+
+When a recorded violation is fixed, its allowance is left unused, and
+`no-unused-baseline` warns at the top of the file; run the command again so
+the file shrinks and nothing new can take the allowance's place. A single
+rule takes the file as an option instead of the setting:
 `["error", { "baseline": ".quickdraw-lint-baseline.json" }]`. A relative path
 is looked up from each linted file's directory upwards, so one file at the
 repository root also serves lint runs started from package directories.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "files": {
-    "apps/api/src/services/task.ts": { "no-unbounded-read": 2 }
+    "apps/api/src/services/task.ts": {
+      "no-unbounded-read": { "5d41402abc4b2a76": 1, "7d793037a0760186": 2 }
+    }
   }
 }
 ```
+
+A version 1 file (counts per file, from an earlier 5.0 prerelease) is
+refused with a message saying to write it again with the command.
 
 ## From the 4.1 rules
 

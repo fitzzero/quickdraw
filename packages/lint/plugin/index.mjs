@@ -1,9 +1,10 @@
 // The quickdraw oxlint plugin (RFC 0003 section 14). Every rule is syntactic
-// and takes a `baseline` option (see `baseline.mjs`). `oxlint.base.jsonc`
-// turns on the rules about the 5.0 API; `oxlint.template.jsonc` adds the
-// design-system rules for apps built from the quickdraw template.
+// and takes a `baseline` option (see `baseline.mjs`), except
+// `no-unused-baseline`, which reports the baseline's unused allowances.
+// `oxlint.base.jsonc` turns on the rules about the 5.0 API; `oxlint.template.jsonc`
+// adds the design-system rules for apps built from the quickdraw template.
 
-import { withBaseline } from "./baseline.mjs";
+import { UNUSED_RULE, withBaseline } from "./baseline.mjs";
 import noAwaitVoidMutate from "./rules/no-await-void-mutate.mjs";
 import noCrossServiceInternalImports from "./rules/no-cross-service-internal-imports.mjs";
 import noDbCallInLoop from "./rules/no-db-call-in-loop.mjs";
@@ -23,6 +24,7 @@ import noRawTypographyStrings from "./rules/no-raw-typography-strings.mjs";
 import noUnboundedRead from "./rules/no-unbounded-read.mjs";
 import noUntrackedWrite from "./rules/no-untracked-write.mjs";
 import noUntypedClient from "./rules/no-untyped-client.mjs";
+import noUnusedBaseline from "./rules/no-unused-baseline.mjs";
 import noV4Api from "./rules/no-v4-api.mjs";
 
 const rules = {
@@ -58,7 +60,8 @@ const rules = {
 /** @type {import('eslint').ESLint.Plugin} */
 export default {
   meta: { name: "quickdraw" },
-  rules: Object.fromEntries(
-    Object.entries(rules).map(([name, rule]) => [name, withBaseline(rule)]),
-  ),
+  rules: {
+    ...Object.fromEntries(Object.entries(rules).map(([name, rule]) => [name, withBaseline(rule)])),
+    [UNUSED_RULE]: noUnusedBaseline,
+  },
 };

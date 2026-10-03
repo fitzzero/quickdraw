@@ -77,7 +77,9 @@
     // Every rule takes `baseline` (or, for all of them at once,
     // `"settings": { "quickdraw": { "baseline": ".quickdraw-lint-baseline.json" } }`
     // in your own config): run `quickdraw-lint baseline` to adopt the rules
-    // without fixing existing violations first.
+    // without fixing existing violations first. `no-unused-baseline` warns
+    // when the file allows a violation that no longer occurs, so it shrinks.
+    "quickdraw/no-unused-baseline": "warn",
 
     // Writes subscribers can see (RFC 0003 section 5).
     "quickdraw/no-untracked-write": "error",

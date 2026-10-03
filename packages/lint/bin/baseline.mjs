@@ -1,26 +1,35 @@
 // `quickdraw-lint baseline`: runs oxlint with the app's own config and
-// records how many times each quickdraw rule reports in each file, in
+// records the fingerprint of every quickdraw violation it reports (the rule,
+// the file and a hash of the violating line's trimmed text), in
 // `.quickdraw-lint-baseline.json` (format in `../plugin/baseline.mjs`). Rules
 // given that file through their `baseline` option, or all of them through
-// `settings.quickdraw.baseline`, then report only what goes beyond the
-// counts. Run it again after fixing old violations so the counts go down.
+// `settings.quickdraw.baseline`, then report only violations it does not
+// record. Run it again when `no-unused-baseline` warns, so the file shrinks.
 //
 // oxlint runs with QUICKDRAW_LINT_BASELINE=ignore, so the baseline being
-// replaced hides nothing from the new one.
+// replaced hides nothing from the new one. oxlint has already dropped the
+// reports disable directives cover, and the rules skip them the same way.
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { BASELINE_ENV, BASELINE_FILE, BASELINE_VERSION } from "../plugin/baseline.mjs";
+import {
+  BASELINE_ENV,
+  BASELINE_FILE,
+  BASELINE_VERSION,
+  UNUSED_RULE,
+  fingerprint,
+  sourceLines,
+} from "../plugin/baseline.mjs";
 
 export const USAGE = `Usage: quickdraw-lint baseline [options] [paths...]
 
-Runs oxlint over the paths (default: the current directory) and writes how
-many times each quickdraw rule reports in each file. Rules given the file
-(the "baseline" option, or settings.quickdraw.baseline) then report only new
-violations.
+Runs oxlint over the paths (default: the current directory) and records a
+fingerprint for each quickdraw violation (rule, file, and a hash of the
+line's text). Rules given the file (the "baseline" option, or
+settings.quickdraw.baseline) then report only violations it does not record.
 
 Options:
   -c, --config <file>   oxlint config to use (default: oxlint's own lookup)
@@ -92,25 +101,47 @@ function sortedObject(entries) {
   return Object.fromEntries([...entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 }
 
+/** `map.get(key)`, set to `create()` first when missing. */
+function entry(map, key, create) {
+  if (!map.has(key)) {
+    map.set(key, create());
+  }
+  return map.get(key);
+}
+
 /**
- * Counts the `plugin` rules' diagnostics in an oxlint JSON report, per file
- * (relative to `directory`, with forward slashes) and rule.
+ * The fingerprints of the `plugin` rules' diagnostics in an oxlint JSON
+ * report, per file (relative to `directory`, with forward slashes) and rule,
+ * each with how many times it occurs. A diagnostic's line comes from the
+ * report; the rules number lines the same way (see `sourceLines`).
  */
-export function countViolations(report, { cwd, directory, plugin = "quickdraw" }) {
+export function collectFingerprints(report, { cwd, directory, plugin = "quickdraw" }) {
   const prefix = `${plugin}(`;
-  const counts = new Map();
+  const files = new Map();
+  const sources = new Map();
   for (const diagnostic of report.diagnostics ?? []) {
     const { code, filename } = diagnostic;
     if (typeof code !== "string" || !code.startsWith(prefix) || !code.endsWith(")")) {
       continue;
     }
     const rule = code.slice(prefix.length, -1);
-    const file = path.relative(directory, path.resolve(cwd, filename)).split(path.sep).join("/");
-    const rules = counts.get(file) ?? new Map();
-    rules.set(rule, (rules.get(rule) ?? 0) + 1);
-    counts.set(file, rules);
+    if (rule === UNUSED_RULE) {
+      continue;
+    }
+    const absolute = path.resolve(cwd, filename);
+    const lines = entry(sources, absolute, () => sourceLines(fs.readFileSync(absolute, "utf8")));
+    const print = fingerprint(lines.text(diagnostic.labels?.[0]?.span?.line ?? 1));
+    const file = path.relative(directory, absolute).split(path.sep).join("/");
+    const rules = entry(files, file, () => new Map());
+    const prints = entry(rules, rule, () => new Map());
+    prints.set(print, (prints.get(print) ?? 0) + 1);
   }
-  return sortedObject([...counts].map(([file, rules]) => [file, sortedObject(rules)]));
+  return sortedObject(
+    [...files].map(([file, rules]) => [
+      file,
+      sortedObject([...rules].map(([rule, prints]) => [rule, sortedObject(prints)])),
+    ]),
+  );
 }
 
 /**
@@ -127,10 +158,11 @@ export function writeBaseline({
 }) {
   const file = path.resolve(cwd, output);
   const report = runOxlint({ cwd, config, paths, oxlint });
-  const files = countViolations(report, { cwd, directory: path.dirname(file), plugin });
+  const files = collectFingerprints(report, { cwd, directory: path.dirname(file), plugin });
   fs.writeFileSync(file, `${JSON.stringify({ version: BASELINE_VERSION, files }, null, 2)}\n`);
   const violations = Object.values(files)
     .flatMap((rules) => Object.values(rules))
+    .flatMap((prints) => Object.values(prints))
     .reduce((sum, count) => sum + count, 0);
   return { file, violations, files: Object.keys(files).length };
 }
