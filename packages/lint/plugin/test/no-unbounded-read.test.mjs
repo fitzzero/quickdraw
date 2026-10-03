@@ -25,6 +25,15 @@ run("no-unbounded-read", {
       code: `db.task.findMany({ where: { id: { in: input.ids } }, select: { id: true, title: true } });`,
     },
     {
+      name: "ids named by equality, equals, or a filter built elsewhere",
+      filename: SERVICE,
+      code: `
+        db.task.findMany({ where: { id: input.id } });
+        db.task.findMany({ where: { id: { equals: input.id } } });
+        db.task.findMany({ where: { id: idFilter } });
+      `,
+    },
+    {
       name: "arguments built elsewhere or spread may carry take",
       filename: SERVICE,
       code: `
@@ -44,6 +53,23 @@ run("no-unbounded-read", {
     },
   ],
   invalid: [
+    {
+      // The review's bad5 case.
+      name: "an id filter that leaves every other row: not, notIn, a comparison",
+      filename: SERVICE,
+      code: `
+        export const others = ({ input, db }) => db.task.findMany({ where: { id: { not: input.id } } });
+        export const after = ({ input, db }) => db.task.findMany({ where: { id: { gt: input.cursor } }, orderBy: { id: "asc" } });
+        export const allBut = ({ input, db }) => db.task.findMany({ where: { id: { notIn: input.hidden } } });
+        export const byProject = ({ input, db }) => db.task.findMany({ where: { projectId: input.projectId } });
+      `,
+      errors: [
+        { messageId: "unbounded", line: 2 },
+        { messageId: "unbounded", line: 3 },
+        { messageId: "unbounded", line: 4 },
+        { messageId: "unbounded", line: 5 },
+      ],
+    },
     {
       name: "no arguments at all",
       filename: SERVICE,

@@ -98,7 +98,7 @@ describe("statement checks", () => {
     expect(unit.raised.map((warning) => warning.kind)).toEqual(["n-plus-one"]);
   });
 
-  it("know an unbounded read: findMany with neither take nor a filter on id", () => {
+  it("know an unbounded read: findMany with neither take nor ids to read", () => {
     const read = (args: Statement["args"]): Statement => ({
       model: "task",
       operation: "findMany",
@@ -108,6 +108,12 @@ describe("statement checks", () => {
     expect(isUnboundedRead(read({ where: { projectId: "p" } }))).toBe(true);
     expect(isUnboundedRead(read({ where: { projectId: "p" }, take: 20 }))).toBe(false);
     expect(isUnboundedRead(read({ where: { id: { in: ["a", "b"] } } }))).toBe(false);
+    expect(isUnboundedRead(read({ where: { id: "a" } }))).toBe(false);
+    expect(isUnboundedRead(read({ where: { id: { equals: "a" } } }))).toBe(false);
+    // The review's bad5 case: these leave every other row.
+    expect(isUnboundedRead(read({ where: { id: { not: "a" } } }))).toBe(true);
+    expect(isUnboundedRead(read({ where: { id: { notIn: ["a"] } } }))).toBe(true);
+    expect(isUnboundedRead(read({ where: { id: { gt: "a" } } }))).toBe(true);
     expect(isUnboundedRead({ model: "task", operation: "findFirst", args: {} })).toBe(false);
     const { check, raised } = checks();
     check(read({ where: { projectId: "p" } }), "batch");

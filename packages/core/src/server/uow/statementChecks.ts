@@ -47,10 +47,25 @@ function whereKeys(statement: Statement): string[] {
 }
 
 /**
+ * Whether an `id` filter names the rows it reads: a value (equality), or
+ * `{ in }` or `{ equals }`. `{ not }`, `{ notIn }` and comparisons leave
+ * every other row.
+ */
+function namesIds(filter: unknown): boolean {
+  if (filter === undefined) {
+    return false;
+  }
+  if (!isRecord(filter)) {
+    return true;
+  }
+  return filter.in !== undefined || filter.equals !== undefined;
+}
+
+/**
  * A `findMany` that can return every row of its table: no `take`, and no
- * filter on `id` (a read by id is bounded by the ids it names). The same
- * test as the lint rule `no-unbounded-read`, made on the arguments the
- * statement actually ran with.
+ * `id` filter that names its rows (a read by ids is bounded by the ids it
+ * names). The same test as the lint rule `no-unbounded-read`, made on the
+ * arguments the statement actually ran with.
  */
 export function isUnboundedRead(statement: Statement): boolean {
   if (statement.operation !== "findMany") {
@@ -60,7 +75,7 @@ export function isUnboundedRead(statement: Statement): boolean {
   if (take !== undefined && take !== null) {
     return false;
   }
-  return !(isRecord(where) && where.id !== undefined);
+  return !(isRecord(where) && namesIds(where.id));
 }
 
 /**

@@ -9,7 +9,8 @@
 // |----------------------|--------------------------------------------------------------------|--------------------------|
 // | `n-plus-one`         | a call ran 10 statements of one shape (model, operation, `where`   | none                     |
 // |                      | keys), outside an array-form `$transaction`                         |                          |
-// | `unbounded-read`     | a call ran `findMany` with neither `take` nor a filter on `id`      | none                     |
+// | `unbounded-read`     | a call ran `findMany` with neither `take` nor ids to read (`id`,    | none                     |
+// |                      | `{ in }`, `{ equals }`)                                            |                          |
 // | `oversized-response` | a reply was larger than `maxResponseBytes`                         | none                     |
 // | `nested-write`       | a write's `data` wrote a related row, which is not tracked         | model, field, operation  |
 // | `ambient-write`      | a tracked write ran outside any unit of work                       | model                    |

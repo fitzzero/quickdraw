@@ -1,12 +1,27 @@
 // A `findMany` without `take` in a service reads every matching row, and the
 // table only grows (RFC 0003 section 14). Not reported: a read whose
 // arguments are not written out literally or spread another object (its
-// `take` may come from there), and a read filtered by `id`, which is bounded
-// by the ids it names.
+// `take` may come from there), and a read that names its ids: `id` equal to
+// a value, `{ in: ids }` or `{ equals: id }`. `{ not }`, `{ notIn }` and the
+// comparisons (`gt`, `lt`, ...) leave every other row, so they do not bound
+// it.
 
 import { FILE_OPTIONS, SERVICE_FILES, TEST_FILES, inScope } from "../lib/files.mjs";
 import { getProperty, hasSpread, unwrap } from "../lib/ast.mjs";
 import { ALL_CLIENTS, CLIENTS_OPTION, modelCall } from "../lib/prisma.mjs";
+
+/**
+ * Whether an `id` filter names the rows it reads: a value (equality), or a
+ * filter object with `in` or `equals`. A filter object built elsewhere
+ * cannot be judged, so it counts as naming them.
+ */
+function namesIds(value) {
+  const filter = unwrap(value);
+  if (filter.type !== "ObjectExpression" || hasSpread(filter)) {
+    return true;
+  }
+  return getProperty(filter, "in") !== undefined || getProperty(filter, "equals") !== undefined;
+}
 
 /** Whether `findMany`'s argument bounds the read or cannot be judged. */
 function isBounded(argument) {
@@ -19,7 +34,8 @@ function isBounded(argument) {
   }
   const where = getProperty(options, "where");
   const filter = where === undefined ? undefined : unwrap(where.value);
-  return filter?.type === "ObjectExpression" && getProperty(filter, "id") !== undefined;
+  const id = filter?.type === "ObjectExpression" ? getProperty(filter, "id") : undefined;
+  return id !== undefined && namesIds(id.value);
 }
 
 /** @type {import('eslint').Rule.RuleModule} */

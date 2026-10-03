@@ -1944,7 +1944,7 @@ one format and names the method call it happened in:
 | Kind                 | Raised when                                                                                          |
 | -------------------- | ---------------------------------------------------------------------------------------------------- |
 | `n-plus-one`         | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])` |
-| `unbounded-read`     | a call ran `findMany` with neither `take` nor a filter on `id`                                       |
+| `unbounded-read`     | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)           |
 | `oversized-response` | a reply was larger than `maxResponseBytes` (default 1 MiB)                                           |
 | `nested-write`       | a write's `data` wrote a related row, which is not tracked                                           |
 | `ambient-write`      | a tracked write ran outside any unit of work                                                         |
