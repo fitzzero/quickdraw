@@ -29,7 +29,12 @@ import type { StorageAdapter } from "../storage";
 import { createAccessApi, type PolicyEngine } from "./api";
 import { bindPolicies } from "./bindings";
 import { createAccessCache } from "./cache";
-import { createChangeSink, type AccessChangeListener } from "./changes";
+import {
+  createChangeSink,
+  forgetAccess,
+  type AccessChangeListener,
+  type Forgotten,
+} from "./changes";
 import { createRowAccess } from "./rowAccess";
 
 /** The access options of a dispatcher: its `access` option, when it is not an engine. */
@@ -91,5 +96,6 @@ export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
     },
     rows: createRowAccess(state),
     sink: createChangeSink(bindings, state.cache, listeners, options.logger),
+    forget: (forgotten: Forgotten) => forgetAccess(bindings, state.cache, forgotten),
   });
 }

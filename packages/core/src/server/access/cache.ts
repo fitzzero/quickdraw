@@ -103,8 +103,9 @@ export interface AccessCache {
   set(ns: Namespace, scope: string, id: string, value: unknown): void;
   /**
    * Drops kept values: one (`scope` and `id`), the row's in every scope
-   * (`id` only), or the whole namespace (neither). Every eviction moves the
-   * namespace to its next generation.
+   * (`id` only), a scope's (`scope` only: a user's levels), or the whole
+   * namespace (neither). Every eviction moves the namespace to its next
+   * generation.
    */
   evict(ns: Namespace, scope?: string, id?: string): void;
   /** Changes on every eviction in `ns`; a lookup that saw it change while running is not kept. */
@@ -114,6 +115,17 @@ export interface AccessCache {
 }
 
 const DEFAULT_MAX_ENTRIES = 100_000;
+
+/** Drops one scope's values, or every scope's without `scope`; returns how many values went. */
+function dropScopes(scopes: Scoped<Entry>, scope: string | undefined): number {
+  const names = scope === undefined ? [...scopes.keys()] : [scope];
+  let dropped = 0;
+  for (const name of names) {
+    dropped += scopes.get(name)?.size ?? 0;
+    scopes.delete(name);
+  }
+  return dropped;
+}
 
 /** Creates the cross-request cache. */
 export function createAccessCache(options: AccessCacheOptions): AccessCache {
@@ -184,10 +196,10 @@ export function createAccessCache(options: AccessCacheOptions): AccessCache {
         evictRow(scopes, scope, id);
         return;
       }
-      for (const ids of scopes.values()) {
-        size -= ids.size;
+      size -= dropScopes(scopes, scope);
+      if (scopes.size === 0) {
+        store.delete(ns);
       }
-      store.delete(ns);
     },
     generation: (ns) => generations.get(ns) ?? 0,
     get size() {

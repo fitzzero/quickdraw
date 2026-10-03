@@ -205,6 +205,42 @@ async function notify(
   await Promise.all(running);
 }
 
+/** What {@link forgetAccess} evicts: an access change, or a user whose grants were reloaded. */
+export interface Forgotten {
+  readonly service?: string;
+  readonly id?: string;
+  readonly userId?: string;
+}
+
+/**
+ * Evicts from this process's cache what an access change names, for a
+ * change this process did not flush (another node broadcast it), or a user
+ * whose grants were reloaded: the revocation that follows must read afresh.
+ * `{ service, id }` drops the row's columns and every member's level on it,
+ * with `userId` that member's level only; `{ service }` drops everything the
+ * service's policy kept; `{ userId }` alone drops that user's levels in every
+ * membership table.
+ */
+export function forgetAccess(
+  bindings: ReadonlyMap<string, Binding>,
+  cache: AccessCache | undefined,
+  forgotten: Forgotten,
+): void {
+  const { service, id, userId } = forgotten;
+  const binding = service === undefined ? undefined : bindings.get(service);
+  if (cache === undefined || (service !== undefined && binding === undefined)) {
+    return;
+  }
+  for (const each of binding === undefined ? bindings.values() : [binding]) {
+    if (service !== undefined) {
+      cache.evict(each.rows, id === undefined ? undefined : "", id);
+    }
+    for (const ns of each.memberships.values()) {
+      cache.evict(ns, service !== undefined && id === undefined ? undefined : userId, id);
+    }
+  }
+}
+
 /**
  * The flush sink that evicts cached lookups and reports access changes, or
  * `undefined` when no served service has a policy.

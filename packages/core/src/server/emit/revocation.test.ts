@@ -55,6 +55,8 @@ interface StartOptions {
   /** Refresh a user's grants when their stored grants are written. */
   readonly grantsColumn?: boolean;
   readonly rateLimit?: { readonly maxRequests: number };
+  /** Keep policy lookups across requests this long. */
+  readonly cacheMs?: number;
 }
 
 async function start(options: StartOptions = {}) {
@@ -63,6 +65,7 @@ async function start(options: StartOptions = {}) {
     services: [projectService, defineTaskService(), cardService],
     db: h.db,
     storage: recorded.storage,
+    ...(options.cacheMs === undefined ? {} : { access: { cacheMs: options.cacheMs } }),
     ...(options.adapter === undefined ? {} : { socket: { adapter: options.adapter } }),
     ...(options.loadServiceAccess === undefined
       ? {}
@@ -505,6 +508,29 @@ describe("behind a cluster adapter", () => {
       .poll(() => member.frames.revoked)
       .toEqual([{ kind: "entity", reason: "access", s: "taskService", id: board.t1 }]);
     expect(roomsOf(holder.app, "taskService", board.t1)).toEqual([]);
+  });
+
+  it("revokes on every node with cacheMs: a node forgets what another node's change names first", async () => {
+    const cluster = peeredCluster();
+    const writer = await start({ adapter: cluster.adapter, cacheMs: 60_000 });
+    const holder = await start({ adapter: cluster.adapter, cacheMs: 60_000 });
+    cluster.servers.push(writer.app.server.io, holder.app.server.io);
+    const member = await connect(holder.app, as(board.bo));
+    // The subscribe and this call leave the member's level in the holder's cache.
+    await sub(member.connection, "taskService", [board.t1]);
+    await expect(
+      holder.app.as(as(board.bo)).taskService.get({ id: board.t1 }),
+    ).resolves.toMatchObject({ id: board.t1 });
+    await writer.app
+      .as(as(board.ada))
+      .projectService.removeMember({ projectId: board.p1, userId: board.bo });
+    await expect
+      .poll(() => member.frames.revoked)
+      .toEqual([{ kind: "entity", reason: "access", s: "taskService", id: board.t1 }]);
+    expect(roomsOf(holder.app, "taskService", board.t1)).toEqual([]);
+    await expect(
+      holder.app.as(as(board.bo)).taskService.get({ id: board.t1 }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("revokes on every node when a row is created again: another node's log cannot tell it exists", async () => {

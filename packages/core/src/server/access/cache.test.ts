@@ -10,8 +10,10 @@ import { defineContract, mutation } from "../../index";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { captureLogger, deferred } from "../__tests__/fixtures";
 import type { AccessChange, AccessOptions, Dispatcher } from "../index";
+import { createRegistry } from "../registry";
 import { as, projectService, qd, seedBoard, taskService, type Board } from "./__tests__/board";
 import { createAccessCache, createRequestMemo, lookup, namespace } from "./cache";
+import { createPolicyEngine } from "./engine";
 
 describe("the cache store", () => {
   it("keeps values per namespace, scope and row until they expire", () => {
@@ -57,6 +59,14 @@ describe("the cache store", () => {
     expect(cache.size).toBe(1);
     expect(cache.get(other, "", "p1")).toEqual({ value: "Admin" });
     expect([cache.generation(members), cache.generation(other)]).toEqual([3, 0]);
+    fill();
+    cache.evict(members, "bo");
+    expect([cache.get(members, "bo", "p1"), cache.get(members, "bo", "p2")]).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(cache.get(members, "cy", "p2")).toEqual({ value: "Read" });
+    expect(cache.size).toBe(3);
   });
 
   it("drops expired values, then everything, past maxEntries", () => {
@@ -394,6 +404,34 @@ describe("eviction by tracked writes", () => {
     expect(await lookupOf(dispatcher, "taskService", board.ada, "t-new")).toEqual([3, "Admin"]);
     await dispatcher.run(() => h.db.project.delete({ where: { id: board.p2 } }));
     expect(changes).toEqual([{ service: "projectService", id: board.p2 }]);
+  });
+});
+
+describe("forgetting what another process changed", () => {
+  it("evicts what an access change names, a regranted user's levels, or a whole service", async () => {
+    const engine = createPolicyEngine({
+      registry: createRegistry([projectService, taskService]),
+      storage: h.storage,
+      logger: captureLogger(),
+      cacheMs: 60_000,
+    });
+    const lookupNow = async (userId: string): Promise<[number, string | null]> => {
+      const counted = await h.storage.countStatements(() =>
+        engine.levelsFor("taskService", as(userId), [board.t1]),
+      );
+      return [counted.statements, counted.value.get(board.t1) ?? null];
+    };
+    expect(await lookupNow(board.bo)).toEqual([3, "Moderate"]);
+    expect(await lookupNow(board.bo)).toEqual([0, "Moderate"]);
+    // The project's columns and the member's level on it are read again; the task's are kept.
+    engine.forget({ service: "projectService", id: board.p1, userId: board.bo });
+    expect(await lookupNow(board.bo)).toEqual([2, "Moderate"]);
+    engine.forget({ userId: board.bo });
+    expect(await lookupNow(board.bo)).toEqual([1, "Moderate"]);
+    engine.forget({ service: "taskService" });
+    expect(await lookupNow(board.bo)).toEqual([1, "Moderate"]);
+    engine.forget({ service: "unknownService" });
+    expect(await lookupNow(board.bo)).toEqual([0, "Moderate"]);
   });
 });
 

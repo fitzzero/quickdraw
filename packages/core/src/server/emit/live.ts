@@ -39,10 +39,15 @@ export interface Live {
   readonly extension: ReturnType<typeof entitySubscriptions>;
   /**
    * Gives the live data its Socket.IO server: frames go out on it, and
-   * access changes broadcast by other nodes arrive on it.
+   * access changes broadcast by other nodes arrive on it. What such a change
+   * names is evicted from the access cache (`cacheMs`) before it is resolved
+   * again.
    */
   attach(io: NonNullable<Hub["io"]>, probe: AdapterProbe): void;
-  /** Re-resolves the subscriptions of `userId`'s sockets on this process after their grants changed. */
+  /**
+   * Re-resolves the subscriptions of `userId`'s sockets on this process after
+   * their grants changed, reading the user's levels afresh.
+   */
   regranted(userId: string): Promise<void>;
   /** Sends a `reset` to one scope of a collection: `dispatcher.collections.reset`. */
   resetCollection(contract: AnyContract, collection: string, scope: string): void;
@@ -95,6 +100,8 @@ export function createLive(options: HubOptions): Live {
       io.on(ACCESS_CHANGED_EVENT, (broadcast: unknown) => {
         const change = readChange(broadcast);
         if (change !== undefined) {
+          // Another node flushed the write, so this node's cache still holds what it changed.
+          options.policies.forget(change);
           revocation.changed(change, true).catch((error: unknown) => {
             hub.logger.error("Revoking for an access change another node broadcast failed", {
               category: "quickdraw.access",
@@ -105,7 +112,11 @@ export function createLive(options: HubOptions): Live {
         }
       });
     },
-    regranted: (userId: string) => revocation.regranted(userId),
+    regranted: (userId: string) => {
+      // The grants may come with writes this node's cache has not seen: read the user's levels afresh.
+      options.policies.forget({ userId });
+      return revocation.regranted(userId);
+    },
     resetCollection: (contract: AnyContract, collection: string, scope: string) => {
       collections.reset(contract, collection, scope);
     },

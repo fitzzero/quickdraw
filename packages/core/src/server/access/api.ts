@@ -10,7 +10,7 @@ import type { AnyContract } from "../../contract/defineContract";
 import type { FlushSink } from "../uow/flushSink";
 import type { Principal } from "../types";
 import type { Binding } from "./bindings";
-import type { AccessChangeListener } from "./changes";
+import type { AccessChangeListener, Forgotten } from "./changes";
 import { serviceGrant } from "./levels";
 import type { AccessFilter, RowLevels } from "./policy";
 import { anchorKey, startCall, type EngineState } from "./tools";
@@ -88,6 +88,12 @@ export interface PolicyEngine extends DispatcherAccess {
     ids: readonly string[],
     options?: ResolveOptions,
   ): Promise<ResolvedAccess>;
+  /**
+   * Evicts from the cross-request cache what an access change this process
+   * did not flush names (another node broadcast it), or a regranted user's
+   * levels, so the re-resolution that follows reads afresh (`forgetAccess`).
+   */
+  forget(forgotten: Forgotten): void;
 }
 
 function bindingFor(state: EngineState, service: AnyContract | string): Binding {
