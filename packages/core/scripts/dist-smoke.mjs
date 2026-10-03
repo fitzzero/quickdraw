@@ -26,6 +26,7 @@
 // - the built read/write kit's halves find each other: `crud.contract` from
 //   the root marks the methods it made, and `crud.handlers` from `./server`
 //   implements them, so both entries share one copy of the kit's registry;
+//   the search kit's halves (`search.contract`, `search.handlers`) likewise;
 // - the built server factory, booted by the built test app (`./testing`),
 //   serves a call over a v5 socket, over HTTP and through the 4.x shim;
 // - the built client (`./client`) calls through its connection over a v5
@@ -92,6 +93,11 @@ const expectations = {
       "CRUD_MAX_IDS",
       "LIST_DEFAULT_LIMIT",
       "LIST_MAX_LIMIT",
+      "search",
+      "SEARCH_DEFAULT_LIMIT",
+      "SEARCH_DEFAULT_MIN_LENGTH",
+      "SEARCH_MAX_LIMIT",
+      "SEARCH_MAX_QUERY_LENGTH",
     ],
     client: false,
   },
@@ -120,6 +126,7 @@ const expectations = {
       "nextOrdinal",
       "ORDINAL_STEP",
       "requireRow",
+      "search",
     ],
     client: false,
   },
@@ -162,6 +169,8 @@ const expectations = {
       "applyCollectionDeltas",
       "applyCollectionFrames",
       "applyCollectionItems",
+      "applyCollectionKept",
+      "SEARCH_DEBOUNCE_MS",
       "getAuthToken",
       "createServerCaller",
       "methodKey",
@@ -297,6 +306,15 @@ const rootTypes = [
   "ListSort",
   "ListQuery",
   "ListPage",
+  // contract/kits: the search kit's contract half
+  "SearchContractOptions",
+  "SearchDef",
+  "SearchMethods",
+  "SearchTag",
+  "TextFieldOf",
+  "SearchInput",
+  "SearchPage",
+  "SearchQuery",
   "KitSchema",
   // protocol/errors.ts
   "ErrorCode",
@@ -590,6 +608,28 @@ assert.deepEqual(await kitCaller.list(), {
   nextCursor: null,
 });
 console.log("ok the built read/write kit's contract and server halves find each other");
+
+// The search kit across the built entries: the method `search.contract`
+// (root) made is found by `search.handlers` (./server), and reads its page
+// through the database client.
+const searchable = core.defineContract("findService", {
+  entity: anything,
+  methods: { ...core.search.contract({ entity: anything, fields: ["title"] }) },
+});
+const findService = app.defineService(searchable, {
+  model: "note",
+  project: { entity: { keys: ["id", "title"] } },
+  methods: { ...server.search.handlers(searchable, { access: "public" }) },
+});
+const findCaller = server
+  .createDispatcher({ services: [findService], db: kitDb, logger: quiet })
+  .caller(null).findService;
+assert.deepEqual(await findCaller.search({ q: "  note " }), {
+  items: [{ id: "n1", title: "Note" }],
+  nextCursor: null,
+});
+assert.deepEqual(await findCaller.search({ q: "n" }), { items: [], nextCursor: null });
+console.log("ok the built search kit's contract and server halves find each other");
 
 // The built server factory and its transports, booted by the built test app:
 // a v5 call over a real socket, an HTTP call, and a 4.x call through the shim.
