@@ -117,6 +117,7 @@ export function contextFor(
     transport: request.transport,
     ...(request.mcp === undefined ? {} : { mcp: request.mcp }),
     touch: settings.touch,
+    kit: { service: target.service, access: settings.policies, storage: settings.storage },
   };
   return createContext(fields, runtimeOf(target.service)?.extendContext);
 }

@@ -143,6 +143,24 @@ export type {
   WatchAccess,
 } from "./access/types";
 
+// Kits (RFC 0003 section 12): the read/write kit's server half, whose
+// contract half is `crud.contract` on the root export; guards and ordinals
+// for hand-written handlers
+export { crud } from "./kits/crud/handlers";
+export { nextOrdinal, ORDINAL_STEP, type NextOrdinalOptions } from "./kits/crud/ordinal";
+export { requireRow } from "./kits/guards";
+export type { CrudPrepare } from "./kits/crud/create";
+export type { KitHandler, KitHandlerArgs } from "./kits/crud/runtime";
+export type {
+  CrudAccess,
+  CrudCreateOf,
+  CrudHandlersOptions,
+  CrudImplementations,
+  CrudKindOf,
+  CrudMethodsOf,
+  KitContext,
+} from "./kits/crud/types";
+
 // The seams later cards implement: tracked writes, "not modified" versions
 // and the completion record
 export {

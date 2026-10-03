@@ -12,6 +12,7 @@ import { compileProjections, projectedOutput, type Projection } from "./emit/pro
 import { MAX_TIMEOUT_MS } from "./pipeline/settings";
 import { outputSchemaOf } from "./pipeline/validation";
 import {
+  handlerProblem,
   registerRuntime,
   type AnyHandler,
   type AnyService,
@@ -229,6 +230,16 @@ function checkRowForms(
   }
 }
 
+/** The checks handlers carry for the service they run in (`checkWhenDefined`): a kit's need a model. */
+function checkHandlers(service: AnyService, fail: Fail): void {
+  for (const method of Object.values(service.methods)) {
+    const problem = handlerProblem(method.handler, service);
+    if (problem !== undefined) {
+      fail(`method "${method.name}": ${problem}`);
+    }
+  }
+}
+
 /** Checks a service definition and returns the frozen service, registered with `runtime`. */
 export function buildService(
   runtime: ServiceRuntime,
@@ -268,6 +279,7 @@ export function buildService(
     adminBypass,
     methods: Object.freeze(methods),
   });
+  checkHandlers(service, fail);
   registerRuntime(service, runtime);
   return service;
 }

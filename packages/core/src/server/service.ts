@@ -128,3 +128,22 @@ export function registerRuntime(service: AnyService, runtime: ServiceRuntime): v
 export function runtimeOf(service: unknown): ServiceRuntime | undefined {
   return typeof service === "object" && service !== null ? runtimes.get(service) : undefined;
 }
+
+/** Why a service cannot run a handler, or `undefined` when it can. */
+export type HandlerCheck = (service: AnyService) => string | undefined;
+
+const handlerChecks = new WeakMap<object, HandlerCheck>();
+
+/**
+ * Makes `defineService` run `check` on the service `handler` is given to, so
+ * a handler that needs something of its service (a kit's need a model) fails
+ * when the service is defined, not on its first call.
+ */
+export function checkWhenDefined(handler: object, check: HandlerCheck): void {
+  handlerChecks.set(handler, check);
+}
+
+/** Why `service` cannot run `handler`, from the check `checkWhenDefined` attached. */
+export function handlerProblem(handler: object, service: AnyService): string | undefined {
+  return handlerChecks.get(handler)?.(service);
+}
