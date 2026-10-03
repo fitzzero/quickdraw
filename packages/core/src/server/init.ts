@@ -7,12 +7,11 @@
 // adds the app's own fields to every handler's `ctx`, once for the whole app;
 // it replaces 4.1's habit of overriding `defineMethod` per service.
 
-import type { AnyContract } from "../contract/defineContract";
-import type { ContractMap } from "../contract/infer";
 import { QuickdrawError } from "../protocol/errors";
 import { buildService } from "./buildService";
-import { createCaller, type Caller } from "./caller";
+import { createCaller, type CallerFor } from "./caller";
 import type { BaseContext, ContextExtender } from "./context";
+import { createServer, type QuickdrawServer, type ServerOptions } from "./createServer";
 import type { DefineService } from "./defineService";
 import { createDispatcher, type Dispatcher, type DispatcherOptions } from "./dispatcher";
 import type { Service } from "./service";
@@ -37,17 +36,6 @@ export type InitArgs<T extends QuickdrawTypes> = T extends { readonly context: o
   ? [options: InitOptions<T> & { readonly context: ContextFactory<T> }]
   : [options?: InitOptions<T>];
 
-/**
- * The type of `qd.caller(principal)`: typed from the app's `contracts` when
- * `QuickdrawTypes` declares them, and untyped (any service, method and
- * input) otherwise.
- */
-export type CallerFor<T extends QuickdrawTypes> = T extends {
-  readonly contracts: infer Contracts extends ContractMap;
-}
-  ? Caller<Contracts[keyof Contracts]>
-  : Caller<AnyContract>;
-
 /** What `initQuickdraw` returns. */
 export interface Quickdraw<T extends QuickdrawTypes> {
   /**
@@ -69,8 +57,14 @@ export interface Quickdraw<T extends QuickdrawTypes> {
    * the app's types; `dispatcher.caller` is typed by its own services.
    */
   caller(principal: PrincipalOf<T> | null): CallerFor<T>;
-  /** The server factory. A placeholder until the transports card adds it; calling it throws. */
-  readonly createServer: (options: never) => never;
+  /**
+   * Serves `services` over Socket.IO and HTTP on the app's Express app and
+   * HTTP server (see `createServer`), and makes the server's dispatcher the
+   * one `qd.caller` calls through.
+   */
+  createServer<const S extends readonly Service<T>[]>(
+    options: ServerOptions<S>,
+  ): QuickdrawServer<S>;
 }
 
 function contextOption(options: unknown): ContextExtender | undefined {
@@ -117,10 +111,10 @@ export function initQuickdraw<T extends QuickdrawTypes = QuickdrawTypes>(
     },
     caller: (principal) =>
       createCaller(() => (current ?? noDispatcher()).call, principal) as CallerFor<T>,
-    createServer: () => {
-      throw new Error(
-        "qd.createServer is not available yet in quickdraw 5.0: it arrives with the transports card",
-      );
+    createServer(options) {
+      const server = createServer(options);
+      current = server.dispatcher as Dispatcher;
+      return server;
     },
   };
   return Object.freeze(qd);

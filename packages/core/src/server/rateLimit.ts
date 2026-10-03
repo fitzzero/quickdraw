@@ -61,6 +61,13 @@ export interface RateLimitOptions {
   onRateLimitExceeded?: (socket: Socket, eventName: string) => void;
 
   /**
+   * The acknowledgement a dropped event's callback receives, given the socket,
+   * the event name and the milliseconds until the limit resets. Default: the
+   * 4.x `{ success: false, error: "Rate limit exceeded", code: 429 }`.
+   */
+  ackPayload?: (socket: Socket, eventName: string, retryAfterMs: number) => unknown;
+
+  /**
    * Logger instance
    */
   logger?: Logger;
@@ -229,7 +236,10 @@ export function createRateLimiter(options: RateLimitOptions = {}): RateLimiter {
 export function applyRateLimitMiddleware(
   io: SocketIOServer,
   rateLimiter: RateLimiter,
-  options: Pick<RateLimitOptions, "keyGenerator" | "onRateLimitExceeded" | "logger"> = {},
+  options: Pick<
+    RateLimitOptions,
+    "keyGenerator" | "onRateLimitExceeded" | "logger" | "ackPayload"
+  > = {},
 ): void {
   const logger =
     options.logger?.child({ service: "RateLimiter" }) ??
@@ -245,6 +255,14 @@ export function applyRateLimitMiddleware(
         retryAfter: rateLimiter.getResetTime(keyGenerator(socket, eventName)),
       });
     });
+
+  const ackPayload =
+    options.ackPayload ??
+    (() => ({
+      success: false,
+      error: "Rate limit exceeded",
+      code: 429,
+    }));
 
   const { excludeEvents, excludePrefixes } = rateLimiter.options;
 
@@ -281,11 +299,7 @@ export function applyRateLimitMiddleware(
         // If there's a callback, call it with an error
         const lastArg = args[args.length - 1];
         if (typeof lastArg === "function") {
-          lastArg({
-            success: false,
-            error: "Rate limit exceeded",
-            code: 429,
-          });
+          lastArg(ackPayload(socket, eventName, rateLimiter.getResetTime(key)));
         }
       }
     });

@@ -6,10 +6,10 @@
 // the original error as `cause`.
 
 import type { AnyContract } from "../contract/defineContract";
-import type { InputOf, MethodName, OutputOf } from "../contract/infer";
+import type { ContractMap, InputOf, MethodName, OutputOf } from "../contract/infer";
 import type { Dispatch } from "./pipeline/pipeline";
 import type { DispatchRequest } from "./pipeline/request";
-import type { Principal } from "./types";
+import type { Principal, QuickdrawTypes } from "./types";
 
 /** Options of one in-process call. */
 export interface CallOptions {
@@ -34,6 +34,17 @@ export type Caller<C extends AnyContract> = {
   readonly [Name in C["name"]]: ServiceCaller<Extract<C, { readonly name: Name }>>;
 };
 
+/**
+ * The type of `qd.caller(principal)`: typed from the app's `contracts` when
+ * `QuickdrawTypes` declares them, and untyped (any service, method and
+ * input) otherwise.
+ */
+export type CallerFor<T extends QuickdrawTypes> = T extends {
+  readonly contracts: infer Contracts extends ContractMap;
+}
+  ? Caller<Contracts[keyof Contracts]>
+  : Caller<AnyContract>;
+
 type MethodFunction = (input?: unknown, options?: CallOptions) => Promise<unknown>;
 
 async function invoke(resolve: () => Dispatch, request: DispatchRequest): Promise<unknown> {
@@ -44,8 +55,11 @@ async function invoke(resolve: () => Dispatch, request: DispatchRequest): Promis
   return result.notModified === true ? undefined : result.data;
 }
 
-/** A read-only object whose members are made on first access and kept. */
-function lazyMembers<Member>(make: (name: string) => Member): object {
+/**
+ * A read-only object whose members are made on first access and kept. It is
+ * never mistaken for a promise: `then` reads as `undefined`.
+ */
+export function lazyMembers<Member>(make: (name: string) => Member): object {
   const made = new Map<string, Member>();
   return new Proxy(Object.freeze({}), {
     get(_target, name) {

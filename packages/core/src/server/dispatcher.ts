@@ -1,7 +1,7 @@
 // The dispatcher: a registry of services plus the method pipeline, with one
 // `call(request)` for every transport and a typed in-process caller.
-// `qd.createServer` (the transports card) builds one; tests, jobs and the
-// MCP bridge can build one directly.
+// `qd.createServer` builds one; tests, jobs and the MCP bridge can build one
+// directly.
 
 import type { AnyContract } from "../contract/defineContract";
 import { createCaller, type Caller } from "./caller";

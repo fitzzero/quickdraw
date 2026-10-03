@@ -7,7 +7,6 @@
 // initQuickdraw, defineService and the in-process caller
 export {
   initQuickdraw,
-  type CallerFor,
   type ContextFactory,
   type InitArgs,
   type InitOptions,
@@ -40,7 +39,7 @@ export type {
   HandlerContext,
   TouchOptions,
 } from "./context";
-export type { CallOptions, Caller, MethodCaller, ServiceCaller } from "./caller";
+export type { CallOptions, Caller, CallerFor, MethodCaller, ServiceCaller } from "./caller";
 
 // The dispatcher and its pipeline
 export {
@@ -79,6 +78,35 @@ export type { UnitOfWork, UnitOfWorkFactory, UnitOfWorkScope, WriteRecord } from
 export type { FlushSink } from "./uow/flushSink";
 export type { VersionRequest, VersionSource } from "./pipeline/notModified";
 export type { CallOutcome, CallRecord } from "./pipeline/metrics";
+
+// The server factory and its transports (RFC 0003 sections 3, 8 and 10):
+// Socket.IO, HTTP and the 4.x legacy shim. The in-process transport is the
+// dispatcher's caller.
+export {
+  createServer,
+  type HttpApp,
+  type QuickdrawServer,
+  type RotateOptions,
+  type ServerOnlyOptions,
+  type ServerOptions,
+} from "./createServer";
+export {
+  createHttpRouter,
+  type HttpRouter,
+  type HttpRouterOptions,
+  type HttpTransportOptions,
+} from "./transports/http";
+export type {
+  AuthenticateRequest,
+  AuthenticateResult,
+  HttpAuthenticateRequest,
+  ServerAuth,
+  ServiceGrants,
+  SocketAuthenticateRequest,
+} from "./transports/auth";
+export type { QuickdrawIo, QuickdrawServerSocket, QuickdrawSocketData } from "./transports/types";
+export type { SocketCors, SocketOptions, SocketRateLimitOptions } from "./transports/socketServer";
+export type { LegacyReply } from "./transports/legacy";
 
 // Redis adapter for horizontal scaling
 export {
