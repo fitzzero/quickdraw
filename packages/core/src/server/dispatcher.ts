@@ -101,6 +101,23 @@ export interface Dispatcher<S extends readonly AnyService[] = readonly AnyServic
   readonly limits: DispatcherLimits;
 }
 
+const ACCESS_SINKS = new WeakMap<object, readonly PipelineSettings["flushSink"][]>();
+
+/**
+ * A copy of `options` whose dispatcher runs `sinks` right after its access
+ * sink, before any frame of a flush is sent: `createServer`'s grants
+ * refresh, so a flush that lowers a user's grants revokes what they held
+ * before that flush's frames reach them.
+ */
+export function withAccessSinks<O extends object>(
+  options: O,
+  sinks: readonly PipelineSettings["flushSink"][],
+): O {
+  const copy = { ...options };
+  ACCESS_SINKS.set(copy, sinks);
+  return copy;
+}
+
 /** `dispatcher.run`: a unit of work around `fn`, flushed once `fn` settles. */
 async function runInUnit<T>(settings: PipelineSettings, fn: () => T | PromiseLike<T>): Promise<T> {
   if (typeof fn !== "function") {
@@ -139,7 +156,7 @@ export function createDispatcher<const S extends readonly AnyService[]>(
     throw new TypeError("createDispatcher: options must be an object with services and db");
   }
   const registry = createRegistry(options.services);
-  const settings = resolveSettings(options, registry, options.db);
+  const settings = resolveSettings(options, registry, options.db, ACCESS_SINKS.get(options));
   // Writes made outside any unit of work flush to this dispatcher's sinks.
   settings.unitOfWork.attach?.(settings.flushSink, settings.logger);
   const call = createPipeline(settings);

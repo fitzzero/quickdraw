@@ -6,6 +6,7 @@ import type { ChangeLogOptions } from "../emit/changeLog";
 import { createLive, type Live } from "../emit/live";
 import type { Registry } from "../registry";
 import { storageOf } from "../storage";
+import type { FlushSink } from "../uow/flushSink";
 import {
   resolveAccess,
   type AccessEngine,
@@ -162,11 +163,15 @@ function resolveLimits(limits: LimitsOptions = {}): DispatcherLimits {
   return Object.freeze(merged);
 }
 
-/** Applies the defaults to the dispatcher's options. */
+/**
+ * Applies the defaults to the dispatcher's options. `accessSinks` run right
+ * after the access sink, before any frame of a flush is sent.
+ */
 export function resolveSettings(
   options: PipelineOptions,
   registry: Registry,
   db: unknown,
+  accessSinks: readonly FlushSink[] = [],
 ): PipelineSettings {
   const development = process.env.NODE_ENV !== "production";
   const logger = options.logger ?? consoleLogger;
@@ -182,6 +187,7 @@ export function resolveSettings(
     ...resolveTracking(options, registry, db, logger, [
       live.intake,
       policies.sink,
+      ...accessSinks,
       live.emit,
       live.collections,
       live.topics,

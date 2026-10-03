@@ -17,6 +17,7 @@ import { consoleLogger, type Logger } from "../contract/logger";
 import { createCaller, type Caller } from "./caller";
 import {
   createDispatcher,
+  withAccessSinks,
   type ContractOfServices,
   type Dispatcher,
   type DispatcherOptions,
@@ -182,15 +183,6 @@ function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void 
   }
 }
 
-/** The app's own flush sinks, as a list. */
-function sinksOf(options: { readonly flushSink?: DispatcherOptions<[]>["flushSink"] }) {
-  const { flushSink } = options;
-  if (flushSink === undefined) {
-    return [];
-  }
-  return Array.isArray(flushSink) ? flushSink : [flushSink];
-}
-
 /** The HTTP transport, mounted on `app` when there is one. */
 function mountRouter<P extends Principal>(
   options: ServerOnlyOptions<P>,
@@ -324,8 +316,9 @@ export function createServer<const S extends readonly AnyService[]>(
   const logger = options.logger ?? consoleLogger;
   let refresh: ((userId: string) => Promise<ServiceGrants>) | undefined;
   const grants = createGrantsSink(options.auth, () => refresh, logger);
+  // Right after the access sink: a flush that lowers grants revokes before its frames go out.
   const created = createDispatcher(
-    grants === undefined ? options : { ...options, flushSink: [...sinksOf(options), grants] },
+    grants === undefined ? options : withAccessSinks(options, [grants]),
   );
   const calls = trackCalls(created);
   const { dispatcher } = calls;

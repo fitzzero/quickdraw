@@ -283,6 +283,28 @@ describe("stored grants", () => {
     ]);
   });
 
+  it("revokes a demoted Admin before the flush that demoted them sends its frames", async () => {
+    const { app } = await start({
+      grantsColumn: true,
+      loadServiceAccess: async (userId) => {
+        const user = await h.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+        return (user.serviceAccess ?? {}) as ServiceGrants;
+      },
+    });
+    const admin = await connect(app, as(board.di, { taskService: "Admin" }));
+    // Only the service-wide Admin grant lets di read T2.
+    await sub(admin.connection, "taskService", [board.t2]);
+    await app.server.dispatcher.run(async () => {
+      await h.db.user.update({ where: { id: board.di }, data: { serviceAccess: {} } });
+      await h.db.task.update({ where: { id: board.t2 }, data: { title: "After the demotion" } });
+    });
+    await admin.frames.settle();
+    expect(admin.frames.entity).toEqual([]);
+    expect(admin.frames.revoked).toEqual([
+      { kind: "entity", reason: "access", s: "taskService", id: board.t2 },
+    ]);
+  });
+
   it("needs loadServiceAccess to reload what it stores", async () => {
     await expect(
       createTestApp({
