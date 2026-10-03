@@ -1125,6 +1125,46 @@ export const taskService = qd.defineService(task, {
   too. For hand-written handlers, `./server` has `requireRow(row, message?)`
   (`NOT_FOUND` for a missing row) and `nextOrdinal(db, model, where)`.
 
+The typed client has no hook for infinite scroll. Page through `list` with
+TanStack's `useInfiniteQuery`, keyed by the list's own `key` (with a suffix,
+since pages are not one list result) and fetching with its `call`, so
+`qd.invalidate(qd.task.list)` refetches the pages too. `no-untyped-client`
+accepts this form for the hooks the typed client has none of
+(`useInfiniteQuery`, `useSuspenseQuery`, `useQueries`, `queryOptions` and
+their variants):
+
+<!-- example: apps/web/src/components/kits/TaskPages.tsx#component -->
+
+```tsx
+export function TaskPages({ projectId }: { readonly projectId: string }) {
+  const filter = { projectId };
+  // the list's own key (plus a suffix: pages are not one list result) and call,
+  // so qd.invalidate(qd.task.list) refetches these pages too
+  const pages = useInfiniteQuery({
+    queryKey: [...qd.task.list.key({ filter }), "pages"],
+    queryFn: ({ pageParam, signal }) =>
+      qd.task.list.call({ filter, cursor: pageParam, limit: 50 }, { signal }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) => page.nextCursor ?? undefined,
+  });
+  const cards = pages.data?.pages.flatMap((page) => page.items) ?? [];
+  return (
+    <>
+      <ul>
+        {cards.map((card) => (
+          <li key={card.id}>{card.title}</li>
+        ))}
+      </ul>
+      {pages.hasNextPage ? (
+        <button type="button" onClick={() => void pages.fetchNextPage()}>
+          More
+        </button>
+      ) : null}
+    </>
+  );
+}
+```
+
 ### Search kit
 
 `search.contract` makes one query, `search`, and `search.handlers`

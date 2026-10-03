@@ -6,6 +6,13 @@
 // `mutationFn` reaches quickdraw by hand (a call on the typed client, such
 // as `qd.task.get.call(input)`; the `call`/`callData` helpers; a `fetch` of
 // `/qd/...`; a raw socket emit), or whose `queryKey` is a quickdraw key.
+//
+// The hooks the typed client has no equivalent for (suspense, infinite and
+// parallel queries, and query options) are how such reads are written, so
+// they pass when every `queryKey` comes from a quickdraw member's `key(...)`
+// (alone, or spread first into a longer key) and their `queryFn` reaches
+// quickdraw only through a member's `call(...)`: then they share the typed
+// client's keys, and `qd.invalidate(member)` reaches them.
 
 import { CLIENT_FILE_OPTIONS, inClientScope } from "../lib/files.mjs";
 import {
@@ -45,6 +52,18 @@ const HELPERS = new Set([
   "KEY_ROOT",
 ]);
 const SOCKET_EMITS = new Set(["emit", "emitWithAck"]);
+/** Hooks with no typed client equivalent: they may read through a member's `key` and `call`. */
+const KEYED_HOOKS = new Set([
+  "useSuspenseQuery",
+  "useSuspenseInfiniteQuery",
+  "useInfiniteQuery",
+  "useQueries",
+  "useSuspenseQueries",
+  "queryOptions",
+  "infiniteQueryOptions",
+  "usePrefetchQuery",
+  "usePrefetchInfiniteQuery",
+]);
 
 function importedName(specifier) {
   return specifier.imported.type === "Identifier"
@@ -63,7 +82,7 @@ export default {
     messages: {
       untypedClient:
         "`{{ hook }}` from @tanstack/react-query fetches quickdraw data by hand, outside the typed client: it gets no live updates, not-modified answers, invalidation coordinator or optimistic overlays. " +
-        "Use the method's own hook: `qd.<service>.<method>.useQuery(input)` or `.useMutation()`.",
+        "Use the method's own hook: `qd.<service>.<method>.useQuery(input)` or `.useMutation()`; for a hook it has no equivalent of, key it with `qd.<service>.<method>.key(input)` and fetch with `.call(input)`.",
     },
     schema: [
       {
@@ -139,6 +158,64 @@ export default {
       return clients.has(names[0]) || (SOCKET_EMITS.has(names.at(-1)) && names.includes("socket"));
     };
 
+    /** Whether `value` calls a typed client member's `method`: `qd.task.get.key(input)`. */
+    const isMemberCall = (value, method) => {
+      const node = unwrap(value);
+      if (node?.type !== "CallExpression") {
+        return false;
+      }
+      const callee = unwrap(node.callee);
+      if (callee.type !== "MemberExpression" || memberName(callee) !== method) {
+        return false;
+      }
+      const names = chainNames(callee);
+      return clients.has(names[0]) && names.length >= 4;
+    };
+
+    /** A member's key, alone or spread first into a longer key: `[...qd.task.list.key(input), "pages"]`. */
+    const isMemberKey = (value) => {
+      const node = unwrap(value);
+      if (node.type === "ArrayExpression" && node.elements[0]?.type === "SpreadElement") {
+        return isMemberCall(node.elements[0].argument, "key");
+      }
+      return isMemberCall(node, "key");
+    };
+
+    /**
+     * Whether a keyed hook's argument reads through typed client members only:
+     * every `queryKey` a member's key, and every call reaching quickdraw in a
+     * `queryFn` a member's `call(...)`; no `mutationFn`.
+     */
+    const readsThroughMembers = (argument) => {
+      let keys = 0;
+      let byHand = false;
+      walk(context, argument, (node) => {
+        if (byHand || node.type !== "Property") {
+          return !byHand;
+        }
+        const name = keyName(node);
+        if (name === "queryKey") {
+          keys += 1;
+          byHand = !isMemberKey(node.value);
+        } else if (name === "mutationFn") {
+          byHand = true;
+        } else if (name === "queryFn") {
+          walk(context, node.value, (inner) => {
+            if (
+              inner.type === "CallExpression" &&
+              reachesQuickdraw(inner) &&
+              !isMemberCall(inner, "call")
+            ) {
+              byHand = true;
+            }
+            return !byHand;
+          });
+        }
+        return !byHand;
+      });
+      return keys > 0 && !byHand;
+    };
+
     const fetchesByHand = (argument) => {
       let found = false;
       walk(context, argument, (node) => {
@@ -183,9 +260,13 @@ export default {
       },
       CallExpression(node) {
         const hook = hookOf(node.callee);
-        if (hook !== undefined && node.arguments.some(fetchesByHand)) {
-          context.report({ node, messageId: "untypedClient", data: { hook } });
+        if (hook === undefined || !node.arguments.some(fetchesByHand)) {
+          return;
         }
+        if (KEYED_HOOKS.has(hook) && node.arguments.every(readsThroughMembers)) {
+          return;
+        }
+        context.report({ node, messageId: "untypedClient", data: { hook } });
       },
     };
   },

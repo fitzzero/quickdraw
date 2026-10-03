@@ -112,7 +112,11 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
 ## Do not
 
 - Do not use the socket (`socket.emit`, `socket.on`) or hand-written
-  TanStack hooks around quickdraw calls; go through `qd.<service>`.
+  TanStack hooks around quickdraw calls; go through `qd.<service>`. For a
+  hook the typed client has none of (infinite scroll over `list` with
+  `useInfiniteQuery`, `useSuspenseQuery`, `useQueries`, `queryOptions`), key
+  it with the member's `key(input)` (a suffix may follow it) and fetch with
+  its `call(input)`.
 - Do not copy server data into React state to keep it current: read it from
   the hooks, which share one cache.
 - The lint rules `no-raw-socket`, `no-untyped-client`, `no-manual-refetch`
