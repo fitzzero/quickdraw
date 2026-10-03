@@ -1,9 +1,11 @@
 "use client";
 
-// `QuickdrawProvider` and `useQuickdraw` (RFC 0003 section 11.1). The provider
-// owns one connection (`connection.ts`) and the TanStack `QueryClient` the
-// hooks cache in, and binds the connection to the client it is given, so the
-// client's `call` and `prefetch` use it too. Ported from 4.1's provider
+// `QuickdrawProvider` and `useQuickdraw` (RFC 0003 sections 11.1 and 11.3).
+// The provider owns one connection (`connection.ts`), the TanStack
+// `QueryClient` the hooks cache in and that client's invalidation
+// coordinator (`coordinator.ts`), and binds the connection and the
+// coordinator to the client it is given, so the client's `call`, `prefetch`
+// and `invalidate` use them too. Ported from 4.1's provider
 // (`legacy-src/client/QuickdrawProvider.tsx:223-437`), which held the socket
 // in React state and recreated it on every token change.
 //
@@ -11,8 +13,11 @@
 // (`legacy-src/client/QuickdrawProvider.tsx:297-298`); here the connection is
 // retained by the mounted provider and closed a tick after its last release,
 // so a strict-mode remount keeps the same socket instead of reconnecting.
-// Nothing is cleared on a disconnect: cached data stays, and later cards
-// resume live data by revision.
+// Nothing is cleared on a disconnect: cached data stays. After a reconnect
+// with the same credentials, the coordinator refetches only the queries that
+// watch a topic (they missed its changes) or are stale, each after a random
+// delay of up to 2 s, where 4.1 invalidated every query at once
+// (`legacy-src/client/QuickdrawProvider.tsx:320-321`).
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
@@ -29,7 +34,8 @@ import {
   type QuickdrawConnectionOptions,
 } from "./connection";
 import { QuickdrawContext, useConnectionState, useQuickdrawContext } from "./context";
-import { bindConnection } from "./createClient";
+import { createInvalidationCoordinator } from "./coordinator";
+import { bindConnection, isWatchedQuery } from "./createClient";
 import { KEY_ROOT } from "./keys";
 import { reloadOncePerSession } from "./reload";
 
@@ -59,9 +65,17 @@ export interface QuickdrawStatus {
   readonly status: ConnectionStatus;
   /** True while the connection is connected. */
   readonly isConnected: boolean;
-  /** The server's `qd:hello`: its version and limits. */
+  /** The server's `qd:hello` on the current credentials: its version, limits and who the socket acts for. */
   readonly hello: HelloFrame | null;
-  /** The grants the server last pushed with `qd:access`, or `null` when it has pushed none. */
+  /**
+   * The user the connection acts for, from the server's hello: `null` while
+   * anonymous, and before the hello on the current credentials arrives.
+   */
+  readonly userId: string | null;
+  /**
+   * The user's service grants: from the server's hello, then from each
+   * `qd:access` push; `null` before the hello on the current credentials.
+   */
   readonly serviceAccess: Readonly<Record<string, AccessLevel>> | null;
   /** Why the server refused the connection, while `status` is `refused`. */
   readonly refusal: ConnectionRefusal | null;
@@ -101,6 +115,10 @@ function ConnectedProvider<Contracts extends ContractMap>(
   const { client, auth, queryClient: given, children, onProtocolMismatch, ...options } = props;
   const [ownQueryClient] = React.useState(createDefaultQueryClient);
   const queryClient = given ?? ownQueryClient;
+  const coordinator = React.useMemo(
+    () => createInvalidationCoordinator(queryClient),
+    [queryClient],
+  );
   const connection = useProviderConnection({ ...options, auth }, onProtocolMismatch);
   React.useEffect(() => connection.retain(), [connection]);
   React.useEffect(() => {
@@ -110,8 +128,23 @@ function ConnectedProvider<Contracts extends ContractMap>(
       void queryClient.invalidateQueries({ queryKey: [KEY_ROOT] });
     }
   }, [connection, auth, queryClient]);
-  React.useEffect(() => bindConnection(client, connection), [client, connection]);
-  const value = React.useMemo(() => ({ connection, queryClient }), [connection, queryClient]);
+  React.useEffect(
+    () =>
+      connection.onReconnect(() => {
+        coordinator.refetchAfterReconnect({
+          watched: (query) => isWatchedQuery(client, query.queryKey),
+        });
+      }),
+    [connection, coordinator, client],
+  );
+  React.useEffect(
+    () => bindConnection(client, connection, coordinator),
+    [client, connection, coordinator],
+  );
+  const value = React.useMemo(
+    () => ({ connection, queryClient, coordinator }),
+    [connection, queryClient, coordinator],
+  );
   return (
     <QueryClientProvider client={queryClient}>
       <QuickdrawContext.Provider value={value}>{children}</QuickdrawContext.Provider>
@@ -141,8 +174,9 @@ export function QuickdrawProvider<Contracts extends ContractMap>(
 
 /**
  * The provider's connection state: whether it is connected, the server's
- * hello, the grants it pushed, why it refused the connection, and whether
- * calls are backing off after `RATE_LIMITED`.
+ * hello, who the connection acts for and their grants, why the server
+ * refused the connection, and whether calls are backing off after
+ * `RATE_LIMITED`.
  */
 export function useQuickdraw(): QuickdrawStatus {
   const { connection } = useQuickdrawContext("useQuickdraw");
@@ -153,6 +187,7 @@ export function useQuickdraw(): QuickdrawStatus {
       status: state.status,
       isConnected: state.status === "connected",
       hello: state.hello,
+      userId: state.hello?.userId ?? null,
       serviceAccess: state.serviceAccess,
       refusal: state.refusal,
       isRateLimited: Object.keys(state.backoff).length > 0,

@@ -1,27 +1,34 @@
-// The connection of a v5 client (RFC 0003 sections 8.1 and 11.1): one
+// The connection of a v5 client (RFC 0003 sections 8.1, 11.1 and 11.3): one
 // Socket.IO socket with the v5 handshake, its state as a snapshot to
-// subscribe to, and the pushes a server sends a whole connection. Ported
-// from 4.1's provider (`legacy-src/client/QuickdrawProvider.tsx:295-403`),
-// without React, so a React Native or Node client uses it as it is: nothing
-// here touches `window` or `document`.
+// subscribe to, the pushes a server sends a whole connection, and the change
+// topics it watches. Ported from 4.1's provider
+// (`legacy-src/client/QuickdrawProvider.tsx:295-403`), without React, so a
+// React Native or Node client uses it as it is: nothing here touches
+// `window` or `document`.
 //
 // - The handshake sends `auth.qd = { protocol: 5, client }` beside the app's
-//   credentials, and keeps the server's `qd:hello`.
+//   credentials, and keeps the server's `qd:hello`: who the socket acts for,
+//   its grants, and the limits. Once it is known, a call waits the server's
+//   `callTimeoutMs` plus 2 s by default, so a slow call ends with the
+//   server's `TIMEOUT` rather than the client's.
 // - A refused handshake says why in its `connect_error` data: another
 //   protocol (`PROTOCOL_MISMATCH`, which calls `onProtocolMismatch`) or failed
 //   authentication (`UNAUTHENTICATED`). Socket.IO does not retry either.
 // - `qd:rotate` reconnects at a random moment within its window; `qd:access`
 //   updates the grants in the state.
 // - `RATE_LIMITED` answers start a backoff window per kind (`backoff.ts`).
+// - A connection that drops and comes back with the same credentials (or
+//   rotates) is `reconnecting` meanwhile, joins its watched topics again
+//   (`watch.ts`) and tells `onReconnect` listeners, which refetch what may
+//   have changed (the provider, through the coordinator).
 //
 // 4.1 created a socket per token and hard-coded its options
-// (`legacy-src/client/QuickdrawProvider.tsx:306-312`). Here one socket lives
-// as long as the connection: new credentials reconnect it, and `socketOptions`
-// pass through to `io()`. Caches are never cleared on a disconnect; later
-// cards resume live data by revision.
+// (`legacy-src/client/QuickdrawProvider.tsx:306-312`), and cleared every
+// subscription on a disconnect (`:326-330`). Here one socket lives as long as
+// the connection: new credentials reconnect it, and `socketOptions` pass
+// through to `io()`. Caches are never cleared on a disconnect.
 
 import { io, type ManagerOptions, type Socket, type SocketOptions } from "socket.io-client";
-import type { AccessLevel } from "../contract/access";
 import { SERVER_EVENTS } from "../contract/names";
 import type { ClientToServerEvents, ServerToClientEvents } from "../protocol/envelope";
 import { isRecord } from "../protocol/guards";
@@ -37,6 +44,7 @@ import {
 import { QUICKDRAW_VERSION } from "../version";
 import { createBackoff, type Backoff, type BackoffKind, type BackoffWindows } from "./backoff";
 import { reloadOncePerSession } from "./reload";
+import { createTopics, notifyEach, type Topics, type TopicWatch } from "./watch";
 
 /** The client's Socket.IO socket, typed with the v5 frames. */
 export type QuickdrawSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -73,7 +81,11 @@ export interface QuickdrawConnectionOptions {
    * client encodes with the JSON-only parser, as the server does (section 8.4).
    */
   readonly binary?: boolean;
-  /** How long a call waits for its answer before it fails with `TIMEOUT`. Default 10,000 ms. */
+  /**
+   * How long a call waits for its answer before it fails with `TIMEOUT`.
+   * Default: the server's `callTimeoutMs` plus 2,000 ms once its hello has
+   * arrived, and 10,000 ms before.
+   */
   readonly timeoutMs?: number;
   /**
    * Called when the server refuses the connection because it speaks another
@@ -103,14 +115,21 @@ export type ConnectionRefusal =
 /** A snapshot of a connection's state. A new object whenever anything in it changes. */
 export interface ConnectionState {
   readonly status: ConnectionStatus;
-  /** The server's last `qd:hello`, or `null` before the first one. */
+  /**
+   * True while the connection is `connecting` again after it was connected
+   * with its current credentials: the socket dropped, or the server asked it
+   * to rotate. Queries keep running meanwhile (their calls wait in the send
+   * buffer); `setAuth` and `close` end it.
+   */
+  readonly reconnecting: boolean;
+  /** The server's `qd:hello` on the current credentials, or `null` before it arrives. */
   readonly hello: HelloFrame | null;
   /**
-   * The service grants the server last pushed with `qd:access`, or `null`
-   * when it has pushed none since the credentials last changed. Protocol 5
-   * pushes them when they change, not when a socket connects.
+   * The principal's service grants: from the server's `qd:hello`, then from
+   * every `qd:access` push; `null` before the hello on the current
+   * credentials arrives.
    */
-  readonly serviceAccess: Readonly<Record<string, AccessLevel>> | null;
+  readonly serviceAccess: HelloFrame["serviceAccess"] | null;
   /** Why the last handshake was refused, while `status` is `refused`. */
   readonly refusal: ConnectionRefusal | null;
   /** When each kind's rate-limit backoff ends; a kind that is not backing off is absent. */
@@ -120,7 +139,11 @@ export interface ConnectionState {
 /** A v5 client connection. */
 export interface QuickdrawConnection {
   readonly url: string;
-  /** The default time limit of a call, in milliseconds. */
+  /**
+   * The default time limit of a call, in milliseconds: the `timeoutMs`
+   * option when it was given; otherwise the server's `callTimeoutMs` plus
+   * 2,000 once its hello has arrived, and 10,000 before.
+   */
   readonly timeoutMs: number;
   /** The socket, created unconnected with the connection and kept for its lifetime. */
   readonly socket: QuickdrawSocket;
@@ -150,12 +173,38 @@ export interface QuickdrawConnection {
   reportRateLimited(kind: BackoffKind, retryAfterMs?: number): void;
   /** How long `kind` still backs off, in milliseconds; 0 when it does not. */
   backoffRemaining(kind: BackoffKind): number;
+  /**
+   * Calls `listener` each time the socket connects again with the same
+   * credentials: after it dropped, after a `qd:rotate`, or on `open` after
+   * the server ended it. Not on the first connect, nor after `setAuth` or
+   * `close`. Watched topics are joined again first. Returns the unsubscribe
+   * function.
+   */
+  onReconnect(listener: () => void): () => void;
+  /**
+   * Watches a change topic (RFC 0003 section 11.3): the first watch of a
+   * topic sends `qd:watch` (again on every connect), the last one to end
+   * sends `qd:unwatch`, and `onChanged` receives the topic's `qd:changed`
+   * frames meanwhile. Returns the function that ends the watch.
+   *
+   * @example
+   * const stop = connection.watch({
+   *   service: "taskService",
+   *   topic: collectionTopic("byProject", projectId),
+   *   onChanged: () => void refresh(),
+   * });
+   */
+  watch(watch: TopicWatch): () => void;
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+/** How much longer than the server's time limit a call waits, so the server's `TIMEOUT` arrives first. */
+const HELLO_TIMEOUT_MARGIN_MS = 2_000;
+
 const INITIAL_STATE: ConnectionState = Object.freeze({
   status: "idle",
+  reconnecting: false,
   hello: null,
   serviceAccess: null,
   refusal: null,
@@ -225,17 +274,30 @@ export function isTimeLimit(value: unknown): value is number {
   return typeof value === "number" && value > 0 && value <= MAX_TIMEOUT_MS;
 }
 
-function checkOptions(options: QuickdrawConnectionOptions): number {
+/** The `timeoutMs` option, checked; `undefined` when it was left out. */
+function checkOptions(options: QuickdrawConnectionOptions): number | undefined {
   if (typeof options.url !== "string" || options.url === "") {
     throw new TypeError("createQuickdrawConnection: url must be the server's URL");
   }
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  if (!isTimeLimit(timeoutMs)) {
+  const { timeoutMs } = options;
+  if (timeoutMs !== undefined && !isTimeLimit(timeoutMs)) {
     throw new TypeError(
       "createQuickdrawConnection: timeoutMs must be a number of milliseconds, above 0 and at most 2^31 - 1",
     );
   }
   return timeoutMs;
+}
+
+/** A call's default time limit: the option, else the server's limit plus the margin, else 10 s. */
+function defaultTimeout(option: number | undefined, hello: HelloFrame | null): number {
+  if (option !== undefined) {
+    return option;
+  }
+  // The frame came over the network: its shape is checked, not trusted.
+  const limits: unknown = hello?.limits;
+  const serverMs: unknown = isRecord(limits) ? limits.callTimeoutMs : undefined;
+  const fromHello = typeof serverMs === "number" ? serverMs + HELLO_TIMEOUT_MARGIN_MS : undefined;
+  return isTimeLimit(fromHello) ? fromHello : DEFAULT_TIMEOUT_MS;
 }
 
 function createSocket(
@@ -256,6 +318,16 @@ function createSocket(
   });
 }
 
+/**
+ * Whether the socket has connected with the current credentials since the
+ * connection last opened (the next connect is then a reconnect), and the
+ * topics, which stop retrying when the connection closes.
+ */
+interface Session {
+  established: boolean;
+  readonly topics: Topics;
+}
+
 /** When the socket opens and closes: the app's `open`, `close` and `retain`, new credentials, `qd:rotate`. */
 interface Lifecycle {
   open(): void;
@@ -269,7 +341,12 @@ interface Lifecycle {
   stoppedStatus(): ConnectionStatus;
 }
 
-function createLifecycle(socket: QuickdrawSocket, store: StateStore, backoff: Backoff): Lifecycle {
+function createLifecycle(
+  socket: QuickdrawSocket,
+  store: StateStore,
+  backoff: Backoff,
+  session: Session,
+): Lifecycle {
   let opened = false;
   let switching = false;
   let users = 0;
@@ -302,11 +379,13 @@ function createLifecycle(socket: QuickdrawSocket, store: StateStore, backoff: Ba
 
   function close(): void {
     opened = false;
+    session.established = false;
+    session.topics.stop();
     clearTimeout(rotateTimer);
     rotateTimer = undefined;
     backoff.clear();
     socket.disconnect();
-    store.set({ status: "idle" });
+    store.set({ status: "idle", reconnecting: false });
   }
 
   function retain(): () => void {
@@ -343,35 +422,57 @@ function createLifecycle(socket: QuickdrawSocket, store: StateStore, backoff: Ba
   return { open, close, retain, reconnect, rotateWithin, stoppedStatus };
 }
 
-/** The pushes a server sends the whole connection, and the handshake's outcome. */
-function listen(
-  socket: QuickdrawSocket,
-  store: StateStore,
-  lifecycle: Lifecycle,
-  onProtocolMismatch: (mismatch: ProtocolMismatch) => void,
-): void {
+/** What the socket's own events update: the state, the session (and its topics) and the reconnect listeners. */
+interface Wiring {
+  readonly socket: QuickdrawSocket;
+  readonly store: StateStore;
+  readonly lifecycle: Lifecycle;
+  readonly session: Session;
+  readonly reconnected: Set<() => void>;
+  readonly onProtocolMismatch: (mismatch: ProtocolMismatch) => void;
+}
+
+/** The socket's connects, disconnects and refusals. */
+function listenToSocket(wiring: Wiring): void {
+  const { socket, store, lifecycle, session } = wiring;
   socket.on("connect", () => {
-    store.set({ status: "connected", refusal: null });
+    const again = session.established;
+    session.established = true;
+    store.set({ status: "connected", reconnecting: false, refusal: null });
+    session.topics.rejoin();
+    if (again) {
+      notifyEach(wiring.reconnected, (listener) => {
+        listener();
+      });
+    }
   });
   socket.on("disconnect", () => {
-    store.set({ status: socket.active ? "connecting" : lifecycle.stoppedStatus() });
+    const status = socket.active ? "connecting" : lifecycle.stoppedStatus();
+    store.set({ status, reconnecting: status === "connecting" && session.established });
   });
   socket.on("connect_error", (error: Error & { readonly data?: unknown }) => {
     if (socket.active) {
       return;
     }
     const refusal = refusalOf(error);
-    store.set({ status: "refused", refusal });
+    session.established = false;
+    store.set({ status: "refused", reconnecting: false, refusal });
     if (refusal.code === "PROTOCOL_MISMATCH") {
-      onProtocolMismatch(refusal);
+      wiring.onProtocolMismatch(refusal);
     }
   });
+}
+
+/** The pushes a server sends the whole connection. */
+function listenToPushes(wiring: Wiring): void {
+  const { socket, store, lifecycle } = wiring;
   socket.on(SERVER_EVENTS.hello, (frame) => {
-    store.set({ hello: frame });
+    const grants = isRecord(frame) && isRecord(frame.serviceAccess) ? frame.serviceAccess : null;
+    store.set({ hello: frame, serviceAccess: grants as HelloFrame["serviceAccess"] | null });
   });
   socket.on(SERVER_EVENTS.access, (frame) => {
     if (isRecord(frame) && isRecord(frame.serviceAccess)) {
-      store.set({ serviceAccess: frame.serviceAccess as Readonly<Record<string, AccessLevel>> });
+      store.set({ serviceAccess: frame.serviceAccess as HelloFrame["serviceAccess"] });
     }
   });
   socket.on(SERVER_EVENTS.rotate, (frame) => {
@@ -396,7 +497,7 @@ function listen(
 export function createQuickdrawConnection(
   options: QuickdrawConnectionOptions,
 ): QuickdrawConnection {
-  const timeoutMs = checkOptions(options);
+  const timeoutOption = checkOptions(options);
   const store = createStore();
   const backoff = createBackoff((windows) => {
     store.set({ backoff: windows });
@@ -407,12 +508,32 @@ export function createQuickdrawConnection(
     ...credentialsOf(auth),
     qd: { protocol: PROTOCOL_VERSION, client: QUICKDRAW_VERSION },
   }));
-  const lifecycle = createLifecycle(socket, store, backoff);
-  listen(socket, store, lifecycle, options.onProtocolMismatch ?? reloadOncePerSession);
+  const timeoutMs = (): number => defaultTimeout(timeoutOption, store.get().hello);
+  const topics = createTopics({
+    socket,
+    timeoutMs,
+    backoffRemaining: backoff.remaining,
+    reportRateLimited: backoff.report,
+  });
+  const session: Session = { established: false, topics };
+  const lifecycle = createLifecycle(socket, store, backoff, session);
+  const reconnected = new Set<() => void>();
+  const wiring: Wiring = {
+    socket,
+    store,
+    lifecycle,
+    session,
+    reconnected,
+    onProtocolMismatch: options.onProtocolMismatch ?? reloadOncePerSession,
+  };
+  listenToSocket(wiring);
+  listenToPushes(wiring);
 
   return Object.freeze({
     url: options.url,
-    timeoutMs,
+    get timeoutMs(): number {
+      return timeoutMs();
+    },
     socket,
     getState: store.get,
     subscribe: store.subscribe,
@@ -424,7 +545,8 @@ export function createQuickdrawConnection(
         return false;
       }
       auth = next;
-      store.set({ serviceAccess: null });
+      session.established = false;
+      store.set({ hello: null, serviceAccess: null });
       lifecycle.reconnect();
       return true;
     },
@@ -435,5 +557,12 @@ export function createQuickdrawConnection(
     },
     reportRateLimited: backoff.report,
     backoffRemaining: backoff.remaining,
+    onReconnect(listener: () => void): () => void {
+      reconnected.add(listener);
+      return () => {
+        reconnected.delete(listener);
+      };
+    },
+    watch: topics.watch,
   });
 }

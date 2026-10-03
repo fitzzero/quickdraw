@@ -31,6 +31,7 @@ import type {
 } from "../protocol/envelope";
 import { QuickdrawError, fromWire } from "../protocol/errors";
 import { isRecord } from "../protocol/guards";
+import { retryAfterOf } from "./backoff";
 import { isTimeLimit, type QuickdrawConnection, type QuickdrawSocket } from "./connection";
 
 /** One call, as {@link call} takes it. */
@@ -65,11 +66,6 @@ function cancelledError(): QuickdrawError {
 
 function internalError(message: string): QuickdrawError {
   return new QuickdrawError("INTERNAL", message);
-}
-
-function retryAfterOf(error: QuickdrawError): number | undefined {
-  const retryAfterMs: unknown = isRecord(error.data) ? error.data.retryAfterMs : undefined;
-  return typeof retryAfterMs === "number" ? retryAfterMs : undefined;
 }
 
 /** Why a call fails before it is sent, if it does. */

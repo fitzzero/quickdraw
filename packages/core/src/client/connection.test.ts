@@ -140,19 +140,69 @@ describe("createQuickdrawConnection", () => {
     expect(await caller(connection)).toBeNull();
   });
 
-  it("keeps the grants the server pushes with qd:access, and drops them with the credentials", async () => {
-    const grants = new Map<string, Record<string, "Read" | "Moderate">>();
+  it("keeps the grants from the hello and from qd:access, and drops them with the credentials", async () => {
+    const grants = new Map<string, Record<string, "Read" | "Moderate">>([
+      ["alice", { probeService: "Read" }],
+    ]);
     const { app } = await harness.start({
       auth: { ...testAuth, loadServiceAccess: (userId) => grants.get(userId) },
     });
-    const connection = await harness.connect(app.url);
+    const connection = harness.connection(app.url);
     expect(connection.getState().serviceAccess).toBeNull();
+    connection.open();
+    await until(() => connection.getState().hello !== null);
+    expect(connection.getState().hello?.userId).toBe("alice");
+    expect(connection.getState().serviceAccess).toEqual({ probeService: "Read" });
     grants.set("alice", { probeService: "Moderate" });
     await app.server.access.refresh("alice");
-    await until(() => connection.getState().serviceAccess !== null);
-    expect(connection.getState().serviceAccess).toEqual({ probeService: "Moderate" });
+    await until(() => connection.getState().serviceAccess?.probeService === "Moderate");
     connection.setAuth({ principal: bob });
-    expect(connection.getState().serviceAccess).toBeNull();
+    expect(connection.getState()).toMatchObject({ hello: null, serviceAccess: null });
+    await until(() => connection.getState().hello !== null);
+    expect(connection.getState()).toMatchObject({ hello: { userId: "bob" }, serviceAccess: {} });
+  });
+
+  it("waits the server's time limit plus 2 s once the hello says it, unless timeoutMs was given", async () => {
+    const { app } = await harness.start();
+    const connection = harness.connection(app.url);
+    expect(connection.timeoutMs).toBe(10_000);
+    connection.open();
+    await until(() => connection.getState().hello !== null);
+    expect(connection.getState().hello?.limits.callTimeoutMs).toBe(30_000);
+    expect(connection.timeoutMs).toBe(32_000);
+    const fixed = await harness.connect(app.url, { timeoutMs: 1500 });
+    await until(() => fixed.getState().hello !== null);
+    expect(fixed.timeoutMs).toBe(1500);
+  });
+
+  it("is reconnecting while a dropped socket comes back, rejoins its topics, and tells onReconnect", async () => {
+    const { app } = await harness.start();
+    const connection = await harness.connect(app.url);
+    const reconnects = vi.fn();
+    const stop = connection.onReconnect(reconnects);
+    const seen: boolean[] = [];
+    connection.subscribe(() => {
+      seen.push(connection.getState().reconnecting);
+    });
+    const first = connection.socket.id;
+    app.server.rotate({ withinMs: 0 });
+    await until(
+      () => connection.socket.id !== first && connection.getState().status === "connected",
+    );
+    expect(seen).toContain(true);
+    expect(connection.getState().reconnecting).toBe(false);
+    expect(reconnects).toHaveBeenCalledTimes(1);
+    connection.setAuth({ principal: bob });
+    expect(connection.getState()).toMatchObject({ status: "connecting", reconnecting: false });
+    await whenStatus(connection, "connected");
+    expect(reconnects).toHaveBeenCalledTimes(1);
+    stop();
+    const second = connection.socket.id;
+    app.server.rotate({ withinMs: 0 });
+    await until(
+      () => connection.socket.id !== second && connection.getState().status === "connected",
+    );
+    expect(reconnects).toHaveBeenCalledTimes(1);
   });
 
   it("reconnects within the window a qd:rotate frame gives", async () => {
