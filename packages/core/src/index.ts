@@ -1,5 +1,5 @@
-/** The published version of `@fitzzero/quickdraw-core`. Kept in step with package.json. */
-export const QUICKDRAW_VERSION = "5.0.0-alpha.0";
+// The package version, also announced by the server in `qd:hello`.
+export { QUICKDRAW_VERSION } from "./version";
 
 // Contracts (RFC 0003 section 2). Plain data plus schemas: everything below is
 // browser-safe, with no Node built-ins, React or server code.

@@ -20,7 +20,9 @@
 //   encoder writes, reports the size, and refuses a binary argument;
 // - the built method runtime (`./server`) defines a service from a contract,
 //   runs a call through the dispatcher and its in-process caller, and answers
-//   invalid input with VALIDATION.
+//   invalid input with VALIDATION;
+// - the built server factory, booted by the built test app (`./testing`),
+//   serves a call over a v5 socket, over HTTP and through the 4.x shim.
 
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -79,6 +81,8 @@ const expectations = {
       "serviceGrant",
       "toCallReply",
       "DEFAULT_LIMITS",
+      "createServer",
+      "createHttpRouter",
       "createRateLimiter",
     ],
     client: false,
@@ -87,6 +91,7 @@ const expectations = {
   "./server/express": { symbols: ["createJsonRateLimiter"], client: false },
   "./client": { symbols: ["formatCurrency"], client: true },
   "./parser": { symbols: ["createJsonParser"], client: false },
+  "./testing": { symbols: ["createTestApp", "emitWithAck", "waitForEvent"], client: false },
   "./testing/prisma": { symbols: ["createPrismaTestGlobalSetup"], client: false },
 };
 
@@ -389,3 +394,42 @@ assert.deepEqual(
   ],
 );
 console.log("ok the built dispatcher runs a call in process and validates input on the wire");
+
+// The built server factory and its transports, booted by the built test app:
+// a v5 call over a real socket, an HTTP call, and a 4.x call through the shim.
+const testing = await import(`${pkg.name}/testing`);
+const { io: connectClient } = await import("socket.io-client");
+const testApp = await testing.createTestApp({
+  services: [echoService],
+  logger: quiet,
+  legacyWire: true,
+});
+try {
+  const connection = await testApp.connect({ userId: "smoke" });
+  assert.equal(connection.hello.protocol, core.PROTOCOL_VERSION);
+  assert.equal(await connection.call.echoService.say("socket"), "SOCKET");
+  const response = await fetch(`${testApp.url}/qd/echoService/say`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify("http"),
+  });
+  assert.deepEqual(await response.json(), { ok: true, d: "HTTP" });
+  const legacy = connectClient(testApp.url, {
+    forceNew: true,
+    reconnection: false,
+    transports: ["websocket"],
+  });
+  try {
+    assert.deepEqual(await legacy.timeout(5000).emitWithAck("echoService:say", "legacy"), {
+      success: true,
+      data: "LEGACY",
+    });
+  } finally {
+    legacy.disconnect();
+  }
+} finally {
+  await testApp.close();
+}
+console.log(
+  "ok the built server serves a call over a v5 socket, over HTTP and through the 4.x shim",
+);

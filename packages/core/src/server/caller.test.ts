@@ -123,10 +123,6 @@ describe("qd.caller", () => {
     app.createDispatcher({ services: [second], db, logger: silent() });
     expect(await caller.taskService.count({ projectId: "p1" })).toBe(2);
   });
-
-  it("leaves createServer to the transports card", () => {
-    expect(() => (qd.createServer as () => never)()).toThrow(/arrives with the transports card/);
-  });
 });
 
 function silent() {

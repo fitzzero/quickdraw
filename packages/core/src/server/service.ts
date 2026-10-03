@@ -49,7 +49,7 @@ export interface ServiceMethod {
 
 /**
  * A service defined with `qd.defineService(contract, definition)`. Pass it
- * to the dispatcher (and, later, to `qd.createServer`).
+ * to `qd.createServer` or to a dispatcher.
  */
 export interface Service<
   T extends QuickdrawTypes = QuickdrawTypes,

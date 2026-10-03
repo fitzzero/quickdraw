@@ -17,6 +17,90 @@ Fast fullstack patterns for real-time applications with Socket.io and TanStack Q
 pnpm add @fitzzero/quickdraw-core
 ```
 
+## 5.0 preview: the server factory, its transports and the 4.x shim
+
+The rest of this README describes 4.x. On the `dev` branch, 5.0 replaces
+`createQuickdrawServer` and `ServiceRegistry` with `qd.createServer`
+(design: `docs/rfcs/0003-v5.md`, sections 3, 8 and 10). It attaches to the
+Express app and HTTP server the app already owns, never listens or exits the
+process itself, and serves every service over three transports:
+
+```typescript
+import express from "express";
+import { qd } from "./quickdraw"; // initQuickdraw<{ db; principal }>()
+
+const app = express();
+app.use(express.json()); // optional: the HTTP transport reads JSON bodies itself
+const server = qd.createServer({
+  app, // the HTTP transport is mounted on it; the HTTP server is created from it
+  services: [taskService, projectService],
+  db: prisma,
+  auth: {
+    // a user id or a principal; nothing for anonymous; throw to refuse
+    authenticate: async ({ auth }) => verifySession(auth.token),
+    loadServiceAccess: async (userId) =>
+      (await prisma.user.findUnique({ where: { id: userId } }))?.serviceAccess,
+  },
+  legacyWire: true, // serve 4.x clients during the upgrade
+  handleSignals: true, // close on SIGTERM and SIGINT (never process.exit)
+});
+server.httpServer.listen(4000);
+```
+
+- **Socket.IO** (protocol 5): a client connects with
+  `auth: { token, qd: { protocol: 5, client } }`, receives `qd:hello` with the
+  server's limits, and calls through `qd:call` and `qd:cancel`. Every socket
+  gets the same few listeners however many methods the services have. The
+  JSON-only parser is the default; `binary: true` restores the stock one.
+  The socket rate limiter is on by default (100 events per minute per socket,
+  `qd:ch` and `qd:cancel` not counted); configure it with `rateLimit`, or turn
+  it off with `rateLimit: false`.
+- **HTTP**: `POST /qd/{service}/{method}` with the input as a JSON body and
+  `Content-Type: application/json` (required, even without a body). The
+  principal comes from the `session` cookie or an `Authorization: Bearer`
+  token through the same `authenticate`; the reply is `{ ok: true, d }` or
+  `{ ok: false, e: { code, message, data? } }` with the code's HTTP status.
+  Works on Express 4 and 5, and on a bare Node server. Move it with
+  `http: { path }`, turn it off with `http: false`, or mount
+  `createHttpRouter({ dispatcher, auth })` yourself.
+- **In process**: `server.dispatcher.caller(principal)` or `qd.caller(principal)`.
+
+`server.close()` disconnects every socket and closes the HTTP server;
+`server.rotate({ withinMs })` asks clients to reconnect within a window;
+`server.access.refresh(userId)` reloads a user's grants and pushes `qd:access`.
+
+### The 4.x legacy shim
+
+With `legacyWire: true`, a client that connects without `auth.qd` is served
+as a 4.x client instead of being refused with `PROTOCOL_MISMATCH`. The shim
+serves **request/response calls only**: `socket.emit("taskService:get", payload, ack)`
+runs through the 5.0 pipeline and is answered in the 4.x `ServiceResponse`
+shape, `{ success: true, data }` or `{ success: false, error, code }`, with the
+HTTP status of the 5.0 error code as `code` (for example 422 for invalid
+input, where 4.1 sent 400). A 4.x call made without a payload arrives as
+`null`, as it did in 4.x. 4.x subscriptions (`{service}:subscribe`),
+collections and channels are **not served**: those events get no reply. The
+socket still receives `auth:info` on connect, and each service, method and
+principal kind that calls through the shim is logged once at `warn`, so the
+remaining 4.x clients can be found.
+
+### Testing
+
+`@fitzzero/quickdraw-core/testing` boots the real server on a free port:
+
+```typescript
+import { createTestApp } from "@fitzzero/quickdraw-core/testing";
+
+const app = await createTestApp({ services: [taskService], db: testPrisma });
+await app.as(alice).taskService.rename({ id, title }); // in process
+const { call, socket } = await app.connect(alice); // a real v5 socket
+await call.taskService.get({ id });
+await app.close();
+```
+
+Its sockets act as the principal they connect with. `emitWithAck` and
+`waitForEvent` send raw frames and wait for events.
+
 ## Quick Start
 
 ### Server Setup
