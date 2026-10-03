@@ -5,6 +5,7 @@
     "": {
       "name": "@fitzzero/quickdraw-core",
       "devDependencies": {
+        "@fitzzero/quickdraw-skills": "workspace:*",
         "@rallycry/conveyor-skills": "^1.0.13",
         "@types/node": "^24.0.0",
         "@typescript/native-preview": "^7.0.0-dev",
@@ -141,6 +142,9 @@
     "packages/skills": {
       "name": "@fitzzero/quickdraw-skills",
       "version": "5.0.0-alpha.0",
+      "bin": {
+        "quickdraw-skills": "./bin/cli.mjs",
+      },
     },
   },
   "packages": {

@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@fitzzero/quickdraw-core": ["../../src/index.ts"],
+      "@fitzzero/quickdraw-core/client": ["../../src/client/index.ts"],
+      "@fitzzero/quickdraw-core/prisma": ["../../src/prisma/index.ts"],
+      "@fitzzero/quickdraw-core/server": ["../../src/server/index.ts"],
+      "@fitzzero/quickdraw-core/server/auth": ["../../src/server/auth/index.ts"],
+      "@fitzzero/quickdraw-core/server/express": ["../../src/server/express/index.ts"],
+      "@fitzzero/quickdraw-core/server/mcp": ["../../src/server/mcp/index.ts"],
+      "@fitzzero/quickdraw-core/server/otel": ["../../src/server/observability/otel.ts"],
+      "@fitzzero/quickdraw-core/testing": ["../../src/testing/index.ts"],
+      "@fitzzero/quickdraw-core/testing/client": ["../../src/testing/client.tsx"],
+      "@fitzzero/quickdraw-core/testing/prisma": ["../../src/testing/prisma.ts"],
+      "@fitzzero/quickdraw-core/utils": ["../../src/utils/index.ts"],
+      "@project/db": ["./packages/db/src/index.ts"],
+      "@project/shared": ["./packages/shared/src/index.ts"]
+    }
+  },
+  "include": ["./**/*"],
+  "exclude": []
+}

@@ -27,6 +27,8 @@ export default defineConfig({
     "testing/index": "src/testing/index.ts",
     "testing/prisma": "src/testing/prisma.ts",
     "testing/client": "src/testing/client.tsx",
+    // The `quickdraw-docs` bin (package.json `bin`), not an export.
+    "cli/quickdraw-docs": "src/cli/quickdraw-docs.ts",
   },
   format: ["esm"],
   dts: true,
