@@ -85,6 +85,21 @@ describe("session cookie", () => {
     expect(firstCall(calls).options.maxAge).toBe(1000);
   });
 
+  it("takes SameSite and Secure from the options, and keeps a SameSite=None cookie Secure", () => {
+    process.env.NODE_ENV = "production";
+    const lax = createFakeResponse();
+    setSessionCookie(lax.res, "jwt-value", { sameSite: "lax" });
+    expect(firstCall(lax.calls).options).toMatchObject({ sameSite: "lax", secure: true });
+
+    process.env.NODE_ENV = "development";
+    const secureDev = createFakeResponse();
+    setSessionCookie(secureDev.res, "jwt-value", { secure: true });
+    expect(firstCall(secureDev.calls).options).toMatchObject({ sameSite: "lax", secure: true });
+    const none = createFakeResponse();
+    clearSessionCookie(none.res, { sameSite: "none", secure: false });
+    expect(firstCall(none.calls).options).toMatchObject({ sameSite: "none", secure: true });
+  });
+
   it("clears with matching options (no maxAge)", () => {
     process.env.NODE_ENV = "development";
     const { res, calls } = createFakeResponse();

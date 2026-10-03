@@ -217,50 +217,41 @@ ${links || "<li><em>No users found.</em></li>"}
 </html>`;
 }
 
-/**
- * Mount the mock OAuth provider endpoints (authorize, token, userinfo) on an
- * Express-compatible router.
- *
- * No-ops (returning false) unless `isMockOAuthEnabled()` — i.e. in production
- * or without ENABLE_MOCK_OAUTH=true the routes are never mounted.
- */
-export function registerMockOAuthProvider(
-  router: MockOAuthRouter,
-  options: RegisterMockOAuthOptions,
-): boolean {
-  const logger = options.logger ?? consoleLogger;
+/** A short-lived grant for one mock user: an auth code or a bearer token. */
+interface MockGrant {
+  email: string;
+  expiresAt: number;
+}
 
-  if (!isMockOAuthEnabled()) {
-    if (process.env.ENABLE_MOCK_OAUTH === "true") {
-      logger.error("Mock OAuth is enabled but NODE_ENV is production — refusing to mount routes");
-    }
+/** What the three mock endpoints share once mounted. */
+interface MockEndpoints {
+  readonly options: RegisterMockOAuthOptions;
+  readonly prefix: string;
+  readonly allowedOrigins: string[];
+  // Single-use auth codes and bearer tokens, both short-lived and in-memory.
+  readonly codes: Map<string, MockGrant>;
+  readonly tokens: Map<string, MockGrant>;
+}
+
+function sweep(store: Map<string, MockGrant>): void {
+  const now = Date.now();
+  for (const [key, entry] of store) {
+    if (entry.expiresAt < now) store.delete(key);
+  }
+}
+
+function guard(res: MockResponse): boolean {
+  // Request-time re-check defends against env mutation after boot.
+  if (process.env.NODE_ENV === "production") {
+    res.status(404).json({ error: "Not found" });
     return false;
   }
+  return true;
+}
 
-  const prefix = options.pathPrefix ?? DEFAULT_MOCK_PATH_PREFIX;
-  const allowedOrigins = options.allowedRedirectOrigins ?? [];
-
-  // Single-use auth codes and bearer tokens, both short-lived and in-memory.
-  const codes = new Map<string, { email: string; expiresAt: number }>();
-  const tokens = new Map<string, { email: string; expiresAt: number }>();
-
-  function sweep(store: Map<string, { expiresAt: number }>): void {
-    const now = Date.now();
-    for (const [key, entry] of store) {
-      if (entry.expiresAt < now) store.delete(key);
-    }
-  }
-
-  function guard(res: MockResponse): boolean {
-    // Request-time re-check defends against env mutation after boot.
-    if (process.env.NODE_ENV === "production") {
-      res.status(404).json({ error: "Not found" });
-      return false;
-    }
-    return true;
-  }
-
-  router.get(`${prefix}/authorize`, async (req, res) => {
+function authorizeHandler(endpoints: MockEndpoints): MockHandler {
+  const { options, prefix, allowedOrigins, codes } = endpoints;
+  return async (req, res) => {
     if (!guard(res)) return;
 
     const redirectUri = getQueryParam(req, "redirect_uri");
@@ -292,9 +283,11 @@ export function registerMockOAuthProvider(
     const params = new URLSearchParams({ code });
     if (state) params.set("state", state);
     res.redirect(`${redirectUri}${redirectUri.includes("?") ? "&" : "?"}${params.toString()}`);
-  });
+  };
+}
 
-  router.post(`${prefix}/token`, async (req, res) => {
+function tokenHandler({ codes, tokens }: MockEndpoints): MockHandler {
+  return async (req, res) => {
     if (!guard(res)) return;
 
     const body = await readBodyParams(req);
@@ -317,9 +310,11 @@ export function registerMockOAuthProvider(
       expires_in: Math.floor(TOKEN_TTL_MS / 1000),
       scope: "openid email profile",
     });
-  });
+  };
+}
 
-  router.get(`${prefix}/userinfo`, async (req, res) => {
+function userinfoHandler({ options, tokens }: MockEndpoints): MockHandler {
+  return async (req, res) => {
     if (!guard(res)) return;
 
     const auth = req.headers.authorization;
@@ -347,8 +342,41 @@ export function registerMockOAuthProvider(
       picture: user.picture ?? null,
       verified_email: true,
     });
-  });
+  };
+}
 
-  logger.info(`Mock OAuth provider mounted at ${prefix} (development only)`);
+/**
+ * Mount the mock OAuth provider endpoints (authorize, token, userinfo) on an
+ * Express-compatible router.
+ *
+ * No-ops (returning false) unless `isMockOAuthEnabled()` — i.e. in production
+ * or without ENABLE_MOCK_OAUTH=true the routes are never mounted.
+ */
+export function registerMockOAuthProvider(
+  router: MockOAuthRouter,
+  options: RegisterMockOAuthOptions,
+): boolean {
+  const logger = options.logger ?? consoleLogger;
+
+  if (!isMockOAuthEnabled()) {
+    if (process.env.ENABLE_MOCK_OAUTH === "true") {
+      logger.error("Mock OAuth is enabled but NODE_ENV is production — refusing to mount routes");
+    }
+    return false;
+  }
+
+  const endpoints: MockEndpoints = {
+    options,
+    prefix: options.pathPrefix ?? DEFAULT_MOCK_PATH_PREFIX,
+    allowedOrigins: options.allowedRedirectOrigins ?? [],
+    codes: new Map(),
+    tokens: new Map(),
+  };
+
+  router.get(`${endpoints.prefix}/authorize`, authorizeHandler(endpoints));
+  router.post(`${endpoints.prefix}/token`, tokenHandler(endpoints));
+  router.get(`${endpoints.prefix}/userinfo`, userinfoHandler(endpoints));
+
+  logger.info(`Mock OAuth provider mounted at ${endpoints.prefix} (development only)`);
   return true;
 }

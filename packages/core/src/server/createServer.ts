@@ -100,7 +100,11 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
    * then `RATE_LIMITED`).
    */
   readonly rateLimit?: SocketRateLimitOptions | false;
-  /** The HTTP transport's options, or `false` to serve no HTTP calls. */
+  /**
+   * The HTTP transport's options, or `false` to serve no HTTP calls. It has
+   * no rate limit unless `rateLimit` is given: `http: { rateLimit:
+   * createCallLimiter() }` (from `./server/express`).
+   */
   readonly http?: HttpTransportOptions | false;
   /** Close the server on `SIGTERM` and `SIGINT`. Default `false`. The process is never exited. */
   readonly handleSignals?: boolean;

@@ -269,6 +269,7 @@ export {
 } from "./createServer";
 export {
   createHttpRouter,
+  type HttpMiddleware,
   type HttpRouter,
   type HttpRouterOptions,
   type HttpTransportOptions,

@@ -3,6 +3,11 @@ import * as jose from "jose";
 export interface JWTPayload {
   userId: string;
   email?: string;
+  /**
+   * The session the token belongs to: the id of the auth routes kit's
+   * `SessionStore` entry, which `socketAuth` checks on every handshake.
+   */
+  sid?: string;
   exp?: number;
   iat?: number;
 }
@@ -47,6 +52,7 @@ export async function verifyJWT(token: string, secret: string): Promise<JWTPaylo
     return {
       userId: payload.userId as string,
       email: payload.email as string | undefined,
+      ...(typeof payload.sid === "string" && { sid: payload.sid }),
       exp: payload.exp,
       iat: payload.iat,
     };

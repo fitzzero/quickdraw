@@ -9,6 +9,7 @@ export {
   createAuthStatusLimiter,
   createWebhookLimiter,
   createPublicApiLimiter,
+  createCallLimiter,
   stripIp,
   bearerOrIp,
 } from "./rateLimit";

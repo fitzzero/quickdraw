@@ -16,6 +16,16 @@ describe("createJWT / verifyJWT", () => {
     expect((payload?.exp ?? 0) - (payload?.iat ?? 0)).toBe(7 * 24 * 60 * 60);
   });
 
+  it("carries the session id as sid, and leaves it out when the token has none", async () => {
+    const withSid = await verifyJWT(
+      await createJWT({ userId: "user-1", sid: "s-1" }, SECRET),
+      SECRET,
+    );
+    expect(withSid).toMatchObject({ userId: "user-1", sid: "s-1" });
+    const without = await verifyJWT(await createJWT({ userId: "user-1" }, SECRET), SECRET);
+    expect(without).not.toHaveProperty("sid");
+  });
+
   it("honours a custom expiry", async () => {
     const payload = await verifyJWT(await createJWT({ userId: "user-1" }, SECRET, "1h"), SECRET);
     expect((payload?.exp ?? 0) - (payload?.iat ?? 0)).toBe(60 * 60);
