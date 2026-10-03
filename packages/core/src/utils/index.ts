@@ -32,9 +32,13 @@ export { parseJWTPayload, type JWTPayload } from "./jwt";
 // a server component needs to prefetch for hydration.
 export {
   KEY_ROOT,
+  collectionKey,
+  entityKey,
   methodKey,
   methodKeyPrefix,
   serviceKeyPrefix,
+  type CollectionQueryKey,
+  type EntityQueryKey,
   type MethodKeyPrefix,
   type MethodQueryKey,
   type ServiceKeyPrefix,

@@ -157,10 +157,10 @@ describe("connection.watch", () => {
     const board = live.board();
     const connection = await connect(app.url, as(board.ada));
     const sent = outgoing(connection);
-    connection.watch({
-      service: "taskService",
-      topic: collectionTopic("board", board.p1),
-      onChanged: () => undefined,
+    // Sent past the connection's lane, so the server's one slot is taken
+    // while the connection's own lane is empty.
+    connection.socket.emit("qd:watch", { s: "taskService", topic: `board:${board.p1}` }, () => {
+      // Its answer does not matter here.
     });
     await until(() => framesOf(sent, "qd:watch").length === 1);
     connection.watch({
@@ -177,6 +177,35 @@ describe("connection.watch", () => {
     expect(watchersOf(app, board.p1, "open")).toBe(0);
     await until(() => watchersOf(app, board.p1, "open") === 1, 3000);
     expect(framesOf(sent, "qd:watch")).toHaveLength(3);
+    expect(connection.backoffRemaining("subscription")).toBe(0);
+  });
+
+  it("sends no more watches at once than the server's lane runs, so a burst is never refused", async () => {
+    let held = deferred();
+    const { app } = await live.start({
+      limits: { subscriptions: { maxInFlight: 1, maxQueued: 0 }, retryAfterMs: 300 },
+      beforeRead: () => held.promise,
+    });
+    const board = live.board();
+    const connection = await connect(app.url, as(board.ada));
+    const sent = outgoing(connection);
+    for (const collection of ["board", "open"]) {
+      connection.watch({
+        service: "taskService",
+        topic: collectionTopic(collection, board.p1),
+        onChanged: () => undefined,
+      });
+    }
+    await until(() => framesOf(sent, "qd:watch").length === 1);
+    await tick(100);
+    // The second waits in the connection's lane while the first holds the server's only slot.
+    expect(framesOf(sent, "qd:watch")).toHaveLength(1);
+    expect(connection.subscriptionLane.waiting()).toBe(1);
+    held.resolve();
+    held = deferred();
+    held.resolve();
+    await until(() => watchersOf(app, board.p1) === 1 && watchersOf(app, board.p1, "open") === 1);
+    expect(framesOf(sent, "qd:watch")).toHaveLength(2);
     expect(connection.backoffRemaining("subscription")).toBe(0);
   });
 

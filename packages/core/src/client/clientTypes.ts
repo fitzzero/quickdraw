@@ -16,15 +16,20 @@ import type {
   CollectionName,
   ContractMap,
   EntityOf,
+  IndexRowOf,
   InputOf,
   ItemOf,
   KindOf,
   MethodName,
   OutputOf,
+  ScopeOf,
+  ViewName,
 } from "../contract/infer";
 import type { QuickdrawError } from "../protocol/errors";
 import type { MethodMutationOptions, MethodQueryOptions } from "./hooks";
 import type { MethodQueryKey } from "./keys";
+import type { UseCollectionOptions, UseCollectionResult } from "./live/useCollection";
+import type { UseEntitiesResult, UseEntityOptions, UseEntityResult } from "./live/useEntity";
 import type { OptimisticCache } from "./optimistic";
 
 /** Options of a query member's `call`. */
@@ -103,14 +108,44 @@ export interface MutationMember<C extends AnyContract, M extends MethodName<C>> 
 export type MethodMember<C extends AnyContract, M extends MethodName<C>> =
   KindOf<C, M> extends "query" ? QueryMember<C, M> : MutationMember<C, M>;
 
+/** The entity members of `qd.<key>`, for a contract with an entity. */
+export interface EntityMembers<C extends AnyContract> {
+  /**
+   * Row `id` of the service, live: loaded with `qd:sub`, kept current by
+   * the server's frames, resumed by revision after a reconnect. A `null` or
+   * empty id holds nothing.
+   */
+  useEntity(
+    id: string | null | undefined,
+    options?: UseEntityOptions,
+  ): UseEntityResult<EntityOf<C>>;
+  /** Rows `ids` of the service, live, subscribed together. */
+  useEntities(ids: readonly string[], options?: UseEntityOptions): UseEntitiesResult<EntityOf<C>>;
+}
+
+/** `qd.<key>.<collection>`: one collection of the service. */
+export interface CollectionMember<C extends AnyContract, K extends CollectionName<C>> {
+  /**
+   * One scope of the collection, live: its members (the index, filtered by
+   * `view`) and the items loaded, kept current by deltas and resumed by
+   * revision after a reconnect. A `null` or empty scope holds nothing.
+   */
+  useCollection(
+    scope: ScopeOf<C, K> | null | undefined,
+    options?: UseCollectionOptions<ViewName<C, K>>,
+  ): UseCollectionResult<ItemOf<C, K>, IndexRowOf<C, K>>;
+}
+
 /**
  * The live members of `qd.<key>` (RFC 0003 sections 11 and 11.5):
- * `useEntity`, `useEntities` and one member per collection, beside the
- * methods (methods and collections share one namespace). The live-data card
- * adds them here; until then every collection maps to nothing.
+ * `useEntity` and `useEntities` when the contract has an entity, and one
+ * member per collection, beside the methods (methods and collections share
+ * one namespace).
  */
-export type LiveMembers<C extends AnyContract> = {
-  readonly [K in CollectionName<C> as never]: never;
+export type LiveMembers<C extends AnyContract> = ([EntityOf<C>] extends [never]
+  ? unknown
+  : EntityMembers<C>) & {
+  readonly [K in CollectionName<C>]: CollectionMember<C, K>;
 };
 
 /** `qd.<key>`: one member per method, plus the live members. */

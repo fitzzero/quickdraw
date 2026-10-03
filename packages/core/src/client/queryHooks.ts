@@ -47,11 +47,25 @@ export interface QueryWatch {
   readonly topic: string | undefined;
 }
 
+/** True when a read of the cached query `queryKey` was sent: it holds a result or an error, or is reading. */
+function wasRead(coordinator: InvalidationCoordinator, queryKey: MethodQueryKey): boolean {
+  const query = coordinator.queryClient.getQueryCache().find({ queryKey, exact: true });
+  if (query === undefined) {
+    return false;
+  }
+  const { dataUpdatedAt, errorUpdatedAt, fetchStatus } = query.state;
+  return dataUpdatedAt > 0 || errorUpdatedAt > 0 || fetchStatus !== "idle";
+}
+
 /**
  * Joins the change topic of a watching query while the component is
  * mounted, and invalidates the query through the coordinator on each
  * `qd:changed`. Components reading the same query cause one invalidation per
- * frame between them: their watches share the query key's hash.
+ * frame between them: their watches share the query key's hash. When the
+ * server acknowledges the join after the query's read was sent (a first
+ * read, or a result prefetched before), a change made between that read and
+ * the join sent no `qd:changed` here, so the query is invalidated once
+ * (RFC 0003 section 17).
  */
 export function useTopicWatch({
   connection,
@@ -75,6 +89,11 @@ export function useTopicWatch({
       key,
       onChanged: () => {
         coordinator.invalidate(latest.current, { exact: true });
+      },
+      onJoined: () => {
+        if (wasRead(coordinator, latest.current)) {
+          coordinator.invalidate(latest.current, { exact: true });
+        }
       },
     });
   }, [connection, coordinator, service, topic, key]);

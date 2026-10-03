@@ -38,7 +38,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { QuickdrawError } from "../protocol/errors";
-import { callData, shouldRetry } from "./call";
+import { callData, isNotModified, shouldRetry } from "./call";
 import { useQueriesLive, useQuickdrawContext } from "./context";
 import { methodKey, methodKeyPrefix, type MethodQueryKey } from "./keys";
 import type { MethodTarget } from "./members";
@@ -149,17 +149,22 @@ export function useMethodMutation<Output, Variables, Context = unknown, Cache = 
     mutationKey: methodKeyPrefix(target.service, target.method),
     ...rest,
     mutationFn: (input: Variables) =>
-      mutateOptimistically(
+      mutateOptimistically<Output>(
         queryClient,
         optimisticTarget,
         optimistic as false | OptimisticUpdate<unknown> | undefined,
         input,
-        () =>
+        (replied) =>
           callData<Output>(connection, {
             service: target.service,
             method: target.method,
             input,
             kind: "mutation",
+            onReply: (result) => {
+              if (!isNotModified(result)) {
+                replied(result.d as Output);
+              }
+            },
           }),
       ),
   });

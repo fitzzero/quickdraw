@@ -12,13 +12,19 @@
 //   reading one topic join it once, and a remount joins it once too.
 // - The server forgets a socket's topics when it disconnects, so every
 //   connect sends `qd:watch` again for each topic still watched.
-// - `qd:watch` runs in the socket's subscription lane on the server. A
-//   `RATE_LIMITED` answer starts the connection's `subscription` backoff, and
-//   the topic is joined again once it ends; no topic is joined while it
-//   lasts. Any other refusal (`FORBIDDEN`, `NOT_FOUND`, ...) stands until
-//   the next connect: the query still works, it is just not told of changes.
+// - `qd:watch` runs in the socket's subscription lane on the server, and goes
+//   through the connection's lane here (`lane.ts`). A `RATE_LIMITED` answer
+//   starts the connection's `subscription` backoff, and the topic is joined
+//   again once it ends; no topic is joined while it lasts. Any other refusal
+//   (`FORBIDDEN`, `NOT_FOUND`, ...) stands until the next connect: the query
+//   still works, it is just not told of changes.
 // - One `qd:changed` listener serves every topic and routes by topic.
 //   Watches that share a `key` are told once per frame between them.
+// - A watch is told once (`onJoined`) when its topic is first joined after
+//   the watch started: a read sent before then may have missed a change
+//   made before the join, so the query hooks read once more (RFC 0003
+//   section 17). Joining again after a reconnect tells no one: the
+//   coordinator's reconnect refetch covers that.
 //
 // React-free: the connection owns one (`connection.watch`).
 
@@ -28,6 +34,7 @@ import { fromWire } from "../protocol/errors";
 import { isRecord } from "../protocol/guards";
 import { DEFAULT_BACKOFF_MS, retryAfterOf, type BackoffKind } from "./backoff";
 import type { QuickdrawSocket } from "./connection";
+import type { SubscriptionLane } from "./lane";
 
 /** One watch of a change topic, as `connection.watch` takes it. */
 export interface TopicWatch {
@@ -42,6 +49,12 @@ export interface TopicWatch {
   /** Called with each `qd:changed` frame of the topic while the watch lasts. */
   readonly onChanged: (frame: ChangedFrame) => void;
   /**
+   * Called once, when the server first acknowledges `qd:watch` for the topic
+   * after this watch started. Not called when the topic was joined already,
+   * nor when it is joined again after a reconnect.
+   */
+  readonly onJoined?: () => void;
+  /**
    * Watches of one topic that share a key are told of each frame once
    * between them. The query hooks pass their query key's hash, so two
    * components reading one query cause one invalidation.
@@ -52,8 +65,8 @@ export interface TopicWatch {
 /** What the topics need of their connection. */
 export interface TopicHost {
   readonly socket: QuickdrawSocket;
-  /** How long to wait for the answer to `qd:watch`. */
-  timeoutMs(): number;
+  /** The connection's lane, which `qd:watch` goes through. */
+  readonly lane: SubscriptionLane;
   backoffRemaining(kind: BackoffKind): number;
   reportRateLimited(kind: BackoffKind, retryAfterMs?: number): void;
 }
@@ -75,11 +88,17 @@ export interface Topics {
  */
 type JoinState = "waiting" | "joining" | "joined" | "refused";
 
+/** One `watch` call: the watch, and whether it was told its topic was joined. */
+interface WatchRecord {
+  readonly watch: TopicWatch;
+  told: boolean;
+}
+
 interface Topic {
   readonly id: string;
   readonly frame: { readonly s: string; readonly topic: string };
   /** One record per `watch` call, so the same watch object may be started twice. */
-  readonly watches: Set<{ readonly watch: TopicWatch }>;
+  readonly watches: Set<WatchRecord>;
   state: JoinState;
   retry: ReturnType<typeof setTimeout> | undefined;
   /**
@@ -121,19 +140,34 @@ export function notifyEach<T>(listeners: Iterable<T>, notify: (listener: T) => v
   }
 }
 
-/** Tells each watch of `topic` of `frame`, once per key. */
-function tell(topic: Topic, frame: ChangedFrame): void {
-  const told = new Set<string>();
-  const watches = [...topic.watches].filter(({ watch }) => {
+/** `records` with one per key: a watch without a key is always kept. */
+function oncePerKey(records: Iterable<WatchRecord>): WatchRecord[] {
+  const keys = new Set<string>();
+  return [...records].filter(({ watch }) => {
     if (watch.key === undefined) {
       return true;
     }
-    const first = !told.has(watch.key);
-    told.add(watch.key);
+    const first = !keys.has(watch.key);
+    keys.add(watch.key);
     return first;
   });
-  notifyEach(watches, ({ watch }) => {
+}
+
+/** Tells each watch of `topic` of `frame`, once per key. */
+function tell(topic: Topic, frame: ChangedFrame): void {
+  notifyEach(oncePerKey(topic.watches), ({ watch }) => {
     watch.onChanged(frame);
+  });
+}
+
+/** Tells the watches of `topic` that were not told yet that it is joined, once per key. */
+function tellJoined(topic: Topic): void {
+  const untold = [...topic.watches].filter((record) => !record.told);
+  for (const record of untold) {
+    record.told = true;
+  }
+  notifyEach(oncePerKey(untold), ({ watch }) => {
+    watch.onJoined?.();
   });
 }
 
@@ -167,6 +201,7 @@ function answered(registry: Registry, topic: Topic, error: Error | null, reply: 
   }
   if (isRecord(reply) && reply.ok === true) {
     topic.state = "joined";
+    tellJoined(topic);
     return;
   }
   const failure = fromWire(isRecord(reply) ? reply.e : undefined);
@@ -192,13 +227,11 @@ function join(registry: Registry, topic: Topic): void {
   } else {
     topic.state = "joining";
     const { attempt } = topic;
-    host.socket
-      .timeout(host.timeoutMs())
-      .emit(CLIENT_EVENTS.watch, topic.frame, (error: Error | null, reply: unknown) => {
-        if (registry.topics.get(topic.id) === topic && topic.attempt === attempt) {
-          answered(registry, topic, error, reply);
-        }
-      });
+    host.lane.send(CLIENT_EVENTS.watch, topic.frame, (error, reply) => {
+      if (registry.topics.get(topic.id) === topic && topic.attempt === attempt) {
+        answered(registry, topic, error, reply);
+      }
+    });
   }
 }
 
@@ -230,7 +263,8 @@ function startWatch(registry: Registry, watch: TopicWatch): () => void {
   const kept = topic.leaving !== undefined;
   clearTimeout(topic.leaving);
   topic.leaving = undefined;
-  const record = { watch };
+  // A topic joined already needs no telling: this watch's reads come after the join.
+  const record: WatchRecord = { watch, told: topic.state === "joined" };
   topic.watches.add(record);
   if (topic.watches.size === 1 && !kept) {
     join(registry, topic);

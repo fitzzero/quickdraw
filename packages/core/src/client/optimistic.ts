@@ -494,26 +494,39 @@ function openLayers(
 /**
  * Runs one mutation call with its optimistic layers: opens them, sends the
  * call with `send`, then finishes them with the reply or drops them when the
- * call fails.
+ * call fails. `send` is given `replied`, to call with the reply's data the
+ * moment it arrives (`CallRequest.onReply`): a frame handled after that is
+ * after the reply, even when the call's promise has not settled yet, as on
+ * Node, where one read of the socket can hand over the reply and the
+ * flush's frames together. A `send` that never calls it has its layers
+ * finished when its promise resolves.
  */
 export async function mutateOptimistically<T>(
   queryClient: QueryClient,
   target: OptimisticTarget,
   optimistic: false | OptimisticUpdate<unknown> | undefined,
   input: unknown,
-  send: () => Promise<T>,
+  send: (replied: (data: T) => void) => Promise<T>,
 ): Promise<T> {
+  const ignore = (): void => undefined;
   if (optimistic === false) {
-    return await send();
+    return await send(ignore);
   }
   const store = storeOf(queryClient);
   const opened = openLayers(store, target, optimistic, input);
   if (opened.length === 0) {
-    return await send();
+    return await send(ignore);
   }
+  let finished = false;
+  const replied = (data: T): void => {
+    if (!finished) {
+      finished = true;
+      store.finish(opened, data);
+    }
+  };
   try {
-    const data = await send();
-    store.finish(opened, data);
+    const data = await send(replied);
+    replied(data);
     return data;
   } catch (error) {
     store.discard(opened);

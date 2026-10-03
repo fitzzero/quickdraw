@@ -21,36 +21,33 @@
 //   rotates) is `reconnecting` meanwhile, joins its watched topics again
 //   (`watch.ts`) and tells `onReconnect` listeners, which refetch what may
 //   have changed (the provider, through the coordinator).
+// - Subscription events (`qd:sub`, `qd:col:sub`, `qd:col:items`,
+//   `qd:watch`) go through the connection's lane (`lane.ts`), paced by the
+//   server's `limits.subscriptions`.
 //
 // 4.1 created a socket per token and hard-coded its options
 // (`legacy-src/client/QuickdrawProvider.tsx:306-312`), and cleared every
 // subscription on a disconnect (`:326-330`). Here one socket lives as long as
-// the connection: new credentials reconnect it, and `socketOptions` pass
-// through to `io()`. Caches are never cleared on a disconnect.
+// the connection (`socket.ts`): new credentials reconnect it, and
+// `socketOptions` pass through to `io()`. Caches are never cleared on a
+// disconnect.
 
-import { io, type ManagerOptions, type Socket, type SocketOptions } from "socket.io-client";
 import { SERVER_EVENTS } from "../contract/names";
-import type { ClientToServerEvents, ServerToClientEvents } from "../protocol/envelope";
 import { isRecord } from "../protocol/guards";
-import { createJsonParser } from "../protocol/parser";
 import {
-  PROTOCOL_VERSION,
   isAuthenticationRefused,
   isProtocolMismatch,
   type AuthenticationRefused,
   type HelloFrame,
   type ProtocolMismatch,
 } from "../protocol/version";
-import { QUICKDRAW_VERSION } from "../version";
 import { createBackoff, type Backoff, type BackoffKind, type BackoffWindows } from "./backoff";
+import { createSubscriptionLane, type SubscriptionLane } from "./lane";
 import { reloadOncePerSession } from "./reload";
+import { createSocket, type QuickdrawSocket, type SocketClientOptions } from "./socket";
 import { createTopics, notifyEach, type Topics, type TopicWatch } from "./watch";
 
-/** The client's Socket.IO socket, typed with the v5 frames. */
-export type QuickdrawSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
-
-/** Socket.IO client options: `io(url, options)`. */
-export type SocketClientOptions = Partial<ManagerOptions & SocketOptions>;
+export type { QuickdrawSocket, SocketClientOptions };
 
 /**
  * The credentials a connection authenticates with: a token, sent as
@@ -147,6 +144,13 @@ export interface QuickdrawConnection {
   readonly timeoutMs: number;
   /** The socket, created unconnected with the connection and kept for its lifetime. */
   readonly socket: QuickdrawSocket;
+  /**
+   * The lane every subscription event goes through (`qd:sub`, `qd:col:sub`,
+   * `qd:col:items`, `qd:watch`): at most the server's
+   * `limits.subscriptions.maxInFlight` of them unanswered at once, none while
+   * the `subscription` backoff lasts.
+   */
+  readonly subscriptionLane: SubscriptionLane;
   /** The current state. The same object until something changes. */
   getState(): ConnectionState;
   /** Calls `listener` after every state change; returns the unsubscribe function. */
@@ -298,24 +302,6 @@ function defaultTimeout(option: number | undefined, hello: HelloFrame | null): n
   const serverMs: unknown = isRecord(limits) ? limits.callTimeoutMs : undefined;
   const fromHello = typeof serverMs === "number" ? serverMs + HELLO_TIMEOUT_MARGIN_MS : undefined;
   return isTimeLimit(fromHello) ? fromHello : DEFAULT_TIMEOUT_MS;
-}
-
-function createSocket(
-  options: QuickdrawConnectionOptions,
-  handshake: () => Record<string, unknown>,
-): QuickdrawSocket {
-  return io(options.url, {
-    forceNew: true,
-    withCredentials: true,
-    transports: ["websocket", "polling"],
-    ...(options.binary === true ? {} : { parser: createJsonParser() }),
-    ...options.socketOptions,
-    ...(options.transports === undefined ? {} : { transports: options.transports }),
-    autoConnect: false,
-    auth: (send: (data: object) => void) => {
-      send(handshake());
-    },
-  });
 }
 
 /**
@@ -504,14 +490,17 @@ export function createQuickdrawConnection(
   });
   let auth = options.auth;
   let nextId = 0;
-  const socket = createSocket(options, () => ({
-    ...credentialsOf(auth),
-    qd: { protocol: PROTOCOL_VERSION, client: QUICKDRAW_VERSION },
-  }));
+  const socket = createSocket(options, () => credentialsOf(auth));
   const timeoutMs = (): number => defaultTimeout(timeoutOption, store.get().hello);
-  const topics = createTopics({
+  const subscriptionLane = createSubscriptionLane({
     socket,
     timeoutMs,
+    hello: () => store.get().hello,
+    backoffRemaining: backoff.remaining,
+  });
+  const topics = createTopics({
+    socket,
+    lane: subscriptionLane,
     backoffRemaining: backoff.remaining,
     reportRateLimited: backoff.report,
   });
@@ -535,6 +524,7 @@ export function createQuickdrawConnection(
       return timeoutMs();
     },
     socket,
+    subscriptionLane,
     getState: store.get,
     subscribe: store.subscribe,
     open: lifecycle.open,

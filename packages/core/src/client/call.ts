@@ -33,6 +33,7 @@ import { QuickdrawError, fromWire } from "../protocol/errors";
 import { isRecord } from "../protocol/guards";
 import { retryAfterOf } from "./backoff";
 import { isTimeLimit, type QuickdrawConnection, type QuickdrawSocket } from "./connection";
+import { notifyEach } from "./watch";
 
 /** One call, as {@link call} takes it. */
 export interface CallRequest {
@@ -49,6 +50,14 @@ export interface CallRequest {
   readonly timeoutMs?: number;
   /** The version of the result the caller holds; the server answers "not modified" while it is current. */
   readonly v?: Version;
+  /**
+   * Called with the result the moment the reply arrives, before any frame
+   * the server sent after it is handled; the returned promise settles only
+   * after more microtasks, and a client on Node can handle several frames in
+   * between. What must follow reply order goes here: an optimistic layer
+   * ends at the first newer frame after its call's reply.
+   */
+  readonly onReply?: (result: CallResult) => void;
 }
 
 /** What a call resolves with: the data, or "not modified" when the `v` it sent is current. */
@@ -183,6 +192,9 @@ export function call<Output = unknown>(
       if (outcome instanceof QuickdrawError) {
         reject(outcome);
       } else {
+        notifyEach([request.onReply], (onReply) => {
+          onReply?.(outcome);
+        });
         resolve(outcome as CallResult<Output>);
       }
     };
