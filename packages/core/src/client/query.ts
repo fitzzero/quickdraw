@@ -7,9 +7,9 @@
 // replaced meanwhile), there is nothing to keep, so the call is made once
 // more without a version; a query never resolves to `undefined` that way.
 //
-// A result that holds rows of its service tells the overlay store which rows
-// it read and when the read was sent (`optimistic.ts`): the server's data for
-// those rows now includes every mutation that had finished by then.
+// A result that holds rows of its service remembers when its read was sent,
+// on the overlay store's clock (`optimistic.ts`): it holds every mutation
+// that had finished by then, so their overlays are not shown over it.
 //
 // React-free: it reads the cache through the `QueryClient` it is given.
 
@@ -19,8 +19,8 @@ import { QuickdrawError } from "../protocol/errors";
 import { call, isNotModified, type CallRequest } from "./call";
 import type { QuickdrawConnection } from "./connection";
 import type { MethodQueryKey } from "./keys";
-import { overlaysOf, rowIdsOf, rowShapeOf } from "./optimistic";
-import { rememberVersion, versionOf } from "./versions";
+import { overlaysOf, rowShapeOf } from "./optimistic";
+import { rememberReadAt, rememberVersion, versionOf } from "./versions";
 
 /** A query to fetch: the call, the key its result is cached under, and the method's output. */
 export interface MethodQuery extends Omit<CallRequest, "v" | "signal" | "kind"> {
@@ -79,13 +79,11 @@ export async function fetchMethodQuery<Output>(
   query: MethodQuery,
   signal?: AbortSignal,
 ): Promise<Output> {
-  const shape = rowShapeOf(query.output);
-  if (shape === undefined) {
+  if (rowShapeOf(query.output) === undefined) {
     return fetchVersioned(connection, queryClient, query, signal);
   }
-  const overlays = overlaysOf(queryClient);
-  const sentAt = overlays.now();
+  const sentAt = overlaysOf(queryClient).now();
   const data = await fetchVersioned<Output>(connection, queryClient, query, signal);
-  overlays.read(query.service, rowIdsOf(shape, data), sentAt);
+  rememberReadAt(data, sentAt);
   return data;
 }

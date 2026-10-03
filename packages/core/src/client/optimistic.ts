@@ -14,20 +14,27 @@
 //   `cache.removeEntity` and `cache.patchItem`.
 // - The layers are made when the call is sent. A refused call drops them.
 // - A call that succeeds keeps them, with the values its reply holds for the
-//   same fields (the server may have normalized them), until the server's
-//   data for the row catches up: a frame (or subscribe reply) whose revision
-//   is newer than every revision of the row seen before the write
-//   (`observe`), or a read sent after the call succeeded (`read`). Revisions
-//   are compared, never arrival order: a read that started before the write
-//   finished, or a frame from an earlier flush, does not end the layer. A
-//   mutation reply carries no revision (the server flushes after it
-//   answers), so the threshold is the newest revision seen before the reply.
+//   same fields (the server may have normalized them), for as long as cached
+//   data can predate the write:
+//   - data read by a request sent after the call succeeded already holds the
+//     write, so a finished layer is not shown over it (`readAt`, on the
+//     store's clock): the cached result of one query is refreshed without
+//     taking the overlay off another that still holds the old row;
+//   - a frame (or subscribe reply) whose revision is newer than every
+//     revision of the row seen before the reply ends the layer for good
+//     (`observe`). A mutation reply carries no revision, because the server
+//     flushes after it answers, so that is the threshold; a frame that
+//     arrives before the reply is from an earlier flush and only raises it.
+//   Revisions and send order are compared, never arrival order: a read that
+//   was sent before the write finished does not end the layer, whenever its
+//   answer arrives.
 // - Only fields the row already has are overlaid, so a projection shows the
 //   fields it carries and nothing else.
 //
 // The query hooks apply overlays to methods whose output is a projection
 // (one row, `nullable(...)` or `listOf(...)`); the live-data hooks apply them
-// to entities and collection items through the same `applyOverlay`.
+// to entities and collection items through the same `applyOverlay`. A store
+// keeps at most 1,000 layers and forgets the oldest finished ones first.
 //
 // React-free: one store per `QueryClient`.
 
@@ -67,24 +74,33 @@ export interface OptimisticCache<
  */
 export type OptimisticUpdate<Input, Cache = OptimisticCache> = (input: Input, cache: Cache) => void;
 
+/** Where a row being shown comes from, for {@link OverlayStore.applyOverlay}. */
+export interface OverlayOptions {
+  /** The collection the row is an item of: layers written with `patchItem` for it apply too. */
+  readonly collection?: string;
+  /**
+   * When the request that read the row was sent, as `now()` was then.
+   * Layers of calls that had finished by then are in the row already and
+   * are not applied again. Left out, every layer applies.
+   */
+  readonly readAt?: number;
+}
+
 /** The overlays of one `QueryClient`. */
 export interface OverlayStore {
   /**
    * `row` as the overlays of `service` show it: their fields over its own,
-   * or `undefined` when one hides it. `collection` names the collection
-   * `row` is an item of, so item-only layers apply to it. Returns `row`
-   * itself when no layer changes it.
+   * or `undefined` when one hides it. Returns `row` itself when no layer
+   * changes it.
    */
-  applyOverlay<T>(service: string, row: T, collection?: string): T | undefined;
+  applyOverlay<T>(service: string, row: T, options?: OverlayOptions): T | undefined;
   /**
    * A frame or subscribe reply carrying revision `rev` of the row arrived:
    * it ends the layers of finished calls that it is newer than.
    */
   observe(service: string, id: string, rev: Revision): void;
-  /** The store's clock, which a read takes when it is sent, for `read`. */
+  /** The store's clock: take it when sending a read, and pass it as `readAt` to show what the read returned. */
   now(): number;
-  /** A read sent at `sentAt` (from `now`) returned these rows: it ends the layers of calls that finished before it. */
-  read(service: string, ids: Iterable<string>, sentAt: number): void;
   /** Calls `listener` whenever a layer is added, changed or dropped; returns the unsubscribe function. */
   subscribe(listener: () => void): () => void;
   /**
@@ -98,7 +114,7 @@ export interface OverlayStore {
 /** The overlays of one service, until one of them changes (`OverlayStore.view`). */
 export interface OverlayView {
   /** `applyOverlay` for this view's service. */
-  apply<T>(row: T, collection?: string): T | undefined;
+  apply<T>(row: T, options?: OverlayOptions): T | undefined;
 }
 
 /** One layer of one mutation call. */
@@ -195,7 +211,7 @@ function viewOf(layers: Layers, service: string): OverlayView {
   let view = layers.views.get(service);
   if (view === undefined) {
     view = Object.freeze({
-      apply: <T>(row: T, collection?: string) => applyOverlay(layers, service, row, collection),
+      apply: <T>(row: T, options?: OverlayOptions) => applyOverlay(layers, service, row, options),
     });
     layers.views.set(service, view);
   }
@@ -258,18 +274,6 @@ function observe(layers: Layers, service: string, id: string, rev: Revision): vo
   discard(layers, dropped);
 }
 
-function read(layers: Layers, service: string, ids: Iterable<string>, sentAt: number): void {
-  const dropped: Layer[] = [];
-  for (const id of ids) {
-    for (const layer of layers.byRow.get(rowKey(service, id)) ?? []) {
-      if (layer.finished !== undefined && layer.finished <= sentAt) {
-        dropped.push(layer);
-      }
-    }
-  }
-  discard(layers, dropped);
-}
-
 /** Drops `dropped` and tells the listeners. */
 function discard(layers: Layers, dropped: readonly Layer[]): void {
   const removed = dropped.filter((layer) => remove(layers, layer));
@@ -279,18 +283,25 @@ function discard(layers: Layers, dropped: readonly Layer[]): void {
   );
 }
 
+/** Whether `layer` shows over a row read at `readAt` and shown in `collection`. */
+function applies(layer: Layer, options: OverlayOptions): boolean {
+  const { collection, readAt } = options;
+  const inRow = layer.finished === undefined || readAt === undefined || layer.finished > readAt;
+  return inRow && (layer.collection === undefined || layer.collection === collection);
+}
+
 function applyOverlay<T>(
   layers: Layers,
   service: string,
   row: T,
-  collection?: string,
+  options: OverlayOptions = {},
 ): T | undefined {
   if (!isRow(row)) {
     return row;
   }
   let shown: Row = row;
   for (const layer of layers.byRow.get(rowKey(service, row.id)) ?? []) {
-    if (layer.collection === undefined || layer.collection === collection) {
+    if (applies(layer, options)) {
       if (layer.removed) {
         return undefined;
       }
@@ -310,15 +321,12 @@ function createStore(): StoreInternals {
     clock: 0,
   };
   return Object.freeze({
-    applyOverlay: <T>(service: string, row: T, collection?: string) =>
-      applyOverlay(layers, service, row, collection),
+    applyOverlay: <T>(service: string, row: T, options?: OverlayOptions) =>
+      applyOverlay(layers, service, row, options),
     observe: (service: string, id: string, rev: Revision) => {
       observe(layers, service, id, rev);
     },
     now: () => layers.clock,
-    read: (service: string, ids: Iterable<string>, sentAt: number) => {
-      read(layers, service, ids, sentAt);
-    },
     subscribe(listener: () => void): () => void {
       layers.listeners.add(listener);
       return () => {
@@ -399,20 +407,21 @@ export function rowShapeOf(output: MethodOutput | undefined): RowShape | undefin
   return output.kind === "list" ? "list" : undefined;
 }
 
-/** The ids of the rows a result of shape `shape` holds. */
-export function rowIdsOf(shape: RowShape, data: unknown): string[] {
-  const rows: unknown[] = shape === "list" ? (Array.isArray(data) ? data : []) : [data];
-  return rows.filter(isRow).map((row) => row.id);
-}
-
 /**
- * A result of shape `shape` as `view` shows it. A hidden row leaves a list
- * and makes a `nullable` result `null`; a result that must be a row keeps
- * it. Returns `data` itself when no overlay changes it.
+ * A result of shape `shape`, read at `readAt` (`OverlayOptions`), as `view`
+ * shows it. A hidden row leaves a list and makes a `nullable` result `null`;
+ * a result that must be a row keeps it. Returns `data` itself when no
+ * overlay changes it.
  */
-export function showRows<T>(view: OverlayView, shape: RowShape, data: T): T {
+export function showRows<T>(
+  view: OverlayView,
+  shape: RowShape,
+  data: T,
+  readAt: number | undefined,
+): T {
+  const options = { readAt };
   if (shape !== "list") {
-    const shown = view.apply(data);
+    const shown = view.apply(data, options);
     if (shown === undefined) {
       return (shape === "nullable" ? null : data) as T;
     }
@@ -424,7 +433,7 @@ export function showRows<T>(view: OverlayView, shape: RowShape, data: T): T {
   const rows: unknown[] = [];
   let same = true;
   for (const row of data as unknown[]) {
-    const shown = view.apply(row);
+    const shown = view.apply(row, options);
     same &&= shown === row;
     if (shown !== undefined) {
       rows.push(shown);

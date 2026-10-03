@@ -293,27 +293,32 @@ describe("an optimistic mutation", () => {
     return { app, gate, board, queryClient, view };
   }
 
-  it("shows the new value before the reply, and keeps it until a read sent after the reply", async () => {
-    const { gate, board, queryClient, view } = await renamed();
+  it("shows the new value before the reply, and keeps it over results read before the reply", async () => {
+    const { app, gate, board, queryClient, view } = await renamed();
     const release = gate.hold();
     act(() => {
       view.result.current.rename.mutate({ id: board.t1, title: "Renamed" });
     });
     await waitFor(() => expect(view.result.current.get.data?.title).toBe("Renamed"));
     expect(view.result.current.cards.data).toEqual([{ id: board.t1, title: "Renamed" }]);
-    const cached = queryClient.getQueryData(qd.task.get.key({ id: board.t1 }));
-    expect(cached).toMatchObject({ title: "T1" });
+    const getKey = qd.task.get.key({ id: board.t1 });
+    expect(queryClient.getQueryData(getKey)).toMatchObject({ title: "T1" });
     release();
     await waitFor(() => expect(view.result.current.rename.isSuccess).toBe(true));
+    // Someone else renames it again. The watched list is read again after
+    // the reply and shows the server's title; `get` was read before the
+    // reply and keeps showing the user's edit over its older copy.
+    await app.as(as(board.bo)).taskService.rename({ id: board.t1, title: "Elsewhere" });
+    await waitFor(() =>
+      expect(view.result.current.cards.data).toEqual([{ id: board.t1, title: "Elsewhere" }]),
+    );
     expect(view.result.current.get.data?.title).toBe("Renamed");
+    expect(queryClient.getQueryData(getKey)).toMatchObject({ title: "T1" });
     await act(async () => {
       await view.result.current.get.refetch();
     });
-    expect(queryClient.getQueryData(qd.task.get.key({ id: board.t1 }))).toMatchObject({
-      title: "Renamed",
-    });
-    const shown = view.result.current.get.data;
-    expect(overlaysOf(queryClient).applyOverlay("taskService", shown)).toBe(shown);
+    await waitFor(() => expect(view.result.current.get.data?.title).toBe("Elsewhere"));
+    expect(view.result.current.get.data).toEqual(queryClient.getQueryData(getKey));
   });
 
   it("restores the old value when the server refuses it", async () => {
@@ -371,13 +376,13 @@ describe("an optimistic mutation", () => {
       view.result.current.custom.mutate({ id: board.t1, title: "conflict" });
     });
     await waitFor(() => expect(view.result.current.get.data?.title).toBe("conflict (saving)"));
-    expect(overlays.applyOverlay("taskService", item, "board")).toEqual({
+    expect(overlays.applyOverlay("taskService", item, { collection: "board" })).toEqual({
       id: board.t1,
       title: "on the board",
     });
     release();
     await waitFor(() => expect(view.result.current.custom.isError).toBe(true));
     expect(view.result.current.get.data?.title).toBe("T1");
-    expect(overlays.applyOverlay("taskService", item, "board")).toBe(item);
+    expect(overlays.applyOverlay("taskService", item, { collection: "board" })).toBe(item);
   });
 });

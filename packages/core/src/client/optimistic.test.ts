@@ -1,7 +1,8 @@
 // The overlay store of optimistic mutations (RFC 0003 section 11.4), without
-// React: layers opened when a call is sent, dropped when it fails, kept after
-// it succeeds until a newer revision or a later read of the row, stacked in
-// call order, and shown only over the fields a row has.
+// React: layers opened when a call is sent, dropped when it fails, kept
+// after it succeeds (shown over rows read before it finished, not over rows
+// read after) until a newer revision, stacked in call order, and shown only
+// over the fields a row has.
 
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
@@ -11,7 +12,6 @@ import { deferred } from "../server/__tests__/fixtures";
 import {
   mutateOptimistically,
   overlaysOf,
-  rowIdsOf,
   rowShapeOf,
   showRows,
   type OptimisticTarget,
@@ -88,20 +88,33 @@ describe("a pending call", () => {
 });
 
 describe("a finished call", () => {
-  it("keeps its layer, with the values of the reply, until a read sent after the reply", async () => {
+  it("shows the reply's values over rows read before it finished, and not over rows read after", async () => {
     const client = new QueryClient();
     const overlays = overlaysOf(client);
+    const readBefore = overlays.now();
     const { reply, done } = send(client, { id: "t1", title: "  New  " });
-    const sentBefore = overlays.now();
+    const readWhilePending = overlays.now();
     reply.resolve({ ...row, title: "New" });
     expect(await done).toEqual({ ...row, title: "New" });
-    expect(overlays.applyOverlay("taskService", row)).toEqual({ ...row, title: "New" });
-    overlays.read("taskService", ["t1"], sentBefore);
-    expect(overlays.applyOverlay("taskService", row)).toEqual({ ...row, title: "New" });
-    overlays.read("taskService", ["t2"], overlays.now());
-    expect(overlays.applyOverlay("taskService", row)).toEqual({ ...row, title: "New" });
-    overlays.read("taskService", ["t1"], overlays.now());
-    expect(overlays.applyOverlay("taskService", row)).toBe(row);
+    const readAfter = overlays.now();
+    const shown = { ...row, title: "New" };
+    expect(overlays.applyOverlay("taskService", row)).toEqual(shown);
+    expect(overlays.applyOverlay("taskService", row, { readAt: readBefore })).toEqual(shown);
+    expect(overlays.applyOverlay("taskService", row, { readAt: readWhilePending })).toEqual(shown);
+    expect(overlays.applyOverlay("taskService", row, { readAt: readAfter })).toBe(row);
+    const view = overlays.view("taskService");
+    expect(showRows(view, "list", [row], readBefore)).toEqual([shown]);
+    expect(showRows(view, "list", [row], readAfter)).toEqual([row]);
+  });
+
+  it("is still shown while pending, whenever the row was read", () => {
+    const client = new QueryClient();
+    const overlays = overlaysOf(client);
+    send(client, { id: "t1", title: "New" });
+    expect(overlays.applyOverlay("taskService", row, { readAt: overlays.now() + 10 })).toEqual({
+      ...row,
+      title: "New",
+    });
   });
 
   it("keeps its layer until a revision newer than every one seen before the write", async () => {
@@ -142,19 +155,21 @@ describe("a custom optimistic update", () => {
       cache.patchItem("board", (input as { id: string }).id, { title: "On the board" });
     });
     const view = overlays.view("taskService");
-    expect(showRows(view, "list", [row, other])).toEqual([row]);
-    expect(showRows(view, "list", [row])).toEqual([row]);
-    expect(showRows(view, "nullable", other)).toBeNull();
-    expect(showRows(view, "one", other)).toBe(other);
+    expect(showRows(view, "list", [row, other], undefined)).toEqual([row]);
+    const unchanged = [row];
+    expect(showRows(view, "list", unchanged, undefined)).toBe(unchanged);
+    expect(showRows(view, "nullable", other, undefined)).toBeNull();
+    expect(showRows(view, "one", other, undefined)).toBe(other);
     expect(overlays.applyOverlay("taskService", row)).toBe(row);
-    expect(overlays.applyOverlay("taskService", row, "board")).toEqual({
+    expect(overlays.applyOverlay("taskService", row, { collection: "board" })).toEqual({
       ...row,
       title: "On the board",
     });
-    expect(overlays.applyOverlay("taskService", row, "mine")).toBe(row);
+    expect(overlays.applyOverlay("taskService", row, { collection: "mine" })).toBe(row);
     reply.reject(new QuickdrawError("FORBIDDEN", "No"));
     await expect(done).rejects.toThrow("No");
-    expect(showRows(overlays.view("taskService"), "list", [row, other])).toEqual([row, other]);
+    const both = [row, other];
+    expect(showRows(overlays.view("taskService"), "list", both, undefined)).toBe(both);
   });
 
   it("is used instead of the default, and a throw drops what it wrote without sending", async () => {
@@ -216,9 +231,12 @@ describe("the store", () => {
     reply.resolve(null);
     await done;
     expect(listener).toHaveBeenCalledTimes(2);
+    overlays.observe("taskService", "t1", 1);
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(overlays.view("taskService").apply(row)).toBe(row);
     stop();
-    overlays.read("taskService", ["t1"], overlays.now());
-    expect(listener).toHaveBeenCalledTimes(2);
+    send(client, { id: "t1", title: "Again" });
+    expect(listener).toHaveBeenCalledTimes(3);
   });
 
   it("keeps at most 1,000 layers, dropping the oldest finished ones first", async () => {
@@ -251,9 +269,5 @@ describe("row shapes", () => {
     expect(rowShapeOf(listOf("card"))).toBe("list");
     expect(rowShapeOf(z.object({ kind: z.literal("list") }))).toBeUndefined();
     expect(rowShapeOf(undefined)).toBeUndefined();
-    expect(rowIdsOf("one", row)).toEqual(["t1"]);
-    expect(rowIdsOf("nullable", null)).toEqual([]);
-    expect(rowIdsOf("list", [row, other, 3])).toEqual(["t1", "t2"]);
-    expect(rowIdsOf("list", "not a list")).toEqual([]);
   });
 });

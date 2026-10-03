@@ -13,6 +13,7 @@ import type { InvalidationCoordinator } from "./coordinator";
 import type { MethodQueryKey } from "./keys";
 import type { MethodTarget } from "./members";
 import { overlaysOf, rowShapeOf, showRows, type OverlayView } from "./optimistic";
+import { readAtOf } from "./versions";
 
 /**
  * The change topic a query of `target` with `input` watches:
@@ -108,7 +109,7 @@ export function useOverlaySelect<Output, Data>(
       return select;
     }
     return (data: Output): Data => {
-      const shown = showRows(view, shape, data);
+      const shown = showRows(view, shape, data, readAtOf(data));
       return select === undefined ? (shown as unknown as Data) : select(shown);
     };
   }, [shape, view, select]);
