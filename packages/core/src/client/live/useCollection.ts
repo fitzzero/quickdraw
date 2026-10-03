@@ -42,7 +42,11 @@ export interface UseCollectionOptions<View extends string = string> {
    * Default: the collection's `limit`, or its `maxLimit` with `load: "all"`.
    */
   readonly limit?: number;
-  /** `false` holds no subscription and shows nothing. Default `true`. */
+  /**
+   * `false` holds no subscription and shows nothing: no items, no index, no
+   * count (and `isLoading` false), even while the scope is cached. Default
+   * `true`.
+   */
   readonly enabled?: boolean;
 }
 
@@ -155,9 +159,11 @@ export function useCollection<Item, Row = IndexRow>(
   }, [live, target, scopeValue, active, limit, loadAll]);
   const overlays = useOverlayView(queryClient, target.service);
   const userId = useUserId(connection);
-  const { data: entry } = useQuery(
+  const { data: cached } = useQuery(
     entryQuery<CollectionEntry>(collectionKey(target.service, target.collection, scopeValue)),
   );
+  // Disabled, it shows nothing of what is cached.
+  const entry = active ? cached : undefined;
   const predicate = viewPredicate(target.def, options.view);
   const state = entry?.state ?? null;
   const shown = useMemo(

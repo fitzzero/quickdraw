@@ -138,6 +138,25 @@ describe("createMockClient", () => {
     }).toThrow("mockRow: the row needs a string id");
   });
 
+  it("shows nothing of a mocked row or scope while the hook is disabled, as the real hooks do", () => {
+    const qd = createMockClient({ task });
+    qd.task.useEntity.mockRow(cardOf("t1", "First"));
+    qd.task.board.mockScope("p1", [cardOf("t1", "First")]);
+    function Off() {
+      const one = qd.task.useEntity("t1", { enabled: false });
+      const many = qd.task.useEntities(["t1"], { enabled: false });
+      const scope = qd.task.board.useCollection("p1", { enabled: false });
+      return (
+        <p>
+          {`one ${String(one.data)} ${String(one.isLoading)} many ${String(many.data[0])} ` +
+            `scope ${scope.items.length} ${String(scope.totalCount)} ${String(scope.isLoading)}`}
+        </p>
+      );
+    }
+    render(<Off />);
+    expect(screen.getByText("one undefined false many undefined scope 0 null false")).toBeTruthy();
+  });
+
   it("shows a scope's items in order, and filters a view of its index for the mock's user", async () => {
     const qd = createMockClient({ task }, { userId: "ada" });
     function Board({ mine }: { readonly mine: boolean }) {

@@ -9,7 +9,7 @@ import { tick } from "../../server/__tests__/fixtures";
 import type { QuickdrawConnection } from "../connection";
 import { createQuickdrawClient } from "../createClient";
 import { QuickdrawProvider, useQuickdraw } from "../provider";
-import { outgoing } from "../__tests__/fixtures";
+import { outgoing, until } from "../__tests__/fixtures";
 import { as, freshClient, liveDataHarness, taskContract } from "./__tests__/server";
 
 const live = liveDataHarness();
@@ -245,6 +245,48 @@ describe("useCollection", () => {
     });
     expect(framesOf(grabbed.sent, "qd:col:sub")).toHaveLength(2);
     expect(result.current.error).toBeNull();
+  });
+
+  it("shows nothing of a cached row or scope once disabled, and lets their subscriptions go", async () => {
+    const { app } = await live.start();
+    const board = live.board();
+    const { wrapper, grabbed } = wrapperFor(app.url, board.ada);
+    const { result, rerender } = renderHook(
+      ({ enabled }: { readonly enabled: boolean }) => ({
+        row: qd.task.useEntity(board.t1, { enabled }),
+        rows: qd.task.useEntities([board.t1], { enabled }),
+        scope: qd.task.board.useCollection(board.p1, { enabled }),
+      }),
+      { wrapper, initialProps: { enabled: true } },
+    );
+    await waitFor(() => expect(result.current.row.data?.title).toBe("T1"));
+    await waitFor(() => expect(result.current.scope.items).toHaveLength(1));
+    expect(result.current.rows.data.map((row) => row?.title)).toEqual(["T1"]);
+
+    rerender({ enabled: false });
+    expect(result.current.row).toEqual({
+      data: undefined,
+      isLoading: false,
+      isRemoved: false,
+      error: null,
+    });
+    expect(result.current.rows).toMatchObject({ data: [undefined], isLoading: false, error: null });
+    expect(result.current.rows.byId.size).toBe(0);
+    expect(result.current.scope).toMatchObject({
+      items: [],
+      index: undefined,
+      totalCount: null,
+      hasMore: false,
+      isLoading: false,
+      error: null,
+    });
+    await until(
+      () =>
+        framesOf(grabbed.sent, "qd:unsub").length === 1 &&
+        framesOf(grabbed.sent, "qd:col:unsub").length === 1,
+    );
+    rerender({ enabled: true });
+    await waitFor(() => expect(result.current.row.data?.title).toBe("T1"));
   });
 
   it("holds nothing for a null scope or a disabled hook", async () => {

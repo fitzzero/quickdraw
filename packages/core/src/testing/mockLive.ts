@@ -118,7 +118,8 @@ function rowsResult(
   const errors = new Map<string, QuickdrawError>();
   let isLoading = false;
   for (const id of ids) {
-    const shown = rowResult(id === "" ? undefined : store.row(service, id), active && id !== "");
+    const shows = active && id !== "";
+    const shown = rowResult(shows ? store.row(service, id) : undefined, shows);
     data.push(shown.data);
     if (shown.data !== undefined) {
       byId.set(id, shown.data);
@@ -197,7 +198,7 @@ function useMockRow(
   const active = options.enabled !== false && rowId !== "";
   const read = (): UseEntityResult<unknown> =>
     store.read(keyOf("row", service, rowId, String(active)), () =>
-      rowResult(rowId === "" ? undefined : store.row(service, rowId), active),
+      rowResult(active ? store.row(service, rowId) : undefined, active),
     );
   return useSyncExternalStore(store.subscribe, read, read);
 }
@@ -237,7 +238,7 @@ function useMockScope(
   const key = keyOf("scope", service, collection, value, options.view ?? "", String(active));
   const read = (): UseCollectionResult<unknown, IndexRow> =>
     store.read(key, () =>
-      scopeResult(def, value === "" ? undefined : store.scope(service, collection, value), {
+      scopeResult(def, active ? store.scope(service, collection, value) : undefined, {
         view: options.view,
         who,
         active,

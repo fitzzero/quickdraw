@@ -25,7 +25,10 @@ import { useLiveData, useOverlayView } from "./liveHooks";
 
 /** Options of `useEntity` and `useEntities`. */
 export interface UseEntityOptions {
-  /** `false` holds no subscription and shows nothing. Default `true`. */
+  /**
+   * `false` holds no subscription and shows nothing: `data` is `undefined`
+   * (and `isLoading` false) even while the row is cached. Default `true`.
+   */
   readonly enabled?: boolean;
 }
 
@@ -90,8 +93,12 @@ export function useEntity<Row>(
   );
   const view = useOverlayView(queryClient, service);
   const { data: entry } = useQuery(entryQuery<EntityEntry<Row>>(entityKey(service, rowId)));
-  return useMemo(() => shown(entry, view, active), [entry, view, active]);
+  // Disabled, it shows nothing of what is cached.
+  const held = active ? entry : undefined;
+  return useMemo(() => shown(held, view, active), [held, view, active]);
 }
+
+const NO_ENTRIES: readonly undefined[] = Object.freeze([]);
 
 /** The entries of `useQueries`' results: a stable function, so TanStack keeps its combined result while they do not change. */
 function entriesOf<Row>(
@@ -148,5 +155,7 @@ export function useEntities<Row>(
     queries: rowIds.map((id) => entryQuery<EntityEntry<Row>>(entityKey(service, id))),
     combine: entriesOf<Row>,
   });
-  return useMemo(() => combined(rowIds, entries, view, active), [rowIds, entries, view, active]);
+  // Disabled, it shows nothing of what is cached.
+  const held = active ? entries : NO_ENTRIES;
+  return useMemo(() => combined(rowIds, held, view, active), [rowIds, held, view, active]);
 }
