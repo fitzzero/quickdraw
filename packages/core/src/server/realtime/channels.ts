@@ -19,15 +19,17 @@
 // not a burst. The rate limiter never counts `qd:ch`
 // (`transports/middleware.ts`).
 //
-// A handler's throw or rejection is logged and does not stop the channel. A
-// schema that validates asynchronously cannot be used here: its messages are
-// dropped, with one warning per channel.
+// A handler's throw or rejection is logged and does not stop the channel:
+// at error, or at debug for a `QuickdrawError` the client caused (any code
+// but `INTERNAL` and `TIMEOUT`), as the pipeline logs calls. A schema that
+// validates asynchronously cannot be used here: its messages are dropped,
+// with one warning per channel.
 
 import { CLIENT_EVENTS, collectionRoom } from "../../contract/names";
 import { meetsLevel, serviceGrant } from "../access/levels";
 import type { Hub } from "../emit/hub";
 import { ownRecord } from "../emit/subscriptions";
-import { describeError } from "../pipeline/metrics";
+import { describeError, failureLevel } from "../pipeline/metrics";
 import type { QuickdrawServerSocket } from "../transports/types";
 import type { Principal } from "../types";
 import type { Rooms } from "./rooms";
@@ -159,13 +161,15 @@ function contextOf(deps: ChannelDeps, state: SocketChannels, principal: Principa
   return state.ctx;
 }
 
+/** Logs a handler's failure: at debug when the client caused it, as the pipeline logs calls (RFC 0003 section 9). */
 function failed(
   deps: ChannelDeps,
   channel: ServiceChannel,
   ctx: ChannelContext,
   error: unknown,
 ): void {
-  deps.hub.logger.error(`The handler of channel ${channel.service}.${channel.name} failed`, {
+  const level = failureLevel(error);
+  deps.hub.logger[level](`The handler of channel ${channel.service}.${channel.name} failed`, {
     category: "quickdraw.channel",
     userId: ctx.principal.userId,
     socketId: ctx.socketId,

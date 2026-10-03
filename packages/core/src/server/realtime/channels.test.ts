@@ -40,18 +40,23 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map(async (app) => await app.close()));
 });
 
-/** A logger that keeps its errors and warnings. */
+/** A logger that keeps its errors, warnings and the debug lines of channel handlers. */
 function capturing() {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const debugs: string[] = [];
   const logger: Logger = {
-    debug: () => undefined,
+    debug: (message, meta) => {
+      if (meta?.category === "quickdraw.channel") {
+        debugs.push(message);
+      }
+    },
     info: () => undefined,
     warn: (message) => warnings.push(message),
     error: (message) => errors.push(message),
     child: () => logger,
   };
-  return { logger, errors, warnings };
+  return { logger, errors, warnings, debugs };
 }
 
 async function start(options: { readonly rateLimit?: { readonly maxRequests: number } } = {}) {
@@ -187,12 +192,16 @@ describe("qd:ch, ported from 4.1", () => {
       acks.push(reply);
     });
     send(cy, "input", input(-998));
+    send(cy, "input", input(-997));
     await settle(cy);
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
     });
-    expect(into.handlerErrors).toBe(2);
-    expect(log.errors).toEqual([
+    expect(into.handlerErrors).toBe(3);
+    // A plain Error is a server fault; a QuickdrawError the client caused (CONFLICT,
+    // FORBIDDEN) logs at debug, as the pipeline logs calls.
+    expect(log.errors).toEqual(["The handler of channel taskService.input failed"]);
+    expect(log.debugs).toEqual([
       "The handler of channel taskService.input failed",
       "The handler of channel taskService.input failed",
     ]);

@@ -8,7 +8,7 @@
 
 import type { Logger } from "../../contract/logger";
 import type { MethodKind } from "../../contract/methods";
-import type { ErrorCode, QuickdrawError } from "../../protocol/errors";
+import { QuickdrawError, type ErrorCode } from "../../protocol/errors";
 import type { Transport } from "../types";
 
 /** How a call ended: `"ok"`, `"not-modified"`, or the error code it failed with. */
@@ -75,8 +75,23 @@ export function describeError(error: unknown, depth = 0): Record<string, unknown
 
 type Level = "debug" | "warn" | "error";
 
+/** True for the codes of server faults, which log at error; every other code the client caused. */
+function isFault(code: unknown): boolean {
+  return code === "INTERNAL" || code === "TIMEOUT";
+}
+
+/**
+ * The level a failure outside a call logs at, as a call's failure does:
+ * `debug` for a `QuickdrawError` the client caused (any code but `INTERNAL`
+ * and `TIMEOUT`), else `error`. A channel handler refusing a payload must
+ * not fill the error log.
+ */
+export function failureLevel(error: unknown): "debug" | "error" {
+  return error instanceof QuickdrawError && !isFault(error.code) ? "debug" : "error";
+}
+
 function levelOf(record: CallRecord, options: RecorderOptions): Level {
-  if (record.outcome === "INTERNAL" || record.outcome === "TIMEOUT") {
+  if (isFault(record.outcome)) {
     return "error";
   }
   const slow = record.durationMs > options.slowMs;

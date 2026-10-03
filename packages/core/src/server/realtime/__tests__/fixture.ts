@@ -139,6 +139,10 @@ export function defineLiveService(into: Received) {
           into.handlerErrors += 1;
           return Promise.reject(new QuickdrawError("CONFLICT", "async boom"));
         }
+        if (payload.seq === -997) {
+          into.handlerErrors += 1;
+          throw new QuickdrawError("FORBIDDEN", "not yours");
+        }
         into.input.push({ userId: ctx.principal.userId, socketId: ctx.socketId, seq: payload.seq });
         return undefined;
       },
