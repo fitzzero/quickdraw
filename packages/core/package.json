@@ -38,9 +38,21 @@
       "types": "./dist/server/express/index.d.ts",
       "import": "./dist/server/express/index.js"
     },
+    "./server/mcp": {
+      "types": "./dist/server/mcp/index.d.ts",
+      "import": "./dist/server/mcp/index.js"
+    },
     "./client": {
       "types": "./dist/client/index.d.ts",
       "import": "./dist/client/index.js"
+    },
+    "./parser": {
+      "types": "./dist/parser.d.ts",
+      "import": "./dist/parser.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
     },
     "./testing/prisma": {
       "types": "./dist/testing/prisma.d.ts",
@@ -62,7 +74,8 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "jose": "^6.0.0"
+    "jose": "^6.0.0",
+    "socket.io-parser": "^4.2.4"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.16",
@@ -78,6 +91,7 @@
     "@vitest/coverage-v8": "^4.0.17",
     "express": "^4.18.2",
     "express-rate-limit": "^8.3.1",
+    "express5": "npm:express@^5.1.0",
     "jsdom": "^24.0.0",
     "pg": "^8.13.0",
     "prisma": "^7.0.0",
@@ -87,8 +101,10 @@
     "socket.io": "^4.8.4",
     "socket.io-client": "^4.8.4",
     "tsup": "^8.0.2",
+    "tsx": "^4.20.0",
     "vitest": "^4.0.17",
-    "zod": "^4.2.0"
+    "zod": "^4.2.0",
+    "zod3": "npm:zod@^3.25.0"
   },
   "peerDependencies": {
     "@electric-sql/pglite": "^0.3.16 || ^0.4.0 || ^0.5.0",

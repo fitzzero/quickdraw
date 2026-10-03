@@ -22,6 +22,7 @@
 import type { Server as SocketIOServer } from "socket.io";
 import type { Logger } from "../contract/logger";
 import { consoleLogger } from "../contract/logger";
+import { isModuleNotFound, loadRedisPeers } from "./redisPeers";
 
 /**
  * Redis adapter configuration options.
@@ -120,19 +121,15 @@ export async function setupRedisAdapter(
 
   try {
     // Dynamically import Redis packages - these are optional peer dependencies.
-    // The build keeps them external because package.json declares them as peers.
-    const [redisAdapterModule, redisModule] = await Promise.all([
-      import("@socket.io/redis-adapter") as Promise<{ createAdapter: unknown }>,
-      import("redis") as Promise<{ createClient: unknown }>,
-    ]);
+    const peers = await loadRedisPeers();
 
-    const createAdapter = redisAdapterModule.createAdapter as (
+    const createAdapter = peers.createAdapter as (
       pubClient: RedisClient,
       subClient: RedisClient,
       opts?: { key?: string },
     ) => unknown;
 
-    const createClient = redisModule.createClient as (opts: {
+    const createClient = peers.createClient as (opts: {
       socket: { host: string; port: number };
       password?: string;
       database?: number;
@@ -174,7 +171,7 @@ export async function setupRedisAdapter(
     const errorMessage = error instanceof Error ? error.message : String(error);
 
     // Check if it's a missing dependency error
-    if (errorMessage.includes("Cannot find module") || errorMessage.includes("MODULE_NOT_FOUND")) {
+    if (isModuleNotFound(error)) {
       logger.warn(
         "Redis adapter packages not installed. Install @socket.io/redis-adapter and redis for horizontal scaling support.",
       );
@@ -198,7 +195,7 @@ export async function setupRedisAdapter(
  */
 export async function isRedisAdapterAvailable(): Promise<boolean> {
   try {
-    await Promise.all([import("@socket.io/redis-adapter"), import("redis")]);
+    await loadRedisPeers();
     return true;
   } catch {
     return false;
