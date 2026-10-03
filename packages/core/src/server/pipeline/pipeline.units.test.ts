@@ -55,41 +55,76 @@ describe("createConcurrencyLimiter", () => {
 });
 
 describe("share keys", () => {
-  it("serializes with sorted keys, following JSON", () => {
+  it("writes plain data with sorted keys, and every value distinctly", () => {
     expect(stableStringify({ b: 1, a: [true, null, "x"], c: undefined })).toBe(
-      '{"a":[true,null,"x"],"b":1}',
+      '{"a":[true,null,"x"],"b":1,"c":undefined}',
     );
     expect(stableStringify({ a: { d: 1, c: 2 } })).toBe(stableStringify({ a: { c: 2, d: 1 } }));
-    expect(stableStringify([undefined, () => 1])).toBe("[null,null]");
-    expect(stableStringify(new Date("2026-10-02T00:00:00.000Z"))).toBe(
-      '"2026-10-02T00:00:00.000Z"',
-    );
+    expect(stableStringify({ c: undefined })).not.toBe(stableStringify({}));
+    expect(stableStringify([undefined])).not.toBe(stableStringify([null]));
+    expect(stableStringify(new Date(0))).toBe("Date(0)");
+    expect(stableStringify(new Date(0))).not.toBe(stableStringify(new Date(0).toJSON()));
     expect(stableStringify(10n)).toBe("10n");
     expect(stableStringify(Number.NaN)).toBe("NaN");
+    expect(stableStringify(-0)).toBe("-0");
     expect(stableStringify(Object.assign(Object.create(null) as object, { z: 1 }))).toBe('{"z":1}');
+    const hidden = Object.defineProperty({}, "scope", { value: "read", enumerable: false });
+    expect(stableStringify(hidden)).toBe('{"scope":"read"}');
   });
 
-  it("refuses values it cannot key safely", () => {
+  it("refuses anything it cannot write in full", () => {
     const cycle: Record<string, unknown> = {};
     cycle.self = cycle;
-    expect(stableStringify(cycle)).toBeUndefined();
-    expect(stableStringify({ tags: new Set(["a"]) })).toBeUndefined();
-    expect(stableStringify(new Map())).toBeUndefined();
+    class Scoped {
+      constructor(readonly scopes: readonly string[]) {}
+      toJSON(): unknown {
+        return {};
+      }
+    }
+    for (const value of [
+      cycle,
+      { tags: new Set(["a"]) },
+      new Map(),
+      [undefined, () => 1],
+      { userId: "u1", can: () => true },
+      { userId: "u1", toJSON: () => ({ userId: "u1" }) },
+      { [Symbol("scope")]: "admin" },
+      { userId: Symbol("u1") },
+      Object.defineProperty({}, "scopes", { get: () => ["read"], enumerable: true }),
+      Object.create({ userId: "u1" }) as object,
+      new Scoped(["read"]),
+      Buffer.from("x"),
+      // oxlint-disable-next-line no-sparse-arrays -- a hole is what is refused
+      [1, , 3],
+      Object.assign([1], { extra: true }),
+    ]) {
+      expect(stableStringify(value)).toBeUndefined();
+    }
     const shared = { a: 1 };
     expect(stableStringify([shared, shared])).toBe('[{"a":1},{"a":1}]');
   });
 
-  it("keys by service, method, principal (or *) and input", () => {
-    const alice = { userId: "alice" };
+  it("keys by service, method, the caller (or *) and input", () => {
+    const alice = { principal: { userId: "alice" }, transport: "socket" as const, mcp: undefined };
     const key = shareKey("taskService", "list", alice, { b: 2, a: 1 });
-    expect(key).toBe(shareKey("taskService", "list", { userId: "alice" }, { a: 1, b: 2 }));
-    expect(key).not.toBe(shareKey("taskService", "list", { userId: "bob" }, { a: 1, b: 2 }));
-    expect(key).not.toBe(
-      shareKey("taskService", "list", { ...alice, claims: { scope: "read" } }, { a: 1, b: 2 }),
+    expect(key).toBe(
+      shareKey("taskService", "list", { ...alice, principal: { userId: "alice" } }, { a: 1, b: 2 }),
     );
+    for (const other of [
+      { ...alice, principal: { userId: "bob" } },
+      { ...alice, principal: { userId: "alice", claims: { scope: "read" } } },
+      { ...alice, transport: "mcp" as const },
+      { ...alice, mcp: { scopes: ["read"] } },
+    ]) {
+      expect(key).not.toBe(shareKey("taskService", "list", other, { a: 1, b: 2 }));
+    }
     expect(shareKey("s", "m", "*", 1)).toBe(JSON.stringify(["s", "m", "*", "1"]));
-    expect(shareKey("s", "m", null, 1)).not.toBe(shareKey("s", "m", "*", 1));
+    expect(shareKey("s", "m", { ...alice, principal: null }, 1)).not.toBe(
+      shareKey("s", "m", "*", 1),
+    );
     expect(shareKey("s", "m", alice, new Map())).toBeUndefined();
+    const withMethod = { ...alice, principal: { userId: "alice", can: () => true } };
+    expect(shareKey("s", "m", withMethod, 1)).toBeUndefined();
   });
 
   it("deep-freezes plain objects and arrays only", () => {

@@ -62,9 +62,10 @@ export function execute(
       : shareKey(
           service.name,
           method.name,
-          method.share === "all" ? "*" : call.principal,
+          method.share === "all"
+            ? "*"
+            : { principal: call.principal, transport: call.transport, mcp: ctx.mcp },
           input,
-          ctx.mcp,
         );
   const existing = key === undefined ? undefined : shares.get(key);
   if (existing !== undefined && existing.settled?.ok !== false) {

@@ -112,6 +112,78 @@ describe('share: "caller"', () => {
     expect((await Promise.all(calls)).map(codeOf)).toEqual(["ok", "ok", "ok", "ok"]);
     expect(handler).toHaveBeenCalledTimes(3);
   });
+
+  /** A `"caller"` query whose result depends on what the principal's `can` says. */
+  function secrets() {
+    const handler = vi.fn(async ({ ctx }: { readonly ctx: { readonly principal: unknown } }) => {
+      await tick(10);
+      const principal = ctx.principal as { can(scope: string): boolean };
+      return principal.can("read:secrets") ? [{ id: "s1", title: "TOP SECRET" }] : [];
+    });
+    const service = qd.defineService(task, {
+      methods: { ...taskDefaults, list: { access: "authenticated", share: "caller", handler } },
+    });
+    return { service, handler };
+  }
+
+  it("never shares between principals that differ only in a function member", async () => {
+    const { service, handler } = secrets();
+    const { call } = setup([service]);
+    const full = { ...alice, can: () => true };
+    const scoped = { ...alice, can: (scope: string) => scope !== "read:secrets" };
+    const [first, second] = await Promise.all([
+      call({ method: "list", input: { projectId: "p1" }, principal: full }),
+      call({ method: "list", input: { projectId: "p1" }, principal: scoped }),
+    ]);
+    expect(dataOf(first)).toEqual([{ id: "s1", title: "TOP SECRET" }]);
+    expect(dataOf(second)).toEqual([]);
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("never shares a principal with toJSON, which could leave its claims out", async () => {
+    class Session {
+      constructor(
+        readonly userId: string,
+        readonly kind: "user",
+        private readonly scopes: readonly string[],
+      ) {}
+      can(scope: string): boolean {
+        return this.scopes.includes(scope);
+      }
+      toJSON(): unknown {
+        return { userId: this.userId, kind: this.kind };
+      }
+    }
+    const { service, handler } = secrets();
+    const { call, records } = setup([service]);
+    const full = new Session("alice", "user", ["read:secrets"]);
+    const results = await Promise.all([
+      call({ method: "list", input: { projectId: "p1" }, principal: full }),
+      call({ method: "list", input: { projectId: "p1" }, principal: full }),
+      call({
+        method: "list",
+        input: { projectId: "p1" },
+        principal: new Session("alice", "user", []),
+      }),
+    ]);
+    expect(results.map((result) => (dataOf(result) as Card[]).length)).toEqual([1, 1, 0]);
+    expect(handler).toHaveBeenCalledTimes(3);
+    expect(records.every((record) => !record.shared)).toBe(true);
+  });
+
+  it("never shares one principal's calls over two transports", async () => {
+    const { service, runs, handler } = sharing("caller");
+    const { call } = setup([service]);
+    const list = (transport: "socket" | "mcp" | "internal") =>
+      call({ method: "list", input: { projectId: "p1" }, transport });
+    const calls = [list("socket"), list("socket"), list("mcp"), list("internal")];
+    await tick();
+    for (const run of runs) {
+      run.resolve(cards);
+    }
+    expect((await Promise.all(calls)).map(codeOf)).toEqual(["ok", "ok", "ok", "ok"]);
+    expect(handler).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe('share: "all"', () => {

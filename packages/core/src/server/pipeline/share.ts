@@ -1,76 +1,123 @@
 // Sharing identical reads (RFC 0003 section 9, step 6). A query that declares
 // `share` runs its handler once for every identical call in flight: same
-// service, method, input and, for `share: "caller"`, the same principal.
-// The key is built from the parsed input, after validation and after each
-// caller was authorized, so a bad payload never joins a good run and a
-// joiner never skips its own access check. With `ttlMs`, a successful result
-// is reused for that long after the run; an error is never kept.
+// service, method, input and, for `share: "caller"`, the same principal over
+// the same transport with the same `ctx.mcp`. The key is built from the
+// parsed input, after validation and after each caller was authorized, so a
+// bad payload never joins a good run and a joiner never skips its own access
+// check. With `ttlMs`, a successful result is reused for that long after the
+// run; an error is never kept.
+//
+// Two calls share only when their keys are equal, so a key must tell apart
+// everything a handler can tell apart. JSON does not: it drops function
+// members and symbol keys, and it writes whatever a `toJSON` returns. Two
+// sessions of one user whose principals differ only in a `can()` method, or
+// in claims a `toJSON` leaves out, would share a run computed with the first
+// one's rights. The key writer below is strict instead: it writes plain data
+// only, and a value it cannot write in full makes the call run unshared.
 
-import type { McpContext, Principal } from "../types";
+import type { McpContext, Principal, Transport } from "../types";
 
 class NotShareable extends Error {}
 
-function writePlain(value: object, seen: Set<object>): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item: unknown) => write(item, seen, "null")).join(",")}]`;
+function refuse(): never {
+  throw new NotShareable();
+}
+
+/** The own members of a plain object or array, by name; anything else in it is refused. */
+function ownValues(value: object): Map<string, unknown> {
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    refuse();
   }
-  const entries = Object.keys(value)
+  const values = new Map<string, unknown>();
+  for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
+    // A getter could answer differently for each caller; only data is keyed.
+    if (!("value" in descriptor)) {
+      refuse();
+    }
+    values.set(key, descriptor.value);
+  }
+  return values;
+}
+
+function writeArray(value: readonly unknown[], seen: Set<object>): string {
+  const values = ownValues(value);
+  // Dense, with no members besides its items and `length`.
+  if (values.size !== value.length + 1) {
+    refuse();
+  }
+  const items: string[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const key = String(index);
+    if (!values.has(key)) {
+      refuse();
+    }
+    items.push(write(values.get(key), seen));
+  }
+  return `[${items.join(",")}]`;
+}
+
+function writeRecord(value: object, seen: Set<object>): string {
+  const values = ownValues(value);
+  const entries = [...values.keys()]
     .sort()
-    .flatMap((key) => {
-      const written = write((value as Readonly<Record<string, unknown>>)[key], seen, undefined);
-      return written === undefined ? [] : [`${JSON.stringify(key)}:${written}`];
-    });
+    .map((key) => `${JSON.stringify(key)}:${write(values.get(key), seen)}`);
   return `{${entries.join(",")}}`;
 }
 
+/** A plain object, an array, or a `Date`; anything else (a class instance, a `Map`, a `toJSON`) is refused. */
 function writeObject(value: object, seen: Set<object>): string {
-  if ("toJSON" in value && typeof value.toJSON === "function") {
-    return write((value as { toJSON(): unknown }).toJSON(), seen, "null");
-  }
   const prototype: unknown = Object.getPrototypeOf(value);
-  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
-    throw new NotShareable();
+  if (prototype === Date.prototype && Reflect.ownKeys(value).length === 0) {
+    return `Date(${(value as Date).getTime()})`;
+  }
+  const array = prototype === Array.prototype && Array.isArray(value);
+  if (!array && prototype !== Object.prototype && prototype !== null) {
+    refuse();
   }
   if (seen.has(value)) {
-    throw new NotShareable();
+    refuse();
   }
   seen.add(value);
-  const written = writePlain(value, seen);
+  const written = array ? writeArray(value as unknown[], seen) : writeRecord(value, seen);
   seen.delete(value);
   return written;
 }
 
-function write<Missing extends string | undefined>(
-  value: unknown,
-  seen: Set<object>,
-  missing: Missing,
-): string | Missing {
+function write(value: unknown, seen: Set<object>): string {
   switch (typeof value) {
     case "string":
     case "boolean":
       return JSON.stringify(value);
     case "number":
+      if (Object.is(value, -0)) {
+        return "-0";
+      }
       return Number.isFinite(value) ? JSON.stringify(value) : String(value);
     case "bigint":
       return `${value}n`;
+    case "undefined":
+      return "undefined";
     case "object":
       return value === null ? "null" : writeObject(value, seen);
     default:
-      return missing;
+      // A function or a symbol: nothing a key could compare.
+      return refuse();
   }
 }
 
 /**
- * Serializes a value with object keys sorted, so equal inputs give equal
- * strings whatever their key order. It follows JSON (`toJSON`, `undefined`
- * members left out) and writes a bigint as `12n`. It returns `undefined` for
- * a value it cannot key safely: a cycle, or an object other than a plain
- * object, an array or a value with `toJSON` (a `Map` would otherwise
- * serialize as `{}` and two different maps would share a result).
+ * Writes a value as a share key: object keys sorted, so equal values give
+ * equal strings whatever their key order, and two values that differ in any
+ * member give different strings. It writes strings, numbers (`-0`, `NaN` and
+ * the infinities included), booleans, `null`, `undefined`, bigints (`12n`),
+ * dates (`Date(0)`), arrays and plain objects. It returns `undefined` for
+ * anything else, so the call runs unshared: a function or symbol anywhere, a
+ * symbol key, a getter, a sparse array, a cycle, or an object that is not
+ * plain (a class instance, with or without `toJSON`, a `Map`, a `Buffer`).
  */
 export function stableStringify(value: unknown): string | undefined {
   try {
-    return write(value, new Set(), undefined);
+    return write(value, new Set());
   } catch (error) {
     if (error instanceof NotShareable) {
       return undefined;
@@ -79,22 +126,30 @@ export function stableStringify(value: unknown): string | undefined {
   }
 }
 
+/** Who a `share: "caller"` run belongs to. */
+export interface ShareCaller {
+  readonly principal: Principal | null;
+  readonly transport: Transport;
+  /** The call's `ctx.mcp`, when the MCP bridge set one. */
+  readonly mcp: McpContext | undefined;
+}
+
 /**
  * The key one call's share run is stored under, or `undefined` when the
- * input or principal cannot be keyed (the call then runs unshared). A
- * `"caller"` key includes the whole principal and the call's `ctx.mcp`, so
- * two sessions of one user with different claims, grants or MCP token scopes
- * never share; an `"all"` key uses `*`.
+ * input or the caller cannot be keyed (the call then runs unshared). A
+ * `"caller"` key includes the whole principal, the transport and the call's
+ * `ctx.mcp`, so two sessions of one user with different claims, grants or
+ * MCP token scopes never share, and neither do one principal's calls over two
+ * transports; an `"all"` key uses `*`.
  */
 export function shareKey(
   service: string,
   method: string,
-  principal: Principal | null | "*",
+  caller: ShareCaller | "*",
   input: unknown,
-  mcp?: McpContext,
 ): string | undefined {
-  const caller = mcp === undefined ? principal : [principal, mcp];
-  const who = principal === "*" ? "*" : stableStringify(caller);
+  const who =
+    caller === "*" ? "*" : stableStringify([caller.principal, caller.transport, caller.mcp]);
   const what = stableStringify(input);
   if (who === undefined || what === undefined) {
     return undefined;
