@@ -86,14 +86,15 @@ await expectBudget(() => app.as(ada).taskService.list({ limit: 20 }), { name: "l
 
 ## Development warnings
 
-`createTestApp({ strictWarnings: true })` (under vitest or jest) throws
-each development warning raised in that app's method calls (`n-plus-one`,
+`createTestApp({ strictWarnings: true })` (under vitest or jest) throws each
+development warning raised in that app's method calls (`n-plus-one`,
 `unbounded-read`, `oversized-response`, `nested-write`, `batch-read`,
 `batch-create-many`) as a `DevWarningError` where it happens, failing the
-test that caused it. Warnings outside its calls (an `ambient-write` while
-seeding) are logged, and `app.close()` ends it. Turn it on for service
-suites. `createRecordingSink()` passed as `flushSink` records what each
-flush wrote.
+test that caused it (an oversized reply fails an in-process `app.as(...)`
+call; over a socket or HTTP the reply was already sent, so it is logged, not
+thrown). Warnings outside its calls (an `ambient-write` while seeding) are
+logged, and `app.close()` ends it. Turn it on for service suites.
+`createRecordingSink()` passed as `flushSink` records what each flush wrote.
 
 ## Components
 
@@ -107,9 +108,10 @@ flush wrote.
   `mockRejectedValue(error)`, `mockImplementation(fn)`, `calls`;
   `qd.task.useEntity.mockRow(row)` (and `mockRemoved`, `mockError`);
   `qd.task.board.mockScope(scope, items)`; `mockItems` for a stream, `sent`
-  for a channel, `mockEmit` for an event. Everything set is
-  forgotten after each test (`$reset()` by hand). It shows no optimistic
-  updates.
+  for a channel, `mockEmit` for an event. Everything set is forgotten
+  after each test only when the runner has a global `afterEach` (vitest
+  with `globals: true`, or jest); otherwise add
+  `afterEach(() => mock.$reset())`. It shows no optimistic updates.
 
 ## What a new service's tests cover
 

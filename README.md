@@ -2005,9 +2005,10 @@ kits' handlers are not. In tests, `createTestApp({ strictWarnings: true })`
 calls as a `DevWarningError` where it is raised, so the test that caused it
 fails: the call it happened in fails with `INTERNAL` and the error as its
 `cause`, and an in-process call whose reply was oversized rejects with it
-once the reply was recorded. Strictness belongs to the app: warnings outside
-its calls (an ambient write while seeding, another app's calls) are logged
-as usual, and `app.close()` ends it.
+once the reply was recorded (over a socket or HTTP the reply was already
+sent, so that error is logged, not thrown). Strictness belongs to the app:
+warnings outside its calls (an ambient write while seeding, another app's
+calls) are logged as usual, and `app.close()` ends it.
 
 ### Components
 
@@ -2046,12 +2047,16 @@ const mock = createMockClient(contracts); // the typed client's members, with st
 mock.task.board.mockScope(projectId, [card]); // what useCollection shows for the scope
 mock.task.countOnBoard.mockResolvedValue(1); // what the query answers
 mock.task.useEntity.mockRow({ ...card, notes: null }); // what useEntity shows for t1
+afterEach(() => mock.$reset()); // forget it all (automatic when the runner has a global afterEach)
 ```
 
 Each method member has `mockResolvedValue`, `mockRejectedValue`,
 `mockImplementation`, `mockReset` and `calls`; streams have `mockItems`,
 channels `sent` and events `mockEmit`. Everything set is forgotten after
-each test (`$reset()` by hand); optimistic updates are not shown.
+each test only when the test runner has a global `afterEach` (vitest with
+`globals: true`, or jest), where the mock registers its own reset
+(`resetAfterEach: false` opts out); otherwise call `mock.$reset()` in an
+`afterEach` of your own, as above. Optimistic updates are not shown.
 
 ### Test databases
 
