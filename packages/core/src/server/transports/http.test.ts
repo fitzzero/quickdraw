@@ -152,6 +152,30 @@ describe("on an Express 4 app with its own JSON parser", () => {
   });
 });
 
+describe("on an Express 4 app whose body parsers pass a call over", () => {
+  // Express 4's parsers set `req.body = {}` before they decide whether a
+  // request is theirs, so `{}` is in `req.body` while the body is unread.
+  const echo = (url: string, headers?: Record<string, string>) =>
+    post(url, "/qd/probeService/echo", { body: '{"text":"hello"}', headers });
+  const echoed = { status: 200, body: { ok: true, d: { text: "hello", transport: "http" } } };
+
+  it("reads the body itself behind express.urlencoded()", async () => {
+    const app = express();
+    app.use(express.urlencoded({ extended: false }));
+    const { url } = await serve({ app });
+    expect(await echo(url)).toMatchObject(echoed);
+    await expectStatuses(url);
+  });
+
+  it("reads the body itself behind express.json() when the type is application/vnd.api+json", async () => {
+    const app = express();
+    app.use(express.json());
+    const { url } = await serve({ app });
+    expect(await echo(url, { "content-type": "application/vnd.api+json" })).toMatchObject(echoed);
+    expect(await echo(url)).toMatchObject(echoed);
+  });
+});
+
 describe("on an Express 5 app without a JSON parser", () => {
   it("reads the body itself and answers the same", async () => {
     const { version } = createRequire(import.meta.url)("express5/package.json") as {

@@ -79,12 +79,18 @@ function readText(req: IncomingMessage, maxBytes: number): Promise<string> {
  * app's JSON parser already read (`express.json()` sets `req.body`); or else
  * the body read here, up to `maxBytes`, and parsed. A body that is too large
  * or not JSON rejects with `VALIDATION`.
+ *
+ * `req.body` counts only once the request stream was consumed. Express 4's
+ * body parsers set `req.body = {}` before they decide whether a request is
+ * theirs, so a request that `express.urlencoded()` passed over, or that
+ * `express.json()` passed over because its type was `application/vnd.api+json`,
+ * arrives with `req.body` set to `{}` and its body still unread.
  */
 export async function readJsonInput(req: HttpRequest, maxBytes: number): Promise<unknown> {
   if (!hasBody(req)) {
     return undefined;
   }
-  if (req.body !== undefined) {
+  if (req.readableEnded) {
     return req.body;
   }
   const text = await readText(req, maxBytes);
