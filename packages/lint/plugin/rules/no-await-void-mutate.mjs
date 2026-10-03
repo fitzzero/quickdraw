@@ -5,7 +5,7 @@
 // happened, and it cannot catch the write's failure. Ported from Conveyor's
 // `no-await-void-mutate`.
 
-import { FILE_OPTIONS, CLIENT_FILES, inScope } from "../lib/files.mjs";
+import { CLIENT_FILE_OPTIONS, inClientScope } from "../lib/files.mjs";
 import { memberName, unwrap } from "../lib/ast.mjs";
 
 /** @type {import('eslint').Rule.RuleModule} */
@@ -24,13 +24,13 @@ export default {
     schema: [
       {
         type: "object",
-        properties: { ...FILE_OPTIONS },
+        properties: { ...CLIENT_FILE_OPTIONS },
         additionalProperties: false,
       },
     ],
   },
   create(context) {
-    if (!inScope(context, context.options[0] ?? {}, { files: CLIENT_FILES })) {
+    if (!inClientScope(context, context.options[0] ?? {})) {
       return {};
     }
     return {

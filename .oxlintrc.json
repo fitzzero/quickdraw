@@ -26,6 +26,12 @@
       }
     },
     {
+      "files": ["**/src/testing/**", "**/src/drivers/**"],
+      "rules": {
+        "quickdraw/no-raw-socket": "off"
+      }
+    },
+    {
       "files": ["**/*.test.ts", "**/*.test.tsx"],
       "rules": {
         "quickdraw/no-nested-write": "off",

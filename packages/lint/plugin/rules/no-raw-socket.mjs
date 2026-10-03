@@ -7,7 +7,7 @@
 // `no-raw-socket-on`; their app-specific default exemptions are gone, and
 // `allowedEvents`/`allowedPrefixes` take an app's own.
 
-import { CLIENT_FILES, FILE_OPTIONS, TEST_FILES, inScope } from "../lib/files.mjs";
+import { CLIENT_FILE_OPTIONS, TEST_FILES, inClientScope } from "../lib/files.mjs";
 import { chainNames, memberName, staticString, unwrap } from "../lib/ast.mjs";
 
 const METHODS = new Set([
@@ -42,7 +42,7 @@ export default {
       {
         type: "object",
         properties: {
-          ...FILE_OPTIONS,
+          ...CLIENT_FILE_OPTIONS,
           sockets: {
             type: "array",
             items: { type: "string" },
@@ -65,7 +65,7 @@ export default {
   },
   create(context) {
     const options = context.options[0] ?? {};
-    if (!inScope(context, options, { files: CLIENT_FILES, ignore: TEST_FILES })) {
+    if (!inClientScope(context, options, { ignore: TEST_FILES })) {
       return {};
     }
     const sockets = options.sockets ?? ["socket"];

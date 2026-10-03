@@ -76,6 +76,11 @@ tests too.
 | routes      | `**/routes/**`, `**/routes.*`            |
 | client code | `**/*.tsx`, `**/*.jsx`, `**/apps/web/**` |
 
+Client code is also any file that imports `@tanstack/react-query`,
+`socket.io-client` or `@fitzzero/quickdraw-core/client`, so a hook in a
+`.ts` file is checked wherever oxlint runs from, the app root or `apps/web`
+alike; for the client rules the globs add files on top of those.
+
 Every file-scoped rule takes `files` and `ignore` globs, matched against the
 path relative to where oxlint runs (keep them `**/`-prefixed):
 

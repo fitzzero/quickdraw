@@ -7,7 +7,7 @@
 // as `qd.task.get.call(input)`; the `call`/`callData` helpers; a `fetch` of
 // `/qd/...`; a raw socket emit), or whose `queryKey` is a quickdraw key.
 
-import { CLIENT_FILES, FILE_OPTIONS, inScope } from "../lib/files.mjs";
+import { CLIENT_FILE_OPTIONS, inClientScope } from "../lib/files.mjs";
 import {
   chainNames,
   keyName,
@@ -69,7 +69,7 @@ export default {
       {
         type: "object",
         properties: {
-          ...FILE_OPTIONS,
+          ...CLIENT_FILE_OPTIONS,
           clients: {
             type: "array",
             items: { type: "string" },
@@ -82,7 +82,7 @@ export default {
   },
   create(context) {
     const options = context.options[0] ?? {};
-    if (!inScope(context, options, { files: CLIENT_FILES })) {
+    if (!inClientScope(context, options)) {
       return {};
     }
     const clients = new Set(options.clients ?? ["qd"]);

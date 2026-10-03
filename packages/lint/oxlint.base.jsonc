@@ -71,8 +71,10 @@
     // files, through its own `files` and `ignore` options; the defaults follow
     // the template's layout (services in `**/services/**`, jobs in
     // `**/jobs/**`, routes in `**/routes/**` and `**/routes.*`, client code in
-    // `**/*.tsx`, `**/*.jsx` and `**/apps/web/**`, tests skipped where they
-    // write or read data directly). Another layout passes `files`, e.g.
+    // `**/*.tsx`, `**/*.jsx` and `**/apps/web/**` plus any file importing
+    // TanStack Query, the Socket.IO client or quickdraw's client, tests
+    // skipped where they write or read data directly). Another layout passes
+    // `files`, e.g.
     //   "quickdraw/no-unbounded-read": ["error", { "files": ["**/server/services/**"] }]
     // Every rule takes `baseline` (or, for all of them at once,
     // `"settings": { "quickdraw": { "baseline": ".quickdraw-lint-baseline.json" } }`

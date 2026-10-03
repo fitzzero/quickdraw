@@ -126,7 +126,10 @@ which downgrades currently-violated rules to `warn` (tracked debt — fix over
 time, then re-tighten), exempts `**/src/client/**` from the client rules
 (`no-raw-socket`, `no-untyped-client`, `no-manual-refetch`,
 `no-await-void-mutate`: the framework's client is the sanctioned home of raw
-sockets and TanStack calls), exempts the framework's own `*.test.ts(x)` from
+sockets and TanStack calls; these rules find client code by its imports as
+well as by path), exempts `**/src/testing/**` and bench's `**/src/drivers/**`
+from `no-raw-socket` (the test helpers and the load harness drive sockets by
+hand), exempts the framework's own `*.test.ts(x)` from
 `no-nested-write` and `no-foreign-write` (they make those writes on purpose),
 lets the README examples (`**/test/readme/**`) keep inline comments, and
 ignores `**/legacy-src/**`. oxlint matches `overrides` and

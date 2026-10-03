@@ -4,6 +4,11 @@
 // file's path relative to the directory oxlint runs in, or against its
 // absolute path when the file lies outside that directory, so keep them
 // `**/`-prefixed. They support `**`, `*`, `?` and `{a,b}`.
+//
+// Client code is also known by what it imports (`inClientScope`): a file
+// that imports TanStack Query, the Socket.IO client or quickdraw's client is
+// client code wherever oxlint runs from, so the client rules do not depend
+// on the working directory; the path globs add files on top.
 
 /** Tests set up and inspect data directly, by design. */
 export const TEST_FILES = Object.freeze([
@@ -30,8 +35,15 @@ export const SERVER_FILES = Object.freeze([
 /** HTTP route handlers. */
 export const ROUTE_FILES = Object.freeze(["**/routes/**", "**/routes.*"]);
 
-/** Client code: React components and the web app. */
+/** Client code by path: React components and the web app. */
 export const CLIENT_FILES = Object.freeze(["**/*.tsx", "**/*.jsx", "**/apps/web/**"]);
+
+/** Client code by import: a file importing one of these modules (or a subpath of them). */
+export const CLIENT_MODULES = Object.freeze([
+  "@tanstack/react-query",
+  "socket.io-client",
+  "@fitzzero/quickdraw-core/client",
+]);
 
 /** The JSON Schema of the `files` and `ignore` options. */
 export const FILE_OPTIONS = Object.freeze({
@@ -45,6 +57,17 @@ export const FILE_OPTIONS = Object.freeze({
     items: { type: "string" },
     description: "Globs of files the rule skips even when `files` matches them.",
   },
+});
+
+/** The JSON Schema of the client rules' `files` and `ignore` options. */
+export const CLIENT_FILE_OPTIONS = Object.freeze({
+  files: {
+    type: "array",
+    items: { type: "string" },
+    description:
+      "Globs of files the rule checks besides those importing a client module (default: `**/*.tsx`, `**/*.jsx`, `**/apps/web/**`).",
+  },
+  ignore: FILE_OPTIONS.ignore,
 });
 
 const compiled = new Map();
@@ -124,4 +147,41 @@ export function inScope(context, options, defaults = {}) {
     return false;
   }
   return !matchesAny(target, options.ignore ?? defaults.ignore ?? []);
+}
+
+/** The module a top-level statement imports or re-exports from, if any. */
+function importSource(statement) {
+  if (
+    statement.type === "ImportDeclaration" ||
+    statement.type === "ExportAllDeclaration" ||
+    statement.type === "ExportNamedDeclaration"
+  ) {
+    return typeof statement.source?.value === "string" ? statement.source.value : undefined;
+  }
+  return undefined;
+}
+
+/** Whether the linted file imports (or re-exports from) one of `modules` or a subpath of one. */
+export function importsAny(context, modules) {
+  return context.sourceCode.ast.body.some((statement) => {
+    const source = importSource(statement);
+    return (
+      source !== undefined &&
+      modules.some((module) => source === module || source.startsWith(`${module}/`))
+    );
+  });
+}
+
+/**
+ * Whether a client rule checks the linted file: it imports one of
+ * {@link CLIENT_MODULES}, or its path matches the `files` option (default
+ * {@link CLIENT_FILES}); either way not when it matches `ignore` (default
+ * `defaults.ignore`).
+ */
+export function inClientScope(context, options, defaults = {}) {
+  const target = lintedPath(context);
+  if (matchesAny(target, options.ignore ?? defaults.ignore ?? [])) {
+    return false;
+  }
+  return importsAny(context, CLIENT_MODULES) || matchesAny(target, options.files ?? CLIENT_FILES);
 }

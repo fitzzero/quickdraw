@@ -148,9 +148,18 @@ function createApp(settings) {
   return root;
 }
 
-/** The quickdraw diagnostics oxlint reports in `root`, as `{ rule, file, line, severity }`. */
-function lint(root) {
-  const report = runOxlint({ cwd: root, paths: ["."], oxlint: OXLINT, ignoreBaselines: false });
+/**
+ * The quickdraw diagnostics oxlint reports in `root`, as `{ rule, file, line, severity }`,
+ * run from `root` or from `cwd` (a directory of the app) with the app's config.
+ */
+function lint(root, cwd = root) {
+  const report = runOxlint({
+    cwd,
+    config: path.relative(cwd, path.join(root, ".oxlintrc.json")) || undefined,
+    paths: ["."],
+    oxlint: OXLINT,
+    ignoreBaselines: false,
+  });
   // A rule that throws ("Error running JS plugin.") is a diagnostic without a code.
   const failure = report.diagnostics.find((diagnostic) => typeof diagnostic.code !== "string");
   if (failure !== undefined) {
@@ -224,6 +233,42 @@ describe("the core package's fixture apps as service files", () => {
       ]),
     );
     expect(lint(root).filter((report) => report.rule === rule)).toEqual([]);
+  });
+});
+
+describe("the client rules, wherever oxlint runs", () => {
+  // The review's scope case: a hook in a .ts file of the web app, linted from
+  // the app root and from apps/web (where `**/apps/web/**` matches nothing).
+  const hook = [
+    "apps/web/src/hooks/useTask.ts",
+    `import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qd } from "../lib/quickdraw";
+
+export function useTask(id: string) {
+  const queryClient = useQueryClient();
+  const task = useQuery({ queryKey: ["task", id], queryFn: () => qd.task.get.call({ id }) });
+  const rename = qd.task.rename.useMutation();
+  const save = async (title: string) => {
+    await rename.mutate({ id, title });
+    await queryClient.invalidateQueries({ queryKey: ["qd", "taskService"] });
+  };
+  return { task, save, emit: () => qd.connection.socket.emit("taskService:get", { id }) };
+}
+`,
+  ];
+  const expected = [
+    "no-untyped-client 6",
+    "no-await-void-mutate 9",
+    "no-manual-refetch 10",
+    "no-raw-socket 12",
+  ];
+
+  it.each([".", "apps/web"])("report the same four violations from %s", (from) => {
+    const root = createApp();
+    roots.push(root);
+    writeFiles(root, [hook]);
+    const found = lint(root, path.join(root, from)).map(({ rule, line }) => `${rule} ${line}`);
+    expect(found.toSorted()).toEqual(expected.toSorted());
   });
 });
 
