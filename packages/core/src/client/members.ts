@@ -15,7 +15,7 @@
 // React-free.
 
 import type { AnyContract } from "../contract/defineContract";
-import type { MethodKind, MethodOutput, Watch } from "../contract/methods";
+import type { MethodDef, MethodKind, MethodOutput, Watch } from "../contract/methods";
 import type { ContractMap } from "../contract/infer";
 
 /** One method of one service, as a member is built for it. */
@@ -59,10 +59,12 @@ function checkEntry(
 }
 
 /**
- * Builds `{ [key]: { [method]: member(target) } }` from `contracts`, frozen.
- * `owner` names the function that builds it, in error messages; `reserved`
- * are keys the caller object uses itself, which no service may take. `live`,
- * when given, adds members of its own to each service (the typed client's
+ * Builds `{ [key]: { [method]: member(target, definition, contract) } }`
+ * from `contracts`, frozen. `member` gets the method's declaration and its
+ * contract too, for what a kit made (the search kit's `useSearch`). `owner`
+ * names the function that builds it, in error messages; `reserved` are keys
+ * the caller object uses itself, which no service may take. `live`, when
+ * given, adds members of its own to each service (the typed client's
  * `useEntity`, `useEntities` and one member per collection); a contract
  * keeps them apart from its methods, since methods, collections and the
  * reserved names share one namespace.
@@ -70,7 +72,7 @@ function checkEntry(
 export function buildCaller(
   owner: string,
   contracts: ContractMap,
-  member: (target: MethodTarget) => object,
+  member: (target: MethodTarget, definition: MethodDef, contract: AnyContract) => object,
   reserved: readonly string[] = [],
   live?: (contract: AnyContract) => Readonly<Record<string, object>>,
 ): Record<string, object> {
@@ -81,13 +83,17 @@ export function buildCaller(
     const contract = checkEntry(owner, key, value, reserved);
     const methods = Object.entries(contract.methods).map(([method, definition]) => [
       method,
-      member({
-        service: contract.name,
-        method,
-        kind: definition.kind,
-        output: definition.output,
-        watch: definition.watch,
-      }),
+      member(
+        {
+          service: contract.name,
+          method,
+          kind: definition.kind,
+          output: definition.output,
+          watch: definition.watch,
+        },
+        definition,
+        contract,
+      ),
     ]);
     const extra = Object.entries(live?.(contract) ?? {});
     return [key, Object.freeze(Object.fromEntries([...methods, ...extra]))];

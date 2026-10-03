@@ -6,7 +6,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { QuickdrawError, defineContract, mutation, query } from "../index";
+import { QuickdrawError, defineContract, mutation, query, search } from "../index";
 import { createMockClient } from "./client";
 
 const card = z.object({
@@ -264,5 +264,36 @@ describe("after each test", () => {
     // A mock made with resetAfterEach: false keeps what it was given.
     expect(kept.task.get.calls).toEqual([{ id: "t1" }]);
     await expect(kept.task.get.call({ id: "t1" })).resolves.toMatchObject({ title: "Kept" });
+  });
+});
+
+describe("a search kit method", () => {
+  const notes = defineContract("noteService", {
+    entity: card,
+    methods: { ...search.contract({ entity: card, fields: ["title"] }) },
+  });
+
+  it("has useSearch, answered by its stub at once, sending nothing below minLength", async () => {
+    const qd = createMockClient({ note: notes });
+    qd.note.search.mockImplementation(({ q }) => ({
+      items: [cardOf("t1", `Found ${q}`)],
+      nextCursor: "more",
+    }));
+    function Results({ q }: { readonly q: string }) {
+      const { items, hasMore } = qd.note.search.useSearch(q);
+      return (
+        <ul aria-label={hasMore ? "more" : "all"}>
+          {items.map((item) => (
+            <li key={item.id}>{item.title}</li>
+          ))}
+        </ul>
+      );
+    }
+    const { rerender } = render(<Results q="a" />);
+    expect(screen.queryAllByRole("listitem")).toEqual([]);
+    rerender(<Results q=" ab " />);
+    await screen.findByText("Found ab");
+    expect(screen.getByRole("list", { name: "more" })).toBeTruthy();
+    expect(qd.note.search.calls).toEqual([{ q: "ab" }]);
   });
 });

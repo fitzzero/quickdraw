@@ -23,8 +23,8 @@ export const LIST_DEFAULT_LIMIT = 50;
 /** The largest page `list` returns: a larger `limit` is clamped to it. */
 export const LIST_MAX_LIMIT = 200;
 
-/** The longest cursor `list` accepts. */
-const MAX_CURSOR_LENGTH = 4096;
+/** The longest cursor `list` (and `search`) accepts. */
+export const MAX_CURSOR_LENGTH = 4096;
 
 /** A value a `list` filter compares a field with. */
 export type FilterValue = string | number | boolean | null;
@@ -109,7 +109,8 @@ function sortIssues(sort: unknown, fields: readonly string[]): Issues {
   return issues;
 }
 
-function pagingIssues(value: Readonly<Record<string, unknown>>): Issues {
+/** The issues of a page request's `cursor`, `limit` and `totalCount`, those it has. */
+export function pagingIssues(value: Readonly<Record<string, unknown>>): Issues {
   const { cursor, limit, totalCount } = value;
   const issues: Issues = [];
   const isCursor =
@@ -207,7 +208,8 @@ export function listInput<Input, Query extends ListQuery>(
   );
 }
 
-function itemsIssues(items: unknown): Issues {
+/** The issues of a page's `items`: each must be a row with an id. */
+export function itemsIssues(items: unknown): Issues {
   if (!Array.isArray(items)) {
     return [{ message: "Expected an array of rows", path: ["items"] }];
   }
@@ -219,16 +221,21 @@ function itemsIssues(items: unknown): Issues {
   });
 }
 
-function pageJson(item: StandardSchemaV1, target: string): JsonSchema {
+/** The JSON Schema of a page's `items`: an array of `item`'s rows, as far as `item` can describe them. */
+export function itemsJson(item: StandardSchemaV1, target: string): JsonSchema {
   let items: JsonSchema;
   try {
     items = jsonOf(item, "output", target) ?? {};
   } catch {
     items = {};
   }
+  return { type: "array", items };
+}
+
+function pageJson(item: StandardSchemaV1, target: string): JsonSchema {
   return objectJson(
     {
-      items: { type: "array", items },
+      items: itemsJson(item, target),
       nextCursor: { type: ["string", "null"] },
       totalCount: { type: "integer", minimum: 0 },
     },

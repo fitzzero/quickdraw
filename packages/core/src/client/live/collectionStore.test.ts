@@ -12,6 +12,7 @@ import {
   applyDeltas,
   applyFrames,
   applyItems,
+  applyKept,
   applyPage,
   applySnapshot,
   emptyCollection,
@@ -670,6 +671,75 @@ describe("items loaded by id", () => {
 
     expect(staleIds(reloaded)).toEqual(["b", "c"]);
     expect(staleIds(applyItems(reloaded, [row("b")], 210, plain, ["b"]))).toEqual(["c"]);
+  });
+});
+
+describe("items read outside the scope (a search's results)", () => {
+  const members = [row("a", 1), row("b", 2), row("c", 3), row("d", 4)];
+  /** Every member in the index, the first two loaded. */
+  const indexedBase = (): CollectionState<Row> =>
+    applySnapshot<Row>(
+      null,
+      snap(members.slice(0, 2), { rev: 100, cursor: "2", members }),
+      indexed,
+    );
+
+  it("keeps an index member's item, unless the state holds a newer one, counting nothing", () => {
+    const { state: live } = apply(
+      indexedBase(),
+      { t: "patched", id: "a", d: { v: 0 } },
+      300,
+      indexed,
+    );
+    const { state, missing } = applyKept(live, [row("d", 4), row("a", 1)], 200, indexed);
+
+    expect(state.byId.get("d")).toEqual(row("d", 4));
+    expect(state.byId.get("a")).toEqual(row("a", 0));
+    expect(state.revById.get("d")).toBe(200);
+    expect(ids(state)).toEqual(["a", "b", "d"]);
+    expect(state.totalCount).toBe(4);
+    expect(missing).toEqual([]);
+    // A later patch of the member now applies to its item.
+    const { state: patched } = apply(state, { t: "patched", id: "d", d: { v: 8 } }, 400, indexed);
+    expect(patched.byId.get("d")).toEqual(row("d", 8));
+  });
+
+  it("leaves out an id the index does not hold, and names a member whose row is newer than the read", () => {
+    const { state: live } = apply(
+      indexedBase(),
+      { t: "patched", id: "c", d: { v: 9 } },
+      300,
+      indexed,
+    );
+    const { state, missing } = applyKept(live, [row("c", 3), row("x", 5)], 200, indexed);
+
+    expect(state.byId.has("c")).toBe(false);
+    expect(state.byId.has("x")).toBe(false);
+    expect(state.index?.some((member) => member.id === "x")).toBe(false);
+    expect(missing).toEqual(["c"]);
+  });
+
+  it("without an index, never brings an item into a paged window, but does into a whole scope", () => {
+    const paged = applySnapshot<Row>(
+      null,
+      snap([row("a"), row("b")], { rev: 100, cursor: "2" }),
+      plain,
+    );
+    expect(applyKept(paged, [row("c")], 200, plain).state).toBe(paged);
+    expect(applyKept(paged, [row("c")], 200, plain, { loadAll: true }).state.byId.has("c")).toBe(
+      true,
+    );
+    const whole = applySnapshot<Row>(null, snap([row("a")], { rev: 100 }), plain);
+    const { state } = applyKept(whole, [row("a", 2), row("c")], 200, plain);
+    expect(ids(state)).toEqual(["a", "c"]);
+    expect(state.byId.get("a")).toEqual(row("a", 2));
+    expect(state.totalCount).toBe(1);
+  });
+
+  it("does not bring back an item removed after the read", () => {
+    const whole = applySnapshot<Row>(null, snap([row("a"), row("b")], { rev: 100 }), plain);
+    const { state: removed } = apply(whole, { t: "removed", id: "b" }, 300);
+    expect(applyKept(removed, [row("b")], 200, plain).state).toBe(removed);
   });
 });
 

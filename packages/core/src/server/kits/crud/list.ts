@@ -29,7 +29,12 @@ export interface ListContext {
   readonly projection: string;
 }
 
-function itemOf(projection: Projection, row: object, hidden: ReadonlySet<string>): unknown {
+/** One row of a page as an item: projected, without the `hidden` fields. The search kit's too. */
+export function pageItem(
+  projection: Projection,
+  row: object,
+  hidden: ReadonlySet<string>,
+): unknown {
   const item = projectRow(projection, row);
   return typeof item === "object" && item !== null
     ? strip(item as Readonly<Record<string, unknown>>, hidden)
@@ -69,7 +74,7 @@ export function listHandler(context: ListContext): KitHandler {
     });
     const hidden = projection.tiers.hidden(readerLevel(call, context.form, level));
     return {
-      items: page.rows.map((row) => itemOf(projection, row, hidden)),
+      items: page.rows.map((row) => pageItem(projection, row, hidden)),
       nextCursor: page.nextCursor,
       ...(page.totalCount === undefined ? {} : { totalCount: page.totalCount }),
     };

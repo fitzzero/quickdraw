@@ -28,6 +28,7 @@ import type {
 import type { QuickdrawError } from "../protocol/errors";
 import type { MethodMutationOptions, MethodQueryOptions } from "./hooks";
 import type { MethodQueryKey } from "./keys";
+import type { SearchMemberOf } from "./live/searchTypes";
 import type { UseCollectionOptions, UseCollectionResult } from "./live/useCollection";
 import type { UseEntitiesResult, UseEntityOptions, UseEntityResult } from "./live/useEntity";
 import type { OptimisticCache } from "./optimistic";
@@ -104,9 +105,9 @@ export interface MutationMember<C extends AnyContract, M extends MethodName<C>> 
   call(...args: InputArgs<C, M, [options?: MutationCallOptions]>): Promise<OutputOf<C, M>>;
 }
 
-/** One method's member, by the method's kind. */
+/** One method's member, by the method's kind; a search kit method's query member also has `useSearch`. */
 export type MethodMember<C extends AnyContract, M extends MethodName<C>> =
-  KindOf<C, M> extends "query" ? QueryMember<C, M> : MutationMember<C, M>;
+  KindOf<C, M> extends "query" ? QueryMember<C, M> & SearchMemberOf<C, M> : MutationMember<C, M>;
 
 /** The entity members of `qd.<key>`, for a contract with an entity. */
 export interface EntityMembers<C extends AnyContract> {

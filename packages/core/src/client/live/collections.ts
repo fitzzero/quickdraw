@@ -7,7 +7,7 @@
 // React-free: the live data (`liveData.ts`) makes one per connection and
 // `QueryClient`.
 
-import type { CollectionFrame, RevokeReason } from "../../protocol/envelope";
+import type { CollectionFrame, Revision, RevokeReason } from "../../protocol/envelope";
 import { isName, isRecord } from "../../protocol/guards";
 import {
   createCollectionController,
@@ -38,6 +38,20 @@ export interface ScopeHolding {
 export interface CollectionHub {
   /** Holds one scope of a collection for one user of it. */
   subscribe(target: CollectionTarget, scope: string, options?: ScopeOptions): ScopeHolding;
+  /** True while a user holds `scope` of `collection`: its deltas arrive and apply to its state. */
+  holds(service: string, collection: string, scope: string): boolean;
+  /**
+   * Keeps items of a held scope that were read outside it at revision `rev`
+   * (a search's results) in its state (`CollectionController.keep`). Returns
+   * false, keeping nothing, when the scope is not held or not loaded yet.
+   */
+  keep(
+    service: string,
+    collection: string,
+    scope: string,
+    items: readonly unknown[],
+    rev: Revision,
+  ): boolean;
   /** A `qd:c` frame arrived. */
   receive(frame: unknown): void;
   /** The server ended the subscription to a scope (`qd:revoked`). */
@@ -102,6 +116,15 @@ export function createCollectionHub(host: LiveHost): CollectionHub {
         },
       };
     },
+    holds: (service: string, collection: string, scope: string) =>
+      held(service, collection, scope) !== undefined,
+    keep: (
+      service: string,
+      collection: string,
+      scope: string,
+      items: readonly unknown[],
+      rev: Revision,
+    ) => held(service, collection, scope)?.keep(items, rev) ?? false,
     receive(frame: unknown): void {
       if (isCollectionFrame(frame)) {
         held(frame.s, frame.c, frame.scope)?.receive(frame);

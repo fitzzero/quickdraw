@@ -31,7 +31,8 @@ export interface ModelDelegate {
 /** What a kit handler is called with, whatever the app's own types. */
 export interface KitHandlerArgs {
   readonly input: unknown;
-  readonly ctx: { readonly principal: Principal | null };
+  /** The call's `ctx`; a dispatcher's always carries its `signal`. */
+  readonly ctx: { readonly principal: Principal | null; readonly signal?: AbortSignal };
   readonly db: unknown;
 }
 

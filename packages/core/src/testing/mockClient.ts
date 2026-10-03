@@ -11,7 +11,9 @@
 //   TanStack's `useMutation` over the stub. Optimistic layers are not shown:
 //   the test sets the rows a component reads.
 // - Every method's member carries its stub (`mockResolvedValue`,
-//   `mockRejectedValue`, `mockImplementation`, `mockReset`, `calls`).
+//   `mockRejectedValue`, `mockImplementation`, `mockReset`, `calls`). A
+//   search kit method's `useSearch` asks its stub at once, with no debounce
+//   and no collection cache (`mockSearch.ts`).
 // - `useEntity`, `useEntities` and `useCollection` show what the test sets
 //   with `mockRow`, `mockRemoved`, `mockError` and `mockScope`
 //   (`mockLive.ts`).
@@ -29,6 +31,7 @@ import { methodKey, methodKeyPrefix, type MethodQueryKey } from "../client/keys"
 import { buildCaller, type MethodTarget } from "../client/members";
 import type { ContractMap } from "../contract/infer";
 import { createMockStore, mockLiveMembers } from "./mockLive";
+import { mockSearchMember } from "./mockSearch";
 import type { MethodStub, MockClient, MockClientOptions } from "./mockTypes";
 
 /** How a stub answers its calls. */
@@ -132,11 +135,16 @@ function useMockQuery(
   );
 }
 
-function mockQueryMember(context: MockContext, target: MethodTarget): object {
+function mockQueryMember(
+  context: MockContext,
+  target: MethodTarget,
+  search: (invoke: Stub["invoke"]) => Readonly<Record<string, unknown>>,
+): object {
   const stub = context.stub(target);
   const key = (input?: unknown): MethodQueryKey => methodKey(target.service, target.method, input);
   const member = withStub(
     {
+      ...search(stub.invoke),
       useQuery: (input?: unknown, options?: MethodQueryOptions<unknown>) =>
         useMockQuery(context.queryClient, stub, key(input), input, options),
       call: (input?: unknown): Promise<unknown> => stub.invoke(input),
@@ -283,9 +291,11 @@ export function createMockClient<const Contracts extends ContractMap>(
   const client = buildCaller(
     "createMockClient",
     contracts,
-    (target) =>
+    (target, definition, contract) =>
       target.kind === "query"
-        ? mockQueryMember(context, target)
+        ? mockQueryMember(context, target, (invoke) =>
+            mockSearchMember(queryClient, invoke, target, definition, contract),
+          )
         : mockMutationMember(context, target),
     ["invalidate"],
     mockLiveMembers(store, { userId: options.userId ?? "" }),

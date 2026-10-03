@@ -23,6 +23,9 @@
 // - `loadItems(ids)` loads items by id with `qd:col:items`, at most 200 per
 //   request, once the scope is joined; a patch for an item not held loads
 //   it that way.
+// - `keep(items, rev)` takes items of the scope read elsewhere (a search's
+//   results) into the state by revision, as if loaded by id, so the scope's
+//   deltas keep them current.
 // - `qd:revoked` drops the state: access was revoked (`FORBIDDEN`) or the
 //   scope's anchor row was deleted (`NOT_FOUND`).
 // - Requests go through the connection's lane. `RATE_LIMITED` waits out the
@@ -35,7 +38,7 @@
 
 import { DEFAULT_COLLECTION_MAX_LIMIT } from "../../contract/collections";
 import { CLIENT_EVENTS } from "../../contract/names";
-import type { CollectionFrame, RevokeReason } from "../../protocol/envelope";
+import type { CollectionFrame, Revision, RevokeReason } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
 import { collectionKey, type CollectionQueryKey } from "../keys";
 import {
@@ -51,6 +54,7 @@ import {
 import {
   applyDeltas,
   applyFrames,
+  applyKept,
   applySnapshot,
   pruneStale,
   staleIds,
@@ -94,6 +98,14 @@ export interface CollectionController {
   loadItems(ids: readonly string[]): Promise<void>;
   /** Loads every page of the scope while the returned release is not called. */
   loadAll(): () => void;
+  /**
+   * Keeps items of the scope read outside it at revision `rev` (a search's
+   * results) in its state, unless it holds something newer, so its deltas
+   * keep them current; a member whose newer revision it holds without an
+   * item is loaded by id instead. Returns false, keeping nothing, until the
+   * scope's state is loaded.
+   */
+  keep(items: readonly unknown[], rev: Revision): boolean;
   /** Another user acts on the connection now: drops the state and loads the scope from scratch. */
   forget(): void;
   /** The connection closed: stops every timer and wait. The next connect loads the scope again. */
@@ -507,6 +519,22 @@ function createPipeline(
   return p;
 }
 
+/** Keeps items read outside the scope at `rev` in its loaded state (`CollectionController.keep`). */
+function keep(p: Pipeline, items: readonly unknown[], rev: Revision): boolean {
+  const state = entryOf(p).state;
+  if (p.disposed || state === null) {
+    return false;
+  }
+  const kept = applyKept(state, items, rev, p.shape, { loadAll: p.allDemand > 0 });
+  if (kept.state !== state) {
+    write(p, { state: kept.state });
+  }
+  if (kept.missing.length > 0) {
+    loadMissing(p, kept.missing);
+  }
+  return true;
+}
+
 /** Loads every page of the scope while the returned release is not called. */
 function holdLoadAll(p: Pipeline): () => void {
   p.allDemand += 1;
@@ -554,6 +582,7 @@ export function createCollectionController(
     },
     loadItems: (ids: readonly string[]) => loadItems(p, ids),
     loadAll: () => holdLoadAll(p),
+    keep: (items: readonly unknown[], rev: Revision) => keep(p, items, rev),
     forget: () => {
       write(p, { state: null, error: null, loadingMore: false });
       load(p, "snapshot");
