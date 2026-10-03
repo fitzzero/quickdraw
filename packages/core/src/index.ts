@@ -120,6 +120,52 @@ export {
   type SearchPage,
   type SearchQuery,
 } from "./contract/kits/searchSchemas";
+// The sharing and membership kit's contract half (RFC 0003 section 12.3);
+// its handlers are `sharing.handlers` on ./server.
+export {
+  SHARING_METHODS,
+  sharing,
+  type AclMethodName,
+  type MembersMethodName,
+  type SharingByNameMethod,
+  type SharingContractOptions,
+  type SharingDefOf,
+  type SharingInvite,
+  type SharingInviteByName,
+  type SharingLeave,
+  type SharingListMembers,
+  type SharingListShares,
+  type SharingMethodName,
+  type SharingMethods,
+  type SharingMode,
+  type SharingRemove,
+  type SharingSetLevel,
+  type SharingSetRole,
+  type SharingShare,
+  type SharingShareByName,
+  type SharingTag,
+  type SharingUnshare,
+} from "./contract/kits/sharing";
+export {
+  SHARE_LEVELS,
+  type InviteByNameInput,
+  type InviteByNameQuery,
+  type InviteInput,
+  type InviteQuery,
+  type LeaveInput,
+  type ListMembersInput,
+  type ListMembersQuery,
+  type Member,
+  type MemberInput,
+  type MembersPage,
+  type SetRoleInput,
+  type ShareByNameInput,
+  type ShareByNameQuery,
+  type ShareInput,
+  type ShareLevel,
+  type UnshareInput,
+  type UserLookupInput,
+} from "./contract/kits/sharingSchemas";
 export type { KitSchema } from "./contract/kits/schemas";
 export type {
   ChannelPayloadOf,

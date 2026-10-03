@@ -173,6 +173,25 @@ export type {
   SearchStrategy,
   SearchStrategyContext,
 } from "./kits/search/types";
+// The sharing and membership kit's server half (RFC 0003 section 12.3), whose
+// contract half is `sharing.contract` on the root export
+export { sharing } from "./kits/sharing/handlers";
+export type {
+  SharingAccess,
+  SharingByNameOf,
+  SharingChange,
+  SharingChangeKind,
+  SharingContract,
+  SharingDefaultAccess,
+  SharingHandlersOptions,
+  SharingImplementations,
+  SharingKindOf,
+  SharingMethodsOf,
+  SharingOnChange,
+  SharingOptionsArgs,
+  SharingResolveUser,
+  SharingUserLookup,
+} from "./kits/sharing/types";
 
 // The seams later cards implement: tracked writes, "not modified" versions
 // and the completion record
