@@ -14,8 +14,10 @@ import {
   type ServerResponse,
 } from "node:http";
 import { consoleLogger, type Logger } from "../contract/logger";
+import { createCaller, type Caller } from "./caller";
 import {
   createDispatcher,
+  type ContractOfServices,
   type Dispatcher,
   type DispatcherOptions,
   type PrincipalOfServices,
@@ -89,8 +91,9 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
   /** Close the server on `SIGTERM` and `SIGINT`. Default `false`. The process is never exited. */
   readonly handleSignals?: boolean;
   /**
-   * How long `close()` waits for HTTP requests in flight before it closes
-   * their connections, in milliseconds. Default 10,000.
+   * How long `close()` waits for calls and HTTP requests in flight before it
+   * stops waiting and closes their connections, in milliseconds. Default
+   * 10,000.
    */
   readonly shutdownTimeoutMs?: number;
 }
@@ -114,13 +117,19 @@ export interface QuickdrawServer<S extends readonly AnyService[] = readonly AnyS
   readonly io: QuickdrawIo<PrincipalOfServices<S>>;
   /** The HTTP server: the app's, or the one created. Not listening until the app says so. */
   readonly httpServer: HttpServer;
-  /** The dispatcher every transport calls; `dispatcher.caller(principal)` calls in process. */
+  /**
+   * The dispatcher every transport calls; `dispatcher.caller(principal)`
+   * calls in process. `close()` waits for its calls in flight.
+   */
   readonly dispatcher: Dispatcher<S>;
   /**
-   * Graceful shutdown: removes the signal handlers, disconnects every socket,
-   * and closes the HTTP server once its requests finish, or closes their
-   * connections after `shutdownTimeoutMs`. Resolves when it is done; calling
-   * it again returns the same promise. It never exits the process.
+   * Graceful shutdown: removes the signal handlers, disconnects every socket
+   * (cancelling its queries; a mutation runs to its end), waits for the calls
+   * still in flight, and closes the HTTP server once its requests finish.
+   * After `shutdownTimeoutMs` it stops waiting and closes the remaining
+   * connections. Resolves when it is done, so an app can then close its
+   * database; calling it again returns the same promise. It never exits the
+   * process.
    */
   close(): Promise<void>;
   /**
@@ -192,20 +201,68 @@ function watchSignals(close: () => Promise<void>, logger: Logger): () => void {
   };
 }
 
+/** A dispatcher whose calls in flight can be awaited. */
+interface TrackedDispatcher<S extends readonly AnyService[]> {
+  readonly dispatcher: Dispatcher<S>;
+  /** Resolves once no call is in flight. */
+  idle(): Promise<void>;
+}
+
+/**
+ * Counts the calls in flight through `dispatcher`, the transports' and the
+ * in-process caller's alike, so `close()` can wait for them.
+ */
+function trackCalls<S extends readonly AnyService[]>(
+  dispatcher: Dispatcher<S>,
+): TrackedDispatcher<S> {
+  const running = new Set<Promise<unknown>>();
+  const call: Dispatcher<S>["call"] = (request) => {
+    const result = dispatcher.call(request);
+    running.add(result);
+    const done = (): void => {
+      running.delete(result);
+    };
+    void result.then(done, done);
+    return result;
+  };
+  return {
+    dispatcher: Object.freeze({
+      ...dispatcher,
+      call,
+      caller: (principal: PrincipalOfServices<S> | null) =>
+        createCaller(() => call, principal) as Caller<ContractOfServices<S>>,
+    }),
+    async idle() {
+      while (running.size > 0) {
+        await Promise.allSettled([...running]);
+      }
+    },
+  };
+}
+
 /** The server's `close`: one shutdown, however often it is called. */
 function closer(
   sockets: SocketServer,
   httpServer: HttpServer,
+  idle: () => Promise<void>,
   timeoutMs: number,
 ): { close: () => Promise<void>; onClose: (stop: () => void) => void } {
   let closing: Promise<void> | undefined;
   let stop = (): void => undefined;
   const shutdown = async (): Promise<void> => {
     stop();
-    const timer = setTimeout(() => httpServer.closeAllConnections(), timeoutMs);
+    let expire = (): void => undefined;
+    const expired = new Promise<void>((resolve) => {
+      expire = resolve;
+    });
+    const timer = setTimeout(() => {
+      httpServer.closeAllConnections();
+      expire();
+    }, timeoutMs);
     try {
-      // Disconnects every socket, then closes `httpServer` once its requests end.
-      await sockets.io.close();
+      // Disconnects every socket and closes `httpServer` once its requests
+      // end, while the calls still running finish: a mutation runs to its end.
+      await Promise.all([sockets.io.close(), Promise.race([idle(), expired])]);
     } finally {
       clearTimeout(timer);
     }
@@ -236,7 +293,8 @@ export function createServer<const S extends readonly AnyService[]>(
 ): QuickdrawServer<S> {
   checkOptions(options);
   const logger = options.logger ?? consoleLogger;
-  const dispatcher = createDispatcher(options);
+  const calls = trackCalls(createDispatcher(options));
+  const { dispatcher } = calls;
   const resolvePrincipal = createPrincipalResolver(options.auth);
   const router = mountRouter(options, { call: dispatcher.call, resolvePrincipal, logger });
   const httpServer = options.httpServer ?? createHttpServer(options.app ?? router ?? notFound);
@@ -255,6 +313,7 @@ export function createServer<const S extends readonly AnyService[]>(
   const { close, onClose } = closer(
     sockets,
     httpServer,
+    () => calls.idle(),
     options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
   );
   if (options.handleSignals === true) {

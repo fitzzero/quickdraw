@@ -65,7 +65,9 @@ server.httpServer.listen(4000);
   `createHttpRouter({ dispatcher, auth })` yourself.
 - **In process**: `server.dispatcher.caller(principal)` or `qd.caller(principal)`.
 
-`server.close()` disconnects every socket and closes the HTTP server;
+`server.close()` disconnects every socket, waits for the calls still in
+flight (a mutation runs to its end) and closes the HTTP server, giving up after
+`shutdownTimeoutMs` (default 10 s);
 `server.rotate({ withinMs })` asks clients to reconnect within a window;
 `server.access.refresh(userId)` reloads a user's grants and pushes `qd:access`.
 

@@ -5,16 +5,20 @@
 import { createServer as createHttpServer } from "node:http";
 import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { defineContract, mutation } from "../index";
 import {
   alice,
   bob,
   captureLogger,
   db,
+  deferred,
   granted,
   qd,
   task,
   taskDefaults,
   taskRow,
+  tick,
   type AppPrincipal,
 } from "./__tests__/fixtures";
 import { createServer, initQuickdraw, type ServiceGrants } from "./index";
@@ -53,6 +57,81 @@ describe("close()", () => {
     expect(await disconnected).toBe("transport close");
     expect(server.httpServer.listening).toBe(false);
     expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("waits for the mutations in flight, over a socket or in process, before it resolves", async () => {
+    const events: string[] = [];
+    const gate = deferred();
+    const writer = defineContract("writeService", {
+      methods: { save: mutation({ input: z.object({ by: z.string() }), output: z.string() }) },
+    });
+    const writeService = qd.defineService(writer, {
+      methods: {
+        save: {
+          access: "authenticated",
+          handler: async ({ input }) => {
+            events.push(`${input.by} started`);
+            await gate.promise;
+            // An app's database write commits here.
+            events.push(`${input.by} finished`);
+            return "saved";
+          },
+        },
+      },
+    });
+    const { server, url } = await harness.start({
+      services: [writeService],
+      db,
+      logger: captureLogger(),
+      auth: trustingAuth,
+    });
+    const opened = harness.open(url, v5Auth(alice));
+    await opened.hello;
+    const socketCall = call(opened.socket, {
+      id: 1,
+      s: "writeService",
+      m: "save",
+      i: { by: "socket" },
+    }).catch((error: unknown) => error);
+    const inProcess = server.dispatcher.caller(alice).writeService.save({ by: "caller" });
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    const closing = server.close().then(() => {
+      events.push("close resolved");
+    });
+    await tick(30);
+    expect(events).not.toContain("close resolved");
+    gate.resolve();
+    await closing;
+    expect(events.slice(2).sort()).toEqual([
+      "caller finished",
+      "close resolved",
+      "socket finished",
+    ]);
+    expect(events.at(-1)).toBe("close resolved");
+    expect(await inProcess).toBe("saved");
+    // The socket was disconnected before its mutation finished, so its reply never came.
+    expect(await socketCall).toMatchObject({ message: "socket has been disconnected" });
+  });
+
+  it("stops waiting for a call that never finishes after shutdownTimeoutMs", async () => {
+    const stuck = defineContract("stuckService", {
+      methods: { save: mutation({ input: z.object({}), output: z.null() }) },
+    });
+    const stuckService = qd.defineService(stuck, {
+      methods: { save: { access: "public", handler: () => deferred<null>().promise } },
+    });
+    const { server } = await harness.start({
+      services: [stuckService],
+      db,
+      logger: captureLogger(),
+      limits: { callTimeoutMs: 1_000 },
+      shutdownTimeoutMs: 50,
+    });
+    void server.dispatcher.caller(null).stuckService.save({});
+    await tick();
+    const started = performance.now();
+    await server.close();
+    expect(performance.now() - started).toBeGreaterThanOrEqual(40);
   });
 
   it("closes the connections of HTTP calls still running after shutdownTimeoutMs", async () => {
