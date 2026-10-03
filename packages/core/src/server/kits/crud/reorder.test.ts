@@ -1,13 +1,18 @@
 // The read/write kit's `reorder` and `nextOrdinal` (RFC 0003 section 12.1)
 // against PGlite: a move takes the whole number halfway between its new
 // neighbors and writes one row; when no gap is left, the list is renumbered
-// in steps, in the same transaction; neighbors must be rows of the same list.
+// in steps, in a second transaction given time for every row; both run
+// SERIALIZABLE, a conflict being `CONFLICT`; neighbors must be rows of the
+// same list.
 
 import { describe, expect, it } from "vitest";
+import { createTestApp, type TestApp } from "../../../testing/index";
 import { colSub, receiveScopes } from "../../collections/__tests__/fixture";
+import { projectService } from "../../emit/__tests__/live";
 import { nextOrdinal, ORDINAL_STEP } from "../../index";
-import { addTasks, as, kitApp } from "./__tests__/fixture";
+import { addTasks, as, defineTaskService, kitApp } from "./__tests__/fixture";
 import { ordinalBetween } from "./ordinal";
+import { RENUMBER_BASE_MS, RENUMBER_MS_PER_ROW } from "./reorder";
 
 const kit = kitApp();
 
@@ -158,5 +163,69 @@ describe("ordinals", () => {
       ORDINAL_STEP,
     );
     await expect(nextOrdinal(db, "")).rejects.toThrow(TypeError);
+  });
+});
+
+describe("reorder's transactions", () => {
+  /** The harness's tracked client, its `$transaction` recording its options and failing on demand. */
+  function watchedDb(fail: () => Error | undefined) {
+    const db = kit.harness().db;
+    const options: unknown[] = [];
+    const watched = new Proxy(db, {
+      get(target, key) {
+        if (key !== "$transaction") {
+          return Reflect.get(target, key) as unknown;
+        }
+        return async (fn: unknown, given?: unknown) => {
+          options.push(given);
+          const error = fail();
+          if (error !== undefined) {
+            throw error;
+          }
+          return await target.$transaction(fn as never, given as never);
+        };
+      },
+    });
+    return { db: watched, options };
+  }
+
+  it("are SERIALIZABLE, a renumbering one given time for every row, and a conflict is CONFLICT", async () => {
+    let fail: (() => Error) | undefined;
+    const { db, options } = watchedDb(() => fail?.());
+    const app = await createTestApp({ services: [projectService, defineTaskService()], db });
+    kit.track(app as unknown as TestApp);
+    const board = kit.board();
+    const prisma = kit.harness().prisma;
+    const [a = "", b = "", c = ""] = await addTasks(prisma, board.p1, [1024, 2048, 3072]);
+    const bo = app.as(as(board.bo)).taskService;
+    // A gap: one transaction.
+    await bo.reorder({ id: c, beforeId: a, afterId: b });
+    expect(options).toEqual([{ isolationLevel: "Serializable" }]);
+    // Every ordinal alike: no gap is left anywhere.
+    await prisma.task.updateMany({ where: { projectId: board.p1 }, data: { ordinal: 5 } });
+    options.length = 0;
+    await bo.reorder({ id: c, beforeId: a, afterId: b });
+    // The first finds no gap and writes nothing; the second renumbers P1's four tasks (the
+    // count is of the list without the moved row, whose time is added).
+    expect(options).toEqual([
+      { isolationLevel: "Serializable" },
+      { isolationLevel: "Serializable", timeout: RENUMBER_BASE_MS + 4 * RENUMBER_MS_PER_ROW },
+    ]);
+    expect((await order(board.p1)).map(([id]) => id)).toEqual([board.t1, a, c, b]);
+    // A conflict the database reports at commit (SSI: two moves into one gap at once).
+    fail = () =>
+      Object.assign(new Error("TransactionWriteConflict"), {
+        name: "DriverAdapterError",
+        cause: { kind: "TransactionWriteConflict", originalCode: "40001" },
+      });
+    await expect(bo.reorder({ id: a, beforeId: c, afterId: b })).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "Another change to this list ran at the same time; try again",
+    });
+    fail = () =>
+      Object.assign(new Error("P2034"), { name: "PrismaClientKnownRequestError", code: "P2034" });
+    await expect(bo.reorder({ id: a, beforeId: c, afterId: b })).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
   });
 });

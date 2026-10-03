@@ -10,6 +10,7 @@ import { kitRuntimeOf, type KitRuntime } from "../../context";
 import type { Projection } from "../../emit/projection";
 import { modelKey } from "../../storage";
 import type { Principal } from "../../types";
+import { inKitTransaction } from "../transactions";
 
 /** A row as the database client returns it. */
 export type Row = Readonly<Record<string, unknown>>;
@@ -95,15 +96,7 @@ export function crudCall(ctx: KitHandlerArgs["ctx"], db: unknown): CrudCall {
  * through the transaction too.
  */
 export async function inTransaction<T>(db: unknown, fn: (tx: unknown) => Promise<T>): Promise<T> {
-  const client = db as { readonly $transaction?: unknown } | null;
-  if (typeof client?.$transaction !== "function") {
-    throw new QuickdrawError(
-      "INTERNAL",
-      "The read/write kit's bulk and reorder methods need a database client with $transaction",
-    );
-  }
-  const run = client.$transaction as (callback: (tx: unknown) => Promise<T>) => Promise<T>;
-  return await run.call(client, fn);
+  return await inKitTransaction(db, fn, { owner: "The read/write kit's bulk methods" });
 }
 
 /** A projection of the call's service, by name. */

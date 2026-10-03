@@ -4,24 +4,34 @@
 // that will come right before it and `afterId` the row right after; given
 // one, the kit finds the other. The moved row takes the whole number halfway
 // between its neighbors (`ordinal.ts`), so a move is one write; when no gap
-// is left, the list is renumbered in the same transaction.
+// is left, the list is renumbered first.
 //
-// Statements, inside one transaction: one read of the row and its
-// neighbors, one more to find the missing neighbor when only one is given,
-// and the write. A renumbering adds one read and one write per row whose
-// ordinal changes; its frames reach a collection scope as a `reset` once
-// they pass the scope's `bulkThreshold`.
+// A move reads its neighbors and writes from what it read, so it runs
+// SERIALIZABLE, as a sharing change does (`../transactions.ts`): two moves
+// into one gap at once would otherwise both take its midpoint. A conflict
+// the database reports is `CONFLICT`; the caller may try again.
+//
+// Statements, in one transaction: one read of the row and its neighbors,
+// one more to find the missing neighbor when only one is given, and the
+// write. When no gap is left, that transaction ends without writing; the
+// list's rows are counted, and a second transaction, given
+// `RENUMBER_BASE_MS` plus `RENUMBER_MS_PER_ROW` for each row (a client's
+// default limit, Prisma's 5 s, would fail a long list every time), reads the
+// rows again, renumbers (one read, and one write per row whose ordinal
+// changes) and moves. The renumbering's frames reach a collection scope as a
+// `reset` once they pass the scope's `bulkThreshold`.
 
 import type { CrudSpec } from "../../../contract/kits/crud";
 import type { ReorderInput } from "../../../contract/kits/crudSchemas";
 import { QuickdrawError } from "../../../protocol/errors";
 import type { StorageWhere } from "../../storage";
+import { inKitTransaction } from "../transactions";
 import { isOrdinal, ordinalBetween, ORDINAL_STEP } from "./ordinal";
 import {
   crudCall,
   delegateOf,
-  inTransaction,
   projectionOf,
+  type CrudCall,
   type KitHandler,
   type KitHandlerArgs,
   type ModelDelegate,
@@ -166,23 +176,74 @@ async function renumber(
   return placed;
 }
 
+/** A renumbering transaction's time limit: this much, plus `RENUMBER_MS_PER_ROW` for each row of the list. */
+export const RENUMBER_BASE_MS = 5_000;
+
+/** The time a renumbering transaction is given for each row of the list it renumbers. */
+export const RENUMBER_MS_PER_ROW = 10;
+
+const OWNER = "The read/write kit's reorder";
+
+const CONFLICT = "Another change to this list ran at the same time; try again";
+
+/** One move: the call, what it asks, and what the moved row is read back with. */
+interface Move {
+  readonly call: CrudCall;
+  readonly spec: ReorderSpec;
+  readonly move: ReorderInput;
+  readonly select: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Moves the row inside `tx`: to the whole number between its new neighbors,
+ * or, with `mayRenumber`, after renumbering its list. Without it, a move
+ * with no gap left writes nothing and answers the list to renumber.
+ */
+async function moveIn(
+  tx: unknown,
+  { call, spec, move, select }: Move,
+  mayRenumber: boolean,
+): Promise<{ readonly row: Row } | { readonly list: StorageWhere }> {
+  const table = delegateOf(tx, call.model);
+  const named = await readNamed(table, spec, move, call.model);
+  const range = await bounds(table, spec, named);
+  const between =
+    range === undefined ? undefined : ordinalBetween(range[0] ?? undefined, range[1] ?? undefined);
+  if (between === undefined && !mayRenumber) {
+    return { list: listOf(spec, named.moved) };
+  }
+  const value = between ?? (await renumber(table, spec, named, move));
+  return {
+    row: await table.update({ where: { id: move.id }, data: { [spec.column]: value }, select }),
+  };
+}
+
 /** The `reorder` handler. */
 export function reorderHandler(spec: ReorderSpec): KitHandler {
   const handler = async ({ input, ctx, db }: KitHandlerArgs): Promise<Row> => {
     const call = crudCall(ctx, db);
-    const move = input as ReorderInput;
-    const { select } = projectionOf(call, "entity");
-    return await inTransaction(db, async (tx) => {
-      const table = delegateOf(tx, call.model);
-      const named = await readNamed(table, spec, move, call.model);
-      const range = await bounds(table, spec, named);
-      const between =
-        range === undefined
-          ? undefined
-          : ordinalBetween(range[0] ?? undefined, range[1] ?? undefined);
-      const value = between ?? (await renumber(table, spec, named, move));
-      return await table.update({ where: { id: move.id }, data: { [spec.column]: value }, select });
+    const move: Move = {
+      call,
+      spec,
+      move: input as ReorderInput,
+      select: projectionOf(call, "entity").select,
+    };
+    const how = { owner: OWNER, conflict: CONFLICT };
+    const first = await inKitTransaction(db, async (tx) => await moveIn(tx, move, false), how);
+    if ("row" in first) {
+      return first.row;
+    }
+    // No gap left: renumber, in a transaction given time for every row of the list.
+    const rows = await call.table.count({ where: first.list });
+    const timeoutMs = RENUMBER_BASE_MS + (rows + 1) * RENUMBER_MS_PER_ROW;
+    const moved = await inKitTransaction(db, async (tx) => await moveIn(tx, move, true), {
+      ...how,
+      timeoutMs,
     });
+    if (!("row" in moved)) {
+      throw new QuickdrawError("INTERNAL", "A renumbering reorder wrote no row");
+    }
+    return moved.row;
   };
   return handler as KitHandler;
 }

@@ -448,7 +448,9 @@ export const taskService = qd.defineService(task, {
   `FORBIDDEN` otherwise.
 - `reorder({ id, beforeId?, afterId? })` puts the row between its new
   neighbors (`beforeId` comes right before it) with one write, or renumbers
-  the `within` list in steps of 1,024 when no gap is left.
+  the `within` list in steps of 1,024 when no gap is left, in a transaction
+  given 5 s plus 10 ms per row of the list. Moves run SERIALIZABLE: two at
+  once into one gap fail one of them with `CONFLICT` (try again).
 - The generated inputs carry JSON Schema, so the kit's methods are MCP tools
   too. For hand-written handlers, `./server` has `requireRow(row, message?)`
   (`NOT_FOUND` for a missing row) and `nextOrdinal(db, model, where)`.

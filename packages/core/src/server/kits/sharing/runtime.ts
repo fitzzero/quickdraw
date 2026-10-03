@@ -19,6 +19,7 @@ import { modelKey } from "../../storage";
 import type { Principal } from "../../types";
 import type { KitHandlerArgs, ModelDelegate } from "../crud/runtime";
 import type { KitContext } from "../crud/types";
+import { inKitTransaction } from "../transactions";
 
 /** One call of a sharing kit method: its service, the caller, and the database client. */
 export interface SharingCall {
@@ -69,27 +70,6 @@ export function tableOf(db: unknown, model: string): ModelDelegate {
   return delegate as ModelDelegate;
 }
 
-const SERIALIZABLE = Object.freeze({ isolationLevel: "Serializable" });
-
-/**
- * True for Prisma's report of a transaction the database failed for a
- * concurrent one: `P2034` when a statement fails (a concurrent update of the
- * row), and the driver adapter's own `TransactionWriteConflict` when the
- * commit does (PostgreSQL finds most serialization failures, two members
- * leaving at once among them, only then; Prisma 7 passes that one through
- * unmapped).
- */
-function isWriteConflict(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  if (error.name === "PrismaClientKnownRequestError") {
-    return (error as Error & { readonly code?: unknown }).code === "P2034";
-  }
-  const kind: unknown = (error.cause as { readonly kind?: unknown } | undefined)?.kind;
-  return error.name === "DriverAdapterError" && kind === "TransactionWriteConflict";
-}
-
 /**
  * Runs `fn` in a SERIALIZABLE interactive transaction of the database
  * client: its writes join the call's unit of work when it commits and are
@@ -97,30 +77,10 @@ function isWriteConflict(error: unknown): boolean {
  * concurrent one is `CONFLICT`.
  */
 export async function inSerializable<T>(db: unknown, fn: (tx: unknown) => Promise<T>): Promise<T> {
-  const client = db as { readonly $transaction?: unknown } | null;
-  if (typeof client?.$transaction !== "function") {
-    throw new QuickdrawError(
-      "INTERNAL",
-      "The sharing kit's changes need a database client with $transaction",
-    );
-  }
-  const run = client.$transaction as (
-    callback: (tx: unknown) => Promise<T>,
-    options: object,
-  ) => Promise<T>;
-  try {
-    return await run.call(client, fn, SERIALIZABLE);
-  } catch (error) {
-    if (!isWriteConflict(error)) {
-      throw error;
-    }
-    const conflict = new QuickdrawError(
-      "CONFLICT",
-      "Another change to this row's access ran at the same time; try again",
-    );
-    conflict.cause = error;
-    throw conflict;
-  }
+  return await inKitTransaction(db, fn, {
+    owner: "The sharing kit's changes",
+    conflict: "Another change to this row's access ran at the same time; try again",
+  });
 }
 
 /** Tells the app's `onChange` about a change, inside its transaction (`tx`). */
