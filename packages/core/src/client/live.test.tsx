@@ -299,6 +299,51 @@ describe("after a reconnect", () => {
   });
 });
 
+describe("a watched read sent before its topic is joined again", () => {
+  it("is read once more when the join is acknowledged, so a change made in between is not missed", async () => {
+    // The refetches after the reconnect come last, at the end of their jitter window.
+    vi.spyOn(Math, "random").mockReturnValue(0.99);
+    const { app, records } = await live.start();
+    const board = live.board();
+    const { wrapper, grabbed } = wrapperFor({
+      url: app.url,
+      principal: as(board.ada),
+      queryClient: freshClient(),
+    });
+    const { result } = renderHook(() => qd.task.countOnBoard.useQuery({ projectId: board.p1 }), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.data).toBe(1));
+    await until(() => watchersOf(app, board.p1) === 1);
+    const connection = grabbed.connection as QuickdrawConnection;
+    const reads = (): number => records.filter((record) => record.method === "countOnBoard").length;
+    expect(reads()).toBe(1);
+
+    // An outage: Socket.IO keeps the socket active and buffers the calls made meanwhile.
+    const manager = connection.socket.io;
+    manager.reconnection(false);
+    manager.engine.close();
+    await until(() => !connection.socket.connected);
+    act(() => {
+      qd.invalidate(qd.task.countOnBoard, { projectId: board.p1 });
+    });
+    await until(() => connection.socket.sendBuffer.length === 1);
+    // The topic's join after the outage waits out a subscription backoff.
+    connection.reportRateLimited("subscription", 600);
+    manager.reconnection(true);
+    connection.socket.connect();
+    // The buffered read reaches the server first, before the topic is joined.
+    await until(() => reads() === 2);
+    expect(watchersOf(app, board.p1)).toBe(0);
+    // A task is added before the join: no qd:changed can reach this socket for it.
+    await live.prisma().task.create({ data: { projectId: board.p1, title: "Before the join" } });
+    await until(() => watchersOf(app, board.p1) === 1, 3000);
+    await waitFor(() => expect(result.current.data).toBe(2));
+    await tick(400);
+    expect(reads()).toBe(3);
+  });
+});
+
 describe("when access is revoked", () => {
   it("leaves no data beside FORBIDDEN, and a qd:revoked reads the service's method queries again", async () => {
     const { app, records } = await live.start();

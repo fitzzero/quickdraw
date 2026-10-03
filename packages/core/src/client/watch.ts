@@ -29,8 +29,13 @@
 //   the watch started, unless its key's read waited for that join: a read
 //   sent before then (on a socket that was not connected yet, or a result
 //   prefetched before the watch) may have missed a change made before the
-//   join, so the query hooks read once more. Joining again after a
-//   reconnect tells no one: the coordinator's reconnect refetch covers that.
+//   join, so the query hooks read once more. A topic is not joined from the
+//   moment the socket drops: a read of a key sent while it is not joined (it
+//   waited in Socket.IO's buffer through an outage, or went out while the
+//   join waited out a backoff) reaches the server before the join, so the
+//   watches of that key are told again when the join is acknowledged.
+//   Otherwise joining again after a reconnect tells no one: the
+//   coordinator's reconnect refetch covers the queries read before it.
 //
 // React-free: the connection owns one (`connection.watch`).
 
@@ -55,10 +60,12 @@ export interface TopicWatch {
   /** Called with each `qd:changed` frame of the topic while the watch lasts. */
   readonly onChanged: (frame: ChangedFrame) => void;
   /**
-   * Called once, when the server first acknowledges `qd:watch` for the topic
-   * after this watch started. Not called when the topic was joined already,
-   * when it is joined again after a reconnect, nor when a read of this
-   * watch's `key` waited for that acknowledgement (`waitForJoin`).
+   * Called when the server first acknowledges `qd:watch` for the topic after
+   * this watch started, and again when a later join (after a reconnect) is
+   * acknowledged after a read of this watch's `key` went out while the topic
+   * was not joined: that read may have missed a change made before the join.
+   * Not called when the topic was joined already, nor when a read of the
+   * `key` waited for that acknowledgement (`waitForJoin`).
    */
   readonly onJoined?: () => void;
   /**
@@ -125,6 +132,8 @@ interface Topic {
   readonly watches: Set<WatchRecord>;
   /** The reads waiting for the `qd:watch` in flight to be answered. */
   readonly holds: Set<Hold>;
+  /** The keys whose reads went out while the topic was not joined, owed a telling at the next join. */
+  readonly unjoinedReads: Set<string>;
   state: JoinState;
   retry: ReturnType<typeof setTimeout> | undefined;
   /**
@@ -187,27 +196,39 @@ function tell(topic: Topic, frame: ChangedFrame): void {
 }
 
 /**
- * Tells the watches of `topic` that were not told yet that it is joined,
- * once per key, except those whose key's read waited for this join: that
- * read is sent after it.
+ * Tells the watches of `topic` that it is joined, once per key: those not
+ * told yet, and those whose key's read went out while it was not joined;
+ * except those whose key's read waited for this join, which is sent after
+ * it.
  */
 function tellJoined(topic: Topic): void {
   const waited = new Set([...topic.holds].map((hold) => hold.key));
-  const untold = [...topic.watches].filter((record) => !record.told);
-  for (const record of untold) {
+  const unjoined = new Set(topic.unjoinedReads);
+  topic.unjoinedReads.clear();
+  const owed = [...topic.watches].filter(
+    ({ watch, told }) => !told || (watch.key !== undefined && unjoined.has(watch.key)),
+  );
+  for (const record of owed) {
     record.told = true;
   }
-  const toTell = untold.filter(({ watch }) => watch.key === undefined || !waited.has(watch.key));
+  const toTell = owed.filter(({ watch }) => watch.key === undefined || !waited.has(watch.key));
   notifyEach(oncePerKey(toTell), ({ watch }) => {
     watch.onJoined?.();
   });
 }
 
-/** Lets every read waiting for `topic`'s join go: it was answered, failed, or will not be sent. */
+/**
+ * Lets every read waiting for `topic`'s join go: it was answered, failed, or
+ * will not be sent. Unless the topic is joined now, those reads go out
+ * before its join.
+ */
 function releaseHolds(topic: Topic): void {
   const holds = [...topic.holds];
   topic.holds.clear();
   for (const hold of holds) {
+    if (topic.state !== "joined" && hold.key !== undefined) {
+      topic.unjoinedReads.add(hold.key);
+    }
     hold.release();
   }
 }
@@ -304,15 +325,25 @@ function leave(registry: Registry, topic: Topic): void {
   }
 }
 
-/** A promise that resolves once `topic`'s `qd:watch` in flight is answered; see `Topics.waitForJoin`. */
+/**
+ * A promise that resolves once `topic`'s `qd:watch` in flight is answered;
+ * see `Topics.waitForJoin`. A read that does not wait while the topic is not
+ * joined goes out before its join, and is remembered for that join.
+ */
 function waitForJoin(registry: Registry, wait: JoinWait): Promise<void> | undefined {
   const topic = registry.topics.get(topicId(wait.service, wait.topic));
-  if (topic === undefined || topic.state !== "joining" || !registry.host.socket.connected) {
+  if (topic === undefined) {
     return undefined;
   }
-  return new Promise<void>((resolve) => {
-    topic.holds.add({ key: wait.key, release: resolve });
-  });
+  if (topic.state === "joining" && registry.host.socket.connected) {
+    return new Promise<void>((resolve) => {
+      topic.holds.add({ key: wait.key, release: resolve });
+    });
+  }
+  if (topic.state !== "joined" && wait.key !== undefined) {
+    topic.unjoinedReads.add(wait.key);
+  }
+  return undefined;
 }
 
 function startWatch(registry: Registry, watch: TopicWatch): () => void {
@@ -322,6 +353,7 @@ function startWatch(registry: Registry, watch: TopicWatch): () => void {
     frame: Object.freeze({ s: watch.service, topic: watch.topic }),
     watches: new Set(),
     holds: new Set(),
+    unjoinedReads: new Set(),
     state: "waiting",
     retry: undefined,
     leaving: undefined,
@@ -357,6 +389,14 @@ export function createTopics(host: TopicHost): Topics {
       : undefined;
     if (topic !== undefined) {
       tell(topic, frame as ChangedFrame);
+    }
+  });
+  host.socket.on("disconnect", () => {
+    // The server forgot the socket's topics with it.
+    for (const topic of registry.topics.values()) {
+      if (topic.state === "joined") {
+        topic.state = "waiting";
+      }
     }
   });
   return Object.freeze({

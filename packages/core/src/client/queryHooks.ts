@@ -111,9 +111,11 @@ export async function readAfterJoin(
  * frame between them: their watches share the query key's hash. A read that
  * starts while the join is in flight waits for it (`readAfterJoin`). When
  * the server acknowledges the join after a read of the query was sent
- * instead (on a socket that was not connected yet, or a result prefetched
- * before the watch), a change made between that read and the join sent no
- * `qd:changed` here, so the query is invalidated once (RFC 0003 section 17).
+ * instead (on a socket that was not connected yet, a result prefetched
+ * before the watch, or a read that waited in the send buffer through an
+ * outage and went out before the topic was joined again), a change made
+ * between that read and the join sent no `qd:changed` here, so the query is
+ * invalidated once (RFC 0003 section 17).
  */
 export function useTopicWatch({
   connection,
