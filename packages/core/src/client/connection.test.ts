@@ -140,6 +140,47 @@ describe("createQuickdrawConnection", () => {
     expect(await caller(connection)).toBeNull();
   });
 
+  it("treats a token string and { token } of the same value as the same credentials", async () => {
+    const { app } = await harness.start();
+    const connection = await harness.connect(app.url, { auth: "carol" });
+    const first = connection.socket.id;
+    expect(connection.setAuth({ token: "carol" })).toBe(false);
+    expect(connection.setAuth("carol")).toBe(false);
+    expect(connection.getState().status).toBe("connected");
+    expect(connection.socket.id).toBe(first);
+    expect(await caller(connection)).toBe("carol");
+    expect(connection.setAuth({ token: "dave" })).toBe(true);
+    await whenStatus(connection, "connected");
+    expect(await caller(connection)).toBe("dave");
+  });
+
+  it("fails a call buffered while offline with CANCELLED when the credentials change, and never sends it", async () => {
+    const { app, records, counter: counterService } = await harness.start();
+    const connection = await harness.connect(app.url, { auth: { principal: alice } });
+    await until(() => connection.getState().hello?.userId === alice.userId);
+    // A network outage: Socket.IO keeps the socket active and buffers emits.
+    const manager = connection.socket.io;
+    manager.reconnection(false);
+    manager.engine.close();
+    await until(() => !connection.socket.connected);
+    const bump = callData(connection, {
+      service: "counterService",
+      method: "bump",
+      input: { name: "offline" },
+      kind: "mutation",
+    });
+    expect(connection.socket.sendBuffer).toHaveLength(1);
+    // Alice signs out and Bob signs in on the same tab before the network is back.
+    manager.reconnection(true);
+    connection.setAuth({ principal: bob });
+    await expect(bump).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(connection.socket.sendBuffer).toEqual([]);
+    await until(() => connection.getState().hello?.userId === bob.userId);
+    expect(await caller(connection)).toBe(bob.userId);
+    expect(records.filter((record) => record.method === "bump")).toEqual([]);
+    expect(counterService.values.get("offline")).toBeUndefined();
+  });
+
   it("keeps the grants from the hello and from qd:access, and drops them with the credentials", async () => {
     const grants = new Map<string, Record<string, "Read" | "Moderate">>([
       ["alice", { probeService: "Read" }],

@@ -14,7 +14,8 @@
 //   retried here: the server may still be running the call.
 // - A connection that drops before the answer, or is not open at all,
 //   rejects with `INTERNAL`. A call made while the socket reconnects waits in
-//   Socket.IO's send buffer, within its time limit.
+//   Socket.IO's send buffer, within its time limit; new credentials meanwhile
+//   fail it with `CANCELLED` instead of sending it as them (`connection.ts`).
 // - A reply `{ ok: true, nm: true, v }` resolves as it is: the version the
 //   caller sent is current, and the caller keeps its copy.
 //
@@ -207,6 +208,9 @@ export function call<Output = unknown>(
       .emit(CLIENT_EVENTS.call, envelopeOf(id, request), (error: Error | null, reply: unknown) => {
         if (error === null) {
           settle(readReply(connection, kind, reply));
+        } else if (error instanceof QuickdrawError) {
+          // Failed by the connection before it was sent (new credentials).
+          settle(error);
         } else if (socket.connected) {
           settle(new QuickdrawError("TIMEOUT", `No answer within ${timeoutMs} ms`));
         } else {

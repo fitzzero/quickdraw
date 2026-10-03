@@ -21,6 +21,9 @@
 //   rotates) is `reconnecting` meanwhile, joins its watched topics again
 //   (`watch.ts`) and tells `onReconnect` listeners, which refetch what may
 //   have changed (the provider, through the coordinator).
+// - New credentials (`setAuth`) fail the calls waiting in Socket.IO's send
+//   buffer with `CANCELLED` before reconnecting: Socket.IO would send them
+//   on the next connect, as the new user.
 // - Subscription events (`qd:sub`, `qd:col:sub`, `qd:col:items`,
 //   `qd:watch`) go through the connection's lane (`lane.ts`), paced by the
 //   server's `limits.subscriptions`.
@@ -33,6 +36,7 @@
 // disconnect.
 
 import { SERVER_EVENTS } from "../contract/names";
+import { QuickdrawError } from "../protocol/errors";
 import { isRecord } from "../protocol/guards";
 import {
   isAuthenticationRefused,
@@ -167,8 +171,12 @@ export interface QuickdrawConnection {
    */
   retain(): () => void;
   /**
-   * Changes the credentials. When they differ from the current ones (compared
-   * by value), an open connection reconnects with them and this returns true.
+   * Changes the credentials. When they differ from the current ones
+   * (compared by value as they are sent: a token string is the same as
+   * `{ token }` with that value), the calls still waiting in Socket.IO's send
+   * buffer fail with `CANCELLED` (they were made as the last credentials,
+   * and would be sent as the new ones), an open connection reconnects with
+   * the new credentials, and this returns true.
    */
   setAuth(auth: ConnectionAuth): boolean;
   /** A call id, unique among this connection's calls in flight. */
@@ -258,16 +266,41 @@ function credentialsOf(auth: ConnectionAuth): Readonly<Record<string, unknown>> 
   return auth ?? {};
 }
 
-/** Equal credentials give equal keys, whatever the order of their fields at any depth. */
+/**
+ * Equal credentials give equal keys, whatever the order of their fields at
+ * any depth. They are compared as they are sent: a token string and
+ * `{ token }` with the same value are the same credentials.
+ */
 function authKey(auth: ConnectionAuth): string {
-  if (typeof auth === "string") {
-    return `token:${auth}`;
-  }
   const sorted = (_key: string, value: unknown): unknown =>
     isRecord(value)
       ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1)))
       : value;
-  return `fields:${JSON.stringify(auth ?? {}, sorted)}`;
+  return JSON.stringify(credentialsOf(auth), sorted);
+}
+
+/** An acknowledgement as Socket.IO keeps it: `withError` when it takes an error first (`timeout`). */
+type Ack = ((...args: unknown[]) => void) & { readonly withError?: boolean };
+
+/**
+ * Fails every packet waiting in Socket.IO's send buffer with `error` and
+ * empties the buffer. Socket.IO sends that buffer on the next connect,
+ * whatever credentials the socket then carries, so a call made as one user
+ * would run as the next.
+ */
+function failBuffered(socket: QuickdrawSocket, error: Error): void {
+  const buffered = socket.sendBuffer.splice(0);
+  const { acks } = socket as unknown as { readonly acks: Record<string, Ack | undefined> };
+  for (const packet of buffered) {
+    const id = packet.id === undefined ? undefined : String(packet.id);
+    const ack = id === undefined ? undefined : acks[id];
+    if (id !== undefined && ack !== undefined) {
+      Reflect.deleteProperty(acks, id);
+      if (ack.withError === true) {
+        ack.call(socket, error);
+      }
+    }
+  }
 }
 
 function refusalOf(error: Error & { readonly data?: unknown }): ConnectionRefusal {
@@ -546,6 +579,10 @@ export function createQuickdrawConnection(
       }
       auth = next;
       session.established = false;
+      failBuffered(
+        socket,
+        new QuickdrawError("CANCELLED", "The credentials changed before the call was sent"),
+      );
       store.set({ hello: null, serviceAccess: null });
       lifecycle.reconnect();
       return true;
