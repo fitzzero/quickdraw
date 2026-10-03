@@ -27,6 +27,16 @@ describe("./utils", () => {
     expect(utils.parseJWTPayload(`${encode({})}.${encode({ id: 1 })}.sig`)).toBeNull();
   });
 
+  it("reads a payload whose base64url has - and _ and no padding, as UTF-8", () => {
+    const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const payload = { userId: "u10??>>", email: "é10@example.com" };
+    const segment = encode(payload);
+    expect(segment).toContain("-");
+    expect(segment).toContain("_");
+    expect(segment.length % 4).not.toBe(0);
+    expect(utils.parseJWTPayload(`${encode({ alg: "none" })}.${segment}.sig`)).toEqual(payload);
+  });
+
   it("is re-exported whole by ./client", () => {
     for (const [name, value] of Object.entries(utils)) {
       expect((client as Record<string, unknown>)[name]).toBe(value);
