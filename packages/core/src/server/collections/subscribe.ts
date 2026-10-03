@@ -5,7 +5,9 @@
 //
 // 1. authorize the scope (`access.ts`): a denied scope is `FORBIDDEN`, and
 //    nothing is read;
-// 2. take the revision before any read: the last one taken (`currentRev`);
+// 2. take the revision before any read: the last one taken (`currentRev`),
+//    or a new one when the last is below the scope's resume floor (just
+//    after a reset), so the client can resume from the page it gets;
 // 3. with a cursor, read that page and answer it: paging never joins;
 // 4. with `since`, when this process sees every change (no cluster adapter,
 //    the change log on): join the scope's room, then answer the buffered
@@ -20,7 +22,7 @@
 import type { CollectionSubscribeReply, Revision } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
 import { usableChangeLog } from "../emit/hub";
-import { currentRev } from "../rev";
+import { currentRev, nextRev } from "../rev";
 import type { QuickdrawServerSocket } from "../transports/types";
 import { authorizeScopes } from "./access";
 import type { BoundCollection, CollectionHub } from "./bind";
@@ -93,11 +95,23 @@ async function recheckAccess(attempt: Attempt): Promise<void> {
   }
 }
 
+/**
+ * Step 2: the revision a page is read at. The last one taken, unless it is
+ * below the scope's resume floor (a reset or a change nobody here received
+ * was the last thing to happen): then a new one, so a client resuming from
+ * the page is covered.
+ */
+function pageRev(attempt: Attempt): Revision {
+  const { hub, request, room } = attempt;
+  const rev = currentRev();
+  const floor = hub.collections.buffer.floor(room, groupOf(request.s, request.c));
+  return rev < floor ? nextRev() : rev;
+}
+
 /** Steps 4 to 6. */
 async function answer(
   attempt: Attempt,
   anchors: readonly string[],
-  rev: Revision,
 ): Promise<CollectionSubscribeReply> {
   const { hub, storage, collection, request, room } = attempt;
   const group = groupOf(request.s, request.c);
@@ -109,11 +123,12 @@ async function answer(
       return { ok: true, resumed: true, rev: replay.rev, deltas: replay.deltas };
     }
   }
+  const rev = pageRev(attempt);
   const page = await readPage(storage, collection, request, rev);
   join(attempt, anchors);
   await recheckAccess(attempt);
   if (attempt.joined && hub.collections.buffer.lastChange(room, group) > rev) {
-    return await readPage(storage, collection, request, currentRev());
+    return await readPage(storage, collection, request, pageRev(attempt));
   }
   return page;
 }
@@ -153,12 +168,11 @@ export async function subscribeScope(
   if (anchors === undefined) {
     throw forbidden();
   }
-  const rev = currentRev();
   if (request.cursor !== undefined) {
-    return await readPage(storage, collection, request, rev);
+    return await readPage(storage, collection, request, pageRev(attempt));
   }
   try {
-    return await answer(attempt, anchors, rev);
+    return await answer(attempt, anchors);
   } catch (error) {
     if (attempt.joined) {
       hub.collections.scopes.delete(socket, room);

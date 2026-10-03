@@ -88,6 +88,8 @@ export interface DeltaBuffer {
    * since then is still held; `undefined` when the client must load the scope.
    */
   since(key: string, since: Revision, group?: string): Replay | undefined;
+  /** The oldest revision a client may hold and still resume the scope from. */
+  floor(key: string, group?: string): Revision;
   /** The revision of the scope's last change this process saw, or the floor when it knows of none. */
   lastChange(key: string, group?: string): Revision;
   /** The scope has a subscriber here: keep its state. */
@@ -159,6 +161,8 @@ export function createDeltaBuffer(options: DeltaBufferOptions = {}): DeltaBuffer
   const logs: Logs = { idle: new Map(), pinned: new Map(), groups: new Map(), base: nextRev() };
   const groupFloor = (group: string | undefined): Revision =>
     group === undefined ? 0 : (logs.groups.get(group) ?? 0);
+  const floor = (key: string, group?: string): Revision =>
+    Math.max(logOf(logs, key)?.floor ?? logs.base, groupFloor(group));
   return Object.freeze({
     record(key: string, rev: Revision, deltas: readonly CollectionDelta[]): void {
       const at = now();
@@ -191,7 +195,7 @@ export function createDeltaBuffer(options: DeltaBufferOptions = {}): DeltaBuffer
       if (log !== undefined) {
         expire(log, now(), maxDeltas, maxAgeMs);
       }
-      if (since < Math.max(log?.floor ?? logs.base, groupFloor(group))) {
+      if (since < floor(key, group)) {
         return undefined;
       }
       const frames = (log?.frames ?? []).filter((frame) => frame.rev > since);
@@ -200,6 +204,7 @@ export function createDeltaBuffer(options: DeltaBufferOptions = {}): DeltaBuffer
         deltas: frames.flatMap((frame) => frame.deltas),
       };
     },
+    floor,
     lastChange: (key: string, group?: string) =>
       Math.max(logOf(logs, key)?.newest ?? logs.base, groupFloor(group) - 1),
     pin(key: string): void {

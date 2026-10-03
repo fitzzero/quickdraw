@@ -7,6 +7,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { PrismaClient } from "../../../test/prisma/setup";
 import { collectionRoom } from "../../index";
+import type { Logger } from "../../contract/logger";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
 import { as, seedBoard, type Board } from "../access/__tests__/board";
@@ -46,6 +47,7 @@ afterEach(async () => {
 interface StartOptions {
   readonly bulkThreshold?: number;
   readonly flushSink?: FlushSink;
+  readonly logger?: Logger;
 }
 
 async function start(options: StartOptions = {}) {
@@ -59,6 +61,7 @@ async function start(options: StartOptions = {}) {
     db: h.db,
     storage: recorded.storage,
     ...(options.flushSink === undefined ? {} : { flushSink: options.flushSink }),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
   apps.push(app as unknown as TestApp);
   return { app, reads: recorded.reads };
@@ -569,7 +572,17 @@ describe("batches, bulk writes and statements", () => {
 
   it("sends a reset to the touched scopes when a flush sink fails", async () => {
     const failing: FlushSink = { flush: () => Promise.reject(new Error("sink down")) };
-    const { app } = await start({ flushSink: failing });
+    const errors: string[] = [];
+    const logger: Logger = {
+      debug: () => undefined,
+      info: () => undefined,
+      warn: () => undefined,
+      error: (message) => {
+        errors.push(message);
+      },
+      child: () => logger,
+    };
+    const { app } = await start({ flushSink: failing, logger });
     const { connection, scopes } = await connect(app, as(board.ada));
     await colSub(connection, "byProject", board.p1);
     await write(app, (db) => db.task.update({ where: { id: board.t1 }, data: { title: "Then" } }));
@@ -578,6 +591,7 @@ describe("batches, bulk writes and statements", () => {
       [{ t: "patched", id: board.t1, d: { title: "Then" } }],
       [{ t: "reset" }],
     ]);
+    expect(errors).toEqual(["A flush sink failed; the response was already sent"]);
   });
 
   it("sends one scope a reset on dispatcher.collections.reset", async () => {
