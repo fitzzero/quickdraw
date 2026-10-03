@@ -167,6 +167,22 @@ describe("the socket rate limiter", () => {
     });
   });
 
+  it("lets an event named with a number through, and the socket stays served", async () => {
+    const { url } = await serve({ rateLimit: { maxRequests: 5, windowMs: 60_000 } });
+    const opened = harness.open(url, v5Auth(alice));
+    await opened.hello;
+    const { socket } = opened;
+    // Socket.IO accepts a number as an event name. Before the guard the limiter
+    // called `startsWith` on it and the throw took the server process down.
+    socket.emit(42 as unknown as string, "x");
+    socket.emit(7 as unknown as string, "y", () => undefined);
+    expect(await call(socket, { id: 1, s: "taskService", m: "get", i: { id: "t1" } })).toEqual({
+      ok: true,
+      d: expect.objectContaining({ id: "t1" }),
+    });
+    expect(socket.connected).toBe(true);
+  });
+
   it("can be turned off", async () => {
     const { url } = await serve({ rateLimit: false });
     const opened = harness.open(url, v5Auth(alice));
