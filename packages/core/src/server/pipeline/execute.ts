@@ -59,7 +59,13 @@ export function execute(
   const key =
     method.share === undefined
       ? undefined
-      : shareKey(service.name, method.name, method.share === "all" ? "*" : call.principal, input);
+      : shareKey(
+          service.name,
+          method.name,
+          method.share === "all" ? "*" : call.principal,
+          input,
+          ctx.mcp,
+        );
   const existing = key === undefined ? undefined : shares.get(key);
   if (existing !== undefined && existing.settled?.ok !== false) {
     call.shared = true;

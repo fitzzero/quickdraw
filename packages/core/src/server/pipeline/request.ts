@@ -6,7 +6,7 @@
 
 import type { CallReply, Version } from "../../protocol/envelope";
 import { toWire, type QuickdrawError } from "../../protocol/errors";
-import type { Principal, Transport } from "../types";
+import type { McpContext, Principal, Transport } from "../types";
 
 /** How one call ended. The dispatcher's `call` resolves with it and never rejects. */
 export type DispatchResult =
@@ -51,6 +51,11 @@ export interface DispatchRequest {
   readonly requestId?: string;
   /** The version of the result the caller already holds. */
   readonly v?: Version;
+  /**
+   * The fields the MCP bridge's `context` option produced for this call,
+   * which the handler reads as `ctx.mcp`. Only the MCP transport sets it.
+   */
+  readonly mcp?: McpContext;
   /**
    * Sends the result to the caller and returns the reply's size in bytes,
    * when the transport measured it. Called once, before the flush and the

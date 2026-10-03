@@ -38,7 +38,7 @@ const DEFINITION_KEYS: ReadonlySet<string> = new Set([
   "events",
 ]);
 
-const METHOD_KEYS: ReadonlySet<string> = new Set(["kind", "input", "output", "watch"]);
+const METHOD_KEYS: ReadonlySet<string> = new Set(["kind", "input", "output", "watch", "describe"]);
 
 const COLLECTION_KEYS: ReadonlySet<string> = new Set([
   "scope",
@@ -202,6 +202,9 @@ function checkMethod(name: string, method: unknown, scope: MethodScope, fail: Fa
   }
   checkOutput(name, method.output, scope, fail);
   checkWatch(name, method, scope, fail);
+  if (method.describe !== undefined && !isName(method.describe)) {
+    fail(`method "${name}": describe must be a non-empty string`);
+  }
   return method as unknown as MethodDef;
 }
 

@@ -6,7 +6,7 @@
 // joiner never skips its own access check. With `ttlMs`, a successful result
 // is reused for that long after the run; an error is never kept.
 
-import type { Principal } from "../types";
+import type { McpContext, Principal } from "../types";
 
 class NotShareable extends Error {}
 
@@ -82,16 +82,19 @@ export function stableStringify(value: unknown): string | undefined {
 /**
  * The key one call's share run is stored under, or `undefined` when the
  * input or principal cannot be keyed (the call then runs unshared). A
- * `"caller"` key includes the whole principal, so two sessions of one user
- * with different claims or grants never share; an `"all"` key uses `*`.
+ * `"caller"` key includes the whole principal and the call's `ctx.mcp`, so
+ * two sessions of one user with different claims, grants or MCP token scopes
+ * never share; an `"all"` key uses `*`.
  */
 export function shareKey(
   service: string,
   method: string,
   principal: Principal | null | "*",
   input: unknown,
+  mcp?: McpContext,
 ): string | undefined {
-  const who = principal === "*" ? "*" : stableStringify(principal);
+  const caller = mcp === undefined ? principal : [principal, mcp];
+  const who = principal === "*" ? "*" : stableStringify(caller);
   const what = stableStringify(input);
   if (who === undefined || what === undefined) {
     return undefined;

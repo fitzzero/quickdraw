@@ -15,14 +15,14 @@ import { createServer, type QuickdrawServer, type ServerOptions } from "./create
 import type { DefineService } from "./defineService";
 import { createDispatcher, type Dispatcher, type DispatcherOptions } from "./dispatcher";
 import type { Service } from "./service";
-import type { ContextExtensionOf, PrincipalOf, QuickdrawTypes } from "./types";
+import type { ContextExtensionOf, McpContextOf, PrincipalOf, QuickdrawTypes } from "./types";
 
 /**
  * Builds the app's fields of `ctx` from the framework's. It runs once per
  * call, before access is checked, so `custom` checks see the fields too.
  */
 export type ContextFactory<T extends QuickdrawTypes> = (
-  base: BaseContext<PrincipalOf<T> | null>,
+  base: BaseContext<PrincipalOf<T> | null, McpContextOf<T>>,
 ) => ContextExtensionOf<T>;
 
 /** Options of `initQuickdraw`. */

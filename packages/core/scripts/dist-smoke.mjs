@@ -22,7 +22,10 @@
 //   runs a call through the dispatcher and its in-process caller, and answers
 //   invalid input with VALIDATION;
 // - the built server factory, booted by the built test app (`./testing`),
-//   serves a call over a v5 socket, over HTTP and through the 4.x shim.
+//   serves a call over a v5 socket, over HTTP and through the 4.x shim;
+// - the built MCP bridge (`./server/mcp`) lists a contract's method as a
+//   tool and serves a call through its stdio server, and `./server` carries
+//   none of the bridge's code.
 
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -89,6 +92,18 @@ const expectations = {
   },
   "./server/auth": { symbols: ["createJWT"], client: false },
   "./server/express": { symbols: ["createJsonRateLimiter"], client: false },
+  "./server/mcp": {
+    symbols: [
+      "describeTools",
+      "createMcpRegistry",
+      "toToolResult",
+      "createMcpStdioServer",
+      "MCP_PROTOCOL_VERSION",
+      "bootstrapMcpServer",
+      "createMcpHttpRouter",
+    ],
+    client: false,
+  },
   "./client": { symbols: ["formatCurrency"], client: true },
   "./parser": { symbols: ["createJsonParser"], client: false },
   "./testing": { symbols: ["createTestApp", "emitWithAck", "waitForEvent"], client: false },
@@ -433,3 +448,94 @@ try {
 console.log(
   "ok the built server serves a call over a v5 socket, over HTTP and through the 4.x shim",
 );
+
+// The built MCP bridge: its own entry, a contract's method as a tool, and a
+// call through the stdio server over in-memory streams, through the built
+// dispatcher with transport "mcp".
+const mcp = await import(`${pkg.name}/server/mcp`);
+assert.equal(server.createMcpRegistry, undefined, "./server must not export the MCP bridge");
+for (const [source, outputs] of emittedIn) {
+  if (source.startsWith("src/server/mcp/")) {
+    assert.deepEqual(outputs, ["server/mcp/index.js"], `${source} must ship in ./server/mcp only`);
+  }
+}
+const { z } = await import("zod");
+const { PassThrough } = await import("node:stream");
+const { createInterface } = await import("node:readline");
+const greet = core.defineContract("greetService", {
+  methods: {
+    hello: core.query({
+      input: z.object({ name: z.string() }),
+      output: z.string(),
+      describe: "Greets someone.",
+    }),
+  },
+});
+const greetService = app.defineService(greet, {
+  methods: {
+    hello: {
+      access: "authenticated",
+      handler: ({ input, ctx }) =>
+        `hello ${input.name} from ${ctx.principal.userId} via ${ctx.transport}`,
+    },
+  },
+});
+const registry = mcp.createMcpRegistry({
+  services: [greetService],
+  dispatcher: server.createDispatcher({ services: [greetService], logger: quiet }),
+  principal: () => ({ userId: "agent" }),
+  logger: quiet,
+});
+assert.deepEqual(registry.tools, [
+  {
+    name: "greetService_hello",
+    description: "Greets someone.",
+    inputSchema: {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: { name: { type: "string" } },
+      required: ["name"],
+    },
+    annotations: { readOnlyHint: true },
+  },
+]);
+const stdin = new PassThrough();
+const stdout = new PassThrough();
+const stdio = mcp.createMcpStdioServer({
+  registry,
+  name: "smoke",
+  version: "0.0.0",
+  input: stdin,
+  output: stdout,
+  logger: quiet,
+});
+const replies = [];
+const replied = new Promise((resolveReplies) => {
+  createInterface({ input: stdout }).on("line", (line) => {
+    replies.push(JSON.parse(line));
+    if (replies.length === 2) {
+      resolveReplies();
+    }
+  });
+});
+for (const message of [
+  { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+  {
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: { name: "greetService_hello", arguments: { name: "smoke" } },
+  },
+]) {
+  stdin.write(`${JSON.stringify(message)}\n`);
+}
+await replied;
+stdin.end();
+await stdio.closed;
+assert.equal(replies[0].result.protocolVersion, mcp.MCP_PROTOCOL_VERSION);
+assert.deepEqual(replies[1], {
+  jsonrpc: "2.0",
+  id: 2,
+  result: { content: [{ type: "text", text: '"hello smoke from agent via mcp"' }] },
+});
+console.log("ok the built MCP bridge lists a contract's tools and serves a call over stdio");

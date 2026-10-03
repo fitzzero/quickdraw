@@ -90,6 +90,7 @@ export function contextFor(
     log,
     requestId,
     transport: request.transport,
+    ...(request.mcp === undefined ? {} : { mcp: request.mcp }),
   };
   return createContext(fields, runtimeOf(target.service)?.extendContext);
 }

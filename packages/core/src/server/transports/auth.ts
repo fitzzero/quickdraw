@@ -80,7 +80,12 @@ export function isPrincipal(value: unknown): value is Principal {
   );
 }
 
-function toPrincipal(result: unknown): Principal | null {
+/**
+ * The principal an `authenticate` result stands for: a principal as is, a
+ * user id as `{ userId }`, nothing as `null`. Throws `TypeError` for anything
+ * else. The MCP bridge reads its `principal` hook's result the same way.
+ */
+export function toPrincipal(result: unknown): Principal | null {
   if (result === null || result === undefined || result === "") {
     return null;
   }
