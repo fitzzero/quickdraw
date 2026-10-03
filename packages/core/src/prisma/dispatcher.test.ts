@@ -249,6 +249,35 @@ describe("qd.run and writes outside methods", () => {
     expect(sink.flushes[0]?.info.method).toBe("renameInJob");
   });
 
+  it("gives a job { touch, log, principal: null }, so it records a raw SQL write", async () => {
+    dispatcherWith();
+    let seen: unknown;
+    const changed = await qd.run(async (ctx) => {
+      seen = ctx;
+      const count = await h.db
+        .$executeRaw`UPDATE "Task" SET "title" = 'by sql' WHERE "id" = ${taskId}`;
+      ctx.touch("task", [taskId]);
+      ctx.log.debug("retitled by SQL", { taskId });
+      return count;
+    });
+    expect(changed).toBe(1);
+    expect(seen).toEqual({
+      touch: expect.any(Function),
+      log: expect.objectContaining({ debug: expect.any(Function) }),
+      principal: null,
+    });
+    expect(Object.isFrozen(seen)).toBe(true);
+    // The raw write is invisible to the tracked client; the touch is all the flush has.
+    expect(sink.flushes).toEqual([
+      {
+        writes: [{ model: "task", id: taskId, op: "update", fields: ["*"] }],
+        info: { requestId: expect.any(String), transport: "internal", rev: expect.any(Number) },
+      },
+    ]);
+    // A job that takes no parameter still runs.
+    expect(await qd.run(() => "no context needed")).toBe("no context needed");
+  });
+
   it("flushes a write made outside any unit to the dispatcher created last", async () => {
     dispatcherWith();
     await h.db.task.update({ where: { id: taskId }, data: { title: "ambient" } });

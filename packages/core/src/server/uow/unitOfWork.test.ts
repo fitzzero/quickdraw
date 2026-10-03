@@ -240,7 +240,8 @@ describe("writes outside any unit of work", () => {
     const logger = captureLogger();
     tracker.unitOfWork.attach?.(createRecordingSink(), logger);
     tracker.record([write("t1")]);
-    tracker.warnOnce("key", "a warning");
+    tracker.warn({ kind: "nested-write", subject: "key", message: "a warning" });
+    tracker.observe({ model: "task", operation: "findMany", args: {} });
     await nextTick();
     expect(logger.warnings).toEqual([]);
   });

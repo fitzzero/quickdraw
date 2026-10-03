@@ -36,6 +36,7 @@
 // and misses what the batch's earlier statements changed: a development
 // warning says so once per model and operation.
 
+import { quietly } from "../server/devWarnings";
 import type { WriteRecord } from "../server/uow/types";
 import type { WriteTracker } from "../server/uow/unitOfWork";
 import { findNestedWrites } from "./nested";
@@ -150,11 +151,12 @@ function rowsOf(result: unknown): Row[] {
 
 function warnNested(op: Operation, data: unknown): void {
   for (const { field, operation } of findNestedWrites(data)) {
-    op.runtime.tracker.warnOnce(
-      `nested:${op.model}.${field}.${operation}`,
-      `A nested write (${op.model}.${field}: { ${operation} }) is not tracked; only the ${op.model} row is. Write related rows through their own model`,
-      { model: op.model, field, operation },
-    );
+    op.runtime.tracker.warn({
+      kind: "nested-write",
+      subject: `${op.model}.${field}.${operation}`,
+      message: `A nested write (${op.model}.${field}: { ${operation} }) is not tracked; only the ${op.model} row is. Write related rows through their own model`,
+      meta: { model: op.model, field, operation },
+    });
   }
 }
 
@@ -222,14 +224,19 @@ function warnBatchRead(op: Operation): void {
   if (!op.runtime.tracker.inBatch()) {
     return;
   }
-  op.runtime.tracker.warnOnce(
-    `batch-read:${op.model}:${op.operation}`,
-    `${op.operation} on ${op.model} inside an array-form $transaction reads its rows first on the root client, outside the batch, so rows the batch's earlier statements changed may be missed; use an interactive transaction to read inside it`,
-    { model: op.model, operation: op.operation },
-  );
+  op.runtime.tracker.warn({
+    kind: "batch-read",
+    subject: `${op.model}.${op.operation}`,
+    message: `${op.operation} on ${op.model} inside an array-form $transaction reads its rows first on the root client, outside the batch, so rows the batch's earlier statements changed may be missed; use an interactive transaction to read inside it`,
+    meta: { model: op.model, operation: op.operation },
+  });
 }
 
-/** Reads `columns` of the rows `where` matches, by id, through the transaction when one is open. */
+/**
+ * Reads `columns` of the rows `where` matches, by id, through the transaction
+ * when one is open. The read is the tracker's own, not the app's, so the
+ * development checks of statements leave it alone.
+ */
 async function readBefore(
   op: Operation,
   where: unknown,
@@ -242,14 +249,16 @@ async function readBefore(
   let rows: Row[];
   try {
     if (options.unique) {
-      const row = await delegate.findUnique({ where, select });
+      const row = await quietly(() => delegate.findUnique({ where, select }));
       rows = row === null ? [] : [row];
     } else {
-      rows = await delegate.findMany({
-        where,
-        select,
-        ...(options.take === undefined ? {} : { take: options.take }),
-      });
+      rows = await quietly(() =>
+        delegate.findMany({
+          where,
+          select,
+          ...(options.take === undefined ? {} : { take: options.take }),
+        }),
+      );
     }
   } catch (error) {
     if (isValidationError(error)) {
@@ -376,11 +385,12 @@ async function createManyInBatch(op: Operation): Promise<unknown> {
   if (rows.length === items.length) {
     record(op, writesOf(op, "create", rows, keysOf(op.args.data)));
   } else {
-    op.runtime.tracker.warnOnce(
-      `batch-createMany:${op.model}`,
-      `createMany on ${op.model} inside an array-form $transaction cannot report the rows it created, so they are not tracked; give each row an id, or use an interactive transaction`,
-      { model: op.model },
-    );
+    op.runtime.tracker.warn({
+      kind: "batch-create-many",
+      subject: op.model,
+      message: `createMany on ${op.model} inside an array-form $transaction cannot report the rows it created, so they are not tracked; give each row an id, or use an interactive transaction`,
+      meta: { model: op.model },
+    });
   }
   return result;
 }

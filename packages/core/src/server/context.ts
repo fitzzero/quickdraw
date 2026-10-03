@@ -110,6 +110,26 @@ export interface HandlerArgs<T extends QuickdrawTypes, Input, P = PrincipalOf<T>
 /** Any handler's `ctx`, as the pipeline handles it. */
 export type AnyContext = BaseContext<Principal | null>;
 
+/**
+ * What `qd.run(fn)` and `dispatcher.run(fn)` give `fn`: the part of a
+ * handler's `ctx` that means something outside a method call. A job has no
+ * caller, so `principal` is `null`. A `fn` that takes no parameter still
+ * works.
+ *
+ * @example
+ * await qd.run(async (ctx) => {
+ *   const ids = await renumberWithSql(projectId);
+ *   ctx.touch("task", ids);
+ * });
+ */
+export interface RunContext {
+  /** `ctx.touch`: records rows the tracked client cannot see (raw SQL, cascades) in this run's unit of work. */
+  readonly touch: BaseContext["touch"];
+  /** The dispatcher's logger, bound to this run's request id. */
+  readonly log: Logger;
+  readonly principal: null;
+}
+
 /** Builds the app's fields of `ctx` from the framework's: the `context` option of `initQuickdraw`. */
 export type ContextExtender = (base: AnyContext) => object;
 

@@ -50,6 +50,22 @@ run("no-raw-sql-write", {
       `,
     },
     {
+      name: "a job touching the rows through the context qd.run gives it",
+      filename: JOB,
+      code: `
+        export async function markLate(ids) {
+          await qd.run(async (ctx) => {
+            await db.$executeRaw\`UPDATE "Task" SET "status" = 'late' WHERE "id" = ANY(\${ids})\`;
+            ctx.touch("task", ids);
+          });
+          await qd.run(async ({ touch }) => {
+            await db.$executeRawUnsafe('DELETE FROM "Task" WHERE "id" = ANY($1)', ids);
+            touch("task", ids, { removed: true });
+          });
+        }
+      `,
+    },
+    {
       name: "tests and scripts outside services, jobs and routes",
       filename: SERVICE_TEST,
       code: `await prisma.$executeRawUnsafe('TRUNCATE "Task" CASCADE');`,

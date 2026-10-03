@@ -2,10 +2,10 @@
 // settings every pipeline stage reads.
 
 import { consoleLogger, type Logger } from "../../contract/logger";
+import { createDevWarnings, strictWarningsOf, type DevWarnings } from "../devWarnings";
 import type { ChangeLogOptions } from "../emit/changeLog";
 import { createLive, type Live } from "../emit/live";
 import type { Registry } from "../registry";
-import { storageOf } from "../storage";
 import type { FlushSink } from "../uow/flushSink";
 import {
   resolveAccess,
@@ -15,7 +15,7 @@ import {
 } from "./accessSettings";
 import { createRecorder, type CallRecord, type RecordDetails } from "./metrics";
 import type { VersionSource } from "./notModified";
-import { resolveTracking, type Tracking, type TrackingOptions } from "./tracking";
+import { resolveTracking, storageFor, type Tracking, type TrackingOptions } from "./tracking";
 
 /**
  * The lane each socket's subscription events (`qd:sub`, `qd:col:sub`,
@@ -93,7 +93,10 @@ export interface PipelineOptions extends TrackingOptions {
   readonly limits?: LimitsOptions;
   /** Calls slower than this are logged at `warn`, in milliseconds. Default 1,000. */
   readonly slowMs?: number;
-  /** Replies larger than this are logged at `warn`, in bytes. Default 1 MiB. */
+  /**
+   * Replies larger than this are logged at `warn`, in bytes, and raise the
+   * `oversized-response` development warning. Default 1 MiB.
+   */
   readonly maxResponseBytes?: number;
   /**
    * Check every handler result against its method's contract output; a
@@ -121,6 +124,8 @@ export interface PipelineSettings extends Tracking {
   readonly limits: DispatcherLimits;
   readonly outputValidation: boolean;
   readonly freezeSharedResults: boolean;
+  /** The development warnings of this dispatcher and of the write tracker it attaches to (`../devWarnings.ts`). */
+  readonly warnings: DevWarnings;
   readonly record: (record: CallRecord, details: RecordDetails) => void;
 }
 
@@ -175,7 +180,8 @@ export function resolveSettings(
 ): PipelineSettings {
   const development = process.env.NODE_ENV !== "production";
   const logger = options.logger ?? consoleLogger;
-  const storage = options.storage ?? storageOf(db);
+  const warnings = createDevWarnings({ logger, development, strict: strictWarningsOf(options) });
+  const storage = storageFor(options, db);
   const { access, policies } = resolveAccess(options.access, registry, storage, logger);
   const live = createLive({
     registry,
@@ -204,11 +210,13 @@ export function resolveSettings(
     limits: resolveLimits(options.limits),
     outputValidation: options.outputValidation ?? development,
     freezeSharedResults: options.freezeSharedResults ?? development,
+    warnings,
     record: createRecorder({
       logger,
       onCall: options.onCall,
       slowMs: options.slowMs ?? 1_000,
       maxResponseBytes: options.maxResponseBytes ?? 1_048_576,
+      warnings,
     }),
   });
 }

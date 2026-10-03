@@ -147,7 +147,8 @@ const handlerChecks = new WeakMap<object, HandlerCheck>();
 /**
  * Makes `defineService` run `check` on the service `handler` is given to, so
  * a handler that needs something of its service (a kit's need a model) fails
- * when the service is defined, not on its first call.
+ * when the service is defined, not on its first call. Only the kits register
+ * checks, so a handler with one is framework code (`isKitHandler`).
  */
 export function checkWhenDefined(handler: object, check: HandlerCheck): void {
   handlerChecks.set(handler, check);
@@ -156,4 +157,13 @@ export function checkWhenDefined(handler: object, check: HandlerCheck): void {
 /** Why `service` cannot run `handler`, from the check `checkWhenDefined` attached. */
 export function handlerProblem(handler: object, service: AnyService): string | undefined {
   return handlerChecks.get(handler)?.(service);
+}
+
+/**
+ * True for a handler a kit made (it registered a check with
+ * `checkWhenDefined`): framework code, whose statements the development
+ * checks leave alone, because an app cannot change them.
+ */
+export function isKitHandler(handler: object): boolean {
+  return handlerChecks.has(handler);
 }

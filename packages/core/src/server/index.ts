@@ -70,6 +70,7 @@ export type {
   ContextServices,
   HandlerArgs,
   HandlerContext,
+  RunContext,
   TouchOptions,
 } from "./context";
 
@@ -255,6 +256,26 @@ export {
 } from "./storage";
 export type { VersionRequest, VersionSource } from "./pipeline/notModified";
 export type { CallOutcome, CallRecord } from "./pipeline/metrics";
+
+// Development warnings (N+1 statements, unbounded reads, oversized replies,
+// untracked writes) and the event-loop stall watchdog. The OpenTelemetry
+// bridge for `onCall` is its own entry, ./server/otel.
+export {
+  DevWarningError,
+  formatDevWarning,
+  N_PLUS_ONE_STATEMENTS,
+  type DevWarning,
+  type DevWarningKind,
+} from "./devWarnings";
+export {
+  DEFAULT_STALL_INTERVAL_MS,
+  DEFAULT_STALL_THRESHOLD_MS,
+  MIN_STALL_INTERVAL_MS,
+  STALL_RESOLUTION_MS,
+  type SlowMethod,
+  type StallReport,
+  type StallWatchdogOptions,
+} from "./observability/stallWatchdog";
 
 // The server factory and its transports (RFC 0003 sections 3, 8 and 10):
 // Socket.IO, HTTP and the 4.x legacy shim. The in-process transport is the

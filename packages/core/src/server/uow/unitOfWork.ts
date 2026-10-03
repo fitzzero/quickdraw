@@ -19,13 +19,25 @@
 // A write with no open buffer above it (a job that did not use `qd.run`, or
 // a handler's background work that outlived its unit's flush) is ambient: it
 // flushes on its own on the next tick, with a development warning.
+//
+// In development a method call's unit also checks the statements run in it
+// for N+1 shapes and unbounded reads (`statementChecks.ts`), and every
+// warning goes out in the shared format of `../devWarnings.ts`, naming the
+// call it happened in.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { consoleLogger, type Logger } from "../../contract/logger";
 import type { TouchOptions } from "../context";
+import { createDevWarnings, isQuiet, type DevWarning, type DevWarnings } from "../devWarnings";
 import { flushWrites } from "./flush";
 import { noFlushSink, type FlushSink } from "./flushSink";
+import {
+  createStatementChecks,
+  type CallSite,
+  type Statement,
+  type StatementCheck,
+} from "./statementChecks";
 import {
   ANY_FIELD,
   type UnitOfWork,
@@ -47,8 +59,15 @@ interface Frame {
   readonly batch: boolean;
   /** Counts the statements issued in this frame and every frame inside it. */
   readonly count: ((statements: number) => void) | undefined;
+  /** A method call's unit: the call warnings made inside it are about. */
+  readonly call: CallSite | undefined;
+  /** A method call's unit in development: checks the statements run inside it. */
+  readonly check: StatementCheck | undefined;
   open: boolean;
 }
+
+/** A warning the tracker raises; it adds the call it was raised in. */
+export type TrackerWarning = Omit<DevWarning, "service" | "method">;
 
 /** An open transaction, from {@link WriteTracker.openTransaction}. */
 export interface TrackedTransaction {
@@ -72,7 +91,11 @@ export interface StatementCount<T> {
 export interface WriteTrackerOptions {
   /** Receives warnings until a dispatcher attaches its logger. Default: the console logger. */
   readonly logger?: Logger;
-  /** Log development warnings (ambient and nested writes). Default: on unless `NODE_ENV` is `"production"`. */
+  /**
+   * Raise development warnings: ambient, nested and batched writes, and the
+   * checks of each method call's statements. Default: on unless `NODE_ENV`
+   * is `"production"`.
+   */
   readonly development?: boolean;
 }
 
@@ -99,8 +122,18 @@ export interface WriteTracker {
   countStatements<T>(fn: () => T | PromiseLike<T>): Promise<StatementCount<T>>;
   /** Calls `listener` with each write once it is durable: in a unit of work, or flushing on its own. */
   onWrite(listener: (write: WriteRecord) => void): () => void;
-  /** Logs a development warning once per `key`. */
-  warnOnce(key: string, message: string, meta?: Record<string, unknown>): void;
+  /**
+   * Raises a development warning about the method call this runs in (none
+   * outside a call): logged once, in the shared format, by the attached
+   * dispatcher's warnings. Nothing outside development.
+   */
+  warn(warning: TrackerWarning): void;
+  /**
+   * Hands a statement the database client is about to run to the checks of
+   * the method call it runs in (development only; nothing outside a call,
+   * nor inside `quietly`).
+   */
+  observe(statement: Statement): void;
   /** The logger warnings go to: the attached dispatcher's, or the one given at creation. */
   readonly logger: Logger;
 }
@@ -108,11 +141,25 @@ export interface WriteTracker {
 interface TrackerState {
   readonly als: AsyncLocalStorage<Frame>;
   readonly listeners: Set<(write: WriteRecord) => void>;
-  readonly warned: Set<string>;
   readonly development: boolean;
   logger: Logger;
+  warnings: DevWarnings;
   sink: FlushSink;
   ambient: WriteRecord[];
+  /** Every statement counted since the tracker was created, wherever it ran. */
+  issued: number;
+}
+
+const ISSUED = new WeakMap<object, () => number>();
+
+/**
+ * How many statements the tracked client of `unitOfWork` (a tracker's
+ * `unitOfWork`, as `storage.unitOfWork` carries it) has counted since it was
+ * created, in every async context: what `expectBudget` measures a test step
+ * with. `undefined` for units of work no tracker made.
+ */
+export function statementsIssued(unitOfWork: object): number | undefined {
+  return ISSUED.get(unitOfWork)?.();
 }
 
 function frameWhere(state: TrackerState, test: (frame: Frame) => boolean): Frame | undefined {
@@ -124,17 +171,20 @@ function frameWhere(state: TrackerState, test: (frame: Frame) => boolean): Frame
   return undefined;
 }
 
-function warnOnce(
-  state: TrackerState,
-  key: string,
-  message: string,
-  meta: Record<string, unknown> = {},
-): void {
-  if (!state.development || state.warned.has(key)) {
+function warn(state: TrackerState, warning: TrackerWarning): void {
+  if (!state.development) {
     return;
   }
-  state.warned.add(key);
-  state.logger.warn(message, { category: "quickdraw.writes", ...meta });
+  const call = frameWhere(state, (frame) => frame.call !== undefined)?.call;
+  state.warnings.warn(call === undefined ? warning : { ...warning, ...call });
+}
+
+function observe(state: TrackerState, statement: Statement): void {
+  if (!state.development || isQuiet()) {
+    return;
+  }
+  const frame = frameWhere(state, (candidate) => candidate.check !== undefined);
+  frame?.check?.(statement, frameWhere(state, (open) => open.buffer !== undefined)?.batch === true);
 }
 
 function notify(state: TrackerState, writes: readonly WriteRecord[]): void {
@@ -165,12 +215,12 @@ function flushAmbient(state: TrackerState): void {
 
 function recordAmbient(state: TrackerState, writes: readonly WriteRecord[]): void {
   for (const model of new Set(writes.map((write) => write.model))) {
-    warnOnce(
-      state,
-      `ambient:${model}`,
-      `A tracked write to ${model} ran outside any unit of work, so it flushes on its own; run jobs and scripts inside qd.run(...)`,
-      { model },
-    );
+    warn(state, {
+      kind: "ambient-write",
+      subject: model,
+      message: `A tracked write to ${model} ran outside any unit of work, so it flushes on its own; run jobs and scripts inside qd.run(...)`,
+      meta: { model },
+    });
   }
   if (state.ambient.length === 0) {
     setImmediate(() => flushAmbient(state));
@@ -209,6 +259,8 @@ function openTransaction(state: TrackerState, kind: "interactive" | "batch"): Tr
     tx: undefined,
     batch: kind === "batch",
     count: undefined,
+    call: undefined,
+    check: undefined,
     open: true,
   };
   return {
@@ -240,6 +292,8 @@ async function countStatements<T>(
     count: (n) => {
       statements += n;
     },
+    call: undefined,
+    check: undefined,
     open: true,
   };
   try {
@@ -248,6 +302,21 @@ async function countStatements<T>(
   } finally {
     frame.open = false;
   }
+}
+
+/** The method call a unit's scope names, and in development the checks of its statements. */
+function callOf(state: TrackerState, scope: UnitOfWorkScope): Pick<Frame, "call" | "check"> {
+  if (scope.service === undefined || scope.method === undefined) {
+    return { call: undefined, check: undefined };
+  }
+  const call: CallSite = { service: scope.service, method: scope.method };
+  if (!state.development) {
+    return { call, check: undefined };
+  }
+  return {
+    call,
+    check: createStatementChecks((warning) => state.warnings.warn({ ...warning, ...call })),
+  };
 }
 
 /** A unit of work over the tracker's frames. */
@@ -272,6 +341,7 @@ function createUnit(state: TrackerState, scope: UnitOfWorkScope): UnitOfWork {
         count: (n) => {
           statements += n;
         },
+        ...callOf(state, scope),
         open: true,
       };
       frame = own;
@@ -306,30 +376,41 @@ function touchWrites(
 
 /** Creates the write tracker of one tracked database client. */
 export function createWriteTracker(options: WriteTrackerOptions = {}): WriteTracker {
+  const development = options.development ?? process.env.NODE_ENV !== "production";
+  const logger = options.logger ?? consoleLogger;
   const state: TrackerState = {
     als: new AsyncLocalStorage<Frame>(),
     listeners: new Set(),
-    warned: new Set(),
-    development: options.development ?? process.env.NODE_ENV !== "production",
-    logger: options.logger ?? consoleLogger,
+    development,
+    logger,
+    warnings: createDevWarnings({ logger, development }),
     sink: noFlushSink,
     ambient: [],
+    issued: 0,
   };
   const touch = (model: string, ids: readonly string[], touchOptions?: TouchOptions): void =>
     deliver(state, touchWrites(model, ids, touchOptions), state.als.getStore());
   const unitOfWork: UnitOfWorkFactory = Object.freeze({
     begin: (scope: UnitOfWorkScope) => createUnit(state, scope),
     touch,
-    attach(sink: FlushSink, logger: Logger): void {
+    attach(sink: FlushSink, attached: Logger, warnings?: DevWarnings): void {
       state.sink = sink;
-      state.logger = logger;
+      state.logger = attached;
+      // A tracker made with `development: true` keeps warning under a
+      // production dispatcher, whose own warnings are off, as it always did.
+      state.warnings =
+        warnings?.enabled === true
+          ? warnings
+          : createDevWarnings({ logger: attached, development });
     },
   });
+  ISSUED.set(unitOfWork, () => state.issued);
   return Object.freeze({
     unitOfWork,
     record: (writes: readonly WriteRecord[]) => deliver(state, writes, state.als.getStore()),
     touch,
     countStatement(): void {
+      state.issued += 1;
       for (let frame = state.als.getStore(); frame !== undefined; frame = frame.parent) {
         if (frame.open) {
           frame.count?.(1);
@@ -346,8 +427,8 @@ export function createWriteTracker(options: WriteTrackerOptions = {}): WriteTrac
         state.listeners.delete(listener);
       };
     },
-    warnOnce: (key: string, message: string, meta?: Record<string, unknown>) =>
-      warnOnce(state, key, message, meta),
+    warn: (warning: TrackerWarning) => warn(state, warning),
+    observe: (statement: Statement) => observe(state, statement),
     get logger() {
       return state.logger;
     },
