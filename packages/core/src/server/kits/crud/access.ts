@@ -9,9 +9,10 @@
 // every row, as everywhere.
 //
 // The row level is the form's own (`{ entry: L }` or `{ scope: L }`), or
-// else `Read` for reads and `Moderate` for writes. A `"public"` method's
-// rows are public, and a service without a policy has no row-level access:
-// there the form is the whole check.
+// else `Read` for reads and `Moderate` for writes. A `"public"` read's rows
+// are public; a write always needs the level, so an anonymous caller writes
+// nothing. A service without a policy has no row-level access: there the
+// form is the whole check.
 
 import type { AccessLevel } from "../../../contract/access";
 import { isCustomAccess } from "../../access/forms";
@@ -28,9 +29,9 @@ export function rowLevel(form: AccessForm, fallback: AccessLevel): AccessLevel {
   return form.entry ?? form.scope ?? fallback;
 }
 
-/** True when the method's rows are not checked against a policy: a public method, or no policy. */
-function unchecked(call: CrudCall, form: AccessForm): boolean {
-  return form === "public" || call.runtime.service.access === undefined;
+/** True when a method's rows are not checked against a policy: a public read, or no policy. */
+function unchecked(call: CrudCall, form: AccessForm, use: "read" | "write"): boolean {
+  return call.runtime.service.access === undefined || (use === "read" && form === "public");
 }
 
 /**
@@ -42,7 +43,7 @@ export async function rowsWhere(
   form: AccessForm,
   level: AccessLevel,
 ): Promise<AccessFilter | undefined> {
-  if (unchecked(call, form)) {
+  if (unchecked(call, form, "read")) {
     return undefined;
   }
   if (call.principal === null) {
@@ -52,14 +53,18 @@ export async function rowsWhere(
   return await access.accessWhere(service.name, call.principal, level);
 }
 
-/** The ids among `ids` on which the caller has at least `level`, in order: one batched lookup. */
+/**
+ * The ids among `ids` on which the caller has at least `level`, in order:
+ * one batched lookup. `use` says whether the method reads or writes them.
+ */
 export async function allowedIds(
   call: CrudCall,
   form: AccessForm,
   ids: readonly string[],
   level: AccessLevel,
+  use: "read" | "write",
 ): Promise<string[]> {
-  if (unchecked(call, form) || ids.length === 0) {
+  if (unchecked(call, form, use) || ids.length === 0) {
     return [...ids];
   }
   if (call.principal === null) {
@@ -82,5 +87,5 @@ export function readerLevel(call: CrudCall, form: AccessForm, level: AccessLevel
   if (service.adminBypass && grant === "Admin") {
     return "Admin";
   }
-  return unchecked(call, form) ? null : level;
+  return unchecked(call, form, "read") ? null : level;
 }

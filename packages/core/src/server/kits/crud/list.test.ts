@@ -73,6 +73,32 @@ describe("list paging", () => {
     expect((await owner.list({ filter: { status: "none" }, totalCount: true })).totalCount).toBe(0);
   });
 
+  it("pages by a date column, whose cursor carries the date", async () => {
+    const { app } = await kit.start();
+    const board = kit.board();
+    const prisma = kit.harness().prisma;
+    const ids = await addTasks(prisma, board.p1, [1, 2, 3]);
+    for (const [index, id] of [board.t1, ...ids].entries()) {
+      await prisma.task.update({
+        where: { id },
+        data: { updatedAt: new Date(Date.UTC(2026, 0, index + 1)) },
+      });
+    }
+    const owner = app.as(as(board.ada)).taskService;
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await owner.list({
+        sort: { field: "updatedAt", direction: "desc" },
+        limit: 1,
+        cursor,
+      });
+      seen.push(...page.items.map((item) => item.id));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+    expect(seen).toEqual([...ids].reverse().concat(board.t1));
+  });
+
   it("refuses a filter or sort on an undeclared field, and a filter value that is not plain", async () => {
     const { app } = await kit.start();
     const owner = app.as(as(kit.board().ada)).taskService as unknown as {

@@ -178,7 +178,12 @@ describe("forms without row checks", () => {
     entity: taskEntity,
     fields: { notes: "Admin" },
     methods: {
-      ...crud.contract({ entity: taskEntity, getMany: true, list: { filter: ["projectId"] } }),
+      ...crud.contract({
+        entity: taskEntity,
+        getMany: true,
+        list: { filter: ["projectId"] },
+        bulkDelete: true,
+      }),
     },
   });
 
@@ -194,7 +199,9 @@ describe("forms without row checks", () => {
         model: "task",
         access: inherit({ from: projectContract, via: "projectId" }),
         methods: {
-          ...crud.handlers(notes, { access: { getMany: "public", list: "public" } }),
+          ...crud.handlers(notes, {
+            access: { getMany: "public", list: "public", bulkDelete: "public" },
+          }),
         },
       }),
     );
@@ -203,6 +210,7 @@ describe("forms without row checks", () => {
       noteService: {
         list(input?: object): Promise<{ items: { id: string; notes?: unknown }[] }>;
         getMany(input: object): Promise<{ id: string }[]>;
+        bulkDelete(input: object): Promise<{ count: number }>;
       };
     };
     const page = await caller.noteService.list();
@@ -212,6 +220,14 @@ describe("forms without row checks", () => {
     expect(
       (await caller.noteService.getMany({ ids: [board.t1, board.t2] })).map((row) => row.id),
     ).toEqual([board.t1, board.t2]);
+    // Reads are public; a write still needs a level on each row, which no one anonymous has.
+    expect(await caller.noteService.bulkDelete({ ids: [board.t1, board.t2] })).toEqual({
+      count: 0,
+    });
+    const signedIn = app.as(as(board.bo)) as unknown as typeof caller;
+    expect(await signedIn.noteService.bulkDelete({ ids: [board.t1, board.t2] })).toEqual({
+      count: 1,
+    });
   });
 
   it("is the whole check on a service without a policy", async () => {
@@ -219,14 +235,26 @@ describe("forms without row checks", () => {
       qd.defineService(notes, {
         model: "task",
         methods: {
-          ...crud.handlers(notes, { access: { getMany: "authenticated", list: "authenticated" } }),
+          ...crud.handlers(notes, {
+            access: {
+              getMany: "authenticated",
+              list: "authenticated",
+              bulkDelete: "authenticated",
+            },
+          }),
         },
       }),
     );
     const board = kit.board();
     const caller = app.as(as(board.cy)) as unknown as {
-      noteService: { list(input?: object): Promise<{ items: { id: string }[] }> };
+      noteService: {
+        list(input?: object): Promise<{ items: { id: string }[] }>;
+        bulkDelete(input: object): Promise<{ count: number }>;
+      };
     };
     expect((await caller.noteService.list()).items).toHaveLength(2);
+    expect(await caller.noteService.bulkDelete({ ids: [board.t1, board.t2] })).toEqual({
+      count: 2,
+    });
   });
 });

@@ -22,7 +22,7 @@ export function getManyHandler(form: AccessForm): KitHandler {
   const handler = async ({ input, ctx, db }: KitHandlerArgs): Promise<Row[]> => {
     const call = crudCall(ctx, db);
     const ids = uniqueIds((input as IdsInput).ids);
-    const allowed = await allowedIds(call, form, ids, rowLevel(form, "Read"));
+    const allowed = await allowedIds(call, form, ids, rowLevel(form, "Read"), "read");
     if (allowed.length === 0) {
       return [];
     }

@@ -23,6 +23,9 @@
 // - the built method runtime (`./server`) defines a service from a contract,
 //   runs a call through the dispatcher and its in-process caller, and answers
 //   invalid input with VALIDATION;
+// - the built read/write kit's halves find each other: `crud.contract` from
+//   the root marks the methods it made, and `crud.handlers` from `./server`
+//   implements them, so both entries share one copy of the kit's registry;
 // - the built server factory, booted by the built test app (`./testing`),
 //   serves a call over a v5 socket, over HTTP and through the 4.x shim;
 // - the built client (`./client`) calls through its connection over a v5
@@ -84,6 +87,11 @@ const expectations = {
       "isAuthenticationRefused",
       "isCallEnvelope",
       "isCancel",
+      "crud",
+      "CRUD_METHODS",
+      "CRUD_MAX_IDS",
+      "LIST_DEFAULT_LIMIT",
+      "LIST_MAX_LIMIT",
     ],
     client: false,
   },
@@ -108,6 +116,10 @@ const expectations = {
       "createRateLimiter",
       "storageOf",
       "ANY_FIELD",
+      "crud",
+      "nextOrdinal",
+      "ORDINAL_STEP",
+      "requireRow",
     ],
     client: false,
   },
@@ -254,6 +266,38 @@ const rootTypes = [
   "EventPayloadOf",
   "ClientEventName",
   "ServerEventName",
+  // contract/kits: the read/write kit's contract half
+  "CrudMethodName",
+  "CrudTag",
+  "CrudToggle",
+  "CrudListOptions",
+  "CrudInputOptions",
+  "CrudReorderOptions",
+  "CrudContractOptions",
+  "CrudMethods",
+  "CrudGet",
+  "CrudGetMany",
+  "CrudList",
+  "CrudCreate",
+  "CrudUpdate",
+  "CrudDelete",
+  "CrudReorder",
+  "CrudBulkUpdate",
+  "CrudBulkDelete",
+  "ListInput",
+  "ScalarFieldOf",
+  "NumberFieldOf",
+  "IdInput",
+  "IdsInput",
+  "BulkResult",
+  "ReorderInput",
+  "WithId",
+  "BulkPatch",
+  "FilterValue",
+  "ListSort",
+  "ListQuery",
+  "ListPage",
+  "KitSchema",
   // protocol/errors.ts
   "ErrorCode",
   "WireError",
@@ -517,6 +561,35 @@ assert.deepEqual(
   ],
 );
 console.log("ok the built dispatcher runs a call in process and validates input on the wire");
+
+// The read/write kit across the built entries: the methods `crud.contract`
+// (root) made are found by `crud.handlers` (./server), and served through a
+// database client with the model's delegate.
+const anything = {
+  "~standard": { version: 1, vendor: "smoke", validate: (value) => ({ value }) },
+};
+const notes = core.defineContract("noteService", {
+  entity: anything,
+  methods: { ...core.crud.contract({ entity: anything, get: true, list: {} }) },
+});
+const note = { id: "n1", title: "Note", body: "not projected" };
+const kitDb = {
+  note: { findUnique: async () => note, findMany: async () => [note], count: async () => 1 },
+};
+const noteService = app.defineService(notes, {
+  model: "note",
+  project: { entity: { keys: ["id", "title"] } },
+  methods: { ...server.crud.handlers(notes, { access: { get: "public", list: "public" } }) },
+});
+const kitCaller = server
+  .createDispatcher({ services: [noteService], db: kitDb, logger: quiet })
+  .caller(null).noteService;
+assert.deepEqual(await kitCaller.get({ id: "n1" }), { id: "n1", title: "Note" });
+assert.deepEqual(await kitCaller.list(), {
+  items: [{ id: "n1", title: "Note" }],
+  nextCursor: null,
+});
+console.log("ok the built read/write kit's contract and server halves find each other");
 
 // The built server factory and its transports, booted by the built test app:
 // a v5 call over a real socket, an HTTP call, and a 4.x call through the shim.

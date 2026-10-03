@@ -104,16 +104,17 @@ describe("reorder", () => {
     );
   });
 
-  it("refuses neighbors of another list, missing neighbors, and neighbors out of order", async () => {
+  it("refuses neighbors of another list as missing ones, and neighbors out of order", async () => {
     const { app } = await kit.start();
     const board = kit.board();
     const [a = "", b = ""] = await addTasks(kit.harness().prisma, board.p1, [1024, 2048]);
     const member = app.as(as(board.bo)).taskService as unknown as {
       reorder(input: unknown): Promise<unknown>;
     };
+    // A row of another list is answered like a missing one: no way to tell them apart.
     await expect(member.reorder({ id: a, beforeId: board.t2 })).rejects.toMatchObject({
-      code: "VALIDATION",
-      data: { issues: [{ path: ["beforeId"] }] },
+      code: "NOT_FOUND",
+      message: "No such task in this list as beforeId",
     });
     await expect(member.reorder({ id: a, afterId: "missing" })).rejects.toMatchObject({
       code: "NOT_FOUND",

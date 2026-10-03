@@ -2,8 +2,8 @@
 // 12.1): one `updateMany` or `deleteMany` over the ids the caller may write,
 // in one transaction with the policy lookup that picked them. Ids the caller
 // cannot write at the method's row level (`Moderate` unless the form names
-// another), and ids with no row, are skipped; the result counts the rows
-// changed. The tracked client records every row, and a flush touching more
+// another), and ids with no row, are skipped, even for a `"public"` method;
+// the result counts the rows changed. The tracked client records every row, and a flush touching more
 // rows of one collection scope than its `bulkThreshold` sends that scope one
 // `reset` instead of a delta per row.
 
@@ -39,7 +39,7 @@ async function writeAllowed(
     return { count: 0 };
   }
   return await inTransaction(db, async (tx) => {
-    const allowed = await allowedIds(call, form, unique, rowLevel(form, "Moderate"));
+    const allowed = await allowedIds(call, form, unique, rowLevel(form, "Moderate"), "write");
     if (allowed.length === 0) {
       return { count: 0 };
     }

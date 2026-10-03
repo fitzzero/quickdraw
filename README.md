@@ -349,6 +349,98 @@ export const taskService = qd.defineService(task, {
   instead: `limits.subscriptions` (8 at once, 64 waiting), then
   `RATE_LIMITED`.
 
+### Read/write kit
+
+The methods most services write by hand, as one-line opt-ins (design:
+`docs/rfcs/0003-v5.md`, section 12.1). `crud.contract` returns ordinary
+entries for exactly the methods it names, and `crud.handlers` implements
+exactly those, each with the access form it is given:
+
+```typescript
+// the shared package
+import { crud, defineContract, mutation } from "@fitzzero/quickdraw-core";
+
+export const task = defineContract("taskService", {
+  entity: taskSchema,
+  projections: { card: cardSchema },
+  methods: {
+    ...crud.contract({
+      entity: taskSchema,
+      get: true,
+      getMany: true,
+      list: { item: cardSchema, filter: ["projectId", "status"], sort: ["ordinal", "updatedAt"] },
+      create: { input: newTaskSchema },
+      update: { input: taskPatchSchema }, // every field optional; the kit adds `id`
+      delete: true,
+      reorder: { column: "ordinal", within: "projectId" },
+      bulkUpdate: { input: taskPatchSchema }, // the kit adds `ids`
+      bulkDelete: true,
+    }),
+    archive: mutation({ input: z.object({ id: z.string() }), output: "entity" }),
+  },
+});
+
+// the server
+import { crud, inherit, nextOrdinal } from "@fitzzero/quickdraw-core/server";
+
+export const taskService = qd.defineService(task, {
+  model: "task",
+  access: inherit({ from: project, via: "projectId" }),
+  methods: {
+    ...crud.handlers(task, {
+      access: {
+        get: { entry: "Read" },
+        getMany: "authenticated",
+        list: "authenticated",
+        create: { scope: "Moderate", of: project, id: "projectId" },
+        update: { entry: "Moderate" },
+        delete: { entry: "Admin" },
+        reorder: { entry: "Moderate" },
+        bulkUpdate: "authenticated",
+        bulkDelete: "authenticated",
+      },
+      // what `create` writes: columns from the principal, the next ordinal
+      prepare: async (input, ctx, db) => ({
+        ...input,
+        ownerId: ctx.principal.userId,
+        ordinal: await nextOrdinal(db, "task", { projectId: input.projectId }),
+      }),
+    }),
+    archive: { access: { entry: "Admin" }, handler: /* ... */ },
+  },
+});
+```
+
+- Each method needs a form: one missing from `access` does not compile.
+  `get`, `update`, `delete` and `reorder` act on `input.id`, which
+  `{ entry: L }` checks. `list`, `getMany`, `bulkUpdate` and `bulkDelete` act
+  on many rows, so they also keep only the rows the service's policy gives
+  the caller at the form's `entry` or `scope` level (else `Read` for reads
+  and `Moderate` for writes): a list never shows a row `get` would refuse. A
+  service-wide `Admin` grant reaches every row. A `"public"` read's rows are
+  not filtered (a public bulk write still needs a level on each row), nor
+  are any on a service without a policy, where the form is the whole check.
+- `list({ filter?, sort?, cursor?, limit?, totalCount? })` returns
+  `{ items, nextCursor, totalCount? }`: equality filters and one sort field,
+  limited to the declared fields (anything else is `VALIDATION`), keyset
+  cursors that stay put when rows are inserted, 50 items by default and at
+  most 200 (a larger `limit` is clamped), and a total only when asked (a
+  second statement). Items are the `item` projection, stripped of fields
+  above the level the page was read at, as collection items are.
+- `getMany({ ids })` (at most 200) leaves out ids the caller cannot read and
+  ids with no row. Bulk writes skip rows the caller cannot write, run in one
+  transaction and return `{ count }`.
+- Writes go through the tracked client: `create` sends `added`, `update` a
+  patch and `delete` `removed`, and a bulk write past a scope's
+  `bulkThreshold` sends it one `reset`. A missing row is `NOT_FOUND`, a
+  unique violation `CONFLICT`.
+- `reorder({ id, beforeId?, afterId? })` puts the row between its new
+  neighbors (`beforeId` comes right before it) with one write, or renumbers
+  the `within` list in steps of 1,024 when no gap is left.
+- The generated inputs carry JSON Schema, so the kit's methods are MCP tools
+  too. For hand-written handlers, `./server` has `requireRow(row, message?)`
+  (`NOT_FOUND` for a missing row) and `nextOrdinal(db, model, where)`.
+
 ### Testing
 
 `@fitzzero/quickdraw-core/testing` boots the real server on a free port:

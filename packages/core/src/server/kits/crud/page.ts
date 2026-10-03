@@ -36,6 +36,11 @@ export interface PageRead {
   readonly select: Readonly<Record<string, unknown>>;
   /** Count every row `where` matches, too. */
   readonly totalCount: boolean;
+  /**
+   * Whether `where` holds values the caller sent (a filter): a database
+   * refusal of them, like one of the cursor's, is then `VALIDATION`.
+   */
+  readonly filtered: boolean;
 }
 
 /** One page of rows. */
@@ -106,7 +111,7 @@ async function nullableColumns(
 /** A database refusal of the caller's values, as `VALIDATION`; anything else unchanged. */
 function refusal(error: unknown, read: PageRead): unknown {
   const isValidation = error instanceof Error && error.name === "PrismaClientValidationError";
-  if (!isValidation) {
+  if (!isValidation || (read.cursor === undefined && !read.filtered)) {
     return error;
   }
   const refused = new QuickdrawError(

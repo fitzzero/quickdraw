@@ -65,6 +65,7 @@ export function listHandler(context: ListContext): KitHandler {
         order.map(([column]) => column),
       ),
       totalCount: query.totalCount,
+      filtered: Object.keys(query.filter).length > 0,
     });
     const hidden = projection.tiers.hidden(readerLevel(call, context.form, level));
     return {

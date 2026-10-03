@@ -41,7 +41,11 @@ function invalid(message: string, path: readonly string[]): QuickdrawError {
   return new QuickdrawError("VALIDATION", message, { issues: [{ path: [...path], message }] });
 }
 
-/** Reads the moved row and its named neighbors: `NOT_FOUND` for a missing one, `VALIDATION` for one in another list. */
+/**
+ * Reads the moved row and its named neighbors. A neighbor that is missing or
+ * in another list is `NOT_FOUND` alike, so a move cannot tell whether a row
+ * of another list exists.
+ */
 async function readNamed(
   table: ModelDelegate,
   spec: ReorderSpec,
@@ -52,28 +56,24 @@ async function readNamed(
   const ids = [move.id, move.beforeId, move.afterId].filter((id) => id !== undefined);
   const rows = await table.findMany({ where: { id: { in: ids } }, select });
   const byId = new Map(rows.map((row) => [row.id, row]));
-  const find = (id: string | undefined, key: string): Row | undefined => {
+  const moved = byId.get(move.id);
+  if (moved === undefined) {
+    throw new QuickdrawError("NOT_FOUND", `No such ${model}`);
+  }
+  const neighbor = (id: string | undefined, key: string): Row | undefined => {
     const row = id === undefined ? undefined : byId.get(id);
-    if (id !== undefined && row === undefined) {
-      throw new QuickdrawError("NOT_FOUND", `No such ${model} as ${key}`);
+    const listed =
+      row !== undefined && spec.within.every((column) => row[column] === moved[column]);
+    if (id !== undefined && !listed) {
+      throw new QuickdrawError("NOT_FOUND", `No such ${model} in this list as ${key}`);
     }
     return row;
   };
-  const moved = find(move.id, "id") as Row;
-  const named: Named = {
+  return {
     moved,
-    before: find(move.beforeId, "beforeId"),
-    after: find(move.afterId, "afterId"),
+    before: neighbor(move.beforeId, "beforeId"),
+    after: neighbor(move.afterId, "afterId"),
   };
-  for (const [key, row] of [
-    ["beforeId", named.before],
-    ["afterId", named.after],
-  ] as const) {
-    if (row !== undefined && spec.within.some((column) => row[column] !== moved[column])) {
-      throw invalid(`${key} is a row of another list`, [key]);
-    }
-  }
-  return named;
 }
 
 /** The rows of the moved row's list, the moved row left out. */
