@@ -25,6 +25,17 @@ export function topicRoom(service: string, topic: string): string {
   return `qd:t:${service}:${topic}`;
 }
 
+/**
+ * The change topic of a whole service (RFC 0003 section 11.3): every flush
+ * that changes one of its rows or collection scopes signals it.
+ */
+export const SERVICE_TOPIC = "service";
+
+/** The change topic of one scope of a collection: `{collection}:{scope}` (RFC 0003 section 11.3). */
+export function collectionTopic(collection: string, scope: string): string {
+  return `${collection}:${scope}`;
+}
+
 /** The room every authenticated socket of a user joins: `user:{userId}`, as in 4.1. */
 export function userRoom(userId: string): string {
   return `user:${userId}`;

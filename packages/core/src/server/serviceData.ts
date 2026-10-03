@@ -1,11 +1,14 @@
 // The run-time checks of `defineService`'s data options (RFC 0003 sections 3,
-// 5.3 and 6): the `model` the rows live in and its `access` policy, the other
-// models the service `writes`, the rows a write `affects`, and the
-// `versionColumn` "not modified" answers read. The types make the same
-// checks; these repeat them for JavaScript callers and casts.
+// 5.3, 6 and 11.3): the `model` the rows live in and its `access` policy, the
+// other models the service `writes`, the rows a write `affects`, the
+// `versionColumn` "not modified" answers read, and who may watch the
+// service's change topic (`watchAccess`). The types make the same checks;
+// these repeat them for JavaScript callers and casts.
 
+import { isAccessLevel } from "../contract/access";
 import type { AnyContract } from "../contract/defineContract";
 import { isAccessPolicy, type AnyAccessPolicy } from "./access/policy";
+import type { WatchAccess } from "./access/types";
 import type { AffectsLink } from "./service";
 
 type Fail = (message: string) => never;
@@ -19,6 +22,7 @@ export interface ServiceData {
   readonly writes: readonly string[];
   readonly affects: readonly AffectsLink[];
   readonly versionColumn: string | undefined;
+  readonly watchAccess: WatchAccess;
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -94,7 +98,21 @@ function checkWrites(value: unknown, fail: Fail): readonly string[] {
   return Object.freeze([...(value as readonly string[])]);
 }
 
-/** Checks a definition's `model`, `access`, `writes`, `affects` and `versionColumn`. */
+/** `watchAccess`: `"public"`, `"authenticated"` (the default) or `{ service: level }`. */
+function checkWatchAccess(value: unknown, fail: Fail): WatchAccess {
+  if (value === undefined) {
+    return "authenticated";
+  }
+  if (value === "public" || value === "authenticated") {
+    return value;
+  }
+  if (!isRecord(value) || Object.keys(value).length !== 1 || !isAccessLevel(value.service)) {
+    fail('watchAccess must be "public", "authenticated" or { service: level }');
+  }
+  return Object.freeze({ service: value.service });
+}
+
+/** Checks a definition's `model`, `access`, `writes`, `affects`, `versionColumn` and `watchAccess`. */
 export function checkServiceData(definition: UnknownRecord, fail: Fail): ServiceData {
   const { model, access, versionColumn } = definition;
   if (model !== undefined && !isName(model)) {
@@ -115,5 +133,6 @@ export function checkServiceData(definition: UnknownRecord, fail: Fail): Service
     writes: checkWrites(definition.writes, fail),
     affects: Object.freeze(checkAffects(definition.affects, model, fail)),
     versionColumn,
+    watchAccess: checkWatchAccess(definition.watchAccess, fail),
   };
 }

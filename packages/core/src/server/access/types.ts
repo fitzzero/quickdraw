@@ -89,6 +89,14 @@ export interface CustomAccess<Input = never, Ctx = never> {
   readonly check: (ctx: Ctx, input: Input) => MaybePromise<boolean>;
 }
 
+/**
+ * Who may watch a service's change topic, `qd:watch { s, topic: "service" }`
+ * (RFC 0003 section 11.3): the forms that need neither a row nor an input.
+ * A service sets it with `defineService`'s `watchAccess`; the default is
+ * `"authenticated"`.
+ */
+export type WatchAccess = PublicAccess | AuthenticatedAccess | ServiceAccess;
+
 /** Any access form, as the pipeline and an access engine see it. */
 export type AccessForm<Input = never, Ctx = never> =
   | PublicAccess

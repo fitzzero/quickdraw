@@ -10,13 +10,18 @@
 // rest, with the item's select (only the patched fields when every delta is
 // a patch). A row read as missing was deleted since: its own flush removes
 // it, so its `added` or `updated` is dropped here.
+//
+// In a collection that declares `index`, an `added` delta also carries its
+// member's index row, built from the item it sends (`index.ts`), with the
+// service's `versionColumn` read alongside the item for the row's `rev`.
 
 import { collectionRoom } from "../../contract/names";
-import type { CollectionDelta } from "../../protocol/envelope";
+import type { CollectionDelta, Revision } from "../../protocol/envelope";
 import { selectFor, type FrameKind } from "../emit/frames";
 import type { StorageAdapter, StorageRow } from "../storage";
 import type { BoundCollection } from "./bind";
-import { itemOf, patchOf } from "./items";
+import { indexColumns, indexRowFrom } from "./index";
+import { itemOf, patchOf, selectWith } from "./items";
 import type { Moves } from "./moves";
 
 /** A delta whose item is not read yet. */
@@ -102,9 +107,11 @@ export async function readItems(
   if (kinds.size === 0) {
     return read;
   }
+  const select = selectFor(collection.item, [...kinds.values()]);
+  const whole = [...kinds.values()].some((kind) => kind.t === "u");
   const rows = await storage.findMany(collection.model, {
     where: { id: { in: [...kinds.keys()] } },
-    select: selectFor(collection.item, [...kinds.values()]),
+    select: whole ? selectWith(select, indexColumns(collection)) : select,
   });
   const all = new Map(read);
   for (const row of rows) {
@@ -115,11 +122,20 @@ export async function readItems(
   return all;
 }
 
-/** The deltas of one scope's frame, from its plan and the rows read. */
+/** An `added` delta: the member's item, and in an indexed collection its index row, built from that item. */
+function added(collection: BoundCollection, row: StorageRow, rev: Revision): CollectionDelta {
+  const item = itemOf(collection, row);
+  return collection.index === undefined
+    ? { t: "added", item }
+    : { t: "added", item, index: indexRowFrom(collection, item, row, rev) };
+}
+
+/** The deltas of one scope's frame for the flush at `rev`, from its plan and the rows read. */
 export function buildDeltas(
   collection: BoundCollection,
   plan: ScopePlan,
   rows: ReadonlyMap<string, StorageRow>,
+  rev: Revision,
 ): CollectionDelta[] {
   if (plan.reset) {
     return [{ t: "reset" }];
@@ -143,7 +159,7 @@ export function buildDeltas(
     }
     deltas.push(
       delta.t === "added"
-        ? { t: "added", item: itemOf(collection, row) }
+        ? added(collection, row, rev)
         : { t: "updated", item: itemOf(collection, row) },
     );
   }

@@ -32,7 +32,7 @@ import type { AnyContract } from "../contract/defineContract";
 import type { KindOf, MethodName, ParsedInputOf } from "../contract/infer";
 import type { Version } from "../protocol/envelope";
 import type { ModelColumn, ModelName, PolicyFor } from "./access/policy";
-import type { AccessFor, CustomAccess, PublicAccess, RowForms } from "./access/types";
+import type { AccessFor, CustomAccess, PublicAccess, RowForms, WatchAccess } from "./access/types";
 import type { HandlerArgs, HandlerContext } from "./context";
 import type { Service, ShareMode } from "./service";
 import type {
@@ -204,6 +204,14 @@ export interface ServiceDefinition<
    * declares collections. Needs `model`.
    */
   readonly collections?: CollectionOptions<C>;
+  /**
+   * Who may watch the service's change topic, `qd:watch { s, topic:
+   * "service" }`, which changes on every flush that touches one of its rows
+   * or collection scopes (RFC 0003 section 11.3): `"public"`,
+   * `"authenticated"` (the default) or `{ service: level }`. A collection
+   * scope's topic is authorized as a subscribe to that scope instead.
+   */
+  readonly watchAccess?: WatchAccess;
   /** One implementation per contract method: no more, no fewer. */
   readonly methods: {
     readonly [M in keyof A]: M extends MethodName<C>

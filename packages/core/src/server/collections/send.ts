@@ -23,7 +23,7 @@ import { collectionRoom, SERVER_EVENTS } from "../../contract/names";
 import type { CollectionDelta, CollectionFrame, Revision } from "../../protocol/envelope";
 import { modelKey } from "../storage";
 import type { WriteRecord } from "../uow/types";
-import type { BoundCollection, CollectionHub } from "./bind";
+import { anchoredScopes, type BoundCollection, type CollectionHub } from "./bind";
 import { groupOf } from "./scopes";
 
 type Io = NonNullable<CollectionHub["io"]>;
@@ -91,15 +91,9 @@ export function closeAnchors(
   rev: Revision,
 ): Set<string> {
   const closed = new Set<string>();
-  for (const write of writes) {
-    const anchored = hub.collections.routes.byAnchorModel.get(modelKey(write.model));
-    if (write.op !== "delete" || anchored === undefined) {
-      continue;
-    }
-    for (const collection of anchored) {
-      closed.add(collectionRoom(collection.service.name, collection.name, write.id));
-      closeScope(hub, io, collection, write.id, rev);
-    }
+  for (const [collection, scope] of anchoredScopes(hub.collections.routes, writes)) {
+    closed.add(collectionRoom(collection.service.name, collection.name, scope));
+    closeScope(hub, io, collection, scope, rev);
   }
   return closed;
 }

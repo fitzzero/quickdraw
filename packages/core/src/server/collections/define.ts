@@ -1,13 +1,15 @@
 // Collections as a service defines them (RFC 0003 section 7.1). The contract
 // declares what a collection is: its scope column or junction, its item
-// projection, its membership filter, its order and its page sizes. The
-// service adds what a contract cannot carry, because access policies live on
-// the server: the contract whose rows the scope values are ids of (`anchor`),
-// or `scopeAccess: "self"` for a scope whose value is the subscriber's own
-// user id; and the `bulkThreshold` past which one flush's changes to a scope
-// go out as a single `reset`. Every collection of the contract needs one or
-// the other, so a scope nobody could authorize fails when the service is
-// defined rather than when a client subscribes.
+// projection, its membership filter, its order, its page sizes and its index.
+// The service adds what a contract cannot carry, because access policies live
+// on the server: the contract whose rows the scope values are ids of
+// (`anchor`), or `scopeAccess: "self"` for a scope whose value is the
+// subscriber's own user id; and the `bulkThreshold` past which one flush's
+// changes to a scope go out as a single `reset`. Every collection of the
+// contract needs one or the other, so a scope nobody could authorize fails
+// when the service is defined rather than when a client subscribes. The
+// index fields are checked here too, against the item projection only the
+// service compiles: a contract cannot see a schema's keys.
 //
 // 4.1 defined a collection with functions (`resolveScopeId`,
 // `checkScopeAccess`, `snapshot`, `toItem`;
@@ -64,6 +66,11 @@ export interface ServiceCollection {
   readonly anchor: AnyContract | undefined;
   /** More changed rows than this for one scope in one flush go out as one `reset`. */
   readonly bulkThreshold: number;
+  /**
+   * The item fields every member's index row holds (RFC 0003 section 7.4),
+   * in the order the contract declares them; `undefined` without an index.
+   */
+  readonly index: readonly string[] | undefined;
 }
 
 const OPTION_KEYS: ReadonlySet<string> = new Set(["anchor", "scopeAccess", "bulkThreshold"]);
@@ -121,6 +128,54 @@ function checkOption(owner: string, option: unknown, fail: Fail): CheckedOption 
   return { anchor: anchor as AnyContract | undefined, bulkThreshold };
 }
 
+/**
+ * The collection's index fields, checked against its item (RFC 0003 sections
+ * 2 and 7.4): each is a key of the item projection other than `id`, named
+ * once, and one the collection's items carry, so not reserved by the
+ * contract's `fields` for a level above the collection's `access`. An index
+ * row holds what its item holds, nothing more. `views` read index rows, so a
+ * collection with views needs an index.
+ */
+function checkIndex(
+  name: string,
+  def: CollectionDef,
+  item: Projection,
+  access: AccessLevel,
+  fail: Fail,
+): readonly string[] | undefined {
+  const { index, views } = def;
+  if (index === undefined) {
+    if (views !== undefined) {
+      fail(`collection "${name}" declares views but no index; views read index rows`);
+    }
+    return undefined;
+  }
+  if (!Array.isArray(index) || !index.every((field) => typeof field === "string")) {
+    fail(`collection "${name}": index must be a list of item field names`);
+  }
+  const owner = `collection "${name}": index field`;
+  const hidden = item.tiers.hidden(access);
+  for (const [position, field] of index.entries()) {
+    if (field === "id") {
+      fail(`${owner} "id" is not needed; every index row starts with the member's id`);
+    }
+    if (!item.keys.includes(field)) {
+      fail(
+        `${owner} "${field}" is not a key of its item "${item.name}"; index fields are item fields`,
+      );
+    }
+    if (hidden.has(field)) {
+      fail(
+        `${owner} "${field}" is reserved by the contract's fields for a level above the collection's access (${access}), so its items never carry it`,
+      );
+    }
+    if (index.indexOf(field) !== position) {
+      fail(`${owner} "${field}" is named twice`);
+    }
+  }
+  return Object.freeze([...index]);
+}
+
 function scopeOf(def: CollectionDef): CollectionScope {
   const { scope } = def;
   if (typeof scope === "string") {
@@ -146,6 +201,7 @@ function compileOne(
   if (item === undefined) {
     fail(`collection "${name}": item "${def.item}" is not a projection of the contract`);
   }
+  const access = def.access ?? "Read";
   return Object.freeze({
     name,
     scope: scopeOf(def),
@@ -154,9 +210,10 @@ function compileOne(
     order: def.order,
     limit: def.limit ?? DEFAULT_COLLECTION_LIMIT,
     maxLimit: def.maxLimit ?? DEFAULT_COLLECTION_MAX_LIMIT,
-    access: def.access ?? "Read",
+    access,
     anchor,
     bulkThreshold,
+    index: checkIndex(name, def, item, access, fail),
   });
 }
 

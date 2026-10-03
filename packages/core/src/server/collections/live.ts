@@ -1,8 +1,9 @@
 // The collections of one dispatcher's live data (RFC 0003 section 7): the
 // state they keep on the hub, the flush sink that sends their deltas, the
-// socket listeners of `qd:col:sub` and `qd:col:unsub`, their half of
-// revocation, and `dispatcher.collections.reset` for the rare change tracked
-// writes cannot describe.
+// socket listeners of `qd:col:sub`, `qd:col:items` and `qd:col:unsub`, their
+// half of revocation, and `dispatcher.collections.reset` for the rare change
+// tracked writes cannot describe. Change topics (`../topics.ts`) are built on
+// the same state.
 
 import type { AnyContract } from "../../contract/defineContract";
 import type { Hub } from "../emit/hub";
@@ -19,7 +20,7 @@ export interface LiveCollections {
   readonly hub: CollectionHub;
   /** Sends the flush's collection deltas: after the entity sink on the dispatcher's list. */
   readonly sink: ReturnType<typeof createCollectionSink>;
-  /** Serves `qd:col:sub` and `qd:col:unsub` on every v5 socket. */
+  /** Serves `qd:col:sub`, `qd:col:items` and `qd:col:unsub` on every v5 socket. */
   readonly extension: ReturnType<typeof collectionSubscriptions>;
   /** Re-authorizes collection scopes on access changes. */
   readonly revocation: ReturnType<typeof createScopeRevocation>;

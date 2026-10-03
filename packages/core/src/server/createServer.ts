@@ -90,7 +90,9 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
   /**
    * The socket rate limiter (`createRateLimiter`'s options), or `false` for
    * none. Default: 100 events per minute per socket. `qd:ch`, `qd:cancel`,
-   * `qd:sub` and `qd:unsub` are never counted.
+   * the entity and collection subscription events (`qd:sub`, `qd:unsub`,
+   * `qd:col:sub`, `qd:col:unsub`, `qd:col:items`) and the topic watches
+   * (`qd:watch`, `qd:unwatch`) are never counted.
    */
   readonly rateLimit?: SocketRateLimitOptions | false;
   /** The HTTP transport's options, or `false` to serve no HTTP calls. */

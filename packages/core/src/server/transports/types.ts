@@ -7,6 +7,7 @@ import type { PROTOCOL_VERSION } from "../../protocol/version";
 import type { ScopeSubscriptions } from "../collections/scopes";
 import type { Dispatcher } from "../dispatcher";
 import type { EntitySubscriptions } from "../emit/subscriptions";
+import type { TopicWatches } from "../topicIndex";
 import type { Principal } from "../types";
 import type { ReplyMeter } from "./ack";
 
@@ -30,6 +31,11 @@ export interface QuickdrawSocketData<P extends Principal = Principal> {
    * Plain data; the server keeps it.
    */
   collections?: ScopeSubscriptions;
+  /**
+   * The change topics the socket watches (`qd:watch`), by room (RFC 0003
+   * section 11.3). Plain data; the server keeps it.
+   */
+  topics?: TopicWatches;
 }
 
 /** The Socket.IO server `createServer` returns. Events are untyped, so apps may emit their own. */

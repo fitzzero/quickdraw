@@ -1,22 +1,32 @@
 // One page of a collection scope (RFC 0003 section 7.3): the rows of the
 // scope (its scope column, or its `via` junction's links, and `where`) in
 // `order`, after the cursor when there is one, at most `limit` of them; the
-// scope's member count; and the cursor of the next page. The revision is
-// taken by the caller before any read, so the page is never older than the
-// revision it claims. 4.1 left all of it to each collection's `snapshot`
-// function and clamped only the page size (`legacy-src/server/collections.ts:160-171`).
+// scope's member count; the cursor of the next page; and, on a first page
+// (no cursor) of a collection that declares `index`, the scope's index
+// (section 7.4, `index.ts`). The revision is taken by the caller before any
+// read, so the page is never older than the revision it claims. 4.1 left all
+// of it to each collection's `snapshot` function and clamped only the page
+// size (`legacy-src/server/collections.ts:160-171`).
 //
-// A page costs two statements, the rows and the count, run together; a `via`
-// scope reads its links first. The first page of a scope through an adapter
-// that answers `nullable` also asks it about each order column, once per
-// process (`StorageAdapter.nullable`).
+// A page costs two statements, the rows and the count, run together, and a
+// first page of an indexed collection a third beside them, the index; a
+// `via` scope reads its links first. The first page of a scope through an
+// adapter that answers `nullable` also asks it about each order column, once
+// per process (`StorageAdapter.nullable`).
+//
+// A cursor is the client's: when the read that applies it fails while the
+// count of the same scope succeeds, the cursor's values did not fit the
+// order columns, and the request is `VALIDATION`, not a server fault.
 
 import type { CollectionSnapshot, Revision } from "../../protocol/envelope";
-import type { StorageAdapter, StorageWhere } from "../storage";
+import type { StorageAdapter, StorageRow, StorageWhere } from "../storage";
 import { unreadable } from "../transports/ack";
 import type { BoundCollection } from "./bind";
 import { afterCursor, decodeCursor, encodeCursor, orderByOf, type CursorValues } from "./cursor";
+import { readIndex } from "./index";
 import { itemOf, selectWith } from "./items";
+
+const NOT_A_CURSOR = "cursor is not a cursor of this collection";
 
 /** What a page asks for. */
 export interface PageRequest {
@@ -87,7 +97,7 @@ async function nullableColumns(
   for (const [index, column] of columns.entries()) {
     const known = storage.nullable !== undefined;
     if (values?.[index] === null && known && answers[index] !== true) {
-      throw unreadable("cursor is not a cursor of this collection", ["cursor"]);
+      throw unreadable(NOT_A_CURSOR, ["cursor"]);
     }
     if (answers[index] === true || values?.[index] === null) {
       nullable.add(column);
@@ -96,10 +106,60 @@ async function nullableColumns(
   return nullable;
 }
 
+/** How one page's rows are read: the scope's filter, the cursor's values and the page size. */
+interface RowsRead {
+  readonly members: StorageWhere;
+  readonly values: CursorValues | undefined;
+  readonly nullable: ReadonlySet<string>;
+  readonly limit: number;
+}
+
+/**
+ * The page's rows (one more than `limit`, to tell whether a page follows)
+ * and the scope's member count. A rows read that applied a cursor and failed
+ * while the count succeeded throws `VALIDATION`: the cursor's values do not
+ * fit the order columns.
+ */
+async function readRows(
+  storage: StorageAdapter,
+  collection: BoundCollection,
+  read: RowsRead,
+): Promise<{ readonly rows: StorageRow[]; readonly total: number }> {
+  const { members, values, nullable, limit } = read;
+  const { order } = collection;
+  const where =
+    values === undefined ? members : { AND: [members, afterCursor(order, values, nullable)] };
+  const [rows, total] = await Promise.allSettled([
+    storage.findMany(collection.model, {
+      where,
+      select: selectWith(
+        collection.item.select,
+        order.map(([column]) => column),
+      ),
+      orderBy: orderByOf(order, nullable),
+      take: limit + 1,
+    }),
+    storage.count(collection.model, { where: members }),
+  ]);
+  if (total.status === "rejected") {
+    throw total.reason;
+  }
+  if (rows.status === "fulfilled") {
+    return { rows: rows.value, total: total.value };
+  }
+  if (values === undefined) {
+    throw rows.reason;
+  }
+  const refused = unreadable(NOT_A_CURSOR, ["cursor"]);
+  refused.cause = rows.reason;
+  throw refused;
+}
+
 /**
  * Reads one page of `request.scope` at revision `rev`: its items, the
  * scope's member count, and the next page's cursor (`null` on the last
- * page). A request above `maxLimit` gets `maxLimit` items and `clamped`.
+ * page); on a first page of a collection that declares `index`, its index
+ * too. A request above `maxLimit` gets `maxLimit` items and `clamped`.
  * Throws `VALIDATION` for a cursor that is not one of this collection.
  */
 export async function readPage(
@@ -114,22 +174,13 @@ export async function readPage(
   const nullable = await nullableColumns(storage, collection, values);
   const members = await membersWhere(storage, collection, request.scope);
   const page = { ok: true, rev, limit, ...(clamped ? { clamped: true as const } : {}) } as const;
+  const indexed = values === undefined && collection.index !== undefined;
   if (members === undefined) {
-    return { ...page, items: [], total: 0, cursor: null };
+    return { ...page, items: [], total: 0, cursor: null, ...(indexed ? { index: [] } : {}) };
   }
-  const where =
-    values === undefined ? members : { AND: [members, afterCursor(order, values, nullable)] };
-  const [rows, total] = await Promise.all([
-    storage.findMany(collection.model, {
-      where,
-      select: selectWith(
-        collection.item.select,
-        order.map(([column]) => column),
-      ),
-      orderBy: orderByOf(order, nullable),
-      take: limit + 1,
-    }),
-    storage.count(collection.model, { where: members }),
+  const [{ rows, total }, index] = await Promise.all([
+    readRows(storage, collection, { members, values, nullable, limit }),
+    indexed ? readIndex(storage, collection, members, nullable, rev) : undefined,
   ]);
   const shown = rows.slice(0, limit);
   const last = shown.at(-1);
@@ -138,5 +189,6 @@ export async function readPage(
     items: shown.map((row) => itemOf(collection, row)),
     total,
     cursor: rows.length > limit && last !== undefined ? encodeCursor(order, last) : null,
+    ...index,
   };
 }

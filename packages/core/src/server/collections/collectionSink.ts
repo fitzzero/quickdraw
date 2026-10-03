@@ -11,14 +11,16 @@
 // 2. per collection the writes concern (its model, its `via` junction, or an
 //    `affects` hop onto its service), find each row's moves (`moves.ts`),
 //    reading only rows whose write does not carry the values that decide
-//    membership;
+//    membership; the topic sink (`../topics.ts`) reuses them;
 // 3. per scope, batch the moves' deltas into one plan, or one `reset` past
 //    `bulkThreshold` (`deltas.ts`);
 // 4. leave out scopes nobody here subscribes to, which raises their resume
 //    floor instead; behind a cluster adapter other nodes' rooms are not
 //    visible, so every scope is sent;
 // 5. read the items the remaining deltas need, in one query per collection,
-//    and send one `qd:c` frame per scope, which the resume buffer keeps.
+//    and send one `qd:c` frame per scope, which the resume buffer keeps. An
+//    indexed collection's `added` deltas carry index rows built from those
+//    items (`index.ts`).
 //
 // A collection with no subscriber on this process (and rooms visible here)
 // skips steps 2 to 5 and reads nothing (`skipTouched`).
@@ -32,20 +34,24 @@ import type { FlushInfo, FlushSink } from "../uow/flushSink";
 import type { WriteRecord } from "../uow/types";
 import type { BoundCollection, CollectionHub } from "./bind";
 import { buildDeltas, planScopes, readItems, type ScopePlan } from "./deltas";
-import { columnMoves, viaMoves } from "./moves";
+import { movesOf } from "./moves";
 import { closeAnchors, resetTouched, sendFrame, skipTouched } from "./send";
 
 type Io = NonNullable<CollectionHub["io"]>;
 
 /** One collection's share of a flush. */
-interface Work {
+export interface Work {
   readonly collection: BoundCollection;
   /** Rows of its service only an `affects` hop touched: their items are sent again. */
   readonly refresh: readonly string[];
 }
 
 /** The collections the flush concerns, with the rows of each that only an `affects` hop touched. */
-function workOf(hub: CollectionHub, writes: readonly WriteRecord[], touched: TouchedRows): Work[] {
+export function workOf(
+  hub: CollectionHub,
+  writes: readonly WriteRecord[],
+  touched: TouchedRows,
+): Work[] {
   const { routes } = hub.collections;
   const concerned = new Set<BoundCollection>();
   for (const write of writes) {
@@ -95,10 +101,7 @@ async function emitCollection(
     skipTouched(hub, collection, writes, refresh, rev);
     return;
   }
-  const moves =
-    collection.scope.kind === "column"
-      ? await columnMoves(storage, collection, writes, refresh)
-      : await viaMoves(storage, collection, writes, refresh);
+  const moves = await movesOf(hub.collections.moves, storage, collection, writes, refresh);
   const sending: ScopePlan[] = [];
   for (const plan of planScopes(collection, moves, subscribed)) {
     if (closed.has(plan.room)) {
@@ -115,7 +118,7 @@ async function emitCollection(
   }
   const rows = await readItems(storage, collection, sending, moves.rows);
   for (const plan of sending) {
-    sendFrame(hub, io, collection, plan.scope, rev, buildDeltas(collection, plan, rows));
+    sendFrame(hub, io, collection, plan.scope, rev, buildDeltas(collection, plan, rows, rev));
   }
 }
 

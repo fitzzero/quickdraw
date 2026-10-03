@@ -12,8 +12,10 @@ import type { Hub } from "../emit/hub";
 import type { Registry } from "../registry";
 import type { AnyService } from "../service";
 import { modelKey, type StorageAdapter } from "../storage";
+import type { WriteRecord } from "../uow/types";
 import { createDeltaBuffer, type DeltaBuffer } from "./buffer";
 import type { ServiceCollection } from "./define";
+import type { FlushMoves } from "./moves";
 import { ScopeIndex } from "./scopes";
 
 /** A collection of a served service, with its anchor's service. */
@@ -43,6 +45,8 @@ export interface CollectionState {
   readonly routes: CollectionRoutes;
   readonly scopes: ScopeIndex;
   readonly buffer: DeltaBuffer;
+  /** Each flush's moves, found once for the collection and topic sinks. */
+  readonly moves: FlushMoves;
 }
 
 /** A dispatcher's live data with its collections: the same hub object, so the server it attaches is shared. */
@@ -142,6 +146,28 @@ export function bindCollections(
   });
 }
 
+/**
+ * The scopes keyed by each row `writes` deleted that collections are
+ * anchored on, with their collections: deleting a chat closes its messages'
+ * scope (RFC 0003 section 7.2).
+ */
+export function anchoredScopes(
+  routes: CollectionRoutes,
+  writes: readonly WriteRecord[],
+): (readonly [BoundCollection, string])[] {
+  const scopes: (readonly [BoundCollection, string])[] = [];
+  for (const write of writes) {
+    const anchored = routes.byAnchorModel.get(modelKey(write.model));
+    if (write.op !== "delete" || anchored === undefined) {
+      continue;
+    }
+    for (const collection of anchored) {
+      scopes.push([collection, write.id]);
+    }
+  }
+  return scopes;
+}
+
 /** The collection state of a dispatcher: its routes, its subscriptions and its resume buffer. */
 export function createCollectionState(
   registry: Registry,
@@ -152,5 +178,6 @@ export function createCollectionState(
     routes: bindCollections(registry, storage),
     scopes: new ScopeIndex(buffer),
     buffer,
+    moves: new WeakMap(),
   };
 }

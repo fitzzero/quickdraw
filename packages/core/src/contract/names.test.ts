@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   CLIENT_EVENTS,
   SERVER_EVENTS,
+  SERVICE_TOPIC,
   collectionRoom,
+  collectionTopic,
   entityRoom,
   topicRoom,
   userRoom,
@@ -18,6 +20,12 @@ describe("room names", () => {
     expect(collectionRoom("taskService", "byProject", "p1")).toBe("qd:c:taskService:byProject:p1");
     expect(topicRoom("taskService", "byProject:p1")).toBe("qd:t:taskService:byProject:p1");
     expect(userRoom("u1")).toBe("user:u1");
+  });
+
+  it("names change topics as RFC 0003 section 11.3 does", () => {
+    expect(collectionTopic("byProject", "p1")).toBe("byProject:p1");
+    expect(SERVICE_TOPIC).toBe("service");
+    expect(topicRoom("taskService", SERVICE_TOPIC)).toBe("qd:t:taskService:service");
   });
 });
 

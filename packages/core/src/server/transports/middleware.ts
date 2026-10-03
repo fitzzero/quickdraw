@@ -114,8 +114,10 @@ export type SocketRateLimitOptions = Omit<RateLimitOptions, "logger" | "ackPaylo
  * per-socket token buckets; cancellations, since dropping one only keeps a
  * call running; entity subscriptions, which a page sends once per row it
  * mounts in batches of up to 500 ids, so a board of sixty rows would trip the
- * limiter; and collection subscriptions, which a page sends once per list it
- * mounts and again to page through it (RFC 0003 section 3).
+ * limiter; collection subscriptions, which a page sends once per list it
+ * mounts and again to page through it, and item loads, which a board holding
+ * a scope's index sends per window of up to 200 ids; and topic watches,
+ * which a page sends once per watching query it mounts (RFC 0003 section 3).
  */
 const UNLIMITED_EVENTS: readonly string[] = [
   CLIENT_EVENTS.channel,
@@ -124,6 +126,9 @@ const UNLIMITED_EVENTS: readonly string[] = [
   CLIENT_EVENTS.unsub,
   CLIENT_EVENTS.collectionSub,
   CLIENT_EVENTS.collectionUnsub,
+  CLIENT_EVENTS.collectionItems,
+  CLIENT_EVENTS.watch,
+  CLIENT_EVENTS.unwatch,
 ];
 
 function rateLimited(retryAfterMs: number): Failure {
