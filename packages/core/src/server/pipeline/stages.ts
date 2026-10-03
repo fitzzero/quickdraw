@@ -118,7 +118,7 @@ export function contextFor(
     transport: request.transport,
     ...(request.mcp === undefined ? {} : { mcp: request.mcp }),
     touch: settings.touch,
-    rooms: realtime.roomsFor(request.transport, request.connectionId),
+    rooms: realtime.roomsFor(request.transport, request.connectionId, target.method.share),
     presence: realtime.presence,
     kit: {
       service: target.service,

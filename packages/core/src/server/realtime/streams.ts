@@ -1,7 +1,8 @@
 // Pushing to streams (RFC 0003 section 12.5): `qd.stream(contract,
 // name).push(scope, item)` (`push(item)` for a global stream). The item is
 // checked against the stream's item schema (a mismatch throws `INTERNAL`,
-// nothing is kept or sent), kept in the scope's seed when the stream declares
+// nothing is kept or sent); the validated item (a Zod object strips keys its
+// schema does not name) is kept in the scope's seed when the stream declares
 // one (`seeds.ts`), and sent to the feed's room as `qd:stream { s, stream,
 // scope?, item }`, volatile when the stream says so. A push is synchronous
 // and logs nothing: it may run at a game loop's tick rate.
@@ -51,17 +52,18 @@ function push(hub: Hub, seeds: StreamSeeds, served: Served, args: readonly unkno
       `${label}.push: ${problem ?? (stream.scoped ? "pass (scope, item)" : "pass (item)")}`,
     );
   }
-  checkOutgoing(stream.item, item, `An item pushed to ${label}`);
+  // What is kept and sent is the validated item: streams have no projections.
+  const checked = checkOutgoing(stream.item, item, `An item pushed to ${label}`);
   const feed = scope as string | undefined;
-  seeds.push(streamKey(service.name, stream.name), feed, item, stream.seed);
+  seeds.push(streamKey(service.name, stream.name), feed, checked, stream.seed);
   const { io } = hub;
   if (io === undefined) {
     return;
   }
   const frame: StreamFrame =
     feed === undefined
-      ? { s: service.name, stream: stream.name, item }
-      : { s: service.name, stream: stream.name, scope: feed, item };
+      ? { s: service.name, stream: stream.name, item: checked }
+      : { s: service.name, stream: stream.name, scope: feed, item: checked };
   const room = io.to(streamRoom(service.name, stream.name, feed));
   (stream.volatile ? room.volatile : room).emit(SERVER_EVENTS.stream, frame);
 }

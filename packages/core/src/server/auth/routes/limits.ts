@@ -1,18 +1,26 @@
 // The rate limits on the auth routes (RFC 0003 section 12.6). By default the
 // sign-in routes (each provider's start and callback, and the guest route)
-// share `createAuthLimiter` (20 requests per 15 minutes per IP) and the
-// session routes (`me`, `logout`, `logout-all`) share
-// `createAuthStatusLimiter` (120). Both presets live in `./server/express`,
+// share `createAuthLimiter({ max: SIGN_IN_LIMIT })` (60 requests per 15
+// minutes per IP: a start and a callback per sign-in, and a shared office or
+// school address, use 4.1's 20 up quickly) and the session routes (`me`,
+// `logout`, `logout-all`) share `createAuthStatusLimiter` (120). Both
+// presets live in `./server/express`,
 // which needs the optional peer `express-rate-limit`; the routes import them
 // only when a default is used, so importing `./server/auth` for its JWT
 // helpers alone does not need the peer.
+
+/** How many sign-in requests one IP may make per 15 minutes under the default limiter. */
+export const SIGN_IN_LIMIT = 60;
 
 /** An Express middleware, such as an `express-rate-limit` limiter: it answers the request, or calls `next()`. */
 export type AuthMiddleware = (req: never, res: never, next: (error?: unknown) => void) => unknown;
 
 /** The limiters of the auth routes. Each one left out gets its default. */
 export interface AuthRateLimits {
-  /** Each provider's start and callback, and the guest route. Default: `createAuthLimiter()`. */
+  /**
+   * Each provider's start and callback, and the guest route. Default:
+   * `createAuthLimiter({ max: 60 })`, 60 requests per 15 minutes per IP.
+   */
   readonly signIn?: AuthMiddleware;
   /** `me`, `logout` and `logout-all`. Default: `createAuthStatusLimiter()`. */
   readonly session?: AuthMiddleware;
@@ -57,7 +65,7 @@ export async function loadLimiters(option: AuthRateLimits | false): Promise<Limi
   }
   const presets = await import("../../express/rateLimit");
   return {
-    signIn: option.signIn ?? presets.createAuthLimiter(),
+    signIn: option.signIn ?? presets.createAuthLimiter({ max: SIGN_IN_LIMIT }),
     session: option.session ?? presets.createAuthStatusLimiter(),
   };
 }

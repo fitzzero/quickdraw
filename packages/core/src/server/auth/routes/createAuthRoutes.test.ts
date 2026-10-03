@@ -520,9 +520,9 @@ describe("the guest route", () => {
 });
 
 describe("rate limits", () => {
-  it("limits the sign-in routes with createAuthLimiter by default: 20 per 15 minutes per IP", async () => {
+  it("limits the sign-in routes with createAuthLimiter by default: 60 per 15 minutes per IP", async () => {
     const { url } = await harness.boot({ rateLimit: undefined });
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
       expect((await get(`${url}/auth/mock/start`)).status).toBe(302);
     }
     const limited = await get(`${url}/auth/mock/callback`);

@@ -348,6 +348,23 @@ describe("revocation", () => {
 });
 
 describe("push", () => {
+  it("keeps and sends the validated item: keys the stream's schema does not name are stripped", async () => {
+    const app = await start();
+    const { connection, items } = await connect(app, as(board.ada));
+    expect(await streamSub(connection, "logs", board.t1)).toEqual({ ok: true, seed: [] });
+    const extra = { line: "built", token: "not in the schema" } as { line: string };
+    logs(app).push(board.t1, extra);
+    await settle(connection);
+    expect(items).toEqual([
+      { s: "taskService", stream: "logs", scope: board.t1, item: { line: "built" } },
+    ]);
+    const later = await connect(app, as(board.ada));
+    expect(await streamSub(later.connection, "logs", board.t1)).toEqual({
+      ok: true,
+      seed: [{ line: "built" }],
+    });
+  });
+
   it("checks the item against the stream's schema, and keeps and sends nothing on a mismatch", async () => {
     const app = await start();
     const { connection, items } = await connect(app, as(board.cy));

@@ -153,6 +153,22 @@ describe("the rows found", () => {
     });
   });
 
+  it("of a { service } search are every row for a grant that meets it, a row level on each", async () => {
+    const board = kit.board();
+    const { app } = await serve({
+      ...search.handlers(searchContract, { access: { service: "Read" } }),
+    });
+    await addTasks(kit.harness().prisma, board.p1, [3], { title: "Shared word" });
+    await addTasks(kit.harness().prisma, board.p2, [3], { title: "Shared word" });
+    // Ed holds nothing on P1; his Read grant reaches it.
+    const ed = app.as(as(board.ed, { taskService: "Read" })).taskService;
+    const found = await ed.search({ q: "shared" });
+    expect(found.items.map((item) => item.projectId).sort()).toEqual([board.p1, board.p2].sort());
+    await expect(app.as(as(board.ed)).taskService.search({ q: "shared" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+
   it("of a public search are every row, read and matched without the tiered fields", async () => {
     const board = kit.board();
     const { app } = await serve({

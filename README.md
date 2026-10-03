@@ -415,15 +415,20 @@ export const taskService = qd.defineService(task, {
 
 - Each method needs a form: one missing from `access` does not compile.
   `get`, `update`, `delete` and `reorder` act on `input.id`, which
-  `{ entry: L }` checks. `list`, `getMany`, `bulkUpdate` and `bulkDelete` act
-  on many rows, so they also keep only the rows the service's policy gives
-  the caller at the form's `entry` or `scope` level (else `Read` for reads
-  and `Moderate` for writes): a list never shows a row `get` would refuse. A
-  service-wide `Admin` grant reaches every row. A `"public"` read's rows are
-  not filtered (a public bulk write still needs a level on each row), nor
-  are any on a service without a policy, where the form is the whole check:
-  there these methods (and `search`) must be `"public"` or `{ service }`,
-  or the service is refused when it is defined.
+  `{ entry: L }` checks; a write on one row also needs the row level
+  (`Moderate`, or the form's `entry`) on that row whatever its form, so
+  `update: "authenticated"` edits no row. `list`, `getMany`, `bulkUpdate`
+  and `bulkDelete` act on many rows, so they also keep only the rows the
+  service's policy gives the caller at the form's `entry` or `scope` level
+  (else `Read` for reads and `Moderate` for writes): a list never shows a
+  row `get` would refuse. A service-wide `Admin` grant reaches every row,
+  and a grant a `{ service: L }` form names is a row level of the grant on
+  every row (the read is not filtered, and its rows are stripped at the
+  grant). A `"public"` read's rows are not filtered (a public bulk write
+  still needs a level on each row), nor are any on a service without a
+  policy, where the form is the whole check: there these methods (and
+  `search`) must be `"public"` or `{ service }`, or the service is refused
+  when it is defined.
 - `list({ filter?, sort?, cursor?, limit?, totalCount? })` returns
   `{ items, nextCursor, totalCount? }`: equality filters and one sort field,
   limited to the declared fields (anything else is `VALIDATION`; a field
@@ -807,22 +812,23 @@ const here = usePresence(`board:${projectId}`); // user ids, after enterBoard jo
 ```
 
 - Streams: `push` checks each item against the stream's schema (a mismatch
-  throws `INTERNAL` and nothing is sent), keeps the latest `seed` items per
-  scope in memory on that process (at most 1,000 per scope and 10,000
-  scopes per stream; a restart empties them, and durable history is the
-  app's: store the rows and expose a collection), and sends
+  throws `INTERNAL` and nothing is sent; what is kept and sent is the
+  validated item, so keys the schema does not name are stripped), keeps the
+  latest `seed` items per scope in memory on that process (at most 1,000 per
+  scope and 10,000 scopes per stream; a restart empties them, and durable
+  history is the app's: store the rows and expose a collection), and sends
   `qd:stream { s, stream, scope?, item }` to the feed's subscribers,
   volatile when the stream says so. `qd:stream:sub` is authorized with the
   stream's `access` through the access engine, the scope being the row an
   `entry` or `scope` form checks; a stream without `access` is closed. The
   answer is the seed; `useStream` then appends, keeps the latest `max`
   (default 500), and subscribes again after a reconnect, when the seed
-  replaces what it held. A socket holds at most 500 feeds. A subscriber whose
-  access is lowered (a tracked write to the row an `entry` or `scope` form
-  checks, or changed grants for any form) is authorized again; one refused
-  leaves the feed and gets `qd:revoked { kind: "stream", reason: "access",
-s, stream, scope? }`, and `useStream` shows `FORBIDDEN` until the next
-  connect.
+  replaces what it held. A socket holds at most 500 feeds. A subscriber
+  whose access is lowered (a tracked write to the row an `entry` or `scope`
+  form checks, or changed grants for any form) is authorized again; one
+  refused leaves the feed and gets
+  `qd:revoked { kind: "stream", reason: "access", s, stream, scope? }`, and
+  `useStream` shows `FORBIDDEN` until the next connect.
 - Channels: each message is `qd:ch [service, channel, payload]`, sent
   volatile and never answered. Per socket and channel a token bucket
   (`ratePerSecond`, default 30; `burst`, default twice that) drops what is
@@ -840,13 +846,15 @@ s, stream, scope? }`, and `useStream` shows `FORBIDDEN` until the next
   node's (`fetchSockets`) behind a Redis adapter.
   `ctx.rooms.join(room)` and `leave` put the calling socket in an app room
   (calls without a socket get `false`; names starting with `qd:` or `user:`
-  are refused with `VALIDATION`; at most 100 per socket), and the room's
+  are refused with `VALIDATION`; at most 100 per socket; a method that shares
+  its runs, `share`, may not join or leave: `INTERNAL`), and the room's
   sockets get `qd:presence` frames: the list on joining, then who joins and
   who leaves. `usePresence(room)` shows them.
 - Events: `ctx.rooms.emit(room, contract, event, payload)` and
   `emitToUser(userId, ...)` replace 4.1's `emitToRoom` and the augmentable
   event map; the payload is checked first (`INTERNAL`, nothing sent, when it
-  fails), then sent as `qd:event [service, event, payload]`.
+  fails), then the validated payload (keys the schema does not name
+  stripped) is sent as `qd:event [service, event, payload]`.
 - A mock client's members show what the test sets: `mockItems` and
   `mockError` for a stream, `sent` for a channel, `mockEmit` for an event.
 
@@ -969,15 +977,16 @@ nothing is cached:
   `allowMissingOrigin: true` is set for native clients that keep cookies.
   Bearer tokens need no Origin, and HTTP calls are guarded by their JSON
   content type instead.
-- Rate limits: the sign-in routes share `createAuthLimiter()` (20 requests
-  per 15 minutes per IP) and the session routes `createAuthStatusLimiter()`
-  (120); pass `rateLimit: { signIn, session }` to replace them (a shared
-  store across instances, say) or `false`. The defaults need the optional
-  peer `express-rate-limit`. The HTTP transport (`/qd`) is not limited
-  unless `http.rateLimit` is set; `createCallLimiter()` (300 calls per
-  minute per IP) refuses in the transport's own `RATE_LIMITED` reply. A web
-  server that prefetches for many users calls from one address: give it its
-  own `keyGenerator` or a higher `max`.
+- Rate limits: the sign-in routes share `createAuthLimiter({ max: 60 })` (60
+  requests per 15 minutes per IP) and the session routes
+  `createAuthStatusLimiter()` (120); pass `rateLimit: { signIn, session }`
+  to replace them (a shared store across instances, say) or `false`. The
+  defaults need the optional peer `express-rate-limit`. The HTTP transport
+  (`/qd`) is not limited unless `http.rateLimit` is set;
+  `createCallLimiter()` (300 calls per minute per IP) refuses in the
+  transport's own `RATE_LIMITED` reply. A web server that prefetches for
+  many users calls from one address: give it its own `keyGenerator` or a
+  higher `max`.
 - The mock provider is mounted only while `isMockOAuthEnabled()`
   (`ENABLE_MOCK_OAUTH=true` and `NODE_ENV` other than `production`), and
   every request checks again. Set `mock({ internalUrl })` where the API

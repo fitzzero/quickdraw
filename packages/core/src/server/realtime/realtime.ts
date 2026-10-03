@@ -10,7 +10,7 @@ import type { Hub } from "../emit/hub";
 import type { QuickdrawServerSocket, SocketContext } from "../transports/types";
 import { channelMessages } from "./channels";
 import { createPresence, PresenceRecords } from "./presence";
-import { createRooms } from "./rooms";
+import { createRooms, unjoinable } from "./rooms";
 import { createStreams, type Streams } from "./streams";
 import type { ContextRooms, Presence, StreamHandle } from "./types";
 
@@ -22,8 +22,13 @@ export interface Realtime {
   extension(socket: QuickdrawServerSocket, context: SocketContext): void;
   /** `ctx.presence`, `dispatcher.presence` and `server.presence`. */
   readonly presence: Presence;
-  /** The `ctx.rooms` of a call: its socket's for a call over a v5 socket, else one that joins nothing. */
-  roomsFor(transport: string, connectionId: string | undefined): ContextRooms;
+  /**
+   * The `ctx.rooms` of a call: its socket's for a call over a v5 socket, else
+   * one that joins nothing. For a method that shares its runs (`share`),
+   * `join` and `leave` throw `INTERNAL`: a shared run serves several callers,
+   * and would join or leave only the first one's socket.
+   */
+  roomsFor(transport: string, connectionId: string | undefined, share?: string): ContextRooms;
   /** The handle of a stream this dispatcher serves; a `TypeError` for any other. */
   stream(contract: AnyContract, name: string): StreamHandle<AnyContract, string>;
   /** The sockets in a room of the attached server, for the kits (`KitRuntime.occupancy`). */
@@ -48,12 +53,13 @@ export function createRealtime(hub: Hub): Realtime {
       });
     },
     presence,
-    roomsFor(transport: string, connectionId: string | undefined): ContextRooms {
+    roomsFor(transport: string, connectionId: string | undefined, share?: string): ContextRooms {
       const socket =
         transport === "socket" && connectionId !== undefined
           ? hub.io?.sockets.sockets.get(connectionId)
           : undefined;
-      return socket === undefined ? rooms.detached : rooms.of(socket);
+      const own = socket === undefined ? rooms.detached : rooms.of(socket);
+      return share === undefined ? own : unjoinable(own, share);
     },
     stream: (contract: AnyContract, name: string) => streams.handle(contract, name),
     occupancy: Object.freeze({

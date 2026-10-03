@@ -275,3 +275,108 @@ describe("forms without row checks", () => {
     await expect(ungranted.noteService.list()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });
+
+describe("a service-wide grant the form names", () => {
+  const graded = defineContract("taskService", {
+    entity: taskEntity,
+    fields: { notes: "Moderate" },
+    methods: {
+      ...crud.contract({ entity: taskEntity, getMany: true, list: { sort: ["title"] } }),
+    },
+  });
+
+  it("is a row level of its level on every row: list and getMany are unfiltered, stripped at the grant", async () => {
+    const service = qd.defineService(graded, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      methods: {
+        ...crud.handlers(graded, {
+          access: { getMany: { service: "Read" }, list: { service: "Read" } },
+        }),
+      },
+    });
+    const app = await createTestApp({ services: [projectService, service], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    const board = kit.board();
+    const prisma = kit.harness().prisma;
+    await prisma.task.updateMany({ data: { notes: "graded" } });
+    // Gus holds no level on either project; his grant reaches both.
+    const gus = (await prisma.user.create({ data: { email: "gus@example.com", name: "Gus" } })).id;
+    const reader = app.as(as(gus, { taskService: "Read" })).taskService;
+    const page = await reader.list({});
+    expect(page.items.map((item) => item.id).sort()).toEqual([board.t1, board.t2].sort());
+    expect(page.items.every((item) => !("notes" in item))).toBe(true);
+    expect((await reader.getMany({ ids: [board.t1, board.t2] })).map((row) => row.id)).toEqual([
+      board.t1,
+      board.t2,
+    ]);
+    // A Moderate grant is a Moderate row level: the Moderate-only notes show.
+    const moderator = app.as(as(gus, { taskService: "Moderate" })).taskService;
+    expect((await moderator.list({})).items.map((item) => item.notes)).toEqual([
+      "graded",
+      "graded",
+    ]);
+    // Without the grant the form refuses.
+    await expect(app.as(as(gus)).taskService.list({})).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
+describe("a write on one row", () => {
+  const writes = defineContract("taskService", {
+    entity: taskEntity,
+    methods: {
+      ...crud.contract({
+        entity: taskEntity,
+        update: { input: taskEntity.pick({ title: true }).partial() },
+        delete: true,
+        reorder: { column: "ordinal", within: "projectId" },
+      }),
+    },
+  });
+
+  async function serveWrites(form: "authenticated" | { readonly service: "Moderate" }) {
+    const service = qd.defineService(writes, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      methods: {
+        ...crud.handlers(writes, { access: { update: form, delete: form, reorder: form } }),
+      },
+    });
+    const app = await createTestApp({ services: [projectService, service], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    return app;
+  }
+
+  it("needs the row level on the row whatever the form says: update: authenticated edits no row", async () => {
+    const app = await serveWrites("authenticated");
+    const board = kit.board();
+    const [other = ""] = await addTasks(kit.harness().prisma, board.p1, [5]);
+    // Cy reads P1; Ed has nothing on it. Neither moderates T1.
+    for (const userId of [board.cy, board.ed]) {
+      const caller = app.as(as(userId)).taskService;
+      for (const call of [
+        caller.update({ id: board.t1, title: "Mine now" }),
+        caller.reorder({ id: board.t1, afterId: other }),
+        caller.delete({ id: board.t1 }),
+      ]) {
+        await expect(call).rejects.toMatchObject({ code: "FORBIDDEN" });
+      }
+    }
+    // Bo moderates P1.
+    const bo = app.as(as(board.bo)).taskService;
+    expect(await bo.update({ id: board.t1, title: "Moderated" })).toMatchObject({
+      title: "Moderated",
+    });
+    expect(await bo.reorder({ id: board.t1, afterId: other })).toMatchObject({ id: board.t1 });
+    expect(await bo.delete({ id: board.t1 })).toBeNull();
+  });
+
+  it("counts a service-wide grant the form names as that row level on every row", async () => {
+    const app = await serveWrites({ service: "Moderate" });
+    const board = kit.board();
+    // Ed holds nothing on P1, but a Moderate grant.
+    const ed = app.as(as(board.ed, { taskService: "Moderate" })).taskService;
+    expect(await ed.update({ id: board.t1, title: "Granted" })).toMatchObject({ title: "Granted" });
+    expect(await ed.delete({ id: board.t1 })).toBeNull();
+  });
+});

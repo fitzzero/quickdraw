@@ -134,8 +134,9 @@ describe("the event checks", () => {
     expect(sent).toEqual([]);
   });
 
-  it("send a checked payload as given, as one qd:event frame", () => {
-    events.emit("lobby", liveContract, "celebrated", { taskId: "t1" });
+  it("send the validated payload, as one qd:event frame: keys the schema does not name are stripped", () => {
+    const extra = { taskId: "t1", secret: "not in the schema" } as { taskId: string };
+    events.emit("lobby", liveContract, "celebrated", extra);
     events.emitToUser("u1", liveContract, "celebrated", { taskId: "t2" });
     expect(sent).toEqual([
       ["lobby", "qd:event", ["taskService", "celebrated", { taskId: "t1" }]],

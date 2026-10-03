@@ -122,3 +122,23 @@ export function createRooms(state: RoomState): Rooms {
     },
   });
 }
+
+/**
+ * `rooms` whose `join` and `leave` throw `INTERNAL`: the `ctx.rooms` of a
+ * method that shares its runs (`share`). A shared run serves several callers
+ * with the first one's `ctx`, so it would join or leave that caller's socket
+ * only. Its events (`emit`, `emitToUser`) stay: they name their room.
+ */
+export function unjoinable(rooms: ContextRooms, share: string): ContextRooms {
+  const refuse = (member: string): never => {
+    throw new QuickdrawError(
+      "INTERNAL",
+      `ctx.rooms.${member} cannot run in a method that shares its runs (share: "${share}"): a shared run serves several callers and would ${member} only the first caller's socket; join rooms from a method without share`,
+    );
+  };
+  return Object.freeze({
+    ...rooms,
+    join: () => refuse("join"),
+    leave: () => refuse("leave"),
+  });
+}

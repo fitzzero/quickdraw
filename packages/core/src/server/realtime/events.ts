@@ -5,9 +5,11 @@
 // contract declares, and its payload is checked against the event's schema
 // before anything is sent: a payload that fails it throws `INTERNAL` (the
 // app's bug, logged by the pipeline when a handler emits it) and no socket
-// receives a frame. A checked payload goes out as given, as one `qd:event`
-// frame, `[service, event, payload]`, to every socket in the room (on every
-// node, through the adapter). Without a server there is nobody to send to.
+// receives a frame. What goes out is the validated payload (a Zod object
+// strips keys its schema does not name: events have no projections), as one
+// `qd:event` frame, `[service, event, payload]`, to every socket in the room
+// (on every node, through the adapter). Without a server there is nobody to
+// send to.
 
 import type { AnyContract } from "../../contract/defineContract";
 import { SERVER_EVENTS, userRoom } from "../../contract/names";
@@ -42,8 +44,12 @@ export function createRoomEvents(hub: Hub): RoomEvents {
       throw new TypeError("ctx.rooms.emit: room must be a non-empty string");
     }
     const def = payloadSchemaOf(contract, event);
-    checkOutgoing(def.payload, payload, `The payload of the ${contract.name}.${event} event`);
-    const frame: EventFrame = [contract.name, event, payload];
+    const checked = checkOutgoing(
+      def.payload,
+      payload,
+      `The payload of the ${contract.name}.${event} event`,
+    );
+    const frame: EventFrame = [contract.name, event, checked];
     hub.io?.to(room).emit(SERVER_EVENTS.event, frame);
   };
   return Object.freeze({

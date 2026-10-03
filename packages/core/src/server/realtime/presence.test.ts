@@ -7,11 +7,13 @@
 // answers come from every node.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { z } from "zod";
+import { defineContract, query } from "../../index";
 import type { PresenceFrame } from "../../protocol/envelope";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, type TestApp, type TestConnection } from "../../testing/index";
 import { as, projectService, seedBoard, type Board } from "../access/__tests__/board";
-import { createDispatcher, type Principal } from "../index";
+import { createDispatcher, initQuickdraw, type Principal } from "../index";
 import { defineLiveService, frames, received, settle } from "./__tests__/fixture";
 import { MAX_APP_ROOMS, PresenceRecords, PRESENCE_MAX_LAST_SEEN } from "./presence";
 
@@ -194,7 +196,56 @@ describe("qd:presence", () => {
   });
 });
 
+/** A logger that prints nothing. */
+const quiet = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+  child: () => quiet,
+};
+
 describe("ctx.rooms.join and leave", () => {
+  it("throw INTERNAL in a method that shares its runs, naming why", async () => {
+    const local = initQuickdraw<{ principal: Principal }>();
+    const lobby = defineContract("lobbyService", {
+      methods: {
+        enterShared: query({ input: z.object({ room: z.string() }), output: z.boolean() }),
+        leaveShared: query({ input: z.object({ room: z.string() }), output: z.boolean() }),
+      },
+    });
+    const service = local.defineService(lobby, {
+      methods: {
+        enterShared: {
+          access: "authenticated",
+          share: "caller",
+          handler: ({ input, ctx }) => ctx.rooms.join(input.room),
+        },
+        leaveShared: {
+          access: "authenticated",
+          share: "all",
+          handler: ({ input, ctx }) => ctx.rooms.leave(input.room),
+        },
+      },
+    });
+    const errors: unknown[] = [];
+    const logger = { ...quiet, error: (_message: string, meta?: unknown) => errors.push(meta) };
+    const app = await createTestApp({ services: [service], logger });
+    apps.push(app as unknown as TestApp);
+    const ada = await app.connect(as(board.ada));
+    await expect(ada.call.lobbyService.enterShared({ room: "lobby" })).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+    await expect(ada.call.lobbyService.leaveShared({ room: "lobby" })).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+    expect(JSON.stringify(errors)).toContain(
+      'ctx.rooms.join cannot run in a method that shares its runs (share: \\"caller\\")',
+    );
+    const socket = app.server.io.sockets.sockets.get(ada.socket.id ?? "");
+    expect(socket?.rooms.has("lobby")).toBe(false);
+  });
+
   it("refuse the framework's rooms and names that cannot be rooms", async () => {
     const app = await start();
     const cy = await app.connect(as(board.cy));

@@ -28,9 +28,9 @@ export function handlerOf(context: MethodContext): KitHandler {
     case "update":
       return updateHandler(form);
     case "delete":
-      return deleteHandler();
+      return deleteHandler(form);
     case "reorder":
-      return reorderHandler(spec);
+      return reorderHandler(spec, form);
     case "bulkUpdate":
       return bulkUpdateHandler(form);
     default:

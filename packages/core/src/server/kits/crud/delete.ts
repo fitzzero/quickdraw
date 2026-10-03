@@ -4,13 +4,16 @@
 // delete: no consumer app uses one.
 
 import type { IdInput } from "../../../contract/kits/crudSchemas";
+import type { AccessForm } from "../../access/types";
+import { checkRowWrite } from "./access";
 import { crudCall, type KitHandler, type KitHandlerArgs } from "./runtime";
 
-/** The `delete` handler. */
-export function deleteHandler(): KitHandler {
+/** The `delete` handler: the caller needs the method's row level on the row whatever the form. */
+export function deleteHandler(form: AccessForm): KitHandler {
   const handler = async ({ input, ctx, db }: KitHandlerArgs): Promise<null> => {
     const call = crudCall(ctx, db);
     const { id } = input as IdInput;
+    await checkRowWrite(call, form, id);
     await call.table.delete({ where: { id }, select: { id: true } });
     return null;
   };

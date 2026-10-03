@@ -25,7 +25,9 @@ import type { CrudSpec } from "../../../contract/kits/crud";
 import type { ReorderInput } from "../../../contract/kits/crudSchemas";
 import { QuickdrawError } from "../../../protocol/errors";
 import type { StorageWhere } from "../../storage";
+import type { AccessForm } from "../../access/types";
 import { inKitTransaction } from "../transactions";
+import { checkRowWrite } from "./access";
 import { isOrdinal, ordinalBetween, ORDINAL_STEP } from "./ordinal";
 import {
   crudCall,
@@ -218,8 +220,8 @@ async function moveIn(
   };
 }
 
-/** The `reorder` handler. */
-export function reorderHandler(spec: ReorderSpec): KitHandler {
+/** The `reorder` handler: the caller needs the method's row level on the moved row whatever the form. */
+export function reorderHandler(spec: ReorderSpec, form: AccessForm): KitHandler {
   const handler = async ({ input, ctx, db }: KitHandlerArgs): Promise<Row> => {
     const call = crudCall(ctx, db);
     const move: Move = {
@@ -228,6 +230,7 @@ export function reorderHandler(spec: ReorderSpec): KitHandler {
       move: input as ReorderInput,
       select: projectionOf(call, "entity").select,
     };
+    await checkRowWrite(call, form, move.move.id);
     const how = { owner: OWNER, conflict: CONFLICT };
     const first = await inKitTransaction(db, async (tx) => await moveIn(tx, move, false), how);
     if ("row" in first) {
