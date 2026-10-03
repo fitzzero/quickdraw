@@ -98,7 +98,8 @@ function checkChannel(
     name,
     payload: def.payload,
     ratePerSecond,
-    burst: def.burst ?? ratePerSecond * 2,
+    // At least one token, so a slow channel (0.2 a second) still lets a message through.
+    burst: def.burst ?? Math.max(1, ratePerSecond * 2),
     requires: compileRequires(def),
     access: checkChannelAccess(owner, implementation.access, fail),
     handler: implementation.handler as AnyChannelHandler,

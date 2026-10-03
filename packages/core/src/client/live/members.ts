@@ -1,12 +1,14 @@
 "use client";
 
-// The live members of `qd.<service>` (RFC 0003 sections 11, 11.5 and 12.2),
-// built once per contract with the rest of the client (`../members.ts`):
-// `useEntity` and `useEntities` for a contract with an entity, and one
-// member per collection, `qd.<service>.<collection>.useCollection`. A
-// collection's member lives beside the methods, not on the service, because
-// methods and collections share one namespace. For the same reason a search
-// kit method's `useSearch` lives on that method's member,
+// The live members of `qd.<service>` (RFC 0003 sections 11, 11.5, 12.2 and
+// 12.5), built once per contract with the rest of the client
+// (`../members.ts`): `useEntity` and `useEntities` for a contract with an
+// entity, one member per collection,
+// `qd.<service>.<collection>.useCollection`, and one per stream, channel and
+// event (`realtimeMembers.ts`). A collection's member lives beside the
+// methods, not on the service, because methods, collections, streams,
+// channels and events share one namespace. For the same reason a search kit
+// method's `useSearch` lives on that method's member,
 // `qd.<service>.<search>.useSearch`. A contract with the admin kit also gets
 // `qd.<service>.admin`, its admin methods' members together (`../admin.ts`).
 
@@ -15,11 +17,13 @@ import type { MethodDef } from "../../contract/methods";
 import { clientAdminNamespace } from "../adminMeta";
 import type { MethodTarget } from "../members";
 import type { CollectionTarget } from "./collectionLoads";
+import { realtimeMembers } from "./realtimeMembers";
 import { searchTargetOf } from "./searchResults";
-import type { UseSearchOptions } from "./searchTypes";
 import { useCollection, type UseCollectionOptions } from "./useCollection";
 import { useEntities, useEntity, type UseEntityOptions } from "./useEntity";
 import { useSearch } from "./useSearch";
+
+type UseSearchOptions = Parameters<typeof useSearch>[2];
 
 /**
  * The live members of one contract's service, keyed as they sit on
@@ -57,7 +61,9 @@ export function liveMembers(
     return [collection, member] as [string, object];
   });
   const admin = Object.entries(clientAdminNamespace(contract, methods));
-  return Object.freeze(Object.fromEntries([...entities, ...collections, ...admin]));
+  return Object.freeze(
+    Object.fromEntries([...entities, ...collections, ...realtimeMembers(contract), ...admin]),
+  );
 }
 
 /**

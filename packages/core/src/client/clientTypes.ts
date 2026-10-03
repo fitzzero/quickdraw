@@ -29,9 +29,15 @@ import type {
 import type { QuickdrawError } from "../protocol/errors";
 import type { MethodMutationOptions, MethodQueryOptions } from "./hooks";
 import type { MethodQueryKey } from "./keys";
+import type {
+  RealtimeMembers,
+  UseCollectionOptions,
+  UseCollectionResult,
+  UseEntitiesResult,
+  UseEntityOptions,
+  UseEntityResult,
+} from "./live/memberTypes";
 import type { SearchMemberOf } from "./live/searchTypes";
-import type { UseCollectionOptions, UseCollectionResult } from "./live/useCollection";
-import type { UseEntitiesResult, UseEntityOptions, UseEntityResult } from "./live/useEntity";
 import type { OptimisticCache } from "./optimistic";
 
 /** Options of a query member's `call`. */
@@ -139,16 +145,16 @@ export interface CollectionMember<C extends AnyContract, K extends CollectionNam
 }
 
 /**
- * The live members of `qd.<key>` (RFC 0003 sections 11 and 11.5):
+ * The live members of `qd.<key>` (RFC 0003 sections 11, 11.5 and 12.5):
  * `useEntity` and `useEntities` when the contract has an entity, and one
- * member per collection, beside the methods (methods and collections share
- * one namespace).
+ * member per collection, stream, channel and event, beside the methods
+ * (they all share one namespace).
  */
 export type LiveMembers<C extends AnyContract> = ([EntityOf<C>] extends [never]
   ? unknown
   : EntityMembers<C>) & {
   readonly [K in CollectionName<C>]: CollectionMember<C, K>;
-};
+} & RealtimeMembers<C>;
 
 /** The names of a contract's methods the admin kit made (the root export's `AdminMethodsOf`). */
 type AdminMethodNames<C extends AnyContract> = {

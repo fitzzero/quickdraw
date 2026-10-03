@@ -103,6 +103,19 @@ export type { CollectionHub, ScopeHolding, ScopeOptions } from "./live/collectio
 export type { EntityEntry } from "./live/entities";
 export type { EntityStore } from "./live/entityStore";
 export { liveDataOf, type LiveData } from "./live/liveData";
+// Stream feeds, typed event handlers and app-room presence, without React
+// (RFC 0003 section 12.5): the stores the realtime hooks read.
+export {
+  PENDING_STREAM,
+  STREAM_DEFAULT_MAX,
+  STREAM_MAX_ITEMS,
+  feedKey,
+  type StreamState,
+  type StreamStore,
+  type StreamTarget,
+} from "./live/streams";
+export type { EventBus, EventHandler } from "./live/events";
+export type { PresenceStore } from "./live/presence";
 
 // The typed client and its provider.
 export { createQuickdrawClient } from "./createClient";
@@ -124,6 +137,21 @@ export type {
 } from "./clientTypes";
 export type { UseCollectionOptions, UseCollectionResult } from "./live/useCollection";
 export type { UseEntitiesResult, UseEntityOptions, UseEntityResult } from "./live/useEntity";
+// Streams, channels, typed events and presence (RFC 0003 section 12.5):
+// `qd.<service>.<stream>.useStream`, `.<channel>.useChannel`,
+// `.<event>.useEvent`, and `usePresence(room)`.
+export type {
+  ChannelMember,
+  EventMember,
+  GlobalStreamMember,
+  RealtimeMembers,
+  ScopedStreamMember,
+  StreamMember,
+} from "./live/memberTypes";
+export type { UseChannelResult } from "./live/useChannel";
+export type { UseEventOptions } from "./live/useEvent";
+export type { UseStreamOptions, UseStreamResult } from "./live/useStream";
+export { usePresence } from "./live/usePresence";
 export { SEARCH_DEBOUNCE_MS } from "./live/useSearch";
 export type {
   SearchMember,

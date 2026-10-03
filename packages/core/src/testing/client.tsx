@@ -39,13 +39,18 @@ export { createMockClient } from "./mockClient";
 export type {
   EntityMock,
   MethodStub,
+  MockChannelMember,
   MockClient,
   MockClientOptions,
   MockCollectionMember,
   MockEntityMembers,
+  MockEventMember,
   MockMethodMember,
+  MockRealtimeMembers,
   MockScope,
   MockServiceClient,
+  MockStreamMember,
+  StreamMock,
 } from "./mockTypes";
 
 /** Options of {@link renderWithQuickdraw}. */

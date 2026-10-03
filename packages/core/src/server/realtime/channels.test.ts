@@ -371,6 +371,18 @@ describe("channel handlers in defineService", () => {
     expect(service.channels.get("b")).toMatchObject({ access: { service: "Moderate" }, burst: 8 });
   });
 
+  it("lets a slow channel's default burst hold at least one message", () => {
+    const slow = defineContract("slowRateService", {
+      channels: { rare: { payload, ratePerSecond: 0.2 } },
+    });
+    const service = (
+      qd.defineService as unknown as (contract: unknown, definition: unknown) => unknown
+    )(slow, { methods: {}, channels: { rare: handler } }) as {
+      readonly channels: ReadonlyMap<string, { readonly burst: number }>;
+    };
+    expect(service.channels.get("rare")?.burst).toBe(1);
+  });
+
   it("refuses channels on a service whose contract declares none", () => {
     const none = defineContract("noneService", {});
     expect(() =>

@@ -14,11 +14,12 @@
 //   the subscriber's access tier, and a "not modified" answer would keep the
 //   last user's.
 //
-// Made on first use for a connection and `QueryClient` pair, by the hooks,
-// and kept as long as the connection: it holds nothing once its hooks are
-// gone, and its listeners live on the connection's socket. Closing the
-// connection stops every timer it runs (retries, reloads, checks); the next
-// connect resumes what is still held.
+// Made for a connection and `QueryClient` pair when the provider mounts
+// (before its socket connects, so no `qd:presence` frame is missed), or on
+// first use by code without React, and kept as long as the connection: it
+// holds nothing once its hooks are gone, and its listeners live on the
+// connection's socket. Closing the connection stops every timer it runs
+// (retries, reloads, checks); the next connect resumes what is still held.
 //
 // React-free.
 
@@ -29,11 +30,21 @@ import { sessionOf } from "../session";
 import { createCollectionHub, type CollectionHub } from "./collections";
 import { listenToFrames } from "./demux";
 import { createEntityStore, type EntityStore } from "./entityStore";
+import { createEventBus, type EventBus } from "./events";
+import { createPresenceStore, type PresenceStore } from "./presence";
+import { createStreamStore, type StreamStore } from "./streams";
 
-/** The live entities and collections of one connection and `QueryClient`. */
+/**
+ * The live data of one connection and `QueryClient`: entities, collections,
+ * stream feeds, typed event handlers, and the presence of the app rooms its
+ * socket is in.
+ */
 export interface LiveData {
   readonly entities: EntityStore;
   readonly collections: CollectionHub;
+  readonly streams: StreamStore;
+  readonly events: EventBus;
+  readonly presence: PresenceStore;
 }
 
 const lives = new WeakMap<QuickdrawConnection, WeakMap<QueryClient, LiveData>>();
@@ -47,6 +58,7 @@ function followConnection(
   const resume = (): void => {
     live.entities.resume();
     live.collections.resume("connect");
+    live.streams.resume();
   };
   connection.socket.on("connect", () => {
     // A hello held now is from the same credentials: the state was loaded for its user.
@@ -54,10 +66,15 @@ function followConnection(
       resume();
     }
   });
+  connection.socket.on("disconnect", () => {
+    // The server took the socket out of every app room with it.
+    live.presence.clear();
+  });
   sessionOf(connection, queryClient).onHello(({ switched, first }) => {
     if (switched) {
       live.entities.forget();
       live.collections.forget();
+      live.streams.forget();
     } else if (first) {
       resume();
     }
@@ -67,6 +84,7 @@ function followConnection(
     if (connection.getState().status === "idle") {
       live.entities.stop();
       live.collections.stop();
+      live.streams.stop();
     }
   });
 }
@@ -76,6 +94,9 @@ function createLiveData(connection: QuickdrawConnection, queryClient: QueryClien
   const live: LiveData = Object.freeze({
     entities: createEntityStore(host),
     collections: createCollectionHub(host),
+    streams: createStreamStore(host),
+    events: createEventBus(),
+    presence: createPresenceStore(),
   });
   listenToFrames(connection.socket, live);
   followConnection(connection, queryClient, live);
