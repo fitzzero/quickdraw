@@ -379,6 +379,19 @@ describe("definitions that fail to compile", () => {
         },
       },
     });
+    qd.defineService(task, {
+      methods: {
+        ...ok,
+        // @ts-expect-error -- a result that is not shared is never kept, so ttlMs needs share
+        count: { access: "public", ttlMs: 500, handler: () => 0 },
+      },
+    });
+    qd.defineService(task, {
+      methods: {
+        ...ok,
+        count: { access: "public", share: "caller", ttlMs: 500, handler: () => 0 },
+      },
+    });
   });
 
   test("an unknown option", () => {

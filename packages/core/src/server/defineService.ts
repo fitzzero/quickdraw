@@ -11,8 +11,8 @@
 //   `listOf`;
 // - `access` is required, and its form decides `ctx.principal`: nullable
 //   under `"public"` only;
-// - `share`, `ttlMs` and `version` exist for queries only, and a method
-//   with `custom` access cannot `share: "all"`.
+// - `share`, `ttlMs` and `version` exist for queries only, `ttlMs` needs
+//   `share`, and a method with `custom` access cannot `share: "all"`.
 //
 // Each method's access form is inferred into the type parameter `A`, one
 // member per method. `access: A[M] | NoInfer<...>` keeps the `custom(fn)`
@@ -44,22 +44,31 @@ export type AccessMap<T extends QuickdrawTypes, C extends AnyContract> = {
   readonly [M in MethodName<C>]: MethodAccess<T, C, M>;
 };
 
-interface QueryOptions<
+/**
+ * A query's `share` and `ttlMs`: `ttlMs` only with `share`, since a result
+ * that is not shared is never kept.
+ */
+type ShareOptions<A> =
+  | {
+      /**
+       * Run identical concurrent calls once: `"caller"` per principal, `"all"`
+       * across principals. Every caller is authorized before it joins; the
+       * handler runs with the first caller's `ctx`, so a `"all"` handler must
+       * not depend on who asks. `"all"` is not allowed with `custom` access,
+       * whose result may depend on who asks.
+       */
+      readonly share: A extends CustomAccess<never, never> ? "caller" : ShareMode;
+      /** Reuse a successful result for this long after its run, in milliseconds. */
+      readonly ttlMs?: number;
+    }
+  | { readonly share?: undefined; readonly ttlMs?: undefined };
+
+type QueryOptions<
   T extends QuickdrawTypes,
   C extends AnyContract,
   M extends MethodName<C>,
   A,
-> {
-  /**
-   * Run identical concurrent calls once: `"caller"` per principal, `"all"`
-   * across principals. Every caller is authorized before it joins; the
-   * handler runs with the first caller's `ctx`, so a `"all"` handler must not
-   * depend on who asks. `"all"` is not allowed with `custom` access, whose
-   * result may depend on who asks.
-   */
-  readonly share?: A extends CustomAccess<never, never> ? "caller" : ShareMode;
-  /** With `share`: reuse a successful result for this long after its run, in milliseconds. */
-  readonly ttlMs?: number;
+> = ShareOptions<A> & {
   /**
    * The current version of this query's result for `input`. A caller that
    * already holds it gets "not modified" instead of a fresh run.
@@ -68,7 +77,7 @@ interface QueryOptions<
     input: ParsedInputOf<C, M>,
     ctx: HandlerContext<T, PrincipalFor<T, A>>,
   ) => MaybePromise<Version>;
-}
+};
 
 interface MutationOptions {
   readonly share?: never;
