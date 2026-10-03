@@ -1,5 +1,6 @@
 // The hooks against a real server on PGlite with tracked writes (RFC 0003
-// sections 11.3 and 11.4): watched topics joined once per topic and
+// sections 11.3, 11.4 and 17): watched topics joined once per topic, read
+// once on first mount after the join is answered (joined or refused) and
 // refetched once per `qd:changed`, refetches after a reconnect spread over
 // the jitter window, `qd.invalidate`, and optimistic mutations.
 
@@ -7,7 +8,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { tick } from "../server/__tests__/fixtures";
+import { deferred, tick } from "../server/__tests__/fixtures";
 import { as } from "../server/access/__tests__/board";
 import type { Principal } from "../server/index";
 import type { QuickdrawConnection } from "./connection";
@@ -103,18 +104,19 @@ describe("a watched query", () => {
     const changed: unknown[] = [];
     grabbed.connection?.socket.on("qd:changed", (frame) => changed.push(frame));
     const reads = (): number => records.filter((record) => record.method === "countOnBoard").length;
-    // The first read was sent before the join was acknowledged, so the
-    // join reads once more, for both hooks (RFC 0003 section 17).
-    await until(() => reads() === 2);
+    // The first read waited for the join to be acknowledged, so it saw
+    // every change made before the join: one read for both hooks, and none
+    // more when the join lands (RFC 0003 section 17).
     await tick(400);
-    expect(reads()).toBe(2);
+    expect(reads()).toBe(1);
+    expect(callsOf(sent(), "countOnBoard")).toHaveLength(1);
     await app.as(as(board.ada)).taskService.renameTenTimes({ id: board.t1 });
-    await until(() => reads() === 3);
+    await until(() => reads() === 2);
     await tick(400);
     expect(changed).toEqual([
       { s: "taskService", topic: `board:${board.p1}`, rev: expect.any(Number) },
     ]);
-    expect(reads()).toBe(3);
+    expect(reads()).toBe(2);
     view.rerender(<Board copies={1} />);
     await tick(50);
     expect(framesOf(sent(), "qd:unwatch")).toEqual([]);
@@ -178,6 +180,72 @@ describe("a watched query", () => {
     await tick(100);
     expect(framesOf(grabbed.sent, "qd:watch")).toHaveLength(1);
     expect(framesOf(grabbed.sent, "qd:unwatch")).toEqual([]);
+    expect(callsOf(grabbed.sent, "countOnBoard")).toHaveLength(1);
+  });
+
+  /** Renders a count of `projectId`'s board as Ada, while the server holds every storage read until released. */
+  async function heldCount(projectId: (board: ReturnType<typeof live.board>) => string) {
+    let held = deferred();
+    const { app, records } = await live.start({ beforeRead: () => held.promise });
+    const board = live.board();
+    const { wrapper, grabbed } = wrapperFor({
+      url: app.url,
+      principal: as(board.ada),
+      queryClient: freshClient(),
+    });
+    function Count() {
+      const { data, error } = qd.task.countOnBoard.useQuery({ projectId: projectId(board) });
+      return <p>{error === null ? `count ${String(data)}` : `refused ${error.code}`}</p>;
+    }
+    render(wrapper({ children: <Count /> }));
+    await until(() => framesOf(grabbed.sent, "qd:watch").length === 1);
+    const release = (): void => {
+      held.resolve();
+      held = deferred();
+      held.resolve();
+    };
+    const reads = (): number => records.filter((record) => record.method === "countOnBoard").length;
+    return { app, board, grabbed, release, reads };
+  }
+
+  /** The position of the first frame of `event` among `sent`. */
+  function firstOf(sent: readonly unknown[][], event: string, m?: string): number {
+    return sent.findIndex(
+      ([name, frame]) => name === event && (m === undefined || (frame as { m?: string }).m === m),
+    );
+  }
+
+  it("holds its first read until the join is acknowledged, then reads once", async () => {
+    const { app, board, grabbed, release, reads } = await heldCount((seeded) => seeded.p1);
+    // The server is still answering the join: the read waits for it.
+    await tick(200);
+    expect(callsOf(grabbed.sent, "countOnBoard")).toEqual([]);
+    expect(screen.getByText("count undefined")).toBeTruthy();
+    release();
+    await screen.findByText("count 1");
+    await until(() => watchersOf(app, board.p1) === 1);
+    await tick(400);
+    expect(callsOf(grabbed.sent, "countOnBoard")).toHaveLength(1);
+    expect(firstOf(grabbed.sent, "qd:call", "countOnBoard")).toBeGreaterThan(
+      firstOf(grabbed.sent, "qd:watch"),
+    );
+    expect(reads()).toBe(1);
+  });
+
+  it("reads once after a refused join, and is not read again", async () => {
+    // Ada may not read P2's board: the join and the read are both refused.
+    const { app, board, grabbed, release, reads } = await heldCount((seeded) => seeded.p2);
+    await tick(200);
+    expect(callsOf(grabbed.sent, "countOnBoard")).toEqual([]);
+    release();
+    await screen.findByText("refused FORBIDDEN");
+    await tick(400);
+    expect(watchersOf(app, board.p2)).toBe(0);
+    expect(callsOf(grabbed.sent, "countOnBoard")).toHaveLength(1);
+    expect(firstOf(grabbed.sent, "qd:call", "countOnBoard")).toBeGreaterThan(
+      firstOf(grabbed.sent, "qd:watch"),
+    );
+    expect(reads()).toBe(1);
   });
 });
 
@@ -205,8 +273,8 @@ describe("after a reconnect", () => {
     await until(() => watchersOf(app, board.p1) === 1);
     const connection = grabbed.connection as QuickdrawConnection;
     const sent = grabbed.sent;
-    // The watched query's first read and the one more its join asked for.
-    await until(() => callsOf(sent, "countOnBoard").length === 2);
+    // The watched query's one first read, sent once its join was acknowledged.
+    await until(() => callsOf(sent, "countOnBoard").length === 1);
     await tick(300);
     const before = sent.length;
     const since = (): unknown[][] => sent.slice(before);

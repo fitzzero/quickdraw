@@ -45,7 +45,7 @@ import { createBackoff, type Backoff, type BackoffKind, type BackoffWindows } fr
 import { createSubscriptionLane, type SubscriptionLane } from "./lane";
 import { reloadOncePerSession } from "./reload";
 import { createSocket, type QuickdrawSocket, type SocketClientOptions } from "./socket";
-import { createTopics, notifyEach, type Topics, type TopicWatch } from "./watch";
+import { createTopics, notifyEach, type JoinWait, type Topics, type TopicWatch } from "./watch";
 
 export type { QuickdrawSocket, SocketClientOptions };
 
@@ -199,6 +199,16 @@ export interface QuickdrawConnection {
    * });
    */
   watch(watch: TopicWatch): () => void;
+  /**
+   * While the socket is connected and a watched topic's `qd:watch` is
+   * unanswered, a promise that resolves once the server answers it (joined
+   * or refused), the attempt fails, the topic is left or the connection
+   * closes; `undefined` when there is nothing to wait for. A read sent after
+   * it sees every change made before the join, so the watches with `key`
+   * are not told `onJoined` for that join. The query hooks hold a watched
+   * query's read with it.
+   */
+  waitForJoin(wait: JoinWait): Promise<void> | undefined;
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -554,5 +564,6 @@ export function createQuickdrawConnection(
       };
     },
     watch: topics.watch,
+    waitForJoin: topics.waitForJoin,
   });
 }

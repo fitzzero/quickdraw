@@ -32,7 +32,11 @@
 //   none of the bridge's code;
 // - the built tracked-writes adapter (`./prisma`) imports nothing from Prisma,
 //   refuses a value that is not a Prisma client, and shares one storage
-//   lookup with `./server`.
+//   lookup with `./server`;
+// - the built client test helpers (`./testing/client`) carry no "use client"
+//   (while `dist/client/index.js` still opens with it), load Testing Library
+//   only lazily, import no jsdom and no server code, and the built mock
+//   client answers from its stubs with no DOM.
 
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -183,6 +187,7 @@ const expectations = {
     client: false,
   },
   "./testing/prisma": { symbols: ["createPrismaTestGlobalSetup"], client: false },
+  "./testing/client": { symbols: ["renderWithQuickdraw", "createMockClient"], client: false },
 };
 
 /** The type-only names the root export's declarations must provide. */
@@ -681,4 +686,64 @@ assert.equal(prisma.storageOf, server.storageOf, "./prisma and ./server share st
 assert.equal(prisma.storageOf({ $quickdrawStorage: {} }), undefined);
 console.log(
   "ok the built ./prisma entry imports no Prisma and refuses a value that is not a client",
+);
+
+// The built client test helpers: no "use client" (checked above, with
+// ./client still opening with it), Testing Library imported only when
+// `renderWithQuickdraw` runs, and no jsdom and no server code anywhere in the
+// entry's static import graph, so a component test that uses
+// `createMockClient` alone loads neither.
+const STATIC_SPECIFIER = /\bfrom\s*["']([^"']+)["']|\bimport\s*["']([^"']+)["']/g;
+const DYNAMIC_SPECIFIER = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
+const testingClientFiles = new Set();
+const testingClientStatic = [];
+const testingClientDynamic = [];
+const testingClientPending = [join(packageDir, pkg.exports["./testing/client"].import)];
+while (testingClientPending.length > 0) {
+  const file = testingClientPending.pop();
+  if (testingClientFiles.has(file)) {
+    continue;
+  }
+  testingClientFiles.add(file);
+  const code = readFileSync(file, "utf8");
+  for (const match of code.matchAll(STATIC_SPECIFIER)) {
+    const imported = match[1] ?? match[2];
+    if (imported.startsWith("./") || imported.startsWith("../")) {
+      testingClientPending.push(resolve(dirname(file), imported));
+    } else {
+      testingClientStatic.push(imported);
+    }
+  }
+  for (const match of code.matchAll(DYNAMIC_SPECIFIER)) {
+    testingClientDynamic.push(match[1]);
+  }
+}
+const forbidden = testingClientStatic.filter(
+  (imported) =>
+    isBuiltin(imported) ||
+    imported.startsWith("@testing-library/") ||
+    ["jsdom", "socket.io", "express"].includes(imported),
+);
+assert.deepEqual(forbidden, [], "./testing/client must not statically import these");
+assert.ok(
+  testingClientDynamic.includes("@testing-library/react"),
+  "./testing/client must import @testing-library/react lazily",
+);
+const serverSources = [...testingClientFiles].flatMap((file) =>
+  JSON.parse(readFileSync(`${file}.map`, "utf8"))
+    .sources.map((source) => relative(packageDir, resolve(dirname(file), source)))
+    .filter((source) => source.startsWith("src/server/")),
+);
+assert.deepEqual(serverSources, [], "./testing/client must not carry server code");
+
+// The built mock client, under plain Node: stubs answer calls, and keys are
+// the real client's.
+const testingClient = await import(`${pkg.name}/testing/client`);
+const mock = testingClient.createMockClient({ echo });
+mock.echo.say.mockResolvedValue("MOCKED");
+assert.equal(await mock.echo.say.call("hi"), "MOCKED");
+assert.deepEqual(mock.echo.say.calls, ["hi"]);
+assert.deepEqual(mock.echo.say.key("hi"), ["qd", "echoService", "m", "say", "hi"]);
+console.log(
+  `ok ${pkg.name}/testing/client loads Testing Library lazily, imports no jsdom or server code, and its mock client answers from stubs`,
 );
