@@ -1,3 +1,8 @@
+// Token storage and logout helpers for the browser, carried over unchanged
+// from 4.1 (`legacy-src/client/utils/auth.ts`). They read `localStorage` and
+// `window`, so they stay on `./client`; `parseJWTPayload`, which needs
+// neither, moved to the isomorphic `./utils` entry (`../utils/jwt.ts`).
+
 const AUTH_TOKEN_KEY = "auth_token";
 
 /**
@@ -24,40 +29,6 @@ export function clearAuthToken(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(AUTH_TOKEN_KEY);
   window.dispatchEvent(new Event("auth-token-changed"));
-}
-
-export interface JWTPayload {
-  userId: string;
-  email?: string;
-}
-
-/**
- * Parse JWT payload client-side (not verified, for display purposes only).
- */
-export function parseJWTPayload(token: string): JWTPayload | null {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3 || !parts[1]) return null;
-
-    const decoded = atob(parts[1]);
-    const payload: unknown = JSON.parse(decoded);
-
-    if (
-      typeof payload === "object" &&
-      payload !== null &&
-      "userId" in payload &&
-      typeof (payload as { userId: unknown }).userId === "string"
-    ) {
-      const typedPayload = payload as { userId: string; email?: string };
-      return {
-        userId: typedPayload.userId,
-        email: typedPayload.email,
-      };
-    }
-    return null;
-  } catch {
-    return null;
-  }
 }
 
 /**

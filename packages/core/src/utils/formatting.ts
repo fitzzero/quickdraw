@@ -1,3 +1,8 @@
+// Display formatting, carried over unchanged from 4.1
+// (`legacy-src/client/utils/formatting.ts`) except that the `value == null`
+// checks are spelled out. Pure and DOM-free: the `./utils` entry exports them
+// for React server components as well as the browser.
+
 /**
  * Format a currency value for display.
  */
@@ -6,7 +11,7 @@ export function formatCurrency(
   currency = "USD",
   locale = "en-US",
 ): string {
-  if (value == null) return "-";
+  if (value === null || value === undefined) return "-";
   const num = typeof value === "string" ? parseFloat(value) : value;
   if (isNaN(num)) return "-";
   return new Intl.NumberFormat(locale, {
@@ -23,7 +28,7 @@ export function formatNumber(
   options?: Intl.NumberFormatOptions,
   locale = "en-US",
 ): string {
-  if (value == null) return "-";
+  if (value === null || value === undefined) return "-";
   const num = typeof value === "string" ? parseFloat(value) : value;
   if (isNaN(num)) return "-";
   return new Intl.NumberFormat(locale, options).format(num);
@@ -90,7 +95,7 @@ export function formatPercent(
   decimals = 1,
   locale = "en-US",
 ): string {
-  if (value == null) return "-";
+  if (value === null || value === undefined) return "-";
   const num = typeof value === "string" ? parseFloat(value) : value;
   if (isNaN(num)) return "-";
   return new Intl.NumberFormat(locale, {

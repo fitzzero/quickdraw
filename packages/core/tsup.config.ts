@@ -8,8 +8,10 @@ import { defineConfig } from "tsup";
 // copy. Every dependency and peer dependency in package.json stays external.
 // esbuild keeps an entry point's directives, so the `"use client"` that opens
 // `src/client/index.ts` also opens `dist/client/index.js`; `tsup`'s rollup
-// `treeshake` pass would strip it, so it stays off. `scripts/dist-smoke.mjs`
-// checks the built output.
+// `treeshake` pass would strip it, so it stays off. The directive of any other
+// module is dropped when it is bundled, which is why `./utils` (no directive)
+// may share chunks with `./client`. `scripts/dist-smoke.mjs` checks the built
+// output.
 export default defineConfig({
   entry: {
     index: "src/index.ts",
@@ -18,6 +20,7 @@ export default defineConfig({
     "server/express/index": "src/server/express/index.ts",
     "server/mcp/index": "src/server/mcp/index.ts",
     "client/index": "src/client/index.ts",
+    "utils/index": "src/utils/index.ts",
     parser: "src/protocol/parser.ts",
     "prisma/index": "src/prisma/index.ts",
     "testing/index": "src/testing/index.ts",

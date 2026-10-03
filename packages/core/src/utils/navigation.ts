@@ -1,3 +1,7 @@
+// Navigation helpers, carried over unchanged from 4.1
+// (`legacy-src/client/utils/navigation.ts`). Pure and DOM-free: the `./utils`
+// entry exports them for React server components as well as the browser.
+
 export interface NavItem {
   id: string;
   label: string;

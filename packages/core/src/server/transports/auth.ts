@@ -59,8 +59,9 @@ export type AuthenticateResult<P extends Principal> =
 export interface ServerAuth<P extends Principal = Principal> {
   /**
    * Says who is calling. Throwing refuses the socket connection ("Authentication
-   * failed") or answers the HTTP call with `UNAUTHENTICATED`; returning
-   * nothing lets the caller in anonymously, so only `"public"` methods pass.
+   * failed", with `{ code: "UNAUTHENTICATED" }` as the `connect_error` data) or
+   * answers the HTTP call with `UNAUTHENTICATED`; returning nothing lets the
+   * caller in anonymously, so only `"public"` methods pass.
    */
   readonly authenticate?: (request: AuthenticateRequest) => MaybePromise<AuthenticateResult<P>>;
   /**
