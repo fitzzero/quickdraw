@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../contract/logger";
 import { nextRev } from "../rev";
-import { combineSinks, flushWrites } from "./flush";
+import { combineSinks, flushWrites, inRevisionOrder } from "./flush";
 import { noFlushSink, type FlushInfo, type FlushSink } from "./flushSink";
 import type { UnitOfWorkScope, WriteRecord } from "./types";
 
@@ -137,6 +137,58 @@ describe("flushWrites", () => {
     expect(logger.entries).toEqual([
       { level: "error", message: "Flushing writes failed; the response was already sent" },
     ]);
+  });
+});
+
+describe("inRevisionOrder", () => {
+  const info = (rev: number): FlushInfo => ({ requestId: `r${rev}`, transport: "internal", rev });
+
+  it("runs each flush once the one before has finished, and goes on past a failure", async () => {
+    const events: string[] = [];
+    let release = (): void => undefined;
+    const slow = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const ordered = inRevisionOrder({
+      flush: async (_writes, { rev }) => {
+        events.push(`start ${rev}`);
+        if (rev === 1) {
+          await slow;
+        }
+        events.push(`end ${rev}`);
+        if (rev === 2) {
+          throw new Error("sink broke");
+        }
+      },
+    });
+    const first = ordered.flush([update("t1", "title")], info(1));
+    const second = ordered.flush([update("t1", "status")], info(2));
+    const third = ordered.flush([update("t1", "notes")], info(3));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    expect(events).toEqual(["start 1"]);
+    release();
+    await first;
+    await expect(second).rejects.toThrow("sink broke");
+    await third;
+    expect(events).toEqual(["start 1", "end 1", "start 2", "end 2", "start 3", "end 3"]);
+  });
+
+  it("runs a flush started inside a run at once, rather than after the run that waits for it", async () => {
+    const events: string[] = [];
+    const ordered: FlushSink = inRevisionOrder({
+      flush: async (_writes, { rev }) => {
+        events.push(`start ${rev}`);
+        if (rev === 1) {
+          // A sink that writes through qd.run flushes from inside this run.
+          await ordered.flush([update("t2", "title")], info(2));
+        }
+        events.push(`end ${rev}`);
+      },
+    });
+    await ordered.flush([update("t1", "title")], info(1));
+    expect(events).toEqual(["start 1", "start 2", "end 2", "end 1"]);
   });
 });
 

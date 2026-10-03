@@ -8,7 +8,7 @@ import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, type TestApp } from "../../testing/index";
 import { deferred } from "../__tests__/fixtures";
 import { as, seedBoard, type Board } from "../access/__tests__/board";
-import type { Principal } from "../index";
+import type { Principal, StorageAdapter } from "../index";
 import {
   cardService,
   defineTaskService,
@@ -264,6 +264,47 @@ describe("frames after a flush", () => {
         d: { title: "Renamed", updatedAt: updated.updatedAt.toISOString() },
       },
     ]);
+  });
+
+  it("sends concurrent flushes in revision order, so a client merging newer patches keeps both", async () => {
+    // The title patch's read is slow, as a pool's slower connection would be.
+    const slow: StorageAdapter = Object.freeze({
+      ...h.storage,
+      findMany: async (model: string, args?: Readonly<Record<string, unknown>>) => {
+        const select = (args?.select ?? {}) as Record<string, unknown>;
+        if (model === "task" && select.title === true && select.status === undefined) {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 50);
+          });
+        }
+        return await h.storage.findMany(model, args);
+      },
+    });
+    const app = await createTestApp({
+      services: [projectService, defineTaskService(), cardService],
+      db: h.db,
+      storage: slow,
+    });
+    apps.push(app as unknown as TestApp);
+    const { connection, frames } = await connect(app as unknown as App, as(board.ada));
+    await sub(connection, "taskService", [board.t1]);
+    const caller = app.as(as(board.ada)).taskService;
+    await Promise.all([
+      caller.rename({ id: board.t1, title: "New title" }),
+      new Promise((resolve) => {
+        setTimeout(resolve, 5);
+      }).then(() => caller.setStatus({ id: board.t1, status: "done" })),
+    ]);
+    await frames.settle();
+    const revs = frames.entity.map((frame) => frame.rev);
+    expect(revs).toEqual([...revs].sort((a, b) => a - b));
+    let held: Record<string, unknown> & { rev: number } = { rev: 0, title: "T1", status: "open" };
+    for (const frame of frames.entity) {
+      if (frame.t === "p" && frame.rev > held.rev) {
+        held = { ...held, ...(frame.d as object), rev: frame.rev };
+      }
+    }
+    expect(held).toMatchObject({ title: "New title", status: "done" });
   });
 
   it("sends ten updates in one call as one frame", async () => {

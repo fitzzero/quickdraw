@@ -14,7 +14,7 @@ import { QuickdrawError } from "../../protocol/errors";
 import type { BaseContext } from "../context";
 import type { Registry } from "../registry";
 import { modelKey, storageOf, type StorageAdapter } from "../storage";
-import { combineSinks } from "../uow/flush";
+import { combineSinks, inRevisionOrder } from "../uow/flush";
 import type { FlushSink } from "../uow/flushSink";
 import type { UnitOfWorkFactory } from "../uow/types";
 import { untrackedUnitOfWork } from "../uow/untracked";
@@ -40,7 +40,7 @@ export interface TrackingOptions {
 export interface Tracking {
   readonly storage: StorageAdapter | undefined;
   readonly unitOfWork: UnitOfWorkFactory;
-  /** The sinks, combined into one. */
+  /** The sinks, combined into one that runs flushes in revision order. */
   readonly flushSink: FlushSink;
   /** Every call's `ctx.touch`. */
   readonly touch: BaseContext["touch"];
@@ -114,7 +114,7 @@ export function resolveTracking(
   return {
     storage,
     unitOfWork,
-    flushSink: combineSinks([...own, ...sinksOf(options.flushSink)], logger),
+    flushSink: inRevisionOrder(combineSinks([...own, ...sinksOf(options.flushSink)], logger)),
     touch,
   };
 }

@@ -4,7 +4,13 @@
 // order they were given. A sink that throws is logged with the rows it
 // failed on; every other sink then hears about it through `onFlushError`.
 // Nothing here rejects: the caller's response was already sent.
+//
+// A dispatcher runs its flushes one after another, in revision order
+// (`inRevisionOrder`): a flush's sinks run once every flush with a lower
+// revision has finished its own, so frames leave in revision order and a
+// client that merges a patch only "when rev is newer" never drops one.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Logger } from "../../contract/logger";
 import { describeError } from "../pipeline/metrics";
 import { nextRev } from "../rev";
@@ -94,6 +100,30 @@ async function reportFailures(
       );
     }
   }
+}
+
+/**
+ * A sink that runs the flushes it receives one at a time, in the order they
+ * arrive, which is revision order: `flushWrites` takes a flush's revision
+ * and hands the batch over in one synchronous step. A flush waits until the
+ * flush before it has finished every sink; one that fails does not hold up
+ * the next. A flush started from inside one of these runs (a sink that
+ * writes through `qd.run`) runs at once instead: waiting for the run that
+ * started it would never end.
+ */
+export function inRevisionOrder(sink: FlushSink): FlushSink {
+  const running = new AsyncLocalStorage<true>();
+  let last: Promise<void> = Promise.resolve();
+  return Object.freeze({
+    flush(writes: readonly WriteRecord[], info: FlushInfo): Promise<void> {
+      if (running.getStore() === true) {
+        return sink.flush(writes, info);
+      }
+      const run = last.then(() => running.run(true, () => sink.flush(writes, info)));
+      last = run.catch(() => undefined);
+      return run;
+    },
+  });
 }
 
 /**
