@@ -51,6 +51,9 @@ export function isProtocolMismatch(value: unknown): value is ProtocolMismatch {
   return isRecord(value) && value.code === PROTOCOL_MISMATCH && Number.isInteger(value.expected);
 }
 
+/** The most ids one `qd:sub` may name (RFC 0003 section 6), as `qd:hello` announces it. */
+export const MAX_SUBSCRIBE_IDS = 500;
+
 /** The limits a server announces in `qd:hello`, so a client can stay inside them. */
 export interface HelloLimits {
   /** Queries one socket may have running at once; more wait in a queue (RFC 0003 section 9). */

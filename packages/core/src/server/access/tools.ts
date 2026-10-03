@@ -44,6 +44,17 @@ export interface PolicyCall {
   levels(binding: Binding, principal: Principal, ids: readonly string[]): Promise<RowLevels>;
   /** The policy's filter for `level`: no service grants. */
   where(binding: Binding, principal: Principal, level: AccessLevel): Promise<AccessFilter>;
+  /**
+   * The rows each of `ids`'s level is derived from, as `anchorKey`s: the row
+   * itself, then its `inherit` parents up the chain. After `levels` in the
+   * same call, the parents' ids come from the rows it already read.
+   */
+  anchors(binding: Binding, ids: readonly string[]): Promise<Map<string, string[]>>;
+}
+
+/** The key of the anchor `id` of `service`: a row a level is derived from. */
+export function anchorKey(service: string, id: string): string {
+  return `${service}\u0000${id}`;
 }
 
 /** What one call's tools share. */
@@ -191,6 +202,32 @@ function toolsFor(scope: CallScope, binding: Binding): PolicyTools {
   return tools;
 }
 
+/** `PolicyCall.anchors`: each row, then the anchors of its `inherit` parents. */
+async function anchorsOf(
+  scope: CallScope,
+  binding: Binding,
+  ids: readonly string[],
+): Promise<Map<string, string[]>> {
+  const anchors = new Map(ids.map((id) => [id, [anchorKey(binding.service.name, id)]]));
+  for (const link of binding.policy.reads.parents ?? []) {
+    const rows = await toolsFor(scope, binding).rows(ids);
+    const parentOf = new Map<string, string>();
+    for (const id of ids) {
+      const parent = rows.get(id)?.[link.via];
+      if (typeof parent === "string" && parent.length > 0) {
+        parentOf.set(id, parent);
+      }
+    }
+    const parents = await anchorsOf(scope, bindingOf(scope.state, link.from), [
+      ...new Set(parentOf.values()),
+    ]);
+    for (const [id, parent] of parentOf) {
+      anchors.get(id)?.push(...(parents.get(parent) ?? []));
+    }
+  }
+  return anchors;
+}
+
 /** Starts one engine call over `state`: its lookups share one memo. */
 export function startCall(state: EngineState): PolicyCall {
   const memo = createRequestMemo();
@@ -213,6 +250,7 @@ export function startCall(state: EngineState): PolicyCall {
         ),
       where: (binding, principal, level) =>
         binding.policy.accessWhere(principal, level, toolsFor(scope, binding)),
+      anchors: (binding, ids) => anchorsOf(scope, binding, ids),
     },
   };
   return scope.call;

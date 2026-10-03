@@ -111,10 +111,17 @@ export type SocketRateLimitOptions = Omit<RateLimitOptions, "logger" | "ackPaylo
 
 /**
  * Events the limiter never counts: channel messages, which carry their own
- * per-socket token buckets, and cancellations, since dropping one only keeps
- * a call running.
+ * per-socket token buckets; cancellations, since dropping one only keeps a
+ * call running; and entity subscriptions, which a page sends once per row it
+ * mounts in batches of up to 500 ids, so a board of sixty rows would trip the
+ * limiter (RFC 0003 section 3).
  */
-const UNLIMITED_EVENTS: readonly string[] = [CLIENT_EVENTS.channel, CLIENT_EVENTS.cancel];
+const UNLIMITED_EVENTS: readonly string[] = [
+  CLIENT_EVENTS.channel,
+  CLIENT_EVENTS.cancel,
+  CLIENT_EVENTS.sub,
+  CLIENT_EVENTS.unsub,
+];
 
 function rateLimited(retryAfterMs: number): Failure {
   return {

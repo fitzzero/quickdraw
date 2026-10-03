@@ -5,6 +5,7 @@ import type { DefaultEventsMap, Server, Socket } from "socket.io";
 import type { Logger } from "../../contract/logger";
 import type { PROTOCOL_VERSION } from "../../protocol/version";
 import type { Dispatcher } from "../dispatcher";
+import type { EntitySubscriptions } from "../emit/subscriptions";
 import type { Principal } from "../types";
 import type { ReplyMeter } from "./ack";
 
@@ -16,6 +17,12 @@ export interface QuickdrawSocketData<P extends Principal = Principal> {
   protocol: typeof PROTOCOL_VERSION | "legacy";
   /** The v5 client package's version from its handshake; absent for a 4.x client. */
   client?: string;
+  /**
+   * The socket's entity subscriptions (`qd:sub`), by service and row id: the
+   * level whose room it is in, and the rows that level is derived from
+   * (RFC 0003 section 4.4). Plain data; the server keeps it.
+   */
+  entities?: EntitySubscriptions;
 }
 
 /** The Socket.IO server `createServer` returns. Events are untyped, so apps may emit their own. */

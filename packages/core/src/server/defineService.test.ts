@@ -72,8 +72,8 @@ describe("defineService", () => {
       '"archive" is not a method of the contract',
     );
     expect(() => defineLoosely(task, {})).toThrow("methods must be an object");
-    expect(() => defineLoosely(task, { methods: taskDefaults, writes: ["taskLabel"] })).toThrow(
-      'the definition has an unknown option "writes"',
+    expect(() => defineLoosely(task, { methods: taskDefaults, relations: ["taskLabel"] })).toThrow(
+      'the definition has an unknown option "relations"',
     );
     expect(() => defineLoosely({ name: "taskService" }, { methods: {} })).toThrow(
       "the first argument must be a contract from defineContract",

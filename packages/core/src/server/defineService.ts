@@ -6,9 +6,11 @@
 //
 // - its keys must be exactly the contract's method names;
 // - each handler receives `{ input, ctx, db }` with the parsed input
-//   (`ParsedInputOf`), and must return the method's output (`OutputOf`): a
-//   row of the projection for a projection output, wrapped by `nullable` and
-//   `listOf`;
+//   (`ParsedInputOf`), and returns the method's output: its schema's type,
+//   or for a projection output the database row the framework projects
+//   (`HandlerOutputOf`: `Date` values allowed, extra columns allowed, and
+//   what the projection's `map` takes when it has one), wrapped by
+//   `nullable` and `listOf`;
 // - `access` is required, and its form decides `ctx.principal`: nullable
 //   under `"public"` only;
 // - `share`, `ttlMs` and `version` exist for queries only, `ttlMs` needs
@@ -23,16 +25,20 @@
 // `Model` and `Policy`. The policy's column names are checked against the
 // model's columns in the app's database client, and they decide which
 // row-level forms the methods may use: `entry` needs a policy, `scope` a
-// model.
+// model. `project` is inferred into `Proj`, so a projection's `map` types
+// the handlers that return it.
 
 import type { AnyContract } from "../contract/defineContract";
-import type { KindOf, MethodName, OutputOf, ParsedInputOf } from "../contract/infer";
+import type { KindOf, MethodName, ParsedInputOf } from "../contract/infer";
 import type { Version } from "../protocol/envelope";
-import type { ModelName, PolicyFor } from "./access/policy";
+import type { ModelColumn, ModelName, PolicyFor } from "./access/policy";
 import type { AccessFor, CustomAccess, PublicAccess, RowForms } from "./access/types";
 import type { HandlerArgs, HandlerContext } from "./context";
 import type { Service, ShareMode } from "./service";
+import type { AffectsOption, HandlerOutputOf, ProjectCheck } from "./serviceTypes";
 import type { DbOf, MaybePromise, PrincipalOf, QuickdrawTypes } from "./types";
+
+type Empty = Record<never, never>;
 
 /** The principal a method's handler sees: `null` is possible under `"public"` access only. */
 export type PrincipalFor<T extends QuickdrawTypes, Access> = Access extends PublicAccess
@@ -115,12 +121,18 @@ export type MethodImplementation<
   M extends MethodName<C>,
   A,
   Rows extends RowForms = "all",
+  Proj = Empty,
 > = {
   /** Who may call: `"public"`, `"authenticated"`, `{ service }`, `{ entry }`, `{ scope, of, id }` or `custom(fn)`. */
   readonly access: A | NoInfer<MethodAccess<T, C, M, Rows>>;
+  /**
+   * Runs the method. For a projection output it returns the database row
+   * (or rows, or `null`), which the framework projects: only the
+   * projection's keys are sent, dates as ISO strings.
+   */
   readonly handler: (
     args: HandlerArgs<T, ParsedInputOf<C, M>, PrincipalFor<T, A>>,
-  ) => MaybePromise<OutputOf<C, M>>;
+  ) => MaybePromise<HandlerOutputOf<C, M, Proj>>;
   /** This method's time limit in milliseconds, instead of the dispatcher's `callTimeoutMs`. */
   readonly timeoutMs?: number;
 } & (KindOf<C, M> extends "query" ? QueryOptions<T, C, M, A> : MutationOptions);
@@ -130,6 +142,11 @@ type NotAMethod<
   M,
 > = `defineService: "${M & string}" is not a method of ${C["name"]}`;
 
+/** The columns of the service's model, when it declares one. */
+type ColumnOf<T extends QuickdrawTypes, Model> = Model extends string
+  ? ModelColumn<DbOf<T>, Model>
+  : never;
+
 /** The second argument of `qd.defineService`. */
 export interface ServiceDefinition<
   T extends QuickdrawTypes,
@@ -137,24 +154,46 @@ export interface ServiceDefinition<
   A,
   Model = undefined,
   Policy = undefined,
+  Proj = Empty,
 > {
   /**
    * The database model the service's rows live in, named as the client names
-   * it (`"task"`). Needed for an access policy and for `scope` access; an
-   * RPC-only service leaves it out.
+   * it (`"task"`). Needed for an access policy, for `scope` access and for
+   * entity subscriptions; an RPC-only service leaves it out.
    */
   readonly model?: Model;
   /**
    * How a principal's level on one of the service's rows is found:
    * `owner(field)`, `jsonAcl(field)`, `members({...})`, `inherit({...})`,
-   * `anyOf(...)` or `resolver({...})`. Needed for `entry` access. The column
-   * names it uses must be columns of `model`.
+   * `anyOf(...)` or `resolver({...})`. Needed for `entry` access and for
+   * entity subscriptions. The column names it uses must be columns of `model`.
    */
   readonly access?: Policy;
+  /** Other models the service's handlers write besides `model`, as the client names them (`"taskLabel"`). */
+  readonly writes?: readonly ModelName<DbOf<T>>[];
+  /**
+   * Rows of other services a write to one of this service's rows changes
+   * too, sent again after the flush (one hop): `[{ service: task, id:
+   * "parentTaskId" }]`. Needs `model`.
+   */
+  readonly affects?: readonly AffectsOption<ColumnOf<T, Model>>[];
+  /**
+   * Options per projection (`"entity"` or a named one): `keys` for a schema
+   * that cannot list them, and `select` plus `map` for relations and
+   * computed fields.
+   */
+  readonly project?: Proj & NoInfer<ProjectCheck<C, Proj>>;
+  /**
+   * A column of `model` holding when the row last changed (`"updatedAt"`). A
+   * caller that holds a row from no earlier than that time gets "not
+   * modified" instead of the row. Without it, the in-process change log
+   * answers.
+   */
+  readonly versionColumn?: ColumnOf<T, Model>;
   /** One implementation per contract method: no more, no fewer. */
   readonly methods: {
     readonly [M in keyof A]: M extends MethodName<C>
-      ? MethodImplementation<T, C, M, A[M], RowFormsOf<Model, Policy>>
+      ? MethodImplementation<T, C, M, A[M], RowFormsOf<Model, Policy>, NoInfer<Proj>>
       : NotAMethod<C, M>;
   };
   /**
@@ -174,7 +213,8 @@ export type DefineService<T extends QuickdrawTypes> = <
     C,
     RowFormsOf<Model, Policy>
   >,
+  const Proj = Empty,
 >(
   contract: C,
-  definition: ServiceDefinition<T, C, A, Model, Policy>,
+  definition: ServiceDefinition<T, C, A, Model, Policy, Proj>,
 ) => Service<T, C>;

@@ -6,8 +6,8 @@
 import type { AnyContract } from "../contract/defineContract";
 import type { MethodDef } from "../contract/methods";
 import { accessFormProblem, isCustomAccess } from "./access/forms";
-import { isAccessPolicy, type AnyAccessPolicy } from "./access/policy";
 import type { AccessForm } from "./access/types";
+import { compileProjections, projectedOutput, type Projection } from "./emit/projection";
 import { MAX_TIMEOUT_MS } from "./pipeline/settings";
 import { outputSchemaOf } from "./pipeline/validation";
 import {
@@ -17,12 +17,22 @@ import {
   type ServiceMethod,
   type ServiceRuntime,
 } from "./service";
+import { checkServiceData, type ServiceData } from "./serviceData";
 
 type Fail = (message: string) => never;
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
-const DEFINITION_KEYS = new Set(["model", "access", "methods", "adminBypass"]);
+const DEFINITION_KEYS = new Set([
+  "model",
+  "access",
+  "writes",
+  "affects",
+  "project",
+  "versionColumn",
+  "methods",
+  "adminBypass",
+]);
 
 const METHOD_KEYS = new Set(["access", "handler", "share", "ttlMs", "timeoutMs", "version"]);
 
@@ -94,6 +104,7 @@ function checkQueryOptions(
 
 function checkMethod(
   contract: AnyContract,
+  projections: ReadonlyMap<string, Projection>,
   name: string,
   entry: unknown,
   fail: Fail,
@@ -125,6 +136,7 @@ function checkMethod(
     kind: def.kind,
     input: def.input,
     output: outputSchemaOf(contract, def.output),
+    projection: projectedOutput(def.output, projections),
     access: entry.access as AccessForm,
     handler: entry.handler as AnyHandler,
     share: entry.share as ServiceMethod["share"],
@@ -136,6 +148,7 @@ function checkMethod(
 
 function checkMethods(
   contract: AnyContract,
+  projections: ReadonlyMap<string, Projection>,
   value: unknown,
   fail: Fail,
 ): Record<string, ServiceMethod> {
@@ -148,27 +161,9 @@ function checkMethods(
   }
   const methods: Record<string, ServiceMethod> = {};
   for (const [name, entry] of Object.entries(value)) {
-    methods[name] = checkMethod(contract, name, entry, fail);
+    methods[name] = checkMethod(contract, projections, name, entry, fail);
   }
   return methods;
-}
-
-/** The service's `model` and `access`: a policy reads rows of the service's own model, so it needs one. */
-function checkData(
-  definition: UnknownRecord,
-  fail: Fail,
-): { model: string | undefined; access: AnyAccessPolicy | undefined } {
-  const { model, access } = definition;
-  if (model !== undefined && (typeof model !== "string" || model.length === 0)) {
-    fail('model must be the database model the rows live in, as the client names it ("task")');
-  }
-  if (access !== undefined && !isAccessPolicy(access)) {
-    fail("access must be an access policy: owner, jsonAcl, members, inherit, anyOf or resolver");
-  }
-  if (access !== undefined && model === undefined) {
-    fail("access needs model: an access policy reads the rows of the service's model");
-  }
-  return { model, access };
 }
 
 /**
@@ -179,7 +174,7 @@ function checkData(
  */
 function checkRowForms(
   methods: Readonly<Record<string, ServiceMethod>>,
-  data: { model: string | undefined; access: AnyAccessPolicy | undefined },
+  data: ServiceData,
   fail: Fail,
 ): void {
   for (const method of Object.values(methods)) {
@@ -218,14 +213,15 @@ export function buildService(
   if (typeof adminBypass !== "boolean") {
     fail("adminBypass must be a boolean");
   }
-  const data = checkData(definition, fail);
-  const methods = checkMethods(checked, definition.methods, fail);
+  const data = checkServiceData(definition, fail);
+  const projections = compileProjections(checked, definition.project, fail);
+  const methods = checkMethods(checked, projections, definition.methods, fail);
   checkRowForms(methods, data, fail);
   const service: AnyService = Object.freeze({
     name: checked.name,
     contract: checked,
-    model: data.model,
-    access: data.access,
+    ...data,
+    projections,
     adminBypass,
     methods: Object.freeze(methods),
   });
