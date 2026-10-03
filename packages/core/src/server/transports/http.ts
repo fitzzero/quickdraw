@@ -13,7 +13,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { consoleLogger, type Logger } from "../../contract/logger";
-import { httpStatus, INTERNAL_MESSAGE, QuickdrawError } from "../../protocol/errors";
+import { httpStatus, INTERNAL_MESSAGE, QuickdrawError, toWire } from "../../protocol/errors";
 import type { Dispatcher } from "../dispatcher";
 import { describeError } from "../pipeline/metrics";
 import { toCallReply, type DispatchResult } from "../pipeline/request";
@@ -106,7 +106,8 @@ function retryAfterSeconds(result: DispatchResult): number | undefined {
 }
 
 function encode(settings: HttpRouterSettings, result: DispatchResult): [number, string] {
-  const status = result.ok ? 200 : httpStatus(result.error.code);
+  // The status of the code the reply carries, which `toWire` keeps to the known codes.
+  const status = result.ok ? 200 : httpStatus(toWire(result.error).code);
   try {
     return [status, JSON.stringify(toCallReply(result))];
   } catch (error) {

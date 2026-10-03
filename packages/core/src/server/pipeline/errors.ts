@@ -1,11 +1,14 @@
 // How the pipeline turns whatever a stage or handler threw into the error the
-// caller receives (RFC 0003 section 3). A `QuickdrawError` passes through.
-// Prisma's two known request errors that callers can act on become
-// `CONFLICT` and `NOT_FOUND`. Everything else becomes `INTERNAL` with the
-// generic message, keeping the original as `cause` for the log and for
-// in-process callers; `toWire` never sends it.
+// caller receives (RFC 0003 section 3). A `QuickdrawError` with one of the
+// error codes passes through. Prisma's two known request errors that callers
+// can act on become `CONFLICT` and `NOT_FOUND`. Everything else becomes
+// `INTERNAL` with the generic message, keeping the original as `cause` for
+// the log and for in-process callers; `toWire` never sends it. That includes
+// a `QuickdrawError` whose code is not one of the error codes, which a cast or
+// a 4.x port (`new QuickdrawError(404, ...)`) can build: no transport has a
+// reply or an HTTP status for it.
 
-import { INTERNAL_MESSAGE, QuickdrawError } from "../../protocol/errors";
+import { INTERNAL_MESSAGE, isErrorCode, QuickdrawError } from "../../protocol/errors";
 
 /** The error a cancelled call settles with. */
 export function cancelledError(): QuickdrawError {
@@ -40,10 +43,11 @@ function prismaError(error: unknown): QuickdrawError | undefined {
 
 /**
  * The `QuickdrawError` a caller receives for `error`. Anything but a
- * `QuickdrawError` keeps the original as `cause`, so it can be logged in full.
+ * `QuickdrawError` with a known code becomes another error that keeps the
+ * original as `cause`, so it can be logged in full.
  */
 export function toQuickdrawError(error: unknown): QuickdrawError {
-  if (error instanceof QuickdrawError) {
+  if (error instanceof QuickdrawError && isErrorCode(error.code)) {
     return error;
   }
   const mapped = prismaError(error) ?? new QuickdrawError("INTERNAL", INTERNAL_MESSAGE);

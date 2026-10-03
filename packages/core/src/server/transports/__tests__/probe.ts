@@ -1,9 +1,17 @@
 // A service for the transport tests: it echoes who called and how, fails with
-// any error code on request, waits on gates the test opens, returns values
-// that cannot be encoded, and has a method that needs a Moderate grant.
+// any error code on request (or with a code no version knows), waits on gates
+// the test opens, returns values that cannot be encoded, and has a method
+// that needs a Moderate grant.
 
 import { z } from "zod";
-import { ERROR_CODES, QuickdrawError, defineContract, mutation, query } from "../../../index";
+import {
+  ERROR_CODES,
+  QuickdrawError,
+  defineContract,
+  mutation,
+  query,
+  type ErrorCode,
+} from "../../../index";
 import { deferred, qd, type Deferred } from "../../__tests__/fixtures";
 
 export const probe = defineContract("probeService", {
@@ -18,6 +26,11 @@ export const probe = defineContract("probeService", {
       }),
     }),
     fail: query({ input: z.object({ code: z.enum(ERROR_CODES) }), output: z.null() }),
+    /** Throws a `QuickdrawError` whose code is not one of ERROR_CODES, as a cast or a 4.x port can. */
+    failOddly: mutation({
+      input: z.object({ code: z.union([z.string(), z.number()]) }),
+      output: z.null(),
+    }),
     wait: query({ input: z.object({ key: z.string() }), output: z.string() }),
     unencodable: query({ input: z.undefined(), output: z.unknown() }),
     moderate: mutation({ input: z.object({ value: z.number() }), output: z.number() }),
@@ -44,6 +57,12 @@ export function createProbe() {
         handler: ({ input }) => {
           const data = input.code === "RATE_LIMITED" ? { retryAfterMs: 1500 } : undefined;
           throw new QuickdrawError(input.code, `Failed with ${input.code}`, data);
+        },
+      },
+      failOddly: {
+        access: "public",
+        handler: ({ input }) => {
+          throw new QuickdrawError(input.code as ErrorCode, `Failed with ${input.code}`);
         },
       },
       wait: {

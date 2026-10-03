@@ -84,6 +84,19 @@ describe("a v5 call", () => {
     }
   });
 
+  it("answers a code outside ERROR_CODES as INTERNAL, and records it so", async () => {
+    const { url, records, logger } = await serve();
+    const socket = await connect(url);
+    expect(
+      await call(socket, { id: 1, s: "probeService", m: "failOddly", i: { code: 404 } }),
+    ).toEqual({ ok: false, e: { code: "INTERNAL", message: "Internal error" } });
+    expect(records.map((record) => record.outcome)).toEqual(["INTERNAL"]);
+    expect(logger.at("error")[0]?.meta?.error).toMatchObject({
+      code: "INTERNAL",
+      cause: { name: "QuickdrawError", code: 404, message: "Failed with 404" },
+    });
+  });
+
   it("carries the pipeline's own failures: unknown names, invalid input, no principal, no grant", async () => {
     const { url } = await serve();
     const socket = await connect(url);

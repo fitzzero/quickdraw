@@ -275,6 +275,27 @@ describe("requests the transport refuses", () => {
     });
     expect(await post(url, "/qd/chatService/get")).toMatchObject({ status: 404 });
   });
+
+  it("answers a code outside ERROR_CODES as INTERNAL with 500, logging the original", async () => {
+    const { url, logger, records } = await serve();
+    for (const code of [404, "GONE"]) {
+      // Before, the status was computed from the raw code, `res.end` threw, and
+      // the request never got a reply.
+      const answer = await post(url, "/qd/probeService/failOddly", {
+        body: JSON.stringify({ code }),
+        signal: AbortSignal.timeout(2_000),
+      });
+      expect(answer).toMatchObject({
+        status: 500,
+        body: { ok: false, e: { code: "INTERNAL", message: "Internal error" } },
+      });
+    }
+    expect(records.map((record) => record.outcome)).toEqual(["INTERNAL", "INTERNAL"]);
+    expect(logger.at("error").map((entry) => entry.meta?.error)).toEqual([
+      expect.objectContaining({ cause: expect.objectContaining({ code: 404 }) }),
+      expect.objectContaining({ cause: expect.objectContaining({ code: "GONE" }) }),
+    ]);
+  });
 });
 
 describe("a request that goes away", () => {

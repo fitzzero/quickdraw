@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { QuickdrawError } from "../../protocol/errors";
+import { QuickdrawError, type ErrorCode } from "../../protocol/errors";
 import { deferred, tick } from "../__tests__/fixtures";
 import { untrackedUnitOfWork } from "../uow/untracked";
 import type { UnitOfWorkScope } from "../uow/types";
@@ -285,5 +285,17 @@ describe("issues and errors", () => {
       "Internal error",
       "a string",
     ]);
+  });
+
+  it("wraps a QuickdrawError whose code is not one of ERROR_CODES as INTERNAL", () => {
+    for (const code of [404, "GONE", undefined]) {
+      const odd = new QuickdrawError(code as unknown as ErrorCode, "Not found");
+      const wrapped = toQuickdrawError(odd);
+      expect([wrapped.code, wrapped.message, wrapped.cause]).toEqual([
+        "INTERNAL",
+        "Internal error",
+        odd,
+      ]);
+    }
   });
 });
