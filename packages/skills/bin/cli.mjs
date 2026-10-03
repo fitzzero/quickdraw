@@ -14,12 +14,17 @@
 //   quickdraw-skills link           create or refresh the links, prune stale ones (the default)
 //   quickdraw-skills link --check   change nothing; exit 1 when a link is missing, stale or dangling
 //
-// Only links this package owns (their target contains
-// `quickdraw-skills/skills/` or `quickdraw-skills/rules/`, or resolves into
-// this package) are ever replaced or pruned. A real file or directory, and
-// another package's link, are left alone with a warning, even when they take
-// the name of one of this package's rules or skills: that is how an app keeps
-// its own version of one.
+// Only links this package owns (their target has the path segments
+// `@fitzzero/quickdraw-skills/skills/` or `@fitzzero/quickdraw-skills/rules/`,
+// or lands in this package's directory) are ever replaced or pruned. A real
+// file or directory, and another package's link, are left alone with a
+// warning, even when they take the name of one of this package's rules or
+// skills: that is how an app keeps its own version of one.
+//
+// Links are only written into real directories of the repo: when `.claude`
+// or `.claude/<kind>` is a symlink, or resolves outside the repo, that kind is
+// left alone with a warning, since relative links written through it would
+// land elsewhere (a shared or global directory) and resolve against it.
 
 import {
   existsSync,
@@ -151,14 +156,68 @@ function planKind(kind) {
   };
 }
 
-/** True when the symlink at `linkPath` belongs to this package. */
+/** True when the path `target` has the segments `@fitzzero/quickdraw-skills/<kind>/` in it. */
+function namesPackage(target, kind) {
+  const segments = target.split(sep);
+  const [scope, name] = PACKAGE.split("/");
+  return segments.some(
+    (segment, index) =>
+      segment === scope &&
+      segments[index + 1] === name &&
+      segments[index + 2] === kind &&
+      index + 3 < segments.length,
+  );
+}
+
+/** True when `path` lies inside `dir`. */
+function inside(path, dir) {
+  return path.startsWith(`${dir}${sep}`);
+}
+
+/**
+ * True when the symlink at `linkPath` belongs to this package: its target
+ * names the installed package, or it lands in this package's directory (as
+ * written, or through any symlink on the way).
+ */
 function ownedBy(plan, linkPath) {
   const target = targetOf(linkPath);
-  if (target.includes(`quickdraw-skills${sep}${plan.kind}${sep}`)) {
+  if (namesPackage(target, plan.kind)) {
     return true;
   }
   const landing = resolve(dirname(linkPath), target);
-  return landing.startsWith(`${plan.sourceDir}${sep}`);
+  if (inside(landing, plan.sourceDir)) {
+    return true;
+  }
+  try {
+    return inside(realpathSync(landing), plan.sourceDir);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Why this package's links cannot go into `.claude/<kind>`, or `undefined`:
+ * `.claude` or `.claude/<kind>` is a symlink, or resolves outside the repo.
+ * A directory that does not exist yet is created inside the repo.
+ */
+function refusal(plan) {
+  const realRoot = realpathSync(repoRoot);
+  for (const [dir, shown] of [
+    [dirname(plan.linkDir), ".claude"],
+    [plan.linkDir, `.claude/${plan.kind}`],
+  ]) {
+    if (!occupied(dir)) {
+      return undefined;
+    }
+    if (isSymlink(dir)) {
+      return `${shown} is a symlink (to ${targetOf(dir)})`;
+    }
+    const real = realpathSync(dir);
+    if (!inside(real, realRoot)) {
+      return `${shown} resolves outside the repo (to ${real})`;
+    }
+  }
+  return undefined;
 }
 
 /** What `--check` and `link` found and did, for the summary. */
@@ -235,8 +294,18 @@ function pruneKind(plan) {
   }
 }
 
-const plans = KINDS.map(planKind);
-for (const plan of plans) {
+const plans = [];
+const leftAlone = [];
+for (const plan of KINDS.map(planKind)) {
+  const refused = refusal(plan);
+  if (refused !== undefined) {
+    warn(
+      `${refused}: left alone, since links written through it would not resolve in this repo; make it a real directory to link this package's ${plan.kind}`,
+    );
+    leftAlone.push(`.claude/${plan.kind}`);
+    continue;
+  }
+  plans.push(plan);
   if (!check) {
     mkdirSync(plan.linkDir, { recursive: true });
   }
@@ -246,14 +315,15 @@ for (const plan of plans) {
   pruneKind(plan);
 }
 
-const counts = plans.map((plan) => `${plan.names.length} ${plan.kind}`).join(" and ");
+const counts = plans.map((plan) => `${plan.names.length} ${plan.kind}`).join(" and ") || "nothing";
+const aside = leftAlone.length === 0 ? "" : `; ${leftAlone.join(" and ")} left alone`;
 if (check) {
   if (tally.problems > 0) {
     fail(`${tally.problems} link(s) out of date: run 'quickdraw-skills link'`);
   }
-  process.stdout.write(`quickdraw-skills: ${counts} linked and up to date\n`);
+  process.stdout.write(`quickdraw-skills: ${counts} linked and up to date${aside}\n`);
 } else {
   process.stdout.write(
-    `quickdraw-skills: ${counts} in .claude (${tally.linked} updated, ${tally.pruned} pruned)\n`,
+    `quickdraw-skills: ${counts} in .claude (${tally.linked} updated, ${tally.pruned} pruned)${aside}\n`,
   );
 }

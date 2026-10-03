@@ -43,10 +43,17 @@ working on matching files.
   `node_modules/@fitzzero/quickdraw-skills` (or into the package wherever it
   is installed, when it is not at the repo root) in the nearest directory
   above the working directory that holds `.git`. It replaces or prunes only
-  links that point into this package: a real file or directory, or another
-  package's link, is left alone with a warning, even under one of this
-  package's names. That is how an app keeps its own version of a rule
-  (with different `paths`, say): replace the link with a copy.
+  links that point into this package (through
+  `@fitzzero/quickdraw-skills/`, or landing in its directory): a real file
+  or directory, or another package's link, is left alone with a warning,
+  even under one of this package's names. That is how an app keeps its own
+  version of a rule (with different `paths`, say): replace the link with a
+  copy.
+- It writes links only into real directories of the repo. When `.claude`,
+  `.claude/skills` or `.claude/rules` is a symlink (to a shared or global
+  directory, say) or resolves outside the repo, that kind is left alone
+  with a warning, since relative links written through it would land
+  elsewhere and resolve there.
 - `quickdraw-skills link --check` changes nothing and exits 1 when a link is
   missing, stale (points elsewhere) or dangling, or when a link to a rule or
   skill the package no longer ships is left; run it in CI.

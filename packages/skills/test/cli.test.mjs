@@ -191,6 +191,85 @@ describe("quickdraw-skills link, beside other entries", () => {
   });
 });
 
+describe("quickdraw-skills link, owning links", () => {
+  it("owns only links naming @fitzzero/quickdraw-skills, not a package whose name ends the same", () => {
+    // The review's linker case: `vendor/my-quickdraw-skills/skills/custom`
+    // contains `quickdraw-skills/skills/` and was pruned as this package's.
+    const repo = createRepo();
+    const vendor = join(repo.root, "vendor", "my-quickdraw-skills", "skills", "custom");
+    mkdirSync(vendor, { recursive: true });
+    writeFileSync(join(vendor, "SKILL.md"), "# custom\n");
+    const skills = join(repo.root, ".claude", "skills");
+    mkdirSync(skills, { recursive: true });
+    const custom = "../../vendor/my-quickdraw-skills/skills/custom";
+    symlinkSync(custom, join(skills, "custom"));
+    symlinkSync(
+      "../../vendor/my-quickdraw-skills/skills/custom",
+      join(skills, "quickdraw-new-service"),
+    );
+
+    const result = run(repo, ["link"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stdout, /^pruned /m);
+    assert.equal(readlinkSync(join(skills, "custom")), custom);
+    assert.match(result.stderr, /quickdraw-new-service is a link owned by something else/);
+    assert.equal(run(repo, ["link", "--check"]).status, 0);
+  });
+
+  it("owns a link that lands in the package through a symlink, and prunes it when stale", () => {
+    const repo = createRepo();
+    const alias = join(repo.root, "tools", "skills-pkg");
+    mkdirSync(dirname(alias), { recursive: true });
+    symlinkSync(repo.installed, alias);
+    const skills = join(repo.root, ".claude", "skills");
+    mkdirSync(skills, { recursive: true });
+    symlinkSync("../../tools/skills-pkg/skills/quickdraw-new-service", join(skills, "renamed"));
+
+    const result = run(repo, ["link"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /^pruned \.claude\/skills\/renamed$/m);
+  });
+});
+
+describe("quickdraw-skills link, through a symlinked .claude", () => {
+  // The review's linker case: relative links written through a symlinked
+  // directory land in the directory it points to and resolve against it.
+  it("leaves a symlinked .claude/skills alone, writes nothing through it, and links the rules", () => {
+    const repo = createRepo();
+    const shared = mkdtempSync(join(tmpdir(), "quickdraw-skills-shared-"));
+    repos.push(shared);
+    mkdirSync(join(repo.root, ".claude"));
+    symlinkSync(shared, join(repo.root, ".claude", "skills"));
+
+    const result = run(repo, ["link"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /\.claude\/skills is a symlink \(to .*\): left alone/);
+    assert.deepEqual(readdirSync(shared), []);
+    assert.equal(linksIn(repo, "rules").length, RULES.length);
+    assert.match(
+      result.stdout,
+      /4 rules in \.claude \(4 updated, 0 pruned\); \.claude\/skills left alone/,
+    );
+
+    const check = run(repo, ["link", "--check"]);
+    assert.equal(check.status, 0, check.stderr);
+    assert.match(check.stdout, /4 rules linked and up to date; \.claude\/skills left alone/);
+  });
+
+  it("leaves both kinds alone when .claude itself is a symlink", () => {
+    const repo = createRepo();
+    const shared = mkdtempSync(join(tmpdir(), "quickdraw-skills-shared-"));
+    repos.push(shared);
+    symlinkSync(shared, join(repo.root, ".claude"));
+
+    const result = run(repo, ["link"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /\.claude is a symlink .*this package's skills/);
+    assert.match(result.stderr, /\.claude is a symlink .*this package's rules/);
+    assert.deepEqual(readdirSync(shared), []);
+  });
+});
+
 describe("quickdraw-skills link --check", () => {
   it("passes when every link is current and changes nothing", () => {
     const repo = createRepo();
