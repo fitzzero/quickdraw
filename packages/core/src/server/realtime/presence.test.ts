@@ -5,7 +5,6 @@
 // refuses the framework's rooms, joins nothing without a socket, and caps a
 // socket's rooms; behind a cluster adapter the answers come from every node.
 
-import { Adapter } from "socket.io-adapter";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { PresenceFrame } from "../../protocol/envelope";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
@@ -40,10 +39,17 @@ async function start(options: { readonly cluster?: boolean } = {}) {
   const app = await createTestApp({
     services: [projectService, defineLiveService(received())],
     db: h.db,
-    // The in-memory adapter, but given as an option: the server then treats it as a cluster adapter.
-    ...(options.cluster === true ? { socket: { adapter: Adapter } } : {}),
   });
   apps.push(app as unknown as TestApp);
+  if (options.cluster === true) {
+    // Any adapter other than the one the server was created with counts as a
+    // cluster adapter (`transports/pushes.ts`): this one is still in memory,
+    // so `fetchSockets` answers from this process, through the cluster path.
+    const { io } = app.server;
+    const InMemory = io.adapter() as unknown as new (...args: never[]) => object;
+    class Cluster extends InMemory {}
+    io.adapter(Cluster as unknown as Parameters<typeof io.adapter>[0]);
+  }
   return app;
 }
 
@@ -236,6 +242,14 @@ describe("ctx.rooms.join and leave", () => {
 describe("behind a cluster adapter", () => {
   it("answers through every node's sockets, and tells a room when a user's last socket leaves", async () => {
     const app = await start({ cluster: true });
+    const { io } = app.server;
+    // Every answer goes through io.in(room).fetchSockets(): record the rooms asked about.
+    const asked: string[] = [];
+    const ask = io.in.bind(io);
+    io.in = ((room: string | string[]) => {
+      asked.push(String(room));
+      return ask(room);
+    }) as typeof io.in;
     const ada = await connect(app, as(board.ada));
     const cy1 = await connect(app, as(board.cy));
     const cy2 = await connect(app, as(board.cy));
@@ -266,6 +280,7 @@ describe("behind a cluster adapter", () => {
     ]);
     expect(await app.server.presence.isOnline(board.cy)).toBe(true);
     expect(await app.server.presence.users("lobby")).toEqual([board.ada]);
+    expect(asked).toEqual(expect.arrayContaining(["lobby", `user:${board.cy}`]));
   });
 });
 
