@@ -16,6 +16,9 @@
     "url": "git+https://github.com/fitzzero/quickdraw.git",
     "directory": "packages/core"
   },
+  "bin": {
+    "quickdraw-docs": "./dist/cli/quickdraw-docs.js"
+  },
   "files": [
     "dist"
   ],
@@ -82,11 +85,12 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsgo --noEmit && tsgo --noEmit -p test/readme",
     "lint": "oxlint -c ../../.oxlintrc.json src test",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "readme:sync": "tsx test/readme/sync.ts",
     "db:generate": "prisma generate --config test/prisma/prisma.config.ts",
     "db:migration": "prisma migrate diff --config test/prisma/prisma.config.ts --from-empty --to-schema test/prisma/schema.prisma --script -o test/prisma/migrations/0001_init/migration.sql",
     "prepublishOnly": "bun run build"

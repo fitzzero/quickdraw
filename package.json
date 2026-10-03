@@ -20,9 +20,10 @@
     "format:check": "oxfmt --check .",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "prepare": "husky && conveyor-skills link"
+    "prepare": "husky && conveyor-skills link && quickdraw-skills link"
   },
   "devDependencies": {
+    "@fitzzero/quickdraw-skills": "workspace:*",
     "@rallycry/conveyor-skills": "^1.0.13",
     "@types/node": "^24.0.0",
     "@typescript/native-preview": "^7.0.0-dev",

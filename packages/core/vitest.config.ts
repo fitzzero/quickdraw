@@ -12,7 +12,15 @@ export default defineConfig({
     // Kept from 4.1: @testing-library/react registers its automatic cleanup
     // only when `afterEach` is a global.
     globals: true,
-    exclude: ["**/node_modules/**", "**/dist/**", "legacy-src/**"],
+    // The README's example app (test/readme/apps, test/readme/packages) is
+    // typechecked, never run: its tests show how an app's tests read.
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "legacy-src/**",
+      "test/readme/apps/**",
+      "test/readme/packages/**",
+    ],
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "html"],

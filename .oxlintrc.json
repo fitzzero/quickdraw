@@ -31,6 +31,12 @@
         "quickdraw/no-nested-write": "off",
         "quickdraw/no-foreign-write": "off"
       }
+    },
+    {
+      "files": ["**/test/readme/**"],
+      "rules": {
+        "no-inline-comments": "off"
+      }
     }
   ],
   "ignorePatterns": ["node_modules", "dist", "coverage", "**/legacy-src/**", "**/generated/**"]
