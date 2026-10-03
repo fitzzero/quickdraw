@@ -51,6 +51,12 @@ export {
 } from "./call";
 export { reloadOncePerSession } from "./reload";
 export type { TopicWatch } from "./watch";
+export {
+  DEFAULT_SUBSCRIPTION_LANE,
+  type LaneCallback,
+  type SubscriptionEvent,
+  type SubscriptionLane,
+} from "./lane";
 
 // Invalidation and optimistic overlays, without React.
 export {
@@ -70,9 +76,36 @@ export {
   type OverlayView,
 } from "./optimistic";
 
+// Live entities and collections, without React: the state the hooks show
+// (cached under `entityKey` and `collectionKey`), the pure merge functions
+// behind it, and the stores a connection and `QueryClient` share.
+export {
+  applyDeltas as applyCollectionDeltas,
+  applyFrames as applyCollectionFrames,
+  applyItems as applyCollectionItems,
+  applyPage as applyCollectionPage,
+  applySnapshot as applyCollectionSnapshot,
+  emptyCollection,
+  type CollectionItem,
+  type CollectionState,
+  type DeltaBatch,
+  type DeltaOptions,
+  type DeltaResult,
+  type PageReply,
+} from "./live/collectionStore";
+export type { CollectionShape, IndexRow } from "./live/collectionIndex";
+export type { CollectionEntry, CollectionTarget } from "./live/collectionLoads";
+export type { CollectionController, ResumeReason } from "./live/collectionController";
+export type { CollectionHub, ScopeHolding, ScopeOptions } from "./live/collections";
+export type { EntityEntry } from "./live/entities";
+export type { EntityStore } from "./live/entityStore";
+export { liveDataOf, type LiveData } from "./live/liveData";
+
 // The typed client and its provider.
 export { createQuickdrawClient } from "./createClient";
 export type {
+  CollectionMember,
+  EntityMembers,
   LiveMembers,
   MethodMember,
   MutationCallOptions,
@@ -85,6 +118,8 @@ export type {
   QuickdrawInvalidate,
   ServiceClient,
 } from "./clientTypes";
+export type { UseCollectionOptions, UseCollectionResult } from "./live/useCollection";
+export type { UseEntitiesResult, UseEntityOptions, UseEntityResult } from "./live/useEntity";
 export type { MethodMutationOptions, MethodQueryOptions } from "./hooks";
 export {
   QuickdrawProvider,

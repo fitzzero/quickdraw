@@ -103,14 +103,18 @@ describe("a watched query", () => {
     const changed: unknown[] = [];
     grabbed.connection?.socket.on("qd:changed", (frame) => changed.push(frame));
     const reads = (): number => records.filter((record) => record.method === "countOnBoard").length;
-    expect(reads()).toBe(1);
-    await app.as(as(board.ada)).taskService.renameTenTimes({ id: board.t1 });
+    // The first read was sent before the join was acknowledged, so the
+    // join reads once more, for both hooks (RFC 0003 section 17).
     await until(() => reads() === 2);
+    await tick(400);
+    expect(reads()).toBe(2);
+    await app.as(as(board.ada)).taskService.renameTenTimes({ id: board.t1 });
+    await until(() => reads() === 3);
     await tick(400);
     expect(changed).toEqual([
       { s: "taskService", topic: `board:${board.p1}`, rev: expect.any(Number) },
     ]);
-    expect(reads()).toBe(2);
+    expect(reads()).toBe(3);
     view.rerender(<Board copies={1} />);
     await tick(50);
     expect(framesOf(sent(), "qd:unwatch")).toEqual([]);
@@ -201,6 +205,9 @@ describe("after a reconnect", () => {
     await until(() => watchersOf(app, board.p1) === 1);
     const connection = grabbed.connection as QuickdrawConnection;
     const sent = grabbed.sent;
+    // The watched query's first read and the one more its join asked for.
+    await until(() => callsOf(sent, "countOnBoard").length === 2);
+    await tick(300);
     const before = sent.length;
     const since = (): unknown[][] => sent.slice(before);
     const reads = (m: string, id?: string): number =>

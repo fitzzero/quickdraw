@@ -61,13 +61,18 @@ function checkEntry(
 /**
  * Builds `{ [key]: { [method]: member(target) } }` from `contracts`, frozen.
  * `owner` names the function that builds it, in error messages; `reserved`
- * are keys the caller object uses itself, which no service may take.
+ * are keys the caller object uses itself, which no service may take. `live`,
+ * when given, adds members of its own to each service (the typed client's
+ * `useEntity`, `useEntities` and one member per collection); a contract
+ * keeps them apart from its methods, since methods, collections and the
+ * reserved names share one namespace.
  */
 export function buildCaller(
   owner: string,
   contracts: ContractMap,
   member: (target: MethodTarget) => object,
   reserved: readonly string[] = [],
+  live?: (contract: AnyContract) => Readonly<Record<string, object>>,
 ): Record<string, object> {
   if (typeof contracts !== "object" || contracts === null) {
     throw new TypeError(`${owner}: pass the contracts as an object, { task, project }`);
@@ -84,7 +89,8 @@ export function buildCaller(
         watch: definition.watch,
       }),
     ]);
-    return [key, Object.freeze(Object.fromEntries(methods))];
+    const extra = Object.entries(live?.(contract) ?? {});
+    return [key, Object.freeze(Object.fromEntries([...methods, ...extra]))];
   });
   return Object.fromEntries(services) as Record<string, object>;
 }

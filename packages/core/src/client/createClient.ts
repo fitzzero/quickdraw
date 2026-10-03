@@ -31,6 +31,7 @@ import {
   type MethodQueryOptions,
 } from "./hooks";
 import { methodKey, type MethodQueryKey } from "./keys";
+import { liveMembers } from "./live/members";
 import { buildCaller, type MethodTarget } from "./members";
 import { fetchMethodQuery } from "./query";
 
@@ -94,14 +95,18 @@ function mutationMember(binding: Binding, target: MethodTarget): object {
 /**
  * Creates the typed client of `contracts`: `qd.<key>.<method>` for every
  * contract in the map, with `useQuery`, `call`, `key` and `prefetch` on a
- * query and `useMutation` and `call` on a mutation, plus `qd.invalidate`.
- * Render a `QuickdrawProvider` with `client={qd}` above the components that
- * use it. No contract may be keyed `invalidate`.
+ * query and `useMutation` and `call` on a mutation; `qd.<key>.useEntity` and
+ * `useEntities` for a contract with an entity; `qd.<key>.<collection>` with
+ * `useCollection` for each collection; plus `qd.invalidate`. Render a
+ * `QuickdrawProvider` with `client={qd}` above the components that use it.
+ * No contract may be keyed `invalidate`.
  *
  * @example
  * export const qd = createQuickdrawClient({ task, project });
  * const { data } = qd.task.get.useQuery({ id });
  * const rename = qd.task.rename.useMutation();
+ * const { data: row } = qd.task.useEntity(id);
+ * const { items, index } = qd.task.byProject.useCollection(projectId, { view: "mine" });
  * qd.invalidate(qd.task.list);
  */
 export function createQuickdrawClient<const Contracts extends ContractMap>(
@@ -114,6 +119,7 @@ export function createQuickdrawClient<const Contracts extends ContractMap>(
     (target) =>
       target.kind === "query" ? queryMember(binding, target) : mutationMember(binding, target),
     RESERVED_KEYS,
+    liveMembers,
   );
   // Not enumerable: the client's own keys stay its services.
   Object.defineProperty(client, "invalidate", { value: invalidateWith(binding) });

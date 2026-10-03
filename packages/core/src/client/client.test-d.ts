@@ -112,13 +112,24 @@ describe("the typed client", () => {
     void qd.taskService.rename.call({ id: "t1", title: "x" }, { signal: AbortSignal.abort() });
   });
 
-  test("a service has its methods and nothing else until the live members arrive", () => {
+  test("a service has its methods, useEntity and useEntities, and a member per collection", () => {
     expectTypeOf<keyof typeof qd.board>().toEqualTypeOf<
-      "get" | "countOnBoard" | "cards" | "rename" | "renameTenTimes"
+      | "get"
+      | "countOnBoard"
+      | "cards"
+      | "rename"
+      | "renameTenTimes"
+      | "useEntity"
+      | "useEntities"
+      | "board"
+      | "open"
     >();
     expectTypeOf<keyof typeof qd.taskService>().toEqualTypeOf<
-      "get" | "find" | "list" | "count" | "rename"
+      "get" | "find" | "list" | "count" | "rename" | "useEntity" | "useEntities"
     >();
+    expectTypeOf<keyof typeof qd.board.board>().toEqualTypeOf<"useCollection">();
+    // A contract without an entity has no live entity members.
+    expectTypeOf<keyof typeof qd.counter>().toEqualTypeOf<"read" | "bump" | "total">();
   });
 
   test("the provider takes the client it serves", () => {
