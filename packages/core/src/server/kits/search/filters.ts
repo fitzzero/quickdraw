@@ -13,6 +13,7 @@
 
 import type { OrderBy } from "../../../contract/collections";
 import { QuickdrawError } from "../../../protocol/errors";
+import { allowedScopes } from "../../collections/access";
 import type { ServiceCollection } from "../../collections/define";
 import { membersWhere } from "../../collections/snapshot";
 import type { FindManyArgs, StorageWhere } from "../../storage";
@@ -87,15 +88,46 @@ export function scopedCollection(run: SearchRun): ServiceCollection | undefined 
 }
 
 /**
- * The members of the call's scope: its column and `where`, or the ids its
- * `via` junction links to it (one read, through the database client).
- * `undefined` without a scope; `"none"` for a scope without members.
+ * Refuses a call whose caller may not subscribe to its scope, decided as
+ * `qd:col:sub` decides it (`allowedScopes`): `UNAUTHENTICATED` without a
+ * principal, `FORBIDDEN` below the collection's `access` on the scope's
+ * anchor (or for another user's `"self"` scope). A search's own access
+ * filter keeps to rows, so without this a scope the caller cannot open
+ * would still name the rows in it, and on a service without a row policy
+ * show them.
+ */
+async function authorizeScope(
+  run: SearchRun,
+  collection: ServiceCollection,
+  scope: string,
+): Promise<void> {
+  const { principal, runtime } = run.call;
+  if (principal === null) {
+    throw new QuickdrawError("UNAUTHENTICATED", "Authentication required");
+  }
+  const rule = {
+    service: runtime.service,
+    anchor: collection.anchor?.name,
+    access: collection.access,
+  };
+  const allowed = await allowedScopes(runtime.access, rule, principal, [scope]);
+  if (!allowed.has(scope)) {
+    throw new QuickdrawError("FORBIDDEN", "Insufficient permissions");
+  }
+}
+
+/**
+ * The members of the call's scope, once the caller is allowed it: its column
+ * and `where`, or the ids its `via` junction links to it (one read, through
+ * the database client). `undefined` without a scope; `"none"` for a scope
+ * without members.
  */
 export async function scopeWhere(run: SearchRun): Promise<StorageWhere | "none" | undefined> {
   const collection = scopedCollection(run);
   if (collection === undefined || run.query.scope === undefined) {
     return undefined;
   }
+  await authorizeScope(run, collection, run.query.scope);
   const reader = {
     findMany: (model: string, args?: FindManyArgs) =>
       delegateOf(run.db, model).findMany(args ?? {}),

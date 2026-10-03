@@ -96,10 +96,16 @@ describe("a scope", () => {
     // Without a scope the results are not one collection's items: no revision.
     expect(await admin.search({ q: "plan" })).not.toHaveProperty("rev");
     expect(idsOf(await admin.search({ q: "plan", scope: board.p2 }))).toEqual([inP2]);
-    // A scope cannot reach past the access filter: Cy reads P1 only.
+    // A scope is authorized as qd:col:sub authorizes it: Cy reads P1 only, and a project
+    // that is not there gives no level.
     const reader = app.as(as(board.cy)).taskService;
-    expect(idsOf(await reader.search({ q: "plan", scope: board.p2 }))).toEqual([]);
-    expect(idsOf(await reader.search({ q: "plan", scope: "no-such-project" }))).toEqual([]);
+    expect(idsOf(await reader.search({ q: "plan", scope: board.p1 }))).toEqual([inP1]);
+    await expect(reader.search({ q: "plan", scope: board.p2 })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(reader.search({ q: "plan", scope: "no-such-project" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
   });
 
   it("of a via collection keeps to the rows its junction links to the scope", async () => {
@@ -286,13 +292,15 @@ describe("strategies", () => {
         },
       },
     });
+    // An unscoped search never resolves a scope's anchor.
+    const access = { ...app.server.dispatcher.access, resolve: vi.fn() };
     const ctx = createContext({
       principal: as(board.ada),
       signal: controller.signal,
       log: consoleLogger,
       requestId: "r1",
       transport: "internal",
-      kit: { service, access: app.server.dispatcher.access, storage: kit.harness().storage },
+      kit: { service, access, storage: kit.harness().storage },
     });
     const db = { task: { findMany } };
     await expect(
@@ -318,6 +326,9 @@ describe("statements", () => {
     expect(await count(() => admin.search({ q: "match", scope: board.p1 }))).toBe(1);
     // The task policy inherits the project's: the filter reads the projects the owner may
     // read (members, then the projects), then the page.
-    expect(await count(() => owner.search({ q: "match", scope: board.p1 }))).toBe(3);
+    expect(await count(() => owner.search({ q: "match" }))).toBe(3);
+    // A scope is authorized first, on the project's policy: its row (owner and access list)
+    // and the owner's membership.
+    expect(await count(() => owner.search({ q: "match", scope: board.p1 }))).toBe(5);
   });
 });

@@ -7,7 +7,7 @@
 import type { AnyContract } from "../contract/defineContract";
 import type { Logger } from "../contract/logger";
 import { QuickdrawError } from "../protocol/errors";
-import type { DispatcherAccess } from "./access/api";
+import type { DispatcherAccess, PolicyEngine } from "./access/api";
 import type { ContextRooms, Presence } from "./realtime/types";
 import type { AnyService } from "./service";
 import type { StorageAdapter } from "./storage";
@@ -122,7 +122,8 @@ export type ContextExtender = (base: AnyContext) => object;
  */
 export interface KitRuntime {
   readonly service: AnyService;
-  readonly access: DispatcherAccess;
+  /** `dispatcher.access`, and `resolve` for levels without service grants (a collection scope's). */
+  readonly access: DispatcherAccess & Pick<PolicyEngine, "resolve">;
   readonly storage: StorageAdapter | undefined;
   /** How many sockets sit in a room, for the admin kit's subscriber counts. */
   readonly occupancy?: RoomOccupancy;

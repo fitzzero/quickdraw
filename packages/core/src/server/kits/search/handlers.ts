@@ -17,7 +17,9 @@
 // (`share: "caller"`): a client typing sends the same search from several
 // places at once. The handler finds its service through the call
 // (`kitRuntimeOf`), so the service must declare its `model`; `defineService`
-// checks that when the service is defined. A search kept to a scope returns
+// checks that when the service is defined, and that a search of a service
+// without an access policy, which reaches every row, has `"public"` or
+// `{ service }` access. A search kept to a scope returns
 // the scope collection's items, so its item must be that collection's item
 // projection: checked here, when the contract is known.
 
@@ -30,6 +32,7 @@ import {
 import { accessFormProblem } from "../../access/forms";
 import type { AccessForm } from "../../access/types";
 import { checkWhenDefined, type AnyService } from "../../service";
+import { everyRowProblem } from "../crud/access";
 import type { AnyStrategy } from "./context";
 import { searchHandler } from "./run";
 import type {
@@ -162,14 +165,20 @@ function checkScope(contract: AnyContract, name: string, spec: SearchSpec, item:
   }
 }
 
-/** Why a service cannot run the search kit's handlers made for `contract`. */
-function serviceProblem(service: AnyService, contract: AnyContract): string | undefined {
+/** Why a service cannot run the search method `name`, made for `contract` with `form`. */
+function serviceProblem(
+  service: AnyService,
+  contract: AnyContract,
+  name: string,
+  form: AccessForm,
+): string | undefined {
   if (service.contract !== contract) {
     return `its search kit handlers were made for another contract; pass ${service.name}'s own contract to search.handlers`;
   }
-  return service.model === undefined
-    ? "the search kit reads the service's rows: declare its model"
-    : undefined;
+  if (service.model === undefined) {
+    return "the search kit reads the service's rows: declare its model";
+  }
+  return everyRowProblem(service, name, form);
 }
 
 function handlers<
@@ -186,7 +195,7 @@ function handlers<
     const projection = itemProjection(contract, name, spec);
     checkScope(contract, name, spec, projection);
     const handler = searchHandler({ spec, form, projection, strategy });
-    checkWhenDefined(handler, (service) => serviceProblem(service, contract));
+    checkWhenDefined(handler, (service) => serviceProblem(service, contract, name, form));
     entries[name] = Object.freeze({ access: form, handler, share: "caller" });
   }
   return Object.freeze(entries) as SearchImplementations<M, A>;

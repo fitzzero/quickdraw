@@ -1,14 +1,20 @@
 // The search kit's access (RFC 0003 sections 4.3 and 12.2), through a real
 // server against PGlite: the access matrix of its methods for the board's
 // owner, member, reader and stranger, a scope form checked on the scope's
-// anchor, then the rows each principal finds. Verify these first: a search
-// must never show a row `get` would refuse.
+// anchor, the rows each principal finds, and a scope authorized as
+// `qd:col:sub` authorizes it. Verify these first: a search must never show a
+// row `get` would refuse, nor a scope the caller could not open.
 
 import { describe, expect, it } from "vitest";
-import { describeAccessMatrix, createTestApp, type TestApp } from "../../../testing/index";
+import {
+  describeAccessMatrix,
+  createTestApp,
+  emitWithAck,
+  type TestApp,
+} from "../../../testing/index";
 import { labelContract, labelService } from "../../collections/__tests__/fixture";
 import { projectContract, projectService, qd } from "../../emit/__tests__/live";
-import { inherit, search } from "../../index";
+import { custom, inherit, search } from "../../index";
 import { addTasks, as, idsOf, searchApp, searchContract } from "./__tests__/fixture";
 
 const kit = searchApp();
@@ -39,26 +45,48 @@ async function serve(methods: Readonly<Record<string, unknown>>) {
   return { app, service };
 }
 
+/** A label of P1, with nothing on it. */
+async function labelOfP1(): Promise<string> {
+  const board = kit.board();
+  const label = await kit
+    .harness()
+    .prisma.label.create({ data: { projectId: board.p1, name: "L" } });
+  return label.id;
+}
+
 describe("the access matrix", () => {
-  it("lets every signed-in principal search, and refuses an anonymous one", async () => {
+  it("lets every signed-in principal search, in the scopes they may open, and refuses an anonymous one", async () => {
     const { app, service } = await kit.start();
     const board = kit.board();
+    const label = await labelOfP1();
     const everyone = ["owner", "member", "reader", "stranger"] as const;
     const report = await describeAccessMatrix(app, {
       service,
       principals: principals(),
       cases: [
         { method: "search", input: { q: "T1" }, allow: [...everyone] },
+        // A scope is authorized as qd:col:sub authorizes it: Read on its project.
         {
           method: "search",
           label: "search in P1",
           input: { q: "T1", scope: board.p1 },
-          allow: [...everyone],
+          allow: ["owner", "member", "reader"],
         },
-        { method: "searchByLabel", input: { q: "T", scope: "no-label" }, allow: [...everyone] },
+        {
+          method: "searchByLabel",
+          input: { q: "T", scope: label },
+          allow: ["owner", "member", "reader"],
+        },
+        // A label that is not there gives no level.
+        {
+          method: "searchByLabel",
+          label: "searchByLabel of no label",
+          input: { q: "T", scope: "no-label" },
+          allow: [],
+        },
       ],
     });
-    expect(report.cells).toHaveLength(3 * 5);
+    expect(report.cells).toHaveLength(4 * 5);
     expect(report.cells.filter((cell) => cell.principal === "anonymous")).toSatisfy((cells) =>
       (cells as { actual: string }[]).every((cell) => cell.actual === "UNAUTHENTICATED"),
     );
@@ -66,6 +94,7 @@ describe("the access matrix", () => {
 
   it("checks a scope form on the scope's anchor, method by method", async () => {
     const board = kit.board();
+    const label = await labelOfP1();
     const { app, service } = await serve({
       ...search.handlers(searchContract, {
         method: "search",
@@ -93,8 +122,8 @@ describe("the access matrix", () => {
         { method: "search", label: "search anywhere", input: { q: "T1" }, allow: [] },
         {
           method: "searchByLabel",
-          input: { q: "T", scope: "no-label" },
-          allow: ["owner", "member", "reader", "stranger"],
+          input: { q: "T", scope: label },
+          allow: ["owner", "member", "reader"],
         },
       ],
     });
@@ -136,5 +165,67 @@ describe("the rows found", () => {
     expect(idsOf(await anonymous.search({ q: "visible" }))).toEqual([secret]);
     // `notes` is Admin-only, so no public search looks in it.
     expect(idsOf(await anonymous.search({ q: "classified" }))).toEqual([]);
+  });
+});
+
+describe("a scoped search", () => {
+  // The service reaches its rows through the board collection only: no row policy of its own.
+  const unpoliced = (access: unknown) =>
+    qd.defineService(searchContract, {
+      model: "task",
+      collections: { board: { anchor: projectContract }, byLabel: { anchor: labelContract } },
+      methods: { ...search.handlers(searchContract, { access: access as "public" }) },
+    });
+
+  it("is authorized as qd:col:sub authorizes its scope, on a service without a row policy too", async () => {
+    const board = kit.board();
+    const app = await createTestApp({
+      services: [projectService, labelService, unpoliced({ service: "Read" })],
+      db: kit.harness().db,
+    });
+    kit.track(app as unknown as TestApp);
+    // Ed owns P2 only: his grant lets him search, not open P1.
+    const ed = as(board.ed, { taskService: "Read" });
+    await expect(app.as(ed).taskService.search({ q: "T1", scope: board.p1 })).rejects.toMatchObject(
+      { code: "FORBIDDEN" },
+    );
+    const socket = await app.connect(ed);
+    const sub = await emitWithAck(socket.socket, "qd:col:sub", {
+      s: "taskService",
+      c: "board",
+      scope: board.p1,
+    });
+    expect(sub).toMatchObject({ ok: false, e: { code: "FORBIDDEN" } });
+    // Ada owns P1.
+    const ada = app.as(as(board.ada, { taskService: "Read" })).taskService;
+    expect(idsOf(await ada.search({ q: "T1", scope: board.p1 }))).toEqual([board.t1]);
+    // Without a scope, a { service } search reaches every row: the form says so.
+    const prisma = kit.harness().prisma;
+    const shared = [
+      ...(await addTasks(prisma, board.p1, [1], { title: "Shared word" })),
+      ...(await addTasks(prisma, board.p2, [1], { title: "Shared word" })),
+    ];
+    expect(idsOf(await app.as(ed).taskService.search({ q: "shared" })).sort()).toEqual(
+      shared.sort(),
+    );
+  });
+
+  it("needs a principal, even in a public search", async () => {
+    const board = kit.board();
+    const { app } = await serve({ ...search.handlers(searchContract, { access: "public" }) });
+    await expect(
+      app.as(null).taskService.search({ q: "T1", scope: board.p1 }),
+    ).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+    expect(idsOf(await app.as(null).taskService.search({ q: "T1" }))).toEqual([board.t1]);
+  });
+
+  it("of a service without a row policy is refused when it is defined, unless its form is public or { service }", () => {
+    const refused = /search reaches every row of taskService, which declares no access policy/;
+    expect(() => unpoliced("authenticated")).toThrow(refused);
+    expect(() => unpoliced(custom(() => true))).toThrow(refused);
+    const scope = (input: { readonly scope?: string }): string => input.scope ?? "";
+    expect(() => unpoliced({ scope: "Read", of: projectContract, id: scope })).toThrow(refused);
+    expect(() => unpoliced("public")).not.toThrow();
+    expect(() => unpoliced({ service: "Read" })).not.toThrow();
   });
 });

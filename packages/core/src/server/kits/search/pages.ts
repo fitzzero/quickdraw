@@ -1,12 +1,17 @@
 // The two ways a search reads its page (RFC 0003 section 12.2).
 //
+// A call kept to a scope is first authorized for it as `qd:col:sub` would
+// be (`filters.ts`): a scope the caller may not open is refused, whatever
+// rows it holds.
+//
 // With a condition (the default "contains", or a strategy's `where`): one
 // keyset page (`../crud/page.ts`) of the rows that match it, that the
 // policy's `accessWhere` lets the caller read at the method's row level and,
 // in a scope, that are its members; in the scope collection's order, else by
-// id. Statements: the access filter's own reads (none for `owner` and
-// `jsonAcl` policies or a service-wide `Admin` grant), the links of a `via`
-// scope, then one for the page.
+// id. Statements: the scope's authorization (the anchor's policy reads; none
+// with a service-wide `Admin` grant), the links of a `via` scope, the access
+// filter's own reads (none for `owner` and `jsonAcl` policies or a
+// service-wide `Admin` grant), then one for the page.
 //
 // With a strategy's `ids`: the rows of the ranked ids (and, in a scope, its
 // members), read in one statement, then only those the caller may read at
@@ -36,13 +41,10 @@ function stopIfAborted(run: SearchRun): void {
 
 /** One page of the rows a condition matches. */
 export async function wherePage(run: SearchRun): Promise<SearchPage<unknown>> {
-  const access = await rowsWhere(run.call, run.context.form, run.level);
-  if (access === "none") {
-    return emptyPage();
-  }
   const scope = await scopeWhere(run);
-  const text = scope === "none" ? "none" : await textWhere(run);
-  if (scope === "none" || text === "none") {
+  const access = scope === "none" ? "none" : await rowsWhere(run.call, run.context.form, run.level);
+  const text = access === "none" ? "none" : await textWhere(run);
+  if (scope === "none" || access === "none" || text === "none") {
     return emptyPage();
   }
   stopIfAborted(run);

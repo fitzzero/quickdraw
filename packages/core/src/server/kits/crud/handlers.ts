@@ -21,13 +21,15 @@
 // Every kit method needs a form in `access`, and nothing else may be there.
 // The handlers find their service through the call (`kitRuntimeOf`), so the
 // service must declare its `model`; `defineService` checks that when the
-// service is defined.
+// service is defined, and that a method on many rows of a service without
+// an access policy has `"public"` or `{ service }` access (`access.ts`).
 
 import type { AnyContract } from "../../../contract/defineContract";
 import { crud as contractHalf, crudSpecOf, type CrudSpec } from "../../../contract/kits/crud";
 import { accessFormProblem } from "../../access/forms";
 import type { AccessForm } from "../../access/types";
 import { checkWhenDefined, type AnyService } from "../../service";
+import { everyRowProblem } from "./access";
 import type { AnyPrepare } from "./create";
 import { handlerOf } from "./methods";
 import type { CrudAccess, CrudHandlersOptions, CrudImplementations } from "./types";
@@ -118,14 +120,28 @@ function checkPrepare(
   return prepare as AnyPrepare;
 }
 
-/** Why a service cannot run the kit's handlers made for `contract`. */
-function serviceProblem(service: AnyService, contract: AnyContract): string | undefined {
+/** The kit's methods on many rows: on a service without a policy, they reach every row. */
+const MANY_ROWS: ReadonlySet<CrudSpec["method"]> = new Set([
+  "list",
+  "getMany",
+  "bulkUpdate",
+  "bulkDelete",
+]);
+
+/** Why a service cannot run the kit's method `name`, made for `contract` with `form`. */
+function serviceProblem(
+  service: AnyService,
+  contract: AnyContract,
+  [name, spec]: readonly [string, CrudSpec],
+  form: AccessForm,
+): string | undefined {
   if (service.contract !== contract) {
     return `its read/write kit handlers were made for another contract; pass ${service.name}'s own contract to crud.handlers`;
   }
-  return service.model === undefined
-    ? "the read/write kit reads and writes the service's rows: declare its model"
-    : undefined;
+  if (service.model === undefined) {
+    return "the read/write kit reads and writes the service's rows: declare its model";
+  }
+  return MANY_ROWS.has(spec.method) ? everyRowProblem(service, name, form) : undefined;
 }
 
 function handlers<C extends AnyContract, const A extends CrudAccess<C>>(
@@ -150,7 +166,7 @@ function handlers<C extends AnyContract, const A extends CrudAccess<C>>(
     const form = access[name] as AccessForm;
     const projection = spec.method === "list" ? itemProjection(contract, spec) : "entity";
     const handler = handlerOf({ spec, form, projection, prepare });
-    checkWhenDefined(handler, (service) => serviceProblem(service, contract));
+    checkWhenDefined(handler, (service) => serviceProblem(service, contract, [name, spec], form));
     entries[name] = Object.freeze({ access: form, handler });
   }
   return Object.freeze(entries) as CrudImplementations<A>;

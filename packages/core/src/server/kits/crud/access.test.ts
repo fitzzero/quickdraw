@@ -230,31 +230,48 @@ describe("forms without row checks", () => {
     });
   });
 
-  it("is the whole check on a service without a policy", async () => {
-    const app = await serve(
+  it("is the whole check on a service without a policy, which takes only public or { service }", async () => {
+    const unpoliced = (form: "authenticated" | { readonly service: "Read" }) =>
+      qd.defineService(notes, {
+        model: "task",
+        methods: {
+          ...crud.handlers(notes, {
+            access: { getMany: form, list: form, bulkDelete: form },
+          }),
+        },
+      });
+    // Every row is reached: the form must say so outright.
+    expect(() => unpoliced("authenticated")).toThrow(
+      /method "getMany": getMany reaches every row of noteService, which declares no access policy/,
+    );
+    expect(() =>
       qd.defineService(notes, {
         model: "task",
         methods: {
           ...crud.handlers(notes, {
             access: {
-              getMany: "authenticated",
-              list: "authenticated",
-              bulkDelete: "authenticated",
+              getMany: "public",
+              list: { service: "Read" },
+              bulkDelete: custom(() => true),
             },
           }),
         },
       }),
-    );
+    ).toThrow(/method "bulkDelete": bulkDelete reaches every row/);
+    const app = await serve(unpoliced({ service: "Read" }));
     const board = kit.board();
-    const caller = app.as(as(board.cy)) as unknown as {
+    type NoteCaller = {
       noteService: {
         list(input?: object): Promise<{ items: { id: string }[] }>;
         bulkDelete(input: object): Promise<{ count: number }>;
       };
     };
-    expect((await caller.noteService.list()).items).toHaveLength(2);
-    expect(await caller.noteService.bulkDelete({ ids: [board.t1, board.t2] })).toEqual({
+    const granted = app.as(as(board.cy, { noteService: "Read" })) as unknown as NoteCaller;
+    expect((await granted.noteService.list()).items).toHaveLength(2);
+    expect(await granted.noteService.bulkDelete({ ids: [board.t1, board.t2] })).toEqual({
       count: 2,
     });
+    const ungranted = app.as(as(board.cy)) as unknown as NoteCaller;
+    await expect(ungranted.noteService.list()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });
