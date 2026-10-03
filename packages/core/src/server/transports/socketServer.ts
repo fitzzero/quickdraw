@@ -15,11 +15,21 @@ import {
   protocolMiddleware,
   type SocketRateLimitOptions,
 } from "./middleware";
-import { adapterProbe, listenForGrants, refreshGrants, rotate, type LiveData } from "./pushes";
+import {
+  adapterProbe,
+  disconnectUser,
+  listenForDisconnects,
+  listenForGrants,
+  refreshGrants,
+  rotate,
+  type DisconnectUserOptions,
+  type LiveData,
+} from "./pushes";
 import { onConnection, type ServerHello, type SocketExtension } from "./socketio";
 import type { QuickdrawIo, SocketContext } from "./types";
 
 export type { SocketRateLimitOptions } from "./middleware";
+export type { DisconnectUserOptions } from "./pushes";
 export type { QuickdrawIo } from "./types";
 
 /** Socket.IO server options `createServer` passes through; it sets `parser` and `cors` itself. */
@@ -49,6 +59,8 @@ export interface SocketServer {
   rotate(withinMs: number): void;
   /** Reloads `userId`'s service grants into their sockets' principals and sends them `qd:access`. */
   refresh(userId: string): Promise<ServiceGrants>;
+  /** Disconnects `userId`'s sockets (of one session) on every node; returns how many this node ended. */
+  disconnectUser(userId: string, options?: DisconnectUserOptions): number;
 }
 
 /** The part of `qd:hello` every socket of the server shares; `onConnection` adds the principal's. */
@@ -90,6 +102,7 @@ export function createSocketServer(
   const probe = adapterProbe(io, settings.socket?.adapter !== undefined);
   settings.live?.attach(io, probe);
   listenForGrants(io, settings.live, settings.logger);
+  listenForDisconnects(io);
   io.use(protocolMiddleware(settings.legacyWire, context));
   io.use(authMiddleware(settings.resolvePrincipal, context));
   // Before the connection handler: the limiter's `socket.use` middleware must
@@ -114,5 +127,7 @@ export function createSocketServer(
     rotate: (withinMs) => rotate(io, withinMs),
     refresh: (userId) =>
       refreshGrants(io, settings.loadServiceAccess, settings.live, probe, userId),
+    disconnectUser: (userId, options) =>
+      disconnectUser(io, probe, settings.logger, userId, options),
   };
 }

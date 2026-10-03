@@ -50,6 +50,7 @@ export interface RouteSettings {
   readonly errorPath: string;
   readonly cookie: ResolvedCookie;
   readonly onLogin: AuthRoutesOptions["onLogin"];
+  readonly onRevoke: AuthRoutesOptions["onRevoke"];
   readonly logger: Logger;
   readonly redeemed: RedeemedStates;
 }
@@ -135,6 +136,9 @@ export function routeSettings(options: AuthRoutesOptions): RouteSettings {
   if (typeof options.onLogin !== "function") {
     throw new TypeError(`${OWNER}: onLogin is required`);
   }
+  if (options.onRevoke !== undefined && typeof options.onRevoke !== "function") {
+    throw new TypeError(`${OWNER}: onRevoke must be a function of (userId, sessionId)`);
+  }
   const successPath = landingPathOf(options.successPath, "successPath", "/");
   return Object.freeze({
     keys: checkSessionKeys(options, OWNER),
@@ -145,6 +149,7 @@ export function routeSettings(options: AuthRoutesOptions): RouteSettings {
     errorPath: landingPathOf(options.errorPath, "errorPath", successPath),
     cookie: cookieOf(options.cookie),
     onLogin: options.onLogin,
+    onRevoke: options.onRevoke,
     logger: options.logger ?? consoleLogger,
     redeemed: redeemedStates(),
   });

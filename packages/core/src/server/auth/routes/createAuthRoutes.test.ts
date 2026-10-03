@@ -621,6 +621,10 @@ describe("the options", () => {
       "createAuthRoutes: sessions must be a SessionStore (create, get, revoke, revokeAll)",
     ],
     [{ onLogin: undefined }, "createAuthRoutes: onLogin is required"],
+    [
+      { onRevoke: "disconnect" },
+      "createAuthRoutes: onRevoke must be a function of (userId, sessionId)",
+    ],
     [{ allowedOrigins: [] }, "createAuthRoutes: allowedOrigins must list the web app's origins"],
     [{ allowedOrigins: ["*"] }, "allowedOrigins entries are origins such as"],
     [{ allowedOrigins: ["https://app.test/path"] }, "allowedOrigins entries are origins such as"],

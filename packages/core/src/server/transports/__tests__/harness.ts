@@ -2,12 +2,14 @@
 // closed after each test.
 
 import type { AddressInfo } from "node:net";
+import { Server, type Namespace, type ServerOptions as IoServerOptions } from "socket.io";
 import { io, type ManagerOptions, type Socket, type SocketOptions } from "socket.io-client";
 import { afterEach } from "vitest";
 import { PROTOCOL_VERSION, type HelloFrame } from "../../../index";
 import {
   createServer,
   type AnyService,
+  type QuickdrawIo,
   type QuickdrawServer,
   type ServerAuth,
   type ServerOptions,
@@ -106,4 +108,31 @@ export function next<T = unknown>(socket: ClientSocket, event: string): Promise<
   return new Promise((resolve) => {
     socket.once(event, resolve);
   });
+}
+
+/** A Socket.IO adapter that hands `serverSideEmit` to the other servers it was made for: a cluster in one process. */
+export function peeredCluster(): {
+  readonly adapter: NonNullable<Partial<IoServerOptions>["adapter"]>;
+  readonly servers: QuickdrawIo[];
+} {
+  const servers: QuickdrawIo[] = [];
+  // A server attached to nothing holds no resources; it only shows the default adapter class.
+  const Base = new Server().of("/").adapter.constructor as new (
+    nsp: Namespace,
+  ) => Namespace["adapter"];
+  class PeeredAdapter extends Base {
+    override serverSideEmit(packet: unknown[]): void {
+      for (const peer of servers) {
+        if (peer.sockets !== this.nsp) {
+          (
+            peer.sockets as unknown as { _onServerSideEmit(args: unknown[]): void }
+          )._onServerSideEmit(packet);
+        }
+      }
+    }
+  }
+  return {
+    adapter: PeeredAdapter as unknown as NonNullable<Partial<IoServerOptions>["adapter"]>,
+    servers,
+  };
 }

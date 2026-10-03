@@ -39,6 +39,7 @@ import {
 } from "./transports/http";
 import {
   createSocketServer,
+  type DisconnectUserOptions,
   type QuickdrawIo,
   type SocketCors,
   type SocketOptions,
@@ -163,6 +164,15 @@ export interface QuickdrawServer<S extends readonly AnyService[] = readonly AnyS
      * the user's entity subscriptions again. Resolves with the grants.
      */
     refresh(userId: string): Promise<ServiceGrants>;
+    /**
+     * Disconnects every socket of `userId` (only those that authenticated
+     * with `sessionId`, when given), on every node: behind a cluster adapter
+     * the request is broadcast. For a session the app revoked (wire
+     * `createAuthRoutes`' `onRevoke` to it): an open socket keeps the
+     * principal it authenticated with, and its reconnect is authenticated
+     * afresh. Returns how many sockets this node disconnected.
+     */
+    disconnectUser(userId: string, options?: DisconnectUserOptions): number;
   };
   /**
    * Who is online, when they were last seen, and who is in a room (RFC 0003
@@ -368,7 +378,11 @@ export function createServer<const S extends readonly AnyService[]>(
     dispatcher,
     close,
     rotate: ({ withinMs }: RotateOptions) => sockets.rotate(withinMs),
-    access: Object.freeze({ refresh: (userId: string) => sockets.refresh(userId) }),
+    access: Object.freeze({
+      refresh: (userId: string) => sockets.refresh(userId),
+      disconnectUser: (userId: string, disconnect?: DisconnectUserOptions) =>
+        sockets.disconnectUser(userId, disconnect),
+    }),
     presence: dispatcher.presence,
     stream: dispatcher.stream,
   });

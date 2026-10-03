@@ -891,6 +891,9 @@ app.use(
     publicUrl: env.API_URL, // redirect URIs: {publicUrl}/auth/{provider}/callback
     successPath: "/auth/callback",
     errorPath: "/auth/login",
+    // a revoked session's open sockets: logout ends its own, logout-all every one of the user
+    onRevoke: (userId, sessionId) =>
+      server.access.disconnectUser(userId, sessionId === null ? {} : { sessionId }),
   }),
 );
 
@@ -983,8 +986,15 @@ nothing is cached:
   `session`, by default. A changed cookie name must be named in all three
   places: `createAuthRoutes({ cookie: { name } })`,
   `socketAuth({ cookieName })` and `createServer({ http: { cookieName } })`.
-- Sockets that are already connected when their session is revoked stay
-  connected until they reconnect.
+- A socket keeps the principal it authenticated with until it reconnects,
+  so a revoked session's open sockets are ended with
+  `server.access.disconnectUser(userId, { sessionId?, reason? })`: every
+  socket of the user, or those `socketAuth` recorded for one session
+  (`recordSocketSession` on `./server` for an app's own `authenticate`), on
+  every node behind a cluster adapter. `onRevoke(userId, sessionId | null)`
+  tells the app when `logout` (the session's id) or `logout-all` (`null`)
+  revoked; wire it as above. A disconnected client does not reconnect on
+  its own; its next connect is authenticated afresh.
 - `issueSession({ sessions, jwtSecret }, userId, { provider })` starts a
   session for an app's own sign-in flow (login codes, an embedded activity),
   and `liveSession` reads a token back; both work with `socketAuth`.

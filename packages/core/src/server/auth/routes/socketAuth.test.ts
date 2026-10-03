@@ -9,7 +9,7 @@ import { z } from "zod";
 import { defineContract, isAuthenticationRefused, query } from "../../../index";
 import { captureLogger, type AppPrincipal } from "../../__tests__/fixtures";
 import { initQuickdraw, type ServerAuth } from "../../index";
-import { call, transportHarness, v5Auth } from "../../transports/__tests__/harness";
+import { call, peeredCluster, transportHarness, v5Auth } from "../../transports/__tests__/harness";
 import { APP_ORIGIN, baseOptions, post, SECRET, signIn, userIdOf } from "./__tests__/harness";
 import { createAuthRoutes } from "./createAuthRoutes";
 import { createMemorySessionStore } from "./sessions";
@@ -66,6 +66,53 @@ async function boot(auth: Authenticate = defaultAuth) {
   const record = { logins: [], guests: [] };
   app.use(createAuthRoutes(baseOptions(url, captureLogger(), sessions, record)));
   return { url, sessions, logger };
+}
+
+/**
+ * Servers with `socketAuth` and the auth routes on one Express app each,
+ * sharing one session store, the routes' `onRevoke` wired to the node's own
+ * `server.access.disconnectUser`; behind one peered cluster adapter when
+ * there are several.
+ */
+async function bootNodes(count: number) {
+  vi.stubEnv("ENABLE_MOCK_OAUTH", "true");
+  const sessions = createMemorySessionStore();
+  const cluster = count > 1 ? peeredCluster() : undefined;
+  const nodes = [];
+  for (let n = 0; n < count; n += 1) {
+    const app = express();
+    const { server, url } = await servers.start({
+      app,
+      services: [whoService],
+      logger: captureLogger(),
+      auth: defaultAuth(sessions),
+      ...(cluster === undefined ? {} : { socket: { adapter: cluster.adapter } }),
+    });
+    cluster?.servers.push(server.io);
+    const record = { logins: [], guests: [] };
+    app.use(
+      createAuthRoutes({
+        ...baseOptions(url, captureLogger(), sessions, record),
+        onRevoke: (userId, sessionId) =>
+          server.access.disconnectUser(userId, sessionId === null ? {} : { sessionId }),
+      }),
+    );
+    nodes.push({ url, server });
+  }
+  return nodes;
+}
+
+/** Opens a v5 socket with this cookie from the web app; resolves once it is connected. */
+async function openWith(url: string, cookie: string) {
+  const opened = servers.open(url, v5Auth(null), {
+    extraHeaders: { cookie, origin: APP_ORIGIN },
+  });
+  await opened.connected;
+  await opened.hello;
+  const disconnected = new Promise<string>((resolve) => {
+    opened.socket.once("disconnect", resolve);
+  });
+  return { socket: opened.socket, disconnected };
 }
 
 /** Opens a v5 socket with these handshake headers (and `auth`); resolves with what happened. */
@@ -186,6 +233,54 @@ describe("a socket with the session cookie", () => {
     expect(twice).toEqual({
       whoami: { ok: false, e: expect.objectContaining({ code: "UNAUTHENTICATED" }) },
     });
+  });
+});
+
+describe("a socket whose session is revoked", () => {
+  it("is disconnected by logout, only that session's, and by logout-all, every one of the user", async () => {
+    const [node] = await bootNodes(1);
+    const { url } = node ?? { url: "" };
+    const laptop = await signIn(url, "ada@demo.local");
+    const phone = await signIn(url, "ada@demo.local");
+    const bob = await signIn(url, "bob@demo.local");
+    const laptopSocket = await openWith(url, laptop.session);
+    const phoneSocket = await openWith(url, phone.session);
+    const bobSocket = await openWith(url, bob.session);
+    await post(`${url}/auth/logout`, { cookie: laptop.session });
+    expect(await laptopSocket.disconnected).toBe("io server disconnect");
+    expect(phoneSocket.socket.connected).toBe(true);
+    await post(`${url}/auth/logout-all`, { cookie: phone.session });
+    expect(await phoneSocket.disconnected).toBe("io server disconnect");
+    expect(bobSocket.socket.connected).toBe(true);
+    expect(await call(bobSocket.socket, { id: 1, s: "whoService", m: "whoami" })).toEqual(
+      signedIn(userIdOf("bob@demo.local")).whoami,
+    );
+  });
+
+  it("is disconnected on every node of a cluster", async () => {
+    const [writer, holder] = await bootNodes(2);
+    const { session } = await signIn(writer?.url ?? "", "ada@demo.local");
+    const elsewhere = await openWith(holder?.url ?? "", session);
+    const here = await openWith(writer?.url ?? "", session);
+    await post(`${writer?.url ?? ""}/auth/logout-all`, { cookie: session });
+    expect(await here.disconnected).toBe("io server disconnect");
+    expect(await elsewhere.disconnected).toBe("io server disconnect");
+  });
+
+  it("counts this node's sockets it ended, and refuses a user id that is not one", async () => {
+    const [node] = await bootNodes(1);
+    const { session } = await signIn(node?.url ?? "", "ada@demo.local");
+    const opened = await openWith(node?.url ?? "", session);
+    const server = node?.server;
+    expect(server?.access.disconnectUser(userIdOf("bob@demo.local"))).toBe(0);
+    expect(server?.access.disconnectUser(userIdOf("ada@demo.local"), { sessionId: "other" })).toBe(
+      0,
+    );
+    expect(server?.access.disconnectUser(userIdOf("ada@demo.local"), { reason: "banned" })).toBe(1);
+    expect(await opened.disconnected).toBe("io server disconnect");
+    expect(() => server?.access.disconnectUser("")).toThrow(
+      "access.disconnectUser: pass the user's id",
+    );
   });
 });
 

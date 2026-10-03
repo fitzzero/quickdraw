@@ -8,7 +8,10 @@
 // the session cookie else the bearer token. No credential: anonymous. A
 // credential that does not stand for a live session is refused with
 // `UNAUTHENTICATED`, checked against the session store on every handshake and
-// call, so a revoked session fails even while its JWT has not expired.
+// call, so a revoked session fails even while its JWT has not expired. A
+// socket's session is recorded (`recordSocketSession`), so the app can end
+// that session's open sockets when it revokes it: wire `createAuthRoutes`'
+// `onRevoke` to `server.access.disconnectUser`.
 //
 // The session cookie is ambient: a browser sends it with a WebSocket
 // handshake that any page opens, and WebSockets are not subject to CORS. So a
@@ -23,7 +26,7 @@
 
 import type { IncomingHttpHeaders } from "node:http";
 import { QuickdrawError } from "../../../protocol/errors";
-import type { AuthenticateRequest } from "../../transports/auth";
+import { recordSocketSession, type AuthenticateRequest } from "../../transports/auth";
 import { cookiesOf, cookieToken, sessionCookieNames } from "../../transports/body";
 import type { MaybePromise, Principal } from "../../types";
 import { originAllowlist, type AllowedOrigin, type OriginAllowlist } from "./origins";
@@ -136,6 +139,10 @@ export function socketAuth(options: SocketAuthOptions): SessionAuthenticate<Prin
     const session = await liveSession(keys, credential.token);
     if (session === null) {
       throw refused("The session is not valid");
+    }
+    if (request.transport === "socket") {
+      // So `server.access.disconnectUser(userId, { sessionId })` can end this session's sockets.
+      recordSocketSession(request.socket, session.id);
     }
     if (loadPrincipal === undefined) {
       return { userId: session.userId, kind: "user" };

@@ -283,8 +283,14 @@ export type {
   ServiceGrants,
   SocketAuthenticateRequest,
 } from "./transports/auth";
+export { recordSocketSession } from "./transports/auth";
 export type { QuickdrawIo, QuickdrawServerSocket, QuickdrawSocketData } from "./transports/types";
-export type { SocketCors, SocketOptions, SocketRateLimitOptions } from "./transports/socketServer";
+export type {
+  DisconnectUserOptions,
+  SocketCors,
+  SocketOptions,
+  SocketRateLimitOptions,
+} from "./transports/socketServer";
 export type { LegacyReply } from "./transports/legacy";
 
 // Redis adapter for horizontal scaling

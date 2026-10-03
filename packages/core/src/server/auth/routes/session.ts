@@ -9,6 +9,10 @@
 //   one, and clears the cookie; 204 either way.
 // - `POST {basePath}/logout-all`: needs a live session; revokes every session
 //   of its user and clears the cookie (204), else 401.
+//
+// Each revocation is told to the app's `onRevoke(userId, sessionId | null)`,
+// which can end the sockets still open with the session
+// (`server.access.disconnectUser`).
 
 import { verifyJWT } from "../jwt";
 import { tokenOf } from "../../transports/body";
@@ -45,6 +49,23 @@ export function meRoute(settings: RouteSettings): Handler {
   };
 }
 
+/** Tells the app's `onRevoke` a session (or, `null`, every one) of `userId` ended; a failure is logged. */
+async function revoked(
+  settings: RouteSettings,
+  userId: string,
+  sessionId: string | null,
+): Promise<void> {
+  try {
+    await settings.onRevoke?.(userId, sessionId);
+  } catch (error) {
+    settings.logger.error("onRevoke failed", {
+      category: "quickdraw.auth",
+      userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 /** `POST {basePath}/logout`. */
 export function logoutRoute(settings: RouteSettings): Handler {
   return async (req, res) => {
@@ -53,6 +74,7 @@ export function logoutRoute(settings: RouteSettings): Handler {
     if (payload?.sid !== undefined) {
       await settings.keys.sessions.revoke(payload.sid);
       settings.logger.info("Signed out", { category: "quickdraw.auth", userId: payload.userId });
+      await revoked(settings, payload.userId, payload.sid);
     }
     clearSession(res, settings, req);
     noContent(res);
@@ -73,6 +95,7 @@ export function logoutAllRoute(settings: RouteSettings): Handler {
       category: "quickdraw.auth",
       userId: session.userId,
     });
+    await revoked(settings, session.userId, null);
     noContent(res);
   };
 }

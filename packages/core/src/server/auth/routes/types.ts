@@ -75,6 +75,14 @@ export interface AuthRoutesOptions {
   readonly cookie?: AuthCookieOptions;
   /** The routes' rate limiters, or `false` for none. Default: the Express presets (see `AuthRateLimits`). */
   readonly rateLimit?: AuthRateLimits | false;
+  /**
+   * Called once `logout` revoked a session (`sessionId`) or `logout-all`
+   * every session of the user (`null`), so the app can end the sockets still
+   * open with them, which keep their principal until they reconnect:
+   * `(userId, sessionId) => server.access.disconnectUser(userId, sessionId
+   * === null ? {} : { sessionId })`. A failure is logged; the sign-out stands.
+   */
+  readonly onRevoke?: (userId: string, sessionId: string | null) => MaybePromise<unknown>;
   /** Default: the console. */
   readonly logger?: Logger;
 }

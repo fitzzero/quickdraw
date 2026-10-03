@@ -4,14 +4,15 @@
 // batch and a flush; several nodes behind a cluster adapter; and the rate
 // limiter leaving subscriptions alone.
 
-import { Server, type Namespace } from "socket.io";
+import type { Server } from "socket.io";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { entityRoom } from "../../index";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
 import { deferred, type Deferred } from "../__tests__/fixtures";
 import { as, seedBoard, type Board } from "../access/__tests__/board";
-import type { Principal, QuickdrawIo, ServiceGrants } from "../index";
+import type { Principal, ServiceGrants } from "../index";
+import { peeredCluster } from "../transports/__tests__/harness";
 import {
   cardService,
   defineTaskService,
@@ -567,27 +568,6 @@ describe("races with a subscribe batch", () => {
     expect(reads).toEqual([]);
   });
 });
-
-/** A Socket.IO adapter that hands `serverSideEmit` to the other servers it was made for: a cluster in one process. */
-function peeredCluster() {
-  const servers: QuickdrawIo[] = [];
-  // A server attached to nothing holds no resources; it only shows the default adapter class.
-  const Base = new Server().of("/").adapter.constructor as new (
-    nsp: Namespace,
-  ) => Namespace["adapter"];
-  class PeeredAdapter extends Base {
-    override serverSideEmit(packet: unknown[]): void {
-      for (const io of servers) {
-        if (io.sockets !== this.nsp) {
-          (io.sockets as unknown as { _onServerSideEmit(args: unknown[]): void })._onServerSideEmit(
-            packet,
-          );
-        }
-      }
-    }
-  }
-  return { adapter: PeeredAdapter as unknown as NonNullable<StartOptions["adapter"]>, servers };
-}
 
 describe("behind a cluster adapter", () => {
   it("reads touched rows without local subscribers, since other nodes' rooms are not visible", async () => {

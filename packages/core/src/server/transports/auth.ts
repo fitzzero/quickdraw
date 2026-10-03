@@ -95,6 +95,23 @@ export interface ServiceAccessSource {
 /** Resolves a request to its principal, or `null`; rejects when authentication fails. */
 export type ResolvePrincipal = (request: AuthenticateRequest) => Promise<Principal | null>;
 
+const SOCKET_SESSIONS = new WeakMap<object, string>();
+
+/**
+ * Records the session a socket authenticated with, so that
+ * `server.access.disconnectUser(userId, { sessionId })` can end that
+ * session's sockets alone. `socketAuth` calls it for the auth routes'
+ * sessions; an app's own `authenticate` may too.
+ */
+export function recordSocketSession(socket: object, sessionId: string): void {
+  SOCKET_SESSIONS.set(socket, sessionId);
+}
+
+/** The session a socket authenticated with, when its `authenticate` recorded one. */
+export function socketSessionOf(socket: object): string | undefined {
+  return SOCKET_SESSIONS.get(socket);
+}
+
 /**
  * True for a refusal `authenticate` made on purpose, by throwing a
  * `QuickdrawError` with code `UNAUTHENTICATED` (a revoked session, a socket
