@@ -6,11 +6,15 @@
 // violations are `NOT_FOUND` and `CONFLICT`.
 
 import { describe, expect, it } from "vitest";
-import { QuickdrawError } from "../../../index";
+import { z } from "zod";
+import { defineContract, QuickdrawError } from "../../../index";
+import { createTestApp, type TestApp } from "../../../testing/index";
+import { projectMembers } from "../../access/__tests__/board";
 import { colSub, receiveScopes } from "../../collections/__tests__/fixture";
-import { receive, sub } from "../../emit/__tests__/live";
+import { projectContract, projectService, qd, receive, sub } from "../../emit/__tests__/live";
+import { anyOf, crud, inherit, jsonAcl } from "../../index";
 import { requireRow } from "../guards";
-import { addTasks, as, ENTITY_KEYS, kitApp } from "./__tests__/fixture";
+import { addTasks, as, ENTITY_KEYS, kitApp, taskEntity } from "./__tests__/fixture";
 import { ORDINAL_STEP } from "./ordinal";
 
 const kit = kitApp();
@@ -187,6 +191,110 @@ describe("refusals", () => {
     await expect(
       owner.bulkUpdate({ ids: Array.from({ length: 201 }, (_, index) => `t${index}`), data: {} }),
     ).rejects.toMatchObject({ code: "VALIDATION", data: { issues: [{ path: ["ids"] }] } });
+  });
+});
+
+describe("columns that decide access", () => {
+  it("move a row only into a parent the caller has the method's row level on", async () => {
+    const patch = z.object({ title: z.string(), projectId: z.string() }).partial();
+    const movable = defineContract("taskService", {
+      entity: taskEntity,
+      methods: {
+        ...crud.contract({
+          entity: taskEntity,
+          update: { input: patch },
+          bulkUpdate: { input: patch },
+        }),
+      },
+    });
+    const service = qd.defineService(movable, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      methods: {
+        ...crud.handlers(movable, {
+          access: { update: { entry: "Moderate" }, bulkUpdate: "authenticated" },
+        }),
+      },
+    });
+    const app = await createTestApp({ services: [projectService, service], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    const board = kit.board();
+    const prisma = kit.harness().prisma;
+    // Bo moderates P1 and P3, and has no level on P2 (Ed's).
+    const p3 = await prisma.project.create({ data: { name: "P3", ownerId: board.ada } });
+    await prisma.projectMember.create({
+      data: { projectId: p3.id, userId: board.bo, role: "Moderate" },
+    });
+    const bo = app.as(as(board.bo)).taskService;
+    await expect(bo.update({ id: board.t1, projectId: board.p2 })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message:
+        'Moving a row of taskService by "projectId" needs Moderate on the projectService row it moves into',
+    });
+    await expect(
+      bo.bulkUpdate({ ids: [board.t1], data: { projectId: board.p2 } }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect((await prisma.task.findUnique({ where: { id: board.t1 } }))?.projectId).toBe(board.p1);
+    expect(await bo.update({ id: board.t1, projectId: p3.id })).toMatchObject({ projectId: p3.id });
+    expect(await bo.bulkUpdate({ ids: [board.t1], data: { projectId: board.p1 } })).toEqual({
+      count: 1,
+    });
+    // Ada holds Admin on P1's tasks and nothing on P2; a service-wide Admin moves anywhere.
+    await expect(
+      app.as(as(board.ada)).taskService.update({ id: board.t1, projectId: board.p2 }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const administrator = app.as(as(board.cy, { taskService: "Admin" })).taskService;
+    expect(await administrator.update({ id: board.t1, projectId: board.p2 })).toMatchObject({
+      projectId: board.p2,
+    });
+  });
+
+  it("leave an owner or access list column to a service-wide Admin", async () => {
+    const projectEntity = z.object({ id: z.string(), name: z.string(), ownerId: z.string() });
+    const patch = z.object({ name: z.string(), ownerId: z.string() }).partial();
+    const projects = defineContract("projectService", {
+      entity: projectEntity,
+      methods: {
+        ...crud.contract({
+          entity: projectEntity,
+          update: { input: patch },
+          bulkUpdate: { input: patch },
+        }),
+      },
+    });
+    const service = qd.defineService(projects, {
+      model: "project",
+      access: anyOf(jsonAcl("acl", { owner: "ownerId" }), projectMembers),
+      methods: {
+        ...crud.handlers(projects, {
+          access: { update: { entry: "Moderate" }, bulkUpdate: "authenticated" },
+        }),
+      },
+    });
+    const app = await createTestApp({ services: [service], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    const board = kit.board();
+    // Ada owns P1: Admin on the row, but no service-wide grant.
+    for (const userId of [board.bo, board.ada]) {
+      const caller = app.as(as(userId)).projectService;
+      await expect(caller.update({ id: board.p1, ownerId: board.bo })).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        message:
+          '"ownerId" decides who may reach rows of projectService: only a service-wide Admin may change it',
+      });
+      await expect(
+        caller.bulkUpdate({ ids: [board.p1], data: { ownerId: board.bo } }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    expect(
+      await app.as(as(board.bo)).projectService.update({ id: board.p1, name: "N" }),
+    ).toMatchObject({
+      name: "N",
+    });
+    const administrator = app.as(as(board.ed, { projectService: "Admin" })).projectService;
+    expect(await administrator.update({ id: board.p1, ownerId: board.bo })).toMatchObject({
+      ownerId: board.bo,
+    });
   });
 });
 

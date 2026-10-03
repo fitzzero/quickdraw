@@ -440,6 +440,12 @@ export const taskService = qd.defineService(task, {
   patch and `delete` `removed`, and a bulk write past a scope's
   `bulkThreshold` sends it one `reset`. A missing row is `NOT_FOUND`, a
   unique violation `CONFLICT`.
+- `update` and `bulkUpdate` (and the admin kit's writes) never let a caller
+  without a service-wide `Admin` grant set a column the policy reads (an
+  owner column, an access list), and move a row into another parent (an
+  `inherit` policy's `via`, an anchored collection's scope column) only
+  when the caller's level on the new parent meets the method's row level:
+  `FORBIDDEN` otherwise.
 - `reorder({ id, beforeId?, afterId? })` puts the row between its new
   neighbors (`beforeId` comes right before it) with one write, or renumbers
   the `within` list in steps of 1,024 when no gap is left.
@@ -710,9 +716,11 @@ const { services } = useAdminServices(qd); // [{ key: "task", serviceName, displ
   client, so subscribers and collections get the same frames as for any
   other write; `adminDelete({ id })` returns `null`. `id`, `createdAt` and
   `updatedAt` are never writable, nor are hidden fields or those an override
-  made read-only (`VALIDATION`); each value is checked by the entity schema
-  itself, and a value the database refuses is `VALIDATION`. A missing row is
-  `NOT_FOUND`.
+  made read-only (`VALIDATION`); without a service-wide `Admin` grant, nor
+  are the columns the policy reads, and a row moves to another parent only
+  with the row level on it (`FORBIDDEN`, as for the read/write kit); each
+  value is checked by the entity schema itself, and a value the database
+  refuses is `VALIDATION`. A missing row is `NOT_FOUND`.
 - `adminMeta()` returns `{ serviceName, displayName, fields }`, one
   `{ name, type, label, required, editable, showInTable, sortable,
 filterable, enumValues?, relationService? }` per field: `type` is

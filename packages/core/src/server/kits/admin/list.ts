@@ -18,7 +18,8 @@ import { selectWith } from "../../collections/items";
 import { defaultSorts, listOrder, listWhere, namedFields } from "../crud/listQuery";
 import { refusal } from "../crud/page";
 import type { KitHandler, KitHandlerArgs, Row } from "../crud/runtime";
-import { adminCall, checkSeen, rowOut, type AdminContext } from "./runtime";
+import { adminCall, checkSeen, rowOut } from "./runtime";
+import type { AdminContext } from "./types";
 
 /** Plain directions: an offset page needs no explicit place for nulls, only a total order. */
 const NO_NULLABLE: ReadonlySet<string> = new Set();

@@ -7,10 +7,12 @@
 // default, and what they show.
 
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { admin as adminContract, defineContract } from "../../../index";
 import { createTestApp, describeAccessMatrix, type TestApp } from "../../../testing/index";
+import { projectMembers } from "../../access/__tests__/board";
 import { projectContract, projectService, qd } from "../../emit/__tests__/live";
-import { admin, inherit } from "../../index";
+import { admin, anyOf, inherit, jsonAcl } from "../../index";
 import { adminApp, as, serviceAdmin, taskEntity } from "./__tests__/fixture";
 
 const kit = adminApp();
@@ -169,5 +171,79 @@ describe("forms an app gives", () => {
     const administrator = app.as(as(board.ed, { strictService: "Admin" })).strictService;
     const all = await administrator.adminList({ filter: { notes: null } });
     expect(all.items[0]).toHaveProperty("notes");
+  });
+});
+
+describe("a lowered form's writes", () => {
+  it("leave the columns that decide access to a service-wide Admin: a member cannot make themselves the owner", async () => {
+    const projectEntity = z.object({ id: z.string(), name: z.string(), ownerId: z.string() });
+    const projects = defineContract("projectService", {
+      entity: projectEntity,
+      methods: { ...adminContract.contract({ entity: projectEntity }) },
+    });
+    const lowered = qd.defineService(projects, {
+      model: "project",
+      access: anyOf(jsonAcl("acl", { owner: "ownerId" }), projectMembers),
+      methods: {
+        ...admin.handlers(projects, {
+          access: { adminUpdate: { entry: "Moderate" }, adminGet: { entry: "Read" } },
+        }),
+      },
+    });
+    const app = await createTestApp({ services: [lowered], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    const board = kit.board();
+    const prisma = kit.harness().prisma;
+    // Bo is a Moderate member of P1; Ada owns it.
+    const bo = app.as(as(board.bo)).projectService;
+    await expect(
+      bo.adminUpdate({ id: board.p1, data: { ownerId: board.bo } }),
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message:
+        '"ownerId" decides who may reach rows of projectService: only a service-wide Admin may change it',
+    });
+    expect((await prisma.project.findUnique({ where: { id: board.p1 } }))?.ownerId).toBe(board.ada);
+    // The owner holds Admin on the row, not a service-wide grant.
+    await expect(
+      app
+        .as(as(board.ada))
+        .projectService.adminUpdate({ id: board.p1, data: { ownerId: board.bo } }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // Other columns are the form's to write.
+    expect(await bo.adminUpdate({ id: board.p1, data: { name: "Renamed" } })).toMatchObject({
+      name: "Renamed",
+    });
+    const administrator = app.as(as(board.ed, { projectService: "Admin" })).projectService;
+    expect(
+      await administrator.adminUpdate({ id: board.p1, data: { ownerId: board.bo } }),
+    ).toMatchObject({ ownerId: board.bo });
+  });
+
+  it("move a row only into a parent the caller has the row level on", async () => {
+    const tasks = defineContract("taskService", {
+      entity: taskEntity,
+      methods: { ...adminContract.contract({ entity: taskEntity, expose: ["adminUpdate"] }) },
+    });
+    const lowered = qd.defineService(tasks, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      methods: { ...admin.handlers(tasks, { access: { adminUpdate: { entry: "Moderate" } } }) },
+    });
+    const app = await createTestApp({ services: [projectService, lowered], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    const board = kit.board();
+    // Bo moderates P1 and has no level on P2.
+    await expect(
+      app.as(as(board.bo)).taskService.adminUpdate({ id: board.t1, data: { projectId: board.p2 } }),
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message:
+        'Moving a row of taskService by "projectId" needs Moderate on the projectService row it moves into',
+    });
+    const moved = await app
+      .as(serviceAdmin(board.bo))
+      .taskService.adminUpdate({ id: board.t1, data: { projectId: board.p2 } });
+    expect(moved).toMatchObject({ projectId: board.p2 });
   });
 });

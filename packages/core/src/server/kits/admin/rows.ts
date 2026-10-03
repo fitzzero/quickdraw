@@ -15,14 +15,9 @@ import type { IdInput } from "../../../contract/kits/crudSchemas";
 import type { AdminCreateQuery, AdminUpdateQuery } from "../../../contract/kits/adminSchemas";
 import { requireRow } from "../guards";
 import type { KitHandler, KitHandlerArgs } from "../crud/runtime";
-import {
-  adminCall,
-  checkWrite,
-  rowOut,
-  writeRefusal,
-  type AdminCall,
-  type AdminContext,
-} from "./runtime";
+import { adminCall, rowOut, type AdminCall } from "./runtime";
+import type { AdminContext } from "./types";
+import { checkWrite, writeRefusal } from "./writes";
 
 async function readRow(call: AdminCall, id: string): Promise<unknown> {
   const row = await call.table.findUnique({ where: { id }, select: call.projection.select });
@@ -43,7 +38,7 @@ export function adminCreateHandler(context: AdminContext): KitHandler {
   const handler = async ({ input, ctx, db }: KitHandlerArgs): Promise<unknown> => {
     const call = adminCall(ctx, db, context.fields);
     const { data } = input as AdminCreateQuery;
-    checkWrite(call, context, data);
+    await checkWrite(call, context, data);
     try {
       return rowOut(call, await call.table.create({ data, select: call.projection.select }));
     } catch (error) {
@@ -58,7 +53,7 @@ export function adminUpdateHandler(context: AdminContext): KitHandler {
   const handler = async ({ input, ctx, db }: KitHandlerArgs): Promise<unknown> => {
     const call = adminCall(ctx, db, context.fields);
     const { id, data } = input as AdminUpdateQuery;
-    checkWrite(call, context, data);
+    await checkWrite(call, context, data);
     if (Object.keys(data).length === 0) {
       return await readRow(call, id);
     }

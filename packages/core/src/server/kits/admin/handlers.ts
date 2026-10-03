@@ -159,7 +159,7 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty>
   const entries: Record<string, object> = {};
   for (const [name, spec] of kit) {
     const form = (access[name] as AccessForm | undefined) ?? ADMIN_DEFAULT_ACCESS;
-    const handler = handlerOf({ spec, fields });
+    const handler = handlerOf({ spec, fields, form });
     checkWhenDefined(handler, (service) => serviceProblem(service, contract));
     entries[name] = Object.freeze({ access: form, handler });
   }

@@ -13,8 +13,7 @@ import {
   adminGetHandler,
   adminUpdateHandler,
 } from "./rows";
-import type { AdminContext } from "./runtime";
-import type { AdminDefaultAccess } from "./types";
+import type { AdminContext, AdminDefaultAccess } from "./types";
 
 /** The form every admin method runs under when `access` gives none. */
 export const ADMIN_DEFAULT_ACCESS: AdminDefaultAccess = Object.freeze({ service: "Admin" });

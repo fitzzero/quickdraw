@@ -26,7 +26,7 @@ export function handlerOf(context: MethodContext): KitHandler {
     case "create":
       return createHandler(context.prepare);
     case "update":
-      return updateHandler();
+      return updateHandler(form);
     case "delete":
       return deleteHandler();
     case "reorder":

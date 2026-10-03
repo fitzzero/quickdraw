@@ -8,11 +8,22 @@
 
 import type { AnyContract } from "../../../contract/defineContract";
 import type { EntityOf, ParsedInputOf } from "../../../contract/infer";
-import type { AdminMethodsOf } from "../../../contract/kits/admin";
+import type { AdminMethodsOf, AdminSpec } from "../../../contract/kits/admin";
 import type { AdminFieldConfig } from "../../../contract/kits/adminFields";
-import type { AccessFor } from "../../access/types";
+import type { AccessFor, AccessForm } from "../../access/types";
 import type { KitHandler } from "../crud/runtime";
 import type { KitContext } from "../crud/types";
+import type { AdminFields } from "./meta";
+
+/** What one admin method's handler is made from. */
+export interface AdminContext {
+  /** What the contract half made the method for: its filter and sort fields. */
+  readonly spec: AdminSpec;
+  /** The service's fields as the kit configures them: what it hides, and what it does not write. */
+  readonly fields: AdminFields;
+  /** The method's access form: a write's row level comes from it. */
+  readonly form: AccessForm;
+}
 
 /**
  * The form every admin method runs under when `access` gives none: the

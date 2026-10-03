@@ -19,7 +19,8 @@ import type { AnyContext } from "../../context";
 import { SUBSCRIBER_LEVELS } from "../../emit/tiers";
 import { requireRow } from "../guards";
 import type { KitHandler, KitHandlerArgs } from "../crud/runtime";
-import { adminCall, type AdminCall, type AdminContext } from "./runtime";
+import { adminCall, type AdminCall } from "./runtime";
+import type { AdminContext } from "./types";
 
 /** The sockets subscribed to row `id`, per level. */
 function subscribersOf(call: AdminCall, id: string): AdminSubscribers {

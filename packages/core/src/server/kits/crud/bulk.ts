@@ -5,10 +5,13 @@
 // another), and ids with no row, are skipped, even for a `"public"` method;
 // the result counts the rows changed. The tracked client records every row, and a flush touching more
 // rows of one collection scope than its `bulkThreshold` sends that scope one
-// `reset` instead of a delta per row.
+// `reset` instead of a delta per row. `bulkUpdate`'s data may not set a
+// column that decides access, nor move the rows into an anchor row the
+// caller lacks the row level on (`../columns.ts`).
 
 import type { IdsInput } from "../../../contract/kits/crudSchemas";
 import type { AccessForm } from "../../access/types";
+import { checkWritableColumns } from "../columns";
 import { allowedIds, rowLevel } from "./access";
 import {
   crudCall,
@@ -60,6 +63,7 @@ export function bulkUpdateHandler(form: AccessForm): KitHandler {
     if (Object.keys(patch).length === 0) {
       return { count: 0 };
     }
+    await checkWritableColumns(call.runtime, call.principal, patch, rowLevel(form, "Moderate"));
     return await writeAllowed(call, db, form, ids, (table, allowed) =>
       table.updateMany({ where: { id: { in: [...allowed] } }, data: patch }),
     );
