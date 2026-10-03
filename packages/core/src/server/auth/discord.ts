@@ -44,8 +44,8 @@ export function getDiscordAvatarUrl(user: DiscordUser): string {
   }
   // Default avatar based on discriminator or user ID
   const index =
-    user.discriminator !== "0"
-      ? parseInt(user.discriminator, 10) % 5
-      : (BigInt(user.id) >> BigInt(22)) % BigInt(6);
+    user.discriminator === "0"
+      ? (BigInt(user.id) >> BigInt(22)) % BigInt(6)
+      : parseInt(user.discriminator, 10) % 5;
   return `https://cdn.discordapp.com/embed/avatars/${index}.png`;
 }

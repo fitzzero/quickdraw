@@ -93,3 +93,41 @@ export function createPublicApiLimiter(overrides: PartialOptions = {}): RateLimi
     ...overrides,
   });
 }
+
+/**
+ * Answers a refused call in the HTTP transport's own reply shape, so a
+ * server caller (`createServerCaller`) reports `RATE_LIMITED` with
+ * `retryAfterMs` instead of an unreadable reply.
+ */
+function callHandler(req: Request, res: Response, _next: NextFunction, options: Options): void {
+  const info = (req as Request & Partial<Record<string, { resetTime?: Date }>>)[
+    options.requestPropertyName
+  ];
+  const untilReset =
+    info?.resetTime === undefined ? options.windowMs : info.resetTime.getTime() - Date.now();
+  const retryAfterMs = Math.max(1000, untilReset);
+  if (!res.getHeader("Retry-After")) {
+    res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
+  }
+  res.status(options.statusCode).json({
+    ok: false,
+    e: { code: "RATE_LIMITED", message: "Rate limit exceeded", data: { retryAfterMs } },
+  });
+}
+
+/**
+ * Calls through the HTTP transport (RFC 0003 section 10), mounted with
+ * `createServer({ http: { rateLimit: createCallLimiter() } })`: 300 calls per
+ * minute per IP, refused with `429 { ok: false, e: { code: "RATE_LIMITED",
+ * message, data: { retryAfterMs } } }`. Server-side prefetch reaches the API
+ * from the web server's address, so key it some other way (`keyGenerator`)
+ * or raise `max` when the web server prefetches for many users.
+ */
+export function createCallLimiter(overrides: PartialOptions = {}): RateLimitRequestHandler {
+  return createJsonRateLimiter({
+    windowMs: 60 * 1000,
+    max: 300,
+    handler: callHandler,
+    ...overrides,
+  });
+}

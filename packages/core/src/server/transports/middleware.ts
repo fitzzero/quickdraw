@@ -20,7 +20,7 @@ import {
   type RateLimiter,
   type RateLimitOptions,
 } from "../rateLimit";
-import type { ResolvePrincipal } from "./auth";
+import { isRefusal, type ResolvePrincipal } from "./auth";
 import { legacyFailure } from "./legacy";
 import type { QuickdrawIo, QuickdrawServerSocket, SocketContext } from "./types";
 
@@ -79,7 +79,9 @@ export function protocolMiddleware(
  * Authenticates the socket and keeps its principal on `socket.data`. A
  * failure refuses the connection with "Authentication failed", as 4.1 did,
  * and `{ code: "UNAUTHENTICATED" }` as the `connect_error` data, so a client
- * can tell it from a protocol mismatch.
+ * can tell it from a protocol mismatch. A refusal `authenticate` makes on
+ * purpose, by throwing a `QuickdrawError` with that code (a revoked session,
+ * say), is the client's doing and logs at debug; any other failure at error.
  */
 export function authMiddleware(
   resolvePrincipal: ResolvePrincipal,
@@ -98,7 +100,8 @@ export function authMiddleware(
         next();
       },
       (error: unknown) => {
-        context.logger.error("Socket authentication failed", {
+        const level = isRefusal(error) ? "debug" : "error";
+        context.logger[level]("Socket authentication failed", {
           category: "quickdraw.socket",
           socketId: socket.id,
           error: describeError(error),

@@ -33,19 +33,27 @@ export interface SessionCookieOptions {
   maxAgeMs?: number;
   /** Cookie domain. Defaults to process.env.COOKIE_DOMAIN. */
   domain?: string;
+  /**
+   * SameSite. Default: "none" in production, "lax" otherwise. A "none"
+   * cookie is always Secure, because browsers drop one that is not.
+   */
+  sameSite?: "lax" | "none";
+  /** Secure. Default: true in production. */
+  secure?: boolean;
 }
 
 function cookieOptions(options: SessionCookieOptions): CookieSettings {
   const isProd = process.env.NODE_ENV === "production";
   const domain = options.domain ?? process.env.COOKIE_DOMAIN;
+  // SameSite=None (with Secure) lets the session cookie ride cross-site
+  // fetches, so a secondary web origin can hit the primary API host. The
+  // CORS allowlist (validateRedirectOrigin) is the actual origin gate. Dev
+  // keeps Lax — localhost is http-only and SameSite=None requires Secure.
+  const sameSite = options.sameSite ?? (isProd ? "none" : "lax");
   return {
     httpOnly: true,
-    secure: isProd,
-    // SameSite=None (with Secure) lets the session cookie ride cross-site
-    // fetches, so a secondary web origin can hit the primary API host. The
-    // CORS allowlist (validateRedirectOrigin) is the actual origin gate. Dev
-    // keeps Lax — localhost is http-only and SameSite=None requires Secure.
-    sameSite: isProd ? "none" : "lax",
+    secure: sameSite === "none" || (options.secure ?? isProd),
+    sameSite,
     path: "/",
     ...(domain && { domain }),
   };

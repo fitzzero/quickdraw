@@ -19,7 +19,7 @@ import { describeError } from "../pipeline/metrics";
 import { toCallReply, type DispatchResult } from "../pipeline/request";
 import type { Principal } from "../types";
 import { INTERNAL_FAILURE, unreadable } from "./ack";
-import { createPrincipalResolver, type ResolvePrincipal, type ServerAuth } from "./auth";
+import { createPrincipalResolver, isRefusal, type ResolvePrincipal, type ServerAuth } from "./auth";
 import { isJsonRequest, readJsonInput, tokenOf, type HttpRequest } from "./body";
 
 /**
@@ -33,6 +33,12 @@ export type HttpRouter = (
   next?: (error?: unknown) => void,
 ) => void;
 
+/**
+ * An Express-style middleware, such as an `express-rate-limit` limiter: it
+ * answers the request itself, or calls `next()` to let it through.
+ */
+export type HttpMiddleware = (req: never, res: never, next: (error?: unknown) => void) => unknown;
+
 /** How the HTTP transport serves calls. */
 export interface HttpTransportOptions {
   /** The path calls are served under: `POST {path}/{service}/{method}`. Default `"/qd"`. */
@@ -44,6 +50,14 @@ export interface HttpTransportOptions {
   readonly maxBodyBytes?: number;
   /** The session cookie a token is read from. Default `"session"`. */
   readonly cookieName?: string;
+  /**
+   * A rate limiter run before each call the transport serves, and only
+   * those: `createCallLimiter()` from `./server/express`, which refuses in
+   * the transport's own `RATE_LIMITED` reply. It runs on the app's Express
+   * request and response, so the transport must be mounted on Express.
+   * Default: none (the socket rate limiter does not see HTTP calls).
+   */
+  readonly rateLimit?: HttpMiddleware;
 }
 
 /** Options of {@link createHttpRouter}. */
@@ -64,6 +78,7 @@ export interface HttpRouterSettings {
   readonly prefix: string;
   readonly maxBodyBytes: number;
   readonly cookieName: string | undefined;
+  readonly rateLimit: HttpMiddleware | undefined;
 }
 
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
@@ -158,7 +173,7 @@ async function authenticate(
       req,
     });
   } catch (error) {
-    settings.logger.error("HTTP authentication failed", {
+    settings.logger[isRefusal(error) ? "debug" : "error"]("HTTP authentication failed", {
       category: "quickdraw.http",
       error: describeError(error),
     });
@@ -212,6 +227,40 @@ function notFound(settings: HttpRouterSettings, res: ServerResponse): void {
   sendResult(settings, res, failure(new QuickdrawError("NOT_FOUND", "Not found")));
 }
 
+/** Serves a call, answering `INTERNAL` when serving it fails. */
+function serveCall(
+  settings: HttpRouterSettings,
+  req: IncomingMessage,
+  res: ServerResponse,
+  target: Target,
+): void {
+  const fail = (error: unknown): void => {
+    settings.logger.error("The HTTP transport failed to serve a call", {
+      category: "quickdraw.http",
+      error: describeError(error),
+    });
+    sendResult(settings, res, failure(new QuickdrawError("INTERNAL", INTERNAL_MESSAGE)));
+  };
+  const { rateLimit } = settings;
+  if (rateLimit === undefined) {
+    serve(settings, req, res, target).catch(fail);
+    return;
+  }
+  // The limiter answers a refused call itself; it calls `next` to let one through.
+  const next = (error?: unknown): void => {
+    if (error === undefined) {
+      serve(settings, req, res, target).catch(fail);
+    } else {
+      fail(error);
+    }
+  };
+  try {
+    Promise.resolve(rateLimit(req as never, res as never, next)).catch(fail);
+  } catch (error) {
+    fail(error);
+  }
+}
+
 /** The router over resolved settings; `createServer` builds it with its own principal resolver. */
 export function httpRouter(settings: HttpRouterSettings): HttpRouter {
   return (req, res, next) => {
@@ -224,13 +273,7 @@ export function httpRouter(settings: HttpRouterSettings): HttpRouter {
       }
       return;
     }
-    serve(settings, req, res, target).catch((error: unknown) => {
-      settings.logger.error("The HTTP transport failed to serve a call", {
-        category: "quickdraw.http",
-        error: describeError(error),
-      });
-      sendResult(settings, res, failure(new QuickdrawError("INTERNAL", INTERNAL_MESSAGE)));
-    });
+    serveCall(settings, req, res, target);
   };
 }
 
@@ -249,11 +292,18 @@ export function httpRouterSettings(
   if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 1) {
     throw new TypeError("http.maxBodyBytes must be a whole number of bytes, 1 or more");
   }
+  const { rateLimit } = options;
+  if (rateLimit !== undefined && typeof rateLimit !== "function") {
+    throw new TypeError(
+      "http.rateLimit must be an Express middleware, such as createCallLimiter()",
+    );
+  }
   return {
     ...base,
     prefix: normalizePath(options.path ?? "/qd"),
     maxBodyBytes,
     cookieName: options.cookieName,
+    rateLimit,
   };
 }
 

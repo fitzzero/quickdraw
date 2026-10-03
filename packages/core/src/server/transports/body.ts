@@ -122,8 +122,17 @@ function decode(raw: string): string {
   }
 }
 
-/** The request's cookies: `req.cookies` from `cookie-parser`, or else the `Cookie` header parsed here. */
-function cookiesOf(req: HttpRequest): Record<string, string> {
+/** Where cookies are read from: a request, or a socket handshake's `{ headers }`. */
+export interface CookieSource {
+  readonly cookies?: unknown;
+  readonly headers: { readonly cookie?: string | undefined };
+}
+
+/**
+ * The request's cookies: `req.cookies` from `cookie-parser`, or else the
+ * `Cookie` header parsed here (the first of a repeated name wins).
+ */
+export function cookiesOf(req: CookieSource): Record<string, string> {
   if (isStringRecord(req.cookies)) {
     return req.cookies;
   }
