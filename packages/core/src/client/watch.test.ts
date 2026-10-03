@@ -1,8 +1,9 @@
 // A connection's change topics against a real server on PGlite (RFC 0003
-// sections 8.2 and 11.3), without React: one `qd:watch` per topic however
+// sections 8.2, 11.3 and 17), without React: one `qd:watch` per topic however
 // many watch it, `qd:changed` routed by topic and told once per key, a topic
 // refused until the next connect, `RATE_LIMITED` waited out on the
-// subscription backoff, and every topic joined again after a reconnect.
+// subscription backoff, every topic joined again after a reconnect, and
+// reads that wait for a join in flight.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectionTopic } from "../index";
@@ -207,6 +208,81 @@ describe("connection.watch", () => {
     await until(() => watchersOf(app, board.p1) === 1 && watchersOf(app, board.p1, "open") === 1);
     expect(framesOf(sent, "qd:watch")).toHaveLength(2);
     expect(connection.backoffRemaining("subscription")).toBe(0);
+  });
+
+  it("lets a read wait for a join in flight, and tells only the watches whose read did not wait", async () => {
+    let held = deferred();
+    const { app } = await live.start({ beforeRead: () => held.promise });
+    const board = live.board();
+    const topic = collectionTopic("board", board.p1);
+    const unwatched = createQuickdrawConnection({
+      url: app.url,
+      auth: { principal: as(board.ada) },
+      transports: ["websocket"],
+    });
+    connections.push(unwatched);
+    unwatched.watch({ service: "taskService", topic, onChanged: () => undefined });
+    // Not connected: there is no join in flight to wait for.
+    expect(unwatched.waitForJoin({ service: "taskService", topic, key: "a" })).toBeUndefined();
+
+    const connection = await connect(app.url, as(board.ada));
+    const sent = outgoing(connection);
+    const joined: string[] = [];
+    for (const key of ["waits", "read before"]) {
+      connection.watch({
+        service: "taskService",
+        topic,
+        key,
+        onChanged: () => undefined,
+        onJoined: () => joined.push(key),
+      });
+    }
+    expect(
+      connection.waitForJoin({ service: "taskService", topic: "board:other" }),
+    ).toBeUndefined();
+    let answered = false;
+    void connection.waitForJoin({ service: "taskService", topic, key: "waits" })?.then(() => {
+      answered = true;
+    });
+    await until(() => framesOf(sent, "qd:watch").length === 1);
+    await tick(100);
+    expect(answered).toBe(false);
+    held.resolve();
+    held = deferred();
+    held.resolve();
+    await until(() => answered);
+    expect(joined).toEqual(["read before"]);
+    // Joined: a read from now on sees every change, so nothing waits.
+    expect(connection.waitForJoin({ service: "taskService", topic, key: "waits" })).toBeUndefined();
+  });
+
+  it("lets a read waiting for a join go when the join is refused", async () => {
+    let held = deferred();
+    const { app } = await live.start({ beforeRead: () => held.promise });
+    const board = live.board();
+    const connection = await connect(app.url, as(board.ada));
+    // Ada may not read P2's board: the server answers FORBIDDEN.
+    const topic = collectionTopic("board", board.p2);
+    const joined: string[] = [];
+    connection.watch({
+      service: "taskService",
+      topic,
+      key: "k",
+      onChanged: () => undefined,
+      onJoined: () => joined.push("k"),
+    });
+    let answered = false;
+    void connection.waitForJoin({ service: "taskService", topic, key: "k" })?.then(() => {
+      answered = true;
+    });
+    await tick(100);
+    expect(answered).toBe(false);
+    held.resolve();
+    held = deferred();
+    held.resolve();
+    await until(() => answered);
+    expect(joined).toEqual([]);
+    expect(connection.waitForJoin({ service: "taskService", topic, key: "k" })).toBeUndefined();
   });
 
   it("tells every watch even when one throws, and reports the error on its own", async () => {

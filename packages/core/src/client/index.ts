@@ -50,7 +50,7 @@ export {
   type CallResult,
 } from "./call";
 export { reloadOncePerSession } from "./reload";
-export type { TopicWatch } from "./watch";
+export type { JoinWait, TopicWatch } from "./watch";
 export {
   DEFAULT_SUBSCRIPTION_LANE,
   type LaneCallback,

@@ -20,11 +20,17 @@
 //   still works, it is just not told of changes.
 // - One `qd:changed` listener serves every topic and routes by topic.
 //   Watches that share a `key` are told once per frame between them.
+// - A read can wait for its topic's join (`waitForJoin`): while the socket
+//   is connected and the topic's `qd:watch` is unanswered, the query hooks
+//   hold a read until the server answers it, joined or refused, so the read
+//   sees every change made before the join and a watched query is read once
+//   on its first mount (RFC 0003 section 17).
 // - A watch is told once (`onJoined`) when its topic is first joined after
-//   the watch started: a read sent before then may have missed a change
-//   made before the join, so the query hooks read once more (RFC 0003
-//   section 17). Joining again after a reconnect tells no one: the
-//   coordinator's reconnect refetch covers that.
+//   the watch started, unless its key's read waited for that join: a read
+//   sent before then (on a socket that was not connected yet, or a result
+//   prefetched before the watch) may have missed a change made before the
+//   join, so the query hooks read once more. Joining again after a
+//   reconnect tells no one: the coordinator's reconnect refetch covers that.
 //
 // React-free: the connection owns one (`connection.watch`).
 
@@ -51,7 +57,8 @@ export interface TopicWatch {
   /**
    * Called once, when the server first acknowledges `qd:watch` for the topic
    * after this watch started. Not called when the topic was joined already,
-   * nor when it is joined again after a reconnect.
+   * when it is joined again after a reconnect, nor when a read of this
+   * watch's `key` waited for that acknowledgement (`waitForJoin`).
    */
   readonly onJoined?: () => void;
   /**
@@ -71,10 +78,21 @@ export interface TopicHost {
   reportRateLimited(kind: BackoffKind, retryAfterMs?: number): void;
 }
 
+/** A topic a read waits for, as `waitForJoin` takes it. */
+export type JoinWait = Pick<TopicWatch, "service" | "topic" | "key">;
+
 /** The topics of one connection. */
 export interface Topics {
   /** Starts a watch; returns the function that ends it. Ending it twice does nothing. */
   watch(watch: TopicWatch): () => void;
+  /**
+   * While the socket is connected and the topic's `qd:watch` is unanswered,
+   * a promise that resolves once it is answered (joined or refused), fails,
+   * or the topic is left or the connection closes; `undefined` otherwise,
+   * when there is nothing to wait for. The watches with `key` are not told
+   * `onJoined` for that join: the read that waited is sent after it.
+   */
+  waitForJoin(wait: JoinWait): Promise<void> | undefined;
   /** Joins every watched topic again: the socket has just connected. */
   rejoin(): void;
   /** Stops waiting to retry joins: the connection closed. The next connect joins again. */
@@ -94,11 +112,19 @@ interface WatchRecord {
   told: boolean;
 }
 
+/** One read waiting for a topic's join (`waitForJoin`): its key, and what lets it go. */
+interface Hold {
+  readonly key: string | undefined;
+  readonly release: () => void;
+}
+
 interface Topic {
   readonly id: string;
   readonly frame: { readonly s: string; readonly topic: string };
   /** One record per `watch` call, so the same watch object may be started twice. */
   readonly watches: Set<WatchRecord>;
+  /** The reads waiting for the `qd:watch` in flight to be answered. */
+  readonly holds: Set<Hold>;
   state: JoinState;
   retry: ReturnType<typeof setTimeout> | undefined;
   /**
@@ -160,15 +186,30 @@ function tell(topic: Topic, frame: ChangedFrame): void {
   });
 }
 
-/** Tells the watches of `topic` that were not told yet that it is joined, once per key. */
+/**
+ * Tells the watches of `topic` that were not told yet that it is joined,
+ * once per key, except those whose key's read waited for this join: that
+ * read is sent after it.
+ */
 function tellJoined(topic: Topic): void {
+  const waited = new Set([...topic.holds].map((hold) => hold.key));
   const untold = [...topic.watches].filter((record) => !record.told);
   for (const record of untold) {
     record.told = true;
   }
-  notifyEach(oncePerKey(untold), ({ watch }) => {
+  const toTell = untold.filter(({ watch }) => watch.key === undefined || !waited.has(watch.key));
+  notifyEach(oncePerKey(toTell), ({ watch }) => {
     watch.onJoined?.();
   });
+}
+
+/** Lets every read waiting for `topic`'s join go: it was answered, failed, or will not be sent. */
+function releaseHolds(topic: Topic): void {
+  const holds = [...topic.holds];
+  topic.holds.clear();
+  for (const hold of holds) {
+    hold.release();
+  }
 }
 
 function isChangedFrame(value: unknown): value is ChangedFrame {
@@ -187,23 +228,9 @@ function retryIn(registry: Registry, topic: Topic, delayMs: number): void {
   }, delayMs);
 }
 
-/** Settles a topic by the answer to its `qd:watch`, or by the error that came instead. */
-function answered(registry: Registry, topic: Topic, error: Error | null, reply: unknown): void {
+/** Settles a topic by a refusal of its `qd:watch`: waits out `RATE_LIMITED`, else stands refused. */
+function refused(registry: Registry, topic: Topic, reply: unknown): void {
   const { host } = registry;
-  if (error !== null) {
-    // No answer: a dropped connection joins again on its next connect.
-    if (host.socket.connected) {
-      retryIn(registry, topic, DEFAULT_BACKOFF_MS);
-    } else {
-      topic.state = "waiting";
-    }
-    return;
-  }
-  if (isRecord(reply) && reply.ok === true) {
-    topic.state = "joined";
-    tellJoined(topic);
-    return;
-  }
   const failure = fromWire(isRecord(reply) ? reply.e : undefined);
   if (failure.code === "RATE_LIMITED") {
     host.reportRateLimited("subscription", retryAfterOf(failure));
@@ -213,7 +240,33 @@ function answered(registry: Registry, topic: Topic, error: Error | null, reply: 
   }
 }
 
-/** Sends `qd:watch` for `topic` when the socket is connected and subscriptions are not backing off. */
+/**
+ * Settles a topic by the answer to its `qd:watch`, or by the error that came
+ * instead, and lets the reads that waited for it go: joined, they see every
+ * change made before the join; otherwise they read anyway.
+ */
+function answered(registry: Registry, topic: Topic, error: Error | null, reply: unknown): void {
+  if (error !== null) {
+    // No answer: a dropped connection joins again on its next connect.
+    if (registry.host.socket.connected) {
+      retryIn(registry, topic, DEFAULT_BACKOFF_MS);
+    } else {
+      topic.state = "waiting";
+    }
+  } else if (isRecord(reply) && reply.ok === true) {
+    topic.state = "joined";
+    tellJoined(topic);
+  } else {
+    refused(registry, topic, reply);
+  }
+  releaseHolds(topic);
+}
+
+/**
+ * Sends `qd:watch` for `topic` when the socket is connected and
+ * subscriptions are not backing off. Reads waiting for an earlier attempt
+ * wait for this one; when none is sent, they go.
+ */
 function join(registry: Registry, topic: Topic): void {
   const { host } = registry;
   clearTimeout(topic.retry);
@@ -222,8 +275,10 @@ function join(registry: Registry, topic: Topic): void {
   const wait = host.backoffRemaining("subscription");
   if (!host.socket.connected) {
     topic.state = "waiting";
+    releaseHolds(topic);
   } else if (wait > 0) {
     retryIn(registry, topic, wait);
+    releaseHolds(topic);
   } else {
     topic.state = "joining";
     const { attempt } = topic;
@@ -242,10 +297,22 @@ function leave(registry: Registry, topic: Topic): void {
   clearTimeout(topic.leaving);
   topic.leaving = undefined;
   topic.attempt += 1;
+  releaseHolds(topic);
   const sent = topic.state === "joining" || topic.state === "joined";
   if (sent && registry.host.socket.connected) {
     registry.host.socket.emit(CLIENT_EVENTS.unwatch, topic.frame);
   }
+}
+
+/** A promise that resolves once `topic`'s `qd:watch` in flight is answered; see `Topics.waitForJoin`. */
+function waitForJoin(registry: Registry, wait: JoinWait): Promise<void> | undefined {
+  const topic = registry.topics.get(topicId(wait.service, wait.topic));
+  if (topic === undefined || topic.state !== "joining" || !registry.host.socket.connected) {
+    return undefined;
+  }
+  return new Promise<void>((resolve) => {
+    topic.holds.add({ key: wait.key, release: resolve });
+  });
 }
 
 function startWatch(registry: Registry, watch: TopicWatch): () => void {
@@ -254,6 +321,7 @@ function startWatch(registry: Registry, watch: TopicWatch): () => void {
     id,
     frame: Object.freeze({ s: watch.service, topic: watch.topic }),
     watches: new Set(),
+    holds: new Set(),
     state: "waiting",
     retry: undefined,
     leaving: undefined,
@@ -293,6 +361,7 @@ export function createTopics(host: TopicHost): Topics {
   });
   return Object.freeze({
     watch: (watch: TopicWatch) => startWatch(registry, watch),
+    waitForJoin: (wait: JoinWait) => waitForJoin(registry, wait),
     rejoin(): void {
       for (const topic of [...registry.topics.values()]) {
         if (topic.watches.size === 0) {
@@ -311,6 +380,7 @@ export function createTopics(host: TopicHost): Topics {
           topic.retry = undefined;
           topic.attempt += 1;
           topic.state = "waiting";
+          releaseHolds(topic);
         }
       }
     },

@@ -2,8 +2,8 @@
 
 // The parts of `qd.<service>.<method>.useQuery` beyond TanStack's own
 // (RFC 0003 sections 11.3 and 11.4): joining the change topic the query
-// watches, and showing the overlays of optimistic mutations over the rows it
-// returns.
+// watches (and holding its read until the join is answered), and showing
+// the overlays of optimistic mutations over the rows it returns.
 
 import { hashKey, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
@@ -57,15 +57,63 @@ function wasRead(coordinator: InvalidationCoordinator, queryKey: MethodQueryKey)
   return dataUpdatedAt > 0 || errorUpdatedAt > 0 || fetchStatus !== "idle";
 }
 
+/** Resolves when `joined` does, or as soon as `signal` aborts. */
+function untilJoinedOrAborted(
+  joined: Promise<void>,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (signal === undefined) {
+    return joined;
+  }
+  return new Promise<void>((resolve) => {
+    const done = (): void => {
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    if (signal.aborted) {
+      done();
+      return;
+    }
+    signal.addEventListener("abort", done, { once: true });
+    void joined.then(done);
+  });
+}
+
+/**
+ * Holds a watching query's read while its change topic is being joined on a
+ * connected socket, until the server answers the join (RFC 0003 section 17):
+ * joined, the read then sees every change made before the join, so the
+ * query is read once on its first mount, not once and again when the join
+ * lands; refused, it reads anyway. Returns at once when there is nothing to
+ * wait for, and as soon as `signal` aborts (the call then fails `CANCELLED`
+ * without being sent).
+ */
+export async function readAfterJoin(
+  connection: QuickdrawConnection,
+  service: string,
+  topic: string | undefined,
+  queryKey: MethodQueryKey,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const joined =
+    topic === undefined
+      ? undefined
+      : connection.waitForJoin({ service, topic, key: hashKey(queryKey) });
+  if (joined !== undefined) {
+    await untilJoinedOrAborted(joined, signal);
+  }
+}
+
 /**
  * Joins the change topic of a watching query while the component is
  * mounted, and invalidates the query through the coordinator on each
  * `qd:changed`. Components reading the same query cause one invalidation per
- * frame between them: their watches share the query key's hash. When the
- * server acknowledges the join after the query's read was sent (a first
- * read, or a result prefetched before), a change made between that read and
- * the join sent no `qd:changed` here, so the query is invalidated once
- * (RFC 0003 section 17).
+ * frame between them: their watches share the query key's hash. A read that
+ * starts while the join is in flight waits for it (`readAfterJoin`). When
+ * the server acknowledges the join after a read of the query was sent
+ * instead (on a socket that was not connected yet, or a result prefetched
+ * before the watch), a change made between that read and the join sent no
+ * `qd:changed` here, so the query is invalidated once (RFC 0003 section 17).
  */
 export function useTopicWatch({
   connection,

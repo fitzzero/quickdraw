@@ -19,7 +19,9 @@
 //   after any other code (`shouldRetry`), unless `retry` says otherwise;
 // - joins the change topic its contract method `watch`es while it is
 //   mounted and enabled, and is invalidated through the coordinator when the
-//   topic changes: never a read cancelled, at most one queued behind it;
+//   topic changes: never a read cancelled, at most one queued behind it. A
+//   read that starts while the join is in flight on a connected socket
+//   waits for the server's answer, so the first mount reads once;
 // - shows the overlays of optimistic mutations over the rows it returns.
 // There are no effect-based `onSuccess`/`onError` callbacks (4.1 had them at
 // `legacy-src/client/useServiceQuery.ts:185-198`).
@@ -44,7 +46,7 @@ import { methodKey, methodKeyPrefix, type MethodQueryKey } from "./keys";
 import type { MethodTarget } from "./members";
 import { mutateOptimistically, type OptimisticCache, type OptimisticUpdate } from "./optimistic";
 import { fetchMethodQuery } from "./query";
-import { topicOf, useOverlaySelect, useTopicWatch } from "./queryHooks";
+import { readAfterJoin, topicOf, useOverlaySelect, useTopicWatch } from "./queryHooks";
 import { carryVersion } from "./versions";
 
 /** Options of a query hook: TanStack's `useQuery` options, without the key and the query function. */
@@ -111,8 +113,9 @@ export function useMethodQuery<Output, Data = Output, Input = unknown>(
   return useQuery<Output, QuickdrawError, Data, MethodQueryKey<Input>>({
     ...rest,
     queryKey,
-    queryFn: ({ signal }) =>
-      fetchMethodQuery<Output>(
+    queryFn: async ({ signal }) => {
+      await readAfterJoin(connection, target.service, topic, queryKey, signal);
+      return await fetchMethodQuery<Output>(
         connection,
         queryClient,
         {
@@ -123,7 +126,8 @@ export function useMethodQuery<Output, Data = Output, Input = unknown>(
           output: target.output,
         },
         signal,
-      ),
+      );
+    },
     enabled: live ? (enabled ?? true) : false,
     retry: retry ?? shouldRetry,
     structuralSharing: shareKeepingVersion(structuralSharing),
