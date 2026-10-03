@@ -285,6 +285,21 @@ describe("the app's own Express app and HTTP server", () => {
       "createServer: shutdownTimeoutMs must be a whole number of milliseconds",
     );
   });
+
+  it("refuses an httpServer without its app, which would serve no HTTP calls, unless http is off", async () => {
+    const base = { services: services().list, db, logger: captureLogger() };
+    const httpServer = createHttpServer((_req, res) => {
+      res.statusCode = 418;
+      res.end("the app's own handler");
+    });
+    expect(() => createServer({ ...base, httpServer })).toThrow(
+      "createServer: httpServer was given without app, so the HTTP transport has nowhere to mount; pass the Express app the server was created from as app, or set http: false to serve sockets only",
+    );
+    const { server, url } = await harness.start({ ...base, httpServer, http: false });
+    expect(server.httpServer).toBe(httpServer);
+    expect((await harness.open(url, v5Auth(null)).hello).protocol).toBe(5);
+    expect((await fetch(`${url}/qd/taskService/get`, { method: "POST" })).status).toBe(418);
+  });
 });
 
 describe("qd.createServer", () => {

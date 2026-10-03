@@ -59,8 +59,9 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
   readonly app?: HttpApp;
   /**
    * The app's HTTP server, for Socket.IO to attach to; pass the one made from
-   * `app`. Without it one is created, from `app` when given. Either way the
-   * app calls `server.httpServer.listen(...)` itself.
+   * `app`, and `app` with it (or `http: false`): the HTTP transport is
+   * mounted on `app`. Without it one is created, from `app` when given.
+   * Either way the app calls `server.httpServer.listen(...)` itself.
    */
   readonly httpServer?: HttpServer;
   /** Authenticates sockets and HTTP calls. Without it every caller is anonymous. */
@@ -155,6 +156,14 @@ function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void 
   }
   if (options.httpServer !== undefined && typeof options.httpServer.listen !== "function") {
     throw new TypeError("createServer: httpServer must be a Node HTTP server");
+  }
+  // The HTTP transport is mounted on `app`; a server passed without it would
+  // build the transport, attach it nowhere, and answer every call with the
+  // app's own handler.
+  if (options.httpServer !== undefined && options.app === undefined && options.http !== false) {
+    throw new TypeError(
+      "createServer: httpServer was given without app, so the HTTP transport has nowhere to mount; pass the Express app the server was created from as app, or set http: false to serve sockets only",
+    );
   }
   const timeout = options.shutdownTimeoutMs;
   if (timeout !== undefined && !(Number.isSafeInteger(timeout) && timeout >= 0)) {

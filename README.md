@@ -65,6 +65,9 @@ server.httpServer.listen(4000);
   `createHttpRouter({ dispatcher, auth })` yourself.
 - **In process**: `server.dispatcher.caller(principal)` or `qd.caller(principal)`.
 
+Pass your own HTTP server as `httpServer` together with the `app` it was
+created from (or with `http: false`): the HTTP transport is mounted on `app`.
+
 `server.close()` disconnects every socket, waits for the calls still in
 flight (a mutation runs to its end) and closes the HTTP server, giving up after
 `shutdownTimeoutMs` (default 10 s);
