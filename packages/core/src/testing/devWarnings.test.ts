@@ -18,6 +18,7 @@ const qd = initQuickdraw<{ db: PrismaClient; principal: Principal }>();
 const ids = z.object({ ids: z.array(z.string()) });
 const scope = z.object({ projectId: z.string() });
 const count = z.number();
+const moves = z.object({ moves: z.array(z.object({ id: z.string(), projectId: z.string() })) });
 
 const contract = defineContract("probeService", {
   methods: {
@@ -31,6 +32,8 @@ const contract = defineContract("probeService", {
     big: query({ input: z.object({ size: z.number() }), output: z.string() }),
     nested: mutation({ input: scope, output: z.string() }),
     flags: mutation({ input: z.object({ id: z.string() }), output: z.string() }),
+    move: mutation({ input: moves, output: count }),
+    moveBatched: mutation({ input: moves, output: count }),
   },
 });
 
@@ -89,6 +92,29 @@ const service = qd.defineService(contract, {
             data: { projectId: input.projectId, title: "nested", labels: { create: [] } },
           })
         ).id,
+    },
+    // Per-row data that moves rows between scopes: by id, in an interactive transaction.
+    move: {
+      access: "authenticated",
+      handler: ({ input, db }) =>
+        db.$transaction(async (tx) => {
+          for (const { id, projectId } of input.moves) {
+            await tx.task.update({ where: { id }, data: { projectId } });
+          }
+          return input.moves.length;
+        }),
+    },
+    // The same in an array-form transaction, which cannot read a moved row inside the batch.
+    moveBatched: {
+      access: "authenticated",
+      handler: async ({ input, db }) =>
+        (
+          await db.$transaction(
+            input.moves.map(({ id, projectId }) =>
+              db.task.update({ where: { id }, data: { projectId } }),
+            ),
+          )
+        ).length,
     },
     // A JSON column whose keys are named like relation operations: not a nested write.
     flags: {
@@ -169,7 +195,7 @@ describe("development warnings in a running app", () => {
     expect(await probe.oneByOne({ ids: taskIds })).toBe(12);
     expect(await probe.oneByOne({ ids: taskIds })).toBe(12);
     expect(devWarnings(logger)).toEqual([
-      "[quickdraw:n-plus-one] probeService.oneByOne: task.findUnique by id ran 10 times in one call, once per item (N+1); read the rows in one query (findMany({ where: { id: { in: ids } } })), or write them together (createMany, updateMany, db.$transaction([...]))",
+      "[quickdraw:n-plus-one] probeService.oneByOne: task.findUnique by id ran 10 times in one call, once per item (N+1); read the rows in one query (findMany({ where: { id: { in: ids } } })), write them in one when every row gets the same data (updateMany, createMany), or write each row by id inside an interactive transaction (db.$transaction(async (tx) => ...))",
     ]);
   });
 
@@ -242,6 +268,22 @@ describe("createTestApp({ strictWarnings: true })", () => {
     expect(await probe.flags({ id })).toBe(id);
     const stored = await h.prisma.task.findUnique({ where: { id } });
     expect(stored?.details).toEqual({ create: true, update: true, delete: false });
+  });
+
+  it("lets per-row moves by id run in an interactive transaction (the review's batchMove cases)", async () => {
+    const { probe } = await start({ strictWarnings: true });
+    const { ownerId } = await h.prisma.project.findUniqueOrThrow({ where: { id: projectId } });
+    const other = await h.prisma.project.create({ data: { name: "Other", ownerId } });
+    const moving = taskIds.slice(0, 10);
+    expect(await probe.move({ moves: moving.map((id) => ({ id, projectId: other.id })) })).toBe(10);
+    expect(await h.prisma.task.count({ where: { id: { in: moving }, projectId: other.id } })).toBe(
+      10,
+    );
+    // The array form cannot read the moved rows inside its batch, so it stays a warning.
+    const error: unknown = await probe
+      .moveBatched({ moves: moving.slice(0, 3).map((id) => ({ id, projectId })) })
+      .catch((reason: unknown) => reason);
+    expect((error as QuickdrawError).cause).toMatchObject({ warning: { kind: "batch-read" } });
   });
 
   it("rejects an in-process call whose reply was oversized, once it was recorded", async () => {

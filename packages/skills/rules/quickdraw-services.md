@@ -141,7 +141,12 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 ## Performance
 
 Bound every `findMany` with `take`; batch per-item reads with `in:` filters;
-filter in `where`, not after loading. `share: "caller"` for hot queries;
+filter in `where`, not after loading. Write many rows in one statement when
+they all get the same data (`updateMany`, `createMany`). When each row's
+data differs, loop over the rows inside an interactive
+`db.$transaction(async (tx) => ...)` and await one `tx.task.update(...)` by
+id per row, not an array-form `$transaction([...])`, which cannot read a
+moved row inside its batch. `share: "caller"` for hot queries;
 `versionColumn: "updatedAt"` answers "not modified" cheaply. The quickdraw
 lint rules enforce most of this file (`no-untracked-write`,
 `no-foreign-write`, `no-nested-write`, `no-raw-sql-write`, `no-manual-emit`,

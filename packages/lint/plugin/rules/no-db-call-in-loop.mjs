@@ -5,11 +5,18 @@
 // flagging correct code it skips `while` loops and `for (;;)` (batched,
 // paged and polling loops), `createMany`, and calls that already work on a
 // set of rows (an `in:` filter, as in a loop over chunks of ids).
+//
+// Writes through the client of an interactive transaction, inside it
+// (`db.$transaction(async (tx) => { for (...) await tx.task.update(...) })`),
+// are the sanctioned form of per-row writes whose data differs per row: an
+// array-form `$transaction([...])` cannot read the rows a write that moves a
+// row or changes who may see it must read first, and `updateMany` sets the
+// same data on every row.
 
 import { FILE_OPTIONS, SERVER_FILES, TEST_FILES, inScope } from "../lib/files.mjs";
-import { keyName, walk } from "../lib/ast.mjs";
+import { isFunction, keyName, memberName, unwrap, walk } from "../lib/ast.mjs";
 import { enclosingLoop } from "../lib/loops.mjs";
-import { ALL_CLIENTS, CLIENTS_OPTION, modelCall } from "../lib/prisma.mjs";
+import { ALL_CLIENTS, CLIENTS_OPTION, WRITE_METHODS, modelCall } from "../lib/prisma.mjs";
 
 const BATCH_METHODS = new Set(["createMany", "createManyAndReturn"]);
 
@@ -27,6 +34,34 @@ function filtersBySet(context, call) {
   return found;
 }
 
+/** Whether `fn` is the callback of an interactive transaction: `db.$transaction(async (tx) => ...)`. */
+function isTransactionCallback(fn) {
+  const call = fn.parent;
+  if (call?.type !== "CallExpression" || call.arguments[0] !== fn) {
+    return false;
+  }
+  const callee = unwrap(call.callee);
+  return callee.type === "MemberExpression" && memberName(callee) === "$transaction";
+}
+
+/**
+ * Whether `node`, a write through the client `name`, runs inside the
+ * interactive transaction that binds `name`, around `loop`.
+ */
+function inTransactionAround(node, name, loop) {
+  for (let current = node.parent; current !== null && current !== undefined; ) {
+    if (isFunction(current) && current.params.some((param) => param.name === name)) {
+      let inside = loop;
+      while (inside !== null && inside !== undefined && inside !== current) {
+        inside = inside.parent;
+      }
+      return inside === current && isTransactionCallback(current);
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
 /** @type {import('eslint').Rule.RuleModule} */
 export default {
   meta: {
@@ -37,7 +72,8 @@ export default {
     messages: {
       callInLoop:
         "`await {{ client }}.{{ model }}.{{ method }}()` inside {{ loop }} runs one query per item. " +
-        "Read or write the items in one call (`findMany({ where: { id: { in: ids } } })`, `updateMany`, `createMany`), or send per-row writes together with `db.$transaction([...])`.",
+        "Read the items in one call (`findMany({ where: { id: { in: ids } } })`), write them in one when every row gets the same data (`updateMany`, `createMany`), " +
+        "or write each row by id inside an interactive transaction (`db.$transaction(async (tx) => { for (...) await tx.{{ model }}.update(...) })`).",
     },
     schema: [
       {
@@ -61,6 +97,9 @@ export default {
         }
         const loop = enclosingLoop(node);
         if (loop === undefined) {
+          return;
+        }
+        if (WRITE_METHODS.has(call.method) && inTransactionAround(node, call.client, loop.node)) {
           return;
         }
         context.report({

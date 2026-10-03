@@ -536,9 +536,16 @@ tracked client as `db`; the server finds the rest on it.
   rollback drops them. Prefer the interactive form
   (`db.$transaction(async (tx) => ...)`): an array-form
   `db.$transaction([...])` has no transaction client, so the rows a
-  `deleteMany` or `updateMany` in it reads first are read outside the batch,
-  and rows its earlier statements changed may be missed (a development
-  warning names the model and operation).
+  `deleteMany` or `updateMany` in it reads first, and the old values an
+  `update` that moves a row or changes who may see it reads first, are read
+  outside the batch, and rows its earlier statements changed may be missed
+  (a development warning names the model and operation).
+- Write many rows in one statement when every row gets the same data
+  (`updateMany`, `createMany`). When each row's data differs (moving tasks
+  to different projects, say), write each row by id inside an interactive
+  transaction: inside `db.$transaction(async (tx) => ...)`, loop over the
+  rows and await `tx.task.update({ where: { id }, data })` for each. Neither
+  the N+1 warning nor `no-db-call-in-loop` counts those writes.
 - A service lists the other models its handlers write
   (`writes: ["taskLabel"]`); the `no-foreign-write` lint rule checks it.
 - Jobs, scripts and webhooks wrap their writes in `qd.run(fn)`, which
@@ -1944,17 +1951,19 @@ one format and names the method call it happened in:
 | `batch-read`         | a write in an array-form `$transaction` read its rows outside the batch                              |
 | `batch-create-many`  | a `createMany` in an array-form `$transaction` could not report its rows                             |
 
-Each is logged once per kind, service, method and subject (the model, or
-the field of a nested write), under `category: "quickdraw.dev"`. Only an
-app's own statements are checked: the framework's reads and the kits'
-handlers are not. In tests, `createTestApp({ strictWarnings: true })` (under
-vitest or jest) throws every warning raised in that app's method calls as a
-`DevWarningError` where it is raised, so the test that caused it fails: the
-call it happened in fails with `INTERNAL` and the error as its `cause`, and
-an in-process call whose reply was oversized rejects with it once the reply
-was recorded. Strictness belongs to the app: warnings outside its calls
-(an ambient write while seeding, another app's calls) are logged as usual,
-and `app.close()` ends it.
+Updates and deletes by id inside an interactive transaction are not counted
+toward `n-plus-one`: that is how per-row writes are written (see tracked
+writes). Each is logged once per kind, service, method and subject (the
+model, or the field of a nested write), under `category: "quickdraw.dev"`.
+Only an app's own statements are checked: the framework's reads and the
+kits' handlers are not. In tests, `createTestApp({ strictWarnings: true })`
+(under vitest or jest) throws every warning raised in that app's method
+calls as a `DevWarningError` where it is raised, so the test that caused it
+fails: the call it happened in fails with `INTERNAL` and the error as its
+`cause`, and an in-process call whose reply was oversized rejects with it
+once the reply was recorded. Strictness belongs to the app: warnings outside
+its calls (an ambient write while seeding, another app's calls) are logged
+as usual, and `app.close()` ends it.
 
 ### Components
 

@@ -23,8 +23,15 @@ export interface CallSite {
   readonly method: string;
 }
 
-/** Checks one statement of a call; `batched` when it runs inside an array-form `$transaction`. */
-export type StatementCheck = (statement: Statement, batched: boolean) => void;
+/**
+ * Where a statement runs: in the call's unit, inside an array-form
+ * `$transaction([...])` (`"batch"`), or inside an interactive
+ * `$transaction(async (tx) => ...)` (`"interactive"`).
+ */
+export type StatementPlace = "unit" | "batch" | "interactive";
+
+/** Checks one statement of a call, run at `place`. */
+export type StatementCheck = (statement: Statement, place: StatementPlace) => void;
 
 /** Raises a warning about the call the checks belong to. */
 export type RaiseWarning = (warning: Omit<DevWarning, "service" | "method">) => void;
@@ -56,6 +63,23 @@ export function isUnboundedRead(statement: Statement): boolean {
   return !(isRecord(where) && where.id !== undefined);
 }
 
+/**
+ * An update or delete of one row by its id inside an interactive
+ * transaction: the sanctioned form of per-row writes whose data differs per
+ * row (one that moves a row or changes who may see it must read the row
+ * first, which an array-form `$transaction` cannot do inside the batch).
+ */
+function isRowWriteInTransaction(statement: Statement, place: StatementPlace): boolean {
+  if (place !== "interactive") {
+    return false;
+  }
+  if (statement.operation !== "update" && statement.operation !== "delete") {
+    return false;
+  }
+  const keys = whereKeys(statement);
+  return keys.length === 1 && keys[0] === "id";
+}
+
 function nPlusOne(
   statement: Statement,
   keys: readonly string[],
@@ -65,8 +89,8 @@ function nPlusOne(
     kind: "n-plus-one",
     message:
       `${label} ran ${N_PLUS_ONE_STATEMENTS} times in one call, once per item (N+1); ` +
-      "read the rows in one query (findMany({ where: { id: { in: ids } } })), or write them together " +
-      "(createMany, updateMany, db.$transaction([...]))",
+      "read the rows in one query (findMany({ where: { id: { in: ids } } })), write them in one when every row gets the same data " +
+      "(updateMany, createMany), or write each row by id inside an interactive transaction (db.$transaction(async (tx) => ...))",
     meta: { model: statement.model, operation: statement.operation, where: keys },
   };
 }
@@ -85,15 +109,17 @@ function unboundedRead(statement: Statement): Omit<DevWarning, "service" | "meth
  * The checks of one method call: warns once its statements of one shape
  * (model, operation and `where` keys) reach {@link N_PLUS_ONE_STATEMENTS}, and
  * at an unbounded read. Statements batched in an array-form `$transaction`
- * are sent together, which is the fix for an N+1, so they are not counted.
+ * are sent together, which is the fix for an N+1, so they are not counted;
+ * neither are updates and deletes by id inside an interactive transaction,
+ * the form per-row writes take when each row's data differs.
  */
 export function createStatementChecks(raise: RaiseWarning): StatementCheck {
   const shapes = new Map<string, number>();
-  return (statement, batched) => {
+  return (statement, place) => {
     if (isUnboundedRead(statement)) {
       raise(unboundedRead(statement));
     }
-    if (batched) {
+    if (place === "batch" || isRowWriteInTransaction(statement, place)) {
       return;
     }
     const keys = whereKeys(statement);

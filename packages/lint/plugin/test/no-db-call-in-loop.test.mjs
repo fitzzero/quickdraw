@@ -35,6 +35,21 @@ run("no-db-call-in-loop", {
       `,
     },
     {
+      // The review's bad3 case: per-row data that moves rows between scopes.
+      name: "per-row writes through an interactive transaction's client, inside it",
+      filename: SERVICE,
+      code: `
+        const handler = ({ input, db }) =>
+          db.$transaction(async (tx) => {
+            for (const m of input.moves) {
+              await tx.task.update({ where: { id: m.id }, data: { projectId: m.projectId } });
+            }
+            await Promise.all(input.gone.map(async (id) => await tx.task.delete({ where: { id } })));
+            return input.moves.length;
+          });
+      `,
+    },
+    {
       name: "a function made in a loop does not run there",
       filename: SERVICE,
       code: `
@@ -75,7 +90,7 @@ run("no-db-call-in-loop", {
       errors: [
         {
           message:
-            "`await db.task.update()` inside a for...of loop runs one query per item. Read or write the items in one call (`findMany({ where: { id: { in: ids } } })`, `updateMany`, `createMany`), or send per-row writes together with `db.$transaction([...])`.",
+            "`await db.task.update()` inside a for...of loop runs one query per item. Read the items in one call (`findMany({ where: { id: { in: ids } } })`), write them in one when every row gets the same data (`updateMany`, `createMany`), or write each row by id inside an interactive transaction (`db.$transaction(async (tx) => { for (...) await tx.task.update(...) })`).",
         },
       ],
     },
@@ -98,6 +113,32 @@ run("no-db-call-in-loop", {
         {
           messageId: "callInLoop",
           data: { client: "tx", model: "user", method: "update", loop: "a for...in loop" },
+        },
+      ],
+    },
+    {
+      name: "reads inside an interactive transaction, and a tx that is not a transaction's",
+      filename: SERVICE,
+      code: `
+        await db.$transaction(async (tx) => {
+          for (const id of ids) {
+            await tx.task.findUnique({ where: { id } });
+          }
+        });
+        await withRetry(async (tx) => {
+          for (const id of ids) {
+            await tx.task.update({ where: { id }, data: { seen: true } });
+          }
+        });
+      `,
+      errors: [
+        {
+          messageId: "callInLoop",
+          data: { client: "tx", model: "task", method: "findUnique", loop: "a for...of loop" },
+        },
+        {
+          messageId: "callInLoop",
+          data: { client: "tx", model: "task", method: "update", loop: "a for...of loop" },
         },
       ],
     },

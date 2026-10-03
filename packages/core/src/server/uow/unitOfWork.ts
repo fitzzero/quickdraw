@@ -43,6 +43,7 @@ import {
   type CallSite,
   type Statement,
   type StatementCheck,
+  type StatementPlace,
 } from "./statementChecks";
 import {
   ANY_FIELD,
@@ -203,12 +204,21 @@ function warn(state: TrackerState, warning: TrackerWarning): void {
   (frame.warnings ?? state.warnings).warn({ ...warning, ...frame.call });
 }
 
+/** Where a statement runs: the innermost open buffer is a unit's, a batch's or an interactive transaction's. */
+function placeOf(state: TrackerState): StatementPlace {
+  const open = frameWhere(state, (candidate) => candidate.buffer !== undefined);
+  if (open?.batch === true) {
+    return "batch";
+  }
+  return open?.tx === undefined ? "unit" : "interactive";
+}
+
 function observe(state: TrackerState, statement: Statement): void {
   if (!state.development || isQuiet()) {
     return;
   }
   const frame = frameWhere(state, (candidate) => candidate.check !== undefined);
-  frame?.check?.(statement, frameWhere(state, (open) => open.buffer !== undefined)?.batch === true);
+  frame?.check?.(statement, placeOf(state));
 }
 
 function notify(state: TrackerState, writes: readonly WriteRecord[]): void {
