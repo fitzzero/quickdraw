@@ -21,7 +21,7 @@ import { delegateOf, projectionOf, uniqueIds } from "../crud/runtime";
 import type { SearchRun } from "./context";
 
 /** The order of a search without a scope collection. */
-const ID_ORDER: OrderBy = Object.freeze([["id", "asc"]]) as unknown as OrderBy;
+const ID_ORDER: OrderBy = Object.freeze([Object.freeze(["id", "asc"] as const)]);
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

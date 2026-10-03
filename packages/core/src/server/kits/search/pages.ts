@@ -88,7 +88,7 @@ export async function idsPage(
   const projection = projectionOf(run.call, run.context.projection);
   const rows = await run.call.table.findMany({
     where: allOf([{ id: { in: ranked } }, scope]),
-    select: projection.select,
+    select: selectWith(projection.select, []),
   });
   const found = new Map(rows.map((row) => [row.id, row]));
   const present = ranked.filter((id) => found.has(id));
