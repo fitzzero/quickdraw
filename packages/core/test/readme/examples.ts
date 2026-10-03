@@ -94,7 +94,8 @@ export function parseDocument(text: string): ParsedDocument {
       continue;
     }
     if (marker !== null) {
-      const [source = "", file = "", region] = marker;
+      const [, file = "", region] = marker;
+      const source = region === undefined ? file : `${file}#${region}`;
       const code = lines.slice(index + 1, block.close).join("\n");
       examples.push({
         source,

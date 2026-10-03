@@ -103,6 +103,17 @@ describe("quickdraw-docs", () => {
     expect(readFileSync(join(out, "guide.md"), "utf8")).toBe("# Written by hand\n");
   });
 
+  it("never replaces a file it did not write", async () => {
+    const out = tempDir();
+    writeFileSync(join(out, INDEX_FILE), "# Our API\n");
+    const result = await run(fixtureModule, "--out", out);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain("README.md in");
+    expect(result.err).toContain("was not written by quickdraw-docs");
+    expect(readFileSync(join(out, INDEX_FILE), "utf8")).toBe("# Our API\n");
+    expect(() => readFileSync(join(out, "taskService.md"))).toThrow();
+  });
+
   it("finds contracts exported alone or in a map, once each", () => {
     const contracts = contractsOf({
       taskContract,

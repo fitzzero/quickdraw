@@ -25,7 +25,7 @@ export const labelContract = defineContract("labelService", {
   },
 });
 
-// No entity: an RPC-only service, with no projections, field levels or collections.
+// No entity: an RPC-only service, with no projections, field tiers or collections.
 export const healthContract = defineContract("healthService", {
   methods: { ping: query({ input: z.undefined(), output: z.literal("pong") }) },
 });

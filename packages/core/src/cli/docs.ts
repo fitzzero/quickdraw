@@ -128,14 +128,24 @@ function generatedIn(dir: string): string[] {
 /**
  * Brings `dir` in line with `files`: writes what differs and removes the
  * generated pages no contract makes any more. With `check`, it changes
- * nothing and reports the same as what it would do. Files that do not start
- * with the generated marker are never removed.
+ * nothing and reports the same as what it would do. A file that does not
+ * start with the generated marker is never replaced or removed: one in the
+ * way of a page fails the whole run before anything is written.
  */
 export function syncDocs(
   files: ReadonlyMap<string, string>,
   dir: string,
   check: boolean,
 ): DocsReport {
+  const foreign = [...files.keys()].filter((name) => {
+    const existing = readText(join(dir, name));
+    return existing !== undefined && !existing.startsWith(GENERATED_MARKER);
+  });
+  if (foreign.length > 0) {
+    throw new Error(
+      `${foreign.join(", ")} in ${dir} ${foreign.length === 1 ? "was" : "were"} not written by quickdraw-docs: move ${foreign.length === 1 ? "it" : "them"}, or write the pages to another --out`,
+    );
+  }
   const written: string[] = [];
   const unchanged: string[] = [];
   for (const [name, content] of files) {

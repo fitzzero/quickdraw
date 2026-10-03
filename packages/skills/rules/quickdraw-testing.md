@@ -35,9 +35,10 @@ await app.close();
   `{ call, socket, hello, close }` once the server said hello. Pass `null`
   for an anonymous caller. Both callers are keyed by service name
   (`taskService`), where the web client uses the contract map's keys.
-- `app.frames(match?)` lists every frame the server sent (`{ event, data,
-socketId, userId, at }`); `frames.waitFor(match, timeoutMs?)` waits for
-  one, `frames.clear()` forgets them. Assert on frames, not internals.
+- `app.frames(match?)` lists every frame the server sent, each with its
+  `event`, `data`, `socketId`, `userId` and `at`;
+  `frames.waitFor(match, timeoutMs?)` waits for one, `frames.clear()`
+  forgets them. Assert on frames, not internals.
 - The app's dispatcher becomes current for the services' `qd`, so
   `qd.run`, `qd.stream(...).push` and `qd.presence` reach it.
 - `db` is the tracked client over a test database, made exactly as in
@@ -99,9 +100,9 @@ what each flush wrote.
 - Without a server: `createMockClient({ task, project })` has the typed
   client's shape with stubs: `qd.task.get.mockResolvedValue(row)`,
   `mockRejectedValue(error)`, `mockImplementation(fn)`, `calls`;
-  `qd.task.useEntity.mockRow(row)` (`mockRemoved(id)`, `mockError(id,
-error)`); `qd.task.board.mockScope(scope, items)`; `mockItems` for a
-  stream, `sent` for a channel, `mockEmit` for an event. Everything set is
+  `qd.task.useEntity.mockRow(row)` (and `mockRemoved`, `mockError`);
+  `qd.task.board.mockScope(scope, items)`; `mockItems` for a stream, `sent`
+  for a channel, `mockEmit` for an event. Everything set is
   forgotten after each test (`$reset()` by hand). It shows no optimistic
   updates.
 

@@ -6,7 +6,7 @@ server implements it and the client is typed from it. Writes are tracked, so
 every subscriber's live rows, lists and cached queries follow them without a
 single hand-written event.
 
-- **Contracts**: methods, projections, field levels, collections, streams,
+- **Contracts**: methods, projections, field tiers, collections, streams,
   channels and events, as plain data plus schemas (Standard Schema; Zod 4.2
   or later where JSON Schema is needed).
 - **Services**: `qd.defineService(contract, { ... })`, one handler per
@@ -65,8 +65,8 @@ typecheck builds.
 ### 1. The contract
 
 `packages/shared/src/contracts/task.ts`. The shared package exports the
-contracts, and a map of them for the client: `contracts = { label, project,
-task }`.
+contracts, and a map of them for the client:
+`contracts = { label, project, task }`.
 
 <!-- example: packages/shared/src/contracts/task.ts -->
 
@@ -308,7 +308,7 @@ export const labelContract = defineContract("labelService", {
   },
 });
 
-// No entity: an RPC-only service, with no projections, field levels or collections.
+// No entity: an RPC-only service, with no projections, field tiers or collections.
 export const healthContract = defineContract("healthService", {
   methods: { ping: query({ input: z.undefined(), output: z.literal("pong") }) },
 });
@@ -539,8 +539,8 @@ tracked client as `db`; the server finds the rest on it.
   `deleteMany` or `updateMany` in it reads first are read outside the batch,
   and rows its earlier statements changed may be missed (a development
   warning names the model and operation).
-- A service lists the other models its handlers write (`writes:
-["taskLabel"]`); the `no-foreign-write` lint rule checks it.
+- A service lists the other models its handlers write
+  (`writes: ["taskLabel"]`); the `no-foreign-write` lint rule checks it.
 - Jobs, scripts and webhooks wrap their writes in `qd.run(fn)`, which
   flushes before it returns. A write made outside any unit of work flushes
   on its own on the next tick, with a development warning.
@@ -639,9 +639,9 @@ export const taskService = qd.defineService(task, {
   dropped); with `map`, it returns what `map` takes.
 - Fields the contract's `fields` map puts above the caller's level on a row
   are stripped from that caller's copy, after any shared run.
-- `affects` names rows of other services a write changes too (`{ service,
-id: column }`, or `{ service, id: (row) => ids, columns }`); they are sent
-  again after the flush, one hop.
+- `affects` names rows of other services a write changes too
+  (`{ service, id: column }`, or `{ service, id: (row) => ids, columns }`);
+  they are sent again after the flush, one hop.
 - `qd.<service>.useEntity(id)` subscribes with `qd:sub { s, ids, revs? }` (up
   to 500 ids per batch), which authorizes every id in one lookup, reads the
   allowed rows in one query and joins the room of each row found for the
@@ -652,7 +652,7 @@ id: column }`, or `{ service, id: (row) => ids, columns }`); they are sent
   `{ t: "p", s, id, rev, d }` with the changed fields only (an update of plain
   projection fields), or `{ t: "r", s, id, rev }` (a delete). One read per
   service per flush, none when no room has subscribers, and each frame is
-  stripped once per subscriber level.
+  stripped once per subscriber tier.
 - "Not modified" (for `qd:sub` and for queries returning one projection row
   by `id`) comes from `versionColumn`, or from an in-process change log of
   recent flushes. The change log sees only this process's writes: an app
@@ -726,7 +726,7 @@ export const taskService = qd.defineService(task, {
   subscriber's own user id: its items are stripped at `Read`, and it may not
   declare a higher `access`.
 - Items are visible to everyone in the scope: no per-row policy or field
-  level applies inside a collection. Derive the item service's own access
+  tier applies inside a collection. Derive the item service's own access
   from the anchor (`inherit` from it, as above): a per-row policy on the item
   service (an owner column, a row's access list) is not applied to
   collection items, so a row it would hide still reaches everyone in its
@@ -885,7 +885,7 @@ globals (React Native).
 | `qd.task.rename.useMutation(options)`                                     | TanStack's `useMutation`; `mutate` returns nothing, `mutateAsync` the output                   |
 | `qd.task.useEntity(id)`, `useEntities(ids)`                               | live rows at the user's level: `{ data, isLoading, isRemoved, error }`                         |
 | `qd.task.board.useCollection(scope, { view, load, limit })`               | a live scope: `{ items, index, byId, totalCount, hasMore, isLoading, loadMore, refresh, ... }` |
-| `qd.task.get.call(input)`, `.key(input)`, `.prefetch(queryClient, input)` | a call outside React, the cache key, a prefetch                                                |
+| `qd.task.get.call(input)`, `.key(input)`, `.prefetch(queryClient, input)` | a call over the mounted provider's connection, the cache key, a prefetch                       |
 | `qd.invalidate(qd.task.get, input?)`                                      | invalidates through the coordinator: a read in flight is never cancelled                       |
 | `useQuickdraw()`                                                          | `{ connection, status, isConnected, userId, serviceAccess, hello, refusal, isRateLimited }`    |
 
@@ -1196,11 +1196,11 @@ export function TaskSearch({ projectId }: { readonly projectId: string }) {
 - By default a row matches when one of the declared `fields` contains `q`,
   ignoring case; `%`, `_` and `\` in `q` are taken literally. `fields` is an
   explicit list because an unbounded "contains" over every column is slow. A
-  field the reader's level does not receive (a field level) is not searched,
+  field the reader's level does not receive (a field tier) is not searched,
   so whether a row matches never tells what that field holds.
 - A search finds only rows the caller can read, as `list` does: the policy's
   `accessWhere` at the form's `entry` or `scope` level, else `Read`; a
-  `"public"` search is not filtered and hides every leveled field. With
+  `"public"` search is not filtered and hides every tiered field. With
   `scope`, only that scope's members (its column, or its `via` junction's
   links, and `where`), and only for a caller who may open the scope as
   `qd:col:sub` decides (`UNAUTHENTICATED` without a principal, `FORBIDDEN`
@@ -1436,7 +1436,7 @@ export function AdminTasks() {
   `adminBypass`. `access: { adminList: { service: "Moderate" } }` replaces
   one method's form; whatever the form, the method reaches every row, and
   rows go out with only the fields the caller's service-wide grant reaches
-  (a `fields` level above it is left out, and a filter, sort or write that
+  (a `fields` tier above it is left out, and a filter, sort or write that
   names such a field is `FORBIDDEN`).
 - `adminList({ page?, pageSize?, filter?, sort? })` returns
   `{ items, total, page, pageSize, totalPages }`: page numbers from 1, 20 rows
@@ -1455,8 +1455,8 @@ export function AdminTasks() {
   value is checked by the entity schema itself, and a value the database
   refuses is `VALIDATION`. A missing row is `NOT_FOUND`.
 - `adminMeta()` returns `{ serviceName, displayName, fields }`, one
-  `{ name, type, label, required, editable, showInTable, sortable,
-filterable, enumValues?, relationService? }` per field: `type` is
+  `{ name, type, label, required, editable, showInTable, sortable, filterable, enumValues?, relationService? }`
+  per field: `type` is
   `string`, `number`, `boolean`, `date` (an ISO string with a date format),
   `enum` or `json` from the field's JSON Schema, and `relation` by override;
   `sortable` and `filterable` are the declared fields; `id` and the
@@ -2048,7 +2048,7 @@ is also a server span named `service.method`, with an error status for
 ## API docs from contracts
 
 The `quickdraw-docs` command writes Markdown API docs from the contracts
-alone: one page per service (its entity and field levels, projections,
+alone: one page per service (its entity and field tiers, projections,
 methods with their kind, input fields and output, collections, streams,
 channels and events, from the schemas' JSON Schema where they have one) and
 a `README.md` index. It reads contracts, never source code.

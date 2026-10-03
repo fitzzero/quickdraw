@@ -33,8 +33,8 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
 - `auth` is a token (sent as `auth.token`) or handshake fields; leave it out
   for cookie sessions. Changing it reconnects, and a hello naming another
   user empties everything quickdraw cached.
-- `useQuickdraw()` gives `{ connection, status, isConnected, userId,
-serviceAccess, hello, refusal, isRateLimited }`.
+- `useQuickdraw()` gives
+  `{ connection, status, isConnected, userId, serviceAccess, hello, refusal, isRateLimited }`.
 
 ## Reading
 
@@ -49,11 +49,12 @@ serviceAccess, hello, refusal, isRateLimited }`.
 
 - Prefer live data: `useEntity` and `useCollection` stay current from the
   server's frames, resume by revision after a reconnect, and cost no refetch.
-- `useCollection` returns `{ items, index, byId, totalCount, hasMore,
-isLoading, isLoadingMore, error, loadMore, loadItems, refresh, clamped,
-indexTruncated }`. `view` names a view the contract declares (filtered on
-  the client over the index); `load: "all"` keeps every page loaded. A `null`
-  scope or id holds nothing; `enabled: false` subscribes to nothing.
+- `useCollection` returns `items`, `index`, `byId`, `totalCount`,
+  `hasMore`, `isLoading`, `isLoadingMore`, `error`, `loadMore`, `loadItems`,
+  `refresh`, `clamped` and `indexTruncated`. `view` names a view the
+  contract declares (filtered on the client over the index); `load: "all"`
+  keeps every page loaded. A `null` scope or id holds nothing;
+  `enabled: false` subscribes to nothing.
 - A query whose result follows writes declares `watch` in its contract; the
   client then joins that change topic and refetches when it changes.
 - Errors are `QuickdrawError` instances: switch on `error.code`
@@ -97,8 +98,9 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
 ## Server components and other runtimes
 
 - A React server component or route handler cannot call `./client` (it
-  starts with `"use client"`): use `createServerCaller(contracts, { url,
-headers })` from `@fitzzero/quickdraw-core/utils`, whose
+  starts with `"use client"`): use
+  `createServerCaller(contracts, { url, headers })` from
+  `@fitzzero/quickdraw-core/utils`, whose
   `caller.task.get.prefetch(queryClient, input)` fills the keys the hooks
   read, for `dehydrate` and `HydrationBoundary`.
 - React Native uses the same client and provider (no DOM is needed).
