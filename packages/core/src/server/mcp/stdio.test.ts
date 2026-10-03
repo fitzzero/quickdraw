@@ -14,17 +14,24 @@ import { createMcpStdioServer, MCP_PROTOCOL_VERSION } from "./index";
 
 type Message = Record<string, unknown> & { readonly id?: unknown };
 
-/** A client's view of a stdio connection: send lines, read replies by id. */
-function client(write: (line: string) => void, messages: Message[]) {
+/**
+ * A client's view of a stdio connection: send lines, read replies by id.
+ * A reply is awaited for `timeoutMs`, `vi.waitFor`'s default of one second
+ * unless given.
+ */
+function client(write: (line: string) => void, messages: Message[], timeoutMs?: number) {
   const send = (message: unknown): void => write(`${JSON.stringify(message)}\n`);
   const reply = (id: unknown): Promise<Message> =>
-    vi.waitFor(() => {
-      const found = messages.find((message) => message.id === id);
-      if (found === undefined) {
-        throw new Error(`no reply to ${JSON.stringify(id)} yet`);
-      }
-      return found;
-    });
+    vi.waitFor(
+      () => {
+        const found = messages.find((message) => message.id === id);
+        if (found === undefined) {
+          throw new Error(`no reply to ${JSON.stringify(id)} yet`);
+        }
+        return found;
+      },
+      timeoutMs === undefined ? undefined : { timeout: timeoutMs },
+    );
   const request = (id: unknown, method: string, params?: unknown): Promise<Message> => {
     send(
       params === undefined
@@ -247,6 +254,16 @@ describe("the stdio server", () => {
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const CHILD = resolve(packageDir, "src/server/mcp/__tests__/stdioChild.ts");
 
+/** What `stdioServer.ts` writes to stderr once its server reads stdin. */
+const READY = "stdio harness: ready";
+
+/**
+ * How long the spawned process may take. Starting `node --import tsx` and
+ * compiling the server module takes well over a second on a cold CI runner,
+ * past `vi.waitFor`'s default.
+ */
+const SPAWN_TIMEOUT_MS = 15_000;
+
 /** Spawns the harness's MCP entry with piped stdin, stdout and stderr. */
 function spawnServer(token: string) {
   const child = spawn(process.execPath, ["--import", "tsx", CHILD], {
@@ -267,12 +284,22 @@ function spawnServer(token: string) {
   const exited = new Promise<number | null>((resolveExit) => {
     child.once("exit", (code) => resolveExit(code));
   });
+  const ready = (): Promise<void> =>
+    vi.waitFor(
+      () => {
+        if (!stderr.includes(READY)) {
+          throw new Error(`the spawned server has not written "${READY}" yet:\n${stderr}`);
+        }
+      },
+      { timeout: SPAWN_TIMEOUT_MS, interval: 20 },
+    );
   return {
     child,
     stdout,
     stderr: () => stderr,
     exited,
-    ...client((line) => child.stdin.write(line), messages),
+    ready,
+    ...client((line) => child.stdin.write(line), messages, SPAWN_TIMEOUT_MS),
   };
 }
 
@@ -280,6 +307,7 @@ describe("a spawned stdio server", () => {
   it("lists its tools and calls one over real pipes, as the mapped principal over transport mcp", async () => {
     const server = spawnServer("reader-token");
     try {
+      await server.ready();
       const init = await server.request(1, "initialize", {
         protocolVersion: "2024-11-05",
         capabilities: {},

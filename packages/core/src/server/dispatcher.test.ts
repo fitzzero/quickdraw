@@ -366,7 +366,10 @@ describe("step 9: the completion record, logging and respond", () => {
   });
 
   it("logs each call once: debug normally, warn when slow or large, error for INTERNAL", async () => {
-    const { call, logger } = setup([service], { slowMs: 30, maxResponseBytes: 100 });
+    // A generous slowMs: the first calls of a cold run (a CI runner compiling
+    // the schemas) can take tens of milliseconds, and must still log at debug.
+    // The slow call below gets its own dispatcher with a small slowMs.
+    const { call, logger } = setup([service], { slowMs: 60_000, maxResponseBytes: 100 });
     await call({ method: "get", input: { id: "t1" }, principal: null });
     await call({ method: "rename", input: { id: "t1", title: "x" }, principal: null });
     expect(logger.entries.map((entry) => [entry.level, entry.message.split(" in ")[0]])).toEqual([
@@ -382,11 +385,17 @@ describe("step 9: the completion record, logging and respond", () => {
       level: "warn",
       meta: { bytes: 101, userId: "alice" },
     });
+    // Waits by the clock the pipeline reads, not by a timer, which may fire a
+    // few milliseconds early by that clock.
+    const pastSlowMs = async (): Promise<number> => {
+      const until = performance.now() + 40;
+      while (performance.now() < until) {
+        await tick(5);
+      }
+      return 1;
+    };
     const slow = qd.defineService(task, {
-      methods: {
-        ...taskDefaults,
-        count: { access: "public", handler: () => tick(40).then(() => 1) },
-      },
+      methods: { ...taskDefaults, count: { access: "public", handler: pastSlowMs } },
     });
     const slowSetup = setup([slow], { slowMs: 30 });
     await slowSetup.call({ method: "count", input: { projectId: "p1" } });

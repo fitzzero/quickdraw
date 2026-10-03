@@ -19,5 +19,7 @@ const registry = createMcpRegistry({
   ...agentAuth(() => process.env.QD_MCP_TOKEN ?? null),
 });
 const server = createMcpStdioServer({ registry, name: "quickdraw-harness", version: "0.0.0" });
+// The test waits for this line before it sends anything.
+process.stderr.write("stdio harness: ready\n");
 await server.closed;
 process.stderr.write("stdio harness: closed\n");
