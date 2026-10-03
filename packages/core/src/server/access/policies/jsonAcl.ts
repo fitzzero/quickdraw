@@ -6,13 +6,38 @@
 
 import type { AccessLevel } from "../../../contract/access";
 import { levelsAtLeast, maxLevel } from "../levels";
-import { checkName, definePolicy, levelsById, type AccessPolicy, type RowLevel } from "../policy";
+import {
+  checkName,
+  definePolicy,
+  levelsById,
+  type AccessPolicy,
+  type AnyAccessPolicy,
+  type RowLevel,
+} from "../policy";
 import type { StorageRow, StorageWhere } from "../../storage";
 
 /** Options of {@link jsonAcl}. */
 export interface JsonAclOptions<Owner extends string = string> {
   /** A column holding the owner's user id; the owner has `Admin`. */
   readonly owner?: Owner;
+}
+
+/** The columns a `jsonAcl` policy reads: its access list, and its owner column when it names one. */
+export interface JsonAclColumns {
+  /** The column holding the `[{ userId, level }]` list. */
+  readonly field: string;
+  /** The column holding the owner's user id, or `undefined` without an owner. */
+  readonly owner: string | undefined;
+}
+
+const COLUMNS = new WeakMap<object, JsonAclColumns>();
+
+/**
+ * The columns of a policy `jsonAcl` made, or `undefined` for any other
+ * policy: what the sharing kit reads and writes.
+ */
+export function jsonAclColumnsOf(policy: AnyAccessPolicy): JsonAclColumns | undefined {
+  return COLUMNS.get(policy);
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -66,7 +91,7 @@ export function jsonAcl<const Field extends string, const Owner extends string =
     const owned = ownerColumn !== undefined && row[ownerColumn] === userId ? "Admin" : null;
     return maxLevel(owned, aclLevel(row[field], userId));
   };
-  return definePolicy({
+  const policy = definePolicy<AccessPolicy<Field | Owner, never>>({
     kind: "jsonAcl",
     field,
     owner: ownerColumn,
@@ -88,4 +113,6 @@ export function jsonAcl<const Field extends string, const Owner extends string =
       return Promise.resolve({ OR: [...owned, ...listed] });
     },
   });
+  COLUMNS.set(policy, Object.freeze({ field, owner: ownerColumn }));
+  return policy;
 }

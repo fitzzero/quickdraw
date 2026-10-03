@@ -9,8 +9,17 @@ import {
   definePolicy,
   idFilter,
   type AccessPolicy,
+  type AnyAccessPolicy,
   type MembershipRead,
 } from "../policy";
+
+/**
+ * The membership table a policy `members` made reads, or `undefined` for
+ * any other policy: what the sharing kit reads and writes.
+ */
+export function membershipOf(policy: AnyAccessPolicy): MembershipRead | undefined {
+  return policy.kind === "members" ? policy.reads.memberships[0] : undefined;
+}
 
 /** Options of {@link members}. */
 export interface MembersOptions<
