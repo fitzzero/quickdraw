@@ -1,16 +1,21 @@
 // The 4.x legacy shim (RFC 0003 section 8.5). A 4.x client connects without
 // `auth.qd` and calls a method by emitting `"{service}:{method}"` with its
 // payload and an acknowledgement (`legacy-src/server/ServiceRegistry.ts:277-406`).
-// With `legacyWire: true` such a socket gets one `onAny` listener instead of
-// the v5 listeners: it maps each call onto the dispatcher with transport
-// `"legacy"` and answers in the 4.x `ServiceResponse` shape
+// With `legacyWire: true` such a socket gets one `socket.use` middleware
+// instead of the v5 listeners: it maps each call onto the dispatcher with
+// transport `"legacy"` and answers in the 4.x `ServiceResponse` shape
 // (`legacy-src/shared/types.ts:88-90`), with the error code's HTTP status as
 // the numeric `code`.
 //
+// The shim is a middleware, not an `onAny` listener, because Socket.IO runs
+// `onAny` listeners before any middleware: the rate limiter, whose middleware
+// is registered first, would count a call only after the shim had started it,
+// and its 429 would then take the call's acknowledgement.
+//
 // The shim serves request/response calls only. 4.x subscriptions,
 // collections and channels are not served: their events match no method, so
-// the shim leaves them to whatever else listens. The stock decoder reads both
-// protocols, so the shim needs no parser of its own.
+// the shim passes them on to whatever else listens. The stock decoder reads
+// both protocols, so the shim needs no parser of its own.
 
 import { httpStatus, toWire, type ErrorCode } from "../../protocol/errors";
 import { describeError } from "../pipeline/metrics";
@@ -125,10 +130,12 @@ function serve(
 }
 
 /**
- * Serves a 4.x socket: one `onAny` listener for its calls, the `auth:info`
- * event 4.x clients read their identity from
+ * Serves a 4.x socket: one `socket.use` middleware for its calls, the
+ * `auth:info` event 4.x clients read their identity from
  * (`legacy-src/server/createServer.ts:134-140`), and cancellation of its
- * calls on disconnect.
+ * calls on disconnect. Call it from the `connection` handler, after the rate
+ * limiter's middleware is in place, so the limiter sees each call first. A
+ * call the shim serves goes no further; any other event passes on.
  */
 export function attachLegacyShim(
   socket: QuickdrawServerSocket,
@@ -136,10 +143,12 @@ export function attachLegacyShim(
   seen: LegacyCallers,
 ): void {
   const calls = new Set<AbortController>();
-  socket.onAny((event: unknown, ...args: unknown[]) => {
+  socket.use((packet: unknown[], next) => {
+    const [event, ...args] = packet;
     const ack = args.at(-1);
     const target = targetOf(event, context.dispatcher.registry);
     if (target === undefined || typeof ack !== "function") {
+      next();
       return;
     }
     noteCaller(context, seen, target, socket.data.principal);

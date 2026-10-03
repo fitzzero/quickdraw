@@ -113,6 +113,8 @@ export function createSocketServer(
   };
   io.use(protocolMiddleware(settings.legacyWire, context));
   io.use(authMiddleware(settings.resolvePrincipal, context));
+  // Before the connection handler: the limiter's `socket.use` middleware must
+  // come before the legacy shim's, so it counts each 4.x call before it runs.
   if (settings.rateLimit !== false) {
     applySocketRateLimit(io, settings.rateLimit, context);
   }

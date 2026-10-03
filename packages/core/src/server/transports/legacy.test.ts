@@ -3,6 +3,8 @@
 // `ServiceResponse` shape back.
 
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import { defineContract, mutation } from "../../index";
 import {
   alice,
   captureLogger,
@@ -12,10 +14,18 @@ import {
   task,
   taskDefaults,
   taskRow,
+  tick,
   type AppPrincipal,
 } from "../__tests__/fixtures";
 import type { CallRecord, PipelineOptions, ServerOnlyOptions } from "../index";
-import { next, trustingAuth, transportHarness, type ClientSocket } from "./__tests__/harness";
+import {
+  call,
+  next,
+  trustingAuth,
+  transportHarness,
+  v5Auth,
+  type ClientSocket,
+} from "./__tests__/harness";
 import { createProbe } from "./__tests__/probe";
 
 const harness = transportHarness();
@@ -199,17 +209,64 @@ describe("the legacy shim", () => {
     ]);
   });
 
-  it("answers a 4.x call over the rate limit in the 4.x shape, with 4.1's error event", async () => {
-    const { url } = await serve({ rateLimit: { maxRequests: 1 } });
+  it("drops a 4.x call over the rate limit before it runs, answering in the 4.x shape with 4.1's error event", async () => {
+    let runs = 0;
+    const counter = defineContract("counterService", {
+      methods: { bump: mutation({ input: z.object({}), output: z.number() }) },
+    });
+    const counterService = qd.defineService(counter, {
+      methods: {
+        bump: {
+          access: "authenticated",
+          handler: () => {
+            runs += 1;
+            return runs;
+          },
+        },
+      },
+    });
+    const { url } = await harness.start({
+      services: [counterService],
+      db,
+      logger: captureLogger(),
+      auth: trustingAuth,
+      legacyWire: true,
+      rateLimit: { maxRequests: 2, windowMs: 60_000 },
+    });
     const { socket } = await connectLegacy(url);
     const notice = next(socket, "error");
-    await legacyCall(socket, "taskService:get", { id: "t1" });
-    expect(await rawLegacyCall(socket, "taskService:get", { id: "t1" })).toEqual({
-      success: false,
-      error: "Rate limit exceeded",
-      code: 429,
-    });
+    const replies: unknown[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      replies.push(await rawLegacyCall(socket, "counterService:bump", {}));
+    }
+    const limited = { success: false, error: "Rate limit exceeded", code: 429 };
+    expect(replies).toEqual([
+      { success: true, data: 1 },
+      { success: true, data: 2 },
+      limited,
+      limited,
+      limited,
+    ]);
     expect(await notice).toMatchObject({ code: "RATE_LIMITED", retryAfter: expect.any(Number) });
+    // A mutation is never cancelled, so a dropped call that had started anyway
+    // would have run by now.
+    await tick(20);
+    expect(runs).toBe(2);
+
+    // The same limit on a v5 socket of the same server runs the same calls.
+    const v5 = harness.open(url, v5Auth(alice));
+    await v5.hello;
+    const codes: unknown[] = [];
+    for (let id = 0; id < 5; id += 1) {
+      const reply = (await call(v5.socket, { id, s: "counterService", m: "bump", i: {} })) as {
+        readonly ok: boolean;
+        readonly e?: { readonly code: string };
+      };
+      codes.push(reply.ok ? "ok" : reply.e?.code);
+    }
+    expect(codes).toEqual(["ok", "ok", "RATE_LIMITED", "RATE_LIMITED", "RATE_LIMITED"]);
+    await tick(20);
+    expect(runs).toBe(4);
   });
 
   it("cancels a 4.x socket's queries when it disconnects", async () => {
