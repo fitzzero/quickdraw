@@ -9,12 +9,13 @@
 // subscription is the authorization, kept current by revocation, so it reads
 // no access and costs one statement (two for a `via` scope). A socket that
 // has not subscribed is `FORBIDDEN`, and more than 200 ids are `VALIDATION`,
-// as more than 500 are for `qd:sub`.
+// as more than 500 are for `qd:sub`. A scope value longer than 256
+// characters is `VALIDATION` in every frame.
 
 import type { CollectionItemsReply, Ok } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
+import { MAX_SCOPE_LENGTH } from "../../protocol/version";
 import { liveService } from "../emit/hub";
-import type { StorageAdapter } from "../storage";
 import { unreadable } from "../transports/ack";
 import type { QuickdrawServerSocket } from "../transports/types";
 import type { BoundCollection, CollectionHub } from "./bind";
@@ -43,6 +44,9 @@ function isName(value: unknown): value is string {
 function readRef(frame: unknown, event: string): ScopeRef & { readonly frame: UnknownRecord } {
   if (!isRecord(frame) || !isName(frame.s) || !isName(frame.c) || !isName(frame.scope)) {
     throw unreadable(`A ${event} frame needs { s, c, scope } with each a non-empty string`);
+  }
+  if (frame.scope.length > MAX_SCOPE_LENGTH) {
+    throw unreadable(`scope must be at most ${MAX_SCOPE_LENGTH} characters`, ["scope"]);
   }
   return { s: frame.s, c: frame.c, scope: frame.scope, frame };
 }
@@ -112,7 +116,10 @@ export function servedCollection(
   hub: CollectionHub,
   socket: QuickdrawServerSocket,
   ref: Pick<ScopeRef, "s" | "c">,
-): { readonly collection: BoundCollection; readonly storage: StorageAdapter } {
+): {
+  readonly collection: BoundCollection;
+  readonly storage: NonNullable<CollectionHub["storage"]>;
+} {
   const collection = collectionOf(hub, ref.s, ref.c);
   if (socket.data.principal === null) {
     throw new QuickdrawError("UNAUTHENTICATED", "Authentication required");
@@ -148,8 +155,9 @@ export async function loadItems(
 
 /**
  * Serves `qd:col:unsub`: the socket leaves the scope, and a subscribe still
- * being made will not join it. Throws `VALIDATION` for a malformed frame and
- * `NOT_FOUND` for an unknown service or collection.
+ * being made will not join it. Throws `VALIDATION` for a malformed frame,
+ * `NOT_FOUND` for an unknown service or collection, and `UNAUTHENTICATED`
+ * for an anonymous socket, which subscribes to nothing.
  */
 export function unsubscribeScope(
   hub: CollectionHub,
@@ -158,6 +166,9 @@ export function unsubscribeScope(
 ): Ok {
   const ref = readRef(value, "qd:col:unsub");
   collectionOf(hub, ref.s, ref.c);
+  if (socket.data.principal === null) {
+    throw new QuickdrawError("UNAUTHENTICATED", "Authentication required");
+  }
   hub.collections.scopes.unsubscribe(socket, roomOf(ref));
   return { ok: true };
 }

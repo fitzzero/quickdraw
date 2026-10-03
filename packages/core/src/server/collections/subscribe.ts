@@ -227,21 +227,23 @@ export async function subscribeScope(
     request,
     room,
     checkedAt: hub.subscriptions.accessChanges,
-    unsubscribes: hub.collections.scopes.unsubscribes(socket, room),
+    unsubscribes: hub.collections.scopes.begin(socket, room),
     record: undefined,
     moving: false,
   };
-  const anchors = await anchorsOf(attempt);
-  if (anchors === undefined) {
-    throw forbidden();
-  }
-  if (request.cursor !== undefined) {
-    return await readPage(storage, collection, request, pageRev(attempt));
-  }
   try {
+    const anchors = await anchorsOf(attempt);
+    if (anchors === undefined) {
+      throw forbidden();
+    }
+    if (request.cursor !== undefined) {
+      return await readPage(storage, collection, request, pageRev(attempt));
+    }
     return await answer(attempt, anchors);
   } catch (error) {
     leave(attempt);
     throw error;
+  } finally {
+    hub.collections.scopes.end(socket, room);
   }
 }

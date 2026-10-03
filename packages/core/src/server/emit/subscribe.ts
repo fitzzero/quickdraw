@@ -342,9 +342,7 @@ export async function subscribe(
     target,
     principal,
     checkedAt: hub.subscriptions.accessChanges,
-    unsubscribes: new Map(
-      request.ids.map((id) => [id, hub.subscriptions.unsubscribes(socket, service, id)]),
-    ),
+    unsubscribes: hub.subscriptions.begin(socket, service, request.ids),
     denied: new Set(),
     answers: new Map(),
     joined: new Map(),
@@ -358,6 +356,8 @@ export async function subscribe(
       retract(batch, id, "missing");
     }
     throw error;
+  } finally {
+    hub.subscriptions.end(socket, service, request.ids);
   }
   return request.ids.map((id) => resultOf(batch, id));
 }

@@ -74,18 +74,23 @@ async function watchTopic(
     );
   }
   const room = topicRoom(watch.s, watch.topic);
-  const unwatches = index.unwatches(socket, room);
-  await authorizeWatch(hub, socket.data.principal, target);
-  if (socket.connected && index.unwatches(socket, room) === unwatches) {
-    index.watch(socket, watch);
+  const unwatches = index.begin(socket, room);
+  try {
+    await authorizeWatch(hub, socket.data.principal, target);
+    if (socket.connected && index.unwatches(socket, room) === unwatches) {
+      index.watch(socket, watch);
+    }
+  } finally {
+    index.end(socket, room);
   }
   return { ok: true };
 }
 
 /**
  * Serves one `qd:unwatch`: the socket leaves the topic's room. Throws
- * `VALIDATION` for a malformed frame and `NOT_FOUND` for an unknown service
- * or collection.
+ * `VALIDATION` for a malformed frame, `NOT_FOUND` for an unknown service or
+ * collection, and `UNAUTHENTICATED` for an anonymous socket, which can watch
+ * nothing but a public service topic.
  */
 function unwatchTopic(
   hub: CollectionHub,
@@ -94,7 +99,11 @@ function unwatchTopic(
   frame: unknown,
 ): Ok {
   const watch = readWatch(frame, CLIENT_EVENTS.unwatch);
-  targetOf(hub, watch);
+  const target = targetOf(hub, watch);
+  const open = target.kind === "service" && target.service.watchAccess === "public";
+  if (socket.data.principal === null && !open) {
+    throw new QuickdrawError("UNAUTHENTICATED", "Authentication required");
+  }
   index.unwatch(socket, topicRoom(watch.s, watch.topic));
   return { ok: true };
 }

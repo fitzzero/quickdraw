@@ -7,6 +7,8 @@
 // Rooms stay the source of truth for who receives `qd:changed`.
 
 import { SERVICE_TOPIC, topicRoom } from "../contract/names";
+import { MAX_SCOPE_LENGTH } from "../protocol/version";
+import { PendingKeys } from "./emit/pending";
 import { emptyRecords, ownRecord } from "./emit/subscriptions";
 import { unreadable } from "./transports/ack";
 import type { QuickdrawServerSocket } from "./transports/types";
@@ -47,6 +49,9 @@ export function readWatch(value: unknown, event: string): TopicWatch {
   if (!isName(s) || !isName(topic)) {
     throw unreadable(`A ${event} frame needs { s, topic } with each a non-empty string`);
   }
+  if (topic.length > MAX_SCOPE_LENGTH) {
+    throw unreadable(`topic must be at most ${MAX_SCOPE_LENGTH} characters`, ["topic"]);
+  }
   if (topic === SERVICE_TOPIC) {
     return { s, topic };
   }
@@ -69,7 +74,8 @@ export class TopicIndex {
   readonly #services = new Map<string, number>();
   /** Per collection (`service\0collection`), how many sockets here watch each scope's topic. */
   readonly #scopes = new Map<string, Map<string, number>>();
-  readonly #unwatched = new WeakMap<QuickdrawServerSocket, Map<string, number>>();
+  /** The topics each socket has a `qd:watch` in flight for, by room. */
+  readonly #pending = new PendingKeys();
 
   #count(watch: TopicWatch, by: 1 | -1): void {
     const { c, scope } = watch;
@@ -107,11 +113,19 @@ export class TopicIndex {
     void socket.join(room);
   }
 
+  /** A `qd:watch` of the topic begins; returns how often it was unwatched so far. */
+  begin(socket: QuickdrawServerSocket, room: string): number {
+    return this.#pending.begin(socket, [room]).get(room) ?? 0;
+  }
+
+  /** The watch `begin` started has ended. */
+  end(socket: QuickdrawServerSocket, room: string): void {
+    this.#pending.end(socket, [room]);
+  }
+
   /** A client unwatched: the socket leaves the topic's room, and a watch still being authorized will not join it. */
   unwatch(socket: QuickdrawServerSocket, room: string): void {
-    const counts = this.#unwatched.get(socket) ?? new Map<string, number>();
-    counts.set(room, (counts.get(room) ?? 0) + 1);
-    this.#unwatched.set(socket, counts);
+    this.#pending.unsubscribed(socket, room);
     const watches = socket.data.topics;
     const watch = ownRecord(watches, room);
     if (watches !== undefined && watch !== undefined) {
@@ -121,9 +135,9 @@ export class TopicIndex {
     void socket.leave(room);
   }
 
-  /** How often the client unwatched the topic; a watch joins only if it has not since it began. */
+  /** How often the client unwatched the topic while a watch of it ran; it joins only if that did not move. */
   unwatches(socket: QuickdrawServerSocket, room: string): number {
-    return this.#unwatched.get(socket)?.get(room) ?? 0;
+    return this.#pending.count(socket, room);
   }
 
   /** A socket disconnected: Socket.IO has emptied its rooms; drop its watches from the counts. */

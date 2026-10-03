@@ -11,6 +11,7 @@
 import { collectionRoom } from "../../contract/names";
 import type { AccessChange } from "../access/changes";
 import { anchorKey } from "../access/tools";
+import { PendingKeys } from "../emit/pending";
 import { emptyRecords, ownRecord } from "../emit/subscriptions";
 import type { QuickdrawServerSocket } from "../transports/types";
 
@@ -73,7 +74,8 @@ export class ScopeIndex {
   readonly #byService = new Map<string, Counts>();
   /** Per collection (`service\0collection`), how many sockets here subscribe to each scope. */
   readonly #scopes = new Map<string, Map<string, number>>();
-  readonly #unsubscribed = new WeakMap<QuickdrawServerSocket, Map<string, number>>();
+  /** The scopes each socket has a `qd:col:sub` in flight for, by room. */
+  readonly #pending = new PendingKeys();
   readonly #listener: ScopeListener | undefined;
 
   constructor(listener?: ScopeListener) {
@@ -142,17 +144,25 @@ export class ScopeIndex {
     return previous;
   }
 
+  /** A `qd:col:sub` of the scope begins; returns how often it was unsubscribed from so far. */
+  begin(socket: QuickdrawServerSocket, room: string): number {
+    return this.#pending.begin(socket, [room]).get(room) ?? 0;
+  }
+
+  /** The subscribe `begin` started has ended. */
+  end(socket: QuickdrawServerSocket, room: string): void {
+    this.#pending.end(socket, [room]);
+  }
+
   /** A client unsubscribed: forget its subscription, and stop one still being made from joining. */
   unsubscribe(socket: QuickdrawServerSocket, room: string): void {
-    const counts = this.#unsubscribed.get(socket) ?? new Map<string, number>();
-    counts.set(room, (counts.get(room) ?? 0) + 1);
-    this.#unsubscribed.set(socket, counts);
+    this.#pending.unsubscribed(socket, room);
     this.delete(socket, room);
   }
 
-  /** How often the client unsubscribed from the scope; a subscribe joins only if it has not since it began. */
+  /** How often the client unsubscribed from the scope while a subscribe of it ran; it joins only if that did not move. */
   unsubscribes(socket: QuickdrawServerSocket, room: string): number {
-    return this.#unsubscribed.get(socket)?.get(room) ?? 0;
+    return this.#pending.count(socket, room);
   }
 
   /** A socket disconnected: Socket.IO has emptied its rooms; drop it from the index. */

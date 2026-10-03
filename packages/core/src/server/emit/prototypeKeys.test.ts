@@ -4,6 +4,9 @@
 // inside Socket.IO's `process.nextTick`, which ends the process: one
 // `qd:unsub { s: "__proto__", ids: ["toString"] }` took a server down. Each
 // frame must be answered, and the socket's subscriptions must keep working.
+// Then the limits every live frame is held to: known services, at most 500
+// ids, scopes and topics of at most 256 characters, and a principal to
+// unsubscribe.
 
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from "vitest";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
@@ -162,4 +165,61 @@ it("answers a qd:unsub naming an unknown service NOT_FOUND, and more than 500 id
   expect(
     await emitWithAck(connection.socket, "qd:unwatch", { s: "taskService", topic: "nope:x" }),
   ).toMatchObject({ ok: false, e: { code: "NOT_FOUND" } });
+});
+
+it("refuses unsubscribes from an anonymous socket, and scopes or topics longer than 256 characters", async () => {
+  const app = await createTestApp({
+    services: [projectService, defineTaskService(), labelService],
+    db: h.db,
+  });
+  apps.push(app as unknown as TestApp);
+  const unauthenticated = {
+    ok: false,
+    e: { code: "UNAUTHENTICATED", message: "Authentication required" },
+  };
+  const anonymous = await app.connect(null);
+  expect(
+    await emitWithAck(anonymous.socket, "qd:unsub", { s: "taskService", ids: [board.t1] }),
+  ).toEqual(unauthenticated);
+  expect(
+    await emitWithAck(anonymous.socket, "qd:col:unsub", {
+      s: "taskService",
+      c: "byProject",
+      scope: board.p1,
+    }),
+  ).toEqual(unauthenticated);
+  expect(
+    await emitWithAck(anonymous.socket, "qd:unwatch", {
+      s: "taskService",
+      topic: `byProject:${board.p1}`,
+    }),
+  ).toEqual(unauthenticated);
+  const connection = await app.connect(as(board.ada));
+  const long = "x".repeat(257);
+  const tooLong = (path: string, message: string) => ({
+    ok: false,
+    e: { code: "VALIDATION", message, data: { issues: [{ path: [path], message }] } },
+  });
+  for (const event of ["qd:col:sub", "qd:col:unsub", "qd:col:items"]) {
+    expect(
+      await emitWithAck(connection.socket, event, {
+        s: "taskService",
+        c: "byProject",
+        scope: long,
+        ids: [],
+      }),
+    ).toEqual(tooLong("scope", "scope must be at most 256 characters"));
+  }
+  for (const event of ["qd:watch", "qd:unwatch"]) {
+    expect(
+      await emitWithAck(connection.socket, event, { s: "taskService", topic: `byProject:${long}` }),
+    ).toEqual(tooLong("topic", "topic must be at most 256 characters"));
+  }
+  // Unique ids by the hundred thousand are answered, and kept nowhere (pending.test.ts).
+  for (let round = 0; round < 20; round += 1) {
+    const ids = Array.from({ length: 500 }, (_, index) => `r${round}-${index}`);
+    expect(await emitWithAck(connection.socket, "qd:unsub", { s: "taskService", ids })).toEqual({
+      ok: true,
+    });
+  }
 });

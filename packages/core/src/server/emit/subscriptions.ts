@@ -16,6 +16,7 @@ import { entityRoom } from "../../contract/names";
 import type { AccessChange } from "../access/changes";
 import { anchorKey } from "../access/tools";
 import type { QuickdrawServerSocket } from "../transports/types";
+import { PendingKeys } from "./pending";
 
 /**
  * `records[key]` when `records` holds `key` itself, never through its
@@ -81,7 +82,8 @@ export class SubscriptionIndex {
   accessChanges = 0;
   readonly #byAnchor = new Map<string, Counts>();
   readonly #byService = new Map<string, Counts>();
-  readonly #unsubscribed = new WeakMap<QuickdrawServerSocket, Map<string, number>>();
+  /** The rows each socket has a `qd:sub` batch in flight for, by `anchorKey`. */
+  readonly pending = new PendingKeys();
 
   #index(socket: QuickdrawServerSocket, anchors: readonly string[], by: 1 | -1): void {
     for (const anchor of anchors) {
@@ -145,18 +147,36 @@ export class SubscriptionIndex {
     return previous;
   }
 
+  /** A `qd:sub` batch of these rows begins; returns how often each was unsubscribed from so far. */
+  begin(
+    socket: QuickdrawServerSocket,
+    service: string,
+    ids: readonly string[],
+  ): Map<string, number> {
+    const counts = this.pending.begin(
+      socket,
+      ids.map((id) => anchorKey(service, id)),
+    );
+    return new Map(ids.map((id) => [id, counts.get(anchorKey(service, id)) ?? 0]));
+  }
+
+  /** The batch `begin` started has ended. */
+  end(socket: QuickdrawServerSocket, service: string, ids: readonly string[]): void {
+    this.pending.end(
+      socket,
+      ids.map((id) => anchorKey(service, id)),
+    );
+  }
+
   /** A client unsubscribed: forget its subscription, and stop one still being made from joining. */
   unsubscribe(socket: QuickdrawServerSocket, service: string, id: string): void {
-    const key = anchorKey(service, id);
-    const counts = this.#unsubscribed.get(socket) ?? new Map<string, number>();
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-    this.#unsubscribed.set(socket, counts);
+    this.pending.unsubscribed(socket, anchorKey(service, id));
     this.delete(socket, service, id);
   }
 
-  /** How often the client unsubscribed from the row; a subscribe joins only if it has not since it began. */
+  /** How often the client unsubscribed from the row while a batch of it ran; a batch joins only if that did not move. */
   unsubscribes(socket: QuickdrawServerSocket, service: string, id: string): number {
-    return this.#unsubscribed.get(socket)?.get(anchorKey(service, id)) ?? 0;
+    return this.pending.count(socket, anchorKey(service, id));
   }
 
   /** A socket disconnected: Socket.IO has emptied its rooms; drop it from the index. */

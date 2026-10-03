@@ -98,6 +98,9 @@ async function onSubscribe(
 function onUnsubscribe(hub: Hub, socket: QuickdrawServerSocket, frame: unknown): Ok {
   const { s, ids } = readIds(frame, CLIENT_EVENTS.unsub, "{ s, ids }");
   liveService(hub, s);
+  if (socket.data.principal === null) {
+    throw new QuickdrawError("UNAUTHENTICATED", "Authentication required");
+  }
   for (const id of ids) {
     hub.subscriptions.unsubscribe(socket, s, id);
   }
