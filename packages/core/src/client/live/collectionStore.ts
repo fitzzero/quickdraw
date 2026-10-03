@@ -18,10 +18,16 @@
 //   equal revisions the later one wins;
 // - `added` for an id already held is an upsert (a touch), and changes no
 //   count;
+// - the count is the server's `total`, changed only by `added` and
+//   `removed`: `updated` and `patched` name members the total already holds;
 // - `patched` merges the changed fields into the item. With no item held it
 //   never makes a partial one: the id is reported `missing`, for the
 //   controller to load with `qd:col:items`, unless only the index holds the
 //   member and the whole scope is not being loaded;
+// - without an index, a member a page has not loaded yet is beyond the items
+//   shown: `updated` and `patched` for it are ignored while more pages
+//   follow, unless the whole scope is being loaded, so they never put an
+//   item into a paged window out of its place;
 // - the index (`collectionIndex.ts`): the snapshot's rows are the scope's
 //   membership, so items of non-members are pruned as 4.1 pruned by `ids`;
 //   `added` brings its row, and `patched` and `updated` change its fields
@@ -143,6 +149,8 @@ interface Work<Item extends CollectionItem> {
   /** The index's rows by id, made on first use. */
   indexById: Map<string, IndexRow> | undefined;
   totalCount: number | null;
+  /** More pages follow the items loaded. */
+  readonly paged: boolean;
   changed: boolean;
 }
 
@@ -159,8 +167,18 @@ function workOn<Item extends CollectionItem>(
     index: base.index === null ? null : [...base.index],
     indexById: undefined,
     totalCount: base.totalCount,
+    paged: base.nextCursor !== null,
     changed: false,
   };
+}
+
+/**
+ * True when a change of member `id` may bring its item in: it is loaded, the
+ * index places it, the whole scope is being loaded, or no page follows the
+ * items loaded. Otherwise it is beyond the paged window shown.
+ */
+function mayBringIn(work: Work<CollectionItem>, id: string, loadAll: boolean): boolean {
+  return work.byId.has(id) || work.index !== null || loadAll || !work.paged;
 }
 
 /** The state `work` made, over `base`; `base` itself when nothing changed and `extra` is empty. */
@@ -299,7 +317,9 @@ function patch(
   }
   if (!work.revById.has(id)) {
     // A member this state does not know, or one it removed: never a partial item.
-    missing.push(id);
+    if (mayBringIn(work, id, loadAll)) {
+      missing.push(id);
+    }
     return;
   }
   work.revById.set(id, rev);
@@ -330,9 +350,12 @@ function applyOne(
   if (delta.t === "reset") {
     return true;
   }
-  if ((delta.t === "added" || delta.t === "updated") && hasId(delta.item)) {
-    const row = delta.t === "added" ? indexRowOf(work.shape, delta.index) : undefined;
-    upsert(work, delta.item, rev, true, row);
+  if (delta.t === "added" && hasId(delta.item)) {
+    upsert(work, delta.item, rev, true, indexRowOf(work.shape, delta.index));
+  } else if (delta.t === "updated" && hasId(delta.item)) {
+    if (mayBringIn(work, delta.item.id, loadAll)) {
+      upsert(work, delta.item, rev, false);
+    }
   } else if (delta.t === "patched" && typeof delta.id === "string") {
     patch(work, { id: delta.id, d: delta.d }, rev, loadAll, missing);
   } else if (delta.t === "removed" && typeof delta.id === "string") {

@@ -298,12 +298,32 @@ describe("applyDeltas, one delta (4.1 cases)", () => {
     expect(state.totalCount).toBe(2);
   });
 
-  it("updated on an unknown id upserts it (added and updated differ in name only)", () => {
+  it("updated on an unknown id of a scope loaded whole upserts it, and only added counts", () => {
     const { state } = apply(base(), { t: "updated", item: row("z") }, 200);
 
     expect(state.byId.get("z")).toEqual(row("z"));
     expect(ids(state)).toEqual(["a", "b", "z"]);
-    expect(state.totalCount).toBe(3);
+    // The count is the server's total: an updated member is one it already holds.
+    expect(state.totalCount).toBe(2);
+  });
+
+  it("updated for a member beyond a paged window changes neither the count nor the items", () => {
+    const first = applySnapshot<Row>(
+      null,
+      snap([row("a")], { rev: 10, total: 3, cursor: "p2" }),
+      plain,
+    );
+    const after = apply(first, { t: "updated", item: row("c", 5) }, 11);
+
+    expect(after.state.totalCount).toBe(3);
+    expect(ids(after.state)).toEqual(["a"]);
+    expect(after.state.rev).toBe(11);
+    // While the whole scope is loaded, it is a member to show.
+    const whole = applyDeltas<Row>(first, [{ t: "updated", item: row("c", 5) }], 11, plain, {
+      loadAll: true,
+    });
+    expect(ids(whole.state)).toEqual(["a", "c"]);
+    expect(whole.state.totalCount).toBe(3);
   });
 
   it("ignores added and updated older than the revision held (the same state object)", () => {
@@ -491,7 +511,7 @@ describe("patches", () => {
   });
 
   it("reports an item it does not hold as missing instead of making a partial item", () => {
-    const first = applySnapshot<Row>(null, snap([row("a")], { rev: 100, cursor: "1" }), plain);
+    const first = applySnapshot<Row>(null, snap([row("a")], { rev: 100 }), plain);
     const { state, missing } = apply(first, { t: "patched", id: "far", d: { v: 9 } }, 200);
 
     expect(missing).toEqual(["far"]);
@@ -499,6 +519,23 @@ describe("patches", () => {
     expect(ids(state)).toEqual(["a"]);
     // The frame arrived, so a resume starts after it; the item comes with its own load.
     expect(state.rev).toBe(200);
+  });
+
+  it("ignores a patch of a member beyond a paged window, unless the whole scope is being loaded", () => {
+    const first = applySnapshot<Row>(
+      null,
+      snap([row("a")], { rev: 100, cursor: "1", total: 9 }),
+      plain,
+    );
+    const patched = { t: "patched", id: "far", d: { v: 9 } };
+    const paged = apply(first, patched, 200);
+
+    expect(paged.missing).toEqual([]);
+    expect(ids(paged.state)).toEqual(["a"]);
+    expect(paged.state.totalCount).toBe(9);
+    expect(applyDeltas<Row>(first, [patched], 200, plain, { loadAll: true }).missing).toEqual([
+      "far",
+    ]);
   });
 
   it("reports a removed id as missing when a newer patch says it is back", () => {

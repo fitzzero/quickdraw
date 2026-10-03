@@ -297,7 +297,8 @@ describe("races and requests", () => {
   it("loads the item a patch names but it does not hold with qd:col:items, never a partial one", async () => {
     const { fake, live, entry, ids } = setup();
     live.collections.subscribe(target, SCOPE);
-    fake.answer("qd:col:sub", 0, snapshot([row("a")], { cursor: "1", total: 9 }));
+    // Loaded whole: a member it does not hold is one it missed.
+    fake.answer("qd:col:sub", 0, snapshot([row("a")], { total: 1 }));
 
     fake.deliver("qd:c", frame(200, [{ t: "patched", id: "far", d: { v: 5 } }]));
     expect(entry()?.state?.byId.has("far")).toBe(false);

@@ -13,7 +13,7 @@ import { QuickdrawProvider } from "../provider";
 import { outgoing, until } from "../__tests__/fixtures";
 import { as, freshClient, liveDataHarness, taskContract } from "./__tests__/server";
 import type { CollectionEntry, CollectionTarget } from "./collectionLoads";
-import { loadedIds } from "./collectionStore";
+import { emptyCollection, loadedIds } from "./collectionStore";
 import type { EntityEntry } from "./entities";
 import { liveDataOf } from "./liveData";
 import { showCollection, viewPredicate } from "./views";
@@ -272,7 +272,7 @@ describe("live collections", () => {
     expect(state?.index).toHaveLength(35);
   });
 
-  it("loads the item of a patch it does not hold with qd:col:items, never a partial one", async () => {
+  it("leaves a patched member beyond the pages loaded to the page that brings it, at its place", async () => {
     const { app, write } = await live.start();
     const board = live.board();
     await live.prisma().task.updateMany({ where: { projectId: board.p1 }, data: { ordinal: 0 } });
@@ -285,19 +285,24 @@ describe("live collections", () => {
     });
     const far = open[3]?.id ?? "";
     const ada = await client(app.url, board.ada);
-    ada.data.collections.subscribe(targetOf("openByProject"), board.p1);
+    const { controller } = ada.data.collections.subscribe(targetOf("openByProject"), board.p1);
     await until(() => hasState(ada, "openByProject", board.p1));
-    expect(scopeOf(ada, "openByProject", board.p1)?.state?.byId.size).toBe(2);
+    const scope = () => scopeOf(ada, "openByProject", board.p1)?.state;
+    expect(scope()?.byId.size).toBe(2);
+    const total = scope()?.totalCount;
 
     await write((db) => db.task.update({ where: { id: far }, data: { title: "Far, patched" } }));
-    await until(() => scopeOf(ada, "openByProject", board.p1)?.state?.byId.has(far) === true);
-    expect(framesOf(ada.sent, "qd:col:items")).toEqual([
-      { s: "taskService", c: "openByProject", scope: board.p1, ids: [far] },
-    ]);
-    expect(scopeOf(ada, "openByProject", board.p1)?.state?.byId.get(far)).toMatchObject({
-      title: "Far, patched",
-      ordinal: 4,
-    });
+    await until(() => (scope()?.rev ?? 0) > (scope()?.snapshotRev ?? 0));
+    await tick(50);
+    expect(scope()?.byId.has(far)).toBe(false);
+    expect(scope()?.totalCount).toBe(total);
+    expect(framesOf(ada.sent, "qd:col:items")).toEqual([]);
+
+    while (scope()?.nextCursor !== null) {
+      await controller.loadMore();
+    }
+    expect(scope()?.byId.get(far)).toMatchObject({ title: "Far, patched", ordinal: 4 });
+    expect(loadedIds(scope() ?? emptyCollection()).at(-1)).toBe(far);
   });
 
   it("reloads a reset scope after the random delay", async () => {
