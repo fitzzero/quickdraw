@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import { defineContract, type CollectionFrame } from "../../../index";
-import { createTestApp, type TestApp } from "../../../testing/index";
+import { createTestApp, emitWithAck, type TestApp } from "../../../testing/index";
 import { qd } from "../../access/__tests__/board";
 import { members, sharing } from "../../index";
 import {
@@ -318,6 +318,33 @@ describe("roles the policy maps to levels", () => {
     expect(
       (await app.as(as(board.gus)).teamService.listMembers({ entryId: board.p2 })).items,
     ).toContainEqual({ userId: board.gus, role: "owner", level: "Admin" });
+  });
+
+  it("revokes a live subscription when a role change leaves the member below Read", async () => {
+    const app = await createTestApp({ services: [teamService], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    const board = kit.board();
+    await kit.harness().prisma.projectMember.createMany({
+      data: [
+        { projectId: board.p2, userId: board.ed, role: "owner" },
+        { projectId: board.p2, userId: board.gus, role: "viewer" },
+      ],
+    });
+    const connection = await app.connect(as(board.gus));
+    expect(
+      await emitWithAck(connection.socket, "qd:sub", { s: "teamService", ids: [board.p2] }),
+    ).toMatchObject({ r: [{ ok: true }] });
+
+    await app
+      .as(as(board.ed))
+      .teamService.setRole({ entryId: board.p2, userId: board.gus, role: "guest" });
+    const revoked = await app.frames.waitFor({ event: "qd:revoked", userId: board.gus });
+    expect(revoked.data).toEqual({
+      kind: "entity",
+      reason: "access",
+      s: "teamService",
+      id: board.p2,
+    });
   });
 });
 
