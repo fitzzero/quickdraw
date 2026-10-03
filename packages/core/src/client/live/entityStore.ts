@@ -187,7 +187,8 @@ function apply(state: State, batch: Batch, results: readonly unknown[]): void {
     }
     const result = entityResultOf(results[position]);
     if (result.ok) {
-      state.host.overlays.observe(row.service, row.id, result.rev);
+      // A reply: it ends an optimistic layer only when the batch was sent after the call's reply.
+      state.host.overlays.observe(row.service, row.id, result.rev, batch.readAt);
     }
     const before = entryOf(state, row.service, row.id);
     commit(state, row, before, applyEntityResult(before, result, batch.readAt));

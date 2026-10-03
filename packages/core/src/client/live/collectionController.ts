@@ -135,13 +135,18 @@ function write(p: Pipeline, change: Partial<CollectionEntry>): void {
   writeEntry(p.host, p.key, Object.freeze({ ...entryOf(p), ...change }));
 }
 
-/** Reports the revision of every item a delta names to the overlay store. */
-function observeDeltas(p: Pipeline, batch: DeltaBatch): void {
+/**
+ * Reports the revision of every item a delta names to the overlay store:
+ * from a frame, or (with `readAt`, when the load was sent) from a resume
+ * reply, which ends an optimistic layer only when it was asked for after the
+ * call's reply.
+ */
+function observeDeltas(p: Pipeline, batch: DeltaBatch, readAt?: number): void {
   for (const delta of batch.deltas as readonly unknown[]) {
     const record = delta as { readonly id?: unknown; readonly item?: { readonly id?: unknown } };
     const id = record.id ?? record.item?.id;
     if (typeof id === "string") {
-      p.host.overlays.observe(p.target.service, id, batch.rev);
+      p.host.overlays.observe(p.target.service, id, batch.rev, readAt);
     }
   }
 }
@@ -223,21 +228,22 @@ function pruneUnseen(p: Pipeline): void {
   }
 }
 
-/** Applies the answer of a load, then the frames kept while it was in flight. */
+/** Applies the answer of a load sent at `readAt`, then the frames kept while it was in flight. */
 function applyLoad(
   p: Pipeline,
   reply: Readonly<Record<string, unknown>>,
   kept: DeltaBatch[],
+  readAt: number,
 ): void {
   const base = entryOf(p).state;
   const options = { loadAll: p.allDemand > 0 };
   let applied: DeltaResult;
   if (reply.resumed === true && isRevision(reply.rev) && Array.isArray(reply.deltas)) {
     const batch: DeltaBatch = { rev: reply.rev, deltas: reply.deltas as DeltaBatch["deltas"] };
-    observeDeltas(p, batch);
+    observeDeltas(p, batch, readAt);
     applied = applyDeltas(base, batch.deltas, batch.rev, p.shape, options);
   } else if (isPage(reply)) {
-    observeItems(p, reply.items, reply.rev);
+    observeItems(p, reply.items, reply.rev, readAt);
     applied = { state: applySnapshot(base, reply, p.shape), reset: false, missing: [] };
   } else {
     refused(p, malformed("qd:col:sub"));
@@ -270,7 +276,15 @@ function refused(p: Pipeline, error: QuickdrawError): void {
   settle(p, error);
 }
 
-function loaded(p: Pipeline, generation: number, kind: LoadKind, outcome: Outcome): void {
+/** What came back for a load. */
+interface Loaded {
+  readonly generation: number;
+  readonly kind: LoadKind;
+  /** The overlay store's clock when the load was sent. */
+  readonly readAt: number;
+}
+
+function loaded(p: Pipeline, { generation, kind, readAt }: Loaded, outcome: Outcome): void {
   if (generation !== p.generation || p.disposed) {
     return;
   }
@@ -278,7 +292,7 @@ function loaded(p: Pipeline, generation: number, kind: LoadKind, outcome: Outcom
   const kept = p.buffered;
   p.buffered = [];
   if (outcome.kind === "ok") {
-    applyLoad(p, outcome.reply, kept);
+    applyLoad(p, outcome.reply, kept, readAt);
   } else if (outcome.kind === "refused") {
     refused(p, outcome.error);
   } else if (outcome.kind === "retry") {
@@ -312,8 +326,9 @@ function load(p: Pipeline, kind: LoadKind): void {
     ...(since === undefined ? {} : { since }),
     ...(limit === undefined ? {} : { limit }),
   };
+  const sent: Loaded = { generation, kind, readAt: p.host.overlays.now() };
   request(p.host, CLIENT_EVENTS.collectionSub, frame, (outcome) => {
-    loaded(p, generation, kind, outcome);
+    loaded(p, sent, outcome);
   });
 }
 

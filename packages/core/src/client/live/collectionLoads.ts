@@ -86,12 +86,21 @@ export function isPage(reply: Readonly<Record<string, unknown>>): reply is Reado
   );
 }
 
-/** Reports the revision items were read at to the overlay store. */
-export function observeItems(p: LoadSteps, items: readonly unknown[], rev: number): void {
+/**
+ * Reports the revision items were read at to the overlay store, by a read
+ * sent at `readAt`: a reply ends an optimistic layer only when it was asked
+ * for after the call's reply.
+ */
+export function observeItems(
+  p: LoadSteps,
+  items: readonly unknown[],
+  rev: number,
+  readAt: number,
+): void {
   for (const item of items) {
     const id = (item as { readonly id?: unknown } | null)?.id;
     if (typeof id === "string") {
-      p.host.overlays.observe(p.target.service, id, rev);
+      p.host.overlays.observe(p.target.service, id, rev, readAt);
     }
   }
 }
@@ -123,10 +132,10 @@ function scopeFrame(p: LoadSteps): {
   return { s: p.target.service, c: p.target.collection, scope: p.scope };
 }
 
-/** Applies the answer to a page; resolves true to go on reading pages, false to stop. */
+/** Applies the answer to a page sent at `readAt`; resolves true to go on reading pages, false to stop. */
 function pageLoaded(
   p: LoadSteps,
-  generation: number,
+  { generation, readAt }: { readonly generation: number; readonly readAt: number },
   outcome: Outcome,
 ): boolean | Promise<boolean> {
   if (generation !== p.generation) {
@@ -139,7 +148,7 @@ function pageLoaded(
       p.write({ loadingMore: false, error: malformed("qd:col:sub") });
       return false;
     }
-    observeItems(p, reply.items, reply.rev);
+    observeItems(p, reply.items, reply.rev, readAt);
     p.write({
       loadingMore: false,
       error: null,
@@ -182,7 +191,7 @@ export function loadPage(p: LoadSteps): Promise<boolean> {
   if (cursor === null || p.disposed) {
     return Promise.resolve(false);
   }
-  const { generation } = p;
+  const sent = { generation: p.generation, readAt: p.host.overlays.now() };
   const limit = p.pageLimit();
   const frame = { ...scopeFrame(p), cursor, ...(limit === undefined ? {} : { limit }) };
   p.write({ loadingMore: true });
@@ -191,7 +200,7 @@ export function loadPage(p: LoadSteps): Promise<boolean> {
     request(p.host, CLIENT_EVENTS.collectionSub, frame, (outcome) => {
       answered = true;
       p.page = undefined;
-      resolve(p.disposed ? false : pageLoaded(p, generation, outcome));
+      resolve(p.disposed ? false : pageLoaded(p, sent, outcome));
     });
   });
   // With the socket down the lane answers at once, before `page` is made.
@@ -203,6 +212,7 @@ export function loadPage(p: LoadSteps): Promise<boolean> {
 
 /** Sends one `qd:col:items` and applies its answer. */
 function requestItems(p: LoadSteps, ids: readonly string[]): Promise<void> {
+  const readAt = p.host.overlays.now();
   return new Promise((resolve, reject) => {
     request(p.host, CLIENT_EVENTS.collectionItems, { ...scopeFrame(p), ids }, (outcome) => {
       const state = p.currentState();
@@ -214,7 +224,7 @@ function requestItems(p: LoadSteps, ids: readonly string[]): Promise<void> {
           reject(malformed("qd:col:items"));
           return;
         }
-        observeItems(p, items, rev);
+        observeItems(p, items, rev, readAt);
         p.write({ state: applyItems(state, items, rev, p.shape, ids) });
         resolve();
       } else if (outcome.kind === "retry") {

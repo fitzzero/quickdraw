@@ -145,6 +145,75 @@ describe("a finished call", () => {
     expect(overlays.applyOverlay("taskService", row)).toBe(row);
   });
 
+  it("is not ended by the reply to a read sent before its reply, whatever its revision", async () => {
+    const client = new QueryClient();
+    const overlays = overlaysOf(client);
+    overlays.observe("taskService", "t1", 5);
+    const { reply, done } = send(client, { id: "t1", title: "New" });
+    // A snapshot or a page is asked for while the call is in flight...
+    const snapshotSent = overlays.now();
+    reply.resolve({ ...row, title: "New" });
+    await done;
+    // ...and answered after the reply, with a revision newer than any seen.
+    overlays.observe("taskService", "t1", 50, snapshotSent);
+    expect(overlays.applyOverlay("taskService", row)).toEqual({ ...row, title: "New" });
+    // A read sent after the reply holds the write.
+    overlays.observe("taskService", "t1", 50, overlays.now());
+    expect(overlays.applyOverlay("taskService", row)).toBe(row);
+  });
+
+  it("keeps the revision of a row with a layer while a thousand other rows are seen", async () => {
+    const client = new QueryClient();
+    const overlays = overlaysOf(client);
+    overlays.observe("taskService", "t1", 7);
+    // A first call holds a layer on the row, then a large board is read.
+    send(client, { id: "t1", title: "Pending" });
+    for (let seen = 0; seen < 1500; seen += 1) {
+      overlays.observe("taskService", `other-${seen}`, 100 + seen);
+    }
+    const second = send(client, { id: "t1", status: "done" });
+    second.reply.resolve({ ...row, status: "done" });
+    await second.done;
+    // A frame no newer than what was seen before the second write does not end it.
+    overlays.observe("taskService", "t1", 7);
+    expect(overlays.applyOverlay("taskService", row)?.status).toBe("done");
+    overlays.observe("taskService", "t1", 8);
+    expect(overlays.applyOverlay("taskService", row)?.status).toBe("open");
+  });
+
+  it("drops a finished layer that nothing ended within 10 s, a custom one on an unfollowed row too", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new QueryClient();
+      const overlays = overlaysOf(client);
+      const told = vi.fn();
+      overlays.subscribe(told);
+      const { reply, done } = send(client, { id: "t1", title: "New" }, (input, cache) => {
+        cache.patchEntity((input as { id: string }).id, { title: "New" });
+        cache.patchItem("board", "t9", { title: "Never followed" });
+      });
+      reply.resolve({ ...row, title: "New" });
+      await done;
+      const unfollowed = { id: "t9", title: "T9" };
+      expect(overlays.applyOverlay("taskService", unfollowed, { collection: "board" })).toEqual({
+        id: "t9",
+        title: "Never followed",
+      });
+      told.mockClear();
+      vi.advanceTimersByTime(9999);
+      expect(overlays.applyOverlay("taskService", row)).toEqual({ ...row, title: "New" });
+      vi.advanceTimersByTime(1);
+      expect(overlays.applyOverlay("taskService", row)).toBe(row);
+      expect(overlays.applyOverlay("taskService", unfollowed, { collection: "board" })).toBe(
+        unfollowed,
+      );
+      expect(told).toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("finishes when the reply arrives, so a frame handled before the call's promise settles still ends it", async () => {
     const client = new QueryClient();
     const overlays = overlaysOf(client);

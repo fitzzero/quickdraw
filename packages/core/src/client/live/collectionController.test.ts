@@ -10,8 +10,9 @@
 // `live.test.ts`.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { tick } from "../../server/__tests__/fixtures";
+import { deferred, tick } from "../../server/__tests__/fixtures";
 import { collectionKey } from "../keys";
+import { mutateOptimistically, overlaysOf } from "../optimistic";
 import { fakeConnection, testQueryClient } from "./__tests__/fakeSocket";
 import type { CollectionEntry, CollectionTarget } from "./collectionLoads";
 import { loadedIds } from "./collectionStore";
@@ -357,6 +358,34 @@ describe("races and requests", () => {
     expect(entry()?.state?.totalCount).toBe(3);
     expect(entry()?.state?.removed.get("x")).toBe(200);
     expect(fake.sent("qd:col:items")).toEqual([]);
+  });
+
+  it("keeps an optimistic layer over a snapshot read before the write and applied after its reply", async () => {
+    const fake = fakeConnection();
+    const queryClient = testQueryClient();
+    const live = liveDataOf(fake.connection, queryClient);
+    const overlays = overlaysOf(queryClient);
+    const { controller } = live.collections.subscribe(target, SCOPE);
+    fake.answer("qd:col:sub", 0, snapshot([row("a", 1)], { rev: 100 }));
+    const reply = deferred<unknown>();
+    const done = mutateOptimistically(
+      queryClient,
+      { service: "chatService", entityOutput: true },
+      undefined,
+      { id: "a", v: 9 },
+      () => reply.promise,
+    );
+    // A reload is asked for while the write is in flight, and answered after its reply.
+    const refreshed = controller.refresh();
+    reply.resolve(row("a", 9));
+    await done;
+    fake.answer("qd:col:sub", 1, snapshot([row("a", 1)], { rev: 300 }));
+    await refreshed;
+    const shown = () => overlays.applyOverlay("chatService", row("a", 1), { collection: "byChat" });
+    expect(shown()).toEqual(row("a", 9));
+    // The write's own frame ends it.
+    fake.deliver("qd:c", frame(301, [{ t: "patched", id: "a", d: { v: 9 } }]));
+    expect(shown()).toEqual(row("a", 1));
   });
 
   it("drops a revoked scope's state and error-marks it; refresh loads it again", async () => {
