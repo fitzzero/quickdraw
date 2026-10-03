@@ -429,8 +429,10 @@ function snapshotIndex(
   const rows: IndexRow[] = [];
   const late: IndexRow[] = [];
   const revs = new Map<string, Revision>();
-  const keep = (id: string): void => {
-    const row = heldRow(base, held, shape, id);
+  // A member newer than the snapshot keeps the row the state holds; with
+  // none held, the snapshot's row (`fallback`) is the best known.
+  const keep = (id: string, fallback?: IndexRow): void => {
+    const row = heldRow(base, held, shape, id) ?? fallback;
     if (row !== undefined) {
       late.push(row);
       revs.set(id, base.revById.get(id) ?? snapshot.rev);
@@ -444,7 +446,7 @@ function snapshotIndex(
       continue;
     }
     if (newer(row.id)) {
-      keep(row.id);
+      keep(row.id, row);
     } else {
       rows.push(row);
       revs.set(row.id, snapshot.rev);
