@@ -547,7 +547,7 @@ describe("races with a subscribe batch", () => {
         setTimeout(resolve, 20);
       });
     });
-    const { app } = await start({ after: hold.after });
+    const { app, reads } = await start({ after: hold.after });
     const owner = await connect(app, as(board.ada));
     closeRef = () => owner.connection.close();
     const serverSocket = app.server.io.sockets.sockets.get(owner.connection.socket.id ?? "");
@@ -557,8 +557,14 @@ describe("races with a subscribe batch", () => {
       setTimeout(resolve, 20);
     });
     expect(serverSocket?.connected).toBe(false);
-    expect(roomsOf(app, "taskService", board.t1)).toEqual([]);
     expect(serverSocket?.data.entities ?? {}).toEqual({});
+    // Rooms cannot tell (Socket.IO ignores a join after a disconnect); the subscription index
+    // can: an access change on the row's project finds no subscription to resolve again.
+    reads.length = 0;
+    await app.server.dispatcher.run(() =>
+      h.db.project.update({ where: { id: board.p1 }, data: { acl: [] } }),
+    );
+    expect(reads).toEqual([]);
   });
 });
 

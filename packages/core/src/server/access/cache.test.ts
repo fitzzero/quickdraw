@@ -238,22 +238,28 @@ describe("keeping lookups across requests", () => {
   });
 
   it("forgets what it kept once cacheMs passes", async () => {
-    const { dispatcher } = boardDispatcher({ cacheMs: 30 });
-    expect(await lookupOf(dispatcher, "projectService", board.bo, board.p1)).toEqual([
-      2,
-      "Moderate",
-    ]);
-    expect(await lookupOf(dispatcher, "projectService", board.bo, board.p1)).toEqual([
-      0,
-      "Moderate",
-    ]);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 60);
-    });
-    expect(await lookupOf(dispatcher, "projectService", board.bo, board.p1)).toEqual([
-      2,
-      "Moderate",
-    ]);
+    // A fake clock (Date only: the database's timers stay real), so a slow
+    // machine cannot let 30 ms pass between the first two lookups.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { dispatcher } = boardDispatcher({ cacheMs: 30 });
+      expect(await lookupOf(dispatcher, "projectService", board.bo, board.p1)).toEqual([
+        2,
+        "Moderate",
+      ]);
+      vi.advanceTimersByTime(29);
+      expect(await lookupOf(dispatcher, "projectService", board.bo, board.p1)).toEqual([
+        0,
+        "Moderate",
+      ]);
+      vi.advanceTimersByTime(1);
+      expect(await lookupOf(dispatcher, "projectService", board.bo, board.p1)).toEqual([
+        2,
+        "Moderate",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
