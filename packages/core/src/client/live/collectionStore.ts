@@ -38,7 +38,8 @@
 //
 // The state's shape and the helpers that read it are in `collectionState.ts`,
 // snapshots in `collectionSnapshot.ts`; this module re-exports both, and
-// applies deltas, later pages and items loaded by id.
+// applies deltas, later pages, items loaded by id and items read outside the
+// scope (a search's results, which the scope's deltas then keep current).
 //
 // Pure functions, React-free.
 
@@ -438,6 +439,49 @@ export function applyPage<Item extends CollectionItem>(
     clamped: page.clamped === true,
     ...(work.index === null ? { totalCount: page.total } : {}),
   });
+}
+
+/** What {@link applyKept} did. */
+export interface KeptResult<Item extends CollectionItem = CollectionItem> {
+  /** The new state: the same object when nothing changed. */
+  readonly state: CollectionState<Item>;
+  /** Index members the state holds a newer revision of but no item for, to load with `qd:col:items`. */
+  readonly missing: readonly string[];
+}
+
+/** True when an item read outside the scope may be kept: a member the index holds, or one a delta could bring in. */
+function keepable(work: Work<CollectionItem>, id: string, loadAll: boolean): boolean {
+  return work.index === null ? mayBringIn(work, id, loadAll) : rowsById(work).has(id);
+}
+
+/**
+ * Applies items of the scope that were read outside it at revision `rev` (a
+ * search's results, `useSearch`): each is upserted as an item loaded by id
+ * is, unless the state holds something newer for it, so the scope's deltas
+ * keep it current from then on. Only members the state can show are kept:
+ * those its index holds, or, without an index, those a delta could bring in
+ * (never one beyond a paged window). Nothing is removed and no count
+ * changes.
+ */
+export function applyKept<Item extends CollectionItem>(
+  prev: CollectionState<Item> | null | undefined,
+  items: readonly unknown[],
+  rev: Revision,
+  shape: CollectionShape,
+  options: DeltaOptions = {},
+): KeptResult<Item> {
+  const base = prev ?? emptyCollection<Item>();
+  const work = workOn(base, shape) as Work<CollectionItem>;
+  const missing: string[] = [];
+  for (const item of items) {
+    if (hasId(item) && keepable(work, item.id, options.loadAll === true)) {
+      upsert(work, item, rev, false);
+      if (work.index !== null && !work.byId.has(item.id)) {
+        missing.push(item.id);
+      }
+    }
+  }
+  return { state: finish(base, work as Work<Item>), missing };
 }
 
 /**

@@ -441,6 +441,107 @@ export const taskService = qd.defineService(task, {
   too. For hand-written handlers, `./server` has `requireRow(row, message?)`
   (`NOT_FOUND` for a missing row) and `nextOrdinal(db, model, where)`.
 
+### Search kit
+
+Search as a one-line opt-in (design: `docs/rfcs/0003-v5.md`, section 12.2).
+`search.contract` makes one query, `search`, and `search.handlers`
+implements it; on the client, its member gets `useSearch`:
+
+```typescript
+// the shared package
+import { defineContract, search } from "@fitzzero/quickdraw-core";
+
+export const task = defineContract("taskService", {
+  entity: taskSchema,
+  projections: { card: cardSchema },
+  methods: {
+    // looks in title and description; a call may keep to one scope of byProject
+    ...search.contract({
+      entity: taskSchema,
+      item: cardSchema, // a scoped search's results are its collection's items
+      fields: ["title", "description"],
+      scope: "byProject",
+    }),
+  },
+  collections: {
+    byProject: {
+      scope: "projectId",
+      item: "card",
+      order: [
+        ["ordinal", "asc"],
+        ["id", "asc"],
+      ],
+    },
+  },
+});
+
+// the server
+import { search } from "@fitzzero/quickdraw-core/server";
+
+export const taskService = qd.defineService(task, {
+  model: "task",
+  access: inherit({ from: project, via: "projectId" }),
+  collections: { byProject: { anchor: project } },
+  methods: { ...search.handlers(task, { access: "authenticated" }) },
+});
+
+// a component
+const { items, isSearching } = qd.task.search.useSearch(text, { scope: projectId });
+```
+
+- `search({ q, scope?, cursor?, limit? })` returns `{ items, nextCursor }`
+  (and `rev`, below). `q` is trimmed, and one shorter than `minLength`
+  (default 2) finds nothing and reads nothing. 20 results by default, at
+  most 100, with keyset cursors as for `list`. There is no ranking: results
+  come in the scope collection's order, else by id.
+- By default a row matches when one of the declared `fields` contains `q`,
+  ignoring case; `%`, `_` and `\` in `q` are taken literally. `fields` is an
+  explicit list because an unbounded "contains" over every column is slow. A
+  field the reader's level does not receive (a field tier) is not searched,
+  so whether a row matches never tells what that field holds.
+- A search finds only rows the caller can read, as `list` does: the policy's
+  `accessWhere` at the form's `entry` or `scope` level, else `Read`; a
+  `"public"` search is not filtered and hides every tiered field. With
+  `scope`, only that scope's members (its column, or its `via` junction's
+  links, and `where`). Identical concurrent searches by one caller run once
+  (`share: "caller"`). For a contract with several search methods,
+  `method` names the one a `search.handlers` call implements.
+- `strategy` replaces how rows are found; the kit still adds the access
+  filter, the scope and paging. `where(q, ctx)` returns a filter;
+  `ids(q, ctx, { limit })` returns ranked ids from an index of your own,
+  which the kit reads, keeps to the rows the caller may read (so a page can
+  hold fewer than `limit`) and returns in that order as one page. Postgres
+  full-text search through a `tsvector` column the app maintains (a
+  generated column or a trigger, with a GIN index):
+
+  ```typescript
+  ...search.handlers(task, {
+    access: "authenticated",
+    strategy: {
+      // Prisma cannot filter on a tsvector column: find the ids with SQL
+      where: async (q) => {
+        const rows = await prisma.$queryRaw<{ id: string }[]>`
+          SELECT id FROM "Task" WHERE "searchVector" @@ websearch_to_tsquery('english', ${q})
+          LIMIT 1000`;
+        return { id: { in: rows.map((row) => row.id) } };
+      },
+    },
+  }),
+  ```
+
+  For results by relevance, return the ids from `ids` instead, ordered by
+  `ts_rank("searchVector", query) DESC` and limited to `limit`.
+
+- `useSearch(q, { scope?, debounceMs?, limit?, enabled? })` sends `q` once
+  typing pauses (200 ms), cancels a search still on its way when the next
+  one is sent (`qd:cancel`), keeps the last results in the same scope shown
+  meanwhile, and returns `{ items, hasMore, isSearching, isLoading, error }`.
+  A scoped search's page carries the revision it was read at (`rev`) when
+  its items are exactly the scope collection's items: while a
+  `useCollection` holds that scope, they are kept in its cache and shown as
+  it holds them, so another user's rename of a result shows at once, with
+  no second search and no subscription of the search's own.
+
 ### Testing
 
 `@fitzzero/quickdraw-core/testing` boots the real server on a free port:

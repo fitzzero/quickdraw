@@ -160,6 +160,19 @@ export type {
   CrudMethodsOf,
   KitContext,
 } from "./kits/crud/types";
+// The search kit's server half (RFC 0003 section 12.2), whose contract half
+// is `search.contract` on the root export
+export { search } from "./kits/search/handlers";
+export type {
+  SearchAccess,
+  SearchContract,
+  SearchHandlersOptions,
+  SearchIdsOptions,
+  SearchImplementations,
+  SearchMethodsOf,
+  SearchStrategy,
+  SearchStrategyContext,
+} from "./kits/search/types";
 
 // The seams later cards implement: tracked writes, "not modified" versions
 // and the completion record

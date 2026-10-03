@@ -101,6 +101,25 @@ export {
   type ListQuery,
   type ListSort,
 } from "./contract/kits/crudList";
+// The search kit's contract half (RFC 0003 section 12.2); its handlers are
+// `search.handlers` on ./server, and the client adds `useSearch` to its member.
+export {
+  search,
+  type SearchContractOptions,
+  type SearchDef,
+  type SearchMethods,
+  type SearchTag,
+  type TextFieldOf,
+} from "./contract/kits/search";
+export {
+  SEARCH_DEFAULT_LIMIT,
+  SEARCH_DEFAULT_MIN_LENGTH,
+  SEARCH_MAX_LIMIT,
+  SEARCH_MAX_QUERY_LENGTH,
+  type SearchInput,
+  type SearchPage,
+  type SearchQuery,
+} from "./contract/kits/searchSchemas";
 export type { KitSchema } from "./contract/kits/schemas";
 export type {
   ChannelPayloadOf,

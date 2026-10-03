@@ -84,6 +84,7 @@ export {
   applyDeltas as applyCollectionDeltas,
   applyFrames as applyCollectionFrames,
   applyItems as applyCollectionItems,
+  applyKept as applyCollectionKept,
   applyPage as applyCollectionPage,
   applySnapshot as applyCollectionSnapshot,
   emptyCollection,
@@ -92,6 +93,7 @@ export {
   type DeltaBatch,
   type DeltaOptions,
   type DeltaResult,
+  type KeptResult,
   type PageReply,
 } from "./live/collectionStore";
 export type { CollectionShape, IndexRow } from "./live/collectionIndex";
@@ -121,6 +123,13 @@ export type {
 } from "./clientTypes";
 export type { UseCollectionOptions, UseCollectionResult } from "./live/useCollection";
 export type { UseEntitiesResult, UseEntityOptions, UseEntityResult } from "./live/useEntity";
+export { SEARCH_DEBOUNCE_MS } from "./live/useSearch";
+export type {
+  SearchMember,
+  SearchMemberOf,
+  UseSearchOptions,
+  UseSearchResult,
+} from "./live/searchTypes";
 export type { MethodMutationOptions, MethodQueryOptions } from "./hooks";
 export {
   QuickdrawProvider,
