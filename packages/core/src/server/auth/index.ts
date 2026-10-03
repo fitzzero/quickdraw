@@ -28,6 +28,7 @@ export {
 export {
   setSessionCookie,
   clearSessionCookie,
+  HOST_SESSION_COOKIE,
   SESSION_COOKIE,
   type CookieResponse,
   type CookieSettings,
@@ -83,7 +84,7 @@ export {
   type IssuedSession,
   type SessionKeys,
 } from "./routes/tokens";
-export { OAUTH_STATE_COOKIE, OAUTH_STATE_TTL_MS } from "./routes/state";
+export { HOST_OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE, OAUTH_STATE_TTL_MS } from "./routes/state";
 export type { AllowedOrigin } from "./routes/origins";
 export type { AuthMiddleware, AuthRateLimits } from "./routes/limits";
 export type { AuthRouteRequest, AuthRouteResponse } from "./routes/respond";

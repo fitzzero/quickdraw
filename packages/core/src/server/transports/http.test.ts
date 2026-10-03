@@ -213,6 +213,44 @@ describe("credentials", () => {
     expect(await echo({})).toMatchObject({ status: 200, body: { d: { userId: null } } });
   });
 
+  it("reads __Host-session before session, only a cookie name it is given, and no repeated name", async () => {
+    const { url } = await serve();
+    const echo = (headers: Record<string, string>) =>
+      post(url, "/qd/probeService/echo", { body: '{"text":"hi"}', headers });
+    const userOf = async (headers: Record<string, string>) =>
+      ((await echo(headers)).body as { d?: { userId: unknown } }).d?.userId;
+    // The moderator token is Alice's, with a Moderate grant.
+    const grantsOf = async (headers: Record<string, string>) =>
+      ((await echo(headers)).body as { d?: { grants?: unknown } }).d?.grants;
+    expect(
+      await grantsOf({ cookie: "session=moderator-token; __Host-session=alice-token" }),
+    ).toBeNull();
+    expect(await userOf({ cookie: "session=moderator-token; __Host-session=alice-token" })).toBe(
+      "alice",
+    );
+    // Two cookies of one name: one may have been planted by a sibling site, so neither counts.
+    expect(await userOf({ cookie: "session=alice-token; session=moderator-token" })).toBeNull();
+    expect(
+      await grantsOf({ cookie: "session=alice-token; session=x", ...bearer("moderator-token") }),
+    ).toEqual({ probeService: "Moderate" });
+    // A repeated __Host-session does not let session stand in for it.
+    expect(
+      await userOf({ cookie: "__Host-session=a; __Host-session=b; session=alice-token" }),
+    ).toBeNull();
+    const named = await serve({ http: { cookieName: "sid" } });
+    const namedUser = async (cookie: string) =>
+      (
+        (
+          await post(named.url, "/qd/probeService/echo", {
+            body: '{"text":"hi"}',
+            headers: { cookie },
+          })
+        ).body as { d?: { userId: unknown } }
+      ).d?.userId;
+    expect(await namedUser("sid=alice-token; session=moderator-token")).toBe("alice");
+    expect(await namedUser("__Host-session=alice-token")).toBeNull();
+  });
+
   it("answers 401 when authenticate throws", async () => {
     const { url, logger } = await serve();
     expect(

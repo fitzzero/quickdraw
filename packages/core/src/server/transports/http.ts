@@ -48,7 +48,11 @@ export interface HttpTransportOptions {
    * own JSON parser already read (`express.json()`) is used as it is.
    */
   readonly maxBodyBytes?: number;
-  /** The session cookie a token is read from. Default `"session"`. */
+  /**
+   * The session cookie a token is read from. Default: `"__Host-session"`,
+   * or else `"session"`; a name given here is the only one read. A name the
+   * request repeats counts as no cookie.
+   */
   readonly cookieName?: string;
   /**
    * A rate limiter run before each call the transport serves, and only

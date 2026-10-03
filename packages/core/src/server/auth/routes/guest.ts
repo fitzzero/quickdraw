@@ -8,9 +8,8 @@
 import { INTERNAL_MESSAGE, QuickdrawError } from "../../../protocol/errors";
 import { readJsonInput } from "../../transports/body";
 import type { MaybePromise } from "../../types";
-import { setSessionCookie } from "../sessionCookie";
 import { refuse, sendJson, type AuthRouteRequest, type AuthRouteResponse } from "./respond";
-import { issueFor, sessionCookieOf, type RouteSettings } from "./settings";
+import { issueFor, setSession, type RouteSettings } from "./settings";
 
 /** The largest guest request body read, in bytes. */
 export const GUEST_MAX_BODY_BYTES = 16_384;
@@ -80,7 +79,7 @@ export function guestRoute(
       return;
     }
     const { token } = await issueFor(settings, userId, provider.id, req);
-    setSessionCookie(res, token, sessionCookieOf(settings, req));
+    setSession(res, settings, req, token);
     settings.logger.info("Signed in a new guest", { category: "quickdraw.auth", userId });
     sendJson(res, 200, { userId });
   };

@@ -7,6 +7,14 @@
 
 export const SESSION_COOKIE = "session";
 
+/**
+ * The session cookie the auth routes kit sets by default on a secure request
+ * when no cookie domain is configured. The `__Host-` prefix makes a browser
+ * keep it only when it is Secure, has `Path=/` and no `Domain`, so no other
+ * site under the same parent domain can set or replace it.
+ */
+export const HOST_SESSION_COOKIE = "__Host-session";
+
 // Matches the default JWT expiry ("7d" in jwt.ts) — a cookie that outlives
 // its JWT just keeps sending a token the server will reject. Pass maxAgeMs
 // if your JWT lifetime differs.

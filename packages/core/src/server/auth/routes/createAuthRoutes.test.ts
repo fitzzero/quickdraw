@@ -270,13 +270,16 @@ describe("signing in", () => {
     });
   });
 
-  it("sets a Secure cookie in production and over HTTPS, and a SameSite=None one when asked", async () => {
+  it("sets a Secure __Host- cookie in production and over HTTPS, and a SameSite=None one when asked", async () => {
     const production = await harness.boot();
     vi.stubEnv("NODE_ENV", "production");
     const secure = await post(`${production.url}/auth/guest`, { body: {} });
-    expect(cookiesSet(secure).get("session")?.attributes).toEqual(
-      expect.arrayContaining(["secure", "samesite=lax", "httponly"]),
+    const hostCookie = cookiesSet(secure).get("__Host-session");
+    expect(hostCookie?.attributes).toEqual(
+      expect.arrayContaining(["secure", "samesite=lax", "httponly", "path=/"]),
     );
+    expect(hostCookie?.attributes.some((attribute) => attribute.startsWith("domain="))).toBe(false);
+    expect(cookiesSet(secure).has("session")).toBe(false);
     vi.stubEnv("NODE_ENV", "test");
 
     const proxied = await harness.boot();
@@ -285,13 +288,63 @@ describe("signing in", () => {
       body: {},
       headers: { "x-forwarded-proto": "https" },
     });
-    expect(cookiesSet(overHttps).get("session")?.attributes).toContain("secure");
+    expect(cookiesSet(overHttps).get("__Host-session")?.attributes).toContain("secure");
 
+    // A cookie for a domain cannot be __Host-: it keeps the plain name.
     const crossSite = await harness.boot({ cookie: { sameSite: "none", domain: "app.test" } });
     const none = await post(`${crossSite.url}/auth/guest`, { body: {} });
     expect(cookiesSet(none).get("session")?.attributes).toEqual(
       expect.arrayContaining(["samesite=none", "secure", "domain=app.test"]),
     );
+    vi.stubEnv("COOKIE_DOMAIN", "env.test");
+    const fromEnv = await harness.boot({ cookie: { secure: true } });
+    const envCookie = cookiesSet(await post(`${fromEnv.url}/auth/guest`, { body: {} }));
+    expect(envCookie.get("session")?.attributes).toContain("domain=env.test");
+  });
+
+  it("signs in with __Host- state and session cookies on a secure request, and reads only those back", async () => {
+    const { url } = await harness.boot({ cookie: { secure: true } });
+    const started = await get(`${url}/auth/mock/start`);
+    const state = cookiesSet(started).get("__Host-qd_oauth");
+    expect(state?.attributes).toEqual(expect.arrayContaining(["secure", "httponly", "path=/"]));
+    expect(cookiesSet(started).has("qd_oauth")).toBe(false);
+    const stateCookie = `__Host-qd_oauth=${state?.value ?? ""}`;
+    const callbackUrl = await consent(
+      { stateCookie, authorizeUrl: new URL(locationOf(started)) },
+      "ada@demo.local",
+    );
+    // The plain state name is not read on a secure request.
+    const plain = await get(callbackUrl.href, `qd_oauth=${state?.value ?? ""}`);
+    expect(new URL(locationOf(plain)).searchParams.get("error")).toBe("state");
+    const callback = await get(callbackUrl.href, stateCookie);
+    expect(cookiesSet(callback).get("__Host-qd_oauth")?.value).toBe("");
+    const token = cookieValue(callback, "__Host-session");
+    expect(cookiesSet(callback).get("__Host-session")?.attributes).toEqual(
+      expect.arrayContaining(["secure", "httponly", "path=/"]),
+    );
+    expect(await (await get(`${url}/auth/me`, `__Host-session=${token}`)).json()).toEqual({
+      userId: userIdOf("ada@demo.local"),
+    });
+    expect((await get(`${url}/auth/me`, `session=${token}`)).status).toBe(401);
+    const out = await post(`${url}/auth/logout`, { cookie: `__Host-session=${token}` });
+    expect(cookiesSet(out).get("__Host-session")?.value).toBe("");
+    // A name the app gives is used as it is.
+    const named = await harness.boot({ cookie: { secure: true, name: "sid" } });
+    const guestSignIn = await post(`${named.url}/auth/guest`, { body: {} });
+    expect(cookiesSet(guestSignIn).has("sid")).toBe(true);
+  });
+
+  it("counts a repeated session or state cookie name as no credential", async () => {
+    const { url } = await harness.boot();
+    const { session } = await signIn(url, "ada@demo.local");
+    expect((await get(`${url}/auth/me`, session)).status).toBe(200);
+    // A sibling site can plant a second cookie of the same name: neither is trusted.
+    expect((await get(`${url}/auth/me`, `${session}; session=planted`)).status).toBe(401);
+    const started = await start(url);
+    const callbackUrl = await consent(started, "ada@demo.local");
+    const twice = await get(callbackUrl.href, `${started.stateCookie}; ${started.stateCookie}`);
+    expect(new URL(locationOf(twice)).searchParams.get("error")).toBe("state");
+    expect(cookiesSet(twice).get("session")).toBeUndefined();
   });
 });
 

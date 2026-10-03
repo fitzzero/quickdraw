@@ -13,7 +13,6 @@
 // `denied` (the provider or `onLogin` refused) or `failed` (the exchange,
 // `onLogin` or the session store failed).
 
-import { setSessionCookie } from "../sessionCookie";
 import { cookiesOf } from "../../transports/body";
 import type { AuthProfile, OAuthSignInProvider } from "./providers";
 import {
@@ -27,11 +26,12 @@ import {
   issueFor,
   landingOf,
   redirectUriOf,
-  sessionCookieOf,
+  setSession,
+  stateCookieName,
   stateCookieOf,
   type RouteSettings,
 } from "./settings";
-import { decodePending, encodePending, newState, OAUTH_STATE_COOKIE, stateMatches } from "./state";
+import { decodePending, encodePending, newState, stateMatches } from "./state";
 
 /** A provider the routes drive; `enabled` is checked again on every request (the mock provider's). */
 export interface SignInFlow extends OAuthSignInProvider {
@@ -63,7 +63,7 @@ export function startRoute(settings: RouteSettings, flow: SignInFlow): Handler {
     const state = newState();
     const location = flow.authorizeUrl(state, redirectUriOf(settings, flow.id));
     const pending = encodePending({ state, provider: flow.id, origin, issuedAt: Date.now() });
-    res.cookie(OAUTH_STATE_COOKIE, pending, stateCookieOf(settings, req, true));
+    res.cookie(stateCookieName(settings, req), pending, stateCookieOf(settings, req, true));
     redirect(res, location);
   };
 }
@@ -134,7 +134,7 @@ async function complete(
     redirect(res, landingOf(settings, origin, "failed"));
     return;
   }
-  setSessionCookie(res, token, sessionCookieOf(settings, req));
+  setSession(res, settings, req, token);
   settings.logger.info("Signed in", { category: CATEGORY, provider: flow.id, userId });
   redirect(res, landingOf(settings, origin));
 }
@@ -146,9 +146,11 @@ export function callbackRoute(settings: RouteSettings, flow: SignInFlow): Handle
       refuse(res, "NOT_FOUND", "Not found");
       return;
     }
-    const pending = decodePending(cookiesOf(req)[OAUTH_STATE_COOKIE]);
+    const name = stateCookieName(settings, req);
+    // A repeated name reads as "": no state, since either could be a planted one.
+    const pending = decodePending(cookiesOf(req)[name]);
     // Single use: the state cookie goes whatever happens next.
-    res.clearCookie(OAUTH_STATE_COOKIE, stateCookieOf(settings, req));
+    res.clearCookie(name, stateCookieOf(settings, req));
     if (pending === null) {
       // Started in another browser, or more than ten minutes ago: no origin was remembered.
       const { fallback } = settings.origins;

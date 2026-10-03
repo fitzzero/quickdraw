@@ -24,9 +24,8 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { QuickdrawError } from "../../../protocol/errors";
 import type { AuthenticateRequest } from "../../transports/auth";
-import { cookiesOf } from "../../transports/body";
+import { cookiesOf, cookieToken, sessionCookieNames } from "../../transports/body";
 import type { MaybePromise, Principal } from "../../types";
-import { SESSION_COOKIE } from "../sessionCookie";
 import { originAllowlist, type AllowedOrigin, type OriginAllowlist } from "./origins";
 import type { AuthSession, SessionStore } from "./sessions";
 import { checkSessionKeys, liveSession } from "./tokens";
@@ -51,7 +50,12 @@ export interface SocketAuthOptions<P extends Principal = Principal> {
    * `Origin` is not allowed is refused either way.
    */
   readonly allowMissingOrigin?: boolean;
-  /** The session cookie's name. Default `"session"`. */
+  /**
+   * The session cookie's name. Default: `"__Host-session"` (what the auth
+   * routes set on a secure request when no cookie domain is configured), or
+   * else `"session"`. A name given here is the only one read. A name the
+   * handshake repeats counts as no credential.
+   */
   readonly cookieName?: string;
   /**
    * Builds the principal, for example with `kind` and the user's
@@ -73,7 +77,10 @@ interface Credential {
   readonly checkOrigin: boolean;
 }
 
-function credentialOf(request: AuthenticateRequest, cookieName: string): Credential | null {
+function credentialOf(
+  request: AuthenticateRequest,
+  cookieNames: readonly string[],
+): Credential | null {
   const { token } = request.auth;
   if (typeof token === "string" && token !== "") {
     return { token, checkOrigin: false };
@@ -81,8 +88,8 @@ function credentialOf(request: AuthenticateRequest, cookieName: string): Credent
   if (request.transport === "http") {
     return null;
   }
-  const cookie = cookiesOf({ headers: request.headers })[cookieName];
-  return cookie === undefined || cookie === "" ? null : { token: cookie, checkOrigin: true };
+  const cookie = cookieToken(cookiesOf({ headers: request.headers }), cookieNames);
+  return cookie === null ? null : { token: cookie, checkOrigin: true };
 }
 
 function originAccepted(
@@ -112,14 +119,14 @@ export function socketAuth(options: SocketAuthOptions): SessionAuthenticate<Prin
 export function socketAuth(options: SocketAuthOptions): SessionAuthenticate<Principal> {
   const keys = checkSessionKeys(options, "socketAuth");
   const origins = originAllowlist(options.allowedOrigins, "socketAuth", true);
-  const cookieName = options.cookieName ?? SESSION_COOKIE;
+  const cookieNames = sessionCookieNames(options.cookieName);
   const allowMissing = options.allowMissingOrigin === true;
   const { loadPrincipal } = options;
   if (loadPrincipal !== undefined && typeof loadPrincipal !== "function") {
     throw new TypeError("socketAuth: loadPrincipal must be a function");
   }
   return async (request) => {
-    const credential = credentialOf(request, cookieName);
+    const credential = credentialOf(request, cookieNames);
     if (credential === null) {
       return null;
     }

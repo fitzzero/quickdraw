@@ -4,6 +4,7 @@
 
 import type { IncomingMessage } from "node:http";
 import { extractBearerOrCookieToken } from "../auth/restMiddleware";
+import { HOST_SESSION_COOKIE, SESSION_COOKIE } from "../auth/sessionCookie";
 import { unreadable } from "./ack";
 
 /** A request as Express leaves it: maybe with `body` from `express.json()` and `cookies` from `cookie-parser`. */
@@ -129,29 +130,68 @@ export interface CookieSource {
 }
 
 /**
- * The request's cookies: `req.cookies` from `cookie-parser`, or else the
- * `Cookie` header parsed here (the first of a repeated name wins).
+ * The request's cookies, from its `Cookie` header, or else `req.cookies`
+ * (`cookie-parser`) for a request without one. A name the header repeats
+ * maps to `""`, no credential: a browser sends two cookies of one name when
+ * another site under the same parent domain, or a path below this one, set
+ * the second (cookie tossing), and the server cannot tell which is its own,
+ * so it trusts neither. `cookie-parser` keeps the first, which may be the
+ * planted one, so the header is read whenever there is one.
  */
 export function cookiesOf(req: CookieSource): Record<string, string> {
-  if (isStringRecord(req.cookies)) {
-    return req.cookies;
+  const header = req.headers.cookie;
+  if (typeof header !== "string") {
+    return isStringRecord(req.cookies) ? req.cookies : {};
   }
   const cookies: Record<string, string> = Object.create(null) as Record<string, string>;
-  for (const pair of (req.headers.cookie ?? "").split(";")) {
+  for (const pair of header.split(";")) {
     const equals = pair.indexOf("=");
     const name = pair.slice(0, equals).trim();
-    if (equals > 0 && name !== "" && !Object.hasOwn(cookies, name)) {
-      cookies[name] = decode(pair.slice(equals + 1).trim());
+    if (equals <= 0 || name === "") {
+      continue;
     }
+    cookies[name] = Object.hasOwn(cookies, name) ? "" : decode(pair.slice(equals + 1).trim());
   }
   return cookies;
 }
 
 /**
- * The token an HTTP call authenticates with: its session cookie, or else its
- * bearer token, as `extractBearerOrCookieToken` picks them.
+ * The session token among `cookies`, under the first of `names` the request
+ * holds: its value, or `null` when it is empty or repeated. A later name is
+ * read only when no earlier one is there, so a repeated name never lets
+ * another stand in for it.
+ */
+export function cookieToken(
+  cookies: Readonly<Record<string, string>>,
+  names: readonly string[],
+): string | null {
+  const name = names.find((candidate) => Object.hasOwn(cookies, candidate));
+  const value = name === undefined ? undefined : cookies[name];
+  return value === undefined || value === "" ? null : value;
+}
+
+const DEFAULT_SESSION_COOKIES: readonly string[] = Object.freeze([
+  HOST_SESSION_COOKIE,
+  SESSION_COOKIE,
+]);
+
+/**
+ * The cookie names a session is read from: `cookieName` when one is given,
+ * else `__Host-session` (what the auth routes set on a secure request with
+ * no cookie domain) and then `session`.
+ */
+export function sessionCookieNames(cookieName: string | undefined): readonly string[] {
+  return cookieName === undefined ? DEFAULT_SESSION_COOKIES : [cookieName];
+}
+
+/**
+ * The token an HTTP call authenticates with: its session cookie
+ * (`sessionCookieNames`), or else its bearer token.
  */
 export function tokenOf(req: HttpRequest, cookieName: string | undefined): string | null {
-  const headers = { authorization: req.headers.authorization };
-  return extractBearerOrCookieToken({ cookies: cookiesOf(req), headers }, cookieName);
+  const cookie = cookieToken(cookiesOf(req), sessionCookieNames(cookieName));
+  if (cookie !== null) {
+    return cookie;
+  }
+  return extractBearerOrCookieToken({ headers: { authorization: req.headers.authorization } });
 }

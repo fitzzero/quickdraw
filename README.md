@@ -908,23 +908,28 @@ nothing is cached:
 | `/mock/provider/*`                     | the mock provider's own endpoints, while `isMockOAuthEnabled()`                                                       |
 
 - The OAuth state is 256 random bits, sent to the provider and kept in a
-  10-minute HttpOnly, SameSite=Lax cookie on `basePath` (`qd_oauth`). The
-  callback clears it whatever happens, and accepts only that state, for
-  that provider, within its 10 minutes, once (each redeemed state is
-  remembered by the process), so a sign-in cannot be finished in another
-  browser or replayed.
+  10-minute HttpOnly, SameSite=Lax cookie (`__Host-qd_oauth` on `/` over a
+  secure request, else `qd_oauth` on `basePath`). The callback clears it
+  whatever happens, and accepts only that state, for that provider, within
+  its 10 minutes, once (each redeemed state is remembered by the process),
+  so a sign-in cannot be finished in another browser or replayed.
 - `returnTo` is an origin or a URL on one; only its origin is kept, and only
   when `allowedOrigins` lists it (exact origins, or patterns anchored with
   `^` and `$`; nothing is read from the environment, and localhost or
   Codespaces origins are allowed only when listed). It is checked before it
   is stored and again before the redirect. Without `returnTo` the sign-in
   returns to the first exact origin listed.
-- The session cookie (`session`, or `cookie.name`) holds a JWT naming the
-  user and the session (`sid`). It is HttpOnly and SameSite=Lax, Secure in
-  production or over HTTPS, and lasts `cookie.maxAgeMs` (7 days), as do the
-  JWT and the stored session. `cookie.sameSite: "none"` (always Secure)
-  serves a web app on another site; `cookie.domain` shares it with
-  subdomains.
+- The session cookie holds a JWT naming the user and the session (`sid`).
+  It is HttpOnly and SameSite=Lax, Secure in production or over HTTPS, and
+  lasts `cookie.maxAgeMs` (7 days), as do the JWT and the stored session.
+  `cookie.sameSite: "none"` (always Secure) serves a web app on another
+  site; `cookie.domain` (or `COOKIE_DOMAIN`) shares it with subdomains. Its
+  name is `cookie.name`, else `__Host-session` when it is Secure and has no
+  domain (a browser then keeps it host-only on `/`, so no other site under
+  the same parent domain can plant or replace it), else `session`.
+- A cookie name a request repeats counts as no credential, for the session
+  and the OAuth state alike: a sibling site can plant a second cookie of
+  the same name, and the server cannot tell which is its own.
 - `me` answers the same 401 whether the request had no credential, a forged
   or expired one, or one whose session was revoked. It, `logout` and
   `logout-all` read the cookie, else an `Authorization: Bearer` token.
@@ -955,9 +960,10 @@ nothing is cached:
   (`ENABLE_MOCK_OAUTH=true` and `NODE_ENV` other than `production`), and
   every request checks again. Set `mock({ internalUrl })` where the API
   cannot reach itself at `publicUrl`.
-- A changed cookie name must be named in all three places:
-  `createAuthRoutes({ cookie: { name } })`, `socketAuth({ cookieName })` and
-  `createServer({ http: { cookieName } })`.
+- `socketAuth` and the HTTP transport read `__Host-session`, else
+  `session`, by default. A changed cookie name must be named in all three
+  places: `createAuthRoutes({ cookie: { name } })`,
+  `socketAuth({ cookieName })` and `createServer({ http: { cookieName } })`.
 - Sockets that are already connected when their session is revoked stay
   connected until they reconnect.
 - `issueSession({ sessions, jwtSecret }, userId, { provider })` starts a

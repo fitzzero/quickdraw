@@ -165,6 +165,28 @@ describe("a socket with the session cookie", () => {
       expect(await connect(url, { cookie, origin: APP_ORIGIN })).toEqual(REFUSED);
     }
   });
+
+  it("is read from __Host-session first, and not at all when its name is repeated", async () => {
+    const { url } = await boot();
+    const { session } = await signIn(url, "ada@demo.local");
+    const token = session.slice("session=".length);
+    const ada = signedIn(userIdOf("ada@demo.local"));
+    expect(await connect(url, { cookie: `__Host-session=${token}`, origin: APP_ORIGIN })).toEqual(
+      ada,
+    );
+    expect(
+      await connect(url, {
+        cookie: `session=garbage; __Host-session=${token}`,
+        origin: APP_ORIGIN,
+      }),
+    ).toEqual(ada);
+    // Two cookies of one name: one may have been planted by a sibling site. No credential, so
+    // the socket is anonymous.
+    const twice = await connect(url, { cookie: `${session}; session=planted`, origin: APP_ORIGIN });
+    expect(twice).toEqual({
+      whoami: { ok: false, e: expect.objectContaining({ code: "UNAUTHENTICATED" }) },
+    });
+  });
 });
 
 describe("a socket without the cookie", () => {

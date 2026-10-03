@@ -11,7 +11,6 @@
 //   of its user and clears the cookie (204), else 401.
 
 import { verifyJWT } from "../jwt";
-import { clearSessionCookie } from "../sessionCookie";
 import { tokenOf } from "../../transports/body";
 import {
   noContent,
@@ -21,7 +20,7 @@ import {
   type AuthRouteResponse,
 } from "./respond";
 import type { AuthSession } from "./sessions";
-import { sessionCookieOf, type RouteSettings } from "./settings";
+import { clearSession, sessionCookieName, type RouteSettings } from "./settings";
 import { liveSession } from "./tokens";
 
 type Handler = (req: AuthRouteRequest, res: AuthRouteResponse) => Promise<void>;
@@ -30,7 +29,7 @@ const NOT_SIGNED_IN = "Not signed in";
 
 /** The live session the request carries, or `null`. */
 function sessionOf(settings: RouteSettings, req: AuthRouteRequest): Promise<AuthSession | null> {
-  const token = tokenOf(req, settings.cookie.name);
+  const token = tokenOf(req, sessionCookieName(settings, req));
   return token === null ? Promise.resolve(null) : liveSession(settings.keys, token);
 }
 
@@ -49,13 +48,13 @@ export function meRoute(settings: RouteSettings): Handler {
 /** `POST {basePath}/logout`. */
 export function logoutRoute(settings: RouteSettings): Handler {
   return async (req, res) => {
-    const token = tokenOf(req, settings.cookie.name);
+    const token = tokenOf(req, sessionCookieName(settings, req));
     const payload = token === null ? null : await verifyJWT(token, settings.keys.jwtSecret);
     if (payload?.sid !== undefined) {
       await settings.keys.sessions.revoke(payload.sid);
       settings.logger.info("Signed out", { category: "quickdraw.auth", userId: payload.userId });
     }
-    clearSessionCookie(res, sessionCookieOf(settings, req));
+    clearSession(res, settings, req);
     noContent(res);
   };
 }
@@ -64,7 +63,7 @@ export function logoutRoute(settings: RouteSettings): Handler {
 export function logoutAllRoute(settings: RouteSettings): Handler {
   return async (req, res) => {
     const session = await sessionOf(settings, req);
-    clearSessionCookie(res, sessionCookieOf(settings, req));
+    clearSession(res, settings, req);
     if (session === null) {
       refuse(res, "UNAUTHENTICATED", NOT_SIGNED_IN);
       return;

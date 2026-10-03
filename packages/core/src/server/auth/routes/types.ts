@@ -15,14 +15,20 @@ export type AuthProvider = OAuthSignInProvider | MockSignInProvider | GuestProvi
 /** The session cookie. */
 export interface AuthCookieOptions {
   /**
-   * Its name. Default `"session"`, which `socketAuth` and the HTTP
-   * transport read by default; name the same cookie there (`cookieName`,
-   * `http.cookieName`) when changing it.
+   * Its name. Default: `"__Host-session"` when no domain is configured and
+   * the cookie is Secure (a browser then keeps it host-only on `/`, so no
+   * other site under the same parent domain can plant or replace it), else
+   * `"session"`. `socketAuth` and the HTTP transport read both by default;
+   * name the same cookie there (`cookieName`, `http.cookieName`) when
+   * changing it.
    */
   readonly name?: string;
   /** How long a session lasts: the cookie, the JWT and the stored session end together. Default 7 days. */
   readonly maxAgeMs?: number;
-  /** Its domain, to share it with subdomains. Default `process.env.COOKIE_DOMAIN`, else the API's host only. */
+  /**
+   * Its domain, to share it with subdomains. Default `process.env.COOKIE_DOMAIN`
+   * (read when the routes are made), else the API's host only.
+   */
   readonly domain?: string;
   /** Default: true when `NODE_ENV` is `"production"` or the request came over HTTPS (`req.secure`). */
   readonly secure?: boolean;

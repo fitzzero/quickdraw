@@ -1,7 +1,8 @@
 // The OAuth `state` of a sign-in (RFC 6749 section 10.12), bound to the
 // browser that started it and redeemable once. `start` sends the state to
 // the provider and keeps it, with the provider and the validated return
-// origin, in a short-lived HttpOnly cookie on the auth routes' path. The
+// origin, in a short-lived HttpOnly cookie (`__Host-qd_oauth` on `/` over a
+// secure request, else `qd_oauth` on the auth routes' path). The
 // callback clears that cookie whatever happens, accepts the state only when
 // the provider sent back the cookie's own value, for the same provider and
 // within ten minutes, and remembers each redeemed state in this process until
@@ -11,8 +12,15 @@
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
 
-/** The cookie that carries a sign-in in progress. */
+/** The cookie that carries a sign-in in progress, on a request that is not secure. */
 export const OAUTH_STATE_COOKIE = "qd_oauth";
+
+/**
+ * The cookie that carries a sign-in in progress on a secure request: the
+ * `__Host-` prefix keeps any other site under the same parent domain from
+ * planting a state of its own (a login CSRF), and requires `Path=/`.
+ */
+export const HOST_OAUTH_STATE_COOKIE = "__Host-qd_oauth";
 
 /** How long a sign-in may take from `start` to its callback. */
 export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
