@@ -36,10 +36,26 @@ export function collectionTopic(collection: string, scope: string): string {
   return `${collection}:${scope}`;
 }
 
+/**
+ * The room of a stream's feed (RFC 0003 section 12.5):
+ * `qd:s:{service}:{stream}:{scope}` for one scope of a scoped stream, and
+ * `qd:s:{service}:{stream}` for a global stream. Stream names hold no colon.
+ */
+export function streamRoom(service: string, stream: string, scope?: string): string {
+  return scope === undefined ? `qd:s:${service}:${stream}` : `qd:s:${service}:${stream}:${scope}`;
+}
+
 /** The room every authenticated socket of a user joins: `user:{userId}`, as in 4.1. */
 export function userRoom(userId: string): string {
   return `user:${userId}`;
 }
+
+/**
+ * The prefixes of the rooms the framework manages: entity, collection, topic
+ * and stream rooms (`qd:`) and user rooms (`user:`). `ctx.rooms.join` refuses
+ * them; a socket enters those rooms only through their authorized paths.
+ */
+export const RESERVED_ROOM_PREFIXES: readonly string[] = Object.freeze(["qd:", "user:"]);
 
 /** Events a client sends to the server (RFC 0003 section 8.2). */
 export const CLIENT_EVENTS = Object.freeze({
@@ -85,6 +101,8 @@ export const SERVER_EVENTS = Object.freeze({
   stream: "qd:stream",
   /** Typed custom room events declared in a contract's `events`. */
   event: "qd:event",
+  /** Who is in an app room the socket is in: the list on joining, then each user who joins or leaves. */
+  presence: "qd:presence",
   /** Reconnect within a jitter window. */
   rotate: "qd:rotate",
   /** The user's service grants changed. */

@@ -6,7 +6,7 @@
 
 import type { Logger } from "../../contract/logger";
 import { QuickdrawError } from "../../protocol/errors";
-import type { PolicyEngine } from "../access/api";
+import type { AccessEngine, PolicyEngine } from "../access/api";
 import type { Registry } from "../registry";
 import type { AnyService } from "../service";
 import type { StorageAdapter } from "../storage";
@@ -31,6 +31,8 @@ export interface HubOptions {
   readonly registry: Registry;
   readonly storage: StorageAdapter | undefined;
   readonly policies: PolicyEngine;
+  /** The dispatcher's access engine, which decides who may subscribe to a stream. */
+  readonly access: AccessEngine;
   readonly logger: Logger;
   /** The change log's options, or `false` for none. */
   readonly changeLog: ChangeLogOptions | false | undefined;
@@ -41,6 +43,8 @@ export interface Hub {
   readonly registry: Registry;
   readonly storage: StorageAdapter | undefined;
   readonly policies: PolicyEngine;
+  /** The dispatcher's access engine (RFC 0003 section 4.1): stream subscribers are authorized through it. */
+  readonly access: AccessEngine;
   readonly logger: Logger;
   readonly routes: Routes;
   /**
@@ -65,6 +69,7 @@ export function createHub(options: HubOptions): Hub {
     registry: options.registry,
     storage: options.storage,
     policies: options.policies,
+    access: options.access,
     logger: options.logger,
     routes: routesOf(options.registry, options.storage),
     changeLog: createChangeLog(options.changeLog === false ? undefined : options.changeLog),

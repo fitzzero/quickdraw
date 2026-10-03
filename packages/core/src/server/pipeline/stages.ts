@@ -109,6 +109,7 @@ export function contextFor(
     method: target.method.name,
     requestId,
   });
+  const { realtime } = settings.live;
   const fields = {
     principal: request.principal,
     signal: signal ?? NEVER_ABORTED,
@@ -117,6 +118,8 @@ export function contextFor(
     transport: request.transport,
     ...(request.mcp === undefined ? {} : { mcp: request.mcp }),
     touch: settings.touch,
+    rooms: realtime.roomsFor(request.transport, request.connectionId),
+    presence: realtime.presence,
     kit: {
       service: target.service,
       access: settings.policies,

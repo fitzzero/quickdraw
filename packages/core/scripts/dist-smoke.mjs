@@ -35,6 +35,10 @@
 //   serves a call over a v5 socket, over HTTP and through the 4.x shim;
 // - the built client (`./client`) calls through its connection over a v5
 //   socket, and the built server caller (`./utils`) over HTTP;
+// - the built server, through the built test app, answers a stream subscribe
+//   with its seed and then pushes, delivers a channel message to its
+//   handler, joins an app room through a method (with its `qd:presence`
+//   list) and sends that room a typed event; its presence sees the socket;
 // - the built MCP bridge (`./server/mcp`) lists a contract's method as a
 //   tool and serves a call through its stdio server, and `./server` carries
 //   none of the bridge's code;
@@ -112,6 +116,12 @@ const expectations = {
       "ADMIN_DEFAULT_PAGE_SIZE",
       "ADMIN_MAX_PAGE_SIZE",
       "ADMIN_MAX_PAGE",
+      "streamRoom",
+      "RESERVED_ROOM_PREFIXES",
+      "GLOBAL_STREAM",
+      "STREAM_MAX_SEED",
+      "CHANNEL_DEFAULT_RATE",
+      "isScopedStream",
     ],
     client: false,
   },
@@ -146,6 +156,12 @@ const expectations = {
       "ADMIN_HIDDEN_FIELDS",
       "displayNameOf",
       "labelOf",
+      "MAX_APP_ROOMS",
+      "PRESENCE_MAX_LAST_SEEN",
+      "STREAM_MAX_SCOPES",
+      "MAX_STREAMS_PER_SOCKET",
+      "CHANNEL_ABUSE_WINDOW_MS",
+      "CHANNEL_ABUSE_MULTIPLIER",
     ],
     client: false,
   },
@@ -198,6 +214,11 @@ const expectations = {
       "collectionKey",
       "formatCurrency",
       "parseJWTPayload",
+      "usePresence",
+      "STREAM_DEFAULT_MAX",
+      "STREAM_MAX_ITEMS",
+      "PENDING_STREAM",
+      "feedKey",
     ],
     client: true,
   },
@@ -267,6 +288,9 @@ const rootTypes = [
   "StreamDef",
   "ChannelDef",
   "EventDef",
+  "StreamAccess",
+  "ChannelRequires",
+  "PayloadSelector",
   "ContractDefinition",
   "Contract",
   "AnyContract",
@@ -293,6 +317,11 @@ const rootTypes = [
   "StreamItemOf",
   "ChannelPayloadOf",
   "EventPayloadOf",
+  "StreamName",
+  "ChannelName",
+  "EventName",
+  "IsScopedStream",
+  "ChannelInputOf",
   "ClientEventName",
   "ServerEventName",
   // contract/kits: the read/write kit's contract half
@@ -454,6 +483,7 @@ const rootTypes = [
   "StreamFrame",
   "ChannelFrame",
   "EventFrame",
+  "PresenceFrame",
   "RevokeReason",
   "RevokedFrame",
   "RotateFrame",
@@ -887,6 +917,80 @@ console.log(
 );
 console.log(
   "ok the built client calls over its v5 connection, and the built server caller over HTTP",
+);
+
+// Presence, streams, channels and typed events across the built entries: a
+// contract from the root, served by ./server through the built test app, and
+// a v5 socket that subscribes to a stream (its seed, then a push), sends on a
+// channel the handler receives, and joins an app room through a method, which
+// answers with the room's presence and lets it hear a typed event.
+const lineItem = {
+  "~standard": {
+    version: 1,
+    vendor: "smoke",
+    validate: (value) =>
+      typeof value === "string" ? { value } : { issues: [{ message: "Expected a string" }] },
+  },
+};
+const lounge = core.defineContract("loungeService", {
+  methods: { enter: core.mutation({ input: text, output: anything }) },
+  streams: { lines: { item: lineItem, scope: "room", seed: 2, access: "authenticated" } },
+  channels: { wave: { payload: text } },
+  events: { waved: { payload: text } },
+});
+const waves = [];
+const loungeService = app.defineService(lounge, {
+  methods: {
+    enter: {
+      access: "authenticated",
+      handler: ({ input, ctx }) => ctx.rooms.join(input),
+    },
+  },
+  channels: {
+    wave: (payload, ctx) => {
+      waves.push([ctx.principal.userId, payload]);
+      ctx.rooms.emit("lobby", lounge, "waved", payload);
+    },
+  },
+});
+const realtimeApp = await testing.createTestApp({ services: [loungeService], logger: quiet });
+try {
+  const lines = realtimeApp.server.stream(lounge, "lines");
+  lines.push("lobby", "one");
+  lines.push("lobby", "two");
+  lines.push("lobby", "three");
+  assert.throws(() => lines.push("lobby", 4), { code: "INTERNAL" });
+  const connection = await realtimeApp.connect({ userId: "smoke" });
+  const { socket } = connection;
+  const seen = [];
+  for (const event of ["qd:stream", "qd:event", "qd:presence"]) {
+    socket.on(event, (frame) => seen.push([event, frame]));
+  }
+  assert.deepEqual(
+    await socket.timeout(5000).emitWithAck("qd:stream:sub", {
+      s: "loungeService",
+      stream: "lines",
+      scope: "lobby",
+    }),
+    { ok: true, seed: ["two", "three"] },
+  );
+  assert.equal(await connection.call.loungeService.enter("lobby"), true);
+  lines.push("lobby", "four");
+  socket.emit("qd:ch", ["loungeService", "wave", "hello"]);
+  await testing.emitWithAck(socket, "qd:unsub", { s: "none", ids: [] });
+  assert.deepEqual(waves, [["smoke", "hello"]]);
+  assert.deepEqual(seen, [
+    ["qd:presence", { room: "lobby", users: ["smoke"] }],
+    ["qd:stream", { s: "loungeService", stream: "lines", scope: "lobby", item: "four" }],
+    ["qd:event", ["loungeService", "waved", "hello"]],
+  ]);
+  assert.equal(await realtimeApp.server.presence.isOnline("smoke"), true);
+  assert.deepEqual(await realtimeApp.server.presence.users("lobby"), ["smoke"]);
+} finally {
+  await realtimeApp.close();
+}
+console.log(
+  "ok the built server serves stream seeds and pushes, channel messages, typed events and presence",
 );
 
 // The built MCP bridge: its own entry, a contract's method as a tool, and a

@@ -49,15 +49,25 @@ export {
 export {
   defineContract,
   type AnyContract,
-  type ChannelDef,
   type Contract,
   type ContractDefinition,
-  type EventDef,
   type IndexRow,
   type ReservedMethodName,
   type RowSchema,
-  type StreamDef,
 } from "./contract/defineContract";
+// Streams, channels and typed room events (RFC 0003 section 12.5).
+export {
+  CHANNEL_DEFAULT_RATE,
+  GLOBAL_STREAM,
+  STREAM_MAX_SEED,
+  isScopedStream,
+  type ChannelDef,
+  type ChannelRequires,
+  type EventDef,
+  type PayloadSelector,
+  type StreamAccess,
+  type StreamDef,
+} from "./contract/realtime";
 // The read/write kit's contract half (RFC 0003 section 12.1); its handlers
 // are `crud.handlers` on ./server.
 export {
@@ -211,15 +221,19 @@ export {
 } from "./contract/kits/adminSchemas";
 export type { KitSchema } from "./contract/kits/schemas";
 export type {
+  ChannelInputOf,
+  ChannelName,
   ChannelPayloadOf,
   CollectionName,
   CollectionOf,
   ContractMap,
   EntityOf,
+  EventName,
   EventPayloadOf,
   IndexFieldOf,
   IndexRowOf,
   InputOf,
+  IsScopedStream,
   ItemOf,
   KindOf,
   MethodName,
@@ -231,15 +245,18 @@ export type {
   ScopeOf,
   ServiceNameOf,
   StreamItemOf,
+  StreamName,
   ViewName,
 } from "./contract/infer";
 export {
   CLIENT_EVENTS,
+  RESERVED_ROOM_PREFIXES,
   SERVER_EVENTS,
   SERVICE_TOPIC,
   collectionRoom,
   collectionTopic,
   entityRoom,
+  streamRoom,
   topicRoom,
   userRoom,
   type ClientEventName,
@@ -310,6 +327,7 @@ export {
   type EventFrame,
   type Failure,
   type Ok,
+  type PresenceFrame,
   type Revision,
   type RevokedFrame,
   type RevokeReason,

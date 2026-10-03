@@ -8,6 +8,7 @@ import type { AnyContract } from "../contract/defineContract";
 import type { Logger } from "../contract/logger";
 import { QuickdrawError } from "../protocol/errors";
 import type { DispatcherAccess } from "./access/api";
+import type { ContextRooms, Presence } from "./realtime/types";
 import type { AnyService } from "./service";
 import type { StorageAdapter } from "./storage";
 import type {
@@ -34,12 +35,7 @@ export interface TouchOptions {
  */
 export type ContextServices = Readonly<Record<never, never>>;
 
-/**
- * `ctx.rooms`: stream and presence joins and custom room events (RFC 0003
- * sections 12.5 and 15). A seam: it has no members until the presence and
- * streams card implements it, and reaching into it throws `INTERNAL`.
- */
-export type ContextRooms = Readonly<Record<never, never>>;
+export type { ContextRooms, Presence };
 
 /**
  * The fields of `ctx` the framework provides, whatever the app adds. `M` is
@@ -82,8 +78,14 @@ export interface BaseContext<P = Principal, M = McpContext> {
   ): void;
   /** Typed callers for the app's other services. Not implemented yet; see {@link ContextServices}. */
   readonly services: ContextServices;
-  /** Room joins and custom room events. Not implemented yet; see {@link ContextRooms}. */
+  /**
+   * App-defined rooms the calling socket joins and leaves (`join` answers
+   * `false` for a call without a socket), and typed room events: `emit` and
+   * `emitToUser` (RFC 0003 section 12.5).
+   */
   readonly rooms: ContextRooms;
+  /** Who is online, when they were last seen, and who is in a room (RFC 0003 section 12.5). */
+  readonly presence: Presence;
 }
 
 /**
@@ -139,14 +141,16 @@ export interface RoomOccupancy {
 
 /**
  * The per-call fields the dispatcher fills in. `touch` is the dispatcher's
- * (its tracked writes); a context built without one gets a `touch` that
- * does nothing. `kit` is kept beside the context, never on it.
+ * (its tracked writes), `rooms` and `presence` its live data's; a context
+ * built without them gets a `touch` that does nothing, `rooms` that join
+ * nothing and send nothing, and a `presence` that sees nobody. `kit` is kept
+ * beside the context, never on it.
  */
 export type ContextFields = Pick<
   AnyContext,
   "principal" | "signal" | "log" | "requestId" | "transport" | "mcp"
 > &
-  Partial<Pick<AnyContext, "touch">> & { readonly kit?: KitRuntime };
+  Partial<Pick<AnyContext, "touch" | "rooms" | "presence">> & { readonly kit?: KitRuntime };
 
 const KIT_RUNTIMES = new WeakMap<object, KitRuntime>();
 
@@ -204,7 +208,22 @@ function unavailable(member: string): Readonly<Record<never, never>> {
 }
 
 const SERVICES: ContextServices = unavailable("ctx.services");
-const ROOMS: ContextRooms = unavailable("ctx.rooms");
+
+/** The `ctx.rooms` of a context no dispatcher built: no socket to join with, no server to send through. */
+const NO_ROOMS: ContextRooms = Object.freeze({
+  join: () => false,
+  leave: () => false,
+  emit: untracked,
+  emitToUser: untracked,
+});
+
+/** The `ctx.presence` of a context no dispatcher built: no server, so nobody is online. */
+const NO_PRESENCE: Presence = Object.freeze({
+  isOnline: () => Promise.resolve(false),
+  lastSeen: () => Promise.resolve(null),
+  count: () => Promise.resolve(0),
+  users: () => Promise.resolve([]),
+});
 
 /**
  * Builds a call's `ctx`: the framework's fields, then the app's fields from
@@ -216,7 +235,8 @@ export function createContext(fields: ContextFields, extend?: ContextExtender): 
     ...own,
     touch: own.touch ?? untracked,
     services: SERVICES,
-    rooms: ROOMS,
+    rooms: own.rooms ?? NO_ROOMS,
+    presence: own.presence ?? NO_PRESENCE,
   });
   if (extend === undefined) {
     return withRuntime(base, kit);

@@ -90,10 +90,12 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
   readonly legacyWire?: boolean;
   /**
    * The socket rate limiter (`createRateLimiter`'s options), or `false` for
-   * none. Default: 100 events per minute per socket. `qd:ch`, `qd:cancel`,
-   * the entity and collection subscription events (`qd:sub`, `qd:unsub`,
-   * `qd:col:sub`, `qd:col:unsub`, `qd:col:items`) and the topic watches
-   * (`qd:watch`, `qd:unwatch`) are never counted; the ones that read run in a
+   * none. Default: 100 events per minute per socket. `qd:ch` (channels keep
+   * their own per-socket token buckets), `qd:cancel`, the entity and
+   * collection subscription events (`qd:sub`, `qd:unsub`, `qd:col:sub`,
+   * `qd:col:unsub`, `qd:col:items`), the topic watches (`qd:watch`,
+   * `qd:unwatch`) and the stream subscriptions (`qd:stream:sub`,
+   * `qd:stream:unsub`) are never counted; the ones that read run in a
    * per-socket lane instead (`limits.subscriptions`: 8 at once, 64 waiting,
    * then `RATE_LIMITED`).
    */
@@ -158,6 +160,14 @@ export interface QuickdrawServer<S extends readonly AnyService[] = readonly AnyS
      */
     refresh(userId: string): Promise<ServiceGrants>;
   };
+  /**
+   * Who is online, when they were last seen, and who is in a room (RFC 0003
+   * section 12.5); the same as `ctx.presence`. Behind a cluster adapter it
+   * asks every node.
+   */
+  readonly presence: Dispatcher<S>["presence"];
+  /** The handle of one of the services' streams: `server.stream(task, "logs").push(taskId, line)`. */
+  readonly stream: Dispatcher<S>["stream"];
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -355,5 +365,7 @@ export function createServer<const S extends readonly AnyService[]>(
     close,
     rotate: ({ withinMs }: RotateOptions) => sockets.rotate(withinMs),
     access: Object.freeze({ refresh: (userId: string) => sockets.refresh(userId) }),
+    presence: dispatcher.presence,
+    stream: dispatcher.stream,
   });
 }

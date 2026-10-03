@@ -15,6 +15,9 @@ import type { AnyContext } from "../context";
 import type { AnyService } from "../service";
 import type { MaybePromise, Principal } from "../types";
 
+/** Re-exported for modules that need the policy type beside the forms. */
+export type { AnyAccessPolicy } from "./policy";
+
 /** Anyone may call, with or without credentials. */
 export type PublicAccess = "public";
 

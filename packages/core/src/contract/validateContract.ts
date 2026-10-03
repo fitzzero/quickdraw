@@ -8,9 +8,10 @@ import {
   DEFAULT_COLLECTION_LIMIT,
   DEFAULT_COLLECTION_MAX_LIMIT,
 } from "./collections";
-import type { AnyContract, ChannelDef, EventDef, RowSchema, StreamDef } from "./defineContract";
+import type { AnyContract, RowSchema } from "./defineContract";
 import type { MethodDef } from "./methods";
 import { isStandardSchema } from "./standardSchema";
+import { checkRealtime, type TakenNames } from "./validateRealtime";
 
 type Fail = (message: string) => never;
 
@@ -354,21 +355,19 @@ function checkCollections(
   return checked;
 }
 
-function checkSchemaMembers<Def>(
-  value: unknown,
-  kind: "stream" | "channel" | "event",
-  key: "item" | "payload",
-  fail: Fail,
-): Record<string, Def> {
-  const checked: Record<string, Def> = {};
-  for (const [name, member] of Object.entries(members(value, `${kind}s`, fail))) {
-    if (!isRecord(member) || !isStandardSchema(member[key])) {
-      fail(`${kind} "${name}" must be { ${key}: <Standard Schema> }`);
-    }
-    checkKeys(member, new Set([key]), `${kind} "${name}"`, fail);
-    checked[name] = Object.freeze({ ...member }) as Def;
+/** The names methods and collections took: streams, channels and events may not take them too. */
+function takenNames(
+  methods: Readonly<Record<string, MethodDef>>,
+  collections: Readonly<Record<string, CollectionDef>>,
+): TakenNames {
+  const taken: TakenNames = new Map();
+  for (const name of Object.keys(methods)) {
+    taken.set(name, "method");
   }
-  return checked;
+  for (const name of Object.keys(collections)) {
+    taken.set(name, "collection");
+  }
+  return taken;
 }
 
 /** Checks a contract definition and returns the frozen contract. */
@@ -401,6 +400,16 @@ export function assembleContract(name: unknown, def: unknown): AnyContract {
     { hasEntity, projections: projectionNames, methods: new Set(Object.keys(methods)) },
     fail,
   );
+  const realtime = checkRealtime(
+    def,
+    {
+      hasEntity,
+      collections: collectionNames,
+      taken: takenNames(methods, collections),
+      reserved: RESERVED_NAMES,
+    },
+    fail,
+  );
   return Object.freeze({
     name,
     entity,
@@ -408,10 +417,6 @@ export function assembleContract(name: unknown, def: unknown): AnyContract {
     fields: Object.freeze(checkFields(def.fields, hasEntity, fail)),
     methods: Object.freeze(methods),
     collections: Object.freeze(collections),
-    streams: Object.freeze(checkSchemaMembers<StreamDef>(def.streams, "stream", "item", fail)),
-    channels: Object.freeze(
-      checkSchemaMembers<ChannelDef>(def.channels, "channel", "payload", fail),
-    ),
-    events: Object.freeze(checkSchemaMembers<EventDef>(def.events, "event", "payload", fail)),
+    ...realtime,
   });
 }

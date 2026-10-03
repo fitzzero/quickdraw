@@ -119,11 +119,12 @@ export type SocketRateLimitOptions = Omit<RateLimitOptions, "logger" | "ackPaylo
  * mounts in batches of up to 500 ids, so a board of sixty rows would trip the
  * limiter; collection subscriptions, which a page sends once per list it
  * mounts and again to page through it, and item loads, which a board holding
- * a scope's index sends per window of up to 200 ids; and topic watches,
- * which a page sends once per watching query it mounts (RFC 0003 section 3).
- * The ones that read (`qd:sub`, `qd:col:sub`, `qd:col:items`, `qd:watch`)
- * run in each socket's lane of subscription work instead (`emit/lane.ts`,
- * `limits.subscriptions`).
+ * a scope's index sends per window of up to 200 ids; topic watches, which a
+ * page sends once per watching query it mounts; and stream subscriptions,
+ * which a page sends once per feed it shows (RFC 0003 section 3). The ones
+ * that read or authorize (`qd:sub`, `qd:col:sub`, `qd:col:items`,
+ * `qd:watch`, `qd:stream:sub`) run in each socket's lane of subscription
+ * work instead (`emit/lane.ts`, `limits.subscriptions`).
  */
 const UNLIMITED_EVENTS: readonly string[] = [
   CLIENT_EVENTS.channel,
@@ -135,6 +136,8 @@ const UNLIMITED_EVENTS: readonly string[] = [
   CLIENT_EVENTS.collectionItems,
   CLIENT_EVENTS.watch,
   CLIENT_EVENTS.unwatch,
+  CLIENT_EVENTS.streamSub,
+  CLIENT_EVENTS.streamUnsub,
 ];
 
 function rateLimited(retryAfterMs: number): Failure {

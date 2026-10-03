@@ -7,6 +7,7 @@ import type { PROTOCOL_VERSION } from "../../protocol/version";
 import type { ScopeSubscriptions } from "../collections/scopes";
 import type { Dispatcher } from "../dispatcher";
 import type { EntitySubscriptions } from "../emit/subscriptions";
+import type { AppRooms, StreamSubscriptions } from "../realtime/types";
 import type { TopicWatches } from "../topicIndex";
 import type { Principal } from "../types";
 import type { ReplyMeter } from "./ack";
@@ -36,6 +37,16 @@ export interface QuickdrawSocketData<P extends Principal = Principal> {
    * section 11.3). Plain data; the server keeps it.
    */
   topics?: TopicWatches;
+  /**
+   * The app rooms a method put the socket in (`ctx.rooms.join`), at most 100
+   * (RFC 0003 section 12.5). Plain data; the server keeps it.
+   */
+  appRooms?: AppRooms;
+  /**
+   * The stream feeds the socket subscribes to (`qd:stream:sub`), by room
+   * (RFC 0003 section 12.5). Plain data; the server keeps it.
+   */
+  streams?: StreamSubscriptions;
 }
 
 /** The Socket.IO server `createServer` returns. Events are untyped, so apps may emit their own. */

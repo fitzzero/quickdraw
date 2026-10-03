@@ -1,7 +1,8 @@
 // The live members of a mock client (`mockClient.ts`): `useEntity`,
 // `useEntities` and each collection's `useCollection`, showing what the test
 // set through their controls (`mockRow`, `mockScope`, ...) instead of
-// subscribing over a socket. They return what the real hooks return
+// subscribing over a socket, and the stream, channel and event members
+// (`mockRealtime.ts`). They return what the real hooks return
 // (`client/live/useEntity.ts`, `client/live/useCollection.ts`): a row or a
 // scope nobody set is loading, a view runs the contract's predicate over the
 // index rows made from the items, and a component re-renders when the test
@@ -9,17 +10,19 @@
 
 import { useSyncExternalStore } from "react";
 import { indexRowFromItem, type IndexRow } from "../client/live/collectionIndex";
-import type { UseCollectionOptions, UseCollectionResult } from "../client/live/useCollection";
 import type {
+  UseCollectionOptions,
+  UseCollectionResult,
   UseEntitiesResult,
   UseEntityOptions,
   UseEntityResult,
-} from "../client/live/useEntity";
+} from "../client/live/memberTypes";
 import { viewPredicate } from "../client/live/views";
 import type { CollectionDef, Viewer } from "../contract/collections";
 import type { AnyContract } from "../contract/defineContract";
 import type { QuickdrawError } from "../protocol/errors";
 import { mockAdminNamespace } from "./mockAdmin";
+import { mockRealtimeMembers } from "./mockRealtime";
 import type { EntityMock, MockScope } from "./mockTypes";
 
 /** What one mocked row shows: the row, its removal, or an error. */
@@ -42,7 +45,10 @@ export interface MockStore {
   setRow(service: string, id: string, state: RowState): void;
   scope(service: string, collection: string, scope: string): ScopeState | undefined;
   setScope(service: string, collection: string, scope: string, state: ScopeState): void;
-  /** Forgets every row and scope; `quiet` tells no hook that shows them (they are about to unmount). */
+  /** A realtime member's mocked value (`mockRealtime.ts`): a feed's items, a channel's sent messages. */
+  value(key: string): unknown;
+  setValue(key: string, value: unknown): void;
+  /** Forgets every row, scope and value; `quiet` tells no hook that shows them (they are about to unmount). */
   clear(quiet?: boolean): void;
 }
 
@@ -54,6 +60,7 @@ function keyOf(...parts: readonly string[]): string {
 export function createMockStore(): MockStore {
   const rows = new Map<string, RowState>();
   const scopes = new Map<string, ScopeState>();
+  const values = new Map<string, unknown>();
   const views = new Map<string, unknown>();
   const listeners = new Set<() => void>();
   const changed = (): void => {
@@ -85,9 +92,15 @@ export function createMockStore(): MockStore {
       scopes.set(keyOf(service, collection, scope), state);
       changed();
     },
+    value: (key) => values.get(key),
+    setValue(key, value) {
+      values.set(key, value);
+      changed();
+    },
     clear(quiet = false) {
       rows.clear();
       scopes.clear();
+      values.clear();
       if (quiet) {
         views.clear();
       } else {
@@ -320,6 +333,7 @@ export function mockLiveMembers(
     for (const [collection, def] of Object.entries(contract.collections)) {
       members.push([collection, mockCollectionMember(store, { service, collection, def }, who)]);
     }
+    members.push(...mockRealtimeMembers(store, contract));
     members.push(...Object.entries(mockAdminNamespace(contract, methods, queryClient)));
     return Object.freeze(Object.fromEntries(members));
   };

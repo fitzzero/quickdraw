@@ -6,11 +6,11 @@ import type { AnyContract } from "../contract/defineContract";
 import type { MethodKind } from "../contract/methods";
 import type { StandardSchemaV1 } from "../contract/standardSchema";
 import type { Version } from "../protocol/envelope";
-import type { AnyAccessPolicy } from "./access/policy";
-import type { AccessForm, WatchAccess } from "./access/types";
+import type { AccessForm, AnyAccessPolicy, WatchAccess } from "./access/types";
 import type { ServiceCollection } from "./collections/define";
 import type { AnyContext, ContextExtender } from "./context";
 import type { ProjectedOutput, Projection } from "./emit/projection";
+import type { ServiceChannel, ServiceStream } from "./realtime/types";
 import type { MaybePromise, QuickdrawTypes } from "./types";
 
 /**
@@ -104,6 +104,10 @@ export interface Service<
   readonly adminBypass: boolean;
   /** The checked method records, by method name. */
   readonly methods: Readonly<Record<string, ServiceMethod>>;
+  /** The contract's channels with the handlers `defineService` gave them (RFC 0003 section 12.5). */
+  readonly channels: ReadonlyMap<string, ServiceChannel>;
+  /** The contract's streams, with their access forms as the access engine decides them. */
+  readonly streams: ReadonlyMap<string, ServiceStream>;
   /** Type-only: the app types the service was defined with. Never set. */
   readonly "~types"?: T;
 }
