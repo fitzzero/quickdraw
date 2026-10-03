@@ -216,6 +216,50 @@ describe("requests the routes refuse", () => {
   });
 });
 
+describe("custom tools over HTTP", () => {
+  it("answer an anonymous request with 401 unless their access is public", async () => {
+    const handler = vi.fn(({ principal }: { readonly principal: unknown }) => ({
+      ranAs: principal,
+    }));
+    const fixture = setup({
+      ...agentAuth((request) => (request.transport === "http" ? request.token : null)),
+      customTools: [
+        {
+          name: "export_all_users",
+          description: "Dumps every user, for the ops agent.",
+          inputSchema: { type: "object" },
+          handler,
+        },
+        {
+          name: "status",
+          description: "Says whether the service is up.",
+          inputSchema: { type: "object" },
+          access: "public",
+          handler,
+        },
+      ],
+    });
+    const url = await listen(
+      createMcpHttpRouter({ registry: fixture.registry, logger: fixture.logger }),
+    );
+    expect(await invoke(url, { name: "export_all_users", arguments: {} })).toEqual({
+      status: 401,
+      body: { success: false, error: "Authentication required", code: "UNAUTHENTICATED" },
+    });
+    expect(handler).not.toHaveBeenCalled();
+    expect(
+      await invoke(url, { name: "export_all_users", arguments: {} }, { token: "reader-token" }),
+    ).toEqual({
+      status: 200,
+      body: { success: true, data: { ranAs: { userId: "alice", kind: "agent" } } },
+    });
+    expect(await invoke(url, { name: "status", arguments: {} })).toEqual({
+      status: 200,
+      body: { success: true, data: { ranAs: null } },
+    });
+  });
+});
+
 describe("a request that goes away", () => {
   it("cancels its call", async () => {
     const { router, services, records } = routes();

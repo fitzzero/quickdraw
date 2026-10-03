@@ -307,6 +307,57 @@ describe("custom tools", () => {
     });
   });
 
+  it("refuse an anonymous caller before anything runs, unless their access is public", async () => {
+    const parse = vi.fn(() => true);
+    const closed = vi.fn(() => "ran");
+    const open = vi.fn(({ principal }: { readonly principal: unknown }) => ({ principal }));
+    const customTools = [
+      {
+        name: "closed",
+        description: "Needs a principal, by default.",
+        inputSchema: z.object({}).refine(parse),
+        handler: closed,
+      },
+      {
+        name: "explicit",
+        description: "Needs a principal, said outright.",
+        inputSchema: { type: "object" as const },
+        access: "authenticated" as const,
+        handler: closed,
+      },
+      {
+        name: "open",
+        description: "Anyone may call it.",
+        inputSchema: { type: "object" as const },
+        access: "public" as const,
+        handler: open,
+      },
+    ];
+    const anonymous = setup({ principal: () => null, context: undefined, customTools }).registry;
+    for (const name of ["closed", "explicit"]) {
+      expect(errorOf(await anonymous.call(name, {}, { request: stdio() }))).toMatchObject({
+        code: "UNAUTHENTICATED",
+        message: "Authentication required",
+      });
+    }
+    expect(parse).not.toHaveBeenCalled();
+    expect(closed).not.toHaveBeenCalled();
+    expect(await anonymous.call("open", {}, { request: stdio() })).toEqual({
+      ok: true,
+      data: { principal: null },
+    });
+
+    const agent = setup({ customTools }).registry;
+    for (const name of ["closed", "explicit"]) {
+      expect(await agent.call(name, {}, { request: stdio() })).toEqual({ ok: true, data: "ran" });
+    }
+    expect(await agent.call("open", {}, { request: stdio() })).toEqual({
+      ok: true,
+      data: { principal: TOKENS["writer-token"]?.principal },
+    });
+    expect(closed).toHaveBeenCalledTimes(2);
+  });
+
   it("take a JSON Schema as it is, and fail with a generic INTERNAL when the handler breaks", async () => {
     const { registry, logger } = setup({
       customTools: [
@@ -389,6 +440,12 @@ describe("createMcpRegistry", () => {
     expect(() =>
       createMcpRegistry({ ...base, customTools: [{ ...tool, description: "" }] }),
     ).toThrow('custom tool "echo" needs a description, a non-empty string');
+    expect(() =>
+      createMcpRegistry({
+        ...base,
+        customTools: [{ ...tool, access: "admin" as unknown as "public" }],
+      }),
+    ).toThrow('custom tool "echo": access must be "public" or "authenticated"');
     expect(() =>
       createMcpRegistry({ ...base, principal: "alice" as unknown as () => null }),
     ).toThrow("createMcpRegistry: principal must be a function of the MCP request");

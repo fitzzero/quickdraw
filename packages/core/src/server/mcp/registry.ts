@@ -46,10 +46,10 @@ export interface McpRegistryOptions<
   /**
    * Says who an MCP session or request acts for: a principal, a user id when
    * a bare `{ userId }` is a principal of the app's type, or nothing for an
-   * anonymous caller, who may call `"public"` methods only. A stdio server
-   * usually reads a token from its environment; an HTTP request carries one
-   * as a bearer token. Throwing fails the call with `UNAUTHENTICATED`.
-   * Without it every call is anonymous.
+   * anonymous caller, who may call `"public"` methods and `"public"` custom
+   * tools only. A stdio server usually reads a token from its environment;
+   * an HTTP request carries one as a bearer token. Throwing fails the call
+   * with `UNAUTHENTICATED`. Without it every call is anonymous.
    */
   readonly principal?: (
     request: McpRequest,

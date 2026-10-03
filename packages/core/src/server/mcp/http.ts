@@ -12,11 +12,12 @@
 //
 // What changed from 4.1: the registry's `principal` hook decides who a bearer
 // token stands for, and a request without one is anonymous (only `"public"`
-// methods pass) where 4.1 refused it; a failure answers with its error code's
-// HTTP status and `{ success: false, error, code, data? }` where 4.1 answered
-// 500 and `{ error }`; `invoke` needs `Content-Type: application/json`, as
-// every HTTP transport call does; and a client that goes away cancels its
-// call. Each request is a session of its own.
+// methods and custom tools pass) where 4.1 refused it; a failure answers
+// with its error code's HTTP status and `{ success: false, error, code,
+// data? }` where 4.1 answered 500 and `{ error }`; `invoke` needs
+// `Content-Type: application/json`, as every HTTP transport call does; and a
+// client that goes away cancels its call. Each request is a session of its
+// own.
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";

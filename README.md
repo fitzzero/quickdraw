@@ -118,6 +118,7 @@ const registry = createMcpRegistry({
       name: "summarize",
       description: "Summarizes the caller's open tasks.",
       inputSchema: z.object({ projectId: z.string() }), // validated before the handler runs
+      // access: "authenticated" is the default; "public" lets anonymous callers in
       handler: async ({ arguments: args, caller }) => summarize(args, caller), // caller acts as the agent
     },
   ],
@@ -135,6 +136,9 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" }); // in an M
 - **HTTP** keeps 4.1's routes: `POST /mcp/invoke` takes `{ name, arguments }`
   or 4.1's `{ service, method, payload }` and answers `{ success: true, data }`,
   or `{ success: false, error, code, data? }` with the code's HTTP status.
+- An anonymous caller (the `principal` hook returned nothing) may call
+  `"public"` methods, and custom tools that declare `access: "public"`; any
+  other tool answers `UNAUTHENTICATED` before it runs.
 - A failed call reaches the agent as a tool error carrying the code
   (`FORBIDDEN`, `VALIDATION` with the issues, and so on). Changed from 4.1:
   tools are per method rather than per service, the agent can no longer pick

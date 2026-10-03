@@ -12,9 +12,11 @@ import {
   createMcpRegistry,
   describeTools,
   type McpCallResult,
+  type McpCustomTool,
   type McpRegistry,
   type McpRequest,
   type McpTool,
+  type McpToolAccess,
 } from "./index";
 
 interface AppPrincipal extends Principal {
@@ -166,6 +168,34 @@ describe("createMcpRegistry", () => {
             expectTypeOf(caller.noteService.find).parameter(0).toEqualTypeOf<{ id: string }>();
             return await caller.noteService.find({ id: "n1" });
           },
+        },
+      ],
+    });
+  });
+
+  test("a custom tool's access is public or authenticated, and may be left out", () => {
+    expectTypeOf<NonNullable<McpCustomTool["access"]>>().toEqualTypeOf<McpToolAccess>();
+    expectTypeOf<McpToolAccess>().toEqualTypeOf<"public" | "authenticated">();
+    const tool = { description: "A tool.", inputSchema: { type: "object" as const } };
+    createMcpRegistry({
+      services: [noteService],
+      dispatcher,
+      customTools: [
+        { ...tool, name: "open", access: "public", handler: () => null },
+        { ...tool, name: "closed", access: "authenticated", handler: () => null },
+        { ...tool, name: "default", handler: () => null },
+      ],
+    });
+    createMcpRegistry({
+      services: [noteService],
+      dispatcher,
+      customTools: [
+        {
+          ...tool,
+          name: "admin",
+          // @ts-expect-error -- a custom tool has no service or row to check a level against
+          access: { service: "Admin" },
+          handler: () => null,
         },
       ],
     });

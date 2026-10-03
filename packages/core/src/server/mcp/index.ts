@@ -28,6 +28,7 @@ export type {
   McpStdioRequest,
   McpTextContent,
   McpTool,
+  McpToolAccess,
   McpToolAnnotations,
   McpToolCall,
   McpToolResult,

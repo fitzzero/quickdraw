@@ -127,7 +127,10 @@ export interface McpToolCall<S extends readonly AnyService[] = readonly AnyServi
    * or the arguments object as the client sent it when it is a JSON Schema.
    */
   readonly arguments: unknown;
-  /** Who the call acts for, from the registry's `principal`; `null` when anonymous. */
+  /**
+   * Who the call acts for, from the registry's `principal`. `null` only for
+   * an anonymous caller of a tool with `access: "public"`.
+   */
   readonly principal: PrincipalOfServices<S> | null;
   /** The fields the registry's `context` produced for the call, if any. */
   readonly mcp: McpContextOfServices<S> | undefined;
@@ -141,10 +144,24 @@ export interface McpToolCall<S extends readonly AnyService[] = readonly AnyServi
   readonly request: McpRequest;
 }
 
+/**
+ * Who may call a custom tool: `"authenticated"` callers only, or `"public"`,
+ * anonymous callers too. These are the two method access forms that need no
+ * service or row.
+ */
+export type McpToolAccess = "public" | "authenticated";
+
 /** An app's own tool, served beside the tools generated from contracts. */
 export interface McpCustomTool<S extends readonly AnyService[] = readonly AnyService[]> {
   readonly name: string;
   readonly description: string;
+  /**
+   * Who may call the tool. Default `"authenticated"`: a caller the registry's
+   * `principal` maps to no one fails with `UNAUTHENTICATED` before the
+   * arguments are read or the handler runs, as a method's tool fails closed.
+   * `"public"` lets anonymous callers in, with `principal: null`.
+   */
+  readonly access?: McpToolAccess;
   /**
    * The tool's arguments. A Standard Schema that can describe itself as JSON
    * Schema (Zod 4.2 or later) validates them before the handler runs; a JSON
