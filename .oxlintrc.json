@@ -19,8 +19,17 @@
     {
       "files": ["**/src/client/**"],
       "rules": {
-        "quickdraw/no-raw-socket-emit": "off",
-        "quickdraw/no-raw-socket-on": "off"
+        "quickdraw/no-raw-socket": "off",
+        "quickdraw/no-untyped-client": "off",
+        "quickdraw/no-manual-refetch": "off",
+        "quickdraw/no-await-void-mutate": "off"
+      }
+    },
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "quickdraw/no-nested-write": "off",
+        "quickdraw/no-foreign-write": "off"
       }
     }
   ],

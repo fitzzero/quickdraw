@@ -123,6 +123,16 @@
     "packages/lint": {
       "name": "@fitzzero/quickdraw-lint",
       "version": "5.0.0-alpha.0",
+      "bin": {
+        "quickdraw-lint": "./bin/quickdraw-lint.mjs",
+      },
+      "devDependencies": {
+        "oxlint": "^1.52.0",
+        "vitest": "^4.0.17",
+      },
+      "peerDependencies": {
+        "oxlint": "^1.52.0",
+      },
     },
     "packages/skills": {
       "name": "@fitzzero/quickdraw-skills",

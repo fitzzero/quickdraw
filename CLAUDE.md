@@ -93,16 +93,21 @@ and `dev`.
 ## Linting
 
 `packages/lint/oxlint.base.jsonc` is the framework's shipped lint baseline —
-consumers extend it from `node_modules/@fitzzero/quickdraw-lint/` (see README
-"Linting"). This repo dogfoods it via the root `.oxlintrc.json`, which
-downgrades currently-violated rules to `warn` (tracked debt — fix over time,
-then re-tighten), exempts `**/src/client/**` from the raw-socket rules (the
-framework layer is the sanctioned home of raw `socket.emit`), and ignores
-`**/legacy-src/**`. oxlint matches `overrides` and `ignorePatterns` globs
-against paths as seen from where it runs, so keep them `**/`-prefixed: lint
-runs from each package directory. When adding a lint rule that all quickdraw
-apps should get, put it in `packages/lint/oxlint.base.jsonc` (or a new rule in
-`packages/lint/plugin/`), not in downstream repos.
+consumers extend it from `node_modules/@fitzzero/quickdraw-lint/` (see
+`packages/lint/README.md`; the design-system rules are in
+`oxlint.template.jsonc`). This repo dogfoods it via the root `.oxlintrc.json`,
+which downgrades currently-violated rules to `warn` (tracked debt — fix over
+time, then re-tighten), exempts `**/src/client/**` from the client rules
+(`no-raw-socket`, `no-untyped-client`, `no-manual-refetch`,
+`no-await-void-mutate`: the framework's client is the sanctioned home of raw
+sockets and TanStack calls), exempts the framework's own `*.test.ts(x)` from
+`no-nested-write` and `no-foreign-write` (they make those writes on purpose),
+and ignores `**/legacy-src/**`. oxlint matches `overrides` and
+`ignorePatterns` globs against paths as seen from where it runs, so keep them
+`**/`-prefixed: lint runs from each package directory. When adding a lint rule
+that all quickdraw apps should get, put it in `packages/lint/oxlint.base.jsonc`
+(or a new rule in `packages/lint/plugin/`, with a test under
+`packages/lint/plugin/test/`), not in downstream repos.
 
 ## Developing against quickdraw-chat
 
