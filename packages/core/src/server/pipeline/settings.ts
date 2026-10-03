@@ -2,12 +2,16 @@
 // settings every pipeline stage reads.
 
 import { consoleLogger, type Logger } from "../../contract/logger";
-import type { PolicyEngine } from "../access/api";
-import { createBasicAccessEngine } from "../access/basicEngine";
-import { createPolicyEngine, type AccessOptions } from "../access/engine";
-import type { AccessEngine } from "../access/types";
+import type { ChangeLogOptions } from "../emit/changeLog";
+import { createLive, type Live } from "../emit/live";
 import type { Registry } from "../registry";
 import { storageOf } from "../storage";
+import {
+  resolveAccess,
+  type AccessEngine,
+  type AccessOptions,
+  type PolicyEngine,
+} from "./accessSettings";
 import { createRecorder, type CallRecord, type RecordDetails } from "./metrics";
 import type { VersionSource } from "./notModified";
 import { resolveTracking, type Tracking, type TrackingOptions } from "./tracking";
@@ -48,8 +52,23 @@ export interface PipelineOptions extends TrackingOptions {
    * row access of the services' policies (RFC 0003 section 4), no cache.
    */
   readonly access?: AccessEngine | AccessOptions;
-  /** Answers query versions for "not modified" replies. Default: none. */
+  /**
+   * Answers query versions for "not modified" replies, for queries that
+   * declare no `version` of their own. Default: the version of the row a
+   * query returns, for a query whose output is one projection row and whose
+   * input has an `id`: the service's `versionColumn`, or the change log.
+   */
   readonly versions?: VersionSource;
+  /**
+   * The in-process change log (RFC 0003 section 6): the revision of the last
+   * flush that touched each row, which answers "not modified" for services
+   * without a `versionColumn`. It sees only this process's writes, so an app
+   * running several processes behind a load balancer passes `false` (the log
+   * then answers nothing) or declares `versionColumn`s; behind a Socket.IO
+   * cluster adapter it answers nothing either. Default: answering, keeping
+   * 100,000 rows.
+   */
+  readonly changeLog?: ChangeLogOptions | false;
   readonly limits?: Partial<DispatcherLimits>;
   /** Calls slower than this are logged at `warn`, in milliseconds. Default 1,000. */
   readonly slowMs?: number;
@@ -76,6 +95,8 @@ export interface PipelineSettings extends Tracking {
   /** The services' access policies, evaluated: `dispatcher.access`. */
   readonly policies: PolicyEngine;
   readonly versions: VersionSource | undefined;
+  /** Entity subscriptions, their frames and revocation (RFC 0003 sections 4.4 and 6). */
+  readonly live: Live;
   readonly limits: DispatcherLimits;
   readonly outputValidation: boolean;
   readonly freezeSharedResults: boolean;
@@ -103,36 +124,6 @@ function resolveLimits(limits: Partial<DispatcherLimits> = {}): DispatcherLimits
   return Object.freeze(merged);
 }
 
-function isAccessEngine(value: unknown): value is AccessEngine {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as Partial<AccessEngine>).authorize === "function"
-  );
-}
-
-/** The policy engine, and the access engine: the app's own, or the basic engine with the policies' row access. */
-function resolveAccess(
-  options: PipelineOptions,
-  registry: Registry,
-  db: unknown,
-  logger: Logger,
-): { access: AccessEngine; policies: PolicyEngine } {
-  const { access } = options;
-  if (access !== undefined && (typeof access !== "object" || access === null)) {
-    throw new TypeError("createDispatcher: access must be an access engine or { cacheMs }");
-  }
-  const engine = isAccessEngine(access) ? access : undefined;
-  const accessOptions: AccessOptions = isAccessEngine(access) ? {} : (access ?? {});
-  const policies = createPolicyEngine({
-    registry,
-    storage: options.storage ?? storageOf(db),
-    logger,
-    cacheMs: accessOptions.cacheMs,
-  });
-  return { access: engine ?? createBasicAccessEngine({ rows: policies.rows }), policies };
-}
-
 /** Applies the defaults to the dispatcher's options. */
 export function resolveSettings(
   options: PipelineOptions,
@@ -141,15 +132,18 @@ export function resolveSettings(
 ): PipelineSettings {
   const development = process.env.NODE_ENV !== "production";
   const logger = options.logger ?? consoleLogger;
-  const { access, policies } = resolveAccess(options, registry, db, logger);
+  const storage = options.storage ?? storageOf(db);
+  const { access, policies } = resolveAccess(options.access, registry, storage, logger);
+  const live = createLive({ registry, storage, policies, logger, changeLog: options.changeLog });
   return Object.freeze({
     registry,
     db,
     logger,
     access,
     policies,
-    ...resolveTracking(options, registry, db, logger, policies.sink),
-    versions: options.versions,
+    ...resolveTracking(options, registry, db, logger, [live.intake, policies.sink, live.emit]),
+    versions: options.versions ?? live.versions,
+    live,
     limits: resolveLimits(options.limits),
     outputValidation: options.outputValidation ?? development,
     freezeSharedResults: options.freezeSharedResults ?? development,

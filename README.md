@@ -53,8 +53,8 @@ server.httpServer.listen(4000);
   gets the same few listeners however many methods the services have. The
   JSON-only parser is the default; `binary: true` restores the stock one.
   The socket rate limiter is on by default (100 events per minute per socket,
-  `qd:ch` and `qd:cancel` not counted); configure it with `rateLimit`, or turn
-  it off with `rateLimit: false`.
+  `qd:ch`, `qd:cancel`, `qd:sub` and `qd:unsub` not counted); configure it
+  with `rateLimit`, or turn it off with `rateLimit: false`.
 - **HTTP**: `POST /qd/{service}/{method}` with the input as a JSON body and
   `Content-Type: application/json` (required, even without a body). The
   principal comes from the `session` cookie or an `Authorization: Bearer`
@@ -72,7 +72,9 @@ created from (or with `http: false`): the HTTP transport is mounted on `app`.
 flight (a mutation runs to its end) and closes the HTTP server, giving up after
 `shutdownTimeoutMs` (default 10 s);
 `server.rotate({ withinMs })` asks clients to reconnect within a window;
-`server.access.refresh(userId)` reloads a user's grants and pushes `qd:access`.
+`server.access.refresh(userId)` reloads a user's grants, pushes `qd:access`
+and resolves the user's entity subscriptions again (behind a cluster adapter,
+on every node).
 
 ### The 4.x legacy shim
 
@@ -182,8 +184,8 @@ await qd.run(() => db.task.updateMany({ where: { dueAt: { lt: now } }, data: { l
   through untracked, with one warning.
 
 `createRecordingSink()` on `./testing` records what is flushed, for tests.
-Live updates built on these flushes (entity frames, collection deltas)
-arrive with later 5.0 cards.
+Entity frames are built on these flushes (below); collection deltas arrive
+with a later 5.0 card.
 
 ### Access control
 
@@ -243,6 +245,64 @@ export const taskService = qd.defineService(task, {
   requests; tracked writes to the columns and membership tables the policies
   read evict them. Writes the tracked client cannot see are picked up only
   when the time passes, so the cache is off by default.
+
+### Projections and entity subscriptions
+
+A projection is the wire shape of a row (design: `docs/rfcs/0003-v5.md`,
+section 6). Its keys decide what a read selects, so a row is never read wider
+than what is sent:
+
+```typescript
+export const taskService = qd.defineService(task, {
+  model: "task",
+  access: inherit({ from: project, via: "projectId" }),
+  versionColumn: "updatedAt", // answers "not modified" from the row's own time
+  affects: [{ service: task, id: "parentTaskId" }], // a write to a child sends its parent again
+  project: {
+    // relations and computed fields: read with select, built by map
+    card: { select: { title: true, status: true }, map: (row: CardRow) => toCard(row) },
+  },
+  methods: {
+    // returns the database row: the framework keeps the projection's keys, dates as ISO strings
+    get: {
+      access: { entry: "Read" },
+      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
+    },
+  },
+});
+```
+
+- A projection's keys come from its schema's JSON Schema (Zod 4.2 or later),
+  or from `project: { <name>: { keys } }`; a service whose projection has
+  neither fails when it is defined. A handler returning a projection returns
+  rows (a `Date` is fine where the wire has a string, extra columns are
+  dropped); with `map`, it returns what `map` takes.
+- Fields the contract's `fields` map puts above the caller's level on a row
+  are stripped from that caller's copy, after any shared run.
+- `qd:sub { s, ids, revs? }` (up to 500 ids) authorizes every id in one
+  lookup, reads the allowed rows in one query, joins the room of each row
+  found for the subscriber's level, and answers each id with
+  `{ ok: true, d, rev }`, `{ ok: true, nm: true, rev }` (the held revision is
+  current) or `{ ok: false, e }` (`FORBIDDEN`, `NOT_FOUND`). A socket is never
+  in the room of a row it could not read. `qd:unsub { s, ids }` leaves.
+- After each flush, subscribers get `qd:e`: `{ t: "u", s, id, rev, d }` with
+  the whole row (a create, a touch, a projection with `map`, an `affects` row),
+  `{ t: "p", s, id, rev, d }` with the changed fields only (an update of plain
+  projection fields), or `{ t: "r", s, id, rev }` (a delete). One read per
+  service per flush, none when no room has subscribers, and each frame is
+  stripped once per subscriber tier.
+- When a write lowers or removes someone's access, their sockets leave the
+  rooms anchored on that row and get `qd:revoked { kind: "entity", reason:
+"access", s, id }`; a changed level moves them to that tier's room with the
+  row as they may now see it.
+- "Not modified" (for `qd:sub` and for queries returning one projection row
+  by `id`) comes from `versionColumn`, or from an in-process change log of
+  recent flushes. The change log sees only this process's writes: an app
+  running several processes without a Socket.IO cluster adapter declares
+  `versionColumn`s or passes `changeLog: false`.
+- Behind a cluster adapter (`setupRedisAdapter`), every touched row is read
+  and sent, since other nodes' rooms are not visible, and access changes and
+  refreshed grants are broadcast to every node.
 
 ### Testing
 

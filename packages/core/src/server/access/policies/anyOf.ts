@@ -29,6 +29,7 @@ function unionReads(policies: readonly AnyAccessPolicy[]): PolicyReads {
     columns: [...new Set(policies.flatMap((policy) => policy.reads.columns))],
     memberships: [...memberships],
     inherits: [...new Set(policies.flatMap((policy) => policy.reads.inherits))],
+    parents: policies.flatMap((policy) => policy.reads.parents ?? []),
     storage: policies.some((policy) => policy.reads.storage),
   };
 }

@@ -22,8 +22,14 @@ import {
   type DispatcherOptions,
   type PrincipalOfServices,
 } from "./dispatcher";
+import { liveOf } from "./emit/live";
 import type { AnyService } from "./service";
-import { createPrincipalResolver, type ServerAuth, type ServiceGrants } from "./transports/auth";
+import {
+  createGrantsSink,
+  createPrincipalResolver,
+  type ServerAuth,
+  type ServiceGrants,
+} from "./transports/auth";
 import {
   httpRouter,
   httpRouterSettings,
@@ -32,12 +38,12 @@ import {
 } from "./transports/http";
 import {
   createSocketServer,
+  type QuickdrawIo,
   type SocketCors,
   type SocketOptions,
   type SocketRateLimitOptions,
   type SocketServer,
 } from "./transports/socketServer";
-import type { QuickdrawIo } from "./transports/types";
 import type { Principal } from "./types";
 
 /**
@@ -83,8 +89,8 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
   readonly legacyWire?: boolean;
   /**
    * The socket rate limiter (`createRateLimiter`'s options), or `false` for
-   * none. Default: 100 events per minute per socket. `qd:ch` and `qd:cancel`
-   * are never counted.
+   * none. Default: 100 events per minute per socket. `qd:ch`, `qd:cancel`,
+   * `qd:sub` and `qd:unsub` are never counted.
    */
   readonly rateLimit?: SocketRateLimitOptions | false;
   /** The HTTP transport's options, or `false` to serve no HTTP calls. */
@@ -141,8 +147,9 @@ export interface QuickdrawServer<S extends readonly AnyService[] = readonly AnyS
   readonly access: {
     /**
      * Reloads `userId`'s grants with `auth.loadServiceAccess`, puts them in the
-     * principal of that user's sockets on this process, and sends them
-     * `qd:access`. Resolves with the grants.
+     * principal of that user's sockets (on every node: behind a cluster
+     * adapter the grants are broadcast), sends them `qd:access`, and resolves
+     * the user's entity subscriptions again. Resolves with the grants.
      */
     refresh(userId: string): Promise<ServiceGrants>;
   };
@@ -169,6 +176,15 @@ function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void 
   if (timeout !== undefined && !(Number.isSafeInteger(timeout) && timeout >= 0)) {
     throw new TypeError("createServer: shutdownTimeoutMs must be a whole number of milliseconds");
   }
+}
+
+/** The app's own flush sinks, as a list. */
+function sinksOf(options: { readonly flushSink?: DispatcherOptions<[]>["flushSink"] }) {
+  const { flushSink } = options;
+  if (flushSink === undefined) {
+    return [];
+  }
+  return Array.isArray(flushSink) ? flushSink : [flushSink];
 }
 
 /** The HTTP transport, mounted on `app` when there is one. */
@@ -302,7 +318,12 @@ export function createServer<const S extends readonly AnyService[]>(
 ): QuickdrawServer<S> {
   checkOptions(options);
   const logger = options.logger ?? consoleLogger;
-  const calls = trackCalls(createDispatcher(options));
+  let refresh: ((userId: string) => Promise<ServiceGrants>) | undefined;
+  const grants = createGrantsSink(options.auth, () => refresh, logger);
+  const created = createDispatcher(
+    grants === undefined ? options : { ...options, flushSink: [...sinksOf(options), grants] },
+  );
+  const calls = trackCalls(created);
   const { dispatcher } = calls;
   const resolvePrincipal = createPrincipalResolver(options.auth);
   const router = mountRouter(options, { call: dispatcher.call, resolvePrincipal, logger });
@@ -318,7 +339,9 @@ export function createServer<const S extends readonly AnyService[]>(
     socket: options.socket,
     rateLimit: options.rateLimit ?? {},
     extensions: [],
+    live: liveOf(created),
   });
+  refresh = (userId) => sockets.refresh(userId);
   const { close, onClose } = closer(
     sockets,
     httpServer,

@@ -52,6 +52,14 @@ export interface MembershipRead {
   readonly levels: Readonly<Record<string, AccessLevel>> | undefined;
 }
 
+/** A parent row a policy takes its level from: `inherit({ from, via })`. */
+export interface ParentLink {
+  /** The parent service's contract. */
+  readonly from: AnyContract;
+  /** The column of the service's model holding the parent row's id. */
+  readonly via: string;
+}
+
 /**
  * What a policy reads, so the engine can register interest in those columns
  * with the storage adapter (tracked writes then carry their `before` and
@@ -64,6 +72,12 @@ export interface PolicyReads {
   readonly memberships: readonly MembershipRead[];
   /** The services whose policies this one asks (`inherit`). */
   readonly inherits: readonly AnyContract[];
+  /**
+   * The parent rows a level comes from (`inherit`), with the column naming
+   * each: the rows a live subscription's access is anchored on besides its
+   * own (RFC 0003 section 4.4).
+   */
+  readonly parents?: readonly ParentLink[];
   /** Whether the policy reads the database through the storage adapter. */
   readonly storage: boolean;
 }

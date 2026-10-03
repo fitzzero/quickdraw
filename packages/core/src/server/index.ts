@@ -21,7 +21,21 @@ export type {
   RowFormsOf,
   ServiceDefinition,
 } from "./defineService";
-export type { AnyService, Service, ServiceMethod, ShareMode } from "./service";
+export type {
+  AffectsOption,
+  HandlerOutputOf,
+  HandlerRow,
+  ProjectCheck,
+  ProjectionOption,
+  RowFor,
+} from "./serviceTypes";
+export type { AffectsLink, AnyService, Service, ServiceMethod, ShareMode } from "./service";
+
+// Projections, field tiers and entity subscriptions (RFC 0003 section 6)
+export type { ProjectedOutput, Projection } from "./emit/projection";
+export type { TierGroup, Tiers } from "./emit/tiers";
+export type { ChangeLogOptions } from "./emit/changeLog";
+export type { EntitySubscription, EntitySubscriptions } from "./emit/subscriptions";
 export type {
   ContextExtensionOf,
   DbOf,
@@ -75,6 +89,7 @@ export type {
   MembershipRead,
   ModelColumn,
   ModelName,
+  ParentLink,
   PolicyFor,
   PolicyKind,
   PolicyReads,
@@ -152,6 +167,7 @@ export type {
   AuthenticateResult,
   HttpAuthenticateRequest,
   ServerAuth,
+  ServiceAccessSource,
   ServiceGrants,
   SocketAuthenticateRequest,
 } from "./transports/auth";

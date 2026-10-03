@@ -90,16 +90,17 @@ function idsOf(ids: string | readonly string[]): readonly string[] {
 }
 
 /**
- * Resolves the dispatcher's tracked-writes options. `accessSink` (the access
- * cache's evictions and access-change events) goes first on the sink list,
- * so the sinks after it read access afresh.
+ * Resolves the dispatcher's tracked-writes options. The framework's own
+ * sinks go first on the sink list, in the order given (the live data's
+ * intake, the access cache's evictions and access-change events, the entity
+ * frames), so the app's sinks after them read access afresh.
  */
 export function resolveTracking(
   options: TrackingOptions,
   registry: Registry,
   db: unknown,
   logger: Logger,
-  accessSink?: FlushSink,
+  framework: readonly (FlushSink | undefined)[] = [],
 ): Tracking {
   const storage = options.storage ?? storageOf(db);
   const unitOfWork = options.unitOfWork ?? storage?.unitOfWork ?? untrackedUnitOfWork;
@@ -108,11 +109,11 @@ export function resolveTracking(
     const rows = idsOf(ids);
     unitOfWork.touch?.(model, rows, touchOptions);
   };
-  const sinks = sinksOf(options.flushSink);
+  const own = framework.filter((sink): sink is FlushSink => sink !== undefined);
   return {
     storage,
     unitOfWork,
-    flushSink: combineSinks(accessSink === undefined ? sinks : [accessSink, ...sinks], logger),
+    flushSink: combineSinks([...own, ...sinksOf(options.flushSink)], logger),
     touch,
   };
 }

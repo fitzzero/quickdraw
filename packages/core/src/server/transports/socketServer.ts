@@ -1,12 +1,11 @@
 // The Socket.IO server of a quickdraw server: the parser, the protocol and
 // authentication middlewares, the rate limiter and the connection handler,
-// plus the two pushes a server sends on the app's request, `qd:rotate` and
-// `qd:access`.
+// the dispatcher's live data (entity subscriptions), plus the two pushes a
+// server sends on the app's request, `qd:rotate` and `qd:access`.
 
 import type { Server as HttpServer } from "node:http";
 import { Server, type ServerOptions } from "socket.io";
-import { SERVER_EVENTS, userRoom } from "../../contract/names";
-import { PROTOCOL_VERSION, type HelloFrame } from "../../protocol/version";
+import { MAX_SUBSCRIBE_IDS, PROTOCOL_VERSION, type HelloFrame } from "../../protocol/version";
 import { QUICKDRAW_VERSION } from "../../version";
 import { createReplyMeter } from "./ack";
 import type { ResolvePrincipal, ServerAuth, ServiceGrants } from "./auth";
@@ -16,19 +15,18 @@ import {
   protocolMiddleware,
   type SocketRateLimitOptions,
 } from "./middleware";
+import { adapterProbe, listenForGrants, refreshGrants, rotate, type LiveData } from "./pushes";
 import { onConnection, type SocketExtension } from "./socketio";
 import type { QuickdrawIo, SocketContext } from "./types";
 
 export type { SocketRateLimitOptions } from "./middleware";
+export type { QuickdrawIo } from "./types";
 
 /** Socket.IO server options `createServer` passes through; it sets `parser` and `cors` itself. */
 export type SocketOptions = Partial<Omit<ServerOptions, "parser" | "cors">>;
 
 /** Socket.IO's CORS setting for the handshake and polling requests. */
 export type SocketCors = Partial<ServerOptions>["cors"];
-
-/** Ids one `qd:sub` may name (RFC 0003 section 6), announced in `qd:hello`. */
-export const DEFAULT_MAX_SUBSCRIBE_IDS = 500;
 
 /** Settings of {@link createSocketServer}. */
 export interface SocketServerSettings extends Omit<SocketContext, "meter"> {
@@ -40,6 +38,8 @@ export interface SocketServerSettings extends Omit<SocketContext, "meter"> {
   readonly socket: SocketOptions | undefined;
   readonly rateLimit: SocketRateLimitOptions | false;
   readonly extensions: readonly SocketExtension[];
+  /** The dispatcher's live data: its extension serves `qd:sub`, and it is given the server. */
+  readonly live?: LiveData;
 }
 
 /** The Socket.IO side of a quickdraw server. */
@@ -59,40 +59,11 @@ function helloFrame(settings: SocketServerSettings): HelloFrame {
     limits: Object.freeze({
       maxInFlightQueries: limits.maxInFlightQueries,
       maxQueuedQueries: limits.maxQueuedQueries,
-      maxSubscribeIds: DEFAULT_MAX_SUBSCRIBE_IDS,
+      maxSubscribeIds: MAX_SUBSCRIBE_IDS,
       callTimeoutMs: limits.callTimeoutMs,
     }),
     features: Object.freeze(settings.binary ? ["binary"] : []),
   });
-}
-
-function rotate(io: QuickdrawIo, withinMs: number): void {
-  if (typeof withinMs !== "number" || !Number.isFinite(withinMs) || withinMs < 0) {
-    throw new TypeError("rotate: withinMs must be a number of milliseconds, 0 or more");
-  }
-  io.emit(SERVER_EVENTS.rotate, { withinMs });
-}
-
-async function refresh(
-  io: QuickdrawIo,
-  load: ServerAuth["loadServiceAccess"],
-  userId: string,
-): Promise<ServiceGrants> {
-  if (load === undefined) {
-    throw new TypeError("access.refresh needs auth.loadServiceAccess to reload a user's grants");
-  }
-  const serviceAccess = (await load(userId)) ?? {};
-  const room = userRoom(userId);
-  // The sockets of this process; a multi-node app refreshes on every node.
-  for (const socketId of io.sockets.adapter.rooms.get(room) ?? []) {
-    const socket = io.sockets.sockets.get(socketId);
-    const principal = socket?.data.principal;
-    if (socket !== undefined && principal?.userId === userId) {
-      socket.data.principal = { ...principal, serviceAccess };
-    }
-  }
-  io.to(room).emit(SERVER_EVENTS.access, { serviceAccess });
-  return serviceAccess;
 }
 
 /** Attaches a Socket.IO server to `httpServer` and serves the dispatcher over it. */
@@ -111,6 +82,9 @@ export function createSocketServer(
     logger: settings.logger,
     meter,
   };
+  const probe = adapterProbe(io, settings.socket?.adapter !== undefined);
+  settings.live?.attach(io, probe);
+  listenForGrants(io, settings.live);
   io.use(protocolMiddleware(settings.legacyWire, context));
   io.use(authMiddleware(settings.resolvePrincipal, context));
   // Before the connection handler: the limiter's `socket.use` middleware must
@@ -123,13 +97,17 @@ export function createSocketServer(
     onConnection({
       ...context,
       hello: helloFrame(settings),
-      extensions: settings.extensions,
+      extensions:
+        settings.live === undefined
+          ? settings.extensions
+          : [...settings.extensions, settings.live.extension],
       legacyCallers: new Set(),
     }),
   );
   return {
     io,
     rotate: (withinMs) => rotate(io, withinMs),
-    refresh: (userId) => refresh(io, settings.loadServiceAccess, userId),
+    refresh: (userId) =>
+      refreshGrants(io, settings.loadServiceAccess, settings.live, probe, userId),
   };
 }

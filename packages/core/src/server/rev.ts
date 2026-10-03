@@ -14,3 +14,16 @@ export function nextRev(): Revision {
   last = Math.max(Date.now(), last + 1);
   return last;
 }
+
+/**
+ * The revision a read made from now on is no older than, without taking a
+ * new one: the last revision taken (one is taken when none was yet). Every
+ * write whose flush took a revision up to it had committed before that
+ * revision was taken, and any later flush takes a greater one. A read that
+ * is not a flush (a subscription's rows) claims it rather than taking its
+ * own, so reads do not push revisions ahead of the clock that
+ * `versionColumn` times are compared with.
+ */
+export function currentRev(): Revision {
+  return last === 0 ? nextRev() : last;
+}

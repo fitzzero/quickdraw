@@ -46,7 +46,13 @@ export function inherit<const Via extends string>(
     kind: "inherit",
     from,
     via,
-    reads: { columns: [via], memberships: [], inherits: [from], storage: true },
+    reads: {
+      columns: [via],
+      memberships: [],
+      inherits: [from],
+      parents: [{ from, via }],
+      storage: true,
+    },
     async levelsFor(principal, ids, tools) {
       const rows = await tools.rows(ids);
       const parentOf = new Map<string, string>();

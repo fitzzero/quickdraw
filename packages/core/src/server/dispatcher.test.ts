@@ -596,7 +596,13 @@ describe("step 7: the unit of work", () => {
   it("runs every handler in a unit, flushes it after respond and before the record", async () => {
     const events: string[] = [];
     const scopes: UnitOfWorkScope[] = [];
-    const flushSink = { flush: () => Promise.resolve() };
+    const flushed: string[] = [];
+    const flushSink = {
+      flush: (writes: readonly unknown[]) => {
+        flushed.push(`app sink: ${writes.length}`);
+        return Promise.resolve();
+      },
+    };
     const unitOfWork: UnitOfWorkFactory = {
       begin(scope) {
         scopes.push(scope);
@@ -644,9 +650,12 @@ describe("step 7: the unit of work", () => {
         kind: "mutation",
         requestId: "req-2",
         transport: "socket",
-        sink: flushSink,
+        sink: expect.objectContaining({ flush: expect.any(Function) }),
       },
     ]);
+    // The unit's sink is the dispatcher's own sinks, then the app's.
+    await scopes[0]?.sink.flush([], { requestId: "req-2", transport: "socket", rev: 1 });
+    expect(flushed).toEqual(["app sink: 0"]);
     expect(logger.at("error")[0]?.message).toBe(
       "Flushing a call's writes failed; its reply was already sent",
     );

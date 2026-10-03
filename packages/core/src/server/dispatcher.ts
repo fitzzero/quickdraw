@@ -6,6 +6,7 @@
 import type { AnyContract } from "../contract/defineContract";
 import type { DispatcherAccess } from "./access/api";
 import { createCaller, type Caller } from "./caller";
+import { registerLive } from "./emit/live";
 import { createPipeline } from "./pipeline/pipeline";
 import type { DispatchRequest, DispatchResult } from "./pipeline/request";
 import {
@@ -123,7 +124,7 @@ export function createDispatcher<const S extends readonly AnyService[]>(
   settings.unitOfWork.attach?.(settings.flushSink, settings.logger);
   const call = createPipeline(settings);
   const { levelsFor, accessWhere, onAccessChanged } = settings.policies;
-  return Object.freeze({
+  const dispatcher: Dispatcher<S> = Object.freeze({
     call,
     caller: (principal: PrincipalOfServices<S> | null) =>
       createCaller(() => call, principal) as Caller<ContractOfServices<S>>,
@@ -132,4 +133,7 @@ export function createDispatcher<const S extends readonly AnyService[]>(
     registry,
     limits: settings.limits,
   });
+  // `createServer` attaches its Socket.IO server to the dispatcher's live data.
+  registerLive(dispatcher, settings.live);
+  return dispatcher;
 }

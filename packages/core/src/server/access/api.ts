@@ -13,7 +13,7 @@ import type { Binding } from "./bindings";
 import type { AccessChangeListener } from "./changes";
 import { serviceGrant } from "./levels";
 import type { AccessFilter, RowLevels } from "./policy";
-import { startCall, type EngineState } from "./tools";
+import { anchorKey, startCall, type EngineState } from "./tools";
 import type { RowAccess } from "./types";
 
 /** The dispatcher's view of its services' access policies: `dispatcher.access`. */
@@ -50,12 +50,28 @@ export interface DispatcherAccess {
   onAccessChanged(listener: AccessChangeListener): () => void;
 }
 
+/** A principal's levels on rows, and the rows each level is derived from. */
+export interface ResolvedAccess {
+  readonly levels: RowLevels;
+  /**
+   * Per id, the `anchorKey`s of the rows its level is derived from (RFC 0003
+   * section 4.4): the row itself, then its `inherit` parents. A service-wide
+   * `Admin` grant anchors on the row only.
+   */
+  readonly anchors: ReadonlyMap<string, readonly string[]>;
+}
+
 /** What a dispatcher's policy engine provides. */
 export interface PolicyEngine extends DispatcherAccess {
   /** Decides `entry` and `scope` forms for the basic engine. */
   readonly rows: RowAccess;
   /** Evicts the cache and reports access changes: first on the sink list. `undefined` without policies. */
   readonly sink: FlushSink | undefined;
+  /**
+   * `levelsFor` and the anchors of each level, from one engine call: the
+   * anchors reuse the rows the levels read. Live subscriptions record them.
+   */
+  resolve(service: string, principal: Principal, ids: readonly string[]): Promise<ResolvedAccess>;
 }
 
 function bindingFor(state: EngineState, service: AnyContract | string): Binding {
@@ -84,22 +100,41 @@ function bypasses(binding: Binding, principal: Principal): boolean {
   return service.adminBypass && serviceGrant(principal, service.name) === "Admin";
 }
 
-/** The levels and filters of `dispatcher.access`. */
+function checkIds(ids: unknown): readonly string[] {
+  const valid = Array.isArray(ids) && ids.every((id) => typeof id === "string" && id !== "");
+  if (!valid) {
+    throw new TypeError("dispatcher.access.levelsFor: ids must be an array of row ids");
+  }
+  return ids as readonly string[];
+}
+
+/** The levels, filters and anchors of a dispatcher's policies. */
 export function createAccessApi(
   state: EngineState,
-): Pick<DispatcherAccess, "levelsFor" | "accessWhere"> {
+): Pick<PolicyEngine, "levelsFor" | "accessWhere" | "resolve"> {
   return {
     async levelsFor(service, principal, ids) {
       const binding = bindingFor(state, service);
       const who = checkPrincipal(principal);
-      const valid = Array.isArray(ids) && ids.every((id) => typeof id === "string" && id !== "");
-      if (!valid) {
-        throw new TypeError("dispatcher.access.levelsFor: ids must be an array of row ids");
-      }
+      checkIds(ids);
       if (bypasses(binding, who)) {
         return new Map(ids.map((id) => [id, "Admin"]));
       }
       return await startCall(state).levels(binding, who, ids);
+    },
+    async resolve(service, principal, ids) {
+      const binding = bindingFor(state, service);
+      const who = checkPrincipal(principal);
+      checkIds(ids);
+      if (bypasses(binding, who)) {
+        return {
+          levels: new Map(ids.map((id) => [id, "Admin"])),
+          anchors: new Map(ids.map((id) => [id, [anchorKey(binding.service.name, id)]])),
+        };
+      }
+      const call = startCall(state);
+      const levels = await call.levels(binding, who, ids);
+      return { levels, anchors: await call.anchors(binding, ids) };
     },
     async accessWhere(service, principal, level) {
       const binding = bindingFor(state, service);
