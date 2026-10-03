@@ -31,6 +31,16 @@ run("no-emit-in-loop", {
       `,
     },
     {
+      name: "the batch form: pushMany after the loop, or once per chunk",
+      filename: JOB,
+      code: `
+        export function relay(taskId, lines) {
+          qd.stream(task, "logs").pushMany(taskId, lines.map((line) => ({ line })));
+          for (const chunk of chunks(lines, 100)) qd.stream(task, "logs").pushMany(taskId, chunk);
+        }
+      `,
+    },
+    {
       name: "arrays are not streams, and while loops are not per-item loops",
       filename: JOB,
       code: `
@@ -55,7 +65,7 @@ run("no-emit-in-loop", {
       errors: [
         {
           message:
-            '`qd.stream(task, "logs").push()` inside a for...of loop sends one frame per item to the same stream scope. Collect the items and send one frame with all of them after the loop (an array payload or stream item).',
+            '`qd.stream(task, "logs").push()` inside a for...of loop pushes one item at a time to the same stream scope. Collect the items and push them together after the loop with `pushMany` (`pushMany(scope, items)`, or `pushMany(items)` for a global stream).',
         },
       ],
     },
@@ -72,11 +82,11 @@ run("no-emit-in-loop", {
       `,
       errors: [
         {
-          messageId: "emitInLoop",
+          messageId: "pushInLoop",
           data: { emit: "logs.push", loop: "a for...of loop", what: "stream scope" },
         },
         {
-          messageId: "emitInLoop",
+          messageId: "pushInLoop",
           data: { emit: "load.push", loop: "a for loop", what: "stream" },
         },
       ],

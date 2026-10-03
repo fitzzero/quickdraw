@@ -6,6 +6,11 @@
 // one (`seeds.ts`), and sent to the feed's room as `qd:stream { s, stream,
 // scope?, item }`, volatile when the stream says so. A push is synchronous
 // and logs nothing: it may run at a game loop's tick rate.
+//
+// `pushMany(scope, items)` (`pushMany(items)`) is the batch form: every item
+// is checked before any is kept or sent, then each goes out as its own frame
+// through one room operator, in order, so the client applies them exactly as
+// it applies single pushes.
 
 import type { AnyContract } from "../../contract/defineContract";
 import { SERVER_EVENTS, streamRoom } from "../../contract/names";
@@ -41,31 +46,72 @@ function servedStream(hub: Hub, contract: AnyContract, name: string): Served {
   return { service, stream };
 }
 
-function push(hub: Hub, seeds: StreamSeeds, served: Served, args: readonly unknown[]): void {
+/**
+ * The feed and the value `push(scope, value)` or `push(value)` names, or a
+ * `TypeError`; `what` names the value in the message (`item`, `items`).
+ */
+function feedOf(
+  served: Served,
+  method: string,
+  what: string,
+  args: readonly unknown[],
+): { readonly feed: string | undefined; readonly value: unknown } {
   const { service, stream } = served;
-  const label = `${service.name}.${stream.name}`;
   const scope = stream.scoped ? args[0] : undefined;
-  const item = stream.scoped ? args[1] : args[0];
   const problem = scopeProblem(stream, scope);
   if (problem !== undefined || args.length !== (stream.scoped ? 2 : 1)) {
-    throw new TypeError(
-      `${label}.push: ${problem ?? (stream.scoped ? "pass (scope, item)" : "pass (item)")}`,
-    );
+    const usage = stream.scoped ? `pass (scope, ${what})` : `pass (${what})`;
+    throw new TypeError(`${service.name}.${stream.name}.${method}: ${problem ?? usage}`);
   }
-  // What is kept and sent is the validated item: streams have no projections.
-  const checked = checkOutgoing(stream.item, item, `An item pushed to ${label}`);
-  const feed = scope as string | undefined;
-  seeds.push(streamKey(service.name, stream.name), feed, checked, stream.seed);
+  return { feed: scope as string | undefined, value: stream.scoped ? args[1] : args[0] };
+}
+
+/** Keeps `items` (already checked) in the feed's seed and sends each as a frame, in order. */
+function send(
+  hub: Hub,
+  seeds: StreamSeeds,
+  served: Served,
+  feed: string | undefined,
+  items: readonly unknown[],
+): void {
+  const { service, stream } = served;
+  for (const item of items) {
+    seeds.push(streamKey(service.name, stream.name), feed, item, stream.seed);
+  }
   const { io } = hub;
   if (io === undefined) {
     return;
   }
-  const frame: StreamFrame =
-    feed === undefined
-      ? { s: service.name, stream: stream.name, item: checked }
-      : { s: service.name, stream: stream.name, scope: feed, item: checked };
   const room = io.to(streamRoom(service.name, stream.name, feed));
-  (stream.volatile ? room.volatile : room).emit(SERVER_EVENTS.stream, frame);
+  const target = stream.volatile ? room.volatile : room;
+  for (const item of items) {
+    const frame: StreamFrame =
+      feed === undefined
+        ? { s: service.name, stream: stream.name, item }
+        : { s: service.name, stream: stream.name, scope: feed, item };
+    target.emit(SERVER_EVENTS.stream, frame);
+  }
+}
+
+function push(hub: Hub, seeds: StreamSeeds, served: Served, args: readonly unknown[]): void {
+  const { feed, value } = feedOf(served, "push", "item", args);
+  const label = `${served.service.name}.${served.stream.name}`;
+  // What is kept and sent is the validated item: streams have no projections.
+  const checked = checkOutgoing(served.stream.item, value, `An item pushed to ${label}`);
+  send(hub, seeds, served, feed, [checked]);
+}
+
+function pushMany(hub: Hub, seeds: StreamSeeds, served: Served, args: readonly unknown[]): void {
+  const { feed, value } = feedOf(served, "pushMany", "items", args);
+  const label = `${served.service.name}.${served.stream.name}`;
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label}.pushMany: pass the items as an array`);
+  }
+  // Every item is checked before any is kept or sent.
+  const checked = value.map((item: unknown, index) =>
+    checkOutgoing(served.stream.item, item, `Item ${String(index)} pushed to ${label}`),
+  );
+  send(hub, seeds, served, feed, checked);
 }
 
 /** One dispatcher's streams: their seeds, the handles that push to them, and their socket listeners. */
@@ -93,6 +139,9 @@ export function createStreams(hub: Hub): Streams {
       return Object.freeze({
         push: (...args: unknown[]) => {
           push(hub, seeds, served, args);
+        },
+        pushMany: (...args: unknown[]) => {
+          pushMany(hub, seeds, served, args);
         },
       }) as StreamHandle<AnyContract, string>;
     },

@@ -5,7 +5,9 @@
 // stream's scope, or a global stream itself) is the same on every
 // iteration. Fan-out, a different target per item, is correct and is not
 // reported: a target counts as fixed only when everything it reads is bound
-// outside the loop, never reassigned in it, and it calls nothing.
+// outside the loop, never reassigned in it, and it calls nothing. A stream's
+// batch form is `pushMany(scope, items)`: the items are checked together and
+// sent through one room operator, each as the frame `useStream` expects.
 
 import { FILE_OPTIONS, SERVER_FILES, TEST_FILES, inScope } from "../lib/files.mjs";
 import { chainNames, contains, memberName, resolveVariable, unwrap, walk } from "../lib/ast.mjs";
@@ -64,6 +66,7 @@ function emitOf(context, call) {
       label: `${context.sourceCode.getText(callee.object)}.push`,
       what: scoped ? "stream scope" : "stream",
       target: scoped ? call.arguments[0] : undefined,
+      stream: true,
     };
   }
   return undefined;
@@ -111,7 +114,10 @@ export default {
     messages: {
       emitInLoop:
         "`{{ emit }}()` inside {{ loop }} sends one frame per item to the same {{ what }}. " +
-        "Collect the items and send one frame with all of them after the loop (an array payload or stream item).",
+        "Collect the items and send one frame with all of them after the loop (an array payload).",
+      pushInLoop:
+        "`{{ emit }}()` inside {{ loop }} pushes one item at a time to the same {{ what }}. " +
+        "Collect the items and push them together after the loop with `pushMany` (`pushMany(scope, items)`, or `pushMany(items)` for a global stream).",
     },
     schema: [
       {
@@ -141,7 +147,7 @@ export default {
         }
         context.report({
           node,
-          messageId: "emitInLoop",
+          messageId: emit.stream === true ? "pushInLoop" : "emitInLoop",
           data: { emit: emit.label, loop: loop.kind, what: emit.what },
         });
       },

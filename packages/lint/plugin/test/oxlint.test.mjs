@@ -56,7 +56,8 @@ const EXAMPLES = {
   ],
   "no-emit-in-loop": [
     "apps/api/src/jobs/emit-loop.ts",
-    `export function f(id, lines) { for (const line of lines) { qd.stream(task, "logs").push(id, line); } }\n`,
+    // The fix: `qd.stream(task, "logs").pushMany(id, lines.map((line) => ({ line })))`.
+    `export function f(id, lines) { for (const line of lines) { qd.stream(task, "logs").push(id, { line }); } }\n`,
   ],
   "no-load-then-filter": [
     "apps/api/src/services/filter.ts",

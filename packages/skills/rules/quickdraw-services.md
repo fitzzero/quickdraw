@@ -131,7 +131,8 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 ## Realtime
 
 - Streams: `streams: { logs: { item, scope: "taskId", seed: 50, access } }`;
-  push with `qd.stream(task, "logs").push(taskId, item)`.
+  push with `qd.stream(task, "logs").push(taskId, item)`, and several items
+  at once with `pushMany(taskId, items)`, never `push` in a loop.
 - Channels: `channels: { cursor: { payload, ratePerSecond, requires } }` in
   the contract, `channels: { cursor: (payload, ctx) => ... }` on the service.
 - Events: `events: { moved: { payload } }`, sent with

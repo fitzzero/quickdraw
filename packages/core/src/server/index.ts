@@ -90,6 +90,7 @@ export type {
   ServiceStream,
   StreamHandle,
   StreamPushArgs,
+  StreamPushManyArgs,
   StreamSubscriptions,
 } from "./realtime/types";
 export { CHANNEL_ABUSE_MULTIPLIER, CHANNEL_ABUSE_WINDOW_MS } from "./realtime/channels";

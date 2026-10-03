@@ -119,6 +119,12 @@ describe("the server", () => {
     qd.stream(lobby, "load").push(3);
     // @ts-expect-error -- a global stream takes no scope
     qd.stream(lobby, "load").push("room1", 3);
+    logs.pushMany("room1", [{ line: "one" }, { line: "two" }]);
+    // @ts-expect-error -- pushMany takes a list of items
+    logs.pushMany("room1", { line: "one" });
+    qd.stream(lobby, "load").pushMany([1, 2, 3]);
+    // @ts-expect-error -- a global stream takes no scope
+    qd.stream(lobby, "load").pushMany("room1", [1]);
     // @ts-expect-error -- lobbyService has no stream "nope"
     qd.stream(lobby, "nope");
     expectTypeOf(dispatcher.presence).toEqualTypeOf<Presence>();

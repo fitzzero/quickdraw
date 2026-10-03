@@ -1617,7 +1617,11 @@ export function TaskRoom({
   scope and 10,000 scopes per stream; a restart empties them, and durable
   history is the app's: store the rows and expose a collection), and sends
   `qd:stream { s, stream, scope?, item }` to the feed's subscribers,
-  volatile when the stream says so. `qd:stream:sub` is authorized with the
+  volatile when the stream says so. `pushMany(scope, items)`
+  (`pushMany(items)` for a global stream) pushes several items to one feed
+  at once: every item is checked before any is kept or sent, and each goes
+  out as its own frame, in order; use it rather than `push` in a loop
+  (`no-emit-in-loop`). `qd:stream:sub` is authorized with the
   stream's `access` through the access engine, the scope being the row an
   `entry` or `scope` form checks; a stream without `access` is closed. The
   answer is the seed; `useStream` then appends, keeps the latest `max`
