@@ -145,6 +145,36 @@ async function transaction(
   }
 }
 
+/**
+ * `StorageAdapter.nullable`: Prisma validates a filter against the schema
+ * before sending it, and refuses `{ column: null }` on a required column. The
+ * answer is kept for the life of the client: one statement per optional
+ * column, none for a required one.
+ */
+function createNullability(
+  delegate: (model: string) => Delegate,
+): (model: string, column: string) => Promise<boolean> {
+  const known = new Map<string, boolean>();
+  return async (model, column) => {
+    const key = `${modelKey(model)}\u0000${column}`;
+    const kept = known.get(key);
+    if (kept !== undefined) {
+      return kept;
+    }
+    let nullable = true;
+    try {
+      await delegate(modelKey(model)).count({ where: { [column]: null } });
+    } catch (error) {
+      if (!(error instanceof Error && error.name === "PrismaClientValidationError")) {
+        throw error;
+      }
+      nullable = false;
+    }
+    known.set(key, nullable);
+    return nullable;
+  };
+}
+
 function createStorage(
   tracker: WriteTracker,
   interest: ReturnType<typeof createInterestRegistry>,
@@ -160,6 +190,7 @@ function createStorage(
     registerInterest: interest.register,
     interestOf: interest.of,
     inTransaction: () => tracker.transactionClient() !== undefined || tracker.inBatch(),
+    nullable: createNullability(delegate),
     unitOfWork: tracker.unitOfWork,
   });
 }

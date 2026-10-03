@@ -61,6 +61,17 @@ export interface ResolvedAccess {
   readonly anchors: ReadonlyMap<string, readonly string[]>;
 }
 
+/** Options of {@link PolicyEngine.resolve}. */
+export interface ResolveOptions {
+  /**
+   * Whether the principal's service-wide `Admin` grant on the service counts,
+   * as it does for `levelsFor`. Default `true`. A collection scope asks its
+   * anchor's policy with `false`, as a `{ scope, of }` form asks `of`'s: the
+   * grants that count there are those on the collection's own service.
+   */
+  readonly grants?: boolean;
+}
+
 /** What a dispatcher's policy engine provides. */
 export interface PolicyEngine extends DispatcherAccess {
   /** Decides `entry` and `scope` forms for the basic engine. */
@@ -71,7 +82,12 @@ export interface PolicyEngine extends DispatcherAccess {
    * `levelsFor` and the anchors of each level, from one engine call: the
    * anchors reuse the rows the levels read. Live subscriptions record them.
    */
-  resolve(service: string, principal: Principal, ids: readonly string[]): Promise<ResolvedAccess>;
+  resolve(
+    service: string,
+    principal: Principal,
+    ids: readonly string[],
+    options?: ResolveOptions,
+  ): Promise<ResolvedAccess>;
 }
 
 function bindingFor(state: EngineState, service: AnyContract | string): Binding {
@@ -122,11 +138,11 @@ export function createAccessApi(
       }
       return await startCall(state).levels(binding, who, ids);
     },
-    async resolve(service, principal, ids) {
+    async resolve(service, principal, ids, options) {
       const binding = bindingFor(state, service);
       const who = checkPrincipal(principal);
       checkIds(ids);
-      if (bypasses(binding, who)) {
+      if (options?.grants !== false && bypasses(binding, who)) {
         return {
           levels: new Map(ids.map((id) => [id, "Admin"])),
           anchors: new Map(ids.map((id) => [id, [anchorKey(binding.service.name, id)]])),

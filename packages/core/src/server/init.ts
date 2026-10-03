@@ -13,7 +13,12 @@ import { createCaller, type CallerFor } from "./caller";
 import type { BaseContext, ContextExtender } from "./context";
 import { createServer, type QuickdrawServer, type ServerOptions } from "./createServer";
 import type { DefineService } from "./defineService";
-import { createDispatcher, type Dispatcher, type DispatcherOptions } from "./dispatcher";
+import {
+  createDispatcher,
+  type Dispatcher,
+  type DispatcherCollections,
+  type DispatcherOptions,
+} from "./dispatcher";
 import type { Service } from "./service";
 import type { ContextExtensionOf, McpContextOf, PrincipalOf, QuickdrawTypes } from "./types";
 
@@ -69,6 +74,12 @@ export interface Quickdraw<T extends QuickdrawTypes> {
    */
   run<R>(fn: () => R | PromiseLike<R>): Promise<R>;
   /**
+   * The collections of the dispatcher this instance created last (RFC 0003
+   * section 7): `qd.collections.reset(contract, collection, scope)` sends one
+   * scope a `reset`, for a change tracked writes cannot describe.
+   */
+  readonly collections: DispatcherCollections;
+  /**
    * Serves `services` over Socket.IO and HTTP on the app's Express app and
    * HTTP server (see `createServer`), and makes the server's dispatcher the
    * one `qd.caller` calls through.
@@ -92,10 +103,15 @@ function contextOption(options: unknown): ContextExtender | undefined {
   return context as ContextExtender | undefined;
 }
 
+const NEEDS: Readonly<Record<string, string>> = Object.freeze({
+  "qd.run": "flush through",
+  "qd.collections.reset": "send through",
+});
+
 function noDispatcher(member: string): never {
   throw new QuickdrawError(
     "INTERNAL",
-    `${member} has no dispatcher to ${member === "qd.run" ? "flush through" : "call through"}: create one with qd.createDispatcher (or qd.createServer) first`,
+    `${member} has no dispatcher to ${NEEDS[member] ?? "call through"}: create one with qd.createDispatcher (or qd.createServer) first`,
   );
 }
 
@@ -123,6 +139,15 @@ export function initQuickdraw<T extends QuickdrawTypes = QuickdrawTypes>(
     caller: (principal) =>
       createCaller(() => (current ?? noDispatcher("qd.caller")).call, principal) as CallerFor<T>,
     run: async (fn) => await (current ?? noDispatcher("qd.run")).run(fn),
+    collections: Object.freeze({
+      reset: (contract, collection, scope) => {
+        (current ?? noDispatcher("qd.collections.reset")).collections.reset(
+          contract,
+          collection,
+          scope,
+        );
+      },
+    } satisfies DispatcherCollections),
     createServer(options) {
       const server = createServer(options);
       current = server.dispatcher as Dispatcher;

@@ -100,7 +100,8 @@ function onUnsubscribe(hub: Hub, socket: QuickdrawServerSocket, frame: unknown):
   return { ok: true };
 }
 
-function reply(
+/** Acknowledges a subscription event, when the client asked for an acknowledgement. Never throws. */
+export function reply(
   socket: QuickdrawServerSocket,
   context: SocketContext,
   ack: unknown,

@@ -64,6 +64,14 @@ export interface StorageAdapter {
    * across requests.
    */
   inTransaction?(): boolean;
+  /**
+   * Whether `column` of `model` may hold null. Collection cursors need it: a
+   * keyset over a nullable column must place and compare nulls, and Prisma
+   * refuses a null filter or null ordering on a required column. An adapter
+   * without it has its order columns treated as never null, except one a
+   * cursor shows holding null.
+   */
+  nullable?(model: string, column: string): Promise<boolean>;
   /** The units of work that record this adapter's writes; the dispatcher uses them. */
   readonly unitOfWork: UnitOfWorkFactory;
 }

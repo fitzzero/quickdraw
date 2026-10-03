@@ -95,7 +95,7 @@ export interface PipelineSettings extends Tracking {
   /** The services' access policies, evaluated: `dispatcher.access`. */
   readonly policies: PolicyEngine;
   readonly versions: VersionSource | undefined;
-  /** Entity subscriptions, their frames and revocation (RFC 0003 sections 4.4 and 6). */
+  /** Entity subscriptions, collections, their frames and revocation (RFC 0003 sections 4.4, 6 and 7). */
   readonly live: Live;
   readonly limits: DispatcherLimits;
   readonly outputValidation: boolean;
@@ -141,7 +141,12 @@ export function resolveSettings(
     logger,
     access,
     policies,
-    ...resolveTracking(options, registry, db, logger, [live.intake, policies.sink, live.emit]),
+    ...resolveTracking(options, registry, db, logger, [
+      live.intake,
+      policies.sink,
+      live.emit,
+      live.collections,
+    ]),
     versions: options.versions ?? live.versions,
     live,
     limits: resolveLimits(options.limits),

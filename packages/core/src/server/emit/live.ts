@@ -1,9 +1,12 @@
-// The live data of one dispatcher (RFC 0003 sections 4.4, 5.3 and 6): entity
-// subscriptions, the frames flushes send them, revocation, and "not modified"
-// versions. A dispatcher makes one; `createServer` attaches its Socket.IO
-// server and serves `qd:sub` with it. Without a server the sinks still keep
-// the change log, so in-process callers get versions too.
+// The live data of one dispatcher (RFC 0003 sections 4.4, 5.3, 6 and 7):
+// entity subscriptions and collection scopes, the frames flushes send them,
+// revocation, and "not modified" versions. A dispatcher makes one;
+// `createServer` attaches its Socket.IO server and serves `qd:sub` and
+// `qd:col:sub` with it. Without a server the sinks still keep the change log,
+// so in-process callers get versions too.
 
+import type { AnyContract } from "../../contract/defineContract";
+import { createLiveCollections } from "../collections/live";
 import { createEntitySinks } from "./entitySink";
 import { entitySubscriptions } from "./extension";
 import { createHub, type AdapterProbe, type Hub, type HubOptions } from "./hub";
@@ -12,15 +15,19 @@ import { createVersionSource } from "./versions";
 
 type Sinks = ReturnType<typeof createEntitySinks>;
 
+type Collections = ReturnType<typeof createLiveCollections>;
+
 /** The live data of one dispatcher. */
 export interface Live {
   /** Records the rows a flush touched in the change log; goes before the access sink. */
   readonly intake: Sinks["intake"];
   /** Sends the flush's entity frames; goes after the access sink. */
   readonly emit: Sinks["emit"];
+  /** Sends the flush's collection deltas; goes after `emit`. */
+  readonly collections: Collections["sink"];
   /** "Not modified" for queries returning one projection row: the dispatcher's default `versions`. */
   readonly versions: ReturnType<typeof createVersionSource>;
-  /** Serves `qd:sub` and `qd:unsub` on every v5 socket. */
+  /** Serves `qd:sub`, `qd:unsub`, `qd:col:sub` and `qd:col:unsub` on every v5 socket. */
   readonly extension: ReturnType<typeof entitySubscriptions>;
   /**
    * Gives the live data its Socket.IO server: frames go out on it, and
@@ -29,6 +36,8 @@ export interface Live {
   attach(io: NonNullable<Hub["io"]>, probe: AdapterProbe): void;
   /** Re-resolves the subscriptions of `userId`'s sockets on this process after their grants changed. */
   regranted(userId: string): Promise<void>;
+  /** Sends a `reset` to one scope of a collection: `dispatcher.collections.reset`. */
+  resetCollection(contract: AnyContract, collection: string, scope: string): void;
 }
 
 type Change = Parameters<ReturnType<typeof createRevocation>["changed"]>[0];
@@ -49,17 +58,26 @@ function readChange(value: unknown): Change | undefined {
   };
 }
 
-/** Creates a dispatcher's live data. Throws a `TypeError` for an `affects` it cannot follow. */
+/**
+ * Creates a dispatcher's live data. Throws a `TypeError` for an `affects` it
+ * cannot follow, or a collection anchor it cannot authorize through.
+ */
 export function createLive(options: HubOptions): Live {
   const hub = createHub(options);
+  const collections = createLiveCollections(hub);
   const sinks = createEntitySinks(hub);
-  const revocation = createRevocation(hub);
+  const revocation = createRevocation(hub, collections.revocation);
+  const entities = entitySubscriptions(hub);
   options.policies.onAccessChanged((change) => revocation.changed(change, false));
   return Object.freeze({
     intake: sinks.intake,
     emit: sinks.emit,
+    collections: collections.sink,
     versions: createVersionSource(hub),
-    extension: entitySubscriptions(hub),
+    extension: (...args: Parameters<typeof entities>): void => {
+      entities(...args);
+      collections.extension(...args);
+    },
     attach(io: NonNullable<Hub["io"]>, probe: AdapterProbe): void {
       hub.io = io;
       hub.probe = probe;
@@ -71,6 +89,9 @@ export function createLive(options: HubOptions): Live {
       });
     },
     regranted: (userId: string) => revocation.regranted(userId),
+    resetCollection: (contract: AnyContract, collection: string, scope: string) => {
+      collections.reset(contract, collection, scope);
+    },
   });
 }
 
