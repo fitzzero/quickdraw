@@ -17,7 +17,14 @@ import {
   type QuickdrawError,
 } from "../index";
 import { counter, probe } from "../client/__tests__/fixtures";
-import { createMockClient, renderWithQuickdraw, type QuickdrawRenderResult } from "./client";
+import type { AppPrincipal } from "../server/__tests__/fixtures";
+import type { createProbe } from "../server/transports/__tests__/probe";
+import {
+  createMockClient,
+  renderWithQuickdraw,
+  type QuickdrawRenderResult,
+  type RenderWithQuickdrawOptions,
+} from "./client";
 import type { RecordedFrame, TestApp } from "./index";
 
 const card = z.object({ id: z.string(), projectId: z.string(), title: z.string() });
@@ -68,15 +75,39 @@ describe("createMockClient", () => {
 });
 
 describe("renderWithQuickdraw", () => {
+  /** An app whose services take the fixtures' principal: a user or an agent, by `kind`. */
+  type Services = readonly [ReturnType<typeof createProbe>["service"]];
+  type Contracts = { probe: typeof probe };
+
   test("acts as the app's principal type, for the client given", () => {
     const qd = createQuickdrawClient({ probe });
-    const render = (app: TestApp) =>
+    // `as` is the principal type of the app's services, or null for an anonymous socket.
+    expectTypeOf<
+      RenderWithQuickdrawOptions<Services, Contracts>["as"]
+    >().toEqualTypeOf<AppPrincipal | null>();
+    expectTypeOf(renderWithQuickdraw<Services, Contracts>)
+      .parameter(1)
+      .toHaveProperty("as")
+      .toEqualTypeOf<AppPrincipal | null>();
+    const render = (app: TestApp<Services>) =>
       renderWithQuickdraw(null as unknown as React.ReactElement, {
         app,
+        as: { userId: "ada", kind: "agent" },
+        client: qd,
+      });
+    expectTypeOf(render).parameter(0).toEqualTypeOf<TestApp<Services>>();
+    expectTypeOf(render).returns.toEqualTypeOf<Promise<QuickdrawRenderResult>>();
+    const anonymous = (app: TestApp<Services>) =>
+      renderWithQuickdraw(null as unknown as React.ReactElement, { app, as: null, client: qd });
+    expectTypeOf(anonymous).returns.toEqualTypeOf<Promise<QuickdrawRenderResult>>();
+    const untyped = (app: TestApp<Services>) =>
+      renderWithQuickdraw(null as unknown as React.ReactElement, {
+        app,
+        // @ts-expect-error the app's principals carry a `kind`
         as: { userId: "ada" },
         client: qd,
       });
-    expectTypeOf(render).returns.toEqualTypeOf<Promise<QuickdrawRenderResult>>();
+    void untyped;
   });
 });
 
