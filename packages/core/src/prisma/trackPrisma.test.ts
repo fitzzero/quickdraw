@@ -70,6 +70,42 @@ describe("create and upsert", () => {
     ]);
   });
 
+  it("marks an upsert that read nothing as a create whose row may have existed", async () => {
+    const existing = await addTask("Existing", { status: "open" });
+    const upsert = () =>
+      h.db.task.upsert({
+        where: { id: existing.id },
+        create: { projectId, title: "Never" },
+        update: { title: "Updated" },
+      });
+    const { writes } = await h.inUnit(upsert);
+    expect(writes).toEqual([
+      expect.objectContaining({ id: existing.id, op: "create", mayHaveExisted: true }),
+    ]);
+    // So an upsert and a delete in one unit still flush the delete of a row that existed.
+    const deleted = await h.inUnit(async () => {
+      await upsert();
+      await h.db.task.delete({ where: { id: existing.id } });
+    });
+    expect(deleted.writes).toEqual([
+      {
+        model: "task",
+        id: existing.id,
+        op: "delete",
+        fields: ["projectId", "title"],
+        before: { projectId, status: "open", parentTaskId: null },
+      },
+    ]);
+  });
+
+  it("flushes nothing for a row created and deleted in one unit", async () => {
+    const { writes } = await h.inUnit(async () => {
+      const task = await h.db.task.create({ data: { projectId, title: "Fleeting" } });
+      await h.db.task.delete({ where: { id: task.id } });
+    });
+    expect(writes).toEqual([]);
+  });
+
   it("reads first when an upsert's update sets an interested column, so an update is an update", async () => {
     const existing = await addTask("Existing", { status: "open" });
     const { writes } = await h.inUnit(() =>

@@ -654,6 +654,36 @@ describe("batches, bulk writes and statements", () => {
     ]);
   });
 
+  it("sends and reads nothing for rows one unit created and deleted again", async () => {
+    const { app, reads } = await start();
+    const { connection, scopes } = await connect(app, as(board.ed));
+    await colSub(connection, "byProject", board.p2);
+    await colSub(connection, "byLabel", "no-label");
+    expect(
+      await emitWithAck(connection.socket, "qd:watch", {
+        s: "taskService",
+        topic: `byProject:${board.p2}`,
+      }),
+    ).toEqual({ ok: true });
+    reads.length = 0;
+    // Merged to a delete without values, this reached every scope subscribed here, other tenants' too.
+    await write(app, async (db) => {
+      const task = await db.task.create({ data: { projectId: board.p1, title: "P1 private" } });
+      await db.task.delete({ where: { id: task.id } });
+    });
+    // And a membership row: the whole table was evicted, every subscription resolved again.
+    await write(app, async (db) => {
+      const member = await db.projectMember.create({
+        data: { projectId: board.p1, userId: board.di, role: "Read" },
+      });
+      await db.projectMember.delete({ where: { id: member.id } });
+    });
+    await scopes.settle();
+    expect(scopes.frames).toEqual([]);
+    expect(scopes.changed).toEqual([]);
+    expect(reads).toEqual([]);
+  });
+
   it("reads a row's old scope first only when the write sets a membership column", async () => {
     const { app } = await start();
     const count = async (data: Record<string, unknown>) =>

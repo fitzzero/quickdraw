@@ -43,6 +43,14 @@ export interface WriteRecord {
   readonly before?: Readonly<Record<string, unknown>>;
   /** The interested columns' values after the write, when the write returned them. */
   readonly after?: Readonly<Record<string, unknown>>;
+  /**
+   * Set on a `create` an `upsert` recorded without reading whether its row
+   * existed (its `update` set no interested column): the row may have been
+   * updated rather than created. Only merging reads it: a row created and
+   * deleted in one unit is dropped from the flush only when its create is
+   * certain.
+   */
+  readonly mayHaveExisted?: true;
 }
 
 /**

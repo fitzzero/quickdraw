@@ -48,13 +48,24 @@ describe("mergeRecords", () => {
     ).toEqual([task("create", ["title", "projectId"], { after: { projectId: "p2" } })]);
   });
 
-  it("cancels a row created and deleted in one unit to a delete", () => {
+  it("drops a row created and deleted in one unit: it never existed outside it", () => {
     expect(
       mergeRecords([
         task("create", ["title"], { after: { projectId: "p1" } }),
+        task("update", ["projectId"], { before: { projectId: "p1" }, after: { projectId: "p2" } }),
+        task("delete", [], { before: { projectId: "p2" } }),
+        { model: "task", id: "t2", op: "update", fields: ["title"] },
+      ]),
+    ).toEqual([{ model: "task", id: "t2", op: "update", fields: ["title"] }]);
+  });
+
+  it("keeps the delete of a row an upsert may have updated, with the values it had", () => {
+    expect(
+      mergeRecords([
+        task("create", ["title"], { after: { projectId: "p1" }, mayHaveExisted: true }),
         task("delete", [], { before: { projectId: "p1" } }),
       ]),
-    ).toEqual([task("delete", ["title"])]);
+    ).toEqual([task("delete", ["title"], { before: { projectId: "p1" } })]);
   });
 
   it("makes an updated then deleted row a delete that keeps the oldest values", () => {

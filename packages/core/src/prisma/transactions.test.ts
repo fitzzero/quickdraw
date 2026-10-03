@@ -5,6 +5,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { storageOf } from "../server/storage";
+import type { WriteRecord } from "../server/uow/types";
 import { createRecordingSink } from "../testing/recordingSink";
 import { createHarness, nextTick, type Harness } from "./__tests__/harness";
 import { trackPrisma } from "./trackPrisma";
@@ -137,21 +138,33 @@ describe("interactive transactions", () => {
   });
 
   it("read updateMany and deleteMany ids through the transaction, seeing its own rows (spike check 6)", async () => {
-    const { writes } = await h.inUnit(() =>
-      h.db.$transaction(async (tx) => {
-        await tx.task.createMany({
-          data: [
-            { projectId, title: "a" },
-            { projectId, title: "b" },
-            { projectId, title: "c" },
-          ],
-        });
-        await tx.task.updateMany({ where: { projectId }, data: { status: "edited" } });
-        await tx.task.deleteMany({ where: { projectId, status: "edited" } });
-      }),
-    );
-    expect(writes).toHaveLength(3);
-    expect(writes.every((write) => write.op === "delete")).toBe(true);
+    const seen: WriteRecord[] = [];
+    const stop = h.storage.onWrite((write) => seen.push(write));
+    try {
+      const { writes } = await h.inUnit(() =>
+        h.db.$transaction(async (tx) => {
+          await tx.task.createMany({
+            data: [
+              { projectId, title: "a" },
+              { projectId, title: "b" },
+              { projectId, title: "c" },
+            ],
+          });
+          await tx.task.updateMany({ where: { projectId }, data: { status: "edited" } });
+          await tx.task.deleteMany({ where: { projectId, status: "edited" } });
+        }),
+      );
+      // Each operation found the three rows the transaction created...
+      expect(seen.map((write) => write.op)).toEqual([
+        ...["create", "create", "create"],
+        ...["update", "update", "update"],
+        ...["delete", "delete", "delete"],
+      ]);
+      // ...and rows created and deleted in one unit flush nothing.
+      expect(writes).toEqual([]);
+    } finally {
+      stop();
+    }
     expect(await h.prisma.task.count()).toBe(0);
   });
 

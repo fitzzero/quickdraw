@@ -19,7 +19,8 @@
 // | deleteMany          | delete      | a read with the same `where`       | one read                     |
 //
 // `fields` are the keys of `data` (for upsert, of `update` when the row
-// existed, of `create` when it did not, and of both when no read told).
+// existed, of `create` when it did not, and of both when no read told; such
+// a create is marked `mayHaveExisted`).
 // When a `select` (or `omit`) would hide the `id` or an interested column,
 // the hook adds it and strips it from the result again, so the caller gets
 // exactly what it asked for. Reads go through the open interactive
@@ -295,10 +296,15 @@ async function upsert(op: Operation): Promise<unknown> {
   const { result, rows } = await runWidened(op);
   if (before !== undefined && before.size > 0) {
     record(op, writesOf(op, "update", rows, keysOf(op.args.update), before));
+  } else if (before === undefined) {
+    // Nothing read: the row may have existed, and been updated.
+    const writes = writesOf(op, "create", rows, keysOf([op.args.create, op.args.update]));
+    record(
+      op,
+      writes.map((write) => ({ ...write, mayHaveExisted: true as const })),
+    );
   } else {
-    const fields =
-      before === undefined ? keysOf([op.args.create, op.args.update]) : keysOf(op.args.create);
-    record(op, writesOf(op, "create", rows, fields));
+    record(op, writesOf(op, "create", rows, keysOf(op.args.create)));
   }
   return result;
 }

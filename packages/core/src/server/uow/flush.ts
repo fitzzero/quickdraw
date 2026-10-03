@@ -36,7 +36,8 @@ function logFailure(
 
 /**
  * Merges `records`, takes one revision and hands the batch to `scope.sink`.
- * With nothing recorded, no revision is taken and the sink is not called.
+ * With nothing recorded, or nothing left once merged (rows the unit created
+ * and deleted again), no revision is taken and the sink is not called.
  * Never rejects; a sink's failure is logged.
  */
 export async function flushWrites(
@@ -44,11 +45,11 @@ export async function flushWrites(
   scope: UnitOfWorkScope,
   logger: Logger,
 ): Promise<void> {
-  if (records.length === 0) {
+  const writes = mergeRecords(records);
+  if (writes.length === 0) {
     return;
   }
   const { sink, ...origin } = scope;
-  const writes = mergeRecords(records);
   const info: FlushInfo = { ...origin, rev: nextRev() };
   try {
     await sink.flush(writes, info);

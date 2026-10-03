@@ -4,11 +4,15 @@
 //
 // Per row, in the order the writes happened:
 //
-// - `delete` beats `create` beats `update`, read as "the row's final state":
-//   a row whose last write deleted it is a `delete` (a row created and
-//   deleted in one unit cancels to a delete nobody needs to see created);
-//   otherwise a row that was created, or deleted and created again, is a
-//   `create`, which sinks send whole; otherwise it is an `update`.
+// - A row the unit created and then deleted is dropped: it never existed
+//   outside the unit, so no sink, change log or topic hears of it. Its create
+//   must be certain: an `upsert` that read nothing (`mayHaveExisted`) may
+//   have updated a row that existed, whose delete is kept, with the values
+//   the writes carry.
+// - Otherwise `delete` beats `create` beats `update`, read as "the row's
+//   final state": a row whose last write deleted it is a `delete`; a row
+//   that was created, or deleted and created again, is a `create`, which
+//   sinks send whole; anything else is an `update`.
 // - `fields` are unioned.
 // - `before` keeps the earliest value of each column: the row as subscribers
 //   last saw it, since nothing was emitted during the unit. A row the unit
@@ -71,19 +75,27 @@ function sinceLastDelete(history: History): readonly WriteRecord[] {
   return history.slice(start);
 }
 
-function mergeRow(history: History): WriteRecord {
+/** True when the row's first write certainly created it: not an upsert that read nothing. */
+function created(first: WriteRecord): boolean {
+  return first.op === "create" && first.mayHaveExisted !== true;
+}
+
+/** The row's one merged record, or `undefined` for a row the unit created and deleted again. */
+function mergeRow(history: History): WriteRecord | undefined {
   const [first] = history;
+  if (created(first) && history[history.length - 1]?.op === "delete") {
+    return undefined;
+  }
   if (history.length === 1) {
     return first;
   }
   const op = finalOp(history);
-  const before =
-    first.op === "create"
-      ? undefined
-      : mergeValues(
-          history.map((record) => record.before),
-          true,
-        );
+  const before = created(first)
+    ? undefined
+    : mergeValues(
+        history.map((record) => record.before),
+        true,
+      );
   const after =
     op === "delete"
       ? undefined
@@ -103,7 +115,8 @@ function mergeRow(history: History): WriteRecord {
 
 /**
  * Merges a unit of work's writes into one record per row, in the order each
- * row was first written. See the rules at the top of this file.
+ * row was first written; a row the unit created and deleted again has none.
+ * See the rules at the top of this file.
  */
 export function mergeRecords(records: readonly WriteRecord[]): WriteRecord[] {
   const rows = new Map<string, [WriteRecord, ...WriteRecord[]]>();
@@ -116,5 +129,5 @@ export function mergeRecords(records: readonly WriteRecord[]): WriteRecord[] {
       history.push(record);
     }
   }
-  return [...rows.values()].map(mergeRow);
+  return [...rows.values()].flatMap((history) => mergeRow(history) ?? []);
 }

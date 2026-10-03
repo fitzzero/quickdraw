@@ -108,6 +108,26 @@ describe("flushWrites", () => {
     }
   });
 
+  it("calls no sink and takes no revision when the unit only created rows it deleted again", async () => {
+    const flush = vi.fn(() => Promise.resolve());
+    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    try {
+      const before = nextRev();
+      await flushWrites(
+        [
+          { model: "task", id: "t9", op: "create", fields: ["title"], after: { projectId: "p1" } },
+          { model: "task", id: "t9", op: "delete", fields: [], before: { projectId: "p1" } },
+        ],
+        scopeWith({ flush }),
+        captureLogger(),
+      );
+      expect(flush).not.toHaveBeenCalled();
+      expect(nextRev()).toBe(before + 1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("logs a failing sink with the rows it failed on, and never rejects", async () => {
     const logger = captureLogger();
     const sink: FlushSink = { flush: () => Promise.reject(new Error("socket gone")) };
