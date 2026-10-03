@@ -454,6 +454,51 @@ describe("definitions that fail to compile", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Collections: each one says how its scopes are authorized (RFC 0003 section 7.1).
+// ---------------------------------------------------------------------------
+
+const listed = defineContract("listedService", {
+  entity: taskSchema,
+  collections: { byProject: { scope: "projectId", item: "entity", order: [["id", "asc"]] } },
+});
+
+describe("collections", () => {
+  test("take an anchor contract or a self scope, and a bulk threshold", () => {
+    qd.defineService(listed, {
+      model: "task",
+      collections: { byProject: { anchor: project, bulkThreshold: 50 } },
+      methods: {},
+    });
+    qd.defineService(listed, {
+      model: "task",
+      collections: { byProject: { scopeAccess: "self" } },
+      methods: {},
+    });
+    qd.defineService(task, { methods: ok });
+  });
+
+  test("are required when the contract declares collections", () => {
+    // @ts-expect-error -- collections is missing
+    qd.defineService(listed, { model: "task", methods: {} });
+  });
+
+  test("need an anchor or a self scope, never both", () => {
+    qd.defineService(listed, {
+      model: "task",
+      // @ts-expect-error -- neither anchor nor scopeAccess
+      collections: { byProject: { bulkThreshold: 5 } },
+      methods: {},
+    });
+    qd.defineService(listed, {
+      model: "task",
+      // @ts-expect-error -- both anchor and scopeAccess
+      collections: { byProject: { anchor: project, scopeAccess: "self" } },
+      methods: {},
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The app's context extension, and the init options it requires.
 // ---------------------------------------------------------------------------
 

@@ -20,6 +20,8 @@
 // node broadcasts every access change it flushes (`serverSideEmit`), and each
 // node re-resolves its own sockets. A changed `serviceAccess`
 // (`server.access.refresh`) re-resolves the user's subscriptions the same way.
+// Collection scopes are authorized again alongside, through the hook the
+// collections give (`collections/revocation.ts`).
 
 import { SERVER_EVENTS, userRoom } from "../../contract/names";
 import type { AccessChange } from "../access/changes";
@@ -173,8 +175,16 @@ export interface Revocation {
   regranted(userId: string): Promise<void>;
 }
 
-/** The revocation of one dispatcher's subscriptions. */
-export function createRevocation(hub: Hub): Revocation {
+/** More subscriptions an access change re-resolves: the collection scopes. */
+export interface RevocationHook {
+  /** Re-resolves the subscriptions `change` concerns on this process. */
+  changed(change: AccessChange): Promise<void>;
+  /** Re-resolves every subscription of these sockets, whose user's grants changed. */
+  regranted(sockets: readonly QuickdrawServerSocket[]): Promise<void>;
+}
+
+/** The revocation of one dispatcher's subscriptions; `hook` re-resolves the collection scopes alongside. */
+export function createRevocation(hub: Hub, hook?: RevocationHook): Revocation {
   return Object.freeze({
     async changed(change: AccessChange, remote: boolean): Promise<void> {
       hub.subscriptions.accessChanges += 1;
@@ -182,7 +192,10 @@ export function createRevocation(hub: Hub): Revocation {
       if (!remote && io !== undefined && !hub.probe.local()) {
         io.serverSideEmit(ACCESS_CHANGED_EVENT, change);
       }
-      await reresolveAll(hub, hub.subscriptions.matching(change));
+      await Promise.all([
+        reresolveAll(hub, hub.subscriptions.matching(change)),
+        hook?.changed(change),
+      ]);
     },
     async regranted(userId: string): Promise<void> {
       hub.subscriptions.accessChanges += 1;
@@ -194,7 +207,7 @@ export function createRevocation(hub: Hub): Revocation {
           found.set(socket, [...hub.subscriptions.entries(socket)]);
         }
       }
-      await reresolveAll(hub, found);
+      await Promise.all([reresolveAll(hub, found), hook?.regranted([...found.keys()])]);
     },
   });
 }

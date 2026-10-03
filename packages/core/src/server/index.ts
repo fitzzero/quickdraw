@@ -23,6 +23,9 @@ export type {
 } from "./defineService";
 export type {
   AffectsOption,
+  CollectionOption,
+  CollectionOptions,
+  CollectionsRequired,
   HandlerOutputOf,
   HandlerRow,
   ProjectCheck,
@@ -36,6 +39,15 @@ export type { ProjectedOutput, Projection } from "./emit/projection";
 export type { TierGroup, Tiers } from "./emit/tiers";
 export type { ChangeLogOptions } from "./emit/changeLog";
 export type { EntitySubscription, EntitySubscriptions } from "./emit/subscriptions";
+
+// Collections: scopes, deltas, snapshots and resume (RFC 0003 section 7)
+export {
+  DEFAULT_BULK_THRESHOLD,
+  type CollectionScope,
+  type ServiceCollection,
+} from "./collections/define";
+export type { ScopeSubscription, ScopeSubscriptions } from "./collections/scopes";
+export { RESUME_MAX_AGE_MS, RESUME_MAX_DELTAS } from "./collections/buffer";
 export type {
   ContextExtensionOf,
   DbOf,
@@ -64,6 +76,7 @@ export {
   type ContractOfServices,
   type DbOfServices,
   type Dispatcher,
+  type DispatcherCollections,
   type DispatcherOptions,
   type PrincipalOfServices,
 } from "./dispatcher";

@@ -10,7 +10,13 @@
 // return what `map` takes.
 
 import type { AnyContract } from "../contract/defineContract";
-import type { MethodName, MethodOf, ProjectionName, ProjectionOf } from "../contract/infer";
+import type {
+  CollectionName,
+  MethodName,
+  MethodOf,
+  ProjectionName,
+  ProjectionOf,
+} from "../contract/infer";
 import type { NullableProjection, ProjectionList } from "../contract/methods";
 import type { InferOutput, StandardSchemaV1 } from "../contract/standardSchema";
 
@@ -92,6 +98,44 @@ export type HandlerOutputOf<
   M extends MethodName<C>,
   Proj = Record<never, never>,
 > = HandlerResult<C, MethodOf<C, M>["output"], Proj>;
+
+/**
+ * How one collection's scopes are authorized (RFC 0003 section 7.1), in
+ * `defineService`'s `collections` option.
+ *
+ * - `anchor`: the contract whose rows the scope values are ids of
+ *   (`{ anchor: project }` for a collection scoped by `projectId`). A
+ *   subscriber needs the collection's `access` level (default `Read`) on
+ *   that row, through its service's policy. Deleting the row closes its
+ *   scopes (`qd:revoked` with reason `"anchor-deleted"`).
+ * - `scopeAccess: "self"`: the scope value is the subscriber's own user id.
+ *
+ * A service-wide `Admin` grant on this service passes either check, as it
+ * passes every check of the service. `bulkThreshold` (default 200) is how
+ * many changed rows of one scope one flush may send as deltas; past it the
+ * scope gets one `reset` and its clients load it again.
+ */
+export type CollectionOption =
+  | {
+      readonly anchor: AnyContract;
+      readonly scopeAccess?: undefined;
+      readonly bulkThreshold?: number;
+    }
+  | {
+      readonly scopeAccess: "self";
+      readonly anchor?: undefined;
+      readonly bulkThreshold?: number;
+    };
+
+/** `defineService`'s `collections` option: one entry per collection of the contract. */
+export type CollectionOptions<C extends AnyContract> = {
+  readonly [Name in CollectionName<C>]: CollectionOption;
+};
+
+/** `{ collections }` is required when the contract declares collections: a scope must say who may read it. */
+export type CollectionsRequired<C extends AnyContract> = [CollectionName<C>] extends [never]
+  ? unknown
+  : { readonly collections: unknown };
 
 /**
  * One `affects` entry (RFC 0003 sections 3 and 5.3): a write to a row of the

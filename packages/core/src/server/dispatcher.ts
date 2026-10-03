@@ -48,6 +48,24 @@ export type DispatcherOptions<S extends readonly AnyService[]> = PipelineOptions
     ? { readonly db?: DbOfServices<S> }
     : { readonly db: DbOfServices<S> });
 
+/** `dispatcher.collections` and `qd.collections`: the services' collections (RFC 0003 section 7). */
+export interface DispatcherCollections {
+  /**
+   * Sends one scope of a collection a `reset`, so its clients load it again:
+   * for a change tracked writes cannot describe, such as a raw SQL write the
+   * app did not `ctx.touch`. Throws a `TypeError` for a collection this
+   * dispatcher does not serve.
+   *
+   * @example
+   * qd.collections.reset(task, "byProject", projectId);
+   */
+  reset<C extends AnyContract>(
+    contract: C,
+    collection: keyof C["collections"] & string,
+    scope: string,
+  ): void;
+}
+
 /** A registry of services and the method pipeline that serves them. */
 export interface Dispatcher<S extends readonly AnyService[] = readonly AnyService[]> {
   /**
@@ -76,6 +94,8 @@ export interface Dispatcher<S extends readonly AnyService[] = readonly AnyServic
    * on rows, list filters, and access-change events.
    */
   readonly access: DispatcherAccess;
+  /** The services' collections: a manual `reset`. Deltas themselves come from tracked writes. */
+  readonly collections: DispatcherCollections;
   readonly registry: Registry;
   /** The resolved limits, for a server to announce in `qd:hello`. */
   readonly limits: DispatcherLimits;
@@ -130,6 +150,11 @@ export function createDispatcher<const S extends readonly AnyService[]>(
       createCaller(() => call, principal) as Caller<ContractOfServices<S>>,
     run: <T>(fn: () => T | PromiseLike<T>) => runInUnit(settings, fn),
     access: Object.freeze({ levelsFor, accessWhere, onAccessChanged }),
+    collections: Object.freeze({
+      reset: (contract: AnyContract, collection: string, scope: string) => {
+        settings.live.resetCollection(contract, collection, scope);
+      },
+    }),
     registry,
     limits: settings.limits,
   });

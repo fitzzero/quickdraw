@@ -35,7 +35,13 @@ import type { ModelColumn, ModelName, PolicyFor } from "./access/policy";
 import type { AccessFor, CustomAccess, PublicAccess, RowForms } from "./access/types";
 import type { HandlerArgs, HandlerContext } from "./context";
 import type { Service, ShareMode } from "./service";
-import type { AffectsOption, HandlerOutputOf, ProjectCheck } from "./serviceTypes";
+import type {
+  AffectsOption,
+  CollectionOptions,
+  CollectionsRequired,
+  HandlerOutputOf,
+  ProjectCheck,
+} from "./serviceTypes";
 import type { DbOf, MaybePromise, PrincipalOf, QuickdrawTypes } from "./types";
 
 type Empty = Record<never, never>;
@@ -190,6 +196,14 @@ export interface ServiceDefinition<
    * answers.
    */
   readonly versionColumn?: ColumnOf<T, Model>;
+  /**
+   * How each collection of the contract authorizes its scopes (RFC 0003
+   * section 7.1): `{ anchor: contract }`, the contract whose rows the scope
+   * values are ids of, or `{ scopeAccess: "self" }` for a scope that is the
+   * subscriber's user id; plus `bulkThreshold`. Required when the contract
+   * declares collections. Needs `model`.
+   */
+  readonly collections?: CollectionOptions<C>;
   /** One implementation per contract method: no more, no fewer. */
   readonly methods: {
     readonly [M in keyof A]: M extends MethodName<C>
@@ -216,5 +230,5 @@ export type DefineService<T extends QuickdrawTypes> = <
   const Proj = Empty,
 >(
   contract: C,
-  definition: ServiceDefinition<T, C, A, Model, Policy, Proj>,
+  definition: ServiceDefinition<T, C, A, Model, Policy, Proj> & CollectionsRequired<C>,
 ) => Service<T, C>;

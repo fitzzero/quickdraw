@@ -4,6 +4,7 @@
 import type { DefaultEventsMap, Server, Socket } from "socket.io";
 import type { Logger } from "../../contract/logger";
 import type { PROTOCOL_VERSION } from "../../protocol/version";
+import type { ScopeSubscriptions } from "../collections/scopes";
 import type { Dispatcher } from "../dispatcher";
 import type { EntitySubscriptions } from "../emit/subscriptions";
 import type { Principal } from "../types";
@@ -23,6 +24,12 @@ export interface QuickdrawSocketData<P extends Principal = Principal> {
    * (RFC 0003 section 4.4). Plain data; the server keeps it.
    */
   entities?: EntitySubscriptions;
+  /**
+   * The socket's collection subscriptions (`qd:col:sub`), by room: the scope
+   * and the rows its access is derived from (RFC 0003 sections 4.4 and 7).
+   * Plain data; the server keeps it.
+   */
+  collections?: ScopeSubscriptions;
 }
 
 /** The Socket.IO server `createServer` returns. Events are untyped, so apps may emit their own. */

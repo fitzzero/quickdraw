@@ -8,6 +8,7 @@ import type { StandardSchemaV1 } from "../contract/standardSchema";
 import type { Version } from "../protocol/envelope";
 import type { AnyAccessPolicy } from "./access/policy";
 import type { AccessForm } from "./access/types";
+import type { ServiceCollection } from "./collections/define";
 import type { AnyContext, ContextExtender } from "./context";
 import type { ProjectedOutput, Projection } from "./emit/projection";
 import type { MaybePromise, QuickdrawTypes } from "./types";
@@ -92,6 +93,8 @@ export interface Service<
   readonly versionColumn: string | undefined;
   /** The contract's projections (`"entity"` and the named ones), compiled with the service's `project` option. */
   readonly projections: ReadonlyMap<string, Projection>;
+  /** The contract's collections, compiled with the service's `collections` option (RFC 0003 section 7.1). */
+  readonly collections: ReadonlyMap<string, ServiceCollection>;
   /** Whether a service-wide `Admin` grant passes every access check of this service. */
   readonly adminBypass: boolean;
   /** The checked method records, by method name. */

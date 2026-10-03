@@ -7,6 +7,7 @@ import type { AnyContract } from "../contract/defineContract";
 import type { MethodDef } from "../contract/methods";
 import { accessFormProblem, isCustomAccess } from "./access/forms";
 import type { AccessForm } from "./access/types";
+import { compileCollections } from "./collections/define";
 import { compileProjections, projectedOutput, type Projection } from "./emit/projection";
 import { MAX_TIMEOUT_MS } from "./pipeline/settings";
 import { outputSchemaOf } from "./pipeline/validation";
@@ -30,6 +31,7 @@ const DEFINITION_KEYS = new Set([
   "affects",
   "project",
   "versionColumn",
+  "collections",
   "methods",
   "adminBypass",
 ]);
@@ -215,6 +217,13 @@ export function buildService(
   }
   const data = checkServiceData(definition, fail);
   const projections = compileProjections(checked, definition.project, fail);
+  const collections = compileCollections(
+    checked,
+    projections,
+    data.model,
+    definition.collections,
+    fail,
+  );
   const methods = checkMethods(checked, projections, definition.methods, fail);
   checkRowForms(methods, data, fail);
   const service: AnyService = Object.freeze({
@@ -222,6 +231,7 @@ export function buildService(
     contract: checked,
     ...data,
     projections,
+    collections,
     adminBypass,
     methods: Object.freeze(methods),
   });
