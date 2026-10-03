@@ -224,3 +224,45 @@ describe("createMockClient", () => {
     expect(screen.getByText("loading")).toBeTruthy();
   });
 });
+
+describe("after each test", () => {
+  // Made while the file is collected, as an app's test module makes its mock.
+  const qd = createMockClient({ task });
+  const kept = createMockClient({ task }, { resetAfterEach: false });
+
+  function Row() {
+    const row = qd.task.useEntity("t1");
+    return <p>{row.isLoading ? "row loading" : `row ${row.data?.title ?? "-"}`}</p>;
+  }
+
+  it("sets answers, calls, rows, scopes and results, and leaves Row mounted", async () => {
+    qd.task.get.mockResolvedValue(cardOf("t1", "First"));
+    qd.task.useEntity.mockRow(cardOf("t1", "First"));
+    qd.task.board.mockScope("p1", [cardOf("t1", "First")]);
+    await qd.task.get.prefetch(qd.$queryClient, { id: "t1" });
+    kept.task.get.mockResolvedValue(cardOf("t1", "Kept"));
+    await kept.task.get.call({ id: "t1" });
+    render(<Row />);
+    await screen.findByText("row First");
+    expect(qd.task.get.calls).toHaveLength(1);
+  });
+
+  it("finds them forgotten: the mock reset itself after the last test", async () => {
+    expect(qd.task.get.calls).toEqual([]);
+    expect(qd.$queryClient.getQueryCache().getAll()).toEqual([]);
+    render(<Row />);
+    expect(screen.getByText("row loading")).toBeTruthy();
+    let settled = false;
+    void qd.task.get.call({ id: "t1" }).then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    // The stub's answer is gone too: a call waits for one.
+    expect(settled).toBe(false);
+    // A mock made with resetAfterEach: false keeps what it was given.
+    expect(kept.task.get.calls).toEqual([{ id: "t1" }]);
+    await expect(kept.task.get.call({ id: "t1" })).resolves.toMatchObject({ title: "Kept" });
+  });
+});

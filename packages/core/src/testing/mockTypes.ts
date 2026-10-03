@@ -113,7 +113,8 @@ export type MockClient<Contracts extends ContractMap> = {
   readonly $queryClient: QueryClient;
   /**
    * Forgets every answer set, call recorded, row, scope and cached result;
-   * for a `beforeEach`, while nothing is mounted.
+   * for a `beforeEach`, while nothing is mounted. The mock does the same on
+   * its own after each test, unless it was made with `resetAfterEach: false`.
    */
   $reset(): void;
 };
@@ -124,4 +125,12 @@ export interface MockClientOptions {
   readonly queryClient?: QueryClient;
   /** The user views select members for (`who.userId`), as a connection's hello names it. Default `""`. */
   readonly userId?: string;
+  /**
+   * Default `true`: when the test runner has a global `afterEach` (vitest
+   * with `globals: true`, jest), the mock registers a reset with it when it
+   * is made, so each test starts with no answers, calls, rows, scopes or
+   * cached results, as Testing Library unmounts after each test. `false`
+   * leaves resetting to `$reset()`.
+   */
+  readonly resetAfterEach?: boolean;
 }

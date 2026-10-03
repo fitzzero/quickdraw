@@ -41,8 +41,8 @@ export interface MockStore {
   setRow(service: string, id: string, state: RowState): void;
   scope(service: string, collection: string, scope: string): ScopeState | undefined;
   setScope(service: string, collection: string, scope: string, state: ScopeState): void;
-  /** Forgets every row and scope. */
-  clear(): void;
+  /** Forgets every row and scope; `quiet` tells no hook that shows them (they are about to unmount). */
+  clear(quiet?: boolean): void;
 }
 
 function keyOf(...parts: readonly string[]): string {
@@ -84,10 +84,14 @@ export function createMockStore(): MockStore {
       scopes.set(keyOf(service, collection, scope), state);
       changed();
     },
-    clear() {
+    clear(quiet = false) {
       rows.clear();
       scopes.clear();
-      changed();
+      if (quiet) {
+        views.clear();
+      } else {
+        changed();
+      }
     },
   };
 }

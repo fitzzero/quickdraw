@@ -17,6 +17,9 @@
 //   (`mockLive.ts`).
 // - `qd.invalidate` invalidates the mock's cache through an invalidation
 //   coordinator, as the real client does.
+// - Everything set is forgotten after each test, when the test runner has a
+//   global `afterEach` (as Testing Library unmounts after each test), and by
+//   `$reset()`.
 
 import { QueryClient, useMutation, useQuery, type QueryKey } from "@tanstack/react-query";
 import { createBinding, invalidateWith, registerQuery, type Binding } from "../client/binding";
@@ -38,6 +41,8 @@ type Answer =
 /** A method's stub: its controls, and the call that answers as they say. */
 interface Stub extends MethodStub<unknown, unknown> {
   invoke(input: unknown): Promise<unknown>;
+  /** Forgets its answer and its calls without refetching anything: the test is over. */
+  forget(): void;
 }
 
 const PENDING: Answer = Object.freeze({ kind: "pending" });
@@ -82,6 +87,10 @@ function createStub(changed: () => void): Stub {
     mockReset: () => {
       calls.length = 0;
       answerWith(PENDING);
+    },
+    forget: () => {
+      calls.length = 0;
+      answer = PENDING;
     },
     get calls() {
       return [...calls];
@@ -205,11 +214,52 @@ function stubMaker(queryClient: QueryClient, stubs: Stub[]): (target: MethodTarg
 }
 
 /**
+ * Forgets everything set on a mock: answers, calls, rows, scopes and cached
+ * results. `quiet` tells no mounted hook, for the reset after a test, which
+ * may run before Testing Library unmounts what the test rendered.
+ */
+function resetMock(
+  queryClient: QueryClient,
+  store: ReturnType<typeof createMockStore>,
+  stubs: readonly Stub[],
+  quiet: boolean,
+): void {
+  queryClient.clear();
+  store.clear(quiet);
+  for (const stub of stubs) {
+    if (quiet) {
+      stub.forget();
+    } else {
+      stub.mockReset();
+    }
+  }
+}
+
+/**
+ * Runs `reset` after each test when the test runner has a global
+ * `afterEach` (vitest with `globals: true`, jest), as Testing Library
+ * registers its cleanup. A runner that takes no hook where the mock is made
+ * (inside a test) leaves it to `$reset()`.
+ */
+function resetAfterEachTest(reset: () => void): void {
+  const runnerAfterEach: unknown = (globalThis as { readonly afterEach?: unknown }).afterEach;
+  if (typeof runnerAfterEach !== "function") {
+    return;
+  }
+  try {
+    (runnerAfterEach as (hook: () => void) => void)(reset);
+  } catch {
+    // No hook can be registered here; `$reset()` still forgets everything.
+  }
+}
+
+/**
  * Creates a mock client of `contracts`: the type of
  * `createQuickdrawClient(contracts)`, with every member a stub and no
  * transport behind it, for component tests. A call stays pending until the
  * test sets its answer; a row or a scope stays loading until the test sets
- * it. No provider is needed above the components.
+ * it. No provider is needed above the components. Everything set is
+ * forgotten after each test (see `resetAfterEach`).
  *
  * @example
  * const qd = createMockClient({ task });
@@ -245,13 +295,14 @@ export function createMockClient<const Contracts extends ContractMap>(
     $queryClient: { value: queryClient },
     $reset: {
       value: (): void => {
-        queryClient.clear();
-        store.clear();
-        for (const stub of stubs) {
-          stub.mockReset();
-        }
+        resetMock(queryClient, store, stubs, false);
       },
     },
   });
+  if (options.resetAfterEach !== false) {
+    resetAfterEachTest(() => {
+      resetMock(queryClient, store, stubs, true);
+    });
+  }
   return Object.freeze(client) as MockClient<Contracts>;
 }
