@@ -22,7 +22,7 @@ export interface ServiceData {
   readonly writes: readonly string[];
   readonly affects: readonly AffectsLink[];
   readonly versionColumn: string | undefined;
-  readonly watchAccess: WatchAccess;
+  readonly watchAccess: WatchAccess | undefined;
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -98,10 +98,10 @@ function checkWrites(value: unknown, fail: Fail): readonly string[] {
   return Object.freeze([...(value as readonly string[])]);
 }
 
-/** `watchAccess`: `"public"`, `"authenticated"` (the default) or `{ service: level }`. */
-function checkWatchAccess(value: unknown, fail: Fail): WatchAccess {
+/** `watchAccess`: `"public"`, `"authenticated"` or `{ service: level }`; none keeps the service topic closed. */
+function checkWatchAccess(value: unknown, fail: Fail): WatchAccess | undefined {
   if (value === undefined) {
-    return "authenticated";
+    return undefined;
   }
   if (value === "public" || value === "authenticated") {
     return value;

@@ -98,7 +98,7 @@ function refused(code: string) {
 
 describe("qd:changed", () => {
   it("is sent once per flush per watched topic, ten writes in one method included, with no data", async () => {
-    const { app } = await start();
+    const { app } = await start({ watchAccess: "authenticated" });
     const { connection, scopes } = await connect(app, as(board.ada));
     expect(await watch(connection, `board:${board.p1}`)).toEqual(ok);
     expect(await watch(connection, "service")).toEqual(ok);
@@ -135,7 +135,7 @@ describe("qd:changed", () => {
   });
 
   it("is sent for a scope closed by deleting its anchor row, and for a via scope's junction writes", async () => {
-    const { app } = await start();
+    const { app } = await start({ watchAccess: "authenticated" });
     const label = await h.prisma.label.create({ data: { projectId: board.p1, name: "Bug" } });
     const { connection, scopes } = await connect(app, as(board.ada));
     await watch(connection, `byLabel:${label.id}`);
@@ -249,8 +249,28 @@ describe("qd:watch", () => {
     expect([...member.scopes.frames, ...owner.scopes.frames]).toEqual([]);
   });
 
-  it("authorizes the service topic by watchAccess: authenticated by default", async () => {
+  it("keeps the service topic closed without watchAccess: it would tell anyone when other tenants' rows change", async () => {
     const { app } = await start();
+    const closed = {
+      ok: false,
+      e: {
+        code: "FORBIDDEN",
+        message: "taskService keeps its service topic closed: it declares no watchAccess",
+      },
+    };
+    const anonymous = await connect(app, null);
+    expect(await watch(anonymous.connection, "service")).toEqual(closed);
+    const owner = await connect(app, as(board.ada));
+    expect(await watch(owner.connection, "service")).toEqual(closed);
+    const admin = await connect(app, as(board.ed, { taskService: "Admin" }));
+    expect(await watch(admin.connection, "service")).toEqual(closed);
+    expect(inTopic(app, "service")).toBe(0);
+    // A scope's topic stays open to whoever may subscribe to the scope.
+    expect(await watch(owner.connection, `board:${board.p1}`)).toEqual(ok);
+  });
+
+  it("authorizes the service topic for any signed-in user with watchAccess: authenticated", async () => {
+    const { app } = await start({ watchAccess: "authenticated" });
     const anonymous = await connect(app, null);
     expect(await watch(anonymous.connection, "service")).toEqual(refused("UNAUTHENTICATED"));
     const anyone = await connect(app, as(board.ed));
@@ -278,7 +298,7 @@ describe("qd:watch", () => {
   });
 
   it("refuses malformed frames as VALIDATION and unknown topics as NOT_FOUND", async () => {
-    const { app } = await start();
+    const { app } = await start({ watchAccess: "authenticated" });
     const { connection } = await connect(app, as(board.ada));
     const frame = (value: unknown) => emitWithAck(connection.socket, "qd:watch", value);
     const invalid = (path: string) => ({
@@ -444,8 +464,9 @@ describe("definition", () => {
     expect(() => defineLoosely(taskContract, definition)).not.toThrow();
   });
 
-  it("takes watchAccess as public, authenticated or a service grant, authenticated by default", () => {
-    expect(defineTaskService().watchAccess).toBe("authenticated");
+  it("takes watchAccess as public, authenticated or a service grant, and none by default", () => {
+    expect(defineTaskService().watchAccess).toBeUndefined();
+    expect(defineTaskService({ watchAccess: "authenticated" }).watchAccess).toBe("authenticated");
     expect(defineTaskService({ watchAccess: "public" }).watchAccess).toBe("public");
     expect(defineTaskService({ watchAccess: { service: "Read" } }).watchAccess).toEqual({
       service: "Read",

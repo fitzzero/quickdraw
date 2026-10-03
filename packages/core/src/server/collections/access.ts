@@ -11,7 +11,8 @@
 //
 // A change topic (RFC 0003 section 11.3) is watched on the same terms: a
 // collection scope's topic exactly as a subscribe to that scope, and a
-// service's topic by the service's `watchAccess`.
+// service's topic by the service's `watchAccess`, closed to everyone when
+// the service declares none.
 
 import { QuickdrawError } from "../../protocol/errors";
 import { meetsLevel, serviceGrant } from "../access/levels";
@@ -67,9 +68,12 @@ export async function authorizeScopes(
   return allowed;
 }
 
-/** True when the service's `watchAccess` lets the principal watch its topic. */
+/** True when the service's `watchAccess` lets the principal watch its topic; never without one. */
 function mayWatchService(service: BoundCollection["service"], principal: Principal): boolean {
   const form = service.watchAccess;
+  if (form === undefined) {
+    return false;
+  }
   if (form === "public" || form === "authenticated") {
     return true;
   }
@@ -88,6 +92,12 @@ export async function authorizeWatch(
   principal: Principal | null,
   target: WatchTarget,
 ): Promise<readonly string[]> {
+  if (target.kind === "service" && target.service.watchAccess === undefined) {
+    throw new QuickdrawError(
+      "FORBIDDEN",
+      `${target.service.name} keeps its service topic closed: it declares no watchAccess`,
+    );
+  }
   if (target.kind === "service" && target.service.watchAccess === "public") {
     return [];
   }

@@ -95,8 +95,11 @@ export interface Service<
   readonly projections: ReadonlyMap<string, Projection>;
   /** The contract's collections, compiled with the service's `collections` option (RFC 0003 section 7.1). */
   readonly collections: ReadonlyMap<string, ServiceCollection>;
-  /** Who may watch the service's change topic (RFC 0003 section 11.3); `"authenticated"` unless the service set it. */
-  readonly watchAccess: WatchAccess;
+  /**
+   * Who may watch the service's change topic (RFC 0003 section 11.3);
+   * `undefined` when the service set none: the topic is closed to everyone.
+   */
+  readonly watchAccess: WatchAccess | undefined;
   /** Whether a service-wide `Admin` grant passes every access check of this service. */
   readonly adminBypass: boolean;
   /** The checked method records, by method name. */

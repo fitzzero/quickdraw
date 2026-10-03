@@ -208,8 +208,10 @@ export interface ServiceDefinition<
    * Who may watch the service's change topic, `qd:watch { s, topic:
    * "service" }`, which changes on every flush that touches one of its rows
    * or collection scopes (RFC 0003 section 11.3): `"public"`,
-   * `"authenticated"` (the default) or `{ service: level }`. A collection
-   * scope's topic is authorized as a subscribe to that scope instead.
+   * `"authenticated"` or `{ service: level }`. Without it the topic is
+   * closed (`FORBIDDEN`): it would tell any watcher when rows it may not
+   * read change, other tenants' included. A collection scope's topic is
+   * authorized as a subscribe to that scope instead.
    */
   readonly watchAccess?: WatchAccess;
   /** One implementation per contract method: no more, no fewer. */

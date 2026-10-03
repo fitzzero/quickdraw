@@ -14,8 +14,9 @@
 // - `{collection}:{scope}` exactly as `qd:col:sub` of that scope is
 //   (`collections/access.ts`): `UNAUTHENTICATED` for an anonymous socket,
 //   `FORBIDDEN` for a scope the principal may not subscribe to;
-// - `service` by the service's `watchAccess`, `"authenticated"` unless it
-//   sets `"public"` or `{ service: level }`.
+// - `service` by the service's `watchAccess` (`"public"`, `"authenticated"`
+//   or `{ service: level }`); without one the topic is closed, `FORBIDDEN`
+//   for everyone, since it changes whenever any row of the service does.
 //
 // A malformed frame is `VALIDATION`, an unknown service or collection (or a
 // service without a model, whose rows never change) `NOT_FOUND`.

@@ -189,8 +189,8 @@ await qd.run(() => db.task.updateMany({ where: { dueAt: { lt: now } }, data: { l
   through untracked, with one warning.
 
 `createRecordingSink()` on `./testing` records what is flushed, for tests.
-Entity frames are built on these flushes (below); collection deltas arrive
-with a later 5.0 card.
+Entity frames, collection deltas and change topics are built on these
+flushes (below).
 
 ### Access control
 
@@ -308,6 +308,46 @@ export const taskService = qd.defineService(task, {
 - Behind a cluster adapter (`setupRedisAdapter`), every touched row is read
   and sent, since other nodes' rooms are not visible, and access changes and
   refreshed grants are broadcast to every node.
+
+### Collections and change topics
+
+A collection is the rows of one service grouped by a scope value (design:
+`docs/rfcs/0003-v5.md`, section 7). The contract declares it; the service
+says whose policy authorizes a scope:
+
+```typescript
+export const taskService = qd.defineService(task, {
+  model: "task",
+  access: inherit({ from: project, via: "projectId" }), // derived from the anchor: see below
+  collections: { byProject: { anchor: project }, mine: { scopeAccess: "self" } },
+  watchAccess: { service: "Read" }, // opens the service topic to Read grants; closed without it
+  methods: {
+    /* ... */
+  },
+});
+```
+
+- `qd:col:sub { s, c, scope }` authorizes the scope through its anchor's
+  policy (the collection's `access` level, `Read` by default), then answers a
+  page and joins the scope's room; flushes send `qd:c` deltas to it. A
+  `"self"` scope is the subscriber's own user id: its items are stripped at
+  `Read`, and it may not declare a higher `access`.
+- Items are visible to everyone in the scope: no per-row policy or field
+  tier applies inside a collection. Derive the item service's own access
+  from the anchor (`inherit` from it, as above): a per-row policy on the
+  item service (an owner column, a row's access list) is not applied to
+  collection items, so a row it would hide still reaches everyone in its
+  scope.
+- `qd:watch { s, topic }` joins a change topic: `{collection}:{scope}`,
+  authorized like a subscribe to that scope, or `service`, which changes
+  whenever any row of the service does. The service topic is closed
+  (`FORBIDDEN`) unless the service declares `watchAccess` (`"public"`,
+  `"authenticated"` or `{ service: level }`). A watcher that loses access
+  leaves the topic after one last `qd:changed`.
+- The socket rate limiter does not count subscription events; each socket
+  runs `qd:sub`, `qd:col:sub`, `qd:col:items` and `qd:watch` in a lane
+  instead: `limits.subscriptions` (8 at once, 64 waiting), then
+  `RATE_LIMITED`.
 
 ### Testing
 

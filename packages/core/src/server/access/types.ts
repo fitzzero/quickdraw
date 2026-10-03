@@ -92,8 +92,9 @@ export interface CustomAccess<Input = never, Ctx = never> {
 /**
  * Who may watch a service's change topic, `qd:watch { s, topic: "service" }`
  * (RFC 0003 section 11.3): the forms that need neither a row nor an input.
- * A service sets it with `defineService`'s `watchAccess`; the default is
- * `"authenticated"`.
+ * A service sets it with `defineService`'s `watchAccess`; without it the
+ * topic is closed: it changes whenever any row of the service does, so a
+ * signed-in user would learn when rows of other tenants change.
  */
 export type WatchAccess = PublicAccess | AuthenticatedAccess | ServiceAccess;
 
