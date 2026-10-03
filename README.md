@@ -536,10 +536,16 @@ const { items, isSearching } = qd.task.search.useSearch(text, { scope: projectId
   ...search.handlers(task, {
     access: "authenticated",
     strategy: {
-      // Prisma cannot filter on a tsvector column: find the ids with SQL
-      where: async (q) => {
+      // Prisma cannot filter on a tsvector column: find the ids with SQL. Keep
+      // to the caller's rows (here, their projects' tasks) before LIMIT, so
+      // other users' matches never fill the 1,000; the kit's access filter
+      // still applies to what comes back.
+      where: async (q, ctx) => {
         const rows = await prisma.$queryRaw<{ id: string }[]>`
-          SELECT id FROM "Task" WHERE "searchVector" @@ websearch_to_tsquery('english', ${q})
+          SELECT t.id FROM "Task" t
+          JOIN "ProjectMember" m ON m."projectId" = t."projectId"
+          WHERE m."userId" = ${ctx.principal.userId}
+            AND t."searchVector" @@ websearch_to_tsquery('english', ${q})
           LIMIT 1000`;
         return { id: { in: rows.map((row) => row.id) } };
       },
