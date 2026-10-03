@@ -11,8 +11,10 @@
 // The adapter probe tells the live data whether rooms are local: true while
 // the server runs the in-memory adapter it was created with.
 
+import type { Logger } from "../../contract/logger";
 import { SERVER_EVENTS, userRoom } from "../../contract/names";
 import type { AdapterProbe } from "../emit/hub";
+import { describeError } from "../pipeline/metrics";
 import type { ServerAuth, ServiceGrants } from "./auth";
 import type { SocketExtension } from "./socketio";
 import type { QuickdrawIo } from "./types";
@@ -58,7 +60,7 @@ function regrant(io: QuickdrawIo, userId: string, serviceAccess: ServiceGrants):
 }
 
 /** Listens for grants other nodes reloaded, and applies them to this node's sockets. */
-export function listenForGrants(io: QuickdrawIo, live: LiveData | undefined): void {
+export function listenForGrants(io: QuickdrawIo, live: LiveData | undefined, logger: Logger): void {
   io.on(GRANTS_EVENT, (broadcast: unknown) => {
     const { userId, serviceAccess } = (broadcast ?? {}) as {
       readonly userId?: unknown;
@@ -67,7 +69,13 @@ export function listenForGrants(io: QuickdrawIo, live: LiveData | undefined): vo
     const grants = typeof serviceAccess === "object" && serviceAccess !== null;
     if (typeof userId === "string" && userId.length > 0 && grants) {
       regrant(io, userId, serviceAccess as ServiceGrants);
-      void live?.regranted(userId);
+      live?.regranted(userId).catch((error: unknown) => {
+        logger.error("Resolving the subscriptions of a user another node regranted failed", {
+          category: "quickdraw.access",
+          userId,
+          error: describeError(error),
+        });
+      });
     }
   });
 }

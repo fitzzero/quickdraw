@@ -161,7 +161,9 @@ describe("qd:changed", () => {
     );
     await scopes.settle();
     expect(scopes.changed).toEqual([]);
-    expect(await unwatch(connection, "nope:x", "noService")).toEqual(ok);
+    // Checked as qd:watch is: an unknown service or collection is NOT_FOUND.
+    expect(await unwatch(connection, "nope:x", "noService")).toEqual(refused("NOT_FOUND"));
+    expect(await unwatch(connection, "nope:x")).toEqual(refused("NOT_FOUND"));
     expect(await emitWithAck(connection.socket, "qd:unwatch", { s: "taskService" })).toMatchObject(
       refused("VALIDATION"),
     );

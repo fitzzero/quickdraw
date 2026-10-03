@@ -6,12 +6,33 @@
 // source of truth for who receives frames: nothing here is read to emit, and
 // 4.1's per-entity `subscribers` map (`legacy-src/server/BaseService.ts:86-89`)
 // is not kept.
+//
+// Services and ids come from client frames, so the records are kept in
+// objects without a prototype and read only through their own keys: a frame
+// naming `__proto__` or `constructor` finds nothing (`ownRecord`).
 
 import type { AccessLevel } from "../../contract/access";
 import { entityRoom } from "../../contract/names";
 import type { AccessChange } from "../access/changes";
 import { anchorKey } from "../access/tools";
 import type { QuickdrawServerSocket } from "../transports/types";
+
+/**
+ * `records[key]` when `records` holds `key` itself, never through its
+ * prototype: client frames name the keys of per-socket records, and a key
+ * like `__proto__`, `constructor` or `toString` must find nothing.
+ */
+export function ownRecord<T>(
+  records: Readonly<Record<string, T>> | undefined,
+  key: string,
+): T | undefined {
+  return records !== undefined && Object.hasOwn(records, key) ? records[key] : undefined;
+}
+
+/** An empty record map without a prototype, so no key a client names is found on it. */
+export function emptyRecords<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
 
 /** One live subscription, as `socket.data.entities[service][id]` records it. */
 export interface EntitySubscription {
@@ -21,7 +42,10 @@ export interface EntitySubscription {
   readonly anchors: readonly string[];
 }
 
-/** `socket.data.entities`: a socket's subscriptions, by service, then row id. Plain data. */
+/**
+ * `socket.data.entities`: a socket's subscriptions, by service, then row id.
+ * Plain data, in objects without a prototype; read it with `ownRecord`.
+ */
 export type EntitySubscriptions = Record<string, Record<string, EntitySubscription>>;
 
 /** One subscription of a socket, with the row it is on. */
@@ -68,7 +92,7 @@ export class SubscriptionIndex {
 
   /** The socket's subscription to a row, or `undefined`. */
   get(socket: QuickdrawServerSocket, service: string, id: string): EntitySubscription | undefined {
-    return socket.data.entities?.[service]?.[id];
+    return ownRecord(ownRecord(socket.data.entities, service), id);
   }
 
   /** Every subscription of the socket. */
@@ -94,9 +118,10 @@ export class SubscriptionIndex {
         void socket.leave(entityRoom(service, id, previous.level));
       }
     }
-    socket.data.entities ??= {};
-    socket.data.entities[service] ??= {};
-    socket.data.entities[service][id] = subscription;
+    const services = (socket.data.entities ??= emptyRecords());
+    const rows = ownRecord(services, service) ?? emptyRecords<EntitySubscription>();
+    services[service] = rows;
+    rows[id] = subscription;
     this.#index(socket, subscription.anchors, 1);
     void socket.join(entityRoom(service, id, subscription.level));
   }
@@ -113,7 +138,7 @@ export class SubscriptionIndex {
     }
     this.#index(socket, previous.anchors, -1);
     void socket.leave(entityRoom(service, id, previous.level));
-    const rows = socket.data.entities?.[service];
+    const rows = ownRecord(socket.data.entities, service);
     if (rows !== undefined) {
       delete rows[id];
     }
@@ -139,7 +164,7 @@ export class SubscriptionIndex {
     for (const { subscription } of this.entries(socket)) {
       this.#index(socket, subscription.anchors, -1);
     }
-    socket.data.entities = {};
+    socket.data.entities = emptyRecords();
   }
 
   /**

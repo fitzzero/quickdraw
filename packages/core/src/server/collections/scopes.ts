@@ -11,6 +11,7 @@
 import { collectionRoom } from "../../contract/names";
 import type { AccessChange } from "../access/changes";
 import { anchorKey } from "../access/tools";
+import { emptyRecords, ownRecord } from "../emit/subscriptions";
 import type { QuickdrawServerSocket } from "../transports/types";
 
 /** One live collection subscription, as `socket.data.collections[room]` records it. */
@@ -24,7 +25,10 @@ export interface ScopeSubscription {
   readonly anchors: readonly string[];
 }
 
-/** `socket.data.collections`: a socket's collection subscriptions, by room name. Plain data. */
+/**
+ * `socket.data.collections`: a socket's collection subscriptions, by room
+ * name. Plain data, in an object without a prototype, read by own keys only.
+ */
 export type ScopeSubscriptions = Record<string, ScopeSubscription>;
 
 /** Told when a scope gains its first subscriber here, and loses its last. */
@@ -102,7 +106,7 @@ export class ScopeIndex {
 
   /** The socket's subscription to a scope, by room, or `undefined`. */
   get(socket: QuickdrawServerSocket, room: string): ScopeSubscription | undefined {
-    return socket.data.collections?.[room];
+    return ownRecord(socket.data.collections, room);
   }
 
   /** Every collection subscription of the socket. */
@@ -114,7 +118,7 @@ export class ScopeIndex {
   set(socket: QuickdrawServerSocket, subscription: ScopeSubscription): void {
     const room = roomOf(subscription);
     const previous = this.get(socket, room);
-    socket.data.collections ??= {};
+    socket.data.collections ??= emptyRecords();
     socket.data.collections[room] = subscription;
     this.#index(socket, subscription, 1);
     if (previous !== undefined) {
@@ -156,7 +160,7 @@ export class ScopeIndex {
     for (const subscription of this.entries(socket)) {
       this.#index(socket, subscription, -1);
     }
-    socket.data.collections = {};
+    socket.data.collections = emptyRecords();
   }
 
   /** The scopes of a collection that sockets of this process subscribe to. */

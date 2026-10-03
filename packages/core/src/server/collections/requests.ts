@@ -11,8 +11,8 @@
 // has not subscribed is `FORBIDDEN`, and more than 200 ids are `VALIDATION`,
 // as more than 500 are for `qd:sub`.
 
-import type { CollectionItemsReply, Failure, Ok } from "../../protocol/envelope";
-import { QuickdrawError, toWire } from "../../protocol/errors";
+import type { CollectionItemsReply, Ok } from "../../protocol/envelope";
+import { QuickdrawError } from "../../protocol/errors";
 import { liveService } from "../emit/hub";
 import type { StorageAdapter } from "../storage";
 import { unreadable } from "../transports/ack";
@@ -146,20 +146,18 @@ export async function loadItems(
   return { ok: true, items: await readItemsById(storage, collection, request.scope, request.ids) };
 }
 
-/** Serves `qd:col:unsub`: the socket leaves the scope, and a subscribe still being made will not join it. */
+/**
+ * Serves `qd:col:unsub`: the socket leaves the scope, and a subscribe still
+ * being made will not join it. Throws `VALIDATION` for a malformed frame and
+ * `NOT_FOUND` for an unknown service or collection.
+ */
 export function unsubscribeScope(
   hub: CollectionHub,
   socket: QuickdrawServerSocket,
   value: unknown,
-): Ok | Failure {
-  try {
-    const ref = readRef(value, "qd:col:unsub");
-    hub.collections.scopes.unsubscribe(socket, roomOf(ref));
-    return { ok: true };
-  } catch (error) {
-    if (error instanceof QuickdrawError) {
-      return { ok: false, e: toWire(error) };
-    }
-    throw error;
-  }
+): Ok {
+  const ref = readRef(value, "qd:col:unsub");
+  collectionOf(hub, ref.s, ref.c);
+  hub.collections.scopes.unsubscribe(socket, roomOf(ref));
+  return { ok: true };
 }

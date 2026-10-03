@@ -7,6 +7,7 @@
 // Rooms stay the source of truth for who receives `qd:changed`.
 
 import { SERVICE_TOPIC, topicRoom } from "../contract/names";
+import { emptyRecords, ownRecord } from "./emit/subscriptions";
 import { unreadable } from "./transports/ack";
 import type { QuickdrawServerSocket } from "./transports/types";
 
@@ -22,7 +23,10 @@ export interface TopicWatch {
   readonly scope?: string;
 }
 
-/** `socket.data.topics`: a socket's watched topics, by room. Plain data. */
+/**
+ * `socket.data.topics`: a socket's watched topics, by room. Plain data, in an
+ * object without a prototype, read by own keys only.
+ */
 export type TopicWatches = Record<string, TopicWatch>;
 
 function isName(value: unknown): value is string {
@@ -95,9 +99,9 @@ export class TopicIndex {
   /** Records a watch and puts the socket in the topic's room; watching a topic again changes nothing. */
   watch(socket: QuickdrawServerSocket, watch: TopicWatch): void {
     const room = topicRoom(watch.s, watch.topic);
-    socket.data.topics ??= {};
-    if (socket.data.topics[room] === undefined) {
-      socket.data.topics[room] = watch;
+    const watches = (socket.data.topics ??= emptyRecords());
+    if (ownRecord(watches, room) === undefined) {
+      watches[room] = watch;
       this.#count(watch, 1);
     }
     void socket.join(room);
@@ -109,7 +113,7 @@ export class TopicIndex {
     counts.set(room, (counts.get(room) ?? 0) + 1);
     this.#unwatched.set(socket, counts);
     const watches = socket.data.topics;
-    const watch = watches?.[room];
+    const watch = ownRecord(watches, room);
     if (watches !== undefined && watch !== undefined) {
       delete watches[room];
       this.#count(watch, -1);
@@ -127,7 +131,7 @@ export class TopicIndex {
     for (const watch of Object.values(socket.data.topics ?? {})) {
       this.#count(watch, -1);
     }
-    socket.data.topics = {};
+    socket.data.topics = emptyRecords();
   }
 
   /** True when a socket of this process watches the service's topic. */

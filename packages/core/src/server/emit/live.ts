@@ -8,6 +8,7 @@
 
 import type { AnyContract } from "../../contract/defineContract";
 import { createLiveCollections } from "../collections/live";
+import { describeError } from "../pipeline/metrics";
 import { createTopics } from "../topics";
 import { createEntitySinks } from "./entitySink";
 import { entitySubscriptions } from "./extension";
@@ -94,7 +95,13 @@ export function createLive(options: HubOptions): Live {
       io.on(ACCESS_CHANGED_EVENT, (broadcast: unknown) => {
         const change = readChange(broadcast);
         if (change !== undefined) {
-          void revocation.changed(change, true);
+          revocation.changed(change, true).catch((error: unknown) => {
+            hub.logger.error("Revoking for an access change another node broadcast failed", {
+              category: "quickdraw.access",
+              service: change.service,
+              error: describeError(error),
+            });
+          });
         }
       });
     },

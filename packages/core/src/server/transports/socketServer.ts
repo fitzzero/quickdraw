@@ -84,7 +84,7 @@ export function createSocketServer(
   };
   const probe = adapterProbe(io, settings.socket?.adapter !== undefined);
   settings.live?.attach(io, probe);
-  listenForGrants(io, settings.live);
+  listenForGrants(io, settings.live, settings.logger);
   io.use(protocolMiddleware(settings.legacyWire, context));
   io.use(authMiddleware(settings.resolvePrincipal, context));
   // Before the connection handler: the limiter's `socket.use` middleware must

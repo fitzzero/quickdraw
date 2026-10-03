@@ -19,18 +19,19 @@
 //
 // A malformed frame is `VALIDATION`, an unknown service or collection (or a
 // service without a model, whose rows never change) `NOT_FOUND`.
-// `qd:unwatch { s, topic }` leaves the room, optionally acknowledged, and
-// stops a watch still being authorized from joining. Neither counts against
-// the socket rate limiter (`transports/middleware.ts`).
+// `qd:unwatch { s, topic }` is checked the same way, leaves the room,
+// optionally acknowledged, and stops a watch still being authorized from
+// joining. Neither counts against the socket rate limiter
+// (`transports/middleware.ts`), and neither listener throws
+// (`emit/extension.ts`).
 
 import { CLIENT_EVENTS, topicRoom } from "../contract/names";
-import type { Failure, Ok } from "../protocol/envelope";
-import { QuickdrawError, toWire } from "../protocol/errors";
+import type { Ok } from "../protocol/envelope";
+import { QuickdrawError } from "../protocol/errors";
 import { authorizeWatch, type WatchTarget } from "./collections/access";
 import type { CollectionHub } from "./collections/bind";
 import { createTopicSink } from "./collections/changed";
-import { answerEvent } from "./collections/extension";
-import { reply } from "./emit/extension";
+import { answerEvent, answerNow, onDisconnect } from "./emit/extension";
 import { readWatch, TopicIndex, type TopicWatch } from "./topicIndex";
 import type { QuickdrawServerSocket, SocketContext } from "./transports/types";
 
@@ -81,22 +82,21 @@ async function watchTopic(
   return { ok: true };
 }
 
-/** Serves one `qd:unwatch`: the socket leaves the topic's room. */
+/**
+ * Serves one `qd:unwatch`: the socket leaves the topic's room. Throws
+ * `VALIDATION` for a malformed frame and `NOT_FOUND` for an unknown service
+ * or collection.
+ */
 function unwatchTopic(
+  hub: CollectionHub,
   index: TopicIndex,
   socket: QuickdrawServerSocket,
   frame: unknown,
-): Ok | Failure {
-  try {
-    const watch = readWatch(frame, CLIENT_EVENTS.unwatch);
-    index.unwatch(socket, topicRoom(watch.s, watch.topic));
-    return { ok: true };
-  } catch (error) {
-    if (error instanceof QuickdrawError) {
-      return { ok: false, e: toWire(error) };
-    }
-    throw error;
-  }
+): Ok {
+  const watch = readWatch(frame, CLIENT_EVENTS.unwatch);
+  targetOf(hub, watch);
+  index.unwatch(socket, topicRoom(watch.s, watch.topic));
+  return { ok: true };
 }
 
 /** The change topics of one dispatcher. */
@@ -113,13 +113,15 @@ export function createTopics(hub: CollectionHub): Topics {
   return Object.freeze({
     sink: createTopicSink(hub, index),
     extension: (socket: QuickdrawServerSocket, context: SocketContext): void => {
-      answerEvent(hub, socket, context, CLIENT_EVENTS.watch, (frame) =>
+      answerEvent(socket, context, CLIENT_EVENTS.watch, (frame) =>
         watchTopic(hub, index, socket, frame),
       );
       socket.on(CLIENT_EVENTS.unwatch, (frame: unknown, ack: unknown) => {
-        reply(socket, context, ack, unwatchTopic(index, socket, frame));
+        answerNow(socket, context, CLIENT_EVENTS.unwatch, ack, () =>
+          unwatchTopic(hub, index, socket, frame),
+        );
       });
-      socket.on("disconnect", () => {
+      onDisconnect(socket, context, () => {
         index.drop(socket);
       });
     },
