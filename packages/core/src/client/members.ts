@@ -67,14 +67,18 @@ function checkEntry(
  * given, adds members of its own to each service (the typed client's
  * `useEntity`, `useEntities` and one member per collection); a contract
  * keeps them apart from its methods, since methods, collections and the
- * reserved names share one namespace.
+ * reserved names share one namespace. It gets the service's method members
+ * too, for members that group them (the admin kit's `admin`).
  */
 export function buildCaller(
   owner: string,
   contracts: ContractMap,
   member: (target: MethodTarget, definition: MethodDef, contract: AnyContract) => object,
   reserved: readonly string[] = [],
-  live?: (contract: AnyContract) => Readonly<Record<string, object>>,
+  live?: (
+    contract: AnyContract,
+    methods: Readonly<Record<string, object>>,
+  ) => Readonly<Record<string, object>>,
 ): Record<string, object> {
   if (typeof contracts !== "object" || contracts === null) {
     throw new TypeError(`${owner}: pass the contracts as an object, { task, project }`);
@@ -95,7 +99,7 @@ export function buildCaller(
         contract,
       ),
     ]);
-    const extra = Object.entries(live?.(contract) ?? {});
+    const extra = Object.entries(live?.(contract, Object.fromEntries(methods)) ?? {});
     return [key, Object.freeze(Object.fromEntries([...methods, ...extra]))];
   });
   return Object.fromEntries(services) as Record<string, object>;

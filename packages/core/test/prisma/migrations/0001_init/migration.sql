@@ -42,6 +42,8 @@ CREATE TABLE "Task" (
     "title" TEXT NOT NULL,
     "assigneeId" TEXT,
     "notes" TEXT,
+    "pinned" BOOLEAN NOT NULL DEFAULT false,
+    "details" JSONB,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 

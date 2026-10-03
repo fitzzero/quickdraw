@@ -17,6 +17,9 @@
 // - `useEntity`, `useEntities` and `useCollection` show what the test sets
 //   with `mockRow`, `mockRemoved`, `mockError` and `mockScope`
 //   (`mockLive.ts`).
+// - `qd.<service>.admin` holds the same mocked members of the admin kit's
+//   methods, and `useAdminServices` asks their `adminMeta` stubs
+//   (`mockAdmin.ts`).
 // - `qd.invalidate` invalidates the mock's cache through an invalidation
 //   coordinator, as the real client does.
 // - Everything set is forgotten after each test, when the test runner has a
@@ -298,7 +301,7 @@ export function createMockClient<const Contracts extends ContractMap>(
           )
         : mockMutationMember(context, target),
     ["invalidate"],
-    mockLiveMembers(store, { userId: options.userId ?? "" }),
+    mockLiveMembers(store, { userId: options.userId ?? "" }, queryClient),
   );
   Object.defineProperties(client, {
     invalidate: { value: invalidateWith(binding) },

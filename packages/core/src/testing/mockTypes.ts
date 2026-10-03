@@ -17,6 +17,7 @@ import type {
   QuickdrawInvalidate,
 } from "../client/clientTypes";
 import type { AnyContract } from "../contract/defineContract";
+import type { AdminMethodsOf } from "../contract/kits/admin";
 import type {
   CollectionName,
   ContractMap,
@@ -96,12 +97,17 @@ export interface MockEntityMembers<C extends AnyContract> {
   readonly useEntities: EntityMembers<C>["useEntities"] & EntityMock<EntityOf<C>>;
 }
 
+/** `qd.<key>.admin` of a mock client, for a contract with the admin kit: the mocked members of its admin methods. */
+export type MockAdminMembers<C extends AnyContract> = [AdminMethodsOf<C>] extends [never]
+  ? unknown
+  : { readonly admin: { readonly [M in AdminMethodsOf<C>]: MockMethodMember<C, M> } };
+
 /** `qd.<key>` of a mock client. */
 export type MockServiceClient<C extends AnyContract> = {
   readonly [M in MethodName<C>]: MockMethodMember<C, M>;
 } & ([EntityOf<C>] extends [never] ? unknown : MockEntityMembers<C>) & {
     readonly [K in CollectionName<C>]: MockCollectionMember<C, K>;
-  };
+  } & MockAdminMembers<C>;
 
 /** What `createMockClient` returns: the typed client of `Contracts`, with stubs. */
 export type MockClient<Contracts extends ContractMap> = {

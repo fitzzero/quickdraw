@@ -166,6 +166,49 @@ export {
   type UnshareInput,
   type UserLookupInput,
 } from "./contract/kits/sharingSchemas";
+// The admin kit's contract half (RFC 0003 section 12.4); its handlers are
+// `admin.handlers` on ./server, and the client adds `qd.<service>.admin`.
+export {
+  ADMIN_METHODS,
+  admin,
+  type AdminContractOptions,
+  type AdminCreateDef,
+  type AdminDeleteDef,
+  type AdminGetDef,
+  type AdminListDef,
+  type AdminMetaDef,
+  type AdminMethodName,
+  type AdminMethods,
+  type AdminMethodsOf,
+  type AdminReemitDef,
+  type AdminSubscribersDef,
+  type AdminTag,
+  type AdminUpdateDef,
+} from "./contract/kits/admin";
+export {
+  ADMIN_FIELD_TYPES,
+  ADMIN_NEVER_WRITABLE,
+  type AdminFieldConfig,
+  type AdminFieldType,
+  type AdminServiceMeta,
+} from "./contract/kits/adminFields";
+export {
+  ADMIN_DEFAULT_PAGE_SIZE,
+  ADMIN_MAX_PAGE,
+  ADMIN_MAX_PAGE_SIZE,
+  type AdminCreateInput,
+  type AdminCreateQuery,
+  type AdminData,
+  type AdminListInput,
+  type AdminListQuery,
+  type AdminMetaInput,
+  type AdminNeverWritable,
+  type AdminPage,
+  type AdminSubscribers,
+  type AdminUpdateInput,
+  type AdminUpdateQuery,
+  type SubscriberLevel,
+} from "./contract/kits/adminSchemas";
 export type { KitSchema } from "./contract/kits/schemas";
 export type {
   ChannelPayloadOf,

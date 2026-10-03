@@ -8,6 +8,7 @@
 
 import type { AnyContract } from "../../contract/defineContract";
 import { createLiveCollections } from "../collections/live";
+import type { RoomOccupancy } from "../context";
 import { describeError } from "../pipeline/metrics";
 import { createTopics } from "../topics";
 import { createEntitySinks } from "./entitySink";
@@ -51,6 +52,8 @@ export interface Live {
   regranted(userId: string): Promise<void>;
   /** Sends a `reset` to one scope of a collection: `dispatcher.collections.reset`. */
   resetCollection(contract: AnyContract, collection: string, scope: string): void;
+  /** The sockets in a room of the attached server, for the kits (`KitRuntime.occupancy`). */
+  readonly occupancy: RoomOccupancy;
 }
 
 type Change = Parameters<ReturnType<typeof createRevocation>["changed"]>[0];
@@ -120,6 +123,10 @@ export function createLive(options: HubOptions): Live {
     resetCollection: (contract: AnyContract, collection: string, scope: string) => {
       collections.reset(contract, collection, scope);
     },
+    occupancy: Object.freeze({
+      sockets: (room: string) => hub.io?.sockets.adapter.rooms.get(room)?.size ?? 0,
+      complete: () => hub.io === undefined || hub.probe.local(),
+    }),
   });
 }
 

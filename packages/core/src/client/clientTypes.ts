@@ -21,6 +21,7 @@ import type {
   ItemOf,
   KindOf,
   MethodName,
+  MethodOf,
   OutputOf,
   ScopeOf,
   ViewName,
@@ -149,10 +150,24 @@ export type LiveMembers<C extends AnyContract> = ([EntityOf<C>] extends [never]
   readonly [K in CollectionName<C>]: CollectionMember<C, K>;
 };
 
-/** `qd.<key>`: one member per method, plus the live members. */
+/** The names of a contract's methods the admin kit made (the root export's `AdminMethodsOf`). */
+type AdminMethodNames<C extends AnyContract> = {
+  [M in MethodName<C>]: "~admin" extends keyof MethodOf<C, M> ? M : never;
+}[MethodName<C>];
+
+/**
+ * `qd.<key>.admin` (RFC 0003 section 12.4): the members of the admin kit's
+ * methods together, for a contract with the kit; no member otherwise.
+ */
+export type AdminMembers<C extends AnyContract> = [AdminMethodNames<C>] extends [never]
+  ? unknown
+  : { readonly admin: { readonly [M in AdminMethodNames<C>]: MethodMember<C, M> } };
+
+/** `qd.<key>`: one member per method, plus the live members, plus `admin` with the admin kit. */
 export type ServiceClient<C extends AnyContract> = {
   readonly [M in MethodName<C>]: MethodMember<C, M>;
-} & LiveMembers<C>;
+} & LiveMembers<C> &
+  AdminMembers<C>;
 
 /**
  * `qd.invalidate`: invalidates cached query results through the provider's

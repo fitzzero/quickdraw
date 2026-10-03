@@ -19,6 +19,7 @@ import { viewPredicate } from "../client/live/views";
 import type { CollectionDef, Viewer } from "../contract/collections";
 import type { AnyContract } from "../contract/defineContract";
 import type { QuickdrawError } from "../protocol/errors";
+import { mockAdminNamespace } from "./mockAdmin";
 import type { EntityMock, MockScope } from "./mockTypes";
 
 /** What one mocked row shows: the row, its removal, or an error. */
@@ -292,14 +293,19 @@ function mockCollectionMember(store: MockStore, target: MockCollectionTarget, wh
 /**
  * The live members of each contract's service on a mock client, as
  * `buildCaller` takes them: the entity hooks for a contract with an entity,
- * each carrying the controls of the rows it shows, and one member per
- * collection.
+ * each carrying the controls of the rows it shows, one member per
+ * collection, and `admin` for a contract with the admin kit (its `adminMeta`
+ * queries run on `queryClient`, the mock's cache).
  */
 export function mockLiveMembers(
   store: MockStore,
   who: Viewer,
-): (contract: AnyContract) => Readonly<Record<string, object>> {
-  return (contract) => {
+  queryClient: Parameters<typeof mockAdminNamespace>[2],
+): (
+  contract: AnyContract,
+  methods: Readonly<Record<string, object>>,
+) => Readonly<Record<string, object>> {
+  return (contract, methods) => {
     const service = contract.name;
     const members: [string, object][] = [];
     if (contract.entity !== undefined) {
@@ -314,6 +320,7 @@ export function mockLiveMembers(
     for (const [collection, def] of Object.entries(contract.collections)) {
       members.push([collection, mockCollectionMember(store, { service, collection, def }, who)]);
     }
+    members.push(...Object.entries(mockAdminNamespace(contract, methods, queryClient)));
     return Object.freeze(Object.fromEntries(members));
   };
 }

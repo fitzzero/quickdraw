@@ -107,6 +107,7 @@ export { liveDataOf, type LiveData } from "./live/liveData";
 // The typed client and its provider.
 export { createQuickdrawClient } from "./createClient";
 export type {
+  AdminMembers,
   CollectionMember,
   EntityMembers,
   LiveMembers,
@@ -130,6 +131,15 @@ export type {
   UseSearchOptions,
   UseSearchResult,
 } from "./live/searchTypes";
+// The admin kit's client half (RFC 0003 section 12.4): `qd.<service>.admin`
+// on the typed client, and the services an admin screen can show.
+export {
+  useAdminServices,
+  type AdminKeysOf,
+  type AdminServiceInfo,
+  type UseAdminServicesOptions,
+  type UseAdminServicesResult,
+} from "./admin";
 export type { MethodMutationOptions, MethodQueryOptions } from "./hooks";
 export {
   QuickdrawProvider,

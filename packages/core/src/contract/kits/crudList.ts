@@ -73,7 +73,8 @@ function quoted(names: readonly string[]): string {
   return names.length === 0 ? "none" : names.map((name) => `"${name}"`).join(", ");
 }
 
-function filterIssues(filter: unknown, fields: readonly string[]): Issues {
+/** The issues of a `filter`: equality on declared fields only. The admin kit's `adminList` too. */
+export function filterIssues(filter: unknown, fields: readonly string[]): Issues {
   if (filter === undefined) {
     return [];
   }
@@ -91,7 +92,8 @@ function filterIssues(filter: unknown, fields: readonly string[]): Issues {
   });
 }
 
-function sortIssues(sort: unknown, fields: readonly string[]): Issues {
+/** The issues of a `sort`: one declared field, and a direction. The admin kit's `adminList` too. */
+export function sortIssues(sort: unknown, fields: readonly string[]): Issues {
   if (sort === undefined) {
     return [];
   }
@@ -161,7 +163,15 @@ function fieldJson(properties: Readonly<Record<string, unknown>>, field: string)
   return isRecord(own) ? { ...own } : { type: ["string", "number", "boolean", "null"] };
 }
 
-function listJson(fields: ListFields, entity: StandardSchemaV1 | undefined, target: string) {
+/**
+ * The JSON Schema properties `filter` and `sort` of a list's input, those it
+ * declares fields for. The admin kit's `adminList` too.
+ */
+export function filterSortJson(
+  fields: ListFields,
+  entity: StandardSchemaV1 | undefined,
+  target: string,
+): Record<string, JsonSchema> {
   const properties = entityProperties(entity, target);
   const filter = Object.fromEntries(
     fields.filter.map((field) => [field, fieldJson(properties, field)]),
@@ -173,9 +183,15 @@ function listJson(fields: ListFields, entity: StandardSchemaV1 | undefined, targ
     },
     ["field"],
   );
-  return objectJson({
+  return {
     ...(fields.filter.length === 0 ? {} : { filter: objectJson(filter) }),
     ...(fields.sort.length === 0 ? {} : { sort }),
+  };
+}
+
+function listJson(fields: ListFields, entity: StandardSchemaV1 | undefined, target: string) {
+  return objectJson({
+    ...filterSortJson(fields, entity, target),
     cursor: { type: "string", minLength: 1, maxLength: MAX_CURSOR_LENGTH },
     limit: { type: "integer", minimum: 1, maximum: LIST_MAX_LIMIT, default: LIST_DEFAULT_LIMIT },
     totalCount: { type: "boolean" },
