@@ -62,7 +62,9 @@ server.httpServer.listen(4000);
   `{ ok: false, e: { code, message, data? } }` with the code's HTTP status.
   Works on Express 4 and 5, and on a bare Node server. Move it with
   `http: { path }`, turn it off with `http: false`, or mount
-  `createHttpRouter({ dispatcher, auth })` yourself.
+  `createHttpRouter({ dispatcher, auth })` yourself. It has no rate limit of
+  its own: on Express, set `http: { rateLimit: createCallLimiter() }` (from
+  `./server/express`), which refuses with the `RATE_LIMITED` reply.
 - **In process**: `server.dispatcher.caller(principal)` or `qd.caller(principal)`.
 
 Pass your own HTTP server as `httpServer` together with the `app` it was
@@ -814,6 +816,177 @@ const here = usePresence(`board:${projectId}`); // user ids, after enterBoard jo
   fails), then sent as `qd:event [service, event, payload]`.
 - A mock client's members show what the test sets: `mockItems` and
   `mockError` for a stream, `sent` for a channel, `mockEmit` for an event.
+
+### Auth routes kit
+
+Sign-in for Google, Discord, a development mock and guests, as one Express
+middleware (design: `docs/rfcs/0003-v5.md`, section 12.6). The app supplies
+how a provider's profile becomes its user (`onLogin`, returning the user's
+id) and where sessions are stored (a `SessionStore`); `socketAuth` then
+authenticates the server's sockets and HTTP calls by those sessions:
+
+```typescript
+import cors from "cors";
+import {
+  createAuthRoutes,
+  discord,
+  google,
+  guest,
+  mock,
+  socketAuth,
+} from "@fitzzero/quickdraw-core/server/auth";
+import { createCallLimiter } from "@fitzzero/quickdraw-core/server/express";
+
+const allowedOrigins = [env.CLIENT_URL]; // the web app's origins: one list for both
+const sessions = prismaSessions(prisma); // below
+
+const app = express();
+app.set("trust proxy", 1); // behind a proxy, so the rate limits see the client's IP
+app.use(cors({ origin: allowedOrigins, credentials: true }));
+app.use(
+  createAuthRoutes({
+    providers: [
+      google({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }),
+      discord({ clientId: env.DISCORD_CLIENT_ID, clientSecret: env.DISCORD_CLIENT_SECRET }),
+      mock({ listUsers: listSeededUsers }), // served only while isMockOAuthEnabled()
+      guest({ createUser: (input) => createGuestUser(guestSchema.parse(input)) }),
+    ],
+    sessions,
+    jwtSecret: env.JWT_SECRET, // 32 characters or more
+    onLogin: (profile, provider) => upsertUser(profile, provider), // the user's id, or null to refuse
+    allowedOrigins,
+    publicUrl: env.API_URL, // redirect URIs: {publicUrl}/auth/{provider}/callback
+    successPath: "/auth/callback",
+    errorPath: "/auth/login",
+  }),
+);
+
+const server = qd.createServer({
+  app,
+  services,
+  db: prisma,
+  auth: {
+    authenticate: socketAuth({
+      sessions,
+      jwtSecret: env.JWT_SECRET,
+      allowedOrigins,
+      loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
+    }),
+    loadServiceAccess: (userId) => loadGrants(userId),
+  },
+  http: { rateLimit: createCallLimiter() }, // the HTTP transport has no limit of its own
+});
+```
+
+The routes, under `basePath` (default `/auth`). Each POST needs
+`Content-Type: application/json`, which a cross-site form cannot send; a
+failure answers `{ error: <code>, message }` with the code's HTTP status, and
+nothing is cached:
+
+| Route                                  | Answer                                                                                                                |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `GET /{provider}/start?returnTo=<url>` | 302 to the provider                                                                                                   |
+| `GET /{provider}/callback`             | 302 to `{origin}{successPath}` with the session cookie, or to `{origin}{errorPath}?error=state`, `denied` or `failed` |
+| `POST /guest`                          | `createUser(body)`, then `{ userId }` with the session cookie                                                         |
+| `GET /me`                              | `{ userId }`, or 401                                                                                                  |
+| `POST /logout`                         | 204: revokes the session, clears the cookie                                                                           |
+| `POST /logout-all`                     | 204: revokes every session of the user; 401 without a live session                                                    |
+| `/mock/provider/*`                     | the mock provider's own endpoints, while `isMockOAuthEnabled()`                                                       |
+
+- The OAuth state is 256 random bits, sent to the provider and kept in a
+  10-minute HttpOnly, SameSite=Lax cookie on `basePath` (`qd_oauth`). The
+  callback clears it whatever happens, and accepts only that state, for
+  that provider, within its 10 minutes, once (each redeemed state is
+  remembered by the process), so a sign-in cannot be finished in another
+  browser or replayed.
+- `returnTo` is an origin or a URL on one; only its origin is kept, and only
+  when `allowedOrigins` lists it (exact origins, or patterns anchored with
+  `^` and `$`; nothing is read from the environment, and localhost or
+  Codespaces origins are allowed only when listed). It is checked before it
+  is stored and again before the redirect. Without `returnTo` the sign-in
+  returns to the first exact origin listed.
+- The session cookie (`session`, or `cookie.name`) holds a JWT naming the
+  user and the session (`sid`). It is HttpOnly and SameSite=Lax, Secure in
+  production or over HTTPS, and lasts `cookie.maxAgeMs` (7 days), as do the
+  JWT and the stored session. `cookie.sameSite: "none"` (always Secure)
+  serves a web app on another site; `cookie.domain` shares it with
+  subdomains.
+- `me` answers the same 401 whether the request had no credential, a forged
+  or expired one, or one whose session was revoked. It, `logout` and
+  `logout-all` read the cookie, else an `Authorization: Bearer` token.
+- `socketAuth` reads a socket's `auth.token` (a bearer token, for clients
+  without cookies), else the session cookie from its handshake; an HTTP
+  call's credential is the one the transport found. No credential is
+  anonymous; a credential that does not stand for a live session in the
+  store is refused with `UNAUTHENTICATED` (logged at debug), so a logged
+  out or revoked session stops working at the next handshake or call even
+  though its JWT has not expired. A socket that uses the cookie must also
+  come from an allowed page: its `Origin` must be in `allowedOrigins`
+  (WebSockets are not subject to CORS, and a browser sends the cookie with
+  any page's handshake). A handshake without `Origin` is refused unless it
+  is a browser's same-origin request (`Sec-Fetch-Site: same-origin`) or
+  `allowMissingOrigin: true` is set for native clients that keep cookies.
+  Bearer tokens need no Origin, and HTTP calls are guarded by their JSON
+  content type instead.
+- Rate limits: the sign-in routes share `createAuthLimiter()` (20 requests
+  per 15 minutes per IP) and the session routes `createAuthStatusLimiter()`
+  (120); pass `rateLimit: { signIn, session }` to replace them (a shared
+  store across instances, say) or `false`. The defaults need the optional
+  peer `express-rate-limit`. The HTTP transport (`/qd`) is not limited
+  unless `http.rateLimit` is set; `createCallLimiter()` (300 calls per
+  minute per IP) refuses in the transport's own `RATE_LIMITED` reply. A web
+  server that prefetches for many users calls from one address: give it its
+  own `keyGenerator` or a higher `max`.
+- The mock provider is mounted only while `isMockOAuthEnabled()`
+  (`ENABLE_MOCK_OAUTH=true` and `NODE_ENV` other than `production`), and
+  every request checks again. Set `mock({ internalUrl })` where the API
+  cannot reach itself at `publicUrl`.
+- A changed cookie name must be named in all three places:
+  `createAuthRoutes({ cookie: { name } })`, `socketAuth({ cookieName })` and
+  `createServer({ http: { cookieName } })`.
+- Sockets that are already connected when their session is revoked stay
+  connected until they reconnect.
+- `issueSession({ sessions, jwtSecret }, userId, { provider })` starts a
+  session for an app's own sign-in flow (login codes, an embedded activity),
+  and `liveSession` reads a token back; both work with `socketAuth`.
+
+A `SessionStore` on Prisma. Sessions are not live data, so nothing needs
+their writes tracked: with the tracked client, the first session write logs
+one development warning about a write outside a unit of work, which running
+the store's writes inside `qd.run(...)` (or using the untracked client here)
+avoids. Delete expired rows now and then.
+
+```prisma
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider  String
+  userAgent String?
+  ip        String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+```
+
+```typescript
+import type { SessionStore } from "@fitzzero/quickdraw-core/server/auth";
+
+export function prismaSessions(db: PrismaClient): SessionStore {
+  return {
+    create: (userId, meta) => db.session.create({ data: { userId, ...meta } }),
+    get: (id) => db.session.findUnique({ where: { id } }),
+    revoke: (id) => db.session.deleteMany({ where: { id } }),
+    revokeAll: (userId) => db.session.deleteMany({ where: { userId } }),
+  };
+}
+```
+
+`createMemorySessionStore()` keeps sessions in the process, for development
+and tests.
 
 ### Testing
 

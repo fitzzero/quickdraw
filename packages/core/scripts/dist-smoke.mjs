@@ -48,7 +48,11 @@
 // - the built client test helpers (`./testing/client`) carry no "use client"
 //   (while `dist/client/index.js` still opens with it), load Testing Library
 //   only lazily, import no jsdom and no server code, and the built mock
-//   client answers from its stubs with no DOM.
+//   client answers from its stubs with no DOM;
+// - the built auth routes kit (`./server/auth`) imports neither express nor
+//   express-rate-limit statically, signs in through the mock provider (start,
+//   consent, callback), answers `me`, authenticates a socket by the session
+//   cookie through the built `socketAuth`, and after logout refuses both.
 
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -165,8 +169,22 @@ const expectations = {
     ],
     client: false,
   },
-  "./server/auth": { symbols: ["createJWT"], client: false },
-  "./server/express": { symbols: ["createJsonRateLimiter"], client: false },
+  "./server/auth": {
+    symbols: [
+      "createJWT",
+      "createAuthRoutes",
+      "socketAuth",
+      "createMemorySessionStore",
+      "google",
+      "discord",
+      "mock",
+      "guest",
+      "issueSession",
+      "liveSession",
+    ],
+    client: false,
+  },
+  "./server/express": { symbols: ["createJsonRateLimiter", "createCallLimiter"], client: false },
   "./server/mcp": {
     symbols: [
       "describeTools",
@@ -1156,4 +1174,143 @@ assert.deepEqual(mock.echo.say.calls, ["hi"]);
 assert.deepEqual(mock.echo.say.key("hi"), ["qd", "echoService", "m", "say", "hi"]);
 console.log(
   `ok ${pkg.name}/testing/client loads Testing Library lazily, imports no jsdom or server code, and its mock client answers from stubs`,
+);
+
+// The built auth routes kit (./server/auth): its static import graph holds
+// neither express nor express-rate-limit (the default rate limiters are
+// imported lazily, and that import resolves from the built output when a
+// request first needs it); a mock sign-in on an Express app (start, the mock
+// provider's consent, the callback), `me` with the session cookie, a v5
+// socket authenticated by that cookie through the built server's
+// `socketAuth`, and logout, after which neither `me` nor a new socket is let in.
+/** What a built file's static import graph imports from outside the package, and imports lazily. */
+function staticGraph(entryFile) {
+  const files = new Set();
+  const externals = [];
+  const dynamic = [];
+  const pending = [entryFile];
+  while (pending.length > 0) {
+    const file = pending.pop();
+    if (files.has(file)) {
+      continue;
+    }
+    files.add(file);
+    const code = readFileSync(file, "utf8");
+    for (const match of code.matchAll(STATIC_SPECIFIER)) {
+      const imported = match[1] ?? match[2];
+      if (imported.startsWith("./") || imported.startsWith("../")) {
+        pending.push(resolve(dirname(file), imported));
+      } else {
+        externals.push(imported);
+      }
+    }
+    for (const match of code.matchAll(DYNAMIC_SPECIFIER)) {
+      dynamic.push(match[1].startsWith(".") ? resolve(dirname(file), match[1]) : match[1]);
+    }
+  }
+  return { externals, dynamic };
+}
+const authGraph = staticGraph(join(packageDir, pkg.exports["./server/auth"].import));
+assert.deepEqual(
+  authGraph.externals.filter((imported) => ["express", "express-rate-limit"].includes(imported)),
+  [],
+  "./server/auth must not statically import express or express-rate-limit",
+);
+assert.ok(
+  authGraph.dynamic.some(
+    (file) => file.startsWith("/") && staticGraph(file).externals.includes("express-rate-limit"),
+  ),
+  "./server/auth must import the Express rate limiters lazily",
+);
+
+const auth = await import(`${pkg.name}/server/auth`);
+const { default: createExpressApp } = await import("express");
+const authSecret = "a-smoke-secret-of-at-least-thirty-two-characters";
+const appOrigin = "http://app.smoke";
+const authSessions = auth.createMemorySessionStore();
+const authApp = createExpressApp();
+const authServer = server.createServer({
+  app: authApp,
+  services: [echoService],
+  logger: quiet,
+  auth: {
+    authenticate: auth.socketAuth({
+      sessions: authSessions,
+      jwtSecret: authSecret,
+      allowedOrigins: [appOrigin],
+    }),
+  },
+});
+await new Promise((resolveListen) => {
+  authServer.httpServer.listen(0, "127.0.0.1", resolveListen);
+});
+const authUrl = `http://127.0.0.1:${authServer.httpServer.address().port}`;
+process.env.ENABLE_MOCK_OAUTH = "true";
+authApp.use(
+  auth.createAuthRoutes({
+    providers: [
+      auth.mock({
+        listUsers: () => Promise.resolve([{ id: "u1", email: "smoke@demo.local", name: "Smoke" }]),
+      }),
+    ],
+    sessions: authSessions,
+    jwtSecret: authSecret,
+    onLogin: (profile) => `user:${profile.email}`,
+    allowedOrigins: [appOrigin],
+    publicUrl: authUrl,
+    logger: quiet,
+  }),
+);
+const firstCookie = (response, name) =>
+  response.headers
+    .getSetCookie()
+    .map((header) => header.split(";", 1)[0])
+    .find((pair) => pair.startsWith(`${name}=`));
+const openSocket = (cookie) => {
+  const socket = connectClient(authUrl, {
+    forceNew: true,
+    reconnection: false,
+    transports: ["websocket"],
+    auth: { qd: { protocol: core.PROTOCOL_VERSION, client: "smoke" } },
+    extraHeaders: { cookie, origin: appOrigin },
+  });
+  const outcome = new Promise((resolveOutcome) => {
+    socket.once("qd:hello", (hello) => resolveOutcome({ hello }));
+    socket.once("connect_error", (error) => resolveOutcome({ refused: error.data }));
+  });
+  return outcome.finally(() => socket.disconnect());
+};
+try {
+  const manual = { redirect: "manual" };
+  const started = await fetch(`${authUrl}/auth/mock/start?returnTo=${appOrigin}`, manual);
+  assert.equal(started.status, 302);
+  const authorize = new URL(started.headers.get("location"));
+  authorize.searchParams.set("email", "smoke@demo.local");
+  const consented = await fetch(authorize, manual);
+  const callback = await fetch(consented.headers.get("location"), {
+    ...manual,
+    headers: { cookie: firstCookie(started, "qd_oauth") },
+  });
+  assert.equal(callback.headers.get("location"), `${appOrigin}/`);
+  const sessionCookie = firstCookie(callback, "session");
+  assert.ok(sessionCookie, "the callback must set the session cookie");
+  const me = await fetch(`${authUrl}/auth/me`, { headers: { cookie: sessionCookie } });
+  assert.deepEqual(await me.json(), { userId: "user:smoke@demo.local" });
+  const signedIn = await openSocket(sessionCookie);
+  assert.equal(signedIn.hello?.userId, "user:smoke@demo.local");
+
+  const loggedOut = await fetch(`${authUrl}/auth/logout`, {
+    method: "POST",
+    headers: { cookie: sessionCookie, "content-type": "application/json" },
+  });
+  assert.equal(loggedOut.status, 204);
+  const after = await fetch(`${authUrl}/auth/me`, { headers: { cookie: sessionCookie } });
+  assert.equal(after.status, 401);
+  assert.deepEqual(await openSocket(sessionCookie), { refused: { code: "UNAUTHENTICATED" } });
+} finally {
+  delete process.env.ENABLE_MOCK_OAUTH;
+  await authServer.close();
+}
+console.log(
+  `ok ${pkg.name}/server/auth imports express-rate-limit lazily, signs in through the mock provider, authenticates a socket by its cookie, and refuses it after logout`,
 );
