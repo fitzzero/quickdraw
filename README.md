@@ -723,6 +723,98 @@ filterable, enumValues?, relationService? }` per field: `type` is
   `qd.<service>.admin.adminMeta.useQuery()`. On a mock client it answers
   from the `adminMeta` stubs.
 
+### Presence, streams and channels
+
+Who is online, feeds that start with recent history and then append (logs,
+metrics), fast one-way input (cursors, typing) and typed room events
+(design: `docs/rfcs/0003-v5.md`, section 12.5). All four are declared in
+the contract; they share `qd.<service>.<name>` with the methods and
+collections:
+
+```typescript
+// the shared package
+export const task = defineContract("taskService", {
+  entity: taskSchema,
+  methods: {
+    enterBoard: mutation({ input: z.object({ projectId: z.string() }), output: z.boolean() }),
+  },
+  streams: {
+    // one feed per task; a subscriber needs Read on the task, and first gets the latest 50 lines
+    logs: { item: logLineSchema, scope: "taskId", seed: 50, access: { entry: "Read" } },
+    load: { item: z.number(), volatile: true, access: "authenticated" }, // one feed for everyone
+  },
+  channels: {
+    // 20 a second per socket; only from a socket subscribed to the task the payload names
+    cursor: { payload: cursorSchema, ratePerSecond: 20, requires: { entity: "taskId" } },
+  },
+  events: { cursorMoved: { payload: cursorSchema } },
+});
+
+// the server
+export const taskService = qd.defineService(task, {
+  model: "task",
+  access: inherit({ from: project, via: "projectId" }),
+  methods: {
+    enterBoard: {
+      access: { scope: "Read", of: project, id: "projectId" },
+      handler: ({ input, ctx }) => ctx.rooms.join(`board:${input.projectId}`),
+    },
+  },
+  channels: {
+    // relay each cursor to the board's room
+    cursor: (payload, ctx) => {
+      ctx.rooms.emit(`board:${payload.projectId}`, task, "cursorMoved", payload);
+    },
+  },
+});
+qd.stream(task, "logs").push(taskId, { line: "build started" }); // handlers, jobs, timers
+await qd.presence.isOnline(userId); // also ctx.presence and server.presence
+
+// the client
+const { items, isLoading } = qd.task.logs.useStream(taskId, { max: 200 });
+const { send, isReady } = qd.task.cursor.useChannel();
+qd.task.cursorMoved.useEvent((cursor) => drawCursor(cursor));
+const here = usePresence(`board:${projectId}`); // user ids, after enterBoard joined the room
+```
+
+- Streams: `push` checks each item against the stream's schema (a mismatch
+  throws `INTERNAL` and nothing is sent), keeps the latest `seed` items per
+  scope in memory on that process (at most 1,000 per scope and 10,000
+  scopes per stream; a restart empties them, and durable history is the
+  app's: store the rows and expose a collection), and sends
+  `qd:stream { s, stream, scope?, item }` to the feed's subscribers,
+  volatile when the stream says so. `qd:stream:sub` is authorized with the
+  stream's `access` through the access engine, the scope being the row an
+  `entry` or `scope` form checks; a stream without `access` is closed. The
+  answer is the seed; `useStream` then appends, keeps the latest `max`
+  (default 500), and subscribes again after a reconnect, when the seed
+  replaces what it held. A socket holds at most 500 feeds.
+- Channels: each message is `qd:ch [service, channel, payload]`, sent
+  volatile and never answered. Per socket and channel a token bucket
+  (`ratePerSecond`, default 30; `burst`, default twice that) drops what is
+  over the rate, and a socket whose drops within 10 s pass 100 times the
+  rate is disconnected. A message from an anonymous socket, one that fails
+  its schema, one without the service grant `{ access: { service }, handler }`
+  names, or one whose `requires` the socket does not hold (`{ entity }`: a
+  `qd:sub` of that row; `{ collection, scope }`: a `qd:col:sub` of that
+  scope) is dropped. Nothing is logged per message; a handler's error is.
+  The socket rate limiter does not count channels.
+- Presence: `isOnline`, `lastSeen` (now while online, else when the user's
+  last socket on this process disconnected), `count` and `users` (each user
+  once, anonymous sockets left out) come from this process's sockets, and
+  from every node's (`fetchSockets`) behind a Redis adapter.
+  `ctx.rooms.join(room)` and `leave` put the calling socket in an app room
+  (calls without a socket get `false`; names starting with `qd:` or `user:`
+  are refused with `VALIDATION`; at most 100 per socket), and the room's
+  sockets get `qd:presence` frames: the list on joining, then who joins and
+  who leaves. `usePresence(room)` shows them.
+- Events: `ctx.rooms.emit(room, contract, event, payload)` and
+  `emitToUser(userId, ...)` replace 4.1's `emitToRoom` and the augmentable
+  event map; the payload is checked first (`INTERNAL`, nothing sent, when it
+  fails), then sent as `qd:event [service, event, payload]`.
+- A mock client's members show what the test sets: `mockItems` and
+  `mockError` for a stream, `sent` for a channel, `mockEmit` for an event.
+
 ### Testing
 
 `@fitzzero/quickdraw-core/testing` boots the real server on a free port:
