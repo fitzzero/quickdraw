@@ -5,14 +5,21 @@
 // driven by tracked writes instead of `BaseService.create/update/delete`.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 import type { PrismaClient } from "../../../test/prisma/setup";
-import { collectionRoom } from "../../index";
+import { collectionRoom, defineContract } from "../../index";
 import type { Logger } from "../../contract/logger";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
 import { as, seedBoard, type Board } from "../access/__tests__/board";
-import { projectService, recordingStorage, type Read } from "../emit/__tests__/live";
-import type { FlushSink, Principal } from "../index";
+import {
+  projectContract,
+  projectService,
+  qd,
+  recordingStorage,
+  type Read,
+} from "../emit/__tests__/live";
+import { inherit, type FlushSink, type Principal } from "../index";
 import {
   addTasks,
   CARD_KEYS,
@@ -282,6 +289,51 @@ describe("qd:col:sub", () => {
       ok: false,
       e: { code: "FORBIDDEN" },
     });
+  });
+
+  it("strips a self scope's items at Read, and refuses a self scope that declares more", async () => {
+    const entity = z.object({
+      id: z.string(),
+      title: z.string(),
+      notes: z.string().nullable(),
+      assigneeId: z.string().nullable(),
+    });
+    const assigned = (access?: "Admin") =>
+      defineContract("assignedService", {
+        entity,
+        fields: { notes: "Admin" },
+        methods: {},
+        collections: {
+          mine: {
+            scope: "assigneeId",
+            item: "entity",
+            order: [["id", "asc"]],
+            ...(access === undefined ? {} : { access }),
+          },
+        },
+      });
+    const define = (contract: ReturnType<typeof assigned>) =>
+      qd.defineService(contract, {
+        model: "task",
+        access: inherit({ from: projectContract, via: "projectId" }),
+        collections: { mine: { scopeAccess: "self" } },
+        methods: {},
+      });
+    // Authorized by the user id alone, an Admin-level self scope would hand everyone Admin fields.
+    expect(() => define(assigned("Admin"))).toThrow("its access may not be above Read");
+    await h.prisma.task.update({
+      where: { id: board.t1 },
+      data: { assigneeId: board.cy, notes: "Admin only" },
+    });
+    const app = await createTestApp({ services: [projectService, define(assigned())], db: h.db });
+    apps.push(app as unknown as TestApp);
+    const connection = await app.connect(as(board.cy));
+    const page = await emitWithAck<{ items: object[] }>(connection.socket, "qd:col:sub", {
+      s: "assignedService",
+      c: "mine",
+      scope: board.cy,
+    });
+    expect(page.items).toEqual([{ id: board.t1, title: "T1", assigneeId: board.cy }]);
   });
 
   it("refuses an unknown collection or service as NOT_FOUND, an anonymous socket, and malformed frames", async () => {

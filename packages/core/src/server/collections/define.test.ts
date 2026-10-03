@@ -153,6 +153,52 @@ describe("a service's collections option", () => {
   });
 });
 
+describe("a self scope", () => {
+  /** A contract whose `mine` collection is scoped by the subscriber's user id, with `access` when given. */
+  function selfContract(access?: string): AnyContract {
+    return (defineContract as (name: string, def: unknown) => AnyContract)("taskService", {
+      entity: z.object({
+        id: z.string(),
+        assigneeId: z.string().nullable(),
+        notes: z.string().nullable(),
+      }),
+      fields: { notes: "Admin" },
+      collections: {
+        mine: {
+          scope: "assigneeId",
+          item: "entity",
+          order: [["id", "asc"]],
+          ...(access === undefined ? {} : { access }),
+        },
+      },
+    });
+  }
+
+  function defineSelf(contract: AnyContract): AnyService {
+    return (qd.defineService as (contract: unknown, definition: unknown) => AnyService)(contract, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      collections: { mine: { scopeAccess: "self" } },
+      methods: {},
+    });
+  }
+
+  it("may not declare access above Read: no level is checked to subscribe to it", () => {
+    expect(() => defineSelf(selfContract("Admin"))).toThrow(
+      `defineService("taskService"): collection "mine" has scopeAccess "self", which is authorized by the subscriber's user id and not by a level, so its access may not be above Read (it declares Admin)`,
+    );
+    expect(() => defineSelf(selfContract("Moderate"))).toThrow("(it declares Moderate)");
+  });
+
+  it("strips its items at Read", () => {
+    expect(defineSelf(selfContract()).collections.get("mine")?.access).toBe("Read");
+    expect(defineSelf(selfContract("Read")).collections.get("mine")?.access).toBe("Read");
+    expect(defineSelf(selfContract("Public")).collections.get("mine")?.access).toBe("Read");
+    const hidden = defineSelf(selfContract()).collections.get("mine")?.item.tiers.hidden("Read");
+    expect([...(hidden ?? [])]).toEqual(["notes"]);
+  });
+});
+
 describe("a collection's index", () => {
   const entity = z.object({
     id: z.string(),

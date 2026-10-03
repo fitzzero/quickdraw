@@ -7,7 +7,9 @@
 // subscriber's own user id; and the `bulkThreshold` past which one flush's
 // changes to a scope go out as a single `reset`. Every collection of the
 // contract needs one or the other, so a scope nobody could authorize fails
-// when the service is defined rather than when a client subscribes. The
+// when the service is defined rather than when a client subscribes. A
+// `"self"` scope is stripped at `Read` and may not declare a higher
+// `access`, since no level is checked to subscribe to it. The
 // index fields are checked here too, against the item projection only the
 // service compiles: a contract cannot see a schema's keys.
 //
@@ -25,6 +27,7 @@ import {
   type OrderBy,
 } from "../../contract/collections";
 import type { AnyContract } from "../../contract/defineContract";
+import { meetsLevel } from "../access/levels";
 import type { Projection } from "../emit/projection";
 
 type Fail = (message: string) => never;
@@ -176,6 +179,31 @@ function checkIndex(
   return Object.freeze([...index]);
 }
 
+/**
+ * The level a collection's subscribers need on its anchor row, which its
+ * items are also stripped at: its `access`, `Read` by default. A `"self"`
+ * scope is authorized by the subscriber's own user id, never by a level, so
+ * its items are stripped at `Read` and it may not declare more: a higher
+ * `access` would hand every subscriber that level's fields of the rows in
+ * their own scope.
+ */
+function accessOf(
+  name: string,
+  def: CollectionDef,
+  anchor: AnyContract | undefined,
+  fail: Fail,
+): AccessLevel {
+  if (anchor !== undefined) {
+    return def.access ?? "Read";
+  }
+  if (def.access !== undefined && meetsLevel(def.access, "Moderate")) {
+    fail(
+      `collection "${name}" has scopeAccess "self", which is authorized by the subscriber's user id and not by a level, so its access may not be above Read (it declares ${def.access})`,
+    );
+  }
+  return "Read";
+}
+
 function scopeOf(def: CollectionDef): CollectionScope {
   const { scope } = def;
   if (typeof scope === "string") {
@@ -201,7 +229,7 @@ function compileOne(
   if (item === undefined) {
     fail(`collection "${name}": item "${def.item}" is not a projection of the contract`);
   }
-  const access = def.access ?? "Read";
+  const access = accessOf(name, def, anchor, fail);
   return Object.freeze({
     name,
     scope: scopeOf(def),
