@@ -14,19 +14,23 @@
 //    deltas since `since` when the buffer covers it. Joining first means a
 //    change recorded after the buffer is read reaches the socket as a frame;
 // 5. otherwise read the first page, then join;
-// 6. settle two races: an access change while the subscribe ran authorizes
+// 6. settle the races: an access change while the subscribe ran authorizes
 //    again (a denied scope leaves its room), and a flush that changed the
 //    scope after the revision (its frame may have gone out before the join)
-//    reads the page again, at a newer revision.
+//    reads the page again, at a newer revision. Then, while access keeps
+//    changing, the scope is authorized again, at most `MAX_RECHECKS` times,
+//    and refused when its anchors were still moving. A subscription the
+//    subscribe recorded and revocation ended meanwhile is `FORBIDDEN`.
 
 import type { CollectionSubscribeReply, Revision } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
 import { usableChangeLog } from "../emit/hub";
+import { MAX_RECHECKS } from "../emit/subscribe";
 import { currentRev, nextRev } from "../rev";
 import type { QuickdrawServerSocket } from "../transports/types";
 import { authorizeScopes } from "./access";
 import type { BoundCollection, CollectionHub } from "./bind";
-import { groupOf, roomOf } from "./scopes";
+import { groupOf, roomOf, type ScopeSubscription } from "./scopes";
 import { readPage, type PageRequest } from "./snapshot";
 
 /** A `qd:col:sub` frame, read. */
@@ -45,12 +49,14 @@ interface Attempt {
   readonly principal: NonNullable<QuickdrawServerSocket["data"]["principal"]>;
   readonly request: ScopeRequest;
   readonly room: string;
-  /** The access changes the process had seen when the subscribe began. */
-  readonly accessChanges: number;
+  /** The access changes the process had seen when the subscribe last authorized the scope. */
+  checkedAt: number;
   /** How often the socket had unsubscribed from the scope when the subscribe began. */
   readonly unsubscribes: number;
-  /** Whether this subscribe put the socket in the scope's room. */
-  joined: boolean;
+  /** The subscription this subscribe recorded, while it manages it. */
+  record: ScopeSubscription | undefined;
+  /** Whether the last recheck gave the scope new anchors. */
+  moving: boolean;
 }
 
 function forbidden(): QuickdrawError {
@@ -64,6 +70,12 @@ async function anchorsOf(attempt: Attempt): Promise<readonly string[] | undefine
   return allowed.get(request.scope);
 }
 
+/** True while the socket's subscription to the scope is still the one this subscribe recorded. */
+function isOwn(attempt: Attempt): boolean {
+  const { hub, socket, room, record } = attempt;
+  return record !== undefined && hub.collections.scopes.get(socket, room) === record;
+}
+
 /** Joins the scope's room, unless the socket has gone or the client unsubscribed meanwhile. */
 function join(attempt: Attempt, anchors: readonly string[]): void {
   const { hub, socket, request, room } = attempt;
@@ -73,26 +85,78 @@ function join(attempt: Attempt, anchors: readonly string[]): void {
   ) {
     return;
   }
-  hub.collections.scopes.set(socket, { s: request.s, c: request.c, scope: request.scope, anchors });
-  attempt.joined = true;
+  const record: ScopeSubscription = { s: request.s, c: request.c, scope: request.scope, anchors };
+  hub.collections.scopes.set(socket, record);
+  attempt.record = record;
 }
 
-/** Step 6, first race: access changed while the subscribe ran, so the scope is authorized again. */
-async function recheckAccess(attempt: Attempt): Promise<void> {
-  const { hub, socket, room } = attempt;
-  if (hub.subscriptions.accessChanges === attempt.accessChanges) {
+/** Ends the subscription this subscribe made; another's is left alone. */
+function leave(attempt: Attempt): void {
+  if (isOwn(attempt)) {
+    attempt.hub.collections.scopes.delete(attempt.socket, attempt.room);
+  }
+  attempt.record = undefined;
+}
+
+/**
+ * The subscription this subscribe recorded is no longer the socket's: ended
+ * by revocation (or a disconnect), which is `FORBIDDEN` unless the client
+ * unsubscribed, or replaced by a newer authorization, which stands.
+ */
+function releaseTaken(attempt: Attempt): void {
+  if (attempt.record === undefined || isOwn(attempt)) {
     return;
   }
-  const anchors = await anchorsOf(attempt);
-  const current = hub.collections.scopes.get(socket, room);
-  if (anchors === undefined) {
-    hub.collections.scopes.delete(socket, room);
-    attempt.joined = false;
+  const { hub, socket, room } = attempt;
+  attempt.record = undefined;
+  const ended = hub.collections.scopes.get(socket, room) === undefined;
+  if (ended && hub.collections.scopes.unsubscribes(socket, room) === attempt.unsubscribes) {
     throw forbidden();
   }
-  if (attempt.joined && current !== undefined) {
-    hub.collections.scopes.set(socket, { ...current, anchors });
+}
+
+function sameAnchors(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((anchor, index) => anchor === b[index]);
+}
+
+/** True when access changed since the subscribe last authorized the scope. */
+function accessMoved(attempt: Attempt): boolean {
+  return attempt.hub.subscriptions.accessChanges !== attempt.checkedAt;
+}
+
+/** Step 6: access changed since the subscribe last authorized the scope, so it is authorized again. */
+async function recheckAccess(attempt: Attempt): Promise<void> {
+  if (!accessMoved(attempt)) {
+    return;
   }
+  attempt.checkedAt = attempt.hub.subscriptions.accessChanges;
+  attempt.moving = false;
+  const anchors = await anchorsOf(attempt);
+  if (anchors === undefined) {
+    leave(attempt);
+    throw forbidden();
+  }
+  releaseTaken(attempt);
+  const { record } = attempt;
+  if (record !== undefined && !sameAnchors(record.anchors, anchors)) {
+    const moved: ScopeSubscription = { ...record, anchors };
+    attempt.hub.collections.scopes.set(attempt.socket, moved);
+    attempt.record = moved;
+    attempt.moving = true;
+  }
+}
+
+/** Step 6, once the reads are done: authorize again while access keeps changing, at most `MAX_RECHECKS` times. */
+async function settleRaces(attempt: Attempt): Promise<void> {
+  for (let round = 0; round < MAX_RECHECKS && accessMoved(attempt); round += 1) {
+    await recheckAccess(attempt);
+  }
+  if (accessMoved(attempt) && attempt.moving) {
+    // Access changed during the last check too, and the scope's anchors moved: they may have missed it.
+    leave(attempt);
+    throw forbidden();
+  }
+  releaseTaken(attempt);
 }
 
 /**
@@ -120,16 +184,18 @@ async function answer(
     const replay = hub.collections.buffer.since(room, request.since, group);
     if (replay !== undefined) {
       await recheckAccess(attempt);
+      await settleRaces(attempt);
       return { ok: true, resumed: true, rev: replay.rev, deltas: replay.deltas };
     }
   }
   const rev = pageRev(attempt);
-  const page = await readPage(storage, collection, request, rev);
+  let page = await readPage(storage, collection, request, rev);
   join(attempt, anchors);
   await recheckAccess(attempt);
-  if (attempt.joined && hub.collections.buffer.lastChange(room, group) > rev) {
-    return await readPage(storage, collection, request, pageRev(attempt));
+  if (attempt.record !== undefined && hub.collections.buffer.lastChange(room, group) > rev) {
+    page = await readPage(storage, collection, request, pageRev(attempt));
   }
+  await settleRaces(attempt);
   return page;
 }
 
@@ -160,9 +226,10 @@ export async function subscribeScope(
     principal,
     request,
     room,
-    accessChanges: hub.subscriptions.accessChanges,
+    checkedAt: hub.subscriptions.accessChanges,
     unsubscribes: hub.collections.scopes.unsubscribes(socket, room),
-    joined: false,
+    record: undefined,
+    moving: false,
   };
   const anchors = await anchorsOf(attempt);
   if (anchors === undefined) {
@@ -174,9 +241,7 @@ export async function subscribeScope(
   try {
     return await answer(attempt, anchors);
   } catch (error) {
-    if (attempt.joined) {
-      hub.collections.scopes.delete(socket, room);
-    }
+    leave(attempt);
     throw error;
   }
 }

@@ -45,6 +45,8 @@ afterEach(async () => {
 interface StartOptions {
   /** Runs after each read through the framework's storage adapter, before its rows return. */
   readonly after?: (read: Read) => Promise<void> | undefined;
+  /** Runs before each read through the framework's storage adapter is made. */
+  readonly before?: (read: Read) => Promise<void> | undefined;
   readonly changeLog?: false;
   readonly adapter?: NonNullable<ConstructorParameters<typeof Server>[1]>["adapter"];
   readonly loadServiceAccess?: (userId: string) => ServiceGrants;
@@ -52,7 +54,7 @@ interface StartOptions {
 }
 
 async function start(options: StartOptions = {}) {
-  const recorded = recordingStorage(h.storage, options.after);
+  const recorded = recordingStorage(h.storage, options.after, options.before);
   const app = await createTestApp({
     services: [projectService, labelService, defineTaskService()],
     db: h.db,
@@ -324,6 +326,47 @@ describe("races with a subscribe", () => {
       items: [{ id: board.t1, title: "Raced" }],
     });
     expect(reads.filter(isPageRead)).toHaveLength(2);
+  });
+
+  it("answers FORBIDDEN for a scope revoked while its page was read again, never that page", async () => {
+    let appRef: App | undefined;
+    let pageReads = 0;
+    let flushing = false;
+    const during = async (step: (app: App) => Promise<unknown>) => {
+      flushing = true;
+      await (appRef === undefined ? undefined : step(appRef));
+      flushing = false;
+    };
+    const { app } = await start({
+      // After the first page, a flush changes the scope: the page is read again.
+      after: (read) =>
+        !flushing && isPageRead(read) && pageReads === 1
+          ? during((target) =>
+              write(target, (db) =>
+                db.task.update({ where: { id: board.t1 }, data: { title: "Raced" } }),
+              ),
+            )
+          : undefined,
+      // Before that second read, the reader loses access to the scope.
+      before: (read) => {
+        if (flushing || !isPageRead(read)) {
+          return undefined;
+        }
+        pageReads += 1;
+        return pageReads === 2
+          ? during((target) =>
+              target
+                .as(as(board.ada))
+                .projectService.removeMember({ projectId: board.p1, userId: board.cy }),
+            )
+          : undefined;
+      },
+    });
+    appRef = app;
+    const member = await connect(app, as(board.cy));
+    expect(await colSub(member.connection, "byProject", board.p1)).toEqual(forbidden);
+    expect(pageReads).toBe(2);
+    expect(inRoom(app, "byProject", board.p1)).toBe(0);
   });
 
   it("does not join a scope the client unsubscribed from while it ran", async () => {

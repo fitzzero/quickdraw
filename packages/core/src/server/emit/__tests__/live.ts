@@ -271,11 +271,13 @@ export interface Read {
 /**
  * A storage adapter that records every `findMany` the framework makes
  * through it. `after`, when given, runs once a read has returned and before
- * its rows are handed back, so a test can make something happen in between.
+ * its rows are handed back, so a test can make something happen in between;
+ * `before` runs before the read is made.
  */
 export function recordingStorage(
   storage: StorageAdapter,
   after?: (read: Read) => Promise<void> | undefined,
+  before?: (read: Read) => Promise<void> | undefined,
 ) {
   const reads: Read[] = [];
   const recording: StorageAdapter = Object.freeze({
@@ -283,6 +285,7 @@ export function recordingStorage(
     findMany: async (model: string, args?: Readonly<Record<string, unknown>>) => {
       const read = { model, args: args ?? {} };
       reads.push(read);
+      await before?.(read);
       const rows = await storage.findMany(model, args);
       await after?.(read);
       return rows;

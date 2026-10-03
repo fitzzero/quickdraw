@@ -47,6 +47,8 @@ afterEach(async () => {
 interface StartOptions {
   /** Runs after each read through the framework's storage adapter, before its rows return. */
   readonly after?: (read: Read) => Promise<void> | undefined;
+  /** Runs before each read through the framework's storage adapter is made. */
+  readonly before?: (read: Read) => Promise<void> | undefined;
   /** A Socket.IO adapter: a cluster adapter for the multi-node tests. */
   readonly adapter?: NonNullable<ConstructorParameters<typeof Server>[1]>["adapter"];
   readonly loadServiceAccess?: (userId: string) => ServiceGrants | Promise<ServiceGrants>;
@@ -56,7 +58,7 @@ interface StartOptions {
 }
 
 async function start(options: StartOptions = {}) {
-  const recorded = recordingStorage(h.storage, options.after);
+  const recorded = recordingStorage(h.storage, options.after, options.before);
   const app = await createTestApp({
     services: [projectService, defineTaskService(), cardService],
     db: h.db,
@@ -346,6 +348,80 @@ describe("races with a subscribe batch", () => {
     expect(reply.r[0].d.title).toBe("Raced");
     expect(reads.filter(isTaskRowRead)).toHaveLength(2);
     expect(owner.frames.entity).toEqual([]);
+  });
+
+  it("answers FORBIDDEN for a row revoked while the batch read it again, never the row it read", async () => {
+    let appRef: App | undefined;
+    let rowReads = 0;
+    const flush = async (data: { projectId?: string; title?: string; status?: string }) => {
+      await appRef?.server.dispatcher.run(() =>
+        h.db.task.update({ where: { id: board.t1 }, data }),
+      );
+    };
+    // Counts the batch's own row reads only: the flushes below read rows too.
+    let flushing = false;
+    const during = async (step: () => Promise<void>) => {
+      flushing = true;
+      await step();
+      flushing = false;
+    };
+    const { app } = await start({
+      // After the first read, a flush touches the row: the batch reads it again.
+      after: (read) =>
+        !flushing && isTaskRowRead(read) && rowReads === 1
+          ? during(() => flush({ status: "touched" }))
+          : undefined,
+      // Before that second read, the row moves to a project the reader cannot read.
+      before: (read) => {
+        if (flushing || !isTaskRowRead(read)) {
+          return undefined;
+        }
+        rowReads += 1;
+        return rowReads === 2
+          ? during(() => flush({ projectId: board.p2, title: "Moved to P2" }))
+          : undefined;
+      },
+    });
+    appRef = app;
+    const reader = await connect(app, as(board.cy));
+    expect(await sub(reader.connection, "taskService", [board.t1])).toEqual({
+      ok: true,
+      r: [{ ok: false, e: { code: "FORBIDDEN", message: "Insufficient permissions" } }],
+    });
+    await reader.frames.settle();
+    expect(rowReads).toBe(2);
+    expect(reader.frames.entity).toEqual([]);
+    expect(roomsOf(app, "taskService", board.t1)).toEqual([]);
+  });
+
+  it("checks access again at most three times after its reads, keeping rows whose anchors held still", async () => {
+    let appRef: App | undefined;
+    let memberReads = 0;
+    let flushing = false;
+    // Every lookup of the reader's membership sees another access change elsewhere (P2's list).
+    const { app } = await start({
+      after: async (read) => {
+        if (flushing || read.model !== "projectMember" || appRef === undefined) {
+          return;
+        }
+        memberReads += 1;
+        flushing = true;
+        await appRef.server.dispatcher.run(() =>
+          h.db.project.update({ where: { id: board.p2 }, data: { acl: [] } }),
+        );
+        flushing = false;
+      },
+    });
+    appRef = app;
+    const reader = await connect(app, as(board.cy));
+    expect(await sub(reader.connection, "taskService", [board.t1])).toMatchObject({
+      r: [{ ok: true, d: { id: board.t1 } }],
+    });
+    // The first lookup, the check after the join, then three more while access kept changing.
+    expect(memberReads).toBe(5);
+    expect(roomsOf(app, "taskService", board.t1)).toEqual([
+      entityRoom("taskService", board.t1, "Read"),
+    ]);
   });
 
   it("does not join a row the client unsubscribed from while the batch ran", async () => {
