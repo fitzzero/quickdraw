@@ -1,9 +1,10 @@
 // The protocol version and the connection handshake (RFC 0003 section 8.1).
 // A v5 client connects with `auth: { token, qd: { protocol: 5, client } }`.
 // The server answers with `qd:hello`, or refuses a client that names another
-// protocol with `PROTOCOL_MISMATCH` in the `connect_error` data. A client that
-// sends no `auth.qd` is a 4.x client, which only the legacy shim serves
-// (section 8.5). There is no capability negotiation: the version decides.
+// protocol with `PROTOCOL_MISMATCH` in the `connect_error` data, and one whose
+// authentication failed with `UNAUTHENTICATED` there. A client that sends no
+// `auth.qd` is a 4.x client, which only the legacy shim serves (section 8.5).
+// There is no capability negotiation: the version decides.
 
 import { isRecord } from "./guards";
 
@@ -49,6 +50,21 @@ export interface ProtocolMismatch {
 /** True when a `connect_error`'s `data` says the server speaks another protocol. */
 export function isProtocolMismatch(value: unknown): value is ProtocolMismatch {
   return isRecord(value) && value.code === PROTOCOL_MISMATCH && Number.isInteger(value.expected);
+}
+
+/**
+ * The `data` of the error a server refuses a connection with when
+ * authenticating it failed: the app's `authenticate` threw, so the
+ * credentials are bad or could not be checked. A client tells it apart from
+ * {@link ProtocolMismatch} by `code`; reconnecting needs other credentials.
+ */
+export interface AuthenticationRefused {
+  readonly code: "UNAUTHENTICATED";
+}
+
+/** True when a `connect_error`'s `data` says authenticating the connection failed. */
+export function isAuthenticationRefused(value: unknown): value is AuthenticationRefused {
+  return isRecord(value) && value.code === "UNAUTHENTICATED";
 }
 
 /** The most ids one `qd:sub` may name (RFC 0003 section 6), as `qd:hello` announces it. */

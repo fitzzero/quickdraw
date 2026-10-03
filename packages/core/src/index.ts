@@ -112,8 +112,10 @@ export {
 export {
   PROTOCOL_MISMATCH,
   PROTOCOL_VERSION,
+  isAuthenticationRefused,
   isProtocolMismatch,
   isQdHandshake,
+  type AuthenticationRefused,
   type HandshakeAuth,
   type HelloFrame,
   type HelloLimits,
