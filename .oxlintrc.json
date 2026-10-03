@@ -8,7 +8,6 @@
     "no-negated-condition": "warn",
     "no-promise-executor-return": "warn",
     "no-warning-comments": "warn",
-    "eqeqeq": "warn",
     "require-await": "warn",
     "complexity": "warn",
     "max-classes-per-file": "warn",
