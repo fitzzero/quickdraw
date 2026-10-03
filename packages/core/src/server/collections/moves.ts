@@ -14,6 +14,8 @@
 // |                                | over the new ones)        |                |
 // | delete                         | its old values            | none           |
 // | touch (`ctx.touch`)            | unknown: none             | read           |
+// | touch merged with a tracked    | the tracked write's old   | its values, or |
+// | write that carried `before`    | values (`before`)         | read           |
 // | an `affects` hop               | the same as after         | read           |
 // | `via` junction create / delete | the entry's links without | its links now  |
 // |                                | this flush's, with the    | (read)         |
@@ -21,12 +23,13 @@
 //
 // Left gives `removed`, entered `added` with the full item (never a patch: a
 // client cannot patch a row it never had), stayed `patched` or `updated` as
-// entity frames decide (`emit/frames.ts`); a row created again stays
-// `updated`, whole. A touched row's old scope is
-// unknown, so it is `added` to its scope now and its old scope is not told
-// (a touch carries no `before`). A deleted row whose old scope the write
-// does not carry (a touch with `removed`, or a `via` entry whose links a
-// cascade removed) left scopes nobody can name: every scope of the
+// entity frames decide (`emit/frames.ts`); a row created again in the same
+// scope is `updated`, whole. A touched row's old scope is unknown, so it is
+// `added` to its scope now and its old scope is not told (a touch carries no
+// `before`), unless a tracked write merged with it says where it was: then
+// it moves, or stays `updated`, whole. A deleted row whose old scope the
+// write does not carry (a touch with `removed`, or a `via` entry whose links
+// a cascade removed) left scopes nobody can name: every scope of the
 // collection subscribed on this process gets `removed`.
 
 import { frameKind, type FrameKind } from "../emit/frames";
@@ -138,12 +141,14 @@ function columnMove(
   if (after === undefined) {
     return undefined;
   }
-  if (write.op === "create" && write.before !== undefined) {
-    // Deleted and created again in one unit: it moved from the deleted row's scope.
+  const whole = write.op === "create" || write.fields.includes(ANY_FIELD);
+  if (whole && write.before !== undefined) {
+    // Its old scope is known after all: deleted and created again in one unit,
+    // or a tracked move merged with a touch. It moved from there, and goes out whole.
     const before = scopeIn(collection, { ...values, ...write.before });
     return moveOf(write.id, setOf(before), setOf(after), WHOLE);
   }
-  if (write.op === "create" || write.fields.includes(ANY_FIELD)) {
+  if (whole) {
     return moveOf(write.id, NONE, setOf(after), undefined);
   }
   const before = scopeIn(collection, { ...values, ...write.before });

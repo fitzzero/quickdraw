@@ -562,6 +562,28 @@ describe("deltas after a flush", () => {
     ]);
   });
 
+  it("moves a row a tracked write moved even when a touch of it merged in, leaving no ghost", async () => {
+    const { app } = await start();
+    const left = await connect(app, as(board.ada));
+    const entered = await connect(app, as(board.ed));
+    await colSub(left.connection, "byProject", board.p1);
+    await colSub(entered.connection, "byProject", board.p2);
+    const touch = h.storage.unitOfWork.touch;
+    await write(app, async (db) => {
+      await db.task.update({ where: { id: board.t1 }, data: { projectId: board.p2 } });
+      touch?.("task", [board.t1]);
+    });
+    await Promise.all([left.scopes.settle(), entered.scopes.settle()]);
+    expect(left.scopes.frames.map(({ deltas }) => deltas)).toEqual([
+      [{ t: "removed", id: board.t1 }],
+    ]);
+    expect(entered.scopes.frames.map(({ deltas }) => deltas)).toEqual([
+      [{ t: "added", item: card(board.t1, board.p2, "T1") }],
+    ]);
+    const fresh = await colSub(left.connection, "byProject", board.p1);
+    expect(fresh.items).toEqual([]);
+  });
+
   it("sends a row again, whole, when a write to another row affects it", async () => {
     const { app } = await start();
     const { connection, scopes } = await connect(app, as(board.ada));
