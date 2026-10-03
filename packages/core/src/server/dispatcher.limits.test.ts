@@ -110,6 +110,55 @@ describe("step 2: per-connection query concurrency", () => {
     expect((await Promise.all([queued, other])).map(codeOf)).toEqual(["ok", "ok"]);
   });
 
+  it("keeps a cancelled query's slot until its handler settles, so cancel-and-resend never runs two at once", async () => {
+    let running = 0;
+    let peak = 0;
+    const gates: Deferred<number>[] = [];
+    const service = qd.defineService(task, {
+      methods: {
+        ...taskDefaults,
+        // Ignores its signal, like a database read that cannot be stopped.
+        count: {
+          access: "public",
+          handler: async () => {
+            running += 1;
+            peak = Math.max(peak, running);
+            const gate = deferred<number>();
+            gates.push(gate);
+            try {
+              return await gate.promise;
+            } finally {
+              running -= 1;
+            }
+          },
+        },
+      },
+    });
+    const { call } = setup([service], { limits: { maxInFlightQueries: 1 } });
+    const count = (signal?: AbortSignal) =>
+      call({ method: "count", input: { projectId: "p1" }, connectionId: "a", signal });
+    const outcomes: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const controller = new AbortController();
+      const pending = count(controller.signal);
+      await tick();
+      controller.abort();
+      outcomes.push(codeOf(await pending));
+    }
+    // Each cancel was answered at once; only the first call's handler started.
+    expect(outcomes).toEqual(["CANCELLED", "CANCELLED", "CANCELLED", "CANCELLED", "CANCELLED"]);
+    expect(gates).toHaveLength(1);
+    const last = count();
+    await tick();
+    expect(gates).toHaveLength(1);
+    gates[0]?.resolve(1);
+    await tick();
+    expect(gates).toHaveLength(2);
+    gates[1]?.resolve(2);
+    expect(await last).toEqual({ ok: true, data: 2 });
+    expect(peak).toBe(1);
+  });
+
   it("never queues a mutation behind queries, and does not cap calls without a connection", async () => {
     const { service, gates } = gated();
     const { call } = setup([service], { limits: { maxInFlightQueries: 1, maxQueuedQueries: 0 } });
@@ -251,11 +300,20 @@ describe("the time limit", () => {
     expect(logger.at("error")).toHaveLength(1);
   });
 
-  it("uses the method's own timeoutMs, and frees the slot for the next query", async () => {
+  it("uses the method's own timeoutMs, and frees the slot once the aborted handler settles", async () => {
     const service = qd.defineService(task, {
       methods: {
         ...taskDefaults,
-        count: { access: "public", timeoutMs: 15, handler: () => deferred<number>().promise },
+        count: {
+          access: "public",
+          timeoutMs: 15,
+          handler: ({ ctx }) =>
+            new Promise<number>((_resolve, reject) => {
+              ctx.signal.addEventListener("abort", () => {
+                reject(ctx.signal.reason as Error);
+              });
+            }),
+        },
         get: { access: "public", handler: () => taskRow() },
       },
     });
@@ -264,6 +322,23 @@ describe("the time limit", () => {
     const next = call({ method: "get", input: { id: "t1" }, connectionId: "a" });
     expect(codeOf(await slow)).toBe("TIMEOUT");
     expect(await next).toEqual({ ok: true, data: taskRow() });
+  });
+
+  it("keeps a timed-out query's slot until its handler settles, and starts the next one's clock then", async () => {
+    const { service, gates } = gated();
+    const { call } = setup([service], { limits: { maxInFlightQueries: 1, callTimeoutMs: 15 } });
+    const slow = call({ method: "count", input: { projectId: "p1" }, connectionId: "a" });
+    const next = call({ method: "count", input: { projectId: "p2" }, connectionId: "a" });
+    expect(codeOf(await slow)).toBe("TIMEOUT");
+    // `count` ignores its signal, so its handler is still running: the next
+    // query waits for the slot, past its own time limit, which has not started.
+    await tick(25);
+    expect(gates).toHaveLength(1);
+    gates[0]?.resolve(1);
+    await tick();
+    expect(gates).toHaveLength(2);
+    gates[1]?.resolve(2);
+    expect(await next).toEqual({ ok: true, data: 2 });
   });
 
   it("times out a mutation too, without waiting for it", async () => {
