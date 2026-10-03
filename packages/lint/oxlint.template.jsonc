@@ -1,0 +1,31 @@
+// Design-system rules for apps built from the quickdraw template (MUI with
+// translations): user-visible strings in `Button`, `Typography` and a
+// `Tooltip`'s `title` go through `t("key")` or `<T>`. Extend it after the
+// base config:
+//
+//   {
+//     "extends": [
+//       "./node_modules/@fitzzero/quickdraw-lint/oxlint.base.jsonc",
+//       "./node_modules/@fitzzero/quickdraw-lint/oxlint.template.jsonc"
+//     ]
+//   }
+//
+// Like every quickdraw rule, these take a `baseline` option.
+{
+  "jsPlugins": [
+    {
+      "name": "quickdraw",
+      "specifier": "./plugin/index.mjs",
+    },
+  ],
+  "overrides": [
+    {
+      "files": ["**/*.tsx", "**/*.jsx"],
+      "rules": {
+        "quickdraw/no-raw-button-strings": "error",
+        "quickdraw/no-raw-tooltip-strings": "error",
+        "quickdraw/no-raw-typography-strings": "error",
+      },
+    },
+  ],
+}

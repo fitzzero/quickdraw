@@ -1,7 +1,7 @@
 {
   "name": "@fitzzero/quickdraw-lint",
   "version": "5.0.0-alpha.0",
-  "description": "oxlint plugin and shared base config for quickdraw apps",
+  "description": "oxlint plugin, base config and baseline command for quickdraw apps",
   "keywords": [
     "lint",
     "oxlint",
@@ -13,18 +13,37 @@
     "url": "git+https://github.com/fitzzero/quickdraw.git",
     "directory": "packages/lint"
   },
+  "bin": {
+    "quickdraw-lint": "./bin/quickdraw-lint.mjs"
+  },
   "files": [
-    "plugin",
-    "oxlint.base.jsonc"
+    "bin",
+    "plugin/index.mjs",
+    "plugin/baseline.mjs",
+    "plugin/lib",
+    "plugin/rules",
+    "oxlint.base.jsonc",
+    "oxlint.template.jsonc"
   ],
   "type": "module",
   "exports": {
     ".": "./plugin/index.mjs",
     "./oxlint.base.jsonc": "./oxlint.base.jsonc",
+    "./oxlint.template.jsonc": "./oxlint.template.jsonc",
     "./package.json": "./package.json"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "oxlint": "^1.52.0",
+    "vitest": "^4.0.17"
+  },
+  "peerDependencies": {
+    "oxlint": "^1.52.0"
   },
   "engines": {
     "node": ">=24"

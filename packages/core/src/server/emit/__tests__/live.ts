@@ -67,6 +67,7 @@ export const projectContract = defineContract("projectService", {
 export const projectService = qd.defineService(projectContract, {
   model: "project",
   access: anyOf(jsonAcl("acl", { owner: "ownerId" }), projectMembers),
+  writes: ["projectMember", "user"],
   methods: {
     rename: {
       access: { entry: "Moderate" },
