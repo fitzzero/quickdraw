@@ -427,6 +427,82 @@ describe("races with a subscribe batch", () => {
     ]);
   });
 
+  it("keeps no socket that disconnected while access was checked again in the index", async () => {
+    let appRef: App | undefined;
+    let memberReads = 0;
+    let flushing = false;
+    const { app, reads } = await start({
+      after: async (read) => {
+        if (flushing || read.model !== "projectMember" || appRef === undefined) {
+          return;
+        }
+        memberReads += 1;
+        if (memberReads === 1) {
+          // While the batch resolves access: an unrelated access change, so it checks again.
+          flushing = true;
+          await appRef.server.dispatcher.run(() =>
+            h.db.project.update({ where: { id: board.p2 }, data: { acl: [] } }),
+          );
+          flushing = false;
+        } else if (memberReads === 2) {
+          // While it checks again, the client goes away.
+          [...appRef.server.io.sockets.sockets.values()][0]?.disconnect(true);
+          await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+          });
+        }
+      },
+    });
+    appRef = app;
+    const member = await connect(app, as(board.bo));
+    member.connection.socket.emit("qd:sub", { s: "taskService", ids: [board.t1] }, () => undefined);
+    await expect.poll(() => memberReads).toBe(2);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(app.server.io.sockets.sockets.size).toBe(0);
+    // An access change on the row's project finds no subscription to resolve again.
+    flushing = true;
+    reads.length = 0;
+    await app.server.dispatcher.run(() =>
+      h.db.project.update({ where: { id: board.p1 }, data: { acl: [] } }),
+    );
+    expect(reads).toEqual([]);
+  });
+
+  it("does not join again a row the client unsubscribed from while access was checked again", async () => {
+    let appRef: App | undefined;
+    let unsubscribe: (() => Promise<unknown>) | undefined;
+    let memberReads = 0;
+    let flushing = false;
+    const { app } = await start({
+      after: async (read) => {
+        if (flushing || read.model !== "projectMember" || appRef === undefined) {
+          return;
+        }
+        memberReads += 1;
+        if (memberReads === 1) {
+          flushing = true;
+          await appRef.server.dispatcher.run(() =>
+            h.db.project.update({ where: { id: board.p2 }, data: { acl: [] } }),
+          );
+          flushing = false;
+        } else if (memberReads === 2) {
+          await unsubscribe?.();
+        }
+      },
+    });
+    appRef = app;
+    const member = await connect(app, as(board.bo));
+    unsubscribe = () =>
+      emitWithAck(member.connection.socket, "qd:unsub", { s: "taskService", ids: [board.t1] });
+    expect(await sub(member.connection, "taskService", [board.t1])).toMatchObject({
+      r: [{ ok: true, d: { id: board.t1 } }],
+    });
+    expect(memberReads).toBe(2);
+    expect(roomsOf(app, "taskService", board.t1)).toEqual([]);
+  });
+
   it("does not join a row the client unsubscribed from while the batch ran", async () => {
     let socketRef: { emitWithAck(event: string, payload: unknown): Promise<unknown> } | undefined;
     const hold = holdRowRead(

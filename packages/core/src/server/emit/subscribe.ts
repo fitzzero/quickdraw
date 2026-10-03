@@ -112,24 +112,37 @@ function isOwn(batch: Batch, id: string): boolean {
 }
 
 /**
- * Step 5: joins the room of each answered row, unless the socket has gone
- * (a join after its disconnect would stay in the adapter's rooms forever) or
- * the client unsubscribed from the row while the batch ran.
+ * True while the batch may put the socket in the row's room: the socket is
+ * still connected (a socket indexed after its disconnect would stay in the
+ * index forever), and the client has not unsubscribed from the row since the
+ * batch began.
  */
+function joinable(batch: Batch, id: string): boolean {
+  const { hub, socket, target } = batch;
+  const unsubscribes = hub.subscriptions.unsubscribes(socket, target.service.name, id);
+  return socket.connected && unsubscribes === batch.unsubscribes.get(id);
+}
+
+/** Step 5: joins the room of each answered row the socket may still join (`joinable`). */
 function join(batch: Batch, anchors: (id: string) => readonly string[]): void {
   const { hub, socket, target } = batch;
   const service = target.service.name;
-  if (!socket.connected) {
-    return;
-  }
   for (const [id, answer] of batch.answers) {
-    if (hub.subscriptions.unsubscribes(socket, service, id) !== batch.unsubscribes.get(id)) {
+    if (!joinable(batch, id)) {
       continue;
     }
     const subscription: EntitySubscription = { level: answer.level, anchors: anchors(id) };
     hub.subscriptions.set(socket, service, id, subscription);
     batch.joined.set(id, subscription);
   }
+}
+
+/** Gives up a joined row the socket may no longer join; the answer stands, as for a row never joined. */
+function abandon(batch: Batch, id: string): void {
+  if (isOwn(batch, id)) {
+    batch.hub.subscriptions.delete(batch.socket, batch.target.service.name, id);
+  }
+  batch.joined.delete(id);
 }
 
 /** Ends a subscription the batch made, and answers the id with `result`; another's is left alone. */
@@ -209,6 +222,11 @@ async function recheckAccess(batch: Batch): Promise<void> {
   for (const id of ids) {
     if (!isOwn(batch, id)) {
       release(batch, id);
+      continue;
+    }
+    // The guards `join` applies, since this may join the row's room again.
+    if (!joinable(batch, id)) {
+      abandon(batch, id);
       continue;
     }
     const level = subscriberLevel(access, id);
