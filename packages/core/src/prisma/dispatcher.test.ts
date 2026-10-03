@@ -33,6 +33,7 @@ const qd = initQuickdraw<{ db: PrismaClient; principal: Principal }>();
 const alice: Principal = { userId: "alice" };
 
 const taskService = qd.defineService(taskContract, {
+  model: "task",
   methods: {
     rename: {
       access: "authenticated",
@@ -188,11 +189,37 @@ describe("ctx.touch", () => {
     expect(sink.writes()).toEqual([{ model: "task", id: taskId, op: "update", fields: ["*"] }]);
   });
 
-  it("refuses a contract until services declare their database model", async () => {
+  it("resolves a contract to the model its service declares", async () => {
     const dispatcher = dispatcherWith();
-    await expect(
-      dispatcher.caller(alice).taskService.touchContract({ id: taskId }),
-    ).rejects.toThrow("no service of this dispatcher declares the database model of taskService");
+    await dispatcher.caller(alice).taskService.touchContract({ id: taskId });
+    expect(sink.writes()).toEqual([{ model: "task", id: taskId, op: "update", fields: ["*"] }]);
+  });
+
+  it("refuses a contract whose service declares no database model", async () => {
+    const labelContract = defineContract("labelService", {
+      methods: { touch: mutation({ input: z.object({ id: z.string() }), output: z.null() }) },
+    });
+    const labelService = qd.defineService(labelContract, {
+      methods: {
+        touch: {
+          access: "authenticated",
+          handler: ({ input, ctx }) => {
+            ctx.touch(labelContract, input.id);
+            return null;
+          },
+        },
+      },
+    });
+    const dispatcher = qd.createDispatcher({
+      services: [taskService, labelService],
+      db: h.db,
+      flushSink: sink,
+      logger: h.logger,
+    });
+    await expect(dispatcher.caller(alice).labelService.touch({ id: "l1" })).rejects.toThrow(
+      "no service of this dispatcher declares the database model of labelService",
+    );
+    expect(sink.flushes).toEqual([]);
   });
 });
 

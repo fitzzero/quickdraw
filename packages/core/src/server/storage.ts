@@ -57,6 +57,13 @@ export interface StorageAdapter {
   registerInterest(model: string, columns: readonly string[]): void;
   /** The columns registered for `model`. */
   interestOf(model: string): readonly string[];
+  /**
+   * True where the caller runs inside an open transaction of this adapter,
+   * whose reads see writes that may still roll back. The access cache keeps
+   * nothing read there; an adapter without this method gets no access cache
+   * across requests.
+   */
+  inTransaction?(): boolean;
   /** The units of work that record this adapter's writes; the dispatcher uses them. */
   readonly unitOfWork: UnitOfWorkFactory;
 }

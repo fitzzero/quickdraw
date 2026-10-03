@@ -2,9 +2,12 @@
 // settings every pipeline stage reads.
 
 import { consoleLogger, type Logger } from "../../contract/logger";
+import type { PolicyEngine } from "../access/api";
 import { createBasicAccessEngine } from "../access/basicEngine";
+import { createPolicyEngine, type AccessOptions } from "../access/engine";
 import type { AccessEngine } from "../access/types";
 import type { Registry } from "../registry";
+import { storageOf } from "../storage";
 import { createRecorder, type CallRecord, type RecordDetails } from "./metrics";
 import type { VersionSource } from "./notModified";
 import { resolveTracking, type Tracking, type TrackingOptions } from "./tracking";
@@ -39,8 +42,12 @@ export const MAX_TIMEOUT_MS = 2_147_483_647;
 export interface PipelineOptions extends TrackingOptions {
   /** Receives one entry per call, and the original error of every `INTERNAL` failure. Default: the console. */
   readonly logger?: Logger;
-  /** Decides each method's access form. Default: `createBasicAccessEngine()`. */
-  readonly access?: AccessEngine;
+  /**
+   * The access options (`{ cacheMs }`), or an engine of the app's own that
+   * decides each method's access form. Default: the basic engine with the
+   * row access of the services' policies (RFC 0003 section 4), no cache.
+   */
+  readonly access?: AccessEngine | AccessOptions;
   /** Answers query versions for "not modified" replies. Default: none. */
   readonly versions?: VersionSource;
   readonly limits?: Partial<DispatcherLimits>;
@@ -66,6 +73,8 @@ export interface PipelineSettings extends Tracking {
   readonly db: unknown;
   readonly logger: Logger;
   readonly access: AccessEngine;
+  /** The services' access policies, evaluated: `dispatcher.access`. */
+  readonly policies: PolicyEngine;
   readonly versions: VersionSource | undefined;
   readonly limits: DispatcherLimits;
   readonly outputValidation: boolean;
@@ -94,6 +103,36 @@ function resolveLimits(limits: Partial<DispatcherLimits> = {}): DispatcherLimits
   return Object.freeze(merged);
 }
 
+function isAccessEngine(value: unknown): value is AccessEngine {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Partial<AccessEngine>).authorize === "function"
+  );
+}
+
+/** The policy engine, and the access engine: the app's own, or the basic engine with the policies' row access. */
+function resolveAccess(
+  options: PipelineOptions,
+  registry: Registry,
+  db: unknown,
+  logger: Logger,
+): { access: AccessEngine; policies: PolicyEngine } {
+  const { access } = options;
+  if (access !== undefined && (typeof access !== "object" || access === null)) {
+    throw new TypeError("createDispatcher: access must be an access engine or { cacheMs }");
+  }
+  const engine = isAccessEngine(access) ? access : undefined;
+  const accessOptions: AccessOptions = isAccessEngine(access) ? {} : (access ?? {});
+  const policies = createPolicyEngine({
+    registry,
+    storage: options.storage ?? storageOf(db),
+    logger,
+    cacheMs: accessOptions.cacheMs,
+  });
+  return { access: engine ?? createBasicAccessEngine({ rows: policies.rows }), policies };
+}
+
 /** Applies the defaults to the dispatcher's options. */
 export function resolveSettings(
   options: PipelineOptions,
@@ -102,12 +141,14 @@ export function resolveSettings(
 ): PipelineSettings {
   const development = process.env.NODE_ENV !== "production";
   const logger = options.logger ?? consoleLogger;
+  const { access, policies } = resolveAccess(options, registry, db, logger);
   return Object.freeze({
     registry,
     db,
     logger,
-    access: options.access ?? createBasicAccessEngine(),
-    ...resolveTracking(options, registry, db, logger),
+    access,
+    policies,
+    ...resolveTracking(options, registry, db, logger, policies.sink),
     versions: options.versions,
     limits: resolveLimits(options.limits),
     outputValidation: options.outputValidation ?? development,

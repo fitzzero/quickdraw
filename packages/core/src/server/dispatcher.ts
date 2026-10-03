@@ -4,6 +4,7 @@
 // directly.
 
 import type { AnyContract } from "../contract/defineContract";
+import type { DispatcherAccess } from "./access/api";
 import { createCaller, type Caller } from "./caller";
 import { createPipeline } from "./pipeline/pipeline";
 import type { DispatchRequest, DispatchResult } from "./pipeline/request";
@@ -69,6 +70,11 @@ export interface Dispatcher<S extends readonly AnyService[] = readonly AnyServic
    * instead. For jobs, scripts and webhooks that write outside a method.
    */
   run<T>(fn: () => T | PromiseLike<T>): Promise<T>;
+  /**
+   * The services' access policies (RFC 0003 section 4): a principal's levels
+   * on rows, list filters, and access-change events.
+   */
+  readonly access: DispatcherAccess;
   readonly registry: Registry;
   /** The resolved limits, for a server to announce in `qd:hello`. */
   readonly limits: DispatcherLimits;
@@ -116,11 +122,13 @@ export function createDispatcher<const S extends readonly AnyService[]>(
   // Writes made outside any unit of work flush to this dispatcher's sinks.
   settings.unitOfWork.attach?.(settings.flushSink, settings.logger);
   const call = createPipeline(settings);
+  const { levelsFor, accessWhere, onAccessChanged } = settings.policies;
   return Object.freeze({
     call,
     caller: (principal: PrincipalOfServices<S> | null) =>
       createCaller(() => call, principal) as Caller<ContractOfServices<S>>,
     run: <T>(fn: () => T | PromiseLike<T>) => runInUnit(settings, fn),
+    access: Object.freeze({ levelsFor, accessWhere, onAccessChanged }),
     registry,
     limits: settings.limits,
   });

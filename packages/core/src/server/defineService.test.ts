@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { defineContract, query } from "../index";
 import { project, qd, task, taskDefaults, taskRow } from "./__tests__/fixtures";
-import { custom, initQuickdraw, type AnyService } from "./index";
+import { custom, inherit, initQuickdraw, owner, type AnyService } from "./index";
 import { createRegistry } from "./registry";
 
 /** Calls defineService the way untyped JavaScript would. */
@@ -72,8 +72,8 @@ describe("defineService", () => {
       '"archive" is not a method of the contract',
     );
     expect(() => defineLoosely(task, {})).toThrow("methods must be an object");
-    expect(() => defineLoosely(task, { methods: taskDefaults, model: "task" })).toThrow(
-      'the definition has an unknown option "model"',
+    expect(() => defineLoosely(task, { methods: taskDefaults, writes: ["taskLabel"] })).toThrow(
+      'the definition has an unknown option "writes"',
     );
     expect(() => defineLoosely({ name: "taskService" }, { methods: {} })).toThrow(
       "the first argument must be a contract from defineContract",
@@ -124,10 +124,56 @@ describe("defineService", () => {
       { scope: "Read", of: project, id: "projectId" },
       custom(() => true),
     ]) {
+      const definition = withMethod("count", { access, handler: () => 0 }) as object;
       expect(() =>
-        defineLoosely(task, withMethod("count", { access, handler: () => 0 })),
+        defineLoosely(task, { model: "task", access: owner("ownerId"), ...definition }),
       ).not.toThrow();
     }
+  });
+
+  it("checks model and access, and allows row-level forms only where they can be decided", () => {
+    const policy = inherit({ from: project, via: "projectId" });
+    const rename = (access: unknown) => withMethod("rename", { access, handler: () => taskRow() });
+    const service = defineLoosely(task, { model: "task", access: policy, methods: taskDefaults });
+    expect(service).toMatchObject({ model: "task", access: policy });
+    expect(qd.defineService(task, { methods: taskDefaults })).toMatchObject({
+      model: undefined,
+      access: undefined,
+    });
+    const problems: [unknown, string][] = [
+      [{ model: "", methods: taskDefaults }, "model must be the database model"],
+      [{ model: 3, methods: taskDefaults }, "model must be the database model"],
+      [
+        { model: "task", access: { kind: "owner" }, methods: taskDefaults },
+        "access must be an access policy",
+      ],
+      [{ access: policy, methods: taskDefaults }, "access needs model"],
+      [rename({ entry: "Moderate" }), 'method "rename" uses entry access, which needs'],
+      [{ model: "task", ...(rename({ entry: "Moderate" }) as object) }, "uses entry access"],
+      [
+        rename({ service: "Admin", entry: "Moderate" }),
+        'method "rename" uses entry access, which needs the service\'s access policy',
+      ],
+      [
+        withMethod("list", {
+          access: { scope: "Read", of: project, id: "projectId" },
+          handler: () => [],
+        }),
+        'method "list" uses scope access, but the service declares no model',
+      ],
+    ];
+    for (const [definition, message] of problems) {
+      expect(() => defineLoosely(task, definition), JSON.stringify(definition)).toThrow(message);
+    }
+    expect(() =>
+      defineLoosely(task, {
+        model: "task",
+        ...(withMethod("list", {
+          access: { scope: "Read", of: project, id: "projectId" },
+          handler: () => [],
+        }) as object),
+      }),
+    ).not.toThrow();
   });
 
   it("keeps share, ttlMs and version to queries, and share all away from custom access", () => {

@@ -4,10 +4,10 @@
 // access level per method and treated a non-entry `Read` method as open to any
 // signed-in user (`legacy-src/server/BaseService.ts:567-603`).
 //
-// The default engine (`basicEngine.ts`) decides `"public"`, `"authenticated"`,
-// `{ service }` and `custom(fn)`. `entry` and `scope` need the row-level
-// policies of RFC section 4.2, which a later card adds by passing `rows` to
-// the basic engine or by replacing the engine.
+// The basic engine (`basicEngine.ts`) decides `"public"`, `"authenticated"`,
+// `{ service }` and `custom(fn)`, and hands `entry` and `scope` to a
+// `RowAccess`. The dispatcher's default gives it the row access of the
+// services' policies (RFC section 4.2; `engine.ts`).
 
 import type { AccessLevel } from "../../contract/access";
 import type { AnyContract } from "../../contract/defineContract";
@@ -99,18 +99,28 @@ export type AccessForm<Input = never, Ctx = never> =
   | CustomAccess<Input, Ctx>;
 
 /**
+ * Which row-level forms a service's methods may use, from what the service
+ * declares (RFC 0003 section 3): `"all"` with a model and an access policy,
+ * `"scope"` with a model only, `"none"` without a model.
+ */
+export type RowForms = "none" | "scope" | "all";
+
+/**
  * The access forms a method whose parsed input is `Input` may declare. An
  * `entry` form may leave out `id` only when every input has an `id` string;
- * there is no run-time sniffing of payloads.
+ * there is no run-time sniffing of payloads. `Rows` leaves out the row-level
+ * forms the service cannot use.
  */
-export type AccessFor<Input, Ctx> =
+export type AccessFor<Input, Ctx, Rows extends RowForms = "all"> =
   | PublicAccess
   | AuthenticatedAccess
   | ServiceAccess
-  | ([Input] extends [{ readonly id: string }]
-      ? EntryAccess<Input>
-      : EntryAccess<Input> & { readonly id: IdSelector<Input> })
-  | ScopeAccess<Input>
+  | (Rows extends "all"
+      ? [Input] extends [{ readonly id: string }]
+        ? EntryAccess<Input>
+        : EntryAccess<Input> & { readonly id: IdSelector<Input> }
+      : never)
+  | (Rows extends "none" ? never : ScopeAccess<Input>)
   | CustomAccess<Input, Ctx>;
 
 /** What an access check is about. */
@@ -133,9 +143,9 @@ export interface AccessRequest {
  * rejects with a `QuickdrawError` when it is not: `UNAUTHENTICATED` without a
  * principal, `FORBIDDEN` when the principal's level is too low.
  *
- * The dispatcher's default is `createBasicAccessEngine()`. The access
- * policies card replaces it, or passes its policies to the basic engine as
- * `rows`, without touching the pipeline.
+ * The dispatcher's default is the basic engine with the row access of the
+ * services' policies: `createBasicAccessEngine({ rows })`. An app may pass
+ * its own as the dispatcher's `access` option.
  */
 export interface AccessEngine {
   authorize(form: AccessForm, request: AccessRequest): MaybePromise<void>;
@@ -145,9 +155,9 @@ export interface AccessEngine {
  * Decides the row-level forms, `entry` and `scope`, from the access policies
  * of RFC 0003 section 4.2. It answers whether the principal's level on the
  * row (or every row, when the selector yields several ids) is high enough,
- * or rejects with a `QuickdrawError` of its own (for example `NOT_FOUND`).
- * The basic engine has already handled the anonymous caller, the service
- * admin bypass and the `service` half of a combined form.
+ * or rejects with a `QuickdrawError` of its own. The basic engine has
+ * already handled the anonymous caller, the service admin bypass and the
+ * `service` half of a combined form.
  */
 export interface RowAccess {
   allows(form: EntryAccess | ScopeAccess, request: AccessRequest): MaybePromise<boolean>;

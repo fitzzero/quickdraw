@@ -18,31 +18,54 @@
 // member per method. `access: A[M] | NoInfer<...>` keeps the `custom(fn)`
 // callback typed while TypeScript infers `A`: a contextual type made only of
 // `A[M]` would type its parameters as `unknown`.
+//
+// `model` and `access` (RFC 0003 sections 3 and 4.2) are inferred too, into
+// `Model` and `Policy`. The policy's column names are checked against the
+// model's columns in the app's database client, and they decide which
+// row-level forms the methods may use: `entry` needs a policy, `scope` a
+// model.
 
 import type { AnyContract } from "../contract/defineContract";
 import type { KindOf, MethodName, OutputOf, ParsedInputOf } from "../contract/infer";
 import type { Version } from "../protocol/envelope";
-import type { AccessFor, CustomAccess, PublicAccess } from "./access/types";
+import type { ModelName, PolicyFor } from "./access/policy";
+import type { AccessFor, CustomAccess, PublicAccess, RowForms } from "./access/types";
 import type { HandlerArgs, HandlerContext } from "./context";
 import type { Service, ShareMode } from "./service";
-import type { MaybePromise, PrincipalOf, QuickdrawTypes } from "./types";
+import type { DbOf, MaybePromise, PrincipalOf, QuickdrawTypes } from "./types";
 
 /** The principal a method's handler sees: `null` is possible under `"public"` access only. */
 export type PrincipalFor<T extends QuickdrawTypes, Access> = Access extends PublicAccess
   ? PrincipalOf<T> | null
   : PrincipalOf<T>;
 
-/** The access forms method `M` may declare. `custom` checks receive an authenticated `ctx`. */
+/**
+ * The access forms method `M` may declare, `Rows` limiting the row-level
+ * ones to what its service declares. `custom` checks receive an
+ * authenticated `ctx`.
+ */
 export type MethodAccess<
   T extends QuickdrawTypes,
   C extends AnyContract,
   M extends MethodName<C>,
-> = AccessFor<ParsedInputOf<C, M>, HandlerContext<T>>;
+  Rows extends RowForms = "all",
+> = AccessFor<ParsedInputOf<C, M>, HandlerContext<T>, Rows>;
 
 /** One access form per contract method: the constraint of `defineService`'s inferred `A`. */
-export type AccessMap<T extends QuickdrawTypes, C extends AnyContract> = {
-  readonly [M in MethodName<C>]: MethodAccess<T, C, M>;
+export type AccessMap<
+  T extends QuickdrawTypes,
+  C extends AnyContract,
+  Rows extends RowForms = "all",
+> = {
+  readonly [M in MethodName<C>]: MethodAccess<T, C, M, Rows>;
 };
+
+/** The row-level forms a service may use: `entry` needs an access policy, `scope` a model. */
+export type RowFormsOf<Model, Policy> = [Model] extends [undefined]
+  ? "none"
+  : [Policy] extends [undefined]
+    ? "scope"
+    : "all";
 
 /**
  * A query's `share` and `ttlMs`: `ttlMs` only with `share`, since a result
@@ -91,9 +114,10 @@ export type MethodImplementation<
   C extends AnyContract,
   M extends MethodName<C>,
   A,
+  Rows extends RowForms = "all",
 > = {
   /** Who may call: `"public"`, `"authenticated"`, `{ service }`, `{ entry }`, `{ scope, of, id }` or `custom(fn)`. */
-  readonly access: A | NoInfer<MethodAccess<T, C, M>>;
+  readonly access: A | NoInfer<MethodAccess<T, C, M, Rows>>;
   readonly handler: (
     args: HandlerArgs<T, ParsedInputOf<C, M>, PrincipalFor<T, A>>,
   ) => MaybePromise<OutputOf<C, M>>;
@@ -107,11 +131,30 @@ type NotAMethod<
 > = `defineService: "${M & string}" is not a method of ${C["name"]}`;
 
 /** The second argument of `qd.defineService`. */
-export interface ServiceDefinition<T extends QuickdrawTypes, C extends AnyContract, A> {
+export interface ServiceDefinition<
+  T extends QuickdrawTypes,
+  C extends AnyContract,
+  A,
+  Model = undefined,
+  Policy = undefined,
+> {
+  /**
+   * The database model the service's rows live in, named as the client names
+   * it (`"task"`). Needed for an access policy and for `scope` access; an
+   * RPC-only service leaves it out.
+   */
+  readonly model?: Model;
+  /**
+   * How a principal's level on one of the service's rows is found:
+   * `owner(field)`, `jsonAcl(field)`, `members({...})`, `inherit({...})`,
+   * `anyOf(...)` or `resolver({...})`. Needed for `entry` access. The column
+   * names it uses must be columns of `model`.
+   */
+  readonly access?: Policy;
   /** One implementation per contract method: no more, no fewer. */
   readonly methods: {
     readonly [M in keyof A]: M extends MethodName<C>
-      ? MethodImplementation<T, C, M, A[M]>
+      ? MethodImplementation<T, C, M, A[M], RowFormsOf<Model, Policy>>
       : NotAMethod<C, M>;
   };
   /**
@@ -124,8 +167,14 @@ export interface ServiceDefinition<T extends QuickdrawTypes, C extends AnyContra
 /** `qd.defineService`, typed by the app's `QuickdrawTypes`. */
 export type DefineService<T extends QuickdrawTypes> = <
   C extends AnyContract,
-  const A extends AccessMap<T, C>,
+  const Model extends ModelName<DbOf<T>> | undefined = undefined,
+  Policy extends PolicyFor<DbOf<T>, Model> | undefined = undefined,
+  const A extends AccessMap<T, C, RowFormsOf<Model, Policy>> = AccessMap<
+    T,
+    C,
+    RowFormsOf<Model, Policy>
+  >,
 >(
   contract: C,
-  definition: ServiceDefinition<T, C, A>,
+  definition: ServiceDefinition<T, C, A, Model, Policy>,
 ) => Service<T, C>;

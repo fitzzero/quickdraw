@@ -15,9 +15,11 @@ import {
   tick,
 } from "./__tests__/fixtures";
 import {
+  createBasicAccessEngine,
   createDispatcher,
   custom,
   initQuickdraw,
+  resolver,
   toCallReply,
   type DispatchResult,
   type UnitOfWorkFactory,
@@ -144,14 +146,16 @@ describe("step 4: authorization", () => {
     expect(check.mock.calls[0]?.[0]).toMatchObject({ principal: alice, transport: "socket" });
   });
 
-  it("fails an entry or scope check with INTERNAL until a policy is configured", async () => {
+  it("fails an entry check with INTERNAL when the app's own engine decides no rows", async () => {
     const service = qd.defineService(task, {
+      model: "task",
+      access: resolver({ levelsFor: () => ({ t1: "Admin" }) }),
       methods: {
         ...taskDefaults,
         rename: { access: { entry: "Moderate" }, handler: () => taskRow() },
       },
     });
-    const { call, logger } = setup([service]);
+    const { call, logger } = setup([service], { access: createBasicAccessEngine() });
     const result = await call({ method: "rename", input: { id: "t1", title: "x" } });
     expect(toCallReply(result)).toEqual({
       ok: false,

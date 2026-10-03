@@ -5,7 +5,8 @@
 
 import type { AnyContract } from "../contract/defineContract";
 import type { MethodDef } from "../contract/methods";
-import { accessFormProblem } from "./access/forms";
+import { accessFormProblem, isCustomAccess } from "./access/forms";
+import { isAccessPolicy, type AnyAccessPolicy } from "./access/policy";
 import type { AccessForm } from "./access/types";
 import { MAX_TIMEOUT_MS } from "./pipeline/settings";
 import { outputSchemaOf } from "./pipeline/validation";
@@ -21,7 +22,7 @@ type Fail = (message: string) => never;
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
-const DEFINITION_KEYS = new Set(["methods", "adminBypass"]);
+const DEFINITION_KEYS = new Set(["model", "access", "methods", "adminBypass"]);
 
 const METHOD_KEYS = new Set(["access", "handler", "share", "ttlMs", "timeoutMs", "version"]);
 
@@ -152,6 +153,53 @@ function checkMethods(
   return methods;
 }
 
+/** The service's `model` and `access`: a policy reads rows of the service's own model, so it needs one. */
+function checkData(
+  definition: UnknownRecord,
+  fail: Fail,
+): { model: string | undefined; access: AnyAccessPolicy | undefined } {
+  const { model, access } = definition;
+  if (model !== undefined && (typeof model !== "string" || model.length === 0)) {
+    fail('model must be the database model the rows live in, as the client names it ("task")');
+  }
+  if (access !== undefined && !isAccessPolicy(access)) {
+    fail("access must be an access policy: owner, jsonAcl, members, inherit, anyOf or resolver");
+  }
+  if (access !== undefined && model === undefined) {
+    fail("access needs model: an access policy reads the rows of the service's model");
+  }
+  return { model, access };
+}
+
+/**
+ * The row-level access forms need what the service declares (RFC 0003
+ * section 3): `entry` asks the service's own policy, and `scope` (another
+ * service's policy) is for services that have a model. A service without a
+ * model may only use `"public"`, `"authenticated"`, `{ service }` or `custom`.
+ */
+function checkRowForms(
+  methods: Readonly<Record<string, ServiceMethod>>,
+  data: { model: string | undefined; access: AnyAccessPolicy | undefined },
+  fail: Fail,
+): void {
+  for (const method of Object.values(methods)) {
+    const form = method.access;
+    if (typeof form !== "object" || isCustomAccess(form)) {
+      continue;
+    }
+    if (form.entry !== undefined && data.access === undefined) {
+      fail(
+        `method "${method.name}" uses entry access, which needs the service's access policy: declare model and access`,
+      );
+    }
+    if (form.scope !== undefined && data.model === undefined) {
+      fail(
+        `method "${method.name}" uses scope access, but the service declares no model; a service without a model may only use "public", "authenticated", { service } or custom access`,
+      );
+    }
+  }
+}
+
 /** Checks a service definition and returns the frozen service, registered with `runtime`. */
 export function buildService(
   runtime: ServiceRuntime,
@@ -170,11 +218,16 @@ export function buildService(
   if (typeof adminBypass !== "boolean") {
     fail("adminBypass must be a boolean");
   }
+  const data = checkData(definition, fail);
+  const methods = checkMethods(checked, definition.methods, fail);
+  checkRowForms(methods, data, fail);
   const service: AnyService = Object.freeze({
     name: checked.name,
     contract: checked,
+    model: data.model,
+    access: data.access,
     adminBypass,
-    methods: Object.freeze(checkMethods(checked, definition.methods, fail)),
+    methods: Object.freeze(methods),
   });
   registerRuntime(service, runtime);
   return service;

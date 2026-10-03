@@ -18,6 +18,7 @@ export type {
   MethodAccess,
   MethodImplementation,
   PrincipalFor,
+  RowFormsOf,
   ServiceDefinition,
 } from "./defineService";
 export type { AnyService, Service, ServiceMethod, ShareMode } from "./service";
@@ -56,9 +57,34 @@ export type { RegisteredMethod, Registry } from "./registry";
 export { toCallReply, type DispatchRequest, type DispatchResult } from "./pipeline/request";
 export { DEFAULT_LIMITS, type DispatcherLimits, type PipelineOptions } from "./pipeline/settings";
 
-// Access forms, and the seams later cards implement: access policies,
-// tracked writes, "not modified" versions and the completion record
+// Access control (RFC 0003 section 4): the method access forms, the access
+// policies a service declares, and the engine that decides both
 export { custom } from "./access/forms";
+export { owner } from "./access/policies/owner";
+export { jsonAcl, type JsonAclOptions } from "./access/policies/jsonAcl";
+export { members, type MembersOptions } from "./access/policies/members";
+export { inherit, type InheritOptions } from "./access/policies/inherit";
+export { anyOf } from "./access/policies/anyOf";
+export { resolver, type ResolverOptions } from "./access/policies/resolver";
+export type {
+  AccessFilter,
+  AccessPolicy,
+  AnyAccessPolicy,
+  ForeignColumns,
+  ForeignColumnsOf,
+  MembershipRead,
+  ModelColumn,
+  ModelName,
+  PolicyFor,
+  PolicyKind,
+  PolicyReads,
+  PolicyTools,
+  RowLevel,
+  RowLevels,
+} from "./access/policy";
+export type { DispatcherAccess } from "./access/api";
+export type { AccessOptions } from "./access/engine";
+export type { AccessChange, AccessChangeListener } from "./access/changes";
 export { createBasicAccessEngine, type BasicAccessEngineOptions } from "./access/basicEngine";
 export { meetsLevel, serviceGrant } from "./access/levels";
 export type {
@@ -73,9 +99,13 @@ export type {
   IdSelector,
   PublicAccess,
   RowAccess,
+  RowForms,
   ScopeAccess,
   ServiceAccess,
 } from "./access/types";
+
+// The seams later cards implement: tracked writes, "not modified" versions
+// and the completion record
 export {
   ANY_FIELD,
   type UnitOfWork,

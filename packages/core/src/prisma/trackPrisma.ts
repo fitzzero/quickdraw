@@ -159,6 +159,7 @@ function createStorage(
     countStatements: tracker.countStatements,
     registerInterest: interest.register,
     interestOf: interest.of,
+    inTransaction: () => tracker.transactionClient() !== undefined || tracker.inBatch(),
     unitOfWork: tracker.unitOfWork,
   });
 }
