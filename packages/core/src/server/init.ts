@@ -58,6 +58,17 @@ export interface Quickdraw<T extends QuickdrawTypes> {
    */
   caller(principal: PrincipalOf<T> | null): CallerFor<T>;
   /**
+   * Runs `fn` inside a unit of work of the dispatcher this instance created
+   * last, so the tracked writes of a job, script or webhook flush to its
+   * sinks once `fn` settles, as a method's do (RFC 0003 section 5.1). Writes
+   * made outside any unit of work still flush, on the next tick, with a
+   * development warning. Inside a method or a transaction, `fn` joins it.
+   *
+   * @example
+   * await qd.run(() => db.task.updateMany({ where: { dueAt: { lt: now } }, data: { status: "late" } }));
+   */
+  run<R>(fn: () => R | PromiseLike<R>): Promise<R>;
+  /**
    * Serves `services` over Socket.IO and HTTP on the app's Express app and
    * HTTP server (see `createServer`), and makes the server's dispatcher the
    * one `qd.caller` calls through.
@@ -81,10 +92,10 @@ function contextOption(options: unknown): ContextExtender | undefined {
   return context as ContextExtender | undefined;
 }
 
-function noDispatcher(): never {
+function noDispatcher(member: string): never {
   throw new QuickdrawError(
     "INTERNAL",
-    "qd.caller has no dispatcher to call through: create one with qd.createDispatcher (or qd.createServer) first",
+    `${member} has no dispatcher to ${member === "qd.run" ? "flush through" : "call through"}: create one with qd.createDispatcher (or qd.createServer) first`,
   );
 }
 
@@ -110,7 +121,8 @@ export function initQuickdraw<T extends QuickdrawTypes = QuickdrawTypes>(
       return dispatcher;
     },
     caller: (principal) =>
-      createCaller(() => (current ?? noDispatcher()).call, principal) as CallerFor<T>,
+      createCaller(() => (current ?? noDispatcher("qd.caller")).call, principal) as CallerFor<T>,
+    run: async (fn) => await (current ?? noDispatcher("qd.run")).run(fn),
     createServer(options) {
       const server = createServer(options);
       current = server.dispatcher as Dispatcher;

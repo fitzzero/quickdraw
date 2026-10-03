@@ -149,6 +149,42 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" }); // in an M
   tools are per method rather than per service, the agent can no longer pick
   its user with a `userId` argument, and `generateToolMetadata` is gone.
 
+### Tracked writes
+
+`@fitzzero/quickdraw-core/prisma` wraps the app's Prisma client so the
+framework sees every write made through it (design: `docs/rfcs/0003-v5.md`,
+section 5). Pass the tracked client as `db`; the server finds the rest on it:
+
+```typescript
+import { trackPrisma } from "@fitzzero/quickdraw-core/prisma";
+
+export const db = trackPrisma(new PrismaClient({ adapter })); // the last extension applied
+export const qd = initQuickdraw<{ db: typeof db; principal: AppPrincipal }>();
+const server = qd.createServer({ app, services, db, flushSink: [auditSink] });
+
+await qd.run(() => db.task.updateMany({ where: { dueAt: { lt: now } }, data: { late: true } }));
+```
+
+- Every handler runs in a unit of work. Each `create`, `update`, `upsert`,
+  `delete`, `createMany`, `updateMany` and `deleteMany` made through `db` is
+  recorded with its row ids, merged per row, and handed to the flush sinks
+  once the response has been sent, with one revision per flush. A handler
+  may return `db.task.update(...)` without awaiting it.
+- Writes inside `db.$transaction` join the unit only when it commits; a
+  rollback drops them.
+- Jobs, scripts and webhooks wrap their writes in `qd.run(fn)`, which
+  flushes before it returns. A write made outside any unit of work flushes
+  on its own on the next tick, with a development warning.
+- Not seen: nested writes (`{ labels: { create: [...] } }`, which warn in
+  development), raw SQL and database cascades. Record raw SQL with
+  `ctx.touch("task", ids)`, or `{ removed: true }` for deleted rows.
+- Tracked models need a string `id` column; writes to other models pass
+  through untracked, with one warning.
+
+`createRecordingSink()` on `./testing` records what is flushed, for tests.
+Live updates built on these flushes (entity frames, collection deltas)
+arrive with later 5.0 cards.
+
 ### Testing
 
 `@fitzzero/quickdraw-core/testing` boots the real server on a free port:
