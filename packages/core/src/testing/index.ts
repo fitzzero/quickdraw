@@ -10,3 +10,12 @@ export {
 } from "./createTestApp";
 export { emitWithAck, waitForEvent } from "./socket";
 export { createRecordingSink, type RecordedFlush, type RecordingSink } from "./recordingSink";
+export {
+  ANONYMOUS,
+  describeAccessMatrix,
+  type AccessMatrixCase,
+  type AccessMatrixCell,
+  type AccessMatrixOptions,
+  type AccessMatrixReport,
+  type MatrixOutcome,
+} from "./accessMatrix";

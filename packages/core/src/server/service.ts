@@ -6,6 +6,7 @@ import type { AnyContract } from "../contract/defineContract";
 import type { MethodKind } from "../contract/methods";
 import type { StandardSchemaV1 } from "../contract/standardSchema";
 import type { Version } from "../protocol/envelope";
+import type { AnyAccessPolicy } from "./access/policy";
 import type { AccessForm } from "./access/types";
 import type { AnyContext, ContextExtender } from "./context";
 import type { MaybePromise, QuickdrawTypes } from "./types";
@@ -58,6 +59,10 @@ export interface Service<
   /** The service name from the contract, unchanged on the wire and in stored grants. */
   readonly name: C["name"];
   readonly contract: C;
+  /** The database model the service's rows live in, named as the client names it: `"task"`. */
+  readonly model: string | undefined;
+  /** How a principal's level on one of the service's rows is found (RFC 0003 section 4.2). */
+  readonly access: AnyAccessPolicy | undefined;
   /** Whether a service-wide `Admin` grant passes every access check of this service. */
   readonly adminBypass: boolean;
   /** The checked method records, by method name. */

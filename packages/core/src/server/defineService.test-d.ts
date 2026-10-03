@@ -11,7 +11,9 @@ import { defineContract, listOf, mutation, nullable, query, type Version } from 
 import {
   createDispatcher,
   custom,
+  inherit,
   initQuickdraw,
+  owner,
   type AnyService,
   type BaseContext,
   type Caller,
@@ -69,10 +71,13 @@ const qd = initQuickdraw<{ db: Db; principal: AppPrincipal; contracts: { task: t
 
 // ---------------------------------------------------------------------------
 // The example service: a query, a mutation, an entry-access method and a
-// custom-access method.
+// custom-access method. Entry access needs the service's model and policy.
 // ---------------------------------------------------------------------------
 
+const rows = { model: "task", access: inherit({ from: project, via: "projectId" }) } as const;
+
 const taskService = qd.defineService(task, {
+  ...rows,
   methods: {
     get: {
       access: "public",
@@ -116,6 +121,7 @@ describe("defineService", () => {
 
   test("a handler receives the parsed input, the app's db and a typed ctx", () => {
     qd.defineService(task, {
+      ...rows,
       methods: {
         get: { access: "public", handler: ({ db }) => db.task.find("t1") },
         find: { access: "public", handler: () => null },
@@ -143,6 +149,7 @@ describe("defineService", () => {
 
   test('ctx.principal is nullable under "public" access only', () => {
     qd.defineService(task, {
+      ...rows,
       methods: {
         get: {
           access: "public",
@@ -307,6 +314,7 @@ describe("definitions that fail to compile", () => {
 
   test("entry access without an id, on an input without one", () => {
     qd.defineService(task, {
+      ...rows,
       methods: {
         ...ok,
         // @ts-expect-error -- list's input has no id, so entry access must name one
@@ -314,6 +322,7 @@ describe("definitions that fail to compile", () => {
       },
     });
     qd.defineService(task, {
+      ...rows,
       methods: {
         ...ok,
         // @ts-expect-error -- limit is a number, so it cannot hold a row id
@@ -321,11 +330,49 @@ describe("definitions that fail to compile", () => {
       },
     });
     qd.defineService(task, {
+      ...rows,
       methods: {
         ...ok,
         list: { access: { entry: "Read", id: (input) => input.projectId }, handler: () => [] },
         rename: { access: { entry: "Moderate" }, handler: () => row },
       },
+    });
+  });
+
+  test("row-level access needs what the service declares", () => {
+    qd.defineService(task, {
+      methods: {
+        ...ok,
+        // @ts-expect-error -- entry access asks the service's policy, and there is none
+        rename: { access: { entry: "Moderate" }, handler: () => row },
+      },
+    });
+    qd.defineService(task, {
+      model: "task",
+      methods: {
+        ...ok,
+        // @ts-expect-error -- a model without a policy still has no policy for entry access
+        rename: { access: { entry: "Moderate" }, handler: () => row },
+      },
+    });
+    qd.defineService(task, {
+      methods: {
+        ...ok,
+        // @ts-expect-error -- a service without a model may not use scope access
+        list: { access: { scope: "Read", of: project, id: "projectId" }, handler: () => [] },
+      },
+    });
+    qd.defineService(task, {
+      model: "task",
+      methods: {
+        ...ok,
+        list: { access: { scope: "Read", of: project, id: "projectId" }, handler: () => [] },
+      },
+    });
+    qd.defineService(task, {
+      // @ts-expect-error -- an access policy reads the rows of the service's model, so it needs one
+      access: owner("ownerId"),
+      methods: ok,
     });
   });
 
@@ -338,6 +385,7 @@ describe("definitions that fail to compile", () => {
       },
     });
     qd.defineService(task, {
+      ...rows,
       methods: {
         ...ok,
         // @ts-expect-error -- a scope form needs the other service's contract

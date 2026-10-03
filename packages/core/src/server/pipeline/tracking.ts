@@ -71,9 +71,8 @@ function modelOf(registry: Registry, target: string | AnyContract): string {
     throw new TypeError('ctx.touch: name the model, as in ctx.touch("task", ids)');
   }
   for (const service of registry.services.values()) {
-    const model: unknown = Reflect.get(service, "model");
-    if (service.contract === target && typeof model === "string") {
-      return modelKey(model);
+    if (service.contract === target && service.model !== undefined) {
+      return modelKey(service.model);
     }
   }
   throw new QuickdrawError(
@@ -90,12 +89,17 @@ function idsOf(ids: string | readonly string[]): readonly string[] {
   return list as readonly string[];
 }
 
-/** Resolves the dispatcher's tracked-writes options. */
+/**
+ * Resolves the dispatcher's tracked-writes options. `accessSink` (the access
+ * cache's evictions and access-change events) goes first on the sink list,
+ * so the sinks after it read access afresh.
+ */
 export function resolveTracking(
   options: TrackingOptions,
   registry: Registry,
   db: unknown,
   logger: Logger,
+  accessSink?: FlushSink,
 ): Tracking {
   const storage = options.storage ?? storageOf(db);
   const unitOfWork = options.unitOfWork ?? storage?.unitOfWork ?? untrackedUnitOfWork;
@@ -104,10 +108,11 @@ export function resolveTracking(
     const rows = idsOf(ids);
     unitOfWork.touch?.(model, rows, touchOptions);
   };
+  const sinks = sinksOf(options.flushSink);
   return {
     storage,
     unitOfWork,
-    flushSink: combineSinks(sinksOf(options.flushSink), logger),
+    flushSink: combineSinks(accessSink === undefined ? sinks : [accessSink, ...sinks], logger),
     touch,
   };
 }

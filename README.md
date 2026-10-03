@@ -185,6 +185,65 @@ await qd.run(() => db.task.updateMany({ where: { dueAt: { lt: now } }, data: { l
 Live updates built on these flushes (entity frames, collection deltas)
 arrive with later 5.0 cards.
 
+### Access control
+
+Each method declares who may call it, and a service with rows declares one
+access policy that says how a principal's level on a row is found (design:
+`docs/rfcs/0003-v5.md`, section 4). Everything fails closed: a method without
+`access` does not compile, and a missing grant, an unknown level, a missing
+id, a row that does not exist or a malformed access list denies.
+
+```typescript
+import { anyOf, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
+
+export const projectService = qd.defineService(project, {
+  model: "project", // the Prisma model the rows live in
+  access: anyOf(
+    jsonAcl("acl", { owner: "ownerId" }), // [{ userId, level }] plus Admin for the owner
+    members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),
+  ),
+  methods: { get: { access: { entry: "Read" }, handler: ({ input, db }) => /* ... */ } },
+});
+
+export const taskService = qd.defineService(task, {
+  model: "task",
+  access: inherit({ from: project, via: "projectId" }), // the level on the task's project
+  methods: {
+    rename: { access: { entry: "Moderate" }, handler: /* ... */ },
+    create: { access: { scope: "Moderate", of: project, id: "projectId" }, handler: /* ... */ },
+    archiveAll: { access: { service: "Admin" }, handler: /* ... */ },
+  },
+});
+```
+
+- Forms: `"public"`, `"authenticated"`, `{ service: L }` (the user's
+  service-wide grant), `{ entry: L, id? }` (the policy's level on the row;
+  `id` defaults to `input.id`), `{ service: L1, entry: L2 }` (either),
+  `{ scope: L, of, id }` (the level on a row of another service) and
+  `custom(fn)`. Without a principal every form but `"public"` answers
+  `UNAUTHENTICATED`; a principal that fails gets `FORBIDDEN`.
+- A service-wide `Admin` grant passes every check on its service
+  (`adminBypass: false` turns that off). A grant below `Admin` counts only
+  where the form names `service`: a `Read` grant no longer reads every row,
+  and a `Read` method without a row id is no longer open to every signed-in
+  user, as both were in 4.x.
+- Policies: `owner(field)`, `jsonAcl(field, { owner? })`,
+  `members({ model, entry, user, level, levels? })`, `inherit({ from, via })`,
+  `anyOf(...)` and `resolver({ levelsFor, where? })`. Their column names are
+  checked against the Prisma client's models at compile time. A lookup is one
+  batched query per table, memoized for the call, so checking 60 ids costs
+  what checking one does. `entry` access needs a policy; a service without
+  `model` may only use `"public"`, `"authenticated"`, `{ service }` and
+  `custom`.
+- `server.dispatcher.access` gives the same answers to other code:
+  `levelsFor(service, principal, ids)`, `accessWhere(service, principal, level)`
+  (a `where` filter for `findMany`, or `"none"`) and `onAccessChanged(listener)`,
+  called when a tracked write may have changed someone's access to a row.
+- `createServer({ access: { cacheMs: 30_000 } })` keeps policy lookups across
+  requests; tracked writes to the columns and membership tables the policies
+  read evict them. Writes the tracked client cannot see are picked up only
+  when the time passes, so the cache is off by default.
+
 ### Testing
 
 `@fitzzero/quickdraw-core/testing` boots the real server on a free port:
@@ -201,6 +260,26 @@ await app.close();
 
 Its sockets act as the principal they connect with. `emitWithAck` and
 `waitForEvent` send raw frames and wait for events.
+
+`describeAccessMatrix(app, { service, principals, cases, via? })` runs each
+case as each principal, and anonymously, through the app's real dispatcher
+(in process, or over a socket per principal with `via: "socket"`), and fails
+listing every cell that differs from the expected table:
+
+```typescript
+await describeAccessMatrix(app, {
+  service: taskService,
+  principals: { owner, member, stranger },
+  cases: [
+    { method: "get", input: { id }, allow: ["owner", "member"] }, // everyone else is denied
+    {
+      method: "rename",
+      input: { id, title: "x" },
+      expect: { owner: "allow", member: "FORBIDDEN" },
+    },
+  ],
+});
+```
 
 ## Quick Start
 
