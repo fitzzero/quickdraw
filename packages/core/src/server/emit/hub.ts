@@ -43,7 +43,14 @@ export interface Hub {
   readonly policies: PolicyEngine;
   readonly logger: Logger;
   readonly routes: Routes;
-  readonly changeLog: ChangeLog | undefined;
+  /**
+   * The rows recent flushes touched. Always kept: subscriptions use it to
+   * tell a deleted row from a forbidden one and to catch a flush racing a
+   * subscribe. It answers "not modified" only when `answers` is on.
+   */
+  readonly changeLog: ChangeLog;
+  /** Whether the change log answers "not modified" (the dispatcher's `changeLog` is not `false`). */
+  readonly answers: boolean;
   readonly subscriptions: SubscriptionIndex;
   /** The Socket.IO server, once `createServer` attached one. */
   io: QuickdrawIo | undefined;
@@ -60,7 +67,8 @@ export function createHub(options: HubOptions): Hub {
     policies: options.policies,
     logger: options.logger,
     routes: routesOf(options.registry, options.storage),
-    changeLog: options.changeLog === false ? undefined : createChangeLog(options.changeLog),
+    changeLog: createChangeLog(options.changeLog === false ? undefined : options.changeLog),
+    answers: options.changeLog !== false,
     subscriptions: new SubscriptionIndex(),
     io: undefined,
     probe: ALWAYS_LOCAL,
@@ -68,11 +76,11 @@ export function createHub(options: HubOptions): Hub {
 }
 
 /**
- * The change log, when it may answer "not modified": it sees only this
- * process's writes, so not behind a cluster adapter.
+ * The change log, when it may answer "not modified": it is on, and, since it
+ * sees only this process's writes, the server is not behind a cluster adapter.
  */
 export function usableChangeLog(hub: Hub): ChangeLog | undefined {
-  return hub.probe.local() ? hub.changeLog : undefined;
+  return hub.answers && hub.probe.local() ? hub.changeLog : undefined;
 }
 
 /** A service whose rows can be subscribed to and sent: it has an entity and a model. */

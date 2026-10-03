@@ -11,9 +11,11 @@
 //
 // It sees the writes this process flushes and nothing else: not raw SQL
 // without `ctx.touch`, not database cascades, not other processes. A
-// deployment of several processes behind a load balancer turns it off
+// deployment of several processes behind a load balancer stops it answering
 // (`changeLog: false`) or gives its services a `versionColumn`; behind a
-// Socket.IO cluster adapter it is not consulted.
+// Socket.IO cluster adapter it never answers. It is kept either way:
+// subscriptions also use it to tell a deleted row from a forbidden one, and
+// to catch a flush that raced a subscribe.
 
 import type { Revision } from "../../protocol/envelope";
 import { nextRev } from "../rev";

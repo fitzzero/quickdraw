@@ -63,9 +63,10 @@ export interface PipelineOptions extends TrackingOptions {
    * The in-process change log (RFC 0003 section 6): the revision of the last
    * flush that touched each row, which answers "not modified" for services
    * without a `versionColumn`. It sees only this process's writes, so an app
-   * running several processes behind a load balancer turns it off (`false`)
-   * or declares `versionColumn`s; behind a Socket.IO cluster adapter it is
-   * not consulted. Default: on, keeping 100,000 rows.
+   * running several processes behind a load balancer passes `false` (the log
+   * then answers nothing) or declares `versionColumn`s; behind a Socket.IO
+   * cluster adapter it answers nothing either. Default: answering, keeping
+   * 100,000 rows.
    */
   readonly changeLog?: ChangeLogOptions | false;
   readonly limits?: Partial<DispatcherLimits>;

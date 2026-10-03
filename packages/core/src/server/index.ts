@@ -167,6 +167,7 @@ export type {
   AuthenticateResult,
   HttpAuthenticateRequest,
   ServerAuth,
+  ServiceAccessSource,
   ServiceGrants,
   SocketAuthenticateRequest,
 } from "./transports/auth";

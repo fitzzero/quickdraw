@@ -6,7 +6,8 @@
 //
 // 1. authorize every id in one engine call, which also gives the rows each
 //    level is anchored on; an id below `Read` is `FORBIDDEN` and never read;
-// 2. take the revision, before any row is read;
+// 2. take the revision before any row is read: the last one taken, so reads
+//    do not push revisions ahead of the clock (`currentRev`);
 // 3. find which held rows are unchanged ("not modified"): one narrow read of
 //    the service's `versionColumn`, or the change log;
 // 4. read the other allowed rows in one `findMany` with the entity
@@ -20,7 +21,7 @@
 //    not.
 
 import type { EntityResult, Revision } from "../../protocol/envelope";
-import { nextRev } from "../rev";
+import { currentRev } from "../rev";
 import type { StorageRow } from "../storage";
 import type { QuickdrawServerSocket } from "../transports/types";
 import type { Hub, LiveService } from "./hub";
@@ -142,16 +143,15 @@ async function recheckAccess(batch: Batch): Promise<void> {
   }
 }
 
-/** Step 6, second race: rows a flush touched after the revision are read again, at a new one. */
+/** Step 6, second race: rows a flush touched after the revision are read again, at the newer one. */
 async function rereadTouched(batch: Batch, rev: Revision): Promise<void> {
   const { hub, target } = batch;
-  const log = hub.changeLog;
   const service = target.service.name;
-  const stale = [...batch.joined].filter((id) => (log?.lastChange(service, id) ?? 0) > rev);
+  const stale = [...batch.joined].filter((id) => hub.changeLog.lastChange(service, id) > rev);
   if (stale.length === 0) {
     return;
   }
-  const fresh = nextRev();
+  const fresh = currentRev();
   const rows = await readRows(hub, target, stale);
   for (const id of stale) {
     const row = rows.get(id);
@@ -176,7 +176,7 @@ async function answerBatch(batch: Batch, held: ReadonlyMap<string, Revision>): P
       batch.denied.add(id);
     }
   }
-  const rev = nextRev();
+  const rev = currentRev();
   const heldAllowed = new Map([...held].filter(([id]) => allowed.has(id)));
   const versions = await rowVersions(hub, target.service, [...heldAllowed.keys()]);
   const unchanged = unchangedRows(versions, heldAllowed);

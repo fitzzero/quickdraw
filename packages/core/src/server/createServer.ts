@@ -24,7 +24,12 @@ import {
 } from "./dispatcher";
 import { liveOf } from "./emit/live";
 import type { AnyService } from "./service";
-import { createPrincipalResolver, type ServerAuth, type ServiceGrants } from "./transports/auth";
+import {
+  createGrantsSink,
+  createPrincipalResolver,
+  type ServerAuth,
+  type ServiceGrants,
+} from "./transports/auth";
 import {
   httpRouter,
   httpRouterSettings,
@@ -173,6 +178,15 @@ function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void 
   }
 }
 
+/** The app's own flush sinks, as a list. */
+function sinksOf(options: { readonly flushSink?: DispatcherOptions<[]>["flushSink"] }) {
+  const { flushSink } = options;
+  if (flushSink === undefined) {
+    return [];
+  }
+  return Array.isArray(flushSink) ? flushSink : [flushSink];
+}
+
 /** The HTTP transport, mounted on `app` when there is one. */
 function mountRouter<P extends Principal>(
   options: ServerOnlyOptions<P>,
@@ -304,7 +318,11 @@ export function createServer<const S extends readonly AnyService[]>(
 ): QuickdrawServer<S> {
   checkOptions(options);
   const logger = options.logger ?? consoleLogger;
-  const created = createDispatcher(options);
+  let refresh: ((userId: string) => Promise<ServiceGrants>) | undefined;
+  const grants = createGrantsSink(options.auth, () => refresh, logger);
+  const created = createDispatcher(
+    grants === undefined ? options : { ...options, flushSink: [...sinksOf(options), grants] },
+  );
   const calls = trackCalls(created);
   const { dispatcher } = calls;
   const resolvePrincipal = createPrincipalResolver(options.auth);
@@ -323,6 +341,7 @@ export function createServer<const S extends readonly AnyService[]>(
     extensions: [],
     live: liveOf(created),
   });
+  refresh = (userId) => sockets.refresh(userId);
   const { close, onClose } = closer(
     sockets,
     httpServer,

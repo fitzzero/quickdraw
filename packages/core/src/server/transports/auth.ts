@@ -9,7 +9,11 @@
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import type { Socket } from "socket.io";
 import type { AccessLevel } from "../../contract/access";
+import type { Logger } from "../../contract/logger";
+import { modelKey } from "../storage";
 import type { MaybePromise, Principal } from "../types";
+import type { FlushSink } from "../uow/flushSink";
+import { ANY_FIELD } from "../uow/types";
 
 /** A principal's service-wide grants by service name: `{ taskService: "Admin" }`. */
 export type ServiceGrants = Readonly<Record<string, AccessLevel>>;
@@ -65,6 +69,23 @@ export interface ServerAuth<P extends Principal = Principal> {
    * calls it again.
    */
   readonly loadServiceAccess?: (userId: string) => MaybePromise<ServiceGrants | null | undefined>;
+  /**
+   * Where `loadServiceAccess` reads grants from, as `{ model: "user", column:
+   * "serviceAccess" }`, the row's id being the user's. A tracked write that
+   * sets that column, or creates, deletes or touches such a row, refreshes
+   * that user's grants once it is flushed (`server.access.refresh`), so a
+   * changed grant reaches their sockets without a reconnect (RFC 0003
+   * section 4.4). Needs `loadServiceAccess`.
+   */
+  readonly serviceAccessSource?: ServiceAccessSource;
+}
+
+/** Where a server's grants are stored: one row per user, the row's id being the user's. */
+export interface ServiceAccessSource {
+  /** The model, as the client names it: `"user"`. */
+  readonly model: string;
+  /** The column holding the grants: `"serviceAccess"`. */
+  readonly column: string;
 }
 
 /** Resolves a request to its principal, or `null`; rejects when authentication fails. */
@@ -121,4 +142,55 @@ export function createPrincipalResolver<P extends Principal>(
     const serviceAccess = (await loadServiceAccess(principal.userId)) ?? {};
     return { ...principal, serviceAccess };
   };
+}
+
+/**
+ * The flush sink that refreshes the grants of the users a flush wrote stored
+ * grants for, or `undefined` without `serviceAccessSource`. `refresh` is
+ * `server.access.refresh`, given once the server exists. Throws a
+ * `TypeError` for a source without `loadServiceAccess`, or a malformed one.
+ */
+export function createGrantsSink<P extends Principal>(
+  auth: ServerAuth<P> | undefined,
+  refresh: () => ((userId: string) => Promise<unknown>) | undefined,
+  logger: Logger,
+): FlushSink | undefined {
+  const source = auth?.serviceAccessSource;
+  if (source === undefined) {
+    return undefined;
+  }
+  const named = (value: unknown): boolean => typeof value === "string" && value.length > 0;
+  if (!named(source.model) || !named(source.column)) {
+    throw new TypeError("createServer: auth.serviceAccessSource must be { model, column }");
+  }
+  if (auth?.loadServiceAccess === undefined) {
+    throw new TypeError(
+      "createServer: auth.serviceAccessSource needs auth.loadServiceAccess to reload the grants it stores",
+    );
+  }
+  const model = modelKey(source.model);
+  return Object.freeze({
+    async flush(writes): Promise<void> {
+      const users = new Set<string>();
+      for (const write of writes) {
+        const sets = write.fields.includes(source.column) || write.fields.includes(ANY_FIELD);
+        if (modelKey(write.model) === model && (write.op !== "update" || sets)) {
+          users.add(write.id);
+        }
+      }
+      await Promise.all(
+        [...users].map(async (userId) => {
+          try {
+            await refresh()?.(userId);
+          } catch (error) {
+            logger.error("Refreshing a user's written grants failed", {
+              category: "quickdraw.access",
+              userId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }),
+      );
+    },
+  } satisfies FlushSink);
 }

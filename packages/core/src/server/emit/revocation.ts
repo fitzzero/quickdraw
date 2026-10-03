@@ -24,7 +24,7 @@
 import { SERVER_EVENTS, userRoom } from "../../contract/names";
 import type { AccessChange } from "../access/changes";
 import { describeError } from "../pipeline/metrics";
-import { nextRev } from "../rev";
+import { currentRev } from "../rev";
 import type { QuickdrawServerSocket } from "../transports/types";
 import type { Hub } from "./hub";
 import { projectRow } from "./projection";
@@ -49,7 +49,7 @@ async function resend(
   if (ids.length === 0 || target?.model === undefined || projection === undefined) {
     return;
   }
-  const rev = nextRev();
+  const rev = currentRev();
   const rows =
     (await hub.storage?.findMany(target.model, {
       where: { id: { in: [...ids] } },
@@ -69,7 +69,7 @@ async function resend(
 
 /** Ends a subscription the principal may no longer read, unless the flush deleted the row. */
 function revoke(hub: Hub, socket: QuickdrawServerSocket, service: string, id: string): void {
-  if (hub.changeLog?.removed(service, id) === true) {
+  if (hub.changeLog.removed(service, id)) {
     return;
   }
   if (hub.subscriptions.delete(socket, service, id) !== undefined) {
@@ -126,6 +126,10 @@ async function reresolve(
   const access = await resolveAgain(hub, socket, service, entries);
   const moved: string[] = [];
   for (const { id, subscription } of entries) {
+    // Unsubscribed, subscribed again or resolved again meanwhile: that is newer than this.
+    if (!socket.connected || hub.subscriptions.get(socket, service, id) !== subscription) {
+      continue;
+    }
     const level = access === undefined ? undefined : subscriberLevel(access, id);
     if (access === undefined || level === undefined) {
       revoke(hub, socket, service, id);

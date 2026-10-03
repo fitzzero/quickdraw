@@ -147,7 +147,7 @@ export function createEntitySinks(hub: Hub): { intake: FlushSink; emit: FlushSin
         flushes.set(writes, touched);
         for (const [service, rows] of touched) {
           for (const [id, touch] of rows) {
-            hub.changeLog?.record(service.name, id, info.rev, touch.op === "delete");
+            hub.changeLog.record(service.name, id, info.rev, touch.op === "delete");
           }
         }
         return Promise.resolve();
