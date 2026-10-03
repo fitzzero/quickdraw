@@ -15,6 +15,7 @@ import { toWire } from "../../protocol/errors";
 import type { HelloFrame } from "../../protocol/version";
 import { describeError } from "../pipeline/metrics";
 import { toCallReply } from "../pipeline/request";
+import type { Principal } from "../types";
 import { acknowledge, INTERNAL_FAILURE, unreadable, type Acknowledge } from "./ack";
 import { attachLegacyShim, type LegacyCallers } from "./legacy";
 import type { QuickdrawServerSocket, SocketContext } from "./types";
@@ -27,10 +28,16 @@ import type { QuickdrawServerSocket, SocketContext } from "./types";
  */
 export type SocketExtension = (socket: QuickdrawServerSocket, context: SocketContext) => void;
 
+/** The part of `qd:hello` every socket of a server shares: all but who the socket acts for. */
+export type ServerHello = Omit<HelloFrame, "userId" | "serviceAccess">;
+
 /** The connection handler's settings. */
 export interface ConnectionSettings extends SocketContext {
-  /** Sent to every v5 socket once its listeners are in place. */
-  readonly hello: HelloFrame;
+  /**
+   * Sent to every v5 socket once its listeners are in place, with the
+   * socket's user id and service grants added.
+   */
+  readonly hello: ServerHello;
   readonly extensions: readonly SocketExtension[];
   /** The 4.x callers already logged, shared by every socket of the server. */
   readonly legacyCallers: LegacyCallers;
@@ -145,6 +152,15 @@ export function onConnection(
     for (const extension of settings.extensions) {
       extension(socket, settings);
     }
-    socket.emit(SERVER_EVENTS.hello, settings.hello);
+    socket.emit(SERVER_EVENTS.hello, helloFor(settings.hello, principal));
+  };
+}
+
+/** The `qd:hello` of a socket acting for `principal`: the server's part, its user id and its grants. */
+function helloFor(hello: ServerHello, principal: Principal | null): HelloFrame {
+  return {
+    ...hello,
+    userId: principal?.userId ?? null,
+    serviceAccess: principal?.serviceAccess ?? {},
   };
 }

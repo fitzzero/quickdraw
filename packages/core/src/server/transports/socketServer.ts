@@ -5,7 +5,7 @@
 
 import type { Server as HttpServer } from "node:http";
 import { Server, type ServerOptions } from "socket.io";
-import { MAX_SUBSCRIBE_IDS, PROTOCOL_VERSION, type HelloFrame } from "../../protocol/version";
+import { MAX_SUBSCRIBE_IDS, PROTOCOL_VERSION } from "../../protocol/version";
 import { QUICKDRAW_VERSION } from "../../version";
 import { createReplyMeter } from "./ack";
 import type { ResolvePrincipal, ServerAuth, ServiceGrants } from "./auth";
@@ -16,7 +16,7 @@ import {
   type SocketRateLimitOptions,
 } from "./middleware";
 import { adapterProbe, listenForGrants, refreshGrants, rotate, type LiveData } from "./pushes";
-import { onConnection, type SocketExtension } from "./socketio";
+import { onConnection, type ServerHello, type SocketExtension } from "./socketio";
 import type { QuickdrawIo, SocketContext } from "./types";
 
 export type { SocketRateLimitOptions } from "./middleware";
@@ -51,7 +51,8 @@ export interface SocketServer {
   refresh(userId: string): Promise<ServiceGrants>;
 }
 
-function helloFrame(settings: SocketServerSettings): HelloFrame {
+/** The part of `qd:hello` every socket of the server shares; `onConnection` adds the principal's. */
+function helloFrame(settings: SocketServerSettings): ServerHello {
   const { limits } = settings.dispatcher;
   return Object.freeze({
     protocol: PROTOCOL_VERSION,
@@ -61,6 +62,10 @@ function helloFrame(settings: SocketServerSettings): HelloFrame {
       maxQueuedQueries: limits.maxQueuedQueries,
       maxSubscribeIds: MAX_SUBSCRIBE_IDS,
       callTimeoutMs: limits.callTimeoutMs,
+      subscriptions: Object.freeze({
+        maxInFlight: limits.subscriptions.maxInFlight,
+        maxQueued: limits.subscriptions.maxQueued,
+      }),
     }),
     features: Object.freeze(settings.binary ? ["binary"] : []),
   });
