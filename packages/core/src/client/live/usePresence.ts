@@ -9,13 +9,16 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { useLiveData } from "./liveHooks";
 
+const NOBODY: readonly string[] = Object.freeze([]);
+
 /** The users in `room`, as the server last said: the same array until it changes. */
 export function usePresence(room: string): readonly string[] {
-  const { live } = useLiveData("usePresence");
+  const { live, awaiting } = useLiveData("usePresence");
   const listen = useCallback(
     (listener: () => void) => live.presence.listen(room, listener),
     [live, room],
   );
-  const read = (): readonly string[] => live.presence.users(room);
+  // Awaiting new credentials' hello, it shows nobody the last user's socket saw.
+  const read = (): readonly string[] => (awaiting ? NOBODY : live.presence.users(room));
   return useSyncExternalStore(listen, read, read);
 }

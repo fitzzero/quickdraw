@@ -11,7 +11,13 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { QuickdrawError } from "../../protocol/errors";
 import { useLiveData } from "./liveHooks";
-import { feedKey, streamMaxOf, type StreamState, type StreamTarget } from "./streams";
+import {
+  feedKey,
+  PENDING_STREAM,
+  streamMaxOf,
+  type StreamState,
+  type StreamTarget,
+} from "./streams";
 
 /** Options of `useStream`. */
 export interface UseStreamOptions {
@@ -46,7 +52,7 @@ export function useStream<Item>(
   scope: string | null | undefined,
   options: UseStreamOptions = {},
 ): UseStreamResult<Item> {
-  const { live } = useLiveData(`${target.service}.${target.stream}.useStream`);
+  const { live, awaiting } = useLiveData(`${target.service}.${target.stream}.useStream`);
   const feed = target.scoped ? (typeof scope === "string" ? scope : "") : undefined;
   const active = options.enabled !== false && feed !== "";
   const max = streamMaxOf(options.max);
@@ -59,7 +65,9 @@ export function useStream<Item>(
     (listener: () => void) => live.streams.listen(key, listener),
     [live, key],
   );
-  const read = (): StreamState => (active ? live.streams.state(key) : IDLE);
+  // Awaiting new credentials' hello, it shows none of the last user's items.
+  const read = (): StreamState =>
+    active ? (awaiting ? PENDING_STREAM : live.streams.state(key)) : IDLE;
   const state = useSyncExternalStore(listen, read, read);
   return useMemo(() => {
     const items =

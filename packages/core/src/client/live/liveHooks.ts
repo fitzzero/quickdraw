@@ -6,7 +6,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
 import type { QuickdrawConnection } from "../connection";
-import { useHello, useQuickdrawContext } from "../context";
+import { useAwaitingHello, useHello, useQuickdrawContext } from "../context";
 import { overlaysOf, type OverlayView } from "../optimistic";
 import { userOf } from "../session";
 import { liveDataOf, type LiveData } from "./liveData";
@@ -21,10 +21,16 @@ export function useLiveData(hook: string): {
   readonly connection: QuickdrawConnection;
   readonly queryClient: QueryClient;
   readonly live: LiveData;
+  /**
+   * True while new credentials await their hello on a cache loaded under the
+   * last ones: the hook shows nothing of what is cached (`../session.ts`).
+   */
+  readonly awaiting: boolean;
 } {
   const { connection, queryClient } = useQuickdrawContext(hook);
   useHello(connection);
-  return { connection, queryClient, live: liveDataOf(connection, queryClient) };
+  const awaiting = useAwaitingHello(connection, queryClient);
+  return { connection, queryClient, live: liveDataOf(connection, queryClient), awaiting };
 }
 
 /** The overlays of `service`, re-rendering when one of them changes. */

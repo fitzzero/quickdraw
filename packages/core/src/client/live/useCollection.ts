@@ -138,7 +138,7 @@ export function useCollection<Item, Row = IndexRow>(
   scope: string | null | undefined,
   options: UseCollectionOptions = {},
 ): UseCollectionResult<Item, Row> {
-  const { connection, queryClient, live } = useLiveData(
+  const { connection, queryClient, live, awaiting } = useLiveData(
     `${target.service}.${target.collection}.useCollection`,
   );
   const scopeValue = typeof scope === "string" ? scope : "";
@@ -162,8 +162,8 @@ export function useCollection<Item, Row = IndexRow>(
   const { data: cached } = useQuery(
     entryQuery<CollectionEntry>(collectionKey(target.service, target.collection, scopeValue)),
   );
-  // Disabled, it shows nothing of what is cached.
-  const entry = active ? cached : undefined;
+  // Disabled, or awaiting new credentials' hello, it shows nothing of what is cached.
+  const entry = active && !awaiting ? cached : undefined;
   const predicate = viewPredicate(target.def, options.view);
   const state = entry?.state ?? null;
   const shown = useMemo(

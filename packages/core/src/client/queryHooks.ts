@@ -2,10 +2,11 @@
 
 // The parts of `qd.<service>.<method>.useQuery` beyond TanStack's own
 // (RFC 0003 sections 11.3 and 11.4): joining the change topic the query
-// watches (and holding its read until the join is answered), and showing
-// the overlays of optimistic mutations over the rows it returns.
+// watches (and holding its read until the join is answered), showing the
+// overlays of optimistic mutations over the rows it returns, and showing
+// nothing while new credentials await their hello.
 
-import { hashKey, type QueryClient } from "@tanstack/react-query";
+import { hashKey, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { collectionTopic } from "../contract/names";
 import type { QuickdrawConnection } from "./connection";
@@ -182,4 +183,35 @@ export function useOverlaySelect<Output, Data>(
       return select === undefined ? (shown as unknown as Data) : select(shown);
     };
   }, [shape, view, select]);
+}
+
+/**
+ * `result` as a query that has read nothing yet: what `useQuery` shows while
+ * new credentials await their hello (`./session.ts`), since what is cached
+ * may be the last user's. The cache keeps it; the hello decides.
+ */
+export function hiddenResult<Data, Failure>(
+  result: UseQueryResult<Data, Failure>,
+): UseQueryResult<Data, Failure> {
+  return {
+    ...result,
+    data: undefined,
+    error: null,
+    status: "pending",
+    isPending: true,
+    isSuccess: false,
+    isError: false,
+    isLoading: result.isFetching,
+    isLoadingError: false,
+    isRefetchError: false,
+    isRefetching: false,
+    isPlaceholderData: false,
+    isFetched: false,
+    isFetchedAfterMount: false,
+    dataUpdatedAt: 0,
+    errorUpdatedAt: 0,
+    failureCount: 0,
+    failureReason: null,
+    errorUpdateCount: 0,
+  } as UseQueryResult<Data, Failure>;
 }

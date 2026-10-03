@@ -10,6 +10,7 @@ import { createContext, useContext, useSyncExternalStore } from "react";
 import type { HelloFrame } from "../protocol/version";
 import type { ConnectionState, QuickdrawConnection } from "./connection";
 import type { InvalidationCoordinator } from "./coordinator";
+import { awaitingHello } from "./session";
 
 /** What `QuickdrawProvider` provides. */
 export interface QuickdrawContextValue {
@@ -66,4 +67,17 @@ export function useQueriesHello(connection: QuickdrawConnection): HelloFrame | n
 export function useHello(connection: QuickdrawConnection): HelloFrame | null {
   const hello = (): HelloFrame | null => connection.getState().hello;
   return useSyncExternalStore(connection.subscribe, hello, hello);
+}
+
+/**
+ * True while new credentials await their hello on a cache loaded under the
+ * last ones (`session.ts`): a hook then shows nothing of what is cached.
+ * Re-renders when that changes.
+ */
+export function useAwaitingHello(
+  connection: QuickdrawConnection,
+  queryClient: QueryClient,
+): boolean {
+  const awaiting = (): boolean => awaitingHello(connection, queryClient);
+  return useSyncExternalStore(connection.subscribe, awaiting, awaiting);
 }

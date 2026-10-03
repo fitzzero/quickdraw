@@ -12,7 +12,7 @@ import type { AnyContract } from "../contract/defineContract";
 import type { AdminServiceMeta } from "../contract/kits/admin";
 import { adminNamespace, type AdminMetaQuery, type AdminMetaState } from "./admin";
 import { shouldRetry } from "./call";
-import { useQueriesHello, useQuickdrawContext } from "./context";
+import { useAwaitingHello, useQueriesHello, useQuickdrawContext } from "./context";
 import { shareKeepingVersion } from "./hooks";
 import { methodKey } from "./keys";
 import { fetchMethodQuery } from "./query";
@@ -29,7 +29,8 @@ function useClientAdminMeta(
 ): readonly AdminMetaState[] {
   const { connection, queryClient } = useQuickdrawContext("useAdminServices");
   const live = useQueriesHello(connection) !== null;
-  return useQueries(
+  const awaiting = useAwaitingHello(connection, queryClient);
+  const states = useQueries(
     {
       queries: queries.map((query) => {
         const queryKey = methodKey(query.serviceName, query.method, undefined);
@@ -51,7 +52,11 @@ function useClientAdminMeta(
     },
     queryClient,
   );
+  // While new credentials await their hello, what is cached may be the last user's.
+  return awaiting ? states.map(() => NOTHING_YET) : states;
 }
+
+const NOTHING_YET: AdminMetaState = Object.freeze({ data: undefined, error: null });
 
 /** The typed client's `admin` member of a contract's service (`adminNamespace`). */
 export function clientAdminNamespace(

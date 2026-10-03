@@ -18,7 +18,10 @@
 //
 // The hooks and the live stores read nothing before the hello on the current
 // credentials has arrived (`context.ts`, `query.ts`, `live/host.ts`), so no
-// version or revision of the last user's data leaves the client first. 4.1
+// version or revision of the last user's data leaves the client first, and
+// while new credentials await their hello the hooks show nothing of what is
+// cached (`awaitingHello`): no cache is removed until the hello decides, and
+// a hello naming the same user shows it again. 4.1
 // cleared nothing on a token change; 5.0's first cut refetched with the
 // versions held, which the server answered "not modified" for the new user.
 //
@@ -61,6 +64,17 @@ export interface CacheSession {
 const loadedFor = new WeakMap<QueryClient, { readonly userId: string | null }>();
 
 const sessions = new WeakMap<QuickdrawConnection, WeakMap<QueryClient, CacheSession>>();
+
+/**
+ * True while new credentials await their hello on a connection whose cache
+ * was loaded under the last ones (a hello settled it): the hooks then show
+ * nothing of what is cached, since it may be another user's, until the hello
+ * settles it (removed for another user, kept for the same one). False before
+ * the connection's first hello, so data a server render prefetched shows.
+ */
+export function awaitingHello(connection: QuickdrawConnection, queryClient: QueryClient): boolean {
+  return connection.getState().hello === null && loadedFor.has(queryClient);
+}
 
 /** The user a hello names: its `userId`, or `null` for an anonymous socket. */
 export function userOf(hello: unknown): string | null {

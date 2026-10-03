@@ -22,7 +22,7 @@ import {
   type TaskServiceOptions,
 } from "../../../server/collections/__tests__/fixture";
 import { projectService, recordingStorage } from "../../../server/emit/__tests__/live";
-import type { LimitsOptions, Principal } from "../../../server/index";
+import type { LimitsOptions, Principal, ServerAuth } from "../../../server/index";
 import { createTestApp, type TestApp } from "../../../testing/index";
 import { createQuickdrawConnection, type QuickdrawConnection } from "../../connection";
 import { whenStatus } from "../../__tests__/fixtures";
@@ -33,6 +33,8 @@ export { as } from "../../../server/access/__tests__/board";
 /** Options of a live-data server. */
 export interface ServerOptions extends TaskServiceOptions {
   readonly limits?: LimitsOptions;
+  /** The server's `authenticate`; default: the test app's, which trusts the handshake's `principal`. */
+  readonly authenticate?: NonNullable<ServerAuth["authenticate"]>;
 }
 
 /** A query client like the provider's default. */
@@ -91,6 +93,9 @@ export function liveDataHarness() {
         db: harness().db,
         storage,
         ...(options.limits === undefined ? {} : { limits: options.limits }),
+        ...(options.authenticate === undefined
+          ? {}
+          : { auth: { authenticate: options.authenticate } }),
       });
       apps.push(app as unknown as TestApp);
       /** Runs `fn` on the tracked client in a unit of work, which flushes: frames go out. */
