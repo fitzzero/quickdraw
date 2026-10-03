@@ -9,6 +9,7 @@
 // dropped.
 
 import type { QuickdrawError } from "../../protocol/errors";
+import { quietly } from "../devWarnings";
 import type { UnitOfWork } from "../uow/types";
 import { abortError, toQuickdrawError } from "./errors";
 
@@ -28,6 +29,8 @@ export interface RunOptions {
   readonly unit: UnitOfWork;
   /** Calls the handler with the run's signal. */
   readonly invoke: (signal: AbortSignal) => unknown;
+  /** Run the handler `quietly`: no development checks of its statements (a kit's handler). */
+  readonly quiet?: boolean;
   /** Turns the handler's value into the run's outcome: output validation, freezing. */
   readonly accept: (value: unknown) => Promise<Outcome>;
 }
@@ -99,9 +102,10 @@ function createState(options: RunOptions, controller: AbortController): RunState
 }
 
 function runHandler(options: RunOptions, state: RunState, signal: AbortSignal): Promise<void> {
+  const invoke = (): unknown => options.invoke(signal);
   let started: Promise<unknown>;
   try {
-    started = options.unit.run(() => options.invoke(signal));
+    started = options.unit.run(options.quiet === true ? () => quietly(invoke) : invoke);
   } catch (error) {
     started = Promise.reject(error);
   }

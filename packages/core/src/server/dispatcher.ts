@@ -6,9 +6,9 @@
 import type { AnyContract } from "../contract/defineContract";
 import type { DispatcherAccess } from "./access/api";
 import { createCaller, type Caller } from "./caller";
+import type { RunContext } from "./context";
 import { registerLive, type Presence, type StreamHandle } from "./emit/live";
-import { createPipeline } from "./pipeline/pipeline";
-import type { DispatchRequest, DispatchResult } from "./pipeline/request";
+import { createPipeline, type DispatchRequest, type DispatchResult } from "./pipeline/pipeline";
 import {
   resolveSettings,
   type DispatcherLimits,
@@ -89,8 +89,10 @@ export interface Dispatcher<S extends readonly AnyService[] = readonly AnyServic
    * sinks once it settles, whether it resolved or threw, and before `run`
    * returns. Inside an open unit of work or transaction, `fn` joins it
    * instead. For jobs, scripts and webhooks that write outside a method.
+   * `fn` gets a {@link RunContext}: `ctx.touch` records the rows a raw SQL
+   * write changed.
    */
-  run<T>(fn: () => T | PromiseLike<T>): Promise<T>;
+  run<T>(fn: (ctx: RunContext) => T | PromiseLike<T>): Promise<T>;
   /**
    * The services' access policies (RFC 0003 section 4): a principal's levels
    * on rows, list filters, and access-change events.
@@ -136,17 +138,26 @@ export function withAccessSinks<O extends object>(
 }
 
 /** `dispatcher.run`: a unit of work around `fn`, flushed once `fn` settles. */
-async function runInUnit<T>(settings: PipelineSettings, fn: () => T | PromiseLike<T>): Promise<T> {
+async function runInUnit<T>(
+  settings: PipelineSettings,
+  fn: (ctx: RunContext) => T | PromiseLike<T>,
+): Promise<T> {
   if (typeof fn !== "function") {
     throw new TypeError("run: pass the function to run inside a unit of work");
   }
+  const requestId = crypto.randomUUID();
   const unit = settings.unitOfWork.begin({
-    requestId: crypto.randomUUID(),
+    requestId,
     transport: "internal",
     sink: settings.flushSink,
   });
+  const ctx: RunContext = Object.freeze({
+    touch: settings.touch,
+    log: settings.logger.child({ requestId }),
+    principal: null,
+  });
   try {
-    return await unit.run(fn);
+    return await unit.run(() => fn(ctx));
   } finally {
     try {
       await unit.flush();
@@ -174,15 +185,16 @@ export function createDispatcher<const S extends readonly AnyService[]>(
   }
   const registry = createRegistry(options.services);
   const settings = resolveSettings(options, registry, options.db, ACCESS_SINKS.get(options));
-  // Writes made outside any unit of work flush to this dispatcher's sinks.
-  settings.unitOfWork.attach?.(settings.flushSink, settings.logger);
+  // Writes made outside any unit of work flush to this dispatcher's sinks,
+  // and the tracker's development warnings go out as this dispatcher's.
+  settings.unitOfWork.attach?.(settings.flushSink, settings.logger, settings.warnings);
   const call = createPipeline(settings);
   const { levelsFor, accessWhere, onAccessChanged } = settings.policies;
   const dispatcher: Dispatcher<S> = Object.freeze({
     call,
     caller: (principal: PrincipalOfServices<S> | null) =>
       createCaller(() => call, principal) as Caller<ContractOfServices<S>>,
-    run: <T>(fn: () => T | PromiseLike<T>) => runInUnit(settings, fn),
+    run: <T>(fn: (ctx: RunContext) => T | PromiseLike<T>) => runInUnit(settings, fn),
     access: Object.freeze({ levelsFor, accessWhere, onAccessChanged }),
     collections: Object.freeze({
       reset: (contract: AnyContract, collection: string, scope: string) => {

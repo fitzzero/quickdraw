@@ -11,7 +11,7 @@ import type { AnyContract } from "../contract/defineContract";
 import { QuickdrawError } from "../protocol/errors";
 import { buildService } from "./buildService";
 import { createCaller, type CallerFor } from "./caller";
-import type { BaseContext, ContextExtender } from "./context";
+import type { BaseContext, ContextExtender, RunContext } from "./context";
 import { createServer, type QuickdrawServer, type ServerOptions } from "./createServer";
 import type { DefineService } from "./defineService";
 import {
@@ -71,11 +71,17 @@ export interface Quickdraw<T extends QuickdrawTypes> {
    * sinks once `fn` settles, as a method's do (RFC 0003 section 5.1). Writes
    * made outside any unit of work still flush, on the next tick, with a
    * development warning. Inside a method or a transaction, `fn` joins it.
+   * `fn` gets a {@link RunContext} (`{ touch, log, principal: null }`):
+   * `ctx.touch` records the rows a raw SQL write changed.
    *
    * @example
    * await qd.run(() => db.task.updateMany({ where: { dueAt: { lt: now } }, data: { status: "late" } }));
+   * await qd.run(async (ctx) => {
+   *   await db.$executeRaw`UPDATE "Task" SET "status" = 'late' WHERE "id" = ANY(${ids})`;
+   *   ctx.touch("task", ids);
+   * });
    */
-  run<R>(fn: () => R | PromiseLike<R>): Promise<R>;
+  run<R>(fn: (ctx: RunContext) => R | PromiseLike<R>): Promise<R>;
   /**
    * The collections of the dispatcher this instance created last (RFC 0003
    * section 7): `qd.collections.reset(contract, collection, scope)` sends one

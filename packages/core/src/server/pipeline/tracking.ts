@@ -89,6 +89,11 @@ function idsOf(ids: string | readonly string[]): readonly string[] {
   return list as readonly string[];
 }
 
+/** The storage adapter the dispatcher reads through: the one given, or the one a tracked `db` carries. */
+export function storageFor(options: TrackingOptions, db: unknown): StorageAdapter | undefined {
+  return options.storage ?? storageOf(db);
+}
+
 /**
  * Resolves the dispatcher's tracked-writes options. The framework's own
  * sinks go first on the sink list, in the order given (the live data's
@@ -104,7 +109,7 @@ export function resolveTracking(
   logger: Logger,
   framework: readonly (FlushSink | undefined)[] = [],
 ): Tracking {
-  const storage = options.storage ?? storageOf(db);
+  const storage = storageFor(options, db);
   const unitOfWork = options.unitOfWork ?? storage?.unitOfWork ?? untrackedUnitOfWork;
   const touch: BaseContext["touch"] = (target, ids, touchOptions) => {
     const model = modelOf(registry, target);

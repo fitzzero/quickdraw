@@ -42,6 +42,9 @@
 // - the built MCP bridge (`./server/mcp`) lists a contract's method as a
 //   tool and serves a call through its stdio server, and `./server` carries
 //   none of the bridge's code;
+// - the built OpenTelemetry bridge (`./server/otel`) records a completion
+//   record's metrics and span, ships in that entry only, and no other entry
+//   imports `@opentelemetry/api`;
 // - the built tracked-writes adapter (`./prisma`) imports nothing from Prisma,
 //   refuses a value that is not a Prisma client, and shares one storage
 //   lookup with `./server`;
@@ -166,6 +169,13 @@ const expectations = {
       "MAX_STREAMS_PER_SOCKET",
       "CHANNEL_ABUSE_WINDOW_MS",
       "CHANNEL_ABUSE_MULTIPLIER",
+      "DevWarningError",
+      "formatDevWarning",
+      "N_PLUS_ONE_STATEMENTS",
+      "STALL_RESOLUTION_MS",
+      "DEFAULT_STALL_THRESHOLD_MS",
+      "DEFAULT_STALL_INTERVAL_MS",
+      "MIN_STALL_INTERVAL_MS",
     ],
     client: false,
   },
@@ -197,6 +207,7 @@ const expectations = {
     ],
     client: false,
   },
+  "./server/otel": { symbols: ["otelOnCall", "UNKNOWN_METHOD"], client: false },
   "./client": {
     symbols: [
       "createQuickdrawClient",
@@ -264,6 +275,11 @@ const expectations = {
       "waitForEvent",
       "createRecordingSink",
       "describeAccessMatrix",
+      "expectBudget",
+      "budgetFileOf",
+      "BUDGET_GROWTH_ENV",
+      "BUDGET_BYTES_TOLERANCE",
+      "DevWarningError",
     ],
     client: false,
   },
@@ -1101,6 +1117,67 @@ assert.deepEqual(replies[1], {
   result: { content: [{ type: "text", text: '"hello smoke from agent via mcp"' }] },
 });
 console.log("ok the built MCP bridge lists a contract's tools and serves a call over stdio");
+
+// The built OpenTelemetry bridge: its own entry, the only one that imports
+// @opentelemetry/api (an optional peer), and an `onCall` handler that records
+// a completion record on the meter and tracer it is given.
+const otel = await import(`${pkg.name}/server/otel`);
+assert.equal(server.otelOnCall, undefined, "./server must not export the OpenTelemetry bridge");
+for (const [source, outputs] of emittedIn) {
+  if (source === "src/server/observability/otel.ts") {
+    assert.deepEqual(outputs, ["server/otel.js"], `${source} must ship in ./server/otel only`);
+  }
+}
+for (const exportPath of exportPaths.filter((path) => path !== "./server/otel")) {
+  const otelImports = importGraph(exportPath).externals.filter((imported) =>
+    imported.endsWith(" imports @opentelemetry/api"),
+  );
+  assert.deepEqual(otelImports, [], `${exportPath} must not import @opentelemetry/api`);
+}
+const points = [];
+const spans = [];
+const instrument = (name) => ({
+  add: (value, attributes) => points.push([name, value, attributes]),
+  record: (value, attributes) => points.push([name, value, attributes]),
+});
+const onCall = otel.otelOnCall({
+  meter: { createCounter: instrument, createHistogram: instrument },
+  tracer: {
+    startSpan: (name, options) => ({
+      setStatus: () => undefined,
+      end: (endTime) => spans.push([name, endTime - options.startTime, options.kind]),
+    }),
+  },
+});
+onCall({
+  service: "echoService",
+  method: "echo",
+  kind: "query",
+  transport: "socket",
+  requestId: "smoke",
+  outcome: "ok",
+  durationMs: 250,
+  queueMs: 0,
+  bytes: 64,
+  shared: false,
+  sqlStatements: 2,
+});
+const echoAttributes = {
+  "quickdraw.service": "echoService",
+  "quickdraw.method": "echo",
+  "quickdraw.outcome": "ok",
+  "quickdraw.transport": "socket",
+};
+assert.deepEqual(points, [
+  ["quickdraw.calls", 1, echoAttributes],
+  ["quickdraw.call.duration", 0.25, echoAttributes],
+  ["quickdraw.call.response.size", 64, echoAttributes],
+  ["quickdraw.call.sql_statements", 2, echoAttributes],
+]);
+assert.deepEqual(spans, [["echoService.echo", 250, 1]]);
+console.log(
+  `ok ${pkg.name}/server/otel records a call's metrics and span, and no other entry imports @opentelemetry/api`,
+);
 
 // The built tracked-writes adapter: its own entry, with no import of Prisma
 // (the app passes its client in), and the storage lookup `./server` uses.

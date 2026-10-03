@@ -42,6 +42,10 @@
       "types": "./dist/server/mcp/index.d.ts",
       "import": "./dist/server/mcp/index.js"
     },
+    "./server/otel": {
+      "types": "./dist/server/otel.d.ts",
+      "import": "./dist/server/otel.js"
+    },
     "./client": {
       "types": "./dist/client/index.d.ts",
       "import": "./dist/client/index.js"
@@ -93,6 +97,8 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.16",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/sdk-metrics": "^2.0.0",
     "@prisma/client": "^7.0.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "@tanstack/react-query": "^5.20.0",
@@ -123,6 +129,7 @@
   },
   "peerDependencies": {
     "@electric-sql/pglite": "^0.3.16 || ^0.4.0 || ^0.5.0",
+    "@opentelemetry/api": "^1.7.0",
     "@prisma/client": "^7.0.0",
     "@socket.io/redis-adapter": "^8.0.0",
     "@tanstack/react-query": "^5.20.0",
@@ -138,6 +145,9 @@
   },
   "peerDependenciesMeta": {
     "@electric-sql/pglite": {
+      "optional": true
+    },
+    "@opentelemetry/api": {
       "optional": true
     },
     "@prisma/client": {

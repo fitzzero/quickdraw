@@ -186,7 +186,17 @@ await qd.run(() => db.task.updateMany({ where: { dueAt: { lt: now } }, data: { l
   on its own on the next tick, with a development warning.
 - Not seen: nested writes (`{ labels: { create: [...] } }`, which warn in
   development), raw SQL and database cascades. Record raw SQL with
-  `ctx.touch("task", ids)`, or `{ removed: true }` for deleted rows.
+  `ctx.touch("task", ids)`, or `{ removed: true }` for deleted rows. A job
+  gets the same `touch` from `qd.run`, whose `fn` receives
+  `{ touch, log, principal: null }`:
+
+  ```typescript
+  await qd.run(async (ctx) => {
+    await db.$executeRaw`UPDATE "Task" SET "status" = 'late' WHERE "id" = ANY(${ids})`;
+    ctx.touch("task", ids);
+  });
+  ```
+
 - Tracked models need a string `id` column; writes to other models pass
   through untracked, with one warning.
 
@@ -1085,6 +1095,129 @@ await describeAccessMatrix(app, {
   ],
 });
 ```
+
+### Performance budgets
+
+`expectBudget(run, { name })` on `./testing` makes performance something a
+test can fail on. It runs one step of a test against the apps
+`createTestApp` started, records what the step cost, and compares that with
+the entry `name` in the budget file beside the test,
+`__budgets__/<test file>.json`. Commit the file.
+
+```typescript
+import { createTestApp, expectBudget } from "@fitzzero/quickdraw-core/testing";
+
+it("lists a page within its budget", async () => {
+  const app = await createTestApp({ services, db });
+  await expectBudget(() => app.as(owner).taskService.list({ limit: 20 }), {
+    name: "list a page",
+  });
+});
+```
+
+It counts statements and bytes, never time, so a budget is the same on every
+machine and on PGlite or PostgreSQL. It records:
+
+- **each call** of the step (through `app.as(...)`, a socket or HTTP): its
+  service and method, the statements its handler ran and its reply's bytes,
+  from its completion record (`CallRecord.sqlStatements` and `bytes`;
+  `app.as(...)` replies count as their JSON). The access check before the
+  handler is not among a call's statements; the reads a kit's handler makes
+  to filter by access are. A query that joined another call's shared run
+  counts none: the run is counted once.
+- **the whole step**: every statement the apps' tracked database clients ran
+  while `run` did (access checks, handlers, flushes and subscription reads),
+  and every byte the apps' servers wrote to sockets (a frame sent to a room
+  counts once per socket that receives it), plus the in-process replies.
+
+What it does with them:
+
+- A missing entry is written. A step that costs less rewrites its entry, so
+  the budget tightens as the code improves.
+- A step that costs more fails, naming every number that grew with its old
+  and new values. Set `QD_ALLOW_BUDGET_GROWTH=1` to accept the new budget
+  instead, and commit the file. A step whose calls changed (other methods,
+  outcomes or how many) counts as growth.
+- Statements must match exactly; bytes may move by up to 5% either way
+  (ids and timestamps vary in length) without counting as a change.
+- Await, inside `run`, everything the step should cost: the replies and the
+  frames it is about. Measure one step at a time.
+- A few reads happen once per process (the storage adapter asks once
+  whether an order column may hold null). When a step could be the first to
+  pay for one, run it once before measuring it, so its budget does not
+  depend on the order tests run in.
+
+### Development warnings
+
+While NODE_ENV is not `"production"`, a running app warns about the slow and
+untracked patterns lint cannot see, as they happen. Every warning has one
+format and names the method call it happened in:
+
+```
+[quickdraw:n-plus-one] taskService.board: task.findUnique by id ran 10 times in one call, once per item (N+1); ...
+```
+
+| Kind                 | Raised when                                                                                          |
+| -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `n-plus-one`         | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])` |
+| `unbounded-read`     | a call ran `findMany` with neither `take` nor a filter on `id`                                       |
+| `oversized-response` | a reply was larger than `maxResponseBytes` (default 1 MiB)                                           |
+| `nested-write`       | a write's `data` wrote a related row, which is not tracked                                           |
+| `ambient-write`      | a tracked write ran outside any unit of work                                                         |
+| `batch-read`         | a write in an array-form `$transaction` read its rows outside the batch                              |
+| `batch-create-many`  | a `createMany` in an array-form `$transaction` could not report its rows                             |
+
+Each is logged once per kind, service, method and subject (the model, or
+the field of a nested write), under `category: "quickdraw.dev"`. Only an
+app's own statements are checked: the framework's reads and the kits'
+handlers are not. In tests, `createTestApp({ strictWarnings: true })` (under
+vitest) throws every warning as a `DevWarningError` where it is raised, so
+the test that caused it fails: the call it happened in fails with `INTERNAL`
+and the error as its `cause`, and an in-process call whose reply was
+oversized rejects with it once the reply was recorded.
+
+### Stall watchdog and OpenTelemetry
+
+`createServer({ stallWatchdog: true })` watches the event loop. It samples
+the loop's delay every 20 ms (`perf_hooks.monitorEventLoopDelay`), reads it
+every 10 s, and logs a warning (`category: "quickdraw.stall"`) when the 99th
+percentile delay of that window is above 200 ms, naming the window's slowest
+methods. `{ thresholdMs, intervalMs, slowest }` change the threshold, the
+window (at least 1 s) and how many methods it names. A percentile needs
+repeated stalls: one 300 ms block in a 10 s window is one sample of about
+500 and does not move it. On an idle process the watchdog costs about 5 ms
+of CPU per 10 s, 0.05% of one CPU
+(`packages/core/scripts/stall-watchdog-overhead.mjs` measures it).
+
+`otelOnCall({ meter, tracer })` on `./server/otel` is an `onCall` handler
+that records every call with OpenTelemetry (`@opentelemetry/api` is an
+optional peer dependency, and only this entry imports it):
+
+```typescript
+import { metrics, trace } from "@opentelemetry/api";
+import { otelOnCall } from "@fitzzero/quickdraw-core/server/otel";
+
+const server = qd.createServer({
+  app,
+  services,
+  db,
+  onCall: otelOnCall({ meter: metrics.getMeter("api"), tracer: trace.getTracer("api") }),
+});
+```
+
+| Instrument                      | Kind      | Unit          |
+| ------------------------------- | --------- | ------------- |
+| `quickdraw.calls`               | counter   | `{call}`      |
+| `quickdraw.call.duration`       | histogram | `s`           |
+| `quickdraw.call.response.size`  | histogram | `By`          |
+| `quickdraw.call.sql_statements` | histogram | `{statement}` |
+
+Every point carries `quickdraw.service`, `quickdraw.method`,
+`quickdraw.outcome` (`ok`, `not-modified` or the error code) and
+`quickdraw.transport`; a call to a method that does not exist is recorded as
+`_unknown`, so no client can add attribute values. With a tracer, each call
+is also a server span named `service.method`, with an error status for
+`INTERNAL` and `TIMEOUT`.
 
 ## Quick Start
 

@@ -11,7 +11,9 @@
 // - `countOnBoard`, a query that watches its project's board topic;
 // - entity-returning mutations, so the client applies them optimistically:
 //   `rename` waits for the test's gate and refuses the title "conflict";
-// - `board`, every task of a project, indexed, with the view `mine`.
+// - `board`, every task of a project, indexed, with the view `mine`;
+// - the kits' `list` (cards, filtered by project and status) and `search`
+//   (in titles), which the budgets test measures.
 //
 //            owner   access list    members                 level on its tasks
 //   P1       ada     di: Read       bo: Moderate, cy: Read  ada Admin, bo Moderate, cy and di Read
@@ -24,7 +26,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach } from "vitest";
 import { z } from "zod";
-import { QuickdrawError, defineContract, mutation, query } from "../../src/index";
+import { QuickdrawError, crud, defineContract, mutation, query, search } from "../../src/index";
 import { createHarness, type Harness } from "../../src/prisma/__tests__/harness";
 import { findTask, seedBoard, type Board } from "../../src/server/access/__tests__/board";
 import {
@@ -33,7 +35,12 @@ import {
   qd,
   recordingStorage,
 } from "../../src/server/emit/__tests__/live";
-import { inherit, type CallRecord } from "../../src/server/index";
+import {
+  crud as crudKit,
+  inherit,
+  search as searchKit,
+  type CallRecord,
+} from "../../src/server/index";
 import { createTestApp, type TestApp } from "../../src/testing/index";
 import type { PrismaClient } from "../prisma/setup";
 
@@ -50,8 +57,10 @@ const card = z.object({
   assigneeId: z.string().nullable(),
 });
 
+const entity = card.extend({ notes: z.string().nullable() });
+
 export const taskContract = defineContract("taskService", {
-  entity: card.extend({ notes: z.string().nullable() }),
+  entity,
   projections: { card },
   fields: { notes: "Admin" },
   methods: {
@@ -86,6 +95,11 @@ export const taskContract = defineContract("taskService", {
       output: "entity",
     }),
     remove: mutation({ input: id, output: z.null() }),
+    ...crud.contract({
+      entity,
+      list: { item: card, filter: ["projectId", "status"], sort: ["ordinal", "title"] },
+    }),
+    ...search.contract({ entity, item: card, fields: ["title"] }),
   },
   collections: {
     board: {
@@ -176,6 +190,8 @@ function defineTaskService(gate: Gate) {
           return null;
         },
       },
+      ...crudKit.handlers(taskContract, { access: { list: "authenticated" } }),
+      ...searchKit.handlers(taskContract, { access: "authenticated" }),
     },
   });
 }

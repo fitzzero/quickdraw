@@ -102,7 +102,15 @@ function startCall(
         return reply(socket, context, ack, toCallReply(result));
       },
     })
-    .then(release, release);
+    .then(release, (error: unknown) => {
+      // The reply went out already; only a strict test app's warning gets here.
+      release();
+      context.logger.error("A call failed after its reply was sent", {
+        category: "quickdraw.socket",
+        socketId: socket.id,
+        error: describeError(error),
+      });
+    });
 }
 
 /** Registers `qd:call` and `qd:cancel` on a v5 socket, and cancels its calls when it disconnects. */

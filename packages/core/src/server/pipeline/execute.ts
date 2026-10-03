@@ -9,7 +9,7 @@ import { serviceGrant } from "../access/levels";
 import { NEVER_ABORTED, withSignal, type AnyContext } from "../context";
 import { projectOutput, stripForReader } from "../emit/projection";
 import type { RegisteredMethod } from "../registry";
-import type { Transport } from "../types";
+import { isKitHandler } from "../service";
 import { startRun, type Outcome, type Run } from "./run";
 import { deepFreeze, shareKey, type ShareTable } from "./share";
 import type { PipelineSettings } from "./settings";
@@ -18,7 +18,7 @@ import { outputIssues } from "./validation";
 /** What `execute` needs to know about the call, and what it reports back. */
 export interface ExecuteCall {
   readonly requestId: string;
-  readonly transport: Transport;
+  readonly transport: AnyContext["transport"];
   readonly principal: AnyContext["principal"];
   /**
    * Aborts when the caller cancels (a query; a mutation cannot be cancelled)
@@ -130,6 +130,8 @@ export function execute(
     timeLimit: call.expired ?? NEVER_ABORTED,
     unit,
     invoke: (signal) => method.handler({ input, ctx: withSignal(ctx, signal), db: settings.db }),
+    // A kit's handler is framework code: the development checks of statements are for the app's.
+    quiet: settings.warnings.enabled && isKitHandler(method.handler),
     accept: (value) => accept(settings, target, value),
   });
   call.run = run;

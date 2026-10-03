@@ -39,7 +39,14 @@ import {
 } from "./stages";
 import { parseInput } from "./validation";
 
-/** Runs one call through the pipeline. Resolves once the reply was sent, flushed and recorded; never rejects. */
+export type { DispatchRequest, DispatchResult };
+
+/**
+ * Runs one call through the pipeline. Resolves once the reply was sent,
+ * flushed and recorded. It never rejects, except in a test app made with
+ * `strictWarnings`, where an oversized reply rejects with its
+ * `DevWarningError` once it was sent and recorded.
+ */
 export type Dispatch = (request: DispatchRequest) => Promise<DispatchResult>;
 
 interface Pipeline {

@@ -19,6 +19,7 @@ export default defineConfig({
     "server/auth/index": "src/server/auth/index.ts",
     "server/express/index": "src/server/express/index.ts",
     "server/mcp/index": "src/server/mcp/index.ts",
+    "server/otel": "src/server/observability/otel.ts",
     "client/index": "src/client/index.ts",
     "utils/index": "src/utils/index.ts",
     parser: "src/protocol/parser.ts",

@@ -13,6 +13,17 @@ export type { FrameMatch, FrameQuery, FrameRecorder, RecordedFrame, ServerFrameO
 export { emitWithAck, waitForEvent } from "./socket";
 export { createRecordingSink, type RecordedFlush, type RecordingSink } from "./recordingSink";
 export {
+  BUDGET_GROWTH_ENV,
+  budgetFileOf,
+  expectBudget,
+  type Budget,
+  type BudgetCall,
+  type BudgetOptions,
+  type BudgetResult,
+} from "./budget";
+export { BUDGET_BYTES_TOLERANCE } from "./budgetCompare";
+export { DevWarningError, type DevWarning, type DevWarningKind } from "../server/devWarnings";
+export {
   ANONYMOUS,
   describeAccessMatrix,
   type AccessMatrixCase,
