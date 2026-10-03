@@ -5,15 +5,17 @@
 // page past the last is empty. The rest is the read/write kit's list
 // machinery (`../crud/listQuery.ts`, `../crud/page.ts`): the filter is
 // equality on the declared fields and the sort a declared field, then `id`,
-// so the order is total and pages never overlap. 4.1 passed the caller's
-// `where` and `orderBy` to the database as they came.
+// so the order is total and pages never overlap; a filter or sort on a field
+// above the caller's level is `FORBIDDEN`, and a default sort on one falls
+// back to `id` (its order would tell what the field holds). 4.1 passed the
+// caller's `where` and `orderBy` to the database as they came.
 //
 // Statements: two, run together: the page's rows and the count.
 
 import type { AdminListQuery, AdminPage } from "../../../contract/kits/adminSchemas";
 import { orderByOf } from "../../collections/cursor";
 import { selectWith } from "../../collections/items";
-import { listOrder, listWhere } from "../crud/listQuery";
+import { defaultSorts, listOrder, listWhere, namedFields } from "../crud/listQuery";
 import { refusal } from "../crud/page";
 import type { KitHandler, KitHandlerArgs, Row } from "../crud/runtime";
 import { adminCall, checkSeen, rowOut, type AdminContext } from "./runtime";
@@ -21,18 +23,13 @@ import { adminCall, checkSeen, rowOut, type AdminContext } from "./runtime";
 /** Plain directions: an offset page needs no explicit place for nulls, only a total order. */
 const NO_NULLABLE: ReadonlySet<string> = new Set();
 
-/** The fields a list call names: its filter's and its sort's. */
-function namedFields(query: AdminListQuery): string[] {
-  return [...Object.keys(query.filter), ...(query.sort === undefined ? [] : [query.sort.field])];
-}
-
 /** The `adminList` handler. */
 export function adminListHandler(context: AdminContext): KitHandler {
   const handler = async ({ input, ctx, db }: KitHandlerArgs): Promise<AdminPage<unknown>> => {
     const call = adminCall(ctx, db, context.fields);
     const query = input as AdminListQuery;
     checkSeen(call, namedFields(query));
-    const order = listOrder(context.spec.sort, query.sort);
+    const order = listOrder(defaultSorts(context.spec.sort, call.unseen), query.sort);
     const where = listWhere(query.filter, undefined);
     const select = selectWith(
       call.projection.select,

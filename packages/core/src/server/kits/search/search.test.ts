@@ -7,8 +7,12 @@
 // its read, and the statements each costs. Access is in `access.test.ts`.
 
 import { describe, expect, it, vi } from "vitest";
-import { consoleLogger } from "../../../index";
+import { consoleLogger, defineContract } from "../../../index";
+import { createTestApp, type TestApp } from "../../../testing/index";
 import { createContext } from "../../context";
+import { projectContract, projectService, qd } from "../../emit/__tests__/live";
+import { inherit, search } from "../../index";
+import { cardSchema, taskEntity } from "../crud/__tests__/fixture";
 import { cursorAfter } from "../crud/page";
 import { addTasks, as, CARD_KEYS, idsOf, searchApp } from "./__tests__/fixture";
 import { searchHandler } from "./run";
@@ -137,6 +141,71 @@ describe("a scope", () => {
       .harness()
       .storage.countStatements(() => admin.searchByLabel({ q: "fix", scope: empty.id }));
     expect(counted).toEqual({ value: { items: [], nextCursor: null }, statements: 1 });
+  });
+});
+
+describe("a scope collection ordered by a tiered column", () => {
+  const ordered = (access?: "Admin") =>
+    defineContract("taskService", {
+      entity: taskEntity,
+      projections: { card: cardSchema },
+      fields: { notes: "Admin" },
+      methods: {
+        ...search.contract({
+          entity: taskEntity,
+          item: cardSchema,
+          fields: ["title"],
+          scope: "board",
+        }),
+      },
+      collections: {
+        board: {
+          scope: "projectId",
+          item: "card",
+          order: [
+            ["notes", "asc"],
+            ["id", "asc"],
+          ],
+          ...(access === undefined ? {} : { access }),
+        },
+      },
+    });
+  const define = (contract: ReturnType<typeof ordered>) =>
+    qd.defineService(contract, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      collections: { board: { anchor: projectContract } },
+      methods: { ...search.handlers(contract, { access: "authenticated" }) },
+    });
+
+  it("is refused when defined, so a scoped page's cursor never carries the column to a reader", () => {
+    expect(() => define(ordered())).toThrow(
+      'collection "board": order column "notes" is reserved by the contract\'s fields for Admin, above the collection\'s access (Read)',
+    );
+  });
+
+  it("may be an Admin collection's, which only callers with Admin on the scope can search", async () => {
+    const board = kit.board();
+    const prisma = kit.harness().prisma;
+    await prisma.task.update({
+      where: { id: board.t1 },
+      data: { notes: "AAA secret", title: "Task one" },
+    });
+    await prisma.task.create({
+      data: { projectId: board.p1, title: "Task two", notes: "BBB secret" },
+    });
+    const app = await createTestApp({
+      services: [projectService, define(ordered("Admin"))],
+      db: kit.harness().db,
+    });
+    kit.track(app as unknown as TestApp);
+    await expect(
+      app.as(as(board.cy)).taskService.search({ q: "Task", scope: board.p1, limit: 1 }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const owner = await app
+      .as(as(board.ada))
+      .taskService.search({ q: "Task", scope: board.p1, limit: 1 });
+    expect(idsOf(owner)).toEqual([board.t1]);
   });
 });
 

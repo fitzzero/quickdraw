@@ -426,11 +426,13 @@ export const taskService = qd.defineService(task, {
   or the service is refused when it is defined.
 - `list({ filter?, sort?, cursor?, limit?, totalCount? })` returns
   `{ items, nextCursor, totalCount? }`: equality filters and one sort field,
-  limited to the declared fields (anything else is `VALIDATION`), keyset
-  cursors that stay put when rows are inserted, 50 items by default and at
-  most 200 (a larger `limit` is clamped), and a total only when asked (a
-  second statement). Items are the `item` projection, stripped of fields
-  above the level the page was read at, as collection items are.
+  limited to the declared fields (anything else is `VALIDATION`; a field
+  above the caller's level is `FORBIDDEN`, and a default sort on one falls
+  back to `id`), keyset cursors that stay put when rows are inserted, 50
+  items by default and at most 200 (a larger `limit` is clamped), and a
+  total only when asked (a second statement). Items are the `item`
+  projection, stripped of fields above the level the page was read at, as
+  collection items are.
 - `getMany({ ids })` (at most 200) leaves out ids the caller cannot read and
   ids with no row. Bulk writes skip rows the caller cannot write, run in one
   transaction and return `{ count }`.

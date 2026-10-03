@@ -268,6 +268,32 @@ describe("a collection's index", () => {
     expect(admins.collections.get("board")?.index).toEqual(["notes", "ordinal"]);
   });
 
+  it("is not needed to keep an order column above the collection's access out: a cursor carries it", () => {
+    const fields = { notes: "Admin" };
+    const byNotes = (board: Record<string, unknown>) =>
+      boardContract(
+        {
+          item: "card",
+          order: [
+            ["notes", "asc"],
+            ["id", "asc"],
+          ],
+          ...board,
+        },
+        fields,
+      );
+    expect(() => defineBoard(byNotes({}))).toThrow(
+      `defineService("taskService"): collection "board": order column "notes" is reserved by the contract's fields for Admin, above the collection's access (Read); a page's cursor and order would tell its subscribers what it holds`,
+    );
+    expect(() => defineBoard(byNotes({ access: "Moderate" }))).toThrow(
+      "order column \"notes\" is reserved by the contract's fields for Admin, above the collection's access (Moderate)",
+    );
+    expect(defineBoard(byNotes({ access: "Admin" })).collections.get("board")?.order).toEqual([
+      ["notes", "asc"],
+      ["id", "asc"],
+    ]);
+  });
+
   it("holds every order column but id, so a client can keep it in order", () => {
     expect(() => defineBoard(boardContract({ item: "card", index: ["status"] }))).toThrow(
       `defineService("taskService"): collection "board": order column "ordinal" is not an index field; a client keeps the index in order by it`,

@@ -4,7 +4,9 @@
 // policy's `accessWhere` is part of every read, so a list never returns a row
 // `get` would refuse. Items are the declared projection's rows (its select,
 // its map, dates as ISO strings), stripped of the fields above the level
-// the page was filtered at.
+// the page was filtered at; a filter or sort on such a field is `FORBIDDEN`
+// (`listQuery.ts`), since the rows it keeps and the cursor it makes would
+// tell what the field holds.
 //
 // Statements: the access filter's own reads (none for `owner` and `jsonAcl`
 // policies or a service-wide `Admin` grant), then one for the page, and one
@@ -17,7 +19,7 @@ import { selectWith } from "../../collections/items";
 import { projectRow, type Projection } from "../../emit/projection";
 import { strip } from "../../emit/tiers";
 import { readerLevel, rowLevel, rowsWhere } from "./access";
-import { listOrder, listWhere } from "./listQuery";
+import { checkVisible, defaultSorts, listOrder, listWhere, namedFields } from "./listQuery";
 import { readPage } from "./page";
 import { crudCall, projectionOf, type KitHandler, type KitHandlerArgs } from "./runtime";
 
@@ -51,12 +53,15 @@ export function listHandler(context: ListContext): KitHandler {
     const call = crudCall(ctx, db);
     const query = input as ListQuery;
     const level = rowLevel(context.form, "Read");
+    const reader = readerLevel(call, context.form, level);
+    const unseen = projectionOf(call, "entity").tiers.hidden(reader);
+    checkVisible(call.runtime.service.name, unseen, namedFields(query));
     const access = await rowsWhere(call, context.form, level);
     if (access === "none") {
       return emptyPage(query);
     }
     const projection = projectionOf(call, context.projection);
-    const order = listOrder(context.spec.sort, query.sort);
+    const order = listOrder(defaultSorts(context.spec.sort, unseen), query.sort);
     const page = await readPage({
       table: call.table,
       model: call.model,
@@ -72,7 +77,7 @@ export function listHandler(context: ListContext): KitHandler {
       totalCount: query.totalCount,
       filtered: Object.keys(query.filter).length > 0,
     });
-    const hidden = projection.tiers.hidden(readerLevel(call, context.form, level));
+    const hidden = projection.tiers.hidden(reader);
     return {
       items: page.rows.map((row) => pageItem(projection, row, hidden)),
       nextCursor: page.nextCursor,

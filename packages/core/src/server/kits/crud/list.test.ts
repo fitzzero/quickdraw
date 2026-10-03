@@ -228,6 +228,74 @@ describe("list items", () => {
   });
 });
 
+describe("list on a tiered field", () => {
+  const card = taskEntity.pick({ id: true, title: true });
+  const tiered = defineContract("taskService", {
+    entity: taskEntity,
+    projections: { card },
+    fields: { notes: "Admin" },
+    methods: {
+      ...crud.contract({
+        entity: taskEntity,
+        list: { item: card, filter: ["notes"], sort: ["notes"] },
+      }),
+    },
+  });
+
+  async function serve() {
+    const service = qd.defineService(tiered, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      methods: { ...crud.handlers(tiered, { access: { list: "authenticated" } }) },
+    });
+    const app = await createTestApp({ services: [projectService, service], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    return app;
+  }
+
+  /** What a cursor carries: the order's signature, then the last row's order values. */
+  function decode(cursor: string | null): unknown {
+    return cursor === null ? null : JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  }
+
+  it("refuses a filter or sort on a field above the caller's level, and sorts by id instead of a hidden default", async () => {
+    const board = kit.board();
+    const prisma = kit.harness().prisma;
+    await prisma.task.update({ where: { id: board.t1 }, data: { notes: "SECRET salary 120k" } });
+    await prisma.task.create({
+      data: { projectId: board.p1, title: "B", notes: "zzz other secret" },
+    });
+    const app = await serve();
+    // Cy reads P1: notes is Admin-only.
+    const reader = app.as(as(board.cy)).taskService;
+    await expect(reader.list({ sort: { field: "notes" }, limit: 1 })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: '"notes" is a field of taskService above your access level',
+    });
+    await expect(reader.list({ filter: { notes: "SECRET salary 120k" } })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    // The declared default sort is notes: the reader's page is in id order, and its cursor
+    // carries ids only.
+    const page = await reader.list({ limit: 1 });
+    const [first] = await prisma.task.findMany({
+      where: { projectId: board.p1 },
+      orderBy: { id: "asc" },
+      select: { id: true },
+    });
+    expect(page.items.map((item) => item.id)).toEqual([first?.id]);
+    expect(decode(page.nextCursor)).toEqual(["id asc", first?.id]);
+    // A service-wide Admin receives notes, so may sort and filter on it.
+    const admin = app.as(as(board.cy, { taskService: "Admin" })).taskService;
+    const sorted = await admin.list({ sort: { field: "notes" }, limit: 1 });
+    expect(sorted.items.map((item) => item.id)).toEqual([board.t1]);
+    expect(decode(sorted.nextCursor)).toEqual(["notes asc,id asc", "SECRET salary 120k", board.t1]);
+    expect(
+      (await admin.list({ filter: { notes: "SECRET salary 120k" } })).items.map((item) => item.id),
+    ).toEqual([board.t1]);
+  });
+});
+
 describe("statements", () => {
   it("costs one statement for get and at most two for list", async () => {
     const { app } = await kit.start();

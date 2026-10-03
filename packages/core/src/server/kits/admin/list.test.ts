@@ -6,10 +6,18 @@
 // try that now is `VALIDATION`, before the handler runs.
 
 import { describe, expect, it } from "vitest";
-import type { CallRecord } from "../../index";
+import { admin as adminContract, defineContract } from "../../../index";
+import { admin as adminKit, inherit, type CallRecord } from "../../index";
 import { createTestApp, type TestApp } from "../../../testing/index";
-import { projectService } from "../../emit/__tests__/live";
-import { addTasks, adminApp, as, defineTaskService, serviceAdmin } from "./__tests__/fixture";
+import { projectContract, projectService, qd } from "../../emit/__tests__/live";
+import {
+  addTasks,
+  adminApp,
+  as,
+  defineTaskService,
+  serviceAdmin,
+  taskEntity,
+} from "./__tests__/fixture";
 
 const kit = adminApp();
 
@@ -133,5 +141,43 @@ describe("adminList", () => {
     // A member reads the same row without the Admin-only field.
     const row = await app.as(as(board.bo)).taskService.get({ id: board.t1 });
     expect(row).not.toHaveProperty("notes");
+  });
+
+  it("sorts by id when its default sort field is above the caller's level, which may not sort on it either", async () => {
+    const tiered = defineContract("taskService", {
+      entity: taskEntity,
+      fields: { notes: "Admin" },
+      methods: { ...adminContract.contract({ entity: taskEntity, sort: ["notes", "title"] }) },
+    });
+    const service = qd.defineService(tiered, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      methods: {
+        ...adminKit.handlers(tiered, { access: { adminList: { service: "Moderate" } } }),
+      },
+    });
+    const app = await createTestApp({ services: [projectService, service], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    const board = kit.board();
+    const prisma = kit.harness().prisma;
+    // In notes order T2 comes first; in id order T1 does.
+    await prisma.task.update({ where: { id: board.t1 }, data: { notes: "zzz" } });
+    await prisma.task.update({ where: { id: board.t2 }, data: { notes: "aaa" } });
+    const byId = (await prisma.task.findMany({ orderBy: { id: "asc" }, select: { id: true } })).map(
+      (row) => row.id,
+    );
+    const moderator = app.as(as(board.cy, { taskService: "Moderate" })).taskService;
+    const page = await moderator.adminList();
+    expect(page.items.map((item) => item.id)).toEqual(byId);
+    expect(page.items[0]).not.toHaveProperty("notes");
+    await expect(moderator.adminList({ sort: { field: "notes" } })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    // A service administrator sees notes, and lists in their order.
+    const administrator = app.as(serviceAdmin(board.ed)).taskService;
+    expect((await administrator.adminList()).items.map((item) => item.id)).toEqual([
+      board.t2,
+      board.t1,
+    ]);
   });
 });
