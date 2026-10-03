@@ -28,7 +28,9 @@
 //   implements them, so both entries share one copy of the kit's registry;
 //   the search kit's halves (`search.contract`, `search.handlers`) likewise,
 //   and the sharing kit's (`sharing.contract`, `sharing.handlers`), which
-//   also read the policies' columns through accessors `./server` shares;
+//   also read the policies' columns through accessors `./server` shares, and
+//   the admin kit's (`admin.contract`, `admin.handlers`), whose metadata
+//   comes from the entity's JSON Schema;
 // - the built server factory, booted by the built test app (`./testing`),
 //   serves a call over a v5 socket, over HTTP and through the 4.x shim;
 // - the built client (`./client`) calls through its connection over a v5
@@ -103,6 +105,13 @@ const expectations = {
       "sharing",
       "SHARING_METHODS",
       "SHARE_LEVELS",
+      "admin",
+      "ADMIN_METHODS",
+      "ADMIN_FIELD_TYPES",
+      "ADMIN_NEVER_WRITABLE",
+      "ADMIN_DEFAULT_PAGE_SIZE",
+      "ADMIN_MAX_PAGE_SIZE",
+      "ADMIN_MAX_PAGE",
     ],
     client: false,
   },
@@ -133,6 +142,10 @@ const expectations = {
       "requireRow",
       "search",
       "sharing",
+      "admin",
+      "ADMIN_HIDDEN_FIELDS",
+      "displayNameOf",
+      "labelOf",
     ],
     client: false,
   },
@@ -177,6 +190,7 @@ const expectations = {
       "applyCollectionItems",
       "applyCollectionKept",
       "SEARCH_DEBOUNCE_MS",
+      "useAdminServices",
       "getAuthToken",
       "createServerCaller",
       "methodKey",
@@ -359,6 +373,35 @@ const rootTypes = [
   "ListMembersQuery",
   "Member",
   "MembersPage",
+  // contract/kits: the admin kit's contract half
+  "AdminMethodName",
+  "AdminTag",
+  "AdminMethodsOf",
+  "AdminContractOptions",
+  "AdminMethods",
+  "AdminListDef",
+  "AdminGetDef",
+  "AdminCreateDef",
+  "AdminUpdateDef",
+  "AdminDeleteDef",
+  "AdminMetaDef",
+  "AdminSubscribersDef",
+  "AdminReemitDef",
+  "AdminFieldType",
+  "AdminFieldConfig",
+  "AdminServiceMeta",
+  "AdminListInput",
+  "AdminListQuery",
+  "AdminPage",
+  "AdminNeverWritable",
+  "AdminData",
+  "AdminCreateInput",
+  "AdminUpdateInput",
+  "AdminCreateQuery",
+  "AdminUpdateQuery",
+  "AdminMetaInput",
+  "SubscriberLevel",
+  "AdminSubscribers",
   "KitSchema",
   // protocol/errors.ts
   "ErrorCode",
@@ -722,6 +765,63 @@ assert.throws(
   /echoService has no method sharing.contract made/,
 );
 console.log("ok the built sharing kit's contract and server halves find each other");
+
+// The admin kit across the built entries: the methods `admin.contract` (root)
+// made are found by `admin.handlers` (./server), each under a service-wide
+// Admin grant, and `adminMeta` answers from the entity's JSON Schema, which
+// the contract half requires.
+const described = {
+  "~standard": {
+    version: 1,
+    vendor: "smoke",
+    validate: (value) => ({ value }),
+    jsonSchema: {
+      input: () => ({
+        type: "object",
+        properties: { id: { type: "string" }, title: { type: "string" } },
+        required: ["id", "title"],
+      }),
+      output: () => ({
+        type: "object",
+        properties: { id: { type: "string" }, title: { type: "string" } },
+        required: ["id", "title"],
+      }),
+    },
+  },
+};
+const administered = core.defineContract("adminService", {
+  entity: described,
+  methods: { ...core.admin.contract({ entity: described, expose: ["adminGet", "adminMeta"] }) },
+});
+const adminHandlers = server.admin.handlers(administered);
+assert.deepEqual(
+  Object.values(adminHandlers).map((entry) => entry.access),
+  [{ service: "Admin" }, { service: "Admin" }],
+);
+const adminService = app.defineService(administered, { model: "note", methods: adminHandlers });
+const adminDispatcher = server.createDispatcher({
+  services: [adminService],
+  db: kitDb,
+  logger: quiet,
+});
+const administrator = adminDispatcher.caller({
+  userId: "smoke",
+  serviceAccess: { adminService: "Admin" },
+}).adminService;
+assert.deepEqual(await administrator.adminGet({ id: "n1" }), { id: "n1", title: "Note" });
+assert.deepEqual(
+  (await administrator.adminMeta()).fields.map((field) => [field.name, field.type, field.editable]),
+  [
+    ["id", "string", false],
+    ["title", "string", true],
+  ],
+);
+await assert.rejects(
+  adminDispatcher.caller({ userId: "smoke" }).adminService.adminGet({ id: "n1" }),
+  { code: "FORBIDDEN" },
+);
+assert.throws(() => core.admin.contract({ entity: anything }), /cannot describe itself/);
+console.log("ok the built admin kit's contract and server halves find each other");
 
 // The built server factory and its transports, booted by the built test app:
 // a v5 call over a real socket, an HTTP call, and a 4.x call through the shim.
