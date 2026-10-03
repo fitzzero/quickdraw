@@ -91,7 +91,10 @@ function checkAccess(access: unknown, names: readonly string[]): UnknownRecord {
 }
 
 /** `resolveUser` and `onChange`: functions, and `resolveUser` exactly when a by-name method needs it. */
-function checkHooks(options: UnknownRecord, kit: readonly [string, SharingSpec][]): HandlerContext {
+function checkHooks(
+  options: UnknownRecord,
+  kit: readonly [string, SharingSpec][],
+): Omit<HandlerContext, "form"> {
   const { resolveUser, onChange } = options;
   const byName = kit.some(([, spec]) => ["shareByName", "inviteByName"].includes(spec.method));
   if (byName && typeof resolveUser !== "function") {
@@ -149,11 +152,11 @@ function handlers<C extends AnyContract, const A extends SharingAccess<C> = Empt
     options.access,
     kit.map(([name]) => name),
   );
-  const context = Object.freeze(checkHooks(options, kit));
+  const hooks = checkHooks(options, kit);
   const entries: Record<string, object> = {};
   for (const [name, spec] of kit) {
     const form = (access[name] as AccessForm | undefined) ?? DEFAULT_ACCESS[spec.method];
-    const handler = handlerOf(spec.method, context);
+    const handler = handlerOf(spec.method, Object.freeze({ ...hooks, form }));
     checkWhenDefined(handler, (service) => serviceProblem(service, contract, spec.mode));
     entries[name] = Object.freeze({ access: form, handler });
   }

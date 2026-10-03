@@ -6,10 +6,14 @@
 // tracked write evicts the cached access of the row and revokes the live
 // subscriptions that lost it. A change:
 //
+// - first reads the caller's own level on the row again, inside the
+//   transaction: `FORBIDDEN` when it no longer meets the method's form, or
+//   when the change would give a level above it (`checks.ts`);
 // - never touches the owner's access, which the owner column gives:
 //   `CONFLICT`;
-// - never leaves a row without an Admin it had (no owner column, and the
-//   last `Admin` entry unshared or lowered): `CONFLICT`;
+// - never leaves a row without an Admin it had (no owner column, the last
+//   `Admin` entry unshared or lowered, and no Admin from another policy of
+//   an `anyOf`, `admins.ts`): `CONFLICT`;
 // - refuses a malformed list (`CONFLICT`), leaving it as it is;
 // - writes nothing when the user already has exactly that level.
 //
@@ -17,9 +21,10 @@
 // need the user in the list (`NOT_FOUND`). Each returns the list as
 // `listShares` does: `[{ userId, level }]`, one entry per user.
 //
-// Statements, inside the transaction: one read of the row, then (for a
-// change) the tracked update, which reads the old access columns first:
-// three in all. `listShares` is one.
+// Statements, inside the transaction: the caller's level (the policy's
+// reads; none with a service-wide `Admin` grant), one read of the row, then
+// (for a change) the tracked update, which reads the old access columns
+// first. `listShares` is one.
 
 import type { ACE } from "../../../contract/access";
 import type { IdInput } from "../../../contract/kits/crudSchemas";
@@ -30,7 +35,6 @@ import type {
   UnshareInput,
 } from "../../../contract/kits/sharingSchemas";
 import { QuickdrawError } from "../../../protocol/errors";
-import type { JsonAclColumns } from "../../access/policies/jsonAcl";
 import type { KitHandler, KitHandlerArgs, ModelDelegate } from "../crud/runtime";
 import {
   entriesOf,
@@ -41,9 +45,13 @@ import {
   withLevel,
   type StoredEntry,
 } from "./aclList";
+import { adminElsewhere, capGrant, checkCaller } from "./checks";
 import { resolveTarget, type HandlerContext } from "./context";
 import { aclColumnsOf } from "./policy";
 import { inSerializable, notifyChange, sharingCall, tableOf, type SharingCall } from "./runtime";
+
+/** The access list a mode `"acl"` method changes: its column, and its owner column. */
+type JsonAclColumns = ReturnType<typeof aclColumnsOf>;
 
 /** One change to a row's access list. */
 interface AclChange {
@@ -100,13 +108,29 @@ function refusal(listed: Listed, change: AclChange, model: string): QuickdrawErr
   if (change.listed && levelIn(listed.entries, change.userId) === null) {
     return new QuickdrawError("NOT_FOUND", `This ${model} is not shared with that user`);
   }
+  return undefined;
+}
+
+/**
+ * `CONFLICT` when `change` takes away the row's last Admin: the list (and its
+ * owner) had one and would have none, and no other policy of the service
+ * gives one (`admins.ts`), read through `tx`.
+ */
+async function checkLastAdmin(
+  call: SharingCall,
+  tx: unknown,
+  listed: Listed,
+  change: AclChange,
+): Promise<void> {
   const next = withLevel(listed.entries, change.userId, change.level);
-  return hasAdmin(listed.entries, listed.owner) && !hasAdmin(next, listed.owner)
-    ? new QuickdrawError(
-        "CONFLICT",
-        `That user is the last Admin of this ${model}; give someone else Admin first`,
-      )
-    : undefined;
+  const losing = hasAdmin(listed.entries, listed.owner) && !hasAdmin(next, listed.owner);
+  const { service } = call.runtime;
+  if (losing && !(await adminElsewhere(service, tx, change.id, aclColumnsOf(service)))) {
+    throw new QuickdrawError(
+      "CONFLICT",
+      `That user is the last Admin of this ${call.model}; give someone else Admin first`,
+    );
+  }
 }
 
 /** Makes `change` to the row's list, and returns the list as it is afterwards. */
@@ -117,12 +141,14 @@ async function changeList(
 ): Promise<ACE[]> {
   const columns = aclColumnsOf(call.runtime.service);
   return await inSerializable(call.db, async (tx) => {
+    capGrant(await checkCaller(call, context.form, change.id), change.level, call.model);
     const table = tableOf(tx, call.model);
     const listed = await readList(table, columns, change.id, call.model);
     const problem = refusal(listed, change, call.model);
     if (problem !== undefined) {
       throw problem;
     }
+    await checkLastAdmin(call, tx, listed, change);
     const before = levelIn(listed.entries, change.userId);
     if (before === change.level && entriesOf(listed.entries, change.userId) === 1) {
       return sharesOf(listed.entries);

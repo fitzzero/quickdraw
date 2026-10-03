@@ -16,7 +16,7 @@ import type { AnyAccessPolicy, MembershipRead } from "../../access/policy";
 import type { AnyService } from "../../service";
 
 /** The policies `policy` is made of: itself, or each policy an `anyOf` combines, at any depth. */
-function policiesIn(policy: AnyAccessPolicy): readonly AnyAccessPolicy[] {
+export function policiesIn(policy: AnyAccessPolicy): readonly AnyAccessPolicy[] {
   const combined = anyOfPolicies(policy);
   return combined === undefined ? [policy] : combined.flatMap(policiesIn);
 }

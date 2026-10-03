@@ -145,15 +145,25 @@ describe("invite, remove and leave", () => {
 });
 
 describe("the last Admin member", () => {
+  // Members only: the table is the row's only source of Admins.
+  const crew = defineContract("crewService", {
+    entity: projectEntity,
+    methods: { ...sharing.contract({ mode: "members" }) },
+  });
+  const crewService = qd.defineService(crew, {
+    model: "project",
+    access: members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),
+    methods: { ...sharing.handlers(crew) },
+  });
+
   it("cannot leave, be removed or lose Admin until another member has it", async () => {
-    const { app } = await kit.start();
+    const app = await createTestApp({ services: [crewService], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
     const board = kit.board();
-    const fay = app.as(as(board.fay)).projectService;
-    const owner = app.as(as(board.ada)).projectService;
+    const fay = app.as(as(board.fay)).crewService;
     for (const call of [
       fay.leave({ entryId: board.p1 }),
-      owner.remove({ entryId: board.p1, userId: board.fay }),
-      owner.setRole({ entryId: board.p1, userId: board.fay, role: "Moderate" }),
+      fay.remove({ entryId: board.p1, userId: board.fay }),
       fay.setRole({ entryId: board.p1, userId: board.fay, role: "Read" }),
     ]) {
       await expect(call).rejects.toMatchObject({
@@ -161,19 +171,31 @@ describe("the last Admin member", () => {
         message: expect.stringContaining("last Admin member"),
       });
     }
-    // Only this table's Admin members count: the owner's Admin from the access list does not.
     expect(await storedRoles(board.p1)).toMatchObject({ [board.fay]: "Admin" });
 
-    await owner.setRole({ entryId: board.p1, userId: board.bo, role: "Admin" });
+    await fay.setRole({ entryId: board.p1, userId: board.bo, role: "Admin" });
     expect(await fay.setRole({ entryId: board.p1, userId: board.fay, role: "Read" })).toEqual({
       userId: board.fay,
       role: "Read",
       level: "Read",
     });
     await expect(
-      app.as(as(board.bo)).projectService.leave({ entryId: board.p1 }),
+      app.as(as(board.bo)).crewService.leave({ entryId: board.p1 }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
     expect(await fay.leave({ entryId: board.p1 })).toBeNull();
+  });
+
+  it("counts every policy of an anyOf: the owner may remove the only Admin member", async () => {
+    const { app } = await kit.start();
+    const board = kit.board();
+    // P1's owner, Ada, is Admin through the access list's owner column.
+    const owner = app.as(as(board.ada)).projectService;
+    expect(
+      await owner.setRole({ entryId: board.p1, userId: board.fay, role: "Moderate" }),
+    ).toMatchObject({ role: "Moderate" });
+    await owner.setRole({ entryId: board.p1, userId: board.fay, role: "Admin" });
+    expect(await owner.remove({ entryId: board.p1, userId: board.fay })).toBeNull();
+    expect(await storedRoles(board.p1)).not.toHaveProperty(board.fay);
   });
 
   it("does not hold back changes to members who are not Admin", async () => {

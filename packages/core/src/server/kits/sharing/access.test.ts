@@ -88,28 +88,22 @@ describe("the access matrix", () => {
           allow: ["owner"],
           expect: { adminMember: "CONFLICT" },
         },
-        // The owner is no member (the access list gives them Admin); the
-        // Admin member is the last one; the Read member leaves.
-        {
-          method: "leave",
-          input: { entryId: p1 },
-          allow: ["readMember"],
-          expect: { adminMember: "CONFLICT" },
-        },
+        // The owner is no member (the access list gives them Admin). The
+        // Admin member and the Read member leave: the owner keeps an Admin.
+        { method: "leave", input: { entryId: p1 }, allow: ["adminMember", "readMember"] },
       ],
     });
     expect(report.cells).toHaveLength(11 * 5);
     expect(report.cells.filter((cell) => cell.principal === "anonymous")).toSatisfy((cells) =>
       (cells as { actual: string }[]).every((cell) => cell.actual === "UNAUTHENTICATED"),
     );
-    // What the allowed changes left: gus invited by name, cy gone.
+    // What the allowed changes left: gus invited by name, fay and cy gone.
     const roles = await kit.harness().prisma.projectMember.findMany({
       where: { projectId: p1 },
       select: { userId: true, role: true },
     });
     expect(Object.fromEntries(roles.map((row) => [row.userId, row.role]))).toEqual({
       [board.bo]: "Moderate",
-      [board.fay]: "Admin",
       [gus]: "Read",
     });
   });
@@ -177,12 +171,75 @@ describe("forms an app gives", () => {
         {
           method: "leave",
           input: { entryId: board.p1 },
-          allow: ["readMember", "moderateMember"],
-          expect: { adminMember: "CONFLICT" },
+          allow: ["adminMember", "readMember", "moderateMember"],
         },
       ],
     });
+    // Every member left (the owner keeps an Admin); a Read grant lists what is there.
     const reader = app.as(as(board.gus, { strictService: "Read" })).strictService;
-    expect((await reader.listMembers({ entryId: board.p1 })).items).toHaveLength(1);
+    expect(await reader.listMembers({ entryId: board.p1 })).toEqual({
+      items: [],
+      nextCursor: null,
+    });
+  });
+
+  it("never let a caller give a level above their own on the row", async () => {
+    const lowered = defineContract("loweredService", {
+      entity: projectEntity,
+      methods: {
+        ...sharing.contract({ mode: "acl", methods: ["share", "setLevel"] }),
+        ...sharing.contract({ mode: "members", methods: ["invite", "setRole"] }),
+      },
+    });
+    const loweredService = qd.defineService(lowered, {
+      model: "project",
+      access: anyOf(jsonAcl("acl", { owner: "ownerId" }), projectMembers),
+      methods: {
+        ...sharing.handlers(lowered, {
+          access: {
+            share: { entry: "Moderate" },
+            setLevel: { entry: "Moderate" },
+            invite: { entry: "Moderate", id: "entryId" },
+            setRole: { service: "Moderate", entry: "Moderate", id: "entryId" },
+          },
+        }),
+      },
+    });
+    const app = await createTestApp({ services: [loweredService], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    const board = kit.board();
+    const { p1, gus, di, cy } = board;
+    // Bo is P1's Moderate member.
+    const bo = app.as(as(board.bo)).loweredService;
+    const above = { code: "FORBIDDEN", message: expect.stringContaining("above your own level") };
+    await expect(bo.share({ id: p1, userId: gus, level: "Admin" })).rejects.toMatchObject(above);
+    await expect(bo.setLevel({ id: p1, userId: di, level: "Admin" })).rejects.toMatchObject(above);
+    await expect(bo.invite({ entryId: p1, userId: gus, role: "Admin" })).rejects.toMatchObject(
+      above,
+    );
+    await expect(bo.setRole({ entryId: p1, userId: cy, role: "Admin" })).rejects.toMatchObject(
+      above,
+    );
+    // Up to their own level is theirs to give.
+    expect(await bo.share({ id: p1, userId: gus, level: "Moderate" })).toContainEqual({
+      userId: gus,
+      level: "Moderate",
+    });
+    expect(await bo.setRole({ entryId: p1, userId: cy, role: "Moderate" })).toMatchObject({
+      level: "Moderate",
+    });
+    // A Moderate grant counts where the form names service, as a Moderate row level.
+    const granted = app.as(as(board.ed, { loweredService: "Moderate" })).loweredService;
+    await expect(granted.setRole({ entryId: p1, userId: cy, role: "Admin" })).rejects.toMatchObject(
+      above,
+    );
+    expect(await granted.setRole({ entryId: p1, userId: cy, role: "Read" })).toMatchObject({
+      level: "Read",
+    });
+    // The owner holds Admin, so may give it.
+    const owner = app.as(as(board.ada)).loweredService;
+    expect(await owner.invite({ entryId: p1, userId: gus, role: "Admin" })).toMatchObject({
+      level: "Admin",
+    });
   });
 });

@@ -1,17 +1,20 @@
 // What every sharing kit handler is made from: the hooks `sharing.handlers`
-// was given. And the user a by-name method means (`shareByName`,
+// was given, and its method's access form. And the user a by-name method means (`shareByName`,
 // `inviteByName`): the app's `resolveUser` finds them by the `name` or
 // `email` the call gave, before the change's transaction opens; no such user
 // is `NOT_FOUND`.
 
 import { QuickdrawError } from "../../../protocol/errors";
+import type { AccessForm } from "../../access/types";
 import type { SharingCall } from "./runtime";
 import type { SharingOnChange, SharingResolveUser, SharingUserLookup } from "./types";
 
-/** The hooks a sharing kit handler calls. */
+/** The hooks a sharing kit handler calls, and the form its method runs under. */
 export interface HandlerContext {
   readonly resolveUser: SharingResolveUser | undefined;
   readonly onChange: SharingOnChange | undefined;
+  /** The method's access form: a change checks its caller against it again (`checks.ts`). */
+  readonly form: AccessForm;
 }
 
 /** What a by-name call gave: a name, an email, or both. */

@@ -629,8 +629,11 @@ export const projectService = qd.defineService(project, {
 - Who may call: a change needs `{ entry: "Admin" }` on the row, a list
   `{ entry: "Read" }`, and `leave` a signed-in member (`FORBIDDEN` for
   anyone else). `access: { share: { entry: "Moderate" } }` replaces one
-  method's form; a lower form lets that level grant any level, `Admin`
-  included.
+  method's form. Whatever the form, no caller shares, sets or invites at a
+  level above their own on the row (`FORBIDDEN`; a service-wide grant
+  counts where the form names `service`), and each change reads the
+  caller's level again inside its transaction, refusing one lowered by a
+  concurrent change (`FORBIDDEN`).
 - The kit changes the list or the table the service's policy reads, alone
   or inside `anyOf`, and takes their names from it: a service whose policy
   has none for a mode the contract uses (or two) fails when it is defined.
@@ -638,10 +641,10 @@ export const projectService = qd.defineService(project, {
   `Moderate` and `Admin` without it; another role is `VALIDATION`, and
   `invite` without a role gives the lowest one that can read the row.
 - The owner's access never changes (`CONFLICT`). A row keeps its last
-  Admin: through the access list, the owner or an `Admin` entry; through
-  the table, an `Admin` member (an owner column elsewhere in `anyOf` does not
-  count). Taking the last one away, by `unshare`, a lower level, `remove`,
-  `leave` or `setRole`, is `CONFLICT`. An access list the policy cannot read
+  Admin, counted across every policy of an `anyOf`: an owner column, an
+  `Admin` entry of the access list, an `Admin` member (so a project's owner
+  may remove its only Admin member). Taking the last one away, by
+  `unshare`, a lower level, `remove`, `leave` or `setRole`, is `CONFLICT`. An access list the policy cannot read
   is `CONFLICT` and left as it is; an entry's other keys are kept. Inviting a
   member is `CONFLICT`, an unknown user `NOT_FOUND`, and a change to the
   level or role a user has already writes nothing.

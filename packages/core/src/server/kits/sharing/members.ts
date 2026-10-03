@@ -11,10 +11,15 @@
 //   An invitee the database does not know (a foreign key) is `NOT_FOUND`.
 // - `remove` and `setRole` need the user to be a member (`NOT_FOUND`);
 //   `leave` is for members only (`FORBIDDEN` for anyone else).
-// - The last Admin member of a row cannot leave, be removed or lose Admin
-//   (`CONFLICT`): whether another member has Admin is read in the same
-//   transaction as the change. Only this table's members count; an owner
-//   column or an access list in an `anyOf` is not part of it.
+// - Each change but `leave` first reads the caller's own level on the row
+//   again, inside the transaction: `FORBIDDEN` when it no longer meets the
+//   method's form, or when `invite` or `setRole` would give a role whose
+//   level is above it (`checks.ts`).
+// - The last Admin of a row cannot leave, be removed or lose Admin
+//   (`CONFLICT`): whether someone else keeps Admin is read in the same
+//   transaction as the change. Under `anyOf` every policy counts: another
+//   Admin member, an owner column, an `Admin` entry of an access list
+//   (`admins.ts`), so a project's owner may remove its only Admin member.
 //
 // Statements, inside the transaction: one read of the member's rows (of
 // whether they are one, for `invite`), one more for whether another member
@@ -33,6 +38,7 @@ import type {
 import { QuickdrawError } from "../../../protocol/errors";
 import type { MembershipRead } from "../../access/policy";
 import type { KitHandler, KitHandlerArgs, ModelDelegate, Row } from "../crud/runtime";
+import { adminElsewhere, capGrant, checkCaller } from "./checks";
 import { resolveTarget, type HandlerContext } from "./context";
 import { membershipTableOf } from "./policy";
 import { adminRolesOf, checkRole, currentRole, levelOfRole, memberOf } from "./roles";
@@ -51,9 +57,14 @@ async function rowsOf(table: ModelDelegate, read: MembershipRead, target: Target
   });
 }
 
-/** True when a member other than the target has `Admin` on the row. */
+/**
+ * True when someone other than the target keeps `Admin` on the row: another
+ * member of this table, or, under `anyOf`, an owner column, an access list
+ * or another table (`admins.ts`), read through `tx`.
+ */
 async function anotherAdmin(
-  table: ModelDelegate,
+  call: SharingCall,
+  tx: unknown,
   read: MembershipRead,
   target: Target,
 ): Promise<boolean> {
@@ -61,7 +72,7 @@ async function anotherAdmin(
   const found =
     roles.length === 0
       ? null
-      : await table.findFirst({
+      : await tableOf(tx, read.model).findFirst({
           where: {
             [read.entry]: target.entryId,
             [read.user]: { not: target.userId },
@@ -69,7 +80,7 @@ async function anotherAdmin(
           },
           select: { id: true },
         });
-  return found !== null;
+  return found !== null || (await adminElsewhere(call.runtime.service, tx, target.entryId, read));
 }
 
 function lastAdmin(model: string): QuickdrawError {
@@ -97,6 +108,8 @@ async function invite(
   const read = membershipTableOf(call.runtime.service);
   const given = checkRole(read, role);
   return await inSerializable(call.db, async (tx) => {
+    const own = await checkCaller(call, context.form, target.entryId);
+    capGrant(own, levelOfRole(read, given), call.model);
     const table = tableOf(tx, read.model);
     if ((await rowsOf(table, read, target)).length > 0) {
       throw new QuickdrawError(
@@ -133,6 +146,9 @@ async function end(
 ): Promise<null> {
   const read = membershipTableOf(call.runtime.service);
   return await inSerializable(call.db, async (tx) => {
+    if (kind === "remove") {
+      await checkCaller(call, context.form, target.entryId);
+    }
     const table = tableOf(tx, read.model);
     const rows = await rowsOf(table, read, target);
     if (rows.length === 0) {
@@ -141,7 +157,7 @@ async function end(
         : new QuickdrawError("NOT_FOUND", `That user is not a member of this ${call.model}`);
     }
     const current = currentRole(read, rows);
-    if (current.level === "Admin" && !(await anotherAdmin(table, read, target))) {
+    if (current.level === "Admin" && !(await anotherAdmin(call, tx, read, target))) {
       throw lastAdmin(call.model);
     }
     const [only, ...more] = rows.map((row) => row.id);
@@ -164,6 +180,8 @@ async function changeRole(
   const read = membershipTableOf(call.runtime.service);
   checkRole(read, role);
   return await inSerializable(call.db, async (tx) => {
+    const own = await checkCaller(call, context.form, target.entryId);
+    capGrant(own, levelOfRole(read, role), call.model);
     const table = tableOf(tx, read.model);
     const rows = await rowsOf(table, read, target);
     if (rows.length === 0) {
@@ -174,7 +192,7 @@ async function changeRole(
       return memberOf(read, target.userId, role);
     }
     const demoted = current.level === "Admin" && levelOfRole(read, role) !== "Admin";
-    if (demoted && !(await anotherAdmin(table, read, target))) {
+    if (demoted && !(await anotherAdmin(call, tx, read, target))) {
       throw lastAdmin(call.model);
     }
     await table.updateMany({

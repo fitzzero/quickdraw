@@ -4,11 +4,12 @@
 // options it refuses, the `onChange` hook inside the change's transaction,
 // and the SERIALIZABLE transaction whose write conflicts are `CONFLICT`.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "../../../../test/prisma/setup";
-import { crud, defineContract } from "../../../index";
+import { consoleLogger, crud, defineContract } from "../../../index";
 import { createTestApp, type TestApp } from "../../../testing/index";
 import { qd } from "../../access/__tests__/board";
+import { createContext } from "../../context";
 import {
   anyOf,
   inherit,
@@ -345,5 +346,95 @@ describe("the transaction", () => {
     // The reads need no transaction.
     expect(await owner.listShares({ id: board.p1 })).toHaveLength(2);
     expect(options).toHaveLength(7);
+  });
+
+  it("reads the caller's level again inside the transaction, and refuses one lowered meanwhile", async () => {
+    const board = kit.board();
+    const { prisma } = kit.harness();
+    // Another change demotes Fay, P1's Admin member, after the pipeline checked her and
+    // before her change's transaction opens.
+    let demote = false;
+    const db = new Proxy(kit.harness().db, {
+      get(target, key) {
+        if (key !== "$transaction") {
+          return Reflect.get(target, key) as unknown;
+        }
+        return async (fn: unknown, given?: unknown) => {
+          if (demote) {
+            await prisma.projectMember.updateMany({
+              where: { projectId: board.p1, userId: board.fay },
+              data: { role: "Read" },
+            });
+          }
+          return await target.$transaction(fn as never, given as never);
+        };
+      },
+    });
+    const app = await createTestApp({ services: [defineProjectService()], db });
+    kit.track(app as unknown as TestApp);
+    const fay = app.as(as(board.fay)).projectService;
+    demote = true;
+    await expect(
+      fay.share({ id: board.p1, userId: board.gus, level: "Read" }),
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("no longer have Admin"),
+    });
+    await expect(fay.invite({ entryId: board.p1, userId: board.gus })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect((await prisma.project.findUniqueOrThrow({ where: { id: board.p1 } })).acl).toEqual([
+      { userId: board.di, level: "Read" },
+    ]);
+    expect(await prisma.projectMember.count({ where: { userId: board.gus } })).toBe(0);
+  });
+
+  it("asks for the caller's level from inside the transaction's callback", async () => {
+    const service = defineProjectService();
+    let inside = false;
+    const asked: boolean[] = [];
+    const levelsFor = (_service: unknown, _principal: unknown, ids: readonly string[]) => {
+      asked.push(inside);
+      return Promise.resolve(new Map(ids.map((id) => [id, "Moderate" as const])));
+    };
+    const update = vi.fn();
+    const tx = {
+      project: {
+        findUnique: () => Promise.resolve({ id: "p", acl: [], ownerId: "owner" }),
+        findMany: () => Promise.resolve([]),
+        update,
+      },
+    };
+    const db = {
+      $transaction: async (fn: (client: unknown) => Promise<unknown>) => {
+        inside = true;
+        try {
+          return await fn(tx);
+        } finally {
+          inside = false;
+        }
+      },
+    };
+    const access = {
+      levelsFor,
+      accessWhere: vi.fn(),
+      onAccessChanged: vi.fn(),
+      resolve: vi.fn(),
+    };
+    const ctx = createContext({
+      principal: as("caller"),
+      signal: new AbortController().signal,
+      log: consoleLogger,
+      requestId: "r1",
+      transport: "internal",
+      kit: { service, access, storage: undefined },
+    });
+    const share = service.methods.share?.handler as unknown as (args: object) => Promise<unknown>;
+    // The default form needs Admin; the caller holds Moderate by the time the change runs.
+    await expect(
+      share({ input: { id: "p", userId: "someone", level: "Read" }, ctx, db }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(asked).toEqual([true]);
+    expect(update).not.toHaveBeenCalled();
   });
 });
