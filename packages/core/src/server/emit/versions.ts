@@ -6,9 +6,12 @@
 // it claims.
 //
 // - A call to a query whose output is one projection row (`"entity"`,
-//   `nullable("card")`) and whose input has an `id` gets that row's version:
-//   a caller that sends it back as `v` gets `{ ok: true, nm: true, v }`
-//   while the row is unchanged. This is the dispatcher's default `versions`.
+//   `nullable("card")`) and whose input has an `id` gets that row's version,
+//   when the row it returns is that row: a caller that sends it back as `v`
+//   gets `{ ok: true, nm: true, v }` while the row is unchanged. A query
+//   keyed by another id (the latest task of project `id`) returns some other
+//   row, whose changes that version does not follow, and gets none. This is
+//   the dispatcher's default `versions`.
 // - `qd:sub` answers "not modified" for an id whose held revision is no
 //   older than the row's version.
 
@@ -94,7 +97,8 @@ function inputId(input: unknown): string | undefined {
 /**
  * The dispatcher's default `versions`: the version of the row a query
  * returns, for a query whose output is one projection row and whose input
- * has an `id`. Any other query has none, and always runs.
+ * has an `id`, attached only when the row returned is row `id`. Any other
+ * query has none, and always runs.
  */
 export function createVersionSource(hub: Hub): VersionSource {
   return Object.freeze({
@@ -109,6 +113,14 @@ export function createVersionSource(hub: Hub): VersionSource {
       }
       const { versions } = await rowVersions(hub, service, [id]);
       return versions.get(id);
+    },
+    describes({ input }, result) {
+      const id = inputId(input);
+      const returned =
+        typeof result === "object" && result !== null
+          ? (result as { readonly id?: unknown }).id
+          : undefined;
+      return id !== undefined && returned === id;
     },
   } satisfies VersionSource);
 }

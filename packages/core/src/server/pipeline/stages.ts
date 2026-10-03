@@ -141,3 +141,27 @@ export async function currentVersion(
       : await method.version(input, ctx);
   return isVersion(version) ? version : undefined;
 }
+
+/**
+ * The version a query's reply carries once it ran: the one step 5 took,
+ * when it describes the caller's result. A method's own `version` always
+ * does; the dispatcher's `versions` source is asked (`describes`).
+ */
+export function versionOfResult(
+  settings: PipelineSettings,
+  target: RegisteredMethod,
+  call: {
+    readonly input: unknown;
+    readonly ctx: AnyContext;
+    readonly version: Version | undefined;
+  },
+  result: unknown,
+): Version | undefined {
+  const { service, method } = target;
+  const { input, ctx, version } = call;
+  if (version === undefined || method.version !== undefined) {
+    return version;
+  }
+  const request = { service, method, input, ctx };
+  return settings.versions?.describes?.(request, result) === false ? undefined : version;
+}

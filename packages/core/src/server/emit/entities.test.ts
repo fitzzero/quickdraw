@@ -3,20 +3,24 @@
 // frames real socket clients receive, and what the framework reads.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { entityRoom } from "../../index";
+import { z } from "zod";
+import { defineContract, entityRoom, nullable, query } from "../../index";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, type TestApp } from "../../testing/index";
 import { deferred } from "../__tests__/fixtures";
 import { as, seedBoard, type Board } from "../access/__tests__/board";
-import type { Principal, StorageAdapter } from "../index";
+import { inherit, type Principal, type StorageAdapter } from "../index";
 import {
   cardService,
   defineTaskService,
+  projectContract,
   projectService,
+  qd,
   receive,
   recordingStorage,
   sub,
   TASK_KEYS,
+  taskEntity,
   type Gate,
 } from "./__tests__/live";
 
@@ -493,6 +497,59 @@ describe("not modified", () => {
     expect(await call(version)).toEqual({ ok: true, notModified: true, version });
     await app.as(as(board.ada)).taskService.rename({ id: board.t1, title: "Changed" });
     expect(await call(version)).toMatchObject({ ok: true, data: { title: "Changed" } });
+  });
+
+  it("gives no version to a query that returns another row than its input's id", async () => {
+    // The latest task of project `id`: keyed by a project, it returns a task.
+    const latestContract = defineContract("latestService", {
+      entity: taskEntity,
+      methods: {
+        latestIn: query({ input: z.object({ id: z.string() }), output: nullable("entity") }),
+        task: query({ input: z.object({ id: z.string() }), output: nullable("entity") }),
+      },
+    });
+    const latestService = qd.defineService(latestContract, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      methods: {
+        latestIn: {
+          access: { scope: "Read", of: projectContract, id: "id" },
+          handler: ({ input, db }) =>
+            db.task.findFirst({ where: { projectId: input.id }, orderBy: { createdAt: "desc" } }),
+        },
+        task: {
+          access: { entry: "Read" },
+          handler: ({ input, db }) => db.task.findUnique({ where: { id: input.id } }),
+        },
+      },
+    });
+    const app = await createTestApp({
+      services: [projectService, defineTaskService(), latestService],
+      db: h.db,
+    });
+    apps.push(app as unknown as TestApp);
+    const call = (method: "latestIn" | "task", id: string, v?: number) =>
+      app.server.dispatcher.call({
+        service: "latestService",
+        method,
+        input: { id },
+        principal: as(board.ada),
+        transport: "internal",
+        ...(v === undefined ? {} : { v }),
+      });
+    const first = await call("latestIn", board.p1);
+    expect(first).toEqual({ ok: true, data: expect.objectContaining({ title: "T1" }) });
+    await app.server.dispatcher.run(() =>
+      h.db.task.create({
+        data: { projectId: board.p1, title: "Newer", createdAt: new Date(Date.now() + 60_000) },
+      }),
+    );
+    expect(await call("latestIn", board.p1)).toMatchObject({ data: { title: "Newer" } });
+    // A query returning row `id` itself still gets its version, and "not modified".
+    const own = await call("task", board.t1);
+    expect(own).toMatchObject({ ok: true, version: expect.any(Number) });
+    const version = own.ok && own.notModified !== true ? (own.version as number) : 0;
+    expect(await call("task", board.t1, version)).toEqual({ ok: true, notModified: true, version });
   });
 
   it("gives no version without a change log or version column", async () => {

@@ -34,6 +34,7 @@ import {
   lookup,
   startTimeLimit,
   untilStopped,
+  versionOfResult,
   type TimeLimit,
 } from "./stages";
 import { parseInput } from "./validation";
@@ -95,7 +96,8 @@ async function proceed(
     return { ok: false, error: outcome.error };
   }
   const data = await stage(call, forCaller(settings, target, request.principal, outcome.value));
-  return version === undefined ? { ok: true, data } : { ok: true, data, version };
+  const reported = versionOfResult(settings, target, { input, ctx, version }, data);
+  return reported === undefined ? { ok: true, data } : { ok: true, data, version: reported };
 }
 
 /**
