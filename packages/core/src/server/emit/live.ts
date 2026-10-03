@@ -80,7 +80,7 @@ export function createLive(options: HubOptions): Live {
   const collections = createLiveCollections(hub);
   const topics = createTopics(collections.hub);
   const sinks = createEntitySinks(hub);
-  const revocation = createRevocation(hub, collections.revocation);
+  const revocation = createRevocation(hub, [collections.revocation, topics.revocation]);
   const entities = entitySubscriptions(hub);
   options.policies.onAccessChanged((change) => revocation.changed(change, false));
   return Object.freeze({

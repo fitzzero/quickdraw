@@ -23,8 +23,9 @@
 // node broadcasts every access change it flushes (`serverSideEmit`), and each
 // node re-resolves its own sockets. A changed `serviceAccess`
 // (`server.access.refresh`) re-resolves the user's subscriptions the same way.
-// Collection scopes are authorized again alongside, through the hook the
-// collections give (`collections/revocation.ts`).
+// Collection scopes and change topic watches are authorized again alongside,
+// through the hooks they give (`collections/revocation.ts`,
+// `topicRevocation.ts`).
 
 import { SERVER_EVENTS, userRoom } from "../../contract/names";
 import type { AccessChange } from "../access/changes";
@@ -195,7 +196,7 @@ export interface Revocation {
   regranted(userId: string): Promise<void>;
 }
 
-/** More subscriptions an access change re-resolves: the collection scopes. */
+/** More subscriptions an access change re-resolves: the collection scopes, the change topics. */
 export interface RevocationHook {
   /** Re-resolves the subscriptions `change` concerns on this process. */
   changed(change: AccessChange): Promise<void>;
@@ -203,8 +204,11 @@ export interface RevocationHook {
   regranted(sockets: readonly QuickdrawServerSocket[]): Promise<void>;
 }
 
-/** The revocation of one dispatcher's subscriptions; `hook` re-resolves the collection scopes alongside. */
-export function createRevocation(hub: Hub, hook?: RevocationHook): Revocation {
+/**
+ * The revocation of one dispatcher's subscriptions; `hooks` re-resolve the
+ * collection scopes and the change topics alongside.
+ */
+export function createRevocation(hub: Hub, hooks: readonly RevocationHook[] = []): Revocation {
   return Object.freeze({
     async changed(change: AccessChange, remote: boolean): Promise<void> {
       hub.subscriptions.accessChanges += 1;
@@ -214,7 +218,7 @@ export function createRevocation(hub: Hub, hook?: RevocationHook): Revocation {
       }
       await Promise.all([
         reresolveAll(hub, hub.subscriptions.matching(change), remote),
-        hook?.changed(change),
+        ...hooks.map(async (hook) => await hook.changed(change)),
       ]);
     },
     async regranted(userId: string): Promise<void> {
@@ -227,7 +231,11 @@ export function createRevocation(hub: Hub, hook?: RevocationHook): Revocation {
           found.set(socket, [...hub.subscriptions.entries(socket)]);
         }
       }
-      await Promise.all([reresolveAll(hub, found, false), hook?.regranted([...found.keys()])]);
+      const sockets = [...found.keys()];
+      await Promise.all([
+        reresolveAll(hub, found, false),
+        ...hooks.map(async (hook) => await hook.regranted(sockets)),
+      ]);
     },
   });
 }

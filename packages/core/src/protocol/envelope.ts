@@ -232,9 +232,13 @@ export interface CollectionItemsRequest extends CollectionScopeRef {
   readonly ids: readonly string[];
 }
 
-/** The acknowledgement of `qd:col:items`: the items found, in request order. */
+/**
+ * The acknowledgement of `qd:col:items`: the items found, in request order,
+ * and the revision they were read at, taken before the read as a
+ * snapshot's is: a client drops an item older than what a delta brought it.
+ */
 export type CollectionItemsReply<Item = unknown> =
-  | { readonly ok: true; readonly items: readonly Item[] }
+  | { readonly ok: true; readonly rev: Revision; readonly items: readonly Item[] }
   | Failure;
 
 /**

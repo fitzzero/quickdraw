@@ -2,7 +2,7 @@
 // 7.4 and 8.2): `qd:col:sub`, answered with a page (`{ ok: true, rev, items,
 // total, cursor, limit, clamped?, index? | indexTruncated? }`), with the
 // deltas since `since` (`{ ok: true, resumed: true, rev, deltas }`), or
-// `{ ok: false, e }`; `qd:col:items`, answered `{ ok: true, items }` or
+// `{ ok: false, e }`; `qd:col:items`, answered `{ ok: true, rev, items }` or
 // `{ ok: false, e }`; and `qd:col:unsub`, optionally acknowledged. One
 // listener per event on every v5 socket, routed by the frame, never one per
 // service or scope. None of them counts against the socket rate limiter

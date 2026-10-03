@@ -263,13 +263,19 @@ describe("a collection's index", () => {
       'collection "board": index field "notes" is reserved by the contract\'s fields for a level above the collection\'s access (Read), so its items never carry it',
     );
     const admins = defineBoard(
-      boardContract({ item: "entity", index: ["notes"], access: "Admin" }, fields),
+      boardContract({ item: "entity", index: ["notes", "ordinal"], access: "Admin" }, fields),
     );
-    expect(admins.collections.get("board")?.index).toEqual(["notes"]);
+    expect(admins.collections.get("board")?.index).toEqual(["notes", "ordinal"]);
+  });
+
+  it("holds every order column but id, so a client can keep it in order", () => {
+    expect(() => defineBoard(boardContract({ item: "card", index: ["status"] }))).toThrow(
+      `defineService("taskService"): collection "board": order column "ordinal" is not an index field; a client keeps the index in order by it`,
+    );
   });
 
   it("is needed by views, also for a contract defineContract never saw", () => {
-    const checked = boardContract({ item: "card", index: ["status"] });
+    const checked = boardContract({ item: "card", index: ["status", "ordinal"] });
     const board = checked.collections.board ?? {};
     const forged = Object.freeze({
       ...checked,

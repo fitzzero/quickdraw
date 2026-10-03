@@ -69,7 +69,7 @@ describe("qd:col:items", () => {
     const [one = "", two = ""] = await addTasks(h.prisma, board.p1, [1, 2]);
     const [done = ""] = await addTasks(h.prisma, board.p1, [3], { status: "done" });
     const connection = await connect(app, as(board.ada));
-    await colSub(connection, "board", board.p1);
+    const page = await colSub(connection, "board", board.p1);
     const reply = await colItems(connection, "board", board.p1, [
       two,
       board.t2,
@@ -78,8 +78,10 @@ describe("qd:col:items", () => {
       two,
       done,
     ]);
+    // The revision the items were read at, as a page carries it: none was taken since.
     expect(reply).toEqual({
       ok: true,
+      rev: page.rev,
       items: [
         expect.objectContaining({ id: two, title: "Task 2", ordinal: 2 }),
         expect.objectContaining({ id: board.t1, title: "T1", ordinal: 0 }),
@@ -89,11 +91,16 @@ describe("qd:col:items", () => {
     expect(Object.keys((reply.items as object[])[0] ?? {}).sort()).toEqual(
       ["assigneeId", "id", "ordinal", "projectId", "status", "title", "updatedAt"].sort(),
     );
-    expect(await colItems(connection, "board", board.p1, [])).toEqual({ ok: true, items: [] });
+    expect(await colItems(connection, "board", board.p1, [])).toEqual({
+      ok: true,
+      rev: expect.any(Number),
+      items: [],
+    });
     // `where` decides membership: a row it excludes is not an item.
     await colSub(connection, "openByProject", board.p1);
     expect(await colItems(connection, "openByProject", board.p1, [one, done])).toEqual({
       ok: true,
+      rev: expect.any(Number),
       items: [expect.objectContaining({ id: one })],
     });
   });
@@ -107,10 +114,12 @@ describe("qd:col:items", () => {
     await colSub(connection, "byLabel", label.id);
     expect(await colItems(connection, "byLabel", label.id, [unlinked, linked])).toEqual({
       ok: true,
+      rev: expect.any(Number),
       items: [expect.objectContaining({ id: linked })],
     });
     expect(await colItems(connection, "byLabel", label.id, [unlinked])).toEqual({
       ok: true,
+      rev: expect.any(Number),
       items: [],
     });
   });

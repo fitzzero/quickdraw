@@ -56,13 +56,21 @@ export interface SubscriptionEntry {
   readonly subscription: EntitySubscription;
 }
 
-type Counts = Map<QuickdrawServerSocket, number>;
+/** How many of a socket's records each socket has under one key of an index. */
+export type Counts = Map<QuickdrawServerSocket, number>;
 
-function serviceOf(anchor: string): string {
+/** The service an `anchorKey` names. */
+export function serviceOf(anchor: string): string {
   return anchor.slice(0, anchor.indexOf("\u0000"));
 }
 
-function count(index: Map<string, Counts>, key: string, socket: QuickdrawServerSocket, by: 1 | -1) {
+/** Counts one more (`1`) or one fewer (`-1`) record of the socket under `key`; drops what reaches zero. */
+export function count(
+  index: Map<string, Counts>,
+  key: string,
+  socket: QuickdrawServerSocket,
+  by: 1 | -1,
+): void {
   const counts = index.get(key) ?? new Map<QuickdrawServerSocket, number>();
   const next = (counts.get(socket) ?? 0) + by;
   if (next > 0) {

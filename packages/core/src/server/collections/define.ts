@@ -136,8 +136,9 @@ function checkOption(owner: string, option: unknown, fail: Fail): CheckedOption 
  * 2 and 7.4): each is a key of the item projection other than `id`, named
  * once, and one the collection's items carry, so not reserved by the
  * contract's `fields` for a level above the collection's `access`. An index
- * row holds what its item holds, nothing more. `views` read index rows, so a
- * collection with views needs an index.
+ * row holds what its item holds, nothing more. Every `order` column but `id`
+ * is an index field, so a client can keep the index in order as deltas
+ * arrive. `views` read index rows, so a collection with views needs an index.
  */
 function checkIndex(
   name: string,
@@ -176,7 +177,18 @@ function checkIndex(
       fail(`${owner} "${field}" is named twice`);
     }
   }
+  checkIndexOrder(name, def.order, index, fail);
   return Object.freeze([...index]);
+}
+
+/** Every order column but `id` must be an index field: a client keeps the index in order by them. */
+function checkIndexOrder(name: string, order: OrderBy, index: readonly string[], fail: Fail): void {
+  const missing = order.map(([column]) => column).find((c) => c !== "id" && !index.includes(c));
+  if (missing !== undefined) {
+    fail(
+      `collection "${name}": order column "${missing}" is not an index field; a client keeps the index in order by it`,
+    );
+  }
 }
 
 /**

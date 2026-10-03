@@ -22,7 +22,7 @@ import {
   type TaskServiceOptions,
 } from "./collections/__tests__/fixture";
 import { projectService, qd, recordingStorage, type Read } from "./emit/__tests__/live";
-import type { AnyService, Principal } from "./index";
+import type { AnyService, Principal, ServiceGrants } from "./index";
 
 let h: Harness;
 let board: Board;
@@ -57,6 +57,7 @@ const pingService = qd.defineService(pingContract, {
 interface StartOptions extends TaskServiceOptions {
   readonly after?: (read: Read) => Promise<void> | undefined;
   readonly rateLimit?: { readonly maxRequests: number };
+  readonly loadServiceAccess?: (userId: string) => ServiceGrants;
 }
 
 async function start(options: StartOptions = {}) {
@@ -66,6 +67,9 @@ async function start(options: StartOptions = {}) {
     db: h.db,
     storage: recorded.storage,
     ...(options.rateLimit === undefined ? {} : { rateLimit: options.rateLimit }),
+    ...(options.loadServiceAccess === undefined
+      ? {}
+      : { auth: { loadServiceAccess: options.loadServiceAccess } }),
   });
   apps.push(app as unknown as TestApp);
   return { app, reads: recorded.reads };
@@ -145,7 +149,15 @@ describe("qd:changed", () => {
     await watch(connection, `board:${board.p1}`);
     await write(app, (db) => db.project.delete({ where: { id: board.p1 } }));
     await scopes.settle();
-    expect(scopes.changed.map(({ topic }) => topic)).toEqual(["service", `board:${board.p1}`]);
+    // Deleting the anchor row ends both scopes' watches (the label went with it, by cascade):
+    // each gets one last qd:changed as it leaves its room; the service topic stays.
+    expect(scopes.changed.map(({ topic }) => topic).sort()).toEqual(
+      ["service", `board:${board.p1}`, `byLabel:${label.id}`].sort(),
+    );
+    expect(scopes.changed.at(-1)?.topic).toBe("service");
+    expect(inTopic(app, `board:${board.p1}`)).toBe(0);
+    expect(inTopic(app, `byLabel:${label.id}`)).toBe(0);
+    expect(inTopic(app, "service")).toBe(1);
   });
 
   it("stops after qd:unwatch, and a topic watched twice is left at once", async () => {
@@ -167,6 +179,45 @@ describe("qd:changed", () => {
     expect(await emitWithAck(connection.socket, "qd:unwatch", { s: "taskService" })).toMatchObject(
       refused("VALIDATION"),
     );
+  });
+});
+
+describe("access loss", () => {
+  it("takes a member who lost access to a scope out of its topic, after one last qd:changed", async () => {
+    const { app } = await start();
+    const member = await connect(app, as(board.cy));
+    const other = await connect(app, as(board.bo));
+    await watch(member.connection, `board:${board.p1}`);
+    await watch(other.connection, `board:${board.p1}`);
+    await app
+      .as(as(board.ada))
+      .projectService.removeMember({ projectId: board.p1, userId: board.cy });
+    await Promise.all([member.scopes.settle(), other.scopes.settle()]);
+    expect(member.scopes.changed).toEqual([
+      { s: "taskService", topic: `board:${board.p1}`, rev: expect.any(Number) },
+    ]);
+    expect(other.scopes.changed).toEqual([]);
+    expect(inTopic(app, `board:${board.p1}`)).toBe(1);
+    member.scopes.clear();
+    await write(app, (db) => db.task.update({ where: { id: board.t1 }, data: { title: "Later" } }));
+    await Promise.all([member.scopes.settle(), other.scopes.settle()]);
+    expect(member.scopes.changed).toEqual([]);
+    expect(other.scopes.changed.map(({ topic }) => topic)).toEqual([`board:${board.p1}`]);
+  });
+
+  it("takes a user whose grants no longer reach watchAccess out of the service topic", async () => {
+    const { app } = await start({
+      watchAccess: { service: "Read" },
+      loadServiceAccess: () => ({}),
+    });
+    const reader = await connect(app, as(board.ed, { taskService: "Read" }));
+    expect(await watch(reader.connection, "service")).toEqual(ok);
+    await app.server.access.refresh(board.ed);
+    await reader.scopes.settle();
+    expect(reader.scopes.changed).toEqual([
+      { s: "taskService", topic: "service", rev: expect.any(Number) },
+    ]);
+    expect(inTopic(app, "service")).toBe(0);
   });
 });
 

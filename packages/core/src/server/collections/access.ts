@@ -79,27 +79,31 @@ function mayWatchService(service: BoundCollection["service"], principal: Princip
 /**
  * Authorizes a watch of `target` by `principal` (`null` when anonymous): a
  * collection scope's topic as a subscribe to that scope, and a service's
- * topic by its `watchAccess`. Throws `UNAUTHENTICATED` or `FORBIDDEN`; a
- * lookup that fails rejects.
+ * topic by its `watchAccess`. Resolves with the rows a scope's access is
+ * derived from (its anchors; none for the service topic). Throws
+ * `UNAUTHENTICATED` or `FORBIDDEN`; a lookup that fails rejects.
  */
 export async function authorizeWatch(
   hub: CollectionHub,
   principal: Principal | null,
   target: WatchTarget,
-): Promise<void> {
+): Promise<readonly string[]> {
   if (target.kind === "service" && target.service.watchAccess === "public") {
-    return;
+    return [];
   }
   if (principal === null) {
     throw new QuickdrawError("UNAUTHENTICATED", "Authentication required");
   }
-  const allowed =
+  const anchors =
     target.kind === "service"
       ? mayWatchService(target.service, principal)
-      : (await authorizeScopes(hub, target.collection, principal, [target.scope])).has(
+        ? []
+        : undefined
+      : (await authorizeScopes(hub, target.collection, principal, [target.scope])).get(
           target.scope,
         );
-  if (!allowed) {
+  if (anchors === undefined) {
     throw new QuickdrawError("FORBIDDEN", "Insufficient permissions");
   }
+  return anchors;
 }

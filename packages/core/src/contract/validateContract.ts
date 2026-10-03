@@ -311,6 +311,11 @@ function checkCollection(
 ): CollectionDef {
   const owner = `collection "${name}"`;
   checkMemberName("collection", name, fail);
+  if (name.includes(":")) {
+    fail(
+      `${owner} may not contain ":"; a change topic is {collection}:{scope}, split at its first colon`,
+    );
+  }
   if (scope.methods.has(name)) {
     fail(`${owner} has the same name as a method; the client exposes both as qd.<service>.${name}`);
   }

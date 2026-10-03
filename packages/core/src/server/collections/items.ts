@@ -9,8 +9,10 @@
 // index asks for the members it shows. The read applies the scope and
 // `where`, so an id that is not a member is simply absent from the answer.
 
+import type { Revision } from "../../protocol/envelope";
 import { pickKeys, projectRow } from "../emit/projection";
 import { strip } from "../emit/tiers";
+import { currentRev } from "../rev";
 import type { StorageAdapter, StorageRow, StorageWhere } from "../storage";
 import type { BoundCollection } from "./bind";
 import type { ServiceCollection } from "./define";
@@ -123,28 +125,32 @@ async function membersAmong(
 
 /**
  * The items of the members of `scope` among `ids`, in the order of `ids`,
- * each once: one read for a column scope, two for a `via` scope (its links
- * among `ids`, then the rows). An id that is not a member is left out.
+ * each once, and the revision they were read at (taken before the first
+ * read, the last one taken): one read for a column scope, two for a `via`
+ * scope (its links among `ids`, then the rows). An id that is not a member
+ * is left out.
  */
 export async function readItemsById(
   storage: StorageAdapter,
   collection: BoundCollection,
   scope: string,
   ids: readonly string[],
-): Promise<unknown[]> {
+): Promise<{ readonly rev: Revision; readonly items: unknown[] }> {
+  const rev = currentRev();
   const wanted = [...new Set(ids)];
   const members =
     wanted.length === 0 ? undefined : await membersAmong(storage, collection, scope, wanted);
   if (members === undefined) {
-    return [];
+    return { rev, items: [] };
   }
   const rows = await storage.findMany(collection.model, {
     where: members,
     select: collection.item.select,
   });
   const found = new Map(rows.flatMap((row) => (typeof row.id === "string" ? [[row.id, row]] : [])));
-  return wanted.flatMap((id) => {
+  const items = wanted.flatMap((id) => {
     const row = found.get(id);
     return row === undefined ? [] : [itemOf(collection, row)];
   });
+  return { rev, items };
 }

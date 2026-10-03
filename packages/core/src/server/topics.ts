@@ -23,40 +23,19 @@
 // optionally acknowledged, and stops a watch still being authorized from
 // joining. Neither counts against the socket rate limiter
 // (`transports/middleware.ts`), and neither listener throws
-// (`emit/answer.ts`).
+// (`emit/answer.ts`). A watch whose access the socket loses leaves its room,
+// after one last `qd:changed` (`topicRevocation.ts`).
 
 import { CLIENT_EVENTS, topicRoom } from "../contract/names";
 import type { Ok } from "../protocol/envelope";
 import { QuickdrawError } from "../protocol/errors";
-import { authorizeWatch, type WatchTarget } from "./collections/access";
+import { authorizeWatch } from "./collections/access";
 import type { CollectionHub } from "./collections/bind";
 import { createTopicSink } from "./collections/changed";
 import { answerEvent, answerNow, onDisconnect } from "./emit/answer";
-import { readWatch, TopicIndex, type TopicWatch } from "./topicIndex";
+import { readWatch, TopicIndex } from "./topicIndex";
+import { createTopicRevocation, targetOf } from "./topicRevocation";
 import type { QuickdrawServerSocket, SocketContext } from "./transports/types";
-
-/** What a watch names, or `NOT_FOUND`. */
-function targetOf(hub: CollectionHub, watch: TopicWatch): WatchTarget {
-  const service = hub.registry.services.get(watch.s);
-  if (service === undefined) {
-    throw new QuickdrawError("NOT_FOUND", `Unknown service "${watch.s}"`);
-  }
-  if (service.model === undefined) {
-    throw new QuickdrawError(
-      "NOT_FOUND",
-      `${watch.s} has no rows whose changes could be watched: it declares no model`,
-    );
-  }
-  const { c, scope } = watch;
-  if (c === undefined || scope === undefined) {
-    return { kind: "service", service };
-  }
-  const collection = hub.collections.routes.find(watch.s, c);
-  if (collection === undefined) {
-    throw new QuickdrawError("NOT_FOUND", `${watch.s} has no collection "${c}"`);
-  }
-  return { kind: "collection", collection, scope };
-}
 
 /** Serves one `qd:watch`: authorizes it, then joins the topic's room unless the client unwatched meanwhile. */
 async function watchTopic(
@@ -76,9 +55,9 @@ async function watchTopic(
   const room = topicRoom(watch.s, watch.topic);
   const unwatches = index.begin(socket, room);
   try {
-    await authorizeWatch(hub, socket.data.principal, target);
+    const anchors = await authorizeWatch(hub, socket.data.principal, target);
     if (socket.connected && index.unwatches(socket, room) === unwatches) {
-      index.watch(socket, watch);
+      index.watch(socket, { ...watch, anchors });
     }
   } finally {
     index.end(socket, room);
@@ -114,6 +93,8 @@ export interface Topics {
   readonly sink: ReturnType<typeof createTopicSink>;
   /** Serves `qd:watch` and `qd:unwatch` on every v5 socket. */
   readonly extension: (socket: QuickdrawServerSocket, context: SocketContext) => void;
+  /** Authorizes watches again on access changes: a watch a socket lost leaves its room (`topicRevocation.ts`). */
+  readonly revocation: ReturnType<typeof createTopicRevocation>;
 }
 
 /** Creates the change topics of a dispatcher whose hub holds its collections. */
@@ -121,6 +102,7 @@ export function createTopics(hub: CollectionHub): Topics {
   const index = new TopicIndex();
   return Object.freeze({
     sink: createTopicSink(hub, index),
+    revocation: createTopicRevocation(hub, index),
     extension: (socket: QuickdrawServerSocket, context: SocketContext): void => {
       answerEvent(socket, context, CLIENT_EVENTS.watch, (frame) =>
         watchTopic(hub, index, socket, frame),

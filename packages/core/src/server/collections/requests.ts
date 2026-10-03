@@ -150,7 +150,7 @@ export async function loadItems(
       "qd:col:items needs the scope subscribed with qd:col:sub",
     );
   }
-  return { ok: true, items: await readItemsById(storage, collection, request.scope, request.ids) };
+  return { ok: true, ...(await readItemsById(storage, collection, request.scope, request.ids)) };
 }
 
 /**

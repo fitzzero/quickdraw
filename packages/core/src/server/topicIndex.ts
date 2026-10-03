@@ -3,13 +3,17 @@
 // with `qd:watch { s, topic }`: `{collection}:{scope}` for one scope of a
 // collection, or `service` for the whole service. Each socket keeps its own
 // watches on `socket.data.topics`, by room; the index counts them per scope
-// and per service, so a flush computes only the topics someone here watches.
+// and per service, so a flush computes only the topics someone here watches,
+// and finds the watches an access change can concern by the rows a scope's
+// access is derived from (its anchors), as `collections/scopes.ts` does.
 // Rooms stay the source of truth for who receives `qd:changed`.
 
 import { SERVICE_TOPIC, topicRoom } from "../contract/names";
 import { MAX_SCOPE_LENGTH } from "../protocol/version";
+import type { AccessChange } from "./access/changes";
+import { anchorKey } from "./access/tools";
 import { PendingKeys } from "./emit/pending";
-import { emptyRecords, ownRecord } from "./emit/subscriptions";
+import { count, emptyRecords, ownRecord, serviceOf, type Counts } from "./emit/subscriptions";
 import { unreadable } from "./transports/ack";
 import type { QuickdrawServerSocket } from "./transports/types";
 
@@ -23,6 +27,12 @@ export interface TopicWatch {
   readonly c?: string;
   /** The scope of a collection scope's topic; absent for the service topic. */
   readonly scope?: string;
+  /**
+   * The rows a collection scope's watch is authorized through (`anchorKey`s):
+   * the anchor row, then its `inherit` parents. None for the service topic
+   * or a `"self"` scope.
+   */
+  readonly anchors?: readonly string[];
 }
 
 /**
@@ -76,6 +86,15 @@ export class TopicIndex {
   readonly #scopes = new Map<string, Map<string, number>>();
   /** The topics each socket has a `qd:watch` in flight for, by room. */
   readonly #pending = new PendingKeys();
+  readonly #byAnchor = new Map<string, Counts>();
+  readonly #byAnchorService = new Map<string, Counts>();
+
+  #index(socket: QuickdrawServerSocket, watch: TopicWatch, by: 1 | -1): void {
+    for (const anchor of watch.anchors ?? []) {
+      count(this.#byAnchor, anchor, socket, by);
+      count(this.#byAnchorService, serviceOf(anchor), socket, by);
+    }
+  }
 
   #count(watch: TopicWatch, by: 1 | -1): void {
     const { c, scope } = watch;
@@ -102,15 +121,41 @@ export class TopicIndex {
     }
   }
 
-  /** Records a watch and puts the socket in the topic's room; watching a topic again changes nothing. */
+  /** Records a watch and puts the socket in the topic's room; watching a topic again records its anchors anew. */
   watch(socket: QuickdrawServerSocket, watch: TopicWatch): void {
     const room = topicRoom(watch.s, watch.topic);
     const watches = (socket.data.topics ??= emptyRecords());
-    if (ownRecord(watches, room) === undefined) {
-      watches[room] = watch;
+    const previous = ownRecord(watches, room);
+    watches[room] = watch;
+    this.#index(socket, watch, 1);
+    if (previous === undefined) {
       this.#count(watch, 1);
+    } else {
+      this.#index(socket, previous, -1);
     }
     void socket.join(room);
+  }
+
+  /** The socket's watch of a topic, by room, or `undefined`. */
+  get(socket: QuickdrawServerSocket, room: string): TopicWatch | undefined {
+    return ownRecord(socket.data.topics, room);
+  }
+
+  /** Every topic the socket watches. */
+  entries(socket: QuickdrawServerSocket): TopicWatch[] {
+    return Object.values(socket.data.topics ?? {});
+  }
+
+  /** Ends a watch the socket may no longer hold: it leaves the topic's room. */
+  leave(socket: QuickdrawServerSocket, room: string): void {
+    const watches = socket.data.topics;
+    const watch = ownRecord(watches, room);
+    if (watches !== undefined && watch !== undefined) {
+      delete watches[room];
+      this.#count(watch, -1);
+      this.#index(socket, watch, -1);
+    }
+    void socket.leave(room);
   }
 
   /** A `qd:watch` of the topic begins; returns how often it was unwatched so far. */
@@ -126,13 +171,7 @@ export class TopicIndex {
   /** A client unwatched: the socket leaves the topic's room, and a watch still being authorized will not join it. */
   unwatch(socket: QuickdrawServerSocket, room: string): void {
     this.#pending.unsubscribed(socket, room);
-    const watches = socket.data.topics;
-    const watch = ownRecord(watches, room);
-    if (watches !== undefined && watch !== undefined) {
-      delete watches[room];
-      this.#count(watch, -1);
-    }
-    void socket.leave(room);
+    this.leave(socket, room);
   }
 
   /** How often the client unwatched the topic while a watch of it ran; it joins only if that did not move. */
@@ -142,10 +181,38 @@ export class TopicIndex {
 
   /** A socket disconnected: Socket.IO has emptied its rooms; drop its watches from the counts. */
   drop(socket: QuickdrawServerSocket): void {
-    for (const watch of Object.values(socket.data.topics ?? {})) {
+    for (const watch of this.entries(socket)) {
       this.#count(watch, -1);
+      this.#index(socket, watch, -1);
     }
     socket.data.topics = emptyRecords();
+  }
+
+  /**
+   * The watches an access change can concern: those of collection scopes
+   * anchored on the changed row (any row of the service when `id` is
+   * absent), of the changed user's sockets (every user's when `userId` is
+   * absent).
+   */
+  matching(change: AccessChange): Map<QuickdrawServerSocket, TopicWatch[]> {
+    const key = change.id === undefined ? undefined : anchorKey(change.service, change.id);
+    const sockets =
+      key === undefined ? this.#byAnchorService.get(change.service) : this.#byAnchor.get(key);
+    const found = new Map<QuickdrawServerSocket, TopicWatch[]>();
+    for (const socket of sockets?.keys() ?? []) {
+      if (change.userId !== undefined && socket.data.principal?.userId !== change.userId) {
+        continue;
+      }
+      const watches = this.entries(socket).filter(({ anchors = [] }) =>
+        anchors.some((anchor) =>
+          key === undefined ? serviceOf(anchor) === change.service : anchor === key,
+        ),
+      );
+      if (watches.length > 0) {
+        found.set(socket, watches);
+      }
+    }
+    return found;
   }
 
   /** True when a socket of this process watches the service's topic. */

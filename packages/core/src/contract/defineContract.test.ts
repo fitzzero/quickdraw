@@ -295,6 +295,12 @@ describe("definition-time checks", () => {
     expect(() =>
       define("taskService", { ...entityOnly, collections: { then: byProject } }),
     ).toThrow('collection "then" uses a reserved name');
+    // A change topic is {collection}:{scope}, split at its first colon.
+    expect(() =>
+      define("taskService", { ...entityOnly, collections: { "by:project": byProject } }),
+    ).toThrow(
+      'defineContract("taskService"): collection "by:project" may not contain ":"; a change topic is {collection}:{scope}, split at its first colon',
+    );
   });
 
   it("requires an entity for projections, fields, collections and the entity projection", () => {
