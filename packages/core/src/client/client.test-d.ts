@@ -2,24 +2,35 @@
 // 11). `bun run typecheck` checks this file, and vitest's typecheck mode
 // reports each block as a test; nothing here runs.
 
-import type { QueryClient, UseMutationResult, UseQueryResult } from "@tanstack/react-query";
+import type {
+  QueryClient,
+  QueryKey,
+  UseMutationResult,
+  UseQueryResult,
+} from "@tanstack/react-query";
 import { describe, expectTypeOf, test } from "vitest";
 import { z } from "zod";
 import { defineContract, mutation, type QuickdrawError } from "../index";
 import { task, type TaskRow } from "../server/__tests__/fixtures";
 import {
+  createInvalidationCoordinator,
   createQuickdrawClient,
   createServerCaller,
+  overlaysOf,
+  useQuickdraw,
+  type InvalidationCoordinator,
   type MethodQueryKey,
+  type OverlayStore,
   type QuickdrawProviderProps,
 } from "./index";
 import { counter } from "./__tests__/fixtures";
+import { taskContract as board } from "./__tests__/live";
 
 const misc = defineContract("miscService", {
   methods: { reset: mutation({ input: z.undefined(), output: z.null() }) },
 });
 
-const qd = createQuickdrawClient({ taskService: task, counter, misc });
+const qd = createQuickdrawClient({ taskService: task, counter, misc, board });
 
 type Card = { id: string; title: string };
 
@@ -102,6 +113,9 @@ describe("the typed client", () => {
   });
 
   test("a service has its methods and nothing else until the live members arrive", () => {
+    expectTypeOf<keyof typeof qd.board>().toEqualTypeOf<
+      "get" | "countOnBoard" | "cards" | "rename" | "renameTenTimes"
+    >();
     expectTypeOf<keyof typeof qd.taskService>().toEqualTypeOf<
       "get" | "find" | "list" | "count" | "rename"
     >();
@@ -112,10 +126,87 @@ describe("the typed client", () => {
       taskService: typeof task;
       counter: typeof counter;
       misc: typeof misc;
+      board: typeof board;
     }>;
     expectTypeOf<Props["client"]>().toEqualTypeOf<typeof qd>();
   });
+
+  test("useQuickdraw names the user the hello said", () => {
+    expectTypeOf<ReturnType<typeof useQuickdraw>["userId"]>().toEqualTypeOf<string | null>();
+  });
 });
+
+describe("qd.invalidate", () => {
+  test("takes a query member with that query's input, or a key", () => {
+    expectTypeOf(qd).toHaveProperty("invalidate");
+    expectTypeOf<keyof typeof qd>().toEqualTypeOf<
+      "taskService" | "counter" | "misc" | "board" | "invalidate"
+    >();
+    qd.invalidate(qd.taskService.get, { id: "t1" });
+    qd.invalidate(qd.taskService.get);
+    qd.invalidate(qd.counter.total);
+    qd.invalidate(["qd", "taskService"]);
+    qd.invalidate(qd.taskService.list.key({ projectId: "p1" }));
+    expectTypeOf(qd.invalidate).returns.toBeVoid();
+    // @ts-expect-error the input is the member's own
+    qd.invalidate(qd.taskService.get, { projectId: "p1" });
+    // @ts-expect-error a mutation caches nothing to invalidate
+    qd.invalidate(qd.taskService.rename);
+    // @ts-expect-error a key is an array
+    qd.invalidate("taskService");
+  });
+
+  test("reserves the key invalidate in the contract map", () => {
+    // @ts-expect-error invalidate is the client's own
+    createQuickdrawClient({ invalidate: counter });
+  });
+});
+
+describe("optimistic mutations", () => {
+  test("take false or a function typed by the contract's entity and collections", () => {
+    const useQuiet = () => qd.taskService.rename.useMutation({ optimistic: false });
+    expectTypeOf<ReturnType<typeof useQuiet>["data"]>().toEqualTypeOf<TaskRow | undefined>();
+    const useCustom = () =>
+      qd.board.rename.useMutation({
+        optimistic: (input, cache) => {
+          expectTypeOf(input).toEqualTypeOf<{ id: string; title: string }>();
+          cache.patchEntity(input.id, { title: input.title, ordinal: 2 });
+          cache.patchItem("board", input.id, { title: input.title });
+          cache.removeEntity(input.id);
+          // @ts-expect-error not a field of the entity
+          cache.patchEntity(input.id, { name: "x" });
+          // @ts-expect-error a card has no status
+          cache.patchItem("board", input.id, { status: "done" });
+          // @ts-expect-error not a collection of the contract
+          cache.patchItem("mine", input.id, {});
+        },
+      });
+    void useCustom;
+    // @ts-expect-error true is the default; only false or a function may be given
+    void (() => qd.taskService.rename.useMutation({ optimistic: true }));
+  });
+
+  test("mutate returns nothing and mutateAsync the output's promise", () => {
+    const useRename = () => qd.taskService.rename.useMutation();
+    type Rename = ReturnType<typeof useRename>;
+    expectTypeOf<Rename["mutate"]>().returns.toBeVoid();
+    expectTypeOf<Rename["mutateAsync"]>().returns.toEqualTypeOf<Promise<TaskRow>>();
+  });
+});
+
+describe("the React-free pieces", () => {
+  test("a coordinator and an overlay store come from a QueryClient", () => {
+    expectTypeOf(createInvalidationCoordinator).parameter(0).toEqualTypeOf<QueryClient>();
+    expectTypeOf(createInvalidationCoordinator).returns.toEqualTypeOf<InvalidationCoordinator>();
+    expectTypeOf<InvalidationCoordinator["invalidate"]>().parameter(0).toEqualTypeOf<QueryKey>();
+    expectTypeOf(overlaysOf).returns.toEqualTypeOf<OverlayStore>();
+    expectTypeOf<OverlayStore["applyOverlay"]>().toBeCallableWith("taskService", taskRowOf());
+  });
+});
+
+function taskRowOf(): TaskRow {
+  return { id: "t1", projectId: "p1", title: "T1", done: false };
+}
 
 describe("the server caller", () => {
   const server = createServerCaller({ taskService: task }, { url: "http://localhost:4000" });

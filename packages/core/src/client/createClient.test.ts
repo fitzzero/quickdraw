@@ -3,7 +3,8 @@
 // the connection the client is bound to.
 
 import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createInvalidationCoordinator, type InvalidationCoordinator } from "./coordinator";
 import { bindConnection, createQuickdrawClient } from "./createClient";
 import { versionOf } from "./versions";
 import { clientHarness, counter, probe } from "./__tests__/fixtures";
@@ -57,9 +58,46 @@ describe("createQuickdrawClient", () => {
     });
   });
 
+  it("invalidates through the bound coordinator: one input, every input of a member, or a key", async () => {
+    const { app } = await harness.start();
+    const qd = createQuickdrawClient({ counter });
+    expect(Object.keys(qd)).toEqual(["counter"]);
+    expect(typeof qd.invalidate).toBe("function");
+    expect(() => {
+      qd.invalidate(qd.counter.read);
+    }).toThrow("qd.invalidate needs a mounted <QuickdrawProvider> for this client");
+    const connection = await harness.connect(app.url);
+    const invalidate = vi.fn();
+    const coordinator: InvalidationCoordinator = {
+      ...createInvalidationCoordinator(new QueryClient()),
+      invalidate,
+    };
+    const unbind = bindConnection(qd, connection, coordinator);
+    qd.invalidate(qd.counter.read, { name: "a" });
+    qd.invalidate(qd.counter.read);
+    qd.invalidate(qd.counter.total);
+    qd.invalidate(["qd", "counterService"]);
+    expect(invalidate.mock.calls).toEqual([
+      [["qd", "counterService", "m", "read", { name: "a" }], { exact: true }],
+      [["qd", "counterService", "m", "read"]],
+      [["qd", "counterService", "m", "total"]],
+      [["qd", "counterService"]],
+    ]);
+    expect(() => {
+      qd.invalidate(qd.counter.bump as never);
+    }).toThrow("qd.invalidate: pass a query member, such as qd.task.get, or a query key");
+    unbind();
+    expect(() => {
+      qd.invalidate(["qd"]);
+    }).toThrow("needs a mounted <QuickdrawProvider>");
+  });
+
   it("refuses a reserved key, a value that is not a contract, and binding a foreign object", () => {
     expect(() => createQuickdrawClient({ then: counter })).toThrow(
       'createQuickdrawClient: "then" cannot name a service',
+    );
+    expect(() => createQuickdrawClient({ invalidate: counter } as never)).toThrow(
+      'createQuickdrawClient: "invalidate" cannot name a service; the client uses it',
     );
     expect(() => createQuickdrawClient({ odd: 1 as unknown as typeof counter })).toThrow(
       "is not a contract",
