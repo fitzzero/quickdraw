@@ -45,6 +45,13 @@ function exactOrigin(entry: unknown, owner: string): string {
   return url.origin;
 }
 
+/**
+ * The pattern, refused unless it is written anchored with `^` and `$`, and
+ * compiled to match whole origins whatever it holds: `^a|b$` is anchored
+ * only at its ends (`^a` or `b$`), so `/^https:\/\/app|staging\.example\.com$/`
+ * would allow `https://app.attacker.net`. The source is wrapped as
+ * `^(?:source)$`, so every alternative must match the whole origin.
+ */
 function anchoredPattern(pattern: RegExp, owner: string): RegExp {
   const { source } = pattern;
   const anchored = source.startsWith("^") && source.endsWith("$") && !source.endsWith("\\$");
@@ -53,7 +60,7 @@ function anchoredPattern(pattern: RegExp, owner: string): RegExp {
       `${owner}: an allowedOrigins pattern must match whole origins, anchored with ^ and $ and without the g or y flag; got ${String(pattern)}`,
     );
   }
-  return pattern;
+  return new RegExp(`^(?:${source})$`, pattern.flags);
 }
 
 /**

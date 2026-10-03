@@ -90,6 +90,18 @@ describe("originAllowlist", () => {
     }
   });
 
+  it("matches a pattern against the whole origin, whatever alternatives it holds", () => {
+    // Meant: ^https://(app|staging).example.com$, written without the group.
+    const loose = originAllowlist([/^https:\/\/app|staging\.example\.com$/], "test");
+    expect(loose.allowed("https://app.attacker.net/x")).toBeNull();
+    expect(loose.allowed("https://staging.example.com")).toBeNull();
+    const grouped = originAllowlist([/^https:\/\/(app|staging)\.example\.com$/i], "test");
+    expect(grouped.allowed("https://app.example.com/x")).toBe("https://app.example.com");
+    expect(grouped.allowed("https://STAGING.example.com")).toBe("https://staging.example.com");
+    expect(grouped.allowed("https://app.attacker.net")).toBeNull();
+    expect(grouped.allowed("https://app.example.com.attacker.net")).toBeNull();
+  });
+
   it("refuses entries that are not origins or anchored patterns", () => {
     for (const entry of [
       "*",
