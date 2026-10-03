@@ -28,8 +28,10 @@
 // cache, and coordinates at most `maxKeys` keys at once; past that a key is
 // refetched without a window or a follow-up, still without cancelling.
 //
-// React-free: the provider makes one per `QueryClient`, and a client without
-// React makes its own with `createInvalidationCoordinator(queryClient)`.
+// React-free: the provider makes one per `QueryClient` and retains it while
+// mounted, so its windows and delayed refetches stop a tick after it
+// unmounts; a client without React makes its own with
+// `createInvalidationCoordinator(queryClient)` and disposes it.
 
 import type { Query, QueryCacheNotifyEvent, QueryClient, QueryKey } from "@tanstack/react-query";
 import { KEY_ROOT } from "./keys";
@@ -92,6 +94,13 @@ export interface InvalidationCoordinator {
    * then it is reading, or it has been read since the reconnect.
    */
   refetchAfterReconnect(options: ReconnectRefetchOptions): void;
+  /**
+   * Holds the coordinator for one user of it (a mounted provider) and
+   * returns the release. A tick after the last release it is disposed,
+   * unless it is retained again first, as React's strict mode does when it
+   * mounts effects twice; retaining a disposed coordinator takes it up again.
+   */
+  retain(): () => void;
   /** Stops every window and pending refetch, and lets a new coordinator be made for the client. */
   dispose(): void;
 }
@@ -122,6 +131,9 @@ interface State {
   /** Stops watching the cache; set while there are entries. */
   unsubscribe: (() => void) | undefined;
   disposed: boolean;
+  /** How many users retain the coordinator, and the disposal a tick after the last let go. */
+  users: number;
+  disposeTimer: Timer | undefined;
 }
 
 const coordinators = new WeakMap<QueryClient, InvalidationCoordinator>();
@@ -300,7 +312,35 @@ function refetchAfterReconnect(state: State, options: ReconnectRefetchOptions): 
   }
 }
 
+function retain(state: State, coordinator: InvalidationCoordinator): () => void {
+  state.users += 1;
+  clearTimeout(state.disposeTimer);
+  state.disposeTimer = undefined;
+  if (state.disposed) {
+    state.disposed = false;
+    if (!coordinators.has(state.queryClient)) {
+      coordinators.set(state.queryClient, coordinator);
+    }
+  }
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    state.users -= 1;
+    if (state.users === 0) {
+      state.disposeTimer = setTimeout(() => {
+        state.disposeTimer = undefined;
+        dispose(state, coordinator);
+      }, 0);
+    }
+  };
+}
+
 function dispose(state: State, coordinator: InvalidationCoordinator): void {
+  clearTimeout(state.disposeTimer);
+  state.disposeTimer = undefined;
   state.disposed = true;
   for (const entry of [...state.entries.values()]) {
     clearTimeout(entry.window);
@@ -351,6 +391,8 @@ export function createInvalidationCoordinator(
     delayed: new Set(),
     unsubscribe: undefined,
     disposed: false,
+    users: 0,
+    disposeTimer: undefined,
   };
   const coordinator: InvalidationCoordinator = Object.freeze({
     queryClient,
@@ -364,6 +406,7 @@ export function createInvalidationCoordinator(
     refetchAfterReconnect(reconnect: ReconnectRefetchOptions): void {
       refetchAfterReconnect(state, reconnect);
     },
+    retain: () => retain(state, coordinator),
     dispose(): void {
       dispose(state, coordinator);
     },

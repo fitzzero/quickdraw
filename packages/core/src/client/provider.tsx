@@ -131,6 +131,8 @@ function ConnectedProvider<Contracts extends ContractMap>(
     sessionOf(connection, queryClient);
   }, [connection, queryClient]);
   React.useEffect(() => connection.retain(), [connection]);
+  // Disposed a tick after the provider unmounts or takes another `QueryClient`.
+  React.useEffect(() => coordinator.retain(), [coordinator]);
   React.useEffect(() => {
     // New credentials reconnect; the hello that follows decides what the cache keeps.
     connection.setAuth(auth);

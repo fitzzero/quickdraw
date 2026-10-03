@@ -59,6 +59,8 @@ export interface LoadSteps {
   disposed: boolean;
   /** The page in flight, shared by everyone who asks for the next page meanwhile. */
   page: Promise<boolean> | undefined;
+  /** The waits before a page or items are asked for again, each with what ends it early. */
+  readonly waits: Map<ReturnType<typeof setTimeout>, () => void>;
   /** The page size to ask for now. */
   pageLimit(): number | undefined;
   currentState(): CollectionState | null;
@@ -91,6 +93,25 @@ export function observeItems(p: LoadSteps, items: readonly unknown[], rev: numbe
     if (typeof id === "string") {
       p.host.overlays.observe(p.target.service, id, rev);
     }
+  }
+}
+
+/** Runs `then` after `delayMs`, unless the waits are ended first (`endWaits`), which runs `ended`. */
+function wait(p: LoadSteps, delayMs: number, then: () => void, ended: () => void): void {
+  const timer = setTimeout(() => {
+    p.waits.delete(timer);
+    then();
+  }, delayMs);
+  p.waits.set(timer, ended);
+}
+
+/** Ends every wait before a page or items are asked for again: the scope is disposed, or the connection closed. */
+export function endWaits(p: LoadSteps): void {
+  const waits = [...p.waits];
+  p.waits.clear();
+  for (const [timer, ended] of waits) {
+    clearTimeout(timer);
+    ended();
   }
 }
 
@@ -133,9 +154,16 @@ function pageLoaded(
   );
   if (outcome.kind === "retry") {
     return new Promise((resolve) => {
-      setTimeout(() => {
-        resolve(true);
-      }, outcome.delayMs);
+      wait(
+        p,
+        outcome.delayMs,
+        () => {
+          resolve(true);
+        },
+        () => {
+          resolve(false);
+        },
+      );
     });
   }
   return false;
@@ -190,9 +218,20 @@ function requestItems(p: LoadSteps, ids: readonly string[]): Promise<void> {
         p.write({ state: applyItems(state, items, rev, p.shape, ids) });
         resolve();
       } else if (outcome.kind === "retry") {
-        setTimeout(() => {
-          requestItems(p, ids).then(resolve, reject);
-        }, outcome.delayMs);
+        wait(
+          p,
+          outcome.delayMs,
+          () => {
+            requestItems(p, ids).then(resolve, reject);
+          },
+          () => {
+            if (p.disposed) {
+              resolve();
+            } else {
+              reject(new QuickdrawError("INTERNAL", "The connection to the server closed"));
+            }
+          },
+        );
       } else {
         reject(
           outcome.kind === "refused"

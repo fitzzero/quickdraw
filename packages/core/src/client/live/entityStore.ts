@@ -15,7 +15,8 @@
 // - A batch refused with `RATE_LIMITED` is sent again once the
 //   subscription backoff ends; one that got no answer is sent again after
 //   5 s while the socket is up, and on the next connect otherwise. Any other
-//   refusal is shown on each row and stands until the next connect.
+//   refusal is shown on each row and stands until the next connect. Those
+//   waits end when the connection closes or no row is held any more.
 // - Every connect asks for every held row again with the revision held, so
 //   an unchanged row is answered "not modified" and keeps its data.
 // - A different user on the connection (`forget`) drops every row and asks
@@ -63,6 +64,8 @@ export interface EntityStore {
   resume(): void;
   /** Another user acts on the connection now: drops every row and asks for each again. */
   forget(): void;
+  /** The connection closed: stops every retry. The next connect asks for every held row again. */
+  stop(): void;
   /** How many rows are held. */
   size(): number;
 }
@@ -83,6 +86,8 @@ interface State {
   scheduled: boolean;
   /** Raised by `forget`: answers to batches sent before are dropped. */
   epoch: number;
+  /** The waits before batches are sent again. */
+  readonly retries: Set<ReturnType<typeof setTimeout>>;
 }
 
 /** One `qd:sub` batch in flight. */
@@ -151,7 +156,8 @@ function refuse(state: State, batch: Batch, error: QuickdrawError): void {
 
 /** Asks for the batch's held rows again after `delayMs`. */
 function retry(state: State, batch: Batch, delayMs: number): void {
-  setTimeout(() => {
+  const timer = setTimeout(() => {
+    state.retries.delete(timer);
     if (batch.epoch !== state.epoch) {
       return;
     }
@@ -161,6 +167,15 @@ function retry(state: State, batch: Batch, delayMs: number): void {
       }
     }
   }, delayMs);
+  state.retries.add(timer);
+}
+
+/** Stops every wait before a batch is sent again. */
+function stopRetries(state: State): void {
+  for (const timer of state.retries) {
+    clearTimeout(timer);
+  }
+  state.retries.clear();
 }
 
 /** Applies each id's answer of a batch, in request order. */
@@ -250,11 +265,15 @@ export function createEntityStore(host: LiveHost): EntityStore {
       state.wanted.get(row.service)?.delete(row.id);
       add(state.leaving, row.service, row.id);
       schedule(state);
+      if (state.registry.held().length === 0) {
+        stopRetries(state);
+      }
     }),
     wanted: new Map(),
     leaving: new Map(),
     scheduled: false,
     epoch: 0,
+    retries: new Set(),
   };
   return Object.freeze({
     subscribe(service: string, ids: readonly string[]): () => void {
@@ -292,6 +311,9 @@ export function createEntityStore(host: LiveHost): EntityStore {
         writeEntry(state.host, entityKey(row.service, row.id), EMPTY_ENTITY);
         want(state, row.service, row.id);
       }
+    },
+    stop(): void {
+      stopRetries(state);
     },
     size: () => state.registry.held().length,
   });

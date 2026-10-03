@@ -161,7 +161,11 @@ export interface QuickdrawConnection {
   subscribe(listener: () => void): () => void;
   /** Connects, unless the connection is connected or connecting. */
   open(): void;
-  /** Disconnects and stays idle until `open`. Calls in flight fail. */
+  /**
+   * Disconnects and stays idle until `open`. Calls in flight fail; calls
+   * still waiting in Socket.IO's send buffer fail with `CANCELLED`. No timer
+   * of the connection's is left running.
+   */
   close(): void;
   /**
    * Opens the connection for one user of it (a mounted provider) and returns
@@ -350,11 +354,13 @@ function defaultTimeout(option: number | undefined, hello: HelloFrame | null): n
 /**
  * Whether the socket has connected with the current credentials since the
  * connection last opened (the next connect is then a reconnect), and the
- * topics, which stop retrying when the connection closes.
+ * topics and the subscription lane, which stop retrying and waiting when the
+ * connection closes.
  */
 interface Session {
   established: boolean;
   readonly topics: Topics;
+  readonly lane: SubscriptionLane;
 }
 
 /** When the socket opens and closes: the app's `open`, `close` and `retain`, new credentials, `qd:rotate`. */
@@ -410,9 +416,17 @@ function createLifecycle(
     opened = false;
     session.established = false;
     session.topics.stop();
+    session.lane.stop();
+    clearTimeout(closeTimer);
+    closeTimer = undefined;
     clearTimeout(rotateTimer);
     rotateTimer = undefined;
     backoff.clear();
+    // A call waiting to be sent would go out on the next `open`, long after the app closed.
+    failBuffered(
+      socket,
+      new QuickdrawError("CANCELLED", "The connection closed before the call was sent"),
+    );
     socket.disconnect();
     store.set({ status: "idle", reconnecting: false });
   }
@@ -547,7 +561,7 @@ export function createQuickdrawConnection(
     backoffRemaining: backoff.remaining,
     reportRateLimited: backoff.report,
   });
-  const session: Session = { established: false, topics };
+  const session: Session = { established: false, topics, lane: subscriptionLane };
   const lifecycle = createLifecycle(socket, store, backoff, session);
   const reconnected = new Set<() => void>();
   const wiring: Wiring = {

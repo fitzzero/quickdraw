@@ -11,7 +11,9 @@
 //   (after a `RATE_LIMITED` answer): the lane waits it out, then goes on;
 // - nothing is sent while the socket is down: an event whose turn comes then
 //   is answered at once with an error, and its sender subscribes again when
-//   the socket connects (the server forgets a socket's subscriptions anyway).
+//   the socket connects (the server forgets a socket's subscriptions anyway);
+//   closing the connection answers every waiting event that way at once, and
+//   leaves no timer behind.
 //
 // Unsubscribe events (`qd:unsub`, `qd:col:unsub`, `qd:unwatch`) are not in
 // the server's lane, and are sent directly.
@@ -65,6 +67,12 @@ export interface SubscriptionLane {
   inFlight(): number;
   /** Events waiting for a slot. */
   waiting(): number;
+  /**
+   * The connection closed: answers every event waiting for a slot as if the
+   * socket were down (their senders subscribe again on the next connect),
+   * and stops waiting out a backoff.
+   */
+  stop(): void;
 }
 
 /** The subscription limits a server announced, checked: they came over the network. */
@@ -164,5 +172,10 @@ export function createSubscriptionLane(host: LaneHost): SubscriptionLane {
     },
     inFlight: () => inFlight,
     waiting: () => queue.length,
+    stop(): void {
+      clearTimeout(backoffTimer);
+      backoffTimer = undefined;
+      dropAll();
+    },
   });
 }

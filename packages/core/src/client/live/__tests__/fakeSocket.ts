@@ -92,15 +92,34 @@ export function fakeConnection() {
     backoffRemaining: () => 0,
   } as unknown as QuickdrawConnection;
 
+  const setState = (patch: Partial<ConnectionState>): void => {
+    state = { ...state, ...patch };
+    for (const listener of [...stateListeners]) {
+      listener();
+    }
+  };
+  /** Drops the socket: unanswered frames fail as Socket.IO fails them. */
+  const disconnect = (): void => {
+    socket.connected = false;
+    for (const entry of emitted.filter((candidate) => !candidate.answered)) {
+      entry.answered = true;
+      entry.ack?.(new Error("socket has been disconnected"), undefined);
+    }
+    fire("disconnect");
+  };
+  const waiting = (event: string, index: number): Emitted & { readonly ack: LaneCallback } => {
+    const entry = emitted.filter((candidate) => candidate.event === event)[index];
+    if (entry?.ack === undefined || entry.answered) {
+      throw new Error(`no ${event} #${index} waits for an answer`);
+    }
+    entry.answered = true;
+    return entry as Emitted & { readonly ack: LaneCallback };
+  };
+
   return {
     connection,
     /** Changes the connection's state and tells its subscribers, as the connection does. */
-    setState(patch: Partial<ConnectionState>): void {
-      state = { ...state, ...patch };
-      for (const listener of [...stateListeners]) {
-        listener();
-      }
-    },
+    setState,
     emitted,
     /** The frames of `event` the client emitted, in order. */
     sent(event: string): Emitted[] {
@@ -108,30 +127,27 @@ export function fakeConnection() {
     },
     /** Answers the acknowledgement of the `index`th frame of `event`. */
     answer(event: string, index: number, reply: unknown): void {
-      const entry = emitted.filter((candidate) => candidate.event === event)[index];
-      if (entry?.ack === undefined || entry.answered) {
-        throw new Error(`no ${event} #${index} waits for an answer`);
-      }
-      entry.answered = true;
-      entry.ack(null, reply);
+      waiting(event, index).ack(null, reply);
+    },
+    /** Fails the acknowledgement of the `index`th frame of `event` as Socket.IO does when no answer came in time. */
+    fail(event: string, index: number): void {
+      waiting(event, index).ack(new Error("operation has timed out"), undefined);
     },
     /** Delivers a server frame to the client. */
     deliver: (event: string, frame: unknown): void => {
       fire(event, frame);
     },
     /** Drops the socket: unanswered frames fail as Socket.IO fails them. */
-    disconnect(): void {
-      socket.connected = false;
-      for (const entry of emitted.filter((candidate) => !candidate.answered)) {
-        entry.answered = true;
-        entry.ack?.(new Error("socket has been disconnected"), undefined);
-      }
-      fire("disconnect");
-    },
+    disconnect,
     /** Connects the socket again. */
     reconnect(): void {
       socket.connected = true;
       fire("connect");
+    },
+    /** Closes the connection as the app does: the socket drops and the connection is idle. */
+    close(): void {
+      disconnect();
+      setState({ status: "idle", reconnecting: false });
     },
     listenerCount: (event: string): number => socket.listeners(event).length,
   };

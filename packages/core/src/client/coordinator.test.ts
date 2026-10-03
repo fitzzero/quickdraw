@@ -284,6 +284,33 @@ describe("createInvalidationCoordinator", () => {
     expect(createInvalidationCoordinator(client)).not.toBe(coordinator);
   });
 
+  it("is disposed a tick after its last release, leaving no timer, unless retained again first", async () => {
+    const { client, coordinator, reads, observe } = setup();
+    const release = coordinator.retain();
+    observe(key);
+    reads[0]?.resolve({ title: "first" });
+    await settle();
+    coordinator.invalidate(key, { exact: true });
+    coordinator.refetchAfterReconnect({ watched: () => true });
+    // The window, and the refetch after the reconnect.
+    expect(vi.getTimerCount()).toBe(2);
+    // React's strict mode lets go and takes it again within one tick.
+    release();
+    const again = coordinator.retain();
+    await settle();
+    expect(createInvalidationCoordinator(client)).toBe(coordinator);
+    expect(vi.getTimerCount()).toBe(2);
+    again();
+    again();
+    await settle();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(createInvalidationCoordinator(client)).not.toBe(coordinator);
+    // Retained again, a disposed coordinator is taken up again only where none replaced it.
+    const revived = coordinator.retain();
+    expect(createInvalidationCoordinator(client)).not.toBe(coordinator);
+    revived();
+  });
+
   it("refuses a window or a bound that is not a count", () => {
     expect(() => createInvalidationCoordinator(new QueryClient(), { windowMs: -1 })).toThrow(
       "windowMs must be a number, 0 or more",

@@ -16,7 +16,9 @@
 //
 // Made on first use for a connection and `QueryClient` pair, by the hooks,
 // and kept as long as the connection: it holds nothing once its hooks are
-// gone, and its listeners live on the connection's socket.
+// gone, and its listeners live on the connection's socket. Closing the
+// connection stops every timer it runs (retries, reloads, checks); the next
+// connect resumes what is still held.
 //
 // React-free.
 
@@ -58,6 +60,13 @@ function followConnection(
       live.collections.forget();
     } else if (first) {
       resume();
+    }
+  });
+  connection.subscribe(() => {
+    // Closed by the app: no retry, reload or check waits for a socket that is gone.
+    if (connection.getState().status === "idle") {
+      live.entities.stop();
+      live.collections.stop();
     }
   });
 }

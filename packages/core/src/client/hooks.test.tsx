@@ -8,7 +8,10 @@ import { act, render, renderHook, screen, waitFor } from "@testing-library/react
 import * as React from "react";
 import { describe, expect, it } from "vitest";
 import { QuickdrawError } from "../index";
+import { tick } from "../server/__tests__/fixtures";
 import type { ConnectionAuth, QuickdrawConnection } from "./connection";
+import { QuickdrawContext } from "./context";
+import { createInvalidationCoordinator, type InvalidationCoordinator } from "./coordinator";
 import { createQuickdrawClient } from "./createClient";
 import { QuickdrawProvider, useQuickdraw, type QuickdrawStatus } from "./provider";
 import {
@@ -234,6 +237,31 @@ describe("QuickdrawProvider", () => {
       </Provider>,
     );
     await screen.findByText("user bob");
+  });
+
+  it("keeps its coordinator through strict mode, and disposes it a tick after it unmounts", async () => {
+    const { app } = await harness.start();
+    const queryClient = new QueryClient();
+    const held: { coordinator?: InvalidationCoordinator } = {};
+    function Grab() {
+      const provided = React.useContext(QuickdrawContext);
+      held.coordinator ??= provided?.coordinator;
+      return null;
+    }
+    const view = render(
+      <React.StrictMode>
+        <Provider url={app.url} queryClient={queryClient}>
+          <Grab />
+          <Echo />
+        </Provider>
+      </React.StrictMode>,
+    );
+    await screen.findByText("user alice");
+    await tick(20);
+    expect(createInvalidationCoordinator(queryClient)).toBe(held.coordinator);
+    view.unmount();
+    await tick(20);
+    expect(createInvalidationCoordinator(queryClient)).not.toBe(held.coordinator);
   });
 
   it("reads every query again when the server pushes new grants (qd:access)", async () => {

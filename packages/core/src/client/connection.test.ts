@@ -181,6 +181,30 @@ describe("createQuickdrawConnection", () => {
     expect(counterService.values.get("offline")).toBeUndefined();
   });
 
+  it("fails a call waiting in the send buffer with CANCELLED when it closes", async () => {
+    const { app, records } = await harness.start();
+    const connection = await harness.connect(app.url);
+    const manager = connection.socket.io;
+    manager.reconnection(false);
+    manager.engine.close();
+    await until(() => !connection.socket.connected);
+    const bump = callData(connection, {
+      service: "counterService",
+      method: "bump",
+      input: { name: "closed" },
+      kind: "mutation",
+    });
+    expect(connection.socket.sendBuffer).toHaveLength(1);
+    connection.close();
+    await expect(bump).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(connection.socket.sendBuffer).toEqual([]);
+    manager.reconnection(true);
+    connection.open();
+    await whenStatus(connection, "connected");
+    expect(await caller(connection)).toBe(alice.userId);
+    expect(records.filter((record) => record.method === "bump")).toEqual([]);
+  });
+
   it("keeps the grants from the hello and from qd:access, and drops them with the credentials", async () => {
     const grants = new Map<string, Record<string, "Read" | "Moderate">>([
       ["alice", { probeService: "Read" }],

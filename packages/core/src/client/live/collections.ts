@@ -46,6 +46,8 @@ export interface CollectionHub {
   resume(reason: ResumeReason): void;
   /** Another user acts on the connection now: drops every scope's state and loads it again. */
   forget(): void;
+  /** The connection closed: stops every scope's timers and the checks, until the next connect. */
+  stop(): void;
   /** How many scopes are held. */
   size(): number;
 }
@@ -109,14 +111,24 @@ export function createCollectionHub(host: LiveHost): CollectionHub {
       held(service, collection, scope)?.revoked(reason);
     },
     resume(reason: ResumeReason): void {
-      for (const controller of registry.held()) {
+      const scopes = registry.held();
+      for (const controller of scopes) {
         controller.resume(reason);
+      }
+      if (reason === "connect" && scopes.length > 0) {
+        checks.start();
       }
     },
     forget(): void {
       for (const controller of registry.held()) {
         controller.forget();
       }
+    },
+    stop(): void {
+      for (const controller of registry.held()) {
+        controller.stop();
+      }
+      checks.stop();
     },
     size: () => registry.held().length,
   });

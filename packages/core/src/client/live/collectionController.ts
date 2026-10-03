@@ -39,6 +39,7 @@ import type { CollectionFrame, RevokeReason } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
 import { collectionKey, type CollectionQueryKey } from "../keys";
 import {
+  endWaits,
   isPage,
   loadItems,
   loadPage,
@@ -95,7 +96,9 @@ export interface CollectionController {
   loadAll(): () => void;
   /** Another user acts on the connection now: drops the state and loads the scope from scratch. */
   forget(): void;
-  /** Ends the subscription: `qd:col:unsub`, and every request in flight is dropped. */
+  /** The connection closed: stops every timer and wait. The next connect loads the scope again. */
+  stop(): void;
+  /** Ends the subscription: `qd:col:unsub`, every request in flight is dropped, and no timer is left. */
   dispose(): void;
 }
 
@@ -426,11 +429,19 @@ function whenJoined(p: Pipeline): Promise<void> {
   });
 }
 
+/** Stops the reload a `reset` scheduled, a load's retry, and the waits of pages and items. */
+function stopTimers(p: Pipeline): void {
+  clearTimeout(p.resetTimer);
+  clearTimeout(p.retryTimer);
+  p.resetTimer = undefined;
+  p.retryTimer = undefined;
+  endWaits(p);
+}
+
 function dispose(p: Pipeline): void {
   p.disposed = true;
   p.generation += 1;
-  clearTimeout(p.resetTimer);
-  clearTimeout(p.retryTimer);
+  stopTimers(p);
   settle(p, null);
   const { socket } = p.host.connection;
   if (socket.connected) {
@@ -442,13 +453,13 @@ function dispose(p: Pipeline): void {
   }
 }
 
-/** Creates the pipeline of one scope; `start` loads it. `limit` is the page size asked for. */
-export function createCollectionController(
+/** The state of a new scope's pipeline, before its first load. */
+function createPipeline(
   host: LiveHost,
   target: CollectionTarget,
   scope: string,
   limit: number | undefined,
-): CollectionController {
+): Pipeline {
   const p: Pipeline = {
     host,
     target,
@@ -470,6 +481,7 @@ export function createCollectionController(
     missing: new Set(),
     disposed: false,
     page: undefined,
+    waits: new Map(),
     pageLimit: () => pageLimit(p),
     currentState: () => entryOf(p).state,
     write: (change) => {
@@ -477,6 +489,30 @@ export function createCollectionController(
     },
     whenJoined: () => whenJoined(p),
   };
+  return p;
+}
+
+/** Loads every page of the scope while the returned release is not called. */
+function holdLoadAll(p: Pipeline): () => void {
+  p.allDemand += 1;
+  void continueLoadAll(p);
+  let released = false;
+  return () => {
+    if (!released) {
+      released = true;
+      p.allDemand -= 1;
+    }
+  };
+}
+
+/** Creates the pipeline of one scope; `start` loads it. `limit` is the page size asked for. */
+export function createCollectionController(
+  host: LiveHost,
+  target: CollectionTarget,
+  scope: string,
+  limit: number | undefined,
+): CollectionController {
+  const p = createPipeline(host, target, scope, limit);
   return Object.freeze({
     key: p.key,
     start: () => {
@@ -502,20 +538,14 @@ export function createCollectionController(
       await loadPage(p);
     },
     loadItems: (ids: readonly string[]) => loadItems(p, ids),
-    loadAll: () => {
-      p.allDemand += 1;
-      void continueLoadAll(p);
-      let released = false;
-      return () => {
-        if (!released) {
-          released = true;
-          p.allDemand -= 1;
-        }
-      };
-    },
+    loadAll: () => holdLoadAll(p),
     forget: () => {
       write(p, { state: null, error: null, loadingMore: false });
       load(p, "snapshot");
+    },
+    stop: () => {
+      p.joined = false;
+      stopTimers(p);
     },
     dispose: () => {
       dispose(p);
