@@ -7,6 +7,9 @@
 import type { AnyContract } from "../contract/defineContract";
 import type { Logger } from "../contract/logger";
 import { QuickdrawError } from "../protocol/errors";
+import type { DispatcherAccess } from "./access/api";
+import type { AnyService } from "./service";
+import type { StorageAdapter } from "./storage";
 import type {
   ContextExtensionOf,
   DbOf,
@@ -109,15 +112,45 @@ export type AnyContext = BaseContext<Principal | null>;
 export type ContextExtender = (base: AnyContext) => object;
 
 /**
+ * What the framework's kits (RFC 0003 section 12) know about the call a
+ * `ctx` belongs to: the service whose method runs, and the dispatcher's
+ * access policies and storage adapter. A kit's handlers are made before any
+ * dispatcher exists, so they find these through `kitRuntimeOf(ctx)`. It is
+ * never a member of `ctx`.
+ */
+export interface KitRuntime {
+  readonly service: AnyService;
+  readonly access: DispatcherAccess;
+  readonly storage: StorageAdapter | undefined;
+}
+
+/**
  * The per-call fields the dispatcher fills in. `touch` is the dispatcher's
  * (its tracked writes); a context built without one gets a `touch` that
- * does nothing.
+ * does nothing. `kit` is kept beside the context, never on it.
  */
 export type ContextFields = Pick<
   AnyContext,
   "principal" | "signal" | "log" | "requestId" | "transport" | "mcp"
 > &
-  Partial<Pick<AnyContext, "touch">>;
+  Partial<Pick<AnyContext, "touch">> & { readonly kit?: KitRuntime };
+
+const KIT_RUNTIMES = new WeakMap<object, KitRuntime>();
+
+/**
+ * The kit runtime of the call `ctx` belongs to, or `undefined` for a
+ * context no dispatcher built.
+ */
+export function kitRuntimeOf(ctx: object): KitRuntime | undefined {
+  return KIT_RUNTIMES.get(ctx);
+}
+
+function withRuntime<Ctx extends object>(ctx: Ctx, runtime: KitRuntime | undefined): Ctx {
+  if (runtime !== undefined) {
+    KIT_RUNTIMES.set(ctx, runtime);
+  }
+  return ctx;
+}
 
 /** A signal that never aborts, for calls that cannot be cancelled. */
 export const NEVER_ABORTED: AbortSignal = new AbortController().signal;
@@ -165,19 +198,20 @@ const ROOMS: ContextRooms = unavailable("ctx.rooms");
  * `extend`. The framework's fields win when the names collide.
  */
 export function createContext(fields: ContextFields, extend?: ContextExtender): AnyContext {
+  const { kit, ...own } = fields;
   const base: AnyContext = Object.freeze({
-    ...fields,
-    touch: fields.touch ?? untracked,
+    ...own,
+    touch: own.touch ?? untracked,
     services: SERVICES,
     rooms: ROOMS,
   });
   if (extend === undefined) {
-    return base;
+    return withRuntime(base, kit);
   }
-  return Object.freeze({ ...extend(base), ...base });
+  return withRuntime(Object.freeze({ ...extend(base), ...base }), kit);
 }
 
 /** The same `ctx` with another signal: the one a handler run aborts. */
 export function withSignal(ctx: AnyContext, signal: AbortSignal): AnyContext {
-  return Object.freeze({ ...ctx, signal });
+  return withRuntime(Object.freeze({ ...ctx, signal }), KIT_RUNTIMES.get(ctx));
 }

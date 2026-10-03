@@ -1,0 +1,77 @@
+// The read/write kit's `list` (RFC 0003 section 12.1): one page of the rows
+// the caller may read, filtered and sorted by the fields the contract
+// declares, by keyset cursor (`page.ts`). The trap it exists to close: the
+// policy's `accessWhere` is part of every read, so a list never returns a row
+// `get` would refuse. Items are the declared projection's rows (its select,
+// its map, dates as ISO strings), stripped of the fields above the level
+// the page was filtered at.
+//
+// Statements: the access filter's own reads (none for `owner` and `jsonAcl`
+// policies or a service-wide `Admin` grant), then one for the page, and one
+// more beside it when the call asks for `totalCount`.
+
+import type { CrudSpec } from "../../../contract/kits/crud";
+import type { ListPage, ListQuery } from "../../../contract/kits/crudList";
+import type { AccessForm } from "../../access/types";
+import { selectWith } from "../../collections/items";
+import { projectRow, type Projection } from "../../emit/projection";
+import { strip } from "../../emit/tiers";
+import { readerLevel, rowLevel, rowsWhere } from "./access";
+import { listOrder, listWhere } from "./listQuery";
+import { readPage } from "./page";
+import { crudCall, projectionOf, type KitHandler, type KitHandlerArgs } from "./runtime";
+
+/** What a `list` handler is made from. */
+export interface ListContext {
+  readonly spec: Extract<CrudSpec, { method: "list" }>;
+  readonly form: AccessForm;
+  /** The projection the items are: `"entity"` or one of the contract's. */
+  readonly projection: string;
+}
+
+function itemOf(projection: Projection, row: object, hidden: ReadonlySet<string>): unknown {
+  const item = projectRow(projection, row);
+  return typeof item === "object" && item !== null
+    ? strip(item as Readonly<Record<string, unknown>>, hidden)
+    : item;
+}
+
+function emptyPage(query: ListQuery): ListPage<never> {
+  return { items: [], nextCursor: null, ...(query.totalCount ? { totalCount: 0 } : {}) };
+}
+
+/** The `list` handler. */
+export function listHandler(context: ListContext): KitHandler {
+  const handler = async ({ input, ctx, db }: KitHandlerArgs): Promise<ListPage<unknown>> => {
+    const call = crudCall(ctx, db);
+    const query = input as ListQuery;
+    const level = rowLevel(context.form, "Read");
+    const access = await rowsWhere(call, context.form, level);
+    if (access === "none") {
+      return emptyPage(query);
+    }
+    const projection = projectionOf(call, context.projection);
+    const order = listOrder(context.spec.sort, query.sort);
+    const page = await readPage({
+      table: call.table,
+      model: call.model,
+      storage: call.runtime.storage,
+      where: listWhere(query.filter, access),
+      order,
+      cursor: query.cursor,
+      limit: query.limit,
+      select: selectWith(
+        projection.select,
+        order.map(([column]) => column),
+      ),
+      totalCount: query.totalCount,
+    });
+    const hidden = projection.tiers.hidden(readerLevel(call, context.form, level));
+    return {
+      items: page.rows.map((row) => itemOf(projection, row, hidden)),
+      nextCursor: page.nextCursor,
+      ...(page.totalCount === undefined ? {} : { totalCount: page.totalCount }),
+    };
+  };
+  return handler as KitHandler;
+}

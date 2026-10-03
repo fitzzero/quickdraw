@@ -58,6 +58,50 @@ export {
   type RowSchema,
   type StreamDef,
 } from "./contract/defineContract";
+// The read/write kit's contract half (RFC 0003 section 12.1); its handlers
+// are `crud.handlers` on ./server.
+export {
+  CRUD_METHODS,
+  crud,
+  type CrudBulkDelete,
+  type CrudBulkUpdate,
+  type CrudContractOptions,
+  type CrudCreate,
+  type CrudDelete,
+  type CrudGet,
+  type CrudGetMany,
+  type CrudInputOptions,
+  type CrudList,
+  type CrudListOptions,
+  type CrudMethodName,
+  type CrudMethods,
+  type CrudReorder,
+  type CrudReorderOptions,
+  type CrudTag,
+  type CrudToggle,
+  type CrudUpdate,
+  type ListInput,
+  type NumberFieldOf,
+  type ScalarFieldOf,
+} from "./contract/kits/crud";
+export {
+  CRUD_MAX_IDS,
+  type BulkPatch,
+  type BulkResult,
+  type IdInput,
+  type IdsInput,
+  type ReorderInput,
+  type WithId,
+} from "./contract/kits/crudSchemas";
+export {
+  LIST_DEFAULT_LIMIT,
+  LIST_MAX_LIMIT,
+  type FilterValue,
+  type ListPage,
+  type ListQuery,
+  type ListSort,
+} from "./contract/kits/crudList";
+export type { KitSchema } from "./contract/kits/schemas";
 export type {
   ChannelPayloadOf,
   CollectionName,
