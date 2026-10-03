@@ -4,7 +4,13 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { defineContract, isProtocolMismatch, PROTOCOL_VERSION, query } from "../../index";
+import {
+  defineContract,
+  isAuthenticationRefused,
+  isProtocolMismatch,
+  PROTOCOL_VERSION,
+  query,
+} from "../../index";
 import {
   alice,
   captureLogger,
@@ -123,10 +129,15 @@ describe("authentication", () => {
         },
       },
     });
-    expect((await refusal(url, { ...v5Auth(null), token: "throw" })).message).toBe(
-      "Authentication failed",
-    );
-    expect((await refusal(url, v5Auth(null))).message).toBe("Authentication failed");
+    for (const error of [
+      await refusal(url, { ...v5Auth(null), token: "throw" }),
+      await refusal(url, v5Auth(null)),
+    ]) {
+      expect(error.message).toBe("Authentication failed");
+      expect(error.data).toEqual({ code: "UNAUTHENTICATED" });
+      expect(isAuthenticationRefused(error.data)).toBe(true);
+      expect(isProtocolMismatch(error.data)).toBe(false);
+    }
     expect(logger.at("error").map((entry) => entry.message)).toEqual([
       "Socket authentication failed",
       "Socket authentication failed",

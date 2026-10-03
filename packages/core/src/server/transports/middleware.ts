@@ -10,6 +10,7 @@ import {
   PROTOCOL_MISMATCH,
   PROTOCOL_VERSION,
   isQdHandshake,
+  type AuthenticationRefused,
   type ProtocolMismatch,
 } from "../../protocol/version";
 import { describeError } from "../pipeline/metrics";
@@ -26,11 +27,9 @@ import type { QuickdrawIo, QuickdrawServerSocket, SocketContext } from "./types"
 type Next = (error?: ExtendedError) => void;
 
 /** A refused handshake: Socket.IO sends `message` and `data` as the client's `connect_error`. */
-function refusal(message: string, data?: ProtocolMismatch): ExtendedError {
+function refusal(message: string, data: ProtocolMismatch | AuthenticationRefused): ExtendedError {
   const error: ExtendedError = new Error(message);
-  if (data !== undefined) {
-    error.data = data;
-  }
+  error.data = data;
   return error;
 }
 
@@ -38,6 +37,8 @@ const MISMATCH: ProtocolMismatch = Object.freeze({
   code: PROTOCOL_MISMATCH,
   expected: PROTOCOL_VERSION,
 });
+
+const UNAUTHENTICATED: AuthenticationRefused = Object.freeze({ code: "UNAUTHENTICATED" });
 
 /**
  * Reads the handshake's `auth.qd`. Protocol 5 is served. A client without
@@ -76,7 +77,9 @@ export function protocolMiddleware(
 
 /**
  * Authenticates the socket and keeps its principal on `socket.data`. A
- * failure refuses the connection with "Authentication failed", as 4.1 did.
+ * failure refuses the connection with "Authentication failed", as 4.1 did,
+ * and `{ code: "UNAUTHENTICATED" }` as the `connect_error` data, so a client
+ * can tell it from a protocol mismatch.
  */
 export function authMiddleware(
   resolvePrincipal: ResolvePrincipal,
@@ -100,7 +103,7 @@ export function authMiddleware(
           socketId: socket.id,
           error: describeError(error),
         });
-        next(refusal("Authentication failed"));
+        next(refusal("Authentication failed", UNAUTHENTICATED));
       },
     );
   };

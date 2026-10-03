@@ -46,6 +46,10 @@
       "types": "./dist/client/index.d.ts",
       "import": "./dist/client/index.js"
     },
+    "./utils": {
+      "types": "./dist/utils/index.d.ts",
+      "import": "./dist/utils/index.js"
+    },
     "./parser": {
       "types": "./dist/parser.d.ts",
       "import": "./dist/parser.js"
@@ -61,6 +65,10 @@
     "./testing/prisma": {
       "types": "./dist/testing/prisma.d.ts",
       "import": "./dist/testing/prisma.js"
+    },
+    "./testing/client": {
+      "types": "./dist/testing/client.d.ts",
+      "import": "./dist/testing/client.js"
     },
     "./package.json": "./package.json"
   },
@@ -118,6 +126,7 @@
     "@prisma/client": "^7.0.0",
     "@socket.io/redis-adapter": "^8.0.0",
     "@tanstack/react-query": "^5.20.0",
+    "@testing-library/react": "^16.0.0",
     "express": "^4.18.0 || ^5.0.0",
     "express-rate-limit": "^8.0.0",
     "pg": "^8.13.0",
@@ -138,6 +147,9 @@
       "optional": true
     },
     "@tanstack/react-query": {
+      "optional": true
+    },
+    "@testing-library/react": {
       "optional": true
     },
     "express": {

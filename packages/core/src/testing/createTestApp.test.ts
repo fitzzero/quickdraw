@@ -105,6 +105,60 @@ describe("createTestApp", () => {
   });
 });
 
+describe("app.frames", () => {
+  it("records every frame the server sends each socket, with the socket, its user and the time", async () => {
+    const { app } = await start();
+    const before = Date.now();
+    const signedIn = await app.connect(alice);
+    const anonymous = await app.connect(null);
+    expect(
+      app.frames({ event: "qd:hello" }).map((frame) => [frame.socketId, frame.userId]),
+    ).toEqual([
+      [signedIn.socket.id, "alice"],
+      [anonymous.socket.id, null],
+    ]);
+    expect(app.frames({ event: "qd:hello", userId: "alice" })[0]?.data).toEqual(signedIn.hello);
+    app.server.rotate({ withinMs: 100 });
+    await app.frames.waitFor({ event: "qd:rotate", userId: null });
+    await app.frames.waitFor({ event: "qd:rotate", userId: "alice" });
+    const rotations = app.frames({ event: "qd:rotate" });
+    expect(rotations.map((frame) => frame.data.withinMs)).toEqual([100, 100]);
+    expect(rotations.map((frame) => frame.args)).toEqual([
+      [{ withinMs: 100 }],
+      [{ withinMs: 100 }],
+    ]);
+    expect(app.frames({ socketId: anonymous.socket.id }).map((frame) => frame.event)).toEqual([
+      "qd:hello",
+      "qd:rotate",
+    ]);
+    expect(app.frames((frame) => frame.at < before)).toEqual([]);
+    expect(app.frames().every((frame) => frame.at <= Date.now())).toBe(true);
+  });
+
+  it("forgets on clear(), and waits for a frame recorded already or still to come", async () => {
+    const { app } = await start();
+    const { socket } = await app.connect(alice);
+    expect(await app.frames.waitFor({ event: "qd:hello" })).toMatchObject({ userId: "alice" });
+    app.frames.clear();
+    expect(app.frames()).toEqual([]);
+    const rotated = app.frames.waitFor((frame) => frame.event === "qd:rotate", 1000);
+    app.server.rotate({ withinMs: 5 });
+    expect(await rotated).toMatchObject({ socketId: socket.id, data: { withinMs: 5 } });
+    expect(app.frames()).toHaveLength(1);
+  });
+
+  it("rejects a wait that nothing matches in time", async () => {
+    const { app } = await start();
+    await app.connect(alice);
+    await expect(app.frames.waitFor({ event: "qd:revoked" }, 50)).rejects.toThrow(
+      'No frame matched {"event":"qd:revoked"} within 50 ms',
+    );
+    await expect(app.frames.waitFor(() => false, 50)).rejects.toThrow(
+      "No frame matched the predicate within 50 ms",
+    );
+  });
+});
+
 describe("emitWithAck and waitForEvent", () => {
   it("send a raw frame and wait for its acknowledgement, or for an event", async () => {
     const { app } = await start();

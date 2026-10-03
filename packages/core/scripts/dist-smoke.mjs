@@ -9,8 +9,10 @@
 // - each export provides its known symbols, and the root export's declarations
 //   provide every public type;
 // - the root export is browser-safe: its whole import graph is the package's
-//   own files, with no Node built-in and no dependency;
-// - `./client` opens with the "use client" directive and no other export does;
+//   own files, with no Node built-in and no dependency; so is `./utils`, the
+//   isomorphic entry React server components import;
+// - `./client` opens with the "use client" directive and no other export does
+//   (`./utils` in particular), and re-exports `./utils`;
 // - every source module is emitted into exactly one output file (entries share
 //   chunks; with `splitting` off each entry would carry its own copy);
 // - no dependency is bundled (every source path is the package's own);
@@ -23,12 +25,18 @@
 //   invalid input with VALIDATION;
 // - the built server factory, booted by the built test app (`./testing`),
 //   serves a call over a v5 socket, over HTTP and through the 4.x shim;
+// - the built client (`./client`) calls through its connection over a v5
+//   socket, and the built server caller (`./utils`) over HTTP;
 // - the built MCP bridge (`./server/mcp`) lists a contract's method as a
 //   tool and serves a call through its stdio server, and `./server` carries
 //   none of the bridge's code;
 // - the built tracked-writes adapter (`./prisma`) imports nothing from Prisma,
 //   refuses a value that is not a Prisma client, and shares one storage
-//   lookup with `./server`.
+//   lookup with `./server`;
+// - the built client test helpers (`./testing/client`) carry no "use client"
+//   (while `dist/client/index.js` still opens with it), load Testing Library
+//   only lazily, import no jsdom and no server code, and the built mock
+//   client answers from its stubs with no DOM.
 
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -73,6 +81,7 @@ const expectations = {
       "PROTOCOL_MISMATCH",
       "isQdHandshake",
       "isProtocolMismatch",
+      "isAuthenticationRefused",
       "isCallEnvelope",
       "isCancel",
     ],
@@ -116,7 +125,56 @@ const expectations = {
     ],
     client: false,
   },
-  "./client": { symbols: ["formatCurrency"], client: true },
+  "./client": {
+    symbols: [
+      "createQuickdrawClient",
+      "QuickdrawProvider",
+      "useQuickdraw",
+      "createQuickdrawConnection",
+      "call",
+      "callData",
+      "isNotModified",
+      "shouldRetry",
+      "reloadOncePerSession",
+      "DEFAULT_BACKOFF_MS",
+      "createInvalidationCoordinator",
+      "DEFAULT_INVALIDATION_WINDOW_MS",
+      "RECONNECT_JITTER_MS",
+      "overlaysOf",
+      "sessionOf",
+      "DEFAULT_SUBSCRIPTION_LANE",
+      "liveDataOf",
+      "emptyCollection",
+      "applyCollectionSnapshot",
+      "applyCollectionPage",
+      "applyCollectionDeltas",
+      "applyCollectionFrames",
+      "applyCollectionItems",
+      "getAuthToken",
+      "createServerCaller",
+      "methodKey",
+      "entityKey",
+      "collectionKey",
+      "formatCurrency",
+      "parseJWTPayload",
+    ],
+    client: true,
+  },
+  "./utils": {
+    symbols: [
+      "formatCurrency",
+      "buildBreadcrumbs",
+      "parseJWTPayload",
+      "createServerCaller",
+      "methodKey",
+      "methodKeyPrefix",
+      "serviceKeyPrefix",
+      "entityKey",
+      "collectionKey",
+      "KEY_ROOT",
+    ],
+    client: false,
+  },
   "./parser": { symbols: ["createJsonParser"], client: false },
   "./prisma": { symbols: ["trackPrisma", "storageOf", "findNestedWrites"], client: false },
   "./testing": {
@@ -130,6 +188,7 @@ const expectations = {
     client: false,
   },
   "./testing/prisma": { symbols: ["createPrismaTestGlobalSetup"], client: false },
+  "./testing/client": { symbols: ["renderWithQuickdraw", "createMockClient"], client: false },
 };
 
 /** The type-only names the root export's declarations must provide. */
@@ -205,6 +264,7 @@ const rootTypes = [
   "QdHandshake",
   "HandshakeAuth",
   "ProtocolMismatch",
+  "AuthenticationRefused",
   "HelloLimits",
   "HelloFrame",
   // protocol/envelope.ts
@@ -347,6 +407,19 @@ console.log(
   `ok ${pkg.name} imports only its own ${rootGraph.files.size} files, so it runs in a browser`,
 );
 
+// React server components import ./utils, so it may not pull in React,
+// Socket.IO or Node built-ins either; ./client re-exports all of it.
+const utilsGraph = importGraph("./utils");
+assert.deepEqual(utilsGraph.externals, [], "./utils must not import packages or Node built-ins");
+const utilsEntry = await import(`${pkg.name}/utils`);
+const clientEntry = await import(`${pkg.name}/client`);
+for (const [name, value] of Object.entries(utilsEntry)) {
+  assert.equal(clientEntry[name], value, `./client must re-export ${name} from ./utils`);
+}
+console.log(
+  `ok ${pkg.name}/utils imports only its own ${utilsGraph.files.size} files, and ./client re-exports it`,
+);
+
 const sourceMaps = readdirSync(distDir, { recursive: true })
   .map(String)
   .filter((file) => file.endsWith(".js.map"));
@@ -477,11 +550,38 @@ try {
   } finally {
     legacy.disconnect();
   }
+
+  // The built client: its React-free connection and call over a v5 socket,
+  // and the server caller from ./utils over HTTP.
+  const clientConnection = clientEntry.createQuickdrawConnection({
+    url: testApp.url,
+    auth: { principal: { userId: "smoke" } },
+    transports: ["websocket"],
+  });
+  clientConnection.open();
+  try {
+    assert.deepEqual(
+      await clientEntry.call(clientConnection, {
+        service: "echoService",
+        method: "say",
+        input: "client",
+      }),
+      { ok: true, d: "CLIENT" },
+    );
+  } finally {
+    clientConnection.close();
+  }
+  const httpCaller = utilsEntry.createServerCaller({ echo }, { url: testApp.url });
+  assert.equal(await httpCaller.echo.say.call("caller"), "CALLER");
+  assert.deepEqual(httpCaller.echo.say.key("caller"), ["qd", "echoService", "m", "say", "caller"]);
 } finally {
   await testApp.close();
 }
 console.log(
   "ok the built server serves a call over a v5 socket, over HTTP and through the 4.x shim",
+);
+console.log(
+  "ok the built client calls over its v5 connection, and the built server caller over HTTP",
 );
 
 // The built MCP bridge: its own entry, a contract's method as a tool, and a
@@ -587,4 +687,64 @@ assert.equal(prisma.storageOf, server.storageOf, "./prisma and ./server share st
 assert.equal(prisma.storageOf({ $quickdrawStorage: {} }), undefined);
 console.log(
   "ok the built ./prisma entry imports no Prisma and refuses a value that is not a client",
+);
+
+// The built client test helpers: no "use client" (checked above, with
+// ./client still opening with it), Testing Library imported only when
+// `renderWithQuickdraw` runs, and no jsdom and no server code anywhere in the
+// entry's static import graph, so a component test that uses
+// `createMockClient` alone loads neither.
+const STATIC_SPECIFIER = /\bfrom\s*["']([^"']+)["']|\bimport\s*["']([^"']+)["']/g;
+const DYNAMIC_SPECIFIER = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
+const testingClientFiles = new Set();
+const testingClientStatic = [];
+const testingClientDynamic = [];
+const testingClientPending = [join(packageDir, pkg.exports["./testing/client"].import)];
+while (testingClientPending.length > 0) {
+  const file = testingClientPending.pop();
+  if (testingClientFiles.has(file)) {
+    continue;
+  }
+  testingClientFiles.add(file);
+  const code = readFileSync(file, "utf8");
+  for (const match of code.matchAll(STATIC_SPECIFIER)) {
+    const imported = match[1] ?? match[2];
+    if (imported.startsWith("./") || imported.startsWith("../")) {
+      testingClientPending.push(resolve(dirname(file), imported));
+    } else {
+      testingClientStatic.push(imported);
+    }
+  }
+  for (const match of code.matchAll(DYNAMIC_SPECIFIER)) {
+    testingClientDynamic.push(match[1]);
+  }
+}
+const forbidden = testingClientStatic.filter(
+  (imported) =>
+    isBuiltin(imported) ||
+    imported.startsWith("@testing-library/") ||
+    ["jsdom", "socket.io", "express"].includes(imported),
+);
+assert.deepEqual(forbidden, [], "./testing/client must not statically import these");
+assert.ok(
+  testingClientDynamic.includes("@testing-library/react"),
+  "./testing/client must import @testing-library/react lazily",
+);
+const serverSources = [...testingClientFiles].flatMap((file) =>
+  JSON.parse(readFileSync(`${file}.map`, "utf8"))
+    .sources.map((source) => relative(packageDir, resolve(dirname(file), source)))
+    .filter((source) => source.startsWith("src/server/")),
+);
+assert.deepEqual(serverSources, [], "./testing/client must not carry server code");
+
+// The built mock client, under plain Node: stubs answer calls, and keys are
+// the real client's.
+const testingClient = await import(`${pkg.name}/testing/client`);
+const mock = testingClient.createMockClient({ echo });
+mock.echo.say.mockResolvedValue("MOCKED");
+assert.equal(await mock.echo.say.call("hi"), "MOCKED");
+assert.deepEqual(mock.echo.say.calls, ["hi"]);
+assert.deepEqual(mock.echo.say.key("hi"), ["qd", "echoService", "m", "say", "hi"]);
+console.log(
+  `ok ${pkg.name}/testing/client loads Testing Library lazily, imports no jsdom or server code, and its mock client answers from stubs`,
 );
