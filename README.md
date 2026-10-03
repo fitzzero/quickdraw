@@ -542,6 +542,103 @@ const { items, isSearching } = qd.task.search.useSearch(text, { scope: projectId
   it holds them, so another user's rename of a result shows at once, with
   no second search and no subscription of the search's own.
 
+### Sharing and membership kit
+
+Sharing a row and managing its members as one-line opt-ins (design:
+`docs/rfcs/0003-v5.md`, section 12.3). `sharing.contract` makes the methods
+for one of the two ways a policy shares rows, and `sharing.handlers`
+implements them on the access list or the membership table the service's own
+policy reads:
+
+```typescript
+// the shared package
+import { defineContract, sharing, via } from "@fitzzero/quickdraw-core";
+
+export const project = defineContract("projectService", {
+  entity: projectSchema,
+  methods: {
+    // the JSON access list jsonAcl reads: share, unshare, setLevel, listShares
+    ...sharing.contract({ mode: "acl" }),
+    // the table members reads: invite, remove, leave, setRole, listMembers; by name too
+    ...sharing.contract({
+      mode: "members",
+      methods: ["invite", "inviteByName", "remove", "leave", "setRole", "listMembers"],
+    }),
+  },
+  collections: {
+    // each user's projects: an invite adds the project, a remove or a leave takes it out
+    mine: {
+      scope: via({ model: "projectMember", entry: "projectId", scope: "userId" }),
+      item: "entity",
+      order: [["id", "asc"]],
+    },
+  },
+});
+
+// the server
+import { anyOf, jsonAcl, members, sharing } from "@fitzzero/quickdraw-core/server";
+
+export const projectService = qd.defineService(project, {
+  model: "project",
+  access: anyOf(
+    jsonAcl("acl", { owner: "ownerId" }),
+    members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),
+  ),
+  collections: { mine: { scopeAccess: "self" } },
+  methods: {
+    ...sharing.handlers(project, {
+      // finds the user inviteByName means; none is NOT_FOUND
+      resolveUser: async ({ name, email }) =>
+        (await prisma.user.findFirst({ where: name === undefined ? { email } : { name } }))?.id,
+      // runs inside the change's transaction: its writes commit with it, a throw undoes it
+      onChange: async (change, ctx, db) => {
+        /* change: { kind, id, userId, before, after } */
+      },
+    }),
+  },
+});
+```
+
+- Access list methods: `share({ id, userId, level })` gives a user `Read`,
+  `Moderate` or `Admin` (replacing any level they had), `setLevel` changes
+  the level of a user the row is shared with, `unshare({ id, userId })`
+  takes it away, and `listShares({ id })` lists the row's shares; each
+  returns the list as `[{ userId, level }]`, one entry per user. Membership
+  methods: `invite({ entryId, userId, role? })` and
+  `setRole({ entryId, userId, role })` return the member as
+  `{ userId, role, level }`, `remove({ entryId, userId })` and
+  `leave({ entryId })` return `null`, and
+  `listMembers({ entryId, cursor?, limit? })` pages the members in user id
+  order (50 by default, at most 200). `shareByName` and `inviteByName` take
+  `name` or `email` instead of `userId`, and need `resolveUser`; a mode adds
+  every method but those two unless `methods` names its own list.
+- Who may call: a change needs `{ entry: "Admin" }` on the row, a list
+  `{ entry: "Read" }`, and `leave` a signed-in member (`FORBIDDEN` for
+  anyone else). `access: { share: { entry: "Moderate" } }` replaces one
+  method's form; a lower form lets that level grant any level, `Admin`
+  included.
+- The kit changes the list or the table the service's policy reads, alone
+  or inside `anyOf`, and takes their names from it: a service whose policy
+  has none for a mode the contract uses (or two) fails when it is defined.
+  Roles are the policy's `levels` keys, or the level names `Read`,
+  `Moderate` and `Admin` without it; another role is `VALIDATION`, and
+  `invite` without a role gives the lowest one that can read the row.
+- The owner's access never changes (`CONFLICT`). A row keeps its last
+  Admin: through the access list, the owner or an `Admin` entry; through
+  the table, an `Admin` member (an owner column elsewhere in `anyOf` does not
+  count). Taking the last one away, by `unshare`, a lower level, `remove`,
+  `leave` or `setRole`, is `CONFLICT`. An access list the policy cannot read
+  is `CONFLICT` and left as it is; an entry's other keys are kept. Inviting a
+  member is `CONFLICT`, an unknown user `NOT_FOUND`, and a change to the
+  level or role a user has already writes nothing.
+- Each change reads and writes in one SERIALIZABLE transaction, so two
+  changes to one row at once cannot lose one or both remove the last two
+  Admins: the database fails the second, which answers `CONFLICT` (try
+  again). The writes go through the tracked client, so the flush revokes
+  the live subscriptions of whoever lost access (`qd:revoked`) and sends
+  the `via` collections over the table `added` and `removed`; the kit sends
+  nothing itself.
+
 ### Testing
 
 `@fitzzero/quickdraw-core/testing` boots the real server on a free port:

@@ -26,7 +26,9 @@
 // - the built read/write kit's halves find each other: `crud.contract` from
 //   the root marks the methods it made, and `crud.handlers` from `./server`
 //   implements them, so both entries share one copy of the kit's registry;
-//   the search kit's halves (`search.contract`, `search.handlers`) likewise;
+//   the search kit's halves (`search.contract`, `search.handlers`) likewise,
+//   and the sharing kit's (`sharing.contract`, `sharing.handlers`), which
+//   also read the policies' columns through accessors `./server` shares;
 // - the built server factory, booted by the built test app (`./testing`),
 //   serves a call over a v5 socket, over HTTP and through the 4.x shim;
 // - the built client (`./client`) calls through its connection over a v5
@@ -98,6 +100,9 @@ const expectations = {
       "SEARCH_DEFAULT_MIN_LENGTH",
       "SEARCH_MAX_LIMIT",
       "SEARCH_MAX_QUERY_LENGTH",
+      "sharing",
+      "SHARING_METHODS",
+      "SHARE_LEVELS",
     ],
     client: false,
   },
@@ -127,6 +132,7 @@ const expectations = {
       "ORDINAL_STEP",
       "requireRow",
       "search",
+      "sharing",
     ],
     client: false,
   },
@@ -315,6 +321,44 @@ const rootTypes = [
   "SearchInput",
   "SearchPage",
   "SearchQuery",
+  // contract/kits: the sharing kit's contract half
+  "SharingMode",
+  "AclMethodName",
+  "MembersMethodName",
+  "SharingMethodName",
+  "SharingByNameMethod",
+  "SharingTag",
+  "SharingContractOptions",
+  "SharingMethods",
+  "SharingDefOf",
+  "SharingShare",
+  "SharingShareByName",
+  "SharingUnshare",
+  "SharingSetLevel",
+  "SharingListShares",
+  "SharingInvite",
+  "SharingInviteByName",
+  "SharingRemove",
+  "SharingLeave",
+  "SharingSetRole",
+  "SharingListMembers",
+  "ShareLevel",
+  "ShareInput",
+  "UnshareInput",
+  "UserLookupInput",
+  "ShareByNameInput",
+  "ShareByNameQuery",
+  "InviteInput",
+  "InviteQuery",
+  "InviteByNameInput",
+  "InviteByNameQuery",
+  "MemberInput",
+  "LeaveInput",
+  "SetRoleInput",
+  "ListMembersInput",
+  "ListMembersQuery",
+  "Member",
+  "MembersPage",
   "KitSchema",
   // protocol/errors.ts
   "ErrorCode",
@@ -630,6 +674,54 @@ assert.deepEqual(await findCaller.search({ q: "  note " }), {
 });
 assert.deepEqual(await findCaller.search({ q: "n" }), { items: [], nextCursor: null });
 console.log("ok the built search kit's contract and server halves find each other");
+
+// The sharing kit across the built entries: the methods `sharing.contract`
+// (root) made are found by `sharing.handlers` (./server), which reads the
+// access list and membership table names from the service's policy through
+// the policy builders' own accessors, so a service whose policy has none is
+// refused when it is defined.
+const shared = core.defineContract("sharedService", {
+  entity: anything,
+  methods: {
+    ...core.sharing.contract({ mode: "acl", methods: ["share", "listShares"] }),
+    ...core.sharing.contract({ mode: "members", methods: ["leave"] }),
+  },
+});
+const sharingHandlers = server.sharing.handlers(shared);
+assert.deepEqual(Object.keys(sharingHandlers), ["share", "listShares", "leave"]);
+assert.deepEqual(
+  Object.values(sharingHandlers).map((entry) => entry.access),
+  [{ entry: "Admin" }, { entry: "Read" }, "authenticated"],
+);
+const sharedPolicy = server.anyOf(
+  server.jsonAcl("acl", { owner: "ownerId" }),
+  server.members({ model: "member", entry: "noteId", user: "userId", level: "role" }),
+);
+const sharedProject = { entity: { keys: ["id", "title"] } };
+assert.equal(
+  app.defineService(shared, {
+    model: "note",
+    access: sharedPolicy,
+    project: sharedProject,
+    methods: sharingHandlers,
+  }).name,
+  "sharedService",
+);
+assert.throws(
+  () =>
+    app.defineService(shared, {
+      model: "note",
+      access: server.owner("ownerId"),
+      project: sharedProject,
+      methods: server.sharing.handlers(shared),
+    }),
+  /need a jsonAcl\(field\) policy/,
+);
+assert.throws(
+  () => server.sharing.handlers(echo),
+  /echoService has no method sharing.contract made/,
+);
+console.log("ok the built sharing kit's contract and server halves find each other");
 
 // The built server factory and its transports, booted by the built test app:
 // a v5 call over a real socket, an HTTP call, and a 4.x call through the shim.
