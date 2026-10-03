@@ -128,6 +128,33 @@ describe("an invalidation during a read", () => {
     expect(client.getQueryData(key)).toEqual({ title: "second" });
   });
 
+  it("of a read nobody observes (a prefetch) leaves the key stale once it settles", async () => {
+    const { client, coordinator, reads, observe } = setup();
+    const prefetch = client.prefetchQuery({
+      queryKey: key,
+      staleTime: Number.POSITIVE_INFINITY,
+      queryFn: ({ queryKey, signal }) =>
+        new Promise((resolve, reject) => {
+          reads.push({ key: queryKey, signal, resolve, reject });
+        }),
+    });
+    expect(reads).toHaveLength(1);
+    // A write lands after the read was taken.
+    coordinator.invalidate(key, { exact: true });
+    reads[0]?.resolve({ title: "read before the write" });
+    await prefetch;
+    await settle();
+    expect(reads).toHaveLength(1);
+    expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+    expect(client.getQueryCache().hasListeners()).toBe(false);
+    // A component mounting now reads it again rather than trusting it for 5 minutes.
+    observe(key);
+    expect(reads).toHaveLength(2);
+    reads[1]?.resolve({ title: "after the write" });
+    await settle();
+    expect(client.getQueryData(key)).toEqual({ title: "after the write" });
+  });
+
   it("of a key unmounted mid-flight causes no follow-up, and leaves the key stale", async () => {
     const { client, coordinator, reads, observe } = setup();
     const unmount = observe(key);

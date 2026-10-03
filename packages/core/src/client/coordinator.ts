@@ -19,7 +19,9 @@
 // - while a read is in flight: mark it dirty. When the read settles (data
 //   or error) and the query still has observers, refetch exactly once;
 // - a query without observers is only marked stale: nothing reads it, and
-//   its next observer refetches it.
+//   its next observer refetches it. One being read without observers (a
+//   prefetch) is marked stale when that read settles, since the read's
+//   success clears the mark.
 //
 // The coordinator watches the `QueryCache` only while it has keys to look
 // after, drops a key when its last observer leaves or the query leaves the
@@ -244,17 +246,26 @@ function entryFor(state: State, query: Query): Entry | undefined {
 
 /** One invalidation of one cached query. */
 function request(state: State, query: Query, windowMs: number): void {
-  if (query.getObserversCount() === 0) {
+  const observed = query.getObserversCount() > 0;
+  if (!observed && !isReading(query)) {
     markStale(state, query);
     return;
   }
   const entry = state.disposed ? undefined : entryFor(state, query);
   if (entry === undefined) {
-    refetchNow(state, query);
+    if (observed) {
+      refetchNow(state, query);
+    } else {
+      markStale(state, query);
+    }
     return;
   }
   entry.windowMs = windowMs;
-  if (entry.window === undefined) {
+  if (!observed) {
+    // A read nobody observes (a prefetch): marked stale once it settles,
+    // since its success would clear the mark set now.
+    entry.dirty = true;
+  } else if (entry.window === undefined) {
     serve(state, entry);
   } else {
     entry.pending = true;
