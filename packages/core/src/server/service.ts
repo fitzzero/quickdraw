@@ -119,6 +119,12 @@ export type AnyService = Service<QuickdrawTypes, AnyContract>;
 export interface ServiceRuntime {
   /** The app's `context` option, or `undefined`. */
   readonly extendContext: ContextExtender | undefined;
+  /**
+   * Makes `dispatcher` the one the instance's `qd.caller`, `qd.run`,
+   * `qd.stream` and `qd.presence` go through, as its own `createServer`
+   * does: for `createTestApp`, which creates its server itself.
+   */
+  readonly adopt?: (dispatcher: object) => void;
 }
 
 const runtimes = new WeakMap<object, ServiceRuntime>();

@@ -1051,7 +1051,10 @@ await call.taskService.get({ id });
 await app.close();
 ```
 
-Its sockets act as the principal they connect with. `emitWithAck` and
+Its sockets act as the principal they connect with. Its dispatcher becomes
+the current one of the `initQuickdraw` instance that defined its services,
+as `qd.createServer` would make it, so `qd.stream(...).push`, `qd.presence`
+and `qd.run` reach the test app (the last one created). `emitWithAck` and
 `waitForEvent` send raw frames and wait for events.
 
 `describeAccessMatrix(app, { service, principals, cases, via? })` runs each

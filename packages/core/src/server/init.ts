@@ -188,8 +188,13 @@ function presenceOf(current: Current): Presence {
 export function initQuickdraw<T extends QuickdrawTypes = QuickdrawTypes>(
   ...args: InitArgs<T>
 ): Quickdraw<T> {
-  const runtime = Object.freeze({ extendContext: contextOption(args[0]) });
   let current: Dispatcher | undefined;
+  const runtime = Object.freeze({
+    extendContext: contextOption(args[0]),
+    adopt: (dispatcher: object) => {
+      current = dispatcher as Dispatcher;
+    },
+  });
   const qd: Quickdraw<T> = {
     defineService: ((contract: unknown, definition: unknown) =>
       buildService(runtime, contract, definition)) as DefineService<T>,

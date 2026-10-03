@@ -1,7 +1,9 @@
 // `createTestApp` (RFC 0003 section 13): the app's real server on a free
 // port, with an `authenticate` that trusts the principal a test connects as,
-// and a recorder of every frame the server sends (`frames.ts`). It replaces
-// 4.1's `createTestServer` and `connectAsUser`
+// and a recorder of every frame the server sends (`frames.ts`). Its
+// dispatcher becomes the current one of the `initQuickdraw` instance that
+// defined the services, so `qd.stream`, `qd.presence` and `qd.run` reach
+// it. It replaces 4.1's `createTestServer` and `connectAsUser`
 // (`legacy-src/server/testing.ts:62-130`), which took a fixed port counter
 // and authenticated by a bare user id.
 
@@ -11,10 +13,23 @@ import type { HelloFrame } from "../protocol/version";
 import type { Caller } from "../server/caller";
 import { createServer, type QuickdrawServer, type ServerOptions } from "../server/createServer";
 import type { ContractOfServices, PrincipalOfServices } from "../server/dispatcher";
-import type { AnyService } from "../server/service";
+import { runtimeOf, type AnyService } from "../server/service";
 import { isPrincipal } from "../server/transports/auth";
 import { recordFrames, type FrameRecorder } from "./frames";
 import { connectV5, socketCaller, type ClientSocket } from "./socket";
+
+/**
+ * Makes `dispatcher` the current one of every `initQuickdraw` instance that
+ * defined one of `services`, as that instance's own `createServer` would:
+ * `qd.stream(...).push`, `qd.presence`, `qd.run` and `qd.caller` then go
+ * through the test app. The last app created wins.
+ */
+function adoptDispatcher(services: readonly AnyService[], dispatcher: object): void {
+  const runtimes = new Set(services.map((service) => runtimeOf(service)));
+  for (const runtime of runtimes) {
+    runtime?.adopt?.(dispatcher);
+  }
+}
 
 /**
  * Options of {@link createTestApp}: the server's. Without `auth.authenticate`
@@ -98,6 +113,7 @@ export async function createTestApp<const S extends readonly AnyService[]>(
       ...options.auth,
     },
   } as ServerOptions<S>);
+  adoptDispatcher(options.services, server.dispatcher);
   const frames = recordFrames(server.io);
   await new Promise<void>((resolve) => {
     server.httpServer.listen(0, "127.0.0.1", resolve);

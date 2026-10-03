@@ -430,6 +430,30 @@ describe("the seeds", () => {
   });
 });
 
+describe("qd.stream, qd.presence and qd.run with createTestApp", () => {
+  it("go through the test app's dispatcher, the current one of the instance that defined its services", async () => {
+    const local = initQuickdraw<{ principal: Principal }>();
+    const feed = defineContract("feedService", {
+      streams: { news: { item: z.string(), seed: 2, access: "public" } },
+    });
+    const service = local.defineService(feed, { methods: {} });
+    const news = local.stream(feed, "news");
+    const app = await createTestApp({ services: [service] });
+    apps.push(app as unknown as TestApp);
+    const connection = await app.connect({ userId: "u1" });
+    const items = frames<{ item: unknown }>(connection, "qd:stream");
+    expect(await streamSub(connection, "news", undefined, "feedService")).toEqual({
+      ok: true,
+      seed: [],
+    });
+    news.push("pushed through qd.stream");
+    await settle(connection);
+    expect(items.map((frame) => frame.item)).toEqual(["pushed through qd.stream"]);
+    expect(await local.presence.isOnline("u1")).toBe(true);
+    expect(await local.run(() => "ran")).toBe("ran");
+  });
+});
+
 describe("qd.stream and qd.presence", () => {
   it("push and ask through the dispatcher the instance created last, and fail before there is one", async () => {
     const local = initQuickdraw<{ principal: Principal }>();
