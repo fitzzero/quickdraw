@@ -173,7 +173,12 @@ await qd.run(() => db.task.updateMany({ where: { dueAt: { lt: now } }, data: { l
   once the response has been sent, with one revision per flush. A handler
   may return `db.task.update(...)` without awaiting it.
 - Writes inside `db.$transaction` join the unit only when it commits; a
-  rollback drops them.
+  rollback drops them. Prefer the interactive form
+  (`db.$transaction(async (tx) => ...)`): an array-form
+  `db.$transaction([...])` has no transaction client, so the rows a
+  `deleteMany` or `updateMany` in it reads first are read outside the batch,
+  and rows its earlier statements changed may be missed (a development
+  warning names the model and operation).
 - Jobs, scripts and webhooks wrap their writes in `qd.run(fn)`, which
   flushes before it returns. A write made outside any unit of work flushes
   on its own on the next tick, with a development warning.

@@ -30,7 +30,11 @@
 // Inside an array-form `$transaction([...])` an operation cannot be replaced
 // by another one, so `createMany` and `updateMany` run as they are there:
 // `updateMany` reads its ids first, and `createMany` is tracked only when
-// every row it creates has an explicit `id`.
+// every row it creates has an explicit `id`. A batch has no transaction
+// client, so every read made first there (`deleteMany`'s and `updateMany`'s
+// ids, an `update`'s old values) runs on the root client, outside the batch,
+// and misses what the batch's earlier statements changed: a development
+// warning says so once per model and operation.
 
 import type { WriteRecord } from "../server/uow/types";
 import type { WriteTracker } from "../server/uow/unitOfWork";
@@ -68,6 +72,8 @@ export interface Operation {
   readonly runtime: Runtime;
   /** The model, named as the client names it: `"task"`. */
   readonly model: string;
+  /** The Prisma operation: `"deleteMany"`. */
+  readonly operation: string;
   readonly args: Args;
   readonly query: (args: Args) => Promise<unknown>;
 }
@@ -206,6 +212,23 @@ async function runWidened(op: Operation): Promise<{ result: unknown; rows: Row[]
   return { result: strip(result, added), rows: rowsOf(result) };
 }
 
+/**
+ * Warns once per model and operation that a read made first inside an
+ * array-form `$transaction` runs on the root client: an array-form batch
+ * has no transaction client to read through, so the read does not see what
+ * the batch's earlier statements changed.
+ */
+function warnBatchRead(op: Operation): void {
+  if (!op.runtime.tracker.inBatch()) {
+    return;
+  }
+  op.runtime.tracker.warnOnce(
+    `batch-read:${op.model}:${op.operation}`,
+    `${op.operation} on ${op.model} inside an array-form $transaction reads its rows first on the root client, outside the batch, so rows the batch's earlier statements changed may be missed; use an interactive transaction to read inside it`,
+    { model: op.model, operation: op.operation },
+  );
+}
+
 /** Reads `columns` of the rows `where` matches, by id, through the transaction when one is open. */
 async function readBefore(
   op: Operation,
@@ -213,6 +236,7 @@ async function readBefore(
   columns: readonly string[],
   options: { readonly unique: boolean; readonly take?: unknown },
 ): Promise<Map<string, Values>> {
+  warnBatchRead(op);
   const select = Object.fromEntries(["id", ...columns].map((column) => [column, true]));
   const delegate = op.runtime.delegate(op.model);
   let rows: Row[];

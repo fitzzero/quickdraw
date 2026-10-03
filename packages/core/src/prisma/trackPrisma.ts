@@ -109,7 +109,7 @@ function createHook(runtime: Runtime) {
     if (!delegates(runtime, operation)) {
       runtime.tracker.countStatement();
     }
-    const op: Operation = { runtime, model: modelKey(model), args: args ?? {}, query };
+    const op: Operation = { runtime, model: modelKey(model), operation, args: args ?? {}, query };
     try {
       return await handler(op);
     } catch (error) {
@@ -202,6 +202,13 @@ function createStorage(
  * to `createServer`, which find its storage adapter on it (`storageOf`).
  * Nested writes, raw SQL and database cascades are not seen; record those
  * with `ctx.touch`.
+ *
+ * Prefer interactive transactions (`db.$transaction(async (tx) => ...)`). An
+ * array-form `db.$transaction([...])` has no transaction client, so the rows
+ * a `deleteMany` or `updateMany` there reads first (and an `update`'s old
+ * values) are read on the root client, outside the batch: rows the batch's
+ * earlier statements created or changed may be missed, and their frames
+ * with them. A development warning names the model and operation once.
  *
  * @example
  * export const db = trackPrisma(new PrismaClient({ adapter }));

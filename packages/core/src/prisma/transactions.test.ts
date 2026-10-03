@@ -232,7 +232,29 @@ describe("array-form transactions", () => {
     ]);
     expect(await h.prisma.task.count()).toBe(3);
     expect(h.logger.warnings).toEqual([
+      expect.stringContaining("updateMany on task inside an array-form $transaction reads"),
       expect.stringContaining("createMany on task inside an array-form $transaction"),
+    ]);
+  });
+
+  it("warn once that deleteMany reads its rows outside the batch, which misses the batch's own", async () => {
+    await h.prisma.task.create({ data: { id: "t-old", projectId, title: "old" } });
+    const batch = () =>
+      h.db.$transaction([
+        h.db.task.create({ data: { id: `t-${crypto.randomUUID()}`, projectId, title: "new" } }),
+        h.db.task.deleteMany({ where: { projectId } }),
+      ]);
+    const { writes } = await h.inUnit(batch);
+    // Read outside the batch, the delete saw only the row that was there already:
+    // the row the batch created is recorded as created, though the batch deleted it too.
+    expect(writes.map(({ id, op }) => `${op} ${id}`).sort()).toEqual([
+      expect.stringMatching(/^create t-/),
+      "delete t-old",
+    ]);
+    expect(await h.prisma.task.count()).toBe(0);
+    await h.inUnit(batch);
+    expect(h.logger.warnings).toEqual([
+      "deleteMany on task inside an array-form $transaction reads its rows first on the root client, outside the batch, so rows the batch's earlier statements changed may be missed; use an interactive transaction to read inside it",
     ]);
   });
 });
