@@ -50,6 +50,32 @@ run("no-db-call-in-loop", {
       `,
     },
     {
+      name: "in: filters on the loop's own set: its binding, a variable derived from it, a callback's parameter",
+      filename: JOB,
+      code: `
+        for (let start = 0; start < ids.length; start += 500) {
+          await db.task.updateMany({ where: { id: { in: ids.slice(start, start + 500) } }, data: { late: true } });
+        }
+        for (const { taskIds } of batches) {
+          await db.task.deleteMany({ where: { id: { in: taskIds } } });
+        }
+        for (const chunk of chunks(rows, 500)) {
+          const chunkIds = chunk.map((row) => row.id);
+          await db.task.updateMany({ where: { id: { in: chunkIds } }, data: { seen: true } });
+        }
+        await Promise.all(chunks(ids, 500).map((chunk) => db.task.findMany({ where: { id: { in: chunk } } })));
+      `,
+    },
+    {
+      name: "a map whose promises go to a batch transaction, or are not sent together",
+      filename: SERVICE,
+      code: `
+        await db.$transaction(ids.map((id) => db.task.update({ where: { id }, data: { seen: true } })));
+        const pending = ids.map((id) => db.task.findUnique({ where: { id } }));
+        await Promise.race(ids.map((id) => db.task.findUnique({ where: { id } })));
+      `,
+    },
+    {
       name: "a function made in a loop does not run there",
       filename: SERVICE,
       code: `
@@ -139,6 +165,49 @@ run("no-db-call-in-loop", {
         {
           messageId: "callInLoop",
           data: { client: "tx", model: "task", method: "update", loop: "a for...of loop" },
+        },
+      ],
+    },
+    {
+      // The review's loops.ts m1 and m2.
+      name: "a map's model calls sent to Promise.all: one query per item, all at once",
+      filename: SERVICE,
+      code: `
+        const m1 = async ({ input, db }) => Promise.all(input.ids.map((id) => db.task.findUnique({ where: { id } })));
+        const m2 = async ({ input, db }) => {
+          const rows = await Promise.all(input.ids.map((id) => db.task.findUnique({ where: { id } })));
+          return rows;
+        };
+        await Promise.allSettled(input.ids.flatMap((id) => { return db.task.delete({ where: { id } }); }));
+      `,
+      errors: [
+        {
+          message:
+            "`db.task.findUnique()` returned from a .map() callback whose results go to `Promise.all` runs one query per item, all at once. Read the items in one call (`findMany({ where: { id: { in: ids } } })`), write them in one when every row gets the same data (`updateMany`, `createMany`), or write each row by id inside an interactive transaction (`db.$transaction(async (tx) => { for (...) await tx.task.update(...) })`).",
+        },
+        {
+          messageId: "callPerItem",
+          data: { client: "db", model: "task", method: "findUnique", loop: "a .map() callback" },
+        },
+        {
+          messageId: "callPerItem",
+          data: { client: "db", model: "task", method: "delete", loop: "a .flatMap() callback" },
+        },
+      ],
+    },
+    {
+      // The review's loops.ts m4.
+      name: "an in: filter on something other than the loop's set does not make it one query",
+      filename: SERVICE,
+      code: `
+        for (const project of input.projects) {
+          out.push(await db.task.findMany({ where: { projectId: project, status: { in: ["open", "done"] } }, take: 10 }));
+        }
+      `,
+      errors: [
+        {
+          messageId: "callInLoop",
+          data: { client: "db", model: "task", method: "findMany", loop: "a for...of loop" },
         },
       ],
     },
