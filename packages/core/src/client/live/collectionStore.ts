@@ -9,7 +9,9 @@
 //   only what is not newer than the page;
 // - a removal leaves a tombstone at its revision, so an older `added` or
 //   page cannot bring the item back; a snapshot at or after the tombstone
-//   drops it.
+//   drops it. A scope keeps the latest 1,000 (`MAX_TOMBSTONES`), and a
+//   frame that removes nothing shares them with the state before it rather
+//   than copying them.
 //
 // and adds what 5.0's protocol carries:
 //
@@ -55,6 +57,7 @@ import {
   type IndexRow,
 } from "./collectionIndex";
 import {
+  addTombstone,
   emptyCollection,
   type CollectionItem,
   type CollectionState,
@@ -63,6 +66,7 @@ import {
 
 export { applySnapshot } from "./collectionSnapshot";
 export {
+  MAX_TOMBSTONES,
   emptyCollection,
   loadedIds,
   pruneStale,
@@ -94,7 +98,13 @@ interface Work<Item extends CollectionItem> {
   readonly byId: Map<string, Item>;
   readonly order: string[];
   readonly revById: Map<string, Revision>;
-  readonly removed: Map<string, Revision>;
+  /**
+   * The tombstones: the base state's own map until the batch changes one,
+   * when `tombstones` copies it, so a frame that removes nothing shares it.
+   */
+  removed: ReadonlyMap<string, Revision>;
+  /** True once `removed` is this batch's copy. */
+  removedCopied: boolean;
   readonly index: IndexRow[] | null;
   /** The index's rows by id, made on first use. */
   indexById: Map<string, IndexRow> | undefined;
@@ -121,7 +131,8 @@ function workOn<Item extends CollectionItem>(
     byId: new Map(base.byId),
     order: [...base.order],
     revById: new Map(base.revById),
-    removed: new Map(base.removed),
+    removed: base.removed,
+    removedCopied: false,
     index: base.index === null ? null : [...base.index],
     indexById: undefined,
     totalCount: base.totalCount,
@@ -159,6 +170,15 @@ function finish<Item extends CollectionItem>(
     totalCount: work.index === null ? work.totalCount : work.index.length,
     ...extra,
   });
+}
+
+/** The batch's tombstones, to change: copied from the base state on the first change. */
+function tombstones(work: Work<CollectionItem>): Map<string, Revision> {
+  if (!work.removedCopied) {
+    work.removed = new Map(work.removed);
+    work.removedCopied = true;
+  }
+  return work.removed as Map<string, Revision>;
 }
 
 /** True when the state holds something newer for `id` than `rev`: an item, a row or a tombstone. */
@@ -244,7 +264,9 @@ function upsert(
     return;
   }
   const known = work.revById.has(id);
-  work.removed.delete(id);
+  if (work.removed.has(id)) {
+    tombstones(work).delete(id);
+  }
   work.byId.set(id, item);
   work.revById.set(id, rev);
   if (work.index !== null) {
@@ -277,7 +299,7 @@ function remove(work: Work<CollectionItem>, id: string, rev: Revision): void {
     // The item without the order's columns may be the one that left: work it out again.
     work.placeable = undefined;
   }
-  work.removed.set(id, rev);
+  addTombstone(tombstones(work), id, rev);
   if (known && work.totalCount !== null) {
     work.totalCount = Math.max(0, work.totalCount - 1);
   }

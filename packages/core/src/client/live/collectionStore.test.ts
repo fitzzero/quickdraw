@@ -16,6 +16,7 @@ import {
   applySnapshot,
   emptyCollection,
   loadedIds,
+  MAX_TOMBSTONES,
   staleIds,
   type CollectionState,
   type PageReply,
@@ -810,5 +811,40 @@ describe("cost", () => {
     // Placing each item by scanning every item loaded took 8 s here; a
     // binary search takes a few hundred milliseconds even on a slow runner.
     expect(ms).toBeLessThan(2_000);
+  });
+});
+
+describe("tombstones", () => {
+  it("keeps the latest 1,000 per scope, dropping the oldest first", () => {
+    let state = applySnapshot<Row>(null, snap([], { rev: 1 }), plain);
+    for (let n = 1; n <= 1500; n += 1) {
+      state = apply(state, { t: "removed", id: `gone-${n}` }, 1 + n).state;
+    }
+    expect(state.removed.size).toBe(MAX_TOMBSTONES);
+    expect(state.removed.has("gone-500")).toBe(false);
+    expect(state.removed.get("gone-501")).toBe(502);
+    expect(state.removed.get("gone-1500")).toBe(1501);
+    // A late add older than a removal still kept stays out.
+    expect(ids(apply(state, added(row("gone-1500")), 1000).state)).toEqual([]);
+  });
+
+  it("shares them with the state before a frame that removes and restores nothing", () => {
+    const first = applySnapshot<Row>(null, snap([row("a")], { rev: 100 }), plain);
+    const removed = apply(first, { t: "removed", id: "b" }, 200).state;
+    const next = applyDeltas<Row>(
+      removed,
+      [
+        added(row("c")),
+        { t: "updated", item: row("a", 4) },
+        { t: "patched", id: "a", d: { v: 5 } },
+      ],
+      300,
+      plain,
+    ).state;
+    expect(next).not.toBe(removed);
+    expect(next.removed).toBe(removed.removed);
+    const back = apply(next, added(row("b")), 400).state;
+    expect(back.removed).not.toBe(removed.removed);
+    expect(back.removed.has("b")).toBe(false);
   });
 });

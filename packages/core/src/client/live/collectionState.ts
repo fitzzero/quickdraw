@@ -24,7 +24,10 @@ export interface CollectionState<Item extends CollectionItem = CollectionItem> {
   readonly order: readonly string[];
   /** The newest revision held for each member: a loaded item, or an index row. */
   readonly revById: ReadonlyMap<string, Revision>;
-  /** Tombstones: the revision each removed id was removed at. */
+  /**
+   * Tombstones: the revision each removed id was removed at, the latest
+   * {@link MAX_TOMBSTONES} of them. A snapshot drops those it is newer than.
+   */
   readonly removed: ReadonlyMap<string, Revision>;
   /** One row per member, in order, when the collection declares an index and the scope fits in it. */
   readonly index: readonly IndexRow[] | null;
@@ -54,6 +57,30 @@ export interface PageReply {
   readonly clamped?: unknown;
   readonly index?: unknown;
   readonly indexTruncated?: unknown;
+}
+
+/**
+ * The most tombstones a scope keeps. A tombstone keeps a frame, page or
+ * items answer older than a removal from bringing the item back; those
+ * arrive soon after it, so the oldest go first once a scope that is never
+ * reloaded has removed this many items.
+ */
+export const MAX_TOMBSTONES = 1000;
+
+/**
+ * Records that `id` was removed at `rev` in `tombstones` (a copy being
+ * written), as its newest entry, and drops the oldest past
+ * {@link MAX_TOMBSTONES}.
+ */
+export function addTombstone(tombstones: Map<string, Revision>, id: string, rev: Revision): void {
+  tombstones.delete(id);
+  tombstones.set(id, rev);
+  for (const oldest of tombstones.keys()) {
+    if (tombstones.size <= MAX_TOMBSTONES) {
+      return;
+    }
+    tombstones.delete(oldest);
+  }
 }
 
 /** The state of a scope nothing arrived for yet. */
@@ -107,7 +134,7 @@ export function pruneStale<Item extends CollectionItem>(
   for (const id of stale) {
     byId.delete(id);
     revById.delete(id);
-    removed.set(id, state.snapshotRev);
+    addTombstone(removed, id, state.snapshotRev);
   }
   return Object.freeze({
     ...state,
