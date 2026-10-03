@@ -12,8 +12,9 @@
 //   8. check the output against the contract    INTERNAL
 //   9. respond, flush, and emit one completion record
 //
-// A query's cancel signal answers the caller at once, and so does the time
-// limit, while work already started (a slow access check, a handler that
+// The time limit starts once the call is admitted (after step 2) and covers
+// steps 3 to 8; a query's cancel signal does too. Either answers the caller
+// at once, and work already started (a slow access check, a handler that
 // ignores its signal) runs on unanswered. A query keeps its slot until that
 // work has settled, so a connection never runs more of it than its cap.
 
@@ -25,7 +26,15 @@ import type { DispatchRequest, DispatchResult } from "./request";
 import type { Run } from "./run";
 import type { PipelineSettings } from "./settings";
 import { createShareTable, type ShareTable } from "./share";
-import { admit, contextFor, currentVersion, lookup, untilCancelled } from "./stages";
+import {
+  admit,
+  contextFor,
+  currentVersion,
+  lookup,
+  startTimeLimit,
+  untilStopped,
+  type TimeLimit,
+} from "./stages";
 import { parseInput } from "./validation";
 
 /** Runs one call through the pipeline. Resolves once the reply was sent, flushed and recorded; never rejects. */
@@ -40,6 +49,7 @@ interface Pipeline {
 interface CallState extends ExecuteCall {
   readonly request: DispatchRequest;
   signal: AbortSignal | undefined;
+  expired: AbortSignal | undefined;
   kind: CallRecord["kind"];
   queueMs: number;
   /** The work of the stage the call is in, or last finished. It may outlive the call's answer. */
@@ -47,16 +57,16 @@ interface CallState extends ExecuteCall {
 }
 
 /**
- * One of steps 3 to 5: waits for `work` until the call is cancelled, and
- * keeps it as the call's stage work.
+ * One of steps 3 to 5: waits for `work` until the call's signal stops it
+ * (`CANCELLED` or `TIMEOUT`), and keeps it as the call's stage work.
  */
 function stage<T>(call: CallState, work: T | PromiseLike<T>): Promise<T> {
   const running = Promise.resolve(work);
   call.stageWork = running;
-  return untilCancelled(running, call.signal);
+  return untilStopped(running, call.signal);
 }
 
-/** Steps 3 to 8, for a call that has its method and, for a query, its slot. */
+/** Steps 3 to 8, for a call that has its method, its time limit and, for a query, its slot. */
 async function proceed(
   pipeline: Pipeline,
   call: CallState,
@@ -89,14 +99,23 @@ async function proceed(
 }
 
 /**
- * Frees a query's slot once nothing the call started is still running: the
- * stage it was answered in the middle of, or the handler run it started.
+ * Frees what a call held. The slot goes back to its connection once nothing
+ * the call started is still running: the stage it was answered in the middle
+ * of, or the handler run it started. The clock stops now, or, for a call that
+ * started a run, once that run settles: the run ends at this call's time
+ * limit, whichever of its callers is still waiting.
  */
-function release(call: CallState, slot: QuerySlot | undefined): void {
+function release(call: CallState, slot: QuerySlot | undefined, limit: TimeLimit | undefined): void {
+  const { run } = call;
+  if (run === undefined) {
+    limit?.stop();
+  } else if (limit !== undefined) {
+    void run.outcome.then(limit.stop);
+  }
   if (slot === undefined) {
     return;
   }
-  const running = call.run === undefined ? call.stageWork : call.run.handlerDone;
+  const running = run === undefined ? call.stageWork : run.handlerDone;
   if (running === undefined) {
     slot.release();
     return;
@@ -107,18 +126,26 @@ function release(call: CallState, slot: QuerySlot | undefined): void {
 /** Steps 1 to 8. Every failure becomes a result; the slot is freed however the call ends. */
 async function settle(pipeline: Pipeline, call: CallState): Promise<DispatchResult> {
   let slot: QuerySlot | undefined;
+  let limit: TimeLimit | undefined;
   try {
     const target = lookup(pipeline.settings.registry, call.request);
     call.kind = target.method.kind;
-    call.signal = target.method.kind === "query" ? call.request.signal : undefined;
-    throwIfCancelled(call.signal);
-    slot = await admit(pipeline.limiter, call.request, target, call.signal);
+    // Only a query can be cancelled.
+    const cancel = target.method.kind === "query" ? call.request.signal : undefined;
+    throwIfCancelled(cancel);
+    slot = await admit(pipeline.limiter, call.request, target, cancel);
     call.queueMs = slot?.queueMs ?? 0;
+    limit = startTimeLimit(
+      target.method.timeoutMs ?? pipeline.settings.limits.callTimeoutMs,
+      cancel,
+    );
+    call.signal = limit.signal;
+    call.expired = limit.expired;
     return await proceed(pipeline, call, target);
   } catch (error) {
     return { ok: false, error: toQuickdrawError(error) };
   } finally {
-    release(call, slot);
+    release(call, slot, limit);
   }
 }
 
@@ -217,6 +244,7 @@ export function createPipeline(settings: PipelineSettings): Dispatch {
       transport: request.transport,
       principal: request.principal,
       signal: undefined,
+      expired: undefined,
       kind: undefined,
       queueMs: 0,
       stageWork: undefined,

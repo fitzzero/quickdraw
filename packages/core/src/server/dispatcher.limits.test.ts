@@ -341,6 +341,43 @@ describe("the time limit", () => {
     expect(await next).toEqual({ ok: true, data: 2 });
   });
 
+  it("covers the access check and version(), not the handler alone, and settles the caller once", async () => {
+    const checks: AbortSignal[] = [];
+    const handler = vi.fn(() => taskRow());
+    const service = qd.defineService(task, {
+      methods: {
+        ...taskDefaults,
+        rename: {
+          // A slow row lookup.
+          access: custom((ctx) => {
+            checks.push(ctx.signal);
+            return tick(60).then(() => true);
+          }),
+          handler,
+        },
+        count: {
+          access: "public",
+          version: () => deferred<string>().promise,
+          handler: () => 1,
+        },
+      },
+    });
+    const respond = vi.fn(() => 0);
+    const { call, records } = setup([service], { limits: { callTimeoutMs: 20 } });
+    const renamed = await call({ method: "rename", input: { id: "t1", title: "x" }, respond });
+    expect(renamed.ok === false && [renamed.error.code, renamed.error.message]).toEqual([
+      "TIMEOUT",
+      "The call ran past its time limit of 20 ms",
+    ]);
+    expect(checks[0]?.reason).toMatchObject({ code: "TIMEOUT" });
+    expect(codeOf(await call({ method: "count", input: { projectId: "p1" } }))).toBe("TIMEOUT");
+    // The access check passes after the call was answered; nothing else runs.
+    await tick(60);
+    expect(handler).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledExactlyOnceWith(renamed);
+    expect(records.map((record) => record.outcome)).toEqual(["TIMEOUT", "TIMEOUT"]);
+  });
+
   it("times out a mutation too, without waiting for it", async () => {
     const service = qd.defineService(task, {
       methods: {

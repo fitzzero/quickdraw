@@ -1,6 +1,6 @@
 // The pipeline stages before the handler runs (RFC 0003 section 9, steps 1
-// to 5): look the method up, take a query slot, build the context, and ask
-// for the result's current version.
+// to 5): look the method up, take a query slot, start the call's time limit,
+// build the context, and ask for the result's current version.
 
 import type { Version } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
@@ -8,7 +8,7 @@ import { createContext, NEVER_ABORTED, type AnyContext } from "../context";
 import type { RegisteredMethod, Registry } from "../registry";
 import { runtimeOf } from "../service";
 import type { QuerySlot, ConcurrencyLimiter } from "./concurrency";
-import { cancelledError } from "./errors";
+import { abortError, timeoutError } from "./errors";
 import { isVersion } from "./notModified";
 import type { DispatchRequest } from "./request";
 import type { PipelineSettings } from "./settings";
@@ -41,19 +41,44 @@ export function admit(
   return limiter.acquire(request.connectionId, signal);
 }
 
+/** A call's time limit, from {@link startTimeLimit}. */
+export interface TimeLimit {
+  /** Aborts when the caller cancels (a query) or the time limit passes. */
+  readonly signal: AbortSignal;
+  /** Aborts when the time limit passes, with the call's `TIMEOUT` error as its reason. */
+  readonly expired: AbortSignal;
+  /** Stops the clock. */
+  stop(): void;
+}
+
 /**
- * Waits for `work`, or rejects with `CANCELLED` as soon as `signal` aborts.
- * `work` keeps running; its late result is ignored.
+ * Starts a call's time limit (RFC 0003 section 9, step 7) once the call is
+ * admitted, so it covers every stage after step 2: validation, the access
+ * check, `version()`, the handler and the output check. Time spent waiting
+ * for a query slot does not count. `cancel` is the caller's own signal,
+ * which only a query has.
  */
-export function untilCancelled<T>(
-  work: PromiseLike<T>,
-  signal: AbortSignal | undefined,
-): Promise<T> {
+export function startTimeLimit(timeoutMs: number, cancel: AbortSignal | undefined): TimeLimit {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(timeoutError(timeoutMs)), timeoutMs);
+  return {
+    signal: cancel === undefined ? controller.signal : AbortSignal.any([cancel, controller.signal]),
+    expired: controller.signal,
+    stop: () => clearTimeout(timer),
+  };
+}
+
+/**
+ * Waits for `work`, or rejects as soon as `signal` aborts: with `TIMEOUT`
+ * when the call's time limit aborted it, and `CANCELLED` otherwise. `work`
+ * keeps running; its late result is ignored.
+ */
+export function untilStopped<T>(work: PromiseLike<T>, signal: AbortSignal | undefined): Promise<T> {
   if (signal === undefined) {
     return Promise.resolve(work);
   }
   return new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => reject(cancelledError());
+    const onAbort = (): void => reject(abortError(signal));
     if (signal.aborted) {
       onAbort();
     }

@@ -27,6 +27,15 @@ export function throwIfCancelled(signal: AbortSignal | undefined): void {
   }
 }
 
+/**
+ * The error a call settles with once its signal aborted: the `TIMEOUT` error
+ * its time limit aborted it with, or else `CANCELLED`.
+ */
+export function abortError(signal: AbortSignal): QuickdrawError {
+  const reason: unknown = signal.reason;
+  return reason instanceof QuickdrawError && reason.code === "TIMEOUT" ? reason : cancelledError();
+}
+
 function prismaError(error: unknown): QuickdrawError | undefined {
   if (!(error instanceof Error) || error.name !== "PrismaClientKnownRequestError") {
     return undefined;

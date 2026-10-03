@@ -1,7 +1,7 @@
 // Unit tests of the pipeline's building blocks: the concurrency limiter, the
 // share keys and table, the handler run, and issue conversion.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { QuickdrawError, type ErrorCode } from "../../protocol/errors";
 import { deferred, tick } from "../__tests__/fixtures";
@@ -11,6 +11,7 @@ import { createConcurrencyLimiter } from "./concurrency";
 import { toQuickdrawError } from "./errors";
 import { startRun, type Outcome } from "./run";
 import { createShareTable, deepFreeze, shareKey, stableStringify } from "./share";
+import { startTimeLimit, type TimeLimit } from "./stages";
 import { outputIssues, parseInput, toWireIssues } from "./validation";
 
 describe("createConcurrencyLimiter", () => {
@@ -158,10 +159,23 @@ describe("share keys", () => {
 describe("startRun", () => {
   const unit = untrackedUnitOfWork.begin({} as UnitOfWorkScope);
   const accept = (value: unknown): Promise<Outcome> => Promise.resolve({ ok: true, value });
+  const limits: TimeLimit[] = [];
+  afterEach(() => {
+    for (const limit of limits.splice(0)) {
+      limit.stop();
+    }
+  });
+  /** The time limit of a call admitted now, with `ms` to run. */
+  const startLimit = (ms: number): TimeLimit => {
+    const limit = startTimeLimit(ms, undefined);
+    limits.push(limit);
+    return limit;
+  };
+  const timeLimit = (ms: number): AbortSignal => startLimit(ms).expired;
 
   it("settles every caller exactly once and drops a result that arrives after the time limit", async () => {
     const gate = deferred<number>();
-    const run = startRun({ timeoutMs: 10, unit, invoke: () => gate.promise, accept });
+    const run = startRun({ timeLimit: timeLimit(10), unit, invoke: () => gate.promise, accept });
     const outcomes = await Promise.all([
       run.join(undefined),
       run.join(new AbortController().signal),
@@ -180,7 +194,7 @@ describe("startRun", () => {
   it("aborts the handler only when every caller has left", async () => {
     let signal: AbortSignal | undefined;
     const run = startRun({
-      timeoutMs: 1_000,
+      timeLimit: timeLimit(1_000),
       unit,
       invoke: (runSignal) => {
         signal = runSignal;
@@ -206,9 +220,30 @@ describe("startRun", () => {
     });
   });
 
+  it("lets a caller leave with TIMEOUT when its own time limit passes first", async () => {
+    let signal: AbortSignal | undefined;
+    const run = startRun({
+      timeLimit: timeLimit(1_000),
+      unit,
+      invoke: (runSignal) => {
+        signal = runSignal;
+        return deferred().promise;
+      },
+      accept,
+    });
+    const own = startLimit(5);
+    expect(await run.join(own.signal)).toMatchObject({
+      ok: false,
+      error: { code: "TIMEOUT", message: "The call ran past its time limit of 5 ms" },
+    });
+    // It was the run's only caller, so the run ends with its reason.
+    expect(signal?.reason).toMatchObject({ code: "TIMEOUT" });
+    expect(run.settled).toMatchObject({ ok: false, error: { code: "TIMEOUT" } });
+  });
+
   it("turns a throwing handler, unit or accept into an outcome, never a rejection", async () => {
     const throwing = startRun({
-      timeoutMs: 1_000,
+      timeLimit: timeLimit(1_000),
       unit,
       invoke: () => {
         throw new QuickdrawError("CONFLICT", "taken");
@@ -217,7 +252,7 @@ describe("startRun", () => {
     });
     expect(await throwing.outcome).toMatchObject({ ok: false, error: { code: "CONFLICT" } });
     const brokenUnit = startRun({
-      timeoutMs: 1_000,
+      timeLimit: timeLimit(1_000),
       unit: {
         ...unit,
         run: () => {
@@ -229,7 +264,7 @@ describe("startRun", () => {
     });
     expect(await brokenUnit.outcome).toMatchObject({ ok: false, error: { code: "INTERNAL" } });
     const brokenAccept = startRun({
-      timeoutMs: 1_000,
+      timeLimit: timeLimit(1_000),
       unit,
       invoke: () => 1,
       accept: () => Promise.reject(new Error("schema threw")),
@@ -238,12 +273,20 @@ describe("startRun", () => {
     await brokenAccept.handlerDone;
   });
 
-  it("stops the clock once the handler settles, while its result is checked", async () => {
+  it("keeps the clock running while the handler's result is checked", async () => {
     const check = deferred<Outcome>();
-    const run = startRun({ timeoutMs: 5, unit, invoke: () => 1, accept: () => check.promise });
+    const run = startRun({
+      timeLimit: timeLimit(5),
+      unit,
+      invoke: () => 1,
+      accept: () => check.promise,
+    });
     await tick(20);
+    expect(run.handlerSettled).toBe(true);
+    expect(run.settled).toMatchObject({ ok: false, error: { code: "TIMEOUT" } });
     check.resolve({ ok: true, value: 1 });
-    expect(await run.outcome).toEqual({ ok: true, value: 1 });
+    await run.handlerDone;
+    expect(await run.outcome).toMatchObject({ ok: false, error: { code: "TIMEOUT" } });
   });
 });
 

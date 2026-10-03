@@ -3,7 +3,7 @@
 // one inside a unit of work, then check the result against the contract.
 
 import { QuickdrawError } from "../../protocol/errors";
-import { withSignal, type AnyContext } from "../context";
+import { NEVER_ABORTED, withSignal, type AnyContext } from "../context";
 import type { RegisteredMethod } from "../registry";
 import type { Transport } from "../types";
 import { startRun, type Outcome, type Run } from "./run";
@@ -16,8 +16,13 @@ export interface ExecuteCall {
   readonly requestId: string;
   readonly transport: Transport;
   readonly principal: AnyContext["principal"];
-  /** Aborts when the caller cancels; `undefined` for a mutation, which cannot be cancelled. */
+  /**
+   * Aborts when the caller cancels (a query; a mutation cannot be cancelled)
+   * or the call's time limit passes. The call then leaves the run it joined.
+   */
   readonly signal: AbortSignal | undefined;
+  /** Aborts when the call's time limit passes. A run this call starts ends with it. */
+  readonly expired: AbortSignal | undefined;
   /** Set when the result came from another call's run. */
   shared: boolean;
   /** Set when this call started the run, and so flushes it. */
@@ -81,7 +86,8 @@ export function execute(
     sink: settings.flushSink,
   });
   const run = startRun({
-    timeoutMs: method.timeoutMs ?? settings.limits.callTimeoutMs,
+    // The pipeline starts every call's time limit at admission, before this.
+    timeLimit: call.expired ?? NEVER_ABORTED,
     unit,
     invoke: (signal) => method.handler({ input, ctx: withSignal(ctx, signal), db: settings.db }),
     accept: (value) => accept(settings, target, value),
