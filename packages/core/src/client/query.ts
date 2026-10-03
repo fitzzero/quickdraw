@@ -11,6 +11,12 @@
 // on the overlay store's clock (`optimistic.ts`): it holds every mutation
 // that had finished by then, so their overlays are not shown over it.
 //
+// Nothing is read before the server's hello on the connection's current
+// credentials has arrived: the hello says which user the cache may hold data
+// for, and empties it when that is another user than it was loaded for
+// (`session.ts`). A version read from the cache before then could belong to
+// the last user's data, which the server would answer "not modified" for.
+//
 // React-free: it reads the cache through the `QueryClient` it is given.
 
 import type { QueryClient } from "@tanstack/react-query";
@@ -68,10 +74,41 @@ async function fetchVersioned<Output>(
 }
 
 /**
- * Fetches a query's result for `queryClient`'s cache: sends the version of
- * the cached result as `v`, resolves with the cached result itself when the
- * server answers "not modified", and calls once more without a version when
- * that result left the cache meanwhile.
+ * Resolves once the connection holds the server's hello on its current
+ * credentials, once its socket stops trying to connect (the call then fails
+ * as it would), or as soon as `signal` aborts. Resolving takes a microtask,
+ * so whatever the hello does to the cache (`session.ts`) is done before the
+ * read looks at the cache.
+ */
+async function helloKnown(
+  connection: QuickdrawConnection,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const ready = (): boolean =>
+    connection.getState().hello !== null || !connection.socket.active || signal?.aborted === true;
+  if (ready()) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    let stop = (): void => undefined;
+    const check = (): void => {
+      if (ready()) {
+        stop();
+        signal?.removeEventListener("abort", check);
+        resolve();
+      }
+    };
+    stop = connection.subscribe(check);
+    signal?.addEventListener("abort", check, { once: true });
+  });
+}
+
+/**
+ * Fetches a query's result for `queryClient`'s cache, once the server's
+ * hello has named the user: sends the version of the cached result as `v`,
+ * resolves with the cached result itself when the server answers "not
+ * modified", and calls once more without a version when that result left
+ * the cache meanwhile.
  */
 export async function fetchMethodQuery<Output>(
   connection: QuickdrawConnection,
@@ -79,6 +116,7 @@ export async function fetchMethodQuery<Output>(
   query: MethodQuery,
   signal?: AbortSignal,
 ): Promise<Output> {
+  await helloKnown(connection, signal);
   if (rowShapeOf(query.output) === undefined) {
     return fetchVersioned(connection, queryClient, query, signal);
   }

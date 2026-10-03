@@ -2,12 +2,27 @@
 // order on demand (a delta that arrives while a snapshot is in flight, a
 // page answered after a reload began). It records every frame the client
 // emits; the test answers acknowledgements and fires server frames itself.
+// Its state holds a hello (as user `u1`) from the start, as a connected
+// connection's does, and tells its subscribers when the test changes it.
 // 4.1's `useCollection` tests drove a mock socket the same way
 // (`legacy-src/client/useCollection.test.tsx:44-81`).
 
 import { QueryClient } from "@tanstack/react-query";
-import type { QuickdrawConnection } from "../../connection";
+import type { HelloFrame } from "../../../protocol/version";
+import type { ConnectionState, QuickdrawConnection } from "../../connection";
 import { createSubscriptionLane, type LaneCallback } from "../../lane";
+
+/** The hello a fake connection holds for `userId`: a new object each time, as each connect brings one. */
+export function fakeHello(userId: string | null = "u1"): HelloFrame {
+  return {
+    protocol: 5,
+    server: "test",
+    limits: {} as HelloFrame["limits"],
+    features: [],
+    userId,
+    serviceAccess: {},
+  };
+}
 
 /** One frame the client emitted, and its acknowledgement when it asked for one. */
 export interface Emitted {
@@ -54,17 +69,38 @@ export function fakeConnection() {
   const subscriptionLane = createSubscriptionLane(
     host as unknown as Parameters<typeof createSubscriptionLane>[0],
   );
+  let state: ConnectionState = {
+    status: "connected",
+    reconnecting: false,
+    hello: fakeHello(),
+    serviceAccess: {},
+    refusal: null,
+    backoff: {},
+  };
+  const stateListeners = new Set<() => void>();
   const connection = {
     socket,
     subscriptionLane,
-    getState: () => ({ status: "connected", hello: null, backoff: {} }),
-    subscribe: () => () => undefined,
+    getState: () => state,
+    subscribe: (listener: () => void) => {
+      stateListeners.add(listener);
+      return () => {
+        stateListeners.delete(listener);
+      };
+    },
     reportRateLimited: () => undefined,
     backoffRemaining: () => 0,
   } as unknown as QuickdrawConnection;
 
   return {
     connection,
+    /** Changes the connection's state and tells its subscribers, as the connection does. */
+    setState(patch: Partial<ConnectionState>): void {
+      state = { ...state, ...patch };
+      for (const listener of [...stateListeners]) {
+        listener();
+      }
+    },
     emitted,
     /** The frames of `event` the client emitted, in order. */
     sent(event: string): Emitted[] {

@@ -17,7 +17,9 @@
 // with the same credentials, the coordinator refetches only the queries that
 // watch a topic (they missed its changes) or are stale, each after a random
 // delay of up to 2 s, where 4.1 invalidated every query at once
-// (`legacy-src/client/QuickdrawProvider.tsx:320-321`).
+// (`legacy-src/client/QuickdrawProvider.tsx:320-321`). The cache follows the
+// user the server's hello names (`session.ts`): another user's hello empties
+// it, and new credentials for the same user refetch it.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
@@ -36,8 +38,8 @@ import {
 import { QuickdrawContext, useConnectionState, useQuickdrawContext } from "./context";
 import { createInvalidationCoordinator } from "./coordinator";
 import { bindConnection, isWatchedQuery } from "./createClient";
-import { KEY_ROOT } from "./keys";
 import { reloadOncePerSession } from "./reload";
+import { sessionOf } from "./session";
 
 /** Props of {@link QuickdrawProvider}. */
 export interface QuickdrawProviderProps<Contracts extends ContractMap> extends Omit<
@@ -49,8 +51,10 @@ export interface QuickdrawProviderProps<Contracts extends ContractMap> extends O
   /**
    * The credentials to connect with: a token (sent as `auth.token`), handshake
    * fields, or nothing for an anonymous or cookie-authenticated connection.
-   * When they change (by value), the connection reconnects with them and the
-   * results the hooks cached are invalidated, so they refetch as the new caller.
+   * When they change (by value), the connection reconnects with them. When
+   * the server's hello then names another user, everything quickdraw cached
+   * is removed, since it was read as the last user; when it names the same
+   * user, it is refetched as the new credentials.
    */
   readonly auth?: ConnectionAuth;
   /** The cache the hooks use. Default: a `QueryClient` the provider creates (5-minute stale time). */
@@ -120,14 +124,15 @@ function ConnectedProvider<Contracts extends ContractMap>(
     [queryClient],
   );
   const connection = useProviderConnection({ ...options, auth }, onProtocolMismatch);
+  React.useEffect(() => {
+    // From now on each hello settles the cache for the user it names.
+    sessionOf(connection, queryClient);
+  }, [connection, queryClient]);
   React.useEffect(() => connection.retain(), [connection]);
   React.useEffect(() => {
-    // Results cached under other credentials may not be this caller's to see:
-    // refetch them, as 4.1 did after a token change, once the connection is back.
-    if (connection.setAuth(auth)) {
-      void queryClient.invalidateQueries({ queryKey: [KEY_ROOT] });
-    }
-  }, [connection, auth, queryClient]);
+    // New credentials reconnect; the hello that follows decides what the cache keeps.
+    connection.setAuth(auth);
+  }, [connection, auth]);
   React.useEffect(
     () =>
       connection.onReconnect(() => {

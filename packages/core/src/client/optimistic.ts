@@ -138,6 +138,8 @@ interface StoreInternals extends OverlayStore {
   add(service: string, id: string, layer: Pick<Layer, "collection" | "removed" | "fields">): Layer;
   finish(layers: readonly Layer[], data: unknown): void;
   discard(layers: readonly Layer[]): void;
+  /** Drops every layer and every revision seen: the cache was emptied for another user. */
+  reset(): void;
 }
 
 /** The most layers a store keeps; past it the oldest finished ones go first. */
@@ -364,6 +366,18 @@ function createStore(): StoreInternals {
     discard(dropped: readonly Layer[]): void {
       discard(layers, dropped);
     },
+    reset(): void {
+      const services = new Set(layers.views.keys());
+      for (const row of layers.byRow.values()) {
+        for (const layer of row) {
+          services.add(layer.service);
+        }
+      }
+      layers.byRow.clear();
+      layers.revisions.clear();
+      layers.count = 0;
+      changed(layers, services);
+    },
   });
 }
 
@@ -384,6 +398,16 @@ function storeOf(queryClient: QueryClient): StoreInternals {
  */
 export function overlaysOf(queryClient: QueryClient): OverlayStore {
   return storeOf(queryClient);
+}
+
+/**
+ * Drops every layer and every revision the overlay store of `queryClient`
+ * holds, and tells its subscribers: the cache was emptied because another
+ * user acts on the connection now (`session.ts`). A call still in flight
+ * shows nothing more.
+ */
+export function resetOverlays(queryClient: QueryClient): void {
+  stores.get(queryClient)?.reset();
 }
 
 /**

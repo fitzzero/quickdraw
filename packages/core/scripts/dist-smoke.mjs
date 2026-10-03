@@ -141,6 +141,7 @@ const expectations = {
       "DEFAULT_INVALIDATION_WINDOW_MS",
       "RECONNECT_JITTER_MS",
       "overlaysOf",
+      "sessionOf",
       "DEFAULT_SUBSCRIPTION_LANE",
       "liveDataOf",
       "emptyCollection",

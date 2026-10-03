@@ -75,6 +75,7 @@ export {
   type OverlayStore,
   type OverlayView,
 } from "./optimistic";
+export { sessionOf, type CacheSession, type HelloChange } from "./session";
 
 // Live entities and collections, without React: the state the hooks show
 // (cached under `entityKey` and `collectionKey`), the pure merge functions

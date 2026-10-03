@@ -7,6 +7,7 @@
 
 import type { QueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useSyncExternalStore } from "react";
+import type { HelloFrame } from "../protocol/version";
 import type { ConnectionState, QuickdrawConnection } from "./connection";
 import type { InvalidationCoordinator } from "./coordinator";
 
@@ -35,18 +36,34 @@ export function useConnectionState(connection: QuickdrawConnection): ConnectionS
 }
 
 /**
- * Whether queries may run: the connection is connected, or reconnecting
- * with the same credentials (their calls then wait in the send buffer, and
- * nothing refetches the moment it is back: the coordinator spreads the
- * refetches after a reconnect), and queries are not backing off after
- * `RATE_LIMITED`. Re-renders only when that changes, not on every change of
- * the connection's state.
+ * The hello queries run under, or `null` while they may not run. They run
+ * while the connection is connected, or reconnecting with the same
+ * credentials (their calls then wait in the send buffer, and nothing
+ * refetches the moment it is back: the coordinator spreads the refetches
+ * after a reconnect), queries are not backing off after `RATE_LIMITED`, and
+ * the server's `qd:hello` on the current credentials has arrived: until it
+ * names the user, a version a query sent could be answered "not modified"
+ * for data the last user read (`session.ts`). Re-renders when that changes
+ * and on each new hello, not on every change of the connection's state, so
+ * a query hook shows the emptied cache after another user's hello.
  */
-export function useQueriesLive(connection: QuickdrawConnection): boolean {
-  const live = (): boolean => {
+export function useQueriesHello(connection: QuickdrawConnection): HelloFrame | null {
+  const ready = (): HelloFrame | null => {
     const state = connection.getState();
     const open = state.status === "connected" || state.reconnecting;
-    return open && state.backoff.query === undefined;
+    return open && state.backoff.query === undefined ? state.hello : null;
   };
-  return useSyncExternalStore(connection.subscribe, live, live);
+  return useSyncExternalStore(connection.subscribe, ready, ready);
+}
+
+/**
+ * The connection's `qd:hello` on its current credentials, or `null` before
+ * it arrives; re-renders on each new one. A hook that shows cached data
+ * reads it so that it renders again after another user's hello emptied the
+ * cache (`session.ts`): a query removed from the cache tells none of its
+ * observers.
+ */
+export function useHello(connection: QuickdrawConnection): HelloFrame | null {
+  const hello = (): HelloFrame | null => connection.getState().hello;
+  return useSyncExternalStore(connection.subscribe, hello, hello);
 }

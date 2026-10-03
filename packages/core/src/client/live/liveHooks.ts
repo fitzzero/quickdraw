@@ -5,19 +5,25 @@
 
 import type { QueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
-import { isRecord } from "../../protocol/guards";
 import type { QuickdrawConnection } from "../connection";
-import { useQuickdrawContext } from "../context";
+import { useHello, useQuickdrawContext } from "../context";
 import { overlaysOf, type OverlayView } from "../optimistic";
+import { userOf } from "../session";
 import { liveDataOf, type LiveData } from "./liveData";
 
-/** The provider's connection and `QueryClient`, and their live data; `hook` names the caller in errors. */
+/**
+ * The provider's connection and `QueryClient`, and their live data; `hook`
+ * names the caller in errors. The hook renders again on each new hello, so
+ * after another user's hello emptied the cache it shows the new entries
+ * (`../session.ts`).
+ */
 export function useLiveData(hook: string): {
   readonly connection: QuickdrawConnection;
   readonly queryClient: QueryClient;
   readonly live: LiveData;
 } {
   const { connection, queryClient } = useQuickdrawContext(hook);
+  useHello(connection);
   return { connection, queryClient, live: liveDataOf(connection, queryClient) };
 }
 
@@ -30,9 +36,6 @@ export function useOverlayView(queryClient: QueryClient, service: string): Overl
 
 /** The user the connection acts for, from its `qd:hello`: `null` while anonymous or before the hello. */
 export function useUserId(connection: QuickdrawConnection): string | null {
-  const userId = (): string | null => {
-    const hello: unknown = connection.getState().hello;
-    return isRecord(hello) && typeof hello.userId === "string" ? hello.userId : null;
-  };
+  const userId = (): string | null => userOf(connection.getState().hello);
   return useSyncExternalStore(connection.subscribe, userId, userId);
 }

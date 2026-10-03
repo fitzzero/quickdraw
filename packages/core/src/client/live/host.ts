@@ -83,7 +83,7 @@ export type Outcome =
    * came while the socket stayed up.
    */
   | { readonly kind: "retry"; readonly delayMs: number }
-  /** The socket is down: send it again on the next connect. */
+  /** The socket is down, or its hello has not arrived: send it again once it has. */
   | { readonly kind: "offline" };
 
 function outcomeOf(host: LiveHost, error: Error | null, reply: unknown): Outcome {
@@ -103,13 +103,24 @@ function outcomeOf(host: LiveHost, error: Error | null, reply: unknown): Outcome
   return { kind: "refused", error: failure };
 }
 
-/** Sends a subscription event through the connection's lane, and calls `done` with how it ended. */
+/**
+ * Sends a subscription event through the connection's lane, and calls `done`
+ * with how it ended. Before the server's hello on the current credentials
+ * has named the user, nothing is sent and `done` is told `offline` at once:
+ * the revisions a request carries could belong to the last user's data, and
+ * the live data asks for everything it holds once the hello arrives
+ * (`liveData.ts`).
+ */
 export function request(
   host: LiveHost,
   event: SubscriptionEvent,
   frame: object,
   done: (outcome: Outcome) => void,
 ): void {
+  if (host.connection.getState().hello === null) {
+    done({ kind: "offline" });
+    return;
+  }
   host.connection.subscriptionLane.send(event, frame, (error, reply) => {
     done(outcomeOf(host, error, reply));
   });

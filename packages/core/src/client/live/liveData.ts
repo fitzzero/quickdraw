@@ -6,10 +6,13 @@
 //   revisions held, and scopes resume from the revision they hold. State is
 //   kept across a disconnect (4.1 cleared it,
 //   `legacy-src/client/QuickdrawProvider.tsx:326-330`).
-// - When a `qd:hello` names another user than the one the state was loaded
-//   for (new credentials), the state is dropped and loaded again from
-//   scratch: rows and items are shown at the subscriber's access tier, and a
-//   "not modified" answer would keep the last user's.
+// - Nothing is asked for before the server's hello on the connection's
+//   current credentials has named the user (`host.ts`): on new credentials
+//   the resume waits for it. When it names another user than the cache was
+//   loaded for, the cache was emptied (`../session.ts`), and the state held
+//   is dropped and loaded again from scratch: rows and items are shown at
+//   the subscriber's access tier, and a "not modified" answer would keep the
+//   last user's.
 //
 // Made on first use for a connection and `QueryClient` pair, by the hooks,
 // and kept as long as the connection: it holds nothing once its hooks are
@@ -18,9 +21,9 @@
 // React-free.
 
 import type { QueryClient } from "@tanstack/react-query";
-import { isRecord } from "../../protocol/guards";
 import type { QuickdrawConnection } from "../connection";
 import { overlaysOf } from "../optimistic";
+import { sessionOf } from "../session";
 import { createCollectionHub, type CollectionHub } from "./collections";
 import { listenToFrames } from "./demux";
 import { createEntityStore, type EntityStore } from "./entityStore";
@@ -33,30 +36,29 @@ export interface LiveData {
 
 const lives = new WeakMap<QuickdrawConnection, WeakMap<QueryClient, LiveData>>();
 
-/** The user a hello names: its `userId`, or `null` for an anonymous socket. */
-function userOf(hello: unknown): string | null {
-  return isRecord(hello) && typeof hello.userId === "string" ? hello.userId : null;
-}
-
-/** Drops and reloads everything when a hello names another user than the state was loaded for. */
-function followUsers(connection: QuickdrawConnection, live: LiveData): void {
-  let hello = connection.getState().hello;
-  let loadedFor = hello === null ? undefined : userOf(hello);
-  connection.subscribe(() => {
-    const next = connection.getState().hello;
-    if (next === hello) {
-      return;
+/** Resumes what is held on each connect, once the user is known; reloads it all for another user. */
+function followConnection(
+  connection: QuickdrawConnection,
+  queryClient: QueryClient,
+  live: LiveData,
+): void {
+  const resume = (): void => {
+    live.entities.resume();
+    live.collections.resume("connect");
+  };
+  connection.socket.on("connect", () => {
+    // A hello held now is from the same credentials: the state was loaded for its user.
+    if (connection.getState().hello !== null) {
+      resume();
     }
-    hello = next;
-    if (next === null) {
-      return;
-    }
-    const user = userOf(next);
-    if (loadedFor !== undefined && user !== loadedFor) {
+  });
+  sessionOf(connection, queryClient).onHello(({ switched, first }) => {
+    if (switched) {
       live.entities.forget();
       live.collections.forget();
+    } else if (first) {
+      resume();
     }
-    loadedFor = user;
   });
 }
 
@@ -67,11 +69,7 @@ function createLiveData(connection: QuickdrawConnection, queryClient: QueryClien
     collections: createCollectionHub(host),
   });
   listenToFrames(connection.socket, live);
-  connection.socket.on("connect", () => {
-    live.entities.resume();
-    live.collections.resume("connect");
-  });
-  followUsers(connection, live);
+  followConnection(connection, queryClient, live);
   return live;
 }
 
