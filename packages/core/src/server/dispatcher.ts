@@ -4,10 +4,17 @@
 // directly.
 
 import type { AnyContract } from "../contract/defineContract";
+import type { DispatcherAccess } from "./access/api";
 import { createCaller, type Caller } from "./caller";
+import { registerLive } from "./emit/live";
 import { createPipeline } from "./pipeline/pipeline";
 import type { DispatchRequest, DispatchResult } from "./pipeline/request";
-import { resolveSettings, type DispatcherLimits, type PipelineOptions } from "./pipeline/settings";
+import {
+  resolveSettings,
+  type DispatcherLimits,
+  type PipelineOptions,
+  type PipelineSettings,
+} from "./pipeline/settings";
 import { createRegistry, type Registry } from "./registry";
 import type { AnyService } from "./service";
 import type { DbOf, Principal, PrincipalOf } from "./types";
@@ -41,6 +48,24 @@ export type DispatcherOptions<S extends readonly AnyService[]> = PipelineOptions
     ? { readonly db?: DbOfServices<S> }
     : { readonly db: DbOfServices<S> });
 
+/** `dispatcher.collections` and `qd.collections`: the services' collections (RFC 0003 section 7). */
+export interface DispatcherCollections {
+  /**
+   * Sends one scope of a collection a `reset`, so its clients load it again:
+   * for a change tracked writes cannot describe, such as a raw SQL write the
+   * app did not `ctx.touch`. Throws a `TypeError` for a collection this
+   * dispatcher does not serve.
+   *
+   * @example
+   * qd.collections.reset(task, "byProject", projectId);
+   */
+  reset<C extends AnyContract>(
+    contract: C,
+    collection: keyof C["collections"] & string,
+    scope: string,
+  ): void;
+}
+
 /** A registry of services and the method pipeline that serves them. */
 export interface Dispatcher<S extends readonly AnyService[] = readonly AnyService[]> {
   /**
@@ -56,9 +81,65 @@ export interface Dispatcher<S extends readonly AnyService[] = readonly AnyServic
    * not capped.
    */
   caller(principal: PrincipalOfServices<S> | null): Caller<ContractOfServices<S>>;
+  /**
+   * Runs `fn` inside a unit of work, as a method's handler runs (RFC 0003
+   * section 5.1): the tracked writes it makes flush to the dispatcher's
+   * sinks once it settles, whether it resolved or threw, and before `run`
+   * returns. Inside an open unit of work or transaction, `fn` joins it
+   * instead. For jobs, scripts and webhooks that write outside a method.
+   */
+  run<T>(fn: () => T | PromiseLike<T>): Promise<T>;
+  /**
+   * The services' access policies (RFC 0003 section 4): a principal's levels
+   * on rows, list filters, and access-change events.
+   */
+  readonly access: DispatcherAccess;
+  /** The services' collections: a manual `reset`. Deltas themselves come from tracked writes. */
+  readonly collections: DispatcherCollections;
   readonly registry: Registry;
   /** The resolved limits, for a server to announce in `qd:hello`. */
   readonly limits: DispatcherLimits;
+}
+
+const ACCESS_SINKS = new WeakMap<object, readonly PipelineSettings["flushSink"][]>();
+
+/**
+ * A copy of `options` whose dispatcher runs `sinks` right after its access
+ * sink, before any frame of a flush is sent: `createServer`'s grants
+ * refresh, so a flush that lowers a user's grants revokes what they held
+ * before that flush's frames reach them.
+ */
+export function withAccessSinks<O extends object>(
+  options: O,
+  sinks: readonly PipelineSettings["flushSink"][],
+): O {
+  const copy = { ...options };
+  ACCESS_SINKS.set(copy, sinks);
+  return copy;
+}
+
+/** `dispatcher.run`: a unit of work around `fn`, flushed once `fn` settles. */
+async function runInUnit<T>(settings: PipelineSettings, fn: () => T | PromiseLike<T>): Promise<T> {
+  if (typeof fn !== "function") {
+    throw new TypeError("run: pass the function to run inside a unit of work");
+  }
+  const unit = settings.unitOfWork.begin({
+    requestId: crypto.randomUUID(),
+    transport: "internal",
+    sink: settings.flushSink,
+  });
+  try {
+    return await unit.run(fn);
+  } finally {
+    try {
+      await unit.flush();
+    } catch (error) {
+      settings.logger.error("Flushing a run's writes failed", {
+        category: "quickdraw.flush",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }
 
 /**
@@ -75,13 +156,26 @@ export function createDispatcher<const S extends readonly AnyService[]>(
     throw new TypeError("createDispatcher: options must be an object with services and db");
   }
   const registry = createRegistry(options.services);
-  const settings = resolveSettings(options, registry, options.db);
+  const settings = resolveSettings(options, registry, options.db, ACCESS_SINKS.get(options));
+  // Writes made outside any unit of work flush to this dispatcher's sinks.
+  settings.unitOfWork.attach?.(settings.flushSink, settings.logger);
   const call = createPipeline(settings);
-  return Object.freeze({
+  const { levelsFor, accessWhere, onAccessChanged } = settings.policies;
+  const dispatcher: Dispatcher<S> = Object.freeze({
     call,
     caller: (principal: PrincipalOfServices<S> | null) =>
       createCaller(() => call, principal) as Caller<ContractOfServices<S>>,
+    run: <T>(fn: () => T | PromiseLike<T>) => runInUnit(settings, fn),
+    access: Object.freeze({ levelsFor, accessWhere, onAccessChanged }),
+    collections: Object.freeze({
+      reset: (contract: AnyContract, collection: string, scope: string) => {
+        settings.live.resetCollection(contract, collection, scope);
+      },
+    }),
     registry,
     limits: settings.limits,
   });
+  // `createServer` attaches its Socket.IO server to the dispatcher's live data.
+  registerLive(dispatcher, settings.live);
+  return dispatcher;
 }

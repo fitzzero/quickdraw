@@ -15,9 +15,11 @@ import {
   tick,
 } from "./__tests__/fixtures";
 import {
+  createBasicAccessEngine,
   createDispatcher,
   custom,
   initQuickdraw,
+  resolver,
   toCallReply,
   type DispatchResult,
   type UnitOfWorkFactory,
@@ -144,14 +146,16 @@ describe("step 4: authorization", () => {
     expect(check.mock.calls[0]?.[0]).toMatchObject({ principal: alice, transport: "socket" });
   });
 
-  it("fails an entry or scope check with INTERNAL until a policy is configured", async () => {
+  it("fails an entry check with INTERNAL when the app's own engine decides no rows", async () => {
     const service = qd.defineService(task, {
+      model: "task",
+      access: resolver({ levelsFor: () => ({ t1: "Admin" }) }),
       methods: {
         ...taskDefaults,
         rename: { access: { entry: "Moderate" }, handler: () => taskRow() },
       },
     });
-    const { call, logger } = setup([service]);
+    const { call, logger } = setup([service], { access: createBasicAccessEngine() });
     const result = await call({ method: "rename", input: { id: "t1", title: "x" } });
     expect(toCallReply(result)).toEqual({
       ok: false,
@@ -522,7 +526,7 @@ describe("the handler's ctx", () => {
     expect(failure(refused).code).toBe("FORBIDDEN");
   });
 
-  it("throws INTERNAL from ctx.touch, ctx.services and ctx.rooms until later cards add them", async () => {
+  it("throws INTERNAL from ctx.services and ctx.rooms until later cards add them", async () => {
     const attempts: Record<string, () => unknown> = {};
     const service = qd.defineService(task, {
       methods: {
@@ -534,7 +538,6 @@ describe("the handler's ctx", () => {
               readonly services: Record<string, unknown>;
               readonly rooms: Record<string, unknown>;
             };
-            attempts.touch = () => ctx.touch("task", "t1");
             attempts.services = () => loose.services.projectService;
             attempts.rooms = () => loose.rooms.join;
             expect(JSON.stringify(ctx.services)).toBe("{}");
@@ -548,6 +551,29 @@ describe("the handler's ctx", () => {
       expect(attempt, name).toThrow(QuickdrawError);
       expect(attempt, name).toThrow(/is not available yet/);
     }
+  });
+
+  it("gives ctx.touch that does nothing when the database client is not tracked", async () => {
+    const touched: unknown[] = [];
+    const service = qd.defineService(task, {
+      methods: {
+        ...taskDefaults,
+        count: {
+          access: "public",
+          handler: ({ ctx }) => {
+            touched.push(
+              ctx.touch("task", ["t1", "t2"]),
+              ctx.touch("task", "t3", { removed: true }),
+            );
+            expect(() => ctx.touch("task", [""])).toThrow(TypeError);
+            return 0;
+          },
+        },
+      },
+    });
+    const result = await setup([service]).call({ method: "count", input: { projectId: "p1" } });
+    expect(result).toEqual({ ok: true, data: 0 });
+    expect(touched).toEqual([undefined, undefined]);
   });
 });
 
@@ -570,7 +596,13 @@ describe("step 7: the unit of work", () => {
   it("runs every handler in a unit, flushes it after respond and before the record", async () => {
     const events: string[] = [];
     const scopes: UnitOfWorkScope[] = [];
-    const flushSink = { flush: () => Promise.resolve() };
+    const flushed: string[] = [];
+    const flushSink = {
+      flush: (writes: readonly unknown[]) => {
+        flushed.push(`app sink: ${writes.length}`);
+        return Promise.resolve();
+      },
+    };
     const unitOfWork: UnitOfWorkFactory = {
       begin(scope) {
         scopes.push(scope);
@@ -618,9 +650,12 @@ describe("step 7: the unit of work", () => {
         kind: "mutation",
         requestId: "req-2",
         transport: "socket",
-        sink: flushSink,
+        sink: expect.objectContaining({ flush: expect.any(Function) }),
       },
     ]);
+    // The unit's sink is the dispatcher's own sinks, then the app's.
+    await scopes[0]?.sink.flush([], { requestId: "req-2", transport: "socket", rev: 1 });
+    expect(flushed).toEqual(["app sink: 0"]);
     expect(logger.at("error")[0]?.message).toBe(
       "Flushing a call's writes failed; its reply was already sent",
     );
@@ -654,10 +689,25 @@ describe("a dispatcher's resolved limits", () => {
       maxQueuedQueries: 64,
       callTimeoutMs: 30_000,
       retryAfterMs: 1_000,
+      subscriptions: { maxInFlight: 8, maxQueued: 64 },
     });
+    expect(
+      createDispatcher({ services: [service], db, limits: { subscriptions: { maxQueued: 2 } } })
+        .limits.subscriptions,
+    ).toEqual({ maxInFlight: 8, maxQueued: 2 });
     expect(() =>
       createDispatcher({ services: [service], db, limits: { maxInFlightQueries: 0 } }),
     ).toThrow(/maxInFlightQueries must be at least 1/);
+    expect(() =>
+      createDispatcher({ services: [service], db, limits: { subscriptions: { maxInFlight: 0 } } }),
+    ).toThrow(/limits.subscriptions.maxInFlight must be at least 1/);
+    expect(() =>
+      createDispatcher({
+        services: [service],
+        db,
+        limits: { subscriptions: { maxQueued: -1 } },
+      }),
+    ).toThrow(/limits.subscriptions.maxQueued must be an integer/);
     expect(() =>
       createDispatcher({ services: [service], db, limits: { callTimeoutMs: 2 ** 31 } }),
     ).toThrow(/callTimeoutMs must be an integer/);

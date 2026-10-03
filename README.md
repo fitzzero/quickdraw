@@ -53,8 +53,8 @@ server.httpServer.listen(4000);
   gets the same few listeners however many methods the services have. The
   JSON-only parser is the default; `binary: true` restores the stock one.
   The socket rate limiter is on by default (100 events per minute per socket,
-  `qd:ch` and `qd:cancel` not counted); configure it with `rateLimit`, or turn
-  it off with `rateLimit: false`.
+  `qd:ch`, `qd:cancel`, `qd:sub` and `qd:unsub` not counted); configure it
+  with `rateLimit`, or turn it off with `rateLimit: false`.
 - **HTTP**: `POST /qd/{service}/{method}` with the input as a JSON body and
   `Content-Type: application/json` (required, even without a body). The
   principal comes from the `session` cookie or an `Authorization: Bearer`
@@ -72,7 +72,9 @@ created from (or with `http: false`): the HTTP transport is mounted on `app`.
 flight (a mutation runs to its end) and closes the HTTP server, giving up after
 `shutdownTimeoutMs` (default 10 s);
 `server.rotate({ withinMs })` asks clients to reconnect within a window;
-`server.access.refresh(userId)` reloads a user's grants and pushes `qd:access`.
+`server.access.refresh(userId)` reloads a user's grants, pushes `qd:access`
+and resolves the user's entity subscriptions again (behind a cluster adapter,
+on every node).
 
 ### The 4.x legacy shim
 
@@ -149,6 +151,204 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" }); // in an M
   tools are per method rather than per service, the agent can no longer pick
   its user with a `userId` argument, and `generateToolMetadata` is gone.
 
+### Tracked writes
+
+`@fitzzero/quickdraw-core/prisma` wraps the app's Prisma client so the
+framework sees every write made through it (design: `docs/rfcs/0003-v5.md`,
+section 5). Pass the tracked client as `db`; the server finds the rest on it:
+
+```typescript
+import { trackPrisma } from "@fitzzero/quickdraw-core/prisma";
+
+export const db = trackPrisma(new PrismaClient({ adapter })); // the last extension applied
+export const qd = initQuickdraw<{ db: typeof db; principal: AppPrincipal }>();
+const server = qd.createServer({ app, services, db, flushSink: [auditSink] });
+
+await qd.run(() => db.task.updateMany({ where: { dueAt: { lt: now } }, data: { late: true } }));
+```
+
+- Every handler runs in a unit of work. Each `create`, `update`, `upsert`,
+  `delete`, `createMany`, `updateMany` and `deleteMany` made through `db` is
+  recorded with its row ids, merged per row, and handed to the flush sinks
+  once the response has been sent, with one revision per flush. A handler
+  may return `db.task.update(...)` without awaiting it.
+- Writes inside `db.$transaction` join the unit only when it commits; a
+  rollback drops them. Prefer the interactive form
+  (`db.$transaction(async (tx) => ...)`): an array-form
+  `db.$transaction([...])` has no transaction client, so the rows a
+  `deleteMany` or `updateMany` in it reads first are read outside the batch,
+  and rows its earlier statements changed may be missed (a development
+  warning names the model and operation).
+- Jobs, scripts and webhooks wrap their writes in `qd.run(fn)`, which
+  flushes before it returns. A write made outside any unit of work flushes
+  on its own on the next tick, with a development warning.
+- Not seen: nested writes (`{ labels: { create: [...] } }`, which warn in
+  development), raw SQL and database cascades. Record raw SQL with
+  `ctx.touch("task", ids)`, or `{ removed: true }` for deleted rows.
+- Tracked models need a string `id` column; writes to other models pass
+  through untracked, with one warning.
+
+`createRecordingSink()` on `./testing` records what is flushed, for tests.
+Entity frames, collection deltas and change topics are built on these
+flushes (below).
+
+### Access control
+
+Each method declares who may call it, and a service with rows declares one
+access policy that says how a principal's level on a row is found (design:
+`docs/rfcs/0003-v5.md`, section 4). Everything fails closed: a method without
+`access` does not compile, and a missing grant, an unknown level, a missing
+id, a row that does not exist or a malformed access list denies.
+
+```typescript
+import { anyOf, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
+
+export const projectService = qd.defineService(project, {
+  model: "project", // the Prisma model the rows live in
+  access: anyOf(
+    jsonAcl("acl", { owner: "ownerId" }), // [{ userId, level }] plus Admin for the owner
+    members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),
+  ),
+  methods: { get: { access: { entry: "Read" }, handler: ({ input, db }) => /* ... */ } },
+});
+
+export const taskService = qd.defineService(task, {
+  model: "task",
+  access: inherit({ from: project, via: "projectId" }), // the level on the task's project
+  methods: {
+    rename: { access: { entry: "Moderate" }, handler: /* ... */ },
+    create: { access: { scope: "Moderate", of: project, id: "projectId" }, handler: /* ... */ },
+    archiveAll: { access: { service: "Admin" }, handler: /* ... */ },
+  },
+});
+```
+
+- Forms: `"public"`, `"authenticated"`, `{ service: L }` (the user's
+  service-wide grant), `{ entry: L, id? }` (the policy's level on the row;
+  `id` defaults to `input.id`), `{ service: L1, entry: L2 }` (either),
+  `{ scope: L, of, id }` (the level on a row of another service) and
+  `custom(fn)`. Without a principal every form but `"public"` answers
+  `UNAUTHENTICATED`; a principal that fails gets `FORBIDDEN`.
+- A service-wide `Admin` grant passes every check on its service
+  (`adminBypass: false` turns that off). A grant below `Admin` counts only
+  where the form names `service`: a `Read` grant no longer reads every row,
+  and a `Read` method without a row id is no longer open to every signed-in
+  user, as both were in 4.x.
+- Policies: `owner(field)`, `jsonAcl(field, { owner? })`,
+  `members({ model, entry, user, level, levels? })`, `inherit({ from, via })`,
+  `anyOf(...)` and `resolver({ levelsFor, where? })`. Their column names are
+  checked against the Prisma client's models at compile time. A lookup is one
+  batched query per table, memoized for the call, so checking 60 ids costs
+  what checking one does. `entry` access needs a policy; a service without
+  `model` may only use `"public"`, `"authenticated"`, `{ service }` and
+  `custom`.
+- `server.dispatcher.access` gives the same answers to other code:
+  `levelsFor(service, principal, ids)`, `accessWhere(service, principal, level)`
+  (a `where` filter for `findMany`, or `"none"`) and `onAccessChanged(listener)`,
+  called when a tracked write may have changed someone's access to a row.
+- `createServer({ access: { cacheMs: 30_000 } })` keeps policy lookups across
+  requests; tracked writes to the columns and membership tables the policies
+  read evict them. Writes the tracked client cannot see are picked up only
+  when the time passes, so the cache is off by default.
+
+### Projections and entity subscriptions
+
+A projection is the wire shape of a row (design: `docs/rfcs/0003-v5.md`,
+section 6). Its keys decide what a read selects, so a row is never read wider
+than what is sent:
+
+```typescript
+export const taskService = qd.defineService(task, {
+  model: "task",
+  access: inherit({ from: project, via: "projectId" }),
+  versionColumn: "updatedAt", // answers "not modified" from the row's own time
+  affects: [{ service: task, id: "parentTaskId" }], // a write to a child sends its parent again
+  project: {
+    // relations and computed fields: read with select, built by map
+    card: { select: { title: true, status: true }, map: (row: CardRow) => toCard(row) },
+  },
+  methods: {
+    // returns the database row: the framework keeps the projection's keys, dates as ISO strings
+    get: {
+      access: { entry: "Read" },
+      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
+    },
+  },
+});
+```
+
+- A projection's keys come from its schema's JSON Schema (Zod 4.2 or later),
+  or from `project: { <name>: { keys } }`; a service whose projection has
+  neither fails when it is defined. A handler returning a projection returns
+  rows (a `Date` is fine where the wire has a string, extra columns are
+  dropped); with `map`, it returns what `map` takes.
+- Fields the contract's `fields` map puts above the caller's level on a row
+  are stripped from that caller's copy, after any shared run.
+- `qd:sub { s, ids, revs? }` (up to 500 ids) authorizes every id in one
+  lookup, reads the allowed rows in one query, joins the room of each row
+  found for the subscriber's level, and answers each id with
+  `{ ok: true, d, rev }`, `{ ok: true, nm: true, rev }` (the held revision is
+  current) or `{ ok: false, e }` (`FORBIDDEN`, `NOT_FOUND`). A socket is never
+  in the room of a row it could not read. `qd:unsub { s, ids }` leaves.
+- After each flush, subscribers get `qd:e`: `{ t: "u", s, id, rev, d }` with
+  the whole row (a create, a touch, a projection with `map`, an `affects` row),
+  `{ t: "p", s, id, rev, d }` with the changed fields only (an update of plain
+  projection fields), or `{ t: "r", s, id, rev }` (a delete). One read per
+  service per flush, none when no room has subscribers, and each frame is
+  stripped once per subscriber tier.
+- When a write lowers or removes someone's access, their sockets leave the
+  rooms anchored on that row and get `qd:revoked { kind: "entity", reason:
+"access", s, id }`; a changed level moves them to that tier's room with the
+  row as they may now see it.
+- "Not modified" (for `qd:sub` and for queries returning one projection row
+  by `id`) comes from `versionColumn`, or from an in-process change log of
+  recent flushes. The change log sees only this process's writes: an app
+  running several processes without a Socket.IO cluster adapter declares
+  `versionColumn`s or passes `changeLog: false`.
+- Behind a cluster adapter (`setupRedisAdapter`), every touched row is read
+  and sent, since other nodes' rooms are not visible, and access changes and
+  refreshed grants are broadcast to every node.
+
+### Collections and change topics
+
+A collection is the rows of one service grouped by a scope value (design:
+`docs/rfcs/0003-v5.md`, section 7). The contract declares it; the service
+says whose policy authorizes a scope:
+
+```typescript
+export const taskService = qd.defineService(task, {
+  model: "task",
+  access: inherit({ from: project, via: "projectId" }), // derived from the anchor: see below
+  collections: { byProject: { anchor: project }, mine: { scopeAccess: "self" } },
+  watchAccess: { service: "Read" }, // opens the service topic to Read grants; closed without it
+  methods: {
+    /* ... */
+  },
+});
+```
+
+- `qd:col:sub { s, c, scope }` authorizes the scope through its anchor's
+  policy (the collection's `access` level, `Read` by default), then answers a
+  page and joins the scope's room; flushes send `qd:c` deltas to it. A
+  `"self"` scope is the subscriber's own user id: its items are stripped at
+  `Read`, and it may not declare a higher `access`.
+- Items are visible to everyone in the scope: no per-row policy or field
+  tier applies inside a collection. Derive the item service's own access
+  from the anchor (`inherit` from it, as above): a per-row policy on the
+  item service (an owner column, a row's access list) is not applied to
+  collection items, so a row it would hide still reaches everyone in its
+  scope.
+- `qd:watch { s, topic }` joins a change topic: `{collection}:{scope}`,
+  authorized like a subscribe to that scope, or `service`, which changes
+  whenever any row of the service does. The service topic is closed
+  (`FORBIDDEN`) unless the service declares `watchAccess` (`"public"`,
+  `"authenticated"` or `{ service: level }`). A watcher that loses access
+  leaves the topic after one last `qd:changed`.
+- The socket rate limiter does not count subscription events; each socket
+  runs `qd:sub`, `qd:col:sub`, `qd:col:items` and `qd:watch` in a lane
+  instead: `limits.subscriptions` (8 at once, 64 waiting), then
+  `RATE_LIMITED`.
+
 ### Testing
 
 `@fitzzero/quickdraw-core/testing` boots the real server on a free port:
@@ -165,6 +365,26 @@ await app.close();
 
 Its sockets act as the principal they connect with. `emitWithAck` and
 `waitForEvent` send raw frames and wait for events.
+
+`describeAccessMatrix(app, { service, principals, cases, via? })` runs each
+case as each principal, and anonymously, through the app's real dispatcher
+(in process, or over a socket per principal with `via: "socket"`), and fails
+listing every cell that differs from the expected table:
+
+```typescript
+await describeAccessMatrix(app, {
+  service: taskService,
+  principals: { owner, member, stranger },
+  cases: [
+    { method: "get", input: { id }, allow: ["owner", "member"] }, // everyone else is denied
+    {
+      method: "rename",
+      input: { id, title: "x" },
+      expect: { owner: "allow", member: "FORBIDDEN" },
+    },
+  ],
+});
+```
 
 ## Quick Start
 

@@ -4,7 +4,10 @@
 import type { DefaultEventsMap, Server, Socket } from "socket.io";
 import type { Logger } from "../../contract/logger";
 import type { PROTOCOL_VERSION } from "../../protocol/version";
+import type { ScopeSubscriptions } from "../collections/scopes";
 import type { Dispatcher } from "../dispatcher";
+import type { EntitySubscriptions } from "../emit/subscriptions";
+import type { TopicWatches } from "../topicIndex";
 import type { Principal } from "../types";
 import type { ReplyMeter } from "./ack";
 
@@ -16,6 +19,23 @@ export interface QuickdrawSocketData<P extends Principal = Principal> {
   protocol: typeof PROTOCOL_VERSION | "legacy";
   /** The v5 client package's version from its handshake; absent for a 4.x client. */
   client?: string;
+  /**
+   * The socket's entity subscriptions (`qd:sub`), by service and row id: the
+   * level whose room it is in, and the rows that level is derived from
+   * (RFC 0003 section 4.4). Plain data; the server keeps it.
+   */
+  entities?: EntitySubscriptions;
+  /**
+   * The socket's collection subscriptions (`qd:col:sub`), by room: the scope
+   * and the rows its access is derived from (RFC 0003 sections 4.4 and 7).
+   * Plain data; the server keeps it.
+   */
+  collections?: ScopeSubscriptions;
+  /**
+   * The change topics the socket watches (`qd:watch`), by room (RFC 0003
+   * section 11.3). Plain data; the server keeps it.
+   */
+  topics?: TopicWatches;
 }
 
 /** The Socket.IO server `createServer` returns. Events are untyped, so apps may emit their own. */

@@ -6,8 +6,11 @@ import type { AnyContract } from "../contract/defineContract";
 import type { MethodKind } from "../contract/methods";
 import type { StandardSchemaV1 } from "../contract/standardSchema";
 import type { Version } from "../protocol/envelope";
-import type { AccessForm } from "./access/types";
+import type { AnyAccessPolicy } from "./access/policy";
+import type { AccessForm, WatchAccess } from "./access/types";
+import type { ServiceCollection } from "./collections/define";
 import type { AnyContext, ContextExtender } from "./context";
+import type { ProjectedOutput, Projection } from "./emit/projection";
 import type { MaybePromise, QuickdrawTypes } from "./types";
 
 /**
@@ -36,6 +39,12 @@ export interface ServiceMethod {
    * projection's schema, wrapped for `nullable` and `listOf`.
    */
   readonly output: StandardSchemaV1;
+  /**
+   * The projection the contract's `output` names, when it names one: the
+   * handler's rows are projected through it before the output check, and
+   * its field tiers are stripped per caller.
+   */
+  readonly projection: ProjectedOutput | undefined;
   readonly access: AccessForm;
   readonly handler: AnyHandler;
   readonly share: ShareMode | undefined;
@@ -45,6 +54,20 @@ export interface ServiceMethod {
   readonly timeoutMs: number | undefined;
   /** The query's current version for "not modified" replies. */
   readonly version: ((input: unknown, ctx: AnyContext) => MaybePromise<Version>) | undefined;
+}
+
+/**
+ * One `affects` declaration of a service, checked (RFC 0003 sections 3 and
+ * 5.3): a write to a row of the service's model also changes rows of
+ * `service`, whose ids the written row's `columns` hold.
+ */
+export interface AffectsLink {
+  /** The contract of the service whose rows the write affects. */
+  readonly service: AnyContract;
+  /** The columns of the service's own model the link reads; tracked writes report them. */
+  readonly columns: readonly string[];
+  /** The ids of the affected rows, from a written row's values of `columns`. */
+  ids(values: Readonly<Record<string, unknown>>): readonly string[];
 }
 
 /**
@@ -58,6 +81,25 @@ export interface Service<
   /** The service name from the contract, unchanged on the wire and in stored grants. */
   readonly name: C["name"];
   readonly contract: C;
+  /** The database model the service's rows live in, named as the client names it: `"task"`. */
+  readonly model: string | undefined;
+  /** How a principal's level on one of the service's rows is found (RFC 0003 section 4.2). */
+  readonly access: AnyAccessPolicy | undefined;
+  /** Other models the service's handlers write, besides its own. */
+  readonly writes: readonly string[];
+  /** Rows of other services that a write to one of this service's rows changes too. */
+  readonly affects: readonly AffectsLink[];
+  /** The column whose time says when a row last changed, for "not modified" answers. */
+  readonly versionColumn: string | undefined;
+  /** The contract's projections (`"entity"` and the named ones), compiled with the service's `project` option. */
+  readonly projections: ReadonlyMap<string, Projection>;
+  /** The contract's collections, compiled with the service's `collections` option (RFC 0003 section 7.1). */
+  readonly collections: ReadonlyMap<string, ServiceCollection>;
+  /**
+   * Who may watch the service's change topic (RFC 0003 section 11.3);
+   * `undefined` when the service set none: the topic is closed to everyone.
+   */
+  readonly watchAccess: WatchAccess | undefined;
   /** Whether a service-wide `Admin` grant passes every access check of this service. */
   readonly adminBypass: boolean;
   /** The checked method records, by method name. */

@@ -1,9 +1,13 @@
 // The pipeline stages that run the handler (RFC 0003 section 9, steps 6 to
 // 8): join an identical run in flight when the query shares, otherwise start
-// one inside a unit of work, then check the result against the contract.
+// one inside a unit of work, then project a projection output's rows and
+// check the result against the contract. Field tiers are stripped later, per
+// caller (`tiers.ts`), because a shared run's result goes to every caller.
 
 import { QuickdrawError } from "../../protocol/errors";
+import { serviceGrant } from "../access/levels";
 import { NEVER_ABORTED, withSignal, type AnyContext } from "../context";
+import { projectOutput, stripForReader } from "../emit/projection";
 import type { RegisteredMethod } from "../registry";
 import type { Transport } from "../types";
 import { startRun, type Outcome, type Run } from "./run";
@@ -29,13 +33,19 @@ export interface ExecuteCall {
   run: Run | undefined;
 }
 
-/** Step 8: checks the handler's value against the method's output, and freezes shared results. */
+/**
+ * Step 8: projects a projection output's rows (RFC 0003 section 6: the
+ * projection's keys only, dates as ISO strings), checks the result against
+ * the method's output, and freezes shared results.
+ */
 async function accept(
   settings: PipelineSettings,
   target: RegisteredMethod,
-  value: unknown,
+  returned: unknown,
 ): Promise<Outcome> {
   const { service, method } = target;
+  const value =
+    method.projection === undefined ? returned : projectOutput(method.projection, returned);
   if (settings.outputValidation) {
     const issues = await outputIssues(method.output, value);
     if (issues !== undefined) {
@@ -49,6 +59,36 @@ async function accept(
   }
   const freeze = method.share !== undefined && settings.freezeSharedResults;
   return { ok: true, value: freeze ? deepFreeze(value) : value };
+}
+
+/**
+ * The caller's result: a projection output's rows without the fields the
+ * caller's level on each row does not reach (RFC 0003 sections 6 and 9).
+ * It runs on each caller's copy after the run, never inside it, so a shared
+ * run's `Admin` result is never handed to a `Read` joiner whole. The level
+ * is the one `dispatcher.access.levelsFor` gives; without a policy, only a
+ * service-wide `Admin` grant (with `adminBypass`) reaches tiered fields.
+ */
+export function forCaller(
+  settings: PipelineSettings,
+  target: RegisteredMethod,
+  principal: ExecuteCall["principal"],
+  value: unknown,
+): Promise<unknown> {
+  const { service, method } = target;
+  if (method.projection === undefined) {
+    return Promise.resolve(value);
+  }
+  return stripForReader(method.projection, value, async (ids) => {
+    if (principal === null) {
+      return new Map();
+    }
+    if (service.access !== undefined && service.model !== undefined) {
+      return await settings.policies.levelsFor(service.name, principal, ids);
+    }
+    const bypass = service.adminBypass && serviceGrant(principal, service.name) === "Admin";
+    return new Map(ids.map((id) => [id, bypass ? "Admin" : null]));
+  });
 }
 
 /** Steps 6 to 8 for one authorized call with its parsed input. */

@@ -66,9 +66,11 @@ export interface BaseContext<P = Principal, M = McpContext> {
    */
   readonly mcp?: M;
   /**
-   * Records writes the tracked database client cannot see: raw SQL and
-   * database cascades (RFC 0003 section 5.2). Tracked writes arrive with a
-   * later card; until then calling it throws `INTERNAL`.
+   * Records writes the tracked database client cannot see, raw SQL and
+   * database cascades (RFC 0003 section 5.2), as if the client had made
+   * them here: inside an open `db.$transaction` they join it and are dropped
+   * on rollback. `target` is the model name (`"task"`); `removed` marks the
+   * rows deleted. Does nothing when the dispatcher's `db` is not tracked.
    */
   touch(
     target: string | AnyContract,
@@ -106,11 +108,16 @@ export type AnyContext = BaseContext<Principal | null>;
 /** Builds the app's fields of `ctx` from the framework's: the `context` option of `initQuickdraw`. */
 export type ContextExtender = (base: AnyContext) => object;
 
-/** The per-call fields the dispatcher fills in. */
+/**
+ * The per-call fields the dispatcher fills in. `touch` is the dispatcher's
+ * (its tracked writes); a context built without one gets a `touch` that
+ * does nothing.
+ */
 export type ContextFields = Pick<
   AnyContext,
   "principal" | "signal" | "log" | "requestId" | "transport" | "mcp"
->;
+> &
+  Partial<Pick<AnyContext, "touch">>;
 
 /** A signal that never aborts, for calls that cannot be cancelled. */
 export const NEVER_ABORTED: AbortSignal = new AbortController().signal;
@@ -122,8 +129,8 @@ function notAvailable(member: string): QuickdrawError {
   );
 }
 
-function touch(): never {
-  throw notAvailable("ctx.touch");
+function untracked(): void {
+  // Without tracked writes there is nothing to record.
 }
 
 // Names that inspection, serialization and test matchers read from any
@@ -158,7 +165,12 @@ const ROOMS: ContextRooms = unavailable("ctx.rooms");
  * `extend`. The framework's fields win when the names collide.
  */
 export function createContext(fields: ContextFields, extend?: ContextExtender): AnyContext {
-  const base: AnyContext = Object.freeze({ ...fields, touch, services: SERVICES, rooms: ROOMS });
+  const base: AnyContext = Object.freeze({
+    ...fields,
+    touch: fields.touch ?? untracked,
+    services: SERVICES,
+    rooms: ROOMS,
+  });
   if (extend === undefined) {
     return base;
   }

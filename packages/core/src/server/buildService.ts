@@ -5,8 +5,10 @@
 
 import type { AnyContract } from "../contract/defineContract";
 import type { MethodDef } from "../contract/methods";
-import { accessFormProblem } from "./access/forms";
+import { accessFormProblem, isCustomAccess } from "./access/forms";
 import type { AccessForm } from "./access/types";
+import { compileCollections } from "./collections/define";
+import { compileProjections, projectedOutput, type Projection } from "./emit/projection";
 import { MAX_TIMEOUT_MS } from "./pipeline/settings";
 import { outputSchemaOf } from "./pipeline/validation";
 import {
@@ -16,12 +18,24 @@ import {
   type ServiceMethod,
   type ServiceRuntime,
 } from "./service";
+import { checkServiceData, type ServiceData } from "./serviceData";
 
 type Fail = (message: string) => never;
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
-const DEFINITION_KEYS = new Set(["methods", "adminBypass"]);
+const DEFINITION_KEYS = new Set([
+  "model",
+  "access",
+  "writes",
+  "affects",
+  "project",
+  "versionColumn",
+  "collections",
+  "watchAccess",
+  "methods",
+  "adminBypass",
+]);
 
 const METHOD_KEYS = new Set(["access", "handler", "share", "ttlMs", "timeoutMs", "version"]);
 
@@ -93,6 +107,7 @@ function checkQueryOptions(
 
 function checkMethod(
   contract: AnyContract,
+  projections: ReadonlyMap<string, Projection>,
   name: string,
   entry: unknown,
   fail: Fail,
@@ -124,6 +139,7 @@ function checkMethod(
     kind: def.kind,
     input: def.input,
     output: outputSchemaOf(contract, def.output),
+    projection: projectedOutput(def.output, projections),
     access: entry.access as AccessForm,
     handler: entry.handler as AnyHandler,
     share: entry.share as ServiceMethod["share"],
@@ -135,6 +151,7 @@ function checkMethod(
 
 function checkMethods(
   contract: AnyContract,
+  projections: ReadonlyMap<string, Projection>,
   value: unknown,
   fail: Fail,
 ): Record<string, ServiceMethod> {
@@ -147,9 +164,69 @@ function checkMethods(
   }
   const methods: Record<string, ServiceMethod> = {};
   for (const [name, entry] of Object.entries(value)) {
-    methods[name] = checkMethod(contract, name, entry, fail);
+    methods[name] = checkMethod(contract, projections, name, entry, fail);
   }
   return methods;
+}
+
+/**
+ * A query's `watch` (RFC 0003 sections 2 and 11.3) names the topic of one
+ * scope of one of the service's collections: the collection must be one the
+ * service serves, and `scope` the function that finds the scope from the
+ * input. `defineContract` checks the same; this catches a contract it never
+ * saw.
+ */
+function checkWatches(
+  contract: AnyContract,
+  collections: ReadonlyMap<string, unknown>,
+  fail: Fail,
+): void {
+  for (const [name, def] of Object.entries(contract.methods)) {
+    const watch: unknown = def.watch;
+    if (watch === undefined) {
+      continue;
+    }
+    if (def.kind !== "query") {
+      fail(`method "${name}" is a mutation; only a query can watch`);
+    }
+    if (!isRecord(watch) || typeof watch.scope !== "function") {
+      fail(`method "${name}": watch needs a scope function, which finds the scope from the input`);
+    }
+    if (typeof watch.collection !== "string" || !collections.has(watch.collection)) {
+      fail(
+        `method "${name}" watches "${String(watch.collection)}", which is not a collection of ${contract.name}`,
+      );
+    }
+  }
+}
+
+/**
+ * The row-level access forms need what the service declares (RFC 0003
+ * section 3): `entry` asks the service's own policy, and `scope` (another
+ * service's policy) is for services that have a model. A service without a
+ * model may only use `"public"`, `"authenticated"`, `{ service }` or `custom`.
+ */
+function checkRowForms(
+  methods: Readonly<Record<string, ServiceMethod>>,
+  data: ServiceData,
+  fail: Fail,
+): void {
+  for (const method of Object.values(methods)) {
+    const form = method.access;
+    if (typeof form !== "object" || isCustomAccess(form)) {
+      continue;
+    }
+    if (form.entry !== undefined && data.access === undefined) {
+      fail(
+        `method "${method.name}" uses entry access, which needs the service's access policy: declare model and access`,
+      );
+    }
+    if (form.scope !== undefined && data.model === undefined) {
+      fail(
+        `method "${method.name}" uses scope access, but the service declares no model; a service without a model may only use "public", "authenticated", { service } or custom access`,
+      );
+    }
+  }
 }
 
 /** Checks a service definition and returns the frozen service, registered with `runtime`. */
@@ -170,11 +247,26 @@ export function buildService(
   if (typeof adminBypass !== "boolean") {
     fail("adminBypass must be a boolean");
   }
+  const data = checkServiceData(definition, fail);
+  const projections = compileProjections(checked, definition.project, fail);
+  const collections = compileCollections(
+    checked,
+    projections,
+    data.model,
+    definition.collections,
+    fail,
+  );
+  checkWatches(checked, collections, fail);
+  const methods = checkMethods(checked, projections, definition.methods, fail);
+  checkRowForms(methods, data, fail);
   const service: AnyService = Object.freeze({
     name: checked.name,
     contract: checked,
+    ...data,
+    projections,
+    collections,
     adminBypass,
-    methods: Object.freeze(checkMethods(checked, definition.methods, fail)),
+    methods: Object.freeze(methods),
   });
   registerRuntime(service, runtime);
   return service;

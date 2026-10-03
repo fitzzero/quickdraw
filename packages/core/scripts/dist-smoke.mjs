@@ -25,10 +25,14 @@
 //   serves a call over a v5 socket, over HTTP and through the 4.x shim;
 // - the built MCP bridge (`./server/mcp`) lists a contract's method as a
 //   tool and serves a call through its stdio server, and `./server` carries
-//   none of the bridge's code.
+//   none of the bridge's code;
+// - the built tracked-writes adapter (`./prisma`) imports nothing from Prisma,
+//   refuses a value that is not a Prisma client, and shares one storage
+//   lookup with `./server`.
 
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { isBuiltin } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -79,6 +83,12 @@ const expectations = {
       "initQuickdraw",
       "createDispatcher",
       "custom",
+      "owner",
+      "jsonAcl",
+      "members",
+      "inherit",
+      "anyOf",
+      "resolver",
       "createBasicAccessEngine",
       "meetsLevel",
       "serviceGrant",
@@ -87,6 +97,8 @@ const expectations = {
       "createServer",
       "createHttpRouter",
       "createRateLimiter",
+      "storageOf",
+      "ANY_FIELD",
     ],
     client: false,
   },
@@ -106,7 +118,17 @@ const expectations = {
   },
   "./client": { symbols: ["formatCurrency"], client: true },
   "./parser": { symbols: ["createJsonParser"], client: false },
-  "./testing": { symbols: ["createTestApp", "emitWithAck", "waitForEvent"], client: false },
+  "./prisma": { symbols: ["trackPrisma", "storageOf", "findNestedWrites"], client: false },
+  "./testing": {
+    symbols: [
+      "createTestApp",
+      "emitWithAck",
+      "waitForEvent",
+      "createRecordingSink",
+      "describeAccessMatrix",
+    ],
+    client: false,
+  },
   "./testing/prisma": { symbols: ["createPrismaTestGlobalSetup"], client: false },
 };
 
@@ -291,26 +313,39 @@ console.log(`ok ${pkg.name} declares ${rootTypes.length} public types`);
 // Browser code imports the root export, so its import graph may hold only the
 // package's own files: no Node built-in, no dependency, no server module.
 const IMPORT_SPECIFIER = /\bfrom\s*["']([^"']+)["']|\bimport\s*\(?\s*["']([^"']+)["']/g;
-const rootGraph = new Set();
-const pending = [join(packageDir, pkg.exports["."].import)];
-const externalImports = [];
-while (pending.length > 0) {
-  const file = pending.pop();
-  if (rootGraph.has(file)) {
-    continue;
-  }
-  rootGraph.add(file);
-  for (const match of readFileSync(file, "utf8").matchAll(IMPORT_SPECIFIER)) {
-    const imported = match[1] ?? match[2];
-    if (imported.startsWith("./") || imported.startsWith("../")) {
-      pending.push(resolve(dirname(file), imported));
-    } else {
-      externalImports.push(`${relative(packageDir, file)} imports ${imported}`);
+
+/** The files an export's import graph holds, and what it imports from outside the package. */
+function importGraph(exportPath) {
+  const files = new Set();
+  const pending = [join(packageDir, pkg.exports[exportPath].import)];
+  const externals = [];
+  while (pending.length > 0) {
+    const file = pending.pop();
+    if (files.has(file)) {
+      continue;
+    }
+    files.add(file);
+    for (const match of readFileSync(file, "utf8").matchAll(IMPORT_SPECIFIER)) {
+      const imported = match[1] ?? match[2];
+      if (imported.startsWith("./") || imported.startsWith("../")) {
+        pending.push(resolve(dirname(file), imported));
+      } else {
+        externals.push(`${relative(packageDir, file)} imports ${imported}`);
+      }
     }
   }
+  return { files, externals };
 }
-assert.deepEqual(externalImports, [], "the root export must not import packages or Node built-ins");
-console.log(`ok ${pkg.name} imports only its own ${rootGraph.size} files, so it runs in a browser`);
+
+const rootGraph = importGraph(".");
+assert.deepEqual(
+  rootGraph.externals,
+  [],
+  "the root export must not import packages or Node built-ins",
+);
+console.log(
+  `ok ${pkg.name} imports only its own ${rootGraph.files.size} files, so it runs in a browser`,
+);
 
 const sourceMaps = readdirSync(distDir, { recursive: true })
   .map(String)
@@ -539,3 +574,17 @@ assert.deepEqual(replies[1], {
   result: { content: [{ type: "text", text: '"hello smoke from agent via mcp"' }] },
 });
 console.log("ok the built MCP bridge lists a contract's tools and serves a call over stdio");
+
+// The built tracked-writes adapter: its own entry, with no import of Prisma
+// (the app passes its client in), and the storage lookup `./server` uses.
+const prisma = await import(`${pkg.name}/prisma`);
+const prismaImports = importGraph("./prisma").externals.filter(
+  (imported) => !isBuiltin(imported.split(" imports ")[1]),
+);
+assert.deepEqual(prismaImports, [], "./prisma must import nothing but Node built-ins");
+assert.throws(() => prisma.trackPrisma({}), TypeError, "trackPrisma must refuse a non-client");
+assert.equal(prisma.storageOf, server.storageOf, "./prisma and ./server share storageOf");
+assert.equal(prisma.storageOf({ $quickdrawStorage: {} }), undefined);
+console.log(
+  "ok the built ./prisma entry imports no Prisma and refuses a value that is not a client",
+);

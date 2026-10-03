@@ -181,6 +181,9 @@ export interface CollectionSubscribe extends CollectionScopeRef {
 /**
  * A scope member in the collection's index (RFC 0003 section 7.4): its id,
  * its revision, then its index field values in the order `index` declares.
+ * The revision is the time in the service's `versionColumn` when it declares
+ * one, else the revision the snapshot (or, in an `added` delta, the flush)
+ * was read at.
  */
 export type WireIndexRow = readonly [id: string, rev: Revision, ...fields: unknown[]];
 
@@ -199,8 +202,14 @@ export interface CollectionSnapshot<Item = unknown> {
   readonly limit: number;
   /** Present when the requested limit was above `maxLimit` and was lowered to it. */
   readonly clamped?: true;
-  /** One row per member, on the first page of a collection that declares `index`. */
+  /**
+   * One row per member in `order`, on the first page of a collection that
+   * declares `index` (not on a page read with `cursor`). Absent when the
+   * scope has more members than the index holds: see `indexTruncated`.
+   */
   readonly index?: readonly WireIndexRow[];
+  /** Present instead of `index` when the scope has more members than the index holds (50,000). */
+  readonly indexTruncated?: true;
 }
 
 /** The answer to `qd:col:sub` when the server still holds every change since `since`. */
@@ -223,12 +232,22 @@ export interface CollectionItemsRequest extends CollectionScopeRef {
   readonly ids: readonly string[];
 }
 
-/** The acknowledgement of `qd:col:items`: the items found, in request order. */
+/**
+ * The acknowledgement of `qd:col:items`: the items found, in request order,
+ * and the revision they were read at, taken before the read as a
+ * snapshot's is: a client drops an item older than what a delta brought it.
+ */
 export type CollectionItemsReply<Item = unknown> =
-  | { readonly ok: true; readonly items: readonly Item[] }
+  | { readonly ok: true; readonly rev: Revision; readonly items: readonly Item[] }
   | Failure;
 
-/** One change to a scope (RFC 0003 section 7.2). */
+/**
+ * One change to a scope (RFC 0003 section 7.2). In a collection that declares
+ * `index`, `added` carries the member's index row, built from the same row as
+ * its item, and `patched` and `updated` carry every changed index field
+ * (index fields are item fields): a client keeping the index updates the
+ * row's fields from them, and its `rev` to the frame's `rev`.
+ */
 export type CollectionDelta<Item = unknown> =
   | { readonly t: "added"; readonly item: Item; readonly index?: WireIndexRow }
   | { readonly t: "updated"; readonly item: Item }
@@ -247,18 +266,23 @@ export interface CollectionFrame<Item = unknown> extends CollectionScopeRef {
 // ---------------------------------------------------------------------------
 
 /**
- * `qd:watch` and `qd:unwatch`: join or leave a change topic, `{collection}:{scope}`
- * or the service name for the service-wide topic (RFC 0003 section 11.3).
+ * `qd:watch` and `qd:unwatch`: join or leave a change topic of service `s`:
+ * `{collection}:{scope}` for one scope of a collection, or `service` for the
+ * service-wide topic (RFC 0003 section 11.3).
  */
 export interface WatchFrame {
   readonly s: string;
   readonly topic: string;
 }
 
-/** `qd:changed`: a watched topic changed in the last flush; invalidate the queries that watch it. */
+/**
+ * `qd:changed`: a watched topic changed in the flush at `rev`; invalidate the
+ * queries that watch it. Sent once per flush per topic, and carries no data.
+ */
 export interface ChangedFrame {
   readonly s: string;
   readonly topic: string;
+  readonly rev: Revision;
 }
 
 /** `qd:stream:sub` and `qd:stream:unsub`: one stream of a service, optionally one scope of it. */

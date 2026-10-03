@@ -84,7 +84,9 @@ export type {
 export {
   CLIENT_EVENTS,
   SERVER_EVENTS,
+  SERVICE_TOPIC,
   collectionRoom,
+  collectionTopic,
   entityRoom,
   topicRoom,
   userRoom,

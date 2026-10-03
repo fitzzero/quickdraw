@@ -9,7 +9,8 @@
 //   5. answer "not modified" when the caller's version is current
 //   6. join an identical shared run in flight
 //   7. run the handler in a unit of work        TIMEOUT, CANCELLED
-//   8. check the output against the contract    INTERNAL
+//   8. project and check the output             INTERNAL
+//      then strip field tiers for this caller
 //   9. respond, flush, and emit one completion record
 //
 // The time limit starts once the call is admitted (after step 2) and covers
@@ -20,7 +21,7 @@
 
 import { createConcurrencyLimiter, type ConcurrencyLimiter, type QuerySlot } from "./concurrency";
 import { throwIfCancelled, toQuickdrawError } from "./errors";
-import { execute, type ExecuteCall } from "./execute";
+import { execute, forCaller, type ExecuteCall } from "./execute";
 import { describeError, type CallOutcome, type CallRecord } from "./metrics";
 import type { DispatchRequest, DispatchResult } from "./request";
 import type { Run } from "./run";
@@ -33,6 +34,7 @@ import {
   lookup,
   startTimeLimit,
   untilStopped,
+  versionOfResult,
   type TimeLimit,
 } from "./stages";
 import { parseInput } from "./validation";
@@ -93,9 +95,9 @@ async function proceed(
   if (!outcome.ok) {
     return { ok: false, error: outcome.error };
   }
-  return version === undefined
-    ? { ok: true, data: outcome.value }
-    : { ok: true, data: outcome.value, version };
+  const data = await stage(call, forCaller(settings, target, request.principal, outcome.value));
+  const reported = versionOfResult(settings, target, { input, ctx, version }, data);
+  return reported === undefined ? { ok: true, data } : { ok: true, data, version: reported };
 }
 
 /**
@@ -115,12 +117,16 @@ function release(call: CallState, slot: QuerySlot | undefined, limit: TimeLimit 
   if (slot === undefined) {
     return;
   }
-  const running = run === undefined ? call.stageWork : run.handlerDone;
-  if (running === undefined) {
+  // The handler run this call started, and the stage it is in or last
+  // finished (for a call that started a run, the per-caller strip after it).
+  const running = [run?.handlerDone, call.stageWork].filter(
+    (work): work is Promise<unknown> => work !== undefined,
+  );
+  if (running.length === 0) {
     slot.release();
     return;
   }
-  void running.then(slot.release, slot.release);
+  void Promise.allSettled(running).then(slot.release);
 }
 
 /** Steps 1 to 8. Every failure becomes a result; the slot is freed however the call ends. */

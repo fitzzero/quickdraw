@@ -22,9 +22,12 @@ import {
   type CallEnvelope,
   type CallReply,
   type CancelFrame,
+  type ChangedFrame,
   type ChannelFrame,
   type ClientEventName,
   type ClientToServerEvents,
+  type CollectionDelta,
+  type CollectionItemsReply,
   type CollectionSubscribeReply,
   type EntityFrame,
   type EntitySubscribeReply,
@@ -36,6 +39,7 @@ import {
   type ServerToClientEvents,
   type Version,
   type WireError,
+  type WireIndexRow,
 } from "../index";
 import { createJsonParser, type JsonParser } from "./parser";
 
@@ -133,7 +137,27 @@ describe("live data frames", () => {
     } else if (reply.ok) {
       expectTypeOf(reply.items).toEqualTypeOf<readonly { id: string }[]>();
       expectTypeOf(reply.cursor).toEqualTypeOf<string | null>();
+      expectTypeOf(reply.index).toEqualTypeOf<readonly WireIndexRow[] | undefined>();
+      expectTypeOf(reply.indexTruncated).toEqualTypeOf<true | undefined>();
     }
+  });
+
+  test("an index row is [id, rev, ...fields], and an added delta may carry one", () => {
+    expectTypeOf<WireIndexRow[0]>().toBeString();
+    expectTypeOf<WireIndexRow[1]>().toBeNumber();
+    const delta = {} as CollectionDelta<{ id: string }>;
+    if (delta.t === "added") {
+      expectTypeOf(delta.index).toEqualTypeOf<WireIndexRow | undefined>();
+    }
+  });
+
+  test("qd:col:items answers items, and qd:changed carries a topic and a revision, no data", () => {
+    const items = {} as CollectionItemsReply<{ id: string }>;
+    if (items.ok) {
+      expectTypeOf(items.items).toEqualTypeOf<readonly { id: string }[]>();
+    }
+    expectTypeOf<keyof ChangedFrame>().toEqualTypeOf<"s" | "topic" | "rev">();
+    expectTypeOf<ChangedFrame["rev"]>().toBeNumber();
   });
 
   test("qd:sub answers each id with a row, not modified or an error", () => {

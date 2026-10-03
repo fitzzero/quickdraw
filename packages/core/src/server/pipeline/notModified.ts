@@ -33,6 +33,13 @@ export interface VersionRequest {
  */
 export interface VersionSource {
   versionOf(request: VersionRequest): MaybePromise<Version | undefined>;
+  /**
+   * Whether the version `versionOf` answered describes `result`, the
+   * caller's result of the query once it ran: the reply carries the version
+   * only when it does, so a caller never holds a version of something else.
+   * Absent: always.
+   */
+  describes?(request: VersionRequest, result: unknown): boolean;
 }
 
 /** True when `value` can be a call's version: a finite number or a string. */
