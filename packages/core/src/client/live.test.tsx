@@ -149,6 +149,32 @@ describe("a watched query", () => {
     expect(reads.every((record) => record.outcome === "ok")).toBe(true);
     expect(framesOf(grabbed.sent, "qd:cancel")).toEqual([]);
   });
+
+  it("joins its topic once in strict mode, which mounts its effects twice", async () => {
+    const { app } = await live.start();
+    const board = live.board();
+    const { wrapper, grabbed } = wrapperFor({
+      url: app.url,
+      principal: as(board.ada),
+      queryClient: freshClient(),
+    });
+    function Count() {
+      const { data } = qd.task.countOnBoard.useQuery({ projectId: board.p1 });
+      return <p>{`count ${String(data)}`}</p>;
+    }
+    function Page({ show }: { readonly show: boolean }) {
+      return wrapper({ children: <React.StrictMode>{show ? <Count /> : null}</React.StrictMode> });
+    }
+    const view = render(<Page show={false} />);
+    await until(() => grabbed.connection?.getState().status === "connected");
+    // Mounted on a connected socket, so the double mount would send frames.
+    view.rerender(<Page show />);
+    await screen.findByText("count 1");
+    await until(() => watchersOf(app, board.p1) === 1);
+    await tick(100);
+    expect(framesOf(grabbed.sent, "qd:watch")).toHaveLength(1);
+    expect(framesOf(grabbed.sent, "qd:unwatch")).toEqual([]);
+  });
 });
 
 describe("after a reconnect", () => {

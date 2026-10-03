@@ -7,8 +7,9 @@
 // (`legacy-src/client/useServiceQuery.ts:139-166`).
 //
 // - Watches are counted per topic across everything that watches it: the
-//   first sends `qd:watch`, the last to leave sends `qd:unwatch`, so two
-//   components reading one topic join it once.
+//   first sends `qd:watch`, and the topic is left (`qd:unwatch`) a tick
+//   after the last ends unless another starts first, so two components
+//   reading one topic join it once, and a remount joins it once too.
 // - The server forgets a socket's topics when it disconnects, so every
 //   connect sends `qd:watch` again for each topic still watched.
 // - `qd:watch` runs in the socket's subscription lane on the server. A
@@ -81,6 +82,13 @@ interface Topic {
   readonly watches: Set<{ readonly watch: TopicWatch }>;
   state: JoinState;
   retry: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * Set when the last watch ended: the topic is left on the next tick
+   * unless a watch starts first, so a component that remounts (React's
+   * strict mode) or changes its input within one scope keeps its topic
+   * instead of leaving and joining it again.
+   */
+  leaving: ReturnType<typeof setTimeout> | undefined;
   /** Raised by every join and by leaving, so the answer to an earlier `qd:watch` is ignored. */
   attempt: number;
 }
@@ -198,6 +206,8 @@ function join(registry: Registry, topic: Topic): void {
 function leave(registry: Registry, topic: Topic): void {
   registry.topics.delete(topic.id);
   clearTimeout(topic.retry);
+  clearTimeout(topic.leaving);
+  topic.leaving = undefined;
   topic.attempt += 1;
   const sent = topic.state === "joining" || topic.state === "joined";
   if (sent && registry.host.socket.connected) {
@@ -213,17 +223,25 @@ function startWatch(registry: Registry, watch: TopicWatch): () => void {
     watches: new Set(),
     state: "waiting",
     retry: undefined,
+    leaving: undefined,
     attempt: 0,
   };
   registry.topics.set(id, topic);
+  const kept = topic.leaving !== undefined;
+  clearTimeout(topic.leaving);
+  topic.leaving = undefined;
   const record = { watch };
   topic.watches.add(record);
-  if (topic.watches.size === 1) {
+  if (topic.watches.size === 1 && !kept) {
     join(registry, topic);
   }
   return () => {
     if (topic.watches.delete(record) && topic.watches.size === 0) {
-      leave(registry, topic);
+      topic.leaving = setTimeout(() => {
+        if (topic.watches.size === 0 && registry.topics.get(topic.id) === topic) {
+          leave(registry, topic);
+        }
+      }, 0);
     }
   };
 }
@@ -242,16 +260,24 @@ export function createTopics(host: TopicHost): Topics {
   return Object.freeze({
     watch: (watch: TopicWatch) => startWatch(registry, watch),
     rejoin(): void {
-      for (const topic of registry.topics.values()) {
-        join(registry, topic);
+      for (const topic of [...registry.topics.values()]) {
+        if (topic.watches.size === 0) {
+          leave(registry, topic);
+        } else {
+          join(registry, topic);
+        }
       }
     },
     stop(): void {
-      for (const topic of registry.topics.values()) {
-        clearTimeout(topic.retry);
-        topic.retry = undefined;
-        topic.attempt += 1;
-        topic.state = "waiting";
+      for (const topic of [...registry.topics.values()]) {
+        if (topic.watches.size === 0) {
+          leave(registry, topic);
+        } else {
+          clearTimeout(topic.retry);
+          topic.retry = undefined;
+          topic.attempt += 1;
+          topic.state = "waiting";
+        }
       }
     },
   });

@@ -69,6 +69,29 @@ describe("connection.watch", () => {
     expect(framesOf(sent, "qd:unwatch")).toEqual([{ s: "taskService", topic }]);
   });
 
+  it("keeps a topic whose last watch ends and another starts in the same tick, as a remount does", async () => {
+    const { app } = await live.start();
+    const board = live.board();
+    const connection = await connect(app.url, as(board.ada));
+    const sent = outgoing(connection);
+    const watch = () =>
+      connection.watch({
+        service: "taskService",
+        topic: collectionTopic("board", board.p1),
+        onChanged: () => undefined,
+      });
+    const first = watch();
+    await until(() => watchersOf(app, board.p1) === 1);
+    first();
+    const second = watch();
+    await tick(100);
+    expect(framesOf(sent, "qd:watch")).toHaveLength(1);
+    expect(framesOf(sent, "qd:unwatch")).toEqual([]);
+    second();
+    await until(() => watchersOf(app, board.p1) === 0);
+    expect(framesOf(sent, "qd:unwatch")).toHaveLength(1);
+  });
+
   it("waits for the connection, and joins every watched topic again after a reconnect", async () => {
     const { app } = await live.start();
     const board = live.board();
