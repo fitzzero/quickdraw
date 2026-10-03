@@ -1,6 +1,7 @@
-// `createTestApp` (RFC 0003 section 13), first version: the app's real server
-// on a free port, with an `authenticate` that trusts the principal a test
-// connects as. It replaces 4.1's `createTestServer` and `connectAsUser`
+// `createTestApp` (RFC 0003 section 13): the app's real server on a free
+// port, with an `authenticate` that trusts the principal a test connects as,
+// and a recorder of every frame the server sends (`frames.ts`). It replaces
+// 4.1's `createTestServer` and `connectAsUser`
 // (`legacy-src/server/testing.ts:62-130`), which took a fixed port counter
 // and authenticated by a bare user id.
 
@@ -12,6 +13,7 @@ import { createServer, type QuickdrawServer, type ServerOptions } from "../serve
 import type { ContractOfServices, PrincipalOfServices } from "../server/dispatcher";
 import type { AnyService } from "../server/service";
 import { isPrincipal } from "../server/transports/auth";
+import { recordFrames, type FrameRecorder } from "./frames";
 import { connectV5, socketCaller, type ClientSocket } from "./socket";
 
 /**
@@ -42,6 +44,12 @@ export interface TestApp<S extends readonly AnyService[] = readonly AnyService[]
   /** The server's URL, `http://127.0.0.1:{port}`. */
   readonly url: string;
   readonly server: QuickdrawServer<S>;
+  /**
+   * Every frame the server sent any socket since the app started (or since
+   * `frames.clear()`), with the socket, its user and the time:
+   * `app.frames({ event: "qd:e", userId })`, `app.frames.waitFor(match)`.
+   */
+  readonly frames: FrameRecorder;
   /** A typed in-process caller acting as `principal` (`null` for anonymous). */
   as(principal: PrincipalOfServices<S> | null): Caller<ContractOfServices<S>>;
   /**
@@ -72,6 +80,7 @@ const quietLogger: Logger = {
  * await app.as(alice).taskService.rename({ id, title });
  * const { call } = await app.connect(alice);
  * await call.taskService.get({ id });
+ * await app.frames.waitFor({ event: "qd:e", userId: alice.userId });
  * await app.close();
  */
 export async function createTestApp<const S extends readonly AnyService[]>(
@@ -89,6 +98,7 @@ export async function createTestApp<const S extends readonly AnyService[]>(
       ...options.auth,
     },
   } as ServerOptions<S>);
+  const frames = recordFrames(server.io);
   await new Promise<void>((resolve) => {
     server.httpServer.listen(0, "127.0.0.1", resolve);
   });
@@ -99,6 +109,7 @@ export async function createTestApp<const S extends readonly AnyService[]>(
   return {
     url,
     server,
+    frames,
     as: (principal) => server.dispatcher.caller(principal),
     async connect(principal) {
       const { socket, hello } = await connectV5(
