@@ -778,3 +778,37 @@ describe("views", () => {
     expect(view.items).toEqual([cards[0], { ...cards[1], assigneeId: "u1" }]);
   });
 });
+
+describe("cost", () => {
+  /** Loads `total` items of a scope without an index, by `ordinal`, as a snapshot and pages of 500. */
+  function loadWhole(total: number) {
+    const shape: CollectionShape = {
+      order: [
+        ["ordinal", "asc"],
+        ["id", "asc"],
+      ],
+    };
+    const item = (n: number) => ({ id: `t${String(n).padStart(8, "0")}`, ordinal: n });
+    const page = (start: number) =>
+      Array.from({ length: Math.min(500, total - start) }, (_, offset) => item(start + offset));
+    let state = applySnapshot(null, { rev: 1, items: page(0), total, cursor: "c" }, shape);
+    const started = performance.now();
+    for (let start = 500; start < total; start += 500) {
+      const cursor = start + 500 >= total ? null : "c";
+      state = applyPage(state, { rev: 2, items: page(start), total, cursor }, shape);
+    }
+    return { state, ms: performance.now() - started };
+  }
+
+  it("loads 20,000 items without an index in time linear in their number, in order", () => {
+    const { state, ms } = loadWhole(20_000);
+    const loaded = loadedIds(state);
+    expect(loaded).toHaveLength(20_000);
+    expect(loaded[0]).toBe("t00000000");
+    expect(loaded.at(-1)).toBe("t00019999");
+    expect(state.nextCursor).toBeNull();
+    // Placing each item by scanning every item loaded took 8 s here; a
+    // binary search takes a few hundred milliseconds even on a slow runner.
+    expect(ms).toBeLessThan(2_000);
+  });
+});

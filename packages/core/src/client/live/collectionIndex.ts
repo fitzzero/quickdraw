@@ -116,19 +116,33 @@ export function hasOrderValues(order: OrderBy | undefined, value: Values): boole
   return order !== undefined && order.every(([column]) => Object.hasOwn(value, column));
 }
 
-/** Where `row` goes in `rows`, which are sorted by `order`: after every row that sorts before or with it. */
-export function insertionPoint(order: OrderBy, rows: readonly Values[], row: Values): number {
+/**
+ * Where `row` goes among `count` rows sorted by `order`, each read with
+ * `rowAt(position)`: after every row that sorts before or with it. A binary
+ * search, so it reads about log2(count) of them.
+ */
+export function insertionPointBy(
+  order: OrderBy,
+  count: number,
+  rowAt: (position: number) => Values,
+  row: Values,
+): number {
   let low = 0;
-  let high = rows.length;
+  let high = count;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    if (compareRows(order, rows[middle] as Values, row) <= 0) {
+    if (compareRows(order, rowAt(middle), row) <= 0) {
       low = middle + 1;
     } else {
       high = middle;
     }
   }
   return low;
+}
+
+/** Where `row` goes in `rows`, which are sorted by `order`: after every row that sorts before or with it. */
+export function insertionPoint(order: OrderBy, rows: readonly Values[], row: Values): number {
+  return insertionPointBy(order, rows.length, (position) => rows[position] as Values, row);
 }
 
 /**

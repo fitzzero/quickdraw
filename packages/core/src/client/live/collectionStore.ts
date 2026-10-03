@@ -34,6 +34,10 @@
 //   and its place; a row newer than the snapshot is kept over it;
 // - `clamped` and `indexTruncated` from the snapshot.
 //
+// The state's shape and the helpers that read it are in `collectionState.ts`,
+// snapshots in `collectionSnapshot.ts`; this module re-exports both, and
+// applies deltas, later pages and items loaded by id.
+//
 // Pure functions, React-free.
 
 import type { CollectionDelta, Revision } from "../../protocol/envelope";
@@ -44,44 +48,29 @@ import {
   indexRowFromItem,
   indexRowOf,
   insertionPoint,
+  insertionPointBy,
   patchIndexRow,
   positionOf,
   type CollectionShape,
   type IndexRow,
 } from "./collectionIndex";
+import {
+  emptyCollection,
+  type CollectionItem,
+  type CollectionState,
+  type PageReply,
+} from "./collectionState";
 
-/** An item of a collection: any object with a string `id`. */
-export type CollectionItem = { readonly id: string };
-
-/** What the cache holds for one collection scope. */
-export interface CollectionState<Item extends CollectionItem = CollectionItem> {
-  /** The items loaded, by id. */
-  readonly byId: ReadonlyMap<string, Item>;
-  /**
-   * The ids of the items loaded, in order, while no index is held: the
-   * server's order of the pages, then items that arrived later, in their
-   * place by `order` when they carry its columns and last otherwise.
-   */
-  readonly order: readonly string[];
-  /** The newest revision held for each member: a loaded item, or an index row. */
-  readonly revById: ReadonlyMap<string, Revision>;
-  /** Tombstones: the revision each removed id was removed at. */
-  readonly removed: ReadonlyMap<string, Revision>;
-  /** One row per member, in order, when the collection declares an index and the scope fits in it. */
-  readonly index: readonly IndexRow[] | null;
-  /** The scope has more members than an index holds (50,000): no index, and views run over loaded items. */
-  readonly indexTruncated: boolean;
-  /** The page size asked for was above the collection's `maxLimit`, and was lowered to it. */
-  readonly clamped: boolean;
-  /** The cursor of the next page; `null` after the last one. */
-  readonly nextCursor: string | null;
-  /** How many members the scope has; `null` before the first snapshot. */
-  readonly totalCount: number | null;
-  /** The revision of the last snapshot. */
-  readonly snapshotRev: Revision;
-  /** The newest revision applied to the scope: what a resume sends as `since`. */
-  readonly rev: Revision;
-}
+export { applySnapshot } from "./collectionSnapshot";
+export {
+  emptyCollection,
+  loadedIds,
+  pruneStale,
+  staleIds,
+  type CollectionItem,
+  type CollectionState,
+  type PageReply,
+} from "./collectionState";
 
 /** What applying deltas did. */
 export interface DeltaResult<Item extends CollectionItem = CollectionItem> {
@@ -99,45 +88,6 @@ export interface DeltaOptions {
   readonly loadAll?: boolean;
 }
 
-/**
- * A page as the store reads it: the answer to `qd:col:sub` without `since`
- * (`CollectionSnapshot`), checked for its required fields only.
- */
-export interface PageReply {
-  readonly rev: Revision;
-  readonly items: readonly unknown[];
-  readonly total: number;
-  readonly cursor: string | null;
-  readonly clamped?: unknown;
-  readonly index?: unknown;
-  readonly indexTruncated?: unknown;
-}
-
-/** The state of a scope nothing arrived for yet. */
-export function emptyCollection<Item extends CollectionItem>(): CollectionState<Item> {
-  return Object.freeze({
-    byId: new Map(),
-    order: [],
-    revById: new Map(),
-    removed: new Map(),
-    index: null,
-    indexTruncated: false,
-    clamped: false,
-    nextCursor: null,
-    totalCount: null,
-    snapshotRev: 0,
-    rev: 0,
-  });
-}
-
-/** The ids of the items loaded, in the order they are shown. */
-export function loadedIds(state: CollectionState<CollectionItem>): string[] {
-  if (state.index === null) {
-    return [...state.order];
-  }
-  return state.index.map((row) => row.id).filter((id) => state.byId.has(id));
-}
-
 /** A copy of a state that one batch of changes is made on. */
 interface Work<Item extends CollectionItem> {
   readonly shape: CollectionShape;
@@ -151,8 +101,16 @@ interface Work<Item extends CollectionItem> {
   totalCount: number | null;
   /** More pages follow the items loaded. */
   readonly paged: boolean;
+  /**
+   * Whether every item in `order` carries the `order` columns, so a new one
+   * can be placed among them by its values: worked out once per batch, on
+   * first use, and kept as items come and go.
+   */
+  placeable: boolean | undefined;
   changed: boolean;
 }
+
+type Values = Readonly<Record<string, unknown>>;
 
 function workOn<Item extends CollectionItem>(
   base: CollectionState<Item>,
@@ -168,6 +126,7 @@ function workOn<Item extends CollectionItem>(
     indexById: undefined,
     totalCount: base.totalCount,
     paged: base.nextCursor !== null,
+    placeable: undefined,
     changed: false,
   };
 }
@@ -239,17 +198,33 @@ function placeIndexRow(work: Work<CollectionItem>, row: IndexRow): void {
   rowsById(work).set(row.id, row);
 }
 
-/** Adds the id of a newly loaded item to the order: in its place when its values allow, else last. */
+/** True when every item in `work.order` carries the `order` columns; read once per batch. */
+function canPlace(work: Work<CollectionItem>): boolean {
+  const { order } = work.shape;
+  if (order === undefined) {
+    return false;
+  }
+  work.placeable ??= work.order.every((id) => hasOrderValues(order, work.byId.get(id) as Values));
+  return work.placeable;
+}
+
+/**
+ * Adds the id of a newly loaded item to the order: in its place when its
+ * values and those of every item loaded allow, found by a binary search over
+ * the order, else last. A page in the server's order lands at the end, so a
+ * whole scope loads in time linear in its size.
+ */
 function placeLoaded(work: Work<CollectionItem>, item: CollectionItem): void {
   const { order } = work.shape;
-  const values = item as Readonly<Record<string, unknown>>;
-  const loaded = work.order.map((id) => work.byId.get(id) as Readonly<Record<string, unknown>>);
-  const placeable = order !== undefined && loaded.every((row) => hasOrderValues(order, row));
-  const at =
-    placeable && hasOrderValues(order, values)
-      ? insertionPoint(order, loaded, values)
-      : work.order.length;
-  work.order.splice(at, 0, item.id);
+  const values = item as Values;
+  if (order === undefined || !canPlace(work) || !hasOrderValues(order, values)) {
+    work.order.push(item.id);
+    work.placeable = order === undefined ? undefined : false;
+    return;
+  }
+  const valuesAt = (position: number): Values =>
+    work.byId.get(work.order[position] as string) as Values;
+  work.order.splice(insertionPointBy(order, work.order.length, valuesAt, values), 0, item.id);
 }
 
 /**
@@ -276,6 +251,8 @@ function upsert(
     placeIndexRow(work, row ?? indexRowFromItem(work.shape, item));
   } else if (!known) {
     placeLoaded(work, item);
+  } else if (work.placeable === true && !hasOrderValues(work.shape.order, item as Values)) {
+    work.placeable = false;
   }
   if (!known && counts && work.totalCount !== null) {
     work.totalCount += 1;
@@ -295,6 +272,10 @@ function remove(work: Work<CollectionItem>, id: string, rev: Revision): void {
   const position = work.order.indexOf(id);
   if (position >= 0) {
     work.order.splice(position, 1);
+  }
+  if (position >= 0 && work.placeable === false) {
+    // The item without the order's columns may be the one that left: work it out again.
+    work.placeable = undefined;
   }
   work.removed.set(id, rev);
   if (known && work.totalCount !== null) {
@@ -413,169 +394,6 @@ export function applyFrames<Item extends CollectionItem>(
   return { state, reset, missing };
 }
 
-/** The index row the state holds for `id`, or one made from its item. */
-function heldRow(
-  base: CollectionState<CollectionItem>,
-  held: ReadonlyMap<string, IndexRow>,
-  shape: CollectionShape,
-  id: string,
-): IndexRow | undefined {
-  const item = base.byId.get(id);
-  return held.get(id) ?? (item === undefined ? undefined : indexRowFromItem(shape, item));
-}
-
-/** The index after a snapshot, and the revision of each member in it. */
-interface SnapshotIndex {
-  readonly rows: IndexRow[];
-  readonly revs: Map<string, Revision>;
-}
-
-/**
- * The snapshot's index merged with what the state holds: a member removed
- * after the snapshot was read stays out, and a member changed or added after
- * it keeps the row the state holds, in its place. `null` without an index.
- */
-function snapshotIndex(
-  base: CollectionState<CollectionItem>,
-  snapshot: PageReply,
-  shape: CollectionShape,
-): SnapshotIndex | null {
-  const wires: readonly unknown[] | undefined = Array.isArray(snapshot.index)
-    ? (snapshot.index as readonly unknown[])
-    : undefined;
-  if (wires === undefined) {
-    return null;
-  }
-  const held = new Map((base.index ?? []).map((row) => [row.id, row]));
-  const newer = (id: string): boolean =>
-    (base.revById.get(id) ?? Number.NEGATIVE_INFINITY) > snapshot.rev;
-  const rows: IndexRow[] = [];
-  const late: IndexRow[] = [];
-  const revs = new Map<string, Revision>();
-  // A member newer than the snapshot keeps the row the state holds; with
-  // none held, the snapshot's row (`fallback`) is the best known.
-  const keep = (id: string, fallback?: IndexRow): void => {
-    const row = heldRow(base, held, shape, id) ?? fallback;
-    if (row !== undefined) {
-      late.push(row);
-      revs.set(id, base.revById.get(id) ?? snapshot.rev);
-    }
-  };
-  for (const wire of wires) {
-    const row = indexRowOf(shape, wire);
-    const removedAfter =
-      (base.removed.get(row?.id ?? "") ?? Number.NEGATIVE_INFINITY) > snapshot.rev;
-    if (row === undefined || revs.has(row.id) || removedAfter) {
-      continue;
-    }
-    if (newer(row.id)) {
-      keep(row.id, row);
-    } else {
-      rows.push(row);
-      revs.set(row.id, snapshot.rev);
-    }
-  }
-  for (const id of base.revById.keys()) {
-    if (!revs.has(id) && newer(id)) {
-      keep(id);
-    }
-  }
-  const { order } = shape;
-  for (const row of late) {
-    rows.splice(order === undefined ? rows.length : insertionPoint(order, rows, row), 0, row);
-  }
-  return { rows, revs };
-}
-
-/** The items a snapshot keeps: those held that are members (or newer than it), then its page's. */
-function snapshotItems<Item extends CollectionItem>(
-  base: CollectionState<Item>,
-  snapshot: PageReply,
-  members: ReadonlySet<string> | null,
-): { readonly byId: Map<string, Item>; readonly revById: Map<string, Revision> } {
-  const byId = new Map<string, Item>();
-  const revById = new Map<string, Revision>();
-  for (const id of loadedIds(base)) {
-    const rev = base.revById.get(id) ?? 0;
-    const pruned = members !== null && !members.has(id) && rev <= snapshot.rev;
-    if (!pruned) {
-      byId.set(id, base.byId.get(id) as Item);
-      revById.set(id, rev);
-    }
-  }
-  for (const item of snapshot.items) {
-    const tombstone = hasId(item) ? base.removed.get(item.id) : undefined;
-    const cached = hasId(item) ? revById.get(item.id) : undefined;
-    const older = (cached ?? tombstone ?? Number.NEGATIVE_INFINITY) > snapshot.rev;
-    if (hasId(item) && !older && (members === null || members.has(item.id))) {
-      byId.set(item.id, item as Item);
-      revById.set(item.id, snapshot.rev);
-    }
-  }
-  return { byId, revById };
-}
-
-/** The order of loaded items after a snapshot without an index: its page first, then the others as before. */
-function snapshotOrder(
-  base: CollectionState<CollectionItem>,
-  snapshot: PageReply,
-  byId: ReadonlyMap<string, unknown>,
-): string[] {
-  const order = new Set<string>();
-  for (const item of snapshot.items) {
-    if (hasId(item) && byId.has(item.id)) {
-      order.add(item.id);
-    }
-  }
-  for (const id of loadedIds(base)) {
-    if (byId.has(id)) {
-      order.add(id);
-    }
-  }
-  return [...order];
-}
-
-/**
- * Applies a snapshot: the answer to `qd:col:sub` without a cursor (a first
- * load, a reload after `reset`, or a resume the server could not serve).
- *
- * - With an index, the index is the scope's membership: held items of
- *   members stay, others are pruned unless a delta newer than the snapshot
- *   put them there. Without one, every held item stays (pages loaded before
- *   are kept), as 4.1 did when the server sent no `ids`.
- * - Page items replace held ones unless the state holds a newer item or a
- *   newer tombstone for them.
- * - Tombstones older than the snapshot are dropped; newer ones stay.
- */
-export function applySnapshot<Item extends CollectionItem>(
-  prev: CollectionState<Item> | null | undefined,
-  snapshot: PageReply,
-  shape: CollectionShape,
-): CollectionState<Item> {
-  const base = prev ?? emptyCollection<Item>();
-  const index = snapshotIndex(base, snapshot, shape);
-  const members = index === null ? null : new Set(index.revs.keys());
-  const { byId, revById } = snapshotItems(base, snapshot, members);
-  for (const [id, rev] of index?.revs ?? []) {
-    if (!revById.has(id)) {
-      revById.set(id, rev);
-    }
-  }
-  return Object.freeze({
-    byId,
-    order: index === null ? snapshotOrder(base, snapshot, byId) : [],
-    revById,
-    removed: new Map([...base.removed].filter(([, rev]) => rev > snapshot.rev)),
-    index: index?.rows ?? null,
-    indexTruncated: snapshot.indexTruncated === true,
-    clamped: snapshot.clamped === true,
-    nextCursor: snapshot.cursor,
-    totalCount: index === null ? snapshot.total : index.rows.length,
-    snapshotRev: snapshot.rev,
-    rev: Math.max(base.rev, snapshot.rev),
-  });
-}
-
 /**
  * Applies a later page (the answer to `qd:col:sub` with a cursor): items are
  * upserted unless the state holds newer ones, nothing is pruned, and new ids
@@ -628,41 +446,4 @@ export function applyItems<Item extends CollectionItem>(
     }
   }
   return finish(base, work as Work<Item>);
-}
-
-/** Loaded items older than the last snapshot and not refreshed by it: their data may be out of date. */
-export function staleIds(state: CollectionState<CollectionItem>): string[] {
-  return loadedIds(state).filter((id) => (state.revById.get(id) ?? 0) < state.snapshotRev);
-}
-
-/**
- * Drops the loaded items a reload did not refresh, from a scope without an
- * index whose every page was read again after its last snapshot: an item
- * older than that snapshot was on none of its pages, in no delta and in no
- * items answer since, so it is no longer a member. Each leaves a tombstone
- * at the snapshot's revision; the count stays the server's. A state with an
- * index (whose snapshot already pruned by membership) is returned as it is.
- */
-export function pruneStale<Item extends CollectionItem>(
-  state: CollectionState<Item>,
-): CollectionState<Item> {
-  const stale = new Set(staleIds(state));
-  if (stale.size === 0 || state.index !== null) {
-    return state;
-  }
-  const byId = new Map(state.byId);
-  const revById = new Map(state.revById);
-  const removed = new Map(state.removed);
-  for (const id of stale) {
-    byId.delete(id);
-    revById.delete(id);
-    removed.set(id, state.snapshotRev);
-  }
-  return Object.freeze({
-    ...state,
-    byId,
-    revById,
-    removed,
-    order: state.order.filter((id) => !stale.has(id)),
-  });
 }
