@@ -119,8 +119,10 @@ async function authorizeScope(
 /**
  * The members of the call's scope, once the caller is allowed it: its column
  * and `where`, or the ids its `via` junction links to it (one read, through
- * the database client). `undefined` without a scope; `"none"` for a scope
- * without members.
+ * the database client, of at most the collection's `maxLimit` links, the
+ * first by the linked row's id: a search pages within those, and never reads
+ * a large scope's every link per keystroke). `undefined` without a scope;
+ * `"none"` for a scope without members.
  */
 export async function scopeWhere(run: SearchRun): Promise<StorageWhere | "none" | undefined> {
   const collection = scopedCollection(run);
@@ -132,7 +134,7 @@ export async function scopeWhere(run: SearchRun): Promise<StorageWhere | "none" 
     findMany: (model: string, args?: FindManyArgs) =>
       delegateOf(run.db, model).findMany(args ?? {}),
   };
-  return (await membersWhere(reader, collection, run.query.scope)) ?? "none";
+  return (await membersWhere(reader, collection, run.query.scope, collection.maxLimit)) ?? "none";
 }
 
 /** The order results come in: the scope collection's, else by id. No ranking. */

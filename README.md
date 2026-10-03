@@ -517,7 +517,9 @@ const { items, isSearching } = qd.task.search.useSearch(text, { scope: projectId
   `scope`, only that scope's members (its column, or its `via` junction's
   links, and `where`), and only for a caller who may open the scope as
   `qd:col:sub` decides (`UNAUTHENTICATED` without a principal, `FORBIDDEN`
-  below the collection's `access` on its anchor). Identical concurrent searches by one caller run once
+  below the collection's `access` on its anchor). A `via` scope is searched
+  among at most its collection's `maxLimit` links, the first by row id, so
+  a search never reads a large scope's every link. Identical concurrent searches by one caller run once
   (`share: "caller"`). For a contract with several search methods,
   `method` names the one a `search.handlers` call implements.
 - `strategy` replaces how rows are found; the kit still adds the access

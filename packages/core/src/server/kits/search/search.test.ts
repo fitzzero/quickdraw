@@ -7,9 +7,10 @@
 // its read, and the statements each costs. Access is in `access.test.ts`.
 
 import { describe, expect, it, vi } from "vitest";
-import { consoleLogger, defineContract } from "../../../index";
+import { consoleLogger, defineContract, via } from "../../../index";
 import { createTestApp, type TestApp } from "../../../testing/index";
 import { createContext } from "../../context";
+import { labelContract, labelService } from "../../collections/__tests__/fixture";
 import { projectContract, projectService, qd } from "../../emit/__tests__/live";
 import { inherit, search } from "../../index";
 import { cardSchema, taskEntity } from "../crud/__tests__/fixture";
@@ -141,6 +142,66 @@ describe("a scope", () => {
       .harness()
       .storage.countStatements(() => admin.searchByLabel({ q: "fix", scope: empty.id }));
     expect(counted).toEqual({ value: { items: [], nextCursor: null }, statements: 1 });
+  });
+});
+
+describe("a via scope with more links than the collection's maxLimit", () => {
+  const capped = defineContract("taskService", {
+    entity: taskEntity,
+    projections: { card: cardSchema },
+    methods: {
+      ...search.contract({
+        entity: taskEntity,
+        item: cardSchema,
+        fields: ["title"],
+        scope: "byLabel",
+        minLength: 1,
+      }),
+    },
+    collections: {
+      byLabel: {
+        scope: via({ model: "taskLabel", entry: "taskId", scope: "labelId" }),
+        item: "card",
+        order: [["id", "asc"]],
+        limit: 3,
+        maxLimit: 3,
+      },
+    },
+  });
+
+  it("is searched among its first maxLimit links by row id, and paged within them", async () => {
+    const board = kit.board();
+    const prisma = kit.harness().prisma;
+    const ids = await addTitled(board.p1, ["Fix 1", "Fix 2", "Fix 3", "Fix 4", "Fix 5"]);
+    const label = await prisma.label.create({ data: { projectId: board.p1, name: "Bug" } });
+    await prisma.taskLabel.createMany({
+      data: ids.map((taskId) => ({ taskId, labelId: label.id })),
+    });
+    const service = qd.defineService(capped, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      collections: { byLabel: { anchor: labelContract } },
+      methods: { ...search.handlers(capped, { access: "authenticated" }) },
+    });
+    const app = await createTestApp({
+      services: [projectService, labelService, service],
+      db: kit.harness().db,
+    });
+    kit.track(app as unknown as TestApp);
+    const owner = app.as(as(board.ada)).taskService;
+    const firstThree = [...ids].sort().slice(0, 3);
+    const all = await owner.search({ q: "fix", scope: label.id, limit: 20 });
+    expect(idsOf(all)).toEqual(firstThree);
+    const first = await owner.search({ q: "fix", scope: label.id, limit: 2 });
+    expect(idsOf(first)).toEqual(firstThree.slice(0, 2));
+    const rest = await owner.search({
+      q: "fix",
+      scope: label.id,
+      limit: 2,
+      cursor: first.nextCursor ?? "",
+    });
+    expect(rest).toMatchObject({ nextCursor: null });
+    expect(idsOf(rest)).toEqual(firstThree.slice(2));
   });
 });
 
