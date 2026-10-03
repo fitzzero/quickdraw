@@ -4,6 +4,7 @@
     "docs/rfcs/**",
     "packages/core/legacy-src/**",
     "bench/apps/*/generated/**",
+    "packages/core/test/prisma/generated/**",
     "bench/baselines/**",
     "bench/reports/**",
     "bench/results/**"

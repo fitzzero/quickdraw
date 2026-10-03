@@ -5,11 +5,9 @@ import { consoleLogger, type Logger } from "../../contract/logger";
 import { createBasicAccessEngine } from "../access/basicEngine";
 import type { AccessEngine } from "../access/types";
 import type { Registry } from "../registry";
-import { noFlushSink, type FlushSink } from "../uow/flushSink";
-import type { UnitOfWorkFactory } from "../uow/types";
-import { untrackedUnitOfWork } from "../uow/untracked";
 import { createRecorder, type CallRecord, type RecordDetails } from "./metrics";
 import type { VersionSource } from "./notModified";
+import { resolveTracking, type Tracking, type TrackingOptions } from "./tracking";
 
 /**
  * The dispatcher's limits. The first three are what a server announces to
@@ -38,15 +36,11 @@ export const DEFAULT_LIMITS: DispatcherLimits = Object.freeze({
 export const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /** The pipeline's options: every seam and limit has a default. */
-export interface PipelineOptions {
+export interface PipelineOptions extends TrackingOptions {
   /** Receives one entry per call, and the original error of every `INTERNAL` failure. Default: the console. */
   readonly logger?: Logger;
   /** Decides each method's access form. Default: `createBasicAccessEngine()`. */
   readonly access?: AccessEngine;
-  /** Opens the unit of work of each handler run. Default: units that track nothing. */
-  readonly unitOfWork?: UnitOfWorkFactory;
-  /** Where units of work flush their writes. Default: nowhere. */
-  readonly flushSink?: FlushSink;
   /** Answers query versions for "not modified" replies. Default: none. */
   readonly versions?: VersionSource;
   readonly limits?: Partial<DispatcherLimits>;
@@ -67,13 +61,11 @@ export interface PipelineOptions {
 }
 
 /** Everything the pipeline stages read, resolved from the dispatcher's options. */
-export interface PipelineSettings {
+export interface PipelineSettings extends Tracking {
   readonly registry: Registry;
   readonly db: unknown;
   readonly logger: Logger;
   readonly access: AccessEngine;
-  readonly unitOfWork: UnitOfWorkFactory;
-  readonly flushSink: FlushSink;
   readonly versions: VersionSource | undefined;
   readonly limits: DispatcherLimits;
   readonly outputValidation: boolean;
@@ -115,8 +107,7 @@ export function resolveSettings(
     db,
     logger,
     access: options.access ?? createBasicAccessEngine(),
-    unitOfWork: options.unitOfWork ?? untrackedUnitOfWork,
-    flushSink: options.flushSink ?? noFlushSink,
+    ...resolveTracking(options, registry, db, logger),
     versions: options.versions,
     limits: resolveLimits(options.limits),
     outputValidation: options.outputValidation ?? development,

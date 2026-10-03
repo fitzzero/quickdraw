@@ -12,6 +12,10 @@ dist/
 bench/results/
 bench/apps/*/generated/
 
+# Core's test Prisma client (`bun run db:generate`; turbo runs it before
+# typecheck and test)
+packages/core/test/prisma/generated/
+
 # Test coverage
 coverage/
 

@@ -76,8 +76,27 @@ export type {
   ScopeAccess,
   ServiceAccess,
 } from "./access/types";
-export type { UnitOfWork, UnitOfWorkFactory, UnitOfWorkScope, WriteRecord } from "./uow/types";
-export type { FlushSink } from "./uow/flushSink";
+export {
+  ANY_FIELD,
+  type UnitOfWork,
+  type UnitOfWorkFactory,
+  type UnitOfWorkScope,
+  type WriteRecord,
+} from "./uow/types";
+export type { FlushInfo, FlushSink } from "./uow/flushSink";
+export type { StatementCount } from "./uow/unitOfWork";
+export type { TrackingOptions } from "./pipeline/tracking";
+
+// The storage adapter tracked database clients carry (RFC 0003 section 5.4);
+// `trackPrisma` is on ./prisma
+export {
+  storageOf,
+  type CountArgs,
+  type FindManyArgs,
+  type StorageAdapter,
+  type StorageRow,
+  type StorageWhere,
+} from "./storage";
 export type { VersionRequest, VersionSource } from "./pipeline/notModified";
 export type { CallOutcome, CallRecord } from "./pipeline/metrics";
 

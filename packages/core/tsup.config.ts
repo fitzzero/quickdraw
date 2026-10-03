@@ -19,6 +19,7 @@ export default defineConfig({
     "server/mcp/index": "src/server/mcp/index.ts",
     "client/index": "src/client/index.ts",
     parser: "src/protocol/parser.ts",
+    "prisma/index": "src/prisma/index.ts",
     "testing/index": "src/testing/index.ts",
     "testing/prisma": "src/testing/prisma.ts",
   },

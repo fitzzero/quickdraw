@@ -3,6 +3,6 @@
   "compilerOptions": {
     "outDir": "./dist"
   },
-  "include": ["src/**/*", "*.config.ts"],
-  "exclude": ["node_modules", "dist", "legacy-src"]
+  "include": ["src/**/*", "test/**/*", "*.config.ts"],
+  "exclude": ["node_modules", "dist", "legacy-src", "test/prisma/generated"]
 }

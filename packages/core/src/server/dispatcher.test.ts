@@ -522,7 +522,7 @@ describe("the handler's ctx", () => {
     expect(failure(refused).code).toBe("FORBIDDEN");
   });
 
-  it("throws INTERNAL from ctx.touch, ctx.services and ctx.rooms until later cards add them", async () => {
+  it("throws INTERNAL from ctx.services and ctx.rooms until later cards add them", async () => {
     const attempts: Record<string, () => unknown> = {};
     const service = qd.defineService(task, {
       methods: {
@@ -534,7 +534,6 @@ describe("the handler's ctx", () => {
               readonly services: Record<string, unknown>;
               readonly rooms: Record<string, unknown>;
             };
-            attempts.touch = () => ctx.touch("task", "t1");
             attempts.services = () => loose.services.projectService;
             attempts.rooms = () => loose.rooms.join;
             expect(JSON.stringify(ctx.services)).toBe("{}");
@@ -548,6 +547,29 @@ describe("the handler's ctx", () => {
       expect(attempt, name).toThrow(QuickdrawError);
       expect(attempt, name).toThrow(/is not available yet/);
     }
+  });
+
+  it("gives ctx.touch that does nothing when the database client is not tracked", async () => {
+    const touched: unknown[] = [];
+    const service = qd.defineService(task, {
+      methods: {
+        ...taskDefaults,
+        count: {
+          access: "public",
+          handler: ({ ctx }) => {
+            touched.push(
+              ctx.touch("task", ["t1", "t2"]),
+              ctx.touch("task", "t3", { removed: true }),
+            );
+            expect(() => ctx.touch("task", [""])).toThrow(TypeError);
+            return 0;
+          },
+        },
+      },
+    });
+    const result = await setup([service]).call({ method: "count", input: { projectId: "p1" } });
+    expect(result).toEqual({ ok: true, data: 0 });
+    expect(touched).toEqual([undefined, undefined]);
   });
 });
 

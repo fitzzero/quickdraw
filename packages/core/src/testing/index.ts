@@ -9,3 +9,4 @@ export {
   type TestConnection,
 } from "./createTestApp";
 export { emitWithAck, waitForEvent } from "./socket";
+export { createRecordingSink, type RecordedFlush, type RecordingSink } from "./recordingSink";
