@@ -9,6 +9,8 @@
 // React-free: the connection owns one and puts its windows in its state.
 
 import type { MethodKind } from "../contract/methods";
+import type { QuickdrawError } from "../protocol/errors";
+import { isRecord } from "../protocol/guards";
 
 /** The kinds of work that back off separately: method calls by kind, and subscription events. */
 export type BackoffKind = MethodKind | "subscription";
@@ -36,6 +38,12 @@ export interface Backoff {
   windows(): BackoffWindows;
   /** Ends every window and its timer. */
   clear(): void;
+}
+
+/** The `retryAfterMs` a `RATE_LIMITED` error carries in its data, if it carries one. */
+export function retryAfterOf(error: QuickdrawError): number | undefined {
+  const retryAfterMs: unknown = isRecord(error.data) ? error.data.retryAfterMs : undefined;
+  return typeof retryAfterMs === "number" ? retryAfterMs : undefined;
 }
 
 function waitFor(retryAfterMs: number | undefined): number {

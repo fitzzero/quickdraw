@@ -119,6 +119,7 @@ export {
   type HandshakeAuth,
   type HelloFrame,
   type HelloLimits,
+  type HelloSubscriptionLimits,
   type ProtocolMismatch,
   type QdHandshake,
 } from "./protocol/version";

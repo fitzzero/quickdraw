@@ -5,12 +5,19 @@
 // (`useQuery` on a mutation), is a compile error. 4.1 apps wrote a typed
 // wrapper file per app for this (`legacy-src/client/useService.ts:22-34`).
 
-import type { QueryClient, UseMutationResult, UseQueryResult } from "@tanstack/react-query";
+import type {
+  QueryClient,
+  QueryKey,
+  UseMutationResult,
+  UseQueryResult,
+} from "@tanstack/react-query";
 import type { AnyContract } from "../contract/defineContract";
 import type {
   CollectionName,
   ContractMap,
+  EntityOf,
   InputOf,
+  ItemOf,
   KindOf,
   MethodName,
   OutputOf,
@@ -18,6 +25,7 @@ import type {
 import type { QuickdrawError } from "../protocol/errors";
 import type { MethodMutationOptions, MethodQueryOptions } from "./hooks";
 import type { MethodQueryKey } from "./keys";
+import type { OptimisticCache } from "./optimistic";
 
 /** Options of a query member's `call`. */
 export interface QueryCallOptions {
@@ -60,11 +68,32 @@ export interface QueryMember<C extends AnyContract, M extends MethodName<C>> {
   prefetch(queryClient: QueryClient, ...args: InputArgs<C, M, []>): Promise<void>;
 }
 
+/**
+ * What a custom optimistic update of a mutation of contract `C` writes
+ * through: layers over its entity's rows and its collections' items.
+ */
+export type OptimisticCacheOf<C extends AnyContract> = OptimisticCache<
+  EntityOf<C>,
+  { readonly [K in CollectionName<C>]: ItemOf<C, K> }
+>;
+
 /** `qd.<key>.<mutation>`. */
 export interface MutationMember<C extends AnyContract, M extends MethodName<C>> {
-  /** TanStack's `useMutation` for this mutation, with `QuickdrawError` as its error. */
+  /**
+   * TanStack's `useMutation` for this mutation, with `QuickdrawError` as its
+   * error. `mutate` returns nothing (a failure lands in the result's
+   * `error`), so do not `await` it; `mutateAsync` returns the output's
+   * promise, which rejects with the `QuickdrawError`. A mutation whose input
+   * has `id` and whose output is `"entity"` is optimistic by default; see
+   * the `optimistic` option.
+   */
   useMutation<Context = unknown>(
-    options?: MethodMutationOptions<OutputOf<C, M>, MutationVariables<C, M>, Context>,
+    options?: MethodMutationOptions<
+      OutputOf<C, M>,
+      MutationVariables<C, M>,
+      Context,
+      OptimisticCacheOf<C>
+    >,
   ): UseMutationResult<OutputOf<C, M>, QuickdrawError, MutationVariables<C, M>, Context>;
   /** Calls the mutation over the provider's connection, outside React. */
   call(...args: InputArgs<C, M, [options?: MutationCallOptions]>): Promise<OutputOf<C, M>>;
@@ -89,7 +118,32 @@ export type ServiceClient<C extends AnyContract> = {
   readonly [M in MethodName<C>]: MethodMember<C, M>;
 } & LiveMembers<C>;
 
+/**
+ * `qd.invalidate`: invalidates cached query results through the provider's
+ * invalidation coordinator (RFC 0003 section 11.3), so a read in flight is
+ * never cancelled and at most one more is queued behind it. Fails with
+ * `INTERNAL` while no `QuickdrawProvider` is mounted for the client.
+ */
+export interface QuickdrawInvalidate {
+  /**
+   * With `input`, the one result of that input; without, every cached
+   * result of the query, whatever its input.
+   *
+   * @example
+   * qd.invalidate(qd.task.get, { id });
+   * qd.invalidate(qd.task.list);
+   */
+  <Input>(member: { readonly key: (...args: never) => MethodQueryKey<Input> }, input?: Input): void;
+  /**
+   * Every cached result whose key `queryKey` prefixes, as TanStack's
+   * `invalidateQueries` matches it: `qd.invalidate(["qd", "taskService"])`.
+   */
+  (queryKey: QueryKey): void;
+}
+
 /** The client of a map of contracts: `qd.task.get.useQuery({ id })`. */
 export type QuickdrawClient<Contracts extends ContractMap> = {
   readonly [Key in keyof Contracts]: ServiceClient<Contracts[Key]>;
+} & {
+  readonly invalidate: QuickdrawInvalidate;
 };

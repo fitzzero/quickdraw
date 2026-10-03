@@ -31,8 +31,11 @@ import {
   type CollectionSubscribeReply,
   type EntityFrame,
   type EntitySubscribeReply,
+  type AccessLevel,
   type ErrorCode,
   type HelloFrame,
+  type HelloLimits,
+  type HelloSubscriptionLimits,
   type ProtocolMismatch,
   type QdHandshake,
   type ServerEventName,
@@ -115,6 +118,18 @@ describe("call frames", () => {
   test("the protocol version is the literal 5", () => {
     expectTypeOf<typeof PROTOCOL_VERSION>().toEqualTypeOf<5>();
     expectTypeOf<HelloFrame["protocol"]>().toEqualTypeOf<5>();
+  });
+
+  test("the hello names the socket's user and grants, and announces the subscription lane", () => {
+    expectTypeOf<HelloFrame["userId"]>().toEqualTypeOf<string | null>();
+    expectTypeOf<HelloFrame["serviceAccess"]>().toEqualTypeOf<
+      Readonly<Record<string, AccessLevel>>
+    >();
+    expectTypeOf<HelloLimits["subscriptions"]>().toEqualTypeOf<HelloSubscriptionLimits>();
+    expectTypeOf<keyof HelloSubscriptionLimits>().toEqualTypeOf<"maxInFlight" | "maxQueued">();
+    expectTypeOf<keyof HelloFrame>().toEqualTypeOf<
+      "protocol" | "server" | "limits" | "features" | "userId" | "serviceAccess"
+    >();
   });
 });
 

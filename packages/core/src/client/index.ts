@@ -10,9 +10,10 @@
 // helpers from `@fitzzero/quickdraw-core/utils`, which this entry re-exports
 // for client code.
 //
-// The layers: `createQuickdrawConnection` and `call` are plain TypeScript,
-// with no React and no DOM, for React Native and Node clients; the provider
-// and the typed client's hooks sit on top.
+// The layers: `createQuickdrawConnection`, `call`, the invalidation
+// coordinator and the overlay store are plain TypeScript, with no React and
+// no DOM, for React Native and Node clients; the provider and the typed
+// client's hooks sit on top.
 
 // Isomorphic helpers, the HTTP server caller and the cache keys (also on ./utils).
 export * from "../utils";
@@ -49,6 +50,25 @@ export {
   type CallResult,
 } from "./call";
 export { reloadOncePerSession } from "./reload";
+export type { TopicWatch } from "./watch";
+
+// Invalidation and optimistic overlays, without React.
+export {
+  DEFAULT_INVALIDATION_WINDOW_MS,
+  RECONNECT_JITTER_MS,
+  createInvalidationCoordinator,
+  type CoordinatorOptions,
+  type InvalidateOptions,
+  type InvalidationCoordinator,
+  type ReconnectRefetchOptions,
+} from "./coordinator";
+export {
+  overlaysOf,
+  type OptimisticCache,
+  type OptimisticUpdate,
+  type OverlayStore,
+  type OverlayView,
+} from "./optimistic";
 
 // The typed client and its provider.
 export { createQuickdrawClient } from "./createClient";
@@ -58,9 +78,11 @@ export type {
   MutationCallOptions,
   MutationMember,
   MutationVariables,
+  OptimisticCacheOf,
   QueryCallOptions,
   QueryMember,
   QuickdrawClient,
+  QuickdrawInvalidate,
   ServiceClient,
 } from "./clientTypes";
 export type { MethodMutationOptions, MethodQueryOptions } from "./hooks";

@@ -7,7 +7,16 @@ import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { ERROR_CODES, QUICKDRAW_VERSION, defineContract, query } from "../../index";
-import { alice, captureLogger, db, qd, task, taskDefaults, taskRow } from "../__tests__/fixtures";
+import {
+  alice,
+  bob,
+  captureLogger,
+  db,
+  qd,
+  task,
+  taskDefaults,
+  taskRow,
+} from "../__tests__/fixtures";
 import { createDispatcher } from "../dispatcher";
 import type { AnyService, CallRecord, PipelineOptions, ServerOnlyOptions } from "../index";
 import type { AppPrincipal } from "../__tests__/fixtures";
@@ -42,7 +51,7 @@ async function connect(url: string, principal: AppPrincipal | null = alice) {
 describe("a v5 call", () => {
   it("is answered with its data, after a hello that announces the server's limits", async () => {
     const { url, records } = await serve({
-      limits: { maxInFlightQueries: 4, callTimeoutMs: 5000 },
+      limits: { maxInFlightQueries: 4, callTimeoutMs: 5000, subscriptions: { maxQueued: 32 } },
     });
     const opened = harness.open(url, v5Auth(alice));
     await opened.connected;
@@ -54,8 +63,11 @@ describe("a v5 call", () => {
         maxQueuedQueries: 64,
         maxSubscribeIds: 500,
         callTimeoutMs: 5000,
+        subscriptions: { maxInFlight: 8, maxQueued: 32 },
       },
       features: [],
+      userId: "alice",
+      serviceAccess: {},
     });
     const reply = await call(opened.socket, { id: 1, s: "taskService", m: "get", i: { id: "t1" } });
     expect(reply).toEqual({ ok: true, d: taskRow() });
@@ -263,6 +275,28 @@ describe("replies that cannot be encoded", () => {
 });
 
 describe("a socket's principal", () => {
+  it("is named in the socket's hello, with its grants", async () => {
+    const { url } = await serve({
+      auth: {
+        ...trustingAuth,
+        loadServiceAccess: (userId) => (userId === "bob" ? { taskService: "Admin" } : undefined),
+      },
+    });
+    const hellos = await Promise.all(
+      [alice, bob, null].map(async (principal) => await harness.open(url, v5Auth(principal)).hello),
+    );
+    expect(hellos.map(({ userId, serviceAccess }) => ({ userId, serviceAccess }))).toEqual([
+      { userId: "alice", serviceAccess: {} },
+      { userId: "bob", serviceAccess: { taskService: "Admin" } },
+      { userId: null, serviceAccess: {} },
+    ]);
+    const carried = await harness.open(
+      url,
+      v5Auth({ ...alice, serviceAccess: { taskService: "Read" } }),
+    ).hello;
+    expect(carried.serviceAccess).toEqual({ taskService: "Read" });
+  });
+
   it("joins the user's room, and anonymous sockets join none", async () => {
     const { server, url } = await serve();
     await connect(url, alice);

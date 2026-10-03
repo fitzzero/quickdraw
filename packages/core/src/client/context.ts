@@ -1,17 +1,21 @@
 "use client";
 
-// The React context `QuickdrawProvider` fills: its connection and the
-// `QueryClient` the hooks cache in. Hooks read the connection from here, so
-// they follow the provider they are rendered under.
+// The React context `QuickdrawProvider` fills: its connection, the
+// `QueryClient` the hooks cache in, and that client's invalidation
+// coordinator. Hooks read them from here, so they follow the provider they
+// are rendered under.
 
 import type { QueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useSyncExternalStore } from "react";
 import type { ConnectionState, QuickdrawConnection } from "./connection";
+import type { InvalidationCoordinator } from "./coordinator";
 
 /** What `QuickdrawProvider` provides. */
 export interface QuickdrawContextValue {
   readonly connection: QuickdrawConnection;
   readonly queryClient: QueryClient;
+  /** The coordinator of `queryClient`, which every invalidation goes through. */
+  readonly coordinator: InvalidationCoordinator;
 }
 
 export const QuickdrawContext = createContext<QuickdrawContextValue | null>(null);
@@ -31,14 +35,18 @@ export function useConnectionState(connection: QuickdrawConnection): ConnectionS
 }
 
 /**
- * Whether queries may run: the connection is connected and queries are not
- * backing off after `RATE_LIMITED`. Re-renders only when that changes, not on
- * every change of the connection's state.
+ * Whether queries may run: the connection is connected, or reconnecting
+ * with the same credentials (their calls then wait in the send buffer, and
+ * nothing refetches the moment it is back: the coordinator spreads the
+ * refetches after a reconnect), and queries are not backing off after
+ * `RATE_LIMITED`. Re-renders only when that changes, not on every change of
+ * the connection's state.
  */
 export function useQueriesLive(connection: QuickdrawConnection): boolean {
   const live = (): boolean => {
     const state = connection.getState();
-    return state.status === "connected" && state.backoff.query === undefined;
+    const open = state.status === "connected" || state.reconnecting;
+    return open && state.backoff.query === undefined;
   };
   return useSyncExternalStore(connection.subscribe, live, live);
 }

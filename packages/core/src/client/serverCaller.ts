@@ -200,7 +200,7 @@ export function createServerCaller<const Contracts extends ContractMap>(
   options: ServerCallerOptions,
 ): ServerCaller<Contracts> {
   const settings = settingsOf(options);
-  return buildCaller("createServerCaller", contracts, (target) =>
-    memberOf(settings, target),
+  return Object.freeze(
+    buildCaller("createServerCaller", contracts, (target) => memberOf(settings, target)),
   ) as ServerCaller<Contracts>;
 }

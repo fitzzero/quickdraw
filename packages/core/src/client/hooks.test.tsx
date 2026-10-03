@@ -235,7 +235,8 @@ describe("QuickdrawProvider", () => {
     expect(view.result.current).toMatchObject({
       status: "connected",
       hello: { protocol: 5 },
-      serviceAccess: null,
+      userId: "alice",
+      serviceAccess: {},
       refusal: null,
       isRateLimited: false,
     });
