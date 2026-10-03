@@ -8,14 +8,19 @@
 //
 // | Write                                     | Evicts                        | Reports                   |
 // |-------------------------------------------|-------------------------------|---------------------------|
-// | a create or delete of a policy's row, or  | the row's columns, for every  | `{ service, id }`; a      |
-// | an update setting a column it reads       | user                          | create reports nothing    |
+// | a create or delete of a policy's row, or  | the row's columns, for every  | `{ service, id }`         |
+// | an update setting a column it reads       | user                          |                           |
 // | a membership row                          | the member's level on its row | `{ service, id, userId }` |
 // |                                           | before and after the write    | for each                  |
 // | a membership row whose row or user is not | the whole membership table    | `{ service }`: any row    |
 // | known (`ctx.touch`, array transactions)   |                               |                           |
-// | the delete of a row with memberships      | every member's level on it    | `{ service, id }`         |
+// | the create or delete of a row with        | every member's level on it    | `{ service, id }`         |
+// | memberships                               |                               |                           |
 //
+// A create is reported because an id can come back: a deleted row's
+// subscribers stay in its room (they get its removal), and a row created
+// again with that id must authorize them again before its first frame. A new
+// id concerns no subscription, so its report costs a lookup in an index.
 // An update that sets none of the columns a policy reads changes nothing.
 // Evictions all happen before the first listener is told.
 
@@ -149,14 +154,12 @@ function apply(
   if (rule.kind === "rows") {
     if (sets(write, rule.binding.columns)) {
       cache?.evict(rule.binding.rows, "", write.id);
-      if (write.op !== "create") {
-        changes.add({ service, id: write.id });
-      }
+      changes.add({ service, id: write.id });
     }
     return;
   }
   if (rule.kind === "anchor") {
-    if (write.op === "delete") {
+    if (write.op !== "update") {
       cache?.evict(rule.ns, undefined, write.id);
       changes.add({ service, id: write.id });
     }

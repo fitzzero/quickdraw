@@ -5,8 +5,11 @@
 // names or for everyone:
 //
 // - below `Read` now: the socket leaves the row's room and gets
-//   `qd:revoked { kind: "entity", reason: "access", s, id }`; a row the flush
-//   deleted is left alone, since its own removal frame (`r`) goes out next;
+//   `qd:revoked { kind: "entity", reason: "access", s, id }`; a row this
+//   process's flush deleted is left alone, since its own removal frame (`r`)
+//   goes out next. Its subscribers stay in its room, and a create of that id
+//   (reported as an access change too) resolves them again before the new
+//   row's first frame;
 // - another level: the socket moves to that level's room, and gets the row
 //   again (`u`) when the two levels see different fields;
 // - a lookup that fails denies, as everywhere else.
@@ -69,9 +72,21 @@ async function resend(
   }
 }
 
-/** Ends a subscription the principal may no longer read, unless the flush deleted the row. */
-function revoke(hub: Hub, socket: QuickdrawServerSocket, service: string, id: string): void {
-  if (hub.changeLog.removed(service, id)) {
+/**
+ * Ends a subscription the principal may no longer read, unless the row is
+ * deleted as far as this process's change log knows: the intake sink records
+ * each flush before access is resolved, so a row created again counts as
+ * existing. A change another node broadcast is never skipped: this process's
+ * log may be behind that node's writes.
+ */
+function revoke(
+  hub: Hub,
+  socket: QuickdrawServerSocket,
+  entry: { readonly service: string; readonly id: string },
+  remote: boolean,
+): void {
+  const { service, id } = entry;
+  if (!remote && hub.changeLog.removed(service, id)) {
     return;
   }
   if (hub.subscriptions.delete(socket, service, id) !== undefined) {
@@ -124,6 +139,7 @@ async function reresolve(
   socket: QuickdrawServerSocket,
   service: string,
   entries: Entries,
+  remote: boolean,
 ): Promise<void> {
   const access = await resolveAgain(hub, socket, service, entries);
   const moved: string[] = [];
@@ -134,7 +150,7 @@ async function reresolve(
     }
     const level = access === undefined ? undefined : subscriberLevel(access, id);
     if (access === undefined || level === undefined) {
-      revoke(hub, socket, service, id);
+      revoke(hub, socket, { service, id }, remote);
       continue;
     }
     hub.subscriptions.set(socket, service, id, { level, anchors: anchorsOf(access, service, id) });
@@ -145,10 +161,14 @@ async function reresolve(
   await resend(hub, socket, service, moved);
 }
 
-/** Resolves the given subscriptions again, one engine call per socket and service. */
+/**
+ * Resolves the given subscriptions again, one engine call per socket and
+ * service. `remote` when the change came from another node.
+ */
 async function reresolveAll(
   hub: Hub,
   found: ReadonlyMap<QuickdrawServerSocket, Entries>,
+  remote: boolean,
 ): Promise<void> {
   const work: Promise<void>[] = [];
   for (const [socket, entries] of found) {
@@ -157,7 +177,7 @@ async function reresolveAll(
       byService.set(entry.service, [...(byService.get(entry.service) ?? []), entry]);
     }
     for (const [service, own] of byService) {
-      work.push(reresolve(hub, socket, service, own));
+      work.push(reresolve(hub, socket, service, own, remote));
     }
   }
   await Promise.all(work);
@@ -193,7 +213,7 @@ export function createRevocation(hub: Hub, hook?: RevocationHook): Revocation {
         io.serverSideEmit(ACCESS_CHANGED_EVENT, change);
       }
       await Promise.all([
-        reresolveAll(hub, hub.subscriptions.matching(change)),
+        reresolveAll(hub, hub.subscriptions.matching(change), remote),
         hook?.changed(change),
       ]);
     },
@@ -207,7 +227,7 @@ export function createRevocation(hub: Hub, hook?: RevocationHook): Revocation {
           found.set(socket, [...hub.subscriptions.entries(socket)]);
         }
       }
-      await Promise.all([reresolveAll(hub, found), hook?.regranted([...found.keys()])]);
+      await Promise.all([reresolveAll(hub, found, false), hook?.regranted([...found.keys()])]);
     },
   });
 }

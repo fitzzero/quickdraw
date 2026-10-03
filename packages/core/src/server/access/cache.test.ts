@@ -387,7 +387,9 @@ describe("eviction by tracked writes", () => {
     await dispatcher.run(() =>
       h.db.task.create({ data: { id: "t-new", projectId: board.p1, title: "New" } }),
     );
-    expect(changes).toEqual([]);
+    // A create is reported: subscribers of a deleted row with that id are authorized again.
+    expect(changes).toEqual([{ service: "taskService", id: "t-new" }]);
+    changes.length = 0;
     // The kept "no such task" is gone; its project is read for the first time.
     expect(await lookupOf(dispatcher, "taskService", board.ada, "t-new")).toEqual([3, "Admin"]);
     await dispatcher.run(() => h.db.project.delete({ where: { id: board.p2 } }));

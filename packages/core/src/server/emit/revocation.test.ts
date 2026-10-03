@@ -192,6 +192,68 @@ describe("an access change", () => {
   });
 });
 
+describe("a row created again with a deleted row's id", () => {
+  const removed = (id: string) => ({ t: "r", s: "taskService", id, rev: expect.any(Number) });
+  const revoked = (id: string) => ({ kind: "entity", reason: "access", s: "taskService", id });
+
+  it("authorizes the deleted row's subscribers again, revoking one that may not read it before its first frame", async () => {
+    const { app } = await start();
+    const reader = await connect(app, as(board.cy));
+    await sub(reader.connection, "taskService", [board.t1]);
+    await app.server.dispatcher.run(() => h.db.task.delete({ where: { id: board.t1 } }));
+    await reader.frames.settle();
+    // A deleted row's subscribers keep its room: they get its removal, not a revocation.
+    expect(reader.frames.entity).toEqual([removed(board.t1)]);
+    expect(reader.frames.revoked).toEqual([]);
+    reader.frames.clear();
+    await app.server.dispatcher.run(() =>
+      h.db.task.create({ data: { id: board.t1, projectId: board.p2, title: "P2 secret" } }),
+    );
+    await reader.frames.settle();
+    expect(reader.frames.entity).toEqual([]);
+    expect(reader.frames.revoked).toEqual([revoked(board.t1)]);
+    expect(roomsOf(app, "taskService", board.t1)).toEqual([]);
+  });
+
+  it("keeps a subscriber that may read the new row, and sends it the row whole", async () => {
+    const { app } = await start();
+    const reader = await connect(app, as(board.cy));
+    await sub(reader.connection, "taskService", [board.t1]);
+    await app.server.dispatcher.run(() => h.db.task.delete({ where: { id: board.t1 } }));
+    await app.server.dispatcher.run(() =>
+      h.db.task.create({ data: { id: board.t1, projectId: board.p1, title: "Back" } }),
+    );
+    await reader.frames.settle();
+    expect(reader.frames.entity).toEqual([
+      removed(board.t1),
+      expect.objectContaining({
+        t: "u",
+        id: board.t1,
+        d: expect.objectContaining({ title: "Back" }),
+      }),
+    ]);
+    expect(reader.frames.revoked).toEqual([]);
+  });
+
+  it("authorizes again when one unit deleted the row and created it elsewhere", async () => {
+    const { app } = await start();
+    const reader = await connect(app, as(board.cy));
+    const owner = await connect(app, as(board.ed));
+    await sub(reader.connection, "taskService", [board.t1]);
+    await app.server.dispatcher.run(async () => {
+      const old = await h.db.task.delete({ where: { id: board.t1 } });
+      await h.db.task.create({ data: { id: old.id, projectId: board.p2, title: "Now in P2" } });
+    });
+    await reader.frames.settle();
+    expect(reader.frames.entity).toEqual([]);
+    expect(reader.frames.revoked).toEqual([revoked(board.t1)]);
+    // The new project's owner may subscribe to it.
+    expect(await sub(owner.connection, "taskService", [board.t1])).toMatchObject({
+      r: [{ ok: true, d: { projectId: board.p2, title: "Now in P2" } }],
+    });
+  });
+});
+
 describe("stored grants", () => {
   it("refreshes a user whose stored grants a tracked write changed, revoking what a lost grant held", async () => {
     const { app } = await start({
@@ -365,6 +427,24 @@ describe("behind a cluster adapter", () => {
       .projectService.removeMember({ projectId: board.p1, userId: board.bo });
     await expect
       .poll(() => member.frames.revoked)
+      .toEqual([{ kind: "entity", reason: "access", s: "taskService", id: board.t1 }]);
+    expect(roomsOf(holder.app, "taskService", board.t1)).toEqual([]);
+  });
+
+  it("revokes on every node when a row is created again: another node's log cannot tell it exists", async () => {
+    const cluster = peeredCluster();
+    const writer = await start({ adapter: cluster.adapter });
+    const holder = await start({ adapter: cluster.adapter });
+    cluster.servers.push(writer.app.server.io, holder.app.server.io);
+    const reader = await connect(holder.app, as(board.cy));
+    await sub(reader.connection, "taskService", [board.t1]);
+    // The holder flushes the delete itself, so its own change log says the row is gone.
+    await holder.app.server.dispatcher.run(() => h.db.task.delete({ where: { id: board.t1 } }));
+    await writer.app.server.dispatcher.run(() =>
+      h.db.task.create({ data: { id: board.t1, projectId: board.p2, title: "P2 secret" } }),
+    );
+    await expect
+      .poll(() => reader.frames.revoked)
       .toEqual([{ kind: "entity", reason: "access", s: "taskService", id: board.t1 }]);
     expect(roomsOf(holder.app, "taskService", board.t1)).toEqual([]);
   });
