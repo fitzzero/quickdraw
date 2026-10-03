@@ -72,6 +72,29 @@ export type {
   HandlerContext,
   TouchOptions,
 } from "./context";
+
+// Presence, streams, channels and typed room events (RFC 0003 section 12.5):
+// `ctx.rooms`, `ctx.presence` / `server.presence`, `qd.stream(...).push`, and
+// the channel handlers of `defineService`
+export type {
+  AppRooms,
+  ChannelAccess,
+  ChannelContext,
+  ChannelHandler,
+  ChannelImplementation,
+  ChannelOptions,
+  ChannelsRequired,
+  Presence,
+  ServiceChannel,
+  ServiceStream,
+  StreamHandle,
+  StreamPushArgs,
+  StreamSubscriptions,
+} from "./realtime/types";
+export { CHANNEL_ABUSE_MULTIPLIER, CHANNEL_ABUSE_WINDOW_MS } from "./realtime/channels";
+export { MAX_APP_ROOMS, PRESENCE_MAX_LAST_SEEN } from "./realtime/presence";
+export { STREAM_MAX_SCOPES } from "./realtime/seeds";
+export { MAX_STREAMS_PER_SOCKET } from "./realtime/streamSubscriptions";
 export type { CallOptions, Caller, CallerFor, MethodCaller, ServiceCaller } from "./caller";
 
 // The dispatcher and its pipeline

@@ -7,6 +7,7 @@
 // adds the app's own fields to every handler's `ctx`, once for the whole app;
 // it replaces 4.1's habit of overriding `defineMethod` per service.
 
+import type { AnyContract } from "../contract/defineContract";
 import { QuickdrawError } from "../protocol/errors";
 import { buildService } from "./buildService";
 import { createCaller, type CallerFor } from "./caller";
@@ -18,6 +19,8 @@ import {
   type Dispatcher,
   type DispatcherCollections,
   type DispatcherOptions,
+  type Presence,
+  type StreamHandle,
 } from "./dispatcher";
 import type { Service } from "./service";
 import type { ContextExtensionOf, McpContextOf, PrincipalOf, QuickdrawTypes } from "./types";
@@ -80,6 +83,23 @@ export interface Quickdraw<T extends QuickdrawTypes> {
    */
   readonly collections: DispatcherCollections;
   /**
+   * The handle of a stream (RFC 0003 section 12.5), for handlers, jobs and
+   * timers: `qd.stream(task, "logs").push(taskId, line)` (`push(item)` for a
+   * global stream). Each push goes through the dispatcher this instance
+   * created last, so a handle can be made when a module loads; pushing
+   * before any dispatcher exists, or to a stream it does not serve, throws.
+   * Throws a `TypeError` at once for a stream the contract does not declare.
+   */
+  stream<C extends AnyContract, K extends keyof C["streams"] & string>(
+    contract: C,
+    name: K,
+  ): StreamHandle<C, K>;
+  /**
+   * Who is online and who is in a room (RFC 0003 section 12.5), through the
+   * dispatcher this instance created last: the same as `ctx.presence`.
+   */
+  readonly presence: Presence;
+  /**
    * Serves `services` over Socket.IO and HTTP on the app's Express app and
    * HTTP server (see `createServer`), and makes the server's dispatcher the
    * one `qd.caller` calls through.
@@ -106,6 +126,8 @@ function contextOption(options: unknown): ContextExtender | undefined {
 const NEEDS: Readonly<Record<string, string>> = Object.freeze({
   "qd.run": "flush through",
   "qd.collections.reset": "send through",
+  "qd.stream": "push through",
+  "qd.presence": "ask",
 });
 
 function noDispatcher(member: string): never {
@@ -113,6 +135,46 @@ function noDispatcher(member: string): never {
     "INTERNAL",
     `${member} has no dispatcher to ${NEEDS[member] ?? "call through"}: create one with qd.createDispatcher (or qd.createServer) first`,
   );
+}
+
+type Current = () => Dispatcher | undefined;
+
+/** `qd.stream`: a handle that pushes through the current dispatcher, resolving the stream once per dispatcher. */
+function streamOf(
+  current: Current,
+  contract: AnyContract,
+  name: string,
+): StreamHandle<AnyContract, string> {
+  const streams: unknown =
+    typeof contract === "object" && contract !== null ? contract.streams : undefined;
+  if (typeof streams !== "object" || streams === null || !Object.hasOwn(streams, name)) {
+    throw new TypeError(
+      `qd.stream: ${String(contract?.name)} declares no stream "${String(name)}"`,
+    );
+  }
+  let resolved:
+    | { readonly from: Dispatcher; readonly handle: StreamHandle<AnyContract, string> }
+    | undefined;
+  return Object.freeze({
+    push(...args: unknown[]): void {
+      const from = current() ?? noDispatcher("qd.stream");
+      if (resolved?.from !== from) {
+        resolved = { from, handle: from.stream(contract, name) };
+      }
+      (resolved.handle.push as (...items: unknown[]) => void)(...args);
+    },
+  }) as StreamHandle<AnyContract, string>;
+}
+
+/** `qd.presence`: presence through the current dispatcher. */
+function presenceOf(current: Current): Presence {
+  const presence = (): Presence => (current() ?? noDispatcher("qd.presence")).presence;
+  return Object.freeze({
+    isOnline: async (userId: string) => await presence().isOnline(userId),
+    lastSeen: async (userId: string) => await presence().lastSeen(userId),
+    count: async (room: string) => await presence().count(room),
+    users: async (room: string) => await presence().users(room),
+  });
 }
 
 /**
@@ -148,6 +210,9 @@ export function initQuickdraw<T extends QuickdrawTypes = QuickdrawTypes>(
         );
       },
     } satisfies DispatcherCollections),
+    stream: <C extends AnyContract, K extends keyof C["streams"] & string>(contract: C, name: K) =>
+      streamOf(() => current, contract, name) as unknown as StreamHandle<C, K>,
+    presence: presenceOf(() => current),
     createServer(options) {
       const server = createServer(options);
       current = server.dispatcher as Dispatcher;

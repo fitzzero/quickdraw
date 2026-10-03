@@ -4,13 +4,13 @@
 // service the registry and the dispatcher read.
 
 import type { AnyContract } from "../contract/defineContract";
-import type { MethodDef } from "../contract/methods";
 import { accessFormProblem, isCustomAccess } from "./access/forms";
 import type { AccessForm } from "./access/types";
 import { compileCollections } from "./collections/define";
 import { compileProjections, projectedOutput, type Projection } from "./emit/projection";
 import { MAX_TIMEOUT_MS } from "./pipeline/settings";
 import { outputSchemaOf } from "./pipeline/validation";
+import { compileChannels, compileStreams } from "./realtime/define";
 import {
   handlerProblem,
   registerRuntime,
@@ -35,6 +35,7 @@ const DEFINITION_KEYS = new Set([
   "collections",
   "watchAccess",
   "methods",
+  "channels",
   "adminBypass",
 ]);
 
@@ -93,7 +94,7 @@ function checkShare(owner: string, entry: UnknownRecord, fail: Fail): void {
 function checkQueryOptions(
   owner: string,
   entry: UnknownRecord,
-  kind: MethodDef["kind"],
+  kind: ServiceMethod["kind"],
   fail: Fail,
 ): void {
   const queryOnly = [entry.share, entry.ttlMs, entry.version].some((value) => value !== undefined);
@@ -278,6 +279,12 @@ export function buildService(
     collections,
     adminBypass,
     methods: Object.freeze(methods),
+    channels: compileChannels(checked, definition.channels, fail),
+    streams: compileStreams(
+      checked,
+      { model: data.model, hasPolicy: data.access !== undefined },
+      fail,
+    ),
   });
   checkHandlers(service, fail);
   registerRuntime(service, runtime);

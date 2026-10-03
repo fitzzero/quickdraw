@@ -9,25 +9,23 @@
 import type { AccessLevel } from "./access";
 import type { CollectionDef, OrderBy, ViaScope, ViewPredicate } from "./collections";
 import type { MethodDef, ProjectionRef } from "./methods";
+import type { ChannelDef, EventDef, StreamDef } from "./realtime";
 import type { InferOutput, StandardSchemaV1 } from "./standardSchema";
 import { assembleContract } from "./validateContract";
+
+export type { ChannelDef, EventDef, StreamDef };
 
 /** A schema whose output is a row: an object with `id: string`. */
 export type RowSchema = StandardSchemaV1<unknown, { readonly id: string }>;
 
-/** A server-to-client stream of append-only items (RFC 0003 section 12.5). */
-export interface StreamDef<Item extends StandardSchemaV1 = StandardSchemaV1> {
-  readonly item: Item;
-}
-
-/** A client-to-server fire-and-forget channel (RFC 0003 section 12.5). */
-export interface ChannelDef<Payload extends StandardSchemaV1 = StandardSchemaV1> {
-  readonly payload: Payload;
-}
-
-/** A typed custom room event, delivered as `qd:event` (RFC 0003 section 8.3). */
-export interface EventDef<Payload extends StandardSchemaV1 = StandardSchemaV1> {
-  readonly payload: Payload;
+/**
+ * A channel as `defineContract` takes it. `requires` is typed by the
+ * channel's payload through the definition's context, so a function there
+ * gets the parsed payload as its parameter type; the contract stores it as a
+ * `ChannelDef`.
+ */
+export interface ChannelDefinition extends Omit<ChannelDef, "requires"> {
+  readonly requires?: unknown;
 }
 
 /** The second argument of {@link defineContract}. */
@@ -50,7 +48,7 @@ export interface ContractDefinition {
   /** Live lists of the entity, grouped by a scope value. */
   readonly collections?: { readonly [name: string]: CollectionDef };
   readonly streams?: { readonly [name: string]: StreamDef };
-  readonly channels?: { readonly [name: string]: ChannelDef };
+  readonly channels?: { readonly [name: string]: ChannelDefinition };
   readonly events?: { readonly [name: string]: EventDef };
 }
 
@@ -142,7 +140,25 @@ interface CollectionContext<Row, Entity, Projections, Item, Index> {
   }>;
 }
 
-type DefinitionContext<Entity, Projections, Items, Indexes> = {
+/** The payload keys a channel requirement may name: those holding a string. */
+type PayloadKeyOf<Parsed> = [Parsed] extends [never]
+  ? string
+  : {
+      [Key in keyof Parsed]-?: NonNullable<Parsed[Key]> extends string ? Key : never;
+    }[keyof Parsed] &
+      string;
+
+type SelectorOf<Parsed> = PayloadKeyOf<Parsed> | ((payload: Parsed) => string | null | undefined);
+
+interface ChannelContext<Payload> {
+  readonly payload: Payload;
+  readonly requires?: NoInfer<
+    | { readonly entity: SelectorOf<SchemaOutput<Payload>> }
+    | { readonly collection: string; readonly scope: SelectorOf<SchemaOutput<Payload>> }
+  >;
+}
+
+type DefinitionContext<Entity, Projections, Items, Indexes, Payloads> = {
   readonly entity?: Entity;
   readonly projections?: Projections;
   readonly fields?: NoInfer<{
@@ -157,6 +173,7 @@ type DefinitionContext<Entity, Projections, Items, Indexes> = {
       Name extends keyof Indexes ? Indexes[Name] : undefined
     >;
   } & { readonly [Name in keyof Indexes]: { readonly index?: Indexes[Name] } };
+  readonly channels?: { readonly [Name in keyof Payloads]: ChannelContext<Payloads[Name]> };
 };
 
 // ---------------------------------------------------------------------------
@@ -280,11 +297,71 @@ type CheckFields<Def> = [keyof FieldsIn<Def>] extends [never]
       : Problem<`fields: ${Quoted<UnknownFields<Def>>} is not a field of the entity, or is "id", which every subscriber receives`>
     : Problem<"fields need an entity">;
 
+type StreamsIn<Def> = MemberOf<Def, "streams", Empty>;
+type ChannelsIn<Def> = MemberOf<Def, "channels", Empty>;
+type EventsIn<Def> = MemberOf<Def, "events", Empty>;
+
+/**
+ * Why a stream, channel or event cannot take `Name`: a reserved name, or one
+ * a method, a collection or an `Earlier` realtime member took (they all sit
+ * on `qd.<service>.<name>`).
+ */
+type RealtimeNameProblem<Def, Kind extends string, Name, Earlier> =
+  IsReserved<Name> extends true
+    ? `${Kind} "${Name & string}" uses a reserved name`
+    : Name extends keyof MethodsIn<Def>
+      ? `${Kind} "${Name & string}" has the same name as a method`
+      : Name extends keyof CollectionsIn<Def>
+        ? `${Kind} "${Name & string}" has the same name as a collection`
+        : Name extends Earlier
+          ? `${Kind} "${Name & string}" has the same name as another stream, channel or event`
+          : never;
+
+type CheckRealtimeNames<Def, Members, Kind extends string, Earlier> = {
+  readonly [Name in keyof Members]: [RealtimeNameProblem<Def, Kind, Name, Earlier>] extends [never]
+    ? unknown
+    : Problem<RealtimeNameProblem<Def, Kind, Name, Earlier>>;
+};
+
+/** A channel's `requires` names a collection of the contract, or a row of an entity it has. */
+type RequiresProblem<Def, Name, Channel> = Channel extends {
+  readonly requires: { readonly collection: infer Collection };
+}
+  ? Collection extends keyof CollectionsIn<Def>
+    ? never
+    : `channel "${Name & string}" requires unknown collection "${Collection & string}"`
+  : Channel extends { readonly requires: { readonly entity: unknown } }
+    ? HasEntity<Def> extends true
+      ? never
+      : `channel "${Name & string}": requires.entity needs the contract's entity`
+    : never;
+
+type CheckChannels<Def> = CheckRealtimeNames<
+  Def,
+  ChannelsIn<Def>,
+  "channel",
+  keyof StreamsIn<Def>
+> & {
+  readonly [Name in keyof ChannelsIn<Def>]: [
+    RequiresProblem<Def, Name, ChannelsIn<Def>[Name]>,
+  ] extends [never]
+    ? unknown
+    : Problem<RequiresProblem<Def, Name, ChannelsIn<Def>[Name]>>;
+};
+
 type DefinitionChecks<Def> = CheckKeys<Def, keyof ContractDefinition, "contract"> & {
   readonly methods?: CheckMethods<Def>;
   readonly collections?: CheckCollections<Def>;
   readonly projections?: CheckProjections<Def>;
   readonly fields?: CheckFields<Def>;
+  readonly streams?: CheckRealtimeNames<Def, StreamsIn<Def>, "stream", never>;
+  readonly channels?: CheckChannels<Def>;
+  readonly events?: CheckRealtimeNames<
+    Def,
+    EventsIn<Def>,
+    "event",
+    keyof StreamsIn<Def> | keyof ChannelsIn<Def>
+  >;
 };
 
 /**
@@ -298,7 +375,7 @@ type DefinitionChecks<Def> = CheckKeys<Def, keyof ContractDefinition, "contract"
  * and `index` name real fields, and that a view reads only index fields.
  *
  * The type parameters after `Def` only exist so TypeScript can type `views`
- * predicates; never pass them.
+ * predicates and channel `requires` functions; never pass them.
  *
  * @example
  * export const task = defineContract("taskService", {
@@ -327,10 +404,11 @@ export function defineContract<
   Projections = Empty,
   Items = Empty,
   Indexes = Empty,
+  Payloads = Empty,
 >(
   name: Name,
   def: Def &
-    DefinitionContext<Entity, Projections, Items, Indexes> &
+    DefinitionContext<Entity, Projections, Items, Indexes, Payloads> &
     NoInfer<DefinitionChecks<Def>>,
 ): Contract<Name, Def> {
   return assembleContract(name, def) as unknown as Contract<Name, Def>;

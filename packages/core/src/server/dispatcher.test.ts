@@ -526,7 +526,7 @@ describe("the handler's ctx", () => {
     expect(failure(refused).code).toBe("FORBIDDEN");
   });
 
-  it("throws INTERNAL from ctx.services and ctx.rooms until later cards add them", async () => {
+  it("throws INTERNAL from ctx.services until a later card adds it", async () => {
     const attempts: Record<string, () => unknown> = {};
     const service = qd.defineService(task, {
       methods: {
@@ -534,12 +534,8 @@ describe("the handler's ctx", () => {
         count: {
           access: "public",
           handler: ({ ctx }) => {
-            const loose = ctx as unknown as {
-              readonly services: Record<string, unknown>;
-              readonly rooms: Record<string, unknown>;
-            };
+            const loose = ctx as unknown as { readonly services: Record<string, unknown> };
             attempts.services = () => loose.services.projectService;
-            attempts.rooms = () => loose.rooms.join;
             expect(JSON.stringify(ctx.services)).toBe("{}");
             return 0;
           },
@@ -551,6 +547,25 @@ describe("the handler's ctx", () => {
       expect(attempt, name).toThrow(QuickdrawError);
       expect(attempt, name).toThrow(/is not available yet/);
     }
+  });
+
+  it("gives ctx.rooms, which joins nothing without a socket, and ctx.presence, which sees nobody without a server", async () => {
+    const seen: unknown[] = [];
+    const service = qd.defineService(task, {
+      methods: {
+        ...taskDefaults,
+        count: {
+          access: "public",
+          handler: async ({ ctx }) => {
+            seen.push(ctx.rooms.join("lobby"), ctx.rooms.leave("lobby"));
+            seen.push(await ctx.presence.isOnline("u1"), await ctx.presence.users("lobby"));
+            return 0;
+          },
+        },
+      },
+    });
+    await setup([service]).call({ method: "count", input: { projectId: "p1" } });
+    expect(seen).toEqual([false, false, false, []]);
   });
 
   it("gives ctx.touch that does nothing when the database client is not tracked", async () => {

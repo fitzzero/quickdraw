@@ -13,14 +13,18 @@ import {
   query,
   via,
   type AnyContract,
+  type ChannelInputOf,
+  type ChannelName,
   type ChannelPayloadOf,
   type CollectionName,
   type ContractMap,
   type EntityOf,
+  type EventName,
   type EventPayloadOf,
   type IndexRowOf,
   type InferOutput,
   type InputOf,
+  type IsScopedStream,
   type ItemOf,
   type KindOf,
   type MethodName,
@@ -32,6 +36,7 @@ import {
   type ScopeOf,
   type StandardSchemaV1,
   type StreamItemOf,
+  type StreamName,
   type ViaScope,
   type ViewName,
 } from "../index";
@@ -704,6 +709,124 @@ describe("contracts that fail to compile", () => {
       entity: taskSchema,
       // @ts-expect-error -- colections is a typo for collections
       colections: {},
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Streams, channels and events (RFC 0003 section 12.5).
+// ---------------------------------------------------------------------------
+
+const cursorSchema = z.object({ docId: z.string(), x: z.number().default(0), y: z.number() });
+
+const realtime = defineContract("realtimeService", {
+  entity: taskSchema,
+  collections: { byProject: { scope: "projectId", item: "entity", order: [["id", "asc"]] } },
+  streams: {
+    logs: { item: z.object({ line: z.string() }), scope: "taskId", seed: 20 },
+    metrics: { item: z.number(), access: "public" },
+    named: { item: z.number(), scope: "global" },
+  },
+  channels: {
+    cursor: { payload: cursorSchema, requires: { entity: "docId" } },
+    typing: {
+      payload: z.object({ projectId: z.string(), on: z.boolean() }),
+      requires: { collection: "byProject", scope: (payload) => payload.projectId },
+    },
+  },
+  events: { celebrated: { payload: z.object({ taskId: z.string() }) } },
+});
+
+type Realtime = typeof realtime;
+
+describe("streams, channels and events", () => {
+  test("names and payload types come from the contract", () => {
+    expectTypeOf<StreamName<Realtime>>().toEqualTypeOf<"logs" | "metrics" | "named">();
+    expectTypeOf<ChannelName<Realtime>>().toEqualTypeOf<"cursor" | "typing">();
+    expectTypeOf<EventName<Realtime>>().toEqualTypeOf<"celebrated">();
+    expectTypeOf<StreamItemOf<Realtime, "logs">>().toEqualTypeOf<{ line: string }>();
+    expectTypeOf<ChannelPayloadOf<Realtime, "cursor">>().toEqualTypeOf<{
+      docId: string;
+      x: number;
+      y: number;
+    }>();
+    expectTypeOf<ChannelInputOf<Realtime, "cursor">>().toEqualTypeOf<{
+      docId: string;
+      x?: number | undefined;
+      y: number;
+    }>();
+  });
+
+  test("a stream is scoped when it names a scope other than global", () => {
+    expectTypeOf<IsScopedStream<Realtime, "logs">>().toEqualTypeOf<true>();
+    expectTypeOf<IsScopedStream<Realtime, "metrics">>().toEqualTypeOf<false>();
+    expectTypeOf<IsScopedStream<Realtime, "named">>().toEqualTypeOf<false>();
+  });
+
+  test("a requires function receives the parsed payload, and the contract stays a contract", () => {
+    const anyContract: AnyContract = realtime;
+    expectTypeOf(anyContract.channels).toExtend<Readonly<Record<string, unknown>>>();
+    defineContract("selectors", {
+      entity: taskSchema,
+      channels: {
+        cursor: {
+          payload: cursorSchema,
+          requires: {
+            entity: (payload) => {
+              expectTypeOf(payload).toEqualTypeOf<{ docId: string; x: number; y: number }>();
+              return payload.docId;
+            },
+          },
+        },
+      },
+    });
+  });
+
+  test("a requirement must name a string key of the payload, a collection and an entity", () => {
+    defineContract("badKey", {
+      entity: taskSchema,
+      channels: {
+        // @ts-expect-error -- "x" holds a number, not a row id
+        cursor: { payload: cursorSchema, requires: { entity: "x" } },
+      },
+    });
+    defineContract("badCollection", {
+      entity: taskSchema,
+      channels: {
+        // @ts-expect-error -- there is no collection named "board"
+        typing: { payload: cursorSchema, requires: { collection: "board", scope: "docId" } },
+      },
+    });
+    defineContract("noEntity", {
+      channels: {
+        // @ts-expect-error -- requires.entity needs an entity
+        cursor: { payload: cursorSchema, requires: { entity: "docId" } },
+      },
+    });
+  });
+
+  test("streams, channels and events share the namespace of methods and collections", () => {
+    defineContract("clash", {
+      methods: { get: query({ input: idInput, output: z.null() }) },
+      streams: {
+        // @ts-expect-error -- a method is named get
+        get: { item: z.number() },
+      },
+      channels: {
+        // @ts-expect-error -- then is reserved
+        then: { payload: z.number() },
+      },
+      events: {
+        // @ts-expect-error -- a method is named get
+        get: { payload: z.number() },
+      },
+    });
+    defineContract("clashLive", {
+      streams: { x: { item: z.number() } },
+      channels: {
+        // @ts-expect-error -- a stream is named x
+        x: { payload: z.number() },
+      },
     });
   });
 });
