@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineContract, query, via } from "../../index";
+import { defineContract, query, via, type AnyContract } from "../../index";
 import {
   createDispatcher,
   inherit,
@@ -150,6 +150,90 @@ describe("a service's collections option", () => {
       anchor: undefined,
       bulkThreshold: 200,
     });
+  });
+});
+
+describe("a collection's index", () => {
+  const entity = z.object({
+    id: z.string(),
+    projectId: z.string(),
+    status: z.string(),
+    ordinal: z.number(),
+    notes: z.string().nullable(),
+  });
+  const card = z.object({ id: z.string(), status: z.string(), ordinal: z.number() });
+
+  /** A contract with one `board` collection, built without `defineContract`'s types. */
+  function boardContract(board: Record<string, unknown>, fields: Record<string, string> = {}) {
+    return (defineContract as (name: string, def: unknown) => AnyContract)("taskService", {
+      entity,
+      projections: { card },
+      fields,
+      collections: {
+        board: {
+          scope: "projectId",
+          order: [
+            ["ordinal", "asc"],
+            ["id", "asc"],
+          ],
+          ...board,
+        },
+      },
+    });
+  }
+
+  function defineBoard(contract: AnyContract): AnyService {
+    return (qd.defineService as (contract: unknown, definition: unknown) => AnyService)(contract, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      collections: { board: { anchor: projectContract } },
+      methods: {},
+    });
+  }
+
+  it("is compiled onto the service, in the contract's order", () => {
+    const service = defineBoard(boardContract({ item: "card", index: ["ordinal", "status"] }));
+    expect(service.collections.get("board")?.index).toEqual(["ordinal", "status"]);
+    const plain = defineBoard(boardContract({ item: "card" }));
+    expect(plain.collections.get("board")?.index).toBeUndefined();
+  });
+
+  it("names fields of the item projection, each once, never id", () => {
+    const refuses = (index: unknown, message: string) =>
+      expect(() => defineBoard(boardContract({ item: "card", index }))).toThrow(message);
+    refuses(
+      ["status", "projectId"],
+      `defineService("taskService"): collection "board": index field "projectId" is not a key of its item "card"; index fields are item fields`,
+    );
+    refuses(["id"], 'index field "id" is not needed; every index row starts with the member\'s id');
+    refuses(["status", "status"], 'index field "status" is named twice');
+  });
+
+  it("leaves out a field the collection's items never carry: one reserved above its access", () => {
+    const fields = { notes: "Admin" };
+    expect(() =>
+      defineBoard(boardContract({ item: "entity", index: ["status", "notes"] }, fields)),
+    ).toThrow(
+      'collection "board": index field "notes" is reserved by the contract\'s fields for a level above the collection\'s access (Read), so its items never carry it',
+    );
+    const admins = defineBoard(
+      boardContract({ item: "entity", index: ["notes"], access: "Admin" }, fields),
+    );
+    expect(admins.collections.get("board")?.index).toEqual(["notes"]);
+  });
+
+  it("is needed by views, also for a contract defineContract never saw", () => {
+    const checked = boardContract({ item: "card", index: ["status"] });
+    const board = checked.collections.board ?? {};
+    const forged = Object.freeze({
+      ...checked,
+      collections: Object.freeze({
+        board: Object.freeze({ ...board, index: undefined, views: { open: () => true } }),
+      }),
+    }) as unknown as AnyContract;
+    expect(() => defineBoard(forged)).toThrow(
+      'collection "board" declares views but no index; views read index rows',
+    );
   });
 });
 

@@ -32,6 +32,7 @@ const DEFINITION_KEYS = new Set([
   "project",
   "versionColumn",
   "collections",
+  "watchAccess",
   "methods",
   "adminBypass",
 ]);
@@ -169,6 +170,37 @@ function checkMethods(
 }
 
 /**
+ * A query's `watch` (RFC 0003 sections 2 and 11.3) names the topic of one
+ * scope of one of the service's collections: the collection must be one the
+ * service serves, and `scope` the function that finds the scope from the
+ * input. `defineContract` checks the same; this catches a contract it never
+ * saw.
+ */
+function checkWatches(
+  contract: AnyContract,
+  collections: ReadonlyMap<string, unknown>,
+  fail: Fail,
+): void {
+  for (const [name, def] of Object.entries(contract.methods)) {
+    const watch: unknown = def.watch;
+    if (watch === undefined) {
+      continue;
+    }
+    if (def.kind !== "query") {
+      fail(`method "${name}" is a mutation; only a query can watch`);
+    }
+    if (!isRecord(watch) || typeof watch.scope !== "function") {
+      fail(`method "${name}": watch needs a scope function, which finds the scope from the input`);
+    }
+    if (typeof watch.collection !== "string" || !collections.has(watch.collection)) {
+      fail(
+        `method "${name}" watches "${String(watch.collection)}", which is not a collection of ${contract.name}`,
+      );
+    }
+  }
+}
+
+/**
  * The row-level access forms need what the service declares (RFC 0003
  * section 3): `entry` asks the service's own policy, and `scope` (another
  * service's policy) is for services that have a model. A service without a
@@ -224,6 +256,7 @@ export function buildService(
     definition.collections,
     fail,
   );
+  checkWatches(checked, collections, fail);
   const methods = checkMethods(checked, projections, definition.methods, fail);
   checkRowForms(methods, data, fail);
   const service: AnyService = Object.freeze({

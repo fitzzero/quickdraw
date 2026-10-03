@@ -40,7 +40,8 @@ export type { TierGroup, Tiers } from "./emit/tiers";
 export type { ChangeLogOptions } from "./emit/changeLog";
 export type { EntitySubscription, EntitySubscriptions } from "./emit/subscriptions";
 
-// Collections: scopes, deltas, snapshots and resume (RFC 0003 section 7)
+// Collections: scopes, deltas, snapshots and resume, the index and items by
+// id (RFC 0003 section 7); change topics (section 11.3)
 export {
   DEFAULT_BULK_THRESHOLD,
   type CollectionScope,
@@ -48,6 +49,9 @@ export {
 } from "./collections/define";
 export type { ScopeSubscription, ScopeSubscriptions } from "./collections/scopes";
 export { RESUME_MAX_AGE_MS, RESUME_MAX_DELTAS } from "./collections/buffer";
+export { INDEX_MAX_ROWS } from "./collections/index";
+export { MAX_ITEM_IDS } from "./collections/items";
+export type { TopicWatch, TopicWatches } from "./topicIndex";
 export type {
   ContextExtensionOf,
   DbOf,
@@ -130,6 +134,7 @@ export type {
   RowForms,
   ScopeAccess,
   ServiceAccess,
+  WatchAccess,
 } from "./access/types";
 
 // The seams later cards implement: tracked writes, "not modified" versions

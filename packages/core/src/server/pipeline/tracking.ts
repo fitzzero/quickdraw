@@ -93,8 +93,8 @@ function idsOf(ids: string | readonly string[]): readonly string[] {
  * Resolves the dispatcher's tracked-writes options. The framework's own
  * sinks go first on the sink list, in the order given (the live data's
  * intake, the access cache's evictions and access-change events, the entity
- * frames, the collection deltas), so the app's sinks after them read access
- * afresh.
+ * frames, the collection deltas, the change topics), so the app's sinks
+ * after them read access afresh.
  */
 export function resolveTracking(
   options: TrackingOptions,

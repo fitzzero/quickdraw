@@ -146,6 +146,7 @@ export function resolveSettings(
       policies.sink,
       live.emit,
       live.collections,
+      live.topics,
     ]),
     versions: options.versions ?? live.versions,
     live,

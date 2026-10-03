@@ -1,12 +1,14 @@
-// The live data of one dispatcher (RFC 0003 sections 4.4, 5.3, 6 and 7):
-// entity subscriptions and collection scopes, the frames flushes send them,
-// revocation, and "not modified" versions. A dispatcher makes one;
-// `createServer` attaches its Socket.IO server and serves `qd:sub` and
-// `qd:col:sub` with it. Without a server the sinks still keep the change log,
-// so in-process callers get versions too.
+// The live data of one dispatcher (RFC 0003 sections 4.4, 5.3, 6, 7 and
+// 11.3): entity subscriptions, collection scopes and change topics, the
+// frames flushes send them, revocation, and "not modified" versions. A
+// dispatcher makes one; `createServer` attaches its Socket.IO server and
+// serves `qd:sub`, `qd:col:sub`, `qd:col:items` and `qd:watch` with it.
+// Without a server the sinks still keep the change log, so in-process callers
+// get versions too.
 
 import type { AnyContract } from "../../contract/defineContract";
 import { createLiveCollections } from "../collections/live";
+import { createTopics } from "../topics";
 import { createEntitySinks } from "./entitySink";
 import { entitySubscriptions } from "./extension";
 import { createHub, type AdapterProbe, type Hub, type HubOptions } from "./hub";
@@ -25,9 +27,14 @@ export interface Live {
   readonly emit: Sinks["emit"];
   /** Sends the flush's collection deltas; goes after `emit`. */
   readonly collections: Collections["sink"];
+  /** Sends `qd:changed` for the flush's change topics; goes after `collections`. */
+  readonly topics: ReturnType<typeof createTopics>["sink"];
   /** "Not modified" for queries returning one projection row: the dispatcher's default `versions`. */
   readonly versions: ReturnType<typeof createVersionSource>;
-  /** Serves `qd:sub`, `qd:unsub`, `qd:col:sub` and `qd:col:unsub` on every v5 socket. */
+  /**
+   * Serves `qd:sub`, `qd:unsub`, `qd:col:sub`, `qd:col:items`,
+   * `qd:col:unsub`, `qd:watch` and `qd:unwatch` on every v5 socket.
+   */
   readonly extension: ReturnType<typeof entitySubscriptions>;
   /**
    * Gives the live data its Socket.IO server: frames go out on it, and
@@ -65,6 +72,7 @@ function readChange(value: unknown): Change | undefined {
 export function createLive(options: HubOptions): Live {
   const hub = createHub(options);
   const collections = createLiveCollections(hub);
+  const topics = createTopics(collections.hub);
   const sinks = createEntitySinks(hub);
   const revocation = createRevocation(hub, collections.revocation);
   const entities = entitySubscriptions(hub);
@@ -73,10 +81,12 @@ export function createLive(options: HubOptions): Live {
     intake: sinks.intake,
     emit: sinks.emit,
     collections: collections.sink,
+    topics: topics.sink,
     versions: createVersionSource(hub),
     extension: (...args: Parameters<typeof entities>): void => {
       entities(...args);
       collections.extension(...args);
+      topics.extension(...args);
     },
     attach(io: NonNullable<Hub["io"]>, probe: AdapterProbe): void {
       hub.io = io;

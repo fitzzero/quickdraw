@@ -31,6 +31,7 @@ import { modelKey, type StorageAdapter, type StorageRow } from "../storage";
 import { ANY_FIELD, type WriteRecord } from "../uow/types";
 import type { BoundCollection } from "./bind";
 import type { CollectionScope } from "./define";
+import { indexColumns } from "./index";
 import { matchesWhere, membershipColumns, scopeIn, selectWith } from "./items";
 
 type Values = Readonly<Record<string, unknown>>;
@@ -95,7 +96,11 @@ function setOf(scope: string | null | undefined): ReadonlySet<string> {
   return typeof scope === "string" ? new Set([scope]) : NONE;
 }
 
-/** Reads rows of the collection's model with the item's select and the membership columns. */
+/**
+ * Reads rows of the collection's model with the item's select, the
+ * membership columns, and the version column an indexed collection's index
+ * rows take their `rev` from.
+ */
 async function readRows(
   storage: StorageAdapter,
   collection: BoundCollection,
@@ -106,7 +111,10 @@ async function readRows(
   }
   const rows = await storage.findMany(collection.model, {
     where: { id: { in: [...ids] } },
-    select: selectWith(collection.item.select, membershipColumns(collection)),
+    select: selectWith(collection.item.select, [
+      ...membershipColumns(collection),
+      ...indexColumns(collection),
+    ]),
   });
   return new Map(rows.flatMap((row) => (typeof row.id === "string" ? [[row.id, row]] : [])));
 }
@@ -271,6 +279,42 @@ function viaMove(collection: BoundCollection, events: LinkEvents, entry: ViaRow)
       ? WHOLE
       : frameKind(collection.item, write, collection.service.versionColumn);
   return moveOf(id, before, after, changed ? kind : undefined);
+}
+
+/**
+ * One flush's moves per collection. The collection sink and the topic sink
+ * (`../topics.ts`) both need them, and the rows a flush's moves read are read
+ * once: the moves are kept by the flush's batch of writes, which every sink
+ * of a flush receives as the same array, until it is garbage.
+ */
+export type FlushMoves = WeakMap<readonly WriteRecord[], Map<BoundCollection, Promise<Moves>>>;
+
+/**
+ * The moves of `collection` in the flush of `writes`, found on the first
+ * call for that flush and shared by every later one. `refresh` holds the
+ * collection's rows only an `affects` hop touched.
+ */
+export function movesOf(
+  memo: FlushMoves,
+  storage: StorageAdapter,
+  collection: BoundCollection,
+  writes: readonly WriteRecord[],
+  refresh: readonly string[],
+): Promise<Moves> {
+  let flush = memo.get(writes);
+  if (flush === undefined) {
+    flush = new Map();
+    memo.set(writes, flush);
+  }
+  let moves = flush.get(collection);
+  if (moves === undefined) {
+    moves =
+      collection.scope.kind === "column"
+        ? columnMoves(storage, collection, writes, refresh)
+        : viaMoves(storage, collection, writes, refresh);
+    flush.set(collection, moves);
+  }
+  return moves;
 }
 
 /** The moves of a `via` collection: from its entry rows' writes, its junction's writes and `affects` hops. */

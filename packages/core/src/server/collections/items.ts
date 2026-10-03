@@ -4,11 +4,19 @@
 // contract's `fields` reserves for a level above the collection's `access` is
 // left out of every item and patch. Membership is the declared scope plus the
 // equality filter `where`, read from a row's values.
+//
+// `qd:col:items` (section 7.4) loads items by id: a client holding a scope's
+// index asks for the members it shows. The read applies the scope and
+// `where`, so an id that is not a member is simply absent from the answer.
 
 import { pickKeys, projectRow } from "../emit/projection";
 import { strip } from "../emit/tiers";
-import type { StorageRow } from "../storage";
+import type { StorageAdapter, StorageRow, StorageWhere } from "../storage";
+import type { BoundCollection } from "./bind";
 import type { ServiceCollection } from "./define";
+
+/** The most ids one `qd:col:items` may name. */
+export const MAX_ITEM_IDS = 200;
 
 type Values = Readonly<Record<string, unknown>>;
 
@@ -85,4 +93,58 @@ export function selectWith(
     }
   }
   return select;
+}
+
+/**
+ * The filter matching the members of `scope` among `ids`: its scope column,
+ * or the ids among them its `via` junction links to it, and `where`.
+ * `undefined` when none can be a member.
+ */
+async function membersAmong(
+  storage: StorageAdapter,
+  collection: BoundCollection,
+  scope: string,
+  ids: readonly string[],
+): Promise<StorageWhere | undefined> {
+  const { where } = collection;
+  const filtered = (filter: StorageWhere): StorageWhere =>
+    Object.keys(where).length === 0 ? filter : { AND: [filter, where] };
+  if (collection.scope.kind === "column") {
+    return filtered({ [collection.scope.column]: scope, id: { in: [...ids] } });
+  }
+  const { model, entry, scope: column } = collection.scope;
+  const links = await storage.findMany(model, {
+    where: { [column]: scope, [entry]: { in: [...ids] } },
+    select: { [entry]: true },
+  });
+  const linked = links.map((link) => link[entry]).filter((id) => typeof id === "string");
+  return linked.length === 0 ? undefined : filtered({ id: { in: [...new Set(linked)] } });
+}
+
+/**
+ * The items of the members of `scope` among `ids`, in the order of `ids`,
+ * each once: one read for a column scope, two for a `via` scope (its links
+ * among `ids`, then the rows). An id that is not a member is left out.
+ */
+export async function readItemsById(
+  storage: StorageAdapter,
+  collection: BoundCollection,
+  scope: string,
+  ids: readonly string[],
+): Promise<unknown[]> {
+  const wanted = [...new Set(ids)];
+  const members =
+    wanted.length === 0 ? undefined : await membersAmong(storage, collection, scope, wanted);
+  if (members === undefined) {
+    return [];
+  }
+  const rows = await storage.findMany(collection.model, {
+    where: members,
+    select: collection.item.select,
+  });
+  const found = new Map(rows.flatMap((row) => (typeof row.id === "string" ? [[row.id, row]] : [])));
+  return wanted.flatMap((id) => {
+    const row = found.get(id);
+    return row === undefined ? [] : [itemOf(collection, row)];
+  });
 }
