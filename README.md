@@ -817,7 +817,12 @@ const here = usePresence(`board:${projectId}`); // user ids, after enterBoard jo
   `entry` or `scope` form checks; a stream without `access` is closed. The
   answer is the seed; `useStream` then appends, keeps the latest `max`
   (default 500), and subscribes again after a reconnect, when the seed
-  replaces what it held. A socket holds at most 500 feeds.
+  replaces what it held. A socket holds at most 500 feeds. A subscriber whose
+  access is lowered (a tracked write to the row an `entry` or `scope` form
+  checks, or changed grants for any form) is authorized again; one refused
+  leaves the feed and gets `qd:revoked { kind: "stream", reason: "access",
+s, stream, scope? }`, and `useStream` shows `FORBIDDEN` until the next
+  connect.
 - Channels: each message is `qd:ch [service, channel, payload]`, sent
   volatile and never answered. Per socket and channel a token bucket
   (`ratePerSecond`, default 30; `burst`, default twice that) drops what is

@@ -146,11 +146,27 @@ export type ChannelsRequired<C extends AnyContract> = [ChannelName<C>] extends [
  */
 export type AppRooms = Record<string, true>;
 
+/** One stream subscription (`qd:stream:sub`), as `socket.data.streams[room]` records it. */
+export interface StreamSubscription {
+  /** The service name. */
+  readonly s: string;
+  /** The stream name. */
+  readonly stream: string;
+  /** The feed's scope; absent for a global stream. */
+  readonly scope?: string;
+  /**
+   * The rows the subscriber's access is derived from (`anchorKey`s): the row
+   * an `entry` or `scope` form checks, then its `inherit` parents. None for
+   * `"public"`, `"authenticated"` or `{ service }`, which no row decides.
+   */
+  readonly anchors: readonly string[];
+}
+
 /**
- * `socket.data.streams`: the socket's stream subscriptions (`qd:stream:sub`),
- * by room. Plain data, in an object without a prototype.
+ * `socket.data.streams`: the socket's stream subscriptions, by room. Plain
+ * data, in an object without a prototype, read by own keys only.
  */
-export type StreamSubscriptions = Record<string, true>;
+export type StreamSubscriptions = Record<string, StreamSubscription>;
 
 /** A channel handler as the dispatcher calls it, whatever its declared types. */
 export type AnyChannelHandler = (payload: unknown, ctx: ChannelContext) => unknown;

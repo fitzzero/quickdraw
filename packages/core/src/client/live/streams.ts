@@ -15,7 +15,10 @@
 //   the server forgot the socket's feeds, and nothing says which items were
 //   missed meanwhile. Another user on the connection drops every feed's items
 //   first. A refusal (`FORBIDDEN`, ...) empties the feed and stands until the
-//   next connect; `RATE_LIMITED` waits out the backoff and asks again.
+//   next connect; `RATE_LIMITED` waits out the backoff and asks again. A
+//   `qd:revoked { kind: "stream" }` (access lowered while subscribed) does
+//   the same as a `FORBIDDEN` refusal: the server took the socket out of the
+//   feed's room.
 // - The last holder's release unsubscribes a tick later (`qd:stream:unsub`),
 //   unless the feed is held again first.
 //
@@ -23,7 +26,7 @@
 // `QueryClient`.
 
 import { CLIENT_EVENTS } from "../../contract/names";
-import type { QuickdrawError } from "../../protocol/errors";
+import { QuickdrawError } from "../../protocol/errors";
 import { isName, isRecord } from "../../protocol/guards";
 import { notifyEach } from "../watch";
 import { request, type LiveHost } from "./host";
@@ -80,6 +83,12 @@ export interface StreamStore {
   listen(key: string, listener: () => void): () => void;
   /** A `qd:stream` frame arrived. */
   receive(frame: unknown): void;
+  /**
+   * The server ended the subscription to a feed (`qd:revoked`): its access
+   * was lowered. The feed empties and shows `FORBIDDEN`, takes no further
+   * item, and stands until the next connect subscribes again.
+   */
+  revoked(service: string, stream: string, scope: string | undefined): void;
   /** Subscribes every held feed again: the socket connected, or the user is known. */
   resume(): void;
   /** Another user acts on the connection now: drops every feed's items and subscribes again. */
@@ -250,6 +259,21 @@ function receive(feeds: Feeds, frame: unknown): void {
   }
 }
 
+/** The server revoked the feed's subscription: its socket left the room. */
+function revoked(feeds: Feeds, key: string): void {
+  const feed = feeds.registry.get(key);
+  if (feed === undefined) {
+    return;
+  }
+  clearTimeout(feed.retry);
+  feed.retry = undefined;
+  feed.attempt += 1;
+  feed.pending = undefined;
+  feed.sent = false;
+  const error = new QuickdrawError("FORBIDDEN", "Access to the stream was revoked");
+  setState(feeds, feed, Object.freeze({ items: [], isLoading: false, error }));
+}
+
 function listen(feeds: Feeds, key: string, listener: () => void): () => void {
   const set = feeds.listeners.get(key) ?? new Set<() => void>();
   feeds.listeners.set(key, set);
@@ -278,6 +302,9 @@ export function createStreamStore(host: LiveHost): StreamStore {
     listen: (key: string, listener: () => void) => listen(feeds, key, listener),
     receive: (frame: unknown) => {
       receive(feeds, frame);
+    },
+    revoked: (service: string, stream: string, scope: string | undefined) => {
+      revoked(feeds, feedKey(service, stream, scope));
     },
     resume(): void {
       for (const feed of feeds.registry.held()) {

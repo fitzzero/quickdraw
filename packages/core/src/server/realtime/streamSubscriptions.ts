@@ -13,18 +13,19 @@
 // acknowledgement). An unsubscribe that arrives while a subscribe of the same
 // feed is being authorized stops it from joining. A socket holds at most
 // `MAX_STREAMS_PER_SOCKET` feeds (`CONFLICT` past that), recorded on
-// `socket.data.streams` in an object without a prototype; Socket.IO empties
-// its rooms when it disconnects.
+// `socket.data.streams` with the rows their access is derived from
+// (`streamIndex.ts`), so an access change revokes them
+// (`streamRevocation.ts`); Socket.IO empties its rooms when it disconnects.
 
 import { CLIENT_EVENTS } from "../../contract/names";
 import { QuickdrawError } from "../../protocol/errors";
-import { answerEvent, answerNow } from "../emit/answer";
+import { answerEvent, answerNow, onDisconnect } from "../emit/answer";
 import type { Hub } from "../emit/hub";
 import { PendingKeys } from "../emit/pending";
-import { emptyRecords, ownRecord } from "../emit/subscriptions";
 import type { QuickdrawServerSocket, SocketContext } from "../transports/types";
 import { streamKey, type StreamSeeds } from "./seeds";
-import { authorizeStream, checkUnsubscriber, streamTarget } from "./streamTargets";
+import { subscriptionOf, type StreamIndex } from "./streamIndex";
+import { authorizeStream, checkUnsubscriber, streamAnchors, streamTarget } from "./streamTargets";
 
 /** The acknowledgement of `qd:stream:sub` (`StreamSubscribeReply` in `envelope.ts`). */
 interface SeedReply {
@@ -38,6 +39,7 @@ export const MAX_STREAMS_PER_SOCKET = 500;
 interface StreamState {
   readonly hub: Hub;
   readonly seeds: StreamSeeds;
+  readonly index: StreamIndex;
   readonly pending: PendingKeys;
 }
 
@@ -51,17 +53,16 @@ async function subscribe(
   const unsubscribes = state.pending.begin(socket, [room]).get(room) ?? 0;
   try {
     await authorizeStream(state.hub, socket, target);
-    const held = (socket.data.streams ??= emptyRecords<true>());
-    const known = ownRecord(held, room) !== undefined;
-    if (!known && Object.keys(held).length >= MAX_STREAMS_PER_SOCKET) {
+    const anchors = await streamAnchors(state.hub, socket, target);
+    const known = state.index.get(socket, room) !== undefined;
+    if (!known && state.index.size(socket) >= MAX_STREAMS_PER_SOCKET) {
       throw new QuickdrawError(
         "CONFLICT",
         `A socket may subscribe to at most ${MAX_STREAMS_PER_SOCKET} stream feeds; unsubscribe from one first`,
       );
     }
     if (socket.connected && state.pending.count(socket, room) === unsubscribes) {
-      held[room] = true;
-      void socket.join(room);
+      state.index.set(socket, subscriptionOf(target, anchors));
     }
   } finally {
     state.pending.end(socket, [room]);
@@ -78,23 +79,21 @@ function unsubscribe(
   const target = streamTarget(state.hub, value, CLIENT_EVENTS.streamUnsub);
   checkUnsubscriber(socket, target);
   state.pending.unsubscribed(socket, target.room);
-  const held = socket.data.streams;
-  if (held !== undefined && ownRecord(held, target.room) !== undefined) {
-    delete held[target.room];
-  }
-  void socket.leave(target.room);
+  state.index.delete(socket, target.room);
   return { ok: true };
 }
 
 /**
  * The socket extension (`transports/socketio.ts`) that serves
- * `qd:stream:sub` and `qd:stream:unsub` for one dispatcher's streams.
+ * `qd:stream:sub` and `qd:stream:unsub` for one dispatcher's streams, and
+ * drops a disconnected socket's feeds from `index`.
  */
 export function streamSubscriptions(
   hub: Hub,
   seeds: StreamSeeds,
+  index: StreamIndex,
 ): (socket: QuickdrawServerSocket, context: SocketContext) => void {
-  const state: StreamState = { hub, seeds, pending: new PendingKeys() };
+  const state: StreamState = { hub, seeds, index, pending: new PendingKeys() };
   return (socket, context) => {
     answerEvent(socket, context, CLIENT_EVENTS.streamSub, (frame) =>
       subscribe(state, socket, frame),
@@ -103,6 +102,9 @@ export function streamSubscriptions(
       answerNow(socket, context, CLIENT_EVENTS.streamUnsub, ack, () =>
         unsubscribe(state, socket, frame),
       );
+    });
+    onDisconnect(socket, context, () => {
+      index.drop(socket);
     });
   };
 }

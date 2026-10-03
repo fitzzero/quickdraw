@@ -11,7 +11,7 @@ import type { QuickdrawServerSocket, SocketContext } from "../transports/types";
 import { channelMessages } from "./channels";
 import { createPresence, PresenceRecords } from "./presence";
 import { createRooms } from "./rooms";
-import { createStreams } from "./streams";
+import { createStreams, type Streams } from "./streams";
 import type { ContextRooms, Presence, StreamHandle } from "./types";
 
 export type { Presence, StreamHandle };
@@ -28,6 +28,8 @@ export interface Realtime {
   stream(contract: AnyContract, name: string): StreamHandle<AnyContract, string>;
   /** The sockets in a room of the attached server, for the kits (`KitRuntime.occupancy`). */
   readonly occupancy: RoomOccupancy;
+  /** Revokes stream subscriptions on access changes and changed grants. */
+  readonly revocation: Streams["revocation"];
 }
 
 /** Creates the realtime half of a dispatcher's live data, on its hub. */
@@ -58,5 +60,6 @@ export function createRealtime(hub: Hub): Realtime {
       sockets: (room: string) => hub.io?.sockets.adapter.rooms.get(room)?.size ?? 0,
       complete: () => hub.io === undefined || hub.probe.local(),
     }),
+    revocation: streams.revocation,
   });
 }

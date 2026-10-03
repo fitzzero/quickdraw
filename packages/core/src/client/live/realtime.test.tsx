@@ -182,6 +182,38 @@ describe("useStream", () => {
     await view.findByText("news [first,second]");
   });
 
+  it("shows FORBIDDEN and nothing further when the server revokes the feed", async () => {
+    const app = await createTestApp({
+      services: [roomService],
+      auth: { loadServiceAccess: () => ({}) },
+    });
+    apps.push(app as unknown as TestApp);
+    const secret = app.server.stream(room, "secret");
+    function Feed() {
+      const { items, isLoading, error } = qd.room.secret.useStream();
+      if (error !== null) {
+        return <p>{`refused ${error.code} [${items.join(",")}]`}</p>;
+      }
+      return <p>{isLoading ? "loading" : `secrets [${items.join(",")}]`}</p>;
+    }
+    const view = await renderWithQuickdraw(<Feed />, {
+      app,
+      as: { userId: "ada", serviceAccess: { roomService: "Admin" } },
+      client: qd,
+    });
+    await view.findByText("secrets []");
+    secret.push("one");
+    await view.findByText("secrets [one]");
+    // The grant is gone: the server revokes the feed.
+    await app.server.access.refresh("ada");
+    await view.findByText("refused FORBIDDEN []");
+    secret.push("two");
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    view.getByText("refused FORBIDDEN []");
+  });
+
   it("subscribes again after a reconnect, showing the seed it missed", async () => {
     const app = await start();
     const ticker = app.server.stream(room, "ticker");

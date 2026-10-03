@@ -12,7 +12,7 @@ import type { StreamFrame } from "../../protocol/envelope";
 import type { Hub } from "../emit/hub";
 import type { AnyService } from "../service";
 import { StreamSeeds, streamKey } from "./seeds";
-import { streamSubscriptions } from "./streamSubscriptions";
+import { createStreamFeeds, type StreamFeeds } from "./streamFeeds";
 import { scopeProblem } from "./streamTargets";
 import type { ServiceStream, StreamHandle } from "./types";
 import { checkOutgoing } from "./validate";
@@ -74,12 +74,17 @@ export interface Streams {
    */
   handle(contract: AnyContract, name: string): StreamHandle<AnyContract, string>;
   /** Serves `qd:stream:sub` and `qd:stream:unsub` on a v5 socket. */
-  readonly extension: ReturnType<typeof streamSubscriptions>;
+  readonly extension: Feeds["extension"];
+  /** Authorizes the feeds an access change or a changed grant concerns again (`streamRevocation.ts`). */
+  readonly revocation: Feeds["revocation"];
 }
+
+type Feeds = StreamFeeds;
 
 /** Creates the streams of the dispatcher whose hub this is. */
 export function createStreams(hub: Hub): Streams {
   const seeds = new StreamSeeds();
+  const feeds = createStreamFeeds(hub, seeds);
   return Object.freeze({
     handle(contract: AnyContract, name: string): StreamHandle<AnyContract, string> {
       const served = servedStream(hub, contract, name);
@@ -89,6 +94,7 @@ export function createStreams(hub: Hub): Streams {
         },
       }) as StreamHandle<AnyContract, string>;
     },
-    extension: streamSubscriptions(hub, seeds),
+    extension: feeds.extension,
+    revocation: feeds.revocation,
   });
 }

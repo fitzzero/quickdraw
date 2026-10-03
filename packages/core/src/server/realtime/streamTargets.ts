@@ -13,6 +13,7 @@
 import { streamRoom } from "../../contract/names";
 import { QuickdrawError } from "../../protocol/errors";
 import { MAX_SCOPE_LENGTH } from "../../protocol/version";
+import { anchorKey } from "../access/tools";
 import { createContext, NEVER_ABORTED } from "../context";
 import type { Hub } from "../emit/hub";
 import type { AnyService } from "../service";
@@ -109,6 +110,39 @@ export async function authorizeStream(
     input,
     ctx,
   });
+}
+
+/**
+ * The rows a subscriber's access to `target` is derived from (its anchors,
+ * `anchorKey`s), for revocation: under an `entry` form, the feed's row of
+ * the stream's service and its `inherit` parents; under a `scope` form, the
+ * row of `of` the scope names and its parents. None for `"public"`,
+ * `"authenticated"` or `{ service }`, which no row decides (a changed grant
+ * authorizes every feed of the user again). Call it once the subscriber is
+ * authorized; a lookup that fails rejects.
+ */
+export async function streamAnchors(
+  hub: Hub,
+  socket: QuickdrawServerSocket,
+  target: StreamTarget,
+): Promise<readonly string[]> {
+  const form = target.stream.access;
+  const { principal } = socket.data;
+  const { scope } = target;
+  if (principal === null || scope === undefined || typeof form !== "object" || "kind" in form) {
+    return [];
+  }
+  if (form.entry !== undefined && target.service.access !== undefined) {
+    const resolved = await hub.policies.resolve(target.service.name, principal, [scope]);
+    return resolved.anchors.get(scope) ?? [anchorKey(target.service.name, scope)];
+  }
+  if (form.scope !== undefined) {
+    const resolved = await hub.policies.resolve(form.of.name, principal, [scope], {
+      grants: false,
+    });
+    return resolved.anchors.get(scope) ?? [anchorKey(form.of.name, scope)];
+  }
+  return [];
 }
 
 /** An unsubscribe needs a principal, unless the stream is public. */

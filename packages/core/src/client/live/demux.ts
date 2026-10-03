@@ -26,7 +26,7 @@ import type { StreamStore } from "./streams";
 export interface FrameRoutes {
   readonly entities: Pick<EntityStore, "receive" | "revoked">;
   readonly collections: Pick<CollectionHub, "receive" | "revoked">;
-  readonly streams: Pick<StreamStore, "receive">;
+  readonly streams: Pick<StreamStore, "receive" | "revoked">;
   readonly events: Pick<EventBus, "receive">;
   readonly presence: Pick<PresenceStore, "receive">;
 }
@@ -41,6 +41,12 @@ function routeRevoked(routes: FrameRoutes, frame: unknown): void {
     routes.entities.revoked(frame.s, frame.id);
   } else if (frame.kind === "collection" && isName(frame.c) && isName(frame.scope)) {
     routes.collections.revoked(frame.s, frame.c, frame.scope, reason);
+  } else if (
+    frame.kind === "stream" &&
+    isName(frame.stream) &&
+    (frame.scope === undefined || isName(frame.scope))
+  ) {
+    routes.streams.revoked(frame.s, frame.stream, frame.scope);
   }
 }
 

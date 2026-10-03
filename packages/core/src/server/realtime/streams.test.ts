@@ -54,6 +54,7 @@ afterEach(async () => {
 interface StartOptions {
   readonly after?: (read: Read) => Promise<void> | undefined;
   readonly rateLimit?: { readonly maxRequests: number };
+  readonly loadServiceAccess?: () => Record<string, never>;
 }
 
 async function start(options: StartOptions = {}) {
@@ -63,6 +64,9 @@ async function start(options: StartOptions = {}) {
     db: h.db,
     storage: recorded.storage,
     ...(options.rateLimit === undefined ? {} : { rateLimit: options.rateLimit }),
+    ...(options.loadServiceAccess === undefined
+      ? {}
+      : { auth: { loadServiceAccess: options.loadServiceAccess } }),
   });
   apps.push(app as unknown as TestApp);
   return app;
@@ -270,6 +274,76 @@ describe("qd:stream:sub", () => {
     expect(await streamSub(connection, "rooms", "r0")).toMatchObject({ ok: true });
     await streamUnsub(connection, "rooms", "r0");
     expect(await streamSub(connection, "rooms", "one-more")).toMatchObject({ ok: true });
+  });
+});
+
+describe("revocation", () => {
+  it("revokes a feed whose subscriber lost the row's access, and sends it nothing more", async () => {
+    const app = await start();
+    const reader = await connect(app, as(board.cy));
+    const owner = await connect(app, as(board.ada));
+    const revoked = frames(reader.connection, "qd:revoked");
+    for (const { connection } of [reader, owner]) {
+      expect(await streamSub(connection, "logs", board.t1)).toEqual({ ok: true, seed: [] });
+    }
+    logs(app).push(board.t1, { line: "before" });
+    await settle(reader.connection);
+    expect(reader.items).toHaveLength(1);
+    // Cy reads T1 as a Read member of P1; a tracked write ends the membership.
+    await app.server.dispatcher.run(() =>
+      h.db.projectMember.deleteMany({ where: { projectId: board.p1, userId: board.cy } }),
+    );
+    await settle(reader.connection);
+    expect(revoked).toEqual([
+      { kind: "stream", reason: "access", s: "taskService", stream: "logs", scope: board.t1 },
+    ]);
+    logs(app).push(board.t1, { line: "after" });
+    await settle(reader.connection);
+    await settle(owner.connection);
+    expect(reader.items.map((frame) => frame.item)).toEqual([{ line: "before" }]);
+    expect(owner.items.map((frame) => frame.item)).toEqual([{ line: "before" }, { line: "after" }]);
+  });
+
+  it("revokes a scope-form feed when the subscriber's level on the other row drops below the form", async () => {
+    const app = await start();
+    const member = await connect(app, as(board.bo));
+    const revoked = frames(member.connection, "qd:revoked");
+    expect(await streamSub(member.connection, "projectFeed", board.p1)).toMatchObject({ ok: true });
+    // Bo moderates P1; a Read role is below projectFeed's Moderate.
+    await app.server.dispatcher.run(() =>
+      h.db.projectMember.updateMany({
+        where: { projectId: board.p1, userId: board.bo },
+        data: { role: "Read" },
+      }),
+    );
+    await settle(member.connection);
+    expect(revoked).toEqual([
+      {
+        kind: "stream",
+        reason: "access",
+        s: "taskService",
+        stream: "projectFeed",
+        scope: board.p1,
+      },
+    ]);
+    app.server.stream(liveContract, "projectFeed").push(board.p1, { n: 1 });
+    await settle(member.connection);
+    expect(member.items).toEqual([]);
+  });
+
+  it("authorizes a { service } feed again when the user's grants change", async () => {
+    const app = await start({ loadServiceAccess: () => ({}) });
+    const admin = await connect(app, as(board.di, { taskService: "Admin" }));
+    const revoked = frames(admin.connection, "qd:revoked");
+    expect(await streamSub(admin.connection, "adminFeed")).toMatchObject({ ok: true });
+    expect(await app.server.access.refresh(board.di)).toEqual({});
+    await settle(admin.connection);
+    expect(revoked).toEqual([
+      { kind: "stream", reason: "access", s: "taskService", stream: "adminFeed" },
+    ]);
+    app.server.stream(liveContract, "adminFeed").push(1);
+    await settle(admin.connection);
+    expect(admin.items).toEqual([]);
   });
 });
 

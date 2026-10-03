@@ -352,7 +352,9 @@ export type RevokeReason = "access" | "anchor-deleted";
 /**
  * `qd:revoked`: the server removed this socket from a subscription's room,
  * because the principal's access was lowered or removed (`access`), or the
- * row a collection scope is anchored on was deleted (`anchor-deleted`).
+ * row a collection scope is anchored on was deleted (`anchor-deleted`). A
+ * stream feed's subscription is revoked for `access` only; `scope` is absent
+ * for a global stream.
  */
 export type RevokedFrame =
   | {
@@ -367,6 +369,13 @@ export type RevokedFrame =
       readonly s: string;
       readonly c: string;
       readonly scope: string;
+    }
+  | {
+      readonly kind: "stream";
+      readonly reason: RevokeReason;
+      readonly s: string;
+      readonly stream: string;
+      readonly scope?: string;
     };
 
 /** `qd:rotate`: reconnect at a random moment within `withinMs`. */
