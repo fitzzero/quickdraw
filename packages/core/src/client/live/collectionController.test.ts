@@ -327,6 +327,37 @@ describe("races and requests", () => {
     expect(fake.sent("qd:col:sub")).toHaveLength(3);
   });
 
+  it("with load all and no index, drops an item deleted during an outage once the reload's pages are read", async () => {
+    const { fake, live, entry, ids } = setup();
+    live.collections.subscribe(target, SCOPE, { loadAll: true });
+    fake.answer("qd:col:sub", 0, snapshot([row("a"), row("b")], { cursor: "c1", total: 4 }));
+    await tick();
+    expect(fake.sent("qd:col:sub")[1]?.frame).toMatchObject({ cursor: "c1" });
+    fake.answer("qd:col:sub", 1, snapshot([row("c"), row("x")], { rev: 101, total: 4 }));
+    await tick();
+    expect(ids()).toEqual(["a", "b", "c", "x"]);
+
+    fake.disconnect();
+    fake.reconnect();
+    expect(fake.sent("qd:col:sub")[2]?.frame).toMatchObject({ since: 100 });
+    // The server cannot resume: a snapshot, its first page only. "x" was deleted meanwhile.
+    fake.answer(
+      "qd:col:sub",
+      2,
+      snapshot([row("a"), row("b")], { rev: 200, cursor: "c2", total: 3 }),
+    );
+    await tick();
+    // Still reading pages: nothing is dropped before the last one.
+    expect(ids()).toEqual(["a", "b", "c", "x"]);
+    expect(fake.sent("qd:col:sub")[3]?.frame).toMatchObject({ cursor: "c2" });
+    fake.answer("qd:col:sub", 3, snapshot([row("c")], { rev: 200, total: 3 }));
+    await tick();
+    expect(ids()).toEqual(["a", "b", "c"]);
+    expect(entry()?.state?.totalCount).toBe(3);
+    expect(entry()?.state?.removed.get("x")).toBe(200);
+    expect(fake.sent("qd:col:items")).toEqual([]);
+  });
+
   it("drops a revoked scope's state and error-marks it; refresh loads it again", async () => {
     const { fake, live, entry, ids } = setup();
     const { controller } = live.collections.subscribe(target, SCOPE);

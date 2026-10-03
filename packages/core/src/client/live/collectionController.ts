@@ -7,7 +7,10 @@
 //   newest revision applied, and a `resumed` answer brings the deltas missed
 //   meanwhile, applied in the order sent. Any other answer is a snapshot,
 //   applied as one; items loaded before and not on its page are then loaded
-//   again by id, since they may have changed.
+//   again by id, since they may have changed. While `load: "all"` reads
+//   every page again instead, the items of a scope without an index that
+//   none of those pages refreshed are dropped once the last page is read:
+//   they left the scope while it was not followed.
 // - Frames that arrive while a load is in flight are kept and applied on top
 //   of its answer, each at its own revision (4.1 did this for snapshots,
 //   `:191-218`).
@@ -48,6 +51,7 @@ import {
   applyDeltas,
   applyFrames,
   applySnapshot,
+  pruneStale,
   staleIds,
   type DeltaBatch,
   type DeltaResult,
@@ -112,6 +116,8 @@ interface Pipeline extends LoadSteps {
   allLoop: boolean;
   /** Set when the reader is asked to read again while it reads. */
   allAgain: boolean;
+  /** A snapshot replaced a loaded state while every page is read: prune what the pages do not bring back. */
+  pruneAfterPages: boolean;
   /** Item ids patches found missing, loaded at the next microtask. */
   readonly missing: Set<string>;
 }
@@ -185,8 +191,33 @@ function followUp(p: Pipeline, result: DeltaResult, reloaded: boolean): void {
   if (reloaded && p.allDemand === 0) {
     // Items loaded before a snapshot and not on its page may have changed.
     loadMissing(p, staleIds(result.state));
+  } else if (reloaded) {
+    // The pages that follow bring back every member: those they do not are gone.
+    p.pruneAfterPages = true;
   }
   void continueLoadAll(p);
+}
+
+/**
+ * After `load: "all"` read pages following a snapshot: once the last page is
+ * read, drops the items none of them refreshed; when nobody loads every page
+ * any more before then, loads those items by id instead.
+ */
+function pruneUnseen(p: Pipeline): void {
+  const state = entryOf(p).state;
+  if (!p.pruneAfterPages || p.disposed || state === null) {
+    return;
+  }
+  if (state.nextCursor === null) {
+    p.pruneAfterPages = false;
+    const pruned = pruneStale(state);
+    if (pruned !== state) {
+      write(p, { state: pruned });
+    }
+  } else if (p.allDemand === 0) {
+    p.pruneAfterPages = false;
+    loadMissing(p, staleIds(state));
+  }
 }
 
 /** Applies the answer of a load, then the frames kept while it was in flight. */
@@ -316,6 +347,7 @@ async function continueLoadAll(p: Pipeline): Promise<void> {
       p.allAgain = false;
       await readPages(p);
     } while (p.allAgain);
+    pruneUnseen(p);
   } finally {
     p.allLoop = false;
   }
@@ -434,6 +466,7 @@ export function createCollectionController(
     allDemand: 0,
     allLoop: false,
     allAgain: false,
+    pruneAfterPages: false,
     missing: new Set(),
     disposed: false,
     page: undefined,

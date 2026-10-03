@@ -611,3 +611,35 @@ export function applyItems<Item extends CollectionItem>(
 export function staleIds(state: CollectionState<CollectionItem>): string[] {
   return loadedIds(state).filter((id) => (state.revById.get(id) ?? 0) < state.snapshotRev);
 }
+
+/**
+ * Drops the loaded items a reload did not refresh, from a scope without an
+ * index whose every page was read again after its last snapshot: an item
+ * older than that snapshot was on none of its pages, in no delta and in no
+ * items answer since, so it is no longer a member. Each leaves a tombstone
+ * at the snapshot's revision; the count stays the server's. A state with an
+ * index (whose snapshot already pruned by membership) is returned as it is.
+ */
+export function pruneStale<Item extends CollectionItem>(
+  state: CollectionState<Item>,
+): CollectionState<Item> {
+  const stale = new Set(staleIds(state));
+  if (stale.size === 0 || state.index !== null) {
+    return state;
+  }
+  const byId = new Map(state.byId);
+  const revById = new Map(state.revById);
+  const removed = new Map(state.removed);
+  for (const id of stale) {
+    byId.delete(id);
+    revById.delete(id);
+    removed.set(id, state.snapshotRev);
+  }
+  return Object.freeze({
+    ...state,
+    byId,
+    revById,
+    removed,
+    order: state.order.filter((id) => !stale.has(id)),
+  });
+}
