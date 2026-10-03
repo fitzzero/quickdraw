@@ -7,10 +7,12 @@
 // collection's member lives beside the methods, not on the service, because
 // methods and collections share one namespace. For the same reason a search
 // kit method's `useSearch` lives on that method's member,
-// `qd.<service>.<search>.useSearch`.
+// `qd.<service>.<search>.useSearch`. A contract with the admin kit also gets
+// `qd.<service>.admin`, its admin methods' members together (`../admin.ts`).
 
 import type { AnyContract } from "../../contract/defineContract";
 import type { MethodDef } from "../../contract/methods";
+import { clientAdminNamespace } from "../adminMeta";
 import type { MethodTarget } from "../members";
 import type { CollectionTarget } from "./collectionLoads";
 import { searchTargetOf } from "./searchResults";
@@ -21,10 +23,15 @@ import { useSearch } from "./useSearch";
 
 /**
  * The live members of one contract's service, keyed as they sit on
- * `qd.<service>`. Built with `Object.fromEntries`, so a collection named
- * `__proto__` is an ordinary member, never a prototype.
+ * `qd.<service>`, and its `admin` member when the contract has the admin
+ * kit (`methods` are the service's method members). Built with
+ * `Object.fromEntries`, so a collection named `__proto__` is an ordinary
+ * member, never a prototype.
  */
-export function liveMembers(contract: AnyContract): Readonly<Record<string, object>> {
+export function liveMembers(
+  contract: AnyContract,
+  methods: Readonly<Record<string, object>> = {},
+): Readonly<Record<string, object>> {
   const service = contract.name;
   const entities: [string, object][] =
     contract.entity === undefined
@@ -49,7 +56,8 @@ export function liveMembers(contract: AnyContract): Readonly<Record<string, obje
     });
     return [collection, member] as [string, object];
   });
-  return Object.freeze(Object.fromEntries([...entities, ...collections]));
+  const admin = Object.entries(clientAdminNamespace(contract, methods));
+  return Object.freeze(Object.fromEntries([...entities, ...collections, ...admin]));
 }
 
 /**

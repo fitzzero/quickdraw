@@ -193,6 +193,20 @@ export type {
   SharingUserLookup,
 } from "./kits/sharing/types";
 
+// The admin kit's server half (RFC 0003 section 12.4), whose contract half is
+// `admin.contract` on the root export
+export { admin } from "./kits/admin/handlers";
+export { ADMIN_HIDDEN_FIELDS, displayNameOf, labelOf } from "./kits/admin/meta";
+export type {
+  AdminAccess,
+  AdminContract,
+  AdminDefaultAccess,
+  AdminFieldOf,
+  AdminFieldOverride,
+  AdminHandlersOptions,
+  AdminImplementations,
+} from "./kits/admin/types";
+
 // The seams later cards implement: tracked writes, "not modified" versions
 // and the completion record
 export {

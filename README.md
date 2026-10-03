@@ -639,6 +639,90 @@ export const projectService = qd.defineService(project, {
   the `via` collections over the table `added` and `removed`; the kit sends
   nothing itself.
 
+### Admin kit
+
+Back-office methods for every row of a service, only for service
+administrators, with the screen's fields derived from the entity (design:
+`docs/rfcs/0003-v5.md`, section 12.4). `admin.contract` makes ordinary,
+typed entries, and `admin.handlers` implements them; 4.1's
+`installAdminMethods` registered them outside the type map:
+
+```typescript
+// the shared package
+import { admin, defineContract } from "@fitzzero/quickdraw-core";
+
+export const task = defineContract("taskService", {
+  entity: taskSchema, // Zod 4.2 or later: the fields come from its JSON Schema
+  methods: {
+    // adminList, adminGet, adminCreate, adminUpdate, adminDelete,
+    // adminMeta, adminSubscribers, adminReemit; `expose` picks fewer
+    ...admin.contract({ entity: taskSchema, filter: ["status"], sort: ["createdAt", "title"] }),
+  },
+});
+
+// the server
+import { admin } from "@fitzzero/quickdraw-core/server";
+
+export const taskService = qd.defineService(task, {
+  model: "task",
+  access: inherit({ from: project, via: "projectId" }),
+  methods: {
+    ...admin.handlers(task, {
+      displayName: "Tasks", // the default: from the service name
+      hiddenFields: ["internalNotes"], // never shown, returned or written
+      fieldOverrides: { assigneeId: { type: "relation", relationService: "userService" } },
+    }),
+  },
+});
+
+// the client
+const { data } = qd.task.admin.adminList.useQuery({ page: 2, sort: { field: "title" } });
+const update = qd.task.admin.adminUpdate.useMutation();
+update.mutate({ id, data: { status: "done" } });
+const { services } = useAdminServices(qd); // [{ key: "task", serviceName, displayName }]
+```
+
+- Who may call: every method defaults to `{ service: "Admin" }`, the
+  caller's service-wide grant. A row-level `Admin` (the row's owner, an
+  access list entry, a member) is `FORBIDDEN`, with or without
+  `adminBypass`. `access: { adminList: { service: "Moderate" } }` replaces
+  one method's form; whatever the form, the method reaches every row, and
+  rows go out with only the fields the caller's service-wide grant reaches
+  (a `fields` tier above it is left out, and a filter, sort or write that
+  names such a field is `FORBIDDEN`).
+- `adminList({ page?, pageSize?, filter?, sort? })` returns
+  `{ items, total, page, pageSize, totalPages }`: page numbers from 1, 20 rows
+  by default and at most 100 (a larger `pageSize` is clamped), in two
+  statements. `filter` is equality on the fields `admin.contract` declares
+  and `sort` one declared field (the first one by default, then `id`):
+  anything else, an operator object, `where` or `orderBy`, is `VALIDATION`.
+  4.1 passed the caller's `where` to the database as it came.
+- `adminGet({ id })` returns the row; `adminCreate({ data })` and
+  `adminUpdate({ id, data })` write the entity's fields through the tracked
+  client, so subscribers and collections get the same frames as for any
+  other write; `adminDelete({ id })` returns `null`. `id`, `createdAt` and
+  `updatedAt` are never writable, nor are hidden fields or those an override
+  made read-only (`VALIDATION`); each value is checked by the entity schema
+  itself, and a value the database refuses is `VALIDATION`. A missing row is
+  `NOT_FOUND`.
+- `adminMeta()` returns `{ serviceName, displayName, fields }`, one
+  `{ name, type, label, required, editable, showInTable, sortable,
+filterable, enumValues?, relationService? }` per field: `type` is
+  `string`, `number`, `boolean`, `date` (an ISO string with a date format),
+  `enum` or `json` from the field's JSON Schema, and `relation` by override;
+  `sortable` and `filterable` are the declared fields; `id` and the
+  timestamps come first and are not editable; `acl`, `serviceAccess` and
+  `service_access` are hidden, as in 4.1.
+- `adminSubscribers({ id })` counts the sockets subscribed to a row per
+  access level (`{ id, count, levels, complete }`; behind a Redis adapter
+  the counts are this server's and `complete` is `false`), and
+  `adminReemit({ id })` touches the row so the flush sends it again to every
+  subscriber.
+- `useAdminServices(qd)` lists the client's services whose `adminMeta`
+  answers the user, with their display names, sharing the cache of
+  `qd.<service>.admin.adminMeta.useQuery()`. On a mock client it answers
+  from the `adminMeta` stubs.
+
 ### Testing
 
 `@fitzzero/quickdraw-core/testing` boots the real server on a free port:

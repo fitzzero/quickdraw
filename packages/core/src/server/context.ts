@@ -122,6 +122,19 @@ export interface KitRuntime {
   readonly service: AnyService;
   readonly access: DispatcherAccess;
   readonly storage: StorageAdapter | undefined;
+  /** How many sockets sit in a room, for the admin kit's subscriber counts. */
+  readonly occupancy?: RoomOccupancy;
+}
+
+/** The sockets in a room (RFC 0003 section 6), as this process sees its rooms. */
+export interface RoomOccupancy {
+  /** This process's sockets in `room`: none without a server. */
+  sockets(room: string): number;
+  /**
+   * `true` when this process sees every socket: its server has no cluster
+   * adapter (Redis), or there is no server.
+   */
+  complete(): boolean;
 }
 
 /**

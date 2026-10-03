@@ -68,6 +68,9 @@ model Task {
   title        String
   assigneeId   String?
   notes        String?
+  // A flag and a JSON column, so the admin kit's tests write every field type.
+  pinned       Boolean     @default(false)
+  details      Json?
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
   project      Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)

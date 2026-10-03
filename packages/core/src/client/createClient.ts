@@ -103,7 +103,8 @@ function mutationMember(binding: Binding, target: MethodTarget): object {
  * query (and `useSearch` on one the search kit made) and `useMutation` and
  * `call` on a mutation; `qd.<key>.useEntity` and `useEntities` for a
  * contract with an entity; `qd.<key>.<collection>` with `useCollection` for
- * each collection; plus `qd.invalidate`. Render a `QuickdrawProvider` with
+ * each collection; `qd.<key>.admin` for a contract with the admin kit; plus
+ * `qd.invalidate`. Render a `QuickdrawProvider` with
  * `client={qd}` above the components that use it. No contract may be keyed
  * `invalidate`.
  *

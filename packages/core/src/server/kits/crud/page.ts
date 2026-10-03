@@ -108,8 +108,11 @@ async function nullableColumns(
   return nullable;
 }
 
-/** A database refusal of the caller's values, as `VALIDATION`; anything else unchanged. */
-function refusal(error: unknown, read: PageRead): unknown {
+/**
+ * A database refusal of the caller's values (a filter or a cursor), as
+ * `VALIDATION`; anything else unchanged. The admin kit's `adminList` too.
+ */
+export function refusal(error: unknown, read: Pick<PageRead, "cursor" | "filtered">): unknown {
   const isValidation = error instanceof Error && error.name === "PrismaClientValidationError";
   if (!isValidation || (read.cursor === undefined && !read.filtered)) {
     return error;
