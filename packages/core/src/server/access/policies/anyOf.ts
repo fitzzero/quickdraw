@@ -34,6 +34,16 @@ function unionReads(policies: readonly AnyAccessPolicy[]): PolicyReads {
   };
 }
 
+const MEMBERS = new WeakMap<object, readonly AnyAccessPolicy[]>();
+
+/**
+ * The policies an `anyOf` policy combines, or `undefined` for any other
+ * policy: the sharing kit finds the `jsonAcl` or `members` policy among them.
+ */
+export function anyOfPolicies(policy: AnyAccessPolicy): readonly AnyAccessPolicy[] | undefined {
+  return MEMBERS.get(policy);
+}
+
 /**
  * The highest level any of `policies` grants on each row. List filters match
  * a row any of them lets through.
@@ -48,7 +58,7 @@ export function anyOf<const P extends readonly AnyAccessPolicy[]>(
     throw new TypeError("anyOf(...policies): pass one or more access policies");
   }
   const all: readonly AnyAccessPolicy[] = Object.freeze([...policies]);
-  return definePolicy({
+  const combined = definePolicy<AccessPolicy<PolicyColumns<P[number]>, PolicyForeign<P[number]>>>({
     kind: "anyOf",
     policies: all,
     reads: unionReads(all),
@@ -74,4 +84,6 @@ export function anyOf<const P extends readonly AnyAccessPolicy[]>(
       return { OR: matching };
     },
   });
+  MEMBERS.set(combined, all);
+  return combined;
 }

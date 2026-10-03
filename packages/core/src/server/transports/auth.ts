@@ -10,6 +10,7 @@ import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import type { Socket } from "socket.io";
 import type { AccessLevel } from "../../contract/access";
 import type { Logger } from "../../contract/logger";
+import { QuickdrawError } from "../../protocol/errors";
 import { modelKey } from "../storage";
 import type { MaybePromise, Principal } from "../types";
 import type { FlushSink } from "../uow/flushSink";
@@ -61,7 +62,9 @@ export interface ServerAuth<P extends Principal = Principal> {
    * Says who is calling. Throwing refuses the socket connection ("Authentication
    * failed", with `{ code: "UNAUTHENTICATED" }` as the `connect_error` data) or
    * answers the HTTP call with `UNAUTHENTICATED`; returning nothing lets the
-   * caller in anonymously, so only `"public"` methods pass.
+   * caller in anonymously, so only `"public"` methods pass. Throw a
+   * `QuickdrawError("UNAUTHENTICATED", ...)` for a refusal that is the
+   * caller's doing (it logs at debug; anything else thrown logs at error).
    */
   readonly authenticate?: (request: AuthenticateRequest) => MaybePromise<AuthenticateResult<P>>;
   /**
@@ -91,6 +94,33 @@ export interface ServiceAccessSource {
 
 /** Resolves a request to its principal, or `null`; rejects when authentication fails. */
 export type ResolvePrincipal = (request: AuthenticateRequest) => Promise<Principal | null>;
+
+const SOCKET_SESSIONS = new WeakMap<object, string>();
+
+/**
+ * Records the session a socket authenticated with, so that
+ * `server.access.disconnectUser(userId, { sessionId })` can end that
+ * session's sockets alone. `socketAuth` calls it for the auth routes'
+ * sessions; an app's own `authenticate` may too.
+ */
+export function recordSocketSession(socket: object, sessionId: string): void {
+  SOCKET_SESSIONS.set(socket, sessionId);
+}
+
+/** The session a socket authenticated with, when its `authenticate` recorded one. */
+export function socketSessionOf(socket: object): string | undefined {
+  return SOCKET_SESSIONS.get(socket);
+}
+
+/**
+ * True for a refusal `authenticate` made on purpose, by throwing a
+ * `QuickdrawError` with code `UNAUTHENTICATED` (a revoked session, a socket
+ * from a page the cookie may not be used from). The transports log those at
+ * debug, as the client's doing, and every other failure at error.
+ */
+export function isRefusal(error: unknown): boolean {
+  return error instanceof QuickdrawError && error.code === "UNAUTHENTICATED";
+}
 
 /** True when `value` has a principal's shape: an object with a non-empty string `userId`. */
 export function isPrincipal(value: unknown): value is Principal {

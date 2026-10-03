@@ -1,6 +1,7 @@
 // The client's lane of subscription events (RFC 0003 section 8.2). The server
-// runs `qd:sub`, `qd:col:sub`, `qd:col:items` and `qd:watch` in a lane per
-// socket: `limits.subscriptions.maxInFlight` (8) at once and `maxQueued` (64)
+// runs `qd:sub`, `qd:col:sub`, `qd:col:items`, `qd:watch` and
+// `qd:stream:sub` in a lane per socket:
+// `limits.subscriptions.maxInFlight` (8) at once and `maxQueued` (64)
 // waiting, then `RATE_LIMITED`. A page that mounts a board can ask for more
 // than that in one tick, so the client keeps a lane of its own in front of it:
 //
@@ -15,8 +16,8 @@
 //   closing the connection answers every waiting event that way at once, and
 //   leaves no timer behind.
 //
-// Unsubscribe events (`qd:unsub`, `qd:col:unsub`, `qd:unwatch`) are not in
-// the server's lane, and are sent directly.
+// Unsubscribe events (`qd:unsub`, `qd:col:unsub`, `qd:unwatch`,
+// `qd:stream:unsub`) are not in the server's lane, and are sent directly.
 //
 // React-free: the connection owns one; the change topics (`watch.ts`) and the
 // live data (`live/`) send through it.
@@ -36,7 +37,8 @@ export type SubscriptionEvent =
   | typeof CLIENT_EVENTS.sub
   | typeof CLIENT_EVENTS.collectionSub
   | typeof CLIENT_EVENTS.collectionItems
-  | typeof CLIENT_EVENTS.watch;
+  | typeof CLIENT_EVENTS.watch
+  | typeof CLIENT_EVENTS.streamSub;
 
 /**
  * Receives what came back for one subscription event: an error (no answer

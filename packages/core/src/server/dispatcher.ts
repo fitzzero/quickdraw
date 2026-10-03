@@ -6,7 +6,7 @@
 import type { AnyContract } from "../contract/defineContract";
 import type { DispatcherAccess } from "./access/api";
 import { createCaller, type Caller } from "./caller";
-import { registerLive } from "./emit/live";
+import { registerLive, type Presence, type StreamHandle } from "./emit/live";
 import { createPipeline } from "./pipeline/pipeline";
 import type { DispatchRequest, DispatchResult } from "./pipeline/request";
 import {
@@ -18,6 +18,8 @@ import {
 import { createRegistry, type Registry } from "./registry";
 import type { AnyService } from "./service";
 import type { DbOf, Principal, PrincipalOf } from "./types";
+
+export type { Presence, StreamHandle };
 
 type TypesOf<S extends readonly AnyService[]> = NonNullable<S[number]["~types"]>;
 
@@ -96,6 +98,21 @@ export interface Dispatcher<S extends readonly AnyService[] = readonly AnyServic
   readonly access: DispatcherAccess;
   /** The services' collections: a manual `reset`. Deltas themselves come from tracked writes. */
   readonly collections: DispatcherCollections;
+  /**
+   * Who is online, when they were last seen, and who is in a room (RFC 0003
+   * section 12.5), from the sockets of the server `createServer` attached;
+   * without a server nobody is online.
+   */
+  readonly presence: Presence;
+  /**
+   * The handle of one of the services' streams (RFC 0003 section 12.5), whose
+   * `push` appends an item: `dispatcher.stream(task, "logs").push(taskId,
+   * line)`. Throws a `TypeError` for a stream the dispatcher does not serve.
+   */
+  stream<C extends AnyContract, K extends keyof C["streams"] & string>(
+    contract: C,
+    name: K,
+  ): StreamHandle<C, K>;
   readonly registry: Registry;
   /** The resolved limits, for a server to announce in `qd:hello`. */
   readonly limits: DispatcherLimits;
@@ -172,6 +189,9 @@ export function createDispatcher<const S extends readonly AnyService[]>(
         settings.live.resetCollection(contract, collection, scope);
       },
     }),
+    presence: settings.live.realtime.presence,
+    stream: <C extends AnyContract, K extends keyof C["streams"] & string>(contract: C, name: K) =>
+      settings.live.realtime.stream(contract, name) as unknown as StreamHandle<C, K>,
     registry,
     limits: settings.limits,
   });

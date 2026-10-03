@@ -285,14 +285,21 @@ export interface ChangedFrame {
   readonly rev: Revision;
 }
 
-/** `qd:stream:sub` and `qd:stream:unsub`: one stream of a service, optionally one scope of it. */
+/**
+ * `qd:stream:sub` and `qd:stream:unsub`: one stream of a service, and for a
+ * scoped stream one scope of it (absent for a global stream).
+ */
 export interface StreamSubscribe {
   readonly s: string;
   readonly stream: string;
   readonly scope?: string;
 }
 
-/** The acknowledgement of `qd:stream:sub`: the stream's seed, oldest first. */
+/**
+ * The acknowledgement of `qd:stream:sub`: the stream's seed, oldest first,
+ * read as the socket joined the stream's room, so items pushed after it
+ * arrive as `qd:stream` frames (possibly before this acknowledgement).
+ */
 export type StreamSubscribeReply<Item = unknown> =
   | { readonly ok: true; readonly seed: readonly Item[] }
   | Failure;
@@ -315,6 +322,26 @@ export type ChannelFrame<Payload = unknown> = readonly [
 /** `qd:event`: a custom room event declared in a contract's `events`: `[service, event, payload]`. */
 export type EventFrame<Payload = unknown> = readonly [s: string, event: string, payload: Payload];
 
+/**
+ * `qd:presence`: who is in an app room (one a method joined with
+ * `ctx.rooms.join`) the socket is in, by user id (RFC 0003 section 12.5).
+ * Sent to a socket as it joins with `users`, the whole list (its own user
+ * included); to the room's other sockets with `joined` when a user's first
+ * socket joins, and with `left` when a user's last socket leaves; and to a
+ * socket that leaves with `users: []`, since it no longer sees the room.
+ * Exactly one of `users`, `joined` and `left` is present. Anonymous sockets
+ * are in no list.
+ */
+export interface PresenceFrame {
+  readonly room: string;
+  /** Every user in the room: replaces what the client holds for it. */
+  readonly users?: readonly string[];
+  /** A user who joined the room. */
+  readonly joined?: string;
+  /** A user who left the room: their last socket in it left or disconnected. */
+  readonly left?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Connection-level frames (sections 4.4, 7.2 and 8.3)
 // ---------------------------------------------------------------------------
@@ -325,7 +352,9 @@ export type RevokeReason = "access" | "anchor-deleted";
 /**
  * `qd:revoked`: the server removed this socket from a subscription's room,
  * because the principal's access was lowered or removed (`access`), or the
- * row a collection scope is anchored on was deleted (`anchor-deleted`).
+ * row a collection scope is anchored on was deleted (`anchor-deleted`). A
+ * stream feed's subscription is revoked for `access` only; `scope` is absent
+ * for a global stream.
  */
 export type RevokedFrame =
   | {
@@ -340,6 +369,13 @@ export type RevokedFrame =
       readonly s: string;
       readonly c: string;
       readonly scope: string;
+    }
+  | {
+      readonly kind: "stream";
+      readonly reason: RevokeReason;
+      readonly s: string;
+      readonly stream: string;
+      readonly scope?: string;
     };
 
 /** `qd:rotate`: reconnect at a random moment within `withinMs`. */
@@ -384,6 +420,7 @@ interface ServerListeners {
   revoked: (frame: RevokedFrame) => void;
   stream: (frame: StreamFrame) => void;
   event: (frame: EventFrame) => void;
+  presence: (frame: PresenceFrame) => void;
   rotate: (frame: RotateFrame) => void;
   access: (frame: AccessFrame) => void;
 }

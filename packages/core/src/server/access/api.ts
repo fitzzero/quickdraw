@@ -14,7 +14,10 @@ import type { AccessChangeListener, Forgotten } from "./changes";
 import { serviceGrant } from "./levels";
 import type { AccessFilter, RowLevels } from "./policy";
 import { anchorKey, startCall, type EngineState } from "./tools";
-import type { RowAccess } from "./types";
+import type { AccessEngine, RowAccess } from "./types";
+
+/** Re-exported for the live data, which authorizes stream subscribers through the engine. */
+export type { AccessEngine };
 
 /** The dispatcher's view of its services' access policies: `dispatcher.access`. */
 export interface DispatcherAccess {

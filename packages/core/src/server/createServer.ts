@@ -39,6 +39,7 @@ import {
 } from "./transports/http";
 import {
   createSocketServer,
+  type DisconnectUserOptions,
   type QuickdrawIo,
   type SocketCors,
   type SocketOptions,
@@ -90,15 +91,21 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
   readonly legacyWire?: boolean;
   /**
    * The socket rate limiter (`createRateLimiter`'s options), or `false` for
-   * none. Default: 100 events per minute per socket. `qd:ch`, `qd:cancel`,
-   * the entity and collection subscription events (`qd:sub`, `qd:unsub`,
-   * `qd:col:sub`, `qd:col:unsub`, `qd:col:items`) and the topic watches
-   * (`qd:watch`, `qd:unwatch`) are never counted; the ones that read run in a
+   * none. Default: 100 events per minute per socket. `qd:ch` (channels keep
+   * their own per-socket token buckets), `qd:cancel`, the entity and
+   * collection subscription events (`qd:sub`, `qd:unsub`, `qd:col:sub`,
+   * `qd:col:unsub`, `qd:col:items`), the topic watches (`qd:watch`,
+   * `qd:unwatch`) and the stream subscriptions (`qd:stream:sub`,
+   * `qd:stream:unsub`) are never counted; the ones that read run in a
    * per-socket lane instead (`limits.subscriptions`: 8 at once, 64 waiting,
    * then `RATE_LIMITED`).
    */
   readonly rateLimit?: SocketRateLimitOptions | false;
-  /** The HTTP transport's options, or `false` to serve no HTTP calls. */
+  /**
+   * The HTTP transport's options, or `false` to serve no HTTP calls. It has
+   * no rate limit unless `rateLimit` is given: `http: { rateLimit:
+   * createCallLimiter() }` (from `./server/express`).
+   */
   readonly http?: HttpTransportOptions | false;
   /** Close the server on `SIGTERM` and `SIGINT`. Default `false`. The process is never exited. */
   readonly handleSignals?: boolean;
@@ -157,7 +164,24 @@ export interface QuickdrawServer<S extends readonly AnyService[] = readonly AnyS
      * the user's entity subscriptions again. Resolves with the grants.
      */
     refresh(userId: string): Promise<ServiceGrants>;
+    /**
+     * Disconnects every socket of `userId` (only those that authenticated
+     * with `sessionId`, when given), on every node: behind a cluster adapter
+     * the request is broadcast. For a session the app revoked (wire
+     * `createAuthRoutes`' `onRevoke` to it): an open socket keeps the
+     * principal it authenticated with, and its reconnect is authenticated
+     * afresh. Returns how many sockets this node disconnected.
+     */
+    disconnectUser(userId: string, options?: DisconnectUserOptions): number;
   };
+  /**
+   * Who is online, when they were last seen, and who is in a room (RFC 0003
+   * section 12.5); the same as `ctx.presence`. Behind a cluster adapter it
+   * asks every node.
+   */
+  readonly presence: Dispatcher<S>["presence"];
+  /** The handle of one of the services' streams: `server.stream(task, "logs").push(taskId, line)`. */
+  readonly stream: Dispatcher<S>["stream"];
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -354,6 +378,12 @@ export function createServer<const S extends readonly AnyService[]>(
     dispatcher,
     close,
     rotate: ({ withinMs }: RotateOptions) => sockets.rotate(withinMs),
-    access: Object.freeze({ refresh: (userId: string) => sockets.refresh(userId) }),
+    access: Object.freeze({
+      refresh: (userId: string) => sockets.refresh(userId),
+      disconnectUser: (userId: string, disconnect?: DisconnectUserOptions) =>
+        sockets.disconnectUser(userId, disconnect),
+    }),
+    presence: dispatcher.presence,
+    stream: dispatcher.stream,
   });
 }

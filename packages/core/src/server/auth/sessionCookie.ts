@@ -7,6 +7,14 @@
 
 export const SESSION_COOKIE = "session";
 
+/**
+ * The session cookie the auth routes kit sets by default on a secure request
+ * when no cookie domain is configured. The `__Host-` prefix makes a browser
+ * keep it only when it is Secure, has `Path=/` and no `Domain`, so no other
+ * site under the same parent domain can set or replace it.
+ */
+export const HOST_SESSION_COOKIE = "__Host-session";
+
 // Matches the default JWT expiry ("7d" in jwt.ts) — a cookie that outlives
 // its JWT just keeps sending a token the server will reject. Pass maxAgeMs
 // if your JWT lifetime differs.
@@ -33,19 +41,27 @@ export interface SessionCookieOptions {
   maxAgeMs?: number;
   /** Cookie domain. Defaults to process.env.COOKIE_DOMAIN. */
   domain?: string;
+  /**
+   * SameSite. Default: "none" in production, "lax" otherwise. A "none"
+   * cookie is always Secure, because browsers drop one that is not.
+   */
+  sameSite?: "lax" | "none";
+  /** Secure. Default: true in production. */
+  secure?: boolean;
 }
 
 function cookieOptions(options: SessionCookieOptions): CookieSettings {
   const isProd = process.env.NODE_ENV === "production";
   const domain = options.domain ?? process.env.COOKIE_DOMAIN;
+  // SameSite=None (with Secure) lets the session cookie ride cross-site
+  // fetches, so a secondary web origin can hit the primary API host. The
+  // CORS allowlist (validateRedirectOrigin) is the actual origin gate. Dev
+  // keeps Lax — localhost is http-only and SameSite=None requires Secure.
+  const sameSite = options.sameSite ?? (isProd ? "none" : "lax");
   return {
     httpOnly: true,
-    secure: isProd,
-    // SameSite=None (with Secure) lets the session cookie ride cross-site
-    // fetches, so a secondary web origin can hit the primary API host. The
-    // CORS allowlist (validateRedirectOrigin) is the actual origin gate. Dev
-    // keeps Lax — localhost is http-only and SameSite=None requires Secure.
-    sameSite: isProd ? "none" : "lax",
+    secure: sameSite === "none" || (options.secure ?? isProd),
+    sameSite,
     path: "/",
     ...(domain && { domain }),
   };

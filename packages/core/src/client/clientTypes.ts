@@ -21,6 +21,7 @@ import type {
   ItemOf,
   KindOf,
   MethodName,
+  MethodOf,
   OutputOf,
   ScopeOf,
   ViewName,
@@ -28,8 +29,15 @@ import type {
 import type { QuickdrawError } from "../protocol/errors";
 import type { MethodMutationOptions, MethodQueryOptions } from "./hooks";
 import type { MethodQueryKey } from "./keys";
-import type { UseCollectionOptions, UseCollectionResult } from "./live/useCollection";
-import type { UseEntitiesResult, UseEntityOptions, UseEntityResult } from "./live/useEntity";
+import type {
+  RealtimeMembers,
+  UseCollectionOptions,
+  UseCollectionResult,
+  UseEntitiesResult,
+  UseEntityOptions,
+  UseEntityResult,
+} from "./live/memberTypes";
+import type { SearchMemberOf } from "./live/searchTypes";
 import type { OptimisticCache } from "./optimistic";
 
 /** Options of a query member's `call`. */
@@ -104,9 +112,9 @@ export interface MutationMember<C extends AnyContract, M extends MethodName<C>> 
   call(...args: InputArgs<C, M, [options?: MutationCallOptions]>): Promise<OutputOf<C, M>>;
 }
 
-/** One method's member, by the method's kind. */
+/** One method's member, by the method's kind; a search kit method's query member also has `useSearch`. */
 export type MethodMember<C extends AnyContract, M extends MethodName<C>> =
-  KindOf<C, M> extends "query" ? QueryMember<C, M> : MutationMember<C, M>;
+  KindOf<C, M> extends "query" ? QueryMember<C, M> & SearchMemberOf<C, M> : MutationMember<C, M>;
 
 /** The entity members of `qd.<key>`, for a contract with an entity. */
 export interface EntityMembers<C extends AnyContract> {
@@ -137,21 +145,35 @@ export interface CollectionMember<C extends AnyContract, K extends CollectionNam
 }
 
 /**
- * The live members of `qd.<key>` (RFC 0003 sections 11 and 11.5):
+ * The live members of `qd.<key>` (RFC 0003 sections 11, 11.5 and 12.5):
  * `useEntity` and `useEntities` when the contract has an entity, and one
- * member per collection, beside the methods (methods and collections share
- * one namespace).
+ * member per collection, stream, channel and event, beside the methods
+ * (they all share one namespace).
  */
 export type LiveMembers<C extends AnyContract> = ([EntityOf<C>] extends [never]
   ? unknown
   : EntityMembers<C>) & {
   readonly [K in CollectionName<C>]: CollectionMember<C, K>;
-};
+} & RealtimeMembers<C>;
 
-/** `qd.<key>`: one member per method, plus the live members. */
+/** The names of a contract's methods the admin kit made (the root export's `AdminMethodsOf`). */
+type AdminMethodNames<C extends AnyContract> = {
+  [M in MethodName<C>]: "~admin" extends keyof MethodOf<C, M> ? M : never;
+}[MethodName<C>];
+
+/**
+ * `qd.<key>.admin` (RFC 0003 section 12.4): the members of the admin kit's
+ * methods together, for a contract with the kit; no member otherwise.
+ */
+export type AdminMembers<C extends AnyContract> = [AdminMethodNames<C>] extends [never]
+  ? unknown
+  : { readonly admin: { readonly [M in AdminMethodNames<C>]: MethodMember<C, M> } };
+
+/** `qd.<key>`: one member per method, plus the live members, plus `admin` with the admin kit. */
 export type ServiceClient<C extends AnyContract> = {
   readonly [M in MethodName<C>]: MethodMember<C, M>;
-} & LiveMembers<C>;
+} & LiveMembers<C> &
+  AdminMembers<C>;
 
 /**
  * `qd.invalidate`: invalidates cached query results through the provider's

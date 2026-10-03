@@ -84,7 +84,7 @@ export function useEntity<Row>(
   id: string | null | undefined,
   options: UseEntityOptions = {},
 ): UseEntityResult<Row> {
-  const { queryClient, live } = useLiveData(`${service}.useEntity`);
+  const { queryClient, live, awaiting } = useLiveData(`${service}.useEntity`);
   const rowId = typeof id === "string" ? id : "";
   const active = options.enabled !== false && rowId !== "";
   useEffect(
@@ -93,8 +93,8 @@ export function useEntity<Row>(
   );
   const view = useOverlayView(queryClient, service);
   const { data: entry } = useQuery(entryQuery<EntityEntry<Row>>(entityKey(service, rowId)));
-  // Disabled, it shows nothing of what is cached.
-  const held = active ? entry : undefined;
+  // Disabled, or awaiting new credentials' hello, it shows nothing of what is cached.
+  const held = active && !awaiting ? entry : undefined;
   return useMemo(() => shown(held, view, active), [held, view, active]);
 }
 
@@ -141,7 +141,7 @@ export function useEntities<Row>(
   ids: readonly string[],
   options: UseEntityOptions = {},
 ): UseEntitiesResult<Row> {
-  const { queryClient, live } = useLiveData(`${service}.useEntities`);
+  const { queryClient, live, awaiting } = useLiveData(`${service}.useEntities`);
   const joined = ids.map((id) => (typeof id === "string" ? id : "")).join("\u0000");
   const count = ids.length;
   const rowIds = useMemo(() => (count === 0 ? [] : joined.split("\u0000")), [joined, count]);
@@ -155,7 +155,7 @@ export function useEntities<Row>(
     queries: rowIds.map((id) => entryQuery<EntityEntry<Row>>(entityKey(service, id))),
     combine: entriesOf<Row>,
   });
-  // Disabled, it shows nothing of what is cached.
-  const held = active ? entries : NO_ENTRIES;
+  // Disabled, or awaiting new credentials' hello, it shows nothing of what is cached.
+  const held = active && !awaiting ? entries : NO_ENTRIES;
   return useMemo(() => combined(rowIds, held, view, active), [rowIds, held, view, active]);
 }

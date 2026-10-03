@@ -7,6 +7,10 @@
 import type { AnyContract } from "../contract/defineContract";
 import type { Logger } from "../contract/logger";
 import { QuickdrawError } from "../protocol/errors";
+import type { DispatcherAccess, PolicyEngine } from "./access/api";
+import type { ContextRooms, Presence } from "./realtime/types";
+import type { AnyService } from "./service";
+import type { StorageAdapter } from "./storage";
 import type {
   ContextExtensionOf,
   DbOf,
@@ -31,12 +35,7 @@ export interface TouchOptions {
  */
 export type ContextServices = Readonly<Record<never, never>>;
 
-/**
- * `ctx.rooms`: stream and presence joins and custom room events (RFC 0003
- * sections 12.5 and 15). A seam: it has no members until the presence and
- * streams card implements it, and reaching into it throws `INTERNAL`.
- */
-export type ContextRooms = Readonly<Record<never, never>>;
+export type { ContextRooms, Presence };
 
 /**
  * The fields of `ctx` the framework provides, whatever the app adds. `M` is
@@ -79,8 +78,14 @@ export interface BaseContext<P = Principal, M = McpContext> {
   ): void;
   /** Typed callers for the app's other services. Not implemented yet; see {@link ContextServices}. */
   readonly services: ContextServices;
-  /** Room joins and custom room events. Not implemented yet; see {@link ContextRooms}. */
+  /**
+   * App-defined rooms the calling socket joins and leaves (`join` answers
+   * `false` for a call without a socket), and typed room events: `emit` and
+   * `emitToUser` (RFC 0003 section 12.5).
+   */
   readonly rooms: ContextRooms;
+  /** Who is online, when they were last seen, and who is in a room (RFC 0003 section 12.5). */
+  readonly presence: Presence;
 }
 
 /**
@@ -109,15 +114,61 @@ export type AnyContext = BaseContext<Principal | null>;
 export type ContextExtender = (base: AnyContext) => object;
 
 /**
+ * What the framework's kits (RFC 0003 section 12) know about the call a
+ * `ctx` belongs to: the service whose method runs, and the dispatcher's
+ * access policies and storage adapter. A kit's handlers are made before any
+ * dispatcher exists, so they find these through `kitRuntimeOf(ctx)`. It is
+ * never a member of `ctx`.
+ */
+export interface KitRuntime {
+  readonly service: AnyService;
+  /** `dispatcher.access`, and `resolve` for levels without service grants (a collection scope's). */
+  readonly access: DispatcherAccess & Pick<PolicyEngine, "resolve">;
+  readonly storage: StorageAdapter | undefined;
+  /** How many sockets sit in a room, for the admin kit's subscriber counts. */
+  readonly occupancy?: RoomOccupancy;
+}
+
+/** The sockets in a room (RFC 0003 section 6), as this process sees its rooms. */
+export interface RoomOccupancy {
+  /** This process's sockets in `room`: none without a server. */
+  sockets(room: string): number;
+  /**
+   * `true` when this process sees every socket: its server has no cluster
+   * adapter (Redis), or there is no server.
+   */
+  complete(): boolean;
+}
+
+/**
  * The per-call fields the dispatcher fills in. `touch` is the dispatcher's
- * (its tracked writes); a context built without one gets a `touch` that
- * does nothing.
+ * (its tracked writes), `rooms` and `presence` its live data's; a context
+ * built without them gets a `touch` that does nothing, `rooms` that join
+ * nothing and send nothing, and a `presence` that sees nobody. `kit` is kept
+ * beside the context, never on it.
  */
 export type ContextFields = Pick<
   AnyContext,
   "principal" | "signal" | "log" | "requestId" | "transport" | "mcp"
 > &
-  Partial<Pick<AnyContext, "touch">>;
+  Partial<Pick<AnyContext, "touch" | "rooms" | "presence">> & { readonly kit?: KitRuntime };
+
+const KIT_RUNTIMES = new WeakMap<object, KitRuntime>();
+
+/**
+ * The kit runtime of the call `ctx` belongs to, or `undefined` for a
+ * context no dispatcher built.
+ */
+export function kitRuntimeOf(ctx: object): KitRuntime | undefined {
+  return KIT_RUNTIMES.get(ctx);
+}
+
+function withRuntime<Ctx extends object>(ctx: Ctx, runtime: KitRuntime | undefined): Ctx {
+  if (runtime !== undefined) {
+    KIT_RUNTIMES.set(ctx, runtime);
+  }
+  return ctx;
+}
 
 /** A signal that never aborts, for calls that cannot be cancelled. */
 export const NEVER_ABORTED: AbortSignal = new AbortController().signal;
@@ -158,26 +209,43 @@ function unavailable(member: string): Readonly<Record<never, never>> {
 }
 
 const SERVICES: ContextServices = unavailable("ctx.services");
-const ROOMS: ContextRooms = unavailable("ctx.rooms");
+
+/** The `ctx.rooms` of a context no dispatcher built: no socket to join with, no server to send through. */
+const NO_ROOMS: ContextRooms = Object.freeze({
+  join: () => false,
+  leave: () => false,
+  emit: untracked,
+  emitToUser: untracked,
+});
+
+/** The `ctx.presence` of a context no dispatcher built: no server, so nobody is online. */
+const NO_PRESENCE: Presence = Object.freeze({
+  isOnline: () => Promise.resolve(false),
+  lastSeen: () => Promise.resolve(null),
+  count: () => Promise.resolve(0),
+  users: () => Promise.resolve([]),
+});
 
 /**
  * Builds a call's `ctx`: the framework's fields, then the app's fields from
  * `extend`. The framework's fields win when the names collide.
  */
 export function createContext(fields: ContextFields, extend?: ContextExtender): AnyContext {
+  const { kit, ...own } = fields;
   const base: AnyContext = Object.freeze({
-    ...fields,
-    touch: fields.touch ?? untracked,
+    ...own,
+    touch: own.touch ?? untracked,
     services: SERVICES,
-    rooms: ROOMS,
+    rooms: own.rooms ?? NO_ROOMS,
+    presence: own.presence ?? NO_PRESENCE,
   });
   if (extend === undefined) {
-    return base;
+    return withRuntime(base, kit);
   }
-  return Object.freeze({ ...extend(base), ...base });
+  return withRuntime(Object.freeze({ ...extend(base), ...base }), kit);
 }
 
 /** The same `ctx` with another signal: the one a handler run aborts. */
 export function withSignal(ctx: AnyContext, signal: AbortSignal): AnyContext {
-  return Object.freeze({ ...ctx, signal });
+  return withRuntime(Object.freeze({ ...ctx, signal }), KIT_RUNTIMES.get(ctx));
 }

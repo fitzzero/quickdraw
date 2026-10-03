@@ -23,6 +23,7 @@ import type { StorageAdapter, StorageRow, StorageWhere } from "../storage";
 import { unreadable } from "../transports/ack";
 import type { BoundCollection } from "./bind";
 import { afterCursor, decodeCursor, encodeCursor, orderByOf, type CursorValues } from "./cursor";
+import type { ServiceCollection } from "./define";
 import { readIndex } from "./index";
 import { itemOf, selectWith } from "./items";
 
@@ -55,12 +56,16 @@ function isId(value: unknown): value is string {
 /**
  * The filter matching the members of a scope: its scope column, or the ids
  * its `via` junction links to it, and `where`. `undefined` for a `via` scope
- * with no links: it has no members.
+ * with no links: it has no members. The search kit reads a scope's members
+ * with it too, through its database client, and passes `maxLinks`: then at
+ * most that many links are read, the first by the linked row's id, so one
+ * call never reads a scope's every link.
  */
 export async function membersWhere(
-  storage: StorageAdapter,
-  collection: BoundCollection,
+  storage: Pick<StorageAdapter, "findMany">,
+  collection: Pick<ServiceCollection, "scope" | "where">,
   scope: string,
+  maxLinks?: number,
 ): Promise<StorageWhere | undefined> {
   const { where } = collection;
   const filtered = (filter: StorageWhere): StorageWhere =>
@@ -72,6 +77,7 @@ export async function membersWhere(
   const links = await storage.findMany(model, {
     where: { [column]: scope },
     select: { [entry]: true },
+    ...(maxLinks === undefined ? {} : { orderBy: { [entry]: "asc" }, take: maxLinks }),
   });
   const ids = [...new Set(links.map((link) => link[entry]).filter(isId))];
   return ids.length === 0 ? undefined : filtered({ id: { in: ids } });

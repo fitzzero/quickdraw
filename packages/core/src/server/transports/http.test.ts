@@ -27,6 +27,8 @@ import {
   type ServerAuth,
   type ServerOnlyOptions,
 } from "../index";
+import { createServerCaller } from "../../utils/index";
+import { createCallLimiter } from "../express/rateLimit";
 import { transportHarness } from "./__tests__/harness";
 import { createProbe } from "./__tests__/probe";
 
@@ -211,6 +213,44 @@ describe("credentials", () => {
     expect(await echo({})).toMatchObject({ status: 200, body: { d: { userId: null } } });
   });
 
+  it("reads __Host-session before session, only a cookie name it is given, and no repeated name", async () => {
+    const { url } = await serve();
+    const echo = (headers: Record<string, string>) =>
+      post(url, "/qd/probeService/echo", { body: '{"text":"hi"}', headers });
+    const userOf = async (headers: Record<string, string>) =>
+      ((await echo(headers)).body as { d?: { userId: unknown } }).d?.userId;
+    // The moderator token is Alice's, with a Moderate grant.
+    const grantsOf = async (headers: Record<string, string>) =>
+      ((await echo(headers)).body as { d?: { grants?: unknown } }).d?.grants;
+    expect(
+      await grantsOf({ cookie: "session=moderator-token; __Host-session=alice-token" }),
+    ).toBeNull();
+    expect(await userOf({ cookie: "session=moderator-token; __Host-session=alice-token" })).toBe(
+      "alice",
+    );
+    // Two cookies of one name: one may have been planted by a sibling site, so neither counts.
+    expect(await userOf({ cookie: "session=alice-token; session=moderator-token" })).toBeNull();
+    expect(
+      await grantsOf({ cookie: "session=alice-token; session=x", ...bearer("moderator-token") }),
+    ).toEqual({ probeService: "Moderate" });
+    // A repeated __Host-session does not let session stand in for it.
+    expect(
+      await userOf({ cookie: "__Host-session=a; __Host-session=b; session=alice-token" }),
+    ).toBeNull();
+    const named = await serve({ http: { cookieName: "sid" } });
+    const namedUser = async (cookie: string) =>
+      (
+        (
+          await post(named.url, "/qd/probeService/echo", {
+            body: '{"text":"hi"}',
+            headers: { cookie },
+          })
+        ).body as { d?: { userId: unknown } }
+      ).d?.userId;
+    expect(await namedUser("sid=alice-token; session=moderator-token")).toBe("alice");
+    expect(await namedUser("__Host-session=alice-token")).toBeNull();
+  });
+
   it("answers 401 when authenticate throws", async () => {
     const { url, logger } = await serve();
     expect(
@@ -330,6 +370,65 @@ describe("the http option", () => {
     expect(() =>
       createHttpRouter({ dispatcher: moved.server.dispatcher, maxBodyBytes: 0 }),
     ).toThrow("http.maxBodyBytes must be a whole number of bytes, 1 or more");
+    expect(() =>
+      createHttpRouter({ dispatcher: moved.server.dispatcher, rateLimit: 5 as never }),
+    ).toThrow("http.rateLimit must be an Express middleware, such as createCallLimiter()");
+  });
+
+  it("rate-limits the calls it serves, and only those, refusing in its own reply shape", async () => {
+    const app = express();
+    app.get("/health", (_req, res) => {
+      res.json({ status: "ok" });
+    });
+    const { url, records } = await serve({
+      app,
+      http: { rateLimit: createCallLimiter({ max: 2 }) },
+    });
+    const get = () => post(url, "/qd/taskService/get", { body: '{"id":"t1"}' });
+    expect((await get()).status).toBe(200);
+    expect((await get()).status).toBe(200);
+    const limited = await get();
+    expect(limited).toMatchObject({
+      status: 429,
+      body: {
+        ok: false,
+        e: {
+          code: "RATE_LIMITED",
+          message: "Rate limit exceeded",
+          data: { retryAfterMs: expect.any(Number) },
+        },
+      },
+    });
+    expect(Number(limited.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+    // The app's own routes are not counted, and the refused call never ran.
+    for (let index = 0; index < 3; index += 1) {
+      expect((await fetch(`${url}/health`)).status).toBe(200);
+    }
+    expect(records).toHaveLength(2);
+    // A server caller reads the refusal as RATE_LIMITED.
+    const caller = createServerCaller({ task }, { url });
+    await expect(caller.task.get.call({ id: "t1" })).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+      data: { retryAfterMs: expect.any(Number) },
+    });
+  });
+
+  it("answers INTERNAL when the limiter fails", async () => {
+    const { url, logger } = await serve({
+      app: express(),
+      http: {
+        rateLimit: (_req, _res, next) => {
+          next(new Error("the limiter's store is down"));
+        },
+      },
+    });
+    expect(await post(url, "/qd/taskService/get", { body: '{"id":"t1"}' })).toMatchObject({
+      status: 500,
+      body: { ok: false, e: { code: "INTERNAL" } },
+    });
+    expect(logger.at("error").map((entry) => entry.message)).toEqual([
+      "The HTTP transport failed to serve a call",
+    ]);
   });
 });
 

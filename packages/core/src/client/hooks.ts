@@ -43,12 +43,18 @@ import {
 } from "@tanstack/react-query";
 import type { QuickdrawError } from "../protocol/errors";
 import { callData, isNotModified, shouldRetry } from "./call";
-import { useQueriesHello, useQuickdrawContext } from "./context";
+import { useAwaitingHello, useQueriesHello, useQuickdrawContext } from "./context";
 import { methodKey, methodKeyPrefix, type MethodQueryKey } from "./keys";
 import type { MethodTarget } from "./members";
 import { mutateOptimistically, type OptimisticCache, type OptimisticUpdate } from "./optimistic";
 import { fetchMethodQuery } from "./query";
-import { readAfterJoin, topicOf, useOverlaySelect, useTopicWatch } from "./queryHooks";
+import {
+  hiddenResult,
+  readAfterJoin,
+  topicOf,
+  useOverlaySelect,
+  useTopicWatch,
+} from "./queryHooks";
 import { carryVersion } from "./versions";
 
 /** Options of a query hook: TanStack's `useQuery` options, without the key and the query function. */
@@ -107,12 +113,13 @@ export function useMethodQuery<Output, Data = Output, Input = unknown>(
     `${target.service}.${target.method}.useQuery`,
   );
   const live = useQueriesHello(connection) !== null;
+  const awaiting = useAwaitingHello(connection, queryClient);
   const { enabled, retry, structuralSharing, select, ...rest } = options;
   const queryKey = methodKey(target.service, target.method, input);
   const topic = enabled === false ? undefined : topicOf(target, input);
   useTopicWatch({ connection, coordinator, service: target.service, queryKey, topic });
   const shown = useOverlaySelect<Output, Data>(queryClient, target, select);
-  return useQuery<Output, QuickdrawError, Data, MethodQueryKey<Input>>({
+  const result = useQuery<Output, QuickdrawError, Data, MethodQueryKey<Input>>({
     ...rest,
     queryKey,
     queryFn: async ({ signal }) => {
@@ -135,6 +142,8 @@ export function useMethodQuery<Output, Data = Output, Input = unknown>(
     structuralSharing: shareKeepingVersion(structuralSharing),
     ...(shown === undefined ? {} : { select: shown }),
   });
+  // While new credentials await their hello, what is cached may be the last user's.
+  return awaiting ? hiddenResult(result) : result;
 }
 
 /**

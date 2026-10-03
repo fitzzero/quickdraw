@@ -72,6 +72,29 @@ export type {
   HandlerContext,
   TouchOptions,
 } from "./context";
+
+// Presence, streams, channels and typed room events (RFC 0003 section 12.5):
+// `ctx.rooms`, `ctx.presence` / `server.presence`, `qd.stream(...).push`, and
+// the channel handlers of `defineService`
+export type {
+  AppRooms,
+  ChannelAccess,
+  ChannelContext,
+  ChannelHandler,
+  ChannelImplementation,
+  ChannelOptions,
+  ChannelsRequired,
+  Presence,
+  ServiceChannel,
+  ServiceStream,
+  StreamHandle,
+  StreamPushArgs,
+  StreamSubscriptions,
+} from "./realtime/types";
+export { CHANNEL_ABUSE_MULTIPLIER, CHANNEL_ABUSE_WINDOW_MS } from "./realtime/channels";
+export { MAX_APP_ROOMS, PRESENCE_MAX_LAST_SEEN } from "./realtime/presence";
+export { STREAM_MAX_SCOPES } from "./realtime/seeds";
+export { MAX_STREAMS_PER_SOCKET } from "./realtime/streamSubscriptions";
 export type { CallOptions, Caller, CallerFor, MethodCaller, ServiceCaller } from "./caller";
 
 // The dispatcher and its pipeline
@@ -143,6 +166,70 @@ export type {
   WatchAccess,
 } from "./access/types";
 
+// Kits (RFC 0003 section 12): the read/write kit's server half, whose
+// contract half is `crud.contract` on the root export; guards and ordinals
+// for hand-written handlers
+export { crud } from "./kits/crud/handlers";
+export { nextOrdinal, ORDINAL_STEP, type NextOrdinalOptions } from "./kits/crud/ordinal";
+export { requireRow } from "./kits/guards";
+export type { CrudPrepare } from "./kits/crud/create";
+export type { KitHandler, KitHandlerArgs } from "./kits/crud/runtime";
+export type {
+  CrudAccess,
+  CrudCreateOf,
+  CrudHandlersOptions,
+  CrudImplementations,
+  CrudKindOf,
+  CrudMethodsOf,
+  KitContext,
+} from "./kits/crud/types";
+// The search kit's server half (RFC 0003 section 12.2), whose contract half
+// is `search.contract` on the root export
+export { search } from "./kits/search/handlers";
+export type {
+  SearchAccess,
+  SearchContract,
+  SearchHandlersOptions,
+  SearchIdsOptions,
+  SearchImplementations,
+  SearchMethodsOf,
+  SearchStrategy,
+  SearchStrategyContext,
+} from "./kits/search/types";
+// The sharing and membership kit's server half (RFC 0003 section 12.3), whose
+// contract half is `sharing.contract` on the root export
+export { sharing } from "./kits/sharing/handlers";
+export type {
+  SharingAccess,
+  SharingByNameOf,
+  SharingChange,
+  SharingChangeKind,
+  SharingContract,
+  SharingDefaultAccess,
+  SharingHandlersOptions,
+  SharingImplementations,
+  SharingKindOf,
+  SharingMethodsOf,
+  SharingOnChange,
+  SharingOptionsArgs,
+  SharingResolveUser,
+  SharingUserLookup,
+} from "./kits/sharing/types";
+
+// The admin kit's server half (RFC 0003 section 12.4), whose contract half is
+// `admin.contract` on the root export
+export { admin } from "./kits/admin/handlers";
+export { ADMIN_HIDDEN_FIELDS, displayNameOf, labelOf } from "./kits/admin/meta";
+export type {
+  AdminAccess,
+  AdminContract,
+  AdminDefaultAccess,
+  AdminFieldOf,
+  AdminFieldOverride,
+  AdminHandlersOptions,
+  AdminImplementations,
+} from "./kits/admin/types";
+
 // The seams later cards implement: tracked writes, "not modified" versions
 // and the completion record
 export {
@@ -182,6 +269,7 @@ export {
 } from "./createServer";
 export {
   createHttpRouter,
+  type HttpMiddleware,
   type HttpRouter,
   type HttpRouterOptions,
   type HttpTransportOptions,
@@ -195,8 +283,14 @@ export type {
   ServiceGrants,
   SocketAuthenticateRequest,
 } from "./transports/auth";
+export { recordSocketSession } from "./transports/auth";
 export type { QuickdrawIo, QuickdrawServerSocket, QuickdrawSocketData } from "./transports/types";
-export type { SocketCors, SocketOptions, SocketRateLimitOptions } from "./transports/socketServer";
+export type {
+  DisconnectUserOptions,
+  SocketCors,
+  SocketOptions,
+  SocketRateLimitOptions,
+} from "./transports/socketServer";
 export type { LegacyReply } from "./transports/legacy";
 
 // Redis adapter for horizontal scaling

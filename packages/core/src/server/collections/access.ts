@@ -12,11 +12,15 @@
 // A change topic (RFC 0003 section 11.3) is watched on the same terms: a
 // collection scope's topic exactly as a subscribe to that scope, and a
 // service's topic by the service's `watchAccess`, closed to everyone when
-// the service declares none.
+// the service declares none. A search kept to a scope (the search kit, RFC
+// 0003 section 12.2) is decided by the same rule (`allowedScopes`).
 
+import type { AccessLevel } from "../../contract/access";
 import { QuickdrawError } from "../../protocol/errors";
+import type { PolicyEngine } from "../access/api";
 import { meetsLevel, serviceGrant } from "../access/levels";
 import { anchorKey } from "../access/tools";
+import type { AnyService } from "../service";
 import type { Principal } from "../types";
 import type { BoundCollection, CollectionHub } from "./bind";
 
@@ -30,42 +34,68 @@ export type WatchTarget =
     };
 
 /**
- * The scopes of `scopes` the principal may subscribe to, each with the rows
- * its access is derived from (its anchors): the anchor row and its `inherit`
- * parents, none for a `"self"` scope. One engine call; a lookup that fails
- * rejects.
+ * What deciding a collection's scopes needs, wherever the scope arrives
+ * from: a `qd:col:sub`, a topic watch, or a search kept to the scope.
  */
-export async function authorizeScopes(
-  hub: CollectionHub,
-  collection: BoundCollection,
+export interface ScopeRule {
+  /** The collection's own service: its service-wide `Admin` grant passes while it keeps `adminBypass`. */
+  readonly service: Pick<AnyService, "name" | "adminBypass">;
+  /** The name of the service whose policy authorizes the scopes; `undefined` for a `"self"` scope. */
+  readonly anchor: string | undefined;
+  /** The level a subscriber needs on the scope's anchor row. */
+  readonly access: AccessLevel;
+}
+
+/**
+ * The scopes of `scopes` the principal may subscribe to under `rule`, each
+ * with the rows its access is derived from (its anchors): the anchor row and
+ * its `inherit` parents, none for a `"self"` scope. One engine call; a lookup
+ * that fails rejects.
+ */
+export async function allowedScopes(
+  policies: Pick<PolicyEngine, "resolve">,
+  rule: ScopeRule,
   principal: Principal,
   scopes: readonly string[],
 ): Promise<Map<string, readonly string[]>> {
   const allowed = new Map<string, readonly string[]>();
-  const { anchorService, service } = collection;
+  const { anchor, service } = rule;
   const anchorRow = (scope: string): readonly string[] =>
-    anchorService === undefined ? [] : [anchorKey(anchorService.name, scope)];
+    anchor === undefined ? [] : [anchorKey(anchor, scope)];
   if (service.adminBypass && serviceGrant(principal, service.name) === "Admin") {
     for (const scope of scopes) {
       allowed.set(scope, anchorRow(scope));
     }
     return allowed;
   }
-  if (anchorService === undefined) {
+  if (anchor === undefined) {
     for (const scope of scopes.filter((candidate) => candidate === principal.userId)) {
       allowed.set(scope, []);
     }
     return allowed;
   }
-  const access = await hub.policies.resolve(anchorService.name, principal, scopes, {
-    grants: false,
-  });
+  const access = await policies.resolve(anchor, principal, scopes, { grants: false });
   for (const scope of scopes) {
-    if (meetsLevel(access.levels.get(scope), collection.access)) {
+    if (meetsLevel(access.levels.get(scope), rule.access)) {
       allowed.set(scope, access.anchors.get(scope) ?? anchorRow(scope));
     }
   }
   return allowed;
+}
+
+/** The scopes of `scopes` the principal may subscribe to in a served collection: {@link allowedScopes}. */
+export async function authorizeScopes(
+  hub: CollectionHub,
+  collection: BoundCollection,
+  principal: Principal,
+  scopes: readonly string[],
+): Promise<Map<string, readonly string[]>> {
+  const rule: ScopeRule = {
+    service: collection.service,
+    anchor: collection.anchorService?.name,
+    access: collection.access,
+  };
+  return await allowedScopes(hub.policies, rule, principal, scopes);
 }
 
 /** True when the service's `watchAccess` lets the principal watch its topic; never without one. */

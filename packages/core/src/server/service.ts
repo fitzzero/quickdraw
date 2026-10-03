@@ -6,11 +6,11 @@ import type { AnyContract } from "../contract/defineContract";
 import type { MethodKind } from "../contract/methods";
 import type { StandardSchemaV1 } from "../contract/standardSchema";
 import type { Version } from "../protocol/envelope";
-import type { AnyAccessPolicy } from "./access/policy";
-import type { AccessForm, WatchAccess } from "./access/types";
+import type { AccessForm, AnyAccessPolicy, WatchAccess } from "./access/types";
 import type { ServiceCollection } from "./collections/define";
 import type { AnyContext, ContextExtender } from "./context";
 import type { ProjectedOutput, Projection } from "./emit/projection";
+import type { ServiceChannel, ServiceStream } from "./realtime/types";
 import type { MaybePromise, QuickdrawTypes } from "./types";
 
 /**
@@ -104,6 +104,10 @@ export interface Service<
   readonly adminBypass: boolean;
   /** The checked method records, by method name. */
   readonly methods: Readonly<Record<string, ServiceMethod>>;
+  /** The contract's channels with the handlers `defineService` gave them (RFC 0003 section 12.5). */
+  readonly channels: ReadonlyMap<string, ServiceChannel>;
+  /** The contract's streams, with their access forms as the access engine decides them. */
+  readonly streams: ReadonlyMap<string, ServiceStream>;
   /** Type-only: the app types the service was defined with. Never set. */
   readonly "~types"?: T;
 }
@@ -115,6 +119,12 @@ export type AnyService = Service<QuickdrawTypes, AnyContract>;
 export interface ServiceRuntime {
   /** The app's `context` option, or `undefined`. */
   readonly extendContext: ContextExtender | undefined;
+  /**
+   * Makes `dispatcher` the one the instance's `qd.caller`, `qd.run`,
+   * `qd.stream` and `qd.presence` go through, as its own `createServer`
+   * does: for `createTestApp`, which creates its server itself.
+   */
+  readonly adopt?: (dispatcher: object) => void;
 }
 
 const runtimes = new WeakMap<object, ServiceRuntime>();
@@ -127,4 +137,23 @@ export function registerRuntime(service: AnyService, runtime: ServiceRuntime): v
 /** The runtime of a service `defineService` returned, or `undefined` for anything else. */
 export function runtimeOf(service: unknown): ServiceRuntime | undefined {
   return typeof service === "object" && service !== null ? runtimes.get(service) : undefined;
+}
+
+/** Why a service cannot run a handler, or `undefined` when it can. */
+export type HandlerCheck = (service: AnyService) => string | undefined;
+
+const handlerChecks = new WeakMap<object, HandlerCheck>();
+
+/**
+ * Makes `defineService` run `check` on the service `handler` is given to, so
+ * a handler that needs something of its service (a kit's need a model) fails
+ * when the service is defined, not on its first call.
+ */
+export function checkWhenDefined(handler: object, check: HandlerCheck): void {
+  handlerChecks.set(handler, check);
+}
+
+/** Why `service` cannot run `handler`, from the check `checkWhenDefined` attached. */
+export function handlerProblem(handler: object, service: AnyService): string | undefined {
+  return handlerChecks.get(handler)?.(service);
 }

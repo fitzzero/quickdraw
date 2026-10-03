@@ -10,6 +10,7 @@ import {
   isProtocolMismatch,
   PROTOCOL_VERSION,
   query,
+  QuickdrawError,
 } from "../../index";
 import {
   alice,
@@ -141,6 +142,28 @@ describe("authentication", () => {
     expect(logger.at("error").map((entry) => entry.message)).toEqual([
       "Socket authentication failed",
       "Socket authentication failed",
+    ]);
+  });
+
+  it("logs a refusal authenticate makes on purpose at debug", async () => {
+    const { url, logger } = await serve({
+      auth: {
+        authenticate: () => {
+          throw new QuickdrawError("UNAUTHENTICATED", "The session was revoked");
+        },
+      },
+    });
+    const error = await refusal(url, { ...v5Auth(null), token: "revoked" });
+    expect(error.message).toBe("Authentication failed");
+    expect(error.data).toEqual({ code: "UNAUTHENTICATED" });
+    expect(logger.at("error")).toEqual([]);
+    expect(logger.at("debug")).toEqual([
+      expect.objectContaining({
+        message: "Socket authentication failed",
+        meta: expect.objectContaining({
+          error: expect.objectContaining({ message: "The session was revoked" }),
+        }),
+      }),
     ]);
   });
 

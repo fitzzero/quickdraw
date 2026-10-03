@@ -112,20 +112,46 @@ export type ViewName<C extends AnyContract, K extends CollectionName<C>> = keyof
 > &
   string;
 
-/** The item type of a stream. */
-export type StreamItemOf<
-  C extends AnyContract,
-  K extends keyof C["streams"] & string,
-> = InferOutput<C["streams"][K]["item"]>;
+/** The names of a contract's streams. */
+export type StreamName<C extends AnyContract> = keyof C["streams"] & string;
 
-/** The payload type of a channel. */
-export type ChannelPayloadOf<
-  C extends AnyContract,
-  K extends keyof C["channels"] & string,
-> = InferOutput<C["channels"][K]["payload"]>;
+/** The names of a contract's channels. */
+export type ChannelName<C extends AnyContract> = keyof C["channels"] & string;
 
-/** The payload type of a custom event. */
-export type EventPayloadOf<
+/** The names of a contract's typed room events. */
+export type EventName<C extends AnyContract> = keyof C["events"] & string;
+
+/** The item type of a stream: what `push` takes and subscribers receive. */
+export type StreamItemOf<C extends AnyContract, K extends StreamName<C>> = InferOutput<
+  C["streams"][K]["item"]
+>;
+
+/**
+ * `true` when a stream has one feed per scope value (it declares a `scope`
+ * other than `"global"`), `false` for a stream with one feed for the service.
+ */
+export type IsScopedStream<
   C extends AnyContract,
-  K extends keyof C["events"] & string,
-> = InferOutput<C["events"][K]["payload"]>;
+  K extends StreamName<C>,
+> = C["streams"][K] extends {
+  readonly scope: infer Scope extends string;
+}
+  ? Scope extends "global"
+    ? false
+    : true
+  : false;
+
+/** The payload type of a channel, as its handler receives it (after its schema ran). */
+export type ChannelPayloadOf<C extends AnyContract, K extends ChannelName<C>> = InferOutput<
+  C["channels"][K]["payload"]
+>;
+
+/** What a client sends on a channel: its payload schema's input type. */
+export type ChannelInputOf<C extends AnyContract, K extends ChannelName<C>> = InferInput<
+  C["channels"][K]["payload"]
+>;
+
+/** The payload type of a custom event: what `ctx.rooms.emit` takes and `useEvent` receives. */
+export type EventPayloadOf<C extends AnyContract, K extends EventName<C>> = InferOutput<
+  C["events"][K]["payload"]
+>;

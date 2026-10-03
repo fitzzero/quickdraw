@@ -16,16 +16,25 @@ import type {
   MethodMember,
   QuickdrawInvalidate,
 } from "../client/clientTypes";
+import type { ChannelMember, EventMember, StreamMember } from "../client/live/memberTypes";
 import type { AnyContract } from "../contract/defineContract";
+import type { AdminMethodsOf } from "../contract/kits/admin";
 import type {
+  ChannelInputOf,
+  ChannelName,
   CollectionName,
   ContractMap,
   EntityOf,
+  EventName,
+  EventPayloadOf,
   InputOf,
+  IsScopedStream,
   ItemOf,
   MethodName,
   OutputOf,
   ScopeOf,
+  StreamItemOf,
+  StreamName,
 } from "../contract/infer";
 import type { QuickdrawError } from "../protocol/errors";
 
@@ -86,6 +95,49 @@ export interface MockCollectionMember<
   mockError(scope: ScopeOf<C, K>, error: QuickdrawError): void;
 }
 
+/**
+ * The controls of a mocked stream: `mockItems(scope, items)` and
+ * `mockError(scope, error)` for a scoped stream, `mockItems(items)` and
+ * `mockError(error)` for a global one. A feed the test has not set is
+ * loading; `useStream` shows the latest `max` of the items set.
+ */
+export type StreamMock<C extends AnyContract, K extends StreamName<C>> =
+  IsScopedStream<C, K> extends true
+    ? {
+        mockItems(scope: string, items: readonly StreamItemOf<C, K>[]): void;
+        mockError(scope: string, error: QuickdrawError): void;
+      }
+    : {
+        mockItems(items: readonly StreamItemOf<C, K>[]): void;
+        mockError(error: QuickdrawError): void;
+      };
+
+/** `qd.<service>.<stream>` of a mock client: `useStream`, and what it shows. */
+export type MockStreamMember<C extends AnyContract, K extends StreamName<C>> = StreamMember<C, K> &
+  StreamMock<C, K>;
+
+/** `qd.<service>.<channel>` of a mock client: `useChannel` (always ready), and what was sent. */
+export type MockChannelMember<C extends AnyContract, K extends ChannelName<C>> = ChannelMember<
+  C,
+  K
+> & {
+  /** Every payload `send` was called with, oldest first. */
+  readonly sent: readonly ChannelInputOf<C, K>[];
+};
+
+/** `qd.<service>.<event>` of a mock client: `useEvent`, and a way to send the event. */
+export type MockEventMember<C extends AnyContract, K extends EventName<C>> = EventMember<C, K> & {
+  /** Calls every mounted `useEvent` handler of this event with `payload`; wrap it in `act`. */
+  mockEmit(payload: EventPayloadOf<C, K>): void;
+};
+
+/** The stream, channel and event members of a mocked service. */
+export type MockRealtimeMembers<C extends AnyContract> = {
+  readonly [K in StreamName<C>]: MockStreamMember<C, K>;
+} & { readonly [K in ChannelName<C>]: MockChannelMember<C, K> } & {
+  readonly [K in EventName<C>]: MockEventMember<C, K>;
+};
+
 /** One method's member of a mock client: the real member's type, and its stub. */
 export type MockMethodMember<C extends AnyContract, M extends MethodName<C>> = MethodMember<C, M> &
   MethodStub<InputOf<C, M>, OutputOf<C, M>>;
@@ -96,12 +148,18 @@ export interface MockEntityMembers<C extends AnyContract> {
   readonly useEntities: EntityMembers<C>["useEntities"] & EntityMock<EntityOf<C>>;
 }
 
+/** `qd.<key>.admin` of a mock client, for a contract with the admin kit: the mocked members of its admin methods. */
+export type MockAdminMembers<C extends AnyContract> = [AdminMethodsOf<C>] extends [never]
+  ? unknown
+  : { readonly admin: { readonly [M in AdminMethodsOf<C>]: MockMethodMember<C, M> } };
+
 /** `qd.<key>` of a mock client. */
 export type MockServiceClient<C extends AnyContract> = {
   readonly [M in MethodName<C>]: MockMethodMember<C, M>;
 } & ([EntityOf<C>] extends [never] ? unknown : MockEntityMembers<C>) & {
     readonly [K in CollectionName<C>]: MockCollectionMember<C, K>;
-  };
+  } & MockRealtimeMembers<C> &
+  MockAdminMembers<C>;
 
 /** What `createMockClient` returns: the typed client of `Contracts`, with stubs. */
 export type MockClient<Contracts extends ContractMap> = {

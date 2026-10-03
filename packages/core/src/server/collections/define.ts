@@ -11,7 +11,9 @@
 // `"self"` scope is stripped at `Read` and may not declare a higher
 // `access`, since no level is checked to subscribe to it. The
 // index fields are checked here too, against the item projection only the
-// service compiles: a contract cannot see a schema's keys.
+// service compiles: a contract cannot see a schema's keys. No order column
+// may sit above the collection's `access` in the contract's `fields`, since
+// cursors carry order columns' values.
 //
 // 4.1 defined a collection with functions (`resolveScopeId`,
 // `checkScopeAccess`, `snapshot`, `toItem`;
@@ -181,6 +183,29 @@ function checkIndex(
   return Object.freeze([...index]);
 }
 
+/**
+ * No `order` column may be reserved by the contract's `fields` for a level
+ * above the collection's `access`, index or not: a page's cursor carries
+ * the last row's value of every order column, and the page's order tells
+ * how the rows' values compare, so either would hand a subscriber the field.
+ */
+function checkOrderTiers(
+  name: string,
+  order: OrderBy,
+  fields: Readonly<Record<string, AccessLevel>>,
+  access: AccessLevel,
+  fail: Fail,
+): void {
+  for (const [column] of order) {
+    const required = Object.hasOwn(fields, column) ? fields[column] : undefined;
+    if (required !== undefined && !meetsLevel(access, required)) {
+      fail(
+        `collection "${name}": order column "${column}" is reserved by the contract's fields for ${required}, above the collection's access (${access}); a page's cursor and order would tell its subscribers what it holds`,
+      );
+    }
+  }
+}
+
 /** Every order column but `id` must be an index field: a client keeps the index in order by them. */
 function checkIndexOrder(name: string, order: OrderBy, index: readonly string[], fail: Fail): void {
   const missing = order.map(([column]) => column).find((c) => c !== "id" && !index.includes(c));
@@ -225,8 +250,8 @@ function scopeOf(def: CollectionDef): CollectionScope {
 }
 
 function compileOne(
-  name: string,
-  def: CollectionDef,
+  [name, def]: readonly [string, CollectionDef],
+  contract: Pick<AnyContract, "fields">,
   projections: ReadonlyMap<string, Projection>,
   option: unknown,
   fail: Fail,
@@ -242,6 +267,7 @@ function compileOne(
     fail(`collection "${name}": item "${def.item}" is not a projection of the contract`);
   }
   const access = accessOf(name, def, anchor, fail);
+  checkOrderTiers(name, def.order, contract.fields, access, fail);
   return Object.freeze({
     name,
     scope: scopeOf(def),
@@ -288,7 +314,7 @@ export function compileCollections(
   }
   const compiled = new Map<string, ServiceCollection>();
   for (const [name, def] of declared) {
-    compiled.set(name, compileOne(name, def, projections, options[name], fail));
+    compiled.set(name, compileOne([name, def], contract, projections, options[name], fail));
   }
   return compiled;
 }

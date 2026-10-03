@@ -40,6 +40,7 @@ import {
 import { QuickdrawContext, useConnectionState, useQuickdrawContext } from "./context";
 import { createInvalidationCoordinator } from "./coordinator";
 import { bindConnection, isWatchedQuery } from "./createClient";
+import { liveDataOf } from "./live/liveData";
 import { reloadOncePerSession } from "./reload";
 import { refetchOnAccessChanges, sessionOf } from "./session";
 
@@ -129,6 +130,8 @@ function ConnectedProvider<Contracts extends ContractMap>(
   React.useEffect(() => {
     // From now on each hello settles the cache for the user it names.
     sessionOf(connection, queryClient);
+    // Before the socket connects: `qd:presence` frames can arrive before any hook asks.
+    liveDataOf(connection, queryClient);
   }, [connection, queryClient]);
   React.useEffect(() => connection.retain(), [connection]);
   // Disposed a tick after the provider unmounts or takes another `QueryClient`.

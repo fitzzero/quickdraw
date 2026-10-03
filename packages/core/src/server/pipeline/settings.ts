@@ -177,7 +177,14 @@ export function resolveSettings(
   const logger = options.logger ?? consoleLogger;
   const storage = options.storage ?? storageOf(db);
   const { access, policies } = resolveAccess(options.access, registry, storage, logger);
-  const live = createLive({ registry, storage, policies, logger, changeLog: options.changeLog });
+  const live = createLive({
+    registry,
+    storage,
+    policies,
+    access,
+    logger,
+    changeLog: options.changeLog,
+  });
   return Object.freeze({
     registry,
     db,

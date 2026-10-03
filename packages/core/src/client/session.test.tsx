@@ -8,10 +8,10 @@
 // access to P1).
 
 import { QueryClient } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { deferred, tick } from "../server/__tests__/fixtures";
+import { deferred, tick, type Deferred } from "../server/__tests__/fixtures";
 import type { QuickdrawConnection } from "./connection";
 import { createQuickdrawClient } from "./createClient";
 import { collectionKey, entityKey, methodKey } from "./keys";
@@ -19,6 +19,7 @@ import { fakeConnection, fakeHello } from "./live/__tests__/fakeSocket";
 import { as, freshClient, liveDataHarness, taskContract } from "./live/__tests__/server";
 import { mutateOptimistically, overlaysOf } from "./optimistic";
 import { QuickdrawProvider, useQuickdraw } from "./provider";
+import { renderWithQuickdraw } from "../testing/client";
 import { sessionOf } from "./session";
 import { outgoing, until } from "./__tests__/fixtures";
 import { callsOf, framesOf } from "./__tests__/live";
@@ -316,8 +317,62 @@ describe("switching users on one provider", () => {
     expect(callsOf(grabbed.sent, "get")[1]).toHaveProperty("v");
     expect(queryClient.getQueryData(key)).toBe(result);
     expect(queryClient.getQueryData(entityKey("taskService", board.t1))).toBe(entry);
-    // No render after the switch went without the data: nothing was emptied.
-    expect(seen.slice(before).filter(([, shown]) => !shown.includes("SECRET"))).toEqual([]);
+    // While the new credentials awaited their hello the hooks showed nothing; the hello
+    // named Ada again, so the kept cache shows again.
+    const awaiting = seen.slice(before).filter(([user]) => user === null);
+    expect(awaiting.map(([, shown]) => shown)).toContain("get none");
+    expect(awaiting.filter(([, shown]) => shown.includes("SECRET"))).toEqual([]);
+    expect(seen.at(-1)).toEqual([board.ada, "get T1/SECRET"]);
     expect(screen.getByText("row T1")).toBeTruthy();
+  });
+});
+
+describe("new credentials awaiting their hello", () => {
+  it("show nothing of what is cached in any hook until the hello decides, and the same user's again", async () => {
+    let held: Deferred<void> | undefined;
+    const { app } = await live.start({
+      authenticate: async ({ auth }) => {
+        if (auth.hold === true) {
+          await held?.promise;
+        }
+        return (auth.principal as { readonly userId: string } | undefined) ?? null;
+      },
+    });
+    const board = live.board();
+    await live.prisma().task.update({ where: { id: board.t1 }, data: { notes: "SECRET" } });
+    function View() {
+      const query = qd.task.get.useQuery({ id: board.t1 });
+      const row = qd.task.useEntity(board.t1);
+      const scope = qd.task.byProject.useCollection(board.p1);
+      const titles = scope.items.map((item) => item.title).join(",");
+      return (
+        <p>{`get ${query.data?.notes ?? "none"} row ${row.data?.title ?? "none"} items [${titles}]`}</p>
+      );
+    }
+    const view = await renderWithQuickdraw(<View />, { app, as: as(board.ada), client: qd });
+    await view.findByText("get SECRET row T1 items [T1]");
+    const key = qd.task.get.key({ id: board.t1 });
+    const cached = view.queryClient.getQueryData(key);
+    // New credentials for the same user: the handshake waits until released.
+    held = deferred();
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ada), hold: true });
+      await tick();
+    });
+    await view.findByText("get none row none items []");
+    // Nothing was removed: the hello decides.
+    expect(view.queryClient.getQueryData(key)).toBe(cached);
+    held.resolve();
+    await view.findByText("get SECRET row T1 items [T1]");
+    expect(view.queryClient.getQueryData(key)).toBe(cached);
+    // Another user: nothing of Ada's shows while their hello is awaited, nor after it.
+    held = deferred();
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.cy), hold: true });
+      await tick();
+    });
+    await view.findByText("get none row none items []");
+    held.resolve();
+    await view.findByText("get none row T1 items [T1]");
   });
 });

@@ -34,6 +34,7 @@ import type { Version } from "../protocol/envelope";
 import type { ModelColumn, ModelName, PolicyFor } from "./access/policy";
 import type { AccessFor, CustomAccess, PublicAccess, RowForms, WatchAccess } from "./access/types";
 import type { HandlerArgs, HandlerContext } from "./context";
+import type { ChannelOptions, ChannelsRequired } from "./realtime/types";
 import type { Service, ShareMode } from "./service";
 import type {
   AffectsOption,
@@ -221,6 +222,15 @@ export interface ServiceDefinition<
       : NotAMethod<C, M>;
   };
   /**
+   * One handler per contract channel (RFC 0003 section 12.5), no more and no
+   * fewer: `(payload, ctx) => void`, or `{ access, handler }` where `access`
+   * is `"authenticated"` (the default) or `{ service: level }`. A message
+   * that is over its socket's rate, fails its schema, comes from an
+   * anonymous socket, fails the access or the contract's `requires`, is
+   * dropped without an answer. Required when the contract declares channels.
+   */
+  readonly channels?: ChannelOptions<T, C>;
+  /**
    * Whether a service-wide `Admin` grant passes every access check of this
    * service (RFC 0003 section 4.1). Default `true`.
    */
@@ -240,5 +250,7 @@ export type DefineService<T extends QuickdrawTypes> = <
   const Proj = Empty,
 >(
   contract: C,
-  definition: ServiceDefinition<T, C, A, Model, Policy, Proj> & CollectionsRequired<C>,
+  definition: ServiceDefinition<T, C, A, Model, Policy, Proj> &
+    CollectionsRequired<C> &
+    ChannelsRequired<C>,
 ) => Service<T, C>;

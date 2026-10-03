@@ -223,8 +223,8 @@ describe("listeners per socket", () => {
       const socket = await connect(url);
       const serverSocket = server.io.sockets.sockets.get(socket.id ?? "");
       // "error" is Socket.IO's own no-op listener, on every socket; entity
-      // and collection subscriptions and change topics add one listener per
-      // event, whatever the services.
+      // and collection subscriptions, change topics, channels and streams
+      // add one listener per event, whatever the services.
       expect(serverSocket?.eventNames()).toEqual([
         "error",
         "qd:call",
@@ -237,11 +237,14 @@ describe("listeners per socket", () => {
         "qd:col:unsub",
         "qd:watch",
         "qd:unwatch",
+        "qd:ch",
+        "qd:stream:sub",
+        "qd:stream:unsub",
       ]);
       counts.push(serverSocket?.eventNames().length ?? 0);
       expect(await call(socket, { id: 1, s: service.name, m: "m1" })).toEqual({ ok: true, d: 1 });
     }
-    expect(counts).toEqual([11, 11]);
+    expect(counts).toEqual([14, 14]);
   });
 });
 
