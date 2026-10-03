@@ -71,13 +71,23 @@ export function tableOf(db: unknown, model: string): ModelDelegate {
 
 const SERIALIZABLE = Object.freeze({ isolationLevel: "Serializable" });
 
-/** True for Prisma's report of a transaction the database failed for a concurrent one. */
+/**
+ * True for Prisma's report of a transaction the database failed for a
+ * concurrent one: `P2034` when a statement fails (a concurrent update of the
+ * row), and the driver adapter's own `TransactionWriteConflict` when the
+ * commit does (PostgreSQL finds most serialization failures, two members
+ * leaving at once among them, only then; Prisma 7 passes that one through
+ * unmapped).
+ */
 function isWriteConflict(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.name === "PrismaClientKnownRequestError" &&
-    (error as Error & { readonly code?: unknown }).code === "P2034"
-  );
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  if (error.name === "PrismaClientKnownRequestError") {
+    return (error as Error & { readonly code?: unknown }).code === "P2034";
+  }
+  const kind: unknown = (error.cause as { readonly kind?: unknown } | undefined)?.kind;
+  return error.name === "DriverAdapterError" && kind === "TransactionWriteConflict";
 }
 
 /**

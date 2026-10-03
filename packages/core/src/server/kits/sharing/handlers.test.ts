@@ -293,16 +293,27 @@ describe("the transaction", () => {
     return { db: watched, options };
   }
 
+  /** A conflict as Prisma reports a failed statement: P2034. */
+  function failedStatement(): Error {
+    const error = new Error("Transaction failed due to a write conflict or a deadlock");
+    return Object.assign(error, { name: "PrismaClientKnownRequestError", code: "P2034" });
+  }
+
+  /**
+   * A conflict as PostgreSQL reports it at commit (SSI: two members leaving
+   * at once), which Prisma 7 passes through as the driver adapter's error.
+   */
+  function failedCommit(): Error {
+    const error = new Error("TransactionWriteConflict");
+    return Object.assign(error, {
+      name: "DriverAdapterError",
+      cause: { kind: "TransactionWriteConflict", originalCode: "40001" },
+    });
+  }
+
   it("is SERIALIZABLE, and a write conflict the database reports is CONFLICT", async () => {
-    let conflict = false;
-    const { db, options } = watchedDb(() =>
-      conflict
-        ? Object.assign(new Error("Transaction failed due to a write conflict or a deadlock"), {
-            name: "PrismaClientKnownRequestError",
-            code: "P2034",
-          })
-        : undefined,
-    );
+    let fail: (() => Error) | undefined;
+    const { db, options } = watchedDb(() => fail?.());
     const app = await createTestApp({ services: [defineProjectService()], db });
     kit.track(app as unknown as TestApp);
     const board = kit.board();
@@ -314,18 +325,25 @@ describe("the transaction", () => {
       { isolationLevel: "Serializable" },
     ]);
 
-    conflict = true;
-    for (const call of [
-      owner.unshare({ id: board.p1, userId: board.gus }),
-      owner.remove({ entryId: board.p1, userId: board.gus }),
-    ]) {
-      await expect(call).rejects.toMatchObject({
-        code: "CONFLICT",
-        message: "Another change to this row's access ran at the same time; try again",
-      });
+    for (const conflict of [failedStatement, failedCommit]) {
+      fail = conflict;
+      for (const call of [
+        owner.unshare({ id: board.p1, userId: board.gus }),
+        owner.remove({ entryId: board.p1, userId: board.gus }),
+      ]) {
+        await expect(call).rejects.toMatchObject({
+          code: "CONFLICT",
+          message: "Another change to this row's access ran at the same time; try again",
+        });
+      }
     }
+    // Any other failure is not a conflict.
+    fail = () => Object.assign(new Error("connection lost"), { name: "DriverAdapterError" });
+    await expect(owner.unshare({ id: board.p1, userId: board.gus })).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
     // The reads need no transaction.
     expect(await owner.listShares({ id: board.p1 })).toHaveLength(2);
-    expect(options).toHaveLength(4);
+    expect(options).toHaveLength(7);
   });
 });
