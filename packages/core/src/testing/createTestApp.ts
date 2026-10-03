@@ -4,7 +4,8 @@
 // dispatcher becomes the current one of the `initQuickdraw` instance that
 // defined the services, so `qd.stream`, `qd.presence` and `qd.run` reach
 // it. While it runs, `expectBudget` measures it (`instrument.ts`), and
-// `strictWarnings` makes its development warnings throw. It replaces 4.1's
+// `strictWarnings` makes the development warnings of its method calls
+// throw; `close()` ends both. It replaces 4.1's
 // `createTestServer` and `connectAsUser` (`legacy-src/server/testing.ts:62-130`),
 // which took a fixed port counter and authenticated by a bare user id.
 
@@ -85,7 +86,10 @@ export interface TestApp<S extends readonly AnyService[] = readonly AnyService[]
    * resolves once the server said hello, rejects when it refused the socket.
    */
   connect(principal: PrincipalOfServices<S> | null): Promise<TestConnection<S>>;
-  /** Disconnects every socket `connect` opened, then closes the server. */
+  /**
+   * Disconnects every socket `connect` opened, then closes the server; the
+   * tracked client goes back to the dispatcher attached before the app's.
+   */
   close(): Promise<void>;
 }
 
@@ -94,8 +98,10 @@ const TIMEOUT_MS = 5000;
 /**
  * Boots the app's services on `createServer`, listening on a free port of
  * 127.0.0.1, for tests that call them in process or over real sockets.
- * `strictWarnings: true` (under vitest) makes every development warning
- * throw where it is raised, so a test that causes one fails.
+ * `strictWarnings: true` (under vitest or jest) makes every development
+ * warning raised in the app's method calls throw where it is raised, so a
+ * test that causes one fails; warnings outside its calls (seeding through
+ * the tracked client, say) are logged, and nothing is strict after `close()`.
  *
  * @example
  * const app = await createTestApp({ services: [taskService], db: testPrisma });

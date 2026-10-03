@@ -1811,7 +1811,11 @@ and frames production does (design: section 13):
 
 ```ts
 it("sends a rename to the other members' boards", async () => {
-  const app = await createTestApp({ services: [projectService, taskService], db });
+  const app = await createTestApp({
+    services: [projectService, taskService],
+    db,
+    strictWarnings: true,
+  });
   const { call } = await app.connect(bo); // a real protocol 5 socket
   await call.taskService.get({ id: taskId });
   await app.as(ada).taskService.rename({ id: taskId, title: "Ship it" }); // in process
@@ -1820,11 +1824,15 @@ it("sends a rename to the other members' boards", async () => {
 });
 ```
 
-- `createTestApp` takes `createServer`'s options. Its sockets act as the
-  principal they connect with, its rate limiter is off, and its dispatcher
-  becomes the current one of the `initQuickdraw` instance that defined its
-  services, so `qd.stream(...).push`, `qd.presence` and `qd.run` reach the
-  test app (the last one created).
+- `createTestApp` takes `createServer`'s options, plus `strictWarnings`
+  (below). Its sockets act as the principal they connect with, its rate
+  limiter is off, and its dispatcher becomes the current one of the
+  `initQuickdraw` instance that defined its services, so
+  `qd.stream(...).push`, `qd.presence` and `qd.run` reach the test app (the
+  last one created).
+- Seed rows with the untracked client (`prisma`), or inside `qd.run` once
+  an app runs: a tracked write outside any unit of work flushes on its own,
+  with an `ambient-write` warning.
 - `app.as(principal)` calls in process and `app.connect(principal)` over a
   real socket (`{ call, socket, hello, close }`); both are keyed by service
   name. `app.frames(match?)` lists every frame the server sent, with its
@@ -1940,10 +1948,13 @@ Each is logged once per kind, service, method and subject (the model, or
 the field of a nested write), under `category: "quickdraw.dev"`. Only an
 app's own statements are checked: the framework's reads and the kits'
 handlers are not. In tests, `createTestApp({ strictWarnings: true })` (under
-vitest) throws every warning as a `DevWarningError` where it is raised, so
-the test that caused it fails: the call it happened in fails with `INTERNAL`
-and the error as its `cause`, and an in-process call whose reply was
-oversized rejects with it once the reply was recorded.
+vitest or jest) throws every warning raised in that app's method calls as a
+`DevWarningError` where it is raised, so the test that caused it fails: the
+call it happened in fails with `INTERNAL` and the error as its `cause`, and
+an in-process call whose reply was oversized rejects with it once the reply
+was recorded. Strictness belongs to the app: warnings outside its calls
+(an ambient write while seeding, another app's calls) are logged as usual,
+and `app.close()` ends it.
 
 ### Components
 

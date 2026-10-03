@@ -124,6 +124,7 @@ export function execute(
     requestId: call.requestId,
     transport: call.transport,
     sink: settings.flushSink,
+    warnings: settings.warnings,
   });
   const run = startRun({
     // The pipeline starts every call's time limit at admission, before this.

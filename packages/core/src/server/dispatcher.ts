@@ -186,8 +186,13 @@ export function createDispatcher<const S extends readonly AnyService[]>(
   const registry = createRegistry(options.services);
   const settings = resolveSettings(options, registry, options.db, ACCESS_SINKS.get(options));
   // Writes made outside any unit of work flush to this dispatcher's sinks,
-  // and the tracker's development warnings go out as this dispatcher's.
-  settings.unitOfWork.attach?.(settings.flushSink, settings.logger, settings.warnings);
+  // and the tracker's development warnings go out as this dispatcher's,
+  // until a server's `close()` detaches it.
+  const detach = settings.unitOfWork.attach?.(
+    settings.flushSink,
+    settings.logger,
+    settings.warnings,
+  );
   const call = createPipeline(settings);
   const { levelsFor, accessWhere, onAccessChanged } = settings.policies;
   const dispatcher: Dispatcher<S> = Object.freeze({
@@ -209,5 +214,19 @@ export function createDispatcher<const S extends readonly AnyService[]>(
   });
   // `createServer` attaches its Socket.IO server to the dispatcher's live data.
   registerLive(dispatcher, settings.live);
+  if (typeof detach === "function") {
+    DETACHES.set(dispatcher, detach);
+  }
   return dispatcher;
+}
+
+const DETACHES = new WeakMap<object, () => void>();
+
+/**
+ * Detaches `dispatcher` from its tracked database client: ambient writes
+ * and the warnings outside calls go back to the dispatcher attached before
+ * it (or nowhere). A server's `close()` calls it once the server stopped.
+ */
+export function detachDispatcher(dispatcher: object): void {
+  DETACHES.get(dispatcher)?.();
 }

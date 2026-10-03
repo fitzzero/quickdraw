@@ -143,8 +143,9 @@ or invalidate after a mutation by hand.
   `renderWithQuickdraw`).
 - `expectBudget` for each method a page calls on load; commit the
   `__budgets__` file it writes.
-- `createTestApp({ ..., strictWarnings: true })`, so N+1 reads and untracked
-  writes fail the test that caused them.
+- `createTestApp({ ..., strictWarnings: true })`, so N+1 reads, unbounded
+  reads and nested writes in the service's calls fail the test that caused
+  them. Seed rows with the untracked client (`prisma`).
 
 ## Finish
 

@@ -21,8 +21,10 @@
 // own statements are checked for the first two: the framework's reads through
 // the storage adapter, the tracker's own reads and the kits' handlers run
 // `quietly`. Warnings are off when NODE_ENV is "production". In a test app
-// made with `strictWarnings` (under vitest) every warning throws a
-// `DevWarningError` where it is raised instead, so the test fails.
+// made with `strictWarnings` (under vitest or jest) every warning raised in
+// one of its method calls throws a `DevWarningError` where it is raised
+// instead, so the test fails; warnings outside its calls (an ambient write
+// while seeding, say) are logged as usual.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { consoleLogger, type Logger } from "../contract/logger";
@@ -78,10 +80,15 @@ export class DevWarningError extends Error {
   }
 }
 
-/** Where development warnings go: one per dispatcher, which the write tracker reports to as well. */
+/**
+ * Where development warnings go: one per dispatcher, which the write tracker
+ * reports a call's warnings to as well.
+ */
 export interface DevWarnings {
   /** False when warnings are off: NODE_ENV is "production" and nothing made them strict. */
   readonly enabled: boolean;
+  /** True when every warning throws: a strict test app's dispatcher. */
+  readonly strict: boolean;
   /** Logs `warning` the first time its kind, service, method and subject come up; strict, throws it every time. */
   warn(warning: DevWarning): void;
 }
@@ -109,6 +116,7 @@ export function createDevWarnings(options: DevWarningsOptions = {}): DevWarnings
   const warned = new Set<string>();
   return Object.freeze({
     enabled,
+    strict,
     warn(warning: DevWarning): void {
       if (strict) {
         throw new DevWarningError(warning);

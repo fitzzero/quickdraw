@@ -666,6 +666,8 @@ describe("step 7: the unit of work", () => {
         requestId: "req-2",
         transport: "socket",
         sink: expect.objectContaining({ flush: expect.any(Function) }),
+        // The dispatcher's warnings: those raised in the call go there.
+        warnings: expect.objectContaining({ enabled: true, strict: false }),
       },
     ]);
     // The unit's sink is the dispatcher's own sinks, then the app's.

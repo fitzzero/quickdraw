@@ -16,6 +16,7 @@ import {
 import { consoleLogger } from "../contract/logger";
 import {
   createDispatcher,
+  detachDispatcher,
   withAccessSinks,
   type Dispatcher,
   type DispatcherOptions,
@@ -280,12 +281,19 @@ export function createServer<const S extends readonly AnyService[]>(
     live: liveOf(created),
   });
   refresh = (userId) => sockets.refresh(userId);
-  const { close, onClose } = closer(
+  const shutdown = closer(
     sockets,
     httpServer,
     () => calls.idle(),
     options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
   );
+  const { onClose } = shutdown;
+  // Once stopped, the tracked client goes back to the dispatcher attached before.
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> =>
+    (closing ??= shutdown.close().then(() => {
+      detachDispatcher(created);
+    }));
   if (options.handleSignals === true) {
     onClose(watchSignals(close, logger));
   }

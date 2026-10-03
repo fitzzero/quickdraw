@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Logger } from "../../contract/logger";
 import { createRecordingSink } from "../../testing/recordingSink";
+import { createDevWarnings, DevWarningError } from "../devWarnings";
 import type { FlushSink } from "./flushSink";
 import { ANY_FIELD, type UnitOfWorkScope, type WriteRecord } from "./types";
 import { createWriteTracker, type WriteTracker } from "./unitOfWork";
@@ -233,6 +234,39 @@ describe("writes outside any unit of work", () => {
     late?.();
     expect((await ambientSink.next()).writes).toEqual([write("t9")]);
     expect(unitSink.flushes).toEqual([]);
+  });
+
+  it("go to the dispatcher attached last, and back to the one before once it detaches", async () => {
+    const tracker = createWriteTracker({ development: false });
+    const first = createRecordingSink();
+    const second = createRecordingSink();
+    const detachFirst = tracker.unitOfWork.attach?.(first, captureLogger());
+    const detachSecond = tracker.unitOfWork.attach?.(second, captureLogger());
+    tracker.record([write("t1")]);
+    expect((await second.next()).writes).toEqual([write("t1")]);
+    detachSecond?.();
+    detachSecond?.();
+    tracker.record([write("t2")]);
+    expect((await first.next()).writes).toEqual([write("t2")]);
+    detachFirst?.();
+    tracker.record([write("t3")]);
+    await nextTick();
+    expect([first.flushes.length, second.flushes.length]).toEqual([1, 1]);
+  });
+
+  it("throw no strict dispatcher's warning outside its calls; its calls' warnings throw", async () => {
+    const tracker = createWriteTracker({ development: true });
+    const logger = captureLogger();
+    const strict = createDevWarnings({ logger, strict: true });
+    tracker.unitOfWork.attach?.(createRecordingSink(), logger, strict);
+    tracker.record([write("t1")]);
+    expect(logger.warnings).toEqual([
+      expect.stringContaining("A tracked write to task ran outside any unit of work"),
+    ]);
+    const unit = tracker.unitOfWork.begin({ ...scope(createRecordingSink()), warnings: strict });
+    await expect(
+      unit.run(() => tracker.warn({ kind: "nested-write", subject: "key", message: "nested" })),
+    ).rejects.toBeInstanceOf(DevWarningError);
   });
 
   it("warn nothing outside development", async () => {

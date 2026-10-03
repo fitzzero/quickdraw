@@ -23,7 +23,13 @@
 // In development a method call's unit also checks the statements run in it
 // for N+1 shapes and unbounded reads (`statementChecks.ts`), and every
 // warning goes out in the shared format of `../devWarnings.ts`, naming the
-// call it happened in.
+// call it happened in. A warning raised inside a method call goes to the
+// warnings of the dispatcher that runs the call (a strict test app's throw);
+// one raised elsewhere goes to the attached dispatcher's, never strictly.
+//
+// Dispatchers attach to the tracker as a stack: the last one attached
+// receives ambient writes and the warnings outside calls, and detaching it
+// (a server's `close()`) restores the one attached before.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
@@ -61,6 +67,8 @@ interface Frame {
   readonly count: ((statements: number) => void) | undefined;
   /** A method call's unit: the call warnings made inside it are about. */
   readonly call: CallSite | undefined;
+  /** A method call's unit: its dispatcher's warnings, which those warnings go to. */
+  readonly warnings: DevWarnings | undefined;
   /** A method call's unit in development: checks the statements run inside it. */
   readonly check: StatementCheck | undefined;
   open: boolean;
@@ -138,10 +146,22 @@ export interface WriteTracker {
   readonly logger: Logger;
 }
 
+/** Where ambient writes flush and warnings outside a call go: the attached dispatcher's. */
+interface Attachment {
+  readonly sink: FlushSink;
+  readonly logger: Logger;
+  /** Never strict: warnings outside a method call only log. */
+  readonly warnings: DevWarnings;
+}
+
 interface TrackerState {
   readonly als: AsyncLocalStorage<Frame>;
   readonly listeners: Set<(write: WriteRecord) => void>;
   readonly development: boolean;
+  /** Before any dispatcher attaches, and once every one detached. */
+  readonly base: Attachment;
+  /** The dispatchers attached, the current one last. */
+  readonly attached: Attachment[];
   logger: Logger;
   warnings: DevWarnings;
   sink: FlushSink;
@@ -175,8 +195,12 @@ function warn(state: TrackerState, warning: TrackerWarning): void {
   if (!state.development) {
     return;
   }
-  const call = frameWhere(state, (frame) => frame.call !== undefined)?.call;
-  state.warnings.warn(call === undefined ? warning : { ...warning, ...call });
+  const frame = frameWhere(state, (candidate) => candidate.call !== undefined);
+  if (frame?.call === undefined) {
+    state.warnings.warn(warning);
+    return;
+  }
+  (frame.warnings ?? state.warnings).warn({ ...warning, ...frame.call });
 }
 
 function observe(state: TrackerState, statement: Statement): void {
@@ -260,6 +284,7 @@ function openTransaction(state: TrackerState, kind: "interactive" | "batch"): Tr
     batch: kind === "batch",
     count: undefined,
     call: undefined,
+    warnings: undefined,
     check: undefined,
     open: true,
   };
@@ -293,6 +318,7 @@ async function countStatements<T>(
       statements += n;
     },
     call: undefined,
+    warnings: undefined,
     check: undefined,
     open: true,
   };
@@ -304,18 +330,28 @@ async function countStatements<T>(
   }
 }
 
-/** The method call a unit's scope names, and in development the checks of its statements. */
-function callOf(state: TrackerState, scope: UnitOfWorkScope): Pick<Frame, "call" | "check"> {
+/**
+ * The method call a unit's scope names, the warnings of the dispatcher that
+ * runs it (the tracker's own when that dispatcher's are off, as for a
+ * production dispatcher over a development tracker), and in development the
+ * checks of its statements.
+ */
+function callOf(
+  state: TrackerState,
+  scope: UnitOfWorkScope,
+): Pick<Frame, "call" | "warnings" | "check"> {
   if (scope.service === undefined || scope.method === undefined) {
-    return { call: undefined, check: undefined };
+    return { call: undefined, warnings: undefined, check: undefined };
   }
   const call: CallSite = { service: scope.service, method: scope.method };
+  const warnings = scope.warnings?.enabled === true ? scope.warnings : state.warnings;
   if (!state.development) {
-    return { call, check: undefined };
+    return { call, warnings, check: undefined };
   }
   return {
     call,
-    check: createStatementChecks((warning) => state.warnings.warn({ ...warning, ...call })),
+    warnings,
+    check: createStatementChecks((warning) => warnings.warn({ ...warning, ...call })),
   };
 }
 
@@ -374,17 +410,57 @@ function touchWrites(
   }));
 }
 
+/**
+ * The warnings an attaching dispatcher's give the tracker for warnings
+ * outside its calls: its own, unless they are off (a tracker made with
+ * `development: true` keeps warning under a production dispatcher, as it
+ * always did) or strict (only a strict dispatcher's calls throw).
+ */
+function outsideCalls(
+  state: TrackerState,
+  logger: Logger,
+  warnings: DevWarnings | undefined,
+): DevWarnings {
+  return warnings?.enabled === true && !warnings.strict
+    ? warnings
+    : createDevWarnings({ logger, development: state.development });
+}
+
+/** Makes `attachment` the current one, until the returned function detaches it. */
+function attach(state: TrackerState, attachment: Attachment): () => void {
+  const follow = (): void => {
+    const current = state.attached.at(-1) ?? state.base;
+    state.sink = current.sink;
+    state.logger = current.logger;
+    state.warnings = current.warnings;
+  };
+  state.attached.push(attachment);
+  follow();
+  return () => {
+    const index = state.attached.indexOf(attachment);
+    if (index !== -1) {
+      state.attached.splice(index, 1);
+      follow();
+    }
+  };
+}
+
 /** Creates the write tracker of one tracked database client. */
 export function createWriteTracker(options: WriteTrackerOptions = {}): WriteTracker {
   const development = options.development ?? process.env.NODE_ENV !== "production";
   const logger = options.logger ?? consoleLogger;
+  const base: Attachment = {
+    sink: noFlushSink,
+    logger,
+    warnings: createDevWarnings({ logger, development }),
+  };
   const state: TrackerState = {
     als: new AsyncLocalStorage<Frame>(),
     listeners: new Set(),
     development,
-    logger,
-    warnings: createDevWarnings({ logger, development }),
-    sink: noFlushSink,
+    base,
+    attached: [],
+    ...base,
     ambient: [],
     issued: 0,
   };
@@ -393,16 +469,8 @@ export function createWriteTracker(options: WriteTrackerOptions = {}): WriteTrac
   const unitOfWork: UnitOfWorkFactory = Object.freeze({
     begin: (scope: UnitOfWorkScope) => createUnit(state, scope),
     touch,
-    attach(sink: FlushSink, attached: Logger, warnings?: DevWarnings): void {
-      state.sink = sink;
-      state.logger = attached;
-      // A tracker made with `development: true` keeps warning under a
-      // production dispatcher, whose own warnings are off, as it always did.
-      state.warnings =
-        warnings?.enabled === true
-          ? warnings
-          : createDevWarnings({ logger: attached, development });
-    },
+    attach: (sink: FlushSink, attached: Logger, warnings?: DevWarnings) =>
+      attach(state, { sink, logger: attached, warnings: outsideCalls(state, attached, warnings) }),
   });
   ISSUED.set(unitOfWork, () => state.issued);
   return Object.freeze({

@@ -1,7 +1,8 @@
 // Development warnings in a running app (RFC 0003 section 13, `devWarnings.ts`):
 // the checks of each method call's statements on a tracked client, the
 // oversized reply, the write tracker's warnings naming their call, and
-// `createTestApp({ strictWarnings })` turning every one into a thrown error.
+// `createTestApp({ strictWarnings })` turning every one raised in its calls
+// into a thrown error, for as long as the app runs.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -233,15 +234,61 @@ describe("createTestApp({ strictWarnings: true })", () => {
     expect(records).toEqual([`big ok ${replyBytes("x".repeat(500))}`]);
   });
 
-  it("throws only under vitest", async () => {
+  it("throws only under vitest or jest", async () => {
     const vitest = process.env.VITEST;
     delete process.env.VITEST;
     try {
       const { logger, probe } = await start({ strictWarnings: true });
       expect(await probe.oneByOne({ ids: taskIds })).toBe(12);
       expect(devWarnings(logger)).toHaveLength(1);
+
+      process.env.JEST_WORKER_ID = "1";
+      const jest = await start({ strictWarnings: true });
+      await expect(jest.probe.oneByOne({ ids: taskIds })).rejects.toMatchObject({
+        code: "INTERNAL",
+      });
     } finally {
       process.env.VITEST = vitest;
+      delete process.env.JEST_WORKER_ID;
     }
+  });
+
+  const AMBIENT =
+    "[quickdraw:ambient-write] A tracked write to project ran outside any unit of work, so it flushes on its own; run jobs and scripts inside qd.run(...)";
+
+  it("throws only in the app's own calls: seeding through the tracked client logs", async () => {
+    const { logger } = await start({ strictWarnings: true });
+    const { userId } = await h.seed();
+    await h.db.project.create({ data: { name: "seeded", ownerId: userId } });
+    expect(devWarnings(logger)).toEqual([AMBIENT]);
+  });
+
+  it("ends with the app: after close(), the tracked client logs and never throws", async () => {
+    // The review's strictLeak case: a strict app runs and closes, then a test seeds.
+    const { app, probe } = await start({ strictWarnings: true });
+    await expect(probe.oneByOne({ ids: taskIds })).rejects.toMatchObject({ code: "INTERNAL" });
+    await app.close();
+    const { userId } = await h.seed();
+    await expect(
+      h.db.project.create({ data: { name: "after", ownerId: userId } }),
+    ).resolves.toMatchObject({ name: "after" });
+    expect(h.logger.warnings).toContain(AMBIENT);
+  });
+
+  it("is per app: an app sharing the tracked client warns, the strict one still throws", async () => {
+    const strict = await start({ strictWarnings: true });
+    const relaxed = await start();
+    expect(await relaxed.probe.oneByOne({ ids: taskIds })).toBe(12);
+    expect(devWarnings(relaxed.logger)).toHaveLength(1);
+    await expect(strict.probe.oneByOne({ ids: taskIds })).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+
+    // Closing the later app gives ambient writes back to the strict one, which logs them.
+    await relaxed.app.close();
+    const { userId } = await h.seed();
+    await h.db.project.create({ data: { name: "back", ownerId: userId } });
+    expect(devWarnings(strict.logger)).toEqual([AMBIENT]);
+    expect(devWarnings(relaxed.logger)).toHaveLength(1);
   });
 });

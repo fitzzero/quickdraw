@@ -46,6 +46,9 @@ await app.close();
   `./testing/prisma` helpers give each worker a database:
   `createPrismaTestGlobalSetup`, `workerDatabaseUrl` and `resetDatabase`
   (PostgreSQL, or PGlite when no `TEST_DATABASE_URL` is set).
+- Seed rows with the untracked client (`prisma`), or inside `qd.run` once an
+  app runs: a tracked write outside any unit of work flushes on its own with
+  an `ambient-write` warning.
 
 ## Every service gets an access matrix
 
@@ -83,12 +86,14 @@ await expectBudget(() => app.as(ada).taskService.list({ limit: 20 }), { name: "l
 
 ## Development warnings
 
-`createTestApp({ strictWarnings: true })` (under vitest) throws each
-development warning (`n-plus-one`, `unbounded-read`, `oversized-response`,
-`nested-write`, `ambient-write`, `batch-read`, `batch-create-many`) as a
-`DevWarningError` where it happens, failing the test that caused it. Turn it
-on for service suites. `createRecordingSink()` passed as `flushSink` records
-what each flush wrote.
+`createTestApp({ strictWarnings: true })` (under vitest or jest) throws
+each development warning raised in that app's method calls (`n-plus-one`,
+`unbounded-read`, `oversized-response`, `nested-write`, `batch-read`,
+`batch-create-many`) as a `DevWarningError` where it happens, failing the
+test that caused it. Warnings outside its calls (an `ambient-write` while
+seeding) are logged, and `app.close()` ends it. Turn it on for service
+suites. `createRecordingSink()` passed as `flushSink` records what each
+flush wrote.
 
 ## Components
 

@@ -6,6 +6,7 @@ import {
   describeAccessMatrix,
   expectBudget,
 } from "@fitzzero/quickdraw-core/testing";
+import { prisma } from "@project/db";
 import { beforeEach, expect, it } from "vitest";
 import { db } from "../db";
 import type { AppPrincipal } from "../quickdraw";
@@ -18,21 +19,29 @@ const ed: AppPrincipal = { userId: "ed", kind: "user" }; // a stranger
 let projectId = "";
 let taskId = "";
 
+// Seed with the untracked client: nothing subscribes yet, and a tracked write
+// outside any unit of work would flush on its own with an `ambient-write` warning.
 beforeEach(async () => {
   for (const { userId } of [ada, bo, ed]) {
-    await db.user.create({ data: { id: userId, name: userId, email: `${userId}@example.com` } });
+    await prisma.user.create({
+      data: { id: userId, name: userId, email: `${userId}@example.com` },
+    });
   }
-  const project = await db.project.create({ data: { name: "Launch", ownerId: ada.userId } });
-  await db.projectMember.create({
+  const project = await prisma.project.create({ data: { name: "Launch", ownerId: ada.userId } });
+  await prisma.projectMember.create({
     data: { projectId: project.id, userId: bo.userId, role: "Read" },
   });
   projectId = project.id;
-  taskId = (await db.task.create({ data: { projectId, title: "Write the docs" } })).id;
+  taskId = (await prisma.task.create({ data: { projectId, title: "Write the docs" } })).id;
 });
 
 // #region app
 it("sends a rename to the other members' boards", async () => {
-  const app = await createTestApp({ services: [projectService, taskService], db });
+  const app = await createTestApp({
+    services: [projectService, taskService],
+    db,
+    strictWarnings: true,
+  });
   const { call } = await app.connect(bo); // a real protocol 5 socket
   await call.taskService.get({ id: taskId });
   await app.as(ada).taskService.rename({ id: taskId, title: "Ship it" }); // in process

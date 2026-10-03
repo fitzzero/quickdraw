@@ -28,12 +28,19 @@ export const quietLogger: Logger = {
 export interface InstrumentedOptions {
   readonly onCall?: (record: CallRecord) => void;
   /**
-   * Under vitest (`VITEST` set), throw every development warning (N+1
-   * statements, unbounded reads, oversized replies, untracked writes) as a
-   * `DevWarningError` where it is raised, so the test that caused it fails.
-   * Default `false`: warnings are logged once.
+   * Under vitest or jest (`VITEST` or `JEST_WORKER_ID` set), throw every
+   * development warning raised in this app's method calls (N+1 statements,
+   * unbounded reads, oversized replies, nested writes) as a `DevWarningError`
+   * where it is raised, so the test that caused it fails. Warnings outside
+   * its calls, such as an ambient write while seeding, are logged; `close()`
+   * ends it. Default `false`: warnings are logged once.
    */
   readonly strictWarnings?: boolean;
+}
+
+/** True under vitest or jest, where `strictWarnings` applies. */
+function underTestRunner(): boolean {
+  return process.env.VITEST !== undefined || process.env.JEST_WORKER_ID !== undefined;
 }
 
 /**
@@ -51,7 +58,7 @@ export function instrumentOptions<O extends InstrumentedOptions>(
       recordBudgetCall(record);
       onCall?.(record);
     },
-    [STRICT_WARNINGS]: strictWarnings === true && process.env.VITEST !== undefined,
+    [STRICT_WARNINGS]: strictWarnings === true && underTestRunner(),
   } as Omit<O, "strictWarnings">;
 }
 
