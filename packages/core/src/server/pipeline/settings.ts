@@ -17,6 +17,18 @@ import type { VersionSource } from "./notModified";
 import { resolveTracking, type Tracking, type TrackingOptions } from "./tracking";
 
 /**
+ * The lane each socket's subscription events (`qd:sub`, `qd:col:sub`,
+ * `qd:col:items`, `qd:watch`) run in, as queries run in theirs: the socket
+ * rate limiter does not count those events, so this caps them instead.
+ */
+export interface SubscriptionLimits {
+  /** Subscription events one socket may have running at once. Default 8. */
+  readonly maxInFlight: number;
+  /** Subscription events one socket may have waiting; past that, `RATE_LIMITED`. Default 64. */
+  readonly maxQueued: number;
+}
+
+/**
  * The dispatcher's limits. The first three are what a server announces to
  * clients in `qd:hello` (`HelloLimits`).
  */
@@ -29,14 +41,22 @@ export interface DispatcherLimits {
   readonly callTimeoutMs: number;
   /** The `retryAfterMs` of the `RATE_LIMITED` error a full queue answers with. Default 1,000. */
   readonly retryAfterMs: number;
+  /** Each socket's lane of subscription events. Default 8 in flight and 64 queued. */
+  readonly subscriptions: SubscriptionLimits;
 }
 
-/** The defaults of RFC 0003 section 9. */
+/** The dispatcher's `limits` option: any of the limits, and any part of `subscriptions`. */
+export type LimitsOptions = Partial<Omit<DispatcherLimits, "subscriptions">> & {
+  readonly subscriptions?: Partial<SubscriptionLimits>;
+};
+
+/** The defaults of RFC 0003 section 9, and the subscription lane's. */
 export const DEFAULT_LIMITS: DispatcherLimits = Object.freeze({
   maxInFlightQueries: 16,
   maxQueuedQueries: 64,
   callTimeoutMs: 30_000,
   retryAfterMs: 1_000,
+  subscriptions: Object.freeze({ maxInFlight: 8, maxQueued: 64 }),
 });
 
 /** The longest time limit `setTimeout` honours, in milliseconds. */
@@ -69,7 +89,7 @@ export interface PipelineOptions extends TrackingOptions {
    * 100,000 rows.
    */
   readonly changeLog?: ChangeLogOptions | false;
-  readonly limits?: Partial<DispatcherLimits>;
+  readonly limits?: LimitsOptions;
   /** Calls slower than this are logged at `warn`, in milliseconds. Default 1,000. */
   readonly slowMs?: number;
   /** Replies larger than this are logged at `warn`, in bytes. Default 1 MiB. */
@@ -110,8 +130,26 @@ function checkCount(name: string, value: number, max: number): number {
   return value;
 }
 
-function resolveLimits(limits: Partial<DispatcherLimits> = {}): DispatcherLimits {
-  const merged = { ...DEFAULT_LIMITS, ...limits };
+function resolveSubscriptionLimits(
+  limits: Partial<SubscriptionLimits> | undefined,
+): SubscriptionLimits {
+  if (limits !== undefined && (typeof limits !== "object" || limits === null)) {
+    throw new TypeError(
+      "createDispatcher: limits.subscriptions must be { maxInFlight, maxQueued }",
+    );
+  }
+  const merged = { ...DEFAULT_LIMITS.subscriptions, ...limits };
+  checkCount("limits.subscriptions.maxQueued", merged.maxQueued, Number.MAX_SAFE_INTEGER);
+  const inFlight = merged.maxInFlight;
+  if (checkCount("limits.subscriptions.maxInFlight", inFlight, Number.MAX_SAFE_INTEGER) === 0) {
+    throw new TypeError("createDispatcher: limits.subscriptions.maxInFlight must be at least 1");
+  }
+  return Object.freeze(merged);
+}
+
+function resolveLimits(limits: LimitsOptions = {}): DispatcherLimits {
+  const subscriptions = resolveSubscriptionLimits(limits.subscriptions);
+  const merged = { ...DEFAULT_LIMITS, ...limits, subscriptions };
   checkCount("limits.maxInFlightQueries", merged.maxInFlightQueries, Number.MAX_SAFE_INTEGER);
   checkCount("limits.maxQueuedQueries", merged.maxQueuedQueries, Number.MAX_SAFE_INTEGER);
   checkCount("limits.retryAfterMs", merged.retryAfterMs, MAX_TIMEOUT_MS);

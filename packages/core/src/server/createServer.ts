@@ -92,7 +92,9 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
    * none. Default: 100 events per minute per socket. `qd:ch`, `qd:cancel`,
    * the entity and collection subscription events (`qd:sub`, `qd:unsub`,
    * `qd:col:sub`, `qd:col:unsub`, `qd:col:items`) and the topic watches
-   * (`qd:watch`, `qd:unwatch`) are never counted.
+   * (`qd:watch`, `qd:unwatch`) are never counted; the ones that read run in a
+   * per-socket lane instead (`limits.subscriptions`: 8 at once, 64 waiting,
+   * then `RATE_LIMITED`).
    */
   readonly rateLimit?: SocketRateLimitOptions | false;
   /** The HTTP transport's options, or `false` to serve no HTTP calls. */

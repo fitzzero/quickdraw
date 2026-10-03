@@ -23,7 +23,7 @@
 // optionally acknowledged, and stops a watch still being authorized from
 // joining. Neither counts against the socket rate limiter
 // (`transports/middleware.ts`), and neither listener throws
-// (`emit/extension.ts`).
+// (`emit/answer.ts`).
 
 import { CLIENT_EVENTS, topicRoom } from "../contract/names";
 import type { Ok } from "../protocol/envelope";
@@ -31,7 +31,7 @@ import { QuickdrawError } from "../protocol/errors";
 import { authorizeWatch, type WatchTarget } from "./collections/access";
 import type { CollectionHub } from "./collections/bind";
 import { createTopicSink } from "./collections/changed";
-import { answerEvent, answerNow, onDisconnect } from "./emit/extension";
+import { answerEvent, answerNow, onDisconnect } from "./emit/answer";
 import { readWatch, TopicIndex, type TopicWatch } from "./topicIndex";
 import type { QuickdrawServerSocket, SocketContext } from "./transports/types";
 

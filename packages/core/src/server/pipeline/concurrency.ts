@@ -15,6 +15,8 @@ export interface ConcurrencyLimits {
   readonly maxQueued: number;
   /** The `retryAfterMs` sent with `RATE_LIMITED` when the queue is full. */
   readonly retryAfterMs: number;
+  /** What a lane runs, for the `RATE_LIMITED` message. Default `"queries"`. */
+  readonly work?: string;
 }
 
 /** A held query slot. */
@@ -112,10 +114,9 @@ export function createConcurrencyLimiter(limits: ConcurrencyLimits): Concurrency
         return Promise.resolve(slot(connectionId, lane, 0));
       }
       if (lane.queue.length >= limits.maxQueued) {
+        const message = `Too many ${limits.work ?? "queries"} in flight on this connection`;
         return Promise.reject(
-          new QuickdrawError("RATE_LIMITED", "Too many queries in flight on this connection", {
-            retryAfterMs: limits.retryAfterMs,
-          }),
+          new QuickdrawError("RATE_LIMITED", message, { retryAfterMs: limits.retryAfterMs }),
         );
       }
       return enqueue(connectionId, lane, signal);

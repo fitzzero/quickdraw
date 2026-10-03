@@ -86,7 +86,13 @@ export {
 } from "./dispatcher";
 export type { RegisteredMethod, Registry } from "./registry";
 export { toCallReply, type DispatchRequest, type DispatchResult } from "./pipeline/request";
-export { DEFAULT_LIMITS, type DispatcherLimits, type PipelineOptions } from "./pipeline/settings";
+export {
+  DEFAULT_LIMITS,
+  type DispatcherLimits,
+  type LimitsOptions,
+  type PipelineOptions,
+  type SubscriptionLimits,
+} from "./pipeline/settings";
 
 // Access control (RFC 0003 section 4): the method access forms, the access
 // policies a service declares, and the engine that decides both

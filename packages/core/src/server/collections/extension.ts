@@ -13,10 +13,10 @@
 // `FORBIDDEN` for a scope the principal may not subscribe to (4.1 answered an
 // unknown collection and a denied scope alike) or, for `qd:col:items`, one
 // the socket has not subscribed to; and `INTERNAL`, logged, for a lookup or
-// read that failed. No listener throws (`emit/extension.ts`).
+// read that failed. No listener throws (`emit/answer.ts`).
 
 import { CLIENT_EVENTS } from "../../contract/names";
-import { answerEvent, answerNow, onDisconnect } from "../emit/extension";
+import { answerEvent, answerNow, onDisconnect } from "../emit/answer";
 import type { QuickdrawServerSocket, SocketContext } from "../transports/types";
 import type { CollectionHub } from "./bind";
 import {

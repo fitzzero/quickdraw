@@ -118,6 +118,9 @@ export type SocketRateLimitOptions = Omit<RateLimitOptions, "logger" | "ackPaylo
  * mounts and again to page through it, and item loads, which a board holding
  * a scope's index sends per window of up to 200 ids; and topic watches,
  * which a page sends once per watching query it mounts (RFC 0003 section 3).
+ * The ones that read (`qd:sub`, `qd:col:sub`, `qd:col:items`, `qd:watch`)
+ * run in each socket's lane of subscription work instead (`emit/lane.ts`,
+ * `limits.subscriptions`).
  */
 const UNLIMITED_EVENTS: readonly string[] = [
   CLIENT_EVENTS.channel,

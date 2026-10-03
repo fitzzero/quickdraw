@@ -12,19 +12,16 @@
 // failed lookup or read is `INTERNAL`, logged. `qd:unsub` is checked the same
 // way.
 //
-// No listener of the live data throws (`answerNow`, `onDisconnect`): Socket.IO
-// runs listeners from `process.nextTick`, where an exception ends the
-// process, so whatever a frame makes go wrong is logged and answered
-// `INTERNAL`.
+// No listener of the live data throws (`answer.ts`), and `qd:sub` runs in
+// the socket's lane of subscription work (`lane.ts`).
 
 import { CLIENT_EVENTS } from "../../contract/names";
-import type { EntitySubscribeReply, Failure, Ok, Revision } from "../../protocol/envelope";
-import { QuickdrawError, toWire } from "../../protocol/errors";
+import type { EntitySubscribeReply, Ok, Revision } from "../../protocol/envelope";
+import { QuickdrawError } from "../../protocol/errors";
 import { MAX_SUBSCRIBE_IDS } from "../../protocol/version";
-import { toQuickdrawError } from "../pipeline/errors";
-import { describeError } from "../pipeline/metrics";
-import { acknowledge, INTERNAL_FAILURE, unreadable, type Acknowledge } from "../transports/ack";
+import { unreadable } from "../transports/ack";
 import type { QuickdrawServerSocket, SocketContext } from "../transports/types";
+import { answerEvent, answerNow, onDisconnect } from "./answer";
 import { liveService, type Hub } from "./hub";
 import { subscribe, type SubscribeRequest } from "./subscribe";
 
@@ -105,132 +102,6 @@ function onUnsubscribe(hub: Hub, socket: QuickdrawServerSocket, frame: unknown):
     hub.subscriptions.unsubscribe(socket, s, id);
   }
   return { ok: true };
-}
-
-/** Acknowledges a subscription event, when the client asked for an acknowledgement. Never throws. */
-export function reply(
-  socket: QuickdrawServerSocket,
-  context: SocketContext,
-  ack: unknown,
-  message: unknown,
-): void {
-  if (typeof ack !== "function") {
-    return;
-  }
-  acknowledge(context.meter, ack as Acknowledge, message, INTERNAL_FAILURE, (error) => {
-    context.logger.error(
-      "A subscription reply could not be encoded; it was answered with INTERNAL",
-      {
-        category: "quickdraw.socket",
-        socketId: socket.id,
-        error: describeError(error),
-      },
-    );
-  });
-}
-
-/** The failure a frame's handler answers with for what it threw; an `INTERNAL` one is logged. */
-export function failureOf(
-  context: Pick<SocketContext, "logger">,
-  socket: QuickdrawServerSocket,
-  event: string,
-  error: unknown,
-): Failure {
-  const failure = toQuickdrawError(error);
-  if (failure.code === "INTERNAL") {
-    context.logger.error(`A ${event} failed`, {
-      category: "quickdraw.socket",
-      socketId: socket.id,
-      error: describeError(failure.cause ?? failure),
-    });
-  }
-  return { ok: false, e: toWire(failure) };
-}
-
-/**
- * Answers a frame whose handler is synchronous with what `work` returns, or
- * with the failure what it threw maps to (`INTERNAL`, logged, for anything
- * but a `QuickdrawError`). Never throws.
- */
-export function answerNow(
-  socket: QuickdrawServerSocket,
-  context: SocketContext,
-  event: string,
-  ack: unknown,
-  work: () => unknown,
-): void {
-  let answer: unknown;
-  try {
-    answer = work();
-  } catch (error) {
-    answer = failureOf(context, socket, event, error);
-  }
-  reply(socket, context, ack, answer);
-}
-
-/**
- * Answers a frame whose handler is asynchronous with what `work` resolves
- * with, or with the failure its rejection maps to. Never throws, and the
- * promise it starts never rejects.
- */
-export function answerLater(
-  socket: QuickdrawServerSocket,
-  context: SocketContext,
-  event: string,
-  ack: unknown,
-  work: () => Promise<unknown>,
-): void {
-  const settled = (async () => {
-    try {
-      return await work();
-    } catch (error) {
-      return failureOf(context, socket, event, error);
-    }
-  })();
-  void settled.then((answer) => {
-    reply(socket, context, ack, answer);
-  });
-}
-
-/** Runs `cleanup` when the socket disconnects; what it throws is logged, never thrown. */
-export function onDisconnect(
-  socket: QuickdrawServerSocket,
-  context: Pick<SocketContext, "logger">,
-  cleanup: () => void,
-): void {
-  socket.on("disconnect", () => {
-    try {
-      cleanup();
-    } catch (error) {
-      context.logger.error("Cleaning up a disconnected socket's live data failed", {
-        category: "quickdraw.socket",
-        socketId: socket.id,
-        error: describeError(error),
-      });
-    }
-  });
-}
-
-/**
- * Registers a listener for an event a client sends with an acknowledgement,
- * answered by `work` (`answerLater`). An event sent without one is ignored.
- */
-export function answerEvent(
-  socket: QuickdrawServerSocket,
-  context: SocketContext,
-  event: string,
-  work: (frame: unknown) => Promise<unknown>,
-): void {
-  socket.on(event, (frame: unknown, ack: unknown) => {
-    if (typeof ack !== "function") {
-      context.logger.debug(`Ignored a ${event} sent without an acknowledgement`, {
-        category: "quickdraw.socket",
-        socketId: socket.id,
-      });
-      return;
-    }
-    answerLater(socket, context, event, ack, () => work(frame));
-  });
 }
 
 /**

@@ -689,10 +689,25 @@ describe("a dispatcher's resolved limits", () => {
       maxQueuedQueries: 64,
       callTimeoutMs: 30_000,
       retryAfterMs: 1_000,
+      subscriptions: { maxInFlight: 8, maxQueued: 64 },
     });
+    expect(
+      createDispatcher({ services: [service], db, limits: { subscriptions: { maxQueued: 2 } } })
+        .limits.subscriptions,
+    ).toEqual({ maxInFlight: 8, maxQueued: 2 });
     expect(() =>
       createDispatcher({ services: [service], db, limits: { maxInFlightQueries: 0 } }),
     ).toThrow(/maxInFlightQueries must be at least 1/);
+    expect(() =>
+      createDispatcher({ services: [service], db, limits: { subscriptions: { maxInFlight: 0 } } }),
+    ).toThrow(/limits.subscriptions.maxInFlight must be at least 1/);
+    expect(() =>
+      createDispatcher({
+        services: [service],
+        db,
+        limits: { subscriptions: { maxQueued: -1 } },
+      }),
+    ).toThrow(/limits.subscriptions.maxQueued must be an integer/);
     expect(() =>
       createDispatcher({ services: [service], db, limits: { callTimeoutMs: 2 ** 31 } }),
     ).toThrow(/callTimeoutMs must be an integer/);
