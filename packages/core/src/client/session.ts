@@ -22,14 +22,21 @@
 // cleared nothing on a token change; 5.0's first cut refetched with the
 // versions held, which the server answered "not modified" for the new user.
 //
+// Pushes that say the user's access changed refetch what it may have
+// changed, through the invalidation coordinator (`refetchOnAccessChanges`):
+// new service grants (`qd:access`) every quickdraw query, and a revoked row
+// or scope (`qd:revoked`) the method queries of its service.
+//
 // React-free: the provider makes the session of its connection and
 // `QueryClient`, and the live data uses the same one.
 
 import type { QueryClient } from "@tanstack/react-query";
-import { isRecord } from "../protocol/guards";
+import { SERVER_EVENTS } from "../contract/names";
+import { isName, isRecord } from "../protocol/guards";
 import type { HelloFrame } from "../protocol/version";
 import type { QuickdrawConnection } from "./connection";
-import { KEY_ROOT } from "./keys";
+import type { InvalidationCoordinator } from "./coordinator";
+import { KEY_ROOT, serviceKeyPrefix } from "./keys";
 import { resetOverlays } from "./optimistic";
 import { notifyEach } from "./watch";
 
@@ -126,4 +133,34 @@ export function sessionOf(connection: QuickdrawConnection, queryClient: QueryCli
     byClient.set(queryClient, session);
   }
   return session;
+}
+
+/**
+ * Refetches, through `coordinator`, what a change of the user's access may
+ * have changed: every quickdraw query when the server pushes new service
+ * grants (`qd:access`), and the method queries of a service when it ends a
+ * subscription of that service (`qd:revoked`: access to a row or a scope was
+ * revoked, or its anchor deleted, so a method may refuse now what it served).
+ * A query refused that way loses its cached result (`query.ts`). Returns the
+ * function that stops; the provider runs it while it is mounted.
+ */
+export function refetchOnAccessChanges(
+  connection: QuickdrawConnection,
+  coordinator: InvalidationCoordinator,
+): () => void {
+  const { socket } = connection;
+  const onAccess = (): void => {
+    coordinator.invalidate([KEY_ROOT]);
+  };
+  const onRevoked = (frame: unknown): void => {
+    if (isRecord(frame) && isName(frame.s)) {
+      coordinator.invalidate([...serviceKeyPrefix(frame.s), "m"]);
+    }
+  };
+  socket.on(SERVER_EVENTS.access, onAccess);
+  socket.on(SERVER_EVENTS.revoked, onRevoked);
+  return () => {
+    socket.off(SERVER_EVENTS.access, onAccess);
+    socket.off(SERVER_EVENTS.revoked, onRevoked);
+  };
 }

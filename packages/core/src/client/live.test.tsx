@@ -299,6 +299,42 @@ describe("after a reconnect", () => {
   });
 });
 
+describe("when access is revoked", () => {
+  it("leaves no data beside FORBIDDEN, and a qd:revoked reads the service's method queries again", async () => {
+    const { app, records } = await live.start();
+    const board = live.board();
+    const { wrapper } = wrapperFor({
+      url: app.url,
+      principal: as(board.cy),
+      queryClient: freshClient(),
+    });
+    const { result } = renderHook(
+      () => ({
+        count: qd.task.countOnBoard.useQuery({ projectId: board.p1 }),
+        get: qd.task.get.useQuery({ id: board.t1 }),
+        row: qd.task.useEntity(board.t1),
+      }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.count.data).toBe(1));
+    await waitFor(() => expect(result.current.get.data?.title).toBe("T1"));
+    await waitFor(() => expect(result.current.row.data?.title).toBe("T1"));
+    await act(async () => {
+      await app
+        .as(as(board.ada))
+        .projectService.removeMember({ projectId: board.p1, userId: board.cy });
+    });
+    // The watched count is read again on its topic's last qd:changed.
+    await waitFor(() => expect(result.current.count.error?.code).toBe("FORBIDDEN"));
+    expect(result.current.count.data).toBeUndefined();
+    // `get` watches nothing: the row's qd:revoked has it read again.
+    await waitFor(() => expect(result.current.get.error?.code).toBe("FORBIDDEN"));
+    expect(result.current.get.data).toBeUndefined();
+    expect(result.current.row).toMatchObject({ data: undefined, error: { code: "FORBIDDEN" } });
+    expect(records.filter((record) => record.method === "get")).toHaveLength(2);
+  });
+});
+
 describe("qd.invalidate", () => {
   it("refetches one input, every input of a member, or what a key prefixes", async () => {
     const { app, records } = await live.start();

@@ -11,7 +11,16 @@ import { QuickdrawError } from "../index";
 import type { ConnectionAuth, QuickdrawConnection } from "./connection";
 import { createQuickdrawClient } from "./createClient";
 import { QuickdrawProvider, useQuickdraw, type QuickdrawStatus } from "./provider";
-import { alice, bob, clientHarness, counter, outgoing, probe, until } from "./__tests__/fixtures";
+import {
+  alice,
+  bob,
+  clientHarness,
+  counter,
+  outgoing,
+  probe,
+  testAuth,
+  until,
+} from "./__tests__/fixtures";
 
 const harness = clientHarness();
 const qd = createQuickdrawClient({ counter, probe });
@@ -225,6 +234,28 @@ describe("QuickdrawProvider", () => {
       </Provider>,
     );
     await screen.findByText("user bob");
+  });
+
+  it("reads every query again when the server pushes new grants (qd:access)", async () => {
+    const grants = new Map<string, Record<string, "Read" | "Moderate">>([
+      ["alice", { probeService: "Read" }],
+    ]);
+    const { app, records } = await harness.start({
+      auth: { ...testAuth, loadServiceAccess: (userId) => grants.get(userId) },
+    });
+    render(
+      <Provider url={app.url}>
+        <Echo />
+      </Provider>,
+    );
+    await screen.findByText("user alice");
+    const echoes = (): number => records.filter((record) => record.method === "echo").length;
+    expect(echoes()).toBe(1);
+    grants.set("alice", { probeService: "Moderate" });
+    await act(async () => {
+      await app.server.access.refresh("alice");
+    });
+    await until(() => echoes() === 2);
   });
 
   it("reports the connection with useQuickdraw, and lends it to the client's call while mounted", async () => {

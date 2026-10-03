@@ -17,6 +17,10 @@
 // (`session.ts`). A version read from the cache before then could belong to
 // the last user's data, which the server would answer "not modified" for.
 //
+// A read refused with `FORBIDDEN`, `UNAUTHENTICATED` or `NOT_FOUND` takes the
+// cached result out of the query, so `data` never holds what the user may no
+// longer read beside the error (TanStack keeps the last data on an error).
+//
 // React-free: it reads the cache through the `QueryClient` it is given.
 
 import type { QueryClient } from "@tanstack/react-query";
@@ -103,12 +107,39 @@ async function helloKnown(
   });
 }
 
+/** The codes that say the caller may not have the result, or there is none: its cached data goes. */
+const REFUSALS: ReadonlySet<string> = new Set(["FORBIDDEN", "UNAUTHENTICATED", "NOT_FOUND"]);
+
+/** Takes the cached result out of the query of `key`: its read was refused. */
+function forgetResult(queryClient: QueryClient, key: MethodQueryKey): void {
+  const cached = queryClient.getQueryCache().find({ queryKey: key, exact: true });
+  if (cached !== undefined && cached.state.data !== undefined) {
+    cached.setState({ ...cached.state, data: undefined });
+  }
+}
+
+async function fetchShown<Output>(
+  connection: QuickdrawConnection,
+  queryClient: QueryClient,
+  query: MethodQuery,
+  signal: AbortSignal | undefined,
+): Promise<Output> {
+  if (rowShapeOf(query.output) === undefined) {
+    return await fetchVersioned(connection, queryClient, query, signal);
+  }
+  const sentAt = overlaysOf(queryClient).now();
+  const data = await fetchVersioned<Output>(connection, queryClient, query, signal);
+  rememberReadAt(data, sentAt);
+  return data;
+}
+
 /**
  * Fetches a query's result for `queryClient`'s cache, once the server's
  * hello has named the user: sends the version of the cached result as `v`,
  * resolves with the cached result itself when the server answers "not
  * modified", and calls once more without a version when that result left
- * the cache meanwhile.
+ * the cache meanwhile. A refusal (`FORBIDDEN`, `UNAUTHENTICATED`,
+ * `NOT_FOUND`) also takes the cached result out of the query.
  */
 export async function fetchMethodQuery<Output>(
   connection: QuickdrawConnection,
@@ -117,11 +148,12 @@ export async function fetchMethodQuery<Output>(
   signal?: AbortSignal,
 ): Promise<Output> {
   await helloKnown(connection, signal);
-  if (rowShapeOf(query.output) === undefined) {
-    return fetchVersioned(connection, queryClient, query, signal);
+  try {
+    return await fetchShown<Output>(connection, queryClient, query, signal);
+  } catch (error) {
+    if (error instanceof QuickdrawError && REFUSALS.has(error.code)) {
+      forgetResult(queryClient, query.key);
+    }
+    throw error;
   }
-  const sentAt = overlaysOf(queryClient).now();
-  const data = await fetchVersioned<Output>(connection, queryClient, query, signal);
-  rememberReadAt(data, sentAt);
-  return data;
 }

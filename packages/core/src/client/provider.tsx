@@ -19,7 +19,9 @@
 // delay of up to 2 s, where 4.1 invalidated every query at once
 // (`legacy-src/client/QuickdrawProvider.tsx:320-321`). The cache follows the
 // user the server's hello names (`session.ts`): another user's hello empties
-// it, and new credentials for the same user refetch it.
+// it, and new credentials for the same user refetch it. New grants
+// (`qd:access`) refetch every query, and a revoked row or scope
+// (`qd:revoked`) the method queries of its service.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
@@ -39,7 +41,7 @@ import { QuickdrawContext, useConnectionState, useQuickdrawContext } from "./con
 import { createInvalidationCoordinator } from "./coordinator";
 import { bindConnection, isWatchedQuery } from "./createClient";
 import { reloadOncePerSession } from "./reload";
-import { sessionOf } from "./session";
+import { refetchOnAccessChanges, sessionOf } from "./session";
 
 /** Props of {@link QuickdrawProvider}. */
 export interface QuickdrawProviderProps<Contracts extends ContractMap> extends Omit<
@@ -142,6 +144,7 @@ function ConnectedProvider<Contracts extends ContractMap>(
       }),
     [connection, coordinator, client],
   );
+  React.useEffect(() => refetchOnAccessChanges(connection, coordinator), [connection, coordinator]);
   React.useEffect(
     () => bindConnection(client, connection, coordinator),
     [client, connection, coordinator],

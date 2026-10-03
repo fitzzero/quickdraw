@@ -82,6 +82,37 @@ describe("fetchMethodQuery", () => {
     expect(await fetchMethodQuery(connection, queryClient, read)).toEqual({ name: "a", value: 0 });
     expect(versions()).toEqual([undefined]);
   });
+
+  it.each(["FORBIDDEN", "UNAUTHENTICATED", "NOT_FOUND"] as const)(
+    "takes the cached result out of a query refused with %s",
+    async (code) => {
+      const { connection, queryClient } = await setup();
+      const fail: MethodQuery = {
+        service: "probeService",
+        method: "fail",
+        input: { code },
+        key: methodKey("probeService", "fail", { code }),
+      };
+      queryClient.setQueryData(fail.key, { held: "before the refusal" });
+      await expect(fetchMethodQuery(connection, queryClient, fail)).rejects.toMatchObject({ code });
+      expect(queryClient.getQueryData(fail.key)).toBeUndefined();
+    },
+  );
+
+  it("keeps the cached result after an error that refuses nothing", async () => {
+    const { connection, queryClient } = await setup();
+    const fail: MethodQuery = {
+      service: "probeService",
+      method: "fail",
+      input: { code: "INTERNAL" },
+      key: methodKey("probeService", "fail", { code: "INTERNAL" }),
+    };
+    queryClient.setQueryData(fail.key, { held: "kept" });
+    await expect(fetchMethodQuery(connection, queryClient, fail)).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+    expect(queryClient.getQueryData(fail.key)).toEqual({ held: "kept" });
+  });
 });
 
 describe("shareKeepingVersion", () => {
