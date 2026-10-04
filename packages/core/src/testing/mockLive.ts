@@ -169,10 +169,14 @@ function rowsResult(
 
 const idle = (): Promise<void> => Promise.resolve();
 
+/** A mock shows no optimistic additions, so none is ever pending. */
+const NONE_PENDING: ReadonlySet<string> = new Set();
+
 /** A mocked scope with nothing in it yet. */
 function emptyScope(active: boolean): UseCollectionResult<unknown, IndexRow> {
   return {
     items: [],
+    pending: NONE_PENDING,
     index: undefined,
     byId: new Map(),
     totalCount: null,

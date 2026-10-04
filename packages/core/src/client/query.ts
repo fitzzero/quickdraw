@@ -29,7 +29,8 @@ import { QuickdrawError } from "../protocol/errors";
 import { call, isNotModified, type CallRequest } from "./call";
 import type { QuickdrawConnection } from "./connection";
 import type { MethodQueryKey } from "./keys";
-import { overlaysOf, rowShapeOf } from "./optimistic";
+import { overlaysOf } from "./optimistic";
+import { rowShapeOf } from "./overlayRows";
 import { rememberReadAt, rememberVersion, versionOf } from "./versions";
 
 /** A query to fetch: the call, the key its result is cached under, and the method's output. */

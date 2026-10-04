@@ -35,23 +35,47 @@
 //   Revisions and send order are compared, never arrival order.
 // - Only fields the row already has are overlaid, so a projection shows the
 //   fields it carries and nothing else.
+// - An update can add a row too (`cache.addItem(collection, scope, item)`,
+//   or `cache.addEntity(row)` for every collection of entity rows it
+//   belongs to): a provisional item shown in the scope at once, in the
+//   collection's order, flagged `pending` while the call is in flight, kept
+//   beside the layers until the scope accounts for it (`additions.ts`,
+//   `settleAdditions`).
 //
 // The query hooks apply overlays to methods whose output is a projection
-// (one row, `nullable(...)` or `listOf(...)`); the live-data hooks apply them
-// to entities and collection items through the same `applyOverlay`. A store
-// keeps at most 1,000 layers and forgets the oldest finished ones first. It
-// remembers the last revision of at most 1,000 rows, plus every row that has
-// a layer, so reading a large board cannot push those out.
+// (one row, `nullable(...)` or `listOf(...)`, `overlayRows.ts`); the
+// live-data hooks apply them to entities and collection items through the
+// same `applyOverlay`. A store keeps at most 1,000 layers and forgets the
+// oldest finished ones first. It remembers the last revision of at most
+// 1,000 rows, plus every row that has a layer, so reading a large board
+// cannot push those out. What one mutation call opens, finishes and drops is
+// `optimisticCall.ts`.
 //
 // React-free: one store per `QueryClient`.
 
 import type { QueryClient } from "@tanstack/react-query";
-import type { MethodOutput } from "../contract/methods";
 import type { Revision } from "../protocol/envelope";
 import { isRecord } from "../protocol/guards";
+import {
+  createAdditions,
+  type AddedItem,
+  type AddedRow,
+  type Addition,
+  type Additions,
+  type ScopeEvidence,
+} from "./additions";
+
+export type { AddedItem, ScopeEvidence } from "./additions";
 
 /** A row as overlays find it: any object with a string `id`. */
 type Row = Readonly<Record<string, unknown>> & { readonly id: string };
+
+/**
+ * A row an optimistic update adds: every field of `T` but `id`, which it may
+ * give (an id the client made, which the server keeps) or leave to the
+ * server.
+ */
+export type NewRow<T> = Omit<T, "id"> & { readonly id?: string };
 
 /**
  * What a custom optimistic update writes layers through, for one mutation
@@ -61,6 +85,7 @@ type Row = Readonly<Record<string, unknown>> & { readonly id: string };
 export interface OptimisticCache<
   Entity = Record<string, unknown>,
   Items extends Record<string, unknown> = Record<string, Record<string, unknown>>,
+  Scopes extends { readonly [K in keyof Items]: unknown } = { readonly [K in keyof Items]: string },
 > {
   /** Shows `fields` over the row `id` of the mutation's service: its entity and its collection items. */
   patchEntity(id: string, fields: Partial<Entity>): void;
@@ -72,6 +97,27 @@ export interface OptimisticCache<
     id: string,
     fields: Partial<Items[K]>,
   ): void;
+  /**
+   * Shows `item` in scope `scope` of `collection` at once, in the
+   * collection's order (give it the `order` fields; without them it shows
+   * last), flagged in `useCollection`'s `pending` while the call is in
+   * flight: a create shown before the server answers. A refused call drops
+   * it; the reply's `id` (the created row's) replaces its own, and the
+   * scope's own copy replaces it when it arrives.
+   */
+  addItem<K extends keyof Items & string>(
+    collection: K,
+    scope: Scopes[K],
+    item: NewRow<Items[K]>,
+  ): void;
+  /**
+   * `addItem` for every collection of the service whose items are the
+   * entity (`item: "entity"`) and whose scope column, and every column of
+   * its `where`, `row` holds with a matching value: the scope is
+   * `row[scope]`. A collection of a projection, or scoped `via` a junction,
+   * takes `addItem`.
+   */
+  addEntity(row: NewRow<Entity>): void;
 }
 
 /**
@@ -125,10 +171,12 @@ export interface OverlayStore {
 export interface OverlayView {
   /** `applyOverlay` for this view's service. */
   apply<T>(row: T, options?: OverlayOptions): T | undefined;
+  /** The items optimistic updates added to scope `scope` of `collection`, oldest first. */
+  added(collection: string, scope: string): readonly AddedItem[];
 }
 
 /** One layer of one mutation call. */
-interface Layer {
+export interface Layer {
   readonly key: string;
   readonly service: string;
   readonly id: string;
@@ -145,11 +193,20 @@ interface Layer {
   expiresAt: number | undefined;
 }
 
+/** What one mutation call opened. */
+export interface Opened {
+  readonly layers: Layer[];
+  readonly additions: Addition[];
+}
+
 /** What a mutation call does with the store: open layers, then finish or drop them. */
-interface StoreInternals extends OverlayStore {
+export interface StoreInternals extends OverlayStore {
   add(service: string, id: string, layer: Pick<Layer, "collection" | "removed" | "fields">): Layer;
-  finish(layers: readonly Layer[], data: unknown): void;
-  discard(layers: readonly Layer[]): void;
+  addItem(service: string, collection: string, scope: string, item: AddedRow): Addition;
+  finish(opened: Opened, data: unknown): void;
+  discard(opened: Opened): void;
+  /** Ends the finished additions to a scope that it accounts for (`settleAdditions`). */
+  settle(service: string, collection: string, scope: string, evidence: ScopeEvidence): void;
   /** Drops every layer and every revision seen: the cache was emptied for another user. */
   reset(): void;
 }
@@ -202,6 +259,8 @@ function repliedFields(layer: Layer, data: unknown): Readonly<Record<string, unk
 /** The layer state of one store, and the bookkeeping its methods share. */
 interface Layers {
   readonly byRow: Map<string, Layer[]>;
+  /** The rows optimistic updates added, per scope (`additions.ts`). */
+  readonly additions: Additions;
   /** The last revision of rows without a layer, the least recently seen first. */
   readonly revisions: Map<string, Revision>;
   /** The last revision of rows with a layer, kept out of `revisions` so that churn cannot evict it. */
@@ -234,6 +293,8 @@ function viewOf(layers: Layers, service: string): OverlayView {
   if (view === undefined) {
     view = Object.freeze({
       apply: <T>(row: T, options?: OverlayOptions) => applyOverlay(layers, service, row, options),
+      added: (collection: string, scope: string) =>
+        layers.additions.added(service, collection, scope),
     });
     layers.views.set(service, view);
   }
@@ -335,34 +396,44 @@ function stopExpiry(layers: Layers): void {
   layers.expiry = undefined;
 }
 
-/** Drops `dropped` and tells the listeners. */
-function discard(layers: Layers, dropped: readonly Layer[]): void {
+/** Drops `dropped` and `additions`, and tells the listeners. */
+function discard(
+  layers: Layers,
+  dropped: readonly Layer[],
+  additions: readonly Addition[] = [],
+): void {
   const removed = dropped.filter((layer) => remove(layers, layer));
-  if (layers.count === 0) {
+  const gone = layers.additions.remove(additions);
+  if (layers.count === 0 && layers.additions.size === 0) {
     stopExpiry(layers);
   }
-  changed(
-    layers,
-    removed.map((layer) => layer.service),
-  );
+  changed(layers, [
+    ...removed.map((layer) => layer.service),
+    ...gone.map((addition) => addition.service),
+  ]);
 }
 
-/** Drops the finished layers whose time is up, and waits for the next to expire. */
+/** Drops the finished layers and additions whose time is up, and waits for the next to expire. */
 function expire(layers: Layers): void {
   const now = Date.now();
-  const due = [...layers.byRow.values()]
-    .flat()
-    .filter((layer) => layer.expiresAt !== undefined && layer.expiresAt <= now);
-  discard(layers, due);
+  const isDue = (entry: { readonly expiresAt: number | undefined }): boolean =>
+    entry.expiresAt !== undefined && entry.expiresAt <= now;
+  discard(
+    layers,
+    [...layers.byRow.values()].flat().filter(isDue),
+    layers.additions.all().filter(isDue),
+  );
   armExpiry(layers);
 }
 
-/** Waits for the first finished layer to expire, unless a wait is set already. */
+/** Waits for the first finished layer or addition to expire, unless a wait is set already. */
 function armExpiry(layers: Layers): void {
   if (layers.expiry !== undefined) {
     return;
   }
-  const times = [...layers.byRow.values()].flat().map((layer) => layer.expiresAt);
+  const times = [...[...layers.byRow.values()].flat(), ...layers.additions.all()].map(
+    (entry) => entry.expiresAt,
+  );
   const first = Math.min(...times.filter((time) => time !== undefined));
   if (Number.isFinite(first)) {
     layers.expiry = setTimeout(
@@ -433,20 +504,26 @@ function addLayer(
   return layer;
 }
 
-/** Finishes the layers of a call that succeeded with `data`: they keep its values, for at most 10 s. */
-function finishLayers(layers: Layers, finished: readonly Layer[], data: unknown): void {
+/**
+ * Finishes the layers and additions of a call that succeeded with `data`:
+ * layers keep its values, additions take the id it names (or are dropped
+ * when it names none, or when their scope holds it already), for at most 10 s.
+ */
+function finishLayers(layers: Layers, opened: Opened, data: unknown): void {
   layers.clock += 1;
   const expiresAt = Date.now() + FINISHED_LAYER_MS;
-  for (const layer of finished) {
+  for (const layer of opened.layers) {
     layer.finished = layers.clock;
     layer.fields = repliedFields(layer, data);
     layer.expiresAt = expiresAt;
   }
+  // Those the reply names no id for, or whose scope holds it already, go now.
+  layers.additions.finish(opened.additions, data, layers.clock, expiresAt);
   armExpiry(layers);
-  changed(
-    layers,
-    finished.map((layer) => layer.service),
-  );
+  changed(layers, [
+    ...opened.layers.map((layer) => layer.service),
+    ...opened.additions.map((addition) => addition.service),
+  ]);
 }
 
 /** Drops every layer and every revision seen, and tells the views of every service shown. */
@@ -457,17 +534,22 @@ function resetLayers(layers: Layers): void {
       services.add(layer.service);
     }
   }
+  for (const addition of layers.additions.all()) {
+    services.add(addition.service);
+  }
   stopExpiry(layers);
   layers.byRow.clear();
+  layers.additions.clear();
   layers.revisions.clear();
   layers.pinned.clear();
   layers.count = 0;
   changed(layers, services);
 }
 
-function createStore(): StoreInternals {
+function createStore(queryClient: QueryClient): StoreInternals {
   const layers: Layers = {
     byRow: new Map(),
+    additions: createAdditions(queryClient),
     revisions: new Map(),
     pinned: new Map(),
     expiry: undefined,
@@ -492,11 +574,21 @@ function createStore(): StoreInternals {
     view: (service: string) => viewOf(layers, service),
     add: (service: string, id: string, made: Pick<Layer, "collection" | "removed" | "fields">) =>
       addLayer(layers, service, id, made),
-    finish(finished: readonly Layer[], data: unknown): void {
-      finishLayers(layers, finished, data);
+    addItem(service: string, collection: string, scope: string, item: AddedRow): Addition {
+      const addition = layers.additions.add(service, collection, scope, item);
+      changed(layers, [service]);
+      return addition;
     },
-    discard(dropped: readonly Layer[]): void {
-      discard(layers, dropped);
+    finish(opened: Opened, data: unknown): void {
+      finishLayers(layers, opened, data);
+    },
+    discard(opened: Opened): void {
+      discard(layers, opened.layers, opened.additions);
+    },
+    settle(service: string, collection: string, scope: string, evidence: ScopeEvidence): void {
+      if (layers.additions.size > 0) {
+        discard(layers, [], layers.additions.settle(service, collection, scope, evidence));
+      }
     },
     reset(): void {
       resetLayers(layers);
@@ -504,10 +596,11 @@ function createStore(): StoreInternals {
   });
 }
 
-function storeOf(queryClient: QueryClient): StoreInternals {
+/** The store of `queryClient`, with what a mutation call does to it (`optimisticCall.ts`). */
+export function storeOf(queryClient: QueryClient): StoreInternals {
   let store = stores.get(queryClient);
   if (store === undefined) {
-    store = createStore();
+    store = createStore(queryClient);
     stores.set(queryClient, store);
   }
   return store;
@@ -534,149 +627,20 @@ export function resetOverlays(queryClient: QueryClient): void {
 }
 
 /**
- * How a method's output holds rows of its service: one row (`"entity"` or a
- * projection name), one row or `null` (`nullable(...)`), or a list of rows
- * (`listOf(...)`). A schema output holds none.
+ * The state of scope `scope` of `collection` of `service` changed in the
+ * cache of `queryClient` (`live/collectionController.ts`): its finished
+ * additions end when that state accounts for them, because it holds the id
+ * their reply named (the server's own copy is shown now), a delta just
+ * applied named it, or the load just applied was sent after their call's
+ * reply (`readAt`) and so would hold it if it were a member. Additions of
+ * calls in flight stay.
  */
-export type RowShape = "one" | "nullable" | "list";
-
-/** The row shape of a method's output, or `undefined` for a schema output. */
-export function rowShapeOf(output: MethodOutput | undefined): RowShape | undefined {
-  if (typeof output === "string") {
-    return "one";
-  }
-  if (!isRecord(output) || "~standard" in output) {
-    return undefined;
-  }
-  if (output.kind === "nullable") {
-    return "nullable";
-  }
-  return output.kind === "list" ? "list" : undefined;
-}
-
-/**
- * A result of shape `shape`, read at `readAt` (`OverlayOptions`), as `view`
- * shows it. A hidden row leaves a list and makes a `nullable` result `null`;
- * a result that must be a row keeps it. Returns `data` itself when no
- * overlay changes it.
- */
-export function showRows<T>(
-  view: OverlayView,
-  shape: RowShape,
-  data: T,
-  readAt: number | undefined,
-): T {
-  const options = { readAt };
-  if (shape !== "list") {
-    const shown = view.apply(data, options);
-    if (shown === undefined) {
-      return (shape === "nullable" ? null : data) as T;
-    }
-    return shown;
-  }
-  if (!Array.isArray(data)) {
-    return data;
-  }
-  const rows: unknown[] = [];
-  let same = true;
-  for (const row of data as unknown[]) {
-    const shown = view.apply(row, options);
-    same &&= shown === row;
-    if (shown !== undefined) {
-      rows.push(shown);
-    }
-  }
-  return (same ? data : rows) as T;
-}
-
-/** The method a mutation calls, as its default optimistic update needs it. */
-export interface OptimisticTarget {
-  /** The service's name on the wire. */
-  readonly service: string;
-  /** True when the method's output is `"entity"`: its calls are optimistic by default. */
-  readonly entityOutput: boolean;
-}
-
-function cacheFor(store: StoreInternals, service: string, opened: Layer[]): OptimisticCache {
-  const fieldsOf = (fields: unknown): Readonly<Record<string, unknown>> =>
-    isRecord(fields) ? { ...fields } : {};
-  return Object.freeze({
-    patchEntity(id: string, fields: Partial<Record<string, unknown>>): void {
-      opened.push(
-        store.add(service, id, { collection: undefined, removed: false, fields: fieldsOf(fields) }),
-      );
-    },
-    removeEntity(id: string): void {
-      opened.push(store.add(service, id, { collection: undefined, removed: true, fields: {} }));
-    },
-    patchItem(collection: string, id: string, fields: Partial<Record<string, unknown>>): void {
-      opened.push(store.add(service, id, { collection, removed: false, fields: fieldsOf(fields) }));
-    },
-  });
-}
-
-/** The layers a call opens: the custom update's, or the default's. */
-function openLayers(
-  store: StoreInternals,
-  target: OptimisticTarget,
-  optimistic: OptimisticUpdate<unknown> | undefined,
-  input: unknown,
-): Layer[] {
-  const opened: Layer[] = [];
-  const cache = cacheFor(store, target.service, opened);
-  try {
-    if (optimistic !== undefined) {
-      optimistic(input, cache);
-    } else if (target.entityOutput && isRow(input)) {
-      const { id, ...fields } = input;
-      cache.patchEntity(id, fields);
-    }
-  } catch (error) {
-    store.discard(opened);
-    throw error;
-  }
-  return opened;
-}
-
-/**
- * Runs one mutation call with its optimistic layers: opens them, sends the
- * call with `send`, then finishes them with the reply or drops them when the
- * call fails. `send` is given `replied`, to call with the reply's data the
- * moment it arrives (`CallRequest.onReply`): a frame handled after that is
- * after the reply, even when the call's promise has not settled yet, as on
- * Node, where one read of the socket can hand over the reply and the
- * flush's frames together. A `send` that never calls it has its layers
- * finished when its promise resolves.
- */
-export async function mutateOptimistically<T>(
+export function settleAdditions(
   queryClient: QueryClient,
-  target: OptimisticTarget,
-  optimistic: false | OptimisticUpdate<unknown> | undefined,
-  input: unknown,
-  send: (replied: (data: T) => void) => Promise<T>,
-): Promise<T> {
-  const ignore = (): void => undefined;
-  if (optimistic === false) {
-    return await send(ignore);
-  }
-  const store = storeOf(queryClient);
-  const opened = openLayers(store, target, optimistic, input);
-  if (opened.length === 0) {
-    return await send(ignore);
-  }
-  let finished = false;
-  const replied = (data: T): void => {
-    if (!finished) {
-      finished = true;
-      store.finish(opened, data);
-    }
-  };
-  try {
-    const data = await send(replied);
-    replied(data);
-    return data;
-  } catch (error) {
-    store.discard(opened);
-    throw error;
-  }
+  service: string,
+  collection: string,
+  scope: string,
+  evidence: ScopeEvidence,
+): void {
+  stores.get(queryClient)?.settle(service, collection, scope, evidence);
 }

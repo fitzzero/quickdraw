@@ -17,7 +17,9 @@
 // - `items`: the items loaded among those members, in order. The first page
 //   loads with the scope, `loadMore` loads the next, `loadItems(ids)` loads
 //   chosen members, and `load: "all"` loads every page;
-// - both with the overlays of optimistic mutations laid over them.
+// - both with the overlays of optimistic mutations laid over them, and the
+//   items they added (`cache.addItem`) in their place; `pending` names those
+//   whose call is in flight.
 
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
@@ -52,8 +54,17 @@ export interface UseCollectionOptions<View extends string = string> {
 
 /** What `useCollection` returns. */
 export interface UseCollectionResult<Item, Row> {
-  /** The items loaded among the members shown, in order. */
+  /**
+   * The items loaded among the members shown, in order, with the items
+   * optimistic updates added (`cache.addItem`) in their place until the
+   * scope's own copies arrive.
+   */
   readonly items: readonly Item[];
+  /**
+   * The ids of the items shown that an optimistic update added and whose
+   * call is in flight: style them as sending. Empty when there are none.
+   */
+  readonly pending: ReadonlySet<string>;
   /**
    * The members shown, in order: one row each, `id` and the index fields.
    * `undefined` for a collection without an index, and for a scope too large
@@ -90,6 +101,13 @@ const NOTHING: CollectionView<never> = Object.freeze({
   byId: new Map<string, never>(),
 });
 
+const NONE_PENDING: ReadonlySet<string> = new Set();
+
+/** What the hook shows, and the ids among it of additions whose call is in flight. */
+interface Shown extends CollectionView<{ readonly id: string }> {
+  readonly pending: ReadonlySet<string>;
+}
+
 /** What the hook returns besides what it shows. */
 type Actions = Pick<UseCollectionResult<unknown, unknown>, "loadMore" | "loadItems" | "refresh">;
 
@@ -111,7 +129,7 @@ function actionsOf(held: { readonly current: CollectionController | null }): Act
 /** What the hook returns, from the entry, what it shows of it and the actions. */
 function resultOf<Item, Row>(
   entry: CollectionEntry | null | undefined,
-  view: CollectionView<{ readonly id: string }>,
+  view: Shown,
   active: boolean,
   actions: Actions,
 ): UseCollectionResult<Item, Row> {
@@ -119,6 +137,7 @@ function resultOf<Item, Row>(
   const error = entry?.error ?? null;
   return {
     items: view.items as readonly Item[],
+    pending: view.pending,
     index: view.index as readonly Row[] | undefined,
     byId: view.byId as ReadonlyMap<string, Item>,
     totalCount: state?.totalCount ?? null,
@@ -166,17 +185,25 @@ export function useCollection<Item, Row = IndexRow>(
   const entry = active && !awaiting ? cached : undefined;
   const predicate = viewPredicate(target.def, options.view);
   const state = entry?.state ?? null;
-  const shown = useMemo(
-    () =>
-      state === null
-        ? NOTHING
-        : showCollection(state, {
-            view: predicate,
-            who: { userId: userId ?? "" },
-            overlay: (row) => overlays.apply(row, { collection: target.collection }),
-          }),
-    [state, predicate, userId, overlays, target.collection],
-  );
+  const shown = useMemo((): Shown => {
+    if (state === null) {
+      return { ...NOTHING, pending: NONE_PENDING };
+    }
+    const added = overlays.added(target.collection, scopeValue);
+    const view = showCollection(state, {
+      view: predicate,
+      who: { userId: userId ?? "" },
+      overlay: (row) => overlays.apply(row, { collection: target.collection }),
+      added: added.map((addition) => addition.item),
+      shape: target.def,
+    });
+    const sending = added.filter((addition) => addition.pending && view.byId.has(addition.item.id));
+    return {
+      ...view,
+      pending:
+        sending.length === 0 ? NONE_PENDING : new Set(sending.map((addition) => addition.item.id)),
+    };
+  }, [state, predicate, userId, overlays, target.collection, target.def, scopeValue]);
   const actions = useMemo(() => actionsOf(held), []);
   return useMemo(
     () => resultOf<Item, Row>(entry, shown, active, actions),

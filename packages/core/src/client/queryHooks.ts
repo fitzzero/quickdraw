@@ -13,7 +13,8 @@ import type { QuickdrawConnection } from "./connection";
 import type { InvalidationCoordinator } from "./coordinator";
 import type { MethodQueryKey } from "./keys";
 import type { MethodTarget } from "./members";
-import { overlaysOf, rowShapeOf, showRows, type OverlayView } from "./optimistic";
+import { overlaysOf, type OverlayView } from "./optimistic";
+import { rowShapeOf, showRows } from "./overlayRows";
 import { readAtOf } from "./versions";
 
 /**
@@ -152,7 +153,10 @@ export function useTopicWatch({
 
 const ignoreChanges = (): (() => void) => () => undefined;
 
-const NO_VIEW: OverlayView = Object.freeze({ apply: <T>(row: T) => row });
+const NO_VIEW: OverlayView = Object.freeze({
+  apply: <T>(row: T) => row,
+  added: () => Object.freeze([]),
+});
 
 /**
  * The `select` a query of `target` runs: the overlays of optimistic

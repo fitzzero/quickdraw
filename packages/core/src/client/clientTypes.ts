@@ -83,11 +83,13 @@ export interface QueryMember<C extends AnyContract, M extends MethodName<C>> {
 
 /**
  * What a custom optimistic update of a mutation of contract `C` writes
- * through: layers over its entity's rows and its collections' items.
+ * through: layers over its entity's rows and its collections' items, and
+ * items added to its collections' scopes.
  */
 export type OptimisticCacheOf<C extends AnyContract> = OptimisticCache<
   EntityOf<C>,
-  { readonly [K in CollectionName<C>]: ItemOf<C, K> }
+  { readonly [K in CollectionName<C>]: ItemOf<C, K> },
+  { readonly [K in CollectionName<C>]: ScopeOf<C, K> }
 >;
 
 /** `qd.<key>.<mutation>`. */

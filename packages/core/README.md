@@ -1159,7 +1159,7 @@ globals (React Native).
 | `qd.task.get.useQuery(input, options)`                                    | TanStack's `useQuery`; errors are `QuickdrawError` with a `code`                                |
 | `qd.task.rename.useMutation(options)`                                     | TanStack's `useMutation`; `mutate` returns nothing, `mutateAsync` the output                    |
 | `qd.task.useEntity(id)`, `useEntities(ids)`                               | live rows at the user's level: `{ data, isLoading, isRemoved, error }`                          |
-| `qd.task.board.useCollection(scope, { view, load, limit })`               | a live scope: `{ items, index, byId, totalCount, hasMore, isLoading, loadMore, refresh, ... }`  |
+| `qd.task.board.useCollection(scope, { view, load, limit })`               | a live scope: `{ items, index, byId, pending, totalCount, hasMore, isLoading, loadMore, ... }`  |
 | `qd.task.get.call(input)`, `.key(input)`, `.prefetch(queryClient, input)` | a call over the mounted provider's connection, the cache key, a prefetch                        |
 | `qd.invalidate(qd.task.get, input?)`                                      | invalidates through the coordinator: a read in flight is never cancelled                        |
 | `useQuickdraw()`                                                          | `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, ... }` |
@@ -1203,7 +1203,8 @@ export function TaskDetail({ id }: { readonly id: string }) {
   collection items from the moment it is sent, are dropped if it fails, and
   give way to the server's frame. `optimistic: false` turns that off;
   `optimistic: (input, cache) => ...` writes its own layers with
-  `patchEntity`, `removeEntity` and `patchItem`.
+  `patchEntity`, `removeEntity` and `patchItem`, and adds rows with
+  `addItem` and `addEntity` (below).
 - Live rows and collections need no refetching: frames keep them current,
   and after a reconnect they resume by revision. A query whose result
   follows writes declares `watch` in its contract; the coordinator fetches
@@ -1227,6 +1228,53 @@ export function TaskDetail({ id }: { readonly id: string }) {
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
   kind of work.
+
+A create shows its row before the server answers with `cache.addItem(collection,
+scope, item)`: the item appears in the scope at once, in its place by the
+collection's `order` (give it the order's fields; without them it goes
+last), and `useCollection`'s `pending` names it while the call is in flight.
+A refused call removes it. The reply's `id` (the created row's) and values
+replace the item's own, and once the scope's own copy arrives (its `added`
+delta, or a load) that copy shows in its place: never both, never a gap.
+`cache.addEntity(row)` adds a row to every collection of entity rows whose
+scope column (and `where`) it matches; a collection of a projection takes
+`addItem`. The item may give its own `id`, one the client made and the
+server keeps:
+
+<!-- example: apps/web/src/components/AddTask.tsx#add -->
+
+```tsx
+export function TaskList({ projectId }: { readonly projectId: string }) {
+  const { items, pending } = qd.task.board.useCollection(projectId);
+  const create = qd.task.create.useMutation({
+    // the new card shows at once, last on the board (its ordinal), until the server's arrives
+    optimistic: (input, cache) =>
+      cache.addItem("board", input.projectId, {
+        projectId: input.projectId,
+        title: input.title,
+        status: "open",
+        ordinal: Number.MAX_SAFE_INTEGER,
+        assigneeId: null,
+      }),
+  });
+  return (
+    <>
+      <ul>
+        {items.map((task) => (
+          // pending: the create is on its way; the card is the server's once it answers
+          <li key={task.id} style={{ opacity: pending.has(task.id) ? 0.5 : 1 }}>
+            {task.title}
+          </li>
+        ))}
+      </ul>
+      <button type="button" onClick={() => create.mutate({ projectId, title: "New task" })}>
+        Add
+      </button>
+      {create.error === null ? null : <p>{`Not added: ${create.error.code}`}</p>}
+    </>
+  );
+}
+```
 
 `useQuickdraw()` says who the connection acts for. `userId` is `null` both
 for an anonymous socket and before the server's hello, so a gate waits for

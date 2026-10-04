@@ -208,6 +208,29 @@ describe("optimistic mutations", () => {
     void (() => qd.taskService.rename.useMutation({ optimistic: true }));
   });
 
+  test("add items typed by each collection's item and scope, and entity rows typed by the entity", () => {
+    const useCreate = () =>
+      qd.board.rename.useMutation({
+        optimistic: (input, cache) => {
+          // A card of the board: every field but id, which may be given or left to the server.
+          cache.addItem("board", "p1", { title: input.title });
+          cache.addItem("board", "p1", { id: "client-made", title: input.title });
+          cache.addEntity({ projectId: "p1", title: input.title, status: "open", ordinal: 1 });
+          // @ts-expect-error a card has a title
+          cache.addItem("board", "p1", {});
+          // @ts-expect-error a card has no status
+          cache.addItem("board", "p1", { title: "x", status: "open" });
+          // @ts-expect-error a scope is the scope column's value
+          cache.addItem("board", 1, { title: "x" });
+          // @ts-expect-error an entity row has every field of the entity
+          cache.addEntity({ title: "x" });
+        },
+      });
+    void useCreate;
+    const useBoard = () => qd.board.board.useCollection("p1");
+    expectTypeOf<ReturnType<typeof useBoard>["pending"]>().toEqualTypeOf<ReadonlySet<string>>();
+  });
+
   test("mutate returns nothing and mutateAsync the output's promise", () => {
     const useRename = () => qd.taskService.rename.useMutation();
     type Rename = ReturnType<typeof useRename>;

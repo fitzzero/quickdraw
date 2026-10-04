@@ -53,12 +53,12 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
 
 - Prefer live data: `useEntity` and `useCollection` stay current from the
   server's frames, resume by revision after a reconnect, and cost no refetch.
-- `useCollection` returns `items`, `index`, `byId`, `totalCount`,
-  `hasMore`, `isLoading`, `isLoadingMore`, `error`, `loadMore`, `loadItems`,
-  `refresh`, `clamped` and `indexTruncated`. `view` names a view the
-  contract declares (filtered on the client over the index); `load: "all"`
-  keeps every page loaded. A `null` scope or id holds nothing;
-  `enabled: false` subscribes to nothing.
+- `useCollection` returns `items`, `index`, `byId`, `pending`,
+  `totalCount`, `hasMore`, `isLoading`, `isLoadingMore`, `error`,
+  `loadMore`, `loadItems`, `refresh`, `clamped` and `indexTruncated`.
+  `view` names a view the contract declares (filtered on the client over
+  the index); `load: "all"` keeps every page loaded. A `null` scope or id
+  holds nothing; `enabled: false` subscribes to nothing.
 - A query whose result follows writes declares `watch` in its contract; the
   client then joins that change topic and refetches when it changes.
 - Errors are `QuickdrawError` instances: switch on `error.code`
@@ -78,6 +78,13 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   the server's frame. `useMutation({ optimistic: false })` turns that off;
   `optimistic: (input, cache) => cache.patchEntity(input.id, { ... })`
   (`removeEntity(id)`, `patchItem(collection, id, fields)`) writes your own.
+- A create (sending a message, adding a card) shows at once with
+  `optimistic: (input, cache) => cache.addItem(collection, scope, item)`
+  (give the item the collection's `order` fields; `addEntity(row)` for
+  collections of entity rows): it shows in its place, `useCollection`'s
+  `pending.has(item.id)` is true while the call is in flight, a refusal
+  removes it, and the server's own item replaces it without a gap or a
+  copy. Never render a mutation's `variables` as a fake row instead.
 - Never refetch or invalidate after a mutation by hand: the frames update
   live rows and collections, and watched queries refetch themselves. For
   anything else use `qd.invalidate(qd.task.stats, input?)`, never
