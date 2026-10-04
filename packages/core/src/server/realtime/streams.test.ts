@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { z } from "zod";
 import { defineContract } from "../../contract/defineContract";
 import type { Logger } from "../../contract/logger";
+import type { StreamFrame } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { connectV5 } from "../../testing/socket";
@@ -86,7 +87,7 @@ interface Connects {
 
 async function connect(app: Connects, principal: Principal | null) {
   const connection = await app.connect(principal);
-  return { connection, items: frames<Record<string, unknown>>(connection, "qd:stream") };
+  return { connection, items: frames<StreamFrame>(connection, "qd:stream") };
 }
 
 describe("qd:stream:sub", () => {
@@ -104,12 +105,7 @@ describe("qd:stream:sub", () => {
     }
     await settle(connection);
     expect(items).toEqual(
-      ["three", "four", "five"].map((line) => ({
-        s: "taskService",
-        stream: "logs",
-        scope: board.t1,
-        item: { line },
-      })),
+      ["three", "four", "five"].map((line) => ["taskService", "logs", board.t1, { line }]),
     );
   });
 
@@ -126,7 +122,7 @@ describe("qd:stream:sub", () => {
       seed: [{ line: "b" }, { line: "c" }, { line: "d" }],
     });
     await settle(first.connection);
-    expect(first.items.map((frame) => frame.item)).toEqual(
+    expect(first.items.map((frame) => frame[3])).toEqual(
       ["a", "b", "c", "d"].map((line) => ({ line })),
     );
   });
@@ -146,7 +142,7 @@ describe("qd:stream:sub", () => {
     logs(app).push(board.t2, { line: "t2 again" });
     status.push("down");
     await settle(cy.connection);
-    expect(cy.items).toEqual([{ s: "taskService", stream: "status", item: "down" }]);
+    expect(cy.items).toEqual([["taskService", "status", null, "down"]]);
   });
 
   it("authorizes with the stream's row-level access form", async () => {
@@ -177,7 +173,7 @@ describe("qd:stream:sub", () => {
     expect(await streamSub(granted.connection, "adminFeed")).toEqual({ ok: true, seed: [] });
     app.server.stream(liveContract, "ticks").push(1);
     await settle(anonymous.connection);
-    expect(anonymous.items).toEqual([{ s: "taskService", stream: "ticks", item: 1 }]);
+    expect(anonymous.items).toEqual([["taskService", "ticks", null, 1]]);
   });
 
   it("refuses everyone, an Admin grant included, on a stream that declares no access", async () => {
@@ -306,8 +302,8 @@ describe("revocation", () => {
     logs(app).push(board.t1, { line: "after" });
     await settle(reader.connection);
     await settle(owner.connection);
-    expect(reader.items.map((frame) => frame.item)).toEqual([{ line: "before" }]);
-    expect(owner.items.map((frame) => frame.item)).toEqual([{ line: "before" }, { line: "after" }]);
+    expect(reader.items.map((frame) => frame[3])).toEqual([{ line: "before" }]);
+    expect(owner.items.map((frame) => frame[3])).toEqual([{ line: "before" }, { line: "after" }]);
   });
 
   it("revokes a scope-form feed when the subscriber's level on the other row drops below the form", async () => {
@@ -361,14 +357,39 @@ describe("push", () => {
     const extra = { line: "built", token: "not in the schema" } as { line: string };
     logs(app).push(board.t1, extra);
     await settle(connection);
-    expect(items).toEqual([
-      { s: "taskService", stream: "logs", scope: board.t1, item: { line: "built" } },
-    ]);
+    expect(items).toEqual([["taskService", "logs", board.t1, { line: "built" }]]);
     const later = await connect(app, as(board.ada));
     expect(await streamSub(later.connection, "logs", board.t1)).toEqual({
       ok: true,
       seed: [{ line: "built" }],
     });
+  });
+
+  it("sends each item as [service, stream, scope, item]: no key names, scope null for a global stream", async () => {
+    const app = await start();
+    const { connection, items } = await connect(app, as(board.cy));
+    await streamSub(connection, "logs", board.t1);
+    await streamSub(connection, "status");
+    // An item the size of quickdraw-chat's two-player world snapshot.
+    const player = { x: 1204.5, y: 880.25, dx: 0.6, dy: -0.8, len: 42, boost: false, ack: 118 };
+    const snapshot = { line: JSON.stringify({ tick: 4120, players: [player, player] }) };
+    logs(app).push(board.t1, snapshot);
+    app.server.stream(liveContract, "status").push("up");
+    await settle(connection);
+    expect(items).toEqual([
+      ["taskService", "logs", board.t1, snapshot],
+      ["taskService", "status", null, "up"],
+    ]);
+    // What each frame costs on the wire against rc.3's object frame, { s, stream, scope?, item }.
+    const packet = (frame: unknown): number =>
+      Buffer.byteLength(`42${JSON.stringify(["qd:stream", frame])}`);
+    const [scoped, global] = items;
+    const rc3Scoped = { s: "taskService", stream: "logs", scope: board.t1, item: snapshot };
+    const rc3Global = { s: "taskService", stream: "status", item: "up" };
+    // `"s":`, `"stream":`, `"scope":` and `"item":`: 28 bytes per scoped frame per subscriber.
+    expect(packet(rc3Scoped) - packet(scoped)).toBe(28);
+    // A global frame writes `null,` for its scope instead: 15 bytes.
+    expect(packet(rc3Global) - packet(global)).toBe(15);
   });
 
   it("checks the item against the stream's schema, and keeps and sends nothing on a mismatch", async () => {
@@ -410,12 +431,7 @@ describe("push", () => {
     app.server.stream(liveContract, "status").pushMany(["up", "down"]);
     await settle(connection);
     expect(items).toEqual(
-      ["a", "b", "c", "d"].map((line) => ({
-        s: "taskService",
-        stream: "logs",
-        scope: board.t1,
-        item: { line },
-      })),
+      ["a", "b", "c", "d"].map((line) => ["taskService", "logs", board.t1, { line }]),
     );
     const later = await connect(app, as(board.bo));
     expect(await streamSub(later.connection, "logs", board.t1)).toEqual({
@@ -552,7 +568,7 @@ describe("a seed the service computes", () => {
     worlds.set("w1", { tick: 4, food: ["b", "c"] });
     app.server.stream(worldContract, "world").push("w1", { tick: 4, food: ["c"] });
     await settle(player.connection);
-    expect(player.items.map((frame) => frame.item)).toEqual([{ tick: 4, food: ["c"] }]);
+    expect(player.items.map((frame) => frame[3])).toEqual([{ tick: 4, food: ["c"] }]);
     // A later spectator starts from the world as it is, not from the deltas pushed so far.
     const spectator = await connect(app, null);
     expect(await streamSub(spectator.connection, "world", "w1", "worldService")).toEqual({
@@ -725,14 +741,14 @@ describe("qd.stream, qd.presence and qd.run with createTestApp", () => {
     const app = await createTestApp({ services: [service] });
     apps.push(app as unknown as TestApp);
     const connection = await app.connect({ userId: "u1" });
-    const items = frames<{ item: unknown }>(connection, "qd:stream");
+    const items = frames<StreamFrame>(connection, "qd:stream");
     expect(await streamSub(connection, "news", undefined, "feedService")).toEqual({
       ok: true,
       seed: [],
     });
     news.push("pushed through qd.stream");
     await settle(connection);
-    expect(items.map((frame) => frame.item)).toEqual(["pushed through qd.stream"]);
+    expect(items.map((frame) => frame[3])).toEqual(["pushed through qd.stream"]);
     expect(await local.presence.isOnline("u1")).toBe(true);
     expect(await local.run(() => "ran")).toBe("ran");
   });

@@ -304,19 +304,30 @@ export interface StreamSubscribe {
 /**
  * The acknowledgement of `qd:stream:sub`: the stream's seed, oldest first,
  * read as the socket joined the stream's room, so items pushed after it
- * arrive as `qd:stream` frames (possibly before this acknowledgement).
+ * arrive as `qd:stream` frames (possibly before this acknowledgement). The
+ * seed is the latest items the server kept, or what the service computed
+ * for this subscriber (the current state the items change); a computed one
+ * the server had to wait for may also reflect items that arrived as frames
+ * meanwhile. A client replaces what it held with it.
  */
 export type StreamSubscribeReply<Item = unknown> =
   | { readonly ok: true; readonly seed: readonly Item[] }
   | Failure;
 
-/** `qd:stream`: an item pushed to a stream. */
-export interface StreamFrame<Item = unknown> {
-  readonly s: string;
-  readonly stream: string;
-  readonly scope?: string;
-  readonly item: Item;
-}
+/**
+ * `qd:stream`: an item pushed to a stream, as one array argument
+ * `[service, stream, scope, item]` (like `qd:event`), so a fast stream sends
+ * no key names: `scope` is `null` for a global stream. The positions are
+ * fixed; a later protocol may append elements after `item`, never insert
+ * them, so a client reads the four it knows and ignores the rest. Before
+ * `5.0.0-rc.4` it was the object `{ s, stream, scope?, item }`.
+ */
+export type StreamFrame<Item = unknown> = readonly [
+  s: string,
+  stream: string,
+  scope: string | null,
+  item: Item,
+];
 
 /** `qd:ch`, sent volatile and never acknowledged: `[service, channel, payload]`. */
 export type ChannelFrame<Payload = unknown> = readonly [

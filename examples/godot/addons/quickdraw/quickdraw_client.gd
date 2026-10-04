@@ -403,8 +403,7 @@ func _on_event(event: String, data: Variant) -> void:
 		"qd:event":
 			_on_room_event(data)
 		"qd:stream":
-			var item: Dictionary = data
-			stream_item.emit(item.s, item.stream, item.get("scope", ""), item.get("item"))
+			_on_stream(data)
 		"qd:presence":
 			_on_presence(data)
 		"qd:revoked":
@@ -440,6 +439,15 @@ func _resubscribe(frame: Dictionary) -> void:
 	var answer := await request("qd:stream:sub", frame)
 	if answer.get("ok", false):
 		stream_seeded.emit(frame.s, frame.stream, frame.get("scope", ""), answer.get("seed", []))
+
+
+## `[service, stream, scope, item]`, `scope` null for a global stream;
+## elements after `item` belong to a later protocol and are ignored.
+func _on_stream(data: Variant) -> void:
+	if not (data is Array) or (data as Array).size() < 4:
+		return
+	var scope: Variant = data[2]
+	stream_item.emit(str(data[0]), str(data[1]), "" if scope == null else str(scope), data[3])
 
 
 func _on_room_event(data: Variant) -> void:

@@ -2062,8 +2062,9 @@ export function TaskRoom({
   latest `seed` items per scope in memory on that process (at most 1,000 per
   scope and 10,000 scopes per stream; a restart empties them, and durable
   history is the app's: store the rows and expose a collection), and sends
-  `qd:stream { s, stream, scope?, item }` to the feed's subscribers,
-  volatile when the stream says so. `pushMany(scope, items)`
+  `qd:stream [service, stream, scope, item]` (`scope` null for a global
+  stream; positional, so a fast stream's frames carry no key names) to the
+  feed's subscribers, volatile when the stream says so. `pushMany(scope, items)`
   (`pushMany(items)` for a global stream) pushes several items to one feed
   at once: every item is checked before any is kept or sent, and each goes
   out as its own frame, in order; use it rather than `push` in a loop

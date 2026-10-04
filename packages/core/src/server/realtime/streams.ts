@@ -3,9 +3,11 @@
 // checked against the stream's item schema (a mismatch throws `INTERNAL`,
 // nothing is kept or sent); the validated item (a Zod object strips keys its
 // schema does not name) is kept in the scope's seed when the stream declares
-// one (`seeds.ts`), and sent to the feed's room as `qd:stream { s, stream,
-// scope?, item }`, volatile when the stream says so. A push is synchronous
-// and logs nothing: it may run at a game loop's tick rate.
+// one (`seeds.ts`), and sent to the feed's room as `qd:stream [service,
+// stream, scope, item]` (`scope` null for a global stream: positional, so a
+// frame at a game's tick rate carries no key names), volatile when the stream
+// says so. A push is synchronous and logs nothing: it may run at a game
+// loop's tick rate.
 //
 // `pushMany(scope, items)` (`pushMany(items)`) is the batch form: every item
 // is checked before any is kept or sent, then each goes out as its own frame
@@ -113,11 +115,9 @@ function send(
   }
   const room = (replicated ? io.local : io).to(streamRoom(service.name, stream.name, feed));
   const target = stream.volatile ? room.volatile : room;
+  const scope = feed ?? null;
   for (const item of items) {
-    const frame: StreamFrame =
-      feed === undefined
-        ? { s: service.name, stream: stream.name, item }
-        : { s: service.name, stream: stream.name, scope: feed, item };
+    const frame: StreamFrame = [service.name, stream.name, scope, item];
     target.emit(SERVER_EVENTS.stream, frame);
   }
 }

@@ -1036,7 +1036,7 @@ try {
   assert.deepEqual(waves, [["smoke", "hello"]]);
   assert.deepEqual(seen, [
     ["qd:presence", { room: "lobby", users: ["smoke"] }],
-    ["qd:stream", { s: "loungeService", stream: "lines", scope: "lobby", item: "four" }],
+    ["qd:stream", ["loungeService", "lines", "lobby", "four"]],
     ["qd:event", ["loungeService", "waved", "hello"]],
   ]);
   assert.equal(await realtimeApp.server.presence.isOnline("smoke"), true);

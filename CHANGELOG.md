@@ -9,6 +9,20 @@ Rounds 3 and 4 of the fixes the quickdraw-chat migration found: round 3 on
 `5.0.0-rc.3` (findings F4.1 to F4.14, from its game and the Godot client on
 protocol v5). No version moves until the release candidate is cut.
 
+### Protocol
+
+- Breaking wire change for `5.0.0-rc.3` clients: `qd:stream` is a
+  positional array, `[service, stream, scope, item]` (`scope` `null` for a
+  global stream), like `qd:event`, instead of the object `{ s, stream,
+scope?, item }`. A frame carries no key names: 28 bytes fewer per scoped
+  frame and 15 per global one, per subscriber (measured in the stream and
+  wire tests; at quickdraw-chat's 20 Hz that is 560 bytes a second per
+  client). Positions are fixed and a later protocol only appends after
+  `item`, so a client reads four elements and ignores the rest. The JS
+  client, the GDScript reference client and `docs/protocol-v5.md` move
+  together: an app that copied `examples/godot/addons/quickdraw/quickdraw_client.gd`
+  must copy it again (F4.7).
+
 ### Realtime
 
 - A stream's seed can be computed when a socket subscribes: `defineService(contract, { streams:

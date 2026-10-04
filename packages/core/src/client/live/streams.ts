@@ -1,10 +1,12 @@
 // The streams one connection holds (RFC 0003 section 12.5): one feed per
 // stream and scope, counted by the hooks that hold it (`registry.ts`), with
-// `qd:stream` frames routed to it by `s`, `stream` and `scope`.
+// `qd:stream [service, stream, scope, item]` frames routed to it by their
+// service, stream and scope (`null` for a global stream).
 //
 // - Holding a feed sends `qd:stream:sub` through the connection's lane
 //   (`../lane.ts`), once the server's hello names the user (`host.ts`). The
-//   answer's seed (the latest items the server kept) becomes the feed's
+//   answer's seed (the latest items the server kept, or what the service
+//   computed for this subscriber) becomes the feed's
 //   items, and every frame after it is appended, oldest first, keeping at
 //   most the largest `max` any holder asked for.
 // - The server joins the feed's room and reads its seed in one tick, so an
@@ -27,7 +29,7 @@
 
 import { CLIENT_EVENTS } from "../../contract/names";
 import { QuickdrawError } from "../../protocol/errors";
-import { isName, isRecord } from "../../protocol/guards";
+import { isName } from "../../protocol/guards";
 import { notifyEach } from "../watch";
 import { request, type LiveHost } from "./host";
 import { createRegistry, type Registry } from "./registry";
@@ -125,19 +127,27 @@ function latest(items: readonly unknown[], cap: number): readonly unknown[] {
   return items.length > cap ? items.slice(items.length - cap) : items;
 }
 
-function isStreamFrame(value: unknown): value is {
-  readonly s: string;
-  readonly stream: string;
-  readonly scope?: string;
-  readonly item: unknown;
-} {
-  return (
-    isRecord(value) &&
-    isName(value.s) &&
-    isName(value.stream) &&
-    (value.scope === undefined || isName(value.scope)) &&
-    "item" in value
-  );
+/**
+ * A `qd:stream` frame read from the network: `[service, stream, scope,
+ * item]`, `scope` null for a global stream; elements after `item` are a
+ * later protocol's and ignored. `undefined` for anything else.
+ */
+function readStreamFrame(value: unknown):
+  | {
+      readonly s: string;
+      readonly stream: string;
+      readonly scope: string | undefined;
+      readonly item: unknown;
+    }
+  | undefined {
+  if (!Array.isArray(value) || value.length < 4) {
+    return undefined;
+  }
+  const [s, stream, scope, item] = value as readonly unknown[];
+  if (!isName(s) || !isName(stream) || !(scope === null || isName(scope))) {
+    return undefined;
+  }
+  return { s, stream, scope: scope ?? undefined, item };
 }
 
 /** What the feeds of one connection share. */
@@ -241,8 +251,9 @@ function hold(
 }
 
 /** A `qd:stream` frame: appended to its feed, or kept until the feed's seed arrives. */
-function receive(feeds: Feeds, frame: unknown): void {
-  if (!isStreamFrame(frame)) {
+function receive(feeds: Feeds, value: unknown): void {
+  const frame = readStreamFrame(value);
+  if (frame === undefined) {
     return;
   }
   const feed = feeds.registry.get(feedKey(frame.s, frame.stream, frame.scope));

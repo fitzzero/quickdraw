@@ -4,7 +4,8 @@
 // however many rows, scopes, feeds and handlers are held. The entity store
 // routes an entity frame by `service` and `id`, the collection hub a
 // collection frame by `service`, `collection` and `scope`, the stream store a
-// stream frame by `s`, `stream` and `scope`, the event bus an event by
+// stream frame (`[service, stream, scope, item]`) by its first three, the
+// event bus an event by
 // service and event, and the presence store a presence frame by room. 4.1
 // put one `socket.on` per subscribed entity, collection scope and room event
 // name on the socket (`legacy-src/client/useSubscription.ts:106-129`,
