@@ -196,6 +196,70 @@ export interface StreamHandle<C extends AnyContract, K extends StreamName<C>> {
   pushMany(...args: StreamPushManyArgs<C, K>): void;
 }
 
+/**
+ * What a stream's `seed` function receives besides the scope: who is
+ * subscribing, already authorized by the stream's `access`.
+ */
+export interface StreamSeedContext<P = Principal> {
+  /** The subscriber's principal; `null` for an anonymous subscriber of a `"public"` stream. */
+  readonly principal: P | null;
+  /** The subscribing socket. */
+  readonly socketId: string;
+  /** The dispatcher's logger. */
+  readonly log: Logger;
+}
+
+/**
+ * A stream's seed computed when a socket subscribes (`defineService`'s
+ * `streams: { <name>: { seed } }`), instead of the latest items pushed: the
+ * current state the items that follow change (a game world whose items are
+ * deltas). It gets the feed's scope (`undefined` for a global stream) and
+ * the subscriber, and returns the items the subscriber starts from, oldest
+ * first, or a promise of them.
+ */
+export type StreamSeed<T extends QuickdrawTypes, C extends AnyContract, K extends StreamName<C>> = (
+  scope: IsScopedStream<C, K> extends true ? string : undefined,
+  ctx: StreamSeedContext<PrincipalOf<T>>,
+) => readonly StreamItemOf<C, K>[] | PromiseLike<readonly StreamItemOf<C, K>[]>;
+
+/** One stream's options in `defineService`'s `streams`. */
+export interface StreamImplementation<
+  T extends QuickdrawTypes,
+  C extends AnyContract,
+  K extends StreamName<C>,
+> {
+  /**
+   * Computes each subscriber's seed when it subscribes, on the node it is
+   * connected to, under its principal once the stream's `access` admitted
+   * it: the current state rather than the last items pushed. It runs for
+   * every `qd:stream:sub`, so keep it cheap (read state the app holds, or
+   * cache it). The socket joins the feed in the same tick as the function
+   * is called, so a function that returns at once gives the exact
+   * guarantee of a kept seed: every item pushed after it reaches the
+   * subscriber, none pushed before it does. One that returns a promise may
+   * also see items pushed while it runs, which then arrive both ways; never
+   * neither. A throw answers the subscribe with that error (a
+   * `QuickdrawError`'s code, else `INTERNAL`) and leaves the feed. Each item
+   * is checked against the stream's schema, as `push` checks. A stream whose
+   * contract keeps a seed (`seed: n`) cannot also compute one.
+   *
+   * @example
+   * streams: { world: { seed: (worldId) => [worlds.get(worldId).snapshot()] } }
+   */
+  readonly seed?: StreamSeed<T, C, K>;
+}
+
+/**
+ * `defineService`'s `streams`: options per stream of the contract (any
+ * subset): a seed computed at subscribe time.
+ */
+export type StreamOptions<T extends QuickdrawTypes, C extends AnyContract> = {
+  readonly [K in StreamName<C>]?: StreamImplementation<T, C, K>;
+};
+
+/** A stream's `seed` function as the subscribe path calls it, whatever its declared types. */
+export type AnyStreamSeed = (scope: string | undefined, ctx: StreamSeedContext) => unknown;
+
 /** Who may send on a channel besides its `requires`: any principal, or a service-wide grant. */
 export type ChannelAccess = "authenticated" | { readonly service: AccessLevel };
 
@@ -300,7 +364,10 @@ export interface ServiceStream {
   readonly item: StandardSchemaV1;
   /** True for a stream with one feed per scope value. */
   readonly scoped: boolean;
+  /** How many of the latest items each scope keeps as its seed (the contract's `seed`). */
   readonly seed: number;
+  /** The service's `seed` function, computing each subscriber's seed instead; `undefined` when it has none. */
+  readonly computeSeed: AnyStreamSeed | undefined;
   readonly volatile: boolean;
   /**
    * The contract's access form as the access engine decides it, with the

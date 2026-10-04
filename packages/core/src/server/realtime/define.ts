@@ -1,8 +1,9 @@
 // The run-time half of `defineService`'s channels and streams (RFC 0003
 // section 12.5): one handler per channel of the contract, no more and no
-// fewer, with its access; and each stream's access form as the access engine
-// decides it. The types make the same checks; these catch JavaScript callers
-// and casts when the service is defined.
+// fewer, with its access; each stream's access form as the access engine
+// decides it; and the service's own stream options (a seed computed when a
+// socket subscribes). The types make the same checks; these catch
+// JavaScript callers and casts when the service is defined.
 
 import { isAccessLevel } from "../../contract/access";
 import type { AnyContract } from "../../contract/defineContract";
@@ -19,6 +20,7 @@ import {
 import type { AccessForm } from "../access/types";
 import type {
   AnyChannelHandler,
+  AnyStreamSeed,
   ChannelAccess,
   CompiledSelector,
   ServiceChannel,
@@ -180,7 +182,47 @@ export interface StreamNeeds {
   readonly hasPolicy: boolean;
 }
 
-function checkStream(name: string, def: StreamDef, needs: StreamNeeds, fail: Fail): ServiceStream {
+const STREAM_OPTION_KEYS = ["seed"];
+
+/** One stream's entry in `defineService`'s `streams`, checked: its seed function, if any. */
+function checkStreamOptions(
+  name: string,
+  def: StreamDef,
+  entry: unknown,
+  fail: Fail,
+): AnyStreamSeed | undefined {
+  const owner = `streams.${name}`;
+  if (entry === undefined) {
+    return undefined;
+  }
+  if (!isRecord(entry)) {
+    fail(`${owner} must be an object: { seed }`);
+  }
+  const unknownKey = Object.keys(entry).find((key) => !STREAM_OPTION_KEYS.includes(key));
+  if (unknownKey !== undefined) {
+    fail(
+      `${owner} has an unknown option "${unknownKey}"; the options are ${STREAM_OPTION_KEYS.join(", ")}`,
+    );
+  }
+  const { seed } = entry;
+  if (seed !== undefined && typeof seed !== "function") {
+    fail(`${owner}.seed must be a function of (scope, ctx) returning the seed's items`);
+  }
+  if (seed !== undefined && (def.seed ?? 0) > 0) {
+    fail(
+      `${owner}.seed computes the seed, but the contract's stream keeps the latest ${String(def.seed)} items as its seed; declare one of the two`,
+    );
+  }
+  return seed as AnyStreamSeed | undefined;
+}
+
+function checkStream(
+  name: string,
+  def: StreamDef,
+  needs: StreamNeeds,
+  options: unknown,
+  fail: Fail,
+): ServiceStream {
   const access = engineForm(def.access);
   if (typeof access === "object" && "entry" in access && !needs.hasPolicy) {
     fail(
@@ -197,20 +239,35 @@ function checkStream(name: string, def: StreamDef, needs: StreamNeeds, fail: Fai
     item: def.item,
     scoped: isScopedStream(def),
     seed: def.seed ?? 0,
+    computeSeed: checkStreamOptions(name, def, options, fail),
     volatile: def.volatile === true,
     access,
   });
 }
 
-/** The streams of a service, from its contract, with the access forms checked against what it declares. */
+/**
+ * The streams of a service, from its contract, with the access forms checked
+ * against what it declares, and `defineService`'s `streams` option (a seed
+ * function per stream) checked against the contract's streams.
+ */
 export function compileStreams(
   contract: AnyContract,
   needs: StreamNeeds,
+  value: unknown,
   fail: Fail,
 ): ReadonlyMap<string, ServiceStream> {
+  if (value !== undefined && !isRecord(value)) {
+    fail("streams must be an object of options per contract stream: { <stream>: { seed } }");
+  }
+  const options = value ?? {};
+  const unknownStream = Object.keys(options).find((name) => !Object.hasOwn(contract.streams, name));
+  if (unknownStream !== undefined) {
+    fail(`streams: "${unknownStream}" is not a stream of the contract`);
+  }
   const streams = new Map<string, ServiceStream>();
   for (const [name, def] of Object.entries(contract.streams)) {
-    streams.set(name, checkStream(name, def, needs, fail));
+    const entry = Object.hasOwn(options, name) ? options[name] : undefined;
+    streams.set(name, checkStream(name, def, needs, entry, fail));
   }
   return streams;
 }

@@ -7,14 +7,15 @@
 // the frames, even one that arrives while the subscribe is being
 // authorized; and `push` checks what it sends.
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineContract } from "../../contract/defineContract";
 import type { Logger } from "../../contract/logger";
+import { QuickdrawError } from "../../protocol/errors";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { connectV5 } from "../../testing/socket";
 import { createTestApp, emitWithAck, type TestApp, type TestConnection } from "../../testing/index";
-import { as, projectService, seedBoard, type Board } from "../access/__tests__/board";
+import { as, projectService, qd, seedBoard, type Board } from "../access/__tests__/board";
 import { recordingStorage, type Read } from "../emit/__tests__/live";
 import { createDispatcher, initQuickdraw, type Principal } from "../index";
 import {
@@ -78,7 +79,12 @@ function logs(app: App) {
   return app.server.stream(liveContract, "logs");
 }
 
-async function connect(app: App, principal: Principal | null) {
+/** What a stream test reads of an app's sockets: any test app's. */
+interface Connects {
+  connect(principal: Principal | null): Promise<Pick<TestConnection, "socket">>;
+}
+
+async function connect(app: Connects, principal: Principal | null) {
   const connection = await app.connect(principal);
   return { connection, items: frames<Record<string, unknown>>(connection, "qd:stream") };
 }
@@ -460,6 +466,225 @@ describe("push", () => {
     expect(() => {
       dispatcher.stream(feed, "news").push("quiet");
     }).not.toThrow();
+  });
+});
+
+const worldSnapshot = z.object({ tick: z.number().int(), food: z.array(z.string()) });
+
+type WorldSnapshot = z.infer<typeof worldSnapshot>;
+
+/** A game's worlds: its stream's items are deltas, so a subscriber starts from the current world. */
+const worldContract = defineContract("worldService", {
+  streams: {
+    world: { item: worldSnapshot, scope: "worldId", volatile: true, access: "public" },
+    lobby: { item: z.string(), access: "authenticated" },
+  },
+});
+
+/** What a seed function was called with. */
+interface SeedCall {
+  readonly scope: string | undefined;
+  readonly userId: string | null;
+  readonly socketId: string;
+}
+
+/** The world service over `worlds`, the app's own state, recording each seed call into `calls`. */
+function defineWorldService(worlds: Map<string, unknown>, calls: SeedCall[], wait?: Promise<void>) {
+  return qd.defineService(worldContract, {
+    methods: {},
+    streams: {
+      world: {
+        seed: async (worldId, ctx) => {
+          calls.push({
+            scope: worldId,
+            userId: ctx.principal?.userId ?? null,
+            socketId: ctx.socketId,
+          });
+          await wait;
+          if (worldId === "garbage") {
+            return "not a list" as unknown as WorldSnapshot[];
+          }
+          const world = worlds.get(worldId);
+          if (world === undefined) {
+            throw new QuickdrawError("NOT_FOUND", `No world "${worldId}"`);
+          }
+          return [world as WorldSnapshot];
+        },
+      },
+      lobby: {
+        seed: (scope, ctx) => {
+          calls.push({ scope, userId: ctx.principal?.userId ?? null, socketId: ctx.socketId });
+          return ["welcome"];
+        },
+      },
+    },
+  });
+}
+
+async function startWorlds(
+  worlds: Map<string, unknown>,
+  calls: SeedCall[],
+  options: { readonly wait?: Promise<void>; readonly logger?: Logger } = {},
+) {
+  const app = await createTestApp({
+    services: [defineWorldService(worlds, calls, options.wait)],
+    db: h.db,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+  });
+  apps.push(app as unknown as TestApp);
+  return app;
+}
+
+describe("a seed the service computes", () => {
+  it("answers each subscriber with the current state, under its principal, then the items pushed after it", async () => {
+    const worlds = new Map<string, unknown>([["w1", { tick: 3, food: ["a", "b"] }]]);
+    const calls: SeedCall[] = [];
+    const app = await startWorlds(worlds, calls);
+    const player = await connect(app, as(board.ada));
+    expect(await streamSub(player.connection, "world", "w1", "worldService")).toEqual({
+      ok: true,
+      seed: [{ tick: 3, food: ["a", "b"] }],
+    });
+    expect(calls).toEqual([
+      { scope: "w1", userId: board.ada, socketId: player.connection.socket.id },
+    ]);
+    // A tick: the app changes its world, then pushes the delta.
+    worlds.set("w1", { tick: 4, food: ["b", "c"] });
+    app.server.stream(worldContract, "world").push("w1", { tick: 4, food: ["c"] });
+    await settle(player.connection);
+    expect(player.items.map((frame) => frame.item)).toEqual([{ tick: 4, food: ["c"] }]);
+    // A later spectator starts from the world as it is, not from the deltas pushed so far.
+    const spectator = await connect(app, null);
+    expect(await streamSub(spectator.connection, "world", "w1", "worldService")).toEqual({
+      ok: true,
+      seed: [{ tick: 4, food: ["b", "c"] }],
+    });
+    expect(calls[1]).toEqual({
+      scope: "w1",
+      userId: null,
+      socketId: spectator.connection.socket.id,
+    });
+    // A global stream's seed function gets no scope.
+    expect(await streamSub(player.connection, "lobby", undefined, "worldService")).toEqual({
+      ok: true,
+      seed: ["welcome"],
+    });
+    expect(calls[2]).toMatchObject({ scope: undefined, userId: board.ada });
+  });
+
+  it("joins before an asynchronous seed resolves: an item pushed meanwhile arrives too", async () => {
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const worlds = new Map<string, unknown>([["w1", { tick: 1, food: [] }]]);
+    const calls: SeedCall[] = [];
+    const app = await startWorlds(worlds, calls, { wait: gate });
+    const { connection, items } = await connect(app, as(board.cy));
+    const subscribing = streamSub(connection, "world", "w1", "worldService");
+    await vi.waitFor(() => {
+      expect(calls).toHaveLength(1);
+    });
+    worlds.set("w1", { tick: 2, food: ["x"] });
+    app.server.stream(worldContract, "world").push("w1", { tick: 2, food: ["x"] });
+    await vi.waitFor(() => {
+      expect(items).toHaveLength(1);
+    });
+    release();
+    // The seed read the world after the push: the item arrived both ways, never neither.
+    expect(await subscribing).toEqual({ ok: true, seed: [{ tick: 2, food: ["x"] }] });
+  });
+
+  it("answers what the function throws, or a seed that does not fit the stream, and leaves the feed", async () => {
+    const worlds = new Map<string, unknown>([["bad", { tick: "late", food: [] }]]);
+    const calls: SeedCall[] = [];
+    const errors: string[] = [];
+    const app = await startWorlds(worlds, calls, {
+      logger: { ...quietLogger, error: (message) => errors.push(message) },
+    });
+    const { connection, items } = await connect(app, as(board.cy));
+    expect(await streamSub(connection, "world", "w404", "worldService")).toEqual(
+      refused("NOT_FOUND"),
+    );
+    expect(await streamSub(connection, "world", "bad", "worldService")).toEqual(
+      refused("INTERNAL"),
+    );
+    expect(await streamSub(connection, "world", "garbage", "worldService")).toEqual(
+      refused("INTERNAL"),
+    );
+    const world = app.server.stream(worldContract, "world");
+    for (const scope of ["w404", "bad", "garbage"]) {
+      world.push(scope, { tick: 9, food: [] });
+    }
+    await settle(connection);
+    expect(items).toEqual([]);
+    expect(app.server.io.sockets.sockets.get(connection.socket.id ?? "")?.data.streams).toEqual({});
+    // The app's bugs are logged; a refusal it chose (NOT_FOUND) is the subscriber's answer only.
+    expect(errors).toEqual(["A qd:stream:sub failed", "A qd:stream:sub failed"]);
+  });
+
+  it("is never called for a subscriber the stream's access refuses", async () => {
+    const calls: SeedCall[] = [];
+    const app = await startWorlds(new Map(), calls);
+    const { connection } = await connect(app, null);
+    expect(await streamSub(connection, "lobby", undefined, "worldService")).toEqual(
+      refused("UNAUTHENTICATED"),
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it("keeps nothing of what is pushed: every subscriber is asked for", async () => {
+    const calls: SeedCall[] = [];
+    const app = await startWorlds(new Map(), calls);
+    const lobby = app.server.stream(worldContract, "lobby");
+    lobby.push("one");
+    lobby.push("two");
+    const { connection } = await connect(app, as(board.cy));
+    expect(await streamSub(connection, "lobby", undefined, "worldService")).toEqual({
+      ok: true,
+      seed: ["welcome"],
+    });
+  });
+});
+
+describe("streams in defineService", () => {
+  const counted = defineContract("countedService", {
+    streams: {
+      kept: { item: z.number(), seed: 5, access: "public" },
+      computed: { item: z.number(), scope: "roomId", access: "public" },
+    },
+  });
+  const define = (streams: unknown): unknown =>
+    (qd.defineService as unknown as (contract: unknown, definition: unknown) => unknown)(counted, {
+      methods: {},
+      streams,
+    });
+  const seed = (): number[] => [];
+
+  it("takes a seed function per contract stream that keeps none", () => {
+    const service = define({ computed: { seed } }) as {
+      readonly streams: ReadonlyMap<string, { readonly computeSeed: unknown }>;
+    };
+    expect(service.streams.get("computed")?.computeSeed).toBe(seed);
+    expect(service.streams.get("kept")?.computeSeed).toBeUndefined();
+    expect(() => define(undefined)).not.toThrow();
+  });
+
+  it("refuses what is not a stream option", () => {
+    expect(() => define("seed")).toThrow("streams must be an object");
+    expect(() => define({ nope: { seed } })).toThrow(
+      'streams: "nope" is not a stream of the contract',
+    );
+    expect(() => define({ computed: seed })).toThrow("streams.computed must be an object");
+    expect(() => define({ computed: { seed, size: 3 } })).toThrow(
+      'streams.computed has an unknown option "size"',
+    );
+    expect(() => define({ computed: { seed: [1, 2] } })).toThrow(
+      "streams.computed.seed must be a function",
+    );
+    expect(() => define({ kept: { seed } })).toThrow(
+      "streams.kept.seed computes the seed, but the contract's stream keeps the latest 5 items",
+    );
   });
 });
 

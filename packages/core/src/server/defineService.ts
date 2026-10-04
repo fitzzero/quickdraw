@@ -37,7 +37,7 @@ import type { Version } from "../protocol/envelope";
 import type { ModelColumn, ModelName, PolicyFor } from "./access/policy";
 import type { AccessFor, CustomAccess, PublicAccess, RowForms, WatchAccess } from "./access/types";
 import type { HandlerArgs, HandlerContext } from "./context";
-import type { ChannelOptions, ChannelsRequired } from "./realtime/types";
+import type { ChannelOptions, ChannelsRequired, StreamOptions } from "./realtime/types";
 import type { Service, ShareMode } from "./service";
 import type {
   AffectsOption,
@@ -283,6 +283,16 @@ export interface ServiceDefinition<
    * dropped without an answer. Required when the contract declares channels.
    */
   readonly channels?: ChannelOptions<T, C>;
+  /**
+   * Options per contract stream (RFC 0003 section 12.5), for any of them:
+   * `seed`, a function `(scope, ctx) => items` computing each subscriber's
+   * seed when it subscribes (the current state, where the contract's `seed:
+   * n` keeps the latest items pushed); see `StreamImplementation`.
+   *
+   * @example
+   * streams: { world: { seed: (worldId) => [game.world(worldId).snapshot()] } }
+   */
+  readonly streams?: StreamOptions<T, C>;
   /**
    * Whether a service-wide `Admin` grant passes every access check of this
    * service (RFC 0003 section 4.1). Default `true`.

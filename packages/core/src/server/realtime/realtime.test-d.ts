@@ -30,6 +30,7 @@ import {
   type RunContext,
   type ServerRooms,
   type StreamHandle,
+  type StreamSeedContext,
 } from "../index";
 
 interface AppPrincipal extends Principal {
@@ -166,6 +167,44 @@ describe("the server", () => {
     // @ts-expect-error -- lobbyService has no stream "nope"
     qd.stream(lobby, "nope");
     expectTypeOf(dispatcher.presence).toEqualTypeOf<Presence>();
+  });
+
+  test("a stream's seed function gets its scope and the subscriber, and returns its items", () => {
+    const world = defineContract("worldService", {
+      streams: {
+        snaps: { item: cursor, scope: "worldId", access: "public" },
+        news: { item: z.string(), access: "authenticated" },
+      },
+    });
+    qd.defineService(world, {
+      methods: {},
+      streams: {
+        snaps: {
+          seed: (worldId, ctx) => {
+            expectTypeOf(worldId).toEqualTypeOf<string>();
+            expectTypeOf(ctx).toEqualTypeOf<StreamSeedContext<AppPrincipal>>();
+            expectTypeOf(ctx.principal).toEqualTypeOf<AppPrincipal | null>();
+            return [{ x: 1, y: 2 }];
+          },
+        },
+        news: {
+          seed: async (scope) => {
+            expectTypeOf(scope).toEqualTypeOf<undefined>();
+            return await Promise.resolve(["hello"]);
+          },
+        },
+      },
+    });
+    qd.defineService(world, {
+      methods: {},
+      // @ts-expect-error -- a snapshot's y is a number
+      streams: { snaps: { seed: () => [{ x: 1 }] } },
+    });
+    qd.defineService(world, {
+      methods: {},
+      // @ts-expect-error -- worldService has no stream "nope"
+      streams: { nope: { seed: () => [] } },
+    });
   });
 
   test("rooms outside a handler: typed events, and a user taken out of a room", () => {

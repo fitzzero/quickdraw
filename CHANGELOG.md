@@ -4,9 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [5.0.0-rc.4] (unreleased)
 
-Round 3 of the fixes the quickdraw-chat migration found on `5.0.0-rc.1`
-(findings F3.1 to F3.11, from its web port). No version moves until the
-release candidate is cut.
+Rounds 3 and 4 of the fixes the quickdraw-chat migration found: round 3 on
+`5.0.0-rc.1` (findings F3.1 to F3.11, from its web port), round 4 on
+`5.0.0-rc.3` (findings F4.1 to F4.14, from its game and the Godot client on
+protocol v5). No version moves until the release candidate is cut.
+
+### Realtime
+
+- A stream's seed can be computed when a socket subscribes: `defineService(contract, { streams:
+{ world: { seed: (scope, ctx) => items } } })` answers each `qd:stream:sub`
+  with what the function returns (the current world, where the items that
+  follow are deltas), on whichever node the subscriber is connected to,
+  under its principal once the stream's `access` admitted it. The socket
+  joins the feed in the tick the function is called, so one that returns at
+  once misses nothing and repeats nothing; one that returns a promise may
+  also see items pushed while it runs, which then arrive both ways. A throw
+  answers the subscribe with that error and leaves the feed; items are
+  checked against the stream's schema. A contract `seed: n` (the latest
+  items, kept per node) and a seed function cannot be declared together. A
+  node that started after the pushes now seeds such a stream correctly
+  (F4.1).
 
 ### Client
 

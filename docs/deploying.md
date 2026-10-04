@@ -142,7 +142,13 @@ the row's next change.
   in memory and sends the items to its own subscribers, so no subscriber gets
   an item twice. A seed holds only what was pushed while its node was up: a
   node started after the pushes (a scale-out, a rolling deploy) answers a new
-  subscriber with an empty seed, or a shorter one, until the next pushes.
+  subscriber with an empty seed, or a shorter one, until the next pushes. A
+  stream whose service computes its seed (`streams: { <name>: { seed } }`)
+  has no such gap: each subscribe calls the app's function on the node it
+  arrives at, so that function must read state every node can see (the
+  database, a shared store), not one node's memory. An item another node
+  pushed around the moment of subscribing may then arrive both in the seed
+  and as a frame: make such items idempotent (a tick, an id).
 - **Collections.** A removal a write cannot address to a scope (a
   `ctx.touch(..., { removed: true })`, junction rows a cascade removed) is
   broadcast, so every node's subscribed scopes get it, except the scope the

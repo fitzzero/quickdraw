@@ -36,6 +36,7 @@ const DEFINITION_KEYS = new Set([
   "watchAccess",
   "methods",
   "channels",
+  "streams",
   "adminBypass",
 ]);
 
@@ -318,6 +319,7 @@ export function buildService(
     streams: compileStreams(
       checked,
       { model: data.model, hasPolicy: data.access !== undefined },
+      definition.streams,
       fail,
     ),
   });
