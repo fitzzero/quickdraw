@@ -237,6 +237,10 @@ function checkScope(owner: string, scope: unknown, fail: Fail): void {
   if (!isVia) {
     fail(`${owner}: scope must be a column name or via({ model, entry, scope })`);
   }
+  const { refreshEntry } = scope as { readonly refreshEntry?: unknown };
+  if (refreshEntry !== undefined && typeof refreshEntry !== "boolean") {
+    fail(`${owner}: via's refreshEntry must be true or false`);
+  }
 }
 
 function isSortColumn(entry: unknown): entry is readonly [string, string] {

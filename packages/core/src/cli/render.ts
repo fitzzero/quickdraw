@@ -161,7 +161,10 @@ function scopeText(scope: CollectionDef["scope"]): string {
   if (typeof scope === "string") {
     return `the ${code(scope)} column`;
   }
-  return `${code(scope.scope)} of the ${code(scope.model)} rows whose ${code(scope.entry)} is the item's id`;
+  const via = `${code(scope.scope)} of the ${code(scope.model)} rows whose ${code(scope.entry)} is the item's id`;
+  return scope.refreshEntry === true
+    ? `${via}; a write to those rows sends the item again to every scope that holds it`
+    : via;
 }
 
 function whereText(where: CollectionDef["where"]): string | undefined {

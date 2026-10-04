@@ -959,6 +959,11 @@ export const taskService = qd.defineService(task, {
   ends in `id`; `limit` (default 100) and `maxLimit` (default 500) size its
   pages; `where` is an equality filter on membership; `access` is the level
   needed on the anchor (default `Read`).
+- A junction write adds or removes its entry in the one scope it links.
+  When the item reads the junction (a chat's `memberCount`), declare
+  `via({ model, entry, scope, refreshEntry: true })`: every junction write
+  then also sends the entry again, `updated`, to each scope that still
+  holds it, for one more read of the item per flush.
 - `qd:col:sub { s, c, scope }` authorizes the scope through its anchor's
   policy, then answers a page and joins the scope's room; flushes send `qd:c`
   deltas to it (`added`, `updated`, `patched`, `removed`, or `reset` for more

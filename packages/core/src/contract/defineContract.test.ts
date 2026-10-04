@@ -160,6 +160,19 @@ describe("defineContract", () => {
       scope: "userId",
     });
   });
+
+  it("keeps a via scope's refreshEntry", () => {
+    const contract = withCollection({
+      scope: via({ model: "chatMember", entry: "chatId", scope: "userId", refreshEntry: true }),
+    })();
+    expect(contract.collections.c?.scope).toEqual({
+      kind: "via",
+      model: "chatMember",
+      entry: "chatId",
+      scope: "userId",
+      refreshEntry: true,
+    });
+  });
 });
 
 describe("the method and collection builders", () => {
@@ -369,6 +382,11 @@ describe("definition-time checks", () => {
     expect(withCollection({ scope: { kind: "via", model: "m", entry: "e" } })).toThrow(
       "scope must be a column name or via(",
     );
+    expect(
+      withCollection({
+        scope: { kind: "via", model: "m", entry: "e", scope: "s", refreshEntry: "yes" },
+      }),
+    ).toThrow("via's refreshEntry must be true or false");
     expect(withCollection({ where: { archived: [false] } })).toThrow(
       "where must map columns to strings, numbers, booleans or null",
     );

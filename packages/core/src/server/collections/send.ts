@@ -100,11 +100,16 @@ export function closeAnchors(
   return closed;
 }
 
-/** The scopes a write's values name in a collection, or `undefined` when they name none. */
+/**
+ * The scopes a write's values name in a collection, or `undefined` when they
+ * name none: an entry's own write in a `via` collection, and with
+ * `refreshEntry` a junction write too, which changes its entry in every
+ * scope that holds it.
+ */
 function namedScopes(collection: BoundCollection, write: WriteRecord): string[] | undefined {
   const { scope } = collection;
   const junction = scope.kind === "via" && modelKey(write.model) === modelKey(scope.model);
-  if (scope.kind === "via" && !junction) {
+  if (scope.kind === "via" && (!junction || scope.refreshEntry)) {
     return undefined;
   }
   const column = scope.kind === "column" ? scope.column : scope.scope;
