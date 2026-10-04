@@ -24,6 +24,7 @@ export interface QdHandshake {
 export interface HandshakeAuth {
   /** The session token the server's `authenticate` reads. */
   readonly token?: string;
+  /** The protocol the client speaks. A client without it is a 4.x client (RFC 0003 section 8.5). */
   readonly qd: QdHandshake;
 }
 
@@ -109,9 +110,11 @@ export interface HelloLimits {
  * socket acts for, so a client knows its user without another call.
  */
 export interface HelloFrame {
+  /** The protocol the server speaks. */
   readonly protocol: typeof PROTOCOL_VERSION;
   /** The server package's version. */
   readonly server: string;
+  /** What a client must stay within. */
   readonly limits: HelloLimits;
   /** Names of optional server features that are on. Informational only. */
   readonly features: readonly string[];

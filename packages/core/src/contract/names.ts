@@ -95,7 +95,7 @@ export const CLIENT_EVENTS = Object.freeze({
 
 /** Events the server sends to a client (RFC 0003 section 8.3). */
 export const SERVER_EVENTS = Object.freeze({
-  /** The handshake reply: `{ protocol, server, limits, features }`. */
+  /** The handshake reply: `{ protocol, server, limits, features, userId, serviceAccess }`. */
   hello: "qd:hello",
   /** Entity frames: full update, patch or removal. */
   entity: "qd:e",

@@ -23,7 +23,12 @@ import type { WireError } from "./errors";
 import { isName, isRecord } from "./guards";
 import type { HelloFrame } from "./version";
 
-/** A per-process monotonic revision, `max(Date.now(), last + 1)` (RFC 0003 section 5.3). */
+/**
+ * A revision: a number in the range of `Date.now()` that every flush raises
+ * (RFC 0003 section 5.3), `max(Date.now(), last + 1)` on one process and
+ * the shared counter's next value behind a cluster. Compare revisions; do
+ * not read them as times.
+ */
 export type Revision = number;
 
 /**

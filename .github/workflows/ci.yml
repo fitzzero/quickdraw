@@ -81,6 +81,13 @@ jobs:
       - name: Check the quickdraw-skills links
         run: ./node_modules/.bin/quickdraw-skills link --check
 
+      # docs/protocol-v5.md, the wire specification for non-JS clients, is
+      # generated from packages/core/src/protocol/envelope.ts and the sources
+      # beside it: it must be what they generate now.
+      - name: Check the protocol document
+        working-directory: packages/core
+        run: bun run protocol:check
+
       - run: bun run lint
 
       - run: bun run format:check
