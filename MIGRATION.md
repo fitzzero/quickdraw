@@ -1394,6 +1394,10 @@ gate for 5.0.0), then seneschal, x-tokage-siege, foundation, farseer and
 Conveyor. makiel (on 3.7) and quickdraw-sunfall (on 3.9.1) need their own
 path: the codemod reads 4.x code.
 
+Each of these apps has an upgrade brief in
+[`docs/downstream/`](docs/downstream/README.md): its size, its top hazards
+and a suggested order of work, which its migration card starts from.
+
 ## Every removed 4.x name
 
 <!-- removed-names:start -->

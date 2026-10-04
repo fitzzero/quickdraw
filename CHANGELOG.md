@@ -2,6 +2,108 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0-rc.0]
+
+The release candidate for quickdraw 5.0, published under npm's `next`
+dist-tag for all four packages: `@fitzzero/quickdraw-core`,
+`@fitzzero/quickdraw-lint`, `@fitzzero/quickdraw-skills` and
+`@fitzzero/quickdraw-codemod`. 5.0 rebuilds what a 4.x app is written
+against (services, access, the wire protocol, the client hooks), so every
+app migrates: start with [`MIGRATION.md`](MIGRATION.md), which lists every
+removed 4.x name with its replacement, and run the codemod it describes.
+`legacyWire: true` keeps 4.x request and response callers working during a
+rollout. The design is [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md)
+(section 17 records each decision made while building it), the rationale
+[`docs/rfcs/0003-v5-audit.md`](docs/rfcs/0003-v5-audit.md).
+
+### Pack A: foundations
+
+- A bun workspace with turbo holding the four packages and the private
+  benchmark harness, with the 4.1.0 baseline recorded. CI on every pull
+  request (lint, format, typecheck including tests, build, dist smoke test,
+  publint, arethetypeswrong, tests, secret scan) and owner-triggered,
+  tag-driven publishing with npm trusted publishing (`docs/releasing.md`).
+- The 4.1 modules 5.0 keeps (auth helpers, Express rate limits, the socket
+  rate limiter, the Redis adapter helper, env and encryption utilities),
+  with 4.1's packaging defects fixed.
+
+### Pack B: core runtime
+
+- Contracts (`defineContract`, `query`, `mutation`) shared by server and
+  client; protocol v5, one `qd:call` envelope with a version handshake and a
+  JSON-only parser; a method pipeline with validation, access,
+  not-modified replies, `share`, cancellation, time limits and per-socket
+  concurrency caps; `QuickdrawError` codes.
+- `qd.createServer` on the app's own Express app, transports for Socket.IO,
+  HTTP (`POST /qd/{service}/{method}`), in-process callers and MCP, and the
+  `legacyWire` shim for 4.x callers.
+
+### Pack C: data plane
+
+- Tracked writes (`trackPrisma`): entity frames and collection deltas
+  follow from the writes themselves, so hand emits are gone.
+- Access is declared and closed by default: a form per method and one row
+  policy (`owner`, `jsonAcl`, `members`, `inherit`, `anyOf`, `resolver`) for
+  every surface, with automatic revocation. Projections and field tiers,
+  entity subscriptions by revision, and collections with keyset paging,
+  resume, a whole-scope index, views and change topics.
+
+### Pack D: client
+
+- `createQuickdrawClient(contracts)`: typed `qd.<service>.<member>` hooks
+  with no wrapper files or string names, and a provider that runs without
+  DOM globals. An invalidation coordinator, optimistic entity mutations,
+  live entities and collections, and `./testing/client`.
+
+### Pack E: kits
+
+- Read/write, search, sharing and membership, admin, presence, streams and
+  channels, and auth routes (`createAuthRoutes`, `socketAuth`: Google,
+  Discord, mock and guest sign-in, sessions, `__Host-` cookies), all through
+  the same pipeline, access and emits.
+
+### Pack F: enforcement
+
+- `@fitzzero/quickdraw-lint`: 19 oxlint rules with tests and baselines;
+  `no-v4-api` names every removed 4.x API and its replacement. Budgets
+  (`expectBudget`), development warnings, a stall watchdog and an
+  OpenTelemetry hook.
+- `@fitzzero/quickdraw-skills`: agent rules and skills, linked into
+  `.claude/` by `quickdraw-skills link`; `quickdraw-docs` renders API pages
+  from contracts.
+
+### Pack G: proof and release
+
+- The benchmark against 4.1.0 (below); `@fitzzero/quickdraw-codemod` with
+  the migration guide (`MIGRATION.md`, `UPGRADE-PROMPT.md`, the
+  `quickdraw-migrate-v5` skill); the release checklist
+  (`docs/release-checklist-5.0.md`) and an upgrade brief per app
+  (`docs/downstream/`).
+- The pack G finale round fixes: a shared run's reply is encoded once per
+  stripped variant, not once per caller; the default socket rate limit is
+  600 events per minute (it was 100); the provider's reconnect refetch
+  jitter is an option (`reconnectJitterMs`); an unannotated `id` selector no
+  longer widens `ctx.principal` in a service's other methods, and
+  `MethodImplementation<…, "authenticated">` with `satisfies` accepts
+  `{ service, entry }`; `socketAuth` and the HTTP transport honor the plain
+  `session` cookie only over plain HTTP.
+
+### Benchmark
+
+5.0 against 4.1.0 on one machine in one sitting (`bench/reports/5.0.0.md`;
+board-steady: 600 writes to a board 50 viewers watch): the board query's p95
+is 0.28× (122 to 34.6 ms), SQL statements per write 0.25×, server CPU per
+write 0.55×, and a reconnect storm serves no snapshots (11,590 in 4.1).
+Missed or worse: bytes per write 0.89×, against a target of 0.30×, because
+the benchmark app keeps a fat watched board query (a collection's index is
+the fix: `MIGRATION.md`, "Boards"); event-loop delay p99 1.7× to 3.7×, from
+a shared run's replies encoded back to back (the finale round's first fix);
+drain after the last write 0.51 s against 0.26 s (the coordinator's 250 ms
+window); restoring a watched query after a reconnect storm, p50 968 ms
+against 10 ms (the deliberate 0 to 2 s refetch jitter); peak memory in that
+storm 1.17× (not explained yet). Measured on 5.0.0-alpha.0, before the
+finale round.
+
 ## [4.1.0] - 2026-08-01
 
 Client portability groundwork for non-DOM runtimes (React Native, workers).
