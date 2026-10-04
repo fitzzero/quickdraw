@@ -4,8 +4,9 @@
 // again, and nothing in a call's own record says so. The watchdog samples the
 // loop's delay with Node's histogram (`perf_hooks.monitorEventLoopDelay`) at
 // a 20 ms resolution, reads it every 10 s, and logs a warning when the 99th
-// percentile delay of that window is above the threshold (200 ms), naming
-// the window's slowest methods from the calls' completion records.
+// percentile delay of that window is above the threshold (200 ms), or when
+// its longest delay is above `maxMs` (1 s), naming the window's slowest
+// methods from the calls' completion records.
 //
 // Cost: the histogram is one libuv timer firing every 20 ms, and the read is
 // one timer every 10 s; recording a call is one map update. A watchdog that
@@ -15,7 +16,9 @@
 //
 // A percentile needs repeated stalls to move: at the default window one
 // 300 ms block is one sample of about 500, and the 99th percentile stays
-// low. The warning is about a loop that keeps stalling, not one slow tick.
+// low; that warning is about a loop that keeps stalling, not one slow tick.
+// One block long enough to be felt by every caller at once, 1 s by default,
+// warns through the window's maximum instead.
 
 import { monitorEventLoopDelay, type ELDHistogram } from "node:perf_hooks";
 import type { Logger } from "../../contract/logger";
@@ -26,6 +29,9 @@ export const STALL_RESOLUTION_MS = 20;
 
 /** The default threshold for the window's 99th percentile delay, in milliseconds. */
 export const DEFAULT_STALL_THRESHOLD_MS = 200;
+
+/** The default threshold for the window's single longest delay, in milliseconds. */
+export const DEFAULT_STALL_MAX_MS = 1_000;
 
 /** The default window: how often the delay is read, in milliseconds. */
 export const DEFAULT_STALL_INTERVAL_MS = 10_000;
@@ -41,6 +47,8 @@ const MAX_INTERVAL_MS = 2_147_483_647;
 export interface StallWatchdogOptions {
   /** Warn when the window's 99th percentile event-loop delay is above this, in milliseconds. Default 200. */
   readonly thresholdMs?: number;
+  /** Warn when the window's single longest event-loop delay is above this, in milliseconds. Default 1,000. */
+  readonly maxMs?: number;
   /** How often the delay is read and a new window starts, in milliseconds; at least 1,000. Default 10,000. */
   readonly intervalMs?: number;
   /** How many of the window's slowest methods a warning names. Default 5. */
@@ -65,7 +73,7 @@ export interface StallReport {
   readonly p99Ms: number;
   readonly maxMs: number;
   readonly meanMs: number;
-  /** True when `p99Ms` was above the threshold, and so a warning was logged. */
+  /** True when `p99Ms` was above the threshold or `maxMs` above its limit, and so a warning was logged. */
   readonly stalled: boolean;
   /** The window's slowest methods, slowest first. */
   readonly slowest: readonly SlowMethod[];
@@ -89,6 +97,7 @@ interface MethodWindow {
 
 interface Settings {
   readonly thresholdMs: number;
+  readonly maxMs: number;
   readonly intervalMs: number;
   readonly slowest: number;
 }
@@ -109,10 +118,14 @@ export function stallWatchdogSettings(
     throw new TypeError("createServer: stallWatchdog must be true, false or its options");
   }
   const thresholdMs = given.thresholdMs ?? DEFAULT_STALL_THRESHOLD_MS;
+  const maxMs = given.maxMs ?? DEFAULT_STALL_MAX_MS;
   const intervalMs = given.intervalMs ?? DEFAULT_STALL_INTERVAL_MS;
   const slowest = given.slowest ?? DEFAULT_SLOWEST;
   if (!(Number.isFinite(thresholdMs) && thresholdMs > 0)) {
     fail("thresholdMs must be a positive number of milliseconds");
+  }
+  if (!(Number.isFinite(maxMs) && maxMs > 0)) {
+    fail("maxMs must be a positive number of milliseconds");
   }
   if (
     !(
@@ -126,7 +139,7 @@ export function stallWatchdogSettings(
   if (!(Number.isSafeInteger(slowest) && slowest >= 0)) {
     fail("slowest must be a whole number, 0 or more");
   }
-  return { thresholdMs, intervalMs, slowest };
+  return { thresholdMs, maxMs, intervalMs, slowest };
 }
 
 const NS_PER_MS = 1e6;
@@ -166,6 +179,24 @@ function readWindow(
 }
 
 /**
+ * The warning a window gives, or `undefined` when it did not stall: the
+ * 99th percentile above the threshold (a loop that keeps stalling), else one
+ * delay above `maxMs` (one long block).
+ */
+function stallMessage(
+  read: Omit<StallReport, "stalled" | "slowest">,
+  settings: Settings,
+): string | undefined {
+  if (read.p99Ms > settings.thresholdMs) {
+    return `The event loop stalled: its 99th percentile delay was ${read.p99Ms} ms over the last ${read.windowMs} ms (threshold ${settings.thresholdMs} ms)`;
+  }
+  if (read.maxMs > settings.maxMs) {
+    return `The event loop stalled: one delay of ${read.maxMs} ms over the last ${read.windowMs} ms (max ${settings.maxMs} ms)`;
+  }
+  return undefined;
+}
+
+/**
  * Starts sampling the event loop's delay, reading it every `intervalMs`. The
  * timer does not keep the process alive. `createServer({ stallWatchdog })`
  * starts one and stops it on `close()`.
@@ -181,14 +212,17 @@ export function startStallWatchdog(settings: Settings, logger: Logger): StallWat
     histogram.reset();
     methods.clear();
     startedAt = performance.now();
-    const stalled = read.p99Ms > settings.thresholdMs;
-    if (stalled) {
-      logger.warn(
-        `The event loop stalled: its 99th percentile delay was ${read.p99Ms} ms over the last ${read.windowMs} ms (threshold ${settings.thresholdMs} ms)`,
-        { category: "quickdraw.stall", ...read, thresholdMs: settings.thresholdMs, slowest },
-      );
+    const message = stallMessage(read, settings);
+    if (message !== undefined) {
+      logger.warn(message, {
+        category: "quickdraw.stall",
+        ...read,
+        thresholdMs: settings.thresholdMs,
+        maxThresholdMs: settings.maxMs,
+        slowest,
+      });
     }
-    return { ...read, stalled, slowest };
+    return { ...read, stalled: message !== undefined, slowest };
   };
   const timer = setInterval(check, settings.intervalMs);
   timer.unref();

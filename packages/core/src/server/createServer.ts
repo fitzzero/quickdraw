@@ -117,8 +117,9 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
   /**
    * Watch the event loop for stalls: sample its delay (every 20 ms), read it
    * every `intervalMs` (10 s), and log a warning naming the window's slowest
-   * methods when the 99th percentile delay is above `thresholdMs` (200 ms).
-   * `true` for the defaults. Default `false`. Stops on `close()`.
+   * methods when the 99th percentile delay is above `thresholdMs` (200 ms)
+   * or one delay is above `maxMs` (1 s). `true` for the defaults. Default
+   * `false`. Stops on `close()`.
    */
   readonly stallWatchdog?: boolean | StallWatchdogOptions;
   /**

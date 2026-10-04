@@ -2089,12 +2089,13 @@ the test client exactly as in production.
 `createServer({ stallWatchdog: true })` watches the event loop. It samples
 the loop's delay every 20 ms (`perf_hooks.monitorEventLoopDelay`), reads it
 every 10 s, and logs a warning (`category: "quickdraw.stall"`) when the 99th
-percentile delay of that window is above 200 ms, naming the window's slowest
-methods. `{ thresholdMs, intervalMs, slowest }` change the threshold, the
-window (at least 1 s) and how many methods it names. A percentile needs
-repeated stalls: one 300 ms block in a 10 s window is one sample of about
-500 and does not move it. On an idle process the watchdog costs about 0.05%
-of one CPU.
+percentile delay of that window is above 200 ms, or when one delay in it is
+above 1 s, naming the window's slowest methods. `{ thresholdMs, maxMs,
+intervalMs, slowest }` change the two thresholds, the window (at least 1 s)
+and how many methods it names. A percentile needs repeated stalls: one
+300 ms block in a 10 s window is one sample of about 500 and does not move
+it, while a single block over `maxMs` warns on its own. On an idle process
+the watchdog costs about 0.05% of one CPU.
 
 `otelOnCall({ meter, tracer })` on `./server/otel` is an `onCall` handler
 that records every call with OpenTelemetry (`@opentelemetry/api` is an

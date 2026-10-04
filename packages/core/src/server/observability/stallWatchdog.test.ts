@@ -13,6 +13,7 @@ import { initQuickdraw } from "../init";
 import type { CallRecord } from "../pipeline/metrics";
 import {
   DEFAULT_STALL_INTERVAL_MS,
+  DEFAULT_STALL_MAX_MS,
   DEFAULT_STALL_THRESHOLD_MS,
   stallWatchdogSettings,
   startStallWatchdog,
@@ -57,9 +58,9 @@ afterEach(() => {
   }
 });
 
-function start(thresholdMs = DEFAULT_STALL_THRESHOLD_MS) {
+function start(thresholdMs = DEFAULT_STALL_THRESHOLD_MS, maxMs = DEFAULT_STALL_MAX_MS) {
   const logger = captureLogger();
-  const settings = stallWatchdogSettings({ thresholdMs, slowest: 2 });
+  const settings = stallWatchdogSettings({ thresholdMs, maxMs, slowest: 2 });
   if (settings === undefined) {
     throw new Error("the watchdog is on");
   }
@@ -112,18 +113,69 @@ describe("the stall watchdog", () => {
     // The median, not the 99th percentile: a slow tick of a busy machine is not the loop's delay.
     expect(report.p50Ms).toBeLessThan(DEFAULT_STALL_THRESHOLD_MS);
     expect(report.p50Ms).toBeLessThanOrEqual(report.p99Ms);
-    expect(report.stalled).toBe(report.p99Ms > DEFAULT_STALL_THRESHOLD_MS);
+    expect(report.stalled).toBe(
+      report.p99Ms > DEFAULT_STALL_THRESHOLD_MS || report.maxMs > DEFAULT_STALL_MAX_MS,
+    );
     expect(logger.entries).toHaveLength(report.stalled ? 1 : 0);
   });
+
+  it("warns about one block longer than maxMs, which the 99th percentile of a long window does not show", async () => {
+    // The default window, read by hand: the p99 threshold cannot fire (above
+    // any delay here), so only the window's longest delay can.
+    const { watchdog, logger } = start(10_000);
+    await wait(100);
+    watchdog.observe(record("export", 1_210));
+    block(1_200);
+    await wait(40);
+    const report = watchdog.check();
+    expect(report.maxMs).toBeGreaterThan(DEFAULT_STALL_MAX_MS);
+    expect(report.stalled).toBe(true);
+    expect(report.slowest).toEqual([
+      { method: "taskService.export", calls: 1, maxMs: 1_210, meanMs: 1_210 },
+    ]);
+    const warnings = logger.at("warn");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toMatch(
+      /^The event loop stalled: one delay of \d+(\.\d)? ms over the last \d+ ms \(max 1000 ms\)$/,
+    );
+    expect(warnings[0]?.meta).toMatchObject({
+      category: "quickdraw.stall",
+      maxThresholdMs: 1_000,
+      slowest: report.slowest,
+    });
+    // A shorter block stays under the limit.
+    block(700);
+    await wait(40);
+    expect(watchdog.check().stalled).toBe(false);
+  });
+
+  it("catches a single 1.2 s block at the default settings, where the 99th percentile would not", async () => {
+    const { watchdog, logger } = start();
+    // About 125 idle samples first: one long one then sits above the 99th percentile.
+    await wait(2_500);
+    watchdog.observe(record("export", 1_210));
+    block(1_200);
+    await wait(40);
+    const report = watchdog.check();
+    expect(report.maxMs).toBeGreaterThan(DEFAULT_STALL_MAX_MS);
+    expect(report.stalled).toBe(true);
+    expect(logger.at("warn")[0]?.meta?.slowest).toEqual([
+      { method: "taskService.export", calls: 1, maxMs: 1_210, meanMs: 1_210 },
+    ]);
+  }, 10_000);
 
   it("checks its options, and is off unless asked", () => {
     expect(stallWatchdogSettings(undefined)).toBeUndefined();
     expect(stallWatchdogSettings(false)).toBeUndefined();
     expect(stallWatchdogSettings(true)).toEqual({
       thresholdMs: DEFAULT_STALL_THRESHOLD_MS,
+      maxMs: DEFAULT_STALL_MAX_MS,
       intervalMs: DEFAULT_STALL_INTERVAL_MS,
       slowest: 5,
     });
+    expect(() => stallWatchdogSettings({ maxMs: 0 })).toThrow(
+      "createServer: stallWatchdog.maxMs must be a positive number of milliseconds",
+    );
     expect(() => stallWatchdogSettings({ intervalMs: 500 })).toThrow(
       "createServer: stallWatchdog.intervalMs must be a whole number of milliseconds, at least 1000",
     );
