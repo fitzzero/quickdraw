@@ -38,6 +38,7 @@ export const taskService = qd.defineService(taskContract, {
   channels: { cursor: () => undefined },
   methods: {
     renameTask,
+    // quickdraw: hand-written because it answers null for a missing task, as 4.x did
     getTask: {
       access: { service: "Read", entry: "Read", id: "id" },
       handler: ({ input, db }) => db.task.findUnique({ where: { id: input.id } }),

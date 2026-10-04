@@ -69,5 +69,15 @@ export const userService = qd.defineService(userContract, {
         }
       },
     },
+    getProfile: {
+      // quickdraw-migrate: review [access] this method takes an id but its access "public" checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant
+      access: "public",
+      rowless: true,
+      handler: async ({ input, db }) =>
+        db.user.findUnique({
+          where: { id: input.id },
+          select: { id: true, name: true },
+        }),
+    },
   },
 });

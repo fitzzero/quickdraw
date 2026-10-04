@@ -45,8 +45,9 @@ export type { DispatchRequest, DispatchResult };
 /**
  * Runs one call through the pipeline. Resolves once the reply was sent,
  * flushed and recorded. It never rejects, except in a test app made with
- * `strictWarnings`, where an oversized reply rejects with its
- * `DevWarningError` once it was sent and recorded.
+ * `strictWarnings`, where an oversized reply, or a call one connection
+ * repeats in a loop (`../devWarnings.ts`), rejects with its `DevWarningError` once it
+ * was sent and recorded.
  */
 export type Dispatch = (request: DispatchRequest) => Promise<DispatchResult>;
 
@@ -285,10 +286,12 @@ export function createPipeline(settings: PipelineSettings): Dispatch {
     const durationMs = performance.now() - startedAt;
     const bytes = respond(settings, call, result);
     await flushRun(settings, call);
-    settings.record(recordOf(call, result, durationMs, bytes), {
+    const record = recordOf(call, result, durationMs, bytes);
+    settings.record(record, {
       error: result.ok ? undefined : result.error,
       userId: request.principal?.userId,
     });
+    settings.loops.call(request, record.outcome);
     return result;
   };
   return pipeline.dispatch;

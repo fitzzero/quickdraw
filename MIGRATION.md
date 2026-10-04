@@ -155,6 +155,19 @@ gets the policy the forms need: `jsonAcl("acl")` for `hasEntryACL: true`
 overrode `checkAccess` or `checkEntryACL`, which grants no row until you
 port the override.
 
+5.0 refuses, when a service with an access policy is defined, a method
+whose input has `id` under a form that checks no row (`"public"`,
+`"authenticated"`, `{ service: L }` below `Admin`): anyone the form admits
+would reach any row by its id. A 4.x `"Public"` method that named a row is
+that shape, and 4.x did let everyone call it, so the codemod writes
+`rowless: true` beside its `"public"`, marked: the method still admits
+exactly the 4.x callers, and the marker asks whether a lookup open to
+anyone was meant. Keep `rowless: true` when it was (a public profile, a
+lookup by an id that tells nothing); otherwise drop the flag and give the
+method an `entry` form. An input that has no JSON Schema yet (a Zod 3 schema,
+a `todoSchema`) is not checked, so the refusal can first appear when the
+schema moves to Zod 4: it names the method and both ways out.
+
 `jsonAcl` keeps 4.x's semantics but one: a user with several entries in a
 row's list gets the highest of their levels, where 4.x's `checkEntryACL`
 took the first entry (`[{ userId: "u1", level: "Read" }, { userId: "u1",
@@ -170,8 +183,8 @@ In this order, because each step leans on the one before:
    `no-todo-schema` lists them), give the entity a schema, and check each
    method's kind: a query can be shared, cached and refetched; a mutation
    cannot.
-2. **Access.** Decide the `"authenticated"` forms, and port each access
-   override into the service's policy.
+2. **Access.** Decide the `"authenticated"` forms and the `rowless`
+   flags, and port each access override into the service's policy.
 3. **Emits.** Delete the hand emits once the writes go through `db` and the
    collections are declared; replace `this.create/update/delete` and the
    lifecycle hooks.
@@ -230,6 +243,7 @@ export const taskService = qd.defineService(taskContract, {
   // a board opens with Read on its project
   collections: { byProject: { anchor: projectContract } },
   methods: {
+    // quickdraw: hand-written because it answers null for a missing task, as 4.x did
     getTask: {
       // 4.x read payload.id implicitly, and a service grant passed too
       access: { service: "Read", entry: "Read", id: "id" },
@@ -537,7 +551,7 @@ protected override getProtectedFields(): (keyof TaskDTO)[] {
 <!-- example: apps/api/src/services/examples/projections.ts#projections -->
 
 ```ts
-import { inherit } from "@fitzzero/quickdraw-core/server";
+import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(task, {
   model: "task",
@@ -559,12 +573,9 @@ export const taskService = qd.defineService(task, {
     },
   },
   methods: {
-    // returns the database row: the projection's keys are sent, dates as ISO strings
-    get: {
-      access: { entry: "Read" },
-      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
-    },
-    // returns what `map` takes
+    // the kit's get reads the entity's keys only, and sends dates as ISO strings
+    ...crud.handlers(task, { access: { get: { entry: "Read" } } }),
+    // returns the database row `map` takes: the framework builds the card from it
     card: {
       access: { entry: "Read" },
       handler: ({ input, db }) =>
@@ -620,7 +631,7 @@ protected override checkAccess(
 <!-- example: apps/api/src/services/examples/access.ts#access -->
 
 ```ts
-import { anyOf, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
+import { anyOf, crud, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
 
 export const projectService = qd.defineService(project, {
   // the Prisma model the rows live in
@@ -631,9 +642,14 @@ export const projectService = qd.defineService(project, {
     members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),
   ),
   methods: {
-    get: {
-      access: { entry: "Read" },
-      handler: ({ input, db }) => db.project.findUniqueOrThrow({ where: { id: input.id } }),
+    // the read/write kit's get: Read on the project itself
+    ...crud.handlers(project, { access: { get: { entry: "Read" } } }),
+    title: {
+      // anyone may read any project's name by its id: the form is the whole check, on purpose
+      access: "public",
+      rowless: true,
+      handler: async ({ input, db }) =>
+        await db.project.findUniqueOrThrow({ where: { id: input.id }, select: { name: true } }),
     },
   },
 });
@@ -648,10 +664,10 @@ export const taskService = qd.defineService(task, {
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { title: input.title } }),
     },
-    create: {
-      access: { scope: "Moderate", of: project, id: "projectId" },
-      handler: ({ input, db }) => db.task.create({ data: input }),
-    },
+    // the kit's create: Moderate on the project the task goes into
+    ...crud.handlers(task, {
+      access: { create: { scope: "Moderate", of: project, id: "projectId" } },
+    }),
     archiveAll: {
       access: { service: "Admin" },
       handler: async ({ db }) => (await db.task.updateMany({ data: { status: "archived" } })).count,
@@ -979,7 +995,7 @@ export function Members({ projectId }: { projectId: string }) {
 <!-- example: packages/shared/src/contracts/task.ts -->
 
 ```ts
-import { defineContract, mutation, query } from "@fitzzero/quickdraw-core";
+import { crud, defineContract, mutation, query } from "@fitzzero/quickdraw-core";
 import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
@@ -991,10 +1007,11 @@ export const taskContract = defineContract("taskService", {
   // only callers with Admin on the task receive notes
   fields: { notes: "Admin" },
   methods: {
-    get: query({ input: z.object({ id: z.string() }), output: "entity" }),
-    create: mutation({
-      input: z.object({ projectId: z.string(), title: z.string() }),
-      output: "entity",
+    // the read/write kit's get (one task by id) and create
+    ...crud.contract({
+      entity: taskSchema,
+      get: true,
+      create: { input: z.object({ projectId: z.string(), title: z.string() }) },
     }),
     rename: mutation({
       input: z.object({ id: z.string(), title: z.string() }),
@@ -1195,7 +1212,7 @@ rows, like a count.
 <!-- example: packages/shared/src/contracts/task.ts -->
 
 ```ts
-import { defineContract, mutation, query } from "@fitzzero/quickdraw-core";
+import { crud, defineContract, mutation, query } from "@fitzzero/quickdraw-core";
 import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
@@ -1207,10 +1224,11 @@ export const taskContract = defineContract("taskService", {
   // only callers with Admin on the task receive notes
   fields: { notes: "Admin" },
   methods: {
-    get: query({ input: z.object({ id: z.string() }), output: "entity" }),
-    create: mutation({
-      input: z.object({ projectId: z.string(), title: z.string() }),
-      output: "entity",
+    // the read/write kit's get (one task by id) and create
+    ...crud.contract({
+      entity: taskSchema,
+      get: true,
+      create: { input: z.object({ projectId: z.string(), title: z.string() }) },
     }),
     rename: mutation({
       input: z.object({ id: z.string(), title: z.string() }),
@@ -1375,8 +1393,12 @@ so ship the clients soon after the server.
 }
 ```
 
-`no-v4-api` reports every 4.x API that is left, with its replacement, and
-`no-todo-schema` every placeholder schema. `quickdraw-lint baseline` writes
+`no-v4-api` reports every 4.x API that is left, with its replacement,
+`no-todo-schema` every placeholder schema, and `prefer-kit` (a warning)
+every migrated method a kit implements (`getProject`, `listTasks`, ...;
+the report lists them under "Methods a kit implements"): move it to the
+kit, or keep it with a `// quickdraw: hand-written because <reason>`
+comment above it. `quickdraw-lint baseline` writes
 a baseline file, so the rules can be adopted before every old violation is
 fixed. The 4.x rules were removed (oxlint refuses a config that names them):
 
@@ -1445,6 +1467,7 @@ export const taskService = qd.defineService(taskContract, {
   channels: { cursor: () => undefined },
   methods: {
     renameTask,
+    // quickdraw: hand-written because it answers null for a missing task, as 4.x did
     getTask: {
       access: { service: "Read", entry: "Read", id: "id" },
       handler: ({ input, db }) => db.task.findUnique({ where: { id: input.id } }),

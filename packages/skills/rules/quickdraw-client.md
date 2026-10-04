@@ -78,6 +78,15 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   live rows and collections, and watched queries refetch themselves. For
   anything else use `qd.invalidate(qd.task.stats, input?)`, never
   `queryClient.invalidateQueries` on a quickdraw key.
+- Fire a mutation from an event handler, never from render or from an
+  effect that its own result runs again: that loops, and every round
+  writes. In development the client warns
+  `[quickdraw:repeated-mutation]` (one `useMutation` issuing more than 5
+  within a second, naming its component) and
+  `[quickdraw:repeated-invalidation]` (one query key invalidated more than
+  20 times within a second), and the server `[quickdraw:repeated-call]`.
+  An effect that must mutate runs once per change: give it the inputs as
+  dependencies and compare them with what it last sent.
 - Outside React, through the mounted provider's connection:
   `qd.task.get.call(input)`, `qd.task.rename.call(input)`,
   `qd.task.get.prefetch(queryClient, input)`; `qd.task.get.key(input)` is

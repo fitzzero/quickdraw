@@ -234,6 +234,20 @@ describe("development warnings in a running app", () => {
     ]);
   });
 
+  it("name a socket that sends one call with the same input more than 10 times within a second, once", async () => {
+    const { app, logger } = await start();
+    const connection = await app.connect(ada);
+    for (let round = 0; round < 15; round += 1) {
+      expect(await connection.call.probeService.page({ projectId })).toBe(5);
+    }
+    expect(devWarnings(logger)).toEqual([
+      `[quickdraw:repeated-call] probeService.page: called 11 times within a second with the same input, on one connection (${String(connection.socket.id)}): ` +
+        "the client calls it in a loop, as a mutation fired from an effect or from render does, or a refetch that triggers itself. " +
+        "Call it from an event handler, or guard the effect so it runs once per change",
+    ]);
+    connection.close();
+  });
+
   it("name the call a write tracker warning was raised in", async () => {
     const { logger, probe } = await start();
     await probe.nested({ projectId });
@@ -284,6 +298,23 @@ describe("createTestApp({ strictWarnings: true })", () => {
       .moveBatched({ moves: moving.slice(0, 3).map((id) => ({ id, projectId })) })
       .catch((reason: unknown) => reason);
     expect((error as QuickdrawError).cause).toMatchObject({ warning: { kind: "batch-read" } });
+  });
+
+  it("answers a socket's repeated call, then logs its DevWarningError as a failure after the reply", async () => {
+    const { app, logger } = await start({ strictWarnings: true });
+    const connection = await app.connect(ada);
+    for (let round = 0; round < 11; round += 1) {
+      expect(await connection.call.probeService.page({ projectId })).toBe(5);
+    }
+    const failures = logger
+      .at("error")
+      .filter((entry) => entry.message.includes("after its reply"));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.meta?.error).toMatchObject({
+      name: "DevWarningError",
+      message: expect.stringContaining("[quickdraw:repeated-call] probeService.page"),
+    });
+    connection.close();
   });
 
   it("rejects an in-process call whose reply was oversized, once it was recorded", async () => {

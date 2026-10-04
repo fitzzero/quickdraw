@@ -28,6 +28,7 @@ import noUntrackedWrite from "./rules/no-untracked-write.mjs";
 import noUntypedClient from "./rules/no-untyped-client.mjs";
 import noUnusedBaseline from "./rules/no-unused-baseline.mjs";
 import noV4Api from "./rules/no-v4-api.mjs";
+import preferKit from "./rules/prefer-kit.mjs";
 
 const rules = {
   // Tracked writes
@@ -51,6 +52,8 @@ const rules = {
   "no-untyped-client": noUntypedClient,
   "no-manual-refetch": noManualRefetch,
   "no-raw-socket": noRawSocket,
+  // The kits
+  "prefer-kit": preferKit,
   // Migration from 4.x
   "no-v4-api": noV4Api,
   "no-todo-schema": noTodoSchema,

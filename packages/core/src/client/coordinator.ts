@@ -26,7 +26,9 @@
 // The coordinator watches the `QueryCache` only while it has keys to look
 // after, drops a key when its last observer leaves or the query leaves the
 // cache, and coordinates at most `maxKeys` keys at once; past that a key is
-// refetched without a window or a follow-up, still without cancelling.
+// refetched without a window or a follow-up, still without cancelling. In
+// development, a key invalidated more than 20 times within a second is
+// named as a loop (`loopGuard.ts`).
 //
 // React-free: the provider makes one per `QueryClient` and retains it while
 // mounted, so its windows and delayed refetches stop a tick after it
@@ -35,6 +37,7 @@
 
 import type { Query, QueryCacheNotifyEvent, QueryClient, QueryKey } from "@tanstack/react-query";
 import { KEY_ROOT } from "./keys";
+import { loopGuardOf } from "./loopGuard";
 
 /** How long after a refetch further invalidations of the key are served together, by default. */
 export const DEFAULT_INVALIDATION_WINDOW_MS = 250;
@@ -421,12 +424,14 @@ export function createInvalidationCoordinator(
     users: 0,
     disposeTimer: undefined,
   };
+  const loops = loopGuardOf(queryClient);
   const coordinator: InvalidationCoordinator = Object.freeze({
     queryClient,
     invalidate(queryKey: QueryKey, invalidateOptions: InvalidateOptions = {}): void {
       const windowMs = checkCount("windowMs", invalidateOptions.windowMs, state.windowMs);
       const filters = { queryKey, exact: invalidateOptions.exact === true };
       for (const query of queryClient.getQueryCache().findAll(filters)) {
+        loops.invalidated(query.queryKey, query.queryHash);
         request(state, query, windowMs);
       }
     },

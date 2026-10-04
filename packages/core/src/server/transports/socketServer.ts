@@ -13,6 +13,7 @@ import {
   applySocketRateLimit,
   authMiddleware,
   protocolMiddleware,
+  type SocketLimitContext,
   type SocketRateLimitOptions,
 } from "./middleware";
 import {
@@ -50,6 +51,8 @@ export interface SocketServerSettings extends Omit<SocketContext, "meter"> {
   readonly extensions: readonly SocketExtension[];
   /** The dispatcher's live data: its extension serves `qd:sub`, and it is given the server. */
   readonly live?: LiveData;
+  /** The dispatcher's loop watch, which counts the rate limiter's refusals too. */
+  readonly loops?: SocketLimitContext["loops"];
 }
 
 /** The Socket.IO side of a quickdraw server. */
@@ -108,7 +111,7 @@ export function createSocketServer(
   // Before the connection handler: the limiter's `socket.use` middleware must
   // come before the legacy shim's, so it counts each 4.x call before it runs.
   if (settings.rateLimit !== false) {
-    applySocketRateLimit(io, settings.rateLimit, context);
+    applySocketRateLimit(io, settings.rateLimit, { ...context, loops: settings.loops });
   }
   io.on(
     "connection",

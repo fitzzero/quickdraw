@@ -24,4 +24,8 @@ export interface UserServiceMethods {
     payload: { id: string; name: string };
     response: { id: string; name: string } | { error: "name_taken" };
   };
+  getProfile: {
+    payload: { id: string };
+    response: { id: string; name: string } | null;
+  };
 }

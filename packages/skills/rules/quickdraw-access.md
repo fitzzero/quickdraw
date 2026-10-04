@@ -36,6 +36,25 @@ Every method's `{ access, handler }` names one form:
 - Never guard inline (`if (!ctx.principal) throw ...`): declare the form. The
   `no-inline-auth-guard` lint rule reports it.
 
+## A method that takes a row id
+
+On a service with a policy, a method whose input has `id` reads or writes
+the row that id names. Under a form that checks no row (`"public"`,
+`"authenticated"`, `{ service: L }` below `Admin`), anyone the form admits
+reaches any row by its id, so `defineService` refuses it when the service is
+defined. Fix the form, not the error:
+
+- Give it `{ entry: L }` (`"Read"` for a read, `"Moderate"` for a change),
+  or `{ service: L, entry: L }` to keep a service grant: the policy decides.
+- Only when every caller the form admits may reach any row on purpose (a
+  public profile, a lookup by an id that tells nothing) say so with
+  `rowless: true` on the method, or `rowless: ["get"]` in a kit's options
+  (`crud.handlers`, `admin.handlers`, `sharing.handlers`).
+- The read/write kit's `update`, `delete`, `reorder` and `create` check the
+  row themselves and need neither.
+- The check reads the input's keys from its JSON Schema: an input without
+  one (a Zod 3 schema) is not checked, so the form is all yours there.
+
 ## Service-wide grants
 
 `principal.serviceAccess` holds grants by service name,

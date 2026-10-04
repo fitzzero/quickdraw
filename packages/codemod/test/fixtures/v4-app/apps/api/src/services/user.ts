@@ -92,6 +92,18 @@ export class UserService extends BaseService<
       { schema: updateUserSchema, resolveEntryId: (p) => p.id },
     );
 
-    this.verifyAllMethods(["getMe", "updateUser"]);
+    // Anyone may look up a user's public profile by id
+    this.defineMethod(
+      "getProfile",
+      "Public",
+      async (payload, _ctx) =>
+        this.prisma.user.findUnique({
+          where: { id: payload.id },
+          select: { id: true, name: true },
+        }),
+      { schema: z.object({ id: cuidSchema("user ID") }) },
+    );
+
+    this.verifyAllMethods(["getMe", "updateUser", "getProfile"]);
   }
 }

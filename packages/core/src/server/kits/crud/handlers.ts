@@ -1,4 +1,4 @@
-// `crud.handlers(contract, { access, prepare? })` (RFC 0003 section 12.1):
+// `crud.handlers(contract, { access, prepare?, rowless? })` (RFC 0003 section 12.1):
 // the read/write kit's server half. It finds the methods `crud.contract` made
 // in the contract and returns an implementation of each, to spread into
 // `defineService`'s `methods`:
@@ -21,14 +21,18 @@
 // Every kit method needs a form in `access`, and nothing else may be there.
 // The handlers find their service through the call (`kitRuntimeOf`), so the
 // service must declare its `model`; `defineService` checks that when the
-// service is defined, and that a method on many rows of a service without
-// an access policy has `"public"` or `{ service }` access (`access.ts`).
+// service is defined, that a method on many rows of a service without an
+// access policy has `"public"` or `{ service }` access (`access.ts`), and,
+// on a service with one, that `get` under a form that checks no row
+// (`"public"`, `"authenticated"`, `{ service }` below `Admin`) is named in
+// `rowless`, which says every caller the form admits may read any row.
 
 import type { AnyContract } from "../../../contract/defineContract";
 import { crud as contractHalf, crudSpecOf, type CrudSpec } from "../../../contract/kits/crud";
 import { accessFormProblem } from "../../access/forms";
 import type { AccessForm } from "../../access/types";
-import { checkWhenDefined, type AnyService } from "../../service";
+import { checkWhenDefined, checksRowsItself, type AnyService } from "../../service";
+import { kitEntry, rowlessMethods } from "../rowless";
 import { everyRowProblem } from "./access";
 import type { AnyPrepare } from "./create";
 import { handlerOf } from "./methods";
@@ -128,6 +132,22 @@ const MANY_ROWS: ReadonlySet<CrudSpec["method"]> = new Set([
   "bulkDelete",
 ]);
 
+/**
+ * The kit's methods that check the caller's level on the row their `id`
+ * names whatever their form (`checkRowWrite`), and `create`, whose `id` (when
+ * its input has one) names a new row: `defineService`'s rowless check leaves
+ * them alone. `get` reads the row its form lets the caller read, so a form
+ * that checks no row needs `rowless`.
+ */
+const CHECKS_ROWS: ReadonlySet<CrudSpec["method"]> = new Set([
+  "create",
+  "update",
+  "delete",
+  "reorder",
+]);
+
+const OPTION_KEYS: readonly string[] = ["access", "prepare", "rowless"];
+
 /** Why a service cannot run the kit's method `name`, made for `contract` with `form`. */
 function serviceProblem(
   service: AnyService,
@@ -150,32 +170,35 @@ function handlers<C extends AnyContract, const A extends CrudAccess<C>, Db = unk
 ): CrudImplementations<A, Db> {
   const kit = kitMethods(contract);
   if (!isRecord(options)) {
-    fail("options must be { access, prepare? }");
+    fail("options must be { access, prepare?, rowless? }");
   }
-  const unknownKey = Object.keys(options).find((key) => key !== "access" && key !== "prepare");
+  const unknownKey = Object.keys(options).find((key) => !OPTION_KEYS.includes(key));
   if (unknownKey !== undefined) {
-    fail(`options has an unknown key "${unknownKey}"; the options are access and prepare`);
+    fail(`options has an unknown key "${unknownKey}"; the options are ${OPTION_KEYS.join(", ")}`);
   }
-  const access = checkAccess(
-    options.access,
-    kit.map(([name]) => name),
-  );
+  const names = kit.map(([name]) => name);
+  const access = checkAccess(options.access, names);
   const prepare = checkPrepare(options.prepare, kit);
+  const rowless = rowlessMethods(options.rowless, names, fail);
   const entries: Record<string, object> = {};
   for (const [name, spec] of kit) {
     const form = access[name] as AccessForm;
     const projection = spec.method === "list" ? itemProjection(contract, spec) : "entity";
     const handler = handlerOf({ spec, form, projection, prepare });
     checkWhenDefined(handler, (service) => serviceProblem(service, contract, [name, spec], form));
-    entries[name] = Object.freeze({ access: form, handler });
+    if (CHECKS_ROWS.has(spec.method)) {
+      checksRowsItself(handler);
+    }
+    entries[name] = kitEntry(name, form, handler, rowless);
   }
   return Object.freeze(entries) as CrudImplementations<A, Db>;
 }
 
 /**
- * The read/write kit: `crud.handlers(contract, { access, prepare? })`
+ * The read/write kit: `crud.handlers(contract, { access, prepare?, rowless? })`
  * implements exactly the methods `crud.contract` made in `contract`, each
- * with the access form `access` gives it. `crud.contract` is here too, for
- * server code; a shared package imports it from the root export.
+ * with the access form `access` gives it (and `rowless: true` for the
+ * methods `rowless` names). `crud.contract` is here too, for server code; a
+ * shared package imports it from the root export.
  */
 export const crud = Object.freeze({ contract: contractHalf.contract, handlers });

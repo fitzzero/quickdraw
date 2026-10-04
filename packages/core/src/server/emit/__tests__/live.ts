@@ -137,7 +137,12 @@ export interface Gate {
   runs: number;
 }
 
-/** The task service; `versionColumn: "updatedAt"` for the variant that answers "not modified" from it. */
+/**
+ * The task service; `versionColumn: "updatedAt"` for the variant that
+ * answers "not modified" from it. Its writes are `rowless`: they let any
+ * signed-in test principal change any task, so the tests can watch what each
+ * subscriber receives whoever wrote.
+ */
 export function defineTaskService(
   options: { readonly versionColumn?: "updatedAt"; readonly gate?: Gate } = {},
 ) {
@@ -160,6 +165,7 @@ export function defineTaskService(
       },
       rename: {
         access: "authenticated",
+        rowless: true,
         handler: async ({ input, db }) => {
           await db.task.update({ where: { id: input.id }, data: { title: input.title } });
           return null;
@@ -167,6 +173,7 @@ export function defineTaskService(
       },
       renameTenTimes: {
         access: "authenticated",
+        rowless: true,
         handler: async ({ input, db }) => {
           for (let round = 1; round <= 10; round += 1) {
             await db.task.update({ where: { id: input.id }, data: { title: `Round ${round}` } });
@@ -176,6 +183,7 @@ export function defineTaskService(
       },
       setNotes: {
         access: "authenticated",
+        rowless: true,
         handler: async ({ input, db }) => {
           await db.task.update({ where: { id: input.id }, data: { notes: input.notes } });
           return null;
@@ -183,6 +191,7 @@ export function defineTaskService(
       },
       setStatus: {
         access: "authenticated",
+        rowless: true,
         handler: async ({ input, db }) => {
           await db.task.update({ where: { id: input.id }, data: { status: input.status } });
           return null;
@@ -200,6 +209,7 @@ export function defineTaskService(
       },
       recreate: {
         access: "authenticated",
+        rowless: true,
         handler: async ({ input, db }) => {
           const old = await db.task.delete({ where: { id: input.id } });
           await db.task.create({
@@ -210,6 +220,7 @@ export function defineTaskService(
       },
       remove: {
         access: "authenticated",
+        rowless: true,
         handler: async ({ input, db }) => {
           await db.task.delete({ where: { id: input.id } });
           return null;
@@ -217,6 +228,7 @@ export function defineTaskService(
       },
       touch: {
         access: "authenticated",
+        rowless: true,
         handler: ({ input, ctx }) => {
           ctx.touch("task", input.id);
           return null;

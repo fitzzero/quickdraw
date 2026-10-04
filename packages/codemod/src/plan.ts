@@ -32,6 +32,8 @@ export interface MethodPlan {
   readonly name: string;
   readonly kind: MethodKind;
   readonly entryId: EntryId;
+  /** Whether the input has an `id` key: the 4.x payload type's, or the inline schema's. */
+  readonly inputHasId: boolean;
   readonly input: string;
   /** The `todoSchema` input to fall back to when the moved schema cannot be written. */
   readonly fallbackInput: string;
@@ -178,6 +180,7 @@ function planMethod(
     name: call.name,
     kind,
     entryId: entryIdOf(call, entry),
+    inputHasId: payload?.getType().getProperty("id") !== undefined || schemaHasId(call.schema),
     input,
     fallbackInput,
     output: output.code,

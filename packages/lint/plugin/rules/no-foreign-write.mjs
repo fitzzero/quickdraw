@@ -5,21 +5,10 @@
 // is reported. A write outside a `defineService` call, or in one whose
 // `model` or `writes` is not written out literally, is not checked.
 
-import { getProperty, hasSpread, memberName, staticString, unwrap } from "../lib/ast.mjs";
+import { getProperty, hasSpread, isDefineService, staticString, unwrap } from "../lib/ast.mjs";
 import { CLIENTS_OPTION, TRACKED_CLIENTS, WRITE_METHODS, modelCall } from "../lib/prisma.mjs";
 
 const UNKNOWN = Symbol("unknown");
-
-function isDefineService(node) {
-  if (node?.type !== "CallExpression" || node.arguments.length < 2) {
-    return false;
-  }
-  const callee = unwrap(node.callee);
-  if (callee.type === "Identifier") {
-    return callee.name === "defineService";
-  }
-  return callee.type === "MemberExpression" && memberName(callee) === "defineService";
-}
 
 /** The definition's `model` (or `undefined` when it has none) and `writes`, or UNKNOWN. */
 function readOwnership(definition) {

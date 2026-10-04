@@ -13,6 +13,7 @@ import {
   type AuthenticationRefused,
   type ProtocolMismatch,
 } from "../../protocol/version";
+import type { LoopWatch } from "../devWarnings";
 import { describeError } from "../pipeline/metrics";
 import {
   applyRateLimitMiddleware,
@@ -171,20 +172,34 @@ function noticeForLegacyClients(
   };
 }
 
-/** Applies the socket rate limiter, answering a dropped call in its client's reply shape. */
+/** What the socket rate limiter is given: the logger, and the dispatcher's loop watch. */
+export interface SocketLimitContext extends Pick<SocketContext, "logger"> {
+  /** Counts each refusal, and warns in development when one socket keeps getting refused. */
+  readonly loops?: Pick<LoopWatch, "refused">;
+}
+
+/**
+ * Applies the socket rate limiter, answering a dropped call in its client's
+ * reply shape. Each refusal is counted by the dispatcher's loop watch
+ * (`../devWarnings.ts`).
+ */
 export function applySocketRateLimit(
   io: QuickdrawIo,
   options: SocketRateLimitOptions,
-  context: Pick<SocketContext, "logger">,
+  context: SocketLimitContext,
 ): void {
   const limiter = createRateLimiter({
     ...options,
     excludeEvents: [...UNLIMITED_EVENTS, ...(options.excludeEvents ?? [])],
   });
+  const notice = options.onRateLimitExceeded ?? noticeForLegacyClients(limiter, options);
   applyRateLimitMiddleware(io, limiter, {
     logger: context.logger,
     keyGenerator: options.keyGenerator,
-    onRateLimitExceeded: options.onRateLimitExceeded ?? noticeForLegacyClients(limiter, options),
+    onRateLimitExceeded: (socket, eventName) => {
+      context.loops?.refused(socket.id, eventName);
+      notice(socket, eventName);
+    },
     ackPayload: (socket, _eventName, retryAfterMs) =>
       isLegacy(socket)
         ? legacyFailure("RATE_LIMITED", "Rate limit exceeded")

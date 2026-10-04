@@ -73,7 +73,7 @@ contracts, and a map of them for the client:
 <!-- example: packages/shared/src/contracts/task.ts -->
 
 ```ts
-import { defineContract, mutation, query } from "@fitzzero/quickdraw-core";
+import { crud, defineContract, mutation, query } from "@fitzzero/quickdraw-core";
 import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
@@ -85,10 +85,11 @@ export const taskContract = defineContract("taskService", {
   // only callers with Admin on the task receive notes
   fields: { notes: "Admin" },
   methods: {
-    get: query({ input: z.object({ id: z.string() }), output: "entity" }),
-    create: mutation({
-      input: z.object({ projectId: z.string(), title: z.string() }),
-      output: "entity",
+    // the read/write kit's get (one task by id) and create
+    ...crud.contract({
+      entity: taskSchema,
+      get: true,
+      create: { input: z.object({ projectId: z.string(), title: z.string() }) },
     }),
     rename: mutation({
       input: z.object({ id: z.string(), title: z.string() }),
@@ -155,12 +156,13 @@ export const qd = initQuickdraw<{
 ```
 
 `apps/api/src/services/task.ts` implements every method of the contract,
-each with its access and handler:
+each with its access: the read/write kit's `get` and `create` in one spread,
+and a handler for each of the others:
 
 <!-- example: apps/api/src/services/task.ts -->
 
 ```ts
-import { inherit } from "@fitzzero/quickdraw-core/server";
+import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 import { projectContract, taskContract } from "@project/shared";
 import { qd } from "../quickdraw";
 
@@ -172,17 +174,16 @@ export const taskService = qd.defineService(taskContract, {
   // a board opens with Read on its project
   collections: { board: { anchor: projectContract } },
   methods: {
-    get: {
-      access: { entry: "Read" },
-      // return the row: the framework sends the projection's fields, dates as ISO strings
-      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
-    },
-    create: {
-      access: { scope: "Moderate", of: projectContract, id: "projectId" },
-      handler: ({ input, db }) => db.task.create({ data: input }),
-    },
+    // the kit implements get and create; each names who may call it
+    ...crud.handlers(taskContract, {
+      access: {
+        get: { entry: "Read" },
+        create: { scope: "Moderate", of: projectContract, id: "projectId" },
+      },
+    }),
     rename: {
       access: { entry: "Moderate" },
+      // return the row: the framework sends the projection's fields, dates as ISO strings
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { title: input.title } }),
     },
@@ -634,7 +635,7 @@ not exist or a malformed access list denies.
 <!-- example: apps/api/src/services/examples/access.ts#access -->
 
 ```ts
-import { anyOf, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
+import { anyOf, crud, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
 
 export const projectService = qd.defineService(project, {
   // the Prisma model the rows live in
@@ -645,9 +646,14 @@ export const projectService = qd.defineService(project, {
     members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),
   ),
   methods: {
-    get: {
-      access: { entry: "Read" },
-      handler: ({ input, db }) => db.project.findUniqueOrThrow({ where: { id: input.id } }),
+    // the read/write kit's get: Read on the project itself
+    ...crud.handlers(project, { access: { get: { entry: "Read" } } }),
+    title: {
+      // anyone may read any project's name by its id: the form is the whole check, on purpose
+      access: "public",
+      rowless: true,
+      handler: async ({ input, db }) =>
+        await db.project.findUniqueOrThrow({ where: { id: input.id }, select: { name: true } }),
     },
   },
 });
@@ -662,10 +668,10 @@ export const taskService = qd.defineService(task, {
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { title: input.title } }),
     },
-    create: {
-      access: { scope: "Moderate", of: project, id: "projectId" },
-      handler: ({ input, db }) => db.task.create({ data: input }),
-    },
+    // the kit's create: Moderate on the project the task goes into
+    ...crud.handlers(task, {
+      access: { create: { scope: "Moderate", of: project, id: "projectId" } },
+    }),
     archiveAll: {
       access: { service: "Admin" },
       handler: async ({ db }) => (await db.task.updateMany({ data: { status: "archived" } })).count,
@@ -686,6 +692,16 @@ export const taskService = qd.defineService(task, {
   `custom(fn)`. Without a principal every form but `"public"` answers
   `UNAUTHENTICATED`; a principal that fails gets `FORBIDDEN`. The levels,
   lowest first, are `Public`, `Read`, `Moderate` and `Admin`.
+- On a service with a policy, a method whose input has `id` under a form
+  that checks no row (`"public"`, `"authenticated"`, `{ service: L }` below
+  `Admin`) would let anyone that form admits reach any row by its id, so
+  `defineService` refuses it, naming the method and the two ways out: a form
+  the policy decides (`{ entry: L }`, or `{ service: L, entry: L }` to keep
+  the grant), or `rowless: true` on the method when every such caller may
+  reach any row on purpose (the `title` method above; public profiles,
+  lookups by an id that tells nothing). A kit's methods take it as
+  `rowless: ["get"]` in the kit's options. The input's keys come from its
+  JSON Schema, so an input without one (Zod 3) is not checked.
 - A service-wide `Admin` grant passes every check on its service
   (`adminBypass: false` turns that off). A grant below `Admin` counts only
   where the form names `service`: a `Read` grant does not read every row.
@@ -798,7 +814,7 @@ what a read selects, so a row is never read wider than what is sent:
 <!-- example: apps/api/src/services/examples/projections.ts#projections -->
 
 ```ts
-import { inherit } from "@fitzzero/quickdraw-core/server";
+import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(task, {
   model: "task",
@@ -820,12 +836,9 @@ export const taskService = qd.defineService(task, {
     },
   },
   methods: {
-    // returns the database row: the projection's keys are sent, dates as ISO strings
-    get: {
-      access: { entry: "Read" },
-      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
-    },
-    // returns what `map` takes
+    // the kit's get reads the entity's keys only, and sends dates as ISO strings
+    ...crud.handlers(task, { access: { get: { entry: "Read" } } }),
+    // returns the database row `map` takes: the framework builds the card from it
     card: {
       access: { entry: "Read" },
       handler: ({ input, db }) =>
@@ -880,7 +893,7 @@ authorizes a scope:
 export const task = defineContract("taskService", {
   entity: taskSchema,
   projections: { card: cardSchema },
-  methods: { get: query({ input: z.object({ id: z.string() }), output: "entity" }) },
+  methods: { ...crud.contract({ entity: taskSchema, get: true }) },
   collections: {
     byProject: {
       // a column holding the scope value
@@ -907,7 +920,7 @@ export const task = defineContract("taskService", {
 <!-- example: apps/api/src/services/examples/collections.ts#service -->
 
 ```ts
-import { inherit } from "@fitzzero/quickdraw-core/server";
+import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(task, {
   model: "task",
@@ -921,12 +934,7 @@ export const taskService = qd.defineService(task, {
   },
   // opens the service topic to Read grants; closed without it
   watchAccess: { service: "Read" },
-  methods: {
-    get: {
-      access: { entry: "Read" },
-      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
-    },
-  },
+  methods: { ...crud.handlers(task, { access: { get: { entry: "Read" } } }) },
 });
 ```
 
@@ -1226,7 +1234,11 @@ the hooks do.
 
 The methods most services write by hand, as one-line opt-ins (design:
 section 12). Each kit's contract half comes from the package root and makes
-ordinary contract entries; its handlers come from `./server`.
+ordinary contract entries; its handlers come from `./server`. Lint's
+`prefer-kit` reports a method written by hand that a kit implements (`get`,
+`list`, `create`, `getTask`, ...) in a service that uses no kit; one that
+must stay hand-written says why in a `// quickdraw: hand-written because ...`
+comment above it.
 
 ### Read/write kit
 
@@ -2265,6 +2277,7 @@ one format and names the method call it happened in:
 | `ambient-write`      | a tracked write ran outside any unit of work                                                         |
 | `batch-read`         | a write in an array-form `$transaction` read its rows outside the batch                              |
 | `batch-create-many`  | a `createMany` in an array-form `$transaction` could not report its rows                             |
+| `repeated-call`      | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                 |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
@@ -2283,6 +2296,20 @@ once the reply was recorded (over a socket or HTTP the reply was already
 sent, so that error is logged, not thrown). Strictness belongs to the app:
 warnings outside its calls (an ambient write while seeding, another app's
 calls) are logged as usual, and `app.close()` ends it.
+
+A `repeated-call` warning names a client caught in a loop (a mutation fired
+from an effect that its own result runs again, a refetch that triggers
+itself) before the socket's rate limit answers `RATE_LIMITED` without saying
+why: when one connection (a socket, an MCP session) calls a method with the
+same input more than 10 times within a second, once per connection, service
+and method; and when one is refused `RATE_LIMITED` more than 30 times within
+a minute, once per connection. Calls without a connection (in-process,
+HTTP) are not counted.
+The client names the same loops from its side, in development, with the
+same format: `repeated-mutation` when one `useMutation` issues its mutation
+more than 5 times within a second (with the component that holds it), and
+`repeated-invalidation` when a query key is invalidated more than 20 times
+within a second.
 
 ### Components
 
@@ -2418,8 +2445,16 @@ nothing. Run `--check` in CI next to the lint step.
 config every 5.0 app extends: it reports untracked and foreign writes, nested
 and raw SQL writes, hand-sent frames, inline auth guards, unbounded reads,
 database calls and emits in loops, layering breaks, bypasses of the typed
-client, and every removed 4.x API with its replacement. Each rule supports a
-baseline, so an app can adopt it before fixing old code.
+client, hand-written copies of kit methods (`prefer-kit`, a warning), and
+every removed 4.x API with its replacement. Each rule supports a baseline,
+so an app can adopt it before fixing old code.
+
+The guards follow one order of preference, so an agent moving fast meets a
+mistake as early as it can be caught: a type error; then a refusal when the
+service is defined (an access form that checks no row on a method that
+takes an `id`, unless it says `rowless: true`); then lint; then a
+development warning as it happens (`repeated-call`, `repeated-mutation` and
+`repeated-invalidation` name a client loop before the rate limit does).
 
 [`@fitzzero/quickdraw-skills`](packages/skills) ships agent rules and skills
 for quickdraw apps and links them into `.claude/` with

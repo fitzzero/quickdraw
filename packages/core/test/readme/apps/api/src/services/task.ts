@@ -1,4 +1,4 @@
-import { inherit } from "@fitzzero/quickdraw-core/server";
+import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 import { projectContract, taskContract } from "@project/shared";
 import { qd } from "../quickdraw";
 
@@ -10,17 +10,16 @@ export const taskService = qd.defineService(taskContract, {
   // a board opens with Read on its project
   collections: { board: { anchor: projectContract } },
   methods: {
-    get: {
-      access: { entry: "Read" },
-      // return the row: the framework sends the projection's fields, dates as ISO strings
-      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
-    },
-    create: {
-      access: { scope: "Moderate", of: projectContract, id: "projectId" },
-      handler: ({ input, db }) => db.task.create({ data: input }),
-    },
+    // the kit implements get and create; each names who may call it
+    ...crud.handlers(taskContract, {
+      access: {
+        get: { entry: "Read" },
+        create: { scope: "Moderate", of: projectContract, id: "projectId" },
+      },
+    }),
     rename: {
       access: { entry: "Moderate" },
+      // return the row: the framework sends the projection's fields, dates as ISO strings
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { title: input.title } }),
     },

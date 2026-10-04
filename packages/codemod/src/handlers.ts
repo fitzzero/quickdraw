@@ -312,6 +312,7 @@ export function buildMethod(
     "{",
     ...accessMarkers,
     `access: ${form.code},`,
+    ...(form.rowless ? ["rowless: true,"] : []),
     ...entryMarkers,
     `handler: ${handlerText},`,
     "}",

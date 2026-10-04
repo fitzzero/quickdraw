@@ -88,6 +88,18 @@ export function chainNames(node) {
   return names;
 }
 
+/** Whether `node` is a `defineService(contract, definition)` or `qd.defineService(...)` call. */
+export function isDefineService(node) {
+  if (node?.type !== "CallExpression" || node.arguments.length < 2) {
+    return false;
+  }
+  const callee = unwrap(node.callee);
+  if (callee.type === "Identifier") {
+    return callee.name === "defineService";
+  }
+  return callee.type === "MemberExpression" && memberName(callee) === "defineService";
+}
+
 /** Whether `node` is a function. */
 export function isFunction(node) {
   return (

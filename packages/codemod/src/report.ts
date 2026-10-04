@@ -27,7 +27,7 @@ const SECTIONS: readonly Section[] = [
     title: "Access",
     categories: ["access"],
     intro:
-      'The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 4.x\'s `hasEntryACL` did, but for a user listed twice in a row\'s list (marked). "Read" without a row id was open to every signed-in user; decide whether that was meant.',
+      'The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 4.x\'s `hasEntryACL` did, but for a user listed twice in a row\'s list (marked). "Read" without a row id was open to every signed-in user; decide whether that was meant. A method whose input has `id` under a form that checks no row ("public", say) carries `rowless: true` (marked): 5.0 refuses to define that shape on a service with an access policy without it, and it keeps the 4.x callers.',
   },
   {
     title: "Access overrides to turn into a policy",
@@ -74,6 +74,12 @@ const SECTIONS: readonly Section[] = [
     title: "installAdminMethods to replace with the admin kit",
     categories: ["admin"],
     intro: "`admin.contract({ entity })` and `admin.handlers(contract, options)`.",
+  },
+  {
+    title: "Methods a kit implements",
+    categories: ["kit"],
+    intro:
+      "Methods of a kit method's shape (`get`, `list`, `create`, `getTask`, ...): the kit checks access on every row it touches, pages and stays live (lint: `prefer-kit`). Replace each with its kit, or keep it with a `// quickdraw: hand-written because <reason>` comment above it.",
   },
   {
     title: "Service instance state and the 4.x context",

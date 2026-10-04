@@ -145,6 +145,62 @@ describe("defineService with kit handlers", () => {
   });
 });
 
+describe("the rowless check on the kit's methods", () => {
+  const writes = {
+    getMany: "authenticated",
+    list: "authenticated",
+    create: "authenticated",
+    update: "authenticated",
+    delete: "authenticated",
+    reorder: "authenticated",
+    bulkUpdate: "authenticated",
+    bulkDelete: "authenticated",
+  } as const;
+  /** The kit's task service with `get` under `get`, the other methods under `"authenticated"`. */
+  const define =
+    (get: unknown, extra: object = {}) =>
+    () =>
+      qd.defineService(taskContract, {
+        model: "task",
+        access: inherit({ from: projectContract, via: "projectId" }),
+        collections: { board: { anchor: projectContract } },
+        methods: {
+          ...crud.handlers(taskContract, { access: { ...writes, get }, ...extra } as never),
+        },
+      });
+
+  it("refuses get under a form that checks no row, naming the kit's rowless option", () => {
+    expect(define("authenticated")).toThrow(
+      'defineService("taskService"): method "get" takes a row id (its input has id), but its access "authenticated" checks no row: ' +
+        "on a service with an access policy, that lets every signed-in user reach any row by its id. " +
+        'Give it { entry: "Read" } so the policy decides, or, if every caller its access admits may reach any row, name it in the kit\'s rowless option (rowless: ["get"])',
+    );
+    expect(define("public")).toThrow('method "get" takes a row id');
+    expect(define({ service: "Read" })).toThrow('method "get" takes a row id');
+  });
+
+  it("defines get under such a form when rowless names it, and the methods that check their row whatever the form", () => {
+    // update, delete and reorder check the row's level themselves; create's optional id names a new row
+    expect(define({ entry: "Read" })).not.toThrow();
+    const service = define("public", { rowless: ["get"] })();
+    expect(service.methods.get?.rowless).toBe(true);
+    expect(service.methods.update?.rowless).toBe(false);
+  });
+
+  it("takes rowless as a list of the kit's own methods", () => {
+    const access = { get: "public", create: "public" } as const;
+    expect(() => crud.handlers(notes, { access, rowless: ["rename"] } as never)).toThrow(
+      'crud.handlers: rowless names "rename", which is not one of the kit\'s methods',
+    );
+    expect(() => crud.handlers(notes, { access, rowless: "get" } as never)).toThrow(
+      "crud.handlers: rowless must list the kit's methods whose access is their whole check",
+    );
+    const handlers = crud.handlers(notes, { access, rowless: ["get"] });
+    expect(handlers.get).toMatchObject({ access: "public", rowless: true });
+    expect(handlers.create).not.toHaveProperty("rowless");
+  });
+});
+
 describe("the kit's MCP tools", () => {
   it("are made from the generated schemas, read-only for queries", () => {
     const tools = describeTools([defineTaskService()]);
