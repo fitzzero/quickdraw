@@ -287,7 +287,7 @@ function methodText(
   setupOnly: ReadonlySet<string>,
 ): { text: string; usesDb: boolean } {
   const note =
-    HOOK_NOTES[method.getName()] ??
+    (Object.hasOwn(HOOK_NOTES, method.getName()) ? HOOK_NOTES[method.getName()] : undefined) ??
     (method.hasModifier("override")
       ? {
           category: "this" as const,

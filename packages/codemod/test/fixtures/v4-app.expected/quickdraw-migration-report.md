@@ -2,7 +2,7 @@
 
 Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review` markers in the code; running the codemod again rewrites it from the markers that remain. Work through the sections in order (contracts, access, emits, client), delete each marker once its item is done, and see the migration guide (`MIGRATION.md`, shipped in `@fitzzero/quickdraw-codemod`) for each kind of item. Then run lint (`no-v4-api` names every 4.x API left, `no-todo-schema` every placeholder) and the typecheck.
 
-119 items in 27 files.
+120 items in 27 files.
 
 | Section                                                        | Items |
 | -------------------------------------------------------------- | ----: |
@@ -17,7 +17,7 @@ Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review`
 | Lifecycle hooks                                                |     1 |
 | installAdminMethods to replace with the admin kit              |     1 |
 | Methods a kit implements                                       |     9 |
-| Service instance state and the 4.x context                     |    11 |
+| Service instance state and the 4.x context                     |    12 |
 | Client                                                         |    11 |
 | Server wiring and other 4.x APIs                               |    22 |
 | Carve-outs                                                     |     1 |
@@ -59,9 +59,9 @@ Each method's kind was chosen from its name (get, list, search, find and count r
 
 The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 4.x's `hasEntryACL` did, but for a user listed twice in a row's list (marked). "Read" without a row id was open to every signed-in user; decide whether that was meant. A method whose input has `id` under a form that checks no row ("public", say) carries `rowless: true` (marked): 5.0 refuses to define that shape on a service with an access policy without it, and it keeps the 4.x callers.
 
-- [ ] `apps/api/src/services/label.ts:60` 4.x had no row-level access here (no hasEntryACL, no checkAccess): only service grants opened rows, which this empty policy keeps. Give it a real policy if rows belong to someone
-- [ ] `apps/api/src/services/label.ts:71` 4.x's resolveEntryId was a function, kept here: where it returns nothing, the "" makes the row check fail, so only the service grant passes (4.x then applied the plain level)
-- [ ] `apps/api/src/services/label.ts:82` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
+- [ ] `apps/api/src/services/label.ts:66` 4.x had no row-level access here (no hasEntryACL, no checkAccess): only service grants opened rows, which this empty policy keeps. Give it a real policy if rows belong to someone
+- [ ] `apps/api/src/services/label.ts:77` 4.x's resolveEntryId was a function, kept here: where it returns nothing, the "" makes the row check fail, so only the service grant passes (4.x then applied the plain level)
+- [ ] `apps/api/src/services/label.ts:88` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/project.ts:94` 4.x's hasEntryACL read the row's `acl` column ([{ userId, level }]), and so does jsonAcl("acl"), with one difference: a user with several entries in a row's list gets the highest of their levels, where 4.x took the first. Check the stored lists for duplicate entries
 - [ ] `apps/api/src/services/project.ts:99` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/project.ts:130` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
@@ -141,8 +141,8 @@ Hooks ran only inside the CRUD helpers; move their work into the methods that wr
 
 Methods of a kit method's shape (`get`, `list`, `create`, `getTask`, ...): the kit checks access on every row it touches, pages and stays live (lint: `prefer-kit`). Replace each with its kit, or keep it with a `// quickdraw: hand-written because <reason>` comment above it.
 
-- [ ] `apps/api/src/services/label.ts:63` getLabel has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
-- [ ] `apps/api/src/services/label.ts:80` listLabels has the shape of the read/write kit's list, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/label.ts:69` getLabel has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/label.ts:86` listLabels has the shape of the read/write kit's list, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/project.ts:97` createProject has the shape of the read/write kit's create, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/project.ts:111` getProject has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/project.ts:155` deleteProject has the shape of the read/write kit's delete, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
@@ -160,11 +160,12 @@ A service is an object now: no constructor, no fields, no `this`; handlers read 
 - [ ] `apps/api/src/services/label.ts:19` 4.x instance field room of LabelService, set by its constructor: now a module binding setUpLabelService(...) sets, one value for the whole process (a service object has no instance); keep it if that is right, else move it where it belongs
 - [ ] `apps/api/src/services/label.ts:22` 4.x constructor code of LabelService, its fields' values included: a service object has no constructor; call setUpLabelService(...) once where the server starts (or move each part to module scope or a job), then delete this function
 - [ ] `apps/api/src/services/label.ts:25` this.getRoomName was 4.x service-instance state: a service object has none. Import what it held, pass it in, or call another service with ctx.services
-- [ ] `apps/api/src/services/label.ts:37` this.subscribers was 4.x service-instance state: a service object has none. Import what it held, pass it in, or call another service with ctx.services
-- [ ] `apps/api/src/services/label.ts:42` overrode the 4.x BaseService method unsubscribeSocket, which 5.0 does not have: keep what it still needs elsewhere, then delete it
-- [ ] `apps/api/src/services/label.ts:44` dropped super.unsubscribeSocket(socket), a call of the 4.x base class, which 5.0 does not have: do here what this code still needs of it
-- [ ] `apps/api/src/services/label.ts:49` overrode the 4.x BaseService method adminCreate, which 5.0 does not have: keep what it still needs elsewhere, then delete it
-- [ ] `apps/api/src/services/label.ts:51` super.adminCreate(data) called the 4.x base class, which 5.0 does not have: it is undefined here; do what this code still needs of it
+- [ ] `apps/api/src/services/label.ts:36` this.constructor was 4.x service-instance state: a service object has none. Import what it held, pass it in, or call another service with ctx.services
+- [ ] `apps/api/src/services/label.ts:43` this.subscribers was 4.x service-instance state: a service object has none. Import what it held, pass it in, or call another service with ctx.services
+- [ ] `apps/api/src/services/label.ts:48` overrode the 4.x BaseService method unsubscribeSocket, which 5.0 does not have: keep what it still needs elsewhere, then delete it
+- [ ] `apps/api/src/services/label.ts:50` dropped super.unsubscribeSocket(socket), a call of the 4.x base class, which 5.0 does not have: do here what this code still needs of it
+- [ ] `apps/api/src/services/label.ts:55` overrode the 4.x BaseService method adminCreate, which 5.0 does not have: keep what it still needs elsewhere, then delete it
+- [ ] `apps/api/src/services/label.ts:57` super.adminCreate(data) called the 4.x base class, which 5.0 does not have: it is undefined here; do what this code still needs of it
 - [ ] `apps/api/src/services/task/methods/queries.ts:9` inline auth guard: the access form already requires a principal, so the !ctx.principal.userId part never holds; drop it (lint: no-inline-auth-guard)
 
 ## Client

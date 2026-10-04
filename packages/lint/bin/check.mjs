@@ -123,8 +123,8 @@ export function parseCheckArgs(args) {
     const arg = args[index];
     const [given, inline] =
       arg.startsWith("--") && arg.includes("=") ? arg.split(/=(.*)/su) : [arg];
-    const flag = ALIASES[given] ?? given;
-    const own = OWN_OPTIONS[flag];
+    const flag = Object.hasOwn(ALIASES, given) ? ALIASES[given] : given;
+    const own = Object.hasOwn(OWN_OPTIONS, flag) ? OWN_OPTIONS[flag] : undefined;
     const takesValue = (own !== undefined && !FLAGS.has(flag)) || OXLINT_VALUE_OPTIONS.has(flag);
     let value = inline;
     if (takesValue && value === undefined) {

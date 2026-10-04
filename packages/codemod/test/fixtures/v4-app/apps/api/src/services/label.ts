@@ -73,6 +73,11 @@ export class LabelService extends BaseService<
     return this.renamed.size;
   }
 
+  /** The class's name, for logs: a member every object has, which the codemod must not take for one of its tables' keys. */
+  public kind(): string {
+    return this.constructor.name;
+  }
+
   /** The label room and how many sockets are in it, for the admin page. */
   public roomStats(): { room: string; sockets: number } {
     const room = this.room;

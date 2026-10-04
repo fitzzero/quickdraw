@@ -120,6 +120,12 @@ describe("a 4.x service class's members (label.ts)", () => {
     );
   });
 
+  it("marks this.constructor as instance state, not as a key of Object.prototype", () => {
+    expect(label()).toMatch(
+      /\[this\] this\.constructor was 4\.x service-instance state[^\n]*\n {2}return this\.constructor\.name;/u,
+    );
+  });
+
   it("puts a marker about a one-line literal above the statement holding it", () => {
     expect(label()).toMatch(
       /\[this\] this\.subscribers was 4\.x service-instance state[^\n]*\n {2}return \{ room, sockets: this\.subscribers/u,

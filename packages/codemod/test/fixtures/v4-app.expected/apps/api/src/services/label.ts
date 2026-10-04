@@ -31,6 +31,12 @@ export function renamedCount(): number {
   return renamed.size;
 }
 
+/** The class's name, for logs: a member every object has, which the codemod must not take for one of its tables' keys. */
+export function kind(): string {
+  // quickdraw-migrate: review [this] this.constructor was 4.x service-instance state: a service object has none. Import what it held, pass it in, or call another service with ctx.services
+  return this.constructor.name;
+}
+
 /** The label room and how many sockets are in it, for the admin page. */
 export function roomStats(): { room: string; sockets: number } {
   const room = roomOfLabelService;

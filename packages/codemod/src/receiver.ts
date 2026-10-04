@@ -222,7 +222,8 @@ function mapAccess(
 }
 
 function markerFor(name: string, service: ServiceModel): { category: Category; message: string } {
-  const emit = EMITS[name];
+  // own keys only: `this.constructor` must not find Object.prototype's
+  const emit = Object.hasOwn(EMITS, name) ? EMITS[name] : undefined;
   if (emit !== undefined) {
     return { category: "emit", message: emit };
   }
@@ -236,7 +237,9 @@ function markerFor(name: string, service: ServiceModel): { category: Category; m
         "the 4.x service logger: take a Logger argument, or log from the handler that calls this with ctx.log",
     };
   }
-  const construction = CONSTRUCTION_MARKERS[name];
+  const construction = Object.hasOwn(CONSTRUCTION_MARKERS, name)
+    ? CONSTRUCTION_MARKERS[name]
+    : undefined;
   if (construction !== undefined) {
     return construction;
   }
