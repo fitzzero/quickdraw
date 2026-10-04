@@ -1,7 +1,17 @@
-import { describe, expect, it } from "vitest";
+/* oxlint-disable quickdraw/no-todo-schema -- these tests are about todoSchema itself */
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import { z as z3 } from "zod3";
-import { hasJsonSchema, isStandardSchema, type StandardSchemaV1, validate } from "./standardSchema";
+import {
+  hasJsonSchema,
+  type InferInput,
+  type InferOutput,
+  isStandardSchema,
+  type StandardSchemaV1,
+  TODO_SCHEMA_VENDOR,
+  todoSchema,
+  validate,
+} from "./standardSchema";
 
 /** A hand-written schema, as a library other than Zod would provide. */
 const evenNumber: StandardSchemaV1<number> = {
@@ -75,5 +85,51 @@ describe("hasJsonSchema", () => {
   it("is false for schemas without it", () => {
     expect(hasJsonSchema(z3.object({ id: z3.string() }))).toBe(false);
     expect(hasJsonSchema(evenNumber)).toBe(false);
+  });
+});
+
+describe("todoSchema", () => {
+  interface ProjectDTO {
+    id: string;
+    name: string;
+    archived: boolean;
+  }
+
+  it("passes every value through unchanged and synchronously, as an unvalidated 4.x payload did", async () => {
+    const schema = todoSchema<ProjectDTO>();
+    const value = { id: "p1", name: "Board", extra: [1, 2] };
+    expect(schema["~standard"].validate(value)).toEqual({ value });
+    expect(schema["~standard"].validate(value)).not.toBeInstanceOf(Promise);
+    expect(await validate(schema, null)).toEqual({ value: null });
+    expect(await validate(schema, "anything")).toEqual({ value: "anything" });
+  });
+
+  it("is a Standard Schema with a permissive JSON Schema, and says it is a placeholder", () => {
+    const schema = todoSchema<ProjectDTO>();
+    expect(isStandardSchema(schema)).toBe(true);
+    expect(hasJsonSchema(schema)).toBe(true);
+    expect(schema["~standard"].vendor).toBe(TODO_SCHEMA_VENDOR);
+    expect(schema["~standard"].jsonSchema.input({ target: "draft-07" })).toEqual({
+      type: "object",
+    });
+    expect(schema["~standard"].jsonSchema.output({ target: "draft-2020-12" })).toEqual({
+      type: "object",
+    });
+  });
+
+  it("lists its keys as JSON Schema properties, each accepting any value", () => {
+    const schema = todoSchema<ProjectDTO>({ keys: ["id", "name"] });
+    expect(schema["~standard"].jsonSchema.output({ target: "draft-07" })).toEqual({
+      type: "object",
+      properties: { id: {}, name: {} },
+    });
+  });
+
+  it("types its value as T, and its keys as T's keys", () => {
+    const schema = todoSchema<ProjectDTO>({ keys: ["id"] });
+    expectTypeOf<InferInput<typeof schema>>().toEqualTypeOf<ProjectDTO>();
+    expectTypeOf<InferOutput<typeof schema>>().toEqualTypeOf<ProjectDTO>();
+    // @ts-expect-error -- "title" is not a key of ProjectDTO
+    todoSchema<ProjectDTO>({ keys: ["title"] });
   });
 });

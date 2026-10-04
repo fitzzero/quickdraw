@@ -2177,6 +2177,19 @@ guidance:
 }
 ```
 
+## Migrating from 4.x
+
+[`@fitzzero/quickdraw-codemod`](packages/codemod) moves a 4.x app to 5.0:
+contracts from the method maps, `defineService` from the service classes,
+the typed client for the hooks, and a report of everything left to decide.
+[`MIGRATION.md`](MIGRATION.md) explains each step, the access mapping and
+the defaults that changed; [`UPGRADE-PROMPT.md`](UPGRADE-PROMPT.md) is the
+procedure for an agent.
+
+```bash
+bunx @fitzzero/quickdraw-codemod@next v5 .
+```
+
 ## Package exports
 
 | Export             | Holds                                                                                                                                                                                                                                           |

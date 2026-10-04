@@ -78,6 +78,8 @@ const expectations = {
       "validate",
       "isStandardSchema",
       "hasJsonSchema",
+      "todoSchema",
+      "TODO_SCHEMA_VENDOR",
       "query",
       "mutation",
       "nullable",

@@ -22,6 +22,7 @@ import noRawSocket from "./rules/no-raw-socket.mjs";
 import noRawSqlWrite from "./rules/no-raw-sql-write.mjs";
 import noRawTooltipStrings from "./rules/no-raw-tooltip-strings.mjs";
 import noRawTypographyStrings from "./rules/no-raw-typography-strings.mjs";
+import noTodoSchema from "./rules/no-todo-schema.mjs";
 import noUnboundedRead from "./rules/no-unbounded-read.mjs";
 import noUntrackedWrite from "./rules/no-untracked-write.mjs";
 import noUntypedClient from "./rules/no-untyped-client.mjs";
@@ -52,6 +53,7 @@ const rules = {
   "no-raw-socket": noRawSocket,
   // Migration from 4.x
   "no-v4-api": noV4Api,
+  "no-todo-schema": noTodoSchema,
   // Design system (oxlint.template.jsonc)
   "no-raw-button-strings": noRawButtonStrings,
   "no-raw-tooltip-strings": noRawTooltipStrings,

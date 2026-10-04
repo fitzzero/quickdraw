@@ -106,6 +106,8 @@
     "quickdraw/no-raw-socket": "error",
     // Every 4.x API 5.0 removed, with its replacement.
     "quickdraw/no-v4-api": "error",
+    // The migration's placeholder schema, until a real schema replaces it.
+    "quickdraw/no-todo-schema": "warn",
   },
   "overrides": [
     // Client/React code: relax server-oriented strictness.

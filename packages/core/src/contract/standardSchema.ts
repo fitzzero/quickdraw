@@ -205,3 +205,46 @@ export async function validate<Output>(
 ): Promise<ValidationResult<Output>> {
   return await schema["~standard"].validate(value);
 }
+
+/** Options of {@link todoSchema}. */
+export interface TodoSchemaOptions<T> {
+  /**
+   * The keys of the object the schema stands for. They become the properties
+   * of its JSON Schema, so a projection (the contract's `entity`, say) whose
+   * schema is a `todoSchema` can still list its keys.
+   */
+  readonly keys?: readonly Extract<keyof T, string>[];
+}
+
+/** The vendor name a {@link todoSchema} reports in its Standard Schema properties. */
+export const TODO_SCHEMA_VENDOR = "quickdraw-todo";
+
+/**
+ * A placeholder schema for code migrated from quickdraw 4.x, whose methods
+ * declared types without schemas (`@fitzzero/quickdraw-codemod` writes it
+ * where it found none). It types its value as `T` and validates nothing:
+ * every value passes unchanged, as an unvalidated 4.x payload did. It also
+ * describes itself as a permissive JSON Schema (any object; `keys` as its
+ * properties), so MCP tools, admin metadata and projection keys keep working.
+ * Replace each one with a real schema (Zod 4.2 or later where JSON Schema is
+ * needed); the lint rule `quickdraw/no-todo-schema` reports every use.
+ *
+ * @example
+ * entity: todoSchema<ProjectDTO>({ keys: ["id", "name", "ownerId"] }),
+ * methods: { create: mutation({ input: todoSchema<{ name: string }>(), output: "entity" }) },
+ */
+export function todoSchema<T>(options: TodoSchemaOptions<T> = {}): StandardSchemaWithJSON<T, T> {
+  const keys = options.keys ?? [];
+  const describe = (): Record<string, unknown> =>
+    keys.length === 0
+      ? { type: "object" }
+      : { type: "object", properties: Object.fromEntries(keys.map((key) => [key, {}])) };
+  return Object.freeze({
+    "~standard": Object.freeze({
+      version: 1,
+      vendor: TODO_SCHEMA_VENDOR,
+      validate: (value: unknown) => ({ value: value as T }),
+      jsonSchema: Object.freeze({ input: describe, output: describe }),
+    }),
+  });
+}

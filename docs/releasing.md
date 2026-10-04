@@ -18,8 +18,8 @@ Agents never bump versions for a release, create or push tags, or publish.
 | `@fitzzero/quickdraw-skills`  | `packages/skills`  | `skills-v<version>`  |
 | `@fitzzero/quickdraw-codemod` | `packages/codemod` | `codemod-v<version>` |
 
-`skills` and `codemod` are `private` placeholders for now. The workflow and
-`scripts/release-tag.sh` refuse to release a private package.
+All four packages are public. The workflow and `scripts/release-tag.sh`
+refuse to release a package marked `private`.
 
 ## Release a version
 

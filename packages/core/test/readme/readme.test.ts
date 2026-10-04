@@ -1,7 +1,7 @@
-// The README's code examples, and the quickdraw-new-service skill's, are
-// copies of the files beside this test, which `bun run typecheck` compiles
-// (see examples.ts). This checks every copy, and that no TypeScript block
-// in them is anything but a copy.
+// The README's code examples, the migration guide's and the
+// quickdraw-new-service skill's are copies of the files beside this test,
+// which `bun run typecheck` compiles (see examples.ts). This checks every
+// copy, and that no TypeScript block in them is anything but a copy.
 
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -63,6 +63,13 @@ describe("example copies", () => {
     expect(checkDocument("doc.md", synced)).toEqual([
       `doc.md: the tsx block on line ${String(unmarked)} is not a copy of an example`,
     ]);
+  });
+
+  it("copy a region inside a block without the marker's indentation", () => {
+    const region =
+      sourceOf("../../../codemod/test/guide-v4/apps/api/src/services/task.ts", "projection") ?? "";
+    expect(region.startsWith("protected override toDto(task: Task): TaskDTO {")).toBe(true);
+    expect(region.split("\n").at(-1)).toBe("}");
   });
 
   it("copy a region of a file without its markers, and nothing for a missing one", () => {

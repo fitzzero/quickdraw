@@ -6,6 +6,10 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/README.md",
+        "$TURBO_ROOT$/MIGRATION.md",
+        "$TURBO_ROOT$/LICENSE",
+        "$TURBO_ROOT$/packages/codemod/MIGRATION.md",
+        "$TURBO_ROOT$/packages/codemod/test/guide-v4/**",
         "$TURBO_ROOT$/packages/skills/skills/**"
       ]
     }

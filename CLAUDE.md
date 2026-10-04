@@ -33,13 +33,21 @@ packages/
 │                #   verbatim), oxlint.base.jsonc + oxlint.template.jsonc, `quickdraw-lint`
 ├── skills/      # @fitzzero/quickdraw-skills — agent rules (rules/*.md), skills
 │                #   (skills/*/SKILL.md) and the `quickdraw-skills link` bin (bin/cli.mjs)
-└── codemod/     # @fitzzero/quickdraw-codemod — private placeholder (pack G)
+└── codemod/     # @fitzzero/quickdraw-codemod — the 4.x→5.0 codemod (ts-morph, src/ built by
+                 #   tsup → dist/, the `quickdraw-codemod` bin); its tests run it on a 4.1
+                 #   fixture app (test/fixtures/v4-app, snapshot in v4-app.expected) and
+                 #   typecheck the guide's 4.x examples (test/guide-v4) against 4.1.0
 bench/           # load harness (private workspace) + bench/apps/* + committed baselines;
                  #   a release tool, not a CI gate (bench/README.md, docs/benchmarks.md)
 docs/rfcs/       # design records; 0003-v5.md is the 5.0 design
 README.md        # the core package's README (5.0); its code examples are copies
                  #   of packages/core/test/readme (see "README examples" below);
                  #   packages/core/README.md and each package's LICENSE are copies
+MIGRATION.md     # the 4.x→5.0 guide; examples copied the same way (5.0 from
+                 #   test/readme, 4.x from packages/codemod/test/guide-v4); its
+                 #   removed-names appendix comes from `bun run guide:sync` in
+                 #   packages/codemod; packages/codemod/MIGRATION.md is a copy
+UPGRADE-PROMPT.md  # the 5.0 upgrade procedure for agents (codemod, report, order)
 tsconfig.base.json  # shared compiler flags; each package's tsconfig.json extends it
 ```
 
