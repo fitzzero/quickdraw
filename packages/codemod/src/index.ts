@@ -42,17 +42,20 @@ export function runCodemod(options: RunOptions): RunResult {
     .filter((file) => !file.isSaved() && !ctx.created.has(file.getFilePath()))
     .map((file) => relative(file.getFilePath()));
   const reportPath = join(layout.root, REPORT_FILE);
-  const reportChanged = !existsSync(reportPath) || readFileSync(reportPath, "utf8") !== report.text;
+  const reportExists = existsSync(reportPath);
+  const reportChanged = !reportExists || readFileSync(reportPath, "utf8") !== report.text;
   if (options.dryRun !== true) {
     project.saveSync();
     if (reportChanged) {
       writeFileSync(reportPath, report.text);
     }
   }
+  const created = [...ctx.created].map(relative);
   return {
     stats: ctx.stats,
-    changed: reportChanged ? [...changed, REPORT_FILE] : changed,
-    created: [...ctx.created].map(relative),
+    // The report is created by the first run, and changed by a later one that finds other markers.
+    changed: reportExists && reportChanged ? [...changed, REPORT_FILE] : changed,
+    created: reportExists ? created : [...created, REPORT_FILE],
     deleted: [...ctx.deleted].map(relative),
     report: report.text,
     items: report.count,

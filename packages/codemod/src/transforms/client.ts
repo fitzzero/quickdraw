@@ -8,7 +8,9 @@
 // whether the call reaches quickdraw's hook directly or through the app's
 // typed wrapper (the template's hooks/useService.ts and friends), which is
 // deleted once nothing uses it. Options 5.0 dropped, a kind the contract
-// disagrees with, and manual refetches are marked, never silently removed.
+// disagrees with, and manual refetches are marked, never silently removed, as
+// is a hook's `error` read as the 4.x message string (`error.includes(...)`):
+// it is a `QuickdrawError` now.
 
 import { type CallExpression, type Identifier, Node, type SourceFile, SyntaxKind } from "ts-morph";
 import type { Work } from "../apply";
@@ -85,6 +87,66 @@ const DROPPED: ReadonlyMap<string, ReadonlyMap<string, string>> = new Map([
     ]),
   ],
 ]);
+
+/** Members of a string: a 4.x hook's `error` was the message, a 5.0 hook's is a `QuickdrawError`. */
+const STRING_MEMBERS: ReadonlySet<string> = new Set([
+  "includes",
+  "toLowerCase",
+  "toUpperCase",
+  "startsWith",
+  "endsWith",
+  "split",
+  "trim",
+  "match",
+  "replace",
+  "replaceAll",
+  "indexOf",
+  "slice",
+  "substring",
+  "charAt",
+  "localeCompare",
+  "length",
+]);
+
+/** The other identifiers of `binding`'s file that refer to it. */
+function referencesOf(binding: Identifier): Identifier[] {
+  const symbol = binding.getSymbol();
+  if (symbol === undefined) {
+    return [];
+  }
+  return binding
+    .getSourceFile()
+    .getDescendantsOfKind(SyntaxKind.Identifier)
+    .filter(
+      (identifier) =>
+        identifier !== binding &&
+        identifier.getText() === binding.getText() &&
+        identifier.getSymbol() === symbol,
+    );
+}
+
+/** The uses of a hook call's `error`: `const { error } = hook(...)`, or `result.error`. */
+function errorUses(call: CallExpression): Node[] {
+  const declaration = call.getParent();
+  if (!Node.isVariableDeclaration(declaration)) {
+    return [];
+  }
+  const name = declaration.getNameNode();
+  if (Node.isObjectBindingPattern(name)) {
+    return name.getElements().flatMap((element) => {
+      const key = element.getPropertyNameNode()?.getText() ?? element.getName();
+      const local = element.getNameNode();
+      return key === "error" && Node.isIdentifier(local) ? referencesOf(local) : [];
+    });
+  }
+  if (!Node.isIdentifier(name)) {
+    return [];
+  }
+  return referencesOf(name).flatMap((reference) => {
+    const parent = reference.getParent();
+    return Node.isPropertyAccessExpression(parent) && parent.getName() === "error" ? [parent] : [];
+  });
+}
 
 function literalArg(call: CallExpression, index: number): string | undefined {
   const arg = call.getArguments()[index];
@@ -195,6 +257,23 @@ class FileRewrite {
   /** 4.x collection types the casts name, imported from the shared package. */
   readonly collectionTypes = new Set<string>();
 
+  /** Marks where the hook's `error` is read as the 4.x message string (`error.includes(...)`). */
+  private markStringErrors(call: CallExpression): void {
+    for (const use of errorUses(call)) {
+      const parent = use.getParent();
+      if (
+        Node.isPropertyAccessExpression(parent) &&
+        parent.getExpression() === use &&
+        STRING_MEMBERS.has(parent.getName())
+      ) {
+        this.mark(
+          parent,
+          "error is a QuickdrawError now (4.x: the message string): read error.message, or error.code (FORBIDDEN, NOT_FOUND, ...) to tell failures apart",
+        );
+      }
+    }
+  }
+
   /** Rewrites one hook call, or marks why it cannot. */
   rewrite(call: CallExpression, hook: string): boolean {
     const service = literalArg(call, 0);
@@ -217,12 +296,14 @@ class FileRewrite {
       }
       this.markOptions(call, hook, 2);
       this.replace(call, `qd.${service}.useEntity`, 1);
+      this.markStringErrors(call);
       return true;
     }
     if (hook === "useCollection") {
       this.markOptions(call, hook, 3);
       this.replace(call, `qd.${service}.${member}.useCollection`, 2);
       this.castCollection(call, service, member, shape);
+      this.markStringErrors(call);
       return true;
     }
     const query = hook === "useServiceQuery";
@@ -242,6 +323,7 @@ class FileRewrite {
     }
     this.markOptions(call, query ? "useServiceQuery" : "useService", query ? 3 : 2);
     this.replace(call, `qd.${service}.${member}.${query ? "useQuery" : "useMutation"}`, 2);
+    this.markStringErrors(call);
     return true;
   }
 }

@@ -178,6 +178,14 @@ export const REMOVED_ENTRIES: ReadonlySet<string> = new Set([
   "@fitzzero/quickdraw-core/eslint-config",
 ]);
 
+/**
+ * Removed entry points whose exports live on under another name, unchanged:
+ * the codemod rewrites the module specifier.
+ */
+export const RENAMED_ENTRIES: Readonly<Record<string, string>> = {
+  "@fitzzero/quickdraw-core/server/testing/prisma": "@fitzzero/quickdraw-core/testing/prisma",
+};
+
 /** 4.x props of `QuickdrawProvider`. */
 export const PROVIDER_PROPS: ReadonlySet<string> = new Set([
   "serverUrl",

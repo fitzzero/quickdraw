@@ -1742,7 +1742,9 @@ export function AdminTasks() {
   per field: `type` is
   `string`, `number`, `boolean`, `date` (an ISO string with a date format),
   `enum` or `json` from the field's JSON Schema, and `relation` by override;
-  `sortable` and `filterable` are the declared fields; `id` and the
+  `sortable` and `filterable` are the declared fields (`filterable` is
+  optional in the `AdminFieldConfig` type, default `false`, so field
+  configurations written for 4.x still type); `id` and the
   timestamps come first and are not editable; `acl`, `serviceAccess` and
   `service_access` are hidden.
 - `adminSubscribers({ id })` counts the sockets subscribed to a row per

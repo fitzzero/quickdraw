@@ -115,6 +115,7 @@ const V4_PATHS = {
   "@fitzzero/quickdraw-core": [join(V4, "dist/shared/index.d.ts")],
   "@fitzzero/quickdraw-core/server": [join(V4, "dist/server/index.d.ts")],
   "@fitzzero/quickdraw-core/client": [join(V4, "dist/client/index.d.ts")],
+  "@fitzzero/quickdraw-core/server/testing/prisma": [join(V4, "dist/server/testing-prisma.d.ts")],
   // 4.1 apps are on Zod 3, and so are 4.1's own types
   zod: [join(PACKAGE, "node_modules", "zod3")],
 };

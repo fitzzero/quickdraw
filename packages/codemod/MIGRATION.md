@@ -99,13 +99,28 @@ faithfully. What it does:
   `qd.<service>.<collection>.useCollection(scope)`, whether the call reaches
   quickdraw directly or through the template's typed wrappers
   (`hooks/useService.ts`), which it deletes once nothing uses them.
+- **Other uses of a service class.** Its import becomes one of the service
+  object, `new ChatService(prisma)` becomes `chatService` (marked: the
+  server takes services in `qd.createServer({ services })`) and the class
+  as a type `typeof chatService`. Where the file already binds that name
+  (`const chatService = new ChatService(prisma)`, a parameter
+  `pushService: PushService`), the object is imported under an alias
+  (`chatService as chatServiceDef`). Every use of a 4.x instance's members
+  (`pushService.resubscribe(...)`, `gameService.sim`), a dynamic `import()`
+  of a service class and the `new` after it are marked.
+- **Every workspace package that depends on quickdraw**, not only the three
+  above (a database package's test helpers, say): `@fitzzero/quickdraw-core/server/testing/prisma`
+  becomes `@fitzzero/quickdraw-core/testing/prisma` (the same functions),
+  and the rest of the 4.x API there is marked.
 - **New files**: `apps/api/src/db.ts` (`trackPrisma(prisma)`),
   `apps/api/src/quickdraw.ts` (`initQuickdraw<AppTypes>()`) and
   `apps/web/src/lib/quickdraw.ts` (`createQuickdrawClient(contracts)`).
 - **The report.** Wherever a person has to decide, it leaves a
   `// quickdraw-migrate: review [kind] ...` marker above the code in
-  question, and writes `quickdraw-migration-report.md` at the root: every
-  marker, with its file and line, grouped by kind.
+  question (a hook's `error` read as the 4.x message string among them: it
+  is a `QuickdrawError` now), and writes `quickdraw-migration-report.md` at
+  the root: every marker, with its file and line, grouped by kind. A dry run
+  lists it as `A` (created) on the first run.
 
 Running it again changes nothing, apart from rewriting the report from the
 markers that remain, so delete each marker once its item is done and run it

@@ -3,9 +3,10 @@
 import { useService, useSubscription } from "../hooks";
 
 export function TaskDetail({ taskId }: { taskId: string }) {
-  const { data: task, isLoading } = useSubscription("taskService", taskId);
+  const { data: task, isLoading, error } = useSubscription("taskService", taskId);
   const updateTask = useService("taskService", "updateTask");
 
+  if (error?.includes("403")) return <p>You have no access to this task</p>;
   if (isLoading || !task) return null;
   return (
     <article>

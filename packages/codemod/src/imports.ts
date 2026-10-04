@@ -51,6 +51,21 @@ export function ensureImport(
   options: { readonly typeOnly?: boolean } = {},
 ): void {
   const typeOnly = options.typeOnly === true;
+  const bound = file
+    .getImportDeclarations()
+    .some(
+      (declaration) =>
+        declaration.getModuleSpecifierValue() === module &&
+        declaration
+          .getNamedImports()
+          .some(
+            (specifier) => (specifier.getAliasNode() ?? specifier.getNameNode()).getText() === name,
+          ),
+    );
+  if (bound) {
+    // Already imported, as a value or a type (`import { type X }` included).
+    return;
+  }
   const existing = file
     .getImportDeclarations()
     .find(

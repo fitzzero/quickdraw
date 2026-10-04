@@ -17,7 +17,19 @@ placeholders, 18 web files rewritten, 3 wrapper hooks deleted; 66 files
 changed, 12 created, 3 deleted; 214 report items in 59 files: contracts 38,
 access 15, access overrides 10, projections 6, collections 2, emits 9,
 writes 7, hooks 2, admin 7, instance state 42, client 23, server and other
-4.x APIs 53.
+4.x APIs 53. Rerun on 2026-10-04 with the review's codemod fixes (no
+self-referential `const chatService = chatService`, `packages/db` scanned,
+instance members marked by type): 67 files changed, 13 created (the report
+among them), 3 deleted; 247 items in 61 files (client 24, server and other
+4.x APIs 85: the 31 new ones are uses of 4.x instance members, 20 of them in
+`game.int.test.ts`). Typecheck errors with `@project/shared` and
+`@project/db` read from source: shared 3, api 238, web 37 (were 3, 233, 44);
+the errors no marker covers are 4.x collection deltas read in two
+integration tests (`delta.type`, `delta.item`), parameters left unused once
+`new X(prisma, options)` became the service object (`build-services.ts`),
+two helpers only the 4.x constructors called, implicit `any`s downstream of
+removed types, and 5.0's readonly items and `undefined` for a missing
+entity in three components.
 
 ## Top hazards
 

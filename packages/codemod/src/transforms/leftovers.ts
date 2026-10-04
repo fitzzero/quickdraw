@@ -2,21 +2,55 @@
 // removed or moved export (the server's ServiceRegistry, room helpers, the
 // collection types), the `QuickdrawEventMap` augmentation, and 4.x props of
 // `QuickdrawProvider`. Each gets a marker; `@fitzzero/quickdraw-lint`'s
-// `no-v4-api` names the replacement of every one.
+// `no-v4-api` names the replacement of every one. An entry point that only
+// moved (`server/testing/prisma`) is rewritten instead, in every package
+// that uses quickdraw, dynamic `import()`s included.
 
 import { Node, type SourceFile, SyntaxKind } from "ts-morph";
 import type { Work } from "../apply";
 import type { RunContext } from "../context";
 import { MarkerSet } from "../markers";
-import { MOVED_NAMES, PROVIDER_PROPS, REMOVED_ENTRIES, REMOVED_NAMES } from "../v4names";
+import type { Edit } from "../text";
+import {
+  MOVED_NAMES,
+  PROVIDER_PROPS,
+  REMOVED_ENTRIES,
+  REMOVED_NAMES,
+  RENAMED_ENTRIES,
+} from "../v4names";
 
 const CORE = /^@fitzzero\/quickdraw-core(?:\/.*)?$/u;
+
+/** Rewrites the specifiers that name a renamed entry point: imports, re-exports and `import()`. */
+function renameEntries(file: SourceFile, edits: Edit[]): void {
+  const specifiers = [
+    ...[...file.getImportDeclarations(), ...file.getExportDeclarations()].map((declaration) =>
+      declaration.getModuleSpecifier(),
+    ),
+    ...file
+      .getDescendantsOfKind(SyntaxKind.CallExpression)
+      .filter((call) => call.getExpression().getKind() === SyntaxKind.ImportKeyword)
+      .map((call) => call.getArguments()[0]),
+  ];
+  for (const specifier of specifiers) {
+    const renamed = Node.isStringLiteral(specifier)
+      ? RENAMED_ENTRIES[specifier.getLiteralValue()]
+      : undefined;
+    if (specifier !== undefined && renamed !== undefined) {
+      edits.push({
+        start: specifier.getStart(),
+        end: specifier.getEnd(),
+        text: JSON.stringify(renamed),
+      });
+    }
+  }
+}
 
 function markImports(file: SourceFile, markers: MarkerSet): void {
   const declarations = [...file.getImportDeclarations(), ...file.getExportDeclarations()];
   for (const declaration of declarations) {
     const source = declaration.getModuleSpecifierValue() ?? "";
-    if (!CORE.test(source)) {
+    if (!CORE.test(source) || RENAMED_ENTRIES[source] !== undefined) {
       continue;
     }
     if (REMOVED_ENTRIES.has(source)) {
@@ -91,11 +125,13 @@ function markProviders(file: SourceFile, markers: MarkerSet): void {
 export function markLeftovers(ctx: RunContext, work: Work): void {
   for (const file of ctx.project.getSourceFiles()) {
     const markers = new MarkerSet(file);
+    const edits: Edit[] = [];
+    renameEntries(file, edits);
     markImports(file, markers);
     markEventMap(file, markers);
     markProviders(file, markers);
-    if (markers.edits.length > 0) {
-      work.for(file).edits.push(...markers.edits);
+    if (markers.edits.length > 0 || edits.length > 0) {
+      work.for(file).edits.push(...edits, ...markers.edits);
     }
   }
 }

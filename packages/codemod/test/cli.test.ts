@@ -69,7 +69,9 @@ describe("quickdraw-codemod", () => {
     expect(out).toContain("5 services, 21 methods, 5 contracts");
     expect(out).toContain("  A packages/shared/src/contracts/project.ts");
     expect(out).toContain("  D apps/web/src/hooks/useService.ts");
-    expect(out).toContain("  M quickdraw-migration-report.md");
+    // The report does not exist yet: the run would create it.
+    expect(out).toContain("  A quickdraw-migration-report.md");
+    expect(out).not.toContain("  M quickdraw-migration-report.md");
     expect(readTree(root)).toEqual(before);
   });
 });

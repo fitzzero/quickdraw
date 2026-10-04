@@ -17,7 +17,7 @@ import type { Layout } from "./layout";
 
 const SKIPPED = ["node_modules", "dist", ".next", "generated", "build", "coverage"];
 
-/** A project holding the shared, api and web sources of `layout`. */
+/** A project holding the shared, api and web sources of `layout`, and its other packages that use quickdraw. */
 export function loadProject(layout: Layout): Project {
   const project = new Project({
     compilerOptions: {
@@ -38,7 +38,7 @@ export function loadProject(layout: Layout): Project {
       useTrailingCommas: true,
     },
   });
-  const sources = [layout.shared.src, layout.api.src, layout.web?.src].filter(
+  const sources = [layout.shared.src, layout.api.src, layout.web?.src, ...layout.others].filter(
     (dir): dir is string => dir !== undefined,
   );
   const globs = sources.flatMap((dir) => [join(dir, "**/*.ts"), join(dir, "**/*.tsx")]);

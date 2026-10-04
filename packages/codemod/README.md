@@ -56,6 +56,19 @@ template's layout; the options move each part:
 - **The web app.** `useService`, `useServiceQuery`, `useSubscription` and
   `useCollection` become `qd.<service>.<member>` hooks, through the app's
   typed wrappers too, which are deleted once nothing calls them.
+- **Other uses of a service class.** An import of `ChatService` becomes one
+  of the service object `chatService`, `new ChatService(prisma)` becomes
+  `chatService` (marked) and the class as a type `typeof chatService`. A
+  file that already binds that name (a local `const chatService = new
+ChatService(prisma)`, a parameter `pushService: PushService`) imports the
+  object under an alias (`chatService as chatServiceDef`), so no output
+  refers to itself.
+- **Every workspace package that depends on quickdraw** (the root
+  `package.json`'s `workspaces`), not only shared, api and web: the
+  database package's test helpers, say. An entry point that only moved is
+  rewritten there and everywhere (`@fitzzero/quickdraw-core/server/testing/prisma`
+  becomes `@fitzzero/quickdraw-core/testing/prisma`, with the same
+  functions); the rest of the 4.x API there is marked.
 - **New files**: the tracked `db`, `initQuickdraw` (with `AppTypes`,
   `MethodOf` and `PublicMethodOf`) and the web app's typed client.
 
@@ -73,9 +86,15 @@ with its file and line, grouped by kind: the contracts' placeholders and
 method kinds, the access forms to decide, access overrides to turn into a
 policy, `toDto` and protected fields, collections to declare, hand emits,
 `this.create/update/delete` calls, raw SQL writes, lifecycle hooks,
-`installAdminMethods`, instance state, client hook options, and the 4.x
-APIs left (the server set-up, room events). The report is read back from
-the markers, so it always matches the code.
+`installAdminMethods`, instance state, client hook options, a hook's
+`error` read as the 4.x message string (`error.includes(...)`: it is a
+`QuickdrawError` now), every use of a 4.x service instance's members
+(`pushService.resubscribe(...)`, `gameService.sim`, found by type; the
+service object has none), a dynamic `import()` of a service class and the
+`new` that follows it, and the 4.x APIs left (the server set-up, room
+events). The report is read back from the markers, so it always matches the
+code. A dry run lists the report with the files it would change: `A` when
+the run would create it.
 
 Running the codemod again changes no code: delete each marker once its
 item is done, run it again, and the report lists what remains. Lint
