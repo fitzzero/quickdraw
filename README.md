@@ -877,14 +877,21 @@ export const taskService = qd.defineService(task, {
   recent flushes. The change log sees only this process's writes: an app
   running several processes without a Socket.IO cluster adapter declares
   `versionColumn`s or passes `changeLog: false`.
+- Revisions are microseconds since the epoch: a flush takes
+  `max(Date.now() * 1000, last + 1)`. Clients compare them as numbers.
 - Behind a cluster adapter (`setupRedisAdapter`), every touched row is read
-  and sent, whole, since other nodes' rooms are not visible and frames from
-  two nodes can arrive out of order; access changes and refreshed grants are
+  (deleted ones too) and sent, whole, decided by the row as read at flush
+  time, since other nodes' rooms are not visible and frames from two nodes
+  can arrive out of order; access changes and refreshed grants are
   broadcast to every node, and a flush sends its frames once every node
-  applied them. Flushes take their revisions from a counter in the cluster's
-  Valkey, so revisions from all nodes are one order:
+  applied them (without waiting while a node does not answer, fail-open).
+  Flushes take their revisions from a counter in the cluster's Valkey, on
+  Valkey's clock in microseconds, so revisions from all nodes are one order;
+  its key needs persistence or replication. A node whose Valkey connection
+  comes back has its clients reconnect to catch up.
   [docs/deploying.md](docs/deploying.md) has the wiring, what holds across
-  nodes, what it costs, and what happens when Valkey stops answering.
+  nodes, what it costs, and what happens when a node or Valkey stops
+  answering.
 
 ## Collections and change topics
 
@@ -1022,8 +1029,8 @@ flight (a mutation runs to its end) and closes the HTTP server, giving up
 after `shutdownTimeoutMs` (default 10 s); behind a cluster adapter it
 disconnects its own sockets first, while the adapter still reaches the other
 nodes, so their rooms hear `left`, and waits for that presence work (at most
-`cluster.timeoutMs`), so the app can close its Valkey clients next. `handleSignals: true` calls it on
-SIGTERM and SIGINT. `server.rotate({ withinMs })` asks clients to reconnect
+`cluster.timeoutMs`), so the app can close its Valkey clients next.
+`handleSignals: true` calls it on SIGTERM and SIGINT. `server.rotate({ withinMs })` asks clients to reconnect
 within a window; `server.access.refresh(userId)` reloads a user's grants,
 pushes `qd:access` and resolves the user's entity subscriptions again;
 `server.access.disconnectUser(userId, { sessionId? })` ends a user's (or one

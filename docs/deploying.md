@@ -2,7 +2,7 @@
 
 How to run a quickdraw 5.0 server as several processes (Cloud Run instances,
 Kubernetes pods) behind one Valkey, what stays correct across them, what it
-costs, and what happens when Valkey stops answering. The behavior described
+costs, and what happens when a node or Valkey stops answering. The behavior described
 here is proved by the cluster test projects (`bun run test:cluster` in
 `packages/core`, CI's `cluster` job): the end-to-end suite and the realtime,
 collection and revocation tests run with every test app booted as two servers
@@ -80,12 +80,12 @@ the row's next change.
   Revisions from all nodes are one total order: a flush that starts after
   another one took its revision gets a greater one, whichever node runs it.
   A revision is a whole number of microseconds since the epoch (on one
-  server too: `max(Date.now() * 1000, last + 1)`), and the counter moves to
-  `max(last + 1, Valkey's time in microseconds, the node's last revision +
-1)`: it runs ahead of Valkey's clock only above a million flushes a second
-  across the cluster, so revisions stay comparable with `versionColumn`
-  times (a time's milliseconds times 1,000) and with the clock a node falls
-  back to.
+  server too: `max(Date.now() * 1000, last + 1)`). The counter moves to the
+  greatest of its last value plus one, Valkey's `TIME` in microseconds, and
+  the node's last revision plus one: it runs ahead of Valkey's clock only
+  above a million flushes a second across the cluster, so revisions stay
+  comparable with `versionColumn` times (a time's milliseconds times 1,000)
+  and with the clock a node falls back to.
 - **Frames applied by revision, never losing a field.** Each process sends
   its flushes' frames in revision order, but frames from two nodes can reach a
   client out of order. Clients apply frames by revision, and behind a cluster
@@ -104,9 +104,10 @@ the row's next change.
 - **Reads no older than what a client holds.** A read that claims a revision
   (a subscription's rows, a collection page, `qd:col:items`, a search page, a
   row sent again after a level change) claims the counter's last revision, so
-  a client holding a newer frame from another node takes the answer. A
-  subscribe whose rows another node changed before it joined their rooms reads
-  them again.
+  a client holding a newer frame from another node takes the answer; when
+  the counter has no key or does not answer, it claims the node's clock,
+  never 0. A subscribe whose rows another node changed before it joined their
+  rooms reads them again.
 - **Access everywhere first.** Access changes and reloaded grants are
   broadcast to every node and answered once the node has resolved its
   subscriptions again; the flushing node sends the flush's frames only after
@@ -123,12 +124,15 @@ the row's next change.
   holds with no round trip (a room the user joined from a socket on another
   node does not count, by design).
 - **Stream seeds.** A push to a stream that keeps a `seed` goes to every node
-  (one publish, as a room broadcast costs), and each node keeps the seed and
-  sends the items to its own subscribers: a subscriber on any node starts with
-  the latest items, and never gets an item twice.
+  (one publish, as a room broadcast costs), and each node keeps its own seed
+  in memory and sends the items to its own subscribers, so no subscriber gets
+  an item twice. A seed holds only what was pushed while its node was up: a
+  node started after the pushes (a scale-out, a rolling deploy) answers a new
+  subscriber with an empty seed, or a shorter one, until the next pushes.
 - **Collections.** A removal a write cannot address to a scope (a
   `ctx.touch(..., { removed: true })`, junction rows a cascade removed) is
-  broadcast, so every node's subscribed scopes get it.
+  broadcast, so every node's subscribed scopes get it, except the scope the
+  row is in again when the flushing node reads it.
 
 ## What it costs
 
@@ -161,9 +165,9 @@ A node that stays subscribed in Valkey but does not answer (a frozen or
 CPU-starved instance, one killed before Valkey dropped its connection, a
 version that does not know the event) would put `cluster.timeoutMs` on every
 flush of the other nodes that changes access, and on every flush behind it.
-So the first broadcast a node does not answer in time puts the flushing node in a
-degraded mode, logged once at error ("A node did not answer a broadcast in
-time; this node sends access changes without waiting for the other nodes
+So the first broadcast a node does not answer in time puts the flushing node
+in a degraded mode, logged once at error ("A node did not answer a broadcast
+in time; this node sends access changes without waiting for the other nodes
 until every node answers a probe"): its access changes and reloaded grants
 go out without waiting, and it broadcasts a probe every second until every
 node answers one, which ends the mode (logged once at info, "Every node
@@ -251,6 +255,16 @@ and subscription reads are always authorized on the node that serves them.
   `left` another node sends meanwhile (this node's own joins are counted).
 - A subscribe that sees the counter move reads every row it joined again, not
   only the ones that changed: the cluster has no shared change log.
+- Access is fail-open across nodes while a node does not answer in time
+  (above): its sockets a change revoked can receive that flush's frames,
+  tiered fields included, until it applies the change. Holding back the
+  fields above a lowered level until every node answered is recorded for
+  later.
+- A row deleted and created again with the same id, whose delete flushes
+  last, still closes the collection scopes anchored on it, and the other
+  nodes' change logs keep it marked deleted until its next write, so an
+  access change on its anchors there does not revoke its subscribers until
+  then (the flushing node corrects its own log).
 - The two nodes of the test projects run in one process: state kept per
   module (the process clock of `rev.ts`) is shared by them there, unlike in a
   real deployment; the counter's own tests run each node's counter apart.
