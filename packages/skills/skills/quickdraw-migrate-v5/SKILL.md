@@ -8,8 +8,9 @@ description: Move a quickdraw 4.x app to quickdraw 5.0 (BaseService classes, Ser
 The codemod does the mechanical part; you work through what it marks. The
 details of every step are in the migration guide:
 `node_modules/@fitzzero/quickdraw-codemod/MIGRATION.md` (or `MIGRATION.md` at
-the root of the quickdraw repository). Read its sections as the report sends
-you to them.
+the root of the quickdraw repository), and the procedure in
+`node_modules/@fitzzero/quickdraw-codemod/UPGRADE-PROMPT.md`. Read the
+guide's sections as the report sends you to them.
 
 ## Rules
 
@@ -22,7 +23,12 @@ you to them.
   as a decision the user agrees to.
 - **Keep every service name**: stored grants (`User.serviceAccess`, JSON
   access lists) name them.
-- **One step per commit**, lint, typecheck and tests green after each.
+- **One step per commit.** Steps 1 and 2 (the upgrade, the codemod) cannot
+  leave the typecheck green: commit them anyway, say so in the message, and
+  pass a typecheck hook with `--no-verify` for those two only. After step 2
+  every file parses, the format check passes, lint passes with its baseline
+  and a second codemod run changes nothing; from step 3 on lint and the
+  tests stay green and the typecheck errors only go down.
 
 ## Procedure
 
@@ -31,8 +37,12 @@ you to them.
    projection keys). Upgrade `@fitzzero/quickdraw-core` to 5.0 (`@next` until
    5.0.0 ships) in every package that imports it, add
    `@fitzzero/quickdraw-lint`, `@fitzzero/quickdraw-skills` and `oxlint` as
-   dev dependencies, extend `oxlint.base.jsonc`, add `quickdraw-skills link`
-   to `prepare`, and add `zod` to the shared package if it lacks it.
+   dev dependencies, extend `oxlint.base.jsonc` (a template app:
+   `oxlint.template.jsonc`, which extends the base), set
+   `settings.quickdraw.baseline` to `.quickdraw-lint-baseline.json`, make the
+   lint scripts run `quickdraw-lint check` instead of `oxlint`, add
+   `quickdraw-skills link` to `prepare`, and add `zod` to the shared package
+   if it lacks it.
 2. **Run the codemod** from the repository root, first with `--dry-run`:
 
    ```bash
@@ -42,7 +52,12 @@ you to them.
 
    It expects the template's layout (`packages/shared`, `apps/api`,
    `apps/web`, `packages/db`); `--shared`, `--api`, `--web` and
-   `--db-package` move each part. Commit its output untouched.
+   `--db-package` move each part. It formats its output with the app's
+   formatter. Commit its output untouched, then run
+   `quickdraw-lint baseline -c .oxlintrc.json` and commit the baseline, so
+   lint passes and reports only new violations. Add each file the report
+   lists under "Carve-outs" to the template's carve-out script
+   (`scripts/strip-game.mjs`'s delete list).
 
 3. **Read `quickdraw-migration-report.md`.** Every item is a
    `// quickdraw-migrate: review [kind] ...` marker above the code it is
@@ -71,11 +86,11 @@ you to them.
 
 4. **Delete each marker when its item is done**, and run the codemod again:
    it changes no code a second time and rewrites the report from the markers
-   left.
-5. **Check**: `oxlint` (`no-v4-api` lists every 4.x API left, with its
-   replacement; `no-todo-schema` every placeholder; `prefer-kit` every
-   hand-written method a kit implements), the typecheck, the tests, and the
-   running app (a change from a second session arrives live).
+   left. Run `quickdraw-lint baseline` again when `no-unused-baseline` warns.
+5. **Check**: `quickdraw-lint check` (`no-v4-api` lists every 4.x API left,
+   with its replacement; `no-todo-schema` every placeholder; `prefer-kit`
+   every hand-written method a kit implements), the typecheck, the tests,
+   and the running app (a change from a second session arrives live).
 
-Done when the report says nothing is left to review and lint, the
-typecheck and the tests are clean.
+Done when the report says nothing is left to review, lint is clean without
+a baseline, and the typecheck and the tests are clean.

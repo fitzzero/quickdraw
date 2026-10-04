@@ -110,7 +110,10 @@ channel `requires`.
   (`{ scope: "Read", of: project, id: "projectId" }`) and filters by it, or
   uses the read/write kit's `list` or a collection, which filter by policy.
 - `fields: { notes: "Admin" }` in the contract strips a field from callers
-  below that level on the row, in replies and in live frames.
+  below that level on the row, in replies and in live frames, so the row
+  types a client reads (`useEntity`, collection items, `"entity"` outputs,
+  `EntityOf`) make it optional: read it with a guard. A handler returns the
+  whole row.
 - The service's change topic (`qd:watch` on `"service"`) is closed unless
   the service declares `watchAccess` (`"public"`, `"authenticated"` or
   `{ service: L }`). A stream without `access` in its contract is closed.

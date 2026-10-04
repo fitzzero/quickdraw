@@ -2,6 +2,84 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0-rc.2] (unreleased)
+
+Round 1 of the fixes the quickdraw-chat migration found on `5.0.0-rc.1`
+(findings F1.1 to F1.15). No version moves until the release candidate is
+cut.
+
+### Core
+
+- A handler may return a Prisma row whose `Json` column (`JsonValue`) sits
+  where the wire has an object, an array or a record: `RowFor` accepts a
+  JSON column's value there (`JsonColumnValue`, on `./server`). String,
+  number and boolean columns are checked as before; the output schema checks
+  the JSON's shape outside production (F1.4).
+- A field the contract's `fields` map tiers is optional in the rows a reader
+  receives: `EntityOf`, `ProjectionOf`, `ItemOf`, the projection outputs of
+  `OutputOf`, so `useEntity`, `useEntities`, `useCollection` items, method
+  results, server callers and the testing mocks. `FullProjectionOf` (new)
+  keeps every key, and handlers, `project` and `map` use it. Index rows stay
+  whole: a collection refuses an index field its tier hides (F1.5).
+
+### Lint
+
+- `quickdraw-lint baseline` records every rule's violations, oxlint's own
+  too (keyed by the code oxlint reports them under). New:
+  `quickdraw-lint check`, the lint command for an app with a baseline: it
+  runs oxlint, applies the baseline to oxlint's native rules as the quickdraw
+  rules apply it to themselves, reports their unused allowances as
+  `no-unused-baseline`, and exits 1 on a remaining error. A file oxlint
+  cannot parse is never recorded (F1.3).
+- `oxlint.base.jsonc`'s path overrides are `**/`-prefixed, so explicit types
+  in `packages/shared` and `packages/db` and the web app's relaxed budgets
+  apply when lint runs from a package directory (F1.10).
+- `oxlint.template.jsonc` extends the base: a template app extends it alone
+  (F1.15).
+
+### Codemod
+
+- A service class's fields are kept as marked module bindings with their
+  initializers, its getters as functions its reads call, and its
+  constructor's other code, field assignments included, in an exported
+  `setUp<Service>(...)` that takes the constructor's parameters it uses.
+  Nothing is dropped silently but the Prisma client's field and a field
+  holding another service (whose uses are marked) (F1.1).
+- A call of the 4.x base class (`super.x(...)`) is dropped under a marker
+  that names it: the output always parses, which a new test checks on every
+  file (F1.2).
+- It formats what it writes with the app's formatter (oxfmt, prettier or
+  Biome, when installed), builds the report from the formatted files and
+  writes its table the way formatters do, so the output passes a format
+  check and a second run changes nothing at all (F1.6).
+- A wrapper hook's file of helper types goes with the wrappers (F1.7).
+- A marker is never a trailing comment: inside a one-line literal it goes
+  above the line (F1.8).
+- In the web app, a local type only a rewritten hook's type arguments named
+  goes, a one-argument `UseCollectionResult<Item>` gets its second argument,
+  and an import left with only `type` names becomes `import type`. Handlers
+  in a file whose helpers import the tracked `db` use it rather than shadow
+  it (F1.3, F1.9).
+- A 4.x `DTO | null` mutation of one row answers `"entity"`, marked in the
+  contract and above its handler: a tracked write throws `NOT_FOUND` rather
+  than answering null, and only `"entity"` is optimistic by default (F1.12).
+- A service inside a template carve-out (`quickdraw-game:start` ...
+  `:end`) keeps its markers in `contracts/index.ts` (and around helpers only
+  it uses), and its new contract file carries a `[carve-out]` marker the
+  report lists under "Carve-outs" (F1.13).
+
+### Packaging and guides
+
+- The codemod ships `UPGRADE-PROMPT.md` beside `MIGRATION.md`, both with
+  their links pointing at the repository on GitHub; the core README says
+  where they ship (F1.11).
+- `UPGRADE-PROMPT.md` and the `quickdraw-migrate-v5` skill say which steps
+  cannot leave the typecheck green (the upgrade, the codemod) and what must
+  hold after each, and adopt lint with a baseline and `quickdraw-lint check`
+  (F1.14).
+- The four packages' `bin` paths drop their `./` prefix, which `npm publish`
+  reported as `"bin[...]" script name ... was invalid and removed` (F1.15).
+
 ## [5.0.0-rc.1]
 
 The first published release candidate (`5.0.0-rc.0` below was cut on

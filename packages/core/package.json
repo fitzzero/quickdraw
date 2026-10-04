@@ -17,7 +17,7 @@
     "directory": "packages/core"
   },
   "bin": {
-    "quickdraw-docs": "./dist/cli/quickdraw-docs.js"
+    "quickdraw-docs": "dist/cli/quickdraw-docs.js"
   },
   "files": [
     "dist"

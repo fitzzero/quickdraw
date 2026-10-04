@@ -14,7 +14,7 @@
     "directory": "packages/lint"
   },
   "bin": {
-    "quickdraw-lint": "./bin/quickdraw-lint.mjs"
+    "quickdraw-lint": "bin/quickdraw-lint.mjs"
   },
   "files": [
     "bin",
