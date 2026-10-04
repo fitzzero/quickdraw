@@ -5,7 +5,7 @@
 //
 // React-free.
 
-import type { QueryKey } from "@tanstack/react-query";
+import type { QueryKey, Updater } from "@tanstack/react-query";
 import { QuickdrawError } from "../protocol/errors";
 import type { QuickdrawConnection } from "./connection";
 import type { InvalidateOptions, InvalidationCoordinator } from "./coordinator";
@@ -116,6 +116,44 @@ export function invalidateWith(binding: Binding): (target: unknown, ...input: un
       );
     }
   };
+}
+
+/**
+ * `qd.<service>.<query>.setData(input, updater)`: writes the cached result
+ * of `input` in the bound provider's cache, as an event that carries the
+ * new state does (`updater` is the result, or a function of the cached
+ * one). A read of that key in flight may have read before the event, so
+ * the coordinator runs one more after it settles, never cancelling it.
+ * Returns what the cache holds then. `INTERNAL` while no provider is mounted.
+ */
+export function setDataWith(
+  binding: Binding,
+  target: MethodTarget,
+): (input: unknown, updater: Updater<unknown, unknown>) => unknown {
+  return (input, updater) => {
+    const { coordinator } = binding;
+    if (coordinator === null) {
+      throw needsProvider(`${target.service}.${target.method}.setData`);
+    }
+    return setCoordinated(coordinator, methodKey(target.service, target.method, input), updater);
+  };
+}
+
+/**
+ * Writes `queryKey`'s cached result through `coordinator`'s cache: a read in
+ * flight is followed by one more (it may predate the data written).
+ */
+function setCoordinated(
+  coordinator: InvalidationCoordinator,
+  queryKey: QueryKey,
+  updater: Updater<unknown, unknown>,
+): unknown {
+  const { queryClient } = coordinator;
+  const data = queryClient.setQueryData(queryKey, updater);
+  if (queryClient.getQueryState(queryKey)?.fetchStatus === "fetching") {
+    coordinator.invalidate(queryKey, { exact: true });
+  }
+  return data;
 }
 
 /**

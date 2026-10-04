@@ -112,7 +112,10 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   `requires` a room takes messages only from a socket a method joined to it:
   the client that sends must make the joining call itself.
 - Events: `qd.task.cursorMoved.useEvent((payload) => ...)` hears the
-  contract's events sent to a room the socket is in.
+  contract's events sent to a room the socket is in. An event that carries
+  a query's new result writes it into the cache with
+  `qd.task.members.setData(input, updater)` instead of a refetch or a copy
+  in React state.
 - Presence: `usePresence(room)` returns the user ids in an app room, after a
   method joined the socket to it (`ctx.rooms.join`).
 - Admin screens: `qd.task.admin.adminList.useQuery(input)` and the other

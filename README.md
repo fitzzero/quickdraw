@@ -1162,6 +1162,7 @@ globals (React Native).
 | `qd.task.board.useCollection(scope, { view, load, limit })`               | a live scope: `{ items, index, byId, pending, totalCount, hasMore, isLoading, loadMore, ... }`  |
 | `qd.task.get.call(input)`, `.key(input)`, `.prefetch(queryClient, input)` | a call over the mounted provider's connection, the cache key, a prefetch                        |
 | `qd.invalidate(qd.task.get, input?)`                                      | invalidates through the coordinator: a read in flight is never cancelled                        |
+| `qd.task.get.setData(input, updater)`                                     | writes a cached result an event carries, at once; a read in flight is followed by one more      |
 | `useQuickdraw()`                                                          | `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, ... }` |
 
 <!-- example: apps/web/src/components/TaskDetail.tsx#detail -->
@@ -1210,6 +1211,11 @@ export function TaskDetail({ id }: { readonly id: string }) {
   follows writes declares `watch` in its contract; the coordinator fetches
   it again once per change, with at most one read in flight per key. Do not
   call `refetch` or `invalidateQueries` on quickdraw keys after a mutation.
+- An event that carries a query's new result (a room's roster, a score)
+  writes it with `qd.<service>.<query>.setData(input, updater)` rather than
+  refetching: the hooks show it at once, under the overlays of optimistic
+  mutations, and a read of that key already in flight (which may predate
+  the event) is followed by one more, never cancelled.
 - After a reconnect, the queries that are watched (they missed the changes
   meanwhile) or stale are refetched, each after a random delay of up to
   `reconnectJitterMs` (2,000 ms by default), so clients that reconnect

@@ -74,8 +74,10 @@ describe("the typed client", () => {
     // @ts-expect-error a query has no useMutation
     void qd.taskService.get.useMutation;
     expectTypeOf<keyof typeof qd.taskService.get>().toEqualTypeOf<
-      "useQuery" | "call" | "key" | "prefetch"
+      "useQuery" | "call" | "key" | "prefetch" | "setData"
     >();
+    // @ts-expect-error a mutation has no cached result to set
+    void qd.taskService.rename.setData;
     expectTypeOf<keyof typeof qd.taskService.rename>().toEqualTypeOf<"useMutation" | "call">();
   });
 
@@ -181,6 +183,21 @@ describe("qd.invalidate", () => {
   test("reserves the key invalidate in the contract map", () => {
     // @ts-expect-error invalidate is the client's own
     createQuickdrawClient({ invalidate: counter });
+  });
+});
+
+describe("setData", () => {
+  test("takes the query's input and its output, or a function of the cached output", () => {
+    expectTypeOf(qd.counter.read.setData).parameter(0).toEqualTypeOf<{ name: string }>();
+    expectTypeOf(qd.counter.read.setData({ name: "a" }, { name: "a", value: 1 })).toEqualTypeOf<
+      { name: string; value: number } | undefined
+    >();
+    qd.counter.read.setData({ name: "a" }, (cached) =>
+      cached === undefined ? undefined : { ...cached, value: cached.value + 1 },
+    );
+    qd.counter.total.setData(undefined, 3);
+    // @ts-expect-error the output is the method's
+    qd.counter.read.setData({ name: "a" }, { name: "a" });
   });
 });
 

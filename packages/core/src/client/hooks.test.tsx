@@ -77,6 +77,61 @@ function Echo() {
   return <p>{data === undefined ? "loading" : `user ${String(data.userId)}`}</p>;
 }
 
+describe("setData", () => {
+  function Read() {
+    const { data } = qd.counter.read.useQuery({ name: "a" });
+    return <p>{data === undefined ? "loading" : `value ${String(data.value)}`}</p>;
+  }
+
+  it("writes a query's cached result, shown at once, with no call", async () => {
+    const { app, records } = await harness.start();
+    render(
+      <Provider url={app.url}>
+        <Read />
+      </Provider>,
+    );
+    await screen.findByText("value 0");
+    act(() => {
+      // what an event that carries the new value does
+      qd.counter.read.setData({ name: "a" }, (cached) =>
+        cached === undefined ? undefined : { ...cached, value: 7 },
+      );
+    });
+    await screen.findByText("value 7");
+    expect(records.filter((record) => record.method === "read")).toHaveLength(1);
+  });
+
+  it("follows a read in flight, which may predate the data written, with one more", async () => {
+    const { app, records, counter: counterService } = await harness.start();
+    render(
+      <Provider url={app.url}>
+        <Read />
+      </Provider>,
+    );
+    await screen.findByText("value 0");
+    const reads = () => records.filter((record) => record.method === "read").length;
+    const release = counterService.hold();
+    counterService.values.set("a", 5);
+    act(() => {
+      qd.invalidate(qd.counter.read, { name: "a" });
+    });
+    act(() => {
+      qd.counter.read.setData({ name: "a" }, { name: "a", value: 9 });
+    });
+    await screen.findByText("value 9");
+    release();
+    await screen.findByText("value 5");
+    await until(() => reads() === 3);
+    expect(reads()).toBe(3);
+  });
+
+  it("needs a mounted provider", () => {
+    expect(() => qd.counter.read.setData({ name: "a" }, { name: "a", value: 1 })).toThrow(
+      "counterService.read.setData needs a mounted <QuickdrawProvider> for this client",
+    );
+  });
+});
+
 describe("useQuery", () => {
   it("renders a query's data from a real server, once connected", async () => {
     const { app } = await harness.start();

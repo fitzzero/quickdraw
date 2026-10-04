@@ -197,6 +197,23 @@ describe("createMockClient", () => {
     expect(await screen.findAllByText("refused FORBIDDEN")).toHaveLength(2);
   });
 
+  it("writes a query's cached result with setData, shown at once", async () => {
+    const qd = createMockClient({ task });
+    qd.task.get.mockResolvedValue(cardOf("t1", "First"));
+    function Title() {
+      const { data } = qd.task.get.useQuery({ id: "t1" });
+      return <p>{data === undefined ? "loading" : data.title}</p>;
+    }
+    render(<Title />);
+    await screen.findByText("First");
+    const asked = qd.task.get.calls.length;
+    act(() => {
+      qd.task.get.setData({ id: "t1" }, cardOf("t1", "From an event"));
+    });
+    await screen.findByText("From an event");
+    expect(qd.task.get.calls).toHaveLength(asked);
+  });
+
   it("invalidates through the mock's cache, and forgets everything on $reset", async () => {
     const qd = createMockClient({ task });
     let reads = 0;

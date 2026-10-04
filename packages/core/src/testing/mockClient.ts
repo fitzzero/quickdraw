@@ -29,7 +29,13 @@
 //   global `afterEach` (as Testing Library unmounts after each test), and by
 //   `$reset()`.
 
-import { QueryClient, useMutation, useQuery, type QueryKey } from "@tanstack/react-query";
+import {
+  QueryClient,
+  useMutation,
+  useQuery,
+  type QueryKey,
+  type Updater,
+} from "@tanstack/react-query";
 import { createBinding, invalidateWith, registerQuery, type Binding } from "../client/binding";
 import type { MethodMutationOptions, MethodQueryOptions } from "../client/hooks";
 import { methodKey, methodKeyPrefix, type MethodQueryKey } from "../client/keys";
@@ -155,6 +161,8 @@ function mockQueryMember(
         useMockQuery(context.queryClient, stub, key(input), input, options),
       call: (input?: unknown): Promise<unknown> => stub.invoke(input),
       key,
+      setData: (input: unknown, updater: Updater<unknown, unknown>): unknown =>
+        context.queryClient.setQueryData(key(input), updater),
       prefetch: (queryClient: QueryClient, input?: unknown): Promise<void> =>
         queryClient.prefetchQuery({ queryKey: key(input), queryFn: () => stub.invoke(input) }),
     },

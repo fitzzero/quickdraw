@@ -19,6 +19,7 @@ import {
   createBinding,
   invalidateWith,
   registerQuery,
+  setDataWith,
   type Binding,
 } from "./binding";
 import { callData } from "./call";
@@ -58,6 +59,7 @@ function queryMember(
         timeoutMs: options?.timeoutMs,
       }),
     key,
+    setData: setDataWith(binding, target),
     async prefetch(queryClient: QueryClient, input?: unknown): Promise<void> {
       const connection = connectionOf(binding, target, "prefetch");
       const queryKey = key(input);
@@ -99,7 +101,7 @@ function mutationMember(binding: Binding, target: MethodTarget): object {
 
 /**
  * Creates the typed client of `contracts`: `qd.<key>.<method>` for every
- * contract in the map, with `useQuery`, `call`, `key` and `prefetch` on a
+ * contract in the map, with `useQuery`, `call`, `key`, `setData` and `prefetch` on a
  * query (and `useSearch` on one the search kit made) and `useMutation` and
  * `call` on a mutation; `qd.<key>.useEntity` and `useEntities` for a
  * contract with an entity; `qd.<key>.<collection>` with `useCollection` for
