@@ -25,7 +25,7 @@ single hand-written event.
 - **Testing**: a real test server, access matrices, performance budgets that
   count statements and bytes, strict development warnings.
 
-Design record: [`docs/rfcs/0003-v5.md`](../../docs/rfcs/0003-v5.md).
+Design record: [`docs/rfcs/0003-v5.md`](https://github.com/fitzzero/quickdraw/blob/dev/docs/rfcs/0003-v5.md).
 
 ## Install
 
@@ -912,7 +912,7 @@ export const taskService = qd.defineService(task, {
   Valkey's clock in microseconds, so revisions from all nodes are one order;
   its key needs persistence or replication. A node whose Valkey connection
   comes back has its clients reconnect to catch up.
-  [docs/deploying.md](../../docs/deploying.md) has the wiring, what holds across
+  [docs/deploying.md](https://github.com/fitzzero/quickdraw/blob/dev/docs/deploying.md) has the wiring, what holds across
   nodes, what it costs, and what happens when a node or Valkey stops
   answering.
 
@@ -1384,9 +1384,9 @@ such code, and `createInvalidationCoordinator(queryClient)` invalidates as
 the hooks do.
 
 A client in another language (a Godot game, a native app) speaks the wire
-itself: [`docs/protocol-v5.md`](../../docs/protocol-v5.md) is its specification,
-generated from the protocol's source, and [`examples/godot`](../../examples/godot)
-holds a GDScript client written from it. [`docs/clients.md`](../../docs/clients.md)
+itself: [`docs/protocol-v5.md`](https://github.com/fitzzero/quickdraw/blob/dev/docs/protocol-v5.md) is its specification,
+generated from the protocol's source, and [`examples/godot`](https://github.com/fitzzero/quickdraw/tree/dev/examples/godot)
+holds a GDScript client written from it. [`docs/clients.md`](https://github.com/fitzzero/quickdraw/blob/dev/docs/clients.md)
 compares the three ways in.
 
 ## Kits
@@ -2927,7 +2927,7 @@ nothing. Run `--check` in CI next to the lint step.
 
 ## Lint rules and agent guidance
 
-[`@fitzzero/quickdraw-lint`](../../packages/lint) is the oxlint plugin and base
+[`@fitzzero/quickdraw-lint`](https://github.com/fitzzero/quickdraw/tree/dev/packages/lint) is the oxlint plugin and base
 config every 5.0 app extends: it reports untracked and foreign writes, nested
 and raw SQL writes, hand-sent frames, inline auth guards, unbounded reads,
 database calls and emits in loops, layering breaks, bypasses of the typed
@@ -2942,7 +2942,7 @@ takes an `id`, unless it says `rowless: true`); then lint; then a
 development warning as it happens (`repeated-call`, `repeated-mutation` and
 `repeated-invalidation` name a client loop before the rate limit does).
 
-[`@fitzzero/quickdraw-skills`](../../packages/skills) ships agent rules and skills
+[`@fitzzero/quickdraw-skills`](https://github.com/fitzzero/quickdraw/tree/dev/packages/skills) ships agent rules and skills
 for quickdraw apps and links them into `.claude/` with
 `quickdraw-skills link`, so every app's agents read the same, current
 guidance:
@@ -2958,11 +2958,11 @@ guidance:
 
 ## Migrating from 4.x
 
-[`@fitzzero/quickdraw-codemod`](../../packages/codemod) moves a 4.x app to 5.0:
+[`@fitzzero/quickdraw-codemod`](https://github.com/fitzzero/quickdraw/tree/dev/packages/codemod) moves a 4.x app to 5.0:
 contracts from the method maps, `defineService` from the service classes,
 the typed client for the hooks, and a report of everything left to decide.
-[`MIGRATION.md`](../../MIGRATION.md) explains each step, the access mapping and
-the defaults that changed; [`UPGRADE-PROMPT.md`](../../UPGRADE-PROMPT.md) is the
+[`MIGRATION.md`](https://github.com/fitzzero/quickdraw/blob/dev/MIGRATION.md) explains each step, the access mapping and
+the defaults that changed; [`UPGRADE-PROMPT.md`](https://github.com/fitzzero/quickdraw/blob/dev/UPGRADE-PROMPT.md) is the
 procedure for an agent. Both ship with the codemod, at
 `node_modules/@fitzzero/quickdraw-codemod/MIGRATION.md` and
 `node_modules/@fitzzero/quickdraw-codemod/UPGRADE-PROMPT.md`.
@@ -2996,7 +2996,7 @@ The package also ships the `quickdraw-docs` command.
 
 A bun workspace with turbo: `packages/core` (this package), `packages/lint`,
 `packages/skills` and `packages/codemod`. See
-[CONTRIBUTING.md](../../CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/fitzzero/quickdraw/blob/dev/CONTRIBUTING.md).
 
 ```bash
 bun install
