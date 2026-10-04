@@ -139,10 +139,17 @@ the committed `.claude/` links; CI runs it. In `examples/godot`:
 Husky hooks: pre-commit runs `bun run format:check`; pre-push runs
 `bun run typecheck && bun run lint`. Node 24 (`.nvmrc`, `engines`).
 CI (`.github/workflows/ci.yml`) runs the `quickdraw-skills link --check`,
-the protocol document's `--check`, lint, format:check, typecheck, build
-(plus the dist smoke test, publint and arethetypeswrong), test, the Godot
-check (`godot` job, the official Godot build) and a secret scan on every pull
-request, whatever its base branch, and on pushes to `main` and `dev`.
+`protocol:check` (in `packages/core`), lint, format:check, typecheck, build
+(plus the dist smoke test, publint and arethetypeswrong), test and a secret
+scan on every pull request, whatever its base branch, and on pushes to `main`
+and `dev`. Two more jobs are path-gated on pull requests (a `*-changes` job
+decides; on pushes they always run, and a skipped one counts as passed): the
+`godot` job runs `check:godot` with the official Godot build when a pull
+request touches `examples/godot`, core's protocol, realtime, transport or
+testing code, `docs/protocol-v5.md`, the dependencies or the workflow; the
+`cluster` job runs `test:cluster` behind a Valkey service when it touches
+core's sources or tests, its vitest config or manifest, the lockfile, the
+root `package.json` or `tsconfig.base.json`, or the workflow.
 
 ## Linting
 

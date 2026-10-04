@@ -103,7 +103,8 @@ and the one that sends must make the joining call
   client headless in Godot through [`test/smoke.gd`](test/smoke.gd). It
   passes when the script's checks hold and the client wrote exactly the
   frames of `test/frames.ts`. CI's `godot` job runs it with the official
-  Godot 4.7.2 build.
+  Godot 4.7.2 build, on every push and on a pull request that touches the
+  client, the wire's code or `docs/protocol-v5.md`.
 
 To watch a session, run the script against a server of your own that
 serves `test/game.ts`'s service:

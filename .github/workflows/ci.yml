@@ -193,11 +193,46 @@ jobs:
       - name: Test scripts/release-tag.sh
         run: bash scripts/release-tag.test.sh
 
+  # Whether the godot job has anything to prove: on pushes and manual runs
+  # always, on a pull request only when it touches the GDScript client, the
+  # wire (the protocol sources, the realtime and transport code, the protocol
+  # document they generate), the test app the client runs against, the
+  # dependencies or this workflow.
+  godot-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The pull request's changes are its merge commit against its base.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          paths='^(examples/godot/|packages/core/src/(protocol|server/realtime|server/transports|testing)/|packages/core/package\.json|docs/protocol-v5\.md|bun\.lock|package\.json|\.github/workflows/ci\.yml)'
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BASE" HEAD | grep -qE "$paths"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # The GDScript reference client (examples/godot), run by Godot itself against
   # a real server: the session of examples/godot/test/smoke.gd, whose frames
   # the Node wire test (in `test`) writes too. The official Godot build,
-  # checked against the SHA-512 Godot publishes for it.
+  # checked against the SHA-512 Godot publishes for it. Skipped when
+  # godot-changes finds nothing to prove, which a required check counts as
+  # passed.
   godot:
+    needs: godot-changes
+    if: needs.godot-changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -234,8 +269,10 @@ jobs:
         run: bun run check:godot
 
   # Whether the cluster job has anything to prove: on pushes and manual runs
-  # always, on a pull request only when it touches the server, the cluster
-  # tests, the suites they run or this workflow.
+  # always, on a pull request only when it touches core's sources or tests
+  # (the cluster projects run the server, client, testing, prisma, protocol
+  # and contract code, and the test schema), its vitest config or manifest,
+  # the lockfile, the root manifest or tsconfig, or this workflow.
   cluster-changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -253,7 +290,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          paths='^(packages/core/(src/server/|test/(cluster|e2e|fixtures)/|vitest\.config\.ts|package\.json)|\.github/workflows/ci\.yml)'
+          paths='^(packages/core/(src|test)/|packages/core/(vitest\.config\.ts|package\.json)|bun\.lock|package\.json|tsconfig\.base\.json|\.github/workflows/ci\.yml)'
           if [ "$EVENT" != "pull_request" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "$BASE" HEAD | grep -qE "$paths"; then
