@@ -4,7 +4,7 @@ import { QUICKDRAW_VERSION } from "./index";
 
 describe("QUICKDRAW_VERSION", () => {
   it("is the 5.0 release candidate version", () => {
-    expect(QUICKDRAW_VERSION).toBe("5.0.0-rc.2");
+    expect(QUICKDRAW_VERSION).toBe("5.0.0-rc.3");
   });
 
   it("matches the package.json version", () => {
