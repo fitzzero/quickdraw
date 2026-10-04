@@ -4,6 +4,7 @@
 // `oxlint.base.jsonc` turns on the rules about the 5.0 API; `oxlint.template.jsonc`
 // adds the design-system rules for apps built from the quickdraw template.
 
+/* oxlint-disable import/max-dependencies -- the plugin's entry imports every rule */
 import { UNUSED_RULE, withBaseline } from "./baseline.mjs";
 import noAwaitVoidMutate from "./rules/no-await-void-mutate.mjs";
 import noCrossServiceInternalImports from "./rules/no-cross-service-internal-imports.mjs";

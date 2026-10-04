@@ -37,6 +37,196 @@ const KEY_HELPERS = new Set([
 ]);
 const QUICKDRAW = /^@fitzzero\/quickdraw-core(?:\/client|\/utils)?$/;
 
+// The rule's state for one file, `state` below: `{ context, clients, keyHelpers }`,
+// the typed client's names and the key helpers the file imports from quickdraw.
+
+/** Whether `node` calls one of the typed client's `hooks`: `qd.task.get.useQuery(...)`. */
+function isHookCall(state, node, hooks) {
+  const call = unwrap(node);
+  if (call?.type !== "CallExpression") {
+    return false;
+  }
+  const names = chainNames(call.callee);
+  return state.clients.has(names[0]) && hooks.has(names.at(-1));
+}
+
+/** Whether `node` is (or names a variable declared from) a call to one of `hooks`. */
+function fromHook(state, node, hooks) {
+  const value = unwrap(node);
+  if (isHookCall(state, value, hooks)) {
+    return true;
+  }
+  if (value?.type !== "Identifier") {
+    return false;
+  }
+  const definition = resolveVariable(state.context, value)?.defs[0];
+  return (
+    definition?.type === "Variable" &&
+    definition.node.init !== null &&
+    isHookCall(state, definition.node.init, hooks)
+  );
+}
+
+/** The `refetch()` call of a quickdraw query in `expression`, if it is one. */
+function quickdrawRefetch(state, expression) {
+  let call = unwrap(expression);
+  if (call?.type === "AwaitExpression") {
+    call = unwrap(call.argument);
+  }
+  if (call?.type !== "CallExpression") {
+    return undefined;
+  }
+  const callee = unwrap(call.callee);
+  if (callee.type === "Identifier" && callee.name === "refetch") {
+    return fromHook(state, callee, QUERY_HOOKS) ? call : undefined;
+  }
+  if (callee.type === "MemberExpression" && memberName(callee) === "refetch") {
+    return fromHook(state, callee.object, QUERY_HOOKS) ? call : undefined;
+  }
+  return undefined;
+}
+
+/** Whether `expression` awaits a quickdraw mutation's `mutateAsync(...)`. */
+function awaitsMutateAsync(state, expression) {
+  const awaited = unwrap(expression);
+  if (awaited?.type !== "AwaitExpression") {
+    return false;
+  }
+  const call = unwrap(awaited.argument);
+  const callee = call?.type === "CallExpression" ? unwrap(call.callee) : undefined;
+  return (
+    callee?.type === "MemberExpression" &&
+    memberName(callee) === "mutateAsync" &&
+    fromHook(state, callee.object, MUTATION_HOOKS)
+  );
+}
+
+/** Whether a statement awaits a quickdraw mutation's `mutateAsync(...)`. */
+function awaitsMutation(state, statement) {
+  if (statement.type === "ExpressionStatement") {
+    return awaitsMutateAsync(state, statement.expression);
+  }
+  return (
+    statement.type === "VariableDeclaration" &&
+    statement.declarations.some((declarator) => awaitsMutateAsync(state, declarator.init))
+  );
+}
+
+/** Reports a quickdraw query's `refetch()` in the statement right after an awaited mutation. */
+function checkStatements(state, statements) {
+  for (let index = 1; index < statements.length; index += 1) {
+    const next = statements[index];
+    if (next.type === "ExpressionStatement" && awaitsMutation(state, statements[index - 1])) {
+      const refetch = quickdrawRefetch(state, next.expression);
+      if (refetch !== undefined) {
+        state.context.report({ node: refetch, messageId: "refetchAfterMutation" });
+      }
+    }
+  }
+}
+
+/** Whether a call takes mutation callbacks: a quickdraw `useMutation(...)` or a quickdraw mutation's `mutate(...)`. */
+function takesMutationCallbacks(state, call) {
+  if (isHookCall(state, call, MUTATION_HOOKS)) {
+    return true;
+  }
+  const callee = unwrap(call.callee);
+  return (
+    callee.type === "MemberExpression" &&
+    MUTATE_METHODS.has(memberName(callee)) &&
+    fromHook(state, callee.object, MUTATION_HOOKS)
+  );
+}
+
+/** Reports a quickdraw query's `refetch()` inside a callback function. */
+function checkCallback(state, callback) {
+  walk(state.context, callback, (node) => {
+    const refetch = node.type === "CallExpression" ? quickdrawRefetch(state, node) : undefined;
+    if (refetch !== undefined) {
+      state.context.report({ node: refetch, messageId: "refetchAfterMutation" });
+    }
+  });
+}
+
+/** Reports a refetch in a mutation's `onSuccess` or `onSettled`. */
+function checkCallbacks(state, call) {
+  const objects = call.arguments
+    .map((argument) => unwrap(argument))
+    .filter((object) => object.type === "ObjectExpression");
+  for (const object of objects) {
+    for (const name of ["onSuccess", "onSettled"]) {
+      const callback = getProperty(object, name);
+      if (callback !== undefined && isFunction(unwrap(callback.value))) {
+        checkCallback(state, callback.value);
+      }
+    }
+  }
+}
+
+/** Whether an array key starts with `"qd"` or a key helper. */
+function startsQuickdrawKey(state, array) {
+  const head = array.elements[0];
+  const first = head === null || head === undefined ? undefined : unwrap(head);
+  return (
+    first !== undefined &&
+    (staticString(first) === "qd" ||
+      (first.type === "Identifier" && state.keyHelpers.has(first.name)))
+  );
+}
+
+/** Whether `value` is a quickdraw key: `["qd", ...]`, a key helper's, or `qd.<service>.<method>.key(...)`. */
+function isQuickdrawKey(state, value) {
+  const node = unwrap(value);
+  if (node.type === "ArrayExpression") {
+    return startsQuickdrawKey(state, node);
+  }
+  if (node.type !== "CallExpression") {
+    return false;
+  }
+  const callee = unwrap(node.callee);
+  if (callee.type === "Identifier") {
+    return state.keyHelpers.has(callee.name);
+  }
+  const names = chainNames(callee);
+  return state.clients.has(names[0]) && names.at(-1) === "key";
+}
+
+/** The key a cache method's filter names: `{ queryKey }`, or the key itself. */
+function keyOf(filter) {
+  const node = filter === undefined ? undefined : unwrap(filter);
+  if (node?.type === "ObjectExpression") {
+    return getProperty(node, "queryKey")?.value;
+  }
+  return node;
+}
+
+/** Reports `invalidateQueries`, `refetchQueries` or `resetQueries` on a quickdraw key. */
+function checkCacheCall(state, node) {
+  const callee = unwrap(node.callee);
+  const method = callee.type === "MemberExpression" ? memberName(callee) : undefined;
+  const key = CACHE_METHODS.has(method) ? keyOf(node.arguments[0]) : undefined;
+  if (key !== undefined && isQuickdrawKey(state, key)) {
+    state.context.report({ node, messageId: "invalidateKey", data: { method } });
+  }
+}
+
+/** Remembers the key helpers an import from quickdraw brings in. */
+function collectKeyHelpers(state, node) {
+  if (!QUICKDRAW.test(node.source.value)) {
+    return;
+  }
+  for (const specifier of node.specifiers) {
+    if (specifier.type !== "ImportSpecifier") {
+      continue;
+    }
+    const name =
+      specifier.imported.type === "Identifier" ? specifier.imported.name : specifier.imported.value;
+    if (KEY_HELPERS.has(name)) {
+      state.keyHelpers.add(specifier.local.name);
+    }
+  }
+}
+
 /** @type {import('eslint').Rule.RuleModule} */
 export default {
   meta: {
@@ -73,189 +263,16 @@ export default {
     if (!inClientScope(context, options)) {
       return {};
     }
-    const clients = new Set(options.clients ?? ["qd"]);
-    const keyHelpers = new Set();
-
-    /** Whether `node` calls one of the typed client's `hooks`: `qd.task.get.useQuery(...)`. */
-    const isHookCall = (node, hooks) => {
-      const call = unwrap(node);
-      if (call?.type !== "CallExpression") {
-        return false;
-      }
-      const names = chainNames(call.callee);
-      return clients.has(names[0]) && hooks.has(names.at(-1));
-    };
-
-    /** Whether `node` is (or names a variable declared from) a call to one of `hooks`. */
-    const fromHook = (node, hooks) => {
-      const value = unwrap(node);
-      if (isHookCall(value, hooks)) {
-        return true;
-      }
-      if (value?.type !== "Identifier") {
-        return false;
-      }
-      const definition = resolveVariable(context, value)?.defs[0];
-      return (
-        definition?.type === "Variable" &&
-        definition.node.init !== null &&
-        isHookCall(definition.node.init, hooks)
-      );
-    };
-
-    /** The `refetch()` call of a quickdraw query in `expression`, if it is one. */
-    const quickdrawRefetch = (expression) => {
-      let call = unwrap(expression);
-      if (call?.type === "AwaitExpression") {
-        call = unwrap(call.argument);
-      }
-      if (call?.type !== "CallExpression") {
-        return undefined;
-      }
-      const callee = unwrap(call.callee);
-      if (callee.type === "Identifier" && callee.name === "refetch") {
-        return fromHook(callee, QUERY_HOOKS) ? call : undefined;
-      }
-      if (callee.type === "MemberExpression" && memberName(callee) === "refetch") {
-        return fromHook(callee.object, QUERY_HOOKS) ? call : undefined;
-      }
-      return undefined;
-    };
-
-    /** Whether a statement awaits a quickdraw mutation's `mutateAsync(...)`. */
-    const awaitsMutation = (statement) => {
-      let expressions = [];
-      if (statement.type === "ExpressionStatement") {
-        expressions = [statement.expression];
-      } else if (statement.type === "VariableDeclaration") {
-        expressions = statement.declarations.map((declarator) => declarator.init);
-      }
-      return expressions.some((expression) => {
-        const awaited = unwrap(expression);
-        if (awaited?.type !== "AwaitExpression") {
-          return false;
-        }
-        const call = unwrap(awaited.argument);
-        const callee = call?.type === "CallExpression" ? unwrap(call.callee) : undefined;
-        return (
-          callee?.type === "MemberExpression" &&
-          memberName(callee) === "mutateAsync" &&
-          fromHook(callee.object, MUTATION_HOOKS)
-        );
-      });
-    };
-
-    const checkStatements = (statements) => {
-      for (let index = 1; index < statements.length; index += 1) {
-        const next = statements[index];
-        if (next.type === "ExpressionStatement" && awaitsMutation(statements[index - 1])) {
-          const refetch = quickdrawRefetch(next.expression);
-          if (refetch !== undefined) {
-            context.report({ node: refetch, messageId: "refetchAfterMutation" });
-          }
-        }
-      }
-    };
-
-    /** Whether a call takes mutation callbacks: a quickdraw `useMutation(...)` or a quickdraw mutation's `mutate(...)`. */
-    const takesMutationCallbacks = (call) => {
-      if (isHookCall(call, MUTATION_HOOKS)) {
-        return true;
-      }
-      const callee = unwrap(call.callee);
-      return (
-        callee.type === "MemberExpression" &&
-        MUTATE_METHODS.has(memberName(callee)) &&
-        fromHook(callee.object, MUTATION_HOOKS)
-      );
-    };
-
-    const checkCallbacks = (call) => {
-      for (const argument of call.arguments) {
-        const object = unwrap(argument);
-        if (object.type !== "ObjectExpression") {
-          continue;
-        }
-        for (const name of ["onSuccess", "onSettled"]) {
-          const callback = getProperty(object, name);
-          if (callback === undefined || !isFunction(unwrap(callback.value))) {
-            continue;
-          }
-          walk(context, callback.value, (node) => {
-            const refetch = node.type === "CallExpression" ? quickdrawRefetch(node) : undefined;
-            if (refetch !== undefined) {
-              context.report({ node: refetch, messageId: "refetchAfterMutation" });
-            }
-          });
-        }
-      }
-    };
-
-    const isQuickdrawKey = (value) => {
-      const node = unwrap(value);
-      if (node.type === "ArrayExpression") {
-        const first =
-          node.elements[0] === null || node.elements[0] === undefined
-            ? undefined
-            : unwrap(node.elements[0]);
-        return (
-          first !== undefined &&
-          (staticString(first) === "qd" ||
-            (first.type === "Identifier" && keyHelpers.has(first.name)))
-        );
-      }
-      if (node.type !== "CallExpression") {
-        return false;
-      }
-      const callee = unwrap(node.callee);
-      if (callee.type === "Identifier") {
-        return keyHelpers.has(callee.name);
-      }
-      const names = chainNames(callee);
-      return clients.has(names[0]) && names.at(-1) === "key";
-    };
-
-    const keyOf = (filter) => {
-      const node = filter === undefined ? undefined : unwrap(filter);
-      if (node?.type === "ObjectExpression") {
-        return getProperty(node, "queryKey")?.value;
-      }
-      return node;
-    };
-
+    const state = { context, clients: new Set(options.clients ?? ["qd"]), keyHelpers: new Set() };
     return {
-      ImportDeclaration(node) {
-        if (!QUICKDRAW.test(node.source.value)) {
-          return;
-        }
-        for (const specifier of node.specifiers) {
-          if (specifier.type === "ImportSpecifier") {
-            const name =
-              specifier.imported.type === "Identifier"
-                ? specifier.imported.name
-                : specifier.imported.value;
-            if (KEY_HELPERS.has(name)) {
-              keyHelpers.add(specifier.local.name);
-            }
-          }
-        }
-      },
-      Program(node) {
-        checkStatements(node.body);
-      },
-      BlockStatement(node) {
-        checkStatements(node.body);
-      },
+      ImportDeclaration: (node) => collectKeyHelpers(state, node),
+      Program: (node) => checkStatements(state, node.body),
+      BlockStatement: (node) => checkStatements(state, node.body),
       CallExpression(node) {
-        if (takesMutationCallbacks(node)) {
-          checkCallbacks(node);
-          return;
-        }
-        const callee = unwrap(node.callee);
-        const method = callee.type === "MemberExpression" ? memberName(callee) : undefined;
-        const key = CACHE_METHODS.has(method) ? keyOf(node.arguments[0]) : undefined;
-        if (key !== undefined && isQuickdrawKey(key)) {
-          context.report({ node, messageId: "invalidateKey", data: { method } });
+        if (takesMutationCallbacks(state, node)) {
+          checkCallbacks(state, node);
+        } else {
+          checkCacheCall(state, node);
         }
       },
     };

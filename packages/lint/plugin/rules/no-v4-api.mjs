@@ -316,13 +316,22 @@ export const REMOVED_MEMBERS = Object.freeze({
   ...each(["getProtectedFields", "hasElevatedAccess"], FIELD_TIERS),
 });
 
-/** 4.x option keys, with what replaces each. */
-export const REMOVED_OPTIONS = Object.freeze({
-  invalidateOn:
-    "Give the query a `watch` in its contract (`query({ input, output, watch: { collection, scope } })`): it is refetched when that scope changes.",
-  hasEntryACL:
-    'Declare the row policy in `qd.defineService(contract, { access: jsonAcl("acl", { owner: "ownerId" }) })`.',
-});
+/**
+ * 4.x option keys, with what replaces each. Built from entries, since an
+ * object literal with these keys is what this rule reports.
+ */
+export const REMOVED_OPTIONS = Object.freeze(
+  Object.fromEntries([
+    [
+      "invalidateOn",
+      "Give the query a `watch` in its contract (`query({ input, output, watch: { collection, scope } })`): it is refetched when that scope changes.",
+    ],
+    [
+      "hasEntryACL",
+      'Declare the row policy in `qd.defineService(contract, { access: jsonAcl("acl", { owner: "ownerId" }) })`.',
+    ],
+  ]),
+);
 
 /** 4.x `QuickdrawProvider` props, with what replaces each. */
 export const REMOVED_PROVIDER_PROPS = Object.freeze({
@@ -355,6 +364,131 @@ function elementName(node) {
   return node.type === "JSXMemberExpression" ? node.property.name : undefined;
 }
 
+/** Reports a removed entry point named by `sourceNode`, a string literal. */
+function checkEntry(context, sourceNode) {
+  const source = sourceNode?.type === "Literal" ? sourceNode.value : undefined;
+  if (typeof source !== "string" || !Object.hasOwn(REMOVED_ENTRIES, source)) {
+    return false;
+  }
+  context.report({
+    node: sourceNode,
+    messageId: "removedEntry",
+    data: { source, replacement: REMOVED_ENTRIES[source] },
+  });
+  return true;
+}
+
+/** Reports the removed and moved names an import or re-export from `source` names. */
+function checkSpecifier(context, specifier, source) {
+  const name =
+    specifier.type === "ImportSpecifier" ? importedName(specifier) : exportedLocal(specifier);
+  const moved = MOVED_NAMES[source] ?? {};
+  if (Object.hasOwn(REMOVED_NAMES, name)) {
+    context.report({
+      node: specifier,
+      messageId: "removedName",
+      data: { name, replacement: REMOVED_NAMES[name] },
+    });
+  } else if (Object.hasOwn(moved, name)) {
+    context.report({
+      node: specifier,
+      messageId: "movedName",
+      data: { name, source, replacement: moved[name] },
+    });
+  }
+}
+
+/** An import or re-export from quickdraw: its entry point, then each name; namespaces are kept. */
+function checkImport(context, namespaces, node) {
+  const source = node.source.value;
+  if (typeof source !== "string" || !CORE.test(source) || checkEntry(context, node.source)) {
+    return;
+  }
+  for (const specifier of node.specifiers ?? []) {
+    if (specifier.type === "ImportNamespaceSpecifier") {
+      namespaces.add(specifier.local.name);
+    } else if (specifier.type === "ImportSpecifier" || specifier.type === "ExportSpecifier") {
+      checkSpecifier(context, specifier, source);
+    }
+  }
+}
+
+/** A call of a 4.x service method on any receiver: `this.defineMethod(...)`. */
+function checkMember(context, node) {
+  const callee = unwrap(node.callee);
+  const name = callee.type === "MemberExpression" ? memberName(callee) : undefined;
+  if (name !== undefined && Object.hasOwn(REMOVED_MEMBERS, name)) {
+    context.report({
+      node: callee.property,
+      messageId: "removedMember",
+      data: { name, replacement: REMOVED_MEMBERS[name] },
+    });
+  }
+}
+
+/** A 4.x option key in an object literal. */
+function checkOption(context, node) {
+  const name = keyName(node);
+  if (
+    name !== undefined &&
+    Object.hasOwn(REMOVED_OPTIONS, name) &&
+    node.parent?.type === "ObjectExpression"
+  ) {
+    context.report({
+      node: node.key,
+      messageId: "removedOption",
+      data: { name, replacement: REMOVED_OPTIONS[name] },
+    });
+  }
+}
+
+/** A removed name reached through a namespace import: `server.BaseService`. */
+function checkNamespaceMember(context, namespaces, node) {
+  const object = unwrap(node.object);
+  const name = memberName(node);
+  if (
+    object.type === "Identifier" &&
+    namespaces.has(object.name) &&
+    Object.hasOwn(REMOVED_NAMES, name)
+  ) {
+    context.report({
+      node,
+      messageId: "removedName",
+      data: { name, replacement: REMOVED_NAMES[name] },
+    });
+  }
+}
+
+/** `declare module "@fitzzero/quickdraw-core" { interface QuickdrawEventMap ... }`. */
+function checkEventMap(context, node) {
+  if (node.id.name !== "QuickdrawEventMap") {
+    return;
+  }
+  const declaration = context.sourceCode
+    .getAncestors(node)
+    .find((ancestor) => ancestor.type === "TSModuleDeclaration");
+  if (declaration?.id.type === "Literal" && CORE.test(declaration.id.value)) {
+    context.report({ node: node.id, messageId: "eventMap" });
+  }
+}
+
+/** A 4.x prop of `<QuickdrawProvider>`. */
+function checkProviderProps(context, node) {
+  if (elementName(node.name) !== "QuickdrawProvider") {
+    return;
+  }
+  for (const attribute of node.attributes) {
+    const name = attribute.type === "JSXAttribute" ? attribute.name.name : undefined;
+    if (typeof name === "string" && Object.hasOwn(REMOVED_PROVIDER_PROPS, name)) {
+      context.report({
+        node: attribute,
+        messageId: "removedProp",
+        data: { name, replacement: REMOVED_PROVIDER_PROPS[name] },
+      });
+    }
+  }
+}
+
 /** @type {import('eslint').Rule.RuleModule} */
 export default {
   meta: {
@@ -378,140 +512,20 @@ export default {
   },
   create(context) {
     const namespaces = new Set();
-
-    const checkImport = (node) => {
-      const source = node.source.value;
-      if (typeof source !== "string" || !CORE.test(source)) {
-        return;
-      }
-      if (Object.hasOwn(REMOVED_ENTRIES, source)) {
-        context.report({
-          node: node.source,
-          messageId: "removedEntry",
-          data: { source, replacement: REMOVED_ENTRIES[source] },
-        });
-        return;
-      }
-      const moved = MOVED_NAMES[source] ?? {};
-      for (const specifier of node.specifiers ?? []) {
-        if (specifier.type === "ImportNamespaceSpecifier") {
-          namespaces.add(specifier.local.name);
-          continue;
-        }
-        if (specifier.type !== "ImportSpecifier" && specifier.type !== "ExportSpecifier") {
-          continue;
-        }
-        const name =
-          specifier.type === "ImportSpecifier" ? importedName(specifier) : exportedLocal(specifier);
-        if (Object.hasOwn(REMOVED_NAMES, name)) {
-          context.report({
-            node: specifier,
-            messageId: "removedName",
-            data: { name, replacement: REMOVED_NAMES[name] },
-          });
-        } else if (Object.hasOwn(moved, name)) {
-          context.report({
-            node: specifier,
-            messageId: "movedName",
-            data: { name, source, replacement: moved[name] },
-          });
-        }
-      }
-    };
-
     return {
-      ImportDeclaration: checkImport,
+      ImportDeclaration: (node) => checkImport(context, namespaces, node),
       ExportNamedDeclaration(node) {
         if (node.source !== null) {
-          checkImport(node);
+          checkImport(context, namespaces, node);
         }
       },
-      ExportAllDeclaration(node) {
-        const source = node.source.value;
-        if (Object.hasOwn(REMOVED_ENTRIES, source)) {
-          context.report({
-            node: node.source,
-            messageId: "removedEntry",
-            data: { source, replacement: REMOVED_ENTRIES[source] },
-          });
-        }
-      },
-      ImportExpression(node) {
-        const source = node.source.type === "Literal" ? node.source.value : undefined;
-        if (typeof source === "string" && Object.hasOwn(REMOVED_ENTRIES, source)) {
-          context.report({
-            node: node.source,
-            messageId: "removedEntry",
-            data: { source, replacement: REMOVED_ENTRIES[source] },
-          });
-        }
-      },
-      CallExpression(node) {
-        const callee = unwrap(node.callee);
-        const name = callee.type === "MemberExpression" ? memberName(callee) : undefined;
-        if (name !== undefined && Object.hasOwn(REMOVED_MEMBERS, name)) {
-          context.report({
-            node: callee.property,
-            messageId: "removedMember",
-            data: { name, replacement: REMOVED_MEMBERS[name] },
-          });
-        }
-      },
-      Property(node) {
-        const name = keyName(node);
-        if (
-          name !== undefined &&
-          Object.hasOwn(REMOVED_OPTIONS, name) &&
-          node.parent?.type === "ObjectExpression"
-        ) {
-          context.report({
-            node: node.key,
-            messageId: "removedOption",
-            data: { name, replacement: REMOVED_OPTIONS[name] },
-          });
-        }
-      },
-      MemberExpression(node) {
-        const object = unwrap(node.object);
-        const name = memberName(node);
-        if (
-          object.type === "Identifier" &&
-          namespaces.has(object.name) &&
-          Object.hasOwn(REMOVED_NAMES, name)
-        ) {
-          context.report({
-            node,
-            messageId: "removedName",
-            data: { name, replacement: REMOVED_NAMES[name] },
-          });
-        }
-      },
-      TSInterfaceDeclaration(node) {
-        if (node.id.name !== "QuickdrawEventMap") {
-          return;
-        }
-        const module = context.sourceCode
-          .getAncestors(node)
-          .find((ancestor) => ancestor.type === "TSModuleDeclaration");
-        if (module?.id.type === "Literal" && CORE.test(module.id.value)) {
-          context.report({ node: node.id, messageId: "eventMap" });
-        }
-      },
-      JSXOpeningElement(node) {
-        if (elementName(node.name) !== "QuickdrawProvider") {
-          return;
-        }
-        for (const attribute of node.attributes) {
-          const name = attribute.type === "JSXAttribute" ? attribute.name.name : undefined;
-          if (typeof name === "string" && Object.hasOwn(REMOVED_PROVIDER_PROPS, name)) {
-            context.report({
-              node: attribute,
-              messageId: "removedProp",
-              data: { name, replacement: REMOVED_PROVIDER_PROPS[name] },
-            });
-          }
-        }
-      },
+      ExportAllDeclaration: (node) => checkEntry(context, node.source),
+      ImportExpression: (node) => checkEntry(context, node.source),
+      CallExpression: (node) => checkMember(context, node),
+      Property: (node) => checkOption(context, node),
+      MemberExpression: (node) => checkNamespaceMember(context, namespaces, node),
+      TSInterfaceDeclaration: (node) => checkEventMap(context, node),
+      JSXOpeningElement: (node) => checkProviderProps(context, node),
     };
   },
 };

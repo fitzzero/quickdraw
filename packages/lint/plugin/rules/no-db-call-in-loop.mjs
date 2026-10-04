@@ -61,23 +61,26 @@ function loopNames(context, loop) {
   return names;
 }
 
+/** Whether `argument` holds an `in:` filter whose value mentions one of `names`. */
+function hasSetFilter(context, argument, names) {
+  let found = false;
+  walk(context, argument, (node) => {
+    if (
+      node.type === "Property" &&
+      keyName(node) === "in" &&
+      mentions(context, node.value, names)
+    ) {
+      found = true;
+    }
+    return !found;
+  });
+  return found;
+}
+
 /** Whether a call's arguments filter by the loop's own set (`{ in: chunk }`). */
 function filtersByLoopSet(context, call, loop) {
   const names = loopNames(context, loop);
-  let found = false;
-  for (const argument of call.args) {
-    walk(context, argument, (node) => {
-      if (
-        node.type === "Property" &&
-        keyName(node) === "in" &&
-        mentions(context, node.value, names)
-      ) {
-        found = true;
-      }
-      return !found;
-    });
-  }
-  return found;
+  return call.args.some((argument) => hasSetFilter(context, argument, names));
 }
 
 /** The node `node` is the value of, past parentheses and type assertions. */

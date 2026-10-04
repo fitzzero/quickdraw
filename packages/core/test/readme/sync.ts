@@ -1,10 +1,12 @@
 // `bun run readme:sync` (in packages/core): rewrites the code examples of the
 // README and the quickdraw-new-service skill from their sources in this
-// directory (see examples.ts). Run it after changing an example, then
-// `bun run format`.
+// directory (see examples.ts), then the copies of the README and the LICENSE
+// the packages ship (see packageFiles.ts). Run it after changing an example
+// or the README, then `bun run format`.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { DOCUMENTS, documentPath, syncDocument } from "./examples";
+import { PACKAGE_FILES, packageFileText } from "./packageFiles";
 
 for (const document of DOCUMENTS) {
   const path = documentPath(document);
@@ -13,5 +15,14 @@ for (const document of DOCUMENTS) {
   if (synced !== text) {
     writeFileSync(path, synced);
     process.stdout.write(`readme:sync: rewrote the examples of ${document}\n`);
+  }
+}
+
+for (const file of PACKAGE_FILES) {
+  const path = documentPath(file.path);
+  const text = packageFileText(file);
+  if (!existsSync(path) || readFileSync(path, "utf8") !== text) {
+    writeFileSync(path, text);
+    process.stdout.write(`readme:sync: wrote ${file.path} from ${file.from}\n`);
   }
 }

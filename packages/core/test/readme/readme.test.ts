@@ -3,7 +3,7 @@
 // (see examples.ts). This checks every copy, and that no TypeScript block
 // in them is anything but a copy.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   checkDocument,
@@ -13,6 +13,7 @@ import {
   sourceOf,
   syncDocument,
 } from "./examples";
+import { fromPackageDirectory, PACKAGE_FILES, packageFileText } from "./packageFiles";
 
 describe.each(DOCUMENTS)("the examples of %s", (document) => {
   const text = readFileSync(documentPath(document), "utf8");
@@ -71,5 +72,25 @@ describe("example copies", () => {
     expect(sourceOf("apps/api/src/jobs/overdue.ts", undefined)).not.toContain("#region");
     expect(sourceOf("apps/api/src/missing.ts", undefined)).toBeUndefined();
     expect(sourceOf("apps/api/src/db.ts", "nowhere")).toBeUndefined();
+  });
+});
+
+describe("the files the packages ship beside their code", () => {
+  it.each(PACKAGE_FILES.map((file) => [file.path, file] as const))(
+    "%s is a copy of the repo's (run bun run readme:sync in packages/core)",
+    (path, file) => {
+      expect(existsSync(documentPath(path))).toBe(true);
+      expect(readFileSync(documentPath(path), "utf8")).toBe(packageFileText(file));
+    },
+  );
+
+  it("make the README's relative links relative to the package directory", () => {
+    expect(
+      fromPackageDirectory(
+        "[a](docs/x.md) [b](packages/lint) [c](https://x.dev/y) [d](#install) [e](/abs) [f](mailto:a@b.c)",
+      ),
+    ).toBe(
+      "[a](../../docs/x.md) [b](../../packages/lint) [c](https://x.dev/y) [d](#install) [e](/abs) [f](mailto:a@b.c)",
+    );
   });
 });

@@ -170,22 +170,24 @@ export function walk(context, root, visit) {
   const pending = [root];
   while (pending.length > 0) {
     const node = pending.pop();
-    if (visit(node) === false) {
-      continue;
+    if (visit(node) !== false) {
+      pending.push(...childrenOf(node, keys[node.type] ?? []));
     }
-    for (const key of keys[node.type] ?? []) {
-      const child = node[key];
-      if (Array.isArray(child)) {
-        for (const item of child) {
-          if (item !== null && typeof item === "object" && typeof item.type === "string") {
-            pending.push(item);
-          }
-        }
-      } else if (child !== null && typeof child === "object" && typeof child.type === "string") {
-        pending.push(child);
+  }
+}
+
+/** The nodes under `node`'s `keys`, in key order (an array key's items in order). */
+function childrenOf(node, keys) {
+  const children = [];
+  for (const key of keys) {
+    const child = node[key];
+    for (const item of Array.isArray(child) ? child : [child]) {
+      if (item !== null && typeof item === "object" && typeof item.type === "string") {
+        children.push(item);
       }
     }
   }
+  return children;
 }
 
 /** Whether `root` mentions an identifier named one of `names`. */

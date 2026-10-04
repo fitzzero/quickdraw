@@ -38,7 +38,8 @@ bench/           # load harness (private workspace) + bench/apps/* + committed b
                  #   a release tool, not a CI gate (bench/README.md, docs/benchmarks.md)
 docs/rfcs/       # design records; 0003-v5.md is the 5.0 design
 README.md        # the core package's README (5.0); its code examples are copies
-                 #   of packages/core/test/readme (see "README examples" below)
+                 #   of packages/core/test/readme (see "README examples" below);
+                 #   packages/core/README.md and each package's LICENSE are copies
 tsconfig.base.json  # shared compiler flags; each package's tsconfig.json extends it
 ```
 
@@ -87,7 +88,12 @@ layout that `bun run typecheck` compiles through
 `<!-- example: <file>[#region] -->` marker. Edit the source file, then run
 `bun run readme:sync` in `packages/core` and `bun run format`;
 `test/readme/readme.test.ts` fails on a stale copy or an unmarked
-TypeScript block. Vitest never runs the example app itself.
+TypeScript block. Vitest never runs the example app itself. The same
+command writes the copies the packages ship (`npm pack` adds a package's
+own README.md and LICENSE): `packages/core/README.md` (the root README with
+its relative links made relative to `packages/core`) and the `LICENSE` of
+core, lint and skills (`test/readme/packageFiles.ts`); the test checks them
+too, so run it after any README change.
 
 ## Commands (bun, never npm/pnpm)
 

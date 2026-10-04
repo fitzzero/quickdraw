@@ -36,6 +36,7 @@
     "access": "public"
   },
   "scripts": {
+    "lint": "oxlint -c ../../.oxlintrc.json plugin bin",
     "test": "vitest run"
   },
   "devDependencies": {
