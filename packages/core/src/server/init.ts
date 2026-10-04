@@ -11,7 +11,7 @@ import type { AnyContract } from "../contract/defineContract";
 import { QuickdrawError } from "../protocol/errors";
 import { buildService } from "./buildService";
 import { createCaller, type CallerFor } from "./caller";
-import type { BaseContext, ContextExtender, RunContext } from "./context";
+import type { BaseContext, ContextExtender, RunContext, RunOptions } from "./context";
 import { createServer, type QuickdrawServer, type ServerOptions } from "./createServer";
 import type { DefineService } from "./defineService";
 import {
@@ -20,6 +20,7 @@ import {
   type DispatcherCollections,
   type DispatcherOptions,
   type Presence,
+  type ServerRooms,
   type StreamHandle,
 } from "./dispatcher";
 import type { Service } from "./service";
@@ -70,7 +71,9 @@ export interface Quickdraw<T extends QuickdrawTypes> {
    * last, so the tracked writes of a job, script or webhook flush to its
    * sinks once `fn` settles, as a method's do (RFC 0003 section 5.1). Writes
    * made outside any unit of work still flush, on the next tick, with a
-   * development warning. Inside a method or a transaction, `fn` joins it.
+   * development warning. Inside a method or a transaction, `fn` joins it,
+   * unless `{ detached: true }` gives it a unit of its own: background work
+   * a handler starts and does not await (see {@link RunOptions}).
    * `fn` gets a {@link RunContext} (`{ touch, log, principal: null }`):
    * `ctx.touch` records the rows a raw SQL write changed.
    *
@@ -81,7 +84,7 @@ export interface Quickdraw<T extends QuickdrawTypes> {
    *   ctx.touch("task", ids);
    * });
    */
-  run<R>(fn: (ctx: RunContext) => R | PromiseLike<R>): Promise<R>;
+  run<R>(fn: (ctx: RunContext) => R | PromiseLike<R>, options?: RunOptions): Promise<R>;
   /**
    * The collections of the dispatcher this instance created last (RFC 0003
    * section 7): `qd.collections.reset(contract, collection, scope)` sends one
@@ -106,6 +109,16 @@ export interface Quickdraw<T extends QuickdrawTypes> {
    * dispatcher this instance created last: the same as `ctx.presence`.
    */
   readonly presence: Presence;
+  /**
+   * App rooms from code that is not a handler (RFC 0003 section 12.5), through
+   * the dispatcher this instance created last: a game loop's or a job's typed
+   * room events (`qd.rooms.emit(room, contract, event, payload)`,
+   * `emitToUser`), and `qd.rooms.leave(room, { userId })`, which takes every
+   * socket of the user out of the room on every node. The same as the
+   * socket-free half of `ctx.rooms`; using it before any dispatcher exists
+   * throws.
+   */
+  readonly rooms: ServerRooms;
   /**
    * Serves `services` over Socket.IO and HTTP on the app's Express app and
    * HTTP server (see `createServer`), and makes the server's dispatcher the
@@ -135,6 +148,7 @@ const NEEDS: Readonly<Record<string, string>> = Object.freeze({
   "qd.collections.reset": "send through",
   "qd.stream": "push through",
   "qd.presence": "ask",
+  "qd.rooms": "send through",
 });
 
 function noDispatcher(member: string): never {
@@ -190,6 +204,21 @@ function presenceOf(current: Current): Presence {
   });
 }
 
+/** `qd.rooms`: app rooms through the current dispatcher. */
+function roomsOf(current: Current): ServerRooms {
+  const rooms = (): ServerRooms => (current() ?? noDispatcher("qd.rooms")).rooms;
+  return Object.freeze({
+    emit: (...args: Parameters<ServerRooms["emit"]>) => {
+      rooms().emit(...args);
+    },
+    emitToUser: (...args: Parameters<ServerRooms["emitToUser"]>) => {
+      rooms().emitToUser(...args);
+    },
+    leave: async (room: string, target: Parameters<ServerRooms["leave"]>[1]) =>
+      await rooms().leave(room, target),
+  }) as ServerRooms;
+}
+
 /**
  * Starts a quickdraw app. The type argument states the app's types once:
  * the database client handlers receive, the principal type, the fields
@@ -218,7 +247,7 @@ export function initQuickdraw<T extends QuickdrawTypes = QuickdrawTypes>(
     },
     caller: (principal) =>
       createCaller(() => (current ?? noDispatcher("qd.caller")).call, principal) as CallerFor<T>,
-    run: async (fn) => await (current ?? noDispatcher("qd.run")).run(fn),
+    run: async (fn, options) => await (current ?? noDispatcher("qd.run")).run(fn, options),
     collections: Object.freeze({
       reset: (contract, collection, scope) => {
         (current ?? noDispatcher("qd.collections.reset")).collections.reset(
@@ -231,6 +260,7 @@ export function initQuickdraw<T extends QuickdrawTypes = QuickdrawTypes>(
     stream: <C extends AnyContract, K extends keyof C["streams"] & string>(contract: C, name: K) =>
       streamOf(() => current, contract, name) as unknown as StreamHandle<C, K>,
     presence: presenceOf(() => current),
+    rooms: roomsOf(() => current),
     createServer(options) {
       const server = createServer(options);
       current = server.dispatcher as Dispatcher;

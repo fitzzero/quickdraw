@@ -334,9 +334,11 @@ export type EventFrame<Payload = unknown> = readonly [s: string, event: string, 
  * Sent to a socket as it joins with `users`, the whole list (its own user
  * included); to the room's other sockets with `joined` when a user's first
  * socket joins, and with `left` when a user's last socket leaves; and to a
- * socket that leaves with `users: []`, since it no longer sees the room.
- * Exactly one of `users`, `joined` and `left` is present. Anonymous sockets
- * are in no list.
+ * socket that leaves with `users: []`, since it no longer sees the room. A
+ * socket the server took out of the room (`rooms.leave(room, { userId })`)
+ * gets that `users: []` unasked: it is out, and its channels requiring the
+ * room are dropped until a joining call lets it back. Exactly one of
+ * `users`, `joined` and `left` is present. Anonymous sockets are in no list.
  */
 export interface PresenceFrame {
   readonly room: string;

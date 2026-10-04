@@ -17,6 +17,7 @@ import type {
 import type { Logger } from "../../contract/logger";
 import type { StandardSchemaV1 } from "../../contract/standardSchema";
 import type { AccessForm } from "../access/types";
+import type { RunContext } from "../context";
 import type { Principal, PrincipalOf, QuickdrawTypes } from "../types";
 
 /**
@@ -41,12 +42,67 @@ export interface Presence {
   users(room: string): Promise<string[]>;
 }
 
+/** Whose sockets `rooms.leave(room, target)` takes out of a room: every socket of one user. */
+export interface RoomTarget {
+  readonly userId: string;
+}
+
+/**
+ * App rooms from code that is not a handler (a game loop, a job, a webhook):
+ * `qd.rooms`, `server.rooms` and `dispatcher.rooms`, the half of `ctx.rooms`
+ * that needs no calling socket. Behind a cluster adapter each reaches every
+ * node.
+ *
+ * @example
+ * // a game loop's tick, outside any handler
+ * qd.rooms.emit(WORLD_ROOM, gameContract, "death", { id: playerId });
+ * // a moderator removed a member: their sockets stop hearing the room
+ * await qd.rooms.leave(chatRoom(chatId), { userId });
+ */
+export interface ServerRooms {
+  /**
+   * Sends the contract's event to every socket in `room` as `qd:event`, on
+   * every node. The payload is checked against the event's schema first: a
+   * payload that fails it throws `INTERNAL` and nothing is sent. Without a
+   * server it does nothing more.
+   */
+  emit<C extends AnyContract, E extends EventName<C>>(
+    room: string,
+    contract: C,
+    event: E,
+    payload: EventPayloadOf<C, E>,
+  ): void;
+  /** `emit` to every socket of one user (their `user:{userId}` room), on every node. */
+  emitToUser<C extends AnyContract, E extends EventName<C>>(
+    userId: string,
+    contract: C,
+    event: E,
+    payload: EventPayloadOf<C, E>,
+  ): void;
+  /**
+   * Takes every socket of `target.userId` out of the app room `room`, on
+   * every node: they stop receiving the room's events and `qd:presence`
+   * frames, and a channel that `requires: { room }` drops their messages.
+   * Each socket taken out gets `qd:presence { room, users: [] }`, as after
+   * its own leave, and `onRoomLeave` hears of it with reason `"removed"`.
+   * Behind a cluster adapter the request is broadcast and answered: it
+   * resolves once every node took the user's sockets out (at most
+   * `cluster.timeoutMs`), so await it before emitting what the user must not
+   * receive. Room names are checked as `join` checks them (`VALIDATION`). A
+   * user with no socket in the room is nothing to do; joining again is the
+   * app's to refuse.
+   */
+  leave(room: string, target: RoomTarget): Promise<void>;
+}
+
 /**
  * `ctx.rooms` (RFC 0003 sections 3, 12.5 and 15): app-defined rooms the
  * calling socket joins and leaves, and typed room events. It replaces 4.1's
  * `emitToRoom` and `emitToUserRoom` (`legacy-src/server/BaseService.ts:378-441`).
+ * Everything that needs no calling socket is also on `qd.rooms`
+ * ({@link ServerRooms}).
  */
-export interface ContextRooms {
+export interface ContextRooms extends ServerRooms {
   /**
    * Puts the calling socket in an app-defined room (a lobby), so it receives
    * the room's events and `qd:presence` frames. Returns `false`, doing
@@ -59,26 +115,56 @@ export interface ContextRooms {
   join(room: string): boolean;
   /** Takes the calling socket out of an app room; `false` when it was not in it, or the call has no socket. */
   leave(room: string): boolean;
-  /**
-   * Sends the contract's event to every socket in `room` as `qd:event`. The
-   * payload is checked against the event's schema first: a payload that
-   * fails it throws `INTERNAL` and nothing is sent. Without a server it does
-   * nothing more.
-   */
-  emit<C extends AnyContract, E extends EventName<C>>(
-    room: string,
-    contract: C,
-    event: E,
-    payload: EventPayloadOf<C, E>,
-  ): void;
-  /** `emit` to every socket of one user (their `user:{userId}` room). */
-  emitToUser<C extends AnyContract, E extends EventName<C>>(
-    userId: string,
-    contract: C,
-    event: E,
-    payload: EventPayloadOf<C, E>,
-  ): void;
+  /** See {@link ServerRooms.leave}: every socket of the user, on every node, from any call. */
+  leave(room: string, target: RoomTarget): Promise<void>;
 }
+
+/** Why a socket left app rooms, as `onRoomLeave` hears it. */
+export type RoomLeaveReason =
+  /** The socket's own `ctx.rooms.leave(room)`. */
+  | "leave"
+  /** `rooms.leave(room, { userId })` took its user out. */
+  | "removed"
+  /** The socket disconnected (a closed tab, a lost network, `qd:rotate`, the server closing): every app room it was in. */
+  | "disconnect";
+
+/** One app room a socket left. */
+export interface RoomLeft {
+  readonly room: string;
+  /**
+   * True when no socket of the user is in the room any more, on any node:
+   * the user is gone from it, not just one of their sockets (another tab
+   * keeps it false). Always true for an anonymous socket. Behind a cluster
+   * adapter it is decided by asking every node once this socket left, as
+   * the room's `left` presence frame is; when they cannot be asked it is
+   * true. For a removal every node reports its own last socket of the user
+   * as last, so it is never missed and may come from more than one node.
+   */
+  readonly last: boolean;
+}
+
+/** What `onRoomLeave` receives: one socket leaving one or more app rooms. */
+export interface RoomLeave<P = Principal> {
+  /** The socket's principal; `null` for an anonymous socket (a spectator). */
+  readonly principal: P | null;
+  /** The socket that left. */
+  readonly socketId: string;
+  readonly reason: RoomLeaveReason;
+  /** The app rooms it left: one for a leave or a removal, every one it was in for a disconnect. */
+  readonly rooms: readonly RoomLeft[];
+}
+
+/**
+ * `createServer`'s `onRoomLeave`: called once per socket that leaves app
+ * rooms, on the node that holds the socket, in a unit of work of its own
+ * (detached: never the unit of the handler whose `ctx.rooms.leave` caused
+ * it), after the room heard the socket go. `ctx` is a `qd.run` context. An
+ * error it throws is logged; a server's `close()` waits for it.
+ */
+export type RoomLeaveHandler<P = Principal> = (
+  leave: RoomLeave<P>,
+  ctx: RunContext,
+) => void | PromiseLike<void>;
 
 /** The arguments of a stream's `push`: `(scope, item)` for a scoped stream, `(item)` for a global one. */
 export type StreamPushArgs<C extends AnyContract, K extends StreamName<C>> =

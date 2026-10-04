@@ -38,6 +38,11 @@ export const liveContract = defineContract("taskService", {
     /** Joins a room with public access, so an anonymous socket can be in one. */
     enterAnyone: mutation({ input: roomInput, output: z.boolean() }),
     exit: mutation({ input: roomInput, output: z.boolean() }),
+    /** Takes every socket of a user out of a room: `ctx.rooms.leave(room, { userId })`. */
+    kick: mutation({
+      input: z.object({ room: z.string(), userId: z.string() }),
+      output: z.null(),
+    }),
     celebrate: mutation({
       input: z.object({ room: z.string(), taskId: z.string() }),
       output: z.null(),
@@ -127,6 +132,13 @@ export function defineLiveService(into: Received) {
       enter: { access: "authenticated", handler: ({ input, ctx }) => ctx.rooms.join(input.room) },
       enterAnyone: { access: "public", handler: ({ input, ctx }) => ctx.rooms.join(input.room) },
       exit: { access: "authenticated", handler: ({ input, ctx }) => ctx.rooms.leave(input.room) },
+      kick: {
+        access: "authenticated",
+        handler: async ({ input, ctx }) => {
+          await ctx.rooms.leave(input.room, { userId: input.userId });
+          return null;
+        },
+      },
       celebrate: {
         access: "authenticated",
         handler: ({ input, ctx }) => {

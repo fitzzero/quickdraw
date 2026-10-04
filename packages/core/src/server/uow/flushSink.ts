@@ -7,7 +7,7 @@ import type { Revision } from "../../protocol/envelope";
 import type { UnitOfWorkScope, WriteRecord } from "./types";
 
 /** What a sink learns about a flush besides its writes: where they came from, and the flush's revision. */
-export interface FlushInfo extends Omit<UnitOfWorkScope, "sink" | "warnings"> {
+export interface FlushInfo extends Omit<UnitOfWorkScope, "sink" | "warnings" | "detached"> {
   /**
    * The flush's revision (RFC 0003 section 5.3, step 2), taken once for the
    * whole batch before any sink runs, so before any row is read.

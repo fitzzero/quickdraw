@@ -99,6 +99,11 @@ writes made through `db`, after the response is sent:
   unawaited). In a job, script or webhook, import the tracked client and
   wrap the work in `qd.run(async (ctx) => ...)`, which flushes before it
   returns. Never write through the untracked client.
+- Background work a handler starts and does not await (a push sent after
+  the reply) runs in `qd.run(fn, { detached: true })`: a unit of its own,
+  flushed when `fn` settles. Without `detached` it joins the handler's unit,
+  which may have flushed already, and its writes flush as ambient. Catch
+  what the promise rejects with.
 - Never emit by hand: no `io.emit`, `socket.emit` or `qd:` event names.
 - List the other models a service writes: `writes: ["taskLabel"]`.
 - Nested writes (`data: { labels: { create: [...] } }`) are not tracked:
@@ -160,6 +165,18 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 - Events: `events: { moved: { payload } }`, sent with
   `ctx.rooms.emit(room, task, "moved", payload)` to an app room
   (`ctx.rooms.join(room)` in a method puts the caller's socket in one).
+  Code that is not a handler (a game loop, a timer, a job) sends with
+  `qd.rooms.emit(room, task, "moved", payload)`; never keep the `io` server
+  to emit by hand.
+- When a user loses the right to a room (removed from a chat, kicked from a
+  game), `await ctx.rooms.leave(room, { userId })` (or `qd.rooms.leave`)
+  takes all their sockets out on every node, before anything they must not
+  hear is sent. 4.x's "emit to the user instead of the room" workaround is
+  not needed.
+- React to a socket leaving with `createServer({ onRoomLeave })`, never with
+  `socket.on("disconnect")`: it runs once per socket in a unit of work of its
+  own, and each room carries `last` (the user's last socket there, on any
+  node), which is when a 4.x `playerLeft` fires.
 
 ## Performance
 

@@ -72,6 +72,14 @@ export interface UnitOfWorkScope {
    * dispatcher's own calls throw. Without them, the attached dispatcher's.
    */
   readonly warnings?: DevWarnings;
+  /**
+   * A unit of its own even where another unit or a transaction is open (a
+   * handler's background work, `qd.run(fn, { detached: true })`): its writes
+   * flush when it does, never with the unit around it, and its statements
+   * are not counted there. Default `false`: a unit begun inside an open
+   * one joins it.
+   */
+  readonly detached?: boolean;
 }
 
 /**

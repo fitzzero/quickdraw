@@ -72,6 +72,7 @@ export type {
   HandlerArgs,
   HandlerContext,
   RunContext,
+  RunOptions,
   TouchOptions,
 } from "./context";
 
@@ -87,6 +88,12 @@ export type {
   ChannelOptions,
   ChannelsRequired,
   Presence,
+  RoomLeave,
+  RoomLeaveHandler,
+  RoomLeaveReason,
+  RoomLeft,
+  RoomTarget,
+  ServerRooms,
   ServiceChannel,
   ServiceStream,
   StreamHandle,

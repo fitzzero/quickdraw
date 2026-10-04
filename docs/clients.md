@@ -91,8 +91,27 @@ the socket is connected to, so it holds behind a cluster with no round trip:
 - A reconnected socket is in no room: the client calls the joining method
   again when it reconnects (the GDScript client's `connected` signal fires
   then).
-- Leaving the room (`ctx.rooms.leave`) or disconnecting ends it for the next
+- Leaving the room (`ctx.rooms.leave`), being taken out of it
+  (`rooms.leave(room, { userId })`) or disconnecting ends it for the next
   message.
 - A string is the room's name, never a payload key (unlike `{ entity }`); a
   name starting with `qd:` or `user:` is refused when the contract is
   defined, and a computed one drops the message.
+
+The server side of a game needs no handler to reach the room:
+
+- The loop sends with `qd.rooms.emit(room, contract, event, payload)` (and
+  `emitToUser`), from a timer or a tick, to every node's sockets in the
+  room; a stream (`qd.stream(...).push`, `volatile`) carries what may be
+  dropped under load, such as snapshots.
+- `qd.rooms.leave(room, { userId })` (or `ctx.rooms.leave` in a handler)
+  takes every socket of a player out, on every node. Each of them receives
+  `qd:presence { room, users: [] }` unasked, which a client reads as "out
+  of the room": it stops sending on the room's channels until a joining
+  call lets it back.
+- `createServer({ onRoomLeave })` hears every socket that leaves (its own
+  leave, a removal, a disconnect) once, with each room and `last`: true when
+  the player has no socket left in the room on any node, the moment to
+  send `playerLeft`. A socket that reconnects after `qd:rotate` is a new
+  socket; the old one's disconnect is the player's last only when they had
+  no other.

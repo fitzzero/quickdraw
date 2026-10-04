@@ -24,5 +24,9 @@ export const task = defineContract("taskService", {
       requires: { room: (cursor) => `board:${cursor.projectId}` },
     },
   },
-  events: { cursorMoved: { payload: cursorSchema } },
+  events: {
+    cursorMoved: { payload: cursorSchema },
+    // a user's last socket left a board: `onRoomLeave` sends it
+    leftBoard: { payload: z.object({ projectId: z.string(), userId: z.string() }) },
+  },
 });

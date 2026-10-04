@@ -766,7 +766,11 @@ tracked client as `db`; the server finds the rest on it.
   (`writes: ["taskLabel"]`); the `no-foreign-write` lint rule checks it.
 - Jobs, scripts and webhooks wrap their writes in `qd.run(fn)`, which
   flushes before it returns. A write made outside any unit of work flushes
-  on its own on the next tick, with a development warning.
+  on its own on the next tick, with a development warning. Inside a
+  handler `qd.run` joins the handler's unit; background work the reply does
+  not wait for (a push sent after a message, pruning what it reports dead)
+  runs in `qd.run(fn, { detached: true })`, a unit of its own that flushes
+  when `fn` settles (catch what the promise rejects with: nothing awaits it).
 
 <!-- example: apps/api/src/jobs/overdue.ts#run -->
 
@@ -1840,7 +1844,11 @@ export const task = defineContract("taskService", {
       requires: { room: (cursor) => `board:${cursor.projectId}` },
     },
   },
-  events: { cursorMoved: { payload: cursorSchema } },
+  events: {
+    cursorMoved: { payload: cursorSchema },
+    // a user's last socket left a board: `onRoomLeave` sends it
+    leftBoard: { payload: z.object({ projectId: z.string(), userId: z.string() }) },
+  },
 });
 ```
 
@@ -1951,6 +1959,61 @@ export function TaskRoom({
   `emitToUser(userId, ...)` check the payload first (`INTERNAL`, nothing
   sent, when it fails), then send the validated payload as
   `qd:event [service, event, payload]`; `useEvent` hears them.
+
+Code that is not a handler (a game loop, a timer, a job) reaches rooms
+through `qd.rooms` (also `server.rooms`), and `onRoomLeave` hears sockets
+leave:
+
+<!-- example: apps/api/src/services/kits/rooms.ts#rooms -->
+
+```ts
+import type { RoomLeaveHandler } from "@fitzzero/quickdraw-core/server";
+
+const boardRoom = (projectId: string): string => `board:${projectId}`;
+
+// a timer or a game loop's tick, outside any handler: every socket in the room, on every node
+export function showCursor(projectId: string, taskId: string, x: number): void {
+  qd.rooms.emit(boardRoom(projectId), task, "cursorMoved", { projectId, taskId, x });
+}
+
+// a member removed from the project: their sockets leave its board on every node, so they hear
+// nothing more of it and its cursor channel drops their messages (also ctx.rooms.leave)
+export async function removeFromBoard(projectId: string, userId: string): Promise<void> {
+  await qd.rooms.leave(boardRoom(projectId), { userId });
+}
+
+// qd.createServer({ ..., onRoomLeave }): once per socket that leaves app rooms, in a unit of its own
+export const onRoomLeave: RoomLeaveHandler<AppPrincipal> = ({ principal, rooms }) => {
+  for (const { room, last } of rooms) {
+    // last: no socket of the user is in the room any more (a second tab keeps it false)
+    if (principal !== null && last && room.startsWith("board:")) {
+      const projectId = room.slice("board:".length);
+      qd.rooms.emit(room, task, "leftBoard", { projectId, userId: principal.userId });
+    }
+  }
+};
+```
+
+- `qd.rooms.emit` and `emitToUser` are `ctx.rooms`' own, from anywhere,
+  reaching every node behind a cluster adapter.
+- `leave(room, { userId })` (on `qd.rooms`, and on `ctx.rooms` beside the
+  calling socket's own `leave(room)`) takes every socket of the user out of
+  an app room, on every node: they hear nothing more of it, a channel that
+  `requires` the room drops their messages, each gets
+  `qd:presence { room, users: [] }`, and the room hears `left`. Behind a
+  cluster it is broadcast and answered, so await it before sending what the
+  user must not receive. Joining again is the app's to refuse.
+- `createServer({ onRoomLeave })` runs once per socket that leaves app
+  rooms, on the node that held it: its own `leave` (`reason: "leave"`), a
+  removal (`"removed"`), or a disconnect, which leaves every app room it was
+  in (`"disconnect"`; `qd:rotate` reconnects with a new socket). Each room
+  comes with `last`: true when no socket of that user is in the room any
+  more, on any node, which is what a game's `playerLeft` waits for. It runs
+  in a unit of work of its own (never the unit of the handler that left), a
+  throw is logged, and `close()` waits for it. Behind a cluster `last` is
+  decided by asking every node once the socket left, so two sockets of one
+  user leaving two nodes at the same moment may both see the other (a
+  removal never misses: each node reports its own last socket).
 
 ### Auth routes kit
 

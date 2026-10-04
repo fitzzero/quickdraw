@@ -172,6 +172,34 @@ describe("a tracked unit of work", () => {
     expect(inner.sqlStatements).toBe(1);
   });
 
+  it("keeps a detached unit apart from the unit and transaction it was begun in", async () => {
+    const tracker = createWriteTracker({ development: false });
+    const outerSink = createRecordingSink();
+    const ownSink = createRecordingSink();
+    const outer = tracker.unitOfWork.begin(scope(outerSink));
+    const detached = tracker.unitOfWork.begin({ ...scope(ownSink), detached: true });
+    await outer.run(async () => {
+      tracker.record([write("t1")]);
+      const transaction = tracker.openTransaction("interactive");
+      transaction.setClient("tx");
+      await transaction.run(async () => {
+        await detached.run(() => {
+          tracker.countStatement();
+          // Outside the transaction: no client of it, and its writes are not rolled back with it.
+          expect(tracker.transactionClient()).toBeUndefined();
+          tracker.record([write("t2")]);
+        });
+      });
+      transaction.rollback();
+      await detached.flush();
+      expect(ownSink.writes()).toEqual([write("t2")]);
+    });
+    await outer.flush();
+    expect(outerSink.writes()).toEqual([write("t1")]);
+    expect(outer.sqlStatements).toBe(0);
+    expect(detached.sqlStatements).toBe(1);
+  });
+
   it("records touches where they run, as changes of any field or as deletes", async () => {
     const tracker = createWriteTracker({ development: false });
     const sink = createRecordingSink();
