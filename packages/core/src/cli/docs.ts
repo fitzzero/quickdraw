@@ -184,13 +184,38 @@ async function tsxImport(
     : undefined;
 }
 
+/**
+ * Node's codes for a module it could not resolve or load as written: an
+ * extensionless import or a `tsconfig` path, a directory import, `.tsx`, or
+ * TypeScript its type stripping cannot run. `tsx` may load those.
+ */
+const LOADER_ERRORS: ReadonlySet<string> = new Set([
+  "ERR_MODULE_NOT_FOUND",
+  "ERR_UNSUPPORTED_DIR_IMPORT",
+  "ERR_UNKNOWN_FILE_EXTENSION",
+  "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX",
+  "ERR_INVALID_TYPESCRIPT_SYNTAX",
+  "ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING",
+]);
+
+/**
+ * True when importing failed in Node's loader (see {@link LOADER_ERRORS}),
+ * not in the module's own code: only then is the module loaded again
+ * through `tsx`, so a module that throws runs once and reports its own error.
+ */
+export function failedToLoad(error: unknown): boolean {
+  const code: unknown =
+    typeof error === "object" && error !== null ? Reflect.get(error, "code") : undefined;
+  return typeof code === "string" && LOADER_ERRORS.has(code);
+}
+
 /** Imports the module at `file`: natively, then through `tsx` for TypeScript Node cannot load alone. */
 async function importModule(file: string, cwd: string): Promise<Readonly<Record<string, unknown>>> {
   const url = pathToFileURL(file).href;
   try {
     return (await import(url)) as Readonly<Record<string, unknown>>;
   } catch (error) {
-    if (!/\.[cm]?tsx?$/.test(file)) {
+    if (!/\.[cm]?tsx?$/.test(file) || !failedToLoad(error)) {
       throw error;
     }
     const tsImport = await tsxImport(cwd);

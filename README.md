@@ -2130,7 +2130,8 @@ quickdraw-docs packages/shared/src/index.ts --out docs/api --check   # exit 1 wh
 The module may export each contract, or a map of them as given to
 `createQuickdrawClient`. A TypeScript module loads through Node's type
 stripping, or through `tsx` when the project has it installed (for
-extensionless imports and `tsconfig` paths). Pages are only ever replaced
+extensionless imports and `tsconfig` paths, which Node's loader refuses); a
+module whose own code throws runs once and its error is reported as is. Pages are only ever replaced
 or removed when they start with the generator's marker, and they are laid
 out as oxfmt and Prettier format Markdown, so formatting them changes
 nothing. Run `--check` in CI next to the lint step.

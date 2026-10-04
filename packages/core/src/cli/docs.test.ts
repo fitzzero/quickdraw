@@ -13,7 +13,15 @@ import { z } from "zod";
 import * as zod3 from "zod3";
 import { projectContract, taskContract } from "../../test/fixtures/app";
 import { defineContract, listOf, mutation, nullable, query, via } from "../index";
-import { contractsOf, generateDocs, INDEX_FILE, main, syncDocs, type DocsOutput } from "./docs";
+import {
+  contractsOf,
+  failedToLoad,
+  generateDocs,
+  INDEX_FILE,
+  main,
+  syncDocs,
+  type DocsOutput,
+} from "./docs";
 import { GENERATED_MARKER } from "./render";
 import { jsonSchemaOf, schemaFields, schemaNotes, schemaText } from "./schemaText";
 
@@ -137,6 +145,43 @@ describe("quickdraw-docs", () => {
       code: 1,
       err: "quickdraw-docs: src/version.ts exports no contract\n",
     });
+  });
+
+  it("reports the error of a module that throws, once, running it once (the review's docs case)", async () => {
+    const dir = tempDir();
+    const ran = join(dir, "ran.log");
+    const throwing = join(dir, "throws.ts");
+    writeFileSync(
+      throwing,
+      [
+        'import { appendFileSync } from "node:fs";',
+        `appendFileSync(${JSON.stringify(ran)}, "ran\\n");`,
+        'throw new Error("the contracts module failed: DATABASE_URL is not set");',
+        "",
+      ].join("\n"),
+    );
+    // Run from the package, where tsx is installed: it must not load the module again.
+    expect(await run(throwing, "--out", tempDir())).toEqual({
+      code: 1,
+      out: "",
+      err: "quickdraw-docs: the contracts module failed: DATABASE_URL is not set\n",
+    });
+    expect(readFileSync(ran, "utf8")).toBe("ran\n");
+  });
+
+  it("loads a module through tsx only when Node's loader could not", () => {
+    const coded = (code: string) => Object.assign(new Error(code), { code });
+    for (const code of [
+      "ERR_MODULE_NOT_FOUND",
+      "ERR_UNSUPPORTED_DIR_IMPORT",
+      "ERR_UNKNOWN_FILE_EXTENSION",
+      "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX",
+    ]) {
+      expect(failedToLoad(coded(code))).toBe(true);
+    }
+    expect(failedToLoad(new Error("DATABASE_URL is not set"))).toBe(false);
+    expect(failedToLoad(coded("ECONNREFUSED"))).toBe(false);
+    expect(failedToLoad("thrown string")).toBe(false);
   });
 
   it("writes every kind of member a contract can declare", () => {
