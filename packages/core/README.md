@@ -710,10 +710,12 @@ export const taskService = qd.defineService(task, {
   (`adminBypass: false` turns that off). A grant below `Admin` counts only
   where the form names `service`: a `Read` grant does not read every row.
 - Grants come from `principal.serviceAccess`, as `authenticate` returns it or
-  `createServer({ auth: { loadServiceAccess } })` loads it. With
+  `createServer({ auth: { loadServiceAccess } })` loads it for a principal
+  that carries none: at a socket's handshake, for each HTTP call, and for
+  an in-process caller (`qd.caller`) at its first call. With
   `auth.serviceAccessSource: { model: "user", column: "serviceAccess" }`, a
   tracked write to that column refreshes the user's open sockets
-  (`qd:access`).
+  (`qd:access`), and in-process callers load the grants again.
 - Policies: `owner(field)`, `jsonAcl(field, { owner? })`,
   `members({ model, entry, user, level, levels? })`, `inherit({ from, via })`,
   `anyOf(...)`, `resolver({ levelsFor, where? })` and `everyone(level)`
