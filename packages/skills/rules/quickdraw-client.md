@@ -117,7 +117,12 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   method joined the socket to it (`ctx.rooms.join`).
 - Admin screens: `qd.task.admin.adminList.useQuery(input)` and the other
   admin kit members; `useAdminServices(qd)` lists the services whose
-  `adminMeta` answers the user.
+  `adminMeta` answers the user, asking only those the hello's grants allow
+  (`Admin`; `{ requires: "Moderate" }` or `null` when the service opened
+  `adminMeta` wider). A screen served from metadata for every service takes
+  `adminOf(qd, key)`, one shape typed by field name: never cast
+  `qd[key].admin`. The kit's rows are not live: after the screen's own
+  write, `onSuccess: () => qd.invalidate(qd.task.admin.adminList)`.
 
 ## Server components and other runtimes
 

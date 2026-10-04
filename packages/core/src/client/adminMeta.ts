@@ -5,12 +5,16 @@
 // `qd.<service>.admin.adminMeta.useQuery()` makes it (`hooks.ts`), under the
 // same key, so the two share one cached result. It runs once the server's
 // hello on the current credentials has arrived, and retries as every query
-// does.
+// does. A service whose `adminMeta` refused the user (`FORBIDDEN`,
+// `UNAUTHENTICATED`) is not asked again (not on a remount, not after a
+// reconnect) until the user's grant on that service changes: its access is
+// the service grant, which the hello and `qd:access` carry.
 
 import { useQueries, type UseQueryResult } from "@tanstack/react-query";
 import type { AnyContract } from "../contract/defineContract";
 import type { AdminServiceMeta } from "../contract/kits/admin";
 import { adminNamespace, type AdminMetaQuery, type AdminMetaState } from "./admin";
+import { grantOn, isRefusal, refusalsOf, useClientAdminGrants } from "./adminGrants";
 import { shouldRetry } from "./call";
 import { useAwaitingHello, useQueriesHello, useQuickdrawContext } from "./context";
 import { shareKeepingVersion } from "./hooks";
@@ -30,20 +34,42 @@ function useClientAdminMeta(
   const { connection, queryClient } = useQuickdrawContext("useAdminServices");
   const live = useQueriesHello(connection) !== null;
   const awaiting = useAwaitingHello(connection, queryClient);
+  const refused = refusalsOf(queryClient);
   const states = useQueries(
     {
       queries: queries.map((query) => {
         const queryKey = methodKey(query.serviceName, query.method, undefined);
+        const standing = refused.get(query.serviceName);
         return {
           queryKey,
-          queryFn: ({ signal }: { readonly signal: AbortSignal }) =>
-            fetchMethodQuery<AdminServiceMeta>(
-              connection,
-              queryClient,
-              { service: query.serviceName, method: query.method, input: undefined, key: queryKey },
-              signal,
-            ),
-          enabled: live && enabled,
+          queryFn: async ({ signal }: { readonly signal: AbortSignal }) => {
+            const grant = grantOn(connection, query.serviceName);
+            try {
+              const meta = await fetchMethodQuery<AdminServiceMeta>(
+                connection,
+                queryClient,
+                {
+                  service: query.serviceName,
+                  method: query.method,
+                  input: undefined,
+                  key: queryKey,
+                },
+                signal,
+              );
+              refused.delete(query.serviceName);
+              return meta;
+            } catch (error) {
+              if (isRefusal(error)) {
+                refused.set(query.serviceName, grant);
+              }
+              throw error;
+            }
+          },
+          // Refused under the grant the user still holds: not asked again.
+          enabled:
+            live &&
+            enabled &&
+            (standing === undefined || standing !== grantOn(connection, query.serviceName)),
           retry: shouldRetry,
           structuralSharing: shareKeepingVersion(undefined),
         };
@@ -63,5 +89,8 @@ export function clientAdminNamespace(
   contract: AnyContract,
   methods: Readonly<Record<string, object>>,
 ): Readonly<Record<string, object>> {
-  return adminNamespace(contract, methods, useClientAdminMeta);
+  return adminNamespace(contract, methods, {
+    useMeta: useClientAdminMeta,
+    useGrants: useClientAdminGrants,
+  });
 }

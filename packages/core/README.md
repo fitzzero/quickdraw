@@ -1841,7 +1841,10 @@ export function AdminTasks() {
   // [{ key: "task", serviceName, displayName }]
   const { services } = useAdminServices(qd);
   const { data } = qd.task.admin.adminList.useQuery({ page: 1, sort: { field: "title" } });
-  const update = qd.task.admin.adminUpdate.useMutation();
+  const update = qd.task.admin.adminUpdate.useMutation({
+    // adminList is a query, not live data: read the page again after this screen's own write
+    onSuccess: () => qd.invalidate(qd.task.admin.adminList),
+  });
   return (
     <table aria-label={services[0]?.displayName}>
       <tbody>
@@ -1916,6 +1919,21 @@ export function AdminTasks() {
   `qd.admin`, since `admin` is reserved per service). `useAdminServices(qd)`
   lists the client's services whose `adminMeta` answers the user, with their
   display names, sharing the cache of `qd.<service>.admin.adminMeta.useQuery()`.
+  It asks only the services the user's grants (from the server's hello)
+  allow: `Admin` by default, what the kit's methods require;
+  `useAdminServices(qd, { requires: "Moderate" })` for an `adminMeta` given
+  another form, `requires: null` for every service. A service that refused
+  is not asked again until the user's grant on it changes, reconnects
+  included.
+- The kit's rows are not live: `adminList` and `adminGet` are queries that
+  watch nothing, so a screen reads them again after its own writes (the
+  `onSuccess` above), and sees other admins' writes when it next reads.
+- A screen that serves every service from its metadata (the route names the
+  service) takes `adminOf(qd, key)`: the same members, keyed by what the kit
+  made them for and typed by field name (`AdminScreen`: rows are
+  `AdminRow`, `adminList` takes `{ page, pageSize, filter, sort: { field, direction } }`
+  with names read from `adminMeta`), so no cast is needed over a union of
+  keys; a method the contract does not expose is absent.
 
 ### Presence, streams and channels
 

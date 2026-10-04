@@ -359,7 +359,7 @@ export function mockLiveMembers(
       members.push([collection, mockCollectionMember(store, { service, collection, def })]);
     }
     members.push(...mockRealtimeMembers(store, contract));
-    members.push(...Object.entries(mockAdminNamespace(contract, methods, queryClient)));
+    members.push(...Object.entries(mockAdminNamespace(contract, methods, queryClient, store)));
     return Object.freeze(Object.fromEntries(members));
   };
 }

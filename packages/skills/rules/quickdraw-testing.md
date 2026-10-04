@@ -122,7 +122,8 @@ logged, and `app.close()` ends it. Turn it on for service suites.
   `mock.$session({ userId, serviceAccess, isConnected, isKnown })` (fields
   left out keep the starting session, `createMockClient(contracts, { session })`)
   and `mock.$presence(room, userIds)`. Never re-export `useQuickdraw` from
-  the module you mock to fake it.
+  the module you mock to fake it. `useAdminServices(mock)` asks only the
+  services the session's `serviceAccess` allows.
 - Storybook and other browser bundles import the mock from
   `@fitzzero/quickdraw-core/testing/mock`, which names no Testing Library:
   a decorator wraps every story in `qd.$Provider`, and a story's
