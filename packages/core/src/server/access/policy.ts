@@ -10,7 +10,7 @@
 //   which the principal has at least `level`, or `"none"`.
 //
 // The builders (`owner`, `jsonAcl`, `members`, `inherit`, `anyOf`,
-// `resolver`) live in `policies/`. A policy reads the database only through
+// `resolver`, `everyone`) live in `policies/`. A policy reads the database only through
 // the `PolicyTools` it is given, which batch, memoize per request and, when
 // the dispatcher enables it, cache across requests; `reads` tells the engine
 // which columns and models a policy depends on, so tracked writes to them
@@ -115,7 +115,14 @@ export interface ForeignColumns {
 }
 
 /** The builder a policy came from. */
-export type PolicyKind = "owner" | "jsonAcl" | "members" | "inherit" | "anyOf" | "resolver";
+export type PolicyKind =
+  | "owner"
+  | "jsonAcl"
+  | "members"
+  | "inherit"
+  | "anyOf"
+  | "resolver"
+  | "everyone";
 
 /**
  * A service's access policy, from one of the builders. `Columns` names the

@@ -716,7 +716,10 @@ export const taskService = qd.defineService(task, {
   (`qd:access`).
 - Policies: `owner(field)`, `jsonAcl(field, { owner? })`,
   `members({ model, entry, user, level, levels? })`, `inherit({ from, via })`,
-  `anyOf(...)` and `resolver({ levelsFor, where? })`. Their column names are
+  `anyOf(...)`, `resolver({ levelsFor, where? })` and `everyone(level)`
+  (every signed-in user has `level` on every row, reading nothing: public
+  profiles are `anyOf(owner("id"), everyone("Read"))`; unlike `rowless: true`
+  on a method, it covers subscriptions and lists too). Their column names are
   checked against the Prisma client's models at compile time. A lookup is one
   batched query per table, memoized for the call, so checking 60 ids costs
   what checking one does. `entry` access needs a policy; a service without

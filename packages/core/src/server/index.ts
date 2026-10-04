@@ -141,6 +141,7 @@ export { members, type MembersOptions } from "./access/policies/members";
 export { inherit, type InheritOptions } from "./access/policies/inherit";
 export { anyOf } from "./access/policies/anyOf";
 export { resolver, type ResolverOptions } from "./access/policies/resolver";
+export { everyone } from "./access/policies/everyone";
 export type {
   AccessFilter,
   AccessPolicy,
