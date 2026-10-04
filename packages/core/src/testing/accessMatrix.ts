@@ -15,14 +15,19 @@
 //   });
 //
 // Every cell calls the method for real, so a mutation runs once per principal
-// it allows: give inputs that can run again.
+// it allows: give inputs that can run again, or `input` as a function, called
+// for each cell with the principal it runs as, which makes a fresh row (a
+// task to delete, a name not yet taken) so no cell depends on the cells
+// before it, whatever the order of the principals:
+//
+//   { method: "remove", input: async () => ({ id: await newTask() }), allow: ["owner"] }
 
 import type { AnyContract } from "../contract/defineContract";
 import type { InputOf, MethodName } from "../contract/infer";
 import { QuickdrawError, type ErrorCode } from "../protocol/errors";
 import type { PrincipalOfServices } from "../server/dispatcher";
 import type { AnyService, Service } from "../server/service";
-import type { QuickdrawTypes } from "../server/types";
+import type { Principal, QuickdrawTypes } from "../server/types";
 import type { TestApp, TestConnection } from "./createTestApp";
 
 /**
@@ -35,11 +40,29 @@ export type MatrixOutcome = "allow" | "deny" | ErrorCode;
 /** The name the anonymous caller has in a matrix, unless `principals` names one as `null`. */
 export const ANONYMOUS = "anonymous";
 
+/** The cell an input factory makes the input of: who the call runs as. */
+export interface MatrixCell<Name extends string = string, P = Principal> {
+  /** The principal's name in the matrix (`"anonymous"` for the added anonymous caller). */
+  readonly name: Name;
+  /** The principal itself, or `null` for an anonymous caller. */
+  readonly principal: P | null;
+}
+
+/** A case's input made per cell: a fresh row for a mutation that cannot run twice on one. */
+export type MatrixInputFactory<Input, Name extends string = string, P = Principal> = (
+  cell: MatrixCell<Name, P>,
+) => Input | PromiseLike<Input>;
+
 /** One row of the matrix: a method, its input, and who may call it. */
-export type AccessMatrixCase<C extends AnyContract, Name extends string> = {
+export type AccessMatrixCase<C extends AnyContract, Name extends string, P = Principal> = {
   readonly [M in MethodName<C>]: {
     readonly method: M;
-    readonly input: InputOf<C, M>;
+    /**
+     * The input, or a function making it for each cell (called just before
+     * that cell's call), so a mutation that can run once per row (a delete,
+     * a unique name) gets a row of its own in every cell.
+     */
+    readonly input: InputOf<C, M> | MatrixInputFactory<InputOf<C, M>, Name, P>;
     /** Names the case in the report; default the method name. */
     readonly label?: string;
     /** The principals the call succeeds for; it is denied for everyone else. */
@@ -55,7 +78,7 @@ export interface AccessMatrixOptions<C extends AnyContract, P, Name extends stri
   readonly service: Service<QuickdrawTypes, C>;
   /** The callers, by name. An anonymous caller named `"anonymous"` is added unless one is `null`. */
   readonly principals: Readonly<Record<Name, P | null>>;
-  readonly cases: readonly AccessMatrixCase<C, NoInfer<Name> | typeof ANONYMOUS>[];
+  readonly cases: readonly AccessMatrixCase<C, NoInfer<Name> | typeof ANONYMOUS, NoInfer<P>>[];
   /** Call in process (`"caller"`, the default) or over a real socket per principal. */
   readonly via?: "caller" | "socket";
 }
@@ -171,7 +194,12 @@ export async function describeAccessMatrix<
         if (method === undefined) {
           throw new TypeError(`describeAccessMatrix: ${service.name} has no ${entry.method}`);
         }
-        const actual = await outcomeOf(() => method(entry.input));
+        const { input } = entry as { readonly input: unknown };
+        const made =
+          typeof input === "function"
+            ? await (input as MatrixInputFactory<unknown>)({ name, principal })
+            : input;
+        const actual = await outcomeOf(() => method(made));
         const pass = matches(expected, actual, principal === null);
         cells.push({ case: entry.label ?? entry.method, principal: name, expected, actual, pass });
       }

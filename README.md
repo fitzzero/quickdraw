@@ -1117,7 +1117,9 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
 
 - **stdio** speaks JSON-RPC (MCP protocol version 2024-11-05). One process is
   one session: its queries share one concurrency lane, and
-  `notifications/cancelled` cancels a call. Start its module through
+  `notifications/cancelled` cancels a call. When stdin ends, the calls still
+  running finish and their replies are written before `closed` resolves
+  (`server.close()` cancels them instead). Start its module through
   `bootstrapMcpServer(new URL("./mcp-server.js", import.meta.url))`, which
   sends console output to stderr so only the protocol reaches stdout.
 - **HTTP**: `GET /mcp/tools` and `POST /mcp/invoke`, which takes
@@ -1127,6 +1129,11 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   `"public"` methods, and custom tools that declare `access: "public"`; any
   other tool answers `UNAUTHENTICATED` before it runs. A failed call reaches
   the agent as a tool error carrying the code.
+- The tool list is the registry's, the same for every caller: `tools/list`
+  and `GET /mcp/tools` are not filtered by the principal, so an agent sees
+  tools it may not call (and its call is refused). Keep a tool out of the
+  list with `exclude` or `include`, per registry, and serve agents of
+  different reach from separate registries.
 
 ## The client
 
@@ -2338,7 +2345,11 @@ it("lets the owner rename, members read, and nobody else in", async () => {
 
 `"deny"` (the default for everyone `allow` does not name) means
 `UNAUTHENTICATED` without a principal and `FORBIDDEN` with one. Mutations run
-for real, once per allowed principal: give inputs that can run again.
+for real, once per allowed principal: give inputs that can run again, or
+`input` as a function of the cell (`({ name, principal }) => input`, sync or
+async), called before each cell's call, that makes a row of its own (a task
+to delete, an unused name), so no cell depends on the order of the
+principals.
 
 ### Performance budgets
 

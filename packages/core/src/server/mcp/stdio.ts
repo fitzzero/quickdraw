@@ -14,7 +14,10 @@
 //   (MCP sends no reply for a cancelled request);
 // - notifications never get a reply, and a JSON-RPC response from the client
 //   is ignored;
-// - it never exits the process: `closed` resolves once stdin ends.
+// - it never exits the process: `closed` resolves once stdin ends and every
+//   call still running has answered (a client that writes its requests and
+//   closes stdin still gets every reply), while `close()` and a broken
+//   stream cancel the calls in flight instead.
 //
 // Anything else that writes to stdout corrupts the protocol, so start the
 // server through `bootstrapMcpServer`, which sends console output to stderr.
@@ -53,9 +56,13 @@ export interface McpStdioServerOptions {
 export interface McpStdioServer {
   /** The session id every call of this server carries, and its synthetic connection. */
   readonly sessionId: string;
-  /** Resolves once the input has ended and every message in flight has been handled. */
+  /**
+   * Resolves once the input has ended and every message in flight has been
+   * handled: when stdin ends, the calls still running finish and their
+   * replies are written first.
+   */
   readonly closed: Promise<void>;
-  /** Stops reading and cancels the calls in flight; resolves as `closed` does. */
+  /** Stops reading and cancels the calls in flight (no reply is written for them); resolves as `closed` does. */
   close(): Promise<void>;
 }
 
@@ -304,12 +311,18 @@ export function createMcpStdioServer(options: McpStdioServerOptions): McpStdioSe
     crlfDelay: Infinity,
     terminal: false,
   });
+  // Ending stdin lets the calls in flight answer; `close()` and a broken stream cancel them.
+  let cancel = false;
+  const stop = (): void => {
+    cancel = true;
+    lines.close();
+  };
   const fail = (error: Error): void => {
     session.logger.warn("The MCP stdio stream failed; the session ends", {
       category: CATEGORY,
       error: describeError(error),
     });
-    lines.close();
+    stop();
   };
   const onOutputError = (error: Error): void => {
     session.writable = false;
@@ -320,7 +333,7 @@ export function createMcpStdioServer(options: McpStdioServerOptions): McpStdioSe
   lines.on("line", (line) => track(session, onLine(session, line)));
   const closed = new Promise<void>((resolve) => {
     lines.once("close", () => {
-      for (const controller of session.calls.values()) {
+      for (const controller of cancel ? session.calls.values() : []) {
         controller.abort();
       }
       void Promise.allSettled([...session.pending]).then(() => {
@@ -333,7 +346,7 @@ export function createMcpStdioServer(options: McpStdioServerOptions): McpStdioSe
     sessionId: session.request.sessionId,
     closed,
     close: () => {
-      lines.close();
+      stop();
       return closed;
     },
   });

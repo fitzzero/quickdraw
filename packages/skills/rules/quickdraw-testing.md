@@ -67,7 +67,9 @@ await describeAccessMatrix(app, {
   `UNAUTHENTICATED` without a principal, `FORBIDDEN` with one). It rejects
   listing every cell that differs; `via: "socket"` runs it over sockets.
 - Mutations run for real, once per allowed principal: give inputs that can
-  run again, or a fresh row per case.
+  run again, or `input` as a function of the cell
+  (`input: async () => ({ id: await newTask() })`), which makes a fresh row
+  for every cell; never order the principals so the allowed one goes last.
 
 ## Hot methods get a budget
 
