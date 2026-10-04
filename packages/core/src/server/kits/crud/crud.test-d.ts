@@ -183,6 +183,43 @@ describe("crud.handlers", () => {
     });
   });
 
+  test("prepare's db is the app's client as annotated, checked against the service's; unknown unannotated", () => {
+    qd.defineService(taskContract, {
+      ...policy,
+      methods: {
+        ...crud.handlers(taskContract, {
+          access,
+          prepare: async (input, _ctx, db: Db) => {
+            const row = await db.task.update({ where: { id: "t1" } });
+            return { ...input, ordinal: row.ordinal + 1 };
+          },
+        }),
+        archive: {
+          access: { entry: "Admin" },
+          handler: ({ input, db }) => db.task.update({ where: { id: input.id } }),
+        },
+      },
+    });
+    qd.defineService(taskContract, {
+      ...policy,
+      // @ts-expect-error -- prepare's db is not the app's client
+      methods: {
+        ...crud.handlers(taskContract, {
+          access,
+          prepare: (input, _ctx, db: { readonly other: true }) => ({ ...input, other: db.other }),
+        }),
+        archive: { access: { entry: "Admin" }, handler: () => Promise.resolve(null as never) },
+      },
+    });
+    crud.handlers(taskContract, {
+      access,
+      prepare: (input, _ctx, db) => {
+        expectTypeOf(db).toEqualTypeOf<unknown>();
+        return input;
+      },
+    });
+  });
+
   test("prepare exists only for a contract with the kit's create", () => {
     const reads = defineContract("readService", {
       entity: task,

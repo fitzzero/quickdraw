@@ -46,8 +46,13 @@ type NotAKitMethod<C extends AnyContract, A> = [Exclude<keyof A, CrudMethodsOf<C
   ? unknown
   : `crud.handlers: ${Exclude<keyof A, CrudMethodsOf<C>> & string} is not a method crud.contract made for ${C["name"]}`;
 
-/** The options of `crud.handlers(contract, options)`. */
-export interface CrudHandlersOptions<C extends AnyContract, A> {
+/**
+ * The options of `crud.handlers(contract, options)`. `Db` is the app's
+ * database client type, taken from an annotated `db` of `prepare`
+ * (`unknown` without one) and checked against the service's when the
+ * handlers are spread into `qd.defineService`.
+ */
+export interface CrudHandlersOptions<C extends AnyContract, A, Db = unknown> {
   /**
    * Who may call each of the kit's methods: one form per method, required.
    * `get`, `update`, `delete` and `reorder` take `{ entry: L }` to check the
@@ -62,12 +67,12 @@ export interface CrudHandlersOptions<C extends AnyContract, A> {
    */
   readonly prepare?: [CrudCreateOf<C>] extends [never]
     ? `crud.handlers: prepare is for the kit's create, which ${C["name"]} does not have`
-    : CrudPrepare<ParsedInputOf<C, CrudCreateOf<C>>, KitContext>;
+    : CrudPrepare<ParsedInputOf<C, CrudCreateOf<C>>, KitContext, Db>;
 }
 
 /** What `crud.handlers` returns: one `{ access, handler }` per kit method, for `defineService`'s `methods`. */
-export type CrudImplementations<A> = {
-  readonly [M in keyof A]: { readonly access: A[M]; readonly handler: KitHandler };
+export type CrudImplementations<A, Db = unknown> = {
+  readonly [M in keyof A]: { readonly access: A[M]; readonly handler: KitHandler<Db> };
 };
 
 /** What a kit method's handler is made from. */

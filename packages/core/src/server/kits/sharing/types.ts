@@ -80,13 +80,14 @@ export interface SharingChange {
 
 /**
  * Runs after each change, inside the change's transaction, with that
- * transaction's tracked client as `db`: its writes commit with the change,
- * and a throw undoes the change and fails the call.
+ * transaction's tracked client as `db` (the app's client type `Db`, when
+ * the callback's `db` is annotated with it): its writes commit with the
+ * change, and a throw undoes the change and fails the call.
  */
-export type SharingOnChange = (
+export type SharingOnChange<Db = unknown> = (
   change: SharingChange,
   ctx: KitContext,
-  db: unknown,
+  db: Db,
 ) => MaybePromise<void>;
 
 /** Who a by-name method means: the `name` and `email` the call gave. */
@@ -100,10 +101,10 @@ export interface SharingUserLookup {
  * `undefined`) when there is no such user, which fails the call with
  * `NOT_FOUND`.
  */
-export type SharingResolveUser = (
+export type SharingResolveUser<Db = unknown> = (
   lookup: SharingUserLookup,
   ctx: KitContext,
-  db: unknown,
+  db: Db,
 ) => MaybePromise<string | null | undefined>;
 
 type NotASharingMethod<C extends AnyContract, A> = [Exclude<keyof A, SharingMethodsOf<C>>] extends [
@@ -112,8 +113,12 @@ type NotASharingMethod<C extends AnyContract, A> = [Exclude<keyof A, SharingMeth
   ? unknown
   : `sharing.handlers: ${Exclude<keyof A, SharingMethodsOf<C>> & string} is not a method sharing.contract made for ${C["name"]}`;
 
-/** The options of `sharing.handlers(contract, options)`. */
-export type SharingHandlersOptions<C extends AnyContract, A> = {
+/**
+ * The options of `sharing.handlers(contract, options)`. `Db` is the app's
+ * database client type, taken from an annotated `db` of `onChange` or
+ * `resolveUser` (`unknown` without one) and checked against the service's.
+ */
+export type SharingHandlersOptions<C extends AnyContract, A, Db = unknown> = {
   /**
    * Forms that replace the kit's defaults, per method: changes need
    * `{ entry: "Admin" }` on the row, lists `{ entry: "Read" }`, and `leave`
@@ -121,20 +126,22 @@ export type SharingHandlersOptions<C extends AnyContract, A> = {
    */
   readonly access?: A & NoInfer<NotASharingMethod<C, A>>;
   /** Runs after each change, inside its transaction: an audit row, a notification. */
-  readonly onChange?: SharingOnChange;
+  readonly onChange?: SharingOnChange<Db>;
 } & ([SharingByNameOf<C>] extends [never]
   ? {
       readonly resolveUser?: `sharing.handlers: resolveUser is for shareByName and inviteByName, which ${C["name"]} does not have`;
     }
   : {
       /** Finds the user `shareByName` and `inviteByName` mean, by name or email. */
-      readonly resolveUser: SharingResolveUser;
+      readonly resolveUser: SharingResolveUser<Db>;
     });
 
 /** `sharing.handlers`' options argument: required when the contract has a by-name method. */
-export type SharingOptionsArgs<C extends AnyContract, A> = [SharingByNameOf<C>] extends [never]
-  ? [options?: SharingHandlersOptions<C, A>]
-  : [options: SharingHandlersOptions<C, A>];
+export type SharingOptionsArgs<C extends AnyContract, A, Db = unknown> = [
+  SharingByNameOf<C>,
+] extends [never]
+  ? [options?: SharingHandlersOptions<C, A, Db>]
+  : [options: SharingHandlersOptions<C, A, Db>];
 
 type FormOf<C extends AnyContract, A, M extends SharingMethodsOf<C>> = M extends keyof A
   ? [Exclude<A[M], undefined>] extends [never]
@@ -143,10 +150,10 @@ type FormOf<C extends AnyContract, A, M extends SharingMethodsOf<C>> = M extends
   : SharingDefaultAccess<SharingKindOf<C, M>>;
 
 /** What `sharing.handlers` returns: one `{ access, handler }` per sharing kit method, for `defineService`. */
-export type SharingImplementations<C extends AnyContract, A> = {
+export type SharingImplementations<C extends AnyContract, A, Db = unknown> = {
   readonly [M in SharingMethodsOf<C>]: {
     readonly access: FormOf<C, A, M>;
-    readonly handler: KitHandler;
+    readonly handler: KitHandler<Db>;
   };
 };
 

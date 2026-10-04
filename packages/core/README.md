@@ -854,12 +854,10 @@ const registry = createMcpRegistry({
     {
       name: "summarize",
       description: "Counts the tasks of a project.",
-      inputSchema: summarizeInput, // validated before the handler runs
+      inputSchema: summarizeInput, // validated before the handler runs, and types `arguments`
       // access: "authenticated" is the default; "public" lets anonymous callers in
-      handler: async ({ arguments: args, caller }) => {
-        const { projectId } = summarizeInput.parse(args);
-        return `${String(await caller.taskService.countOnBoard({ projectId }))} tasks`;
-      },
+      handler: async ({ arguments: { projectId }, caller }) =>
+        `${String(await caller.taskService.countOnBoard({ projectId }))} tasks`,
     },
   ],
 });
@@ -1084,6 +1082,10 @@ export const taskService = qd.defineService(task, {
 });
 ```
 
+- `prepare` gets the app's database client as `db`; annotate it with the
+  client's type (`db: AppDb`) to use it typed, and the handlers spread into
+  `qd.defineService` refuse a type that is not the service's client (the
+  sharing kit's `resolveUser` and `onChange` take `db` the same way).
 - Each method needs a form: one missing from `access` does not compile.
   `get`, `update`, `delete` and `reorder` act on `input.id`, which
   `{ entry: L }` checks; a write on one row also needs the row level

@@ -215,11 +215,9 @@ describe("development checks", () => {
             bulkDelete: "authenticated",
           },
           // Reads every task of the project to number the new one: an unbounded read.
-          prepare: async (input, _ctx, db) => ({
+          prepare: async (input, _ctx, db: PrismaClient) => ({
             ...input,
-            ordinal: (
-              await (db as PrismaClient).task.findMany({ where: { projectId: input.projectId } })
-            ).length,
+            ordinal: (await db.task.findMany({ where: { projectId: input.projectId } })).length,
           }),
         }),
       },

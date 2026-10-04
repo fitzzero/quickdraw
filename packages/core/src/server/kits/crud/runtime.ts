@@ -30,19 +30,23 @@ export interface ModelDelegate {
 }
 
 /** What a kit handler is called with, whatever the app's own types. */
-export interface KitHandlerArgs {
+export interface KitHandlerArgs<Db = unknown> {
   readonly input: unknown;
   /** The call's `ctx`; a dispatcher's always carries its `signal`. */
   readonly ctx: { readonly principal: Principal | null; readonly signal?: AbortSignal };
-  readonly db: unknown;
+  /** The app's database client. */
+  readonly db: Db;
 }
 
 /**
  * A handler of a kit method. Typed to return `never` so it fits the method
  * of any app's service: what it returns is the row (or rows, or page) its
  * method's output names, which the framework projects as for any handler.
+ * `Db` is the app's database client type, as the app's callbacks (`prepare`,
+ * `resolveUser`, `onChange`) annotate their `db`, so a wrong annotation is
+ * refused where the handlers are spread into `qd.defineService`.
  */
-export type KitHandler = (args: KitHandlerArgs) => Promise<never>;
+export type KitHandler<Db = unknown> = (args: KitHandlerArgs<Db>) => Promise<never>;
 
 /** One call of a kit method: the service it runs in, its model's delegate, and the caller. */
 export interface CrudCall {

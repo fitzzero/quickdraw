@@ -9,11 +9,11 @@ import { checked } from "../../devWarnings";
 import type { MaybePromise, Principal } from "../../types";
 import { crudCall, projectionOf, type KitHandler, type KitHandlerArgs } from "./runtime";
 
-/** `prepare(input, ctx, db)`: the data `create` writes, from the parsed input. */
-export type CrudPrepare<Input = never, Ctx = never> = (
+/** `prepare(input, ctx, db)`: the data `create` writes, from the parsed input; `db` is the app's client. */
+export type CrudPrepare<Input = never, Ctx = never, Db = unknown> = (
   input: Input,
   ctx: Ctx,
-  db: unknown,
+  db: Db,
 ) => MaybePromise<Readonly<Record<string, unknown>>>;
 
 /** `prepare` as the handler calls it. */

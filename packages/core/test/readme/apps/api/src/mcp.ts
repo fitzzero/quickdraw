@@ -27,12 +27,10 @@ const registry = createMcpRegistry({
     {
       name: "summarize",
       description: "Counts the tasks of a project.",
-      inputSchema: summarizeInput, // validated before the handler runs
+      inputSchema: summarizeInput, // validated before the handler runs, and types `arguments`
       // access: "authenticated" is the default; "public" lets anonymous callers in
-      handler: async ({ arguments: args, caller }) => {
-        const { projectId } = summarizeInput.parse(args);
-        return `${String(await caller.taskService.countOnBoard({ projectId }))} tasks`;
-      },
+      handler: async ({ arguments: { projectId }, caller }) =>
+        `${String(await caller.taskService.countOnBoard({ projectId }))} tasks`,
     },
   ],
 });
