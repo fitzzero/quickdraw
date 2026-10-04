@@ -19,8 +19,9 @@ which the command names.
 {
   "extends": [
     "./node_modules/@fitzzero/quickdraw-lint/oxlint.base.jsonc",
-    // apps built from the quickdraw template: the design-system rules
-    "./node_modules/@fitzzero/quickdraw-lint/oxlint.template.jsonc",
+    // or, in an app built from the quickdraw template, the template config
+    // instead: it extends the base and adds the design-system rules
+    // "./node_modules/@fitzzero/quickdraw-lint/oxlint.template.jsonc",
   ],
   // plugins, ignorePatterns, env, globals and settings are not inherited
   "plugins": ["typescript", "import", "react", "nextjs", "jsx_a11y"],
@@ -30,8 +31,11 @@ which the command names.
 
 The configs load the plugin through a path relative to themselves, so an app
 needs no `jsPlugins` entry of its own. The comment at the top of
-`oxlint.base.jsonc` lists what an extending config inherits. The plugin runs
-on oxlint 1.52 or later.
+`oxlint.base.jsonc` lists what an extending config inherits. Its path
+overrides (explicit types in `packages/shared` and `packages/db`, the web
+app's relaxed budgets) are `**/`-prefixed, so they apply whether lint runs
+from the app's root or from each package directory. The plugin runs on
+oxlint 1.52 or later.
 
 ## Rules
 
@@ -65,6 +69,7 @@ correct code; each rule's file says what it leaves alone.
 
 The base config turns on all but the last three, at `error`, except
 `no-unused-baseline`, `no-todo-schema` and `prefer-kit`, which warn.
+`oxlint.template.jsonc` extends the base and adds the last three.
 
 ### Which files a rule checks
 
@@ -109,42 +114,63 @@ so a misspelled option fails oxlint at startup.
 
 ## Baselines
 
-An app adopts the rules without fixing every existing violation first:
+An app adopts the base config without fixing every existing violation
+first, quickdraw's rules and oxlint's own alike:
 
 ```bash
-bunx quickdraw-lint baseline            # writes .quickdraw-lint-baseline.json
+bunx quickdraw-lint baseline -c .oxlintrc.json   # writes .quickdraw-lint-baseline.json
 ```
 
 ```jsonc
-// .oxlintrc.json: every quickdraw rule reads the file
+// .oxlintrc.json: every rule reads the file
 {
   "settings": { "quickdraw": { "baseline": ".quickdraw-lint-baseline.json" } },
 }
 ```
 
+```jsonc
+// package.json: lint through quickdraw-lint check (per package: -c ../../.oxlintrc.json src)
+{ "scripts": { "lint": "quickdraw-lint check -c .oxlintrc.json ." } }
+```
+
 `quickdraw-lint baseline` runs oxlint with your config (`-c` to pick one;
 paths after the options, the current directory by default) and records a
-fingerprint for every quickdraw violation: the rule, the file, and a hash of
-the violating line's trimmed text. A rule given the file reports a violation
-only when its fingerprint is not recorded, or occurs more often than
-recorded. So fixing an old violation and adding a new one in the same file
-reports the new one, at its line, while edits elsewhere in the file (which
-move lines without changing them) disturb nothing. A violation that a disable
-comment covers is not recorded and uses no allowance. Commit the file.
+fingerprint for every violation it reports: the rule, the file, and a hash
+of the violating line's trimmed text. A violation is then reported only when
+its fingerprint is not recorded, or occurs more often than recorded. So
+fixing an old violation and adding a new one in the same file reports the
+new one, at its line, while edits elsewhere in the file (which move lines
+without changing them) disturb nothing. A violation that a disable comment
+covers is not recorded and uses no allowance, and a file oxlint cannot parse
+is never recorded: no baseline holds a syntax error. Commit the file.
+
+The quickdraw rules apply the file themselves, so a plain `oxlint` run (an
+editor's too) leaves out their recorded violations. oxlint's own rules
+(`no-unused-vars`, `no-shadow`, ...) run natively, where a JS plugin cannot
+reach them: `quickdraw-lint check` runs oxlint and leaves out their recorded
+violations as well, so it is the command an app lints with. It passes every
+option it does not know (`-c`, `--fix`, paths) to oxlint, prints what is
+left as `file:line:column: message [Severity/rule]` (`--format json` for
+oxlint's JSON report, filtered), takes `--quiet`, `--deny-warnings` and
+`--max-warnings <n>` as oxlint does, and exits 1 when an error is left.
 
 When a recorded violation is fixed, its allowance is left unused, and
-`no-unused-baseline` warns at the top of the file; run the command again so
-the file shrinks and nothing new can take the allowance's place. A single
-rule takes the file as an option instead of the setting:
-`["error", { "baseline": ".quickdraw-lint-baseline.json" }]`. A relative path
-is looked up from each linted file's directory upwards, so one file at the
-repository root also serves lint runs started from package directories.
+`no-unused-baseline` warns at the top of the file (`quickdraw-lint check`
+reports oxlint's own rules' unused allowances the same way); run the
+baseline command again so the file shrinks and nothing new can take the
+allowance's place. A single rule takes the file as an option instead of the
+setting: `["error", { "baseline": ".quickdraw-lint-baseline.json" }]`. A
+relative path is looked up from each linted file's directory upwards, so one
+file at the repository root also serves lint runs started from package
+directories. A quickdraw rule is keyed by its name, any other rule by the
+code oxlint reports it under:
 
 ```json
 {
   "version": 2,
   "files": {
     "apps/api/src/services/task.ts": {
+      "eslint(no-unused-vars)": { "9a0364b9e99bb480": 1 },
       "no-unbounded-read": { "5d41402abc4b2a76": 1, "7d793037a0760186": 2 }
     }
   }
@@ -176,7 +202,9 @@ from your overrides:
 `bun run --filter @fitzzero/quickdraw-lint test` runs every rule's cases
 under oxlint's own `RuleTester` (`oxlint/plugins-dev`: oxlint's parser and
 plugin runtime, in vitest), and `plugin/test/oxlint.test.mjs` runs the oxlint
-CLI with the shipped configs: every rule must report its example there, the
-core package's fixture apps must pass the rules that judge service
-definitions, and the baseline command must round-trip. The plugin's `.mjs`
-files ship as they are; there is no build.
+CLI with the shipped configs: every rule must report its example there (with
+the template config alone too), the core package's fixture apps must pass
+the rules that judge service definitions, and the baseline command must
+round-trip. `plugin/test/check.test.mjs` runs the configs' path overrides
+from the app root and from package directories, and `quickdraw-lint check`.
+The plugin's `.mjs` files and `bin/` ship as they are; there is no build.

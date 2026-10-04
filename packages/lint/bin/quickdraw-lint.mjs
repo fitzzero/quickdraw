@@ -1,19 +1,25 @@
 #!/usr/bin/env node
-// The `quickdraw-lint` command. One subcommand so far: `baseline`.
+// The `quickdraw-lint` command: `baseline` records what the rules report now,
+// `check` lints and reports only what the baseline does not record.
 
 import { main as baseline } from "./baseline.mjs";
+import { main as check } from "./check.mjs";
 
 const USAGE = `Usage: quickdraw-lint <command> [options]
 
 Commands:
-  baseline   record the quickdraw rules' current violations, so the rules
-             report only new ones (quickdraw-lint baseline --help)
+  baseline   record every rule's current violations, so lint reports only
+             new ones (quickdraw-lint baseline --help)
+  check      run oxlint and report only the violations the baseline does not
+             record, for every rule (quickdraw-lint check --help)
 `;
 
 const [command, ...args] = process.argv.slice(2);
 
 if (command === "baseline") {
   process.exitCode = baseline(args);
+} else if (command === "check") {
+  process.exitCode = check(args);
 } else if (command === undefined || command === "--help" || command === "-h") {
   process.stdout.write(USAGE);
 } else {

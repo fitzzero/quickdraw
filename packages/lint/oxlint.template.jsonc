@@ -1,23 +1,16 @@
 // Design-system rules for apps built from the quickdraw template (MUI with
 // translations): user-visible strings in `Button`, `Typography` and a
-// `Tooltip`'s `title` go through `t("key")` or `<T>`. Extend it after the
-// base config:
+// `Tooltip`'s `title` go through `t("key")` or `<T>`. It extends the base
+// config, so an app built from the template extends this file alone:
 //
 //   {
-//     "extends": [
-//       "./node_modules/@fitzzero/quickdraw-lint/oxlint.base.jsonc",
-//       "./node_modules/@fitzzero/quickdraw-lint/oxlint.template.jsonc"
-//     ]
+//     "extends": ["./node_modules/@fitzzero/quickdraw-lint/oxlint.template.jsonc"]
 //   }
 //
-// Like every quickdraw rule, these take a `baseline` option.
+// (Extending both, the base first, works the same.) Like every quickdraw
+// rule, these take a `baseline` option.
 {
-  "jsPlugins": [
-    {
-      "name": "quickdraw",
-      "specifier": "./plugin/index.mjs",
-    },
-  ],
+  "extends": ["./oxlint.base.jsonc"],
   "overrides": [
     {
       "files": ["**/*.tsx", "**/*.jsx"],
