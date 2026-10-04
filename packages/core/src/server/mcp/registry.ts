@@ -33,11 +33,16 @@ import type {
   McpCustomTool,
   McpRequest,
   McpTool,
+  McpToolInputSchema,
 } from "./types";
 
-/** Options of {@link createMcpRegistry}. */
+/**
+ * Options of {@link createMcpRegistry}. `Tools` are the custom tools' input
+ * schema types, one per tool, which type each handler's `arguments`.
+ */
 export interface McpRegistryOptions<
   S extends readonly AnyService[],
+  Tools extends readonly McpToolInputSchema[] = readonly McpToolInputSchema[],
 > extends DescribeToolsOptions<S> {
   /** The services whose methods become tools. The dispatcher must serve each of them. */
   readonly services: S;
@@ -64,7 +69,7 @@ export interface McpRegistryOptions<
     principal: PrincipalOfServices<S> | null,
   ) => MaybePromise<McpContextOfServices<S>>;
   /** The app's own tools, listed after the generated ones. */
-  readonly customTools?: readonly McpCustomTool<S>[];
+  readonly customTools?: { readonly [K in keyof Tools]: McpCustomTool<S, Tools[K]> };
   /** Receives tool failures and authentication errors. Default: the console. */
   readonly logger?: Logger;
 }
@@ -269,9 +274,10 @@ function callMethodTool(
  *   context: (request) => ({ scopes: scopesOf(request) }),
  * });
  */
-export function createMcpRegistry<const S extends readonly AnyService[]>(
-  options: McpRegistryOptions<S>,
-): McpRegistry {
+export function createMcpRegistry<
+  const S extends readonly AnyService[],
+  const Tools extends readonly McpToolInputSchema[] = [],
+>(options: McpRegistryOptions<S, Tools>): McpRegistry {
   const settings = resolveRegistry(options as unknown as McpRegistryOptions<readonly AnyService[]>);
   const tools = Object.freeze([...settings.entries.values()].map((entry) => entry.tool));
   return Object.freeze({

@@ -13,17 +13,23 @@ import {
   type Server as HttpServer,
   type ServerResponse,
 } from "node:http";
-import { consoleLogger, type Logger } from "../contract/logger";
-import { createCaller, type Caller } from "./caller";
+import { consoleLogger } from "../contract/logger";
 import {
   createDispatcher,
+  detachDispatcher,
   withAccessSinks,
-  type ContractOfServices,
   type Dispatcher,
   type DispatcherOptions,
   type PrincipalOfServices,
 } from "./dispatcher";
 import { liveOf } from "./emit/live";
+import {
+  closer,
+  prepareWatchdog,
+  trackCalls,
+  watchSignals,
+  type StallWatchdogOptions,
+} from "./lifecycle";
 import type { AnyService } from "./service";
 import {
   createGrantsSink,
@@ -44,7 +50,6 @@ import {
   type SocketCors,
   type SocketOptions,
   type SocketRateLimitOptions,
-  type SocketServer,
 } from "./transports/socketServer";
 import type { Principal } from "./types";
 
@@ -109,6 +114,14 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
   readonly http?: HttpTransportOptions | false;
   /** Close the server on `SIGTERM` and `SIGINT`. Default `false`. The process is never exited. */
   readonly handleSignals?: boolean;
+  /**
+   * Watch the event loop for stalls: sample its delay (every 20 ms), read it
+   * every `intervalMs` (10 s), and log a warning naming the window's slowest
+   * methods when the 99th percentile delay is above `thresholdMs` (200 ms)
+   * or one delay is above `maxMs` (1 s). `true` for the defaults. Default
+   * `false`. Stops on `close()`.
+   */
+  readonly stallWatchdog?: boolean | StallWatchdogOptions;
   /**
    * How long `close()` waits for calls and HTTP requests in flight before it
    * stops waiting and closes their connections, in milliseconds. Default
@@ -225,101 +238,6 @@ function notFound(_req: IncomingMessage, res: ServerResponse): void {
   res.end();
 }
 
-/** Watches `SIGTERM` and `SIGINT` until the server closes; returns the function that stops watching. */
-function watchSignals(close: () => Promise<void>, logger: Logger): () => void {
-  const onSignal = (signal: NodeJS.Signals): void => {
-    logger.info(`Received ${signal}; closing the quickdraw server`, {
-      category: "quickdraw.server",
-    });
-    close().catch((error: unknown) => {
-      logger.error("Closing the quickdraw server failed", {
-        category: "quickdraw.server",
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  };
-  process.once("SIGTERM", onSignal);
-  process.once("SIGINT", onSignal);
-  return () => {
-    process.off("SIGTERM", onSignal);
-    process.off("SIGINT", onSignal);
-  };
-}
-
-/** A dispatcher whose calls in flight can be awaited. */
-interface TrackedDispatcher<S extends readonly AnyService[]> {
-  readonly dispatcher: Dispatcher<S>;
-  /** Resolves once no call is in flight. */
-  idle(): Promise<void>;
-}
-
-/**
- * Counts the calls in flight through `dispatcher`, the transports' and the
- * in-process caller's alike, so `close()` can wait for them.
- */
-function trackCalls<S extends readonly AnyService[]>(
-  dispatcher: Dispatcher<S>,
-): TrackedDispatcher<S> {
-  const running = new Set<Promise<unknown>>();
-  const call: Dispatcher<S>["call"] = (request) => {
-    const result = dispatcher.call(request);
-    running.add(result);
-    const done = (): void => {
-      running.delete(result);
-    };
-    void result.then(done, done);
-    return result;
-  };
-  return {
-    dispatcher: Object.freeze({
-      ...dispatcher,
-      call,
-      caller: (principal: PrincipalOfServices<S> | null) =>
-        createCaller(() => call, principal) as Caller<ContractOfServices<S>>,
-    }),
-    async idle() {
-      while (running.size > 0) {
-        await Promise.allSettled([...running]);
-      }
-    },
-  };
-}
-
-/** The server's `close`: one shutdown, however often it is called. */
-function closer(
-  sockets: SocketServer,
-  httpServer: HttpServer,
-  idle: () => Promise<void>,
-  timeoutMs: number,
-): { close: () => Promise<void>; onClose: (stop: () => void) => void } {
-  let closing: Promise<void> | undefined;
-  let stop = (): void => undefined;
-  const shutdown = async (): Promise<void> => {
-    stop();
-    let expire = (): void => undefined;
-    const expired = new Promise<void>((resolve) => {
-      expire = resolve;
-    });
-    const timer = setTimeout(() => {
-      httpServer.closeAllConnections();
-      expire();
-    }, timeoutMs);
-    try {
-      // Disconnects every socket and closes `httpServer` once its requests
-      // end, while the calls still running finish: a mutation runs to its end.
-      await Promise.all([sockets.io.close(), Promise.race([idle(), expired])]);
-    } finally {
-      clearTimeout(timer);
-    }
-  };
-  return {
-    close: () => (closing ??= shutdown()),
-    onClose: (callback) => {
-      stop = callback;
-    },
-  };
-}
-
 /**
  * Serves `services` over Socket.IO and HTTP on the app's own Express app and
  * HTTP server: socket authentication, the `user:{id}` room, `qd:hello`, the
@@ -338,11 +256,12 @@ export function createServer<const S extends readonly AnyService[]>(
 ): QuickdrawServer<S> {
   checkOptions(options);
   const logger = options.logger ?? consoleLogger;
+  const watchdog = prepareWatchdog(options, options.stallWatchdog);
   let refresh: ((userId: string) => Promise<ServiceGrants>) | undefined;
   const grants = createGrantsSink(options.auth, () => refresh, logger);
   // Right after the access sink: a flush that lowers grants revokes before its frames go out.
   const created = createDispatcher(
-    grants === undefined ? options : withAccessSinks(options, [grants]),
+    grants === undefined ? watchdog.options : withAccessSinks(watchdog.options, [grants]),
   );
   const calls = trackCalls(created);
   const { dispatcher } = calls;
@@ -363,14 +282,24 @@ export function createServer<const S extends readonly AnyService[]>(
     live: liveOf(created),
   });
   refresh = (userId) => sockets.refresh(userId);
-  const { close, onClose } = closer(
+  const shutdown = closer(
     sockets,
     httpServer,
     () => calls.idle(),
     options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
   );
+  const { onClose } = shutdown;
+  // Once stopped, the tracked client goes back to the dispatcher attached before.
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> =>
+    (closing ??= shutdown.close().then(() => {
+      detachDispatcher(created);
+    }));
   if (options.handleSignals === true) {
     onClose(watchSignals(close, logger));
+  }
+  if (watchdog.start !== undefined) {
+    onClose(watchdog.start(logger).stop);
   }
   return Object.freeze({
     io: sockets.io as QuickdrawIo<PrincipalOfServices<S>>,

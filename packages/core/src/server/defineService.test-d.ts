@@ -577,6 +577,36 @@ describe("the in-process caller", () => {
     void caller.chatService;
   });
 
+  test("ctx.services is typed by the app's contracts, as qd.caller is, or untyped without them", () => {
+    qd.defineService(project, {
+      methods: {
+        get: {
+          access: "authenticated",
+          handler: async ({ input, ctx }) => {
+            expectTypeOf(ctx.services.taskService.get).returns.resolves.toEqualTypeOf<TaskRow>();
+            const renamed = await ctx.services.taskService.rename({ id: input.id, title: "x" });
+            // @ts-expect-error -- rename takes a title
+            void ctx.services.taskService.rename({ id: input.id });
+            // @ts-expect-error -- the app's contracts declare no chatService
+            void ctx.services.chatService;
+            return { id: renamed.id, name: renamed.title };
+          },
+        },
+      },
+    });
+    initQuickdraw().defineService(project, {
+      methods: {
+        get: {
+          access: "public",
+          handler: async ({ input, ctx }) => {
+            expectTypeOf(await ctx.services.anything?.method?.({})).toEqualTypeOf<unknown>();
+            return { id: input.id, name: "" };
+          },
+        },
+      },
+    });
+  });
+
   test("qd.caller is typed by the app's contracts, or untyped without them", () => {
     expectTypeOf(qd.caller(user).taskService.get).returns.resolves.toEqualTypeOf<TaskRow>();
     // @ts-expect-error -- the app's contracts declare no projectService

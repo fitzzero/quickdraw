@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import type { PrismaClient } from "../../../../test/prisma/setup";
 import { defineContract, QuickdrawError } from "../../../index";
 import { createTestApp, type TestApp } from "../../../testing/index";
 import { projectMembers } from "../../access/__tests__/board";
@@ -14,7 +15,7 @@ import { colSub, receiveScopes } from "../../collections/__tests__/fixture";
 import { projectContract, projectService, qd, receive, sub } from "../../emit/__tests__/live";
 import { anyOf, crud, inherit, jsonAcl } from "../../index";
 import { requireRow } from "../guards";
-import { addTasks, as, ENTITY_KEYS, kitApp, taskEntity } from "./__tests__/fixture";
+import { addTasks, as, ENTITY_KEYS, kitApp, taskContract, taskEntity } from "./__tests__/fixture";
 import { ORDINAL_STEP } from "./ordinal";
 
 const kit = kitApp();
@@ -191,6 +192,55 @@ describe("refusals", () => {
     await expect(
       owner.bulkUpdate({ ids: Array.from({ length: 201 }, (_, index) => `t${index}`), data: {} }),
     ).rejects.toMatchObject({ code: "VALIDATION", data: { issues: [{ path: ["ids"] }] } });
+  });
+});
+
+describe("development checks", () => {
+  it("check the app's prepare, which the kit's quiet handler calls", async () => {
+    const service = qd.defineService(taskContract, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      collections: { board: { anchor: projectContract } },
+      methods: {
+        ...crud.handlers(taskContract, {
+          access: {
+            get: { entry: "Read" },
+            getMany: "authenticated",
+            list: "authenticated",
+            create: { scope: "Moderate", of: projectContract, id: "projectId" },
+            update: { entry: "Moderate" },
+            delete: { entry: "Moderate" },
+            reorder: { entry: "Moderate" },
+            bulkUpdate: "authenticated",
+            bulkDelete: "authenticated",
+          },
+          // Reads every task of the project to number the new one: an unbounded read.
+          prepare: async (input, _ctx, db: PrismaClient) => ({
+            ...input,
+            ordinal: (await db.task.findMany({ where: { projectId: input.projectId } })).length,
+          }),
+        }),
+      },
+    });
+    const app = await createTestApp({
+      services: [projectService, service],
+      db: kit.harness().db,
+      strictWarnings: true,
+    });
+    kit.track(app as unknown as TestApp);
+    const board = kit.board();
+    const error: unknown = await app
+      .as(as(board.bo))
+      .taskService.create({ projectId: board.p1, title: "Numbered" })
+      .catch((reason: unknown) => reason);
+    expect(error).toMatchObject({
+      code: "INTERNAL",
+      cause: { warning: { kind: "unbounded-read", service: "taskService", method: "create" } },
+    });
+    // The kit's own reads stay quiet: a list reads by the caller's access, unchecked.
+    expect(
+      await app.as(as(board.bo)).taskService.list({ filter: { projectId: board.p1 } }),
+    ).toMatchObject({ items: expect.any(Array) });
   });
 });
 

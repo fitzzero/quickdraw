@@ -144,10 +144,10 @@ function serviceProblem(
   return MANY_ROWS.has(spec.method) ? everyRowProblem(service, name, form) : undefined;
 }
 
-function handlers<C extends AnyContract, const A extends CrudAccess<C>>(
+function handlers<C extends AnyContract, const A extends CrudAccess<C>, Db = unknown>(
   contract: C,
-  options: CrudHandlersOptions<C, A>,
-): CrudImplementations<A> {
+  options: CrudHandlersOptions<C, A, Db>,
+): CrudImplementations<A, Db> {
   const kit = kitMethods(contract);
   if (!isRecord(options)) {
     fail("options must be { access, prepare? }");
@@ -169,7 +169,7 @@ function handlers<C extends AnyContract, const A extends CrudAccess<C>>(
     checkWhenDefined(handler, (service) => serviceProblem(service, contract, [name, spec], form));
     entries[name] = Object.freeze({ access: form, handler });
   }
-  return Object.freeze(entries) as CrudImplementations<A>;
+  return Object.freeze(entries) as CrudImplementations<A, Db>;
 }
 
 /**

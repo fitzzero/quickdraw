@@ -173,6 +173,43 @@ describe("createMcpRegistry", () => {
     });
   });
 
+  test("a custom tool's arguments are its Standard Schema's output, each tool its own", () => {
+    createMcpRegistry({
+      services: [noteService],
+      dispatcher,
+      customTools: [
+        {
+          name: "search",
+          description: "Searches notes.",
+          inputSchema: z.object({ q: z.string(), limit: z.number().default(10) }),
+          handler: ({ arguments: args }) => {
+            expectTypeOf(args).toEqualTypeOf<{ q: string; limit: number }>();
+            return args.q.slice(0, args.limit);
+          },
+        },
+        {
+          name: "tag",
+          description: "Tags a note.",
+          inputSchema: z.object({ id: z.string(), tags: z.array(z.string()) }),
+          handler: ({ arguments: args }) => {
+            expectTypeOf(args).toEqualTypeOf<{ id: string; tags: string[] }>();
+            // @ts-expect-error -- the tag tool's arguments have no q
+            return args.q;
+          },
+        },
+        {
+          name: "raw",
+          description: "Takes a JSON Schema object.",
+          inputSchema: { type: "object", properties: { id: { type: "string" } } },
+          handler: ({ arguments: args }) => {
+            expectTypeOf(args).toBeUnknown();
+            return null;
+          },
+        },
+      ],
+    });
+  });
+
   test("a custom tool's access is public or authenticated, and may be left out", () => {
     expectTypeOf<NonNullable<McpCustomTool["access"]>>().toEqualTypeOf<McpToolAccess>();
     expectTypeOf<McpToolAccess>().toEqualTypeOf<"public" | "authenticated">();

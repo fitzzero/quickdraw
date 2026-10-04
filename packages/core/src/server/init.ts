@@ -11,7 +11,7 @@ import type { AnyContract } from "../contract/defineContract";
 import { QuickdrawError } from "../protocol/errors";
 import { buildService } from "./buildService";
 import { createCaller, type CallerFor } from "./caller";
-import type { BaseContext, ContextExtender } from "./context";
+import type { BaseContext, ContextExtender, RunContext } from "./context";
 import { createServer, type QuickdrawServer, type ServerOptions } from "./createServer";
 import type { DefineService } from "./defineService";
 import {
@@ -71,11 +71,17 @@ export interface Quickdraw<T extends QuickdrawTypes> {
    * sinks once `fn` settles, as a method's do (RFC 0003 section 5.1). Writes
    * made outside any unit of work still flush, on the next tick, with a
    * development warning. Inside a method or a transaction, `fn` joins it.
+   * `fn` gets a {@link RunContext} (`{ touch, log, principal: null }`):
+   * `ctx.touch` records the rows a raw SQL write changed.
    *
    * @example
    * await qd.run(() => db.task.updateMany({ where: { dueAt: { lt: now } }, data: { status: "late" } }));
+   * await qd.run(async (ctx) => {
+   *   await db.$executeRaw`UPDATE "Task" SET "status" = 'late' WHERE "id" = ANY(${ids})`;
+   *   ctx.touch("task", ids);
+   * });
    */
-  run<R>(fn: () => R | PromiseLike<R>): Promise<R>;
+  run<R>(fn: (ctx: RunContext) => R | PromiseLike<R>): Promise<R>;
   /**
    * The collections of the dispatcher this instance created last (RFC 0003
    * section 7): `qd.collections.reset(contract, collection, scope)` sends one
@@ -85,9 +91,10 @@ export interface Quickdraw<T extends QuickdrawTypes> {
   /**
    * The handle of a stream (RFC 0003 section 12.5), for handlers, jobs and
    * timers: `qd.stream(task, "logs").push(taskId, line)` (`push(item)` for a
-   * global stream). Each push goes through the dispatcher this instance
-   * created last, so a handle can be made when a module loads; pushing
-   * before any dispatcher exists, or to a stream it does not serve, throws.
+   * global stream; `pushMany(taskId, lines)` for several at once). Each push
+   * goes through the dispatcher this instance created last, so a handle can
+   * be made when a module loads; pushing before any dispatcher exists, or to
+   * a stream it does not serve, throws.
    * Throws a `TypeError` at once for a stream the contract does not declare.
    */
   stream<C extends AnyContract, K extends keyof C["streams"] & string>(
@@ -155,13 +162,19 @@ function streamOf(
   let resolved:
     | { readonly from: Dispatcher; readonly handle: StreamHandle<AnyContract, string> }
     | undefined;
+  const handle = (): StreamHandle<AnyContract, string> => {
+    const from = current() ?? noDispatcher("qd.stream");
+    if (resolved?.from !== from) {
+      resolved = { from, handle: from.stream(contract, name) };
+    }
+    return resolved.handle;
+  };
   return Object.freeze({
     push(...args: unknown[]): void {
-      const from = current() ?? noDispatcher("qd.stream");
-      if (resolved?.from !== from) {
-        resolved = { from, handle: from.stream(contract, name) };
-      }
-      (resolved.handle.push as (...items: unknown[]) => void)(...args);
+      (handle().push as (...items: unknown[]) => void)(...args);
+    },
+    pushMany(...args: unknown[]): void {
+      (handle().pushMany as (...items: unknown[]) => void)(...args);
     },
   }) as StreamHandle<AnyContract, string>;
 }

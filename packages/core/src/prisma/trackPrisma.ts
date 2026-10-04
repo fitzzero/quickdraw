@@ -18,6 +18,7 @@
 // runs outside transactions, but not on a transaction's client.
 
 import { consoleLogger, type Logger } from "../contract/logger";
+import { quietly } from "../server/devWarnings";
 import {
   createInterestRegistry,
   modelKey,
@@ -99,15 +100,28 @@ function delegateOf(client: unknown, model: string): Delegate {
   return delegate as Delegate;
 }
 
+/** Counts one statement the hook is about to run, and hands a model's to the development checks. */
+function count(
+  runtime: Runtime,
+  model: string | undefined,
+  operation: string,
+  args: Args | undefined,
+): void {
+  runtime.tracker.countStatement();
+  if (model !== undefined) {
+    runtime.tracker.observe({ model: modelKey(model), operation, args });
+  }
+}
+
 function createHook(runtime: Runtime) {
   return async function track({ model, operation, args, query }: QueryHookArgs): Promise<unknown> {
     const handler = model === undefined ? undefined : WRITE_OPERATIONS[operation];
     if (model === undefined || handler === undefined || runtime.untracked.has(modelKey(model))) {
-      runtime.tracker.countStatement();
+      count(runtime, model, operation, args);
       return query(args);
     }
     if (!delegates(runtime, operation)) {
-      runtime.tracker.countStatement();
+      count(runtime, model, operation, args);
     }
     const op: Operation = { runtime, model: modelKey(model), operation, args: args ?? {}, query };
     try {
@@ -163,7 +177,7 @@ function createNullability(
     }
     let nullable = true;
     try {
-      await delegate(modelKey(model)).count({ where: { [column]: null } });
+      await quietly(() => delegate(modelKey(model)).count({ where: { [column]: null } }));
     } catch (error) {
       if (!(error instanceof Error && error.name === "PrismaClientValidationError")) {
         throw error;
@@ -175,16 +189,21 @@ function createNullability(
   };
 }
 
+/**
+ * The adapter the framework reads through. Its reads are the framework's own
+ * (access checks, subscriptions, flushes, kits), so the development checks
+ * of statements leave them alone.
+ */
 function createStorage(
   tracker: WriteTracker,
   interest: ReturnType<typeof createInterestRegistry>,
   delegate: (model: string) => Delegate,
 ): StorageAdapter {
   return Object.freeze({
-    findMany: async (model: string, args: FindManyArgs = {}) =>
-      await delegate(modelKey(model)).findMany(args as Args),
-    count: async (model: string, args: CountArgs = {}) =>
-      await delegate(modelKey(model)).count(args as Args),
+    findMany: (model: string, args: FindManyArgs = {}) =>
+      quietly(() => delegate(modelKey(model)).findMany(args as Args)),
+    count: (model: string, args: CountArgs = {}) =>
+      quietly(() => delegate(modelKey(model)).count(args as Args)),
     onWrite: tracker.onWrite,
     countStatements: tracker.countStatements,
     registerInterest: interest.register,

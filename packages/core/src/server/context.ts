@@ -8,6 +8,8 @@ import type { AnyContract } from "../contract/defineContract";
 import type { Logger } from "../contract/logger";
 import { QuickdrawError } from "../protocol/errors";
 import type { DispatcherAccess, PolicyEngine } from "./access/api";
+import { createCaller, type CallerFor } from "./caller";
+import type { Dispatch } from "./pipeline/pipeline";
 import type { ContextRooms, Presence } from "./realtime/types";
 import type { AnyService } from "./service";
 import type { StorageAdapter } from "./storage";
@@ -29,11 +31,15 @@ export interface TouchOptions {
 }
 
 /**
- * `ctx.services`: typed in-process callers for the app's other services
- * (RFC 0003 section 10). A seam: it has no members until a later card
- * implements it, and reaching into it throws `INTERNAL`.
+ * `ctx.services`: in-process callers for the app's services (RFC 0003
+ * sections 3 and 10), by service name: `ctx.services.projectService.get(input)`.
+ * A call runs the whole pipeline (input check, access, handler, output
+ * check) as the calling principal with transport `"internal"`, its writes
+ * join the calling method's unit of work (one flush for both), and it is
+ * cancelled with `ctx.signal`. Typed by the `contracts` of the app's types,
+ * like `qd.caller`; untyped without them.
  */
-export type ContextServices = Readonly<Record<never, never>>;
+export type ContextServices<T extends QuickdrawTypes = QuickdrawTypes> = CallerFor<T>;
 
 export type { ContextRooms, Presence };
 
@@ -76,7 +82,10 @@ export interface BaseContext<P = Principal, M = McpContext> {
     ids: string | readonly string[],
     options?: TouchOptions,
   ): void;
-  /** Typed callers for the app's other services. Not implemented yet; see {@link ContextServices}. */
+  /**
+   * In-process callers for the app's services, as this call's principal:
+   * `await ctx.services.projectService.get({ id })`. See {@link ContextServices}.
+   */
   readonly services: ContextServices;
   /**
    * App-defined rooms the calling socket joins and leaves (`join` answers
@@ -96,7 +105,10 @@ export type HandlerContext<T extends QuickdrawTypes, P = PrincipalOf<T>> = Omit<
   ContextExtensionOf<T>,
   keyof BaseContext
 > &
-  BaseContext<P, McpContextOf<T>>;
+  Omit<BaseContext<P, McpContextOf<T>>, "services"> & {
+    /** In-process callers for the app's services, typed by its `contracts`. */
+    readonly services: ContextServices<T>;
+  };
 
 /** What a handler receives: the parsed input, the call's context and the app's database client. */
 export interface HandlerArgs<T extends QuickdrawTypes, Input, P = PrincipalOf<T>> {
@@ -109,6 +121,26 @@ export interface HandlerArgs<T extends QuickdrawTypes, Input, P = PrincipalOf<T>
 
 /** Any handler's `ctx`, as the pipeline handles it. */
 export type AnyContext = BaseContext<Principal | null>;
+
+/**
+ * What `qd.run(fn)` and `dispatcher.run(fn)` give `fn`: the part of a
+ * handler's `ctx` that means something outside a method call. A job has no
+ * caller, so `principal` is `null`. A `fn` that takes no parameter still
+ * works.
+ *
+ * @example
+ * await qd.run(async (ctx) => {
+ *   const ids = await renumberWithSql(projectId);
+ *   ctx.touch("task", ids);
+ * });
+ */
+export interface RunContext {
+  /** `ctx.touch`: records rows the tracked client cannot see (raw SQL, cascades) in this run's unit of work. */
+  readonly touch: BaseContext["touch"];
+  /** The dispatcher's logger, bound to this run's request id. */
+  readonly log: Logger;
+  readonly principal: null;
+}
 
 /** Builds the app's fields of `ctx` from the framework's: the `context` option of `initQuickdraw`. */
 export type ContextExtender = (base: AnyContext) => object;
@@ -142,18 +174,23 @@ export interface RoomOccupancy {
 
 /**
  * The per-call fields the dispatcher fills in. `touch` is the dispatcher's
- * (its tracked writes), `rooms` and `presence` its live data's; a context
+ * (its tracked writes), `rooms` and `presence` its live data's, `dispatch`
+ * its own dispatch function, which `ctx.services` calls through; a context
  * built without them gets a `touch` that does nothing, `rooms` that join
- * nothing and send nothing, and a `presence` that sees nobody. `kit` is kept
- * beside the context, never on it.
+ * nothing and send nothing, a `presence` that sees nobody, and `services`
+ * that throw `INTERNAL`. `kit` is kept beside the context, never on it.
  */
 export type ContextFields = Pick<
   AnyContext,
   "principal" | "signal" | "log" | "requestId" | "transport" | "mcp"
 > &
-  Partial<Pick<AnyContext, "touch" | "rooms" | "presence">> & { readonly kit?: KitRuntime };
+  Partial<Pick<AnyContext, "touch" | "rooms" | "presence">> & {
+    readonly kit?: KitRuntime;
+    readonly dispatch?: Dispatch;
+  };
 
 const KIT_RUNTIMES = new WeakMap<object, KitRuntime>();
+const SERVICE_CALLERS = new WeakMap<object, (signal: AbortSignal) => ContextServices>();
 
 /**
  * The kit runtime of the call `ctx` belongs to, or `undefined` for a
@@ -163,9 +200,16 @@ export function kitRuntimeOf(ctx: object): KitRuntime | undefined {
   return KIT_RUNTIMES.get(ctx);
 }
 
-function withRuntime<Ctx extends object>(ctx: Ctx, runtime: KitRuntime | undefined): Ctx {
+function withRuntime<Ctx extends object>(
+  ctx: Ctx,
+  runtime: KitRuntime | undefined,
+  services: ((signal: AbortSignal) => ContextServices) | undefined,
+): Ctx {
   if (runtime !== undefined) {
     KIT_RUNTIMES.set(ctx, runtime);
+  }
+  if (services !== undefined) {
+    SERVICE_CALLERS.set(ctx, services);
   }
   return ctx;
 }
@@ -176,7 +220,7 @@ export const NEVER_ABORTED: AbortSignal = new AbortController().signal;
 function notAvailable(member: string): QuickdrawError {
   return new QuickdrawError(
     "INTERNAL",
-    `${member} is not available yet in quickdraw 5.0: it arrives with a later 5.0 card`,
+    `${member} needs a dispatcher: it calls through the dispatcher that runs the method`,
   );
 }
 
@@ -197,7 +241,7 @@ const INSPECTED = new Set([
   "nodeType",
 ]);
 
-function unavailable(member: string): Readonly<Record<never, never>> {
+function unavailable(member: string): ContextServices {
   return new Proxy(Object.freeze({}), {
     get(_target, key) {
       if (typeof key === "symbol" || INSPECTED.has(key)) {
@@ -227,25 +271,46 @@ const NO_PRESENCE: Presence = Object.freeze({
 });
 
 /**
+ * `ctx.services` for a signal: callers acting as `principal` through
+ * `dispatch`, every call cancelled with the signal.
+ */
+function servicesOf(
+  dispatch: Dispatch | undefined,
+  principal: Principal | null,
+): ((signal: AbortSignal) => ContextServices) | undefined {
+  if (dispatch === undefined) {
+    return undefined;
+  }
+  return (signal) => createCaller(() => dispatch, principal, signal) as ContextServices;
+}
+
+/**
  * Builds a call's `ctx`: the framework's fields, then the app's fields from
  * `extend`. The framework's fields win when the names collide.
  */
 export function createContext(fields: ContextFields, extend?: ContextExtender): AnyContext {
-  const { kit, ...own } = fields;
+  const { kit, dispatch, ...own } = fields;
+  const services = servicesOf(dispatch, own.principal);
   const base: AnyContext = Object.freeze({
     ...own,
     touch: own.touch ?? untracked,
-    services: SERVICES,
+    services: services?.(own.signal) ?? SERVICES,
     rooms: own.rooms ?? NO_ROOMS,
     presence: own.presence ?? NO_PRESENCE,
   });
   if (extend === undefined) {
-    return withRuntime(base, kit);
+    return withRuntime(base, kit, services);
   }
-  return withRuntime(Object.freeze({ ...extend(base), ...base }), kit);
+  return withRuntime(Object.freeze({ ...extend(base), ...base }), kit, services);
 }
 
-/** The same `ctx` with another signal: the one a handler run aborts. */
+/**
+ * The same `ctx` with another signal: the one a handler run aborts. Its
+ * `ctx.services` calls are cancelled with that signal.
+ */
 export function withSignal(ctx: AnyContext, signal: AbortSignal): AnyContext {
-  return withRuntime(Object.freeze({ ...ctx, signal }), KIT_RUNTIMES.get(ctx));
+  const services = SERVICE_CALLERS.get(ctx);
+  const next =
+    services === undefined ? { ...ctx, signal } : { ...ctx, signal, services: services(signal) };
+  return withRuntime(Object.freeze(next), KIT_RUNTIMES.get(ctx), services);
 }

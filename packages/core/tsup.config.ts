@@ -19,6 +19,7 @@ export default defineConfig({
     "server/auth/index": "src/server/auth/index.ts",
     "server/express/index": "src/server/express/index.ts",
     "server/mcp/index": "src/server/mcp/index.ts",
+    "server/otel": "src/server/observability/otel.ts",
     "client/index": "src/client/index.ts",
     "utils/index": "src/utils/index.ts",
     parser: "src/protocol/parser.ts",
@@ -26,6 +27,8 @@ export default defineConfig({
     "testing/index": "src/testing/index.ts",
     "testing/prisma": "src/testing/prisma.ts",
     "testing/client": "src/testing/client.tsx",
+    // The `quickdraw-docs` bin (package.json `bin`), not an export.
+    "cli/quickdraw-docs": "src/cli/quickdraw-docs.ts",
   },
   format: ["esm"],
   dts: true,

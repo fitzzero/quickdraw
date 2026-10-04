@@ -1,173 +1,537 @@
 # @fitzzero/quickdraw-core
 
-Fast fullstack patterns for real-time applications with Socket.io and TanStack Query.
+Typed real-time fullstack services on Socket.IO, TanStack Query and Prisma.
+A service is declared once, as a contract in the app's shared package; the
+server implements it and the client is typed from it. Writes are tracked, so
+every subscriber's live rows, lists and cached queries follow them without a
+single hand-written event.
 
-## Features
+- **Contracts**: methods, projections, field tiers, collections, streams,
+  channels and events, as plain data plus schemas (Standard Schema; Zod 4.2
+  or later where JSON Schema is needed).
+- **Services**: `qd.defineService(contract, { ... })`, one handler per
+  method, access declared and failing closed, row policies shared by every
+  surface.
+- **Live data**: tracked Prisma writes become entity frames, collection
+  deltas and change topics, with revisions, resume after reconnect, and
+  revocation when access is lost.
+- **Client**: `qd.<service>.<member>` hooks over TanStack Query, live
+  entities and collections, optimistic mutations, one invalidation
+  coordinator.
+- **Kits**: read/write, search, sharing and membership, admin, presence and
+  streams, auth routes.
+- **Transports**: Socket.IO (protocol 5), HTTP, in process, MCP, and a shim
+  for 4.x clients.
+- **Testing**: a real test server, access matrices, performance budgets that
+  count statements and bytes, strict development warnings.
 
-- **Server Core**: BaseService class with typed CRUD, ACL-based access control, and real-time subscriptions
-- **Collections**: declare a scope-keyed list once, get live add/update/remove deltas, pagination, and reconnect healing — no hand-wired events
-- **Client Core**: TanStack Query integration with Socket.io for real-time state management
-- **Socket Inputs**: Pre-built form components that sync with server state
-- **Custom OAuth**: JWT-based authentication with Discord and Google providers
-- **Type Safety**: End-to-end TypeScript support with shared type definitions
+Design record: [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md).
 
-## Installation
+## Install
 
 ```bash
-pnpm add @fitzzero/quickdraw-core
+bun add @fitzzero/quickdraw-core zod
+bun add express socket.io @prisma/client                   # the server
+bun add socket.io-client @tanstack/react-query react        # the web app
+bun add -d @fitzzero/quickdraw-lint @fitzzero/quickdraw-skills oxlint
 ```
 
-## 5.0 preview: the server factory, its transports and the 4.x shim
+5.0 prereleases are published under the `next` dist-tag
+(`@fitzzero/quickdraw-core@next`). Node 24 or later. Every peer dependency
+is optional: install the ones the entries you import need.
 
-The rest of this README describes 4.x. On the `dev` branch, 5.0 replaces
-`createQuickdrawServer` and `ServiceRegistry` with `qd.createServer`
-(design: `docs/rfcs/0003-v5.md`, sections 3, 8 and 10). It attaches to the
-Express app and HTTP server the app already owns, never listens or exits the
-process itself, and serves every service over three transports:
+| Entry                                   | Needs                                                                   |
+| --------------------------------------- | ----------------------------------------------------------------------- |
+| `.` (contracts, errors, protocol types) | a Standard Schema library: Zod 4.2 or later where JSON Schema is needed |
+| `./server`, `./server/mcp`              | `socket.io`; an Express 4 or 5 app (or none) for the HTTP transport     |
+| `./server/auth`                         | `express-rate-limit` for its default sign-in limits                     |
+| `./server/express`                      | `express-rate-limit`                                                    |
+| `./server/otel`                         | `@opentelemetry/api`                                                    |
+| `./prisma`                              | `@prisma/client` 7                                                      |
+| `./client`                              | `socket.io-client`, `@tanstack/react-query` 5, `react` 19               |
+| `./utils`, `./parser`                   | nothing more                                                            |
+| `./testing`                             | `socket.io`, `socket.io-client`                                         |
+| `./testing/client`                      | the `./client` peers, and `@testing-library/react`                      |
+| `./testing/prisma`                      | `pg` or `@electric-sql/pglite`                                          |
 
-```typescript
-import express from "express";
-import { qd } from "./quickdraw"; // initQuickdraw<{ db; principal }>()
+## Quick start
 
-const app = express();
-app.use(express.json()); // optional: the HTTP transport reads JSON bodies itself
-const server = qd.createServer({
-  app, // the HTTP transport is mounted on it; the HTTP server is created from it
-  services: [taskService, projectService],
-  db: prisma,
-  auth: {
-    // a user id or a principal; nothing for anonymous; throw to refuse
-    authenticate: async ({ auth }) => verifySession(auth.token),
-    loadServiceAccess: async (userId) =>
-      (await prisma.user.findUnique({ where: { id: userId } }))?.serviceAccess,
+A board of tasks in the quickdraw template's layout: contracts in
+`packages/shared`, the server in `apps/api`, the web app in `apps/web`. The
+examples in this README compile: they are copies of
+[`packages/core/test/readme/`](packages/core/test/readme), which the package's
+typecheck builds.
+
+### 1. The contract
+
+`packages/shared/src/contracts/task.ts`. The shared package exports the
+contracts, and a map of them for the client:
+`contracts = { label, project, task }`.
+
+<!-- example: packages/shared/src/contracts/task.ts -->
+
+```ts
+import { defineContract, mutation, query } from "@fitzzero/quickdraw-core";
+import { z } from "zod";
+import { cardSchema, taskSchema } from "../schemas";
+
+export const taskContract = defineContract("taskService", {
+  entity: taskSchema, // the full row; it must contain `id: string`
+  projections: { card: cardSchema }, // lean shapes of the row
+  fields: { notes: "Admin" }, // only callers with Admin on the task receive notes
+  methods: {
+    get: query({ input: z.object({ id: z.string() }), output: "entity" }),
+    create: mutation({
+      input: z.object({ projectId: z.string(), title: z.string() }),
+      output: "entity",
+    }),
+    rename: mutation({
+      input: z.object({ id: z.string(), title: z.string() }),
+      output: "entity",
+      describe: "Renames a task.",
+    }),
+    countOnBoard: query({
+      input: z.object({ projectId: z.string() }),
+      output: z.number(),
+      // fetched again whenever the project's board changes
+      watch: { collection: "board", scope: (input) => input.projectId },
+    }),
   },
-  legacyWire: true, // serve 4.x clients during the upgrade
-  handleSignals: true, // close on SIGTERM and SIGINT (never process.exit)
+  collections: {
+    // every task of a project, live, in board order
+    board: {
+      scope: "projectId",
+      item: "card",
+      order: [
+        ["ordinal", "asc"],
+        ["id", "asc"],
+      ],
+      index: ["status", "ordinal", "assigneeId"], // sent for the whole board
+      views: { mine: (row, who) => row.assigneeId === who.userId },
+    },
+  },
 });
+```
+
+### 2. The service
+
+The app states its types once, with one tracked database client.
+
+<!-- example: apps/api/src/db.ts -->
+
+```ts
+import { trackPrisma } from "@fitzzero/quickdraw-core/prisma";
+import { prisma } from "@project/db";
+
+// Every write through `db` is tracked: subscribers see it. Apply trackPrisma
+// last, after any other client extension.
+export const db = trackPrisma(prisma);
+```
+
+<!-- example: apps/api/src/quickdraw.ts -->
+
+```ts
+import { initQuickdraw, type Principal } from "@fitzzero/quickdraw-core/server";
+import type { contracts } from "@project/shared";
+import type { db } from "./db";
+
+/** Who calls: a signed-in user, or an agent acting for one. */
+export interface AppPrincipal extends Principal {
+  readonly kind: "user" | "agent";
+}
+
+// The app's types, stated once: every service, handler and caller is typed from them.
+export const qd = initQuickdraw<{
+  db: typeof db;
+  principal: AppPrincipal;
+  contracts: typeof contracts;
+}>();
+```
+
+`apps/api/src/services/task.ts` implements every method of the contract,
+each with its access and handler:
+
+<!-- example: apps/api/src/services/task.ts -->
+
+```ts
+import { inherit } from "@fitzzero/quickdraw-core/server";
+import { projectContract, taskContract } from "@project/shared";
+import { qd } from "../quickdraw";
+
+export const taskService = qd.defineService(taskContract, {
+  model: "task", // the Prisma model its rows live in
+  access: inherit({ from: projectContract, via: "projectId" }), // the level on the task's project
+  collections: { board: { anchor: projectContract } }, // a board opens with Read on its project
+  methods: {
+    get: {
+      access: { entry: "Read" },
+      // return the row: the framework sends the projection's fields, dates as ISO strings
+      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
+    },
+    create: {
+      access: { scope: "Moderate", of: projectContract, id: "projectId" },
+      handler: ({ input, db }) => db.task.create({ data: input }),
+    },
+    rename: {
+      access: { entry: "Moderate" },
+      handler: ({ input, db }) =>
+        db.task.update({ where: { id: input.id }, data: { title: input.title } }),
+    },
+    countOnBoard: {
+      access: { scope: "Read", of: projectContract, id: "projectId" },
+      share: "caller", // identical concurrent calls by one user run once
+      handler: ({ input, db }) => db.task.count({ where: { projectId: input.projectId } }),
+    },
+  },
+});
+```
+
+### 3. The server
+
+`apps/api/src/index.ts`: the services on the app's own Express app.
+
+<!-- example: apps/api/src/index.ts -->
+
+```ts
+import express, { type Express } from "express";
+import { loadGrants, verifySession } from "./auth";
+import { db } from "./db";
+import { qd } from "./quickdraw";
+import { labelService } from "./services/label";
+import { projectService } from "./services/project";
+import { taskService } from "./services/task";
+
+export const app: Express = express();
+
+export const server = qd.createServer({
+  app, // the HTTP transport is mounted on it: POST /qd/{service}/{method}
+  services: [labelService, projectService, taskService],
+  db,
+  cors: { origin: ["http://localhost:3000"], credentials: true },
+  auth: {
+    // a principal, a user id, or nothing for an anonymous caller
+    authenticate: ({ auth }) => verifySession(auth.token),
+    loadServiceAccess: (userId) => loadGrants(userId),
+    // a tracked write to User.serviceAccess refreshes that user's open sockets
+    serviceAccessSource: { model: "user", column: "serviceAccess" },
+  },
+  handleSignals: true, // close on SIGTERM and SIGINT; the process is never exited
+});
+
 server.httpServer.listen(4000);
 ```
 
-- **Socket.IO** (protocol 5): a client connects with
-  `auth: { token, qd: { protocol: 5, client } }`, receives `qd:hello` with the
-  server's limits, and calls through `qd:call` and `qd:cancel`. Every socket
-  gets the same few listeners however many methods the services have. The
-  JSON-only parser is the default; `binary: true` restores the stock one.
-  The socket rate limiter is on by default (100 events per minute per socket,
-  `qd:ch`, `qd:cancel`, `qd:sub` and `qd:unsub` not counted); configure it
-  with `rateLimit`, or turn it off with `rateLimit: false`.
-- **HTTP**: `POST /qd/{service}/{method}` with the input as a JSON body and
-  `Content-Type: application/json` (required, even without a body). The
-  principal comes from the `session` cookie or an `Authorization: Bearer`
-  token through the same `authenticate`; the reply is `{ ok: true, d }` or
-  `{ ok: false, e: { code, message, data? } }` with the code's HTTP status.
-  Works on Express 4 and 5, and on a bare Node server. Move it with
-  `http: { path }`, turn it off with `http: false`, or mount
-  `createHttpRouter({ dispatcher, auth })` yourself. It has no rate limit of
-  its own: on Express, set `http: { rateLimit: createCallLimiter() }` (from
-  `./server/express`), which refuses with the `RATE_LIMITED` reply.
-- **In process**: `server.dispatcher.caller(principal)` or `qd.caller(principal)`.
+### 4. The client
 
-Pass your own HTTP server as `httpServer` together with the `app` it was
-created from (or with `http: false`): the HTTP transport is mounted on `app`.
+<!-- example: apps/web/src/lib/quickdraw.ts -->
 
-`server.close()` disconnects every socket, waits for the calls still in
-flight (a mutation runs to its end) and closes the HTTP server, giving up after
-`shutdownTimeoutMs` (default 10 s);
-`server.rotate({ withinMs })` asks clients to reconnect within a window;
-`server.access.refresh(userId)` reloads a user's grants, pushes `qd:access`
-and resolves the user's entity subscriptions again (behind a cluster adapter,
-on every node).
+```ts
+import { createQuickdrawClient } from "@fitzzero/quickdraw-core/client";
+import { contracts } from "@project/shared";
 
-### The 4.x legacy shim
+// One typed client for the app: qd.task and qd.project, from the contracts.
+export const qd = createQuickdrawClient(contracts);
+```
 
-With `legacyWire: true`, a client that connects without `auth.qd` is served
-as a 4.x client instead of being refused with `PROTOCOL_MISMATCH`. The shim
-serves **request/response calls only**: `socket.emit("taskService:get", payload, ack)`
-runs through the 5.0 pipeline and is answered in the 4.x `ServiceResponse`
-shape, `{ success: true, data }` or `{ success: false, error, code }`, with the
-HTTP status of the 5.0 error code as `code` (for example 422 for invalid
-input, where 4.1 sent 400). A 4.x call made without a payload arrives as
-`null`, as it did in 4.x. 4.x subscriptions (`{service}:subscribe`),
-collections and channels are **not served**: those events get no reply. The
-socket still receives `auth:info` on connect, and each service, method and
-principal kind that calls through the shim is logged once at `warn`, so the
-remaining 4.x clients can be found.
+<!-- example: apps/web/src/app/providers.tsx -->
 
-### MCP bridge
+```tsx
+"use client";
 
-`@fitzzero/quickdraw-core/server/mcp` serves the services to AI agents as MCP
-tools generated from their contracts at startup: one tool per method, named
-`{service}_{method}`, described by the method's `describe` text
-(`query({ input, output, describe: "Reads one task by its id." })`), with the
-input schema's JSON Schema as its arguments and `readOnlyHint` on every query.
-That needs Zod 4.2 or later for the input schemas: a method whose schema cannot
-describe itself as JSON Schema stops the registry at startup, naming the method,
-unless it is excluded. Every tool call goes through the dispatcher with
-transport `"mcp"`, so input validation, access checks and limits apply exactly
-as on a socket.
+import { QuickdrawProvider } from "@fitzzero/quickdraw-core/client";
+import type { ReactNode } from "react";
+import { qd } from "../lib/quickdraw";
 
-```typescript
-import {
-  createMcpHttpRouter,
-  createMcpRegistry,
-  createMcpStdioServer,
-} from "@fitzzero/quickdraw-core/server/mcp";
+export function Providers({ children }: { readonly children: ReactNode }) {
+  // Cookie sessions need no `auth`; a bearer token is `auth={token}`.
+  return (
+    <QuickdrawProvider client={qd} url="http://localhost:4000">
+      {children}
+    </QuickdrawProvider>
+  );
+}
+```
 
-// qd = initQuickdraw<{ db; principal; mcp: { scopes: string[] } }>() types ctx.mcp
-const registry = createMcpRegistry({
-  services: [taskService, projectService],
-  dispatcher: server.dispatcher,
-  // who a stdio session or an HTTP bearer token stands for; nothing = anonymous
-  principal: async (request): Promise<AppPrincipal | null> =>
-    verifyAgentToken(request.transport === "http" ? request.token : process.env.AGENT_TOKEN),
-  context: async (request) => ({ scopes: await scopesOf(request) }), // ctx.mcp in handlers
-  exclude: ["taskService.purge"], // or include: [...]; name: (service, method) => ...
-  customTools: [
-    {
-      name: "summarize",
-      description: "Summarizes the caller's open tasks.",
-      inputSchema: z.object({ projectId: z.string() }), // validated before the handler runs
-      // access: "authenticated" is the default; "public" lets anonymous callers in
-      handler: async ({ arguments: args, caller }) => summarize(args, caller), // caller acts as the agent
-    },
-  ],
+<!-- example: apps/web/src/components/TaskBoard.tsx -->
+
+```tsx
+"use client";
+
+import { qd } from "../lib/quickdraw";
+
+export function TaskBoard({ projectId }: { readonly projectId: string }) {
+  // Live: tasks added, changed, moved or removed by anyone show at once.
+  const { items, isLoading } = qd.task.board.useCollection(projectId);
+  const { data: count } = qd.task.countOnBoard.useQuery({ projectId });
+  // Optimistic: the new title shows before the server answers.
+  const rename = qd.task.rename.useMutation();
+
+  if (isLoading) {
+    return <p>Loading…</p>;
+  }
+  return (
+    <section>
+      <h2>{`${String(count ?? items.length)} tasks`}</h2>
+      <ul>
+        {items.map((task) => (
+          <li key={task.id}>
+            {task.title}
+            <button type="button" onClick={() => rename.mutate({ id: task.id, title: "Done" })}>
+              Rename
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+```
+
+When another user adds, renames or moves a task, the board changes at once,
+and `countOnBoard` is fetched again because it watches the board.
+
+## Contracts
+
+A contract is plain data plus schemas, so browser code imports it without
+any server code (design: `docs/rfcs/0003-v5.md`, section 2).
+
+<!-- example: packages/shared/src/contracts/examples.ts#outputs -->
+
+```ts
+export const labelContract = defineContract("labelService", {
+  entity: labelSchema,
+  projections: { chip: z.object({ id: z.string(), name: z.string() }) },
+  methods: {
+    find: query({ input: z.object({ name: z.string() }), output: nullable("entity") }),
+    chips: query({ input: z.object({ projectId: z.string() }), output: listOf("chip") }),
+    usage: query({ input: z.undefined(), output: z.record(z.string(), z.number()) }),
+  },
 });
 
-app.use(createMcpHttpRouter({ registry })); // GET /mcp/tools, POST /mcp/invoke
-createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" }); // in an MCP client's process
+// No entity: an RPC-only service, with no projections, field tiers or collections.
+export const healthContract = defineContract("healthService", {
+  methods: { ping: query({ input: z.undefined(), output: z.literal("pong") }) },
+});
 ```
 
-- **stdio** speaks the JSON-RPC wire format 4.1 did (protocol version
-  2024-11-05). One process is one session: its queries share one concurrency
-  lane, and `notifications/cancelled` cancels a call. Start its module through
-  `bootstrapMcpServer(new URL("./mcp-server.js", import.meta.url))`, which
-  sends console output to stderr so only the protocol reaches stdout.
-- **HTTP** keeps 4.1's routes: `POST /mcp/invoke` takes `{ name, arguments }`
-  or 4.1's `{ service, method, payload }` and answers `{ success: true, data }`,
-  or `{ success: false, error, code, data? }` with the code's HTTP status.
-- An anonymous caller (the `principal` hook returned nothing) may call
-  `"public"` methods, and custom tools that declare `access: "public"`; any
-  other tool answers `UNAUTHENTICATED` before it runs.
-- A failed call reaches the agent as a tool error carrying the code
-  (`FORBIDDEN`, `VALIDATION` with the issues, and so on). Changed from 4.1:
-  tools are per method rather than per service, the agent can no longer pick
-  its user with a `userId` argument, and `generateToolMetadata` is gone.
+- Every method is a `query` or a `mutation`, with an `input` and an
+  `output`. The kind decides request sharing, cancellation, the concurrency
+  cap, the MCP read-only hint and which client hook exists. `describe` is the
+  method's description for people and agents (the MCP tool's description).
+- `output` is a schema, or a projection: `"entity"`, a named projection,
+  `nullable("entity")` or `listOf("card")`. A handler returns database rows
+  for a projection output, and the framework projects them.
+- `entity` and every projection contain `id: string`. A contract without an
+  `entity` is an RPC-only service.
+- Only a query may `watch` (`{ collection, scope: (input) => scopeId }`): the
+  client joins that scope's change topic and fetches the query again when it
+  changes.
+- Methods, collections, streams, channels and events share one namespace,
+  because the client exposes each as `qd.<service>.<name>`. `subscribe`,
+  `unsubscribe`, `call`, `then`, `useEntity`, `useEntities`, `admin` and
+  names starting with `$` are reserved.
+- Schemas are any Standard Schema. A projection's keys, admin field
+  metadata, MCP tool schemas and `quickdraw-docs` read Standard JSON Schema,
+  which Zod 4.2 or later provides; a projection whose schema cannot describe
+  itself declares `keys` in the service's `project` option.
 
-### Tracked writes
+Types come from the contract too:
+
+<!-- example: packages/shared/src/contracts/examples.ts#types -->
+
+```ts
+export type RenameInput = InputOf<typeof taskContract, "rename">; // { id: string; title: string }
+export type Task = OutputOf<typeof taskContract, "get">; // the entity, as the wire has it
+export type Card = ItemOf<typeof taskContract, "board">; // one item of the board
+```
+
+`InputOf`, `ParsedInputOf`, `OutputOf`, `EntityOf`, `ProjectionOf`,
+`ItemOf`, `ScopeOf`, `IndexRowOf`, `ViewName` and the rest are exported from
+the package root.
+
+## Services
+
+`qd.defineService(contract, definition)` implements a contract (design:
+section 3). `methods` must implement exactly the contract's methods; each is
+`{ access, handler }`, plus `timeoutMs`, and for a query `share`, `ttlMs` and
+`version`.
+
+<!-- example: apps/api/src/services/examples/handlers.ts#handler -->
+
+```ts
+export const taskService = qd.defineService(task, {
+  model: "task",
+  methods: {
+    assign: {
+      access: { service: "Moderate" },
+      timeoutMs: 5_000, // instead of the dispatcher's callTimeoutMs (30 s)
+      handler: async ({ input, ctx, db }) => {
+        const found = await db.task.findUnique({ where: { id: input.id } });
+        if (found === null) {
+          throw new QuickdrawError("NOT_FOUND", "No such task"); // the caller receives the code
+        }
+        ctx.log.info("assigning", { by: ctx.principal.userId, transport: ctx.transport });
+        return db.task.update({ where: { id: input.id }, data: { assigneeId: input.assigneeId } });
+      },
+    },
+  },
+});
+```
+
+- A handler receives `{ input, ctx, db }`: the input after its schema ran,
+  the call's context, and the tracked database client. `ctx` holds
+  `principal` (`userId`, `kind`, `claims`, `serviceAccess`; `null` only in a
+  `"public"` method called anonymously), `signal` (aborts on cancel or time
+  limit), `log`, `requestId`, `transport` (`"socket"`, `"http"`, `"mcp"`,
+  `"internal"` or `"legacy"`), `touch` (below), `rooms` and `presence`
+  (realtime, below), `mcp` (the MCP bridge's context) and `services`.
+- `ctx.services` calls the app's services in process, as the same
+  principal, by service name: `await ctx.services.projectService.get({ id })`.
+  Each call runs the whole pipeline with transport `"internal"` (input
+  check, access, handler, output check), so access is checked on the inner
+  call too; its writes join the calling method's unit of work, so both
+  flush together once; and it is cancelled with `ctx.signal`. It is typed
+  by the `contracts` of `initQuickdraw`'s types, as `qd.caller` is.
+- `share: "caller"` runs identical concurrent calls of one principal once,
+  `share: "all"` across principals (not with `custom` access); `ttlMs` keeps
+  a shared result. `version(input, ctx)` answers "not modified" for a query
+  whose result the caller already holds.
+- Every call runs a pipeline: look up, concurrency (16 queries in flight per
+  socket and 64 queued, then `RATE_LIMITED`; mutations are not queued behind
+  queries), input validation, access, "not modified", sharing, the handler
+  under a time limit (30 s by default), output validation outside
+  production, the reply, the flush, and one completion record (`onCall`).
+  A mutation ignores the caller's cancel: only its time limit stops it.
+
+Errors are `QuickdrawError(code, message, data?)`. Anything else a handler
+throws reaches the caller as `INTERNAL` with a generic message, and is
+logged; Prisma's unique violation becomes `CONFLICT` and its missing row
+`NOT_FOUND`.
+
+| Code              | HTTP | Meaning                                            |
+| ----------------- | ---- | -------------------------------------------------- |
+| `UNAUTHENTICATED` | 401  | no principal                                       |
+| `FORBIDDEN`       | 403  | access denied                                      |
+| `NOT_FOUND`       | 404  | unknown service, method or row                     |
+| `CONFLICT`        | 409  | unique or state conflict                           |
+| `VALIDATION`      | 422  | input failed its schema; `data.issues` lists paths |
+| `RATE_LIMITED`    | 429  | limiter or queue overflow; `data.retryAfterMs`     |
+| `CANCELLED`       | 499  | the caller cancelled                               |
+| `TIMEOUT`         | 504  | the handler ran past its time limit                |
+| `INTERNAL`        | 500  | everything else                                    |
+
+An app adds its own fields to every `ctx` once, through `initQuickdraw`:
+
+<!-- example: apps/api/src/services/examples/context.ts#context -->
+
+```ts
+interface AppContext {
+  /** The tenant every query of this call is scoped to. */
+  readonly tenantId: string;
+}
+
+export const qd = initQuickdraw<{ db: typeof db; principal: Principal; context: AppContext }>({
+  // runs once per call, before access is checked, so custom checks see it too
+  context: (base) => ({ tenantId: String(base.principal?.claims?.tenant ?? "public") }),
+});
+```
+
+## Access control
+
+Each method declares who may call it, and a service with rows declares one
+access policy that says how a principal's level on a row is found (design:
+section 4). Everything fails closed: a method without `access` does not
+compile, and a missing grant, an unknown level, a missing id, a row that does
+not exist or a malformed access list denies.
+
+<!-- example: apps/api/src/services/examples/access.ts#access -->
+
+```ts
+import { anyOf, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
+
+export const projectService = qd.defineService(project, {
+  model: "project", // the Prisma model the rows live in
+  access: anyOf(
+    jsonAcl("acl", { owner: "ownerId" }), // [{ userId, level }] plus Admin for the owner
+    members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),
+  ),
+  methods: {
+    get: {
+      access: { entry: "Read" },
+      handler: ({ input, db }) => db.project.findUniqueOrThrow({ where: { id: input.id } }),
+    },
+  },
+});
+
+export const taskService = qd.defineService(task, {
+  model: "task",
+  access: inherit({ from: project, via: "projectId" }), // the level on the task's project
+  methods: {
+    rename: {
+      access: { entry: "Moderate" },
+      handler: ({ input, db }) =>
+        db.task.update({ where: { id: input.id }, data: { title: input.title } }),
+    },
+    create: {
+      access: { scope: "Moderate", of: project, id: "projectId" },
+      handler: ({ input, db }) => db.task.create({ data: input }),
+    },
+    archiveAll: {
+      access: { service: "Admin" },
+      handler: async ({ db }) => (await db.task.updateMany({ data: { status: "archived" } })).count,
+    },
+    claim: {
+      access: custom((ctx, input) => input.id.length > 0 && ctx.principal.kind === "user"),
+      handler: ({ input, ctx, db }) =>
+        db.task.update({ where: { id: input.id }, data: { assigneeId: ctx.principal.userId } }),
+    },
+  },
+});
+```
+
+- Forms: `"public"`, `"authenticated"`, `{ service: L }` (the user's
+  service-wide grant), `{ entry: L, id? }` (the policy's level on the row;
+  `id` defaults to `input.id`), `{ service: L1, entry: L2 }` (either),
+  `{ scope: L, of, id }` (the level on a row of another service) and
+  `custom(fn)`. Without a principal every form but `"public"` answers
+  `UNAUTHENTICATED`; a principal that fails gets `FORBIDDEN`. The levels,
+  lowest first, are `Public`, `Read`, `Moderate` and `Admin`.
+- A service-wide `Admin` grant passes every check on its service
+  (`adminBypass: false` turns that off). A grant below `Admin` counts only
+  where the form names `service`: a `Read` grant does not read every row.
+- Grants come from `principal.serviceAccess`, as `authenticate` returns it or
+  `createServer({ auth: { loadServiceAccess } })` loads it. With
+  `auth.serviceAccessSource: { model: "user", column: "serviceAccess" }`, a
+  tracked write to that column refreshes the user's open sockets
+  (`qd:access`).
+- Policies: `owner(field)`, `jsonAcl(field, { owner? })`,
+  `members({ model, entry, user, level, levels? })`, `inherit({ from, via })`,
+  `anyOf(...)` and `resolver({ levelsFor, where? })`. Their column names are
+  checked against the Prisma client's models at compile time. A lookup is one
+  batched query per table, memoized for the call, so checking 60 ids costs
+  what checking one does. `entry` access needs a policy; a service without
+  `model` may only use `"public"`, `"authenticated"`, `{ service }` and
+  `custom`. `inherit` uses the parent's policy only: grants on the parent's
+  service do not flow down.
+- One policy decides every surface: method calls, entity subscriptions,
+  collection scopes, the kits' lists and searches, streams and channels.
+- When a tracked write lowers or removes someone's access, their sockets
+  leave the rooms anchored on that row and get `qd:revoked`; a changed level
+  moves them to that level's room. In a cluster the change is broadcast to
+  every node.
+- `server.dispatcher.access` gives the same answers to other code:
+  `levelsFor(service, principal, ids)`, `accessWhere(service, principal, level)`
+  (a `where` filter for `findMany`, or `"none"`) and `onAccessChanged(listener)`.
+- `createServer({ access: { cacheMs: 30_000 } })` keeps policy lookups across
+  requests; tracked writes to the columns and membership tables the policies
+  read evict them. Writes the tracked client cannot see are picked up only
+  when the time passes, so the cache is off by default.
+
+## Tracked writes
 
 `@fitzzero/quickdraw-core/prisma` wraps the app's Prisma client so the
-framework sees every write made through it (design: `docs/rfcs/0003-v5.md`,
-section 5). Pass the tracked client as `db`; the server finds the rest on it:
-
-```typescript
-import { trackPrisma } from "@fitzzero/quickdraw-core/prisma";
-
-export const db = trackPrisma(new PrismaClient({ adapter })); // the last extension applied
-export const qd = initQuickdraw<{ db: typeof db; principal: AppPrincipal }>();
-const server = qd.createServer({ app, services, db, flushSink: [auditSink] });
-
-await qd.run(() => db.task.updateMany({ where: { dueAt: { lt: now } }, data: { late: true } }));
-```
+framework sees every write made through it (design: section 5). Pass the
+tracked client as `db`; the server finds the rest on it.
 
 - Every handler runs in a unit of work. Each `create`, `update`, `upsert`,
   `delete`, `createMany`, `updateMany` and `deleteMany` made through `db` is
@@ -178,102 +542,104 @@ await qd.run(() => db.task.updateMany({ where: { dueAt: { lt: now } }, data: { l
   rollback drops them. Prefer the interactive form
   (`db.$transaction(async (tx) => ...)`): an array-form
   `db.$transaction([...])` has no transaction client, so the rows a
-  `deleteMany` or `updateMany` in it reads first are read outside the batch,
-  and rows its earlier statements changed may be missed (a development
-  warning names the model and operation).
+  `deleteMany` or `updateMany` in it reads first, and the old values an
+  `update` that moves a row or changes who may see it reads first, are read
+  outside the batch, and rows its earlier statements changed may be missed
+  (a development warning names the model and operation).
+- Write many rows in one statement when every row gets the same data
+  (`updateMany`, `createMany`). When each row's data differs (moving tasks
+  to different projects, say), write each row by id inside an interactive
+  transaction: inside `db.$transaction(async (tx) => ...)`, loop over the
+  rows and await `tx.task.update({ where: { id }, data })` for each. Neither
+  the N+1 warning nor `no-db-call-in-loop` counts those writes.
+- A service lists the other models its handlers write
+  (`writes: ["taskLabel"]`); the `no-foreign-write` lint rule checks it.
 - Jobs, scripts and webhooks wrap their writes in `qd.run(fn)`, which
   flushes before it returns. A write made outside any unit of work flushes
   on its own on the next tick, with a development warning.
-- Not seen: nested writes (`{ labels: { create: [...] } }`, which warn in
-  development), raw SQL and database cascades. Record raw SQL with
-  `ctx.touch("task", ids)`, or `{ removed: true }` for deleted rows.
-- Tracked models need a string `id` column; writes to other models pass
-  through untracked, with one warning.
 
-`createRecordingSink()` on `./testing` records what is flushed, for tests.
-Entity frames, collection deltas and change topics are built on these
-flushes (below).
+<!-- example: apps/api/src/jobs/overdue.ts#run -->
 
-### Access control
-
-Each method declares who may call it, and a service with rows declares one
-access policy that says how a principal's level on a row is found (design:
-`docs/rfcs/0003-v5.md`, section 4). Everything fails closed: a method without
-`access` does not compile, and a missing grant, an unknown level, a missing
-id, a row that does not exist or a malformed access list denies.
-
-```typescript
-import { anyOf, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
-
-export const projectService = qd.defineService(project, {
-  model: "project", // the Prisma model the rows live in
-  access: anyOf(
-    jsonAcl("acl", { owner: "ownerId" }), // [{ userId, level }] plus Admin for the owner
-    members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),
-  ),
-  methods: { get: { access: { entry: "Read" }, handler: ({ input, db }) => /* ... */ } },
-});
-
-export const taskService = qd.defineService(task, {
-  model: "task",
-  access: inherit({ from: project, via: "projectId" }), // the level on the task's project
-  methods: {
-    rename: { access: { entry: "Moderate" }, handler: /* ... */ },
-    create: { access: { scope: "Moderate", of: project, id: "projectId" }, handler: /* ... */ },
-    archiveAll: { access: { service: "Admin" }, handler: /* ... */ },
-  },
-});
+```ts
+export async function markStale(before: Date): Promise<number> {
+  // a job's writes flush to subscribers when qd.run settles, as a method's do
+  const { count } = await qd.run(() =>
+    db.task.updateMany({
+      where: { status: "open", updatedAt: { lt: before } },
+      data: { status: "stale" },
+    }),
+  );
+  return count;
+}
 ```
 
-- Forms: `"public"`, `"authenticated"`, `{ service: L }` (the user's
-  service-wide grant), `{ entry: L, id? }` (the policy's level on the row;
-  `id` defaults to `input.id`), `{ service: L1, entry: L2 }` (either),
-  `{ scope: L, of, id }` (the level on a row of another service) and
-  `custom(fn)`. Without a principal every form but `"public"` answers
-  `UNAUTHENTICATED`; a principal that fails gets `FORBIDDEN`.
-- A service-wide `Admin` grant passes every check on its service
-  (`adminBypass: false` turns that off). A grant below `Admin` counts only
-  where the form names `service`: a `Read` grant no longer reads every row,
-  and a `Read` method without a row id is no longer open to every signed-in
-  user, as both were in 4.x.
-- Policies: `owner(field)`, `jsonAcl(field, { owner? })`,
-  `members({ model, entry, user, level, levels? })`, `inherit({ from, via })`,
-  `anyOf(...)` and `resolver({ levelsFor, where? })`. Their column names are
-  checked against the Prisma client's models at compile time. A lookup is one
-  batched query per table, memoized for the call, so checking 60 ids costs
-  what checking one does. `entry` access needs a policy; a service without
-  `model` may only use `"public"`, `"authenticated"`, `{ service }` and
-  `custom`.
-- `server.dispatcher.access` gives the same answers to other code:
-  `levelsFor(service, principal, ids)`, `accessWhere(service, principal, level)`
-  (a `where` filter for `findMany`, or `"none"`) and `onAccessChanged(listener)`,
-  called when a tracked write may have changed someone's access to a row.
-- `createServer({ access: { cacheMs: 30_000 } })` keeps policy lookups across
-  requests; tracked writes to the columns and membership tables the policies
-  read evict them. Writes the tracked client cannot see are picked up only
-  when the time passes, so the cache is off by default.
+- Not seen: nested writes (`{ labels: { create: [...] } }`, which warn in
+  development), raw SQL and database cascades. Record raw SQL with
+  `ctx.touch("task", ids)`, or `{ removed: true }` for deleted rows. A job
+  gets the same `touch` from `qd.run`, whose `fn` receives
+  `{ touch, log, principal: null }`:
 
-### Projections and entity subscriptions
+<!-- example: apps/api/src/jobs/overdue.ts#touch -->
 
-A projection is the wire shape of a row (design: `docs/rfcs/0003-v5.md`,
-section 6). Its keys decide what a read selects, so a row is never read wider
-than what is sent:
+```ts
+export async function spreadOrdinals(projectId: string): Promise<void> {
+  await qd.run(async (ctx) => {
+    const rows = await db.$queryRaw<{ id: string }[]>`
+      UPDATE "Task" SET "ordinal" = "ordinal" * 2 WHERE "projectId" = ${projectId} RETURNING "id"`;
+    ctx.touch(
+      "task",
+      rows.map((row) => row.id),
+    ); // raw SQL is invisible to the tracked client: record the rows it changed
+  });
+}
+```
 
-```typescript
+- Tracked models need a string `id` column; writes to other models pass
+  through untracked, with one warning.
+- `createServer({ flushSink })` adds the app's own sinks (an audit log, say);
+  `createRecordingSink()` on `./testing` records what is flushed, for tests.
+
+## Projections and entity subscriptions
+
+A projection is the wire shape of a row (design: section 6). Its keys decide
+what a read selects, so a row is never read wider than what is sent:
+
+<!-- example: apps/api/src/services/examples/projections.ts#projections -->
+
+```ts
+import { inherit } from "@fitzzero/quickdraw-core/server";
+
 export const taskService = qd.defineService(task, {
   model: "task",
-  access: inherit({ from: project, via: "projectId" }),
+  access: inherit({ from: projectContract, via: "projectId" }),
   versionColumn: "updatedAt", // answers "not modified" from the row's own time
-  affects: [{ service: task, id: "parentTaskId" }], // a write to a child sends its parent again
+  affects: [{ service: task, id: "parentTaskId" }], // a write to a subtask sends its parent again
   project: {
-    // relations and computed fields: read with select, built by map
-    card: { select: { title: true, status: true }, map: (row: CardRow) => toCard(row) },
+    // a relation count: read with select, built by a pure, synchronous map
+    card: {
+      select: { title: true, status: true, _count: { select: { labels: true } } },
+      map: (row: { id: string; title: string; status: string; _count: { labels: number } }) => ({
+        id: row.id,
+        title: row.title,
+        status: row.status,
+        labelCount: row._count.labels,
+      }),
+    },
   },
   methods: {
-    // returns the database row: the framework keeps the projection's keys, dates as ISO strings
+    // returns the database row: the projection's keys are sent, dates as ISO strings
     get: {
       access: { entry: "Read" },
       handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
+    },
+    // returns what `map` takes
+    card: {
+      access: { entry: "Read" },
+      handler: ({ input, db }) =>
+        db.task.findUniqueOrThrow({
+          where: { id: input.id },
+          select: { id: true, title: true, status: true, _count: { select: { labels: true } } },
+        }),
     },
   },
 });
@@ -286,22 +652,20 @@ export const taskService = qd.defineService(task, {
   dropped); with `map`, it returns what `map` takes.
 - Fields the contract's `fields` map puts above the caller's level on a row
   are stripped from that caller's copy, after any shared run.
-- `qd:sub { s, ids, revs? }` (up to 500 ids) authorizes every id in one
-  lookup, reads the allowed rows in one query, joins the room of each row
-  found for the subscriber's level, and answers each id with
-  `{ ok: true, d, rev }`, `{ ok: true, nm: true, rev }` (the held revision is
-  current) or `{ ok: false, e }` (`FORBIDDEN`, `NOT_FOUND`). A socket is never
-  in the room of a row it could not read. `qd:unsub { s, ids }` leaves.
+- `affects` names rows of other services a write changes too
+  (`{ service, id: column }`, or `{ service, id: (row) => ids, columns }`);
+  they are sent again after the flush, one hop.
+- `qd.<service>.useEntity(id)` subscribes with `qd:sub { s, ids, revs? }` (up
+  to 500 ids per batch), which authorizes every id in one lookup, reads the
+  allowed rows in one query and joins the room of each row found for the
+  subscriber's level. A socket is never in the room of a row it could not
+  read.
 - After each flush, subscribers get `qd:e`: `{ t: "u", s, id, rev, d }` with
   the whole row (a create, a touch, a projection with `map`, an `affects` row),
   `{ t: "p", s, id, rev, d }` with the changed fields only (an update of plain
   projection fields), or `{ t: "r", s, id, rev }` (a delete). One read per
   service per flush, none when no room has subscribers, and each frame is
   stripped once per subscriber tier.
-- When a write lowers or removes someone's access, their sockets leave the
-  rooms anchored on that row and get `qd:revoked { kind: "entity", reason:
-"access", s, id }`; a changed level moves them to that tier's room with the
-  row as they may now see it.
 - "Not modified" (for `qd:sub` and for queries returning one projection row
   by `id`) comes from `versionColumn`, or from an in-process change log of
   recent flushes. The change log sees only this process's writes: an app
@@ -311,35 +675,83 @@ export const taskService = qd.defineService(task, {
   and sent, since other nodes' rooms are not visible, and access changes and
   refreshed grants are broadcast to every node.
 
-### Collections and change topics
+## Collections and change topics
 
 A collection is the rows of one service grouped by a scope value (design:
-`docs/rfcs/0003-v5.md`, section 7). The contract declares it; the service
-says whose policy authorizes a scope:
+section 7). The contract declares it; the service says whose policy
+authorizes a scope:
 
-```typescript
-export const taskService = qd.defineService(task, {
-  model: "task",
-  access: inherit({ from: project, via: "projectId" }), // derived from the anchor: see below
-  collections: { byProject: { anchor: project }, mine: { scopeAccess: "self" } },
-  watchAccess: { service: "Read" }, // opens the service topic to Read grants; closed without it
-  methods: {
-    /* ... */
+<!-- example: apps/api/src/services/examples/collections.ts#contract -->
+
+```ts
+export const task = defineContract("taskService", {
+  entity: taskSchema,
+  projections: { card: cardSchema },
+  methods: { get: query({ input: z.object({ id: z.string() }), output: "entity" }) },
+  collections: {
+    byProject: {
+      scope: "projectId", // a column holding the scope value
+      item: "card", // the projection each item is sent as
+      where: { status: "open" }, // membership: only open tasks
+      order: [
+        ["ordinal", "asc"],
+        ["id", "asc"],
+      ], // ends in "id": the keyset cursor
+      index: ["ordinal", "assigneeId"], // sent for the whole scope
+      views: { mine: (row, who) => row.assigneeId === who.userId },
+    },
+    assigned: { scope: "assigneeId", item: "card", order: [["id", "asc"]] }, // each user's own
   },
 });
 ```
 
+<!-- example: apps/api/src/services/examples/collections.ts#service -->
+
+```ts
+import { inherit } from "@fitzzero/quickdraw-core/server";
+
+export const taskService = qd.defineService(task, {
+  model: "task",
+  access: inherit({ from: projectContract, via: "projectId" }), // derived from the anchor
+  collections: {
+    byProject: { anchor: projectContract }, // Read on the project opens its scope
+    assigned: { scopeAccess: "self" }, // a user opens only the scope that is their id
+  },
+  watchAccess: { service: "Read" }, // opens the service topic to Read grants; closed without it
+  methods: {
+    get: {
+      access: { entry: "Read" },
+      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
+    },
+  },
+});
+```
+
+- `scope` is a string column, or `via({ model, entry, scope })` for scopes
+  that come from a junction table (a chat in each member's list). `order`
+  ends in `id`; `limit` (default 100) and `maxLimit` (default 500) size its
+  pages; `where` is an equality filter on membership; `access` is the level
+  needed on the anchor (default `Read`).
 - `qd:col:sub { s, c, scope }` authorizes the scope through its anchor's
-  policy (the collection's `access` level, `Read` by default), then answers a
-  page and joins the scope's room; flushes send `qd:c` deltas to it. A
-  `"self"` scope is the subscriber's own user id: its items are stripped at
-  `Read`, and it may not declare a higher `access`.
+  policy, then answers a page and joins the scope's room; flushes send `qd:c`
+  deltas to it (`added`, `updated`, `patched`, `removed`, or `reset` for more
+  than `bulkThreshold` rows, default 200). A `"self"` scope is the
+  subscriber's own user id: its items are stripped at `Read`, and it may not
+  declare a higher `access`.
 - Items are visible to everyone in the scope: no per-row policy or field
   tier applies inside a collection. Derive the item service's own access
-  from the anchor (`inherit` from it, as above): a per-row policy on the
-  item service (an owner column, a row's access list) is not applied to
+  from the anchor (`inherit` from it, as above): a per-row policy on the item
+  service (an owner column, a row's access list) is not applied to
   collection items, so a row it would hide still reaches everyone in its
   scope.
+- `index` sends one small row per member (`[id, rev, ...fields]`, up to
+  50,000) with the first page, so the client knows the whole membership and
+  order at once; `views` are pure predicates over index rows the client runs.
+  When a collection declares `index`, every `order` column but `id` must be
+  an index field.
+- A deleted anchor row (a project, for its tasks) closes its scopes with
+  `qd:revoked`; `qd.collections.reset(contract, collection, scope)` resets a
+  scope after a change tracked writes cannot describe.
 - `qd:watch { s, topic }` joins a change topic: `{collection}:{scope}`,
   authorized like a subscribe to that scope, or `service`, which changes
   whenever any row of the service does. The service topic is closed
@@ -351,16 +763,266 @@ export const taskService = qd.defineService(task, {
   instead: `limits.subscriptions` (8 at once, 64 waiting), then
   `RATE_LIMITED`.
 
-### Read/write kit
+## The server and its transports
+
+`qd.createServer` attaches to the Express app and HTTP server the app already
+owns, never listens or exits the process itself, and serves every service
+over three transports (design: sections 3, 8 and 10):
+
+- **Socket.IO** (protocol 5): a client connects with
+  `auth: { token, qd: { protocol: 5, client } }`, receives `qd:hello` with the
+  server's limits and who it acts for, and calls through `qd:call` and
+  `qd:cancel`. Every socket gets the same few listeners however many methods
+  the services have. The JSON-only parser is the default; `binary: true`
+  restores the stock one. The socket rate limiter is on by default (100
+  events per minute per socket; channels, cancels and subscription events not
+  counted); configure it with `rateLimit`, or turn it off with
+  `rateLimit: false`. There is no default CORS origin: pass `cors`.
+- **HTTP**: `POST /qd/{service}/{method}` with the input as a JSON body and
+  `Content-Type: application/json` (required, even without a body, so a
+  cross-site page cannot use a session cookie without a CORS preflight). The
+  principal comes from the `session` cookie or an `Authorization: Bearer`
+  token through the same `authenticate`; the reply is `{ ok: true, d }` or
+  `{ ok: false, e: { code, message, data? } }` with the code's HTTP status.
+  Works on Express 4 and 5, and on a bare Node server. Move it with
+  `http: { path }`, turn it off with `http: false`, or mount
+  `createHttpRouter({ dispatcher, auth })` yourself. It has no rate limit of
+  its own: on Express, set `http: { rateLimit: createCallLimiter() }` (from
+  `./server/express`), which refuses with the `RATE_LIMITED` reply.
+- **In process**: `server.dispatcher.caller(principal)` or
+  `qd.caller(principal)`: `await qd.caller(user).taskService.rename(input)`,
+  typed by the `contracts` of `initQuickdraw`'s types.
+
+`authenticate` takes one request (`{ transport, auth, headers, socket | req }`)
+for both transports and returns a principal, a user id, or nothing for an
+anonymous caller; throwing `QuickdrawError("UNAUTHENTICATED", ...)` refuses.
+Pass your own HTTP server as `httpServer` together with the `app` it was
+created from (or with `http: false`).
+
+`server.close()` disconnects every socket, waits for the calls still in
+flight (a mutation runs to its end) and closes the HTTP server, giving up
+after `shutdownTimeoutMs` (default 10 s); `handleSignals: true` calls it on
+SIGTERM and SIGINT. `server.rotate({ withinMs })` asks clients to reconnect
+within a window; `server.access.refresh(userId)` reloads a user's grants,
+pushes `qd:access` and resolves the user's entity subscriptions again;
+`server.access.disconnectUser(userId, { sessionId? })` ends a user's (or one
+session's) sockets, on every node behind a cluster adapter.
+
+### The 4.x legacy shim
+
+With `legacyWire: true`, a client that connects without `auth.qd` is served
+as a 4.x client instead of being refused with `PROTOCOL_MISMATCH`. The shim
+serves request/response calls only: `socket.emit("taskService:get", payload, ack)`
+runs through the 5.0 pipeline and is answered in the 4.x `ServiceResponse`
+shape, `{ success: true, data }` or `{ success: false, error, code }`, with
+the HTTP status of the error code as `code`. 4.x subscriptions, collections
+and channels are not served. Each service, method and principal kind that
+calls through the shim is logged once at `warn`, so the remaining 4.x
+clients can be found.
+
+### MCP bridge
+
+`@fitzzero/quickdraw-core/server/mcp` serves the services to AI agents as MCP
+tools generated from their contracts at startup: one tool per method, named
+`{service}_{method}`, described by the method's `describe` text, with the
+input schema's JSON Schema as its arguments and `readOnlyHint` on every
+query. Every tool call goes through the dispatcher with transport `"mcp"`,
+so input validation, access checks and limits apply exactly as on a socket.
+A method whose input cannot describe itself as JSON Schema stops the
+registry at startup, naming the method, unless it is excluded.
+
+<!-- example: apps/api/src/mcp.ts#mcp -->
+
+```ts
+import {
+  createMcpHttpRouter,
+  createMcpRegistry,
+  createMcpStdioServer,
+} from "@fitzzero/quickdraw-core/server/mcp";
+
+const summarizeInput = z.object({ projectId: z.string() });
+
+const registry = createMcpRegistry({
+  services: [projectService, taskService],
+  dispatcher: server.dispatcher,
+  // who a stdio session or an HTTP bearer token stands for; nothing is anonymous
+  principal: (request) =>
+    verifySession(request.transport === "http" ? request.token : process.env.AGENT_TOKEN),
+  context: () => ({ scopes: ["tasks"] }), // handlers read it as ctx.mcp
+  exclude: ["projectService.invite"], // or include: [...]; name: (service, method) => ...
+  customTools: [
+    {
+      name: "summarize",
+      description: "Counts the tasks of a project.",
+      inputSchema: summarizeInput, // validated before the handler runs, and types `arguments`
+      // access: "authenticated" is the default; "public" lets anonymous callers in
+      handler: async ({ arguments: { projectId }, caller }) =>
+        `${String(await caller.taskService.countOnBoard({ projectId }))} tasks`,
+    },
+  ],
+});
+
+app.use(createMcpHttpRouter({ registry })); // GET /mcp/tools, POST /mcp/invoke
+createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" }); // in an MCP client's process
+```
+
+- **stdio** speaks JSON-RPC (MCP protocol version 2024-11-05). One process is
+  one session: its queries share one concurrency lane, and
+  `notifications/cancelled` cancels a call. Start its module through
+  `bootstrapMcpServer(new URL("./mcp-server.js", import.meta.url))`, which
+  sends console output to stderr so only the protocol reaches stdout.
+- **HTTP**: `GET /mcp/tools` and `POST /mcp/invoke`, which takes
+  `{ name, arguments }` and answers `{ success: true, data }`, or
+  `{ success: false, error, code, data? }` with the code's HTTP status.
+- An anonymous caller (the `principal` hook returned nothing) may call
+  `"public"` methods, and custom tools that declare `access: "public"`; any
+  other tool answers `UNAUTHENTICATED` before it runs. A failed call reaches
+  the agent as a tool error carrying the code.
+
+## The client
+
+`createQuickdrawClient(contracts)` builds one typed client from the
+contracts: `qd.<key>.<member>` for each method, collection, stream, channel
+and event, plus `useEntity` and `useEntities` for a contract with an entity
+(design: section 11). Nothing is generated: a misspelled method, or a hook
+the method's kind does not have, is a compile error.
+`<QuickdrawProvider client={qd} url auth>` owns the socket and the TanStack
+`QueryClient` (5-minute stale time by default), and works without DOM
+globals (React Native).
+
+| Member                                                                    | Gives                                                                                          |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `qd.task.get.useQuery(input, options)`                                    | TanStack's `useQuery`; errors are `QuickdrawError` with a `code`                               |
+| `qd.task.rename.useMutation(options)`                                     | TanStack's `useMutation`; `mutate` returns nothing, `mutateAsync` the output                   |
+| `qd.task.useEntity(id)`, `useEntities(ids)`                               | live rows at the user's level: `{ data, isLoading, isRemoved, error }`                         |
+| `qd.task.board.useCollection(scope, { view, load, limit })`               | a live scope: `{ items, index, byId, totalCount, hasMore, isLoading, loadMore, refresh, ... }` |
+| `qd.task.get.call(input)`, `.key(input)`, `.prefetch(queryClient, input)` | a call over the mounted provider's connection, the cache key, a prefetch                       |
+| `qd.invalidate(qd.task.get, input?)`                                      | invalidates through the coordinator: a read in flight is never cancelled                       |
+| `useQuickdraw()`                                                          | `{ connection, status, isConnected, userId, serviceAccess, hello, refusal, isRateLimited }`    |
+
+<!-- example: apps/web/src/components/TaskDetail.tsx#detail -->
+
+```tsx
+export function TaskDetail({ id }: { readonly id: string }) {
+  const { data: task, isRemoved, error } = qd.task.useEntity(id); // live, at the user's level
+  const rename = qd.task.rename.useMutation({
+    // the default for a mutation with `id` and an "entity" output, written out
+    optimistic: (input, cache) => cache.patchEntity(input.id, { title: input.title }),
+  });
+  if (error?.code === "FORBIDDEN") {
+    return <p>You cannot see this task.</p>;
+  }
+  if (isRemoved) {
+    return <p>This task was deleted.</p>;
+  }
+  return (
+    <div>
+      <h1>{task?.title}</h1>
+      {task?.notes === undefined ? null : <p>{task.notes}</p>}
+      <button type="button" onClick={() => rename.mutate({ id, title: "Renamed" })}>
+        Rename
+      </button>
+      {rename.error === null ? null : <p>{`Refused: ${rename.error.code}`}</p>}
+    </div>
+  );
+}
+```
+
+- A mutation whose input has `id` and whose output is `"entity"` is
+  optimistic by default: its input's fields show over the cached row and its
+  collection items from the moment it is sent, are dropped if it fails, and
+  give way to the server's frame. `optimistic: false` turns that off;
+  `optimistic: (input, cache) => ...` writes its own layers with
+  `patchEntity`, `removeEntity` and `patchItem`.
+- Live rows and collections need no refetching: frames keep them current,
+  and after a reconnect they resume by revision. A query whose result
+  follows writes declares `watch` in its contract; the coordinator fetches
+  it again once per change, with at most one read in flight per key. Do not
+  call `refetch` or `invalidateQueries` on quickdraw keys after a mutation.
+- `useCollection` holds one scope: its index (the members, in order), the
+  items loaded, and `loadMore`/`loadItems`; `view` filters the members by a
+  view of the contract, for the user the server's hello names; `load: "all"`
+  keeps every page loaded. A `null` scope holds nothing; `enabled: false`
+  subscribes to nothing.
+- The cache follows the user: a hello naming another user removes everything
+  quickdraw cached; new credentials for the same user refetch it; new grants
+  (`qd:access`) refetch every query.
+- A protocol mismatch reloads the page once per session by default
+  (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
+  kind of work.
+
+### Server components and other runtimes
+
+`./client` begins with `"use client"`, so a React server component imports
+`createServerCaller` from `@fitzzero/quickdraw-core/utils` instead. It calls
+over the HTTP transport, and `prefetch` fills the keys the hooks read:
+
+<!-- example: apps/web/src/app/tasks/page.tsx#page -->
+
+```tsx
+import { createServerCaller } from "@fitzzero/quickdraw-core/utils";
+import { contracts } from "@project/shared";
+
+export async function TasksPage({ projectId, cookie }: { projectId: string; cookie: string }) {
+  // forwards the user's session cookie to the API's HTTP transport
+  const caller = createServerCaller(contracts, { url: "http://api:4000", headers: { cookie } });
+  const queryClient = new QueryClient();
+  await caller.task.countOnBoard.prefetch(queryClient, { projectId }); // the key useQuery reads
+  return (
+    <HydrationBoundary state={dehydrate(queryClient)}>
+      <TaskBoard projectId={projectId} />
+    </HydrationBoundary>
+  );
+}
+```
+
+A script, a worker or a React Native module without hooks uses the
+connection directly:
+
+<!-- example: apps/api/scripts/report.ts#script -->
+
+```ts
+import { callData, createQuickdrawConnection } from "@fitzzero/quickdraw-core/client";
+
+const connection = createQuickdrawConnection({
+  url: "http://localhost:4000",
+  auth: process.env.API_TOKEN, // sent as auth.token
+});
+connection.open();
+const count = await callData<number>(connection, {
+  service: "taskService",
+  method: "countOnBoard",
+  input: { projectId: process.argv[2] },
+});
+process.stdout.write(`${String(count)} tasks\n`);
+connection.close();
+```
+
+`liveDataOf(connection, queryClient)` holds live rows and collections for
+such code, and `createInvalidationCoordinator(queryClient)` invalidates as
+the hooks do.
+
+## Kits
 
 The methods most services write by hand, as one-line opt-ins (design:
-`docs/rfcs/0003-v5.md`, section 12.1). `crud.contract` returns ordinary
-entries for exactly the methods it names, and `crud.handlers` implements
-exactly those, each with the access form it is given:
+section 12). Each kit's contract half comes from the package root and makes
+ordinary contract entries; its handlers come from `./server`.
 
-```typescript
-// the shared package
+### Read/write kit
+
+`crud.contract` returns entries for exactly the methods it names, and
+`crud.handlers` implements exactly those, each with the access form it is
+given:
+
+<!-- example: packages/shared/src/kits/crud.ts -->
+
+```ts
 import { crud, defineContract, mutation } from "@fitzzero/quickdraw-core";
+import { z } from "zod";
+import { cardSchema, taskSchema } from "../schemas";
+
+const newTaskSchema = z.object({ projectId: z.string(), title: z.string() });
+const taskPatch = z.object({ title: z.string(), status: z.string() }).partial(); // every field optional
 
 export const task = defineContract("taskService", {
   entity: taskSchema,
@@ -370,31 +1032,34 @@ export const task = defineContract("taskService", {
       entity: taskSchema,
       get: true,
       getMany: true,
-      list: { item: cardSchema, filter: ["projectId", "status"], sort: ["ordinal", "updatedAt"] },
+      list: { item: cardSchema, filter: ["projectId", "status"], sort: ["ordinal", "title"] },
       create: { input: newTaskSchema },
-      update: { input: taskPatchSchema }, // every field optional; the kit adds `id`
+      update: { input: taskPatch }, // the kit adds `id`
       delete: true,
       reorder: { column: "ordinal", within: "projectId" },
-      bulkUpdate: { input: taskPatchSchema }, // the kit adds `ids`
+      bulkUpdate: { input: taskPatch }, // the kit adds `ids`
       bulkDelete: true,
     }),
     archive: mutation({ input: z.object({ id: z.string() }), output: "entity" }),
   },
 });
+```
 
-// the server
+<!-- example: apps/api/src/services/kits/crud.ts#service -->
+
+```ts
 import { crud, inherit, nextOrdinal } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(task, {
   model: "task",
-  access: inherit({ from: project, via: "projectId" }),
+  access: inherit({ from: projectContract, via: "projectId" }),
   methods: {
     ...crud.handlers(task, {
       access: {
         get: { entry: "Read" },
         getMany: "authenticated",
         list: "authenticated",
-        create: { scope: "Moderate", of: project, id: "projectId" },
+        create: { scope: "Moderate", of: projectContract, id: "projectId" },
         update: { entry: "Moderate" },
         delete: { entry: "Admin" },
         reorder: { entry: "Moderate" },
@@ -404,15 +1069,23 @@ export const taskService = qd.defineService(task, {
       // what `create` writes: columns from the principal, the next ordinal
       prepare: async (input, ctx, db) => ({
         ...input,
-        ownerId: ctx.principal.userId,
+        assigneeId: ctx.principal.userId,
         ordinal: await nextOrdinal(db, "task", { projectId: input.projectId }),
       }),
     }),
-    archive: { access: { entry: "Admin" }, handler: /* ... */ },
+    archive: {
+      access: { entry: "Admin" },
+      handler: ({ input, db }) =>
+        db.task.update({ where: { id: input.id }, data: { status: "archived" } }),
+    },
   },
 });
 ```
 
+- `prepare` gets the app's database client as `db`; annotate it with the
+  client's type (`db: AppDb`) to use it typed, and the handlers spread into
+  `qd.defineService` refuse a type that is not the service's client (the
+  sharing kit's `resolveUser` and `onChange` take `db` the same way).
 - Each method needs a form: one missing from `access` does not compile.
   `get`, `update`, `delete` and `reorder` act on `input.id`, which
   `{ entry: L }` checks; a write on one row also needs the row level
@@ -460,25 +1133,66 @@ export const taskService = qd.defineService(task, {
   too. For hand-written handlers, `./server` has `requireRow(row, message?)`
   (`NOT_FOUND` for a missing row) and `nextOrdinal(db, model, where)`.
 
+The typed client has no hook for infinite scroll. Page through `list` with
+TanStack's `useInfiniteQuery`, keyed by the list's own `key` (with a suffix,
+since pages are not one list result) and fetching with its `call`, so
+`qd.invalidate(qd.task.list)` refetches the pages too. `no-untyped-client`
+accepts this form for the hooks the typed client has none of
+(`useInfiniteQuery`, `useSuspenseQuery`, `useQueries`, `queryOptions` and
+their variants):
+
+<!-- example: apps/web/src/components/kits/TaskPages.tsx#component -->
+
+```tsx
+export function TaskPages({ projectId }: { readonly projectId: string }) {
+  const filter = { projectId };
+  // the list's own key (plus a suffix: pages are not one list result) and call,
+  // so qd.invalidate(qd.task.list) refetches these pages too
+  const pages = useInfiniteQuery({
+    queryKey: [...qd.task.list.key({ filter }), "pages"],
+    queryFn: ({ pageParam, signal }) =>
+      qd.task.list.call({ filter, cursor: pageParam, limit: 50 }, { signal }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) => page.nextCursor ?? undefined,
+  });
+  const cards = pages.data?.pages.flatMap((page) => page.items) ?? [];
+  return (
+    <>
+      <ul>
+        {cards.map((card) => (
+          <li key={card.id}>{card.title}</li>
+        ))}
+      </ul>
+      {pages.hasNextPage ? (
+        <button type="button" onClick={() => void pages.fetchNextPage()}>
+          More
+        </button>
+      ) : null}
+    </>
+  );
+}
+```
+
 ### Search kit
 
-Search as a one-line opt-in (design: `docs/rfcs/0003-v5.md`, section 12.2).
 `search.contract` makes one query, `search`, and `search.handlers`
 implements it; on the client, its member gets `useSearch`:
 
-```typescript
-// the shared package
+<!-- example: packages/shared/src/kits/search.ts -->
+
+```ts
 import { defineContract, search } from "@fitzzero/quickdraw-core";
+import { cardSchema, taskSchema } from "../schemas";
 
 export const task = defineContract("taskService", {
   entity: taskSchema,
   projections: { card: cardSchema },
   methods: {
-    // looks in title and description; a call may keep to one scope of byProject
+    // looks in title and notes; a call may keep to one scope of byProject
     ...search.contract({
       entity: taskSchema,
       item: cardSchema, // a scoped search's results are its collection's items
-      fields: ["title", "description"],
+      fields: ["title", "notes"],
       scope: "byProject",
     }),
   },
@@ -493,19 +1207,40 @@ export const task = defineContract("taskService", {
     },
   },
 });
+```
 
-// the server
-import { search } from "@fitzzero/quickdraw-core/server";
+<!-- example: apps/api/src/services/kits/search.ts#service -->
+
+```ts
+import { inherit, search } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(task, {
   model: "task",
-  access: inherit({ from: project, via: "projectId" }),
-  collections: { byProject: { anchor: project } },
+  access: inherit({ from: projectContract, via: "projectId" }),
+  collections: { byProject: { anchor: projectContract } },
   methods: { ...search.handlers(task, { access: "authenticated" }) },
 });
+```
 
-// a component
-const { items, isSearching } = qd.task.search.useSearch(text, { scope: projectId });
+<!-- example: apps/web/src/components/kits/TaskSearch.tsx#component -->
+
+```tsx
+export function TaskSearch({ projectId }: { readonly projectId: string }) {
+  const [text, setText] = useState("");
+  // debounced, superseded searches cancelled, results live while the board is open
+  const { items, isSearching } = qd.task.search.useSearch(text, { scope: projectId });
+  return (
+    <>
+      <input value={text} onChange={(event) => setText(event.target.value)} />
+      {isSearching ? <p>Searching…</p> : null}
+      <ul>
+        {items.map((card) => (
+          <li key={card.id}>{card.title}</li>
+        ))}
+      </ul>
+    </>
+  );
+}
 ```
 
 - `search({ q, scope?, cursor?, limit? })` returns `{ items, nextCursor }`
@@ -525,10 +1260,10 @@ const { items, isSearching } = qd.task.search.useSearch(text, { scope: projectId
   links, and `where`), and only for a caller who may open the scope as
   `qd:col:sub` decides (`UNAUTHENTICATED` without a principal, `FORBIDDEN`
   below the collection's `access` on its anchor). A `via` scope is searched
-  among at most its collection's `maxLimit` links, the first by row id, so
-  a search never reads a large scope's every link. Identical concurrent searches by one caller run once
-  (`share: "caller"`). For a contract with several search methods,
-  `method` names the one a `search.handlers` call implements.
+  among at most its collection's `maxLimit` links, the first by row id.
+  Identical concurrent searches by one caller run once (`share: "caller"`).
+  For a contract with several search methods, `method` names the one a
+  `search.handlers` call implements.
 - `strategy` replaces how rows are found; the kit still adds the access
   filter, the scope and paging. `where(q, ctx)` returns a filter;
   `ids(q, ctx, { limit })` returns ranked ids from an index of your own,
@@ -537,29 +1272,31 @@ const { items, isSearching } = qd.task.search.useSearch(text, { scope: projectId
   full-text search through a `tsvector` column the app maintains (a
   generated column or a trigger, with a GIN index):
 
-  ```typescript
-  ...search.handlers(task, {
-    access: "authenticated",
-    strategy: {
-      // Prisma cannot filter on a tsvector column: find the ids with SQL. Keep
-      // to the caller's rows (here, their projects' tasks) before LIMIT, so
-      // other users' matches never fill the 1,000; the kit's access filter
-      // still applies to what comes back.
-      where: async (q, ctx) => {
-        const rows = await prisma.$queryRaw<{ id: string }[]>`
-          SELECT t.id FROM "Task" t
-          JOIN "ProjectMember" m ON m."projectId" = t."projectId"
-          WHERE m."userId" = ${ctx.principal.userId}
-            AND t."searchVector" @@ websearch_to_tsquery('english', ${q})
-          LIMIT 1000`;
-        return { id: { in: rows.map((row) => row.id) } };
-      },
-    },
-  }),
-  ```
+<!-- example: apps/api/src/services/kits/search.ts#fulltext -->
 
-  For results by relevance, return the ids from `ids` instead, ordered by
-  `ts_rank("searchVector", query) DESC` and limited to `limit`.
+```ts
+export const fullTextSearch = search.handlers(task, {
+  access: "authenticated",
+  strategy: {
+    // Prisma cannot filter on a tsvector column: find the ids with SQL. Keep
+    // to the caller's rows (here, their projects' tasks) before LIMIT, so
+    // other users' matches never fill the 1,000; the kit's access filter
+    // still applies to what comes back.
+    where: async (q, ctx) => {
+      const rows = await db.$queryRaw<{ id: string }[]>`
+        SELECT t.id FROM "Task" t
+        JOIN "ProjectMember" m ON m."projectId" = t."projectId"
+        WHERE m."userId" = ${ctx.principal.userId}
+          AND t."searchVector" @@ websearch_to_tsquery('english', ${q})
+        LIMIT 1000`;
+      return { id: { in: rows.map((row) => row.id) } };
+    },
+  },
+});
+```
+
+For results by relevance, return the ids from `ids` instead, ordered by
+`ts_rank("searchVector", query) DESC` and limited to `limit`.
 
 - `useSearch(q, { scope?, debounceMs?, limit?, enabled? })` sends `q` once
   typing pauses (200 ms), cancels a search still on its way when the next
@@ -573,15 +1310,17 @@ const { items, isSearching } = qd.task.search.useSearch(text, { scope: projectId
 
 ### Sharing and membership kit
 
-Sharing a row and managing its members as one-line opt-ins (design:
-`docs/rfcs/0003-v5.md`, section 12.3). `sharing.contract` makes the methods
-for one of the two ways a policy shares rows, and `sharing.handlers`
-implements them on the access list or the membership table the service's own
-policy reads:
+`sharing.contract` makes the methods for one of the two ways a policy shares
+rows, and `sharing.handlers` implements them on the access list or the
+membership table the service's own policy reads:
 
-```typescript
-// the shared package
+<!-- example: packages/shared/src/kits/sharing.ts -->
+
+```ts
 import { defineContract, sharing, via } from "@fitzzero/quickdraw-core";
+import { z } from "zod";
+
+const projectSchema = z.object({ id: z.string(), name: z.string() });
 
 export const project = defineContract("projectService", {
   entity: projectSchema,
@@ -603,8 +1342,11 @@ export const project = defineContract("projectService", {
     },
   },
 });
+```
 
-// the server
+<!-- example: apps/api/src/services/kits/sharing.ts#service -->
+
+```ts
 import { anyOf, jsonAcl, members, sharing } from "@fitzzero/quickdraw-core/server";
 
 export const projectService = qd.defineService(project, {
@@ -618,10 +1360,10 @@ export const projectService = qd.defineService(project, {
     ...sharing.handlers(project, {
       // finds the user inviteByName means; none is NOT_FOUND
       resolveUser: async ({ name, email }) =>
-        (await prisma.user.findFirst({ where: name === undefined ? { email } : { name } }))?.id,
+        (await db.user.findFirst({ where: name === undefined ? { email } : { name } }))?.id,
       // runs inside the change's transaction: its writes commit with it, a throw undoes it
-      onChange: async (change, ctx, db) => {
-        /* change: { kind, id, userId, before, after } */
+      onChange: (change, ctx) => {
+        ctx.log.info("sharing changed", { kind: change.kind, id: change.id, user: change.userId });
       },
     }),
   },
@@ -659,59 +1401,88 @@ export const projectService = qd.defineService(project, {
   Admin, counted across every policy of an `anyOf`: an owner column, an
   `Admin` entry of the access list, an `Admin` member (so a project's owner
   may remove its only Admin member). Taking the last one away, by
-  `unshare`, a lower level, `remove`, `leave` or `setRole`, is `CONFLICT`. An access list the policy cannot read
-  is `CONFLICT` and left as it is; an entry's other keys are kept. Inviting a
-  member is `CONFLICT`, an unknown user `NOT_FOUND`, and a change to the
-  level or role a user has already writes nothing.
+  `unshare`, a lower level, `remove`, `leave` or `setRole`, is `CONFLICT`.
+  An access list the policy cannot read is `CONFLICT` and left as it is; an
+  entry's other keys are kept. Inviting a member is `CONFLICT`, an unknown
+  user `NOT_FOUND`, and a change to the level or role a user has already
+  writes nothing.
 - Each change reads and writes in one SERIALIZABLE transaction, so two
   changes to one row at once cannot lose one or both remove the last two
   Admins: the database fails the second, which answers `CONFLICT` (try
   again). The writes go through the tracked client, so the flush revokes
   the live subscriptions of whoever lost access (`qd:revoked`) and sends
   the `via` collections over the table `added` and `removed`; the kit sends
-  nothing itself.
+  nothing itself. The by-name methods tell a row's owner whether an account
+  exists; list them only where that is acceptable.
 
 ### Admin kit
 
 Back-office methods for every row of a service, only for service
 administrators, with the screen's fields derived from the entity (design:
-`docs/rfcs/0003-v5.md`, section 12.4). `admin.contract` makes ordinary,
-typed entries, and `admin.handlers` implements them; 4.1's
-`installAdminMethods` registered them outside the type map:
+section 12.4). `admin.contract` makes ordinary, typed entries, and
+`admin.handlers` implements them:
 
-```typescript
-// the shared package
+<!-- example: packages/shared/src/kits/admin.ts -->
+
+```ts
 import { admin, defineContract } from "@fitzzero/quickdraw-core";
+import { taskSchema } from "../schemas";
 
 export const task = defineContract("taskService", {
   entity: taskSchema, // Zod 4.2 or later: the fields come from its JSON Schema
   methods: {
     // adminList, adminGet, adminCreate, adminUpdate, adminDelete,
     // adminMeta, adminSubscribers, adminReemit; `expose` picks fewer
-    ...admin.contract({ entity: taskSchema, filter: ["status"], sort: ["createdAt", "title"] }),
+    ...admin.contract({ entity: taskSchema, filter: ["status"], sort: ["ordinal", "title"] }),
   },
 });
+```
 
-// the server
-import { admin } from "@fitzzero/quickdraw-core/server";
+<!-- example: apps/api/src/services/kits/admin.ts#service -->
+
+```ts
+import { admin, inherit } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(task, {
   model: "task",
-  access: inherit({ from: project, via: "projectId" }),
+  access: inherit({ from: projectContract, via: "projectId" }),
   methods: {
     ...admin.handlers(task, {
       displayName: "Tasks", // the default: from the service name
-      hiddenFields: ["internalNotes"], // never shown, returned or written
+      hiddenFields: ["notes"], // never shown, returned or written
       fieldOverrides: { assigneeId: { type: "relation", relationService: "userService" } },
     }),
   },
 });
+```
 
-// the client
-const { data } = qd.task.admin.adminList.useQuery({ page: 2, sort: { field: "title" } });
-const update = qd.task.admin.adminUpdate.useMutation();
-update.mutate({ id, data: { status: "done" } });
-const { services } = useAdminServices(qd); // [{ key: "task", serviceName, displayName }]
+<!-- example: apps/web/src/components/kits/AdminTasks.tsx#component -->
+
+```tsx
+export function AdminTasks() {
+  const { services } = useAdminServices(qd); // [{ key: "task", serviceName, displayName }]
+  const { data } = qd.task.admin.adminList.useQuery({ page: 1, sort: { field: "title" } });
+  const update = qd.task.admin.adminUpdate.useMutation();
+  return (
+    <table aria-label={services[0]?.displayName}>
+      <tbody>
+        {data?.items.map((row) => (
+          <tr key={row.id}>
+            <td>{row.title}</td>
+            <td>
+              <button
+                type="button"
+                onClick={() => update.mutate({ id: row.id, data: { status: "done" } })}
+              >
+                Done
+              </button>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 ```
 
 - Who may call: every method defaults to `{ service: "Admin" }`, the
@@ -728,7 +1499,6 @@ const { services } = useAdminServices(qd); // [{ key: "task", serviceName, displ
   statements. `filter` is equality on the fields `admin.contract` declares
   and `sort` one declared field (the first one by default, then `id`):
   anything else, an operator object, `where` or `orderBy`, is `VALIDATION`.
-  4.1 passed the caller's `where` to the database as it came.
 - `adminGet({ id })` returns the row; `adminCreate({ data })` and
   `adminUpdate({ id, data })` write the entity's fields through the tracked
   client, so subscribers and collections get the same frames as for any
@@ -740,33 +1510,40 @@ const { services } = useAdminServices(qd); // [{ key: "task", serviceName, displ
   value is checked by the entity schema itself, and a value the database
   refuses is `VALIDATION`. A missing row is `NOT_FOUND`.
 - `adminMeta()` returns `{ serviceName, displayName, fields }`, one
-  `{ name, type, label, required, editable, showInTable, sortable,
-filterable, enumValues?, relationService? }` per field: `type` is
+  `{ name, type, label, required, editable, showInTable, sortable, filterable, enumValues?, relationService? }`
+  per field: `type` is
   `string`, `number`, `boolean`, `date` (an ISO string with a date format),
   `enum` or `json` from the field's JSON Schema, and `relation` by override;
   `sortable` and `filterable` are the declared fields; `id` and the
   timestamps come first and are not editable; `acl`, `serviceAccess` and
-  `service_access` are hidden, as in 4.1.
+  `service_access` are hidden.
 - `adminSubscribers({ id })` counts the sockets subscribed to a row per
   access level (`{ id, count, levels, complete }`; behind a Redis adapter
   the counts are this server's and `complete` is `false`), and
   `adminReemit({ id })` touches the row so the flush sends it again to every
   subscriber.
-- `useAdminServices(qd)` lists the client's services whose `adminMeta`
-  answers the user, with their display names, sharing the cache of
-  `qd.<service>.admin.adminMeta.useQuery()`. On a mock client it answers
-  from the `adminMeta` stubs.
+- `qd.<service>.admin` holds the kit's members (there is no top-level
+  `qd.admin`, since `admin` is reserved per service). `useAdminServices(qd)`
+  lists the client's services whose `adminMeta` answers the user, with their
+  display names, sharing the cache of `qd.<service>.admin.adminMeta.useQuery()`.
 
 ### Presence, streams and channels
 
 Who is online, feeds that start with recent history and then append (logs,
 metrics), fast one-way input (cursors, typing) and typed room events
-(design: `docs/rfcs/0003-v5.md`, section 12.5). All four are declared in
-the contract; they share `qd.<service>.<name>` with the methods and
-collections:
+(design: section 12.5). All four are declared in the contract; they share
+`qd.<service>.<name>` with the methods and collections:
 
-```typescript
-// the shared package
+<!-- example: packages/shared/src/kits/realtime.ts -->
+
+```ts
+import { defineContract, mutation } from "@fitzzero/quickdraw-core";
+import { z } from "zod";
+import { taskSchema } from "../schemas";
+
+const cursorSchema = z.object({ projectId: z.string(), taskId: z.string(), x: z.number() });
+const logLineSchema = z.object({ line: z.string() });
+
 export const task = defineContract("taskService", {
   entity: taskSchema,
   methods: {
@@ -783,14 +1560,19 @@ export const task = defineContract("taskService", {
   },
   events: { cursorMoved: { payload: cursorSchema } },
 });
+```
 
-// the server
+<!-- example: apps/api/src/services/kits/realtime.ts#service -->
+
+```ts
+import { inherit } from "@fitzzero/quickdraw-core/server";
+
 export const taskService = qd.defineService(task, {
   model: "task",
-  access: inherit({ from: project, via: "projectId" }),
+  access: inherit({ from: projectContract, via: "projectId" }),
   methods: {
     enterBoard: {
-      access: { scope: "Read", of: project, id: "projectId" },
+      access: { scope: "Read", of: projectContract, id: "projectId" },
       handler: ({ input, ctx }) => ctx.rooms.join(`board:${input.projectId}`),
     },
   },
@@ -801,14 +1583,39 @@ export const taskService = qd.defineService(task, {
     },
   },
 });
-qd.stream(task, "logs").push(taskId, { line: "build started" }); // handlers, jobs, timers
-await qd.presence.isOnline(userId); // also ctx.presence and server.presence
 
-// the client
-const { items, isLoading } = qd.task.logs.useStream(taskId, { max: 200 });
-const { send, isReady } = qd.task.cursor.useChannel();
-qd.task.cursorMoved.useEvent((cursor) => drawCursor(cursor));
-const here = usePresence(`board:${projectId}`); // user ids, after enterBoard joined the room
+// in handlers, jobs and timers
+export function logLine(taskId: string, line: string): void {
+  qd.stream(task, "logs").push(taskId, { line });
+}
+
+export async function isOnline(userId: string): Promise<boolean> {
+  return await qd.presence.isOnline(userId); // also ctx.presence and server.presence
+}
+```
+
+<!-- example: apps/web/src/components/kits/TaskRoom.tsx#component -->
+
+```tsx
+export function TaskRoom({
+  projectId,
+  taskId,
+}: {
+  readonly projectId: string;
+  readonly taskId: string;
+}) {
+  const { items } = qd.task.logs.useStream(taskId, { max: 200 });
+  const { send, isReady } = qd.task.cursor.useChannel();
+  const [lastX, setLastX] = useState(0);
+  qd.task.cursorMoved.useEvent((cursor) => setLastX(cursor.x));
+  const here = usePresence(`board:${projectId}`); // user ids, after enterBoard joined the room
+  return (
+    <div onMouseMove={(event) => isReady && send({ projectId, taskId, x: event.clientX })}>
+      <p>{`${String(here.length)} here; a cursor at ${String(lastX)}`}</p>
+      <pre>{items.map((item) => item.line).join("\n")}</pre>
+    </div>
+  );
+}
 ```
 
 - Streams: `push` checks each item against the stream's schema (a mismatch
@@ -818,17 +1625,19 @@ const here = usePresence(`board:${projectId}`); // user ids, after enterBoard jo
   scope and 10,000 scopes per stream; a restart empties them, and durable
   history is the app's: store the rows and expose a collection), and sends
   `qd:stream { s, stream, scope?, item }` to the feed's subscribers,
-  volatile when the stream says so. `qd:stream:sub` is authorized with the
+  volatile when the stream says so. `pushMany(scope, items)`
+  (`pushMany(items)` for a global stream) pushes several items to one feed
+  at once: every item is checked before any is kept or sent, and each goes
+  out as its own frame, in order; use it rather than `push` in a loop
+  (`no-emit-in-loop`). `qd:stream:sub` is authorized with the
   stream's `access` through the access engine, the scope being the row an
   `entry` or `scope` form checks; a stream without `access` is closed. The
   answer is the seed; `useStream` then appends, keeps the latest `max`
   (default 500), and subscribes again after a reconnect, when the seed
   replaces what it held. A socket holds at most 500 feeds. A subscriber
-  whose access is lowered (a tracked write to the row an `entry` or `scope`
-  form checks, or changed grants for any form) is authorized again; one
-  refused leaves the feed and gets
-  `qd:revoked { kind: "stream", reason: "access", s, stream, scope? }`, and
-  `useStream` shows `FORBIDDEN` until the next connect.
+  whose access is lowered is authorized again; one refused leaves the feed
+  and gets `qd:revoked { kind: "stream", reason: "access", s, stream, scope? }`,
+  and `useStream` shows `FORBIDDEN` until the next connect.
 - Channels: each message is `qd:ch [service, channel, payload]`, sent
   volatile and never answered. Per socket and channel a token bucket
   (`ratePerSecond`, default 30; `burst`, default twice that) drops what is
@@ -841,9 +1650,8 @@ const here = usePresence(`board:${projectId}`); // user ids, after enterBoard jo
   The socket rate limiter does not count channels.
 - Presence: `isOnline`, `lastSeen` (now while online, else when the user's
   last socket on this process disconnected), `count` and `users` (each user
-  once, anonymous sockets left out; app rooms only, so a `qd:` or `user:`
-  room is `VALIDATION`) come from this process's sockets, and from every
-  node's (`fetchSockets`) behind a Redis adapter.
+  once, anonymous sockets left out; app rooms only) come from this process's
+  sockets, and from every node's (`fetchSockets`) behind a Redis adapter.
   `ctx.rooms.join(room)` and `leave` put the calling socket in an app room
   (calls without a socket get `false`; names starting with `qd:` or `user:`
   are refused with `VALIDATION`; at most 100 per socket; a method that shares
@@ -851,25 +1659,24 @@ const here = usePresence(`board:${projectId}`); // user ids, after enterBoard jo
   sockets get `qd:presence` frames: the list on joining, then who joins and
   who leaves. `usePresence(room)` shows them.
 - Events: `ctx.rooms.emit(room, contract, event, payload)` and
-  `emitToUser(userId, ...)` replace 4.1's `emitToRoom` and the augmentable
-  event map; the payload is checked first (`INTERNAL`, nothing sent, when it
-  fails), then the validated payload (keys the schema does not name
-  stripped) is sent as `qd:event [service, event, payload]`.
-- A mock client's members show what the test sets: `mockItems` and
-  `mockError` for a stream, `sent` for a channel, `mockEmit` for an event.
+  `emitToUser(userId, ...)` check the payload first (`INTERNAL`, nothing
+  sent, when it fails), then send the validated payload as
+  `qd:event [service, event, payload]`; `useEvent` hears them.
 
 ### Auth routes kit
 
 Sign-in for Google, Discord, a development mock and guests, as one Express
-middleware (design: `docs/rfcs/0003-v5.md`, section 12.6). The app supplies
-how a provider's profile becomes its user (`onLogin`, returning the user's
-id) and where sessions are stored (a `SessionStore`); `socketAuth` then
-authenticates the server's sockets and HTTP calls by those sessions:
+middleware (design: section 12.6). The app supplies how a provider's profile
+becomes its user (`onLogin`, returning the user's id) and where sessions are
+stored (a `SessionStore`); `socketAuth` then authenticates the server's
+sockets and HTTP calls by those sessions:
 
-```typescript
-import cors from "cors";
+<!-- example: apps/api/src/auth/routes.ts#routes -->
+
+```ts
 import {
   createAuthRoutes,
+  createMemorySessionStore,
   discord,
   google,
   guest,
@@ -879,22 +1686,22 @@ import {
 import { createCallLimiter } from "@fitzzero/quickdraw-core/server/express";
 
 const allowedOrigins = [env.CLIENT_URL]; // the web app's origins: one list for both
-const sessions = prismaSessions(prisma); // below
+const sessions = createMemorySessionStore(); // in production: a store over your database (below)
 
-const app = express();
+export const app: Express = express();
 app.set("trust proxy", 1); // behind a proxy, so the rate limits see the client's IP
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+// a web app on another origin also needs CORS with credentials on these routes
 app.use(
   createAuthRoutes({
     providers: [
       google({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }),
       discord({ clientId: env.DISCORD_CLIENT_ID, clientSecret: env.DISCORD_CLIENT_SECRET }),
       mock({ listUsers: listSeededUsers }), // served only while isMockOAuthEnabled()
-      guest({ createUser: (input) => createGuestUser(guestSchema.parse(input)) }),
+      guest({ createUser: (input) => createGuestUser(input) }),
     ],
     sessions,
     jwtSecret: env.JWT_SECRET, // 32 characters or more
-    onLogin: (profile, provider) => upsertUser(profile, provider), // the user's id, or null to refuse
+    onLogin: (profile) => upsertUser(profile), // the user's id, or null to refuse
     allowedOrigins,
     publicUrl: env.API_URL, // redirect URIs: {publicUrl}/auth/{provider}/callback
     successPath: "/auth/callback",
@@ -905,10 +1712,10 @@ app.use(
   }),
 );
 
-const server = qd.createServer({
+export const server = qd.createServer({
   app,
   services,
-  db: prisma,
+  db,
   auth: {
     authenticate: socketAuth({
       sessions,
@@ -1008,11 +1815,12 @@ nothing is cached:
   session for an app's own sign-in flow (login codes, an embedded activity),
   and `liveSession` reads a token back; both work with `socketAuth`.
 
-A `SessionStore` on Prisma. Sessions are not live data, so nothing needs
-their writes tracked: with the tracked client, the first session write logs
-one development warning about a write outside a unit of work, which running
-the store's writes inside `qd.run(...)` (or using the untracked client here)
-avoids. Delete expired rows now and then.
+`createMemorySessionStore()` keeps sessions in the process, for development
+and tests. In production, store them in the database. Sessions are not live
+data, so nothing needs their writes tracked: with the tracked client, the
+first session write logs one development warning about a write outside a
+unit of work, which running the store's writes inside `qd.run(...)` (or
+using the untracked client here) avoids. Delete expired rows now and then.
 
 ```prisma
 model Session {
@@ -1030,847 +1838,379 @@ model Session {
 }
 ```
 
-```typescript
+<!-- example: apps/api/src/auth/sessions.ts#store -->
+
+```ts
 import type { SessionStore } from "@fitzzero/quickdraw-core/server/auth";
 
-export function prismaSessions(db: PrismaClient): SessionStore {
+/** The methods of Prisma's `db.session` delegate the store calls. */
+interface SessionTable {
+  create(args: { data: SessionMeta & { userId: string } }): Promise<AuthSession>;
+  findUnique(args: { where: { id: string } }): Promise<AuthSession | null>;
+  deleteMany(args: { where: { id: string } | { userId: string } }): Promise<unknown>;
+}
+
+export function prismaSessions(sessions: SessionTable): SessionStore {
   return {
-    create: (userId, meta) => db.session.create({ data: { userId, ...meta } }),
-    get: (id) => db.session.findUnique({ where: { id } }),
-    revoke: (id) => db.session.deleteMany({ where: { id } }),
-    revokeAll: (userId) => db.session.deleteMany({ where: { userId } }),
+    create: (userId, meta) => sessions.create({ data: { userId, ...meta } }),
+    get: (id) => sessions.findUnique({ where: { id } }),
+    revoke: (id) => sessions.deleteMany({ where: { id } }),
+    revokeAll: (userId) => sessions.deleteMany({ where: { userId } }),
   };
 }
 ```
 
-`createMemorySessionStore()` keeps sessions in the process, for development
-and tests.
+## Testing
 
-### Testing
+`@fitzzero/quickdraw-core/testing` boots the app's real server on a free
+port, so a test exercises the same dispatcher, access engine, tracked writes
+and frames production does (design: section 13):
 
-`@fitzzero/quickdraw-core/testing` boots the real server on a free port:
+<!-- example: apps/api/src/services/task.test.ts#app -->
 
-```typescript
-import { createTestApp } from "@fitzzero/quickdraw-core/testing";
-
-const app = await createTestApp({ services: [taskService], db: testPrisma });
-await app.as(alice).taskService.rename({ id, title }); // in process
-const { call, socket } = await app.connect(alice); // a real v5 socket
-await call.taskService.get({ id });
-await app.close();
+```ts
+it("sends a rename to the other members' boards", async () => {
+  const app = await createTestApp({
+    services: [projectService, taskService],
+    db,
+    strictWarnings: true,
+  });
+  const { call } = await app.connect(bo); // a real protocol 5 socket
+  await call.taskService.get({ id: taskId });
+  await app.as(ada).taskService.rename({ id: taskId, title: "Ship it" }); // in process
+  await app.frames.waitFor({ event: "qd:e", userId: bo.userId }); // the entity frame bo receives
+  await app.close();
+});
 ```
 
-Its sockets act as the principal they connect with. Its dispatcher becomes
-the current one of the `initQuickdraw` instance that defined its services,
-as `qd.createServer` would make it, so `qd.stream(...).push`, `qd.presence`
-and `qd.run` reach the test app (the last one created). `emitWithAck` and
-`waitForEvent` send raw frames and wait for events.
+- `createTestApp` takes `createServer`'s options, plus `strictWarnings`
+  (below). Its sockets act as the principal they connect with, its rate
+  limiter is off, and its dispatcher becomes the current one of the
+  `initQuickdraw` instance that defined its services, so
+  `qd.stream(...).push`, `qd.presence` and `qd.run` reach the test app (the
+  last one created).
+- Seed rows with the untracked client (`prisma`), or inside `qd.run` once
+  an app runs: a tracked write outside any unit of work flushes on its own,
+  with an `ambient-write` warning.
+- `app.as(principal)` calls in process and `app.connect(principal)` over a
+  real socket (`{ call, socket, hello, close }`); both are keyed by service
+  name. `app.frames(match?)` lists every frame the server sent, with its
+  socket and user; `frames.waitFor(match)` waits for one. `emitWithAck` and
+  `waitForEvent` send raw frames and wait for events.
+
+### Access matrices
 
 `describeAccessMatrix(app, { service, principals, cases, via? })` runs each
 case as each principal, and anonymously, through the app's real dispatcher
 (in process, or over a socket per principal with `via: "socket"`), and fails
 listing every cell that differs from the expected table:
 
-```typescript
-await describeAccessMatrix(app, {
-  service: taskService,
-  principals: { owner, member, stranger },
-  cases: [
-    { method: "get", input: { id }, allow: ["owner", "member"] }, // everyone else is denied
-    {
-      method: "rename",
-      input: { id, title: "x" },
-      expect: { owner: "allow", member: "FORBIDDEN" },
-    },
-  ],
-});
-```
+<!-- example: apps/api/src/services/task.test.ts#matrix -->
 
-## Quick Start
-
-### Server Setup
-
-```typescript
-import { createQuickdrawServer, BaseService } from "@fitzzero/quickdraw-core/server";
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
-
-// Define your service
-class ChatService extends BaseService<
-  Chat,
-  Prisma.ChatCreateInput,
-  Prisma.ChatUpdateInput,
-  ChatServiceMethods
-> {
-  constructor() {
-    super({ serviceName: "chatService", hasEntryACL: true });
-    this.setDelegate(prisma.chat);
-
-    // Define public methods
-    this.createChat = this.defineMethod("createChat", "Read", async (payload, ctx) => {
-      const chat = await this.create({ title: payload.title, ownerId: ctx.userId });
-      return { id: chat.id };
-    });
-  }
-
-  createChat: ReturnType<typeof this.defineMethod<"createChat">>;
-}
-
-// Start server
-const { io, httpServer } = createQuickdrawServer({
-  port: 4000,
-  cors: { origin: "http://localhost:3000" },
-  services: {
-    chatService: new ChatService(),
-  },
-  auth: {
-    authenticate: async (socket, auth) => {
-      const payload = await verifyJWT(auth.token, process.env.JWT_SECRET);
-      return payload?.userId;
-    },
-  },
-});
-```
-
-### Client Setup
-
-```tsx
-// app/layout.tsx
-import { QuickdrawProvider } from "@fitzzero/quickdraw-core/client";
-
-export default function RootLayout({ children }) {
-  return (
-    <QuickdrawProvider serverUrl="http://localhost:4000" authToken={getAuthToken()}>
-      {children}
-    </QuickdrawProvider>
-  );
-}
-
-// app/chat/page.tsx
-import { useService, useSubscription, useRoomEvents } from "@fitzzero/quickdraw-core/client";
-
-function ChatPage({ chatId }: { chatId: string }) {
-  // Subscribe to real-time entity updates
-  const { data: chat, isLoading } = useSubscription("chatService", chatId);
-
-  // Mutation hook
-  const updateTitle = useService("chatService", "updateTitle", {
-    onSuccess: () => console.log("Title updated!"),
-  });
-
-  // Listen for custom events broadcast to the chat room
-  const [typing, setTyping] = useState(false);
-  useRoomEvents({
-    "chat:message": (msg) => appendMessage(msg),
-    agent_typing_start: () => setTyping(true),
-    agent_typing_stop: () => setTyping(false),
-  });
-
-  if (isLoading) return <div>Loading...</div>;
-
-  return (
-    <div>
-      <h1>{chat?.title}</h1>
-      <button onClick={() => updateTitle.mutate({ id: chatId, title: "New Title" })}>
-        Update Title
-      </button>
-    </div>
-  );
-}
-```
-
-### Collections (Live Lists)
-
-Entity subscriptions cover single rows; **collections** cover lists. A
-collection is "rows of this service, grouped by a scope id derived from the
-row" — declare it once and the framework handles emission (multi-node-safe),
-pagination, and reconnect correctness. No more `task:created` /
-`task:deleted` mirror events, `invalidateOn` refetches, or hand-rolled
-merge-by-id state.
-
-**Server** — declare next to your methods; the CRUD trio emits deltas
-automatically (scope moves and predicate entry/exit included):
-
-```typescript
-type MessageCollections = { byChat: { item: MessageDTO } };
-
-class MessageService extends BaseService<
-  Message,
-  Prisma.MessageCreateInput,
-  Prisma.MessageUpdateInput,
-  MessageServiceMethods,
-  Record<string, unknown>, // channels
-  MessageDTO, // TDto — wire shape
-  MessageCollections // TCollections
-> {
-  constructor(prisma: PrismaClient) {
-    super({ serviceName: "messageService" });
-    this.setDelegate(prisma.message);
-
-    this.defineCollection("byChat", {
-      resolveScopeId: (message) => message.chatId,
-      checkScopeAccess: (userId, chatId) => this.isChatMember(userId, chatId),
-      // Server-ordered first page + reconnect re-snapshot. Omit `ids` for
-      // unbounded histories like this one; return it for bounded scopes so
-      // reconnecting clients prune rows deleted while offline.
-      snapshot: async (chatId, { cursor, limit }) => this.getMessagePage(chatId, cursor, limit),
-      toItem: (message) => this.toDto(message),
-    });
-  }
-}
-```
-
-**Client** — one hook per list; live deltas, `loadMore` paging, and
-re-snapshot-on-reconnect are built in:
-
-```tsx
-import { useCollection } from "@fitzzero/quickdraw-core/client";
-
-function ChatWindow({ chatId }: { chatId: string }) {
-  const {
-    items: messages,
-    isLoading,
-    hasMore,
-    loadMore,
-  } = useCollection<MessageDTO>("messageService", "byChat", chatId, {
-    compare: (a, b) => a.createdAt.localeCompare(b.createdAt),
-  });
-
-  return <MessageList messages={messages} onScrollTop={hasMore ? loadMore : undefined} />;
-}
-```
-
-Scopes don't have to be parent entities — `resolveScopeId` may return a
-`string[]` to fan out (e.g. a chat appearing in every member's `myChats`
-collection, scope = user id), or `null` to exclude a row (predicate
-filtering). For hand-rolled write paths, one-line choke points keep deltas
-flowing: `emitCollectionUpsert` / `emitCollectionRemove` /
-`emitCollectionMove` / `emitCollectionReset`, plus `kickFromCollection` for
-adapter-safe ACL revocation.
-
-ACL is deliberately simple: items are **scope-visible** — anyone who passes
-`checkScopeAccess` sees every item in full (strip sensitive fields in
-`toItem`/`snapshot`). If visibility varies per user within a scope, that's
-not a collection — use separate scopes or entity subscriptions.
-
-When to use which:
-
-| Hook              | Use for                                                       |
-| ----------------- | ------------------------------------------------------------- |
-| `useSubscription` | One entity, field-tiered (detail panels)                      |
-| `useCollection`   | Live lists of a scope (boards, feeds, chat histories)         |
-| `useServiceQuery` | Genuinely query-shaped reads (search, cross-scope aggregates) |
-
-### Socket Inputs
-
-```tsx
-import { SocketTextField } from "@fitzzero/quickdraw-core/client";
-
-function ChatTitleEditor({ chat, updateChat }) {
-  return (
-    <SocketTextField
-      state={chat}
-      update={(patch) => updateChat.mutateAsync({ id: chat.id, ...patch })}
-      property="title"
-      commitMode="debounce"
-      debounceMs={500}
-      placeholder="Chat title..."
-    />
-  );
-}
-```
-
-### Custom Room Events
-
-For genuinely custom, ephemeral events (typing indicators, presence pulses —
-things that aren't rows), broadcast with `emitToRoom` and listen with
-`useRoomEvents`:
-
-```tsx
-import { useSubscription, useRoomEvents } from "@fitzzero/quickdraw-core/client";
-
-function ChatView({ chatId }: { chatId: string }) {
-  const { data: chat } = useSubscription("chatService", chatId);
-  const [typing, setTyping] = useState<string | null>(null);
-
-  // Lifecycle-managed event listeners — cleanup handled automatically
-  useRoomEvents({
-    "chat:typing": ({ userName }: { userName: string }) => setTyping(userName),
-    "chat:typingStop": () => setTyping(null),
-  });
-
-  return <Chat chat={chat} typing={typing} />;
-}
-```
-
-Event names and payloads can be typed end-to-end by augmenting
-`QuickdrawEventMap` from the package root — `emitToRoom` and `useRoomEvents`
-then check payloads and autocomplete names (and degrade to
-`string`/`unknown` if you never augment it):
-
-```typescript
-declare module "@fitzzero/quickdraw-core" {
-  interface QuickdrawEventMap {
-    "chat:typing": { userName: string };
-    "chat:typingStop": Record<string, never>;
-  }
-}
-```
-
-Don't hand-emit row lifecycle events (`task:created`, `task:deleted`, …) —
-that's what collections automate; the shipped
-`quickdraw/no-manual-collection-events` lint rule flags them.
-
-### Auto-Invalidating Queries
-
-For genuinely query-shaped reads (search results, cross-scope aggregates)
-that should refresh when related events fire, use `invalidateOn`:
-
-```tsx
-import { useServiceQuery } from "@fitzzero/quickdraw-core/client";
-
-function SearchResults({ query }: { query: string }) {
-  const { data: results } = useServiceQuery(
-    "taskService",
-    "searchTasks",
-    { query },
-    {
-      invalidateOn: ["task:statusUpdate"],
-      refetchInterval: 60_000, // optional periodic refresh
-    },
-  );
-
-  return <Results items={results} />;
-}
-```
-
-Rapid-fire events within 100ms are debounced into a single refetch. For
-plain scope lists, prefer `useCollection` — it replaces the
-`invalidateOn` + refetch cycle with true deltas.
-
-### Channels (High-Frequency Traffic)
-
-Methods are request/response: ack'd, ACL-checked against the database, and
-counted by the global rate limiter. **Channels** are their fire-and-forget
-counterpart for traffic where per-message overhead matters and losing a
-message is fine — game input, cursor positions, typing indicators, telemetry.
-
-Channel messages have no ack and no response. Each message is validated
-(zod schema required), access-checked entirely in memory (zero DB reads on
-the hot path), and governed by a per-socket, per-channel token bucket instead
-of the global limiter. Excess messages are silently dropped; sustained extreme
-flooding disconnects the socket.
-
-**Server** — define channels next to methods; broadcast tick data back with
-`emitToRoomVolatile` (backpressured clients drop frames instead of queueing):
-
-```typescript
-type GameServiceChannels = ServiceChannelMap<{
-  input: { seq: number; dx: number; dy: number; boost: boolean };
-}>;
-
-class GameService extends BaseService<
-  GameWorld,
-  Prisma.GameWorldCreateInput,
-  Prisma.GameWorldUpdateInput,
-  GameServiceMethods,
-  GameServiceChannels // 5th type param
-> {
-  constructor(prisma: PrismaClient) {
-    super({ serviceName: "gameService" });
-    this.setDelegate(prisma.gameWorld);
-
-    this.defineChannel(
-      "input",
-      "Read",
-      (payload, ctx) => this.sim.applyInput(ctx.userId, payload),
+```ts
+it("lets the owner rename, members read, and nobody else in", async () => {
+  const app = await createTestApp({ services: [projectService, taskService], db });
+  await describeAccessMatrix(app, {
+    service: taskService,
+    principals: { owner: ada, member: bo, stranger: ed },
+    cases: [
+      { method: "get", input: { id: taskId }, allow: ["owner", "member"] }, // everyone else is denied
       {
-        schema: gameInputSchema,
-        ratePerSecond: 30, // default 30
-        burst: 60, // default 2x rate
-        requireRoom: () => this.getRoomName(WORLD_ID), // entry-level gate
+        method: "rename",
+        input: { id: taskId, title: "x" },
+        expect: { owner: "allow", member: "FORBIDDEN" },
       },
-    );
-  }
-
-  // In a 20Hz tick loop:
-  broadcastSnapshot(snapshot: WorldSnapshot): void {
-    this.emitToRoomVolatile(this.getRoomName(WORLD_ID), "game:snapshot", snapshot);
-  }
-}
-```
-
-Exempt channel traffic from the global rate limiter (channels self-limit):
-
-```typescript
-import { CHANNEL_EVENT_PREFIX } from "@fitzzero/quickdraw-core";
-
-const rateLimiter = createRateLimiter({
-  maxRequests: 100,
-  excludePrefixes: [CHANNEL_EVENT_PREFIX],
+    ],
+  });
+  await app.close();
 });
 ```
 
-**Client** — send with `useChannelSend`; receive broadcasts with the existing
-`useRoomEvents` (volatile room emits arrive as ordinary events):
+`"deny"` (the default for everyone `allow` does not name) means
+`UNAUTHENTICATED` without a principal and `FORBIDDEN` with one. Mutations run
+for real, once per allowed principal: give inputs that can run again.
+
+### Performance budgets
+
+`expectBudget(run, { name })` makes performance something a test can fail
+on. It runs one step of a test against the apps `createTestApp` started,
+records what the step cost, and compares that with the entry `name` in the
+budget file beside the test, `__budgets__/<test file>.json`. Commit the
+file.
+
+<!-- example: apps/api/src/services/task.test.ts#budget -->
+
+```ts
+it("counts a board within its budget", async () => {
+  const app = await createTestApp({ services: [projectService, taskService], db });
+  const result = await expectBudget(() => app.as(ada).taskService.countOnBoard({ projectId }), {
+    name: "count a board",
+  });
+  expect(result.measured.calls).toHaveLength(1); // what the step cost: calls, statements, bytes
+  await app.close();
+});
+```
+
+It counts statements and bytes, never time, so a budget is the same on every
+machine and on PGlite or PostgreSQL. It records:
+
+- **each call** of the step (through `app.as(...)`, a socket or HTTP): its
+  service and method, the statements its handler ran and its reply's bytes,
+  from its completion record (`CallRecord.sqlStatements` and `bytes`;
+  `app.as(...)` replies count as their JSON). The access check before the
+  handler is not among a call's statements; the reads a kit's handler makes
+  to filter by access are. A query that joined another call's shared run
+  counts none: the run is counted once.
+- **the whole step**: every statement the apps' tracked database clients ran
+  while `run` did (access checks, handlers, flushes and subscription reads),
+  and every byte the apps' servers wrote to sockets (a frame sent to a room
+  counts once per socket that receives it), plus the in-process replies.
+
+What it does with them:
+
+- A missing entry is written. A step that costs less rewrites its entry, so
+  the budget tightens as the code improves; under CI (`CI=1` or `CI=true`)
+  it fails instead ("budget changed; rerun locally to accept"), so removed
+  work is noticed and the lower budget is committed from a local run.
+- A step that costs more fails, naming every number that grew with its old
+  and new values. Set `QD_ALLOW_BUDGET_GROWTH=1` to accept every new budget,
+  or `QD_ALLOW_BUDGET_GROWTH="list a page,count a board"` for the ones it
+  names, and commit the file. A step whose calls changed (other methods,
+  outcomes or how many) counts as growth.
+- Each step of a test file has its own name: a name another test of the
+  file already measured is a `TypeError` (the same test measuring it again,
+  a retry, is fine).
+- Statements must match exactly; bytes may move by up to 5% either way
+  (ids and timestamps vary in length) without counting as a change.
+- Await, inside `run`, everything the step should cost: the replies and the
+  frames it is about. Measure one step at a time.
+- A few reads happen once per process (the storage adapter asks once
+  whether an order column may hold null). When a step could be the first to
+  pay for one, run it once before measuring it, so its budget does not
+  depend on the order tests run in.
+
+### Development warnings
+
+While `NODE_ENV` is not `"production"`, a running app warns about the slow
+and untracked patterns lint cannot see, as they happen. Every warning has
+one format and names the method call it happened in:
+
+```text
+[quickdraw:n-plus-one] taskService.board: task.findUnique by id ran 10 times in one call, once per item (N+1); ...
+```
+
+| Kind                 | Raised when                                                                                          |
+| -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `n-plus-one`         | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])` |
+| `unbounded-read`     | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)           |
+| `oversized-response` | a reply was larger than `maxResponseBytes` (default 1 MiB)                                           |
+| `nested-write`       | a write's `data` wrote a related row, which is not tracked                                           |
+| `ambient-write`      | a tracked write ran outside any unit of work                                                         |
+| `batch-read`         | a write in an array-form `$transaction` read its rows outside the batch                              |
+| `batch-create-many`  | a `createMany` in an array-form `$transaction` could not report its rows                             |
+
+Updates and deletes by id inside an interactive transaction are not counted
+toward `n-plus-one`: that is how per-row writes are written (see tracked
+writes). Each is logged once per kind, service, method and subject (the
+model, or the field of a nested write), under `category: "quickdraw.dev"`.
+Only an app's own statements are checked: the framework's reads and the
+kits' own reads are not, while the app's callbacks a kit calls (`prepare`,
+`onChange`, `resolveUser`, a search strategy) are. A statement filtered by
+an `id` list (`{ id: { in: ids } }`, one per chunk of ids) never counts
+toward `n-plus-one`. In tests, `createTestApp({ strictWarnings: true })`
+(under vitest or jest) throws every warning raised in that app's method
+calls as a `DevWarningError` where it is raised, so the test that caused it
+fails: the call it happened in fails with `INTERNAL` and the error as its
+`cause`, and an in-process call whose reply was oversized rejects with it
+once the reply was recorded (over a socket or HTTP the reply was already
+sent, so that error is logged, not thrown). Strictness belongs to the app:
+warnings outside its calls (an ambient write while seeding, another app's
+calls) are logged as usual, and `app.close()` ends it.
+
+### Components
+
+`@fitzzero/quickdraw-core/testing/client` renders components against the
+test app, with the real provider, hooks and socket:
+
+<!-- example: apps/web/src/components/TaskBoard.test.tsx#render -->
 
 ```tsx
-import { useSubscription, useRoomEvents, useChannelSend } from "@fitzzero/quickdraw-core/client";
-
-function GameView({ worldId }: { worldId: string }) {
-  useSubscription("gameService", worldId); // room membership gates the channel
-  const { send, isReady } = useChannelSend<GameInput>("gameService", "input");
-
-  useRoomEvents({
-    "game:snapshot": (snap: WorldSnapshot) => applySnapshot(snap),
+it("shows a task another user adds", async () => {
+  const app = await createTestApp({ services: [projectService, taskService], db });
+  const view = await renderWithQuickdraw(<TaskBoard projectId={projectId} />, {
+    app,
+    as: ada,
+    client: qd,
   });
-
-  // e.g. called from a fixed-timestep loop
-  const onTick = (input: GameInput) => send(input);
-}
+  await app.as(ada).taskService.create({ projectId, title: "Added elsewhere" });
+  await view.findByText("Added elsewhere"); // the collection delta reached the component
+  await app.close();
+});
 ```
 
-**Access model** (all synchronous, in-memory):
+`renderWithQuickdraw(ui, { app, as, client, queryClient?, wrapper? })` is
+async (Testing Library, an optional peer, is loaded lazily) and returns
+Testing Library's result plus `connection`, `queryClient`, `disconnect()`
+and `reconnect()`, which drop and restore the socket as a lost network does.
 
-| Check                    | Behavior                                                                                                                                                       |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Authentication           | Always required — anonymous messages dropped, even at `"Public"` access                                                                                        |
-| `"Public"` / `"Read"`    | Any authenticated user passes the service gate                                                                                                                 |
-| `"Moderate"` / `"Admin"` | Requires that level in the socket's `serviceAccess`                                                                                                            |
-| `requireRoom`            | Socket must already be in the resolved room — membership was ACL-checked at subscribe time, so this inherits entry ACL semantics without a DB read per message |
+For a component test without a server, `createMockClient(contracts)` gives
+the typed client's shape with stubs; give it to the components in place of
+the app's client (a module mock of the file that exports `qd`, say):
 
-Channels route as the Socket.io event `channel:<serviceName>:<channelName>`
-(helper: `channelEventName(serviceName, channelName)`), which also makes them
-easy to speak from non-JS clients (game engines, native apps).
+<!-- example: apps/web/src/components/TaskBoard.test.tsx#mock -->
 
-When to use which:
-
-|                | Method                    | Channel                  |
-| -------------- | ------------------------- | ------------------------ |
-| Response       | ack with data/error       | none (fire-and-forget)   |
-| Frequency      | occasional (user actions) | tick rate (10-60Hz)      |
-| Loss tolerance | must not lose             | next message supersedes  |
-| ACL            | full async check incl. DB | in-memory only           |
-| Rate limit     | global limiter            | per-channel token bucket |
-
-## Splitting Large Services
-
-Real services grow past what one file should hold. The proven pattern —
-battle-tested in the framework's largest consumer without import cycles — is
-an abstract `*ServiceCore` plus method modules wired by a thin concrete
-subclass:
-
-```typescript
-// services/task/service-core.ts — state, ACL overrides, helpers. No methods.
-export abstract class TaskServiceCore extends BaseService<
-  Task,
-  Prisma.TaskCreateInput,
-  Prisma.TaskUpdateInput,
-  TaskServiceMethods,
-  TaskChannels,
-  TaskDTO,
-  TaskCollections
-> {
-  constructor(protected readonly prisma: PrismaClient) {
-    super({ serviceName: "taskService" });
-    this.setDelegate(prisma.task);
-  }
-
-  public buildCardDTO(taskId: string): Promise<TaskCardDTO> {
-    /* ... */
-  }
-}
-
-// services/task/methods/create-task.ts — one module per method (or cluster).
-// defineMethod is public precisely so modules can register on the instance.
-export function registerCreateTask(service: TaskService): void {
-  service.defineMethod(
-    "createTask",
-    "Read",
-    async (payload, ctx) => {
-      // ...
-    },
-    { schema: createTaskSchema },
-  );
-}
-
-// services/task/index.ts — the concrete subclass wires the modules.
-export class TaskService extends TaskServiceCore {
-  constructor(prisma: PrismaClient) {
-    super(prisma);
-    registerCreateTask(this);
-    registerUpdateTask(this);
-    // ...
-    this.verifyAllMethods(["createTask", "updateTask" /* ... */]);
-  }
-}
+```tsx
+const mock = createMockClient(contracts); // the typed client's members, with stubs
+mock.task.board.mockScope(projectId, [card]); // what useCollection shows for the scope
+mock.task.countOnBoard.mockResolvedValue(1); // what the query answers
+mock.task.useEntity.mockRow({ ...card, notes: null }); // what useEntity shows for t1
+afterEach(() => mock.$reset()); // forget it all (automatic when the runner has a global afterEach)
 ```
 
-Core → modules → concrete class is a DAG: the core never imports the modules,
-the modules never import each other. `verifyAllMethods` catches a forgotten
-`register*` call at boot. The public choke points (`emitUpdate`,
-`emitCollectionUpsert`, `emitToRoom`, `isLevelSufficient`, …) exist so method
-modules outside the class stay fully capable.
+Each method member has `mockResolvedValue`, `mockRejectedValue`,
+`mockImplementation`, `mockReset` and `calls`; streams have `mockItems`,
+channels `sent` and events `mockEmit`. Everything set is forgotten after
+each test only when the test runner has a global `afterEach` (vitest with
+`globals: true`, or jest), where the mock registers its own reset
+(`resetAfterEach: false` opts out); otherwise call `mock.$reset()` in an
+`afterEach` of your own, as above. Optimistic updates are not shown.
 
-## Package Exports
+### Test databases
 
-```typescript
-// Shared types (both server and client)
-import {
-  ServiceResponse,
-  AccessLevel,
-  ServiceMethodMap,
-  // Room helpers + typed events (4.0)
-  serviceRoom,
-  collectionRoom,
-  userRoom,
-  type QuickdrawEventMap,
-  type CollectionDelta,
-} from "@fitzzero/quickdraw-core";
+`@fitzzero/quickdraw-core/testing/prisma` gives each vitest worker a database
+of its own: `createPrismaTestGlobalSetup` migrates a template once per run
+and clones a database per worker on PostgreSQL (`TEST_DATABASE_URL`), or
+boots PGlite from a cached dump without one; `workerDatabaseUrl` and
+`resetDatabase` (truncates every table) do the rest. Apply `trackPrisma` to
+the test client exactly as in production.
 
-// Server
-import {
-  BaseService,
-  BaseRpcService, // 4.0: method-only services, no delegate/CRUD
-  ServiceRegistry,
-  createQuickdrawServer,
-  type CollectionDefinition, // 4.0
-  type QuickdrawIdentity, // 4.0: structured authenticate result
-  createJWT,
-  verifyJWT,
-  discordProvider,
-  googleProvider,
-  // Auth & security (3.7+)
-  createMockOAuthProvider,
-  registerMockOAuthProvider,
-  isMockOAuthEnabled,
-  validateRedirectOrigin,
-  setSessionCookie,
-  clearSessionCookie,
-  createRequireAuth,
-  encrypt,
-  decrypt,
-} from "@fitzzero/quickdraw-core/server";
+## Observability
 
-// Express rate-limit presets (3.7+, requires the optional express-rate-limit peer)
-import {
-  createAuthLimiter,
-  createWebhookLimiter,
-  createPublicApiLimiter,
-} from "@fitzzero/quickdraw-core/server/express";
+`createServer({ stallWatchdog: true })` watches the event loop. It samples
+the loop's delay every 20 ms (`perf_hooks.monitorEventLoopDelay`), reads it
+every 10 s, and logs a warning (`category: "quickdraw.stall"`) when the 99th
+percentile delay of that window is above 200 ms, or when one delay in it is
+above 1 s, naming the window's slowest methods. `{ thresholdMs, maxMs,
+intervalMs, slowest }` change the two thresholds, the window (at least 1 s)
+and how many methods it names. A percentile needs repeated stalls: one
+300 ms block in a 10 s window is one sample of about 500 and does not move
+it, while a single block over `maxMs` warns on its own. On an idle process
+the watchdog costs about 0.05% of one CPU.
 
-// Server testing
-import {
-  createTestServer,
-  connectAsUser,
-  emitWithAck,
-} from "@fitzzero/quickdraw-core/server/testing";
+`otelOnCall({ meter, tracer })` on `./server/otel` is an `onCall` handler
+that records every call with OpenTelemetry (`@opentelemetry/api` is an
+optional peer dependency, and only this entry imports it):
 
-// Dual-mode Prisma test databases (3.7+, optional peers: @electric-sql/pglite, pg)
-import {
-  createPrismaTestGlobalSetup,
-  resetDatabase,
-  workerDatabaseUrl,
-} from "@fitzzero/quickdraw-core/server/testing/prisma";
+<!-- example: apps/api/src/observability.ts#otel -->
 
-// Client
-import {
-  QuickdrawProvider,
-  useQuickdrawSocket,
-  useService,
-  useServiceQuery,
-  useSubscription,
-  useCollection, // 4.0: live scope-keyed lists
-  useRoomEvents,
-  ServiceCallError, // 4.0: hook errors carry the server code
-  SocketCheckbox,
-  SocketTextField,
-  SocketSelect,
-  SocketSlider,
-  SocketSwitch,
-} from "@fitzzero/quickdraw-core/client";
+```ts
+import { metrics, trace } from "@opentelemetry/api";
+import { otelOnCall } from "@fitzzero/quickdraw-core/server/otel";
 
-// Client testing
-import { createMockSocket, createTestWrapper } from "@fitzzero/quickdraw-core/client/testing";
+export const server = qd.createServer({
+  app,
+  services,
+  db,
+  stallWatchdog: true, // warns when the event loop's p99 delay passes 200 ms
+  onCall: otelOnCall({ meter: metrics.getMeter("api"), tracer: trace.getTracer("api") }),
+});
 ```
 
-## Linting
+| Instrument                      | Kind      | Unit          |
+| ------------------------------- | --------- | ------------- |
+| `quickdraw.calls`               | counter   | `{call}`      |
+| `quickdraw.call.duration`       | histogram | `s`           |
+| `quickdraw.call.response.size`  | histogram | `By`          |
+| `quickdraw.call.sql_statements` | histogram | `{statement}` |
 
-The package ships a shared oxlint base config, `oxlint.base.jsonc` — the
-framework's lint best practices (strict type-safety, complexity budgets, and
-the `quickdraw` plugin rules pre-wired for `services/**` and client code).
-Extend it from your root `.oxlintrc.json` so best practices update with the
-package:
+Every point carries `quickdraw.service`, `quickdraw.method`,
+`quickdraw.outcome` (`ok`, `not-modified` or the error code) and
+`quickdraw.transport`; a call to a method that does not exist is recorded as
+`_unknown`, so no client can add attribute values. With a tracer, each call
+is also a server span named `service.method`, with an error status for
+`INTERNAL` and `TIMEOUT`. With or without either, calls slower than `slowMs`
+(default 1 s) or larger than `maxResponseBytes` (default 1 MiB) log at
+`warn`.
 
-```jsonc
-{
-  "extends": ["./node_modules/@fitzzero/quickdraw-core/oxlint.base.jsonc"],
-  // plugins are NOT purely inherited: omitting this array unions oxlint's
-  // default plugin set into the merge — mirror the base's list.
-  "plugins": ["typescript", "import", "react", "nextjs", "jsx_a11y"],
-  // ignorePatterns, env, globals, and settings are not inherited — declare here.
-  "ignorePatterns": ["**/dist/**", "**/node_modules/**"],
-  "overrides": [
-    // Project-specific relaxations win over the base (overrides concatenate,
-    // consumer last), e.g. allow specific cross-service mutations:
-    {
-      "files": ["**/services/**/*.ts"],
-      "rules": {
-        "quickdraw/no-cross-service-mutations": [
-          "error",
-          { "allowedModels": { "chat": ["chatMember"] } },
-        ],
-      },
-    },
-  ],
-}
-```
+## API docs from contracts
 
-The base config also loads `./eslint-plugin` (the `quickdraw` rules) via
-`jsPlugins` — no separate wiring needed. The `./eslint-config` export (ESLint
-flat config) is legacy; prefer the oxlint base.
-
-## Local Development
-
-This package is developed alongside [quickdraw-chat](https://github.com/fitzzero/quickdraw-chat), a reference implementation.
-
-quickdraw-chat consumes the published npm package. For local iteration
-against a checkout, use `bun link` (or point lint `extends` at the sibling
-path), and always re-verify against a published version before releasing:
+The `quickdraw-docs` command writes Markdown API docs from the contracts
+alone: one page per service (its entity and field tiers, projections,
+methods with their kind, input fields and output, collections, streams,
+channels and events, from the schemas' JSON Schema where they have one) and
+a `README.md` index. It reads contracts, never source code.
 
 ```bash
-bun run build  # or bun run dev for watch mode
+quickdraw-docs packages/shared/src/index.ts --out docs/api           # write the pages
+quickdraw-docs packages/shared/src/index.ts --out docs/api --check   # exit 1 when they are stale
 ```
 
-## Type Definitions
+The module may export each contract, or a map of them as given to
+`createQuickdrawClient`. A TypeScript module loads through Node's type
+stripping, or through `tsx` when the project has it installed (for
+extensionless imports and `tsconfig` paths, which Node's loader refuses); a
+module whose own code throws runs once and its error is reported as is. Pages are only ever replaced
+or removed when they start with the generator's marker, and they are laid
+out as oxfmt and Prettier format Markdown, so formatting them changes
+nothing. Run `--check` in CI next to the lint step.
 
-Define your service methods in a shared types file:
+## Lint rules and agent guidance
 
-```typescript
-// shared/types.ts
-import type { ServiceMethodMap } from "@fitzzero/quickdraw-core";
+[`@fitzzero/quickdraw-lint`](packages/lint) is the oxlint plugin and base
+config every 5.0 app extends: it reports untracked and foreign writes, nested
+and raw SQL writes, hand-sent frames, inline auth guards, unbounded reads,
+database calls and emits in loops, layering breaks, bypasses of the typed
+client, and every removed 4.x API with its replacement. Each rule supports a
+baseline, so an app can adopt it before fixing old code.
 
-export type ChatServiceMethods = ServiceMethodMap<{
-  createChat: {
-    payload: { title: string };
-    response: { id: string };
-  };
-  updateTitle: {
-    payload: { id: string; title: string };
-    response: { id: string; title: string };
-  };
-  inviteUser: {
-    payload: { id: string; userId: string; level: "Read" | "Moderate" | "Admin" };
-    response: { id: string };
-  };
-}>;
-```
+[`@fitzzero/quickdraw-skills`](packages/skills) ships agent rules and skills
+for quickdraw apps and links them into `.claude/` with
+`quickdraw-skills link`, so every app's agents read the same, current
+guidance:
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Client (React)                          │
-├─────────────────────────────────────────────────────────────────┤
-│  QuickdrawProvider                                              │
-│  ├── TanStack QueryClient                                       │
-│  └── Socket.io Connection                                       │
-│                                                                 │
-│  useService() ──────────────────────────────────────────────┐   │
-│  useSubscription() ─────────────────────────────────────────┤   │
-│  useCollection() ───────────────────────────────────────────┤   │
-│  SocketTextField, SocketCheckbox, ... ──────────────────────┤   │
-│                                                             │   │
-└─────────────────────────────────────────────────────────────│───┘
-                                                              │
-                        Socket.io Events                      │
-                                                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                         Server (Node.js)                        │
-├─────────────────────────────────────────────────────────────────┤
-│  createQuickdrawServer()                                        │
-│  └── ServiceRegistry                                            │
-│      ├── Auto-discovers public methods                          │
-│      └── Wires methods to Socket.io events                      │
-│                                                                 │
-│  BaseService<Entity, Create, Update, Methods, …, Dto, Colls>    │
-│  ├── defineMethod() - Type-safe method definition               │
-│  ├── defineCollection() - Live lists with automatic deltas      │
-│  ├── subscribe() / unsubscribe() - Real-time subscriptions      │
-│  ├── create() / update() / delete() - CRUD, auto-emit + hooks   │
-│  └── checkAccess() - ACL enforcement                            │
-│                                                                 │
-│  Auth Utilities                                                 │
-│  ├── createJWT() / verifyJWT()                                  │
-│  └── OAuth providers (Discord, Google)                          │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Access Control
-
-Quickdraw provides flexible ACL with two complementary levels:
-
-### Service-level ACL
-
-Blanket permissions across all entries in a service. Stored in `user.serviceAccess`:
-
-```typescript
-// User model must satisfy QuickdrawUser interface
-interface QuickdrawUser {
-  id: string;
-  serviceAccess?: Record<string, AccessLevel> | null;
-}
-
-// Example: Admin access to all chats
-user.serviceAccess = { chatService: "Admin", userService: "Read" };
-```
-
-### Entry-level ACL
-
-Per-entity permissions. Quickdraw supports two patterns:
-
-#### Pattern 1: JSON ACL (Simple)
-
-Store ACL directly on the entity. Best for:
-
-- Simple ownership models (owner + collaborators)
-- When you don't need to query "all entities user X can access" efficiently
-- Minimal schema complexity
-
-```typescript
-// Entity must satisfy ACLEntity interface
-interface ACLEntity {
-  id: string;
-  acl?: ACL | null;  // ACL = Array<{ userId: string; level: AccessLevel }>
-}
-
-// Prisma schema
-model Document {
-  id    String @id @default(cuid())
-  acl   Json?  // Stores [{ userId: "...", level: "Read" }]
-}
-
-// Service - uses default checkEntryACL (no override needed)
-class DocumentService extends BaseService<Document, ...> {
-  constructor(prisma: PrismaClient) {
-    super({ serviceName: "documentService", hasEntryACL: true });
-    this.setDelegate(prisma.document);
-  }
+```jsonc
+// package.json
+{
+  "scripts": {
+    "prepare": "quickdraw-skills link",
+  },
 }
 ```
 
-#### Pattern 2: Membership Table (Complex)
+## Package exports
 
-Separate table for memberships. Best for:
+| Export             | Holds                                                                                                                                                                                                                                           |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.`                | `defineContract`, `query`, `mutation`, `nullable`, `listOf`, `via`, the kits' contract halves, inference types, `QuickdrawError`, error codes, protocol types, room and topic names                                                             |
+| `./server`         | `initQuickdraw`, `createServer`, `createDispatcher`, `createHttpRouter`, policies, `custom`, the kits' handlers, `requireRow`, `nextOrdinal`, `storageOf`, dev warnings, the Redis adapter, the socket rate limiter, env and encryption helpers |
+| `./server/auth`    | `createAuthRoutes`, `socketAuth`, providers (`google`, `discord`, `mock`, `guest`), session stores, `issueSession`, `liveSession`, JWT, cookie and origin helpers                                                                               |
+| `./server/express` | Express rate limits: `createAuthLimiter`, `createAuthStatusLimiter`, `createCallLimiter`, `createPublicApiLimiter`, `createWebhookLimiter`                                                                                                      |
+| `./server/mcp`     | `createMcpRegistry`, `describeTools`, `createMcpStdioServer`, `createMcpHttpRouter`, `bootstrapMcpServer`                                                                                                                                       |
+| `./server/otel`    | `otelOnCall`                                                                                                                                                                                                                                    |
+| `./prisma`         | `trackPrisma`, `storageOf`                                                                                                                                                                                                                      |
+| `./client`         | `createQuickdrawClient`, `QuickdrawProvider`, `useQuickdraw`, `usePresence`, `useAdminServices`, `createQuickdrawConnection`, `call`, `callData`, `liveDataOf`, the coordinator; everything in `./utils`                                        |
+| `./utils`          | `createServerCaller`, cache keys (`methodKey`, `entityKey`, `collectionKey`), formatting, navigation, `parseJWTPayload`                                                                                                                         |
+| `./parser`         | the JSON-only Socket.IO parser                                                                                                                                                                                                                  |
+| `./testing`        | `createTestApp`, `describeAccessMatrix`, `expectBudget`, `createRecordingSink`, `DevWarningError`                                                                                                                                               |
+| `./testing/client` | `renderWithQuickdraw`, `createMockClient`                                                                                                                                                                                                       |
+| `./testing/prisma` | test databases on PostgreSQL or PGlite                                                                                                                                                                                                          |
 
-- Querying "all entities user X can access" efficiently
-- Complex role hierarchies
-- Additional membership metadata (join date, invited by, etc.)
+The package also ships the `quickdraw-docs` command.
 
-```typescript
-// Prisma schema
-model Chat {
-  id      String       @id
-  members ChatMember[]
-}
+## Developing this repository
 
-model ChatMember {
-  chatId String
-  userId String
-  level  String  // "Read" | "Moderate" | "Admin"
+A bun workspace with turbo: `packages/core` (this package), `packages/lint`,
+`packages/skills` and `packages/codemod`. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-  @@unique([chatId, userId])
-}
-
-// Service - override checkEntryACL to use membership table
-class ChatService extends BaseService<Chat, ...> {
-  protected override async checkEntryACL(
-    userId: string,
-    chatId: string,
-    requiredLevel: AccessLevel
-  ): Promise<boolean> {
-    const member = await this.prisma.chatMember.findUnique({
-      where: { chatId_userId: { chatId, userId } },
-    });
-    if (!member) return false;
-    return this.isLevelSufficient(member.level as AccessLevel, requiredLevel);
-  }
-}
+```bash
+bun install
+bun run build && bun run typecheck && bun run lint && bun run test
+bun run format:check
 ```
 
-### Access Check Order
-
-When a method is called, `ensureAccessForMethod` checks in this order:
-
-1. **Service-level**: `socket.serviceAccess[serviceName] >= requiredLevel` → Allow
-2. **Custom override**: `checkAccess()` returns true → Allow (use for self-access patterns)
-3. **Entry-level**: `checkEntryACL()` returns true → Allow (JSON ACL or membership table)
-4. **Deny** if none of the above
-
-### Access Levels
-
-| Level    | Value | Typical Use                      |
-| -------- | ----- | -------------------------------- |
-| Public   | 0     | No authentication required       |
-| Read     | 1     | View data, subscribe to updates  |
-| Moderate | 2     | Edit content, manage members     |
-| Admin    | 3     | Delete, manage ACL, full control |
-
-## Testing
-
-### Server Integration Tests
-
-```typescript
-import {
-  createTestServer,
-  connectAsUser,
-  emitWithAck,
-} from "@fitzzero/quickdraw-core/server/testing";
-
-describe("ChatService", () => {
-  let server;
-
-  beforeAll(async () => {
-    server = await createTestServer({
-      services: { chatService: new ChatService() },
-      seedDb: async () => {
-        /* seed test data */
-      },
-    });
-  });
-
-  afterAll(() => server.stop());
-
-  it("creates chat", async () => {
-    const client = await server.connectAs("user-id");
-    const chat = await client.emit("chatService:createChat", { title: "Test" });
-    expect(chat.id).toBeDefined();
-    client.close();
-  });
-});
-```
-
-### Client Component Tests
-
-```typescript
-import { createTestWrapper, createMockSocket, mockSuccessEmit } from '@fitzzero/quickdraw-core/client/testing';
-
-test('renders chat', () => {
-  const mockSocket = createMockSocket();
-  mockSocket.emit.mockImplementation(mockSuccessEmit({ title: 'Test Chat' }));
-
-  const wrapper = createTestWrapper({ socketContext: { socket: mockSocket } });
-  render(<ChatView chatId="123" />, { wrapper });
-
-  expect(screen.getByText('Test Chat')).toBeInTheDocument();
-});
-```
-
-## Contributing
-
-Contributions are welcome! Please read our contributing guide for details.
+The README's examples live in `packages/core/test/readme/`: edit them there,
+then run `bun run readme:sync` in `packages/core` to copy them in here.
 
 ## License
 

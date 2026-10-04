@@ -1,0 +1,160 @@
+---
+paths:
+  - "apps/api/**"
+  - "packages/shared/**"
+---
+
+# quickdraw 5.0: contracts and services
+
+> From `@fitzzero/quickdraw-skills` (`quickdraw-skills link`). `paths` follow
+> the quickdraw template: contracts in `packages/shared`, the server in
+> `apps/api`. Another layout replaces this link with a copy and edits them.
+
+## The contract comes first
+
+One contract per service, in the shared package, so the client imports it
+without server code. Everything else is typed from it.
+
+```ts
+export const task = defineContract("taskService", {
+  entity: taskSchema, // the full row; every row schema has `id: string`
+  projections: { card: cardSchema }, // named lean shapes; "entity" is implicit
+  fields: { notes: "Admin" }, // the level a caller needs to receive a field
+  methods: {
+    rename: mutation({ input: renameSchema, output: "entity", describe: "Renames a task." }),
+    count: query({
+      input: z.object({ projectId: z.string() }),
+      output: z.number(),
+      watch: { collection: "board", scope: (input) => input.projectId },
+    }),
+  },
+  collections: { board: { scope: "projectId", item: "card", order: byOrdinal } }, // ends in "id"
+});
+```
+
+- Every method is `query` or `mutation`, with `input` and `output`. `output`
+  is a schema or a projection: `"entity"`, `"card"`, `nullable("entity")`,
+  `listOf("card")`. Only a query may `watch`.
+- Schemas are any Standard Schema. Use Zod 4.2 or later: MCP tools, the admin
+  kit, projection keys and `quickdraw-docs` read their JSON Schema.
+- Methods, collections, streams, channels and events share one namespace
+  (`qd.<service>.<name>` on the client). `subscribe`, `unsubscribe`, `call`,
+  `then`, `useEntity`, `useEntities`, `admin` and `$`-names are reserved.
+  A contract without `entity` is an RPC-only service.
+
+## The service implements it
+
+```ts
+export const taskService = qd.defineService(task, {
+  model: "task", // the Prisma delegate the rows live in
+  access: inherit({ from: project, via: "projectId" }), // see quickdraw-access.md
+  collections: { board: { anchor: project } },
+  methods: {
+    count: {
+      access: { scope: "Read", of: project, id: "projectId" },
+      handler: ({ input, db }) => db.task.count({ where: { projectId: input.projectId } }),
+    },
+    rename: {
+      access: { entry: "Moderate" },
+      handler: ({ input, db }) =>
+        db.task.update({ where: { id: input.id }, data: { title: input.title } }),
+    },
+  },
+});
+```
+
+- `qd` comes from one `initQuickdraw<{ db: typeof db; principal: AppPrincipal }>()`
+  for the whole app (`context: (base) => ({...})` adds app fields to every
+  `ctx`). `db` is `trackPrisma(new PrismaClient({ adapter }))` from
+  `@fitzzero/quickdraw-core/prisma`, applied as the last extension.
+- `methods` implements exactly the contract's methods; each is
+  `{ access, handler }`, plus `timeoutMs`, and for queries `share`
+  (`"caller"` or `"all"`), `ttlMs` and `version`.
+- A handler receives `{ input, ctx, db }`: the parsed input, the context
+  (`principal`, `signal`, `log`, `requestId`, `transport`, `touch`, `rooms`,
+  `presence`, `mcp`, `services`) and the tracked client.
+- For a projection output, return the database row (a `Date` where the wire
+  has a string, extra columns allowed): the framework selects and projects
+  it. Never build the wire shape by hand. A relation or computed field is
+  `project: { card: { select, map } }` on the service, `map` synchronous.
+- Fail with `throw new QuickdrawError(code, message, data?)`: `NOT_FOUND`,
+  `CONFLICT`, `VALIDATION`, `FORBIDDEN`, and so on. Anything else thrown
+  reaches the caller as `INTERNAL`, except Prisma's unique violation
+  (`CONFLICT`) and missing row (`NOT_FOUND`, as from `findUniqueOrThrow`).
+- To use another service's method, call it through `ctx.services`, by
+  service name: `await ctx.services.projectService.get({ id })`. It runs as
+  the same principal with transport `"internal"`, checks that method's
+  access, joins this call's unit of work (its writes flush with this call's)
+  and is cancelled with `ctx.signal`; it is typed by the app's `contracts`
+  (`initQuickdraw<{ ...; contracts }>()`). Never write another service's
+  model directly to skip its access checks.
+
+## Writes are tracked; frames are derived
+
+Entity frames, collection deltas and change topics are computed from the
+writes made through `db`, after the response is sent:
+
+- Write through the handler's `db` (it may return `db.task.update(...)`
+  unawaited). In a job, script or webhook, import the tracked client and
+  wrap the work in `qd.run(async (ctx) => ...)`, which flushes before it
+  returns. Never write through the untracked client.
+- Never emit by hand: no `io.emit`, `socket.emit` or `qd:` event names.
+- List the other models a service writes: `writes: ["taskLabel"]`.
+- Nested writes (`data: { labels: { create: [...] } }`) are not tracked:
+  write each model through its own delegate, inside an interactive
+  `db.$transaction(async (tx) => ...)` when they must commit together.
+- Raw SQL writes and database cascades are not seen: record them with
+  `ctx.touch("task", ids)` (`{ removed: true }` for deleted rows); `qd.run`
+  passes `fn` the same `touch`.
+- A write to one row that changes how another service's row looks (a
+  parent's counts) declares `affects: [{ service: task, id: "parentTaskId" }]`.
+
+## Collections
+
+A contract collection has `scope` (a string column, or
+`via({ model, entry, scope })` for a junction table), `item`, `order` (ending
+in `id`), and optionally `where`, `limit`, `maxLimit`, `index` (small fields
+sent for the whole scope), `views` (`(row, who) => boolean` over index rows)
+and `access`. The service says who may open a scope: `{ anchor: project }`
+(the level on the row the scope value names) or `{ scopeAccess: "self" }`
+(the subscriber's own user id). Everyone in a scope sees every item, so
+derive the item service's access from the anchor (`inherit`).
+
+## Kits instead of hand-written CRUD
+
+Contract halves come from `@fitzzero/quickdraw-core`, handlers from
+`@fitzzero/quickdraw-core/server`, spread into `methods`:
+
+- `crud.contract({ entity, get: true, list: { item, filter, sort }, create: { input }, update: { input }, delete: true })`
+  (also `getMany`, `reorder`, `bulkUpdate`, `bulkDelete`) with
+  `crud.handlers(task, { access: { get: { entry: "Read" }, ... }, prepare })`.
+- `search.contract({ entity, fields, item?, scope? })` with `search.handlers(task, { access })`.
+- `sharing.contract({ mode: "acl" | "members" })` with `sharing.handlers(project)`,
+  on a service whose policy has a `jsonAcl` or `members`.
+- `admin.contract({ entity })` with `admin.handlers(task)` (`{ service: "Admin" }` by default).
+
+## Realtime
+
+- Streams: `streams: { logs: { item, scope: "taskId", seed: 50, access } }`;
+  push with `qd.stream(task, "logs").push(taskId, item)`, and several items
+  at once with `pushMany(taskId, items)`, never `push` in a loop.
+- Channels: `channels: { cursor: { payload, ratePerSecond, requires } }` in
+  the contract, `channels: { cursor: (payload, ctx) => ... }` on the service.
+- Events: `events: { moved: { payload } }`, sent with
+  `ctx.rooms.emit(room, task, "moved", payload)` to an app room
+  (`ctx.rooms.join(room)` in a method puts the caller's socket in one).
+
+## Performance
+
+Bound every `findMany` with `take`; batch per-item reads with `in:` filters;
+filter in `where`, not after loading. Write many rows in one statement when
+they all get the same data (`updateMany`, `createMany`). When each row's
+data differs, loop over the rows inside an interactive
+`db.$transaction(async (tx) => ...)` and await one `tx.task.update(...)` by
+id per row, not an array-form `$transaction([...])`, which cannot read a
+moved row inside its batch. `share: "caller"` for hot queries;
+`versionColumn: "updatedAt"` answers "not modified" cheaply. The quickdraw
+lint rules enforce most of this file (`no-untracked-write`,
+`no-foreign-write`, `no-nested-write`, `no-raw-sql-write`, `no-manual-emit`,
+`no-unbounded-read`, `no-db-call-in-loop`, `no-load-then-filter`): fix the
+code, not the rule.

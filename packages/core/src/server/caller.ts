@@ -76,13 +76,26 @@ export function lazyMembers<Member>(make: (name: string) => Member): object {
   });
 }
 
+/** `signal`, and also `outer` when there is one: aborted when either is. */
+function bothSignals(outer: AbortSignal | undefined, signal: AbortSignal | undefined) {
+  if (outer === undefined || signal === undefined) {
+    return outer ?? signal;
+  }
+  return AbortSignal.any([outer, signal]);
+}
+
 /**
  * Creates an in-process caller acting as `principal` (`null` for an
  * anonymous caller). `resolve` returns the dispatch function to call through;
  * it is asked on every call, so a caller made before its dispatcher exists
- * works once one does.
+ * works once one does. Every call is also cancelled with `outer`, when given
+ * (`ctx.services` passes the calling method's `ctx.signal`).
  */
-export function createCaller(resolve: () => Dispatch, principal: Principal | null): object {
+export function createCaller(
+  resolve: () => Dispatch,
+  principal: Principal | null,
+  outer?: AbortSignal,
+): object {
   return lazyMembers((service) =>
     lazyMembers<MethodFunction>(
       (method) => (input, options) =>
@@ -92,7 +105,7 @@ export function createCaller(resolve: () => Dispatch, principal: Principal | nul
           input,
           principal,
           transport: "internal",
-          signal: options?.signal,
+          signal: bothSignals(outer, options?.signal),
         }),
     ),
   );

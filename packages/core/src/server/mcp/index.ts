@@ -30,6 +30,8 @@ export type {
   McpTool,
   McpToolAccess,
   McpToolAnnotations,
+  McpToolArguments,
   McpToolCall,
+  McpToolInputSchema,
   McpToolResult,
 } from "./types";

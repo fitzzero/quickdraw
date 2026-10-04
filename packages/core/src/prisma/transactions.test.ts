@@ -254,7 +254,7 @@ describe("array-form transactions", () => {
     expect(await h.prisma.task.count()).toBe(0);
     await h.inUnit(batch);
     expect(h.logger.warnings).toEqual([
-      "deleteMany on task inside an array-form $transaction reads its rows first on the root client, outside the batch, so rows the batch's earlier statements changed may be missed; use an interactive transaction to read inside it",
+      "[quickdraw:batch-read] deleteMany on task inside an array-form $transaction reads its rows first on the root client, outside the batch, so rows the batch's earlier statements changed may be missed; use an interactive transaction to read inside it",
     ]);
   });
 });

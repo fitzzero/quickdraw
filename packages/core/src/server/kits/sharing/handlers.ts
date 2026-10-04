@@ -142,10 +142,10 @@ function serviceProblem(
   return policyProblem(service, mode);
 }
 
-function handlers<C extends AnyContract, const A extends SharingAccess<C> = Empty>(
+function handlers<C extends AnyContract, const A extends SharingAccess<C> = Empty, Db = unknown>(
   contract: C & NoInfer<SharingContract<C>>,
-  ...rest: SharingOptionsArgs<C, A>
-): SharingImplementations<C, A> {
+  ...rest: SharingOptionsArgs<C, A, Db>
+): SharingImplementations<C, A, Db> {
   const kit = kitMethods(contract);
   const options = checkOptions(rest[0]);
   const access = checkAccess(
@@ -160,7 +160,7 @@ function handlers<C extends AnyContract, const A extends SharingAccess<C> = Empt
     checkWhenDefined(handler, (service) => serviceProblem(service, contract, spec.mode));
     entries[name] = Object.freeze({ access: form, handler });
   }
-  return Object.freeze(entries) as SharingImplementations<C, A>;
+  return Object.freeze(entries) as SharingImplementations<C, A, Db>;
 }
 
 /**

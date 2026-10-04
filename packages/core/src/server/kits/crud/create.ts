@@ -5,14 +5,15 @@
 // its collections as `added`. A unique violation is `CONFLICT`.
 
 import { QuickdrawError } from "../../../protocol/errors";
+import { checked } from "../../devWarnings";
 import type { MaybePromise, Principal } from "../../types";
 import { crudCall, projectionOf, type KitHandler, type KitHandlerArgs } from "./runtime";
 
-/** `prepare(input, ctx, db)`: the data `create` writes, from the parsed input. */
-export type CrudPrepare<Input = never, Ctx = never> = (
+/** `prepare(input, ctx, db)`: the data `create` writes, from the parsed input; `db` is the app's client. */
+export type CrudPrepare<Input = never, Ctx = never, Db = unknown> = (
   input: Input,
   ctx: Ctx,
-  db: unknown,
+  db: Db,
 ) => MaybePromise<Readonly<Record<string, unknown>>>;
 
 /** `prepare` as the handler calls it. */
@@ -26,7 +27,8 @@ export type AnyPrepare = (
 export function createHandler(prepare: AnyPrepare | undefined): KitHandler {
   const handler = async ({ input, ctx, db }: KitHandlerArgs): Promise<unknown> => {
     const call = crudCall(ctx, db);
-    const data = prepare === undefined ? input : await prepare(input, ctx, db);
+    // The app's prepare is the app's code: its statements are checked.
+    const data = prepare === undefined ? input : await checked(() => prepare(input, ctx, db));
     if (typeof data !== "object" || data === null || Array.isArray(data)) {
       throw new QuickdrawError(
         "INTERNAL",

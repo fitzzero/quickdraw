@@ -1,11 +1,13 @@
 # quickdraw-core — Project Context
 
 `@fitzzero/quickdraw-core` is an npm package providing typed real-time
-fullstack patterns: Socket.IO services with ACL (`BaseService` +
-`ServiceRegistry`), fire-and-forget channels, OAuth/JWT auth utilities
-(including a dev-only mock provider), Express helpers (rate limits), an MCP
-bridge, and React client hooks (TanStack Query). The reference consumer is
-the `quickdraw-chat` template (sibling checkout at `../quickdraw-chat`).
+fullstack services: contracts (`defineContract`), services
+(`qd.defineService`) with declared access and row policies, tracked Prisma
+writes that drive live entities, collections and change topics, kits
+(read/write, search, sharing, admin, presence and streams, auth routes),
+Socket.IO, HTTP, MCP and in-process transports, and a typed React client over
+TanStack Query. The reference consumer is the `quickdraw-chat` template
+(sibling checkout at `../quickdraw-chat`), still on 4.1.
 
 ## 5.0 in progress
 
@@ -21,17 +23,23 @@ A bun workspace monorepo driven by turbo (`turbo.json`). Packages per
 
 ```
 packages/
-├── core/        # @fitzzero/quickdraw-core — the framework (5.0, being rebuilt)
-│   ├── src/         # 5.0 sources; built by tsup → dist/. Holds the 4.1 modules
-│   │                #   5.0 keeps unchanged until packs B–E add the new core
+├── core/        # @fitzzero/quickdraw-core — the framework (5.0)
+│   ├── src/         # 5.0 sources; built by tsup → dist/ (one entry per export,
+│   │                #   plus src/cli/quickdraw-docs.ts, the `quickdraw-docs` bin)
+│   ├── test/        # e2e suite (test/e2e, fixture app test/fixtures/app.ts),
+│   │                #   PGlite test schema (test/prisma), README examples (test/readme)
 │   └── legacy-src/  # the 4.1 tree, kept as a porting reference (see below)
 ├── lint/        # @fitzzero/quickdraw-lint — oxlint plugin (plugin/, .mjs shipped
-│                #   verbatim) + oxlint.base.jsonc, the shared base config
-├── skills/      # @fitzzero/quickdraw-skills — private placeholder
-└── codemod/     # @fitzzero/quickdraw-codemod — private placeholder
+│                #   verbatim), oxlint.base.jsonc + oxlint.template.jsonc, `quickdraw-lint`
+├── skills/      # @fitzzero/quickdraw-skills — agent rules (rules/*.md), skills
+│                #   (skills/*/SKILL.md) and the `quickdraw-skills link` bin (bin/cli.mjs)
+└── codemod/     # @fitzzero/quickdraw-codemod — private placeholder (pack G)
 bench/           # load harness (private workspace) + bench/apps/* + committed baselines;
                  #   a release tool, not a CI gate (bench/README.md, docs/benchmarks.md)
 docs/rfcs/       # design records; 0003-v5.md is the 5.0 design
+README.md        # the core package's README (5.0); its code examples are copies
+                 #   of packages/core/test/readme (see "README examples" below);
+                 #   packages/core/README.md and each package's LICENSE are copies
 tsconfig.base.json  # shared compiler flags; each package's tsconfig.json extends it
 ```
 
@@ -55,54 +63,87 @@ legacy-src/
                #   useChannelSend, useRoomEvents, inputs/ (socket-synced MUI)
 ```
 
-Large consumer services split as abstract `*ServiceCore` + method modules
-wired by a thin concrete subclass — documented in README "Splitting Large
-Services" (4.1); keep that section accurate when touching `defineMethod`.
+Each package's export map lives in its own `package.json`. Core's has `.`
+(contracts, kits' contract halves, errors, protocol types; browser-safe and
+dependency-free), `./server`, `./server/auth`, `./server/express`,
+`./server/mcp`, `./server/otel`, `./prisma`, `./client` (opens with
+`"use client"`), `./utils` (isomorphic: `createServerCaller`, cache keys,
+formatting), `./parser` (the JSON-only Socket.IO parser, kept out of the
+root), `./testing`, `./testing/client` and `./testing/prisma`, with one tsup
+entry per export and shared chunks (`splitting`), plus the `quickdraw-docs`
+bin (`src/cli/`). `packages/core/scripts/dist-smoke.mjs` checks the built
+output, including the `"use client"` that must open `dist/client/index.js`.
+Tests sit next to sources (`*.test.ts(x)`) and are typechecked. Core's vitest
+config has three projects: `node` (`*.test.ts`), `dom` (`*.test.tsx`, jsdom)
+and `types` (`*.test-d.ts`).
 
-Each package's export map lives in its own `package.json`. Core's has `.`,
-`./server`, `./server/auth`, `./server/express`, `./client`, `./parser` (the
-JSON-only Socket.IO parser, kept out of the dependency-free root) and
-`./testing/prisma` so far, with one tsup entry per export and shared chunks
-(`splitting`); `packages/core/scripts/dist-smoke.mjs` checks the built output,
-including the `"use client"` that must open `dist/client/index.js`. Tests sit
-next to sources (`*.test.ts(x)`) and are typechecked.
-Core's vitest config has two projects: `node` (`*.test.ts`) and `dom`
-(`*.test.tsx`, jsdom).
+### README examples
+
+Every TypeScript block in `README.md` and in the
+`quickdraw-new-service` skill is a copy of a file (or a `// #region <name>`
+of one) under `packages/core/test/readme/`, a small app in the template's
+layout that `bun run typecheck` compiles through
+`packages/core/test/readme/tsconfig.json` (it maps the package's own name to
+`src/`, `@project/db` to a client over the test schema). A block follows a
+`<!-- example: <file>[#region] -->` marker. Edit the source file, then run
+`bun run readme:sync` in `packages/core` and `bun run format`;
+`test/readme/readme.test.ts` fails on a stale copy or an unmarked
+TypeScript block. Vitest never runs the example app itself. The same
+command writes the copies the packages ship (`npm pack` adds a package's
+own README.md and LICENSE): `packages/core/README.md` (the root README with
+its relative links made relative to `packages/core`) and the `LICENSE` of
+core, lint and skills (`test/readme/packageFiles.ts`); the test checks them
+too, so run it after any README change.
 
 ## Commands (bun, never npm/pnpm)
 
 Run from the repo root; turbo fans out to the packages that define the script.
 
 ```bash
-bun install            # workspace install; `prepare` runs husky + conveyor-skills link
+bun install            # workspace install; `prepare` runs husky, conveyor-skills link
+                       #   and quickdraw-skills link
 bun run build          # turbo: tsup → packages/core/dist/ (ESM + d.ts + sourcemaps)
-bun run typecheck      # turbo: tsgo --noEmit per package (src + tests)
-bun run lint           # turbo: oxlint -c ../../.oxlintrc.json src per package
-bun run test           # turbo: vitest run per package
+bun run typecheck      # turbo: tsgo --noEmit per package (core: src + tests, then test/readme)
+bun run lint           # turbo: oxlint -c ../../.oxlintrc.json per package (core: src test)
+bun run test           # turbo: vitest run per package; node --test for packages/skills
 bun run format         # oxfmt --write . (repo-wide, not through turbo)
 bun run format:check   # oxfmt --check . (repo-wide)
 ```
 
+In `packages/core`: `bun run readme:sync` (README examples, above) and
+`bun run db:generate` (the gitignored test Prisma client; turbo runs it before
+typecheck and test). `quickdraw-skills link --check` (from the root) checks
+the committed `.claude/` links; CI runs it.
+
 Husky hooks: pre-commit runs `bun run format:check`; pre-push runs
 `bun run typecheck && bun run lint`. Node 24 (`.nvmrc`, `engines`).
-CI (`.github/workflows/ci.yml`) runs lint, format:check, typecheck, build
-(plus the dist smoke test, publint and arethetypeswrong), test and a secret
-scan on every pull request, whatever its base branch, and on pushes to `main`
-and `dev`.
+CI (`.github/workflows/ci.yml`) runs the `quickdraw-skills link --check`,
+lint, format:check, typecheck, build (plus the dist smoke test, publint and
+arethetypeswrong), test and a secret scan on every pull request, whatever its
+base branch, and on pushes to `main` and `dev`.
 
 ## Linting
 
 `packages/lint/oxlint.base.jsonc` is the framework's shipped lint baseline —
-consumers extend it from `node_modules/@fitzzero/quickdraw-lint/` (see README
-"Linting"). This repo dogfoods it via the root `.oxlintrc.json`, which
-downgrades currently-violated rules to `warn` (tracked debt — fix over time,
-then re-tighten), exempts `**/src/client/**` from the raw-socket rules (the
-framework layer is the sanctioned home of raw `socket.emit`), and ignores
-`**/legacy-src/**`. oxlint matches `overrides` and `ignorePatterns` globs
-against paths as seen from where it runs, so keep them `**/`-prefixed: lint
-runs from each package directory. When adding a lint rule that all quickdraw
-apps should get, put it in `packages/lint/oxlint.base.jsonc` (or a new rule in
-`packages/lint/plugin/`), not in downstream repos.
+consumers extend it from `node_modules/@fitzzero/quickdraw-lint/` (see
+`packages/lint/README.md`; the design-system rules are in
+`oxlint.template.jsonc`). This repo dogfoods it via the root `.oxlintrc.json`,
+which downgrades currently-violated rules to `warn` (tracked debt — fix over
+time, then re-tighten), exempts `**/src/client/**` from the client rules
+(`no-raw-socket`, `no-untyped-client`, `no-manual-refetch`,
+`no-await-void-mutate`: the framework's client is the sanctioned home of raw
+sockets and TanStack calls; these rules find client code by its imports as
+well as by path), exempts `**/src/testing/**` and bench's `**/src/drivers/**`
+from `no-raw-socket` (the test helpers and the load harness drive sockets by
+hand), exempts the framework's own `*.test.ts(x)` from
+`no-nested-write` and `no-foreign-write` (they make those writes on purpose),
+lets the README examples (`**/test/readme/**`) keep inline comments, and
+ignores `**/legacy-src/**`. oxlint matches `overrides` and
+`ignorePatterns` globs against paths as seen from where it runs, so keep them
+`**/`-prefixed: lint runs from each package directory. When adding a lint rule
+that all quickdraw apps should get, put it in `packages/lint/oxlint.base.jsonc`
+(or a new rule in `packages/lint/plugin/`, with a test under
+`packages/lint/plugin/test/`), not in downstream repos.
 
 ## Developing against quickdraw-chat
 
@@ -121,6 +162,15 @@ one-time npm setup are in `docs/releasing.md`.
 
 ## Domain-Specific Context
 
-Service/hook patterns (BaseService, defineMethod, ACL, client hooks) are in
-`.claude/rules/` with path-targeted scoping — they load automatically when you
-work on matching files.
+The 5.0 usage guidance ships in `@fitzzero/quickdraw-skills` (`packages/skills`)
+and is linked into this repo the way consumers get it: `.claude/rules/quickdraw-*.md`
+and `.claude/skills/quickdraw-*` are committed symlinks into
+`node_modules/@fitzzero/quickdraw-skills` (which here is `packages/skills`), made
+by `quickdraw-skills link` in `prepare`. Edit the files in `packages/skills`,
+never the links; a new rule or skill needs `quickdraw-skills link` and its new
+link committed. The rules' `paths` follow an app's layout (`apps/api/**`,
+`apps/web/**`, `packages/shared/**` from the repo root), which no file of this
+repo matches, so they never load here on their own: when you change how apps
+use the framework, read the matching `packages/skills/rules/*.md` and keep it,
+the skills and the README accurate. `docs/rfcs/0003-v5.md` section 17 records
+what each 5.0 card actually built.

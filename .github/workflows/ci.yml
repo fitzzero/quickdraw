@@ -75,6 +75,12 @@ jobs:
 
       - run: bun install --frozen-lockfile --ignore-scripts
 
+      # The agent rules and skills linked into .claude/ from
+      # @fitzzero/quickdraw-skills (packages/skills) must match the package:
+      # no link missing, stale or dangling.
+      - name: Check the quickdraw-skills links
+        run: ./node_modules/.bin/quickdraw-skills link --check
+
       - run: bun run lint
 
       - run: bun run format:check

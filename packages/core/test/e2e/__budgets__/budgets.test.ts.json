@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "budgets": {
+    "first collection snapshot": {
+      "statements": 5,
+      "bytes": 12557,
+      "calls": []
+    },
+    "kit list": {
+      "statements": 3,
+      "bytes": 2951,
+      "calls": [
+        {
+          "call": "taskService.list",
+          "statements": 3,
+          "bytes": 2951
+        }
+      ]
+    },
+    "kit search": {
+      "statements": 3,
+      "bytes": 1616,
+      "calls": [
+        {
+          "call": "taskService.search",
+          "statements": 3,
+          "bytes": 1616
+        }
+      ]
+    },
+    "one update with one subscriber": {
+      "statements": 8,
+      "bytes": 268,
+      "calls": [
+        {
+          "call": "taskService.rename",
+          "statements": 1,
+          "bytes": 154
+        }
+      ]
+    },
+    "subscribe to 60 tasks": {
+      "statements": 4,
+      "bytes": 11523,
+      "calls": []
+    }
+  }
+}

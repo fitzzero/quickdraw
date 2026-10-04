@@ -15,11 +15,12 @@ import type { OrderBy } from "../../../contract/collections";
 import { QuickdrawError } from "../../../protocol/errors";
 import { allowedScopes } from "../../collections/access";
 import type { ServiceCollection } from "../../collections/define";
+import { checked } from "../../devWarnings";
 import { membersWhere } from "../../collections/snapshot";
 import type { FindManyArgs, StorageWhere } from "../../storage";
 import { readerLevel } from "../crud/access";
 import { delegateOf, projectionOf, uniqueIds } from "../crud/runtime";
-import type { SearchRun } from "./context";
+import type { AnyStrategy, SearchRun } from "./context";
 
 /** The order of a search without a scope collection. */
 const ID_ORDER: OrderBy = Object.freeze([Object.freeze(["id", "asc"] as const)]);
@@ -61,7 +62,7 @@ export async function textWhere(run: SearchRun): Promise<StorageWhere | "none"> 
     const fields = searchedFields(run);
     return fields.length === 0 ? "none" : containsWhere(fields, run.query.q);
   }
-  const filter: unknown = await where(run.query.q, run.ctx);
+  const filter: unknown = await checked(() => where(run.query.q, run.ctx));
   if (!isRecord(filter)) {
     throw new QuickdrawError(
       "INTERNAL",
@@ -143,6 +144,18 @@ export function searchOrder(run: SearchRun): OrderBy {
   const collection =
     scope === undefined ? undefined : run.call.runtime.service.collections.get(scope);
   return collection?.order ?? ID_ORDER;
+}
+
+/**
+ * The ids the app's `ids` strategy ranks for the query, each once and at
+ * most `limit`: the strategy is the app's code, so its statements are checked.
+ */
+export async function strategyIds(
+  run: SearchRun,
+  ids: NonNullable<AnyStrategy["ids"]>,
+): Promise<string[]> {
+  const found = await checked(() => ids(run.query.q, run.ctx, { limit: run.query.limit }));
+  return rankedIds(run, found);
 }
 
 /** The ids a strategy ranked, each once and at most `limit`, or `INTERNAL` for anything else. */

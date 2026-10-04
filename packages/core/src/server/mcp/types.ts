@@ -8,7 +8,7 @@
 
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import type { MethodName } from "../../contract/infer";
-import type { StandardSchemaV1 } from "../../contract/standardSchema";
+import type { InferOutput, StandardSchemaV1 } from "../../contract/standardSchema";
 import type { QuickdrawError } from "../../protocol/errors";
 import type { Caller } from "../caller";
 import type { ContractOfServices, PrincipalOfServices } from "../dispatcher";
@@ -120,13 +120,27 @@ export interface McpCallOptions {
   readonly respond?: (result: McpCallResult) => number | undefined;
 }
 
+/** A custom tool's input schema: a Standard Schema, or a JSON Schema object. */
+export type McpToolInputSchema = StandardSchemaV1 | McpInputSchema;
+
+/**
+ * The `arguments` a custom tool's handler receives for its `inputSchema`:
+ * the Standard Schema's output, or `unknown` for a JSON Schema object (the
+ * handler checks those itself).
+ */
+export type McpToolArguments<I> = I extends StandardSchemaV1 ? InferOutput<I> : unknown;
+
 /** What a custom tool's handler receives. */
-export interface McpToolCall<S extends readonly AnyService[] = readonly AnyService[]> {
+export interface McpToolCall<
+  S extends readonly AnyService[] = readonly AnyService[],
+  Args = unknown,
+> {
   /**
-   * The arguments: what `inputSchema` produced when it is a Standard Schema,
-   * or the arguments object as the client sent it when it is a JSON Schema.
+   * The arguments: what `inputSchema` produced when it is a Standard Schema
+   * (typed as its output), or the arguments object as the client sent it
+   * when it is a JSON Schema.
    */
-  readonly arguments: unknown;
+  readonly arguments: Args;
   /**
    * Who the call acts for, from the registry's `principal`. `null` only for
    * an anonymous caller of a tool with `access: "public"`.
@@ -151,8 +165,14 @@ export interface McpToolCall<S extends readonly AnyService[] = readonly AnyServi
  */
 export type McpToolAccess = "public" | "authenticated";
 
-/** An app's own tool, served beside the tools generated from contracts. */
-export interface McpCustomTool<S extends readonly AnyService[] = readonly AnyService[]> {
+/**
+ * An app's own tool, served beside the tools generated from contracts. `I`
+ * is its input schema's type, which types the handler's `arguments`.
+ */
+export interface McpCustomTool<
+  S extends readonly AnyService[] = readonly AnyService[],
+  I extends McpToolInputSchema = McpToolInputSchema,
+> {
   readonly name: string;
   readonly description: string;
   /**
@@ -167,11 +187,11 @@ export interface McpCustomTool<S extends readonly AnyService[] = readonly AnySer
    * Schema (Zod 4.2 or later) validates them before the handler runs; a JSON
    * Schema object is listed as it is, and the handler checks the arguments.
    */
-  readonly inputSchema: StandardSchemaV1 | McpInputSchema;
+  readonly inputSchema: I;
   readonly annotations?: McpToolAnnotations;
   /**
    * Runs the tool; its value is the result. Throw a `QuickdrawError` to fail
    * with its code; anything else fails as `INTERNAL`.
    */
-  readonly handler: (call: McpToolCall<S>) => unknown;
+  readonly handler: (call: McpToolCall<S, McpToolArguments<I>>) => unknown;
 }

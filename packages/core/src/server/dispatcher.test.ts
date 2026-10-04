@@ -7,6 +7,7 @@ import {
   captureLogger,
   db,
   granted,
+  project,
   qd,
   setup,
   task,
@@ -26,6 +27,7 @@ import {
   type UnitOfWorkScope,
 } from "./index";
 import { untrackedUnitOfWork } from "./uow/untracked";
+import { createContext } from "./context";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -526,27 +528,60 @@ describe("the handler's ctx", () => {
     expect(failure(refused).code).toBe("FORBIDDEN");
   });
 
-  it("throws INTERNAL from ctx.services until a later card adds it", async () => {
-    const attempts: Record<string, () => unknown> = {};
+  it("calls the app's services through ctx.services, as the same principal over transport internal", async () => {
+    const seen: unknown[] = [];
+    const projectService = qd.defineService(project, {
+      methods: {
+        get: {
+          access: "authenticated",
+          handler: ({ input, ctx }) => {
+            seen.push({ principal: ctx.principal, transport: ctx.transport });
+            return { id: input.id, name: "Board" };
+          },
+        },
+      },
+    });
     const service = qd.defineService(task, {
       methods: {
         ...taskDefaults,
         count: {
           access: "public",
-          handler: ({ ctx }) => {
-            const loose = ctx as unknown as { readonly services: Record<string, unknown> };
-            attempts.services = () => loose.services.projectService;
-            expect(JSON.stringify(ctx.services)).toBe("{}");
-            return 0;
+          handler: async ({ input, ctx }) => {
+            // These fixtures' app declares no contracts, so ctx.services is untyped.
+            const board = await ctx.services.projectService?.get?.({ id: input.projectId });
+            return (board as { readonly name: string }).name.length;
           },
         },
       },
     });
-    await setup([service]).call({ method: "count", input: { projectId: "p1" } });
-    for (const [name, attempt] of Object.entries(attempts)) {
-      expect(attempt, name).toThrow(QuickdrawError);
-      expect(attempt, name).toThrow(/is not available yet/);
-    }
+    const { call, records } = setup([service, projectService]);
+    expect(await call({ method: "count", input: { projectId: "p1" } })).toEqual({
+      ok: true,
+      data: 5,
+    });
+    expect(seen).toEqual([{ principal: alice, transport: "internal" }]);
+    expect(
+      records.map((record) => `${record.service}.${record.method} ${record.transport}`),
+    ).toEqual(["projectService.get internal", "taskService.count socket"]);
+    // The inner call checks access: an anonymous caller is refused there, and the outer call fails with it.
+    const refused = failure(
+      await call({ method: "count", input: { projectId: "p1" }, principal: null }),
+    );
+    expect(refused.code).toBe("UNAUTHENTICATED");
+  });
+
+  it("throws INTERNAL from ctx.services of a context no dispatcher built", () => {
+    const ctx = createContext({
+      principal: null,
+      signal: new AbortController().signal,
+      log: captureLogger(),
+      requestId: "r1",
+      transport: "internal",
+    });
+    expect(JSON.stringify(ctx.services)).toBe("{}");
+    expect(() => (ctx.services as Record<string, unknown>).projectService).toThrow(
+      /ctx\.services\.projectService needs a dispatcher/,
+    );
   });
 
   it("gives ctx.rooms, which joins nothing without a socket, and ctx.presence, which sees nobody without a server", async () => {
@@ -666,6 +701,8 @@ describe("step 7: the unit of work", () => {
         requestId: "req-2",
         transport: "socket",
         sink: expect.objectContaining({ flush: expect.any(Function) }),
+        // The dispatcher's warnings: those raised in the call go there.
+        warnings: expect.objectContaining({ enabled: true, strict: false }),
       },
     ]);
     // The unit's sink is the dispatcher's own sinks, then the app's.

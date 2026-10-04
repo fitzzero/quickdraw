@@ -187,6 +187,34 @@ describe("sharing.handlers", () => {
     sharing.handlers(project, { resolveUser: () => null });
   });
 
+  test("onChange's and resolveUser's db are the app's client as annotated, checked against the service's", () => {
+    const made = sharing.handlers(named, {
+      resolveUser: async (lookup, _ctx, db: Db) => {
+        const row = await db.project.findUnique({ where: { name: lookup.name } });
+        return row.ownerId;
+      },
+      onChange: async (change, _ctx, db: Db) => {
+        await db.project.findUnique({ where: { id: change.id } });
+      },
+    });
+    qd.defineService(named, { ...policy, methods: { ...made } });
+    const loose = sharing.handlers(named, {
+      resolveUser: (_lookup, _ctx, db) => {
+        expectTypeOf(db).toEqualTypeOf<unknown>();
+        return null;
+      },
+    });
+    qd.defineService(named, { ...policy, methods: { ...loose } });
+    const wrong = sharing.handlers(named, {
+      resolveUser: (_lookup, _ctx, db: { readonly users: true }) => (db.users ? "u1" : null),
+    });
+    qd.defineService(named, {
+      ...policy,
+      // @ts-expect-error -- resolveUser's db is not the app's client
+      methods: { ...wrong },
+    });
+  });
+
   test("a contract without the kit's methods does not compile", () => {
     const plain = defineContract("plainService", {
       entity: projectRow,

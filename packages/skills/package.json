@@ -1,13 +1,37 @@
 {
   "name": "@fitzzero/quickdraw-skills",
   "version": "5.0.0-alpha.0",
-  "private": true,
-  "description": "Agent rules and skills for quickdraw apps, plus the `quickdraw-skills link` command (placeholder)",
+  "description": "Agent rules and skills for quickdraw 5.0 apps, linked into .claude/ by the quickdraw-skills command",
+  "keywords": [
+    "agents",
+    "claude-code",
+    "quickdraw",
+    "skills"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/fitzzero/quickdraw.git",
     "directory": "packages/skills"
   },
-  "type": "module"
+  "bin": {
+    "quickdraw-skills": "./bin/cli.mjs"
+  },
+  "files": [
+    "bin",
+    "skills",
+    "rules",
+    "README.md"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "lint": "oxlint -c ../../.oxlintrc.json bin test",
+    "test": "node --test 'test/*.test.mjs'"
+  },
+  "engines": {
+    "node": ">=24"
+  }
 }

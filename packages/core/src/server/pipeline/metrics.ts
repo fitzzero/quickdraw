@@ -9,6 +9,7 @@
 import type { Logger } from "../../contract/logger";
 import type { MethodKind } from "../../contract/methods";
 import { QuickdrawError, type ErrorCode } from "../../protocol/errors";
+import type { DevWarnings } from "../devWarnings";
 import type { Transport } from "../types";
 
 /** How a call ended: `"ok"`, `"not-modified"`, or the error code it failed with. */
@@ -31,7 +32,14 @@ export interface CallRecord {
   readonly bytes: number;
   /** True when the result came from another call's run of the same query, or its `ttlMs` cache. */
   readonly shared: boolean;
-  /** Database statements the handler run issued, when the unit of work counts them. */
+  /**
+   * Database statements the handler run issued, when the unit of work counts
+   * them: the handler's own reads and writes, the reads a kit handler makes
+   * to filter by access included. The access check before the handler (its
+   * reads run before the unit opens), the flush after it and the per-caller
+   * strip of field tiers are not counted. A shared run is counted once, on
+   * the call that started it; a call that joined it reports `undefined`.
+   */
   readonly sqlStatements: number | undefined;
 }
 
@@ -41,6 +49,8 @@ export interface RecorderOptions {
   readonly onCall: ((record: CallRecord) => void) | undefined;
   readonly slowMs: number;
   readonly maxResponseBytes: number;
+  /** Raises `oversized-response` for a reply over `maxResponseBytes`. */
+  readonly warnings?: DevWarnings;
 }
 
 /** What a record is logged with besides the record itself. */
@@ -98,7 +108,46 @@ function levelOf(record: CallRecord, options: RecorderOptions): Level {
   return slow || record.bytes > options.maxResponseBytes ? "warn" : "debug";
 }
 
-/** Returns the function that logs a call's record and hands it to `onCall`. */
+/** Hands `record` to `onCall`; what it throws is logged, never thrown. */
+function emit(options: RecorderOptions, record: CallRecord): void {
+  if (options.onCall === undefined) {
+    return;
+  }
+  try {
+    options.onCall(record);
+  } catch (error) {
+    options.logger.error("onCall threw; the call was not affected", {
+      category: "quickdraw.call",
+      error: describeError(error),
+    });
+  }
+}
+
+/**
+ * The `oversized-response` development warning, for a method whose reply
+ * was larger than `maxResponseBytes`. It is raised after the record went to
+ * `onCall`, because a strict test app throws it.
+ */
+function warnOversized(options: RecorderOptions, record: CallRecord): void {
+  if (record.kind === undefined || record.bytes <= options.maxResponseBytes) {
+    return;
+  }
+  options.warnings?.warn({
+    kind: "oversized-response",
+    service: record.service,
+    method: record.method,
+    message:
+      `replied with ${record.bytes} bytes, more than maxResponseBytes (${options.maxResponseBytes}); ` +
+      "page the result (take and a cursor), return a leaner projection, or serve it as a collection",
+    meta: { bytes: record.bytes, maxResponseBytes: options.maxResponseBytes },
+  });
+}
+
+/**
+ * Returns the function that logs a call's record and hands it to `onCall`.
+ * In a strict test app it throws an oversized reply's `DevWarningError`
+ * once it has done both.
+ */
 export function createRecorder(
   options: RecorderOptions,
 ): (record: CallRecord, details: RecordDetails) => void {
@@ -113,16 +162,7 @@ export function createRecorder(
     const duration = Math.round(record.durationMs);
     const message = `${record.service}.${record.method} ${record.outcome} in ${duration} ms`;
     options.logger[levelOf(record, options)](message, meta);
-    if (options.onCall === undefined) {
-      return;
-    }
-    try {
-      options.onCall(record);
-    } catch (error) {
-      options.logger.error("onCall threw; the call was not affected", {
-        category: "quickdraw.call",
-        error: describeError(error),
-      });
-    }
+    emit(options, record);
+    warnOversized(options, record);
   };
 }

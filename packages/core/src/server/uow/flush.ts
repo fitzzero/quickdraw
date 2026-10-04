@@ -55,7 +55,8 @@ export async function flushWrites(
   if (writes.length === 0) {
     return;
   }
-  const { sink, ...origin } = scope;
+  // The call's warnings stay with the unit: sinks see where the writes came from.
+  const { sink, warnings: _warnings, ...origin } = scope;
   const info: FlushInfo = { ...origin, rev: nextRev() };
   try {
     await sink.flush(writes, info);

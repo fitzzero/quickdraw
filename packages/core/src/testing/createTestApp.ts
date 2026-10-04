@@ -3,12 +3,13 @@
 // and a recorder of every frame the server sends (`frames.ts`). Its
 // dispatcher becomes the current one of the `initQuickdraw` instance that
 // defined the services, so `qd.stream`, `qd.presence` and `qd.run` reach
-// it. It replaces 4.1's `createTestServer` and `connectAsUser`
-// (`legacy-src/server/testing.ts:62-130`), which took a fixed port counter
-// and authenticated by a bare user id.
+// it. While it runs, `expectBudget` measures it (`instrument.ts`), and
+// `strictWarnings` makes the development warnings of its method calls
+// throw; `close()` ends both. It replaces 4.1's
+// `createTestServer` and `connectAsUser` (`legacy-src/server/testing.ts:62-130`),
+// which took a fixed port counter and authenticated by a bare user id.
 
 import type { AddressInfo } from "node:net";
-import { consoleLogger, type Logger } from "../contract/logger";
 import type { HelloFrame } from "../protocol/version";
 import type { Caller } from "../server/caller";
 import { createServer, type QuickdrawServer, type ServerOptions } from "../server/createServer";
@@ -16,6 +17,13 @@ import type { ContractOfServices, PrincipalOfServices } from "../server/dispatch
 import { runtimeOf, type AnyService } from "../server/service";
 import { isPrincipal } from "../server/transports/auth";
 import { recordFrames, type FrameRecorder } from "./frames";
+import {
+  instrumentOptions,
+  measuredCaller,
+  meterServer,
+  quietLogger,
+  type InstrumentedOptions,
+} from "./instrument";
 import { connectV5, socketCaller, type ClientSocket } from "./socket";
 
 /**
@@ -32,11 +40,13 @@ function adoptDispatcher(services: readonly AnyService[], dispatcher: object): v
 }
 
 /**
- * Options of {@link createTestApp}: the server's. Without `auth.authenticate`
- * a socket acts as the `principal` it connects with; the rate limiter is off
- * unless `rateLimit` is given; the logger prints warnings and errors only.
+ * Options of {@link createTestApp}: the server's, and `strictWarnings`.
+ * Without `auth.authenticate` a socket acts as the `principal` it connects
+ * with; the rate limiter is off unless `rateLimit` is given; the logger
+ * prints warnings and errors only.
  */
-export type TestAppOptions<S extends readonly AnyService[]> = ServerOptions<S>;
+export type TestAppOptions<S extends readonly AnyService[]> = ServerOptions<S> &
+  Pick<InstrumentedOptions, "strictWarnings">;
 
 /** A socket connected to the test app. */
 export interface TestConnection<S extends readonly AnyService[] = readonly AnyService[]> {
@@ -65,30 +75,33 @@ export interface TestApp<S extends readonly AnyService[] = readonly AnyService[]
    * `app.frames({ event: "qd:e", userId })`, `app.frames.waitFor(match)`.
    */
   readonly frames: FrameRecorder;
-  /** A typed in-process caller acting as `principal` (`null` for anonymous). */
+  /**
+   * A typed in-process caller acting as `principal` (`null` for anonymous).
+   * Its calls' completion records carry their reply's size as JSON, as an
+   * HTTP call's do, so `expectBudget` sees their bytes.
+   */
   as(principal: PrincipalOfServices<S> | null): Caller<ContractOfServices<S>>;
   /**
    * Connects a real v5 socket acting as `principal` (`null` for anonymous);
    * resolves once the server said hello, rejects when it refused the socket.
    */
   connect(principal: PrincipalOfServices<S> | null): Promise<TestConnection<S>>;
-  /** Disconnects every socket `connect` opened, then closes the server. */
+  /**
+   * Disconnects every socket `connect` opened, then closes the server; the
+   * tracked client goes back to the dispatcher attached before the app's.
+   */
   close(): Promise<void>;
 }
 
 const TIMEOUT_MS = 5000;
 
-const quietLogger: Logger = {
-  debug: () => undefined,
-  info: () => undefined,
-  warn: (message, meta) => consoleLogger.warn(message, meta),
-  error: (message, meta) => consoleLogger.error(message, meta),
-  child: () => quietLogger,
-};
-
 /**
  * Boots the app's services on `createServer`, listening on a free port of
  * 127.0.0.1, for tests that call them in process or over real sockets.
+ * `strictWarnings: true` (under vitest or jest) makes every development
+ * warning raised in the app's method calls throw where it is raised, so a
+ * test that causes one fails; warnings outside its calls (seeding through
+ * the tracked client, say) are logged, and nothing is strict after `close()`.
  *
  * @example
  * const app = await createTestApp({ services: [taskService], db: testPrisma });
@@ -105,7 +118,7 @@ export async function createTestApp<const S extends readonly AnyService[]>(
   // The spread keeps `services` and `db` as given; TypeScript cannot see that
   // through the conditional `db` member of the options.
   const server = createServer<S>({
-    ...options,
+    ...instrumentOptions(options),
     logger: options.logger ?? quietLogger,
     rateLimit: options.rateLimit ?? false,
     auth: {
@@ -115,6 +128,7 @@ export async function createTestApp<const S extends readonly AnyService[]>(
   } as ServerOptions<S>);
   adoptDispatcher(options.services, server.dispatcher);
   const frames = recordFrames(server.io);
+  const unmeter = meterServer({ io: server.io, db: options.db, storage: options.storage });
   await new Promise<void>((resolve) => {
     server.httpServer.listen(0, "127.0.0.1", resolve);
   });
@@ -126,7 +140,8 @@ export async function createTestApp<const S extends readonly AnyService[]>(
     url,
     server,
     frames,
-    as: (principal) => server.dispatcher.caller(principal),
+    as: (principal) =>
+      measuredCaller(server.dispatcher.call, principal) as Caller<ContractOfServices<S>>,
     async connect(principal) {
       const { socket, hello } = await connectV5(
         url,
@@ -145,6 +160,7 @@ export async function createTestApp<const S extends readonly AnyService[]>(
       };
     },
     async close() {
+      unmeter();
       for (const socket of sockets) {
         socket.disconnect();
       }

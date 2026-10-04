@@ -86,6 +86,12 @@ export type StreamPushArgs<C extends AnyContract, K extends StreamName<C>> =
     ? [scope: string, item: StreamItemOf<C, K>]
     : [item: StreamItemOf<C, K>];
 
+/** The arguments of a stream's `pushMany`: `(scope, items)` for a scoped stream, `(items)` for a global one. */
+export type StreamPushManyArgs<C extends AnyContract, K extends StreamName<C>> =
+  IsScopedStream<C, K> extends true
+    ? [scope: string, items: readonly StreamItemOf<C, K>[]]
+    : [items: readonly StreamItemOf<C, K>[]];
+
 /** What `qd.stream(contract, name)` returns. */
 export interface StreamHandle<C extends AnyContract, K extends StreamName<C>> {
   /**
@@ -95,6 +101,13 @@ export interface StreamHandle<C extends AnyContract, K extends StreamName<C>> {
    * subscriber as `qd:stream`, volatile when the stream says so.
    */
   push(...args: StreamPushArgs<C, K>): void;
+  /**
+   * Appends several items to one feed at once, in order, as `push` would one
+   * by one (each is its own `qd:stream` frame, so `useStream` sees them as
+   * pushed): every item is checked first, and one mismatch throws `INTERNAL`
+   * with nothing kept or sent. The batch form of a `push` in a loop.
+   */
+  pushMany(...args: StreamPushManyArgs<C, K>): void;
 }
 
 /** Who may send on a channel besides its `requires`: any principal, or a service-wide grant. */

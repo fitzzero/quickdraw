@@ -42,6 +42,9 @@
 // - the built MCP bridge (`./server/mcp`) lists a contract's method as a
 //   tool and serves a call through its stdio server, and `./server` carries
 //   none of the bridge's code;
+// - the built OpenTelemetry bridge (`./server/otel`) records a completion
+//   record's metrics and span, ships in that entry only, and no other entry
+//   imports `@opentelemetry/api`;
 // - the built tracked-writes adapter (`./prisma`) imports nothing from Prisma,
 //   refuses a value that is not a Prisma client, and shares one storage
 //   lookup with `./server`;
@@ -52,7 +55,9 @@
 // - the built auth routes kit (`./server/auth`) imports neither express nor
 //   express-rate-limit statically, signs in through the mock provider (start,
 //   consent, callback), answers `me`, authenticates a socket by the session
-//   cookie through the built `socketAuth`, and after logout refuses both.
+//   cookie through the built `socketAuth`, and after logout refuses both;
+// - the built `quickdraw-docs` bin (package.json `bin`) is executable, writes
+//   the pages of a contracts module it loads, and passes its own `--check`.
 
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -166,6 +171,13 @@ const expectations = {
       "MAX_STREAMS_PER_SOCKET",
       "CHANNEL_ABUSE_WINDOW_MS",
       "CHANNEL_ABUSE_MULTIPLIER",
+      "DevWarningError",
+      "formatDevWarning",
+      "N_PLUS_ONE_STATEMENTS",
+      "STALL_RESOLUTION_MS",
+      "DEFAULT_STALL_THRESHOLD_MS",
+      "DEFAULT_STALL_INTERVAL_MS",
+      "MIN_STALL_INTERVAL_MS",
     ],
     client: false,
   },
@@ -197,6 +209,7 @@ const expectations = {
     ],
     client: false,
   },
+  "./server/otel": { symbols: ["otelOnCall", "UNKNOWN_METHOD"], client: false },
   "./client": {
     symbols: [
       "createQuickdrawClient",
@@ -264,6 +277,11 @@ const expectations = {
       "waitForEvent",
       "createRecordingSink",
       "describeAccessMatrix",
+      "expectBudget",
+      "budgetFileOf",
+      "BUDGET_GROWTH_ENV",
+      "BUDGET_BYTES_TOLERANCE",
+      "DevWarningError",
     ],
     client: false,
   },
@@ -1102,6 +1120,67 @@ assert.deepEqual(replies[1], {
 });
 console.log("ok the built MCP bridge lists a contract's tools and serves a call over stdio");
 
+// The built OpenTelemetry bridge: its own entry, the only one that imports
+// @opentelemetry/api (an optional peer), and an `onCall` handler that records
+// a completion record on the meter and tracer it is given.
+const otel = await import(`${pkg.name}/server/otel`);
+assert.equal(server.otelOnCall, undefined, "./server must not export the OpenTelemetry bridge");
+for (const [source, outputs] of emittedIn) {
+  if (source === "src/server/observability/otel.ts") {
+    assert.deepEqual(outputs, ["server/otel.js"], `${source} must ship in ./server/otel only`);
+  }
+}
+for (const exportPath of exportPaths.filter((path) => path !== "./server/otel")) {
+  const otelImports = importGraph(exportPath).externals.filter((imported) =>
+    imported.endsWith(" imports @opentelemetry/api"),
+  );
+  assert.deepEqual(otelImports, [], `${exportPath} must not import @opentelemetry/api`);
+}
+const points = [];
+const spans = [];
+const instrument = (name) => ({
+  add: (value, attributes) => points.push([name, value, attributes]),
+  record: (value, attributes) => points.push([name, value, attributes]),
+});
+const onCall = otel.otelOnCall({
+  meter: { createCounter: instrument, createHistogram: instrument },
+  tracer: {
+    startSpan: (name, options) => ({
+      setStatus: () => undefined,
+      end: (endTime) => spans.push([name, endTime - options.startTime, options.kind]),
+    }),
+  },
+});
+onCall({
+  service: "echoService",
+  method: "echo",
+  kind: "query",
+  transport: "socket",
+  requestId: "smoke",
+  outcome: "ok",
+  durationMs: 250,
+  queueMs: 0,
+  bytes: 64,
+  shared: false,
+  sqlStatements: 2,
+});
+const echoAttributes = {
+  "quickdraw.service": "echoService",
+  "quickdraw.method": "echo",
+  "quickdraw.outcome": "ok",
+  "quickdraw.transport": "socket",
+};
+assert.deepEqual(points, [
+  ["quickdraw.calls", 1, echoAttributes],
+  ["quickdraw.call.duration", 0.25, echoAttributes],
+  ["quickdraw.call.response.size", 64, echoAttributes],
+  ["quickdraw.call.sql_statements", 2, echoAttributes],
+]);
+assert.deepEqual(spans, [["echoService.echo", 250, 1]]);
+console.log(
+  `ok ${pkg.name}/server/otel records a call's metrics and span, and no other entry imports @opentelemetry/api`,
+);
+
 // The built tracked-writes adapter: its own entry, with no import of Prisma
 // (the app passes its client in), and the storage lookup `./server` uses.
 const prisma = await import(`${pkg.name}/prisma`);
@@ -1313,4 +1392,45 @@ try {
 }
 console.log(
   `ok ${pkg.name}/server/auth imports express-rate-limit lazily, signs in through the mock provider, authenticates a socket by its cookie, and refuses it after logout`,
+);
+
+// The `quickdraw-docs` bin, as a consumer's shell runs it: a contracts module
+// (plain JavaScript importing the built root by path) documented into a
+// temporary directory, then checked.
+const { spawnSync } = await import("node:child_process");
+const { mkdtempSync, rmSync, statSync, writeFileSync } = await import("node:fs");
+const { tmpdir } = await import("node:os");
+const { pathToFileURL } = await import("node:url");
+const binPath = join(packageDir, pkg.bin["quickdraw-docs"]);
+assert.ok(
+  readFileSync(binPath, "utf8").startsWith("#!/usr/bin/env node\n"),
+  "the bin needs its shebang",
+);
+assert.ok((statSync(binPath).mode & 0o111) !== 0, "the bin must be executable");
+const docsDir = mkdtempSync(join(tmpdir(), "quickdraw-docs-smoke-"));
+try {
+  writeFileSync(
+    join(docsDir, "contracts.mjs"),
+    `import { defineContract, query } from ${JSON.stringify(pathToFileURL(join(distDir, "index.js")).href)};
+const anyValue = { "~standard": { version: 1, vendor: "smoke", validate: (value) => ({ value }) } };
+export const contracts = { echo: defineContract("echoService", { methods: { echo: query({ input: anyValue, output: anyValue }) } }) };
+`,
+  );
+  const runDocs = (...args) =>
+    spawnSync(binPath, [join(docsDir, "contracts.mjs"), "--out", join(docsDir, "api"), ...args], {
+      encoding: "utf8",
+    });
+  const written = runDocs();
+  assert.equal(written.status, 0, written.stderr);
+  assert.match(
+    readFileSync(join(docsDir, "api", "echoService.md"), "utf8"),
+    /^<!-- Generated by quickdraw-docs/,
+  );
+  const checked = runDocs("--check");
+  assert.equal(checked.status, 0, checked.stderr);
+} finally {
+  rmSync(docsDir, { recursive: true, force: true });
+}
+console.log(
+  `ok ${pkg.name}'s quickdraw-docs bin documents a contracts module and passes its own --check`,
 );

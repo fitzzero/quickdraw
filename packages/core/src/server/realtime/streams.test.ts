@@ -396,6 +396,48 @@ describe("push", () => {
     }).toThrow("pass (scope, item)");
   });
 
+  it("pushMany sends several items to one feed as pushes would, in order, and seeds them", async () => {
+    const app = await start();
+    const { connection, items } = await connect(app, as(board.cy));
+    await streamSub(connection, "logs", board.t1);
+    logs(app).pushMany(board.t1, [{ line: "a" }, { line: "b" }, { line: "c" }, { line: "d" }]);
+    app.server.stream(liveContract, "status").pushMany(["up", "down"]);
+    await settle(connection);
+    expect(items).toEqual(
+      ["a", "b", "c", "d"].map((line) => ({
+        s: "taskService",
+        stream: "logs",
+        scope: board.t1,
+        item: { line },
+      })),
+    );
+    const later = await connect(app, as(board.bo));
+    expect(await streamSub(later.connection, "logs", board.t1)).toEqual({
+      ok: true,
+      seed: [{ line: "b" }, { line: "c" }, { line: "d" }],
+    });
+  });
+
+  it("pushMany checks every item first: one mismatch keeps and sends none", async () => {
+    const app = await start();
+    const { connection, items } = await connect(app, as(board.cy));
+    await streamSub(connection, "logs", board.t1);
+    const bad = [{ line: "fine" }, { line: 42 }] as unknown as { line: string }[];
+    expect(() => {
+      logs(app).pushMany(board.t1, bad);
+    }).toThrow(expect.objectContaining({ code: "INTERNAL" }) as Error);
+    const loose = logs(app) as unknown as { pushMany(...args: unknown[]): void };
+    expect(() => {
+      loose.pushMany(board.t1, { line: "not a list" });
+    }).toThrow("taskService.logs.pushMany: pass the items as an array");
+    expect(() => {
+      loose.pushMany([{ line: "no scope" }]);
+    }).toThrow("taskService.logs.pushMany: logs is scoped");
+    await settle(connection);
+    expect(items).toEqual([]);
+    expect(await streamSub(connection, "logs", board.t1)).toEqual({ ok: true, seed: [] });
+  });
+
   it("throws a TypeError for a stream the dispatcher does not serve", async () => {
     const app = await start();
     const other = defineContract("otherService", { streams: { feed: { item: z.number() } } });

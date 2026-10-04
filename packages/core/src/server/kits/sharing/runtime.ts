@@ -15,6 +15,7 @@
 import type { SharingChange, SharingOnChange } from "./types";
 import { QuickdrawError } from "../../../protocol/errors";
 import { kitRuntimeOf, type KitRuntime } from "../../context";
+import { checked } from "../../devWarnings";
 import { modelKey } from "../../storage";
 import type { Principal } from "../../types";
 import type { KitHandlerArgs, ModelDelegate } from "../crud/runtime";
@@ -90,5 +91,7 @@ export async function notifyChange(
   change: SharingChange,
   tx: unknown,
 ): Promise<void> {
-  await onChange?.(Object.freeze(change), call.ctx, tx);
+  if (onChange !== undefined) {
+    await checked(() => onChange(Object.freeze(change), call.ctx, tx));
+  }
 }

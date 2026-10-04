@@ -1,4 +1,4 @@
-// Shared oxlint base config for quickdraw apps.
+// Shared oxlint base config for quickdraw apps (RFC 0003 section 14).
 //
 // Consume from a project by extending it in your root .oxlintrc.json:
 //
@@ -6,6 +6,9 @@
 //     "extends": ["./node_modules/@fitzzero/quickdraw-lint/oxlint.base.jsonc"],
 //     ...project-specific config
 //   }
+//
+// Apps built from the quickdraw template also extend `oxlint.template.jsonc`
+// (the design-system rules) after this file.
 //
 // oxlint merge semantics (v1.x): `rules` and `categories` merge per-key with
 // the extending config winning; `overrides` concatenate (base first, so a
@@ -63,27 +66,49 @@
       "error",
       { "max": 80, "skipBlankLines": true, "skipComments": true },
     ],
+
+    // The quickdraw rules. A rule about one layer checks only that layer's
+    // files, through its own `files` and `ignore` options; the defaults follow
+    // the template's layout (services in `**/services/**`, jobs in
+    // `**/jobs/**`, routes in `**/routes/**` and `**/routes.*`, client code in
+    // `**/*.tsx`, `**/*.jsx` and `**/apps/web/**` plus any file importing
+    // TanStack Query, the Socket.IO client or quickdraw's client, tests
+    // skipped where they write or read data directly). Another layout passes
+    // `files`, e.g.
+    //   "quickdraw/no-unbounded-read": ["error", { "files": ["**/server/services/**"] }]
+    // Every rule takes `baseline` (or, for all of them at once,
+    // `"settings": { "quickdraw": { "baseline": ".quickdraw-lint-baseline.json" } }`
+    // in your own config): run `quickdraw-lint baseline` to adopt the rules
+    // without fixing existing violations first. `no-unused-baseline` warns
+    // when the file allows a violation that no longer occurs, so it shrinks.
+    "quickdraw/no-unused-baseline": "warn",
+
+    // Writes subscribers can see (RFC 0003 section 5).
+    "quickdraw/no-untracked-write": "error",
+    "quickdraw/no-foreign-write": "error",
+    "quickdraw/no-nested-write": "error",
+    "quickdraw/no-raw-sql-write": "error",
+    // Frames come from tracked writes; access is declared.
+    "quickdraw/no-manual-emit": "error",
+    "quickdraw/no-inline-auth-guard": "error",
+    // Performance.
+    "quickdraw/no-unbounded-read": "error",
+    "quickdraw/no-db-call-in-loop": "error",
+    "quickdraw/no-emit-in-loop": "error",
+    "quickdraw/no-load-then-filter": "error",
+    // Layering.
+    "quickdraw/no-prisma-in-routes": "error",
+    "quickdraw/no-cross-service-internal-imports": "error",
+    // The typed client and its invalidation coordinator.
+    "quickdraw/no-await-void-mutate": "error",
+    "quickdraw/no-untyped-client": "error",
+    "quickdraw/no-manual-refetch": "error",
+    "quickdraw/no-raw-socket": "error",
+    // Every 4.x API 5.0 removed, with its replacement.
+    "quickdraw/no-v4-api": "error",
   },
   "overrides": [
-    // Service layer: enforce the quickdraw service contract.
-    // `no-cross-service-mutations` ships with an EMPTY allowlist (strictest).
-    // Projects relax it with their own services override, e.g.:
-    //   { "files": ["**/services/**/*.ts"], "rules": { "quickdraw/no-cross-service-mutations": ["error", { "allowedModels": { "chat": ["chatMember"] } }] } }
-    {
-      "files": ["**/services/**/*.ts"],
-      "rules": {
-        "quickdraw/no-raw-service-room-string": "error",
-        "quickdraw/no-cross-service-mutations": "error",
-        "quickdraw/require-zod-schema": "error",
-        "quickdraw/no-service-method-record": "error",
-        "quickdraw/no-unsafe-payload-cast": "error",
-        // Warn while migrating hand-emitted *:created/deleted/updated/
-        // reordered events to defineCollection; flip to error afterwards.
-        "quickdraw/no-manual-collection-events": "warn",
-      },
-    },
-    // Client/React code: relax server-oriented strictness, enforce the
-    // typed-socket and design-system rules instead.
+    // Client/React code: relax server-oriented strictness.
     {
       "files": ["apps/web/**", "**/*.tsx"],
       "rules": {
@@ -95,11 +120,6 @@
         "max-lines-per-function": "off",
         "max-lines": "off",
         "no-warning-comments": "off",
-        "quickdraw/no-raw-tooltip-strings": "error",
-        "quickdraw/no-raw-typography-strings": "error",
-        "quickdraw/no-raw-button-strings": "error",
-        "quickdraw/no-raw-socket-on": "error",
-        "quickdraw/no-raw-socket-emit": "error",
       },
     },
     // Shared/db packages: public surface — explicit types required.

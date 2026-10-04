@@ -12,6 +12,7 @@
 import type { Logger } from "../../contract/logger";
 import type { MethodKind } from "../../contract/methods";
 import type { TouchOptions } from "../context";
+import type { DevWarnings } from "../devWarnings";
 import type { Transport } from "../types";
 import type { FlushSink } from "./flushSink";
 
@@ -65,6 +66,12 @@ export interface UnitOfWorkScope {
   readonly transport: Transport;
   /** Where the unit's writes go when it flushes. */
   readonly sink: FlushSink;
+  /**
+   * The development warnings of the dispatcher whose method call this unit
+   * runs: a warning raised inside the call goes there, so only a strict
+   * dispatcher's own calls throw. Without them, the attached dispatcher's.
+   */
+  readonly warnings?: DevWarnings;
 }
 
 /**
@@ -100,8 +107,11 @@ export interface UnitOfWorkFactory {
   touch?(model: string, ids: readonly string[], options?: TouchOptions): void;
   /**
    * Called by each dispatcher created with this factory: writes made outside
-   * any unit of work flush to `sink`, and development warnings go to
-   * `logger`. The dispatcher created last wins.
+   * any unit of work flush to `sink`, and development warnings raised
+   * outside a method call go to the dispatcher's `warnings` (or, without
+   * them, to `logger`), never strictly. The dispatcher attached last wins.
+   * Returns the function that detaches it again (a server's `close()`
+   * calls it), restoring the dispatcher attached before.
    */
-  attach?(sink: FlushSink, logger: Logger): void;
+  attach?(sink: FlushSink, logger: Logger, warnings?: DevWarnings): (() => void) | void;
 }
