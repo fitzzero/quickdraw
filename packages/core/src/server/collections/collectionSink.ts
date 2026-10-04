@@ -22,7 +22,9 @@
 // 5. read the items the remaining deltas need, in one query per collection,
 //    and send one `qd:c` frame per scope, which the resume buffer keeps. An
 //    indexed collection's `added` deltas carry index rows built from those
-//    items (`index.ts`).
+//    items (`index.ts`). Behind a cluster adapter the same read also takes
+//    the rows of removals, and each delta is decided by its row as read
+//    then (`deltas.ts`): a write that committed first can flush last.
 //
 // A collection with no subscriber on this process (and rooms visible here)
 // skips steps 2 to 5 and reads nothing (`skipTouched`).
@@ -100,13 +102,12 @@ async function emitCollection(
 ): Promise<void> {
   const { collection, refresh } = work;
   const subscribed = hub.collections.scopes.scopes(collection.service.name, collection.name);
-  if (subscribed.length === 0 && hub.probe.local()) {
+  const cluster = !hub.probe.local();
+  if (subscribed.length === 0 && !cluster) {
     skipTouched(hub, collection, writes, refresh, rev);
     return;
   }
-  const moves = await movesOf(hub.collections.moves, storage, collection, writes, refresh);
-  // What no scope could be named for reaches the scopes subscribed on the other nodes too.
-  broadcastUnnamed(hub, unnamedOf(collection, moves, rev));
+  const moves = await movesOf(hub.collections.moves, storage, collection, writes, refresh, cluster);
   const sending: ScopePlan[] = [];
   for (const plan of planScopes(collection, moves, subscribed)) {
     if (closed.has(plan.room)) {
@@ -118,14 +119,20 @@ async function emitCollection(
       hub.collections.buffer.skip(plan.room, rev);
     }
   }
-  if (sending.length === 0) {
+  // Behind a cluster adapter, changes go out whole (frames of two nodes can arrive out of
+  // order), decided by the rows read now; the rows of removals no scope could be named for
+  // are read too, so the other nodes keep such a row where it is again.
+  const unnamed = cluster ? moves.moves.filter((move) => move.unknownLeft) : [];
+  if (sending.length === 0 && unnamed.length === 0) {
+    broadcastUnnamed(hub, unnamedOf(collection, moves, rev));
     return;
   }
-  // Behind a cluster adapter, changes go out whole: frames of two nodes can arrive out of order.
-  const whole = !hub.probe.local();
-  const rows = await readItems(storage, collection, sending, moves.rows, whole);
+  const also = unnamed.map((move) => move.id);
+  const rows = await readItems(storage, collection, sending, moves.rows, cluster, also);
+  // What no scope could be named for reaches the scopes subscribed on the other nodes too.
+  broadcastUnnamed(hub, unnamedOf(collection, moves, rev, cluster ? rows : undefined));
   for (const plan of sending) {
-    const deltas = buildDeltas(collection, plan, rows, rev, whole);
+    const deltas = buildDeltas(collection, plan, rows, rev, cluster);
     sendFrame(hub, io, collection, plan.scope, rev, deltas);
   }
 }

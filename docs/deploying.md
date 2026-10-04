@@ -74,6 +74,15 @@ revision + 1)`, so revisions stay in the clock range that clients and
   adapter a node sends changes whole (`u` and `updated` where one server sends
   `p` and `patched`), so a frame dropped as older never takes a field with it.
   A subscriber tier that would have got an empty patch still gets nothing.
+- **Frames decided at the read.** A flush takes its revision when it flushes,
+  after its handler settled, so a write that committed first can flush last
+  with the higher revision. Behind a cluster adapter every frame is decided by
+  its row as read at flush time, after the revision was taken: a move out of a
+  scope that flushes after a later move back in sends the row `updated` to the
+  scope it is in again, and a delete that flushes after a later create of the
+  same id sends the row (`u`), not its removal. One server keeps its cheaper
+  rule, so there the newer write's frame can still lose to the older one's
+  until the row's next write.
 - **Reads no older than what a client holds.** A read that claims a revision
   (a subscription's rows, a collection page, `qd:col:items`, a search page, a
   row sent again after a level change) claims the counter's last revision, so
@@ -116,7 +125,9 @@ statements and bytes) and the split end-to-end suite:
   any node took a revision meanwhile;
 - a node reads every touched row and scope for its frames, since other nodes'
   rooms are invisible to it: "one update with one subscriber" costs 9
-  statements on two nodes against 8 on one;
+  statements on two nodes against 8 on one; deleted rows and rows that left
+  a collection are read too (one statement per service and collection of a
+  flush that only removes);
 - changes go out whole: that step sends 400 bytes against 268;
 - a flush that changes access waits for every node's answer: a few Valkey
   round trips and the slowest node's re-resolution, at most

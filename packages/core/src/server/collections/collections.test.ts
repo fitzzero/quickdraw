@@ -569,6 +569,8 @@ describe("deltas after a flush", () => {
     await colSub(connection, "byProject", board.p1);
     const touch = h.storage.unitOfWork.touch;
     await write(app, () => Promise.resolve(touch?.("task", [board.t1])));
+    // The raw delete a touch with `removed` reports.
+    await h.prisma.task.delete({ where: { id: board.t1 } });
     await write(app, () => Promise.resolve(touch?.("task", [board.t1], { removed: true })));
     await scopes.settle();
     expect(scopes.frames.map(({ deltas }) => deltas)).toEqual([

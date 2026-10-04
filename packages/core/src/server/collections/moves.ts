@@ -31,6 +31,13 @@
 // write does not carry (a touch with `removed`, or a `via` entry whose links
 // a cascade removed) left scopes nobody can name: every scope of the
 // collection subscribed on this process gets `removed`.
+//
+// Behind a cluster adapter (`current`) a write that committed first can
+// flush last (`deltas.ts`), so membership comes from what is read at flush
+// time: a column-scoped row's deltas are decided by its row read for the
+// frame (`deltas.ts`), and a `via` entry's links are read here anyway, so a
+// deleted entry linked to scopes again at that read (its id created again
+// by a write whose flush went first) stays in them, whole.
 
 import { frameKind, type FrameKind } from "../emit/frames";
 import { modelKey, type StorageAdapter, type StorageRow } from "../storage";
@@ -85,6 +92,30 @@ function moveOf(
     entered: [...after].filter((scope) => !before.has(scope)),
     stayed: kind === undefined ? [] : [...after].filter((scope) => before.has(scope)),
     kind: kind ?? WHOLE,
+    unknownLeft,
+  };
+}
+
+/**
+ * The move of a row the write took out of `before` (and put in `after`), as
+ * the scopes it is in at the flush's read (`now`) decide it: it leaves every
+ * scope the write named that it is not in now, and goes out whole to the
+ * ones it is in now.
+ */
+function movedTo(
+  id: string,
+  before: ReadonlySet<string>,
+  after: ReadonlySet<string>,
+  now: ReadonlySet<string>,
+  unknownLeft: boolean,
+): Move {
+  const named = new Set([...before, ...after]);
+  return {
+    id,
+    left: [...named].filter((scope) => !now.has(scope)),
+    entered: [...now].filter((scope) => !before.has(scope)),
+    stayed: [...now].filter((scope) => before.has(scope)),
+    kind: WHOLE,
     unknownLeft,
   };
 }
@@ -268,16 +299,28 @@ function filtered(collection: BoundCollection): boolean {
   return Object.keys(collection.where).length > 0;
 }
 
-/** A `via` entry's move: its links before the flush against its links now, both filtered by `where`. */
-function viaMove(collection: BoundCollection, events: LinkEvents, entry: ViaRow): Move {
+/**
+ * A `via` entry's move: its links before the flush against its links now,
+ * both filtered by `where`. A deleted entry left scopes nobody can name;
+ * with `current` (behind a cluster adapter), the scopes it is linked to at
+ * the read keep it.
+ */
+function viaMove(
+  collection: BoundCollection,
+  events: LinkEvents,
+  entry: ViaRow,
+  current: boolean,
+): Move {
   const { id, write, links, row } = entry;
   const unlinked = events.unlinked.get(id) ?? NONE;
-  if (write?.op === "delete") {
-    return moveOf(id, unlinked, NONE, undefined, true);
-  }
   const matches = (values: Values | undefined): boolean =>
     !filtered(collection) || (values !== undefined && matchesWhere(collection, values));
   const after = matches(row) ? links : NONE;
+  if (write?.op === "delete") {
+    return current
+      ? movedTo(id, unlinked, NONE, after, true)
+      : moveOf(id, unlinked, NONE, undefined, true);
+  }
   if (write?.op === "create" || write?.fields.includes(ANY_FIELD) === true) {
     return moveOf(id, NONE, after, undefined);
   }
@@ -305,7 +348,8 @@ export type FlushMoves = WeakMap<readonly WriteRecord[], Map<BoundCollection, Pr
 /**
  * The moves of `collection` in the flush of `writes`, found on the first
  * call for that flush and shared by every later one. `refresh` holds the
- * collection's rows only an `affects` hop touched.
+ * collection's rows only an `affects` hop touched; `current` is true behind
+ * a cluster adapter.
  */
 export function movesOf(
   memo: FlushMoves,
@@ -313,6 +357,7 @@ export function movesOf(
   collection: BoundCollection,
   writes: readonly WriteRecord[],
   refresh: readonly string[],
+  current = false,
 ): Promise<Moves> {
   let flush = memo.get(writes);
   if (flush === undefined) {
@@ -324,18 +369,23 @@ export function movesOf(
     moves =
       collection.scope.kind === "column"
         ? columnMoves(storage, collection, writes, refresh)
-        : viaMoves(storage, collection, writes, refresh);
+        : viaMoves(storage, collection, writes, refresh, current);
     flush.set(collection, moves);
   }
   return moves;
 }
 
-/** The moves of a `via` collection: from its entry rows' writes, its junction's writes and `affects` hops. */
+/**
+ * The moves of a `via` collection: from its entry rows' writes, its
+ * junction's writes and `affects` hops. With `current`, a deleted entry
+ * linked to scopes at the read stays in them.
+ */
 export async function viaMoves(
   storage: StorageAdapter,
   collection: BoundCollection,
   writes: readonly WriteRecord[],
   refresh: readonly string[],
+  current = false,
 ): Promise<Moves> {
   const via = collection.scope as Via;
   const entries = new Map(
@@ -365,13 +415,18 @@ export async function viaMoves(
   ]);
   const refreshed = new Set(refresh);
   const moves = ids.map((id) =>
-    viaMove(collection, events, {
-      id,
-      write: entries.get(id),
-      links: links.get(id) ?? NONE,
-      row: rows.get(id),
-      refreshed: refreshed.has(id),
-    }),
+    viaMove(
+      collection,
+      events,
+      {
+        id,
+        write: entries.get(id),
+        links: links.get(id) ?? NONE,
+        row: rows.get(id),
+        refreshed: refreshed.has(id),
+      },
+      current,
+    ),
   );
   return { moves: moves.filter((move) => !isEmpty(move)), rows, resetAll: events.resetAll };
 }

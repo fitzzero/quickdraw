@@ -285,7 +285,9 @@ describe("the other node", () => {
     await colSub(onA, "byProject", board.p1);
     await colSub(onB, "byProject", board.p1);
     await colSub(onA, "board", board.p1);
-    // The write names no scope: the row's old scope went with it (`ctx.touch` with removed).
+    // The write names no scope: the row's old scope went with it (a raw delete, reported
+    // with `ctx.touch` and `removed`).
+    await h.prisma.task.delete({ where: { id: board.t1 } });
     await app.server.dispatcher.run((ctx) => {
       ctx.touch("task", [board.t1], { removed: true });
     });
@@ -299,6 +301,31 @@ describe("the other node", () => {
     expect(removals(scopesB, "byProject").length).toBeGreaterThanOrEqual(1);
     expect(removals(scopesA, "byProject").length).toBeGreaterThanOrEqual(1);
     expect(removals(scopesA, "board")).toHaveLength(1);
+  });
+
+  it("keeps a row touched as removed in the scope it is in at the read, on both nodes", async () => {
+    const app = await start();
+    const onA = await app.connect(as(board.ada));
+    const onB = (await connectToWriter(app, as(board.ada))).connection;
+    const scopesA = receiveScopes(onA);
+    const scopesB = receiveScopes(onB);
+    await colSub(onA, "byProject", board.p1);
+    await colSub(onB, "byProject", board.p1);
+    await colSub(onA, "board", board.p1);
+    // The row is there when node B reads it (its id created again by a write whose flush went
+    // first): it stays in P1 for every subscriber, and node A removes it from no scope.
+    await app.server.dispatcher.run((ctx) => {
+      ctx.touch("task", [board.t1], { removed: true });
+    });
+    await Promise.all([scopesA.settle(), scopesB.settle()]);
+    const deltas = (scopes: ReturnType<typeof receiveScopes>, c: string) =>
+      scopes.frames.filter((frame) => frame.c === c).flatMap((frame) => frame.deltas);
+    for (const scopes of [scopesA, scopesB]) {
+      expect(deltas(scopes, "byProject")).toEqual([
+        { t: "added", item: expect.objectContaining({ id: board.t1, title: "T1" }) },
+      ]);
+    }
+    expect(deltas(scopesA, "board")).toEqual([]);
   });
 });
 

@@ -23,6 +23,13 @@
 // order, and a patch it dropped as older would lose its fields, while an
 // older whole row is rightly dropped (the newer one was read after the older
 // write). A tier that would have got an empty patch still gets nothing.
+//
+// Behind a cluster adapter a deleted row is read too: a flush takes its
+// revision when it flushes, so a delete that committed first can flush after
+// a later create of the same id, and its `r` would win over that row on the
+// client. A row this flush deleted that exists at the read goes out whole
+// (`u`) instead, and the change log records it as existing. One server keeps
+// sending `r` without a read.
 
 import type { AccessLevel } from "../../contract/access";
 import { entityRoom, SERVER_EVENTS } from "../../contract/names";
@@ -102,14 +109,15 @@ function send(io: Io, frame: EntityFrame, target: Target, service: AnyService): 
   }
 }
 
-/** Reads the rows of `targets` that need data, in one query. */
+/** Reads the rows of `targets` that need data, in one query: behind a cluster adapter, removed rows too. */
 async function readTargets(
   hub: Hub,
   service: AnyService,
   targets: readonly Target[],
+  local: boolean,
 ): Promise<Map<string, Readonly<Record<string, unknown>>>> {
   const projection = service.projections.get("entity");
-  const reading = targets.filter((target) => target.kind.t !== "r");
+  const reading = local ? targets.filter((target) => target.kind.t !== "r") : targets;
   if (projection === undefined || service.model === undefined || reading.length === 0) {
     return new Map();
   }
@@ -118,7 +126,7 @@ async function readTargets(
       where: { id: { in: reading.map((target) => target.id) } },
       select: selectFor(
         projection,
-        reading.map((target) => target.kind),
+        reading.map((target) => (target.kind.t === "r" ? WHOLE : target.kind)),
       ),
     })) ?? [];
   return new Map(rows.flatMap((row) => (typeof row.id === "string" ? [[row.id, row]] : [])));
@@ -147,17 +155,18 @@ async function emitService(
   if (targets.length === 0) {
     return;
   }
-  const rows = await readTargets(hub, service, targets);
+  const rows = await readTargets(hub, service, targets, local);
   for (const target of targets) {
+    const row = rows.get(target.id);
+    // Behind a cluster adapter, a row this flush deleted that exists at the read was created
+    // again by a write whose flush went first: it goes out whole, not removed.
+    const again = target.kind.t === "r" && row !== undefined;
+    if (again) {
+      hub.changeLog.record(service.name, target.id, rev, false);
+    }
     // A row read as missing was deleted since: its own flush sends the removal.
-    const frame = buildFrame(
-      service.name,
-      target.id,
-      target.kind,
-      rows.get(target.id),
-      rev,
-      projection,
-    );
+    const kind = again ? WHOLE : target.kind;
+    const frame = buildFrame(service.name, target.id, kind, row, rev, projection);
     if (frame !== undefined) {
       send(io, frame, target, service);
     }

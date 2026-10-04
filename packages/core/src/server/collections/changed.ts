@@ -118,7 +118,14 @@ async function findTopics(flush: Flush, storage: StorageAdapter): Promise<void> 
       if (flush.local && watched.size === 0) {
         return;
       }
-      const moves = await movesOf(hub.collections.moves, storage, collection, writes, refresh);
+      const moves = await movesOf(
+        hub.collections.moves,
+        storage,
+        collection,
+        writes,
+        refresh,
+        !flush.local,
+      );
       for (const scope of scopesOf(moves, watched)) {
         markScope(flush, collection, scope);
       }
