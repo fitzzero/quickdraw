@@ -55,6 +55,21 @@ state; tick each item as it is done.
         `5.0.0-rc.0` entry of `CHANGELOG.md` lists exactly what shipped; and
         `bun run readme:sync` (in `packages/core`) and `bun run guide:sync`
         (in `packages/codemod`) have copied the guide;
+  - [x] the independent review's fixes A to G (each with its tests):
+        A, the cookie rule above; B, the README's `@next` installs, a quick
+        start that authenticates with `socketAuth`, "The example app" with
+        the pieces the quick start imports, and examples without trailing
+        comments, which a test in `packages/lint` lints with
+        `oxlint.base.jsonc`; C, the codemod on real code (an alias where a
+        file binds the service's name, every workspace package that uses
+        quickdraw, `server/testing/prisma` rewritten, 4.x instance members,
+        dynamic imports and a hook's string `error` marked, a new report
+        listed as `A`) and `AdminFieldConfig.filterable` optional; D,
+        `jsonAcl`'s highest level for a user listed twice, documented and
+        marked by the codemod; E, the benchmark report's figures and the
+        changelog's p99 range; F, the peers' new floors in `MIGRATION.md`
+        and quickdraw-chat's Zod 3 api; G, no `workspace:` range in a
+        published manifest (`npm pack` shows none);
   - [ ] the round's decisions are recorded in RFC 0003 section 17.
 - [ ] Pack G merged to `dev`, so all seven packs are on `dev`.
 - [ ] CI green on `dev` at that merge commit.

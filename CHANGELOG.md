@@ -109,6 +109,23 @@ rollout. The design is [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md)
     for `__Host-session`. The transports read `COOKIE_DOMAIN` as the routes
     do; a `cookie.domain` given only to the routes logs a startup warning
     until the cookie is named.
+  - `AdminFieldConfig.filterable` is optional (default `false`), so 4.x
+    field configurations still type.
+  - The codemod: a file that already binds a service object's name imports
+    it under an alias (no more `const chatService = chatService`); every
+    workspace package that depends on quickdraw is migrated, with
+    `server/testing/prisma` rewritten to `testing/prisma`; uses of a 4.x
+    instance's members, a dynamic `import()` of a service class and a
+    hook's `error` read as a string are marked; a `jsonAcl("acl")` it
+    writes is marked for duplicate list entries (5.0 takes the highest
+    level, 4.x took the first); a dry run lists the report as `A` when it
+    would create it; and its published manifest names no `workspace:`
+    range.
+  - The docs: the README's installs carry `@next`, its quick start
+    authenticates with `socketAuth` and shows the pieces it imports, and
+    no example keeps a trailing comment (a test lints every example with
+    `oxlint.base.jsonc`); `MIGRATION.md` lists the peers' new floors; the
+    benchmark report's figures are recomputed from its data.
 
 ### Benchmark
 
