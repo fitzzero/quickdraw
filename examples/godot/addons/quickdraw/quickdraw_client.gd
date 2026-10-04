@@ -75,8 +75,12 @@ const SUBSCRIPTION_EVENTS := ["qd:sub", "qd:col:sub", "qd:col:items", "qd:watch"
 enum State { IDLE, CONNECTING, HANDSHAKE, READY, CLOSED }
 
 var state := State.IDLE
-## The server's `qd:hello`: `protocol`, `server`, `limits`, `features`, `userId`, `serviceAccess`.
+## The server's `qd:hello`: `protocol`, `server`, `serverId`, `limits`, `features`, `userId`, `serviceAccess`.
 var hello: Dictionary = {}
+## The server's id from its hello: new each time a server starts. A reconnect
+## that brings another one reached a restarted server (or another node), whose
+## state (a game's world, its tick counter) starts over: compare it in `connected`.
+var server_id := ""
 ## The user the socket acts for, or null when anonymous.
 var user_id: Variant = null
 var service_access: Dictionary = {}
@@ -426,6 +430,7 @@ func _on_event(event: String, data: Variant) -> void:
 
 func _on_hello(data: Variant) -> void:
 	hello = data
+	server_id = str(hello.get("serverId", ""))
 	user_id = hello.get("userId")
 	service_access = hello.get("serviceAccess", {})
 	state = State.READY

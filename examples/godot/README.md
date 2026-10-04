@@ -46,6 +46,7 @@ func _on_event(service: String, event: String, payload: Variant) -> void:
 | `request(event, payload)`                         | Any other acknowledged event of the protocol (`qd:sub`, `qd:watch`, ...), paced by the hello's subscription lane.                                                          |
 | `close()`                                         | Disconnects for good.                                                                                                                                                      |
 | `rng`                                             | The `RandomNumberGenerator` behind the client's random waits (reconnect backoff, the `qd:rotate` moment); seed it to repeat a run.                                         |
+| `server_id`                                       | The hello's `serverId`: new each time a server starts. Another one after a reconnect means a restarted server (or another node): a game's world and ticks start over.      |
 
 Signals: `connected(hello)`, `disconnected(reason)`, `refused(code, message)`
 (`PROTOCOL_MISMATCH` or `UNAUTHENTICATED`; it does not reconnect),

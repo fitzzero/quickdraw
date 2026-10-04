@@ -36,7 +36,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { consoleLogger, type Logger } from "../../contract/logger";
-import type { TouchOptions } from "../context";
+import type { RunContext, RunOptions, TouchOptions } from "../context";
 import { createDevWarnings, isQuiet, type DevWarning, type DevWarnings } from "../devWarnings";
 import { flushWrites } from "./flush";
 import { noFlushSink, type FlushSink } from "./flushSink";
@@ -265,6 +265,80 @@ function recordAmbient(state: TrackerState, writes: readonly WriteRecord[]): voi
   notify(state, writes);
 }
 
+/**
+ * `qd.run(fn)` made before any dispatcher exists (a boot-time seed written
+ * before `createServer`): a unit of work no dispatcher opened, shared by
+ * every tracked client. The writes each client makes in it are kept apart
+ * from ambient writes (so they raise no warning) and flush once `fn`
+ * settles, to the dispatcher that client is attached to by then: none
+ * before any server exists, so they reach no one, as no socket could be
+ * subscribed yet.
+ */
+interface LooseRun {
+  /** The writes of each tracked client, until the run settles. */
+  readonly writes: Map<TrackerState, WriteRecord[]>;
+}
+
+const looseRuns = new AsyncLocalStorage<LooseRun>();
+
+/** Keeps `writes` in the loose run this runs in, if any; false outside one. */
+function keptLoose(state: TrackerState, writes: readonly WriteRecord[]): boolean {
+  const run = looseRuns.getStore();
+  if (run === undefined) {
+    return false;
+  }
+  run.writes.set(state, [...(run.writes.get(state) ?? []), ...writes]);
+  notify(state, writes);
+  return true;
+}
+
+/**
+ * `qd.run(fn)` before its instance created any dispatcher: `fn` runs in a
+ * unit of work no dispatcher opened, with a context that records nothing
+ * (no tracked client is known to `ctx.touch`) and logs to the console.
+ */
+export async function runBeforeAnyDispatcher<R>(
+  fn: (ctx: RunContext) => R | PromiseLike<R>,
+  options?: RunOptions,
+): Promise<R> {
+  if (typeof fn !== "function") {
+    throw new TypeError("run: pass the function to run inside a unit of work");
+  }
+  if (options !== undefined && (typeof options !== "object" || options === null)) {
+    throw new TypeError("run: options must be an object, { detached?: boolean }");
+  }
+  const ctx: RunContext = Object.freeze({
+    touch: () => undefined,
+    log: consoleLogger.child({ requestId: randomUUID() }),
+    principal: null,
+  });
+  return await runLoose(() => fn(ctx));
+}
+
+/**
+ * Runs `fn` in a unit of work no dispatcher opened (`qd.run` before any
+ * exists): every tracked client's writes in it flush once `fn` settles,
+ * whether it resolved or threw, each to the dispatcher its client is
+ * attached to then, which before any server is none.
+ */
+async function runLoose<T>(fn: () => T | PromiseLike<T>): Promise<T> {
+  const run: LooseRun = { writes: new Map() };
+  try {
+    return await looseRuns.run(run, async () => await fn());
+  } finally {
+    const flushed = [...run.writes].map(async ([state, writes]) => {
+      const scope: UnitOfWorkScope = {
+        requestId: randomUUID(),
+        transport: "internal",
+        sink: state.sink,
+      };
+      await flushWrites(writes, scope, state.logger);
+    });
+    run.writes.clear();
+    await Promise.all(flushed);
+  }
+}
+
 /** Puts `writes` in the first open buffer at or above `from`, or flushes them on their own. */
 function deliver(
   state: TrackerState,
@@ -283,7 +357,9 @@ function deliver(
       return;
     }
   }
-  recordAmbient(state, writes);
+  if (!keptLoose(state, writes)) {
+    recordAmbient(state, writes);
+  }
 }
 
 function openTransaction(state: TrackerState, kind: "interactive" | "batch"): TrackedTransaction {

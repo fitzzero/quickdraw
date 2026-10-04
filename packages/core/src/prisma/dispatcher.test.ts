@@ -11,7 +11,14 @@ import { createDispatcher, initQuickdraw, type CallRecord, type Principal } from
 import { storageOf } from "../server/storage";
 import { createTestApp } from "../testing/createTestApp";
 import { createRecordingSink, type RecordingSink } from "../testing/recordingSink";
-import { createHarness, nextTick, type Harness } from "./__tests__/harness";
+import {
+  captureLogger,
+  createHarness,
+  INTEREST,
+  nextTick,
+  type Harness,
+} from "./__tests__/harness";
+import { trackPrisma } from "./trackPrisma";
 
 const row = z.object({ id: z.string(), title: z.string() });
 
@@ -339,9 +346,43 @@ describe("qd.run and writes outside methods", () => {
     expect(sink.writes()).toEqual([expect.objectContaining({ id: taskId, op: "update" })]);
   });
 
-  it("fails qd.run on an app that has created no dispatcher", async () => {
+  it("runs qd.run in a unit of its own before the app created any dispatcher: its writes reach no one", async () => {
+    // A tracked client no dispatcher was ever attached to, as at boot before createServer.
+    const logger = captureLogger();
+    const db = trackPrisma(h.prisma, { interest: INTEREST, logger, development: true });
     const lone = initQuickdraw();
-    await expect(lone.run(() => 1)).rejects.toThrow("qd.run has no dispatcher to flush through");
+    let seen: unknown;
+    const title = await lone.run(async (ctx) => {
+      seen = ctx;
+      ctx.touch("task", [taskId]);
+      const seeded = await db.task.update({ where: { id: taskId }, data: { title: "seeded" } });
+      return seeded.title;
+    });
+    expect(title).toBe("seeded");
+    expect(seen).toEqual({
+      touch: expect.any(Function),
+      log: expect.objectContaining({ debug: expect.any(Function) }),
+      principal: null,
+    });
+    await nextTick();
+    // Kept in the run's own unit: no ambient-write warning, and no sink to reach.
+    expect(logger.warnings).toEqual([]);
+    expect((await h.prisma.task.findUniqueOrThrow({ where: { id: taskId } })).title).toBe("seeded");
+    await expect(lone.run(() => Promise.reject(new Error("boom")))).rejects.toThrow("boom");
+    await expect(lone.run(3 as unknown as () => number)).rejects.toThrow("pass the function");
+    // The same write outside any run is ambient, and warns.
+    await db.task.update({ where: { id: taskId }, data: { title: "ambient" } });
+    await nextTick();
+    expect(logger.warnings).toEqual([expect.stringContaining("ambient-write")]);
+  });
+
+  it("flushes a loose run's writes to a dispatcher attached to the client meanwhile", async () => {
+    const lone = initQuickdraw();
+    await lone.run(async () => {
+      dispatcherWith();
+      await h.db.task.update({ where: { id: taskId }, data: { title: "after attach" } });
+    });
+    expect(sink.writes()).toEqual([expect.objectContaining({ id: taskId, op: "update" })]);
   });
 });
 

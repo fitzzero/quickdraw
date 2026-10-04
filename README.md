@@ -774,6 +774,10 @@ tracked client as `db`; the server finds the rest on it.
   not wait for (a push sent after a message, pruning what it reports dead)
   runs in `qd.run(fn, { detached: true })`, a unit of its own that flushes
   when `fn` settles (catch what the promise rejects with: nothing awaits it).
+  Before any server exists (a seed at boot, before `createServer`),
+  `qd.run(fn)` still runs `fn` in a unit of its own, and its writes reach no
+  one: no socket can be subscribed yet (behind a cluster, write after
+  `createServer` when other nodes' subscribers must hear of it).
 
 <!-- example: apps/api/src/jobs/overdue.ts#run -->
 
@@ -1020,7 +1024,9 @@ over three transports (design: sections 3, 8 and 10):
 
 - **Socket.IO** (protocol 5): a client connects with
   `auth: { token, qd: { protocol: 5, client } }`, receives `qd:hello` with the
-  server's limits and who it acts for, and calls through `qd:call` and
+  server's limits, who it acts for and the server's id (`serverId`, new
+  each time a server starts: a reconnect that brings another one reached a
+  restarted server, or another node), and calls through `qd:call` and
   `qd:cancel`. Every socket gets the same few listeners however many methods
   the services have. The JSON-only parser is the default; `binary: true`
   restores the stock one. The socket rate limiter is on by default (600

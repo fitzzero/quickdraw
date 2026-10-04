@@ -89,6 +89,19 @@ room or is taken out of it is revoked from the feed at once
   (`outputValidation`, on unless `NODE_ENV` is `"production"`); unchecked,
   an item goes out as pushed. The default stays `"always"` (F4.14).
 
+### Server
+
+- `qd.run(fn)` before the app created any dispatcher (a boot-time seed
+  before `createServer`) runs `fn` in a unit of work of its own instead of
+  throwing: its tracked writes raise no ambient warning and flush once it
+  settles to the dispatcher the client is attached to by then, which before
+  any server is none, so they reach no one (no socket can be subscribed
+  yet). `ctx.touch` records nothing there (F4.10).
+- `qd:hello` carries `serverId`, random and new each time a server starts,
+  so a client tells a restarted server (or another node) from a network
+  blip; `docs/protocol-v5.md`, the JS client's hello and the GDScript
+  client's `server_id` carry it (F4.11).
+
 ### Client
 
 - `useQuickdraw()` gains `isKnown` (the server's hello on the current

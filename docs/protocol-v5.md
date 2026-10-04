@@ -143,14 +143,15 @@ The limits a server announces in `qd:hello`, so a client can stay inside them.
 connection, after the socket's listeners are in place. It says who the
 socket acts for, so a client knows its user without another call.
 
-| Field           | Type                          | Meaning                                                                                                                                                                                                       |
-| --------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `protocol`      | `5`                           | The protocol the server speaks.                                                                                                                                                                               |
-| `server`        | `string`                      | The server package's version.                                                                                                                                                                                 |
-| `limits`        | `HelloLimits`                 | What a client must stay within.                                                                                                                                                                               |
-| `features`      | `string[]`                    | Names of optional server features that are on. Informational only.                                                                                                                                            |
-| `userId`        | `string \| null`              | The user the socket acts for, or `null` when it is anonymous.                                                                                                                                                 |
-| `serviceAccess` | `Record<string, AccessLevel>` | The principal's service-wide grants when the socket connected, by service name: `{ taskService: "Admin" }`. Empty for an anonymous socket or a principal without grants. Later changes arrive as `qd:access`. |
+| Field           | Type                          | Meaning                                                                                                                                                                                                                                                              |
+| --------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `protocol`      | `5`                           | The protocol the server speaks.                                                                                                                                                                                                                                      |
+| `server`        | `string`                      | The server package's version.                                                                                                                                                                                                                                        |
+| `serverId`      | `string`                      | This server's id: random, new each time a server starts. A client that reconnects to the same id came back after a blip, to another id to a restarted server (a game's world and clock start over) or, behind a cluster, to another node, each of which has its own. |
+| `limits`        | `HelloLimits`                 | What a client must stay within.                                                                                                                                                                                                                                      |
+| `features`      | `string[]`                    | Names of optional server features that are on. Informational only.                                                                                                                                                                                                   |
+| `userId`        | `string \| null`              | The user the socket acts for, or `null` when it is anonymous.                                                                                                                                                                                                        |
+| `serviceAccess` | `Record<string, AccessLevel>` | The principal's service-wide grants when the socket connected, by service name: `{ taskService: "Admin" }`. Empty for an anonymous socket or a principal without grants. Later changes arrive as `qd:access`.                                                        |
 
 ## Example session
 
@@ -162,7 +163,7 @@ a channel that requires the lobby, and hears an event and a presence frame.
 < 0{"sid":"a1","upgrades":[],"pingInterval":25000,"pingTimeout":20000,"maxPayload":1000000}
 > 40{"qd":{"client":"my-game/1.0","protocol":5},"token":"…"}
 < 40{"sid":"b2"}
-< 42["qd:hello",{"protocol":5,"server":"5.0.0","limits":{…},"features":[],"userId":"ada","serviceAccess":{}}]
+< 42["qd:hello",{"protocol":5,"server":"5.0.0","serverId":"c3f1…","limits":{…},"features":[],"userId":"ada","serviceAccess":{}}]
 > 421["qd:call",{"id":0,"s":"lobbyService","m":"join","i":{"lobby":"main"}}]
 < 42["qd:presence",{"room":"lobby:main","users":["ada"]}]
 < 431[{"ok":true,"d":{"lobby":"main","players":["ada"]}}]
@@ -215,7 +216,10 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
 ## What a client must do
 
 - Wait for `qd:hello` before the first call: it says who the socket acts for
-  (`userId`, `serviceAccess`) and the limits to stay within.
+  (`userId`, `serviceAccess`) and the limits to stay within. Each hello is a
+  new socket in no app room: make the joining calls again after every one. A
+  `serverId` other than the last hello's means the server restarted (or,
+  behind a cluster, another node answered): its state starts over.
 - Give each `qd:call` an `id` no call in flight on the socket has; `qd:cancel`
   names it, and the call's acknowledgement still arrives. Send it with an ack
   id: the server ignores a `qd:call` sent without one, with no reply and no

@@ -98,12 +98,16 @@ export function sessionOver(
   });
 }
 
+/** The id a mock's hello names its server by: one mock server, never restarted. */
+const MOCK_SERVER_ID = "mock";
+
 /** The connection state a session shows: connected or connecting, with a hello once it is known. */
 function stateOf(session: SessionState): ConnectionState {
   const hello: HelloFrame | null = session.isKnown
     ? Object.freeze({
         protocol: PROTOCOL_VERSION,
         server: QUICKDRAW_VERSION,
+        serverId: MOCK_SERVER_ID,
         limits: MOCK_LIMITS,
         features: Object.freeze([]),
         userId: session.userId,

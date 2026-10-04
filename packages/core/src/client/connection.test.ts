@@ -297,6 +297,24 @@ describe("createQuickdrawConnection", () => {
     expect(hellos).toHaveLength(3);
   });
 
+  it("names the server in each hello: the same id after a blip, another after a restart", async () => {
+    const first = await harness.start();
+    const connection = await harness.connect(first.app.url);
+    await until(() => connection.getState().hello !== null);
+    const id = connection.getState().hello?.serverId;
+    expect(id).toEqual(expect.any(String));
+    const hellos: string[] = [];
+    connection.onHello((hello) => hellos.push(hello.serverId));
+    first.app.server.rotate({ withinMs: 0 });
+    await until(() => hellos.length === 2);
+    expect(hellos).toEqual([id, id]);
+    // Another server, as after a restart: another id.
+    const second = await harness.start();
+    const elsewhere = await harness.connect(second.app.url);
+    await until(() => elsewhere.getState().hello !== null);
+    expect(elsewhere.getState().hello?.serverId).not.toBe(id);
+  });
+
   it("calls an onHello listener that stopped before its microtask with nothing", async () => {
     const { app } = await harness.start();
     const connection = await harness.connect(app.url);

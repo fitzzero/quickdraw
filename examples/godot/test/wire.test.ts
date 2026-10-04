@@ -175,6 +175,7 @@ describe("the GDScript client's session, frame by frame", () => {
     expect(hello).toEqual({
       protocol: 5,
       server: expect.any(String),
+      serverId: expect.any(String),
       limits: {
         maxInFlightQueries: 1,
         maxQueuedQueries: 0,

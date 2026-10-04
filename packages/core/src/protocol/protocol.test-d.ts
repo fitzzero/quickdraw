@@ -128,7 +128,7 @@ describe("call frames", () => {
     expectTypeOf<HelloLimits["subscriptions"]>().toEqualTypeOf<HelloSubscriptionLimits>();
     expectTypeOf<keyof HelloSubscriptionLimits>().toEqualTypeOf<"maxInFlight" | "maxQueued">();
     expectTypeOf<keyof HelloFrame>().toEqualTypeOf<
-      "protocol" | "server" | "limits" | "features" | "userId" | "serviceAccess"
+      "protocol" | "server" | "serverId" | "limits" | "features" | "userId" | "serviceAccess"
     >();
   });
 });

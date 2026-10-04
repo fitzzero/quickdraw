@@ -43,7 +43,9 @@ the sources beside it, so it always describes the server you run.
 A client implements, roughly in the order a game needs it:
 
 1. the framing and the handshake (`auth.qd`, `qd:hello`), and answering
-   pings;
+   pings; the hello's `serverId` is new each time a server starts, so a
+   reconnect that brings another one reached a restarted server (a game's
+   world and clock start over) rather than surviving a blip;
 2. `qd:call` with an ack id, reading `{ ok: true, d }` or
    `{ ok: false, e: { code, message, data? } }`, and backing off on
    `RATE_LIMITED` for `retryAfterMs`;
