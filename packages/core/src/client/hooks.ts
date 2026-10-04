@@ -28,25 +28,19 @@
 // There are no effect-based `onSuccess`/`onError` callbacks (4.1 had them at
 // `legacy-src/client/useServiceQuery.ts:185-198`).
 //
-// A mutation returns TanStack's mutation result as it is, typed with
-// `QuickdrawError`, and is optimistic by default when its input has `id` and
-// its output is `"entity"` (`optimistic.ts`).
+// The mutation hook is `mutation.ts`'s, exported from here too.
 
 import {
   replaceEqualDeep,
-  useMutation,
   useQuery,
-  type UseMutationOptions,
-  type UseMutationResult,
   type UseQueryOptions,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { QuickdrawError } from "../protocol/errors";
-import { callData, isNotModified, shouldRetry } from "./call";
+import { shouldRetry } from "./call";
 import { useAwaitingHello, useQueriesHello, useQuickdrawContext } from "./context";
-import { methodKey, methodKeyPrefix, type MethodQueryKey } from "./keys";
+import { methodKey, type MethodQueryKey } from "./keys";
 import type { MethodTarget } from "./members";
-import { mutateOptimistically, type OptimisticCache, type OptimisticUpdate } from "./optimistic";
 import { fetchMethodQuery } from "./query";
 import {
   hiddenResult,
@@ -57,32 +51,13 @@ import {
 } from "./queryHooks";
 import { carryVersion } from "./versions";
 
+export { useMethodMutation, type MethodMutationOptions } from "./mutation";
+
 /** Options of a query hook: TanStack's `useQuery` options, without the key and the query function. */
 export type MethodQueryOptions<Output, Data = Output, Input = unknown> = Omit<
   UseQueryOptions<Output, QuickdrawError, Data, MethodQueryKey<Input>>,
   "queryKey" | "queryFn"
 >;
-
-/**
- * Options of a mutation hook: TanStack's `useMutation` options, without the
- * mutation function, and `optimistic`.
- */
-export type MethodMutationOptions<
-  Output,
-  Variables,
-  Context = unknown,
-  Cache = OptimisticCache,
-> = Omit<UseMutationOptions<Output, QuickdrawError, Variables, Context>, "mutationFn"> & {
-  /**
-   * The mutation's optimistic update (RFC 0003 section 11.4): `false` for
-   * none, or a function that writes its own layers through `cache`. Left
-   * out, a mutation whose input has `id` and whose output is `"entity"`
-   * shows its input's other fields over that row from the moment it is sent:
-   * dropped if the call fails, kept after it succeeds until the server's
-   * data for the row catches up.
-   */
-  readonly optimistic?: false | OptimisticUpdate<Variables, Cache>;
-};
 
 type StructuralSharing = boolean | ((oldData: unknown, newData: unknown) => unknown);
 
@@ -144,43 +119,4 @@ export function useMethodQuery<Output, Data = Output, Input = unknown>(
   });
   // While new credentials await their hello, what is cached may be the last user's.
   return awaiting ? hiddenResult(result) : result;
-}
-
-/**
- * `qd.<service>.<method>.useMutation(options)`. `mutate` returns nothing (a
- * failure lands in the result's `error`); `mutateAsync` returns the promise
- * of the output, which rejects with the `QuickdrawError`.
- */
-export function useMethodMutation<Output, Variables, Context = unknown, Cache = OptimisticCache>(
-  target: MethodTarget,
-  options: MethodMutationOptions<Output, Variables, Context, Cache> = {},
-): UseMutationResult<Output, QuickdrawError, Variables, Context> {
-  const { connection, queryClient } = useQuickdrawContext(
-    `${target.service}.${target.method}.useMutation`,
-  );
-  const { optimistic, ...rest } = options;
-  const optimisticTarget = { service: target.service, entityOutput: target.output === "entity" };
-  return useMutation<Output, QuickdrawError, Variables, Context>({
-    mutationKey: methodKeyPrefix(target.service, target.method),
-    ...rest,
-    mutationFn: (input: Variables) =>
-      mutateOptimistically<Output>(
-        queryClient,
-        optimisticTarget,
-        optimistic as false | OptimisticUpdate<unknown> | undefined,
-        input,
-        (replied) =>
-          callData<Output>(connection, {
-            service: target.service,
-            method: target.method,
-            input,
-            kind: "mutation",
-            onReply: (result) => {
-              if (!isNotModified(result)) {
-                replied(result.d as Output);
-              }
-            },
-          }),
-      ),
-  });
 }

@@ -214,6 +214,7 @@ export function createDispatcher<const S extends readonly AnyService[]>(
   });
   // `createServer` attaches its Socket.IO server to the dispatcher's live data.
   registerLive(dispatcher, settings.live);
+  LOOPS.set(dispatcher, settings.loops);
   if (typeof detach === "function") {
     DETACHES.set(dispatcher, detach);
   }
@@ -221,6 +222,16 @@ export function createDispatcher<const S extends readonly AnyService[]>(
 }
 
 const DETACHES = new WeakMap<object, () => void>();
+
+const LOOPS = new WeakMap<object, PipelineSettings["loops"]>();
+
+/**
+ * The loop watch of a dispatcher `createDispatcher` returned: `createServer`
+ * counts its socket rate limiter's refusals there too (`devWarnings.ts`).
+ */
+export function loopsOf(dispatcher: object): PipelineSettings["loops"] | undefined {
+  return LOOPS.get(dispatcher);
+}
 
 /**
  * Detaches `dispatcher` from its tracked database client: ambient writes

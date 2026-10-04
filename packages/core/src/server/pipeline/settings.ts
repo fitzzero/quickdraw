@@ -2,7 +2,13 @@
 // settings every pipeline stage reads.
 
 import { consoleLogger, type Logger } from "../../contract/logger";
-import { createDevWarnings, strictWarningsOf, type DevWarnings } from "../devWarnings";
+import {
+  createDevWarnings,
+  createLoopWatch,
+  strictWarningsOf,
+  type DevWarnings,
+  type LoopWatch,
+} from "../devWarnings";
 import type { ChangeLogOptions } from "../emit/changeLog";
 import { createLive, type Live } from "../emit/live";
 import type { Registry } from "../registry";
@@ -126,6 +132,8 @@ export interface PipelineSettings extends Tracking {
   readonly freezeSharedResults: boolean;
   /** The development warnings of this dispatcher and of the write tracker it attaches to (`../devWarnings.ts`). */
   readonly warnings: DevWarnings;
+  /** Counts each connection's calls and refusals, and warns when they look like a client loop (`../devWarnings.ts`). */
+  readonly loops: LoopWatch;
   readonly record: (record: CallRecord, details: RecordDetails) => void;
 }
 
@@ -211,6 +219,7 @@ export function resolveSettings(
     outputValidation: options.outputValidation ?? development,
     freezeSharedResults: options.freezeSharedResults ?? development,
     warnings,
+    loops: createLoopWatch(warnings, logger),
     record: createRecorder({
       logger,
       onCall: options.onCall,

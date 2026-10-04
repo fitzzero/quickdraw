@@ -16,9 +16,13 @@
 // | `ambient-write`      | a tracked write ran outside any unit of work                       | model                    |
 // | `batch-read`         | a write in an array-form `$transaction` read its rows outside it   | model, operation         |
 // | `batch-create-many`  | a `createMany` in an array-form `$transaction` could not be traced | model                    |
+// | `repeated-call`      | one connection called a method with the same input more than 10    | connection               |
+// |                      | times within a second, or was refused `RATE_LIMITED` more than 30  | (`refused <connection>`) |
+// |                      | times within a minute: a client in a loop (`createLoopWatch`)      |                          |
 //
-// The last four are the write tracker's (`uow/unitOfWork.ts`), raised exactly
-// where they were before; they gained the format and the call. Only an app's
+// `nested-write`, `ambient-write`, `batch-read` and `batch-create-many` are
+// the write tracker's (`uow/unitOfWork.ts`), raised exactly where they were
+// before; they gained the format and the call. Only an app's
 // own statements are checked for the first two: the framework's reads through
 // the storage adapter, the tracker's own reads and the kits' handlers run
 // `quietly`, while the app's callbacks a kit calls (`prepare`, `onChange`,
@@ -31,7 +35,9 @@
 // while seeding, say) are logged as usual.
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import { consoleLogger, type Logger } from "../contract/logger";
+import type { CallOutcome } from "./pipeline/metrics";
 
 /** What a development warning is about. */
 export type DevWarningKind =
@@ -41,7 +47,8 @@ export type DevWarningKind =
   | "nested-write"
   | "ambient-write"
   | "batch-read"
-  | "batch-create-many";
+  | "batch-create-many"
+  | "repeated-call";
 
 /** One development warning. */
 export interface DevWarning {
@@ -52,7 +59,8 @@ export interface DevWarning {
   /**
    * What the warning is about within its call, for the once-only rule: the
    * model of an ambient write, the model, field and operation of a nested
-   * write. Empty for the kinds that are once per call site.
+   * write, the connection of a repeated call. Empty for the kinds that are
+   * once per call site.
    */
   readonly subject?: string;
   /** What happened and what to do instead. */
@@ -177,4 +185,163 @@ export async function checked<T>(fn: () => T | PromiseLike<T>): Promise<T> {
 /** True inside {@link quietly}, and not inside a {@link checked} within it. */
 export function isQuiet(): boolean {
   return QUIET.getStore() === true;
+}
+
+// Loop warnings (`repeated-call`). Without them, a client re-issuing one
+// call (a mutation fired from an effect that its own result re-runs, a
+// refetch that triggers itself) is seen only as `RATE_LIMITED` once the
+// socket's 600-per-minute limiter trips, which says nothing about why. The
+// dispatcher's loop watch says it instead:
+//
+// - one connection (a socket, an MCP session) calls the same method with an
+//   identical input more than 10 times within a second: once per
+//   connection, service and method;
+// - one connection is refused `RATE_LIMITED` more than 30 times within a
+//   minute, by the socket rate limiter or by a full query queue: once per
+//   connection, at warn where a refusal on its own logs at debug.
+//
+// A test app made with `strictWarnings` throws them from the call that
+// crossed the line, once its reply was sent; a refusal outside any call is
+// logged even there. Calls without a connection (in-process, HTTP) are not
+// counted. Memory is bounded: the 10,000 most recently seen keys are kept.
+
+/** Identical calls one connection may make within {@link REPEATED_CALL_WINDOW_MS}. */
+export const REPEATED_CALL_LIMIT = 10;
+export const REPEATED_CALL_WINDOW_MS = 1_000;
+
+/** `RATE_LIMITED` refusals one connection may get within {@link REFUSAL_WINDOW_MS}. */
+export const REFUSAL_LIMIT = 30;
+export const REFUSAL_WINDOW_MS = 60_000;
+
+const MAX_KEYS = 10_000;
+
+/** Inputs longer than this are keyed by their hash. */
+const MAX_INPUT_KEY = 256;
+
+/** What a finished call is counted by. */
+export interface CountedCall {
+  readonly service: string;
+  readonly method: string;
+  readonly input: unknown;
+  readonly connectionId?: string;
+}
+
+/** Counts each connection's calls and refusals, and warns when they look like a loop. */
+export interface LoopWatch {
+  /**
+   * Counts one finished call and how it ended. Throws the warning in a test
+   * app made with `strictWarnings`; call it once the reply was sent.
+   */
+  call(call: CountedCall, outcome: CallOutcome): void;
+  /** Counts an event the socket rate limiter refused; never throws. */
+  refused(connectionId: string, event: string): void;
+}
+
+/**
+ * Counts events per key: returns how many fell within `windowMs` up to now,
+ * once that is more than `limit`, else `undefined`. Keeps at most `limit + 1`
+ * times per key and drops the least recently seen key past `MAX_KEYS`.
+ */
+function createCounter(
+  limit: number,
+  windowMs: number,
+  now: () => number,
+): (key: string) => number | undefined {
+  const times = new Map<string, number[]>();
+  return (key) => {
+    const at = now();
+    const recent = (times.get(key) ?? []).filter((time) => at - time < windowMs);
+    recent.push(at);
+    if (recent.length > limit + 1) {
+      recent.shift();
+    }
+    times.delete(key);
+    times.set(key, recent);
+    if (times.size > MAX_KEYS) {
+      const [oldest] = times.keys();
+      times.delete(oldest ?? key);
+    }
+    return recent.length > limit ? recent.length : undefined;
+  };
+}
+
+/** The input as a key: its JSON, hashed when long; `undefined` for an input JSON cannot write. */
+function inputKey(input: unknown): string | undefined {
+  let text: string | undefined;
+  try {
+    text = JSON.stringify(input) ?? "undefined";
+  } catch {
+    return undefined;
+  }
+  return text.length <= MAX_INPUT_KEY ? text : createHash("sha1").update(text).digest("base64url");
+}
+
+const OFF: LoopWatch = Object.freeze({
+  call: () => undefined,
+  refused: () => undefined,
+});
+
+/**
+ * The loop watch of one dispatcher: it raises its `repeated-call` warnings
+ * through `warnings`, and through a lenient copy logging to `logger` for
+ * refusals outside any call.
+ */
+export function createLoopWatch(
+  warnings: DevWarnings,
+  logger: Logger,
+  now: () => number = Date.now,
+): LoopWatch {
+  if (!warnings.enabled) {
+    return OFF;
+  }
+  const repeats = createCounter(REPEATED_CALL_LIMIT, REPEATED_CALL_WINDOW_MS, now);
+  const refusals = createCounter(REFUSAL_LIMIT, REFUSAL_WINDOW_MS, now);
+  const outside = warnings.strict ? createDevWarnings({ logger, development: true }) : warnings;
+  const refusal = (sink: DevWarnings, connectionId: string, what: string): void => {
+    const count = refusals(connectionId);
+    if (count !== undefined) {
+      sink.warn({
+        kind: "repeated-call",
+        subject: `refused ${connectionId}`,
+        message:
+          `connection ${connectionId} was refused RATE_LIMITED ${String(count)} times within a minute (the last: ${what}): ` +
+          "its client keeps calling while it is rate limited, as a loop does. The quickdraw client backs off on RATE_LIMITED; " +
+          "find the call that repeats (a repeated-call warning names it) and stop the loop",
+        meta: { connectionId, refusals: count, windowMs: REFUSAL_WINDOW_MS },
+      });
+    }
+  };
+  return Object.freeze({
+    call(call: CountedCall, outcome: CallOutcome): void {
+      const { connectionId } = call;
+      if (connectionId === undefined) {
+        return;
+      }
+      if (outcome === "RATE_LIMITED") {
+        refusal(warnings, connectionId, `${call.service}.${call.method}`);
+      }
+      const key = inputKey(call.input);
+      const count =
+        key === undefined
+          ? undefined
+          : repeats([connectionId, call.service, call.method, key].join("\u0000"));
+      if (count === undefined) {
+        return;
+      }
+      warnings.warn({
+        kind: "repeated-call",
+        service: call.service,
+        method: call.method,
+        subject: connectionId,
+        message:
+          `called ${String(count)} times within a second with the same input, on one connection (${connectionId}): ` +
+          "the client calls it in a loop, as a mutation fired from an effect or from render does, or a refetch that triggers itself. " +
+          "Call it from an event handler, or guard the effect so it runs once per change",
+        meta: { connectionId, calls: count, windowMs: REPEATED_CALL_WINDOW_MS },
+      });
+    },
+    refused(connectionId: string, event: string): void {
+      refusal(outside, connectionId, event);
+    },
+  });
 }

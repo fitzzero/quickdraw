@@ -17,6 +17,7 @@ import { consoleLogger } from "../contract/logger";
 import {
   createDispatcher,
   detachDispatcher,
+  loopsOf,
   withAccessSinks,
   type Dispatcher,
   type DispatcherOptions,
@@ -280,6 +281,7 @@ export function createServer<const S extends readonly AnyService[]>(
     rateLimit: options.rateLimit ?? {},
     extensions: [],
     live: liveOf(created),
+    loops: loopsOf(created),
   });
   refresh = (userId) => sockets.refresh(userId);
   const shutdown = closer(
