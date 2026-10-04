@@ -94,7 +94,13 @@ export const labelService = qd.defineService(labelContract, {
 - Every method declares `access`; write through the handler's `db`; list any
   other model the handlers write in `writes`; return rows for projection
   outputs. Throw `QuickdrawError` with a code for expected failures.
-- Reach for a kit before hand-writing CRUD, search, sharing or admin.
+- A method whose input has `id` names a row: give it `{ entry: L }`.
+  `defineService` refuses `"public"`, `"authenticated"` or `{ service: L }`
+  below `Admin` there unless the method says `rowless: true` (every caller
+  the form admits may reach any row, on purpose).
+- Reach for a kit before hand-writing CRUD, search, sharing or admin; lint's
+  `prefer-kit` warns on a hand-written `get`, `list`, `create` or
+  `getLabel`-style method in a service that uses no kit.
 
 ## 3. Register it (`apps/api/src/index.ts`)
 

@@ -79,6 +79,14 @@ state; tick each item as it is done.
       tests (the fixture's snapshot, its output typechecking against the
       built core and passing lint apart from its markers, a second run
       changing nothing).
+- [ ] Pack H (agent guardrails, the multi-node proof and non-JS clients,
+      PR #50) merged to `dev` after its finale review and its two fixer
+      rounds, with CI green there (the path-gated `cluster` and `godot` jobs
+      included). It is not in `5.0.0-rc.0`, tagged at the pack G merge
+      commit (`1429b82`): the release candidate that carries it is
+      `5.0.0-rc.1` (its `CHANGELOG.md` entry waits under that heading; the
+      versions move when it is tagged, part 2 again), and quickdraw-chat's
+      game client needs it.
 
 ## 2. Publish the release candidate (owner)
 
@@ -99,9 +107,9 @@ state; tick each item as it is done.
   harmless, since the workflow skips a version already on npm, and keeps
   the tag record. A hand-published version has no provenance.
 
-- [ ] Tag the release candidate on `dev` at the pack G merge commit (or a
-      later one) with a clean tree, for each of `core`, `lint`, `skills` and
-      `codemod`:
+- [ ] Tag the release candidate on `dev` at the pack G merge commit
+      (`1429b82`; a later commit carries pack H, which is `5.0.0-rc.1`) with
+      a clean tree, for each of `core`, `lint`, `skills` and `codemod`:
 
   ```bash
   bash scripts/release-tag.sh core 5.0.0-rc.0   # prints core-v5.0.0-rc.0
@@ -135,9 +143,9 @@ state; tick each item as it is done.
       unshare a document, reconnect after going offline.
 - [ ] Findings from that migration fed back: each awkward spot fixed in
       quickdraw as a framework bug, or filed as a follow-up card. A fix to
-      the packages ships as a new release candidate (`5.0.0-rc.1`: versions,
-      CHANGELOG, then part 2 again), and quickdraw-chat is checked again on
-      it.
+      the packages ships as a new release candidate (the next
+      `5.0.0-rc.<n>`: versions, CHANGELOG, then part 2 again), and
+      quickdraw-chat is checked again on it.
 
 ## 4. Release 5.0.0
 

@@ -35,6 +35,8 @@ export interface Realtime {
   readonly occupancy: RoomOccupancy;
   /** Revokes stream subscriptions on access changes and changed grants. */
   readonly revocation: Streams["revocation"];
+  /** Listens on the server the hub was given for the items other nodes push to seeded streams. */
+  listen(): void;
 }
 
 /** Creates the realtime half of a dispatcher's live data, on its hub. */
@@ -67,5 +69,6 @@ export function createRealtime(hub: Hub): Realtime {
       complete: () => hub.io === undefined || hub.probe.local(),
     }),
     revocation: streams.revocation,
+    listen: streams.listen,
   });
 }

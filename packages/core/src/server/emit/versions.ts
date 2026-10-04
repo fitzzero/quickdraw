@@ -18,7 +18,8 @@
 import type { Revision } from "../../protocol/envelope";
 import type { VersionSource } from "../pipeline/notModified";
 import type { AnyService } from "../service";
-import { usableChangeLog, versionTime, type Hub } from "./hub";
+import { versionTime } from "../rev";
+import { usableChangeLog, type Hub } from "./hub";
 
 /** The versions of some rows of a service. */
 export interface RowVersions {

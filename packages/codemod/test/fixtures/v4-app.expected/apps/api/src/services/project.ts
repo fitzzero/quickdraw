@@ -94,6 +94,7 @@ export const projectService = qd.defineService(projectContract, {
   // quickdraw-migrate: review [access] 4.x's hasEntryACL read the row's `acl` column ([{ userId, level }]), and so does jsonAcl("acl"), with one difference: a user with several entries in a row's list gets the highest of their levels, where 4.x took the first. Check the stored lists for duplicate entries
   access: jsonAcl("acl"),
   methods: {
+    // quickdraw-migrate: review [kit] createProject has the shape of the read/write kit's create, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
     createProject: {
       // quickdraw-migrate: review [access] "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
       access: "authenticated",
@@ -107,6 +108,7 @@ export const projectService = qd.defineService(projectContract, {
         return { id: project.id };
       },
     },
+    // quickdraw-migrate: review [kit] getProject has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
     getProject: {
       access: { service: "Read", entry: "Read", id: "id" },
       handler: async ({ input, db }) => {
@@ -149,6 +151,7 @@ export const projectService = qd.defineService(projectContract, {
         return { id: input.id, archived: true as const };
       },
     },
+    // quickdraw-migrate: review [kit] deleteProject has the shape of the read/write kit's delete, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
     deleteProject: {
       access: { service: "Admin", entry: "Admin", id: "id" },
       handler: async ({ input, ctx }) => {

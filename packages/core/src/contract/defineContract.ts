@@ -125,11 +125,18 @@ export type IndexRow<Item, Fields> = Pick<Item, Extract<keyof Item, "id" | Field
 type ColumnOf<Row> = [Row] extends [never] ? string : keyof Row & string;
 type ScopeColumnOf<Row> = [Row] extends [never] ? string : StringColumn<Row> & string;
 
+// Every option of `CollectionDef` is listed, the plain ones too: when a
+// channel's `requires` holds a function, TypeScript checks the literal's
+// excess properties against this context alone, so an option missing here
+// (`access`, say) was reported as unknown.
 interface CollectionContext<Row, Entity, Projections, Item, Index> {
   readonly scope: NoInfer<ViaScope | ScopeColumnOf<Row>>;
   readonly item: Item;
   readonly order: NoInfer<OrderBy<ColumnOf<Row>>>;
   readonly where?: NoInfer<{ readonly [Column in ColumnOf<Row>]?: unknown }>;
+  readonly limit?: number | undefined;
+  readonly maxLimit?: number | undefined;
+  readonly access?: NoInfer<AccessLevel> | undefined;
   readonly index?: NoInfer<
     readonly (IndexField<ProjectionRow<Entity, Projections, Item>> & string)[]
   >;
@@ -150,11 +157,31 @@ type PayloadKeyOf<Parsed> = [Parsed] extends [never]
 
 type SelectorOf<Parsed> = PayloadKeyOf<Parsed> | ((payload: Parsed) => string | null | undefined);
 
+/** An app room's name, or a function of the parsed payload that returns one. */
+type RoomOf<Parsed> = string | ((payload: Parsed) => string | null | undefined);
+
+// One form at a time: the keys of the other forms are absent.
 interface ChannelContext<Payload> {
   readonly payload: Payload;
   readonly requires?: NoInfer<
-    | { readonly entity: SelectorOf<SchemaOutput<Payload>> }
-    | { readonly collection: string; readonly scope: SelectorOf<SchemaOutput<Payload>> }
+    | {
+        readonly entity: SelectorOf<SchemaOutput<Payload>>;
+        readonly collection?: undefined;
+        readonly scope?: undefined;
+        readonly room?: undefined;
+      }
+    | {
+        readonly collection: string;
+        readonly scope: SelectorOf<SchemaOutput<Payload>>;
+        readonly entity?: undefined;
+        readonly room?: undefined;
+      }
+    | {
+        readonly room: RoomOf<SchemaOutput<Payload>>;
+        readonly entity?: undefined;
+        readonly collection?: undefined;
+        readonly scope?: undefined;
+      }
   >;
 }
 
@@ -323,7 +350,28 @@ type CheckRealtimeNames<Def, Members, Kind extends string, Earlier> = {
     : Problem<RealtimeNameProblem<Def, Kind, Name, Earlier>>;
 };
 
-/** A channel's `requires` names a collection of the contract, or a row of an entity it has. */
+/** The keys of a channel's parsed payload, when its schema's output is known. */
+type PayloadKeys<Channel> = Channel extends { readonly payload: infer Payload }
+  ? [SchemaOutput<Payload>] extends [never]
+    ? never
+    : keyof SchemaOutput<Payload> & string
+  : never;
+
+/**
+ * Why a literal `requires.room` names no app room: a reserved name, or a key
+ * of the payload (a string there is the room itself, not a payload key as in
+ * the other forms, so naming a key is almost always meant as
+ * `(payload) => payload.key`).
+ */
+type RoomProblem<Name, Room, Channel> = string extends Room
+  ? never
+  : Room extends `${"qd:" | "user:"}${string}`
+    ? `channel "${Name & string}": requires.room "${Room & string}" is not an app room: names starting with "qd:" or "user:" are the framework's own rooms`
+    : Room extends PayloadKeys<Channel>
+      ? `channel "${Name & string}": requires.room is a room's name and "${Room & string}" is a key of the payload; to read the room from the payload write (payload) => payload.${Room & string}, and for a fixed room of that name () => "${Room & string}"`
+      : never;
+
+/** A channel's `requires` names a collection of the contract, a row of an entity it has, or an app room. */
 type RequiresProblem<Def, Name, Channel> = Channel extends {
   readonly requires: { readonly collection: infer Collection };
 }
@@ -334,7 +382,9 @@ type RequiresProblem<Def, Name, Channel> = Channel extends {
     ? HasEntity<Def> extends true
       ? never
       : `channel "${Name & string}": requires.entity needs the contract's entity`
-    : never;
+    : Channel extends { readonly requires: { readonly room: infer Room } }
+      ? RoomProblem<Name, Room, Channel>
+      : never;
 
 type CheckChannels<Def> = CheckRealtimeNames<
   Def,

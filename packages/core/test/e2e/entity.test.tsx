@@ -7,6 +7,7 @@ import { within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { createQuickdrawClient } from "../../src/client/index";
 import { renderWithQuickdraw } from "../../src/testing/client";
+import { inCluster } from "../cluster/mode";
 import { as, e2eApp, projectContract, taskContract } from "../fixtures/app";
 
 const e2e = e2eApp();
@@ -50,8 +51,10 @@ describe("useEntity", () => {
 
     await app.as(as(board.bo)).taskService.rename({ id: board.t1, title: "By Bo" });
     await view.findByText("title By Bo");
+    // Behind a cluster adapter a change in place goes out whole.
+    const d = inCluster() ? expect.objectContaining({ title: "By Bo" }) : { title: "By Bo" };
     expect(app.frames({ event: "qd:e", userId: board.cy }).map((frame) => frame.data)).toEqual([
-      expect.objectContaining({ s: "taskService", id: board.t1, d: { title: "By Bo" } }),
+      expect.objectContaining({ s: "taskService", id: board.t1, d }),
     ]);
 
     await app.as(as(board.ada)).taskService.remove({ id: board.t1 });
@@ -88,6 +91,7 @@ describe("useEntity", () => {
     const toOwner = app.frames({ event: "qd:e", userId: board.ada });
     expect(toReader).not.toEqual([]);
     expect(toReader.filter((frame) => carriesNotes(frame.data))).toEqual([]);
-    expect(toOwner.filter((frame) => carriesNotes(frame.data))).toHaveLength(1);
+    // Behind a cluster adapter the rename goes out whole too, so the owner's copy carries notes.
+    expect(toOwner.filter((frame) => carriesNotes(frame.data))).toHaveLength(inCluster() ? 2 : 1);
   });
 });

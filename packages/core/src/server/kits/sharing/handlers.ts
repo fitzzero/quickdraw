@@ -1,5 +1,5 @@
-// `sharing.handlers(contract, { access?, resolveUser?, onChange? })` (RFC
-// 0003 section 12.3): the sharing and membership kit's server half. It finds
+// `sharing.handlers(contract, { access?, resolveUser?, onChange?, rowless? })`
+// (RFC 0003 section 12.3): the sharing and membership kit's server half. It finds
 // the methods `sharing.contract` made in the contract and returns an
 // implementation of each, to spread into `defineService`'s `methods`:
 //
@@ -13,7 +13,9 @@
 // the row, a list `Read`, `leave` a signed-in member) unless `access` gives
 // another. The kit changes the access list or membership table the service's
 // own policy reads, so `defineService` refuses a service whose policy has
-// none for a mode the contract uses (`policy.ts`), or that has no model.
+// none for a mode the contract uses (`policy.ts`), or that has no model. An
+// access-list method (its input names the row as `id`) given a form that
+// checks no row (`"authenticated"`, say) must be named in `rowless`.
 
 import type { AnyContract } from "../../../contract/defineContract";
 import {
@@ -25,6 +27,7 @@ import {
 import { accessFormProblem } from "../../access/forms";
 import type { AccessForm } from "../../access/types";
 import { checkWhenDefined, type AnyService } from "../../service";
+import { kitEntry, rowlessMethods } from "../rowless";
 import type { HandlerContext } from "./context";
 import { DEFAULT_ACCESS, handlerOf } from "./methods";
 import { policyProblem } from "./policy";
@@ -117,9 +120,9 @@ function checkOptions(options: unknown): UnknownRecord {
     return {};
   }
   if (!isRecord(options)) {
-    fail("options must be { access?, resolveUser?, onChange? }");
+    fail("options must be { access?, resolveUser?, onChange?, rowless? }");
   }
-  const allowed = ["access", "resolveUser", "onChange"];
+  const allowed = ["access", "resolveUser", "onChange", "rowless"];
   const unknownKey = Object.keys(options).find((key) => !allowed.includes(key));
   if (unknownKey !== undefined) {
     fail(`options has an unknown key "${unknownKey}"; the options are ${allowed.join(", ")}`);
@@ -148,25 +151,24 @@ function handlers<C extends AnyContract, const A extends SharingAccess<C> = Empt
 ): SharingImplementations<C, A, Db> {
   const kit = kitMethods(contract);
   const options = checkOptions(rest[0]);
-  const access = checkAccess(
-    options.access,
-    kit.map(([name]) => name),
-  );
+  const names = kit.map(([name]) => name);
+  const access = checkAccess(options.access, names);
+  const rowless = rowlessMethods(options.rowless, names, fail);
   const hooks = checkHooks(options, kit);
   const entries: Record<string, object> = {};
   for (const [name, spec] of kit) {
     const form = (access[name] as AccessForm | undefined) ?? DEFAULT_ACCESS[spec.method];
     const handler = handlerOf(spec.method, Object.freeze({ ...hooks, form }));
     checkWhenDefined(handler, (service) => serviceProblem(service, contract, spec.mode));
-    entries[name] = Object.freeze({ access: form, handler });
+    entries[name] = kitEntry(name, form, handler, rowless);
   }
   return Object.freeze(entries) as SharingImplementations<C, A, Db>;
 }
 
 /**
  * The sharing and membership kit: `sharing.handlers(contract, { access?,
- * resolveUser?, onChange? })` implements the methods `sharing.contract` made
- * in `contract`. `sharing.contract` is here too, for server code; a shared
+ * resolveUser?, onChange?, rowless? })` implements the methods
+ * `sharing.contract` made in `contract`. `sharing.contract` is here too, for server code; a shared
  * package imports it from the root export.
  */
 export const sharing = Object.freeze({ contract: contractHalf.contract, handlers });

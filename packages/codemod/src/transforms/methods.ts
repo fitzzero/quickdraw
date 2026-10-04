@@ -8,6 +8,7 @@ import { accessFor } from "../access";
 import type { Work } from "../apply";
 import type { RunContext } from "../context";
 import { buildMethod } from "../handlers";
+import { kitMarker } from "../kits";
 import type { ServicePlan } from "../plan";
 import type { Hoisted } from "../receiver";
 import { infraPaths } from "./infra";
@@ -49,14 +50,14 @@ export function buildMethods(
     anyEntry: false,
   };
   const leafFile = plan.service.chain[0]?.getSourceFile();
+  const names = plan.methods.map((method) => method.name);
   for (const method of plan.methods) {
     const { call } = method;
-    const form = accessFor(
-      call.level,
-      call.levelText,
-      method.entryId,
-      plan.service.model !== undefined,
-    );
+    const form = accessFor(call.level, call.levelText, {
+      entryId: method.entryId,
+      rows: plan.service.model !== undefined,
+      inputHasId: method.inputHasId,
+    });
     build.anyEntry ||= form.entry;
     const entry = buildMethod(call, form, {
       service: plan.service,
@@ -66,8 +67,9 @@ export function buildMethods(
       inHandler: true,
     });
     ctx.stats.methods += 1;
+    const kit = kitMarker(method.name, plan.service.model, names);
     if (call.register === undefined) {
-      build.inline.push(`${method.name}: ${entry.text},`);
+      build.inline.push(`${kit}${method.name}: ${entry.text},`);
       if (leafFile !== undefined) {
         addHoistedImports(work, leafFile, entry.imports);
       }
@@ -77,7 +79,7 @@ export function buildMethods(
     list.push(moduleConst(plan, method, entry, form.isPublic));
     build.modules.set(call.register, list);
     build.moduleExports.push({ name: method.name, file: call.register.getSourceFile() });
-    build.inline.push(`${method.name},`);
+    build.inline.push(`${kit}${method.name},`);
     addHoistedImports(work, call.register.getSourceFile(), entry.imports);
   }
   return build;

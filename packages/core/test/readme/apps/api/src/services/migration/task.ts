@@ -18,6 +18,7 @@ export const taskService = qd.defineService(taskContract, {
   // a board opens with Read on its project
   collections: { byProject: { anchor: projectContract } },
   methods: {
+    // quickdraw: hand-written because it answers null for a missing task, as 4.x did
     getTask: {
       // 4.x read payload.id implicitly, and a service grant passed too
       access: { service: "Read", entry: "Read", id: "id" },

@@ -11,6 +11,7 @@
 
 import { expect } from "vitest";
 import { z } from "zod";
+import { settleCluster } from "../../../../test/cluster/mode";
 import { QuickdrawError, defineContract, mutation, query } from "../../../index";
 import { emitWithAck, type TestConnection } from "../../../testing/index";
 import { projectContract, qd } from "../../access/__tests__/board";
@@ -18,6 +19,9 @@ import { inherit } from "../../index";
 
 const taskRow = z.object({ id: z.string(), projectId: z.string(), title: z.string() });
 const roomInput = z.object({ room: z.string() });
+
+/** The app room the `shout` channel requires its sender to be in. */
+export const LOBBY = "lobby:main";
 
 export const inputSchema = z.object({
   taskId: z.string(),
@@ -75,6 +79,13 @@ export const liveContract = defineContract("taskService", {
     adminPing: { payload: z.object({ note: z.string() }) },
     tight: { payload: z.object({ n: z.number() }), ratePerSecond: 1, burst: 1 },
     relay: { payload: z.object({ room: z.string(), taskId: z.string() }) },
+    /** Only from a socket in the app room `lobby:main` (a game's one world). */
+    shout: { payload: z.object({ n: z.number() }), requires: { room: LOBBY } },
+    /** Only from a socket in the app room the payload names. */
+    move: {
+      payload: z.object({ room: z.string(), n: z.number() }),
+      requires: { room: (payload) => payload.room },
+    },
   },
   events: { celebrated: { payload: z.object({ taskId: z.string() }) } },
 });
@@ -85,11 +96,21 @@ export interface Received {
   readonly typing: { readonly userId: string; readonly projectId: string }[];
   readonly adminPings: string[];
   readonly tight: number[];
+  readonly shout: { readonly userId: string; readonly socketId: string; readonly n: number }[];
+  readonly move: { readonly room: string; readonly n: number }[];
   handlerErrors: number;
 }
 
 export function received(): Received {
-  return { input: [], typing: [], adminPings: [], tight: [], handlerErrors: 0 };
+  return {
+    input: [],
+    typing: [],
+    adminPings: [],
+    tight: [],
+    shout: [],
+    move: [],
+    handlerErrors: 0,
+  };
 }
 
 /** The live task service: channel handlers record into `into`. */
@@ -161,6 +182,12 @@ export function defineLiveService(into: Received) {
       relay: (payload, ctx) => {
         ctx.rooms.emit(payload.room, liveContract, "celebrated", { taskId: payload.taskId });
       },
+      shout: (payload, ctx) => {
+        into.shout.push({ userId: ctx.principal.userId, socketId: ctx.socketId, n: payload.n });
+      },
+      move: (payload) => {
+        into.move.push({ room: payload.room, n: payload.n });
+      },
     },
   });
 }
@@ -179,9 +206,11 @@ export function send(connection: Connected, channel: string, payload: unknown, s
 /**
  * Waits until the server has handled every event the socket sent before now:
  * Socket.IO handles one socket's packets in order, so the acknowledgement of
- * an event sent after them arrives once they ran.
+ * an event sent after them arrives once they ran. In the cluster projects it
+ * first waits for what the writer node pushed to reach the socket's node.
  */
 export async function settle(connection: Connected): Promise<void> {
+  await settleCluster();
   await emitWithAck(connection.socket, "qd:unsub", { s: "noService", ids: [] });
 }
 

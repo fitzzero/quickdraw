@@ -5,6 +5,7 @@
 // collections, streams, channels and events share `qd.<service>.<name>`.
 
 import { ACCESS_LEVELS, isAccessLevel } from "./access";
+import { reservedRoomPrefix } from "./names";
 import type { ChannelDef, EventDef, StreamDef } from "./realtime";
 import { isScopedStream, STREAM_MAX_SEED } from "./realtime";
 import { isStandardSchema } from "./standardSchema";
@@ -157,11 +158,41 @@ function isSelector(value: unknown): boolean {
   return isName(value) || typeof value === "function";
 }
 
+const REQUIRES_FORMS = "requires must be { entity }, { collection, scope } or { room }";
+
+/**
+ * Checks `requires: { room }`: a function of the payload, or the name of an
+ * app room, which is never empty and never starts with a reserved prefix
+ * (`ctx.rooms.join` refuses those, so no socket could ever be in it).
+ */
+function checkRoomRequirement(owner: string, form: UnknownRecord, fail: Fail): void {
+  if (form.entity !== undefined || form.collection !== undefined || form.scope !== undefined) {
+    fail(`${owner}: ${REQUIRES_FORMS}`);
+  }
+  const { room } = form;
+  if (typeof room === "function") {
+    return;
+  }
+  if (!isName(room)) {
+    fail(`${owner}: requires.room must be an app room's name or a function of the payload`);
+  }
+  const prefix = reservedRoomPrefix(room);
+  if (prefix !== undefined) {
+    fail(
+      `${owner}: requires.room "${room}" is not an app room: names starting with "${prefix}" are the framework's own rooms, which ctx.rooms.join refuses`,
+    );
+  }
+}
+
 function checkRequires(owner: string, requires: unknown, scope: RealtimeScope, fail: Fail): void {
   if (requires === undefined) {
     return;
   }
   const form = isRecord(requires) ? requires : {};
+  if (form.room !== undefined) {
+    checkRoomRequirement(owner, form, fail);
+    return;
+  }
   if (form.entity !== undefined && form.collection === undefined && form.scope === undefined) {
     if (!isSelector(form.entity)) {
       fail(`${owner}: requires.entity must be a payload key or a function of the payload`);
@@ -172,7 +203,7 @@ function checkRequires(owner: string, requires: unknown, scope: RealtimeScope, f
     return;
   }
   if (form.entity !== undefined || !isName(form.collection) || !isSelector(form.scope)) {
-    fail(`${owner}: requires must be { entity } or { collection, scope }`);
+    fail(`${owner}: ${REQUIRES_FORMS}`);
   }
   if (!scope.collections.has(form.collection)) {
     fail(

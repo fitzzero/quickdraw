@@ -10,7 +10,8 @@
 //   the scope is the whole answer, and nothing else goes to it;
 // - when the flush failed (this sink or another one), every scope its writes
 //   name gets a `reset`, and a collection whose writes name no scope (a
-//   touch, a `via` entry) resets every scope subscribed on this process;
+//   touch, a `via` entry) resets every scope subscribed on this process, and
+//   behind a cluster adapter on every other node (`unnamed.ts`);
 // - a collection nobody on this process subscribes to (with rooms visible
 //   here) reads and sends nothing: the scopes its writes name lose their
 //   resume from before the flush, and a write that names none (a touch, a
@@ -25,6 +26,7 @@ import { modelKey } from "../storage";
 import type { WriteRecord } from "../uow/types";
 import { anchoredScopes, type BoundCollection, type CollectionHub } from "./bind";
 import { groupOf } from "./scopes";
+import { broadcastUnnamed } from "./unnamed";
 
 type Io = NonNullable<CollectionHub["io"]>;
 
@@ -152,6 +154,7 @@ export function resetTouched(
   rev: Revision,
 ): void {
   const touched = new Map<BoundCollection, Set<string>>();
+  const unnamed = new Set<BoundCollection>();
   const { routes } = hub.collections;
   for (const write of writes) {
     const key = modelKey(write.model);
@@ -159,9 +162,12 @@ export function resetTouched(
       ...(routes.byModel.get(key) ?? []),
       ...(routes.byJunction.get(key) ?? []),
     ]) {
+      const named = namedScopes(collection, write);
+      if (named === undefined) {
+        unnamed.add(collection);
+      }
       const scopes =
-        namedScopes(collection, write) ??
-        hub.collections.scopes.scopes(collection.service.name, collection.name);
+        named ?? hub.collections.scopes.scopes(collection.service.name, collection.name);
       touched.set(collection, new Set([...(touched.get(collection) ?? []), ...scopes]));
     }
   }
@@ -169,5 +175,9 @@ export function resetTouched(
     for (const scope of scopes) {
       sendFrame(hub, io, collection, scope, rev, [{ t: "reset" }]);
     }
+  }
+  for (const collection of unnamed) {
+    const { name: s } = collection.service;
+    broadcastUnnamed(hub, { s, c: collection.name, rev, removed: [], reset: true });
   }
 }

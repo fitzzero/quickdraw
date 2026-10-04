@@ -6,6 +6,7 @@
 
 import type { Server } from "socket.io";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { inCluster } from "../../../test/cluster/mode";
 import { entityRoom } from "../../index";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
@@ -91,6 +92,19 @@ async function connect(app: App, principal: Principal) {
   return { connection, frames: receive(connection) };
 }
 
+/**
+ * The reads that resolve access again. Behind a cluster adapter the writer
+ * also reads a changed project row for its frames (whose rooms hold
+ * subscribers is not visible to it), which is not one of them.
+ */
+function accessReads(reads: readonly Read[]): Read[] {
+  const frameSelect = JSON.stringify({ id: true, name: true });
+  return reads.filter(
+    (read) =>
+      !inCluster() || read.model !== "project" || JSON.stringify(read.args.select) !== frameSelect,
+  );
+}
+
 function roomsOf(app: App, service: string, id: string): string[] {
   const levels = ["Read", "Moderate", "Admin"] as const;
   return levels
@@ -126,9 +140,11 @@ describe("an access change", () => {
     await app.as(as(board.ada)).taskService.rename({ id: board.t1, title: "After" });
     await Promise.all([member.frames.settle(), reader.frames.settle()]);
     expect(member.frames.entity).toEqual([]);
-    expect(reader.frames.entity).toEqual([
-      expect.objectContaining({ t: "p", d: { title: "After" } }),
-    ]);
+    // Behind a cluster adapter a change in place goes out whole.
+    const after = inCluster()
+      ? { t: "u", d: expect.objectContaining({ title: "After" }) as unknown }
+      : { t: "p", d: { title: "After" } };
+    expect(reader.frames.entity).toEqual([expect.objectContaining(after)]);
     expect(reader.frames.revoked).toEqual([]);
   });
 
@@ -372,7 +388,9 @@ describe("races with a subscribe batch", () => {
     await owner.frames.settle();
     // The first read saw "T1"; its frame went out before the join; the second read sees the rename.
     expect(reply.r[0].d.title).toBe("Raced");
-    expect(reads.filter(isTaskRowRead)).toHaveLength(2);
+    // Behind a cluster adapter the writer node also reads the row for its frames, once per
+    // service on the task model (whose rooms hold subscribers is not visible to it).
+    expect(reads.filter(isTaskRowRead)).toHaveLength(inCluster() ? 4 : 2);
     expect(owner.frames.entity).toEqual([]);
   });
 
@@ -490,7 +508,7 @@ describe("races with a subscribe batch", () => {
     await app.server.dispatcher.run(() =>
       h.db.project.update({ where: { id: board.p1 }, data: { acl: [] } }),
     );
-    expect(reads).toEqual([]);
+    expect(accessReads(reads)).toEqual([]);
   });
 
   it("does not join again a row the client unsubscribed from while access was checked again", async () => {
@@ -565,7 +583,7 @@ describe("races with a subscribe batch", () => {
     await app.server.dispatcher.run(() =>
       h.db.project.update({ where: { id: board.p1 }, data: { acl: [] } }),
     );
-    expect(reads).toEqual([]);
+    expect(accessReads(reads)).toEqual([]);
   });
 });
 

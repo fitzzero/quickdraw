@@ -7,7 +7,8 @@
 // 1. authorize every id in one engine call, which also gives the rows each
 //    level is anchored on; an id below `Read` is `FORBIDDEN` and never read;
 // 2. take the revision before any row is read: the last one taken, so reads
-//    do not push revisions ahead of the clock (`currentRev`);
+//    do not push revisions ahead of the clock (`currentRev`); behind a
+//    cluster's counter, the counter's last one (`cluster/revisions.ts`);
 // 3. find which held rows are unchanged ("not modified"): one narrow read of
 //    the service's `versionColumn`, or the change log;
 // 4. read the other allowed rows in one `findMany` with the entity
@@ -16,7 +17,8 @@
 //    the subscription and its anchors on `socket.data`;
 // 6. settle the races: an access change while the batch ran re-resolves the
 //    joined rows, and a flush that touched a joined row after the revision
-//    (its frame may have gone out before the join) re-reads that row. Then,
+//    (its frame may have gone out before the join) re-reads that row (behind
+//    a cluster's counter, any flush on any node: every joined row). Then,
 //    while access keeps changing, the joined rows are resolved again, at most
 //    `MAX_RECHECKS` times; a row whose anchors were still moving is denied.
 //    A subscription the batch recorded and someone else ended meanwhile
@@ -246,17 +248,34 @@ async function recheckAccess(batch: Batch): Promise<void> {
   batch.moving = moving;
 }
 
+/**
+ * The joined rows a flush may have touched after the revision, and the
+ * revision to read them again at. This process's change log names them; it
+ * sees only this process's flushes, so behind a cluster's counter every
+ * joined row is read again once any node took a revision after `rev`.
+ */
+async function touchedSince(
+  batch: Batch,
+  rev: Revision,
+): Promise<{ readonly stale: string[]; readonly fresh: Revision }> {
+  const { hub, target } = batch;
+  const joined = [...batch.joined.keys()];
+  if (hub.revisions.shared()) {
+    const moved = await hub.revisions.movedPast(rev);
+    return { stale: moved === undefined ? [] : joined, fresh: moved ?? rev };
+  }
+  const service = target.service.name;
+  const stale = joined.filter((id) => hub.changeLog.lastChange(service, id) > rev);
+  return { stale, fresh: stale.length === 0 ? rev : currentRev() };
+}
+
 /** Step 6: rows a flush touched after the revision are read again, at the newer one. */
 async function rereadTouched(batch: Batch, rev: Revision): Promise<void> {
   const { hub, target } = batch;
-  const service = target.service.name;
-  const stale = [...batch.joined.keys()].filter(
-    (id) => hub.changeLog.lastChange(service, id) > rev,
-  );
+  const { stale, fresh } = await touchedSince(batch, rev);
   if (stale.length === 0) {
     return;
   }
-  const fresh = currentRev();
   const rows = await readRows(hub, target, stale);
   for (const id of stale) {
     const row = rows.get(id);
@@ -299,7 +318,8 @@ async function answerBatch(batch: Batch, held: ReadonlyMap<string, Revision>): P
       batch.denied.add(id);
     }
   }
-  const rev = currentRev();
+  const claimed = hub.revisions.claim();
+  const rev = typeof claimed === "number" ? claimed : await claimed;
   const heldAllowed = new Map([...held].filter(([id]) => allowed.has(id)));
   const versions = await rowVersions(hub, target.service, [...heldAllowed.keys()]);
   const unchanged = unchangedRows(versions, heldAllowed);

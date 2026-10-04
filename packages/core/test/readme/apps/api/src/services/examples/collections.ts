@@ -1,15 +1,14 @@
 // The README's collections and change topics example.
 
-import { defineContract, query } from "@fitzzero/quickdraw-core";
+import { defineContract } from "@fitzzero/quickdraw-core";
 import { cardSchema, projectContract, taskSchema } from "@project/shared";
-import { z } from "zod";
 import { qd } from "../../quickdraw";
 
 // #region contract
 export const task = defineContract("taskService", {
   entity: taskSchema,
   projections: { card: cardSchema },
-  methods: { get: query({ input: z.object({ id: z.string() }), output: "entity" }) },
+  methods: { ...crud.contract({ entity: taskSchema, get: true }) },
   collections: {
     byProject: {
       // a column holding the scope value
@@ -34,7 +33,7 @@ export const task = defineContract("taskService", {
 // #endregion
 
 // #region service
-import { inherit } from "@fitzzero/quickdraw-core/server";
+import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(task, {
   model: "task",
@@ -48,11 +47,6 @@ export const taskService = qd.defineService(task, {
   },
   // opens the service topic to Read grants; closed without it
   watchAccess: { service: "Read" },
-  methods: {
-    get: {
-      access: { entry: "Read" },
-      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
-    },
-  },
+  methods: { ...crud.handlers(task, { access: { get: { entry: "Read" } } }) },
 });
 // #endregion

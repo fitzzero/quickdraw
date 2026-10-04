@@ -15,11 +15,17 @@
 
 import type { Logger } from "../../contract/logger";
 import { SERVER_EVENTS, userRoom } from "../../contract/names";
+import { answerOf } from "../cluster/acks";
+import type { ClusterBroadcasts } from "../cluster/broadcasts";
+import type { ClusterOptions } from "../cluster/revisions";
 import type { AdapterProbe } from "../emit/hub";
 import { describeError } from "../pipeline/metrics";
 import { socketSessionOf, type ServerAuth, type ServiceGrants } from "./auth";
 import type { SocketExtension } from "./socketio";
 import type { QuickdrawIo } from "./types";
+
+export type { ClusterOptions } from "../cluster/revisions";
+export { serveBroadcasts } from "../cluster/broadcasts";
 
 /** The server-to-server event reloaded grants are broadcast on behind a cluster adapter. */
 export const GRANTS_EVENT = "quickdraw:grants";
@@ -38,7 +44,12 @@ export interface DisconnectUserOptions {
 /** What the socket server needs of its dispatcher's live data (`emit/live.ts`). */
 export interface LiveData {
   readonly extension: SocketExtension;
-  attach(io: QuickdrawIo, probe: AdapterProbe): void;
+  attach(
+    io: QuickdrawIo,
+    probe: AdapterProbe,
+    cluster?: ClusterOptions,
+    broadcasts?: ClusterBroadcasts,
+  ): void;
   regranted(userId: string): Promise<void>;
 }
 
@@ -150,49 +161,70 @@ export function listenForDisconnects(io: QuickdrawIo): void {
   });
 }
 
-/** Listens for grants other nodes reloaded, and applies them to this node's sockets. */
+/**
+ * Listens for grants other nodes reloaded, and applies them to this node's
+ * sockets; the node that reloaded them waits for the answer, sent once this
+ * node's subscriptions of the user are resolved again.
+ */
 export function listenForGrants(io: QuickdrawIo, live: LiveData | undefined, logger: Logger): void {
-  io.on(GRANTS_EVENT, (broadcast: unknown) => {
+  io.on(GRANTS_EVENT, (broadcast: unknown, ...rest: unknown[]) => {
+    const answer = answerOf(rest);
     const { userId, serviceAccess } = (broadcast ?? {}) as {
       readonly userId?: unknown;
       readonly serviceAccess?: unknown;
     };
     const grants = typeof serviceAccess === "object" && serviceAccess !== null;
-    if (typeof userId === "string" && userId.length > 0 && grants) {
-      regrant(io, userId, serviceAccess as ServiceGrants);
-      live?.regranted(userId).catch((error: unknown) => {
+    if (typeof userId !== "string" || userId.length === 0 || !grants) {
+      answer(false);
+      return;
+    }
+    regrant(io, userId, serviceAccess as ServiceGrants);
+    (live?.regranted(userId) ?? Promise.resolve()).then(
+      () => answer(true),
+      (error: unknown) => {
+        answer(false);
         logger.error("Resolving the subscriptions of a user another node regranted failed", {
           category: "quickdraw.access",
           userId,
           error: describeError(error),
         });
-      });
-    }
+      },
+    );
   });
+}
+
+/** What `refreshGrants` works with besides the user. */
+export interface GrantsContext {
+  readonly io: QuickdrawIo;
+  readonly load: ServerAuth["loadServiceAccess"];
+  readonly live: LiveData | undefined;
+  readonly probe: AdapterProbe;
+  /** Sends the reloaded grants to the other nodes, behind a cluster adapter. */
+  readonly broadcasts: ClusterBroadcasts;
 }
 
 /**
  * `server.access.refresh(userId)`: reloads the user's grants, applies them on
- * every node (broadcast behind a cluster adapter), sends them to the user's
- * sockets as `qd:access`, and resolves this node's subscriptions of the user
- * again.
+ * every node (broadcast behind a cluster adapter, resolving once every node
+ * applied them, at most `cluster.timeoutMs`, and without waiting while the
+ * broadcasts are degraded: `../cluster/broadcasts.ts`), sends them to the
+ * user's sockets as `qd:access`, and resolves this node's subscriptions of
+ * the user again.
  */
 export async function refreshGrants(
-  io: QuickdrawIo,
-  load: ServerAuth["loadServiceAccess"],
-  live: LiveData | undefined,
-  probe: AdapterProbe,
+  context: GrantsContext,
   userId: string,
 ): Promise<ServiceGrants> {
+  const { io, load, live, probe } = context;
   if (load === undefined) {
     throw new TypeError("access.refresh needs auth.loadServiceAccess to reload a user's grants");
   }
   const serviceAccess = (await load(userId)) ?? {};
-  if (!probe.local()) {
-    io.serverSideEmit(GRANTS_EVENT, { userId, serviceAccess });
-  }
+  const others = probe.local()
+    ? undefined
+    : context.broadcasts.broadcast(GRANTS_EVENT, { userId, serviceAccess });
   regrant(io, userId, serviceAccess);
   io.to(userRoom(userId)).emit(SERVER_EVENTS.access, { serviceAccess });
-  await live?.regranted(userId);
+  await Promise.all([others, live?.regranted(userId)]);
   return serviceAccess;
 }

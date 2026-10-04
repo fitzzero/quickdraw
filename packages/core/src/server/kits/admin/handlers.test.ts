@@ -8,7 +8,7 @@ import { z } from "zod";
 import { admin as contractAdmin, defineContract, QuickdrawError } from "../../../index";
 import { qd } from "../../emit/__tests__/live";
 import { describeTools } from "../../mcp/index";
-import { admin } from "../../index";
+import { admin, owner } from "../../index";
 import { defineTaskService, taskContract, taskEntity } from "./__tests__/fixture";
 
 const notes = defineContract("noteService", {
@@ -121,6 +121,32 @@ describe("defineService with the admin kit", () => {
     const definition = { model: "task", methods: { ...admin.handlers(notes) } };
     expect(() => qd.defineService(twin, definition as never)).toThrow(
       "its admin kit handlers were made for another contract",
+    );
+  });
+
+  it("refuses a method on one row under a form below Admin that checks no row, unless rowless names it", () => {
+    const define = (options: Options) => () =>
+      qd.defineService(notes, {
+        model: "task",
+        access: owner("assigneeId"),
+        methods: { ...admin.handlers(notes, options) },
+      });
+    expect(define({})).not.toThrow();
+    expect(define({ access: { adminGet: { service: "Moderate" } } })).toThrow(
+      'method "adminGet" takes a row id (its input has id), but its access { service: "Moderate" } checks no row',
+    );
+    expect(define({ access: { adminUpdate: "authenticated" } })).toThrow(
+      'name it in the kit\'s rowless option (rowless: ["adminUpdate"])',
+    );
+    // a list is the kit's own every-row read; a form on it names who may page through every row
+    expect(define({ access: { adminList: { service: "Moderate" } } })).not.toThrow();
+    const service = define({
+      access: { adminGet: { service: "Moderate" } },
+      rowless: ["adminGet"],
+    })();
+    expect(service.methods.adminGet?.rowless).toBe(true);
+    expect(refuse({ rowless: ["adminReemit"] })).toThrow(
+      'admin.handlers: rowless names "adminReemit", which is not one of the kit\'s methods',
     );
   });
 

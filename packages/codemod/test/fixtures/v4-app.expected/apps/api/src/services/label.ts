@@ -8,6 +8,7 @@ export const labelService = qd.defineService(labelContract, {
   // quickdraw-migrate: review [access] 4.x had no row-level access here (no hasEntryACL, no checkAccess): only service grants opened rows, which this empty policy keeps. Give it a real policy if rows belong to someone
   access: resolver({ levelsFor: () => ({}) }),
   methods: {
+    // quickdraw-migrate: review [kit] getLabel has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
     getLabel: {
       access: { service: "Read", entry: "Read", id: "id" },
       handler: async ({ input, db }) => {
@@ -21,6 +22,7 @@ export const labelService = qd.defineService(labelContract, {
         return await db.label.update({ where: { id: labelId }, data: { name } });
       },
     },
+    // quickdraw-migrate: review [kit] listLabels has the shape of the read/write kit's list, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
     listLabels: {
       // quickdraw-migrate: review [access] "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
       access: "authenticated",

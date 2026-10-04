@@ -13,7 +13,7 @@
 
 import { SERVER_EVENTS } from "../../contract/names";
 import type { PresenceFrame } from "../../protocol/envelope";
-import type { Hub } from "../emit/hub";
+import { track, type Hub } from "../emit/hub";
 import { describeError } from "../pipeline/metrics";
 import type { QuickdrawServerSocket } from "../transports/types";
 import { inRoom, usersInRoom, type PresenceRecords } from "./presence";
@@ -49,15 +49,18 @@ export function entered(state: RoomState, socket: QuickdrawServerSocket, room: s
     sendList(socket, room, state.records.users(room) ?? []);
     return;
   }
-  usersInRoom(state.hub, state.records, room).then(
-    (users) => {
-      if (socket.connected) {
-        sendList(socket, room, users);
-      }
-    },
-    (error: unknown) => {
-      logFailure(state, room, error);
-    },
+  track(
+    state.hub,
+    usersInRoom(state.hub, state.records, room).then(
+      (users) => {
+        if (socket.connected) {
+          sendList(socket, room, users);
+        }
+      },
+      (error: unknown) => {
+        logFailure(state, room, error);
+      },
+    ),
   );
 }
 
@@ -85,14 +88,17 @@ export function exited(
     io.to(room).emit(SERVER_EVENTS.presence, frame);
     return;
   }
-  inRoom(state.hub, state.records, room, userId).then(
-    (still) => {
-      if (!still) {
-        io.to(room).emit(SERVER_EVENTS.presence, frame);
-      }
-    },
-    (error: unknown) => {
-      logFailure(state, room, error);
-    },
+  track(
+    state.hub,
+    inRoom(state.hub, state.records, room, userId).then(
+      (still) => {
+        if (!still) {
+          io.to(room).emit(SERVER_EVENTS.presence, frame);
+        }
+      },
+      (error: unknown) => {
+        logFailure(state, room, error);
+      },
+    ),
   );
 }

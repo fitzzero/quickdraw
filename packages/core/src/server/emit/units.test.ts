@@ -13,7 +13,14 @@ import { ANY_FIELD } from "../uow/types";
 import { routesOf, touchedRows } from "./affects";
 import { createChangeLog } from "./changeLog";
 import { frameKind, selectFor } from "./frames";
-import { isoDates, projectOutput, projectRow, readerView, schemaKeys } from "./projection";
+import {
+  inputKeys,
+  isoDates,
+  projectOutput,
+  projectRow,
+  readerView,
+  schemaKeys,
+} from "./projection";
 import { strip, tiersOf } from "./tiers";
 
 const qd = initQuickdraw();
@@ -59,6 +66,7 @@ describe("a projection's keys", () => {
 
   it("are unknown for a schema that cannot describe itself", () => {
     expect(schemaKeys(z3.object({ id: z3.string() }))).toBeUndefined();
+    // A projection's values go on the wire, so one JSON cannot carry stays a definition error.
     expect(schemaKeys(z.object({ id: z.string(), at: z.date() }))).toBeUndefined();
     expect(
       schemaKeys(z.union([z.object({ id: z.string() }), z.object({ x: z.number() })])),
@@ -96,6 +104,47 @@ describe("a projection's keys", () => {
     expect(() => defineLoosely(task, { methods, project: { card: { where: {} } } })).toThrow(
       'projection "card" has an unknown option "where"; the options are keys, select and map',
     );
+  });
+});
+
+describe("an input's keys, for the rowless check", () => {
+  const id = z.object({ id: z.string() });
+
+  it("are every branch's top-level keys, through references and past null", () => {
+    expect(inputKeys(id.extend({ title: z.string() }))).toEqual(["id", "title"]);
+    expect(inputKeys(z.union([z.object({ slug: z.string() }), id]))).toEqual(["slug", "id"]);
+    expect(
+      inputKeys(
+        z.discriminatedUnion("kind", [
+          id.extend({ kind: z.literal("a") }),
+          z.object({ kind: z.literal("b"), n: z.number() }),
+        ]),
+      ),
+    ).toEqual(["id", "kind", "n"]);
+    expect(inputKeys(z.union([id, z.object({ x: z.number() })]).nullable())).toEqual(["id", "x"]);
+    expect(inputKeys(z.intersection(id, z.object({ x: z.number() })))).toEqual(["id", "x"]);
+    expect(inputKeys(z.union([id.meta({ id: "Keyed" }), z.null()]))).toEqual(["id"]);
+    const node = z.object({
+      id: z.string(),
+      get children() {
+        return z.array(node);
+      },
+    });
+    expect(inputKeys(node)).toEqual(["id", "children"]);
+  });
+
+  it("are read past values JSON Schema cannot write, and from the input side of a transform", () => {
+    const dated = id.extend({ at: z.date(), tags: z.set(z.string()), n: z.bigint() });
+    expect(inputKeys(dated)).toEqual(["id", "at", "tags", "n"]);
+    expect(inputKeys(z.object({ id: z.custom<string>(() => true) }))).toEqual(["id"]);
+    expect(inputKeys(id.transform((value) => value.id))).toEqual(["id"]);
+  });
+
+  it("are none for an input that is no object, and unknown without JSON Schema", () => {
+    expect(inputKeys(z.string())).toEqual([]);
+    expect(inputKeys(z.array(id))).toEqual([]);
+    expect(inputKeys(z.record(z.string(), z.string()))).toEqual([]);
+    expect(inputKeys(z3.object({ id: z3.string() }))).toBeUndefined();
   });
 });
 

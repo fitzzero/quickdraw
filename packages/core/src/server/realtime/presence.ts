@@ -15,10 +15,12 @@
 // The answers come from this process's rooms while the server runs the
 // in-memory adapter it was created with. Behind a cluster adapter (Redis)
 // other nodes' sockets are not visible here, so `isOnline`, `count` and
-// `users` ask every node through `io.in(room).fetchSockets()`; `lastSeen`
-// still knows only this process's disconnects.
+// `users` ask every node through `io.in(room).fetchSockets()`, and
+// `lastSeen` also reads the last disconnect any node recorded in the
+// cluster's Valkey (`../cluster/lastSeen.ts`).
 
 import { RESERVED_ROOM_PREFIXES, userRoom } from "../../contract/names";
+import { readLastSeen, recordLastSeen } from "../cluster/lastSeen";
 import type { Hub } from "../emit/hub";
 import { unreadable } from "../transports/ack";
 import type { QuickdrawIo } from "../transports/types";
@@ -88,6 +90,15 @@ export class PresenceRecords {
   }
 }
 
+/**
+ * The user's last socket on this process disconnected at `at`: kept here,
+ * and behind a cluster's Valkey for every node (`../cluster/lastSeen.ts`).
+ */
+export function markSeen(hub: Hub, records: PresenceRecords, userId: string, at: number): void {
+  records.seen(userId, at);
+  recordLastSeen(hub, userId, at);
+}
+
 /** The distinct user ids of these principals, in order; anonymous sockets have none. */
 function distinctUsers(
   principals: Iterable<{ readonly userId?: unknown } | null | undefined>,
@@ -114,7 +125,13 @@ function localUsers(io: QuickdrawIo, records: PresenceRecords, room: string): st
   );
 }
 
-/** The users with a socket in `room` on any node: through every node's sockets behind a cluster adapter. */
+/**
+ * The users with a socket in `room` on any node: through every node's sockets
+ * behind a cluster adapter. This node's own are read once the other nodes
+ * answered, not when they were asked: a socket that joined here meanwhile
+ * sent its `joined` to the room already, and a list that left it out would
+ * undo it.
+ */
 export async function usersInRoom(
   hub: Hub,
   records: PresenceRecords,
@@ -128,7 +145,11 @@ export async function usersInRoom(
     return localUsers(io, records, room);
   }
   const sockets = await io.in(room).fetchSockets();
-  return distinctUsers(sockets.map((socket) => socket.data.principal));
+  const remote = sockets.filter((socket) => !io.sockets.sockets.has(socket.id));
+  return distinctUsers([
+    ...remote.map((socket) => socket.data.principal),
+    ...localUsers(io, records, room).map((userId) => ({ userId })),
+  ]);
 }
 
 /** True while some socket of `userId` is in `room`, on any node. */
@@ -183,7 +204,11 @@ export function createPresence(hub: Hub, records: PresenceRecords): Presence {
     isOnline,
     async lastSeen(userId: string): Promise<number | null> {
       checkName("lastSeen", userId);
-      return (await isOnline(userId)) ? Date.now() : (records.lastSeen(userId) ?? null);
+      if (await isOnline(userId)) {
+        return Date.now();
+      }
+      const seen = Math.max(records.lastSeen(userId) ?? 0, (await readLastSeen(hub, userId)) ?? 0);
+      return seen > 0 ? seen : null;
     },
     async count(room: string): Promise<number> {
       checkRoom("count", room);

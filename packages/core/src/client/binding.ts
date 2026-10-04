@@ -8,8 +8,9 @@
 import type { QueryKey } from "@tanstack/react-query";
 import { QuickdrawError } from "../protocol/errors";
 import type { QuickdrawConnection } from "./connection";
-import type { InvalidationCoordinator } from "./coordinator";
+import type { InvalidateOptions, InvalidationCoordinator } from "./coordinator";
 import { KEY_ROOT, methodKey, methodKeyPrefix } from "./keys";
+import { loopGuardOf } from "./loopGuard";
 import type { MethodTarget } from "./members";
 
 /** The provider's connection and coordinator, while one is mounted, and the client's watching queries. */
@@ -67,6 +68,26 @@ export function connectionOf(
 }
 
 /**
+ * Invalidates what `queryKey` matches through `coordinator`, counting each
+ * cached query as asked for the loop warning first (`loopGuard.ts`): an app
+ * that asks on every render or effect run is the loop it names, and the
+ * coordinator's window would otherwise hide it.
+ */
+function invalidateAsked(
+  coordinator: InvalidationCoordinator,
+  queryKey: QueryKey,
+  ...options: [InvalidateOptions?]
+): void {
+  const { queryClient } = coordinator;
+  const loops = loopGuardOf(queryClient);
+  const exact = options[0]?.exact === true;
+  for (const query of queryClient.getQueryCache().findAll({ queryKey, exact })) {
+    loops.asked(query.queryKey, query.queryHash);
+  }
+  coordinator.invalidate(queryKey, ...options);
+}
+
+/**
  * `qd.invalidate(member, input?)` or `qd.invalidate(queryKey)`, through the
  * bound coordinator: a member with `input` invalidates that one result, a
  * member alone every result of the query, a key what it prefixes.
@@ -81,12 +102,14 @@ export function invalidateWith(binding: Binding): (target: unknown, ...input: un
       typeof target === "object" && target !== null ? queryTargets.get(target) : undefined;
     if (query !== undefined) {
       if (input[0] === undefined) {
-        coordinator.invalidate(methodKeyPrefix(query.service, query.method));
+        invalidateAsked(coordinator, methodKeyPrefix(query.service, query.method));
       } else {
-        coordinator.invalidate(methodKey(query.service, query.method, input[0]), { exact: true });
+        invalidateAsked(coordinator, methodKey(query.service, query.method, input[0]), {
+          exact: true,
+        });
       }
     } else if (Array.isArray(target)) {
-      coordinator.invalidate(target as QueryKey);
+      invalidateAsked(coordinator, target as QueryKey);
     } else {
       throw new TypeError(
         "qd.invalidate: pass a query member, such as qd.task.get, or a query key",

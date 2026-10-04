@@ -1,28 +1,39 @@
 /**
  * Redis adapter utilities for horizontal scaling.
  *
- * This module provides optional Redis integration for Socket.io
- * to enable running multiple server instances.
+ * This module provides optional Redis (or Valkey) integration for Socket.io
+ * to enable running multiple server instances. Behind the adapter, the
+ * server also takes its flush revisions from a shared counter on the same
+ * client and keeps users' last-seen times there (`createServer`'s `cluster`
+ * option; docs/deploying.md). When the subscribing connection comes back
+ * after a drop, the node's clients are told to reconnect within 2 seconds,
+ * so they catch up on what the node missed; a publish Valkey did not take
+ * is logged rather than left unhandled (`cluster/adapterClients.ts`).
  *
  * @example
  * ```typescript
- * import { createQuickdrawServer } from '@fitzzero/quickdraw-core/server';
  * import { setupRedisAdapter } from '@fitzzero/quickdraw-core/server';
  *
- * const { io } = createQuickdrawServer({ ... });
+ * const server = qd.createServer({ app, services, db });
  *
  * // Enable Redis for horizontal scaling
- * await setupRedisAdapter(io, {
+ * const redis = await setupRedisAdapter(server.io, {
  *   host: process.env.REDIS_HOST ?? 'localhost',
  *   port: parseInt(process.env.REDIS_PORT ?? '6379'),
  * });
+ *
+ * // On shutdown, once the server closed:
+ * await server.close();
+ * await redis.cleanup();
  * ```
  */
 
 import type { Server as SocketIOServer } from "socket.io";
 import type { Logger } from "../contract/logger";
 import { consoleLogger } from "../contract/logger";
+import { watchAdapterClients } from "./cluster/adapterClients";
 import { isModuleNotFound, loadRedisPeers } from "./redisPeers";
+import type { QuickdrawIo } from "./transports/types";
 
 /**
  * Redis adapter configuration options.
@@ -79,6 +90,28 @@ interface RedisClient {
   connect: () => Promise<void>;
   quit: () => Promise<void>;
   duplicate: () => RedisClient;
+  on(event: "error" | "ready", listener: (error?: unknown) => void): unknown;
+}
+
+/**
+ * Logs a client's errors at warn, once until it is ready again: a client
+ * that lost its server reports every reconnect attempt, and one without an
+ * `error` listener would make the adapter print a warning each time.
+ */
+function reportErrors(client: RedisClient, logger: Logger, role: string): void {
+  let reported = false;
+  client.on("error", (error) => {
+    if (!reported) {
+      reported = true;
+      logger.warn("Redis adapter connection lost; it reconnects by itself", {
+        client: role,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+  client.on("ready", () => {
+    reported = false;
+  });
 }
 
 /**
@@ -143,6 +176,8 @@ export async function setupRedisAdapter(
     });
 
     const subClient = pubClient.duplicate();
+    reportErrors(pubClient, logger, "publish");
+    reportErrors(subClient, logger, "subscribe");
 
     // Connect both clients
     await Promise.all([pubClient.connect(), subClient.connect()]);
@@ -151,6 +186,8 @@ export async function setupRedisAdapter(
     io.adapter(
       createAdapter(pubClient, subClient, { key: keyPrefix }) as Parameters<typeof io.adapter>[0],
     );
+    // When the subscription comes back, this node's clients catch up; a failed publish is logged.
+    watchAdapterClients(io as unknown as QuickdrawIo, logger);
 
     logger.info(`Redis adapter connected to ${host}:${port}`);
 

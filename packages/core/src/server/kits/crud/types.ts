@@ -68,11 +68,29 @@ export interface CrudHandlersOptions<C extends AnyContract, A, Db = unknown> {
   readonly prepare?: [CrudCreateOf<C>] extends [never]
     ? `crud.handlers: prepare is for the kit's create, which ${C["name"]} does not have`
     : CrudPrepare<ParsedInputOf<C, CrudCreateOf<C>>, KitContext, Db>;
+  /**
+   * The kit's methods whose access form is their whole check on purpose:
+   * each gets `rowless: true`. On a service with an access policy,
+   * `defineService` refuses `get` under `"public"`, `"authenticated"` or
+   * `{ service: L }` below `Admin` (any such caller could read any row by
+   * its id) unless it is named here: `rowless: ["get"]` for public
+   * profiles, say. `update`, `delete` and `reorder` check the row whatever
+   * their form, and need nothing.
+   */
+  readonly rowless?: readonly CrudMethodsOf<C>[];
 }
 
-/** What `crud.handlers` returns: one `{ access, handler }` per kit method, for `defineService`'s `methods`. */
+/**
+ * What `crud.handlers` returns: one `{ access, handler }` per kit method
+ * (with `rowless: true` for those `rowless` names), for `defineService`'s
+ * `methods`.
+ */
 export type CrudImplementations<A, Db = unknown> = {
-  readonly [M in keyof A]: { readonly access: A[M]; readonly handler: KitHandler<Db> };
+  readonly [M in keyof A]: {
+    readonly access: A[M];
+    readonly handler: KitHandler<Db>;
+    readonly rowless?: true;
+  };
 };
 
 /** What a kit method's handler is made from. */

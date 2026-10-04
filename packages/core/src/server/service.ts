@@ -54,6 +54,13 @@ export interface ServiceMethod {
   readonly timeoutMs: number | undefined;
   /** The query's current version for "not modified" replies. */
   readonly version: ((input: unknown, ctx: AnyContext) => MaybePromise<Version>) | undefined;
+  /**
+   * True when the method said `rowless: true`: its access form is its whole
+   * check on purpose, so every caller the form admits may reach any row its
+   * input names (`defineService` refuses such a method otherwise; see
+   * `buildService.ts`).
+   */
+  readonly rowless: boolean;
 }
 
 /**
@@ -166,4 +173,23 @@ export function handlerProblem(handler: object, service: AnyService): string | u
  */
 export function isKitHandler(handler: object): boolean {
   return handlerChecks.has(handler);
+}
+
+const rowChecked = new WeakSet<object>();
+
+/**
+ * Marks a kit handler that never reaches an existing row its input's `id`
+ * names without checking the caller's level on that row itself, whatever its
+ * access form says: the read/write kit's `update`, `delete` and `reorder`
+ * (they need the method's row level on the row) and `create` (its `id`, when
+ * it has one, names a new row). `defineService`'s rowless check leaves such
+ * a handler alone.
+ */
+export function checksRowsItself(handler: object): void {
+  rowChecked.add(handler);
+}
+
+/** True for a handler marked with {@link checksRowsItself}. */
+export function isRowChecked(handler: object): boolean {
+  return rowChecked.has(handler);
 }

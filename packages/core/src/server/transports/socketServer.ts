@@ -13,6 +13,7 @@ import {
   applySocketRateLimit,
   authMiddleware,
   protocolMiddleware,
+  type SocketLimitContext,
   type SocketRateLimitOptions,
 } from "./middleware";
 import {
@@ -22,6 +23,8 @@ import {
   listenForGrants,
   refreshGrants,
   rotate,
+  serveBroadcasts,
+  type ClusterOptions,
   type DisconnectUserOptions,
   type LiveData,
 } from "./pushes";
@@ -29,7 +32,7 @@ import { onConnection, type ServerHello, type SocketExtension } from "./socketio
 import type { QuickdrawIo, SocketContext } from "./types";
 
 export type { SocketRateLimitOptions } from "./middleware";
-export type { DisconnectUserOptions } from "./pushes";
+export type { ClusterOptions, DisconnectUserOptions } from "./pushes";
 export type { QuickdrawIo } from "./types";
 
 /** Socket.IO server options `createServer` passes through; it sets `parser` and `cors` itself. */
@@ -50,6 +53,10 @@ export interface SocketServerSettings extends Omit<SocketContext, "meter"> {
   readonly extensions: readonly SocketExtension[];
   /** The dispatcher's live data: its extension serves `qd:sub`, and it is given the server. */
   readonly live?: LiveData;
+  /** Where a cluster's shared state lives, behind a cluster adapter (`createServer`'s `cluster`). */
+  readonly cluster?: ClusterOptions;
+  /** The dispatcher's loop watch, which counts the rate limiter's refusals too. */
+  readonly loops?: SocketLimitContext["loops"];
 }
 
 /** The Socket.IO side of a quickdraw server. */
@@ -61,6 +68,8 @@ export interface SocketServer {
   refresh(userId: string): Promise<ServiceGrants>;
   /** Disconnects `userId`'s sockets (of one session) on every node; returns how many this node ended. */
   disconnectUser(userId: string, options?: DisconnectUserOptions): number;
+  /** Stops what runs in the background (a degraded node's probes): the server closes. */
+  stop(): void;
 }
 
 /** The part of `qd:hello` every socket of the server shares; `onConnection` adds the principal's. */
@@ -100,7 +109,8 @@ export function createSocketServer(
     meter,
   };
   const probe = adapterProbe(io, settings.socket?.adapter !== undefined);
-  settings.live?.attach(io, probe);
+  const broadcasts = serveBroadcasts(io, settings.logger, settings.cluster?.timeoutMs);
+  settings.live?.attach(io, probe, settings.cluster, broadcasts);
   listenForGrants(io, settings.live, settings.logger);
   listenForDisconnects(io);
   io.use(protocolMiddleware(settings.legacyWire, context));
@@ -108,7 +118,7 @@ export function createSocketServer(
   // Before the connection handler: the limiter's `socket.use` middleware must
   // come before the legacy shim's, so it counts each 4.x call before it runs.
   if (settings.rateLimit !== false) {
-    applySocketRateLimit(io, settings.rateLimit, context);
+    applySocketRateLimit(io, settings.rateLimit, { ...context, loops: settings.loops });
   }
   io.on(
     "connection",
@@ -126,8 +136,20 @@ export function createSocketServer(
     io,
     rotate: (withinMs) => rotate(io, withinMs),
     refresh: (userId) =>
-      refreshGrants(io, settings.loadServiceAccess, settings.live, probe, userId),
+      refreshGrants(
+        {
+          io,
+          load: settings.loadServiceAccess,
+          live: settings.live,
+          probe,
+          broadcasts,
+        },
+        userId,
+      ),
     disconnectUser: (userId, options) =>
       disconnectUser(io, probe, settings.logger, userId, options),
+    stop: () => {
+      broadcasts.close();
+    },
   };
 }

@@ -45,6 +45,7 @@ export const userService = qd.defineService(userContract, {
         return user ? toDto(user) : null;
       },
     },
+    // quickdraw-migrate: review [kit] updateUser has the shape of the read/write kit's update, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
     updateUser: {
       access: { service: "Read", entry: "Read", id: "id" },
       handler: async ({ input, ctx, db }) => {
@@ -68,6 +69,16 @@ export const userService = qd.defineService(userContract, {
           throw error;
         }
       },
+    },
+    getProfile: {
+      // quickdraw-migrate: review [access] this method takes an id but its access "public" checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant
+      access: "public",
+      rowless: true,
+      handler: async ({ input, db }) =>
+        db.user.findUnique({
+          where: { id: input.id },
+          select: { id: true, name: true },
+        }),
     },
   },
 });

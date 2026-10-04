@@ -23,7 +23,7 @@
 // `indexTruncated: true` instead, and is loaded by pages.
 
 import type { Revision, WireIndexRow } from "../../protocol/envelope";
-import { versionTime } from "../emit/hub";
+import { versionTime } from "../rev";
 import type { StorageAdapter, StorageRow, StorageWhere } from "../storage";
 import type { BoundCollection } from "./bind";
 import { orderByOf } from "./cursor";

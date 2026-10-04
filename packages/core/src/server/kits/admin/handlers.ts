@@ -1,5 +1,6 @@
 // `admin.handlers(contract, { access?, displayName?, hiddenFields?,
-// fieldOverrides? })` (RFC 0003 section 12.4): the admin kit's server half.
+// fieldOverrides?, rowless? })` (RFC 0003 section 12.4): the admin kit's
+// server half.
 // It finds the methods `admin.contract` made in the contract and returns an
 // implementation of each, to spread into `defineService`'s `methods`:
 //
@@ -18,13 +19,18 @@
 // access block 4.1 apps repeated for `installAdminMethods`. `adminMeta`'s
 // answer is worked out here, once (`meta.ts`). The handlers find their
 // service through the call, so `defineService` refuses a service without a
-// model, or one of another contract.
+// model, or one of another contract. On a service with an access policy, it
+// also refuses a method on one row (`adminGet`, `adminUpdate`,
+// `adminDelete`) given a form that checks no row below `Admin` (`{ service:
+// "Moderate" }`, `"authenticated"`) unless `rowless` names it, since such a
+// method reaches any row by its id.
 
 import type { AnyContract } from "../../../contract/defineContract";
 import { admin as contractHalf, adminSpecOf, type AdminSpec } from "../../../contract/kits/admin";
 import { accessFormProblem } from "../../access/forms";
 import type { AccessForm } from "../../access/types";
 import { checkWhenDefined, type AnyService } from "../../service";
+import { kitEntry, rowlessMethods } from "../rowless";
 import { adminFieldsOf, type AdminFields } from "./meta";
 import { ADMIN_DEFAULT_ACCESS, handlerOf } from "./methods";
 import type {
@@ -38,7 +44,13 @@ type UnknownRecord = Readonly<Record<string, unknown>>;
 
 type Empty = Record<never, never>;
 
-const OPTION_KEYS: readonly string[] = ["access", "displayName", "hiddenFields", "fieldOverrides"];
+const OPTION_KEYS: readonly string[] = [
+  "access",
+  "displayName",
+  "hiddenFields",
+  "fieldOverrides",
+  "rowless",
+];
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -81,7 +93,7 @@ function checkOptions(options: unknown): UnknownRecord {
     return {};
   }
   if (!isRecord(options)) {
-    fail("options must be { access?, displayName?, hiddenFields?, fieldOverrides? }");
+    fail("options must be { access?, displayName?, hiddenFields?, fieldOverrides?, rowless? }");
   }
   const unknownKey = Object.keys(options).find((key) => !OPTION_KEYS.includes(key));
   if (unknownKey !== undefined) {
@@ -151,26 +163,25 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty>
 ): AdminImplementations<C, A> {
   const kit = kitMethods(contract);
   const checked = checkOptions(options);
-  const access = checkAccess(
-    checked.access,
-    kit.map(([name]) => name),
-  );
+  const names = kit.map(([name]) => name);
+  const access = checkAccess(checked.access, names);
+  const rowless = rowlessMethods(checked.rowless, names, fail);
   const fields = fieldsOf(contract, kit, checked);
   const entries: Record<string, object> = {};
   for (const [name, spec] of kit) {
     const form = (access[name] as AccessForm | undefined) ?? ADMIN_DEFAULT_ACCESS;
     const handler = handlerOf({ spec, fields, form });
     checkWhenDefined(handler, (service) => serviceProblem(service, contract));
-    entries[name] = Object.freeze({ access: form, handler });
+    entries[name] = kitEntry(name, form, handler, rowless);
   }
   return Object.freeze(entries) as AdminImplementations<C, A>;
 }
 
 /**
  * The admin kit: `admin.handlers(contract, { access?, displayName?,
- * hiddenFields?, fieldOverrides? })` implements the methods `admin.contract`
- * made in `contract`, each open to a service-wide `Admin` grant unless
- * `access` gives another form. `admin.contract` is here too, for server
- * code; a shared package imports it from the root export.
+ * hiddenFields?, fieldOverrides?, rowless? })` implements the methods
+ * `admin.contract` made in `contract`, each open to a service-wide `Admin`
+ * grant unless `access` gives another form. `admin.contract` is here too,
+ * for server code; a shared package imports it from the root export.
  */
 export const admin = Object.freeze({ contract: contractHalf.contract, handlers });

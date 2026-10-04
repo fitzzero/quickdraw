@@ -25,7 +25,8 @@ A bun workspace monorepo driven by turbo (`turbo.json`). Packages per
 packages/
 ├── core/        # @fitzzero/quickdraw-core — the framework (5.0)
 │   ├── src/         # 5.0 sources; built by tsup → dist/ (one entry per export,
-│   │                #   plus src/cli/quickdraw-docs.ts, the `quickdraw-docs` bin)
+│   │                #   plus src/cli/quickdraw-docs.ts, the `quickdraw-docs` bin;
+│   │                #   src/cli/quickdraw-protocol.ts writes docs/protocol-v5.md, not built)
 │   ├── test/        # e2e suite (test/e2e, fixture app test/fixtures/app.ts),
 │   │                #   PGlite test schema (test/prisma), README examples (test/readme)
 │   └── legacy-src/  # the 4.1 tree, kept as a porting reference (see below)
@@ -37,9 +38,15 @@ packages/
                  #   tsup → dist/, the `quickdraw-codemod` bin); its tests run it on a 4.1
                  #   fixture app (test/fixtures/v4-app, snapshot in v4-app.expected) and
                  #   typecheck the guide's 4.x examples (test/guide-v4) against 4.1.0
+examples/godot/  # the GDScript reference client for protocol v5 (private workspace, never
+                 #   published): addons/quickdraw/quickdraw_client.gd, its Node wire test
+                 #   (`test`) and its Godot check (`check:godot`, CI's godot job)
 bench/           # load harness (private workspace) + bench/apps/* + committed baselines;
                  #   a release tool, not a CI gate (bench/README.md, docs/benchmarks.md)
 docs/rfcs/       # design records; 0003-v5.md is the 5.0 design
+docs/protocol-v5.md  # the wire specification for non-JS clients, generated from
+                 #   packages/core/src/protocol/envelope.ts (`bun run protocol:sync` in
+                 #   packages/core; never edited by hand); docs/clients.md, the ways in
 README.md        # the core package's README (5.0); its code examples are copies
                  #   of packages/core/test/readme (see "README examples" below);
                  #   packages/core/README.md and each package's LICENSE are copies
@@ -114,21 +121,35 @@ bun run build          # turbo: tsup → packages/core/dist/ (ESM + d.ts + sourc
 bun run typecheck      # turbo: tsgo --noEmit per package (core: src + tests, then test/readme)
 bun run lint           # turbo: oxlint -c ../../.oxlintrc.json per package (core: src test)
 bun run test           # turbo: vitest run per package; node --test for packages/skills
+                       #   (the two-node cluster suite is separate: `bun run test:cluster` in
+                       #   packages/core, QD_CLUSTER=1, Valkey from test/cluster/docker-compose.yml)
 bun run format         # oxfmt --write . (repo-wide, not through turbo)
 bun run format:check   # oxfmt --check . (repo-wide)
 ```
 
-In `packages/core`: `bun run readme:sync` (README examples, above) and
+In `packages/core`: `bun run readme:sync` (README examples, above),
+`bun run protocol:sync` (rewrites `docs/protocol-v5.md` from the protocol's
+sources; `protocol:check` fails when it is stale, and a test does too) and
 `bun run db:generate` (the gitignored test Prisma client; turbo runs it before
 typecheck and test). `quickdraw-skills link --check` (from the root) checks
-the committed `.claude/` links; CI runs it.
+the committed `.claude/` links; CI runs it. In `examples/godot`:
+`bun run check:godot` runs the GDScript client in Godot 4 (on the PATH, or
+`GODOT`) against a real server, after `bun run build`.
 
 Husky hooks: pre-commit runs `bun run format:check`; pre-push runs
 `bun run typecheck && bun run lint`. Node 24 (`.nvmrc`, `engines`).
 CI (`.github/workflows/ci.yml`) runs the `quickdraw-skills link --check`,
-lint, format:check, typecheck, build (plus the dist smoke test, publint and
-arethetypeswrong), test and a secret scan on every pull request, whatever its
-base branch, and on pushes to `main` and `dev`.
+`protocol:check` (in `packages/core`), lint, format:check, typecheck, build
+(plus the dist smoke test, publint and arethetypeswrong), test and a secret
+scan on every pull request, whatever its base branch, and on pushes to `main`
+and `dev`. Two more jobs are path-gated on pull requests (a `*-changes` job
+decides; on pushes they always run, and a skipped one counts as passed): the
+`godot` job runs `check:godot` with the official Godot build when a pull
+request touches `examples/godot`, core's protocol, realtime, transport or
+testing code, `docs/protocol-v5.md`, the dependencies or the workflow; the
+`cluster` job runs `test:cluster` behind a Valkey service when it touches
+core's sources or tests, its vitest config or manifest, the lockfile, the
+root `package.json` or `tsconfig.base.json`, or the workflow.
 
 ## Linting
 

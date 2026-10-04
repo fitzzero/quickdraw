@@ -68,8 +68,9 @@ export const taskService = qd.defineService(task, {
   `ctx`). `db` is `trackPrisma(new PrismaClient({ adapter }))` from
   `@fitzzero/quickdraw-core/prisma`, applied as the last extension.
 - `methods` implements exactly the contract's methods; each is
-  `{ access, handler }`, plus `timeoutMs`, and for queries `share`
-  (`"caller"` or `"all"`), `ttlMs` and `version`.
+  `{ access, handler }`, plus `timeoutMs`, `rowless` (see
+  quickdraw-access.md), and for queries `share` (`"caller"` or `"all"`),
+  `ttlMs` and `version`.
 - A handler receives `{ input, ctx, db }`: the parsed input, the context
   (`principal`, `signal`, `log`, `requestId`, `transport`, `touch`, `rooms`,
   `presence`, `mcp`, `services`) and the tracked client.
@@ -122,6 +123,14 @@ derive the item service's access from the anchor (`inherit`).
 
 ## Kits instead of hand-written CRUD
 
+Before writing `get`, `list`, `create`, `update`, `delete`, `search`,
+sharing or admin methods by hand, use the kit: it checks access on every row
+it touches, pages, filters by declared fields and stays live. Lint's
+`prefer-kit` warns on a hand-written method a kit implements (`get`,
+`list`, `create`, `getTask`, `listTasks`, `createTask`, `share`,
+`adminList`, ...) in a service that spreads no kit; when one must stay
+hand-written, say why right above it:
+`// quickdraw: hand-written because it answers null for a missing task`.
 Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 `@fitzzero/quickdraw-core/server`, spread into `methods`:
 
@@ -140,6 +149,11 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   at once with `pushMany(taskId, items)`, never `push` in a loop.
 - Channels: `channels: { cursor: { payload, ratePerSecond, requires } }` in
   the contract, `channels: { cursor: (payload, ctx) => ... }` on the service.
+  `requires` is what the sending socket must hold: `{ entity: "taskId" }` (a
+  subscription to the row the payload's key names), `{ collection, scope }`,
+  or an app room a method joined that socket to: `{ room: "world" }` names
+  the room itself (not a payload key), ``{ room: (p) => `lobby:${p.lobbyId}` }``
+  computes it. 4.x's `requireRoom` becomes `{ room }`.
 - Events: `events: { moved: { payload } }`, sent with
   `ctx.rooms.emit(room, task, "moved", payload)` to an app room
   (`ctx.rooms.join(room)` in a method puts the caller's socket in one).
@@ -156,5 +170,10 @@ moved row inside its batch. `share: "caller"` for hot queries;
 `versionColumn: "updatedAt"` answers "not modified" cheaply. The quickdraw
 lint rules enforce most of this file (`no-untracked-write`,
 `no-foreign-write`, `no-nested-write`, `no-raw-sql-write`, `no-manual-emit`,
-`no-unbounded-read`, `no-db-call-in-loop`, `no-load-then-filter`): fix the
-code, not the rule.
+`no-unbounded-read`, `no-db-call-in-loop`, `no-load-then-filter`,
+`prefer-kit`): fix the code, not the rule. In development the server also
+names a client loop: `[quickdraw:repeated-call]` when one connection calls
+a method with the same input more than 10 times within a second, or is
+refused `RATE_LIMITED` more than 30 times within a minute. Find the client
+code that repeats it (quickdraw-client.md); never raise the rate limit to
+quiet it.

@@ -21,5 +21,7 @@ export const userContract = defineContract("userService", {
     getMe: query({ input: z.object({}), output: nullable("entity") }),
     // quickdraw-migrate: review [contract] mutation, chosen from its name; output: todoSchema of the 4.x response type
     updateUser: mutation({ input: updateUserSchema, output: todoSchema<{ id: string; name: string } | { error: "name_taken" }>() }),
+    // quickdraw-migrate: review [contract] query, chosen from its name; output: todoSchema of the 4.x response type
+    getProfile: query({ input: z.object({ id: cuidSchema("user ID") }), output: todoSchema<{ id: string; name: string } | null>() }),
   },
 });

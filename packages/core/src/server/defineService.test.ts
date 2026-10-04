@@ -5,7 +5,8 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { defineContract, query } from "../index";
-import { project, qd, task, taskDefaults, taskRow } from "./__tests__/fixtures";
+import { z as z3 } from "zod3";
+import { project, qd, task, taskDefaults, taskRow, taskSchema } from "./__tests__/fixtures";
 import { custom, inherit, initQuickdraw, owner, type AnyService } from "./index";
 import { createRegistry } from "./registry";
 
@@ -216,6 +217,151 @@ describe("defineService", () => {
     const init = initQuickdraw as unknown as (options: unknown) => unknown;
     expect(() => init({ context: "tenant" })).toThrow("context must be a function");
     expect(() => init("options")).toThrow("options must be an object");
+  });
+});
+
+describe("the rowless check", () => {
+  const policy = owner("ownerId");
+  /** A task service with `name` implemented by `entry`, the others by `taskDefaults`. */
+  const withEntry = (name: string, entry: object, policed = true): (() => AnyService) => {
+    const definition = withMethod(name, entry) as object;
+    return () =>
+      defineLoosely(task, policed ? { model: "task", access: policy, ...definition } : definition);
+  };
+  const refusal = "takes a row id (its input has id), but its access";
+
+  it("refuses an id-taking method whose form checks no row, on a service with a policy, unless it is rowless", () => {
+    const forms = ["authenticated", "public", { service: "Read" }, { service: "Moderate" }];
+    const methods = [
+      ["rename", true],
+      ["get", true],
+      ["count", false],
+    ] as const;
+    const cases = forms.flatMap((access) =>
+      methods.flatMap(([name, takesId]) =>
+        [true, false].flatMap((policed) =>
+          [false, true].map((rowless) => ({ access, name, takesId, policed, rowless })),
+        ),
+      ),
+    );
+    expect(cases).toHaveLength(48);
+    for (const { access, name, takesId, policed, rowless } of cases) {
+      const entry = { access, handler: () => taskRow(), ...(rowless ? { rowless } : {}) };
+      const define = withEntry(name, entry, policed);
+      const label = JSON.stringify({ access, name, policed, rowless });
+      if (takesId && policed && !rowless) {
+        expect(define, label).toThrow(`method "${name}" ${refusal}`);
+      } else {
+        expect(define, label).not.toThrow();
+      }
+    }
+  });
+
+  it("names the form, who it lets in, and the two ways out", () => {
+    expect(withEntry("rename", { access: "authenticated", handler: () => taskRow() })).toThrow(
+      'defineService("taskService"): method "rename" takes a row id (its input has id), but its access "authenticated" checks no row: ' +
+        "on a service with an access policy, that lets every signed-in user reach any row by its id. " +
+        'Give it { entry: "Moderate" } so the policy decides, or, if every caller its access admits may reach any row, set rowless: true on the method',
+    );
+    expect(withEntry("get", { access: "public", handler: () => taskRow() })).toThrow(
+      'access "public" checks no row: on a service with an access policy, that lets anyone, signed in or not, reach any row by its id. Give it { entry: "Read" }',
+    );
+    expect(withEntry("get", { access: { service: "Moderate" }, handler: () => taskRow() })).toThrow(
+      'access { service: "Moderate" } checks no row: on a service with an access policy, that lets everyone with a service-wide Moderate grant reach any row by its id. Give it { service: "Moderate", entry: "Moderate" }',
+    );
+  });
+
+  it("leaves alone the forms that check a row or decide for themselves, and Admin grants", () => {
+    for (const access of [
+      { service: "Admin" },
+      { entry: "Read" },
+      { service: "Read", entry: "Read" },
+      { entry: "Read", id: "id" },
+      { scope: "Read", of: project, id: "id" },
+      custom(() => true),
+    ]) {
+      expect(
+        withEntry("get", { access, handler: () => taskRow() }),
+        JSON.stringify(access),
+      ).not.toThrow();
+    }
+  });
+
+  it("finds the id in any branch of a union and beside values JSON Schema cannot write", () => {
+    /** Defines a service whose one method `m` takes `input` under `"authenticated"`. */
+    const defineWith = (input: z.ZodType) => () =>
+      defineLoosely(
+        defineContract("probeService", {
+          entity: taskSchema,
+          methods: { m: query({ input, output: z.null() }) },
+        }),
+        {
+          model: "task",
+          access: policy,
+          methods: { m: { access: "authenticated", handler: () => null } },
+        },
+      );
+    const id = z.object({ id: z.string() });
+    const refused: Record<string, z.ZodType> = {
+      "{ id }": id,
+      "{ id, at: z.date() }": id.extend({ at: z.date() }),
+      "{ id, at: z.coerce.date() }": id.extend({ at: z.coerce.date() }),
+      "{ id, tags: z.set() }": id.extend({ tags: z.set(z.string()) }),
+      "{ id, n: z.bigint() }": id.extend({ n: z.bigint() }),
+      "{ id: z.custom() }": z.object({ id: z.custom<string>((v) => typeof v === "string") }),
+      "{ id: z.string().transform() }": z.object({ id: z.string().transform((s) => s.trim()) }),
+      "{ id }.transform()": id.transform((v) => v),
+      "{ id }.nullable()": id.nullable(),
+      "{ id }.optional()": id.optional(),
+      "z.union, id in both": z.union([id, id.extend({ slug: z.string() })]),
+      "z.union, id in one": z.union([z.object({ slug: z.string() }), id]),
+      "z.union of a union, nullable": z.union([id, z.object({ x: z.number() })]).nullable(),
+      "z.discriminatedUnion": z.discriminatedUnion("kind", [
+        id.extend({ kind: z.literal("a") }),
+        z.object({ kind: z.literal("b"), slug: z.string() }),
+      ]),
+      "z.intersection": z.intersection(id, z.object({ x: z.number() })),
+      "a named branch ($ref)": z.union([id.meta({ id: "ById" }), z.object({ slug: z.string() })]),
+      "z.lazy": z.lazy(() => id),
+      "z.preprocess": z.preprocess((v) => v, id),
+    };
+    for (const [label, input] of Object.entries(refused)) {
+      expect(defineWith(input), label).toThrow(`method "m" ${refusal}`);
+    }
+    // Not checked: no object at the top (the id itself), or the row named another way.
+    const unchecked: Record<string, z.ZodType> = {
+      "z.string()": z.string(),
+      "{ ids: string[] }": z.object({ ids: z.array(z.string()) }),
+      "{ where: { id } }": z.object({ where: id }),
+      "z.record()": z.record(z.string(), z.string()),
+    };
+    for (const [label, input] of Object.entries(unchecked)) {
+      expect(defineWith(input), label).not.toThrow();
+    }
+  });
+
+  it("cannot read the keys of an input without JSON Schema (Zod 3), so it does not refuse it", () => {
+    const zod3 = defineContract("taskService", {
+      entity: taskSchema,
+      methods: { get: query({ input: z3.object({ id: z3.string() }), output: "entity" }) },
+    });
+    const get = { access: "authenticated", handler: () => taskRow() };
+    expect(() =>
+      defineLoosely(zod3, { model: "task", access: policy, methods: { get } }),
+    ).not.toThrow();
+  });
+
+  it("stores rowless on the method, and takes only a boolean", () => {
+    const service = withEntry("rename", {
+      access: "authenticated",
+      rowless: true,
+      handler: () => taskRow(),
+    })();
+    expect(service.methods.rename?.rowless).toBe(true);
+    expect(service.methods.count?.rowless).toBe(false);
+    expect(
+      withEntry("rename", { access: "authenticated", rowless: "yes", handler: () => 0 }),
+    ).toThrow('method "rename": rowless must be true, or left out');
   });
 });
 

@@ -67,6 +67,32 @@ describe("the services sharing.handlers refuses", () => {
     ).not.toThrow();
   });
 
+  it("refuses an access-list method under a form that checks no row, unless rowless names it", () => {
+    const definition = (options: object) => ({
+      model: "project",
+      access: jsonAcl("acl"),
+      methods: sharing.handlers(acl, options as never),
+    });
+    expect(() => define(acl, definition({}))).not.toThrow();
+    expect(() => define(acl, definition({ access: { listShares: "authenticated" } }))).toThrow(
+      'defineService("aclService"): method "listShares" takes a row id (its input has id), but its access "authenticated" checks no row',
+    );
+    expect(() => define(acl, definition({ access: { unshare: { service: "Read" } } }))).toThrow(
+      'name it in the kit\'s rowless option (rowless: ["unshare"])',
+    );
+    expect(() =>
+      define(acl, definition({ access: { listShares: "authenticated" }, rowless: ["listShares"] })),
+    ).not.toThrow();
+    // members mode names its row entryId, so its "authenticated" leave is not one of them
+    expect(() =>
+      define(team, {
+        model: "project",
+        access: projectMembers,
+        methods: sharing.handlers(team),
+      }),
+    ).not.toThrow();
+  });
+
   it("needs one list or table to change, not two", () => {
     const twoLists = anyOf(jsonAcl("acl"), jsonAcl("name"));
     expect(() =>

@@ -78,6 +78,17 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   live rows and collections, and watched queries refetch themselves. For
   anything else use `qd.invalidate(qd.task.stats, input?)`, never
   `queryClient.invalidateQueries` on a quickdraw key.
+- Fire a mutation from an event handler, never from render or from an
+  effect that its own result runs again: that loops, and every round
+  writes. In development the client warns
+  `[quickdraw:repeated-mutation]` (one `useMutation` issuing more than 5
+  within a second, naming its component) and
+  `[quickdraw:repeated-invalidation]` (`qd.invalidate` asking for one query
+  key more than 20 times within a second; a busy watched topic is not
+  counted, the coordinator coalesces it), and the server
+  `[quickdraw:repeated-call]`.
+  An effect that must mutate runs once per change: give it the inputs as
+  dependencies and compare them with what it last sent.
 - Outside React, through the mounted provider's connection:
   `qd.task.get.call(input)`, `qd.task.rename.call(input)`,
   `qd.task.get.prefetch(queryClient, input)`; `qd.task.get.key(input)` is
@@ -86,7 +97,9 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
 ## Realtime
 
 - Channels: `const { send, isReady } = qd.task.cursor.useChannel();` sends
-  fire-and-forget messages (dropped over the channel's rate).
+  fire-and-forget messages (dropped over the channel's rate). A channel that
+  `requires` a room takes messages only from a socket a method joined to it:
+  the client that sends must make the joining call itself.
 - Events: `qd.task.cursorMoved.useEvent((payload) => ...)` hears the
   contract's events sent to a room the socket is in.
 - Presence: `usePresence(room)` returns the user ids in an app room, after a
@@ -108,6 +121,10 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   `createQuickdrawConnection({ url, auth })`, calls `open()`, and calls
   `callData(connection, { service: "taskService", method: "get", input })`
   from `./client`; `liveDataOf(connection, queryClient)` holds live rows.
+- A client in another language (a Godot game, a native app) speaks the wire
+  itself: `docs/protocol-v5.md` in the quickdraw repository is the
+  specification, `examples/godot` a GDScript client written from it, and
+  `docs/clients.md` compares the ways in.
 
 ## Do not
 

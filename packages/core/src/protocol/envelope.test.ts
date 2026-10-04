@@ -5,7 +5,7 @@ describe("isCallEnvelope", () => {
   it.each([
     [
       "a full envelope",
-      { id: 1, s: "taskService", m: "get", i: { id: "t1" }, v: 1_759_400_000_000 },
+      { id: 1, s: "taskService", m: "get", i: { id: "t1" }, v: 1_759_400_000_000_000 },
     ],
     ["an envelope without input or version", { id: 0, s: "taskService", m: "list" }],
     ["a string version", { id: 2, s: "taskService", m: "stats", i: {}, v: "etag-3f9a" }],

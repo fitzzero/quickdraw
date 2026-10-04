@@ -14,6 +14,28 @@
 // In a collection that declares `index`, an `added` delta also carries its
 // member's index row, built from the item it sends (`index.ts`), with the
 // service's `versionColumn` read alongside the item for the row's `rev`.
+//
+// Behind a cluster adapter (`cluster`) a change that would be `patched` goes
+// out `updated`, with the whole item: frames from two nodes can reach a
+// client out of revision order, and a patch it dropped as older would lose
+// its fields. One that would be dropped as empty is still dropped.
+//
+// Behind a cluster adapter each delta is also decided by its row as read
+// for the frame, not by the write's own values alone. A flush takes its
+// revision when it flushes, after its handler settled and (behind a
+// cluster) once the counter answered, so a write that committed first can
+// flush last: a move out of a scope, or a delete, then carries a higher
+// revision than a later move back in, or a later create of its id, and a
+// client would apply it over them. The read is made after the flush took
+// its revision, so it sees every write whose flush took a lower one: a row
+// in the scope at the read goes out (`removed` becomes `updated`, or
+// `added` for a row that left scopes nobody could name), and one that is
+// not there is `removed`. Every frame a scope gets about a row is then right
+// as of a read made after its revision, and the newest one wins on the
+// client. The rows of `removed` deltas are read for it, with the membership
+// columns. One server keeps its cheaper rule (no read for a removal): a
+// write that commits first and flushes last can still leave a client
+// without a member there until the row's next write.
 
 import { collectionRoom } from "../../contract/names";
 import type { CollectionDelta, Revision } from "../../protocol/envelope";
@@ -21,12 +43,18 @@ import { selectFor, type FrameKind } from "../emit/frames";
 import type { StorageAdapter, StorageRow } from "../storage";
 import type { BoundCollection } from "./bind";
 import { indexColumns, indexRowFrom } from "./index";
-import { itemOf, patchOf, selectWith } from "./items";
+import { itemOf, membershipColumns, patchOf, scopeIn, selectWith } from "./items";
 import type { Moves } from "./moves";
 
 /** A delta whose item is not read yet. */
 type Pending =
-  | { readonly t: "removed" | "added" | "updated"; readonly id: string }
+  | { readonly t: "added" | "updated"; readonly id: string }
+  | {
+      readonly t: "removed";
+      readonly id: string;
+      /** The row left scopes nobody could name: this scope may never have held it. */
+      readonly unnamed?: true;
+    }
   | { readonly t: "patched"; readonly id: string; readonly fields: readonly string[] };
 
 /** What one scope gets from one flush. */
@@ -74,7 +102,7 @@ export function planScopes(
     const named = new Set([...move.left, ...move.entered, ...move.stayed]);
     for (const scope of move.unknownLeft ? subscribed : []) {
       if (!named.has(scope)) {
-        planOf(scope).deltas.push({ t: "removed", id });
+        planOf(scope).deltas.push({ t: "removed", id, unnamed: true });
       }
     }
   }
@@ -87,21 +115,36 @@ export function planScopes(
   return [...plans.values()];
 }
 
-/** The rows the plans' deltas take items from: those the moves read, and one read for the others. */
+const WHOLE: FrameKind = Object.freeze({ t: "u" });
+
+/**
+ * The rows the plans' deltas take items from: those the moves read, and one
+ * read for the others. Behind a cluster adapter (`cluster`) every change
+ * reads its whole item, and the rows of `removed` deltas and of `also` are
+ * read too, with the membership columns, so the deltas are decided at the
+ * read (`buildDeltas`).
+ */
 export async function readItems(
   storage: StorageAdapter,
   collection: BoundCollection,
   plans: readonly ScopePlan[],
   read: ReadonlyMap<string, StorageRow>,
+  cluster = false,
+  also: readonly string[] = [],
 ): Promise<ReadonlyMap<string, StorageRow>> {
   const kinds = new Map<string, FrameKind>();
   for (const plan of plans.filter(({ reset }) => !reset)) {
     for (const delta of plan.deltas) {
-      if (delta.t === "removed" || read.has(delta.id)) {
+      if (read.has(delta.id) || (delta.t === "removed" && !cluster)) {
         continue;
       }
-      const whole = delta.t !== "patched" || kinds.get(delta.id)?.t === "u";
-      kinds.set(delta.id, whole ? { t: "u" } : { t: "p", fields: delta.fields });
+      const item = cluster || delta.t !== "patched" || kinds.get(delta.id)?.t === "u";
+      kinds.set(delta.id, item ? WHOLE : { t: "p", fields: delta.fields });
+    }
+  }
+  for (const id of cluster ? also : []) {
+    if (!read.has(id)) {
+      kinds.set(id, WHOLE);
     }
   }
   if (kinds.size === 0) {
@@ -109,9 +152,10 @@ export async function readItems(
   }
   const select = selectFor(collection.item, [...kinds.values()]);
   const whole = [...kinds.values()].some((kind) => kind.t === "u");
+  const columns = [...indexColumns(collection), ...(cluster ? membershipColumns(collection) : [])];
   const rows = await storage.findMany(collection.model, {
     where: { id: { in: [...kinds.keys()] } },
-    select: whole ? selectWith(select, indexColumns(collection)) : select,
+    select: whole ? selectWith(select, columns) : select,
   });
   const all = new Map(read);
   for (const row of rows) {
@@ -130,19 +174,55 @@ function added(collection: BoundCollection, row: StorageRow, rev: Revision): Col
     : { t: "added", item, index: indexRowFrom(collection, item, row, rev) };
 }
 
-/** The deltas of one scope's frame for the flush at `rev`, from its plan and the rows read. */
+/**
+ * Behind a cluster adapter, a pending delta of `scope` as the row read for
+ * the frame decides it (`row` absent: the row is gone). In a column-scoped
+ * collection a row not in the scope at the read is `removed`, and one in it
+ * is not: a removal becomes `updated` (`added` for a row that left scopes
+ * nobody could name, which this scope may never have held). A `via` scope's
+ * links were already read at flush time (`moves.ts`), so there only a row
+ * gone since is `removed`.
+ */
+function decided(
+  collection: BoundCollection,
+  scope: string,
+  pending: Pending,
+  row: StorageRow | undefined,
+): Pending {
+  if (collection.scope.kind !== "column") {
+    return row === undefined && pending.t !== "removed"
+      ? { t: "removed", id: pending.id }
+      : pending;
+  }
+  if (row === undefined || scopeIn(collection, row) !== scope) {
+    return pending.t === "removed" ? pending : { t: "removed", id: pending.id };
+  }
+  if (pending.t !== "removed") {
+    return pending;
+  }
+  return { t: pending.unnamed === true ? "added" : "updated", id: pending.id };
+}
+
+/**
+ * The deltas of one scope's frame for the flush at `rev`, from its plan and
+ * the rows read. Behind a cluster adapter (`cluster`) each delta is decided
+ * by its row as read (`decided`), and goes out `updated`, whole, where a
+ * patch would go.
+ */
 export function buildDeltas(
   collection: BoundCollection,
   plan: ScopePlan,
   rows: ReadonlyMap<string, StorageRow>,
   rev: Revision,
+  cluster = false,
 ): CollectionDelta[] {
   if (plan.reset) {
     return [{ t: "reset" }];
   }
   const deltas: CollectionDelta[] = [];
-  for (const delta of plan.deltas) {
-    const row = rows.get(delta.id);
+  for (const pending of plan.deltas) {
+    const row = rows.get(pending.id);
+    const delta = cluster ? decided(collection, plan.scope, pending, row) : pending;
     if (delta.t === "removed") {
       deltas.push({ t: "removed", id: delta.id });
       continue;
@@ -153,7 +233,11 @@ export function buildDeltas(
     if (delta.t === "patched") {
       const d = patchOf(collection, row, delta.fields);
       if (Object.keys(d).length > 0) {
-        deltas.push({ t: "patched", id: delta.id, d });
+        deltas.push(
+          cluster
+            ? { t: "updated", item: itemOf(collection, row) }
+            : { t: "patched", id: delta.id, d },
+        );
       }
       continue;
     }

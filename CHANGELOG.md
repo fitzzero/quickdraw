@@ -2,6 +2,81 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0-rc.1] (unreleased)
+
+The next release candidate: pack H on top of `5.0.0-rc.0`. The four
+packages move to `5.0.0-rc.1` when it is tagged
+([`docs/release-checklist-5.0.md`](docs/release-checklist-5.0.md)).
+
+### Pack H: agent guardrails, the multi-node proof and non-JS clients
+
+- **Breaking for `5.0.0-rc.0` users.** On a service with an access policy,
+  `defineService` refuses a method whose input may carry a top-level `id`
+  (in any branch of a union, and beside a `Date`, a `Set` or another value
+  JSON Schema cannot write) under a form that checks no row (`"public"`,
+  `"authenticated"`, `{ service: L }` below `Admin`): anyone the form admits
+  would reach any row by its id. The message names the method and the two
+  ways out: a form the policy decides (`{ entry: L }`, or
+  `{ service: L, entry: L }` to keep a grant), or `rowless: true` on the
+  method when every caller the form admits may reach any row on purpose.
+  Kits take it as `rowless: [names]` in their options (`crud.handlers`,
+  `admin.handlers`, `sharing.handlers`). Not checked: an input without JSON
+  Schema (Zod 3), an input that is the id itself, and a row named by
+  another key. The codemod writes `rowless: true`, marked, where it maps a
+  4.x method that named a row to a form that checks none.
+- Revisions are microseconds since the epoch: Valkey's clock behind a
+  cluster, and on one server `max(Date.now() * 1000, last + 1)`. A client
+  still compares them as opaque numbers (safe integers); `versionColumn`
+  times compare as their milliseconds times 1,000.
+- Lint: `prefer-kit` (a warning) reports a method written by hand that a
+  kit implements (`get`, `list`, `create`, `search`, `share`, `adminList`,
+  ..., or `getTask`, `listTasks`, `createTask`, `updateTask` and
+  `deleteTask` for model `"task"`; `remove` only on a membership model or
+  beside another sharing method) in a service that spreads no kit (a spread
+  variable or call counts as one). A
+  `// quickdraw: hand-written because <reason>` comment above it keeps it.
+  The codemod marks such methods `[kit]` in its report.
+- Loop warnings, in development: the server's `repeated-call` (one
+  connection sends the same call with the same input more than 10 times
+  within a second, or is refused `RATE_LIMITED` more than 30 times within a
+  minute; thrown in a test app made with `strictWarnings`); the client's
+  `repeated-mutation` (one `useMutation` mutates more than 5 times within a
+  second, named with its component) and `repeated-invalidation`
+  (`qd.invalidate` asks for one query key more than 20 times within a
+  second, or the invalidation coordinator refetches it that often; counted
+  after the coordinator's coalescing, so a busy watched topic is not named).
+- `createServer({ cluster: { client?, keyPrefix?, timeoutMs? } })` runs
+  several nodes behind `@socket.io/redis-adapter` on Valkey
+  ([`docs/deploying.md`](docs/deploying.md)). Flushes share one order from a
+  counter key (`{keyPrefix}:rev`) that needs persistence or replication: a
+  lost key is warned about once and starts again at Valkey's clock, and a
+  counter that does not answer puts the node on its own clock until a
+  probe answers. Behind a cluster, unlike on one server: entity and
+  collection changes go out as whole rows (`u`, `updated`), decided by the
+  row read at flush time; a flush costs one counter round trip and a read a
+  GET of it; access changes and reloaded grants are broadcast and
+  acknowledged, failing open after `timeoutMs`, and after one goes
+  unanswered broadcasts stop waiting until every node answers a probe; a
+  push to a seeded stream goes to every node; `lastSeen` is kept in Valkey
+  for 30 days; a node whose Valkey subscription comes back sends its own
+  clients `qd:rotate` so they catch up; `close()` lets the node's sockets
+  leave while the other nodes still hear it. A publish node-redis rejects
+  while Valkey is down is logged once per outage instead of ending the
+  process as an unhandled rejection. The proof is `bun run test:cluster`
+  (two nodes, a real Valkey) and CI's `cluster` job.
+- Channels take `requires: { room: RoomSelector }`: the app room the
+  sending socket itself must have joined, a name or a function of the
+  payload, checked in memory and failing closed.
+- Docs and examples: [`docs/protocol-v5.md`](docs/protocol-v5.md), the
+  wire for clients in other languages, generated from the protocol's
+  sources (`bun run protocol:sync` in `packages/core`; CI checks it), with
+  its fixed limits apart from its defaults;
+  [`docs/clients.md`](docs/clients.md), the ways in;
+  [`docs/deploying.md`](docs/deploying.md), several nodes, Valkey and Cloud
+  Run; and [`examples/godot`](examples/godot), a GDScript client for
+  Godot 4 that CI runs against a real server, which keeps its socket
+  through a `qd:rotate` window and reconnects with full jitter.
+
 ## [5.0.0-rc.0]
 
 The release candidate for quickdraw 5.0, published under npm's `next`

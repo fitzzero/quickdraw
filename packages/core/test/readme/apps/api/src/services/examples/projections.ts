@@ -17,13 +17,13 @@ const task = defineContract("taskService", {
   entity: taskSchema,
   projections: { card: cardSchema },
   methods: {
-    get: query({ input: z.object({ id: z.string() }), output: "entity" }),
+    ...crud.contract({ entity: taskSchema, get: true }),
     card: query({ input: z.object({ id: z.string() }), output: "card" }),
   },
 });
 
 // #region projections
-import { inherit } from "@fitzzero/quickdraw-core/server";
+import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(task, {
   model: "task",
@@ -45,12 +45,9 @@ export const taskService = qd.defineService(task, {
     },
   },
   methods: {
-    // returns the database row: the projection's keys are sent, dates as ISO strings
-    get: {
-      access: { entry: "Read" },
-      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
-    },
-    // returns what `map` takes
+    // the kit's get reads the entity's keys only, and sends dates as ISO strings
+    ...crud.handlers(task, { access: { get: { entry: "Read" } } }),
+    // returns the database row `map` takes: the framework builds the card from it
     card: {
       access: { entry: "Read" },
       handler: ({ input, db }) =>

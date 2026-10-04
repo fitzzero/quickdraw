@@ -18,7 +18,18 @@
 //
 // Room occupancy is read from this process's adapter. Behind a cluster
 // adapter (Redis) other nodes' rooms are invisible, so every touched row is
-// read and its frame sent to every tier.
+// read and its frame sent to every tier. Frames sent there go out whole
+// (`u`, never `p`): frames from two nodes can reach a client out of revision
+// order, and a patch it dropped as older would lose its fields, while an
+// older whole row is rightly dropped (the newer one was read after the older
+// write). A tier that would have got an empty patch still gets nothing.
+//
+// Behind a cluster adapter a deleted row is read too: a flush takes its
+// revision when it flushes, so a delete that committed first can flush after
+// a later create of the same id, and its `r` would win over that row on the
+// client. A row this flush deleted that exists at the read goes out whole
+// (`u`) instead, and the change log records it as existing. One server keeps
+// sending `r` without a read.
 
 import type { AccessLevel } from "../../contract/access";
 import { entityRoom, SERVER_EVENTS } from "../../contract/names";
@@ -38,6 +49,27 @@ interface Target {
   readonly id: string;
   readonly kind: FrameKind;
   readonly rooms: ReadonlyMap<AccessLevel, string>;
+  /** Behind a cluster adapter, the fields a patch would have carried: the row goes out whole. */
+  readonly patched?: readonly string[];
+}
+
+const WHOLE: FrameKind = Object.freeze({ t: "u" });
+
+/** How a row goes out: as `frameKind` says, but whole instead of a patch behind a cluster adapter. */
+function targetOf(
+  id: string,
+  kind: FrameKind,
+  rooms: ReadonlyMap<AccessLevel, string>,
+  local: boolean,
+): Target {
+  return local || kind.t !== "p"
+    ? { id, kind, rooms }
+    : { id, kind: WHOLE, rooms, patched: kind.fields };
+}
+
+/** True when the tier sees none of the fields the write changed: it gets no frame, as it would get no patch. */
+function seesNoChange(target: Target, hidden: ReadonlySet<string>): boolean {
+  return target.patched !== undefined && target.patched.every((field) => hidden.has(field));
 }
 
 /** The tier rooms of a row that have subscribers here; behind a cluster adapter, every tier room. */
@@ -68,21 +100,24 @@ function send(io: Io, frame: EntityFrame, target: Target, service: AnyService): 
   for (const group of tiers?.groups ?? []) {
     const rooms = group.levels.flatMap((level) => target.rooms.get(level) ?? []);
     const data = strip(frame.d as Readonly<Record<string, unknown>>, group.hidden);
-    if (rooms.length === 0 || (frame.t === "p" && Object.keys(data).length === 0)) {
+    const empty =
+      frame.t === "p" ? Object.keys(data).length === 0 : seesNoChange(target, group.hidden);
+    if (rooms.length === 0 || empty) {
       continue;
     }
     io.to(rooms).emit(SERVER_EVENTS.entity, { ...frame, d: data });
   }
 }
 
-/** Reads the rows of `targets` that need data, in one query. */
+/** Reads the rows of `targets` that need data, in one query: behind a cluster adapter, removed rows too. */
 async function readTargets(
   hub: Hub,
   service: AnyService,
   targets: readonly Target[],
+  local: boolean,
 ): Promise<Map<string, Readonly<Record<string, unknown>>>> {
   const projection = service.projections.get("entity");
-  const reading = targets.filter((target) => target.kind.t !== "r");
+  const reading = local ? targets.filter((target) => target.kind.t !== "r") : targets;
   if (projection === undefined || service.model === undefined || reading.length === 0) {
     return new Map();
   }
@@ -91,7 +126,7 @@ async function readTargets(
       where: { id: { in: reading.map((target) => target.id) } },
       select: selectFor(
         projection,
-        reading.map((target) => target.kind),
+        reading.map((target) => (target.kind.t === "r" ? WHOLE : target.kind)),
       ),
     })) ?? [];
   return new Map(rows.flatMap((row) => (typeof row.id === "string" ? [[row.id, row]] : [])));
@@ -114,23 +149,24 @@ async function emitService(
   for (const [id, touch] of touched) {
     const rooms = occupiedRooms(io, service.name, id, local);
     if (rooms.size > 0) {
-      targets.push({ id, kind: frameKind(projection, touch, service.versionColumn), rooms });
+      targets.push(targetOf(id, frameKind(projection, touch, service.versionColumn), rooms, local));
     }
   }
   if (targets.length === 0) {
     return;
   }
-  const rows = await readTargets(hub, service, targets);
+  const rows = await readTargets(hub, service, targets, local);
   for (const target of targets) {
+    const row = rows.get(target.id);
+    // Behind a cluster adapter, a row this flush deleted that exists at the read was created
+    // again by a write whose flush went first: it goes out whole, not removed.
+    const again = target.kind.t === "r" && row !== undefined;
+    if (again) {
+      hub.changeLog.record(service.name, target.id, rev, false);
+    }
     // A row read as missing was deleted since: its own flush sends the removal.
-    const frame = buildFrame(
-      service.name,
-      target.id,
-      target.kind,
-      rows.get(target.id),
-      rev,
-      projection,
-    );
+    const kind = again ? WHOLE : target.kind;
+    const frame = buildFrame(service.name, target.id, kind, row, rev, projection);
     if (frame !== undefined) {
       send(io, frame, target, service);
     }

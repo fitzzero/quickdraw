@@ -8,13 +8,27 @@
 // where the tracked client runs them, and bytes may move by 5% (ids and
 // revisions keep their lengths). Each step measures the server's whole work:
 // access checks, handlers, flushes and subscription reads.
+//
+// The cluster projects measure the same steps on two nodes behind Valkey
+// (both nodes' statements and bytes) and keep them apart, in
+// `__budgets__/budgets.cluster.ts.json`: a cluster node reads every touched
+// row and scope, and sends changes whole (docs/deploying.md).
 
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { storageOf } from "../../src/server/storage";
 import { emitWithAck, expectBudget } from "../../src/testing/index";
+import { inCluster } from "../cluster/mode";
 import { as, e2eApp } from "../fixtures/app";
 
 const e2e = e2eApp();
+
+/** A step's budget options: in the cluster projects, kept in the cluster's own budget file. */
+function step(name: string): { readonly name: string; readonly file?: string } {
+  return inCluster()
+    ? { name, file: fileURLToPath(new URL("./budgets.cluster.ts", import.meta.url)) }
+    : { name };
+}
 
 /** P1's tasks: "Task 1" to "Task 60", in order, written untracked; their ids in that order. */
 async function seedTasks(projectId: string, count: number): Promise<string[]> {
@@ -54,12 +68,9 @@ describe("the fixture app's budgets", () => {
     const ids = await seedTasks(board.p1, 60);
     const { socket } = await app.connect(as(board.ada));
     let reply: { readonly ok: boolean; readonly results?: readonly unknown[] } | undefined;
-    const { measured } = await expectBudget(
-      async () => {
-        reply = await emitWithAck(socket, "qd:sub", { s: "taskService", ids });
-      },
-      { name: "subscribe to 60 tasks" },
-    );
+    const { measured } = await expectBudget(async () => {
+      reply = await emitWithAck(socket, "qd:sub", { s: "taskService", ids });
+    }, step("subscribe to 60 tasks"));
     expect(reply?.ok).toBe(true);
     expect(measured.calls).toEqual([]);
   });
@@ -70,16 +81,13 @@ describe("the fixture app's budgets", () => {
     await seedTasks(board.p1, 60);
     const { socket } = await app.connect(as(board.ada));
     let reply: { readonly ok: boolean; readonly total?: number } | undefined;
-    await expectBudget(
-      async () => {
-        reply = await emitWithAck(socket, "qd:col:sub", {
-          s: "taskService",
-          c: "board",
-          scope: board.p1,
-        });
-      },
-      { name: "first collection snapshot" },
-    );
+    await expectBudget(async () => {
+      reply = await emitWithAck(socket, "qd:col:sub", {
+        s: "taskService",
+        c: "board",
+        scope: board.p1,
+      });
+    }, step("first collection snapshot"));
     expect(reply).toMatchObject({ ok: true, total: 61 });
   });
 
@@ -89,13 +97,10 @@ describe("the fixture app's budgets", () => {
     const { socket } = await app.connect(as(board.ada));
     await emitWithAck(socket, "qd:sub", { s: "taskService", ids: [board.t1] });
     app.frames.clear();
-    const { measured } = await expectBudget(
-      async () => {
-        await app.as(as(board.bo)).taskService.rename({ id: board.t1, title: "Renamed" });
-        await app.frames.waitFor({ event: "qd:e", userId: board.ada });
-      },
-      { name: "one update with one subscriber" },
-    );
+    const { measured } = await expectBudget(async () => {
+      await app.as(as(board.bo)).taskService.rename({ id: board.t1, title: "Renamed" });
+      await app.frames.waitFor({ event: "qd:e", userId: board.ada });
+    }, step("one update with one subscriber"));
     expect(measured.calls.map((call) => call.call)).toEqual(["taskService.rename"]);
   });
 
@@ -104,14 +109,11 @@ describe("the fixture app's budgets", () => {
     const board = e2e.board();
     await seedTasks(board.p1, 60);
     let page: { readonly items: readonly unknown[] } | undefined;
-    await expectBudget(
-      async () => {
-        page = await app
-          .as(as(board.ada))
-          .taskService.list({ filter: { projectId: board.p1 }, limit: 20 });
-      },
-      { name: "kit list" },
-    );
+    await expectBudget(async () => {
+      page = await app
+        .as(as(board.ada))
+        .taskService.list({ filter: { projectId: board.p1 }, limit: 20 });
+    }, step("kit list"));
     expect(page?.items).toHaveLength(20);
   });
 
@@ -120,12 +122,9 @@ describe("the fixture app's budgets", () => {
     const board = e2e.board();
     await seedTasks(board.p1, 60);
     let found: { readonly items: readonly unknown[] } | undefined;
-    await expectBudget(
-      async () => {
-        found = await app.as(as(board.ada)).taskService.search({ q: "Task 1" });
-      },
-      { name: "kit search" },
-    );
+    await expectBudget(async () => {
+      found = await app.as(as(board.ada)).taskService.search({ q: "Task 1" });
+    }, step("kit search"));
     // "Task 1" and "Task 10" to "Task 19".
     expect(found?.items).toHaveLength(11);
   });

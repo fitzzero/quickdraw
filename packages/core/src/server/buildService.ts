@@ -5,7 +5,7 @@
 
 import type { AnyContract } from "../contract/defineContract";
 import { accessFormProblem, isCustomAccess } from "./access/forms";
-import type { AccessForm } from "./access/types";
+import { rowlessProblem } from "./access/rowless";
 import { compileCollections } from "./collections/define";
 import { compileProjections, projectedOutput, type Projection } from "./emit/projection";
 import { MAX_TIMEOUT_MS } from "./pipeline/settings";
@@ -39,7 +39,15 @@ const DEFINITION_KEYS = new Set([
   "adminBypass",
 ]);
 
-const METHOD_KEYS = new Set(["access", "handler", "share", "ttlMs", "timeoutMs", "version"]);
+const METHOD_KEYS = new Set([
+  "access",
+  "handler",
+  "share",
+  "ttlMs",
+  "timeoutMs",
+  "version",
+  "rowless",
+]);
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -135,6 +143,9 @@ function checkMethod(
       `${owner}: timeoutMs must be a positive number of milliseconds, at most ${MAX_TIMEOUT_MS}`,
     );
   }
+  if (entry.rowless !== undefined && typeof entry.rowless !== "boolean") {
+    fail(`${owner}: rowless must be true, or left out`);
+  }
   checkQueryOptions(owner, entry, def.kind, fail);
   return Object.freeze({
     name,
@@ -142,12 +153,13 @@ function checkMethod(
     input: def.input,
     output: outputSchemaOf(contract, def.output),
     projection: projectedOutput(def.output, projections),
-    access: entry.access as AccessForm,
+    access: entry.access as ServiceMethod["access"],
     handler: entry.handler as AnyHandler,
     share: entry.share as ServiceMethod["share"],
     ttlMs: entry.ttlMs as number | undefined,
     timeoutMs: entry.timeoutMs as number | undefined,
     version: entry.version as ServiceMethod["version"],
+    rowless: entry.rowless === true,
   });
 }
 
@@ -231,6 +243,28 @@ function checkRowForms(
   }
 }
 
+/**
+ * On a service with an access policy, a method whose input has `id` and
+ * whose form checks no row is refused unless it says `rowless: true`
+ * (`access/rowless.ts`). A service without a policy has no row check to
+ * skip.
+ */
+function checkRowless(
+  methods: Readonly<Record<string, ServiceMethod>>,
+  data: ServiceData,
+  fail: Fail,
+): void {
+  if (data.access === undefined) {
+    return;
+  }
+  for (const method of Object.values(methods)) {
+    const problem = rowlessProblem(method);
+    if (problem !== undefined) {
+      fail(problem);
+    }
+  }
+}
+
 /** The checks handlers carry for the service they run in (`checkWhenDefined`): a kit's need a model. */
 function checkHandlers(service: AnyService, fail: Fail): void {
   for (const method of Object.values(service.methods)) {
@@ -271,6 +305,7 @@ export function buildService(
   checkWatches(checked, collections, fail);
   const methods = checkMethods(checked, projections, definition.methods, fail);
   checkRowForms(methods, data, fail);
+  checkRowless(methods, data, fail);
   const service: AnyService = Object.freeze({
     name: checked.name,
     contract: checked,

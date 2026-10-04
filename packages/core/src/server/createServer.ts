@@ -17,6 +17,7 @@ import { consoleLogger } from "../contract/logger";
 import {
   createDispatcher,
   detachDispatcher,
+  loopsOf,
   withAccessSinks,
   type Dispatcher,
   type DispatcherOptions,
@@ -45,6 +46,7 @@ import {
 } from "./transports/http";
 import {
   createSocketServer,
+  type ClusterOptions,
   type DisconnectUserOptions,
   type QuickdrawIo,
   type SocketCors,
@@ -128,6 +130,14 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
    * 10,000.
    */
   readonly shutdownTimeoutMs?: number;
+  /**
+   * Behind a cluster adapter: where the cluster's shared state lives (the
+   * revision counter every node's flushes take their revision from, and
+   * users' last-seen times). By default the Socket.IO Redis adapter's own
+   * Valkey or Redis client, under keys prefixed `quickdraw:`; see
+   * `docs/deploying.md`.
+   */
+  readonly cluster?: ClusterOptions;
 }
 
 /**
@@ -280,6 +290,8 @@ export function createServer<const S extends readonly AnyService[]>(
     rateLimit: options.rateLimit ?? {},
     extensions: [],
     live: liveOf(created),
+    loops: loopsOf(created),
+    cluster: options.cluster,
   });
   refresh = (userId) => sockets.refresh(userId);
   const shutdown = closer(
@@ -287,12 +299,20 @@ export function createServer<const S extends readonly AnyService[]>(
     httpServer,
     () => calls.idle(),
     options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
+    {
+      drain: () => liveOf(created)?.drain() ?? Promise.resolve(),
+      timeoutMs: options.cluster?.timeoutMs,
+    },
   );
   const { onClose } = shutdown;
-  // Once stopped, the tracked client goes back to the dispatcher attached before.
+  onClose(sockets.stop);
+  // Once stopped (its sockets leave first, and what their last events started settles while the
+  // adapter still reaches the other nodes: `closer`), and once anything started after that has
+  // settled too, the tracked client goes back to the dispatcher attached before.
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> =>
-    (closing ??= shutdown.close().then(() => {
+    (closing ??= shutdown.close().then(async () => {
+      await liveOf(created)?.drain();
       detachDispatcher(created);
     }));
   if (options.handleSignals === true) {

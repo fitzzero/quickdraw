@@ -89,3 +89,31 @@ answered, so a slow server cannot lower the load it is offered.
    why each worse metric is worse, and for each missed target a CPU profile
    of the server (`--cpu-prof` on a separate run) and a fix or a follow-up.
    Quote failed requests with the latencies, and state the load average.
+
+## Behind a cluster adapter
+
+The harness runs one server; a cluster run (`--cluster 2`) is a follow-up.
+What several nodes behind Valkey add is measured instead by the cluster test
+projects (`bun run test:cluster` in `packages/core`) and kept in
+`packages/core/test/e2e/__budgets__/budgets.cluster.ts.json` (both nodes'
+statements and bytes, the same steps as `budgets.test.ts.json`):
+
+| Step                           | One server (statements, bytes) | Two nodes behind Valkey |
+| ------------------------------ | ------------------------------ | ----------------------- |
+| One update with one subscriber | 8, 268                         | 9, 400                  |
+| Subscribe to 60 tasks          | 4, 11,523                      | 4, 11,703               |
+| First collection snapshot      | 5, 12,557                      | 5, 12,743               |
+| Kit list, kit search           | unchanged                      | unchanged               |
+
+The update costs one more statement (the writer reads every touched scope,
+since other nodes' rooms are invisible to it) and more bytes (changes go out
+whole). The subscribe steps cost the same on both: their extra bytes are the
+three digits revisions gained in microseconds (sixteen instead of thirteen),
+which the one-server file, measured in milliseconds, holds within its 5%
+tolerance. Behind a cluster a flush that only removes (a delete, a move out
+of a collection) reads the removed rows too, one statement per service and
+collection, so a row created again meanwhile is not sent as removed. Besides
+statements, every flush costs one Valkey round trip (the counter script)
+before its first read, every subscription read one or two `GET`s, and a
+flush that changes access waits for every node's answer, in line with the
+node's other flushes: `docs/deploying.md`, "What it costs".

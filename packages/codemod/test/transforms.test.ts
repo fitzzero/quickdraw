@@ -8,7 +8,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Node, Project, SyntaxKind } from "ts-morph";
+// @ts-expect-error -- the lint plugin is plain JavaScript without types
+import { kitShape as preferKit } from "../../lint/plugin/rules/prefer-kit.mjs";
 import { runCodemod, type RunResult } from "../src/index";
+import { kitShapeOf } from "../src/kits";
 import { findMarkers, MARKER } from "../src/markers";
 import { REPORT_FILE } from "../src/report";
 import { copyFixture, EXPECTED, FIXTURE, readTree, removeCopies } from "./helpers";
@@ -43,10 +46,10 @@ describe("the output on the 4.1 fixture app", () => {
   it("converts every service, method and hook call, and deletes the wrapper hooks", () => {
     expect(result.stats).toEqual({
       services: 5,
-      methods: 21,
+      methods: 22,
       contracts: 5,
-      schemasMoved: 13,
-      todoSchemas: 20,
+      schemasMoved: 14,
+      todoSchemas: 21,
       clientCalls: 7,
       wrappersDeleted: 3,
     });
@@ -135,6 +138,20 @@ describe("the access mapping", () => {
         `${MARKER} [access] "Read" with no row id let every signed-in user call this in 4.x`,
       );
     }
+  });
+
+  it('writes "public" with rowless: true for a "Public" method whose input has an id', () => {
+    const { form, markers } = accessOf("getProfile");
+    expect(form).toBe('"public"');
+    expect(markers.join("\n")).toContain(
+      `${MARKER} [access] this method takes an id but its access "public" checks no row`,
+    );
+    expect(output.get("apps/api/src/services/user.ts")).toContain(
+      'access: "public",\n      rowless: true,\n',
+    );
+    // a method without an id, or with a form that checks its row, needs no rowless
+    const code = [...output].filter(([file]) => file.startsWith("apps/api/"));
+    expect(code.flatMap(([, text]) => text.match(/^\s*rowless: true,$/gmu) ?? [])).toHaveLength(1);
   });
 
   it('writes { service: L } for "Moderate" or "Admin" without a row id', () => {
@@ -246,5 +263,48 @@ describe("the report", () => {
 
   it("lists a contract item for every migrated method and entity", () => {
     expect(section("Contracts")).toHaveLength(result.stats.methods + 4);
+  });
+
+  it("lists every method of a kit method's shape, marked above the method", () => {
+    const listed = section("Methods a kit implements");
+    expect(
+      listed.map((line) => /^- \[ \] `[^`]+` (\w+) has the shape of/u.exec(line)?.[1]),
+    ).toEqual([
+      ...["getLabel", "listLabels", "createProject", "getProject", "deleteProject"],
+      ...["createTask", "listTasks", "updateTask", "updateUser"],
+    ]);
+    for (const line of listed) {
+      const name = /^- \[ \] `[^`]+` (\w+)/u.exec(line)?.[1] ?? "";
+      expect(codeAt(line)).toMatch(new RegExp(`^\\s*${name}[:,]`, "u"));
+    }
+  });
+});
+
+describe("the kit shapes", () => {
+  it("are the ones lint's prefer-kit reports", () => {
+    const names = [
+      ...["get", "getMany", "list", "create", "update", "delete", "reorder", "bulkUpdate"],
+      ...["bulkDelete", "search", "share", "shareByName", "unshare", "listShares", "invite"],
+      ...["inviteByName", "remove", "listMembers", "leave", "setRole", "setLevel"],
+      ...["adminList", "adminGet", "adminCreate", "adminUpdate", "adminDelete", "adminMeta"],
+      ...["getTask", "listTasks", "createTask", "updateTask", "deleteTask", "removeTask"],
+      ...["getProject", "listCategories", "deleteCategory", "updateProjectMember"],
+      ...["listAddresses", "listTaskes", "getCategory", "rename", "getMe", "find"],
+    ];
+    const models = ["task", "category", "address", "projectMember", "membership", undefined];
+    const siblings = [[], ["rename", "leave"], ["share"], ["invite"], ["listMembers"]];
+    for (const model of models) {
+      for (const methods of siblings) {
+        for (const name of names) {
+          const lint = model === undefined ? undefined : preferKit(name, model, methods);
+          const label = `${name} on ${String(model)} beside ${methods.join(", ")}`;
+          expect(kitShapeOf(name, model, methods)?.method, label).toBe(lint?.method);
+        }
+      }
+    }
+    expect(kitShapeOf("remove", "task")).toBeUndefined();
+    expect(kitShapeOf("remove", "task", ["invite"])?.method).toBe("remove");
+    expect(kitShapeOf("remove", "projectMember")?.method).toBe("remove");
+    expect(kitShapeOf("deleteTask", "task")?.method).toBe("delete");
   });
 });

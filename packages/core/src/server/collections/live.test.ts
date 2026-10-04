@@ -3,15 +3,17 @@
 // access changes or the anchor row is deleted, races between a subscribe and
 // a flush or an access change, a cluster adapter, and the rate limiter.
 
-import { Server, type Namespace } from "socket.io";
+import type { Server } from "socket.io";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { inCluster } from "../../../test/cluster/mode";
 import type { PrismaClient } from "../../../test/prisma/setup";
 import { collectionRoom } from "../../index";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
 import { as, seedBoard, type Board } from "../access/__tests__/board";
 import { projectService, recordingStorage, type Read } from "../emit/__tests__/live";
-import type { Principal, QuickdrawIo, ServiceGrants } from "../index";
+import type { Principal, ServiceGrants } from "../index";
+import { peeredCluster } from "../transports/__tests__/harness";
 import {
   colSub,
   colUnsub,
@@ -123,46 +125,52 @@ describe("resume", () => {
     const resumed = await colSub(away.connection, "byProject", board.p1, {
       since: first.rev as number,
     });
-    expect(resumed).toEqual({
-      ok: true,
-      resumed: true,
-      rev: expect.any(Number),
-      deltas: [
-        {
-          t: "added",
-          item: {
-            id: created.id,
-            projectId: board.p1,
-            title: "While away",
-            status: "open",
-            ordinal: 3,
+    if (inCluster()) {
+      // Behind a cluster adapter a resume reads a page: a process's buffer sees its own flushes only.
+      expect(resumed).toMatchObject({ ok: true, items: [{ id: board.t1, title: "Renamed" }] });
+      expect(resumed).not.toHaveProperty("resumed");
+    } else {
+      expect(resumed).toEqual({
+        ok: true,
+        resumed: true,
+        rev: expect.any(Number),
+        deltas: [
+          {
+            t: "added",
+            item: {
+              id: created.id,
+              projectId: board.p1,
+              title: "While away",
+              status: "open",
+              ordinal: 3,
+            },
           },
-        },
-        { t: "patched", id: board.t1, d: { title: "Renamed" } },
-        { t: "removed", id: created.id },
-      ],
-    });
+          { t: "patched", id: board.t1, d: { title: "Renamed" } },
+          { t: "removed", id: created.id },
+        ],
+      });
+      expect(itemReads(reads)).toEqual([]);
+    }
     expect(resumed.rev as number).toBeGreaterThan(first.rev as number);
-    expect(itemReads(reads)).toEqual([]);
     expect(inRoom(app, "byProject", board.p1)).toBe(2);
     await write(app, (db) => db.task.update({ where: { id: board.t1 }, data: { title: "Live" } }));
     await away.scopes.settle();
-    expect(away.scopes.frames).toEqual([
-      expect.objectContaining({ deltas: [{ t: "patched", id: board.t1, d: { title: "Live" } }] }),
-    ]);
+    const live = inCluster()
+      ? { t: "updated", item: expect.objectContaining({ id: board.t1, title: "Live" }) }
+      : { t: "patched", id: board.t1, d: { title: "Live" } };
+    expect(away.scopes.frames).toEqual([expect.objectContaining({ deltas: [live] })]);
   });
 
   it("resumes an unchanged scope with no deltas", async () => {
     const { app } = await start();
     const { connection } = await connect(app, as(board.ada));
     const first = await colSub(connection, "byProject", board.p1);
-    expect(await colSub(connection, "byProject", board.p1, { since: first.rev as number })).toEqual(
-      {
-        ok: true,
-        resumed: true,
-        rev: first.rev,
-        deltas: [],
-      },
+    const again = await colSub(connection, "byProject", board.p1, { since: first.rev as number });
+    // Behind a cluster adapter a resume reads a page: a process's buffer sees its own flushes only.
+    expect(again).toEqual(
+      inCluster()
+        ? { ...first, rev: expect.any(Number) }
+        : { ok: true, resumed: true, rev: first.rev, deltas: [] },
     );
   });
 
@@ -171,7 +179,7 @@ describe("resume", () => {
     const { connection } = await connect(app, as(board.ada));
     const first = await colSub(connection, "byProject", board.p1);
     const old = await colSub(connection, "byProject", board.p1, {
-      since: (first.rev as number) - 600_000,
+      since: (first.rev as number) - 600_000_000,
     });
     expect(old).toMatchObject({ ok: true, items: [{ id: board.t1 }], total: 1, cursor: null });
     expect(old).not.toHaveProperty("resumed");
@@ -204,9 +212,14 @@ describe("resume", () => {
     const { connection } = await connect(app, as(board.ada));
     app.server.dispatcher.collections.reset(taskContract, "byProject", board.p1);
     const page = await colSub(connection, "byProject", board.p1);
+    // Behind a cluster adapter a resume reads a page: a process's buffer sees its own flushes only.
     expect(
       await colSub(connection, "byProject", board.p1, { since: page.rev as number }),
-    ).toMatchObject({ ok: true, resumed: true, deltas: [] });
+    ).toMatchObject(
+      inCluster()
+        ? { ok: true, items: [{ id: board.t1 }] }
+        : { ok: true, resumed: true, deltas: [] },
+    );
   });
 });
 
@@ -378,27 +391,6 @@ describe("races with a subscribe", () => {
     expect(inRoom(app, "byProject", board.p1)).toBe(0);
   });
 });
-
-/** A Socket.IO adapter that hands `serverSideEmit` to the other servers it was made for: a cluster in one process. */
-function peeredCluster() {
-  const servers: QuickdrawIo[] = [];
-  // A server attached to nothing holds no resources; it only shows the default adapter class.
-  const Base = new Server().of("/").adapter.constructor as new (
-    nsp: Namespace,
-  ) => Namespace["adapter"];
-  class PeeredAdapter extends Base {
-    override serverSideEmit(packet: unknown[]): void {
-      for (const io of servers) {
-        if (io.sockets !== this.nsp) {
-          (io.sockets as unknown as { _onServerSideEmit(args: unknown[]): void })._onServerSideEmit(
-            packet,
-          );
-        }
-      }
-    }
-  }
-  return { adapter: PeeredAdapter as unknown as NonNullable<StartOptions["adapter"]>, servers };
-}
 
 describe("behind a cluster adapter", () => {
   it("reads a flush's rows without local subscribers, and answers resumes with a page", async () => {

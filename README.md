@@ -73,7 +73,7 @@ contracts, and a map of them for the client:
 <!-- example: packages/shared/src/contracts/task.ts -->
 
 ```ts
-import { defineContract, mutation, query } from "@fitzzero/quickdraw-core";
+import { crud, defineContract, mutation, query } from "@fitzzero/quickdraw-core";
 import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
@@ -85,10 +85,11 @@ export const taskContract = defineContract("taskService", {
   // only callers with Admin on the task receive notes
   fields: { notes: "Admin" },
   methods: {
-    get: query({ input: z.object({ id: z.string() }), output: "entity" }),
-    create: mutation({
-      input: z.object({ projectId: z.string(), title: z.string() }),
-      output: "entity",
+    // the read/write kit's get (one task by id) and create
+    ...crud.contract({
+      entity: taskSchema,
+      get: true,
+      create: { input: z.object({ projectId: z.string(), title: z.string() }) },
     }),
     rename: mutation({
       input: z.object({ id: z.string(), title: z.string() }),
@@ -155,12 +156,13 @@ export const qd = initQuickdraw<{
 ```
 
 `apps/api/src/services/task.ts` implements every method of the contract,
-each with its access and handler:
+each with its access: the read/write kit's `get` and `create` in one spread,
+and a handler for each of the others:
 
 <!-- example: apps/api/src/services/task.ts -->
 
 ```ts
-import { inherit } from "@fitzzero/quickdraw-core/server";
+import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 import { projectContract, taskContract } from "@project/shared";
 import { qd } from "../quickdraw";
 
@@ -172,17 +174,16 @@ export const taskService = qd.defineService(taskContract, {
   // a board opens with Read on its project
   collections: { board: { anchor: projectContract } },
   methods: {
-    get: {
-      access: { entry: "Read" },
-      // return the row: the framework sends the projection's fields, dates as ISO strings
-      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
-    },
-    create: {
-      access: { scope: "Moderate", of: projectContract, id: "projectId" },
-      handler: ({ input, db }) => db.task.create({ data: input }),
-    },
+    // the kit implements get and create; each names who may call it
+    ...crud.handlers(taskContract, {
+      access: {
+        get: { entry: "Read" },
+        create: { scope: "Moderate", of: projectContract, id: "projectId" },
+      },
+    }),
     rename: {
       access: { entry: "Moderate" },
+      // return the row: the framework sends the projection's fields, dates as ISO strings
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { title: input.title } }),
     },
@@ -634,7 +635,7 @@ not exist or a malformed access list denies.
 <!-- example: apps/api/src/services/examples/access.ts#access -->
 
 ```ts
-import { anyOf, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
+import { anyOf, crud, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
 
 export const projectService = qd.defineService(project, {
   // the Prisma model the rows live in
@@ -645,9 +646,14 @@ export const projectService = qd.defineService(project, {
     members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),
   ),
   methods: {
-    get: {
-      access: { entry: "Read" },
-      handler: ({ input, db }) => db.project.findUniqueOrThrow({ where: { id: input.id } }),
+    // the read/write kit's get: Read on the project itself
+    ...crud.handlers(project, { access: { get: { entry: "Read" } } }),
+    title: {
+      // anyone may read any project's name by its id: the form is the whole check, on purpose
+      access: "public",
+      rowless: true,
+      handler: async ({ input, db }) =>
+        await db.project.findUniqueOrThrow({ where: { id: input.id }, select: { name: true } }),
     },
   },
 });
@@ -662,10 +668,10 @@ export const taskService = qd.defineService(task, {
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { title: input.title } }),
     },
-    create: {
-      access: { scope: "Moderate", of: project, id: "projectId" },
-      handler: ({ input, db }) => db.task.create({ data: input }),
-    },
+    // the kit's create: Moderate on the project the task goes into
+    ...crud.handlers(task, {
+      access: { create: { scope: "Moderate", of: project, id: "projectId" } },
+    }),
     archiveAll: {
       access: { service: "Admin" },
       handler: async ({ db }) => (await db.task.updateMany({ data: { status: "archived" } })).count,
@@ -686,6 +692,20 @@ export const taskService = qd.defineService(task, {
   `custom(fn)`. Without a principal every form but `"public"` answers
   `UNAUTHENTICATED`; a principal that fails gets `FORBIDDEN`. The levels,
   lowest first, are `Public`, `Read`, `Moderate` and `Admin`.
+- On a service with a policy, a method whose input has `id` under a form
+  that checks no row (`"public"`, `"authenticated"`, `{ service: L }` below
+  `Admin`) would let anyone that form admits reach any row by its id, so
+  `defineService` refuses it, naming the method and the two ways out: a form
+  the policy decides (`{ entry: L }`, or `{ service: L, entry: L }` to keep
+  the grant), or `rowless: true` on the method when every such caller may
+  reach any row on purpose (the `title` method above; public profiles,
+  lookups by an id that tells nothing). A kit's methods take it as
+  `rowless: ["get"]` in the kit's options. The input's keys come from its
+  JSON Schema: an `id` in any branch of a union counts, and so does one
+  beside a value JSON Schema cannot write (a `Date`, a `Set`). Not checked:
+  an input without JSON Schema (Zod 3), one that is no object (a bare string
+  that is the id itself) and a row named by another key (`ids`, `taskId`, a
+  nested `where.id`).
 - A service-wide `Admin` grant passes every check on its service
   (`adminBypass: false` turns that off). A grant below `Admin` counts only
   where the form names `service`: a `Read` grant does not read every row.
@@ -798,7 +818,7 @@ what a read selects, so a row is never read wider than what is sent:
 <!-- example: apps/api/src/services/examples/projections.ts#projections -->
 
 ```ts
-import { inherit } from "@fitzzero/quickdraw-core/server";
+import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(task, {
   model: "task",
@@ -820,12 +840,9 @@ export const taskService = qd.defineService(task, {
     },
   },
   methods: {
-    // returns the database row: the projection's keys are sent, dates as ISO strings
-    get: {
-      access: { entry: "Read" },
-      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
-    },
-    // returns what `map` takes
+    // the kit's get reads the entity's keys only, and sends dates as ISO strings
+    ...crud.handlers(task, { access: { get: { entry: "Read" } } }),
+    // returns the database row `map` takes: the framework builds the card from it
     card: {
       access: { entry: "Read" },
       handler: ({ input, db }) =>
@@ -864,9 +881,21 @@ export const taskService = qd.defineService(task, {
   recent flushes. The change log sees only this process's writes: an app
   running several processes without a Socket.IO cluster adapter declares
   `versionColumn`s or passes `changeLog: false`.
+- Revisions are microseconds since the epoch: a flush takes
+  `max(Date.now() * 1000, last + 1)`. Clients compare them as numbers.
 - Behind a cluster adapter (`setupRedisAdapter`), every touched row is read
-  and sent, since other nodes' rooms are not visible, and access changes and
-  refreshed grants are broadcast to every node.
+  (deleted ones too) and sent, whole, decided by the row as read at flush
+  time, since other nodes' rooms are not visible and frames from two nodes
+  can arrive out of order; access changes and refreshed grants are
+  broadcast to every node, and a flush sends its frames once every node
+  applied them (without waiting while a node does not answer, fail-open).
+  Flushes take their revisions from a counter in the cluster's Valkey, on
+  Valkey's clock in microseconds, so revisions from all nodes are one order;
+  its key needs persistence or replication. A node whose Valkey connection
+  comes back has its clients reconnect to catch up.
+  [docs/deploying.md](docs/deploying.md) has the wiring, what holds across
+  nodes, what it costs, and what happens when a node or Valkey stops
+  answering.
 
 ## Collections and change topics
 
@@ -880,7 +909,7 @@ authorizes a scope:
 export const task = defineContract("taskService", {
   entity: taskSchema,
   projections: { card: cardSchema },
-  methods: { get: query({ input: z.object({ id: z.string() }), output: "entity" }) },
+  methods: { ...crud.contract({ entity: taskSchema, get: true }) },
   collections: {
     byProject: {
       // a column holding the scope value
@@ -907,7 +936,7 @@ export const task = defineContract("taskService", {
 <!-- example: apps/api/src/services/examples/collections.ts#service -->
 
 ```ts
-import { inherit } from "@fitzzero/quickdraw-core/server";
+import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(task, {
   model: "task",
@@ -921,12 +950,7 @@ export const taskService = qd.defineService(task, {
   },
   // opens the service topic to Read grants; closed without it
   watchAccess: { service: "Read" },
-  methods: {
-    get: {
-      access: { entry: "Read" },
-      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
-    },
-  },
+  methods: { ...crud.handlers(task, { access: { get: { entry: "Read" } } }) },
 });
 ```
 
@@ -1006,8 +1030,11 @@ created from (or with `http: false`).
 
 `server.close()` disconnects every socket, waits for the calls still in
 flight (a mutation runs to its end) and closes the HTTP server, giving up
-after `shutdownTimeoutMs` (default 10 s); `handleSignals: true` calls it on
-SIGTERM and SIGINT. `server.rotate({ withinMs })` asks clients to reconnect
+after `shutdownTimeoutMs` (default 10 s); behind a cluster adapter it
+disconnects its own sockets first, while the adapter still reaches the other
+nodes, so their rooms hear `left`, and waits for that presence work (at most
+`cluster.timeoutMs`), so the app can close its Valkey clients next.
+`handleSignals: true` calls it on SIGTERM and SIGINT. `server.rotate({ withinMs })` asks clients to reconnect
 within a window; `server.access.refresh(userId)` reloads a user's grants,
 pushes `qd:access` and resolves the user's entity subscriptions again;
 `server.access.disconnectUser(userId, { sessionId? })` ends a user's (or one
@@ -1222,11 +1249,21 @@ connection.close();
 such code, and `createInvalidationCoordinator(queryClient)` invalidates as
 the hooks do.
 
+A client in another language (a Godot game, a native app) speaks the wire
+itself: [`docs/protocol-v5.md`](docs/protocol-v5.md) is its specification,
+generated from the protocol's source, and [`examples/godot`](examples/godot)
+holds a GDScript client written from it. [`docs/clients.md`](docs/clients.md)
+compares the three ways in.
+
 ## Kits
 
 The methods most services write by hand, as one-line opt-ins (design:
 section 12). Each kit's contract half comes from the package root and makes
-ordinary contract entries; its handlers come from `./server`.
+ordinary contract entries; its handlers come from `./server`. Lint's
+`prefer-kit` reports a method written by hand that a kit implements (`get`,
+`list`, `create`, `getTask`, ...) in a service that uses no kit; one that
+must stay hand-written says why in a `// quickdraw: hand-written because ...`
+comment above it.
 
 ### Read/write kit
 
@@ -1786,8 +1823,12 @@ export const task = defineContract("taskService", {
     load: { item: z.number(), volatile: true, access: "authenticated" },
   },
   channels: {
-    // 20 a second per socket; only from a socket subscribed to the task the payload names
-    cursor: { payload: cursorSchema, ratePerSecond: 20, requires: { entity: "taskId" } },
+    // 20 a second per socket; only from a socket in the board's room, which enterBoard joined
+    cursor: {
+      payload: cursorSchema,
+      ratePerSecond: 20,
+      requires: { room: (cursor) => `board:${cursor.projectId}` },
+    },
   },
   events: { cursorMoved: { payload: cursorSchema } },
 });
@@ -1879,8 +1920,13 @@ export function TaskRoom({
   its schema, one without the service grant `{ access: { service }, handler }`
   names, or one whose `requires` the socket does not hold (`{ entity }`: a
   `qd:sub` of that row; `{ collection, scope }`: a `qd:col:sub` of that
-  scope) is dropped. Nothing is logged per message; a handler's error is.
-  The socket rate limiter does not count channels.
+  scope; `{ room }`: the app room, a name like `"world"` or a function of
+  the payload, which a call over that same socket joined) is dropped.
+  Nothing is logged per message; a handler's error is. The socket rate
+  limiter does not count channels. Every requirement is the sending
+  socket's own: a room another socket of the user joined does not count, a
+  reconnected socket must join again, and behind a cluster the check runs
+  on the node the socket is connected to, with no round trip.
 - Presence: `isOnline`, `lastSeen` (now while online, else when the user's
   last socket on this process disconnected), `count` and `users` (each user
   once, anonymous sockets left out; app rooms only) come from this process's
@@ -2265,6 +2311,7 @@ one format and names the method call it happened in:
 | `ambient-write`      | a tracked write ran outside any unit of work                                                         |
 | `batch-read`         | a write in an array-form `$transaction` read its rows outside the batch                              |
 | `batch-create-many`  | a `createMany` in an array-form `$transaction` could not report its rows                             |
+| `repeated-call`      | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                 |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
@@ -2283,6 +2330,23 @@ once the reply was recorded (over a socket or HTTP the reply was already
 sent, so that error is logged, not thrown). Strictness belongs to the app:
 warnings outside its calls (an ambient write while seeding, another app's
 calls) are logged as usual, and `app.close()` ends it.
+
+A `repeated-call` warning names a client caught in a loop (a mutation fired
+from an effect that its own result runs again, a refetch that triggers
+itself) before the socket's rate limit answers `RATE_LIMITED` without saying
+why: when one connection (a socket, an MCP session) calls a method with the
+same input more than 10 times within a second, once per connection, service
+and method; and when one is refused `RATE_LIMITED` more than 30 times within
+a minute, once per connection. Calls without a connection (in-process,
+HTTP) are not counted.
+The client names the same loops from its side, in development, with the
+same format: `repeated-mutation` when one `useMutation` issues its mutation
+more than 5 times within a second (with the component that holds it), and
+`repeated-invalidation` when `qd.invalidate` asks for one query key more
+than 20 times within a second, or the invalidation coordinator refetches
+or marks it stale that often. The coordinator's work is counted after its
+coalescing, so a watched topic that changes 25 times a second (a few
+refetches) is not named a loop.
 
 ### Components
 
@@ -2418,8 +2482,16 @@ nothing. Run `--check` in CI next to the lint step.
 config every 5.0 app extends: it reports untracked and foreign writes, nested
 and raw SQL writes, hand-sent frames, inline auth guards, unbounded reads,
 database calls and emits in loops, layering breaks, bypasses of the typed
-client, and every removed 4.x API with its replacement. Each rule supports a
-baseline, so an app can adopt it before fixing old code.
+client, hand-written copies of kit methods (`prefer-kit`, a warning), and
+every removed 4.x API with its replacement. Each rule supports a baseline,
+so an app can adopt it before fixing old code.
+
+The guards follow one order of preference, so an agent moving fast meets a
+mistake as early as it can be caught: a type error; then a refusal when the
+service is defined (an access form that checks no row on a method that
+takes an `id`, unless it says `rowless: true`); then lint; then a
+development warning as it happens (`repeated-call`, `repeated-mutation` and
+`repeated-invalidation` name a client loop before the rate limit does).
 
 [`@fitzzero/quickdraw-skills`](packages/skills) ships agent rules and skills
 for quickdraw apps and links them into `.claude/` with

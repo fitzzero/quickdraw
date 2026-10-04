@@ -71,13 +71,17 @@ export const db: FakeDb = { label: "fake-db" };
 
 export const qd = initQuickdraw<{ db: FakeDb; principal: AppPrincipal }>();
 
-/** Implementations of every task method, for tests that override only one or two. */
+/**
+ * Implementations of every task method, for tests that override only one or
+ * two. The ones taking an `id` are `rowless`, so a test may define them on
+ * a service with an access policy without checking rows.
+ */
 export const taskDefaults = {
-  get: { access: "public", handler: () => taskRow() },
-  find: { access: "public", handler: () => null },
+  get: { access: "public", rowless: true, handler: () => taskRow() },
+  find: { access: "public", rowless: true, handler: () => null },
   list: { access: "public", handler: () => [{ id: "t1", title: "a card" }] },
   count: { access: "public", handler: () => 0 },
-  rename: { access: "authenticated", handler: () => taskRow() },
+  rename: { access: "authenticated", rowless: true, handler: () => taskRow() },
 } as const;
 
 export interface LogEntry {

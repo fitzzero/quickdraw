@@ -185,6 +185,16 @@ export type MethodImplementation<
   ) => MaybePromise<HandlerOutputOf<C, M, Proj>>;
   /** This method's time limit in milliseconds, instead of the dispatcher's `callTimeoutMs`. */
   readonly timeoutMs?: number;
+  /**
+   * Says the access form is this method's whole check on purpose. On a
+   * service with an access policy, `defineService` refuses a method whose
+   * input has `id` while its access is `"public"`, `"authenticated"` or `{
+   * service: L }` below `Admin`, since any caller the form admits could then
+   * reach any row by its id: give it `{ entry: L }` so the policy decides,
+   * or `rowless: true` when every such caller may reach any row (public
+   * profiles, lookups by an id that tells nothing).
+   */
+  readonly rowless?: true;
 } & (KindOf<C, M> extends "query" ? QueryOptions<T, C, M, A> : MutationOptions);
 
 type NotAMethod<

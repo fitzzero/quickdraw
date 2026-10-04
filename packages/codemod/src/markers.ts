@@ -27,6 +27,7 @@ export const CATEGORIES = [
   "raw-sql",
   "lifecycle",
   "admin",
+  "kit",
   "channel",
   "this",
   "context",
