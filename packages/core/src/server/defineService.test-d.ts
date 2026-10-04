@@ -18,6 +18,7 @@ import {
   type BaseContext,
   type Caller,
   type HandlerContext,
+  type MethodImplementation,
   type Principal,
   type Service,
 } from "./index";
@@ -191,6 +192,53 @@ describe("defineService", () => {
           // @ts-expect-error -- a "public" handler cannot assume a principal
           handler: ({ ctx }) => (ctx.principal.userId === "" ? "pong" : "pong"),
         },
+      },
+    });
+  });
+
+  test("an unannotated id function leaves every other method's principal as its own form says", () => {
+    qd.defineService(task, {
+      ...rows,
+      methods: {
+        get: {
+          access: "public",
+          handler: ({ ctx }) => {
+            expectTypeOf(ctx.principal).toEqualTypeOf<AppPrincipal | null>();
+            return row;
+          },
+        },
+        find: {
+          access: "authenticated",
+          handler: ({ ctx }) => {
+            expectTypeOf(ctx.principal).toEqualTypeOf<AppPrincipal>();
+            return null;
+          },
+        },
+        list: {
+          access: {
+            entry: "Read",
+            id: (input) => {
+              expectTypeOf(input).toEqualTypeOf<{ projectId: string; limit: number }>();
+              return input.projectId;
+            },
+          },
+          handler: ({ ctx }) => {
+            expectTypeOf(ctx.principal).toEqualTypeOf<AppPrincipal>();
+            return [];
+          },
+        },
+        count: {
+          access: custom((ctx) => ctx.principal.kind === "user"),
+          handler: ({ ctx }) => ctx.principal.email.length,
+        },
+        rename: {
+          access: { service: "Moderate", entry: "Moderate" },
+          handler: ({ ctx }) => {
+            expectTypeOf(ctx.principal).toEqualTypeOf<AppPrincipal>();
+            return row;
+          },
+        },
+        ping: { access: "public", handler: () => "pong" },
       },
     });
   });
@@ -399,6 +447,15 @@ describe("definitions that fail to compile", () => {
         count: { access: "anyone", handler: () => 0 },
       },
     });
+    qd.defineService(task, {
+      ...rows,
+      methods: {
+        ...ok,
+        list: { access: { entry: "Read", id: (input) => input.projectId }, handler: () => [] },
+        // @ts-expect-error -- still checked beside a form whose id function TypeScript cannot infer
+        count: { access: { service: "Owner" }, handler: () => 0 },
+      },
+    });
   });
 
   test("share, ttlMs and version belong to queries, and custom access cannot share with all", () => {
@@ -450,6 +507,60 @@ describe("definitions that fail to compile", () => {
         count: { access: "public", cache: true, handler: () => 0 },
       },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A method written in a module of its own (MIGRATION.md, "Splitting large
+// services"), typed with `satisfies MethodImplementation<...>` and listed in
+// `methods`.
+// ---------------------------------------------------------------------------
+
+type Types = { db: Db; principal: AppPrincipal; contracts: { task: typeof task } };
+
+describe("a method written on its own", () => {
+  test('typed for "authenticated", it takes every form but "public", with a principal', () => {
+    const rename = {
+      access: { service: "Moderate", entry: "Moderate" },
+      handler: ({ input, ctx, db }) => {
+        expectTypeOf(ctx.principal).toEqualTypeOf<AppPrincipal>();
+        return db.task.find(input.id);
+      },
+    } satisfies MethodImplementation<Types, typeof task, "rename", "authenticated">;
+    const list = {
+      access: { entry: "Read", id: (input) => input.projectId },
+      handler: () => [],
+    } satisfies MethodImplementation<Types, typeof task, "list", "authenticated">;
+    const count = {
+      access: custom((ctx, input) => ctx.principal.kind === "user" && input.projectId !== ""),
+      handler: () => 0,
+    } satisfies MethodImplementation<Types, typeof task, "count", "authenticated">;
+    const find = {
+      access: "authenticated",
+      handler: () => null,
+    } satisfies MethodImplementation<Types, typeof task, "find", "authenticated">;
+    qd.defineService(task, { ...rows, methods: { ...ok, rename, list, count, find } });
+    const open = {
+      // @ts-expect-error -- a handler typed for a principal cannot serve anonymous callers
+      access: "public",
+      handler: () => 0,
+    } satisfies MethodImplementation<Types, typeof task, "count", "authenticated">;
+    expectTypeOf(open).toBeObject();
+  });
+
+  test('typed for "public", it takes every form, and its principal may be null', () => {
+    const get = {
+      access: "public",
+      handler: ({ ctx }) => {
+        expectTypeOf(ctx.principal).toEqualTypeOf<AppPrincipal | null>();
+        return row;
+      },
+    } satisfies MethodImplementation<Types, typeof task, "get", "public">;
+    const count = {
+      access: { service: "Read" },
+      handler: () => 0,
+    } satisfies MethodImplementation<Types, typeof task, "count", "public">;
+    qd.defineService(task, { ...rows, methods: { ...ok, get, count } });
   });
 });
 

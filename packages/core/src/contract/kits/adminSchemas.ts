@@ -412,7 +412,7 @@ function fieldConfigJson(): JsonSchema {
       enumValues: { type: "array", items: STRING },
       relationService: STRING,
     },
-    ["name", "type", "label", "required", "editable", "showInTable", "sortable", "filterable"],
+    ["name", "type", "label", "required", "editable", "showInTable", "sortable"],
   );
 }
 

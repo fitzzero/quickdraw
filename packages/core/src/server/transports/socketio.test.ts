@@ -6,16 +6,19 @@ import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { ERROR_CODES, QUICKDRAW_VERSION, defineContract, query } from "../../index";
+import { ERROR_CODES, QUICKDRAW_VERSION, defineContract, listOf, query } from "../../index";
 import {
   alice,
   bob,
   captureLogger,
   db,
+  deferred,
+  granted,
   qd,
   task,
   taskDefaults,
   taskRow,
+  tick,
 } from "../__tests__/fixtures";
 import { createDispatcher } from "../dispatcher";
 import type { AnyService, CallRecord, PipelineOptions, ServerOnlyOptions } from "../index";
@@ -274,6 +277,108 @@ describe("replies that cannot be encoded", () => {
     expect((await opened.hello).features).toEqual(["binary"]);
     await call(opened.socket, { id: 1, s: "taskService", m: "get", i: { id: "t1" } });
     expect(records.map((record) => [record.outcome, record.bytes])).toEqual([["ok", 0]]);
+  });
+});
+
+describe("a shared run's reply", () => {
+  const SENTINEL = "a board only a shared run returns";
+  const boardRow = z.object({ id: z.string(), title: z.string(), notes: z.string() });
+  const board = defineContract("boardService", {
+    entity: boardRow,
+    fields: { notes: "Admin" },
+    methods: {
+      board: query({ input: z.object({ projectId: z.string() }), output: listOf("entity") }),
+    },
+  });
+  const rows = [
+    { id: "b1", title: SENTINEL, notes: "admins only" },
+    { id: "b2", title: SENTINEL, notes: "admins only" },
+  ];
+  const readerRows = rows.map(({ notes: _notes, ...row }) => row);
+
+  /** A server whose `board` query shares one run, held until `gate` opens, kept for a minute after. */
+  async function serveBoard() {
+    const gate = deferred();
+    const runs = { n: 0 };
+    const service = qd.defineService(board, {
+      methods: {
+        board: {
+          access: "authenticated",
+          share: "all",
+          ttlMs: 60_000,
+          handler: async () => {
+            runs.n += 1;
+            await gate.promise;
+            return rows;
+          },
+        },
+      },
+    });
+    const records: CallRecord[] = [];
+    const { url } = await harness.start({
+      services: [service],
+      db,
+      logger: captureLogger(),
+      auth: trustingAuth,
+      onCall: (record) => records.push(record),
+    });
+    return { url, gate, runs, records };
+  }
+
+  /** Calls `board` from every principal at once, opens the run, and counts the encodings of its rows. */
+  async function callTogether(principals: readonly AppPrincipal[]) {
+    const { url, gate, runs, records } = await serveBoard();
+    const sockets = await Promise.all(principals.map(async (who) => await connect(url, who)));
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      const replies = Promise.all(
+        sockets.map(
+          async (socket) =>
+            await call(socket, { id: 1, s: "boardService", m: "board", i: { projectId: "p1" } }),
+        ),
+      );
+      await vi.waitFor(() => {
+        expect(runs.n).toBe(1);
+      });
+      // Calls that arrive after the run settled join it too, through `ttlMs`.
+      await tick(20);
+      gate.resolve();
+      const results = await replies;
+      const encodings = stringify.mock.results.filter(
+        (result) => typeof result.value === "string" && result.value.includes(SENTINEL),
+      ).length;
+      return { results, encodings, runs: runs.n, records };
+    } finally {
+      stringify.mockRestore();
+    }
+  }
+
+  it("is encoded once for every caller who sees the same fields, not once per caller", async () => {
+    const readers = [alice, bob, alice, bob, alice, bob];
+    const { results, encodings, runs, records } = await callTogether(readers);
+    expect(runs).toBe(1);
+    expect(encodings).toBe(1);
+    expect(results).toEqual(readers.map(() => ({ ok: true, d: readerRows })));
+    expect(records.filter((record) => record.shared)).toHaveLength(readers.length - 1);
+    // Each socket's first acknowledgement is packet 0: `30[reply]`, measured as before.
+    const bytes = Buffer.byteLength(`30${JSON.stringify([{ ok: true, d: readerRows }])}`);
+    expect(records.map((record) => record.bytes)).toEqual(readers.map(() => bytes));
+  });
+
+  it("never hands a joiner the copy of a level above its own", async () => {
+    const admin = granted(alice, { boardService: "Admin" });
+    const reader = granted(bob, { boardService: "Read" });
+    const callers = [reader, admin, reader, admin];
+    const { results, encodings, runs } = await callTogether(callers);
+    expect(runs).toBe(1);
+    // One copy, stripped and encoded once, per group of callers who see the same fields.
+    expect(encodings).toBe(2);
+    expect(results).toEqual([
+      { ok: true, d: readerRows },
+      { ok: true, d: rows },
+      { ok: true, d: readerRows },
+      { ok: true, d: rows },
+    ]);
   });
 });
 

@@ -72,7 +72,11 @@ export interface ReconnectRefetchOptions {
    * it is fresh.
    */
   readonly watched: (query: Query) => boolean;
-  /** The longest random delay before each refetch. Default 2,000 ms. */
+  /**
+   * The longest random delay before each refetch, so clients that reconnect
+   * together do not refetch in one burst; `0` refetches at once. Default
+   * 2,000 ms. The provider passes its `reconnectJitterMs`.
+   */
   readonly jitterMs?: number;
   /** Which queries to consider: those this key prefixes. Default `["qd"]`, every quickdraw query. */
   readonly queryKey?: QueryKey;
@@ -90,8 +94,9 @@ export interface InvalidationCoordinator {
   invalidate(queryKey: QueryKey, options?: InvalidateOptions): void;
   /**
    * After a reconnect: refetches the active queries that are watched or
-   * stale, each after its own random delay of up to `jitterMs`, unless by
-   * then it is reading, or it has been read since the reconnect.
+   * stale, each after its own random delay of up to `jitterMs` (at once for
+   * `0`), unless by then it is reading, or it has been read since the
+   * reconnect. Throws a `TypeError` for a `jitterMs` below 0.
    */
   refetchAfterReconnect(options: ReconnectRefetchOptions): void;
   /**
@@ -295,19 +300,41 @@ function refreshAfter(state: State, query: Query, since: number): void {
   }
 }
 
+/**
+ * A reconnect's jitter, checked: `value`, or 2,000 ms when it is
+ * `undefined`. Throws a `TypeError` naming `owner` for anything but a finite
+ * number of milliseconds, 0 or more.
+ */
+export function reconnectJitter(owner: string, value: number | undefined): number {
+  const jitterMs = value ?? RECONNECT_JITTER_MS;
+  if (typeof jitterMs !== "number" || !Number.isFinite(jitterMs) || jitterMs < 0) {
+    throw new TypeError(`${owner} must be a number of milliseconds, 0 or more`);
+  }
+  return jitterMs;
+}
+
+/** {@link refreshAfter} after a random delay of up to `jitterMs`, or at once for 0. */
+function refreshLater(state: State, query: Query, since: number, jitterMs: number): void {
+  if (jitterMs === 0) {
+    refreshAfter(state, query, since);
+    return;
+  }
+  const timer = setTimeout(() => {
+    state.delayed.delete(timer);
+    refreshAfter(state, query, since);
+  }, Math.random() * jitterMs);
+  state.delayed.add(timer);
+}
+
 function refetchAfterReconnect(state: State, options: ReconnectRefetchOptions): void {
   const since = Date.now();
-  const jitterMs = options.jitterMs ?? RECONNECT_JITTER_MS;
+  const jitterMs = reconnectJitter("refetchAfterReconnect: jitterMs", options.jitterMs);
   const queries = state.queryClient
     .getQueryCache()
     .findAll({ queryKey: options.queryKey ?? [KEY_ROOT] });
   for (const query of queries) {
     if (query.isActive() && (options.watched(query) || query.isStale())) {
-      const timer = setTimeout(() => {
-        state.delayed.delete(timer);
-        refreshAfter(state, query, since);
-      }, Math.random() * jitterMs);
-      state.delayed.add(timer);
+      refreshLater(state, query, since, jitterMs);
     }
   }
 }

@@ -10,6 +10,7 @@ import {
   admin as adminContract,
   defineContract,
   query,
+  type AdminFieldConfig,
   type AdminPage,
   type AdminServiceMeta,
   type AdminSubscribers,
@@ -106,6 +107,23 @@ describe("admin.contract", () => {
     update({ id: "t1", data: { id: "t2" } });
     // @ts-expect-error createdAt is not writable
     update({ id: "t1", data: { createdAt: "2026-01-01T00:00:00.000Z" } });
+  });
+});
+
+describe("AdminFieldConfig", () => {
+  test("takes a 4.x field configuration, which has no filterable", () => {
+    // A 4.x story or config literal: every 4.1 field but no `filterable`, which 5.0 added.
+    const legacy = {
+      name: "title",
+      type: "string",
+      label: "Title",
+      required: true,
+      editable: true,
+      showInTable: true,
+      sortable: true,
+    } as const;
+    expectTypeOf(legacy).toExtend<AdminFieldConfig>();
+    expectTypeOf<AdminFieldConfig["filterable"]>().toEqualTypeOf<boolean | undefined>();
   });
 });
 

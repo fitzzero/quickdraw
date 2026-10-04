@@ -6,8 +6,11 @@ the same guidance, written against the API as built, and it updates with
 the package instead of drifting per app.
 
 ```bash
-bun add -d @fitzzero/quickdraw-skills
+bun add -d @fitzzero/quickdraw-skills@next
 ```
+
+Until 5.0.0 is released, 5.0 is published under the `next` dist-tag,
+which the command names.
 
 ```jsonc
 // package.json
@@ -31,7 +34,7 @@ whatever the version.
 | `.claude/rules/quickdraw-client.md`    | the typed client, live entities and collections, views, optimistic mutations, `watch`    |
 | `.claude/rules/quickdraw-testing.md`   | `createTestApp`, access matrices, budgets, strict warnings, component tests              |
 | `.claude/skills/quickdraw-new-service` | adding a service end to end: contract, service, registration, client, tests              |
-| `.claude/skills/quickdraw-migrate-v5`  | moving a 4.x app to 5.0 (a stub until the 5.0 migration guide ships)                     |
+| `.claude/skills/quickdraw-migrate-v5`  | moving a 4.x app to 5.0 with `@fitzzero/quickdraw-codemod` and the migration guide       |
 
 Each rule's `paths` frontmatter follows the quickdraw template's layout
 (`apps/api`, `apps/web`, `packages/shared`), so Claude Code loads it while

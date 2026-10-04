@@ -40,6 +40,15 @@ function flattenServer(rep: Repetition, out: Flat): void {
   out["server.sqlStatements"] = s ? s.sqlStatements : null;
   out["server.snapshots.collection"] = s ? s.snapshotsServed.collection : null;
   out["server.snapshots.entity"] = s ? s.snapshotsServed.entity : null;
+  if (s?.snapshotsServed.collectionResumes !== undefined) {
+    out["server.snapshots.collectionResumes"] = s.snapshotsServed.collectionResumes;
+  }
+  if (s?.snapshotsServed.entityNotModified !== undefined) {
+    out["server.snapshots.entityNotModified"] = s.snapshotsServed.entityNotModified;
+  }
+  if (s?.listenersPerSocket !== undefined) {
+    out["server.listenersPerSocket"] = s.listenersPerSocket;
+  }
   out["server.rssPeakMb"] = s ? round(s.rssPeakMb, 1) : null;
   for (const [handler, runs] of Object.entries(s?.handlerRuns ?? {})) {
     out[`server.handlerRuns.${handler}`] = runs;

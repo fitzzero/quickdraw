@@ -7,12 +7,16 @@
  * type dependency on Express.
  */
 
+import type { IncomingHttpHeaders } from "node:http";
 import { verifyJWT } from "./jwt";
-import { SESSION_COOKIE } from "./sessionCookie";
+import { cookieDomainFromEnv, sessionCookieNamesFor } from "./sessionCookie";
 
 export interface AuthRequest {
   cookies?: Record<string, string>;
-  headers: { authorization?: string };
+  /** Its headers: `authorization`, and what says whether it came over HTTPS (`sessionCookieNamesFor`). */
+  headers: IncomingHttpHeaders;
+  /** Express's `req.secure`. */
+  secure?: unknown;
   userId?: string;
 }
 
@@ -30,19 +34,26 @@ export interface RequireAuthOptions {
   getSession: (token: string) => Promise<{ expiresAt: Date } | null>;
   /** JWT signing secret. Defaults to process.env.JWT_SECRET. */
   jwtSecret?: string;
-  /** Cookie to read the JWT from. Default: "session". */
+  /**
+   * Cookie to read the JWT from. Default: the names `setSessionCookie` and
+   * the auth routes set on the same request (`sessionCookieNamesFor`):
+   * `__Host-session` over HTTPS, `session` (then `__Host-session`) over
+   * plain HTTP or when `COOKIE_DOMAIN` is set.
+   */
   cookieName?: string;
 }
 
 /**
- * Extract a JWT from the session cookie or Authorization header
- * (cookie takes priority).
+ * Extract a JWT from the session cookie (`req.cookies`, from `cookie-parser`)
+ * or Authorization header (cookie takes priority). Without a `cookieName`,
+ * the cookie is read under the names `setSessionCookie` sets on the same
+ * request.
  */
-export function extractBearerOrCookieToken(
-  req: AuthRequest,
-  cookieName: string = SESSION_COOKIE,
-): string | null {
-  const cookieToken = req.cookies?.[cookieName];
+export function extractBearerOrCookieToken(req: AuthRequest, cookieName?: string): string | null {
+  const { cookies } = req;
+  const names = sessionCookieNamesFor(req, { cookieName, domain: cookieDomainFromEnv() });
+  const name = names.find((candidate) => cookies?.[candidate] !== undefined);
+  const cookieToken = name === undefined ? undefined : cookies?.[name];
   if (cookieToken) return cookieToken;
 
   const authHeader = req.headers.authorization;

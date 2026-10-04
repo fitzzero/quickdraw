@@ -10,7 +10,8 @@
 //   6. join an identical shared run in flight
 //   7. run the handler in a unit of work        TIMEOUT, CANCELLED
 //   8. project and check the output             INTERNAL
-//      then strip field tiers for this caller
+//      then strip field tiers for this caller (one copy, encoded
+//      once, per group of a shared run's callers who see the same fields)
 //   9. respond, flush, and emit one completion record
 //
 // The time limit starts once the call is admitted (after step 2) and covers
@@ -23,7 +24,7 @@ import { createConcurrencyLimiter, type ConcurrencyLimiter, type QuerySlot } fro
 import { throwIfCancelled, toQuickdrawError } from "./errors";
 import { execute, forCaller, type ExecuteCall } from "./execute";
 import { describeError, type CallOutcome, type CallRecord } from "./metrics";
-import type { DispatchRequest, DispatchResult } from "./request";
+import type { DispatchRequest, DispatchResult, SharedData } from "./request";
 import type { Run } from "./run";
 import type { PipelineSettings } from "./settings";
 import { createShareTable, type ShareTable } from "./share";
@@ -65,6 +66,8 @@ interface CallState extends ExecuteCall {
   queueMs: number;
   /** The work of the stage the call is in, or last finished. It may outlive the call's answer. */
   stageWork: Promise<unknown> | undefined;
+  /** The shared copy the call's data is, handed to `respond` with its result. */
+  sharedData: SharedData | undefined;
 }
 
 /**
@@ -104,7 +107,8 @@ async function proceed(
   if (!outcome.ok) {
     return { ok: false, error: outcome.error };
   }
-  const data = await stage(call, forCaller(settings, target, request.principal, outcome.value));
+  const { data, shared } = await stage(call, forCaller(settings, target, call, outcome.value));
+  call.sharedData = shared;
   const reported = versionOfResult(settings, target, { input, ctx, version }, data);
   return reported === undefined ? { ok: true, data } : { ok: true, data, version: reported };
 }
@@ -164,14 +168,22 @@ async function settle(pipeline: Pipeline, call: CallState): Promise<DispatchResu
   }
 }
 
-/** Step 9a: hands the result to the transport, which reports the reply's size. */
+/**
+ * Step 9a: hands the result to the transport, which reports the reply's
+ * size, with the shared copy its data is when it came from a shared run.
+ */
 function respond(settings: PipelineSettings, call: CallState, result: DispatchResult): number {
   const { respond: send } = call.request;
   if (send === undefined) {
     return 0;
   }
+  const { sharedData } = call;
+  const shared =
+    result.ok && result.notModified !== true && sharedData?.data === result.data
+      ? sharedData
+      : undefined;
   try {
-    const bytes = send(result);
+    const bytes = shared === undefined ? send(result) : send(result, shared);
     return typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
   } catch (error) {
     settings.logger.error("A transport failed to send a reply", {
@@ -266,6 +278,8 @@ export function createPipeline(settings: PipelineSettings): Dispatch {
       stageWork: undefined,
       shared: false,
       run: undefined,
+      source: undefined,
+      sharedData: undefined,
     };
     const result = await settle(pipeline, call);
     const durationMs = performance.now() - startedAt;

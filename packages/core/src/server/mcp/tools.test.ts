@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { z as z3 } from "zod3";
-import { defineContract, mutation, query } from "../../index";
+import { defineContract, mutation, query, todoSchema } from "../../index";
 import { createServices, qd } from "./__tests__/fixtures";
 import { describeTools } from "./index";
 
@@ -213,6 +213,25 @@ describe("describeTools", () => {
       "describeTools: the input schema of legacyService.find cannot describe itself as JSON Schema, which an MCP tool needs: use Zod 4.2 or later for that schema, or leave legacyService.find out with exclude",
     );
     expect(describeTools([legacyService], { exclude: ["legacyService.find"] })).toEqual([]);
+  });
+
+  it("serves a migrated method whose input is a todoSchema, taking its arguments as the input", () => {
+    const migrated = defineContract("migratedService", {
+      methods: {
+        // oxlint-disable-next-line quickdraw/no-todo-schema -- the placeholder is what this tests
+        rename: mutation({ input: todoSchema<{ id: string; title: string }>(), output: z.null() }),
+      },
+    });
+    const migratedService = qd.defineService(migrated, {
+      methods: { rename: { access: "public", handler: () => null } },
+    });
+    expect(describeTools([migratedService])).toEqual([
+      {
+        name: "migratedService_rename",
+        description: "migratedService.rename (mutation)",
+        inputSchema: { type: "object" },
+      },
+    ]);
   });
 
   it("refuses an input JSON Schema cannot represent, unless the method takes no input", () => {

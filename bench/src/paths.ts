@@ -10,6 +10,8 @@ export const RESULTS_DIR = join(BENCH_DIR, "results");
 export const BASELINES_DIR = join(BENCH_DIR, "baselines");
 /** Committed Markdown reports next to the baselines. */
 export const REPORTS_DIR = join(BENCH_DIR, "reports");
+/** The other runs a committed comparison report was made from, one directory per new version. */
+export const COMPARISONS_DIR = join(BENCH_DIR, "comparisons");
 export const COMPOSE_FILE = join(BENCH_DIR, "docker-compose.yml");
 export const SCHEMA_FILE = join(BENCH_DIR, "result.schema.json");
 

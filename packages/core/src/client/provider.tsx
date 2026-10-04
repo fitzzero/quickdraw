@@ -16,12 +16,12 @@
 // Nothing is cleared on a disconnect: cached data stays. After a reconnect
 // with the same credentials, the coordinator refetches only the queries that
 // watch a topic (they missed its changes) or are stale, each after a random
-// delay of up to 2 s, where 4.1 invalidated every query at once
-// (`legacy-src/client/QuickdrawProvider.tsx:320-321`). The cache follows the
-// user the server's hello names (`session.ts`): another user's hello empties
-// it, and new credentials for the same user refetch it. New grants
-// (`qd:access`) refetch every query, and a revoked row or scope
-// (`qd:revoked`) the method queries of its service.
+// delay of up to 2 s by default (`reconnectJitterMs`), where 4.1 invalidated
+// every query at once (`legacy-src/client/QuickdrawProvider.tsx:320-321`).
+// The cache follows the user the server's hello names (`session.ts`):
+// another user's hello empties it, and new credentials for the same user
+// refetch it. New grants (`qd:access`) refetch every query, and a revoked row
+// or scope (`qd:revoked`) the method queries of its service.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
@@ -38,7 +38,7 @@ import {
   type QuickdrawConnectionOptions,
 } from "./connection";
 import { QuickdrawContext, useConnectionState, useQuickdrawContext } from "./context";
-import { createInvalidationCoordinator } from "./coordinator";
+import { createInvalidationCoordinator, reconnectJitter } from "./coordinator";
 import { bindConnection, isWatchedQuery } from "./createClient";
 import { liveDataOf } from "./live/liveData";
 import { reloadOncePerSession } from "./reload";
@@ -62,6 +62,14 @@ export interface QuickdrawProviderProps<Contracts extends ContractMap> extends O
   readonly auth?: ConnectionAuth;
   /** The cache the hooks use. Default: a `QueryClient` the provider creates (5-minute stale time). */
   readonly queryClient?: QueryClient;
+  /**
+   * After a reconnect, the longest random delay before each watched or stale
+   * query is refetched, so a fleet of clients that reconnect together (a
+   * server restart) does not refetch in one burst; `0` refetches them at
+   * once. Default 2,000 ms. Entity rows and collections resume by revision
+   * at once either way.
+   */
+  readonly reconnectJitterMs?: number;
   readonly children?: React.ReactNode;
 }
 
@@ -119,7 +127,16 @@ function useProviderConnection(
 function ConnectedProvider<Contracts extends ContractMap>(
   props: QuickdrawProviderProps<Contracts>,
 ): React.ReactElement {
-  const { client, auth, queryClient: given, children, onProtocolMismatch, ...options } = props;
+  const {
+    client,
+    auth,
+    queryClient: given,
+    reconnectJitterMs,
+    children,
+    onProtocolMismatch,
+    ...options
+  } = props;
+  const jitterMs = reconnectJitter("QuickdrawProvider: reconnectJitterMs", reconnectJitterMs);
   const [ownQueryClient] = React.useState(createDefaultQueryClient);
   const queryClient = given ?? ownQueryClient;
   const coordinator = React.useMemo(
@@ -145,9 +162,10 @@ function ConnectedProvider<Contracts extends ContractMap>(
       connection.onReconnect(() => {
         coordinator.refetchAfterReconnect({
           watched: (query) => isWatchedQuery(client, query.queryKey),
+          jitterMs,
         });
       }),
-    [connection, coordinator, client],
+    [connection, coordinator, client, jitterMs],
   );
   React.useEffect(() => refetchOnAccessChanges(connection, coordinator), [connection, coordinator]);
   React.useEffect(

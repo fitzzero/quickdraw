@@ -1,4 +1,5 @@
-import { BoardState, V4Connection, Viewer, Writer } from "../drivers/v4";
+import type { BoardViewer, BoardWriter, PlainConnection } from "../drivers/types";
+import { BoardState } from "../drivers/board-state";
 import { sleep } from "../time";
 import type { ScenarioContext } from "./types";
 
@@ -25,13 +26,13 @@ export async function openViewers(
   ctx: ScenarioContext,
   count: number,
   entities: number,
-): Promise<Viewer[]> {
+): Promise<BoardViewer[]> {
   const entityIds = ctx.workload.hotTaskIds.slice(0, entities);
-  const viewers: Viewer[] = [];
+  const viewers: BoardViewer[] = [];
   for (let start = 0; start < count; start += SETUP_BATCH) {
     const batch = Array.from({ length: Math.min(SETUP_BATCH, count - start) }, (_, offset) => {
       const token = tokenFor(ctx, ctx.workload.viewerUserIds, start + offset);
-      return new Viewer(ctx, token, ctx.workload.project.id, entityIds);
+      return ctx.driver.viewer(ctx, token, ctx.workload.project.id, entityIds);
     });
     viewers.push(...batch);
     const loads = await Promise.all(batch.map(async (viewer) => await viewer.open()));
@@ -45,11 +46,10 @@ export async function openViewers(
 }
 
 /** Open `count` writers, one per Moderate member. */
-export async function openWriters(ctx: ScenarioContext, count: number): Promise<Writer[]> {
+export async function openWriters(ctx: ScenarioContext, count: number): Promise<BoardWriter[]> {
   const board = new BoardState(ctx.workload);
-  const writers = Array.from(
-    { length: count },
-    (_, index) => new Writer(ctx, tokenFor(ctx, ctx.workload.writerUserIds, index), index, board),
+  const writers = Array.from({ length: count }, (_, index) =>
+    ctx.driver.writer(ctx, tokenFor(ctx, ctx.workload.writerUserIds, index), index, board),
   );
   await Promise.all(writers.map(async (writer) => await writer.open()));
   return writers;
@@ -59,10 +59,9 @@ export async function openWriters(ctx: ScenarioContext, count: number): Promise<
 export async function openConnections(
   ctx: ScenarioContext,
   count: number,
-): Promise<V4Connection[]> {
-  const connections = Array.from(
-    { length: count },
-    (_, index) => new V4Connection(ctx, tokenFor(ctx, ctx.workload.viewerUserIds, index)),
+): Promise<PlainConnection[]> {
+  const connections = Array.from({ length: count }, (_, index) =>
+    ctx.driver.connection(ctx, tokenFor(ctx, ctx.workload.viewerUserIds, index)),
   );
   await Promise.all(connections.map(async (connection) => await connection.connect()));
   return connections;
@@ -75,11 +74,12 @@ export interface Quiet {
 
 /**
  * Wait until nothing is left to do: no client request in flight, no viewer
- * debounce or retry pending, and no handler running on the server.
+ * work queued (a debounce, a retry or a refetch owed), and no handler
+ * running on the server.
  */
 export async function waitForQuiet(
   ctx: ScenarioContext,
-  viewers: readonly Viewer[],
+  viewers: readonly BoardViewer[],
   capMs: number,
 ): Promise<Quiet> {
   const startedAt = performance.now();

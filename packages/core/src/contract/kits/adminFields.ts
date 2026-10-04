@@ -64,8 +64,12 @@ export interface AdminFieldConfig {
   readonly showInTable: boolean;
   /** Whether `adminList` may sort by it: the contract declares it in `sort`. */
   readonly sortable: boolean;
-  /** Whether `adminList` may filter on it: the contract declares it in `filter`. */
-  readonly filterable: boolean;
+  /**
+   * Whether `adminList` may filter on it: the contract declares it in
+   * `filter`. `adminMeta` always says; optional (default `false`) so field
+   * configurations written for 4.x, which had no `filterable`, still type.
+   */
+  readonly filterable?: boolean;
   /** For enum fields, the allowed values. */
   readonly enumValues?: readonly string[];
   /** For relation fields, the related service's name. */

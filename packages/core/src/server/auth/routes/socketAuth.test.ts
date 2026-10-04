@@ -174,13 +174,16 @@ describe("a socket with the session cookie", () => {
     const { url } = await boot();
     const { session } = await signIn(url, "ada@demo.local");
     const ada = signedIn(userIdOf("ada@demo.local"));
+    // An https: page's handshake reads only __Host-session, so it carries that one here.
+    const hostOnly = `__Host-session=${session.slice("session=".length)}`;
     for (const origin of [
       "https://evil.test",
       "http://app.test.evil.test",
       "null",
       "http://APP.test:80x",
     ]) {
-      expect(await connect(url, { cookie: session, origin }), origin).toEqual(REFUSED);
+      const cookie = origin.startsWith("https:") ? hostOnly : session;
+      expect(await connect(url, { cookie, origin }), origin).toEqual(REFUSED);
     }
     expect(await connect(url, { cookie: session })).toEqual(REFUSED);
     expect(await connect(url, { cookie: session, "sec-fetch-site": "cross-site" })).toEqual(
@@ -201,8 +204,9 @@ describe("a socket with the session cookie", () => {
     }));
     const nativeSession = (await signIn(native.url, "ada@demo.local")).session;
     expect(await connect(native.url, { cookie: nativeSession })).toEqual(ada);
+    const nativeHostOnly = `__Host-session=${nativeSession.slice("session=".length)}`;
     expect(
-      await connect(native.url, { cookie: nativeSession, origin: "https://evil.test" }),
+      await connect(native.url, { cookie: nativeHostOnly, origin: "https://evil.test" }),
     ).toEqual(REFUSED);
   });
 
@@ -213,26 +217,72 @@ describe("a socket with the session cookie", () => {
     }
   });
 
-  it("is read from __Host-session first, and not at all when its name is repeated", async () => {
+  it("is read over plain HTTP from session, the name the routes set there, then __Host-session, and not at all when its name is repeated", async () => {
     const { url } = await boot();
     const { session } = await signIn(url, "ada@demo.local");
     const token = session.slice("session=".length);
     const ada = signedIn(userIdOf("ada@demo.local"));
+    const anonymous = {
+      whoami: { ok: false, e: expect.objectContaining({ code: "UNAUTHENTICATED" }) },
+    };
     expect(await connect(url, { cookie: `__Host-session=${token}`, origin: APP_ORIGIN })).toEqual(
       ada,
     );
     expect(
       await connect(url, {
-        cookie: `session=garbage; __Host-session=${token}`,
+        cookie: `__Host-session=garbage; session=${token}`,
         origin: APP_ORIGIN,
       }),
     ).toEqual(ada);
     // Two cookies of one name: one may have been planted by a sibling site. No credential, so
-    // the socket is anonymous.
+    // the socket is anonymous, and a later name does not stand in for it.
     const twice = await connect(url, { cookie: `${session}; session=planted`, origin: APP_ORIGIN });
-    expect(twice).toEqual({
+    expect(twice).toEqual(anonymous);
+    expect(
+      await connect(url, {
+        cookie: `${session}; session=planted; __Host-session=${token}`,
+        origin: APP_ORIGIN,
+      }),
+    ).toEqual(anonymous);
+  });
+
+  it("is read from the plain session cookie over plain HTTP only, unless its name is given", async () => {
+    const secureOrigin = "https://app.test";
+    const withName =
+      (cookieName?: string): Authenticate =>
+      (sessions) => ({
+        authenticate: socketAuth({
+          sessions,
+          jwtSecret: SECRET,
+          allowedOrigins: [APP_ORIGIN, secureOrigin],
+          ...(cookieName === undefined ? {} : { cookieName }),
+          loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
+        }),
+      });
+    const { url } = await boot(withName());
+    const { session } = await signIn(url, "ada@demo.local");
+    const token = session.slice("session=".length);
+    const ada = signedIn(userIdOf("ada@demo.local"));
+    const anonymous = {
       whoami: { ok: false, e: expect.objectContaining({ code: "UNAUTHENTICATED" }) },
-    });
+    };
+    expect(await connect(url, { cookie: `session=${token}`, origin: APP_ORIGIN })).toEqual(ada);
+    // Over HTTPS (an https: page, or a proxy that ended TLS) only __Host-session is read: a
+    // sibling site can plant `session` for the whole parent domain.
+    const secure: readonly Record<string, string>[] = [
+      { origin: secureOrigin },
+      { origin: APP_ORIGIN, "x-forwarded-proto": "https" },
+    ];
+    for (const over of secure) {
+      expect(await connect(url, { cookie: `session=${token}`, ...over })).toEqual(anonymous);
+      expect(await connect(url, { cookie: `__Host-session=${token}`, ...over })).toEqual(ada);
+    }
+    // A name given is read as it is, over HTTPS too.
+    const named = await boot(withName("session"));
+    const signedInThere = await signIn(named.url, "ada@demo.local");
+    expect(
+      await connect(named.url, { cookie: signedInThere.session, origin: secureOrigin }),
+    ).toEqual(ada);
   });
 });
 

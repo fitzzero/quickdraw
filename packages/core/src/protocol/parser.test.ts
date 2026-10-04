@@ -3,8 +3,9 @@ import type { AddressInfo } from "node:net";
 import { Server } from "socket.io";
 import { io as connect, type Socket as ClientSocket } from "socket.io-client";
 import { Decoder, Encoder, PacketType, type Packet } from "socket.io-parser";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createJsonParser, type JsonParser } from "./parser";
+import { PreEncoded } from "./preEncoded";
 import { countUtf8Bytes, utf8ByteLength } from "./utf8";
 
 // ---------------------------------------------------------------------------
@@ -350,6 +351,62 @@ describe("binary arguments", () => {
     expect(encoder.encode(packet)).toEqual([
       '2["upload",{"file":{"type":"Buffer","data":[104,105]}}]',
     ]);
+  });
+});
+
+describe("pre-encoded arguments", () => {
+  const reply = { ok: true, d: [row(1), row(2)], v: "rev-1" };
+  const written = (value: unknown, calls: { n: number }) =>
+    new PreEncoded(value, () => {
+      calls.n += 1;
+      return JSON.stringify(value);
+    });
+
+  it("are spliced in as written, byte for byte what the stock encoder writes for their values", () => {
+    const reports: number[] = [];
+    const encoder = new (createJsonParser({
+      onEncoded: (_packet, bytes) => reports.push(bytes),
+    }).Encoder)();
+    const calls = { n: 0 };
+    const stringify = vi.spyOn(JSON, "stringify");
+    const packets: Packet[] = [
+      { type: PacketType.ACK, nsp: "/", id: 12, data: [written(reply, calls)] },
+      { type: PacketType.ACK, nsp: "/tenant-42", id: 0, data: [written(UNICODE, calls)] },
+      { type: PacketType.EVENT, nsp: "/", data: [written("qd:e", calls), written(reply, calls)] },
+    ];
+    const texts = packets.map((packet) => encoder.encode(packet));
+    // Each argument's own text is written once; the encoder serializes nothing itself.
+    expect(stringify).toHaveBeenCalledTimes(calls.n);
+    stringify.mockRestore();
+    expect(calls.n).toBe(4);
+    const plain = (packet: Packet): Packet => ({
+      ...packet,
+      data: (packet.data as PreEncoded[]).map((arg) => arg.value),
+    });
+    expect(texts).toEqual(packets.map((packet) => [stockText(plain(packet))]));
+    expect(reports).toEqual(texts.map(([text]) => Buffer.byteLength(String(text), "utf8")));
+  });
+
+  it("go through toJSON when only some arguments are, or for the stock encoder", () => {
+    const encoder = new (createJsonParser().Encoder)();
+    const calls = { n: 0 };
+    const mixed: Packet = {
+      type: PacketType.EVENT,
+      nsp: "/",
+      data: ["qd:e", written(reply, calls)],
+    };
+    const plain: Packet = { type: PacketType.EVENT, nsp: "/", data: ["qd:e", reply] };
+    expect(encoder.encode(mixed)).toEqual([stockText(plain)]);
+    expect(stock.encode(mixed)).toEqual([stockText(plain)]);
+    expect(calls.n).toBe(0);
+  });
+
+  it("surface what writing their text throws, from the encoder", () => {
+    const encoder = new (createJsonParser().Encoder)();
+    const refused = new PreEncoded({ big: 1n }, () => JSON.stringify({ big: 1n }));
+    expect(() =>
+      encoder.encode({ type: PacketType.ACK, nsp: "/", id: 1, data: [refused] }),
+    ).toThrow(TypeError);
   });
 });
 

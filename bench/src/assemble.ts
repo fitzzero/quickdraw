@@ -1,4 +1,5 @@
 import type { Options } from "./cli";
+import { TARGET_NOTES } from "./drivers/notes";
 import type { AppInfo } from "./env/app";
 import type { Database } from "./env/database";
 import { expandCpus, type Machine, type Runtime } from "./env/machine";
@@ -7,21 +8,25 @@ import { SCENARIOS, type ScenarioName } from "./scenarios";
 import { summarizeRepetitions } from "./summary";
 import { describeWorkload, type Workload } from "./workload";
 
-/** How every number in a result file was taken. Shown in the report. */
+/**
+ * How every number in a result file was taken, whatever the target. Shown in
+ * the report, followed by the target's own notes (its driver's `notes`).
+ */
 export const NOTES = [
-  "Client latency is timed in the load generator from emit to acknowledgement, only for calls answered successfully within the client's timeout; every other call is counted by kind, not timed.",
-  "Failed requests are timeouts (no answer within the 10 s the 4.1 hooks wait), error answers, and calls with no client timeout still unanswered when the window closed. Calls abandoned because the client itself dropped the connection are counted separately and are not failures.",
+  "Client latency is timed in the load generator from emit to acknowledgement, only for calls answered successfully within the client's timeout; every other call is counted by kind, not timed. Calls abandoned because the client itself dropped the connection are counted separately and are not failures.",
   "Delivery is the time from a writer emitting updateTask to a viewer receiving that change (collection delta or entity update), on the load generator's single clock.",
   "Server CPU is process.cpuUsage() of the server process over the window. Event-loop delay is how late a 10 ms perf_hooks.monitorEventLoopDelay timer fired (the histogram value minus its 10 ms interval). Bytes are TCP bytes the server wrote, including HTTP and WebSocket framing.",
-  "SQL statements are Prisma query events. Prisma batches findUnique calls made in the same tick into one statement, so the 60 per-row access checks and reads of a batchSubscribe cost a handful of statements rather than 180.",
+  "SQL statements are the Prisma client's query events: every statement the server sent, access checks and the reads that build live frames included.",
   "Machine noise comes from /proc: the time other processes spent on the server's pinned cpus during each window (those cpus' busy time minus the server process's own), and how busy the cpus the benchmark did not use were. Interrupt time on the server's cpus, mostly the benchmark's own network traffic, is kept apart in the result file.",
-  "Every run starts a fresh server process on a freshly seeded database. The server logs with 4.1's defaults (two info lines per method call) to a file on local disk.",
+  "Every run starts a fresh server process on a freshly seeded database.",
   "Writes are open-loop: they are issued on schedule whether or not earlier writes have been answered, so a slow server cannot reduce the offered load.",
 ];
 
 export interface AssembleInput {
   options: Options;
   label: string;
+  /** The quickdraw-core version the app installs (the label unless `--label` named another). */
+  coreVersion: string;
   startedAt: number;
   machine: Machine;
   runtime: Runtime;
@@ -35,12 +40,13 @@ export interface AssembleInput {
 function limits(input: AssembleInput): BenchResult["limits"] {
   const { options, database } = input;
   const pgCpus = database.cpus ?? options.pgCpus;
+  const profiled = options.cpuProf ? ", profiled with --cpu-prof" : "";
   return {
     server: {
       method: "taskset",
       cpus: options.serverCpus,
       cpuCount: expandCpus(options.serverCpus).length,
-      detail: `taskset -c ${options.serverCpus} node --import tsx src/server.ts (${expandCpus(options.serverCpus).length} CPUs, affinity checked in /proc/<pid>/status)`,
+      detail: `taskset -c ${options.serverCpus} node --import tsx src/server.ts (${expandCpus(options.serverCpus).length} CPUs, affinity checked in /proc/<pid>/status${profiled})`,
     },
     loadgen: {
       method: "taskset",
@@ -86,8 +92,8 @@ export function assemble(input: AssembleInput): BenchResult {
     createdAt: new Date(input.startedAt).toISOString(),
     totalDurationMs: Date.now() - input.startedAt,
     app: {
-      name: input.options.app,
-      quickdrawCore: input.label,
+      name: input.options.target,
+      quickdrawCore: input.coreVersion,
       versions: input.info.versions,
       dbPoolMax: input.info.dbPoolMax,
       logging: input.info.logging,
@@ -97,7 +103,7 @@ export function assemble(input: AssembleInput): BenchResult {
     limits: limits(input),
     workload: describeWorkload(input.workload),
     order: input.order,
-    notes: NOTES,
+    notes: [...NOTES, ...TARGET_NOTES[input.options.target]],
     notMeasured: notMeasured(scenarios),
     scenarios,
   };

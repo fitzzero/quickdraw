@@ -16,7 +16,7 @@ import type { AccessLevel } from "../../contract/access";
 import type { AnyContract } from "../../contract/defineContract";
 import type { MethodOutput } from "../../contract/methods";
 import { hasJsonSchema, type StandardSchemaV1 } from "../../contract/standardSchema";
-import type { RowLevels } from "../access/policy";
+import type { RowLevel, RowLevels } from "../access/policy";
 import type { StorageRow } from "../storage";
 import { strip, tiersOf, type Tiers } from "./tiers";
 
@@ -287,6 +287,22 @@ export function rowIds(value: unknown): string[] {
   return ids;
 }
 
+/** What one reader may see of a method's result, from {@link readerView}. */
+export interface ReaderView {
+  /**
+   * Equal for two readers of one result exactly when every row hides the
+   * same fields from both, so they may share one stripped copy.
+   */
+  readonly key: string;
+  /** The result without the fields this reader does not receive: a copy of each row that hides any. */
+  strip(): unknown;
+}
+
+/** The view of a reader who sees the whole value: a schema output, or a projection without tiers. */
+export function wholeView(value: unknown): ReaderView {
+  return { key: "", strip: () => value };
+}
+
 /**
  * A projected method result as one reader may see it: each row without the
  * fields its reader's level on that row does not reach (RFC 0003 section 6).
@@ -294,23 +310,23 @@ export function rowIds(value: unknown): string[] {
  * projection has tiered keys. Rows are copied, never changed in place, so a
  * shared run's result stays whole for the other callers.
  */
-export async function stripForReader(
+export async function readerView(
   output: ProjectedOutput,
   value: unknown,
   levelsOf: (ids: readonly string[]) => Promise<RowLevels>,
-): Promise<unknown> {
+): Promise<ReaderView> {
   const { tiers } = output.projection;
   if (!tiers.tiered || value === null || value === undefined) {
-    return value;
+    return wholeView(value);
   }
   const ids = [...new Set(rowIds(value))];
   const levels: RowLevels = ids.length === 0 ? new Map() : await levelsOf(ids);
-  const one = (row: unknown): unknown => {
-    if (!isRecord(row)) {
-      return row;
-    }
-    const level = typeof row.id === "string" ? (levels.get(row.id) ?? null) : null;
-    return strip(row, tiers.hidden(level));
-  };
-  return Array.isArray(value) ? value.map(one) : one(value);
+  const levelOf = (row: UnknownRecord): RowLevel =>
+    typeof row.id === "string" ? (levels.get(row.id) ?? null) : null;
+  const rows: readonly unknown[] = Array.isArray(value) ? value : [value];
+  // A value that is not a row goes to every reader as it is.
+  const key = rows.map((row) => (isRecord(row) ? tiers.label(levelOf(row)) : "-")).join("");
+  const one = (row: unknown): unknown =>
+    isRecord(row) ? strip(row, tiers.hidden(levelOf(row))) : row;
+  return { key, strip: () => (Array.isArray(value) ? value.map(one) : one(value)) };
 }

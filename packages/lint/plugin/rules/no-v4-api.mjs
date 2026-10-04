@@ -261,6 +261,11 @@ export const MOVED_NAMES = Object.freeze({
       ],
       `Moved: import it from "${AUTH}".`,
     ),
+    // Same position in the table; these four also changed their default cookie name.
+    setSessionCookie: `Moved: import it from "${AUTH}". Without a \`cookieName\` it sets the name the auth routes give the response's request (\`__Host-session\` over HTTPS when the cookie has no domain, else \`session\`), which \`socketAuth\` and the HTTP transport read.`,
+    clearSessionCookie: `Moved: import it from "${AUTH}". Without a \`cookieName\` it clears the name \`setSessionCookie\` sets on the same request.`,
+    extractBearerOrCookieToken: `Moved: import it from "${AUTH}". Without a \`cookieName\` it reads the names \`setSessionCookie\` sets on the same request (only \`__Host-session\` over HTTPS when the cookie has no domain).`,
+    createRequireAuth: `Moved: import it from "${AUTH}". Without a \`cookieName\` it reads the names \`setSessionCookie\` sets on the same request (only \`__Host-session\` over HTTPS when the cookie has no domain).`,
     ...each(
       ["bootstrapMcpServer", "createMcpStdioServer", "McpStdioServerOptions", "McpRegistryOptions"],
       `Moved: import it from "${MCP}".`,
@@ -344,7 +349,7 @@ export const REMOVED_PROVIDER_PROPS = Object.freeze({
     "Pass Socket.IO options in `socketOptions`: `socketOptions={{ withCredentials: true }}`.",
   socketPath: "Pass Socket.IO options in `socketOptions`: `socketOptions={{ path }}`.",
   reconnectBehavior:
-    "Removed: after a reconnect only watched or stale queries refetch, spread over 0 to 2 s.",
+    "Removed: after a reconnect only watched or stale queries refetch, each after a random delay of up to `reconnectJitterMs` (2,000 ms by default; `0` refetches at once).",
 });
 
 function importedName(specifier) {

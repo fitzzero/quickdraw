@@ -20,7 +20,14 @@ import { toCallReply, type DispatchResult } from "../pipeline/request";
 import type { Principal } from "../types";
 import { INTERNAL_FAILURE, unreadable } from "./ack";
 import { createPrincipalResolver, isRefusal, type ResolvePrincipal, type ServerAuth } from "./auth";
-import { isJsonRequest, readJsonInput, tokenOf, type HttpRequest } from "./body";
+import {
+  isJsonRequest,
+  readJsonInput,
+  tokenOf,
+  transportCookieNaming,
+  type HttpRequest,
+  type SessionCookieNaming,
+} from "./body";
 
 /**
  * A Node request handler that serves calls: mount it with `app.use(router)`
@@ -49,9 +56,14 @@ export interface HttpTransportOptions {
    */
   readonly maxBodyBytes?: number;
   /**
-   * The session cookie a token is read from. Default: `"__Host-session"`,
-   * or else `"session"`; a name given here is the only one read. A name the
-   * request repeats counts as no cookie.
+   * The session cookie a token is read from. Default: the name the auth
+   * routes set on the same request: `"session"` when `COOKIE_DOMAIN` gives
+   * the cookie a domain; else `"__Host-session"` on a request over HTTPS
+   * (`req.secure`, `X-Forwarded-Proto: https` or an `https:` `Origin`),
+   * which never reads the plain name a sibling site could plant, and
+   * `"session"` (then `"__Host-session"`) on a plain HTTP one. A name given
+   * here is the only one read, on any request. A name the request repeats
+   * counts as no cookie.
    */
   readonly cookieName?: string;
   /**
@@ -81,7 +93,8 @@ export interface HttpRouterSettings {
   readonly logger: Logger;
   readonly prefix: string;
   readonly maxBodyBytes: number;
-  readonly cookieName: string | undefined;
+  /** `cookieName`, and `COOKIE_DOMAIN` read when the router is made: a cookie with a domain is `session`. */
+  readonly cookieNaming: SessionCookieNaming;
   readonly rateLimit: HttpMiddleware | undefined;
 }
 
@@ -168,7 +181,7 @@ async function authenticate(
   settings: HttpRouterSettings,
   req: HttpRequest,
 ): Promise<Principal | null | QuickdrawError> {
-  const token = tokenOf(req, settings.cookieName);
+  const token = tokenOf(req, settings.cookieNaming);
   try {
     return await settings.resolvePrincipal({
       transport: "http",
@@ -306,7 +319,7 @@ export function httpRouterSettings(
     ...base,
     prefix: normalizePath(options.path ?? "/qd"),
     maxBodyBytes,
-    cookieName: options.cookieName,
+    cookieNaming: transportCookieNaming(options.cookieName),
     rateLimit,
   };
 }

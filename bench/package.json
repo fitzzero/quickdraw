@@ -6,7 +6,8 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "bench": "node --import tsx src/runner.ts",
+    "bench": "turbo run build --filter=bench^... --output-logs=errors-only && node --import tsx src/runner.ts",
+    "compare": "node --import tsx src/compare-cli.ts",
     "report": "node --import tsx src/render.ts",
     "schema": "node --import tsx src/write-schema.ts && oxfmt result.schema.json",
     "typecheck": "tsgo --noEmit",
@@ -14,6 +15,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fitzzero/quickdraw-core": "workspace:*",
+    "@tanstack/react-query": "^5.20.0",
+    "bench-app-v5": "workspace:*",
+    "react": "^19.0.0",
     "socket.io-client": "^4.8.0",
     "zod": "^4.2.0"
   },

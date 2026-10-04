@@ -12,8 +12,13 @@
 // server). This module imports `socket.io-parser`, so it is its own export,
 // `@fitzzero/quickdraw-core/parser`, and the package root stays free of
 // dependencies.
+//
+// The server hands it pre-encoded arguments (`preEncoded.ts`) for text that
+// several packets share, such as a shared run's reply to each of its callers:
+// their text is spliced in as written, so it is encoded once, not per packet.
 
 import { Decoder, Encoder, PacketType, type Packet } from "socket.io-parser";
+import { isPreEncoded, type PreEncoded } from "./preEncoded";
 import { utf8ByteLength } from "./utf8";
 
 /** Options of {@link createJsonParser}. */
@@ -100,6 +105,40 @@ function stockEncodeAsString(): StringEncoding["encodeAsString"] {
   return encodeAsString;
 }
 
+/** The arguments of an event or acknowledgement when every one is pre-encoded. */
+function preEncodedArguments(packet: Packet): readonly PreEncoded[] | undefined {
+  const data: unknown = packet.data;
+  if (
+    (packet.type !== PacketType.EVENT && packet.type !== PacketType.ACK) ||
+    !Array.isArray(data)
+  ) {
+    return undefined;
+  }
+  const args: readonly unknown[] = data;
+  return args.length > 0 && args.every(isPreEncoded) ? args : undefined;
+}
+
+/**
+ * The text of an event or acknowledgement whose arguments are all
+ * pre-encoded: the stock encoding of the packet without its arguments, then
+ * the arguments' own text as a JSON array, which is what the stock encoding
+ * writes for their values. `undefined` for any other packet, and when the
+ * encoder was given a `replacer` (the stock encoding then writes the values).
+ */
+function splicedText(
+  encoder: Encoder,
+  packet: Packet,
+  encodeAsString: StringEncoding["encodeAsString"],
+): string | undefined {
+  const args = preEncodedArguments(packet);
+  const { replacer } = encoder as unknown as { readonly replacer?: unknown };
+  if (args === undefined || replacer !== undefined) {
+    return undefined;
+  }
+  const head = encodeAsString.call(encoder, { ...packet, data: undefined });
+  return `${head}[${args.map((arg) => arg.json()).join(",")}]`;
+}
+
 function report(onEncoded: EncodedHook, packet: Packet, text: string): void {
   try {
     onEncoded(packet, utf8ByteLength(text));
@@ -125,7 +164,7 @@ export function createJsonParser(options: JsonParserOptions = {}): JsonParser {
   class JsonEncoder extends Encoder {
     override encode(packet: Packet): string[] {
       rejectBinaryArguments(packet);
-      const text = encodeAsString.call(this, packet);
+      const text = splicedText(this, packet, encodeAsString) ?? encodeAsString.call(this, packet);
       if (onEncoded !== undefined) {
         report(onEncoded, packet, text);
       }

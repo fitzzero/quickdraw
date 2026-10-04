@@ -28,6 +28,9 @@ export const PACKAGE_FILES: readonly PackageFile[] = [
   { path: "packages/core/LICENSE", from: "LICENSE" },
   { path: "packages/lint/LICENSE", from: "LICENSE" },
   { path: "packages/skills/LICENSE", from: "LICENSE" },
+  // the migration guide ships with the codemod that does most of it
+  { path: "packages/codemod/MIGRATION.md", from: "MIGRATION.md", transform: fromPackageDirectory },
+  { path: "packages/codemod/LICENSE", from: "LICENSE" },
 ];
 
 /** What a package file must hold: its root file, transformed. */

@@ -32,14 +32,3 @@ export const QUERY_RETRIES = 1;
 export const QUERY_RETRY_DELAY_MS = 1_000;
 /** useServiceQuery's invalidateOn debounce. */
 export const INVALIDATE_DEBOUNCE_MS = 100;
-
-/** Writers stamp every title with `@<performance.now()>` so viewers can time delivery. */
-export function stampTitle(base: string, tag: string, stampMs: number): string {
-  return `${base} · ${tag} @${stampMs.toFixed(3)}`;
-}
-
-export function readStamp(title: unknown): number | null {
-  if (typeof title !== "string") return null;
-  const match = /@(\d+(?:\.\d+)?)$/.exec(title);
-  return match?.[1] === undefined ? null : Number(match[1]);
-}

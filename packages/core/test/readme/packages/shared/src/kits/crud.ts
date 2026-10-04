@@ -3,7 +3,8 @@ import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
 const newTaskSchema = z.object({ projectId: z.string(), title: z.string() });
-const taskPatch = z.object({ title: z.string(), status: z.string() }).partial(); // every field optional
+// every field optional
+const taskPatch = z.object({ title: z.string(), status: z.string() }).partial();
 
 export const task = defineContract("taskService", {
   entity: taskSchema,
@@ -15,10 +16,12 @@ export const task = defineContract("taskService", {
       getMany: true,
       list: { item: cardSchema, filter: ["projectId", "status"], sort: ["ordinal", "title"] },
       create: { input: newTaskSchema },
-      update: { input: taskPatch }, // the kit adds `id`
+      // the kit adds `id`
+      update: { input: taskPatch },
       delete: true,
       reorder: { column: "ordinal", within: "projectId" },
-      bulkUpdate: { input: taskPatch }, // the kit adds `ids`
+      // the kit adds `ids`
+      bulkUpdate: { input: taskPatch },
       bulkDelete: true,
     }),
     archive: mutation({ input: z.object({ id: z.string() }), output: "entity" }),

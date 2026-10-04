@@ -4,13 +4,21 @@
 
 import type { IncomingMessage } from "node:http";
 import { extractBearerOrCookieToken } from "../auth/restMiddleware";
-import { HOST_SESSION_COOKIE, SESSION_COOKIE } from "../auth/sessionCookie";
+import {
+  cookieDomainFromEnv,
+  sessionCookieNamesFor,
+  type SessionCookieNaming,
+} from "../auth/sessionCookie";
 import { unreadable } from "./ack";
 
-/** A request as Express leaves it: maybe with `body` from `express.json()` and `cookies` from `cookie-parser`. */
+/**
+ * A request as Express leaves it: maybe with `body` from `express.json()`,
+ * `cookies` from `cookie-parser`, and Express's own `secure`.
+ */
 export type HttpRequest = IncomingMessage & {
   readonly body?: unknown;
   readonly cookies?: unknown;
+  readonly secure?: unknown;
 };
 
 /**
@@ -170,26 +178,24 @@ export function cookieToken(
   return value === undefined || value === "" ? null : value;
 }
 
-const DEFAULT_SESSION_COOKIES: readonly string[] = Object.freeze([
-  HOST_SESSION_COOKIE,
-  SESSION_COOKIE,
-]);
+export type { SessionCookieNaming };
 
 /**
- * The cookie names a session is read from: `cookieName` when one is given,
- * else `__Host-session` (what the auth routes set on a secure request with
- * no cookie domain) and then `session`.
+ * How a transport names the session cookie: the `cookieName` it was given,
+ * and the domain `COOKIE_DOMAIN` gives the cookie, read now, as the auth
+ * routes read it (a cookie with a domain is `session`).
  */
-export function sessionCookieNames(cookieName: string | undefined): readonly string[] {
-  return cookieName === undefined ? DEFAULT_SESSION_COOKIES : [cookieName];
+export function transportCookieNaming(cookieName: string | undefined): SessionCookieNaming {
+  return { cookieName, domain: cookieDomainFromEnv() };
 }
 
 /**
- * The token an HTTP call authenticates with: its session cookie
- * (`sessionCookieNames`), or else its bearer token.
+ * The token an HTTP call authenticates with: its session cookie, under the
+ * names `sessionCookieNamesFor` gives the request (by how the app named the
+ * cookie and whether the request came over HTTPS), or else its bearer token.
  */
-export function tokenOf(req: HttpRequest, cookieName: string | undefined): string | null {
-  const cookie = cookieToken(cookiesOf(req), sessionCookieNames(cookieName));
+export function tokenOf(req: HttpRequest, naming: SessionCookieNaming): string | null {
+  const cookie = cookieToken(cookiesOf(req), sessionCookieNamesFor(req, naming));
   if (cookie !== null) {
     return cookie;
   }

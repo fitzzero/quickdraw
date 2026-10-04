@@ -270,29 +270,32 @@ describe("signing in", () => {
     });
   });
 
-  it("sets a Secure __Host- cookie in production and over HTTPS, and a SameSite=None one when asked", async () => {
+  it("sets a Secure __Host- cookie over HTTPS, a Secure plain one in production over plain HTTP, and a SameSite=None one when asked", async () => {
     const production = await harness.boot();
     vi.stubEnv("NODE_ENV", "production");
-    const secure = await post(`${production.url}/auth/guest`, { body: {} });
+    const https = { "x-forwarded-proto": "https" };
+    const secure = await post(`${production.url}/auth/guest`, { body: {}, headers: https });
     const hostCookie = cookiesSet(secure).get("__Host-session");
     expect(hostCookie?.attributes).toEqual(
       expect.arrayContaining(["secure", "samesite=lax", "httponly", "path=/"]),
     );
     expect(hostCookie?.attributes.some((attribute) => attribute.startsWith("domain="))).toBe(false);
     expect(cookiesSet(secure).has("session")).toBe(false);
+    // A request that came over plain HTTP gets the name the transports read there, Secure in
+    // production all the same.
+    const plain = cookiesSet(await post(`${production.url}/auth/guest`, { body: {} }));
+    expect(plain.has("__Host-session")).toBe(false);
+    expect(plain.get("session")?.attributes).toContain("secure");
     vi.stubEnv("NODE_ENV", "test");
 
     const proxied = await harness.boot();
     proxied.app.set("trust proxy", true);
-    const overHttps = await post(`${proxied.url}/auth/guest`, {
-      body: {},
-      headers: { "x-forwarded-proto": "https" },
-    });
+    const overHttps = await post(`${proxied.url}/auth/guest`, { body: {}, headers: https });
     expect(cookiesSet(overHttps).get("__Host-session")?.attributes).toContain("secure");
 
-    // A cookie for a domain cannot be __Host-: it keeps the plain name.
+    // A cookie for a domain cannot be __Host-: it keeps the plain name, over HTTPS too.
     const crossSite = await harness.boot({ cookie: { sameSite: "none", domain: "app.test" } });
-    const none = await post(`${crossSite.url}/auth/guest`, { body: {} });
+    const none = await post(`${crossSite.url}/auth/guest`, { body: {}, headers: https });
     expect(cookiesSet(none).get("session")?.attributes).toEqual(
       expect.arrayContaining(["samesite=none", "secure", "domain=app.test"]),
     );
@@ -303,8 +306,9 @@ describe("signing in", () => {
   });
 
   it("signs in with __Host- state and session cookies on a secure request, and reads only those back", async () => {
-    const { url } = await harness.boot({ cookie: { secure: true } });
-    const started = await get(`${url}/auth/mock/start`);
+    const { url } = await harness.boot();
+    const https = { "x-forwarded-proto": "https" };
+    const started = await get(`${url}/auth/mock/start`, undefined, https);
     const state = cookiesSet(started).get("__Host-qd_oauth");
     expect(state?.attributes).toEqual(expect.arrayContaining(["secure", "httponly", "path=/"]));
     expect(cookiesSet(started).has("qd_oauth")).toBe(false);
@@ -314,24 +318,67 @@ describe("signing in", () => {
       "ada@demo.local",
     );
     // The plain state name is not read on a secure request.
-    const plain = await get(callbackUrl.href, `qd_oauth=${state?.value ?? ""}`);
+    const plain = await get(callbackUrl.href, `qd_oauth=${state?.value ?? ""}`, https);
     expect(new URL(locationOf(plain)).searchParams.get("error")).toBe("state");
-    const callback = await get(callbackUrl.href, stateCookie);
+    const callback = await get(callbackUrl.href, stateCookie, https);
     expect(cookiesSet(callback).get("__Host-qd_oauth")?.value).toBe("");
     const token = cookieValue(callback, "__Host-session");
     expect(cookiesSet(callback).get("__Host-session")?.attributes).toEqual(
       expect.arrayContaining(["secure", "httponly", "path=/"]),
     );
-    expect(await (await get(`${url}/auth/me`, `__Host-session=${token}`)).json()).toEqual({
+    expect(await (await get(`${url}/auth/me`, `__Host-session=${token}`, https)).json()).toEqual({
       userId: userIdOf("ada@demo.local"),
     });
-    expect((await get(`${url}/auth/me`, `session=${token}`)).status).toBe(401);
-    const out = await post(`${url}/auth/logout`, { cookie: `__Host-session=${token}` });
+    expect((await get(`${url}/auth/me`, `session=${token}`, https)).status).toBe(401);
+    const out = await post(`${url}/auth/logout`, {
+      cookie: `__Host-session=${token}`,
+      headers: https,
+    });
     expect(cookiesSet(out).get("__Host-session")?.value).toBe("");
     // A name the app gives is used as it is.
     const named = await harness.boot({ cookie: { secure: true, name: "sid" } });
-    const guestSignIn = await post(`${named.url}/auth/guest`, { body: {} });
+    const guestSignIn = await post(`${named.url}/auth/guest`, { body: {}, headers: https });
     expect(cookiesSet(guestSignIn).has("sid")).toBe(true);
+    // `secure: true` makes the cookie Secure; its name still follows the request, as the
+    // transports' reads do, so a plain HTTP request gets a Secure `session`.
+    const forced = await harness.boot({ cookie: { secure: true } });
+    const forcedPlain = cookiesSet(await post(`${forced.url}/auth/guest`, { body: {} }));
+    expect(forcedPlain.get("session")?.attributes).toContain("secure");
+  });
+
+  it("names the callback's cookie for the page it returns to, which an OAuth callback has no Origin of its own for", async () => {
+    // An https: web app on a plain HTTP loopback API (a development setup): its requests carry
+    // an https: Origin, so the transports read __Host-session; the callback sets that name.
+    const secureApp = "https://app.test";
+    const { url } = await harness.boot({ allowedOrigins: [secureApp] });
+    const started = await start(url);
+    const callbackUrl = await consent(started, "ada@demo.local");
+    const callback = await get(callbackUrl.href, started.stateCookie);
+    expect(locationOf(callback)).toBe(`${secureApp}/`);
+    const token = cookieValue(callback, "__Host-session");
+    expect(cookiesSet(callback).get("__Host-session")?.attributes).toContain("secure");
+    expect(
+      await (await get(`${url}/auth/me`, `__Host-session=${token}`, { origin: secureApp })).json(),
+    ).toEqual({ userId: userIdOf("ada@demo.local") });
+  });
+
+  it("refuses a __Host- cookie name with a domain, and warns when the transports cannot see the cookie's domain", async () => {
+    await expect(
+      harness.boot({ cookie: { name: "__Host-sid", domain: "app.test" } }),
+    ).rejects.toThrow('cookie.name cannot start with "__Host-"');
+    const optionOnly = await harness.boot({ cookie: { domain: "app.test" } });
+    expect(optionOnly.logger.at("warn").map((entry) => entry.message)).toEqual([
+      expect.stringContaining("cookie.domain is set and COOKIE_DOMAIN is not"),
+    ]);
+    const named = await harness.boot({ cookie: { domain: "app.test", name: "session" } });
+    expect(named.logger.at("warn")).toEqual([]);
+    vi.stubEnv("COOKIE_DOMAIN", "app.test");
+    const both = await harness.boot({ cookie: { domain: "app.test" } });
+    expect(both.logger.at("warn")).toEqual([]);
+    const cleared = await harness.boot({ cookie: { domain: "" } });
+    expect(cleared.logger.at("warn").map((entry) => entry.message)).toEqual([
+      expect.stringContaining('cookie.domain is "" while COOKIE_DOMAIN is set'),
+    ]);
   });
 
   it("counts a repeated session or state cookie name as no credential", async () => {

@@ -18,8 +18,18 @@ Agents never bump versions for a release, create or push tags, or publish.
 | `@fitzzero/quickdraw-skills`  | `packages/skills`  | `skills-v<version>`  |
 | `@fitzzero/quickdraw-codemod` | `packages/codemod` | `codemod-v<version>` |
 
-`skills` and `codemod` are `private` placeholders for now. The workflow and
-`scripts/release-tag.sh` refuse to release a private package.
+All four packages are public. The workflow and `scripts/release-tag.sh`
+refuse to release a package marked `private`.
+
+`npm publish` ships a package's `package.json` as it is, and npm does not
+know bun's `workspace:` ranges, so no published package names one: the
+codemod's devDependencies on core and lint are semver ranges
+(`^5.0.0-rc.0`), which bun links to the workspace packages all the same
+while their versions match. `packages/core/test/readme/readme.test.ts`
+checks the four manifests.
+
+For 5.0, the whole sequence from the release candidate to 5.0.0 on `main`
+is [`release-checklist-5.0.md`](release-checklist-5.0.md).
 
 ## Release a version
 
@@ -79,16 +89,17 @@ package, that package's Publish runs fail at the publish step.
 
 1. **Publish the first version by hand** if the package has never been
    published. `@fitzzero/quickdraw-core` already exists on npm (4.x), so skip
-   this step for it. `@fitzzero/quickdraw-lint` does not exist yet:
+   this step for it. `@fitzzero/quickdraw-lint`, `@fitzzero/quickdraw-skills`
+   and `@fitzzero/quickdraw-codemod` did not exist yet on 2026-10-03:
 
    ```bash
    npm login
-   cd packages/lint
+   cd packages/lint                         # then packages/skills, packages/codemod
    npm publish --access public --tag next   # a prerelease needs --tag
    ```
 
-   A package with a build step needs `bun install` and `bun run build` at the
-   repository root first.
+   A package with a build step (core, codemod) needs `bun install` and
+   `bun run build` at the repository root first.
 
 2. **Add the trusted publisher.** On npmjs.com, open the package, then
    Settings, then Trusted Publisher, choose GitHub Actions, and enter:

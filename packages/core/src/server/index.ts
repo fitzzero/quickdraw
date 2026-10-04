@@ -110,7 +110,12 @@ export {
   type PrincipalOfServices,
 } from "./dispatcher";
 export type { RegisteredMethod, Registry } from "./registry";
-export { toCallReply, type DispatchRequest, type DispatchResult } from "./pipeline/request";
+export {
+  toCallReply,
+  type DispatchRequest,
+  type DispatchResult,
+  type SharedData,
+} from "./pipeline/request";
 export {
   DEFAULT_LIMITS,
   type DispatcherLimits,

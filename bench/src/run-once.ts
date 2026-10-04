@@ -16,10 +16,13 @@ import type { Workload } from "./workload";
 
 export interface RunSetup {
   appDirectory: string;
+  driver: ScenarioContext["driver"];
   databaseUrl: string;
   workload: Workload;
   workloadPath: string;
   logDirectory: string;
+  /** Where to write a CPU profile of each server, or null for none. */
+  profileDirectory: string | null;
   port: number;
   serverCpus: string;
   cpuSets: CpuSets;
@@ -104,6 +107,11 @@ export async function runOnce(
     cpus: setup.serverCpus,
     databaseUrl: setup.databaseUrl,
     logFile: join(setup.logDirectory, `${scenario.name}-r${index}.log`),
+    ...(setup.profileDirectory === null
+      ? {}
+      : {
+          profile: { dir: setup.profileDirectory, name: `${scenario.name}-r${index}.cpuprofile` },
+        }),
   });
   setup.track(server);
   const parameters = scenario.parameters(setup.quick);
@@ -115,6 +123,7 @@ export async function runOnce(
       tokens: await server.tokens(),
       workload: setup.workload,
       recorder,
+      driver: setup.driver,
       log: setup.log,
       measure: async (work) => await measure(server, recorder, setup.cpuSets, work),
       serverInFlight: async () => await serverInFlight(server),

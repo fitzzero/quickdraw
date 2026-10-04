@@ -61,6 +61,27 @@ describe("extractBearerOrCookieToken", () => {
     );
     expect(extractBearerOrCookieToken({ headers: {} })).toBeNull();
   });
+
+  it("reads the cookie under the name setSessionCookie sets on the same request, or the one given", () => {
+    const both = { session: "plain-token", "__Host-session": "host-token" };
+    // Over plain HTTP `session`, then `__Host-session`; over HTTPS only `__Host-session`.
+    expect(extractBearerOrCookieToken({ cookies: both, headers: {} })).toBe("plain-token");
+    expect(
+      extractBearerOrCookieToken({ cookies: { "__Host-session": "host-token" }, headers: {} }),
+    ).toBe("host-token");
+    expect(extractBearerOrCookieToken({ cookies: both, headers: {}, secure: true })).toBe(
+      "host-token",
+    );
+    expect(
+      extractBearerOrCookieToken({
+        cookies: { session: "planted" },
+        headers: { "x-forwarded-proto": "https" },
+      }),
+    ).toBeNull();
+    expect(
+      extractBearerOrCookieToken({ cookies: both, headers: {}, secure: true }, "session"),
+    ).toBe("plain-token");
+  });
 });
 
 describe("createRequireAuth", () => {

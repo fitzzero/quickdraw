@@ -17,6 +17,13 @@ import plugin from "../index.mjs";
 
 const LINT = fileURLToPath(new URL("../..", import.meta.url));
 const CORE = path.join(LINT, "..", "core");
+const REPO = path.join(LINT, "..", "..");
+/** The documents whose 5.0 examples apps copy: copies of packages/core/test/readme. */
+const DOCUMENTS = [
+  "README.md",
+  "MIGRATION.md",
+  "packages/skills/skills/quickdraw-new-service/SKILL.md",
+];
 const OXLINT = findOxlint(LINT);
 const BIN = path.join(LINT, "bin", "quickdraw-lint.mjs");
 
@@ -91,6 +98,10 @@ const EXAMPLES = {
     "apps/web/src/legacy.ts",
     `import { useSubscription } from "@fitzzero/quickdraw-core/client";\n`,
   ],
+  "no-todo-schema": [
+    "packages/shared/src/contracts/migrated.ts",
+    `import { todoSchema } from "@fitzzero/quickdraw-core";\nexport const input = todoSchema<{ id: string }>();\n`,
+  ],
   "no-raw-button-strings": [
     "apps/web/src/components/Button.tsx",
     `export const B = () => <Button>Save</Button>;\n`,
@@ -125,10 +136,11 @@ function writeFiles(root, files) {
 }
 
 /**
- * A temporary app extending the shipped configs, with `settings` of its own
- * and oxlint installed (linked to this package's).
+ * A temporary app extending the shipped configs (the base, then the template
+ * unless `template` is false), with `settings` and `overrides` of its own and
+ * oxlint installed (linked to this package's).
  */
-function createApp(settings) {
+function createApp(settings, { template = true, overrides } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "quickdraw-lint-app-"));
   fs.mkdirSync(path.join(root, "node_modules"));
   fs.symlinkSync(
@@ -139,11 +151,12 @@ function createApp(settings) {
   const config = {
     extends: [
       path.relative(root, path.join(LINT, "oxlint.base.jsonc")),
-      path.relative(root, path.join(LINT, "oxlint.template.jsonc")),
+      ...(template ? [path.relative(root, path.join(LINT, "oxlint.template.jsonc"))] : []),
     ],
     plugins: ["typescript", "import", "react", "nextjs", "jsx_a11y"],
     ignorePatterns: ["**/node_modules/**"],
     ...(settings === undefined ? {} : { settings }),
+    ...(overrides === undefined ? {} : { overrides }),
   };
   fs.writeFileSync(path.join(root, ".oxlintrc.json"), JSON.stringify(config));
   return root;
@@ -234,6 +247,56 @@ describe("the core package's fixture apps as service files", () => {
       ]),
     );
     expect(lint(root).filter((report) => report.rule === rule)).toEqual([]);
+  });
+});
+
+/**
+ * The 5.0 TypeScript blocks of `DOCUMENTS`, which apps copy: each at the path
+ * its `<!-- example: file#region -->` marker names, a region in a
+ * `region-<name>/` folder beside its file, so the config's file scopes (the
+ * test files' relaxed rules among them) apply to it as in an app. The guide's
+ * 4.x examples (sources outside the example app, `../`) are left out.
+ */
+function documentBlocks() {
+  const marked = /<!-- example: ([\w./-]+?)(?:#([\w-]+))? -->\s*\n```(tsx?)\n([\s\S]*?)\n```/g;
+  const blocks = new Map();
+  for (const document of DOCUMENTS) {
+    const text = fs.readFileSync(path.join(REPO, document), "utf8");
+    for (const [, file, region, , code] of text.matchAll(marked)) {
+      if (file.startsWith("../")) {
+        continue;
+      }
+      const at =
+        region === undefined
+          ? file
+          : path.posix.join(
+              path.posix.dirname(file),
+              `region-${region}`,
+              path.posix.basename(file),
+            );
+      blocks.set(at, `${code}\n`);
+    }
+  }
+  return [...blocks];
+}
+
+describe("the TypeScript blocks of the README, the guide and the new-service skill", () => {
+  it("pass the shipped base config, as an app that copies them lints them", () => {
+    const root = createApp(undefined, {
+      template: false,
+      // A region is part of a file: the names it uses may be imported outside it.
+      overrides: [{ files: ["**/region-*/**"], rules: { "react/jsx-no-undef": "off" } }],
+    });
+    roots.push(root);
+    const blocks = documentBlocks();
+    expect(blocks.length).toBeGreaterThan(50);
+    writeFiles(root, blocks);
+    const report = runOxlint({ cwd: root, config: ".oxlintrc.json", paths: ["."], oxlint: OXLINT });
+    const found = report.diagnostics.map(
+      (diagnostic) =>
+        `${String(diagnostic.code)} ${diagnostic.filename.split(path.sep).join("/")}:${String(diagnostic.labels[0]?.span.line)}`,
+    );
+    expect(found).toEqual([]);
   });
 });
 

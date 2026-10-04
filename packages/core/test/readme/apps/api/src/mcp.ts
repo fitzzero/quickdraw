@@ -21,13 +21,16 @@ const registry = createMcpRegistry({
   // who a stdio session or an HTTP bearer token stands for; nothing is anonymous
   principal: (request) =>
     verifySession(request.transport === "http" ? request.token : process.env.AGENT_TOKEN),
-  context: () => ({ scopes: ["tasks"] }), // handlers read it as ctx.mcp
-  exclude: ["projectService.invite"], // or include: [...]; name: (service, method) => ...
+  // handlers read it as ctx.mcp
+  context: () => ({ scopes: ["tasks"] }),
+  // or include: [...]; name: (service, method) => ...
+  exclude: ["projectService.invite"],
   customTools: [
     {
       name: "summarize",
       description: "Counts the tasks of a project.",
-      inputSchema: summarizeInput, // validated before the handler runs, and types `arguments`
+      // validated before the handler runs, and types `arguments`
+      inputSchema: summarizeInput,
       // access: "authenticated" is the default; "public" lets anonymous callers in
       handler: async ({ arguments: { projectId }, caller }) =>
         `${String(await caller.taskService.countOnBoard({ projectId }))} tasks`,
@@ -35,6 +38,8 @@ const registry = createMcpRegistry({
   ],
 });
 
-app.use(createMcpHttpRouter({ registry })); // GET /mcp/tools, POST /mcp/invoke
-createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" }); // in an MCP client's process
+// GET /mcp/tools, POST /mcp/invoke
+app.use(createMcpHttpRouter({ registry }));
+// in an MCP client's process
+createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
 // #endregion

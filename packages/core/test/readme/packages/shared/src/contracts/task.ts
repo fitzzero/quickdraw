@@ -3,9 +3,12 @@ import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
 export const taskContract = defineContract("taskService", {
-  entity: taskSchema, // the full row; it must contain `id: string`
-  projections: { card: cardSchema }, // lean shapes of the row
-  fields: { notes: "Admin" }, // only callers with Admin on the task receive notes
+  // the full row; it must contain `id: string`
+  entity: taskSchema,
+  // lean shapes of the row
+  projections: { card: cardSchema },
+  // only callers with Admin on the task receive notes
+  fields: { notes: "Admin" },
   methods: {
     get: query({ input: z.object({ id: z.string() }), output: "entity" }),
     create: mutation({
@@ -33,7 +36,8 @@ export const taskContract = defineContract("taskService", {
         ["ordinal", "asc"],
         ["id", "asc"],
       ],
-      index: ["status", "ordinal", "assigneeId"], // sent for the whole board
+      // sent for the whole board
+      index: ["status", "ordinal", "assigneeId"],
       views: { mine: (row, who) => row.assigneeId === who.userId },
     },
   },

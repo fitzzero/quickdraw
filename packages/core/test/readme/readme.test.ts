@@ -1,7 +1,7 @@
-// The README's code examples, and the quickdraw-new-service skill's, are
-// copies of the files beside this test, which `bun run typecheck` compiles
-// (see examples.ts). This checks every copy, and that no TypeScript block
-// in them is anything but a copy.
+// The README's code examples, the migration guide's and the
+// quickdraw-new-service skill's are copies of the files beside this test,
+// which `bun run typecheck` compiles (see examples.ts). This checks every
+// copy, and that no TypeScript block in them is anything but a copy.
 
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -65,6 +65,13 @@ describe("example copies", () => {
     ]);
   });
 
+  it("copy a region inside a block without the marker's indentation", () => {
+    const region =
+      sourceOf("../../../codemod/test/guide-v4/apps/api/src/services/task.ts", "projection") ?? "";
+    expect(region.startsWith("protected override toDto(task: Task): TaskDTO {")).toBe(true);
+    expect(region.split("\n").at(-1)).toBe("}");
+  });
+
   it("copy a region of a file without its markers, and nothing for a missing one", () => {
     const region = sourceOf("apps/api/src/jobs/overdue.ts", "run") ?? "";
     expect(region.startsWith("export async function markStale(")).toBe(true);
@@ -81,6 +88,14 @@ describe("the files the packages ship beside their code", () => {
     (path, file) => {
       expect(existsSync(documentPath(path))).toBe(true);
       expect(readFileSync(documentPath(path), "utf8")).toBe(packageFileText(file));
+    },
+  );
+
+  it.each(["core", "lint", "skills", "codemod"])(
+    "@fitzzero/quickdraw-%s's package.json names no workspace: range, which npm publish ships as it is",
+    (name) => {
+      const manifest = readFileSync(documentPath(`packages/${name}/package.json`), "utf8");
+      expect(manifest).not.toContain("workspace:");
     },
   );
 

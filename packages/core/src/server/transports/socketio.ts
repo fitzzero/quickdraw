@@ -7,16 +7,22 @@
 // A call becomes one `DispatchRequest`: the connection is the socket, so its
 // queries share the socket's concurrency lane; `qd:cancel` and a disconnect
 // abort the call's signal; the reply goes out through the acknowledgement,
-// and its size comes back from the parser.
+// written from a shared run's encoded copy when there is one, and its size
+// comes back from the parser.
 
 import { CLIENT_EVENTS, SERVER_EVENTS, userRoom } from "../../contract/names";
-import { isCallEnvelope, isCancel, type CallId, type CallReply } from "../../protocol/envelope";
+import { isCallEnvelope, isCancel, type CallId } from "../../protocol/envelope";
 import { toWire } from "../../protocol/errors";
 import type { HelloFrame } from "../../protocol/version";
 import { describeError } from "../pipeline/metrics";
-import { toCallReply } from "../pipeline/request";
 import type { Principal } from "../types";
-import { acknowledge, INTERNAL_FAILURE, unreadable, type Acknowledge } from "./ack";
+import {
+  acknowledge,
+  callAcknowledgement,
+  INTERNAL_FAILURE,
+  unreadable,
+  type Acknowledge,
+} from "./ack";
 import { attachLegacyShim, type LegacyCallers } from "./legacy";
 import type { QuickdrawServerSocket, SocketContext } from "./types";
 
@@ -51,7 +57,7 @@ function reply(
   socket: QuickdrawServerSocket,
   context: SocketContext,
   ack: Acknowledge,
-  message: CallReply,
+  message: unknown,
 ): number | undefined {
   return acknowledge(context.meter, ack, message, INTERNAL_FAILURE, (error) => {
     context.logger.error("A call's reply could not be encoded; it was answered with INTERNAL", {
@@ -97,9 +103,9 @@ function startCall(
       connectionId: socket.id,
       signal: controller.signal,
       v: envelope.v,
-      respond: (result) => {
+      respond: (result, shared) => {
         release();
-        return reply(socket, context, ack, toCallReply(result));
+        return reply(socket, context, ack, callAcknowledgement(context.meter, result, shared));
       },
     })
     .then(release, (error: unknown) => {

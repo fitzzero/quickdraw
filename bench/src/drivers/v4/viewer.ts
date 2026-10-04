@@ -1,5 +1,7 @@
 import type { Outcome } from "../../recorder";
-import { V4Connection, type DriverContext } from "./connection";
+import type { BoardViewer, DriverContext, LoadResult } from "../types";
+import { readStamp } from "../writes";
+import { V4Connection } from "./connection";
 import {
   CLIENT_TIMEOUT_MS,
   COLLECTION,
@@ -9,7 +11,6 @@ import {
   QUERY_RETRY_DELAY_MS,
   collectionEvent,
   entityUpdateEvent,
-  readStamp,
 } from "./protocol";
 
 /**
@@ -28,12 +29,6 @@ import {
  *   reconnect everything above happens again.
  */
 
-export interface LoadResult {
-  ok: boolean;
-  ms: number;
-  failure?: string;
-}
-
 interface QueryAttempt {
   cancelled: boolean;
   retriesLeft: number;
@@ -41,7 +36,7 @@ interface QueryAttempt {
 
 type Piece = "collection" | "entities" | "query";
 
-export class Viewer {
+export class Viewer implements BoardViewer {
   private readonly conn: V4Connection;
   private readonly deltaEvent: string;
   private hasQueryData = false;
@@ -50,6 +45,8 @@ export class Viewer {
   private retry: ReturnType<typeof setTimeout> | null = null;
   private loaded = new Set<Piece>();
   private loadStartedAt = 0;
+  /** When the collection and the entities had both answered, for the current load. */
+  private liveAt: number | undefined;
   private waiters: Array<(result: LoadResult) => void> = [];
 
   constructor(
@@ -91,6 +88,7 @@ export class Viewer {
 
   private nextLoad(): Promise<LoadResult> {
     this.loadStartedAt = performance.now();
+    this.liveAt = undefined;
     return new Promise((resolve) => {
       this.waiters.push(resolve);
     });
@@ -178,6 +176,13 @@ export class Viewer {
   private settle(piece: Piece, outcome: Outcome): void {
     if (outcome.ok) {
       this.loaded.add(piece);
+      if (
+        this.liveAt === undefined &&
+        this.loaded.has("collection") &&
+        this.loaded.has("entities")
+      ) {
+        this.liveAt = performance.now();
+      }
       if (this.loaded.size === 3) this.resolveWaiters({ ok: true });
       return;
     }
@@ -186,12 +191,14 @@ export class Viewer {
     }
   }
 
-  private resolveWaiters(result: Omit<LoadResult, "ms">): void {
+  private resolveWaiters(result: Pick<LoadResult, "ok" | "failure">): void {
     const waiters = this.waiters;
     if (waiters.length === 0) return;
     this.waiters = [];
     const ms = performance.now() - this.loadStartedAt;
-    for (const resolve of waiters) resolve({ ...result, ms });
+    const liveMs = this.liveAt === undefined ? undefined : this.liveAt - this.loadStartedAt;
+    for (const resolve of waiters)
+      resolve({ ...result, ms, ...(liveMs === undefined ? {} : { liveMs }) });
   }
 
   /**

@@ -16,6 +16,9 @@ bench/apps/*/generated/
 # typecheck and test)
 packages/core/test/prisma/generated/
 
+# The codemod tests' copies of the fixture app
+packages/codemod/.test-output/
+
 # Test coverage
 coverage/
 

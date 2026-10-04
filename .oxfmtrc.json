@@ -5,7 +5,9 @@
     "packages/core/legacy-src/**",
     "bench/apps/*/generated/**",
     "packages/core/test/prisma/generated/**",
+    "packages/codemod/test/fixtures/**",
     "bench/baselines/**",
+    "bench/comparisons/**",
     "bench/reports/**",
     "bench/results/**"
   ]

@@ -40,25 +40,32 @@ import {
 } from "@fitzzero/quickdraw-core/server/auth";
 import { createCallLimiter } from "@fitzzero/quickdraw-core/server/express";
 
-const allowedOrigins = [env.CLIENT_URL]; // the web app's origins: one list for both
-const sessions = createMemorySessionStore(); // in production: a store over your database (below)
+// the web app's origins: one list for both
+const allowedOrigins = [env.CLIENT_URL];
+// in production: a store over your database (below)
+const sessions = createMemorySessionStore();
 
 export const app: Express = express();
-app.set("trust proxy", 1); // behind a proxy, so the rate limits see the client's IP
+// behind a proxy, so the rate limits see the client's IP
+app.set("trust proxy", 1);
 // a web app on another origin also needs CORS with credentials on these routes
 app.use(
   createAuthRoutes({
     providers: [
       google({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }),
       discord({ clientId: env.DISCORD_CLIENT_ID, clientSecret: env.DISCORD_CLIENT_SECRET }),
-      mock({ listUsers: listSeededUsers }), // served only while isMockOAuthEnabled()
+      // served only while isMockOAuthEnabled()
+      mock({ listUsers: listSeededUsers }),
       guest({ createUser: (input) => createGuestUser(input) }),
     ],
     sessions,
-    jwtSecret: env.JWT_SECRET, // 32 characters or more
-    onLogin: (profile) => upsertUser(profile), // the user's id, or null to refuse
+    // 32 characters or more
+    jwtSecret: env.JWT_SECRET,
+    // the user's id, or null to refuse
+    onLogin: (profile) => upsertUser(profile),
     allowedOrigins,
-    publicUrl: env.API_URL, // redirect URIs: {publicUrl}/auth/{provider}/callback
+    // redirect URIs: {publicUrl}/auth/{provider}/callback
+    publicUrl: env.API_URL,
     successPath: "/auth/callback",
     errorPath: "/auth/login",
     // a revoked session's open sockets: logout ends its own, logout-all every one of the user
@@ -80,6 +87,7 @@ export const server = qd.createServer({
     }),
     loadServiceAccess: (userId) => loadGrants(userId),
   },
-  http: { rateLimit: createCallLimiter() }, // the HTTP transport has no limit of its own
+  // the HTTP transport has no limit of its own
+  http: { rateLimit: createCallLimiter() },
 });
 // #endregion

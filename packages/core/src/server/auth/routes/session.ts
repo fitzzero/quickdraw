@@ -1,6 +1,7 @@
 // The session routes of the auth kit (RFC 0003 section 12.6). Each reads the
 // session the request carries the way the HTTP transport does: the session
-// cookie, else an `Authorization: Bearer` token.
+// cookie, under the names the shared rule gives the request
+// (`sessionCookieNamesFor`), else an `Authorization: Bearer` token.
 //
 // - `GET {basePath}/me`: `{ userId }` for a live session, else 401. The
 //   answer is the same whether the request had no credential, a forged or
@@ -24,7 +25,7 @@ import {
   type AuthRouteResponse,
 } from "./respond";
 import type { AuthSession } from "./sessions";
-import { clearSession, sessionCookieName, type RouteSettings } from "./settings";
+import { clearSession, sessionCookieNaming, type RouteSettings } from "./settings";
 import { liveSession } from "./tokens";
 
 type Handler = (req: AuthRouteRequest, res: AuthRouteResponse) => Promise<void>;
@@ -33,7 +34,7 @@ const NOT_SIGNED_IN = "Not signed in";
 
 /** The live session the request carries, or `null`. */
 function sessionOf(settings: RouteSettings, req: AuthRouteRequest): Promise<AuthSession | null> {
-  const token = tokenOf(req, sessionCookieName(settings, req));
+  const token = tokenOf(req, sessionCookieNaming(settings));
   return token === null ? Promise.resolve(null) : liveSession(settings.keys, token);
 }
 
@@ -69,7 +70,7 @@ async function revoked(
 /** `POST {basePath}/logout`. */
 export function logoutRoute(settings: RouteSettings): Handler {
   return async (req, res) => {
-    const token = tokenOf(req, sessionCookieName(settings, req));
+    const token = tokenOf(req, sessionCookieNaming(settings));
     const payload = token === null ? null : await verifyJWT(token, settings.keys.jwtSecret);
     if (payload?.sid !== undefined) {
       await settings.keys.sessions.revoke(payload.sid);

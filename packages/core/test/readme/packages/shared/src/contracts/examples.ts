@@ -32,7 +32,10 @@ export const healthContract = defineContract("healthService", {
 // #endregion
 
 // #region types
-export type RenameInput = InputOf<typeof taskContract, "rename">; // { id: string; title: string }
-export type Task = OutputOf<typeof taskContract, "get">; // the entity, as the wire has it
-export type Card = ItemOf<typeof taskContract, "board">; // one item of the board
+// { id: string; title: string }
+export type RenameInput = InputOf<typeof taskContract, "rename">;
+// the entity, as the wire has it
+export type Task = OutputOf<typeof taskContract, "get">;
+// one item of the board
+export type Card = ItemOf<typeof taskContract, "board">;
 // #endregion
