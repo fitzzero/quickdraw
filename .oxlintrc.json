@@ -45,5 +45,14 @@
       }
     }
   ],
-  "ignorePatterns": ["node_modules", "dist", "coverage", "**/legacy-src/**", "**/generated/**"]
+  "ignorePatterns": [
+    "node_modules",
+    "dist",
+    "coverage",
+    "**/legacy-src/**",
+    "**/generated/**",
+    "**/fixtures/v4-app/**",
+    "**/fixtures/v4-app.expected/**",
+    "**/.test-output/**"
+  ]
 }

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      "dependsOn": ["^build", "@fitzzero/quickdraw-core#db:generate"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/lint/oxlint.base.jsonc",
+        "$TURBO_ROOT$/packages/lint/plugin/**"
+      ]
+    }
+  }
+}

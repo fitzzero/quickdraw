@@ -1,0 +1,11 @@
+{
+  "name": "@project/api",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@fitzzero/quickdraw-core": "^4.1.0",
+    "@project/db": "workspace:*",
+    "@project/shared": "workspace:*",
+    "zod": "^3.25.76"
+  }
+}

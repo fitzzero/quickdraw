@@ -1,0 +1,8 @@
+// The transforms, in the order a run applies them (see ../migrate.ts).
+
+export { deleteWrappers, migrateClient, queriedMethods } from "./client";
+export { writeContracts } from "./contracts";
+export { writeClientInfra, writeServerInfra } from "./infra";
+export { markLeftovers } from "./leftovers";
+export { rewriteReferences } from "./references";
+export { migrateServices } from "./services";

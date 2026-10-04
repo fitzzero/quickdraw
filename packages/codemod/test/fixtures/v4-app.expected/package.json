@@ -1,0 +1,6 @@
+{
+  "name": "v4-app",
+  "private": true,
+  "description": "A quickdraw 4.1 app in the template's layout: the codemod's test fixture",
+  "workspaces": ["apps/*", "packages/*"]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "@project/shared",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@fitzzero/quickdraw-core": "^4.1.0"
+  }
+}
