@@ -127,6 +127,15 @@ export type SharingHandlersOptions<C extends AnyContract, A, Db = unknown> = {
   readonly access?: A & NoInfer<NotASharingMethod<C, A>>;
   /** Runs after each change, inside its transaction: an audit row, a notification. */
   readonly onChange?: SharingOnChange<Db>;
+  /**
+   * The kit's methods whose access form is their whole check on purpose:
+   * each gets `rowless: true`. On a service with an access policy,
+   * `defineService` refuses an access-list method (`share`, `unshare`,
+   * `setLevel`, `listShares`, `shareByName`: their input names the row as
+   * `id`) under `"public"`, `"authenticated"` or `{ service: L }` below
+   * `Admin` unless it is named here.
+   */
+  readonly rowless?: readonly SharingMethodsOf<C>[];
 } & ([SharingByNameOf<C>] extends [never]
   ? {
       readonly resolveUser?: `sharing.handlers: resolveUser is for shareByName and inviteByName, which ${C["name"]} does not have`;
@@ -149,11 +158,16 @@ type FormOf<C extends AnyContract, A, M extends SharingMethodsOf<C>> = M extends
     : Exclude<A[M], undefined>
   : SharingDefaultAccess<SharingKindOf<C, M>>;
 
-/** What `sharing.handlers` returns: one `{ access, handler }` per sharing kit method, for `defineService`. */
+/**
+ * What `sharing.handlers` returns: one `{ access, handler }` per sharing kit
+ * method (with `rowless: true` for those `rowless` names), for
+ * `defineService`.
+ */
 export type SharingImplementations<C extends AnyContract, A, Db = unknown> = {
   readonly [M in SharingMethodsOf<C>]: {
     readonly access: FormOf<C, A, M>;
     readonly handler: KitHandler<Db>;
+    readonly rowless?: true;
   };
 };
 

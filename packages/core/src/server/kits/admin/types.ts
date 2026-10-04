@@ -79,6 +79,15 @@ export interface AdminHandlersOptions<C extends AnyContract, A> {
   readonly hiddenFields?: readonly Exclude<AdminFieldOf<C>, "id">[];
   /** Changes to the configuration `adminMeta` derives, per field. */
   readonly fieldOverrides?: { readonly [Field in AdminFieldOf<C>]?: AdminFieldOverride };
+  /**
+   * The kit's methods whose access form is their whole check on purpose:
+   * each gets `rowless: true`. On a service with an access policy,
+   * `defineService` refuses `adminGet`, `adminUpdate` or `adminDelete`
+   * under a form below the default that checks no row (`{ service:
+   * "Moderate" }`, `"authenticated"`) unless it is named here, since any
+   * caller the form admits reaches any row by its id.
+   */
+  readonly rowless?: readonly AdminMethodsOf<C>[];
 }
 
 type FormOf<A, M> = M extends keyof A
@@ -87,11 +96,15 @@ type FormOf<A, M> = M extends keyof A
     : Exclude<A[M], undefined>
   : AdminDefaultAccess;
 
-/** What `admin.handlers` returns: one `{ access, handler }` per admin method, for `defineService`. */
+/**
+ * What `admin.handlers` returns: one `{ access, handler }` per admin method
+ * (with `rowless: true` for those `rowless` names), for `defineService`.
+ */
 export type AdminImplementations<C extends AnyContract, A> = {
   readonly [M in AdminMethodsOf<C>]: {
     readonly access: FormOf<A, M>;
     readonly handler: KitHandler;
+    readonly rowless?: true;
   };
 };
 

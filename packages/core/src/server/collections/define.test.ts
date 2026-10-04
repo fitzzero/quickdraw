@@ -56,6 +56,7 @@ const taskContract = defineContract("taskService", {
 
 const get = {
   access: "public",
+  rowless: true,
   handler: () => ({ id: "t", projectId: "p", status: "open", ordinal: 0 }),
 };
 

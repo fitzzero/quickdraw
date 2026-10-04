@@ -70,18 +70,21 @@ function objectSchema(json: UnknownRecord): UnknownRecord | undefined {
 }
 
 /**
- * The keys a schema's output has, read from its Standard JSON Schema, or
- * `undefined` when it cannot say: no JSON Schema (a Zod 3 schema), a value
- * JSON Schema cannot write (a `Date`, a transform), or an output that is not
- * one object (a union).
+ * The keys a schema's output (or, with `side` `"input"`, its input) has,
+ * read from its Standard JSON Schema, or `undefined` when it cannot say: no
+ * JSON Schema (a Zod 3 schema), a value JSON Schema cannot write (a `Date`,
+ * a transform), or a value that is not one object (a union).
  */
-export function schemaKeys(schema: StandardSchemaV1): readonly string[] | undefined {
+export function schemaKeys(
+  schema: StandardSchemaV1,
+  side: "input" | "output" = "output",
+): readonly string[] | undefined {
   if (!hasJsonSchema(schema)) {
     return undefined;
   }
   let json: unknown;
   try {
-    json = schema["~standard"].jsonSchema.output({ target: "draft-07" });
+    json = schema["~standard"].jsonSchema[side]({ target: "draft-07" });
   } catch {
     return undefined;
   }

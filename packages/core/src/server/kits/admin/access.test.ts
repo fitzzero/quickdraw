@@ -111,6 +111,8 @@ describe("forms an app gives", () => {
           adminUpdate: { service: "Moderate" },
           adminGet: { entry: "Admin" },
         },
+        // A Moderate grant edits any row through the kit, on purpose.
+        rowless: ["adminUpdate"],
       }),
     },
   });
