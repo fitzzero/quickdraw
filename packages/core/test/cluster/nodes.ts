@@ -35,8 +35,8 @@ export type CreateTestApp = <const S extends readonly AnyService[]>(
 ) => Promise<TestApp<S>>;
 
 /** One server of a test cluster, and the two Valkey connections its adapter holds. */
-export interface ClusterNode<S extends readonly AnyService[] = readonly AnyService[]> {
-  readonly app: TestApp<S>;
+export interface ClusterNode {
+  readonly app: TestApp;
   readonly clients: readonly ValkeyClient[];
 }
 
@@ -57,7 +57,7 @@ export async function startNode<const S extends readonly AnyService[]>(
   create: CreateTestApp,
   options: TestAppOptions<S>,
   settings: ClusterSettings,
-): Promise<ClusterNode<S>> {
+): Promise<ClusterNode> {
   const pub = valkeyClient(settings.url);
   const sub = pub.duplicate();
   sub.on("error", () => undefined);
@@ -67,7 +67,7 @@ export async function startNode<const S extends readonly AnyService[]>(
     socket: { ...options.socket, adapter: createAdapter(pub, sub, { key: settings.prefix }) },
     cluster: { keyPrefix: settings.prefix, ...options.cluster },
   } as TestAppOptions<S>);
-  return { app, clients: [pub, sub] };
+  return { app: app as unknown as TestApp, clients: [pub, sub] };
 }
 
 /**
@@ -206,17 +206,22 @@ export async function clusterTestApp<const S extends readonly AnyService[]>(
   // The writer boots last: `qd.run`, `qd.stream` and `qd.caller` reach the app created last.
   const reader = await startNode(create, options, settings);
   const writer = await startNode(create, options, settings).catch(async (error: unknown) => {
-    await stopNodes([reader as ClusterNode]);
+    await stopNodes([reader]);
     throw error;
   });
   const barrier = createBarrier(writer.app.server.io, reader.app.server.io);
   registerBarrier(barrier);
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> =>
-    (closing ??= stopNodes([reader as ClusterNode, writer as ClusterNode]).then(() => {
+    (closing ??= stopNodes([reader, writer]).then(() => {
       dropBarrier(barrier);
     }));
-  const app = splitApp(reader.app, writer.app, barrier, close);
-  NODES.set(app, [reader as ClusterNode, writer as ClusterNode]);
+  const app = splitApp(
+    reader.app as unknown as TestApp<S>,
+    writer.app as unknown as TestApp<S>,
+    barrier,
+    close,
+  );
+  NODES.set(app, [reader, writer]);
   return app;
 }

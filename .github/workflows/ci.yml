@@ -185,3 +185,78 @@ jobs:
 
       - name: Test scripts/release-tag.sh
         run: bash scripts/release-tag.test.sh
+
+  # Whether the cluster job has anything to prove: on pushes and manual runs
+  # always, on a pull request only when it touches the server, the cluster
+  # tests, the suites they run or this workflow.
+  cluster-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The pull request's changes are its merge commit against its base.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          paths='^(packages/core/(src/server/|test/(cluster|e2e|fixtures)/|vitest\.config\.ts|package\.json)|\.github/workflows/ci\.yml)'
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BASE" HEAD | grep -qE "$paths"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The multi-node proof (pack H): the end-to-end suite and the realtime,
+  # collection and revocation tests with every test app booted as two servers
+  # behind a real Valkey, plus the cluster's own tests (packages/core/test/cluster).
+  # Skipped when cluster-changes finds nothing to prove, which a required check
+  # counts as passed: make `cluster` a required check of `dev` only.
+  cluster:
+    needs: cluster-changes
+    if: needs.cluster-changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      valkey:
+        image: valkey/valkey:8.1-alpine
+        ports:
+          - 6399:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      QD_VALKEY_URL: redis://127.0.0.1:6399
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      # The test Prisma client, which turbo generates before `bun run test`.
+      - name: Generate the test Prisma client
+        working-directory: packages/core
+        run: bun run db:generate
+
+      - name: Run the cluster projects
+        working-directory: packages/core
+        run: bun run test:cluster
