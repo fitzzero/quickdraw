@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.1.1] - 2026-10-04
+
+### Fixed
+
+- The socket rate limiter no longer crashes the process when a client sends
+  an event whose name is not a string. Socket.IO accepts a numeric event
+  name; `applyRateLimitMiddleware` called `eventName.startsWith` on it inside
+  `process.nextTick`, an uncaught `TypeError` that exited the server. Such
+  events now pass the limiter uncounted.
+
 ## [4.1.0] - 2026-08-01
 
 Client portability groundwork for non-DOM runtimes (React Native, workers).
