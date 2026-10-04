@@ -1979,9 +1979,9 @@ export function TaskRoom({
   `ctx.rooms.join(room)` and `leave` put the calling socket in an app room
   (calls without a socket get `false`; names starting with `qd:` or `user:`
   are refused with `VALIDATION`; at most 100 per socket; a method that shares
-  its runs, `share`, may not join or leave: `INTERNAL`), and the room's
-  sockets get `qd:presence` frames: the list on joining, then who joins and
-  who leaves. `usePresence(room)` shows them.
+  its runs, `share`, may not join or leave with its caller's socket:
+  `INTERNAL`), and the room's sockets get `qd:presence` frames: the list on
+  joining, then who joins and who leaves. `usePresence(room)` shows them.
 - Events: `ctx.rooms.emit(room, contract, event, payload)` and
   `emitToUser(userId, ...)` check the payload first (`INTERNAL`, nothing
   sent, when it fails), then send the validated payload as
