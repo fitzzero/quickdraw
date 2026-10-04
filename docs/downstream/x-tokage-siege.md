@@ -35,9 +35,10 @@ planning.
    events declared in the contract (`usePresence` for who is there): at
    most 100 app rooms per socket, `qd:` and `user:` names refused, and no
    joins inside a `share`d query.
-5. **Its channel.** 5.0 drops anonymous senders, and a channel's `requires`
-   can name only an entity or collection subscription the sender holds,
-   not an app room as 4.x's `requireRoom` could.
+5. **Its channel.** 5.0 drops anonymous senders, and 4.x's `requireRoom`
+   becomes `requires: { room }` (a fixed name or a function of the
+   payload): the sending socket must have joined that app room through a
+   method it called itself, and a message naming no room is dropped.
 
 ## Suggested order
 

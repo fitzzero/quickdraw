@@ -751,7 +751,12 @@ A room event is declared in the contract with its payload schema, sent with
 `ctx.rooms.emit(room, contract, event, payload)` (`emitToUser` for one
 user) and received with `qd.<service>.<event>.useEvent(handler)`. Channels
 (`defineChannel`) are declared the same way and handled in
-`defineService`'s `channels`.
+`defineService`'s `channels`. A channel's `requireRoom` becomes
+`requires: { room }` in the contract: `{ room: "world" }` for a fixed room,
+`{ room: (payload) => ... }` for one the payload names. The sending socket
+must have joined that app room through `ctx.rooms.join` in a method it
+called; a message that names no room is dropped, where 4.x skipped the
+check.
 
 <!-- example: ../../../codemod/test/guide-v4/packages/shared/src/index.ts#events -->
 

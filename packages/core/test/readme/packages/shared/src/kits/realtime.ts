@@ -17,8 +17,12 @@ export const task = defineContract("taskService", {
     load: { item: z.number(), volatile: true, access: "authenticated" },
   },
   channels: {
-    // 20 a second per socket; only from a socket subscribed to the task the payload names
-    cursor: { payload: cursorSchema, ratePerSecond: 20, requires: { entity: "taskId" } },
+    // 20 a second per socket; only from a socket in the board's room, which enterBoard joined
+    cursor: {
+      payload: cursorSchema,
+      ratePerSecond: 20,
+      requires: { room: (cursor) => `board:${cursor.projectId}` },
+    },
   },
   events: { cursorMoved: { payload: cursorSchema } },
 });

@@ -1237,6 +1237,12 @@ connection.close();
 such code, and `createInvalidationCoordinator(queryClient)` invalidates as
 the hooks do.
 
+A client in another language (a Godot game, a native app) speaks the wire
+itself: [`docs/protocol-v5.md`](docs/protocol-v5.md) is its specification,
+generated from the protocol's source, and [`examples/godot`](examples/godot)
+holds a GDScript client written from it. [`docs/clients.md`](docs/clients.md)
+compares the three ways in.
+
 ## Kits
 
 The methods most services write by hand, as one-line opt-ins (design:
@@ -1805,8 +1811,12 @@ export const task = defineContract("taskService", {
     load: { item: z.number(), volatile: true, access: "authenticated" },
   },
   channels: {
-    // 20 a second per socket; only from a socket subscribed to the task the payload names
-    cursor: { payload: cursorSchema, ratePerSecond: 20, requires: { entity: "taskId" } },
+    // 20 a second per socket; only from a socket in the board's room, which enterBoard joined
+    cursor: {
+      payload: cursorSchema,
+      ratePerSecond: 20,
+      requires: { room: (cursor) => `board:${cursor.projectId}` },
+    },
   },
   events: { cursorMoved: { payload: cursorSchema } },
 });
@@ -1898,8 +1908,13 @@ export function TaskRoom({
   its schema, one without the service grant `{ access: { service }, handler }`
   names, or one whose `requires` the socket does not hold (`{ entity }`: a
   `qd:sub` of that row; `{ collection, scope }`: a `qd:col:sub` of that
-  scope) is dropped. Nothing is logged per message; a handler's error is.
-  The socket rate limiter does not count channels.
+  scope; `{ room }`: the app room, a name like `"world"` or a function of
+  the payload, which a call over that same socket joined) is dropped.
+  Nothing is logged per message; a handler's error is. The socket rate
+  limiter does not count channels. Every requirement is the sending
+  socket's own: a room another socket of the user joined does not count, a
+  reconnected socket must join again, and behind a cluster the check runs
+  on the node the socket is connected to, with no round trip.
 - Presence: `isOnline`, `lastSeen` (now while online, else when the user's
   last socket on this process disconnected), `count` and `users` (each user
   once, anonymous sockets left out; app rooms only) come from this process's
