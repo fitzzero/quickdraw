@@ -17,9 +17,12 @@
 //   `share`, and a method with `custom` access cannot `share: "all"`.
 //
 // Each method's access form is inferred into the type parameter `A`, one
-// member per method. `access: A[M] | NoInfer<...>` keeps the `custom(fn)`
-// callback typed while TypeScript infers `A`: a contextual type made only of
-// `A[M]` would type its parameters as `unknown`.
+// member per method, and checked by that method's `access` (`AccessValue`)
+// rather than by `A`'s constraint, so a form TypeScript cannot infer (one
+// holding an unannotated `id` function) leaves the other methods' forms, and
+// their principals, as they are. The `NoInfer` forms beside `A[M]` keep the
+// `custom(fn)` callback typed while TypeScript infers `A`: a contextual type
+// made only of `A[M]` would type its parameters as `unknown`.
 //
 // `model` and `access` (RFC 0003 sections 3 and 4.2) are inferred too, into
 // `Model` and `Policy`. The policy's column names are checked against the
@@ -64,7 +67,7 @@ export type MethodAccess<
   Rows extends RowForms = "all",
 > = AccessFor<ParsedInputOf<C, M>, HandlerContext<T>, Rows>;
 
-/** One access form per contract method: the constraint of `defineService`'s inferred `A`. */
+/** One access form per contract method. */
 export type AccessMap<
   T extends QuickdrawTypes,
   C extends AnyContract,
@@ -72,6 +75,39 @@ export type AccessMap<
 > = {
   readonly [M in MethodName<C>]: MethodAccess<T, C, M, Rows>;
 };
+
+/**
+ * The constraint of `defineService`'s inferred `A`: one entry per contract
+ * method, of any type. TypeScript infers no form for a method whose `access`
+ * holds an unannotated function (`id: (input) => input.projectId`), and
+ * leaves it `unknown`; with `AccessMap` as the constraint, that one entry
+ * would fail it, every method's form would fall back to the whole union,
+ * and every handler's `ctx.principal` would be nullable. Each form is
+ * checked by its method's `access` instead (`AccessValue`).
+ */
+type MethodKeys<C extends AnyContract> = { readonly [M in MethodName<C>]: unknown };
+
+/**
+ * `NoInfer` on each member of a union. TypeScript does not relate an object
+ * literal to `X | NoInfer<A | B>` member by member: `{ service, entry }`
+ * failed against it.
+ */
+type NoInferEach<U> = U extends unknown ? NoInfer<U> : never;
+
+/**
+ * What a method's `access` accepts, given `A`, the form inferred from it
+ * (or, for an implementation written on its own, the form it is typed for:
+ * `"authenticated"` for a handler that needs a principal): `A` itself when
+ * it is one of `Forms`, then any of `Forms`, but not `"public"` unless `A`
+ * may be `"public"`, since only then is the handler's principal nullable.
+ * An `A` that is not one of `Forms`, or that TypeScript could not infer, is
+ * replaced by `Forms`, so the value is still checked. The `NoInfer` keeps
+ * the forms from absorbing the inference of `A` while still typing a
+ * `custom(fn)` callback and an `id` function.
+ */
+type AccessValue<A, Forms> =
+  | (unknown extends A ? Forms : A extends Forms ? A : Forms)
+  | NoInferEach<PublicAccess extends A ? Forms : Exclude<Forms, PublicAccess>>;
 
 /** The row-level forms a service may use: `entry` needs an access policy, `scope` a model. */
 export type RowFormsOf<Model, Policy> = [Model] extends [undefined]
@@ -121,7 +157,14 @@ interface MutationOptions {
   readonly version?: never;
 }
 
-/** One method's implementation inside `defineService`'s `methods`. */
+/**
+ * One method's implementation inside `defineService`'s `methods`. `A` is its
+ * access form. For a method written in a module of its own, it says which
+ * principal the handler gets: `satisfies MethodImplementation<Types, typeof
+ * task, "rename", "authenticated">` takes any form but `"public"`, and the
+ * principal is never null; with `"public"` it takes any form, and the
+ * principal may be null.
+ */
 export type MethodImplementation<
   T extends QuickdrawTypes,
   C extends AnyContract,
@@ -131,7 +174,7 @@ export type MethodImplementation<
   Proj = Empty,
 > = {
   /** Who may call: `"public"`, `"authenticated"`, `{ service }`, `{ entry }`, `{ scope, of, id }` or `custom(fn)`. */
-  readonly access: A | NoInfer<MethodAccess<T, C, M, Rows>>;
+  readonly access: AccessValue<A, MethodAccess<T, C, M, Rows>>;
   /**
    * Runs the method. For a projection output it returns the database row
    * (or rows, or `null`), which the framework projects: only the
@@ -242,11 +285,7 @@ export type DefineService<T extends QuickdrawTypes> = <
   C extends AnyContract,
   const Model extends ModelName<DbOf<T>> | undefined = undefined,
   Policy extends PolicyFor<DbOf<T>, Model> | undefined = undefined,
-  const A extends AccessMap<T, C, RowFormsOf<Model, Policy>> = AccessMap<
-    T,
-    C,
-    RowFormsOf<Model, Policy>
-  >,
+  const A extends MethodKeys<C> = AccessMap<T, C, RowFormsOf<Model, Policy>>,
   const Proj = Empty,
 >(
   contract: C,

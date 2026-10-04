@@ -113,7 +113,7 @@ describe("the access mapping", () => {
     );
     // a resolveEntryId that is more than a key stays a function, marked
     expect(accessOf("renameLabel").form).toBe(
-      '{ service: "Moderate", entry: "Moderate", id: (input: ParsedInputOf<typeof labelContract, "renameLabel">) => ((p) => p.labelId ?? null)(input) ?? "" }',
+      '{ service: "Moderate", entry: "Moderate", id: (input) => ((p) => p.labelId ?? null)(input) ?? "" }',
     );
     expect(accessOf("renameLabel").markers.join("\n")).toContain(
       `${MARKER} [access] 4.x's resolveEntryId was a function`,

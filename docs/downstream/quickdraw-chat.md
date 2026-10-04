@@ -52,14 +52,12 @@ writes 7, hooks 2, admin 7, instance state 42, client 23, server and other
    broadcasts, so it needs a port to protocol v5; and the channel's
    `requireRoom` (an app room) has no 5.0 form, since `requires` names an
    entity or a collection subscription.
-5. **Two `defineService` typing issues, queued for the finale round.** An
-   unannotated function `id` selector in one method widens `ctx.principal`
-   to nullable in every other method (annotate its parameter);
-   `MethodImplementation<…, "authenticated">` with `satisfies` rejects
-   `{ service, entry }` (use `Exclude<MethodAccess, "public">`, as the
-   codemod's `MethodOf` does). With the fixes in, either one is a bug.
 
-Also: the admin screens name services at run time (they move to
+Also: the two `defineService` typing issues the dry run found are fixed in
+the release candidate (an unannotated `id` function no longer widens the
+other methods' `ctx.principal`; `MethodOf`, typed for `"authenticated"`,
+takes `{ service, entry }`), so either one showing up again is a framework
+bug. The admin screens name services at run time (they move to
 `qd.<service>.admin.*` and `useAdminServices(qd)`), and production stays on
 4.x until this ships, so take 4.1.1 when it is out.
 

@@ -53,14 +53,13 @@ function entryForm(level: Level, id: string, notes: Note[] = []): AccessForm {
   return form(`{ service: ${quote(level)}, entry: ${quote(level)}, id: ${id} }`, notes, true);
 }
 
-function withRow(level: Level, entryId: NonNullable<EntryId>, inputType: string): AccessForm {
-  // The parameter is annotated: an unannotated `id` function leaves
-  // defineService unable to infer the other methods' access forms.
+function withRow(level: Level, entryId: NonNullable<EntryId>): AccessForm {
+  // `defineService` types the `id` function's input, so it needs no annotation.
   switch (entryId.kind) {
     case "key":
       return entryForm(level, quote(entryId.key));
     case "function":
-      return entryForm(level, `(input: ${inputType}) => (${entryId.text})(input) ?? ""`, [
+      return entryForm(level, `(input) => (${entryId.text})(input) ?? ""`, [
         {
           category: "access",
           message:
@@ -68,7 +67,7 @@ function withRow(level: Level, entryId: NonNullable<EntryId>, inputType: string)
         },
       ]);
     case "optional":
-      return entryForm(level, `(input: ${inputType}) => input.${entryId.key} ?? ""`, [
+      return entryForm(level, `(input) => input.${entryId.key} ?? ""`, [
         {
           category: "access",
           message: `the input's ${entryId.key} is optional: 4.x checked the row when one was sent and the plain level otherwise; this form asks for the service grant when it is missing`,
@@ -79,15 +78,13 @@ function withRow(level: Level, entryId: NonNullable<EntryId>, inputType: string)
 
 /**
  * The 5.0 form for a method of `level`, naming `entryId`. `rows` is false
- * for a service without a model, which cannot use an `entry` form;
- * `inputType` is the method's parsed input type, for an `id` function.
+ * for a service without a model, which cannot use an `entry` form.
  */
 export function accessFor(
   level: Level | undefined,
   levelText: string,
   entryId: EntryId,
   rows: boolean,
-  inputType = "unknown",
 ): AccessForm {
   if (level === undefined) {
     return form(`{ service: "Admin" }`, [
@@ -101,7 +98,7 @@ export function accessFor(
     return form(quote("public"));
   }
   if (entryId !== undefined && rows) {
-    return withRow(level, entryId, inputType);
+    return withRow(level, entryId);
   }
   if (entryId !== undefined) {
     return form(`{ service: ${quote(level)} }`, [

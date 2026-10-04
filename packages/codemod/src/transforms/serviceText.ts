@@ -91,11 +91,6 @@ export function defineServiceText(
   ].join("\n");
 }
 
-/** The parsed input type of a method, as code: what an `id` function takes. */
-export function parsedInputType(plan: ServicePlan, method: MethodPlan): string {
-  return `ParsedInputOf<typeof ${plan.contractVar}, ${quote(method.name)}>`;
-}
-
 /** The marker above a `registerX(service)` function that also did other work. */
 export function registerLeftoverMarker(name: string): string {
   return markerText(

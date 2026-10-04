@@ -1,5 +1,4 @@
 import { resolver } from "@fitzzero/quickdraw-core/server";
-import type { ParsedInputOf } from "@fitzzero/quickdraw-core";
 import { qd } from "../quickdraw.js";
 import { labelContract } from "@project/shared";
 
@@ -17,7 +16,7 @@ export const labelService = qd.defineService(labelContract, {
     },
     renameLabel: {
       // quickdraw-migrate: review [access] 4.x's resolveEntryId was a function, kept here: where it returns nothing, the "" makes the row check fail, so only the service grant passes (4.x then applied the plain level)
-      access: { service: "Moderate", entry: "Moderate", id: (input: ParsedInputOf<typeof labelContract, "renameLabel">) => ((p) => p.labelId ?? null)(input) ?? "" },
+      access: { service: "Moderate", entry: "Moderate", id: (input) => ((p) => p.labelId ?? null)(input) ?? "" },
       handler: async ({ input: { labelId, name }, db }) => {
         return await db.label.update({ where: { id: labelId }, data: { name } });
       },

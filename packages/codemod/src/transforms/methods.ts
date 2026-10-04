@@ -14,7 +14,6 @@ import { infraPaths } from "./infra";
 import {
   leadingCommentText,
   moduleConst,
-  parsedInputType,
   registerLeftoverMarker,
   startWithComments,
 } from "./serviceText";
@@ -52,20 +51,12 @@ export function buildMethods(
   const leafFile = plan.service.chain[0]?.getSourceFile();
   for (const method of plan.methods) {
     const { call } = method;
-    const inputType = parsedInputType(plan, method);
     const form = accessFor(
       call.level,
       call.levelText,
       method.entryId,
       plan.service.model !== undefined,
-      inputType,
     );
-    const landing = call.register?.getSourceFile() ?? leafFile;
-    if (form.code.includes("ParsedInputOf<") && landing !== undefined) {
-      work
-        .for(landing)
-        .imports.push({ name: "ParsedInputOf", from: "@fitzzero/quickdraw-core", typeOnly: true });
-    }
     build.anyEntry ||= form.entry;
     const entry = buildMethod(call, form, {
       service: plan.service,

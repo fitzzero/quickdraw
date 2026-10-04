@@ -1348,12 +1348,12 @@ codemod writes, with `MethodOf` added to `apps/api/src/quickdraw.ts`:
 <!-- example: apps/api/src/services/migration/split.ts#split -->
 
 ```ts
-// apps/api/src/quickdraw.ts (the codemod writes MethodOf there)
+// apps/api/src/quickdraw.ts (the codemod writes MethodOf there): any form but "public"
 export type MethodOf<C extends AnyContract, M extends MethodName<C>> = MethodImplementation<
   AppTypes,
   C,
   M,
-  Exclude<MethodAccess<AppTypes, C, M>, "public">
+  "authenticated"
 >;
 
 // apps/api/src/services/task/methods/rename.ts: one module per method, or per cluster

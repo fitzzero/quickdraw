@@ -3,7 +3,7 @@
 // writes it. Three files, shown as one.
 
 import type { AnyContract, MethodName } from "@fitzzero/quickdraw-core";
-import type { MethodAccess, MethodImplementation } from "@fitzzero/quickdraw-core/server";
+import type { MethodImplementation } from "@fitzzero/quickdraw-core/server";
 import type { contracts } from "@project/shared";
 import { projectContract } from "@project/shared";
 import { taskContract } from "../../../../../packages/shared/src/migration/contracts";
@@ -13,12 +13,12 @@ import { type AppPrincipal, qd } from "../../quickdraw";
 type AppTypes = { db: typeof db; principal: AppPrincipal; contracts: typeof contracts };
 
 // #region split
-// apps/api/src/quickdraw.ts (the codemod writes MethodOf there)
+// apps/api/src/quickdraw.ts (the codemod writes MethodOf there): any form but "public"
 export type MethodOf<C extends AnyContract, M extends MethodName<C>> = MethodImplementation<
   AppTypes,
   C,
   M,
-  Exclude<MethodAccess<AppTypes, C, M>, "public">
+  "authenticated"
 >;
 
 // apps/api/src/services/task/methods/rename.ts: one module per method, or per cluster
