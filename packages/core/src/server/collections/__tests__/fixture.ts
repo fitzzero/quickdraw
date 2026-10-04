@@ -182,7 +182,7 @@ interface LabelSource {
 interface TaggedSource {
   readonly id: string;
   readonly title: string;
-  readonly _count: { readonly labels: number };
+  readonly labels: readonly { readonly id: string }[];
 }
 
 /** Options of {@link defineTaskService}. */
@@ -208,11 +208,12 @@ export function defineTaskService(options: TaskServiceOptions = {}) {
         map: (row: LabelSource) => ({ id: row.id, label: `${row.status}: ${row.title}` }),
       },
       tagged: {
-        select: { title: true, _count: { select: { labels: true } } },
+        // the junction's rows of the tasks read, counted: Prisma's _count would aggregate the whole table
+        select: { title: true, labels: { select: { id: true } } },
         map: (row: TaggedSource) => ({
           id: row.id,
           title: row.title,
-          labelCount: row._count.labels,
+          labelCount: row.labels.length,
         }),
       },
     },

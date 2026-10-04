@@ -56,11 +56,12 @@ const myProjectsService = qd.defineService(myProjectsContract, {
   collections: { mine: { scopeAccess: "self" } },
   project: {
     summary: {
-      select: { name: true, _count: { select: { members: true } } },
-      map: (row: { id: string; name: string; _count: { members: number } }) => ({
+      // the members of the projects read, counted (Prisma's _count would aggregate the whole table)
+      select: { name: true, members: { select: { id: true } } },
+      map: (row: { id: string; name: string; members: { id: string }[] }) => ({
         id: row.id,
         name: row.name,
-        memberCount: row._count.members,
+        memberCount: row.members.length,
       }),
     },
   },
@@ -160,7 +161,8 @@ describe("the fixture app's budgets", () => {
     expect(page).toMatchObject({ ok: true, items: [{ id: board.p1, memberCount: 2 }] });
     app.frames.clear();
     // A new member: their own scope gets `added` (nobody subscribes to it), and the member
-    // count goes out again to bo's: one read of the entry's item more than a plain via collection.
+    // count goes out again to bo's: the entry's item read (the project, then its members)
+    // is what a plain via collection would not read.
     await expectBudget(async () => {
       await write((db) =>
         db.projectMember.create({ data: { projectId: board.p1, userId: board.ed, role: "Read" } }),

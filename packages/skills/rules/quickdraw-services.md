@@ -189,7 +189,11 @@ they all get the same data (`updateMany`, `createMany`). When each row's
 data differs, loop over the rows inside an interactive
 `db.$transaction(async (tx) => ...)` and await one `tx.task.update(...)` by
 id per row, not an array-form `$transaction([...])`, which cannot read a
-moved row inside its batch. `share: "caller"` for hot queries;
+moved row inside its batch. A projection's relation count selects the
+relation's ids (`labels: { select: { id: true } }`) and counts them in
+`map`, never `_count`, which Prisma compiles to a `GROUP BY` over the whole
+relation table on every read; a huge relation gets a counter column.
+`share: "caller"` for hot queries;
 `versionColumn: "updatedAt"` answers "not modified" cheaply. The quickdraw
 lint rules enforce most of this file (`no-untracked-write`,
 `no-foreign-write`, `no-nested-write`, `no-raw-sql-write`, `no-manual-emit`,

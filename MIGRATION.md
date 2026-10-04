@@ -598,14 +598,16 @@ export const taskService = qd.defineService(task, {
   // a write to a subtask sends its parent again
   affects: [{ service: task, id: "parentTaskId" }],
   project: {
-    // a relation count: read with select, built by a pure, synchronous map
+    // a relation count: read with select, built by a pure, synchronous map. Read the relation's
+    // ids, which Prisma fetches for the rows read only; its _count aggregates the whole TaskLabel
+    // table (a GROUP BY over every row) on every snapshot and flush
     card: {
-      select: { title: true, status: true, _count: { select: { labels: true } } },
-      map: (row: { id: string; title: string; status: string; _count: { labels: number } }) => ({
+      select: { title: true, status: true, labels: { select: { id: true } } },
+      map: (row: { id: string; title: string; status: string; labels: { id: string }[] }) => ({
         id: row.id,
         title: row.title,
         status: row.status,
-        labelCount: row._count.labels,
+        labelCount: row.labels.length,
       }),
     },
   },
@@ -618,7 +620,7 @@ export const taskService = qd.defineService(task, {
       handler: ({ input, db }) =>
         db.task.findUniqueOrThrow({
           where: { id: input.id },
-          select: { id: true, title: true, status: true, _count: { select: { labels: true } } },
+          select: { id: true, title: true, status: true, labels: { select: { id: true } } },
         }),
     },
   },

@@ -835,14 +835,16 @@ export const taskService = qd.defineService(task, {
   // a write to a subtask sends its parent again
   affects: [{ service: task, id: "parentTaskId" }],
   project: {
-    // a relation count: read with select, built by a pure, synchronous map
+    // a relation count: read with select, built by a pure, synchronous map. Read the relation's
+    // ids, which Prisma fetches for the rows read only; its _count aggregates the whole TaskLabel
+    // table (a GROUP BY over every row) on every snapshot and flush
     card: {
-      select: { title: true, status: true, _count: { select: { labels: true } } },
-      map: (row: { id: string; title: string; status: string; _count: { labels: number } }) => ({
+      select: { title: true, status: true, labels: { select: { id: true } } },
+      map: (row: { id: string; title: string; status: string; labels: { id: string }[] }) => ({
         id: row.id,
         title: row.title,
         status: row.status,
-        labelCount: row._count.labels,
+        labelCount: row.labels.length,
       }),
     },
   },
@@ -855,13 +857,19 @@ export const taskService = qd.defineService(task, {
       handler: ({ input, db }) =>
         db.task.findUniqueOrThrow({
           where: { id: input.id },
-          select: { id: true, title: true, status: true, _count: { select: { labels: true } } },
+          select: { id: true, title: true, status: true, labels: { select: { id: true } } },
         }),
     },
   },
 });
 ```
 
+- A count over a relation reads the relation's ids (`labels: { select: { id: true } }`)
+  and counts them in `map`: Prisma reads them for the rows read only (a
+  second SQL query, `WHERE "taskId" IN (...)`). Its `_count` compiles to a
+  `GROUP BY` over the whole relation table, joined in, on every snapshot,
+  page and flush that reads the projection. For a relation too large to read
+  (a chat's members), keep a counter column that the writes maintain.
 - A projection's keys come from its schema's JSON Schema (Zod 4.2 or later),
   or from `project: { <name>: { keys } }`; a service whose projection has
   neither fails when it is defined. A handler returning a projection returns
