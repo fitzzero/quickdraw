@@ -6,6 +6,7 @@
 import type { Server as HttpServer } from "node:http";
 import type { Logger } from "../contract/logger";
 import { createCaller, type Caller } from "./caller";
+import { DEFAULT_CLUSTER_TIMEOUT_MS, within } from "./cluster/acks";
 import type { ContractOfServices, Dispatcher, PrincipalOfServices } from "./dispatcher";
 import {
   stallWatchdogSettings,
@@ -87,12 +88,21 @@ export interface Closer {
   readonly onClose: (stop: () => void) => void;
 }
 
+/** What a closing server lets settle before Socket.IO closes: the work its sockets' last events start. */
+export interface Departure {
+  /** Resolves once the live data's work in flight settled (a room's presence read from every node). */
+  readonly drain: () => Promise<void>;
+  /** How long it is waited for at most: `cluster.timeoutMs`. Default 1,000. */
+  readonly timeoutMs?: number;
+}
+
 /** The server's `close`: one shutdown, however often it is called. */
 export function closer(
   sockets: SocketServer,
   httpServer: HttpServer,
   idle: () => Promise<void>,
   timeoutMs: number,
+  departure?: Departure,
 ): Closer {
   let closing: Promise<void> | undefined;
   const stops: (() => void)[] = [];
@@ -109,8 +119,22 @@ export function closer(
       expire();
     }, timeoutMs);
     try {
-      // Disconnects every socket and closes `httpServer` once its requests
-      // end, while the calls still running finish: a mutation runs to its end.
+      // This node's sockets go first, while a cluster adapter still reaches the
+      // other nodes: each app room a socket was in asks them whether its user
+      // is still there and tells them it left, which settles (bounded) before
+      // the adapter closes, instead of waiting out its `requestsTimeout`. Each
+      // socket's connection is closed, as `io.close()` closes them, rather than
+      // disconnected: a client told "io server disconnect" would not reconnect
+      // (to another node, in a rolling deploy).
+      for (const socket of sockets.io.sockets.sockets.values()) {
+        socket.conn.close();
+      }
+      if (departure !== undefined) {
+        const bound = departure.timeoutMs ?? DEFAULT_CLUSTER_TIMEOUT_MS;
+        await within(departure.drain(), bound).catch(() => undefined);
+      }
+      // Closes `httpServer` once its requests end, while the calls still
+      // running finish: a mutation runs to its end.
       await Promise.all([sockets.io.close(), Promise.race([idle(), expired])]);
     } finally {
       clearTimeout(timer);

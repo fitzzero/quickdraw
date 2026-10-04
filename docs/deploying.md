@@ -230,9 +230,12 @@ and subscription reads are always authorized on the node that serves them.
 - **Observability.** Turn on `stallWatchdog: true` and
   `onCall: otelOnCall(...)` (README, "Observability"): a node whose event loop
   stalls delays every node's access changes.
-- **Shutdown.** On `SIGTERM`, `await server.close()` (it waits for calls,
-  flushes and the presence work its sockets' last events started), then close
-  the Valkey clients (`redis.cleanup()`).
+- **Shutdown.** On `SIGTERM`, `await server.close()`, then close the Valkey
+  clients (`redis.cleanup()`). `close()` disconnects the node's own sockets
+  first, while its adapter still reaches the other nodes, so their rooms
+  hear `left`; it waits for that presence work (at most `cluster.timeoutMs`),
+  for the calls still running and their flushes, and takes milliseconds when
+  the other nodes answer.
 
 ## Gaps that remain
 

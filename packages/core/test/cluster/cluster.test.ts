@@ -13,7 +13,7 @@ import {
   applyEntityResult,
   type EntityEntry,
 } from "../../src/client/live/entities";
-import type { EntityFrame, EntityResult } from "../../src/index";
+import type { EntityFrame, EntityResult, PresenceFrame } from "../../src/index";
 import { createHarness, type Harness } from "../../src/prisma/__tests__/harness";
 import { deferred } from "../../src/server/__tests__/fixtures";
 import {
@@ -348,6 +348,46 @@ describe("a channel's app room across nodes", () => {
     expect(into.shout).toEqual([{ userId: board.cy, socketId: onB.socket.id, n: 2 }]);
     // Presence answers for the whole cluster; the channel asks the sending socket only.
     expect(await app.server.presence.users(LOBBY)).toEqual([board.cy]);
+  });
+});
+
+describe("closing one node", () => {
+  it("tells the other nodes' rooms its users left, and takes milliseconds", async () => {
+    const app = await createTestApp({
+      services: [boardProjects, defineLiveService(received())],
+      db: h.db,
+    });
+    apps.push(app as unknown as TestApp);
+    const [nodeA, nodeB] = nodesOf(app) as unknown as readonly [
+      { app: typeof app },
+      { app: typeof app },
+    ];
+    const onA = await nodeA.app.connect(as(board.cy));
+    const onB = await nodeB.app.connect(as(board.ada));
+    const heard: PresenceFrame[] = [];
+    onB.socket.on("qd:presence", (frame: PresenceFrame) => heard.push(frame));
+    expect(await onA.call.taskService.enter({ room: LOBBY })).toBe(true);
+    expect(await onB.call.taskService.enter({ room: LOBBY })).toBe(true);
+    // Node B's member sees node A's in the room: the presence list read from both nodes.
+    await vi.waitFor(() => {
+      expect(heard.some(({ users }) => users?.includes(board.cy) === true)).toBe(true);
+    });
+    heard.length = 0;
+    const gone = new Promise<string>((resolve) => {
+      onA.socket.once("disconnect", resolve);
+    });
+    const started = performance.now();
+    // Node A's sockets leave while its adapter still reaches node B; it used to wait out the
+    // adapter's 5 s requestsTimeout, and node B never heard `left`. (The server's own close: the
+    // test app's would disconnect its clients first.)
+    await nodeA.app.server.close();
+    const closedIn = performance.now() - started;
+    await vi.waitFor(() => {
+      expect(heard).toContainEqual({ room: LOBBY, left: board.cy });
+    }, 5000);
+    expect(closedIn).toBeLessThan(1000);
+    // Its connection closed, not ended by the server: the client reconnects (to another node).
+    expect(await gone).toBe("transport close");
   });
 });
 

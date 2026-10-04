@@ -1019,9 +1019,10 @@ created from (or with `http: false`).
 
 `server.close()` disconnects every socket, waits for the calls still in
 flight (a mutation runs to its end) and closes the HTTP server, giving up
-after `shutdownTimeoutMs` (default 10 s); behind a cluster adapter it also
-waits for the presence work its sockets' last events started, so the app can
-close its Valkey clients next. `handleSignals: true` calls it on
+after `shutdownTimeoutMs` (default 10 s); behind a cluster adapter it
+disconnects its own sockets first, while the adapter still reaches the other
+nodes, so their rooms hear `left`, and waits for that presence work (at most
+`cluster.timeoutMs`), so the app can close its Valkey clients next. `handleSignals: true` calls it on
 SIGTERM and SIGINT. `server.rotate({ withinMs })` asks clients to reconnect
 within a window; `server.access.refresh(userId)` reloads a user's grants,
 pushes `qd:access` and resolves the user's entity subscriptions again;

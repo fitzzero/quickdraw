@@ -299,12 +299,16 @@ export function createServer<const S extends readonly AnyService[]>(
     httpServer,
     () => calls.idle(),
     options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
+    {
+      drain: () => liveOf(created)?.drain() ?? Promise.resolve(),
+      timeoutMs: options.cluster?.timeoutMs,
+    },
   );
   const { onClose } = shutdown;
   onClose(sockets.stop);
-  // Once stopped, and once what its sockets' last events started has settled (presence read
-  // from every node, behind a cluster adapter), the tracked client goes back to the dispatcher
-  // attached before.
+  // Once stopped (its sockets leave first, and what their last events started settles while the
+  // adapter still reaches the other nodes: `closer`), and once anything started after that has
+  // settled too, the tracked client goes back to the dispatcher attached before.
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> =>
     (closing ??= shutdown.close().then(async () => {
