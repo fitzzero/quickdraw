@@ -118,8 +118,9 @@ is 0.28× (122 to 34.6 ms), SQL statements per write 0.25×, server CPU per
 write 0.55×, and a reconnect storm serves no snapshots (11,590 in 4.1).
 Missed or worse: bytes per write 0.89×, against a target of 0.30×, because
 the benchmark app keeps a fat watched board query (a collection's index is
-the fix: `MIGRATION.md`, "Boards"); event-loop delay p99 1.7× to 3.7×, from
-a shared run's replies encoded back to back (the finale round's first fix);
+the fix: `MIGRATION.md`, "Boards"); event-loop delay p99 1.7× to 3.7× (5.1×
+in fat-read, where the two 4.1 runs disagree by 43%), from a shared run's
+replies encoded back to back (the finale round's first fix);
 drain after the last write 0.51 s against 0.26 s (the coordinator's 250 ms
 window); restoring a watched query after a reconnect storm, p50 968 ms
 against 10 ms (the deliberate 0 to 2 s refetch jitter, now
