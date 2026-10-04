@@ -64,9 +64,14 @@ entity in three components.
 4. **The Godot client speaks the 4.x wire.** The codemod does not touch
    `apps/game/godot/addons/quickdraw/quickdraw_client.gd`. `legacyWire`
    serves its method calls, not its `input` channel or the world
-   broadcasts, so it needs a port to protocol v5; and the channel's
-   `requireRoom` (an app room) has no 5.0 form, since `requires` names an
-   entity or a collection subscription.
+   broadcasts, so it moves to protocol v5: quickdraw's
+   `examples/godot/addons/quickdraw/quickdraw_client.gd` (same path, a v5
+   client written from `docs/protocol-v5.md`) replaces it, and
+   `game.gd`'s calls move from `{success, data}` to `{ok, d}`. The
+   channel's `requireRoom` becomes `requires: { room: <the world's room> }`;
+   the world's room is joined by a method the Godot socket calls itself
+   (`watchWorld`, say), since a room the page's socket joined does not
+   count for the game client's socket.
 5. **Zod 3 in the api.** `apps/api` is on `zod ^3.25.76`, and
    `packages/shared`, which now holds the contracts and the 31 schemas the
    codemod moved there, lists no `zod` at all. 5.0 validates Zod 3.25

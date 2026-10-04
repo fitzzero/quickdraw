@@ -525,10 +525,43 @@ describe("streams, channels and events (RFC 0003 section 12.5)", () => {
       channel({ requires: { collection: "board", scope: "docId" } }, { entity: taskSchema }),
     ).toThrow('requires names unknown collection "board"');
     expect(channel({ requires: { collection: "board" } })).toThrow(
-      "requires must be { entity } or { collection, scope }",
+      "requires must be { entity }, { collection, scope } or { room }",
     );
     expect(channel({ requires: "docId" })).toThrow(
-      "requires must be { entity } or { collection, scope }",
+      "requires must be { entity }, { collection, scope } or { room }",
+    );
+  });
+
+  it("takes an app room's name or a function of the payload as requires.room", () => {
+    const rooms = defineContract("roomService", {
+      channels: {
+        move: { payload: cursor, requires: { room: "world" } },
+        lobby: { payload: cursor, requires: { room: (payload) => `lobby:${payload.docId}` } },
+      },
+    });
+    expect(rooms.channels.move.requires).toEqual({ room: "world" });
+    expect(typeof rooms.channels.lobby.requires?.room).toBe("function");
+  });
+
+  it("refuses a room requirement no socket could meet, or one mixed with another form", () => {
+    const channel =
+      (requires: unknown, extra: Record<string, unknown> = {}) =>
+      () =>
+        define("s", { ...extra, channels: { cursor: { payload: cursor, requires } } });
+    expect(channel({ room: "qd:e:taskService:t1@Read" })).toThrow(
+      'requires.room "qd:e:taskService:t1@Read" is not an app room: names starting with "qd:" are the framework\'s own rooms',
+    );
+    expect(channel({ room: "user:ada" })).toThrow('names starting with "user:"');
+    for (const room of ["", 42, null, { name: "world" }]) {
+      expect(channel({ room })).toThrow(
+        "requires.room must be an app room's name or a function of the payload",
+      );
+    }
+    expect(channel({ room: "world", entity: "docId" }, { entity: taskSchema })).toThrow(
+      "requires must be { entity }, { collection, scope } or { room }",
+    );
+    expect(channel({ room: "world", scope: "docId" })).toThrow(
+      "requires must be { entity }, { collection, scope } or { room }",
     );
   });
 });

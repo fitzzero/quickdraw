@@ -6,11 +6,13 @@
 
 import { isAccessLevel } from "../../contract/access";
 import type { AnyContract } from "../../contract/defineContract";
+import { reservedRoomPrefix } from "../../contract/names";
 import {
   CHANNEL_DEFAULT_RATE,
   isScopedStream,
   type ChannelDef,
   type PayloadSelector,
+  type RoomSelector,
   type StreamAccess,
   type StreamDef,
 } from "../../contract/realtime";
@@ -48,10 +50,30 @@ function compileSelector(selector: PayloadSelector): CompiledSelector {
   };
 }
 
+/**
+ * The app room a message must come from: a fixed name (checked when the
+ * contract was defined), or a function of the payload whose answer names no
+ * room when it is not a string, is empty or is reserved (`qd:`, `user:`),
+ * since a socket is never in such a room as an app room.
+ */
+function compileRoom(room: RoomSelector): CompiledSelector {
+  if (typeof room === "string") {
+    return () => room;
+  }
+  const computed = compileSelector(room);
+  return (payload) => {
+    const name = computed(payload);
+    return name === undefined || reservedRoomPrefix(name) !== undefined ? undefined : name;
+  };
+}
+
 function compileRequires(def: ChannelDef): ServiceChannel["requires"] {
   const { requires } = def;
   if (requires === undefined) {
     return undefined;
+  }
+  if (requires.room !== undefined) {
+    return { kind: "room", select: compileRoom(requires.room) };
   }
   if (requires.collection === undefined) {
     return { kind: "entity", select: compileSelector(requires.entity) };

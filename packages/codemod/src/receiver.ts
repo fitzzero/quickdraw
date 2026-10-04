@@ -88,7 +88,7 @@ const CONSTRUCTION_MARKERS: Readonly<Record<string, { category: Category; messag
   defineChannel: {
     category: "channel",
     message:
-      "4.x channel: declare it in the contract's channels ({ payload, ratePerSecond, burst, requires }) and handle it in defineService's channels",
+      "4.x channel: declare it in the contract's channels ({ payload, ratePerSecond, burst, requires }; requireRoom becomes requires: { room }) and handle it in defineService's channels",
   },
   defineMethod: {
     category: "contract",

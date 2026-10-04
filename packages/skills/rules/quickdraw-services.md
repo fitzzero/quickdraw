@@ -149,6 +149,11 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   at once with `pushMany(taskId, items)`, never `push` in a loop.
 - Channels: `channels: { cursor: { payload, ratePerSecond, requires } }` in
   the contract, `channels: { cursor: (payload, ctx) => ... }` on the service.
+  `requires` is what the sending socket must hold: `{ entity: "taskId" }` (a
+  subscription to the row the payload's key names), `{ collection, scope }`,
+  or an app room a method joined that socket to: `{ room: "world" }` names
+  the room itself (not a payload key), ``{ room: (p) => `lobby:${p.lobbyId}` }``
+  computes it. 4.x's `requireRoom` becomes `{ room }`.
 - Events: `events: { moved: { payload } }`, sent with
   `ctx.rooms.emit(room, task, "moved", payload)` to an app room
   (`ctx.rooms.join(room)` in a method puts the caller's socket in one).

@@ -1,0 +1,25 @@
+{
+  "name": "quickdraw-example-godot",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The GDScript reference client for quickdraw protocol v5, its Godot check and its Node wire test (an example, never published)",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "lint": "oxlint -c ../../.oxlintrc.json test",
+    "test": "vitest run",
+    "check:godot": "tsx test/godot.ts"
+  },
+  "devDependencies": {
+    "@fitzzero/quickdraw-core": "workspace:*",
+    "@types/node": "^24.0.0",
+    "socket.io": "^4.8.4",
+    "socket.io-client": "^4.8.4",
+    "tsx": "^4.20.0",
+    "vitest": "^4.0.17",
+    "zod": "^4.2.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

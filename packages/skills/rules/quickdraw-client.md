@@ -95,7 +95,9 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
 ## Realtime
 
 - Channels: `const { send, isReady } = qd.task.cursor.useChannel();` sends
-  fire-and-forget messages (dropped over the channel's rate).
+  fire-and-forget messages (dropped over the channel's rate). A channel that
+  `requires` a room takes messages only from a socket a method joined to it:
+  the client that sends must make the joining call itself.
 - Events: `qd.task.cursorMoved.useEvent((payload) => ...)` hears the
   contract's events sent to a room the socket is in.
 - Presence: `usePresence(room)` returns the user ids in an app room, after a
@@ -117,6 +119,10 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   `createQuickdrawConnection({ url, auth })`, calls `open()`, and calls
   `callData(connection, { service: "taskService", method: "get", input })`
   from `./client`; `liveDataOf(connection, queryClient)` holds live rows.
+- A client in another language (a Godot game, a native app) speaks the wire
+  itself: `docs/protocol-v5.md` in the quickdraw repository is the
+  specification, `examples/godot` a GDScript client written from it, and
+  `docs/clients.md` compares the ways in.
 
 ## Do not
 

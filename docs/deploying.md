@@ -89,7 +89,12 @@ revision + 1)`, so revisions stay in the clock range that clients and
   a deleted row's id is authorized again before its first frame.
 - **Users and rooms.** `server.access.disconnectUser` (logout everywhere),
   `access.refresh`, presence (`isOnline`, `users`, `count`, `lastSeen`), app
-  rooms and typed events work across nodes.
+  rooms and typed events work across nodes. A channel's
+  `requires: { room }` is checked on the node the sending socket is
+  connected to, against the app rooms that socket joined: a socket's rooms
+  live on its node and only a call over the socket joins it, so the check
+  holds with no round trip (a room the user joined from a socket on another
+  node does not count, by design).
 - **Stream seeds.** A push to a stream that keeps a `seed` goes to every node
   (one publish, as a room broadcast costs), and each node keeps the seed and
   sends the items to its own subscribers: a subscriber on any node starts with

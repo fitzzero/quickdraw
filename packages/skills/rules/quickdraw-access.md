@@ -112,7 +112,9 @@ channel `requires`.
   the service declares `watchAccess` (`"public"`, `"authenticated"` or
   `{ service: L }`). A stream without `access` in its contract is closed.
   A channel takes `{ access: { service: L }, handler }` on the service and
-  `requires: { entity } | { collection, scope }` in the contract.
+  `requires: { entity } | { collection, scope } | { room }` in the contract;
+  `{ room }` admits only a socket a method joined to that app room, so the
+  method's access decides who may send.
 
 ## Changing access
 

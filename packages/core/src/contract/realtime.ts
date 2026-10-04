@@ -79,21 +79,45 @@ export interface StreamDef<Item extends StandardSchemaV1 = StandardSchemaV1> {
 export type PayloadSelector = string | ((payload: never) => string | null | undefined);
 
 /**
+ * The app room a channel requirement names: the room itself (`"world"`, a
+ * game's one world), or a function of the parsed payload that returns it
+ * (`(payload) => \`lobby:${payload.lobbyId}\``). Unlike a
+ * {@link PayloadSelector}, a string here is the room's name, not a payload
+ * key. A name starting with `qd:` or `user:` is never an app room: a literal
+ * one is refused when the contract is defined, and a computed one drops the
+ * message.
+ */
+export type RoomSelector = string | ((payload: never) => string | null | undefined);
+
+/**
  * What a channel message requires of the socket that sends it: a live
  * subscription (`qd:sub`) to the row of this service `entity` names, or
- * (`qd:col:sub`) to the scope of `collection` that `scope` names. A message
- * whose payload names none is dropped.
+ * (`qd:col:sub`) to the scope of `collection` that `scope` names; or that
+ * the socket is in the app room `room` names, which a method called over
+ * that same socket joined with `ctx.rooms.join` (a room another socket of
+ * the user joined does not count, and a reconnected socket is in none until
+ * it joins again). Each is checked in memory against the sending socket's
+ * own records, on the node it is connected to. A message whose payload names
+ * none is dropped.
  */
 export type ChannelRequires =
   | {
       readonly entity: PayloadSelector;
       readonly collection?: undefined;
       readonly scope?: undefined;
+      readonly room?: undefined;
     }
   | {
       readonly collection: string;
       readonly scope: PayloadSelector;
       readonly entity?: undefined;
+      readonly room?: undefined;
+    }
+  | {
+      readonly room: RoomSelector;
+      readonly entity?: undefined;
+      readonly collection?: undefined;
+      readonly scope?: undefined;
     };
 
 /** A client-to-server fire-and-forget channel (RFC 0003 section 12.5). */
@@ -104,7 +128,7 @@ export interface ChannelDef<Payload extends StandardSchemaV1 = StandardSchemaV1>
   readonly ratePerSecond?: number;
   /** How many messages one socket may send at once. Default twice `ratePerSecond`. */
   readonly burst?: number;
-  /** What the sender must already be subscribed to. */
+  /** What the sender must already be subscribed to, or the app room it must be in. */
   readonly requires?: ChannelRequires;
 }
 

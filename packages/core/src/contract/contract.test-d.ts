@@ -805,6 +805,73 @@ describe("streams, channels and events", () => {
     });
   });
 
+  test("a room requirement names an app room, or reads one from the parsed payload", () => {
+    defineContract("rooms", {
+      channels: {
+        move: { payload: cursorSchema, requires: { room: "world" } },
+        lobby: {
+          payload: z.object({ lobbyId: z.string(), x: z.number() }),
+          requires: {
+            room: (payload) => {
+              expectTypeOf(payload).toEqualTypeOf<{ lobbyId: string; x: number }>();
+              return `lobby:${payload.lobbyId}`;
+            },
+          },
+        },
+        fixed: { payload: cursorSchema, requires: { room: () => "docId" } },
+      },
+    });
+  });
+
+  test("a requires function leaves a collection's plain options known", () => {
+    // Before the room card, a function here made `access` an unknown collection option.
+    defineContract("functionAndOptions", {
+      entity: taskSchema,
+      collections: {
+        byProject: {
+          scope: "projectId",
+          item: "entity",
+          order: [["id", "asc"]],
+          access: "Moderate",
+          limit: 20,
+          maxLimit: 50,
+        },
+      },
+      channels: {
+        cursor: { payload: cursorSchema, requires: { room: (payload) => `doc:${payload.docId}` } },
+        typing: { payload: cursorSchema, requires: { entity: (payload) => payload.docId } },
+      },
+    });
+  });
+
+  test("a room requirement is never reserved, never a payload key, never mixed with another form", () => {
+    defineContract("reservedRoom", {
+      channels: {
+        // @ts-expect-error -- qd: rooms are the framework's own
+        move: { payload: cursorSchema, requires: { room: "qd:e:taskService:t1@Read" } },
+      },
+    });
+    defineContract("userRoom", {
+      channels: {
+        // @ts-expect-error -- user: rooms are the framework's own
+        move: { payload: cursorSchema, requires: { room: "user:ada" } },
+      },
+    });
+    defineContract("keyRoom", {
+      channels: {
+        // @ts-expect-error -- a room named "docId": the payload's docId needs (payload) => payload.docId
+        move: { payload: cursorSchema, requires: { room: "docId" } },
+      },
+    });
+    defineContract("mixedRoom", {
+      entity: taskSchema,
+      channels: {
+        // @ts-expect-error -- one form at a time
+        move: { payload: cursorSchema, requires: { entity: "docId", room: "world" } },
+      },
+    });
+  });
+
   test("streams, channels and events share the namespace of methods and collections", () => {
     defineContract("clash", {
       methods: { get: query({ input: idInput, output: z.null() }) },

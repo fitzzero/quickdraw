@@ -15,7 +15,7 @@ import {
   type UseChannelResult,
   type UseStreamResult,
 } from "../../client/index";
-import { defineContract, mutation, type QuickdrawError } from "../../index";
+import { defineContract, mutation, type ChannelRequires, type QuickdrawError } from "../../index";
 import { createMockClient } from "../../testing/client";
 import {
   createDispatcher,
@@ -89,6 +89,39 @@ describe("the server", () => {
       // @ts-expect-error -- a channel's access is "authenticated" or { service }
       channels: { cursor: { access: { entry: "Read" }, handler: () => undefined } },
     });
+  });
+
+  test("a channel that requires an app room is handled like any other", () => {
+    const world = defineContract("worldService", {
+      methods: { enter: mutation({ input: z.object({}), output: z.boolean() }) },
+      channels: {
+        move: { payload: cursor, requires: { room: "world" } },
+        wave: { payload: z.object({ lobby: z.string() }), requires: { room: (p) => p.lobby } },
+      },
+    });
+    expectTypeOf(world.channels.move.requires).toExtend<ChannelRequires>();
+    const service = qd.defineService(world, {
+      methods: {
+        enter: { access: "authenticated", handler: ({ ctx }) => ctx.rooms.join("world") },
+      },
+      channels: {
+        move: (payload, ctx) => {
+          expectTypeOf(payload).toEqualTypeOf<{ x: number; y: number }>();
+          expectTypeOf(ctx.principal.team).toBeString();
+        },
+        wave: {
+          access: { service: "Read" },
+          handler: (payload) => {
+            expectTypeOf(payload).toEqualTypeOf<{ lobby: string }>();
+          },
+        },
+      },
+    });
+    expectTypeOf(service.contract).toEqualTypeOf<typeof world>();
+    const useMove = () => createQuickdrawClient({ world }).world.move.useChannel();
+    expectTypeOf<ReturnType<typeof useMove>>().toEqualTypeOf<
+      UseChannelResult<{ x: number; y?: number | undefined }>
+    >();
   });
 
   test("a contract with channels needs one handler per channel", () => {

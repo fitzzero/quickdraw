@@ -92,6 +92,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "readme:sync": "tsx test/readme/sync.ts",
+    "protocol:sync": "tsx src/cli/quickdraw-protocol.ts",
+    "protocol:check": "tsx src/cli/quickdraw-protocol.ts --check",
     "db:generate": "prisma generate --config test/prisma/prisma.config.ts",
     "db:migration": "prisma migrate diff --config test/prisma/prisma.config.ts --from-empty --to-schema test/prisma/schema.prisma --script -o test/prisma/migrations/0001_init/migration.sql",
     "prepublishOnly": "bun run build"

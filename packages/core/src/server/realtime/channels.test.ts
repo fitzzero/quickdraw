@@ -7,17 +7,28 @@
 // handler's failure is logged and the channel keeps working. Plus what 5.0
 // adds: the one `qd:ch` event routed by `[service, channel, payload]`, a
 // bucket per service and channel, prototype-free lookups, the rate limiter
-// that never counts `qd:ch`, and the handler's `ctx`.
+// that never counts `qd:ch`, the handler's `ctx`, and `requires: { room }`
+// (4.1's `requireRoom`): the sending socket itself must have joined the app
+// room, through a call over it.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { defineContract } from "../../contract/defineContract";
 import type { Logger } from "../../contract/logger";
+import { entityRoom, userRoom } from "../../contract/names";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
 import { as, projectService, qd, seedBoard, type Board } from "../access/__tests__/board";
 import type { Principal } from "../index";
-import { defineLiveService, frames, received, send, settle } from "./__tests__/fixture";
+import {
+  defineLiveService,
+  frames,
+  LOBBY,
+  received,
+  send,
+  settle,
+  type Received,
+} from "./__tests__/fixture";
 
 let h: Harness;
 let board: Board;
@@ -227,7 +238,80 @@ describe("qd:ch, ported from 4.1", () => {
     const ada = await app.connect(as(board.ada));
     const socket = app.server.io.sockets.sockets.get(ada.socket.id ?? "");
     expect(socket?.listeners("qd:ch")).toHaveLength(1);
-    expect(app.server.dispatcher.registry.services.get("taskService")?.channels.size).toBe(5);
+    expect(app.server.dispatcher.registry.services.get("taskService")?.channels.size).toBe(7);
+  });
+});
+
+describe("requires: { room }", () => {
+  const shouts = (into: Received) => into.shout.map(({ n }) => n);
+
+  it("delivers from a socket in the room, and drops from one that never joined or has left", async () => {
+    const { app, into } = await start();
+    const cy = await app.connect(as(board.cy));
+    const di = await app.connect(as(board.di));
+    send(cy, "shout", { n: 1 });
+    expect(await cy.call.taskService.enter({ room: LOBBY })).toBe(true);
+    send(cy, "shout", { n: 2 });
+    send(di, "shout", { n: 3 });
+    await Promise.all([settle(cy), settle(di)]);
+    expect(await cy.call.taskService.exit({ room: LOBBY })).toBe(true);
+    send(cy, "shout", { n: 4 });
+    await settle(cy);
+    expect(into.shout).toEqual([{ userId: board.cy, socketId: cy.socket.id, n: 2 }]);
+  });
+
+  it("counts the rooms the sending socket joined, not the ones its user's other sockets joined", async () => {
+    const { app, into } = await start();
+    // A player's page and game client: the page joined the lobby, the game client did not.
+    const page = await app.connect(as(board.cy));
+    const game = await app.connect(as(board.cy));
+    await page.call.taskService.enter({ room: LOBBY });
+    send(game, "shout", { n: 1 });
+    send(page, "shout", { n: 2 });
+    await Promise.all([settle(page), settle(game)]);
+    expect(shouts(into)).toEqual([2]);
+  });
+
+  it("drops what a new connection sends until a call over it joins the room again", async () => {
+    const { app, into } = await start();
+    const first = await app.connect(as(board.cy));
+    await first.call.taskService.enter({ room: LOBBY });
+    send(first, "shout", { n: 1 });
+    await settle(first);
+    first.close();
+    const again = await app.connect(as(board.cy));
+    send(again, "shout", { n: 2 });
+    await settle(again);
+    await again.call.taskService.enter({ room: LOBBY });
+    send(again, "shout", { n: 3 });
+    await settle(again);
+    expect(shouts(into)).toEqual([1, 3]);
+  });
+
+  it("reads a computed room from the payload, and never takes a framework room for one", async () => {
+    const { app, into } = await start();
+    const ada = await onT1(app, as(board.ada));
+    await ada.call.taskService.enter({ room: "table:7" });
+    // The socket is in its user room and in T1's entity room, but those are not app rooms.
+    const own = [userRoom(board.ada), entityRoom("taskService", board.t1, "Admin")] as const;
+    const rooms = app.server.io.sockets.sockets.get(ada.socket.id ?? "")?.rooms;
+    expect(own.every((room) => rooms?.has(room))).toBe(true);
+    send(ada, "move", { room: "table:7", n: 1 });
+    send(ada, "move", { room: "table:8", n: 2 });
+    send(ada, "move", { room: own[0], n: 3 });
+    send(ada, "move", { room: own[1], n: 4 });
+    send(ada, "move", { room: "", n: 5 });
+    await settle(ada);
+    expect(into.move).toEqual([{ room: "table:7", n: 1 }]);
+  });
+
+  it("drops messages from an anonymous socket, even in the room", async () => {
+    const { app, into } = await start();
+    const anonymous = await app.connect(null);
+    expect(await anonymous.call.taskService.enterAnyone({ room: LOBBY })).toBe(true);
+    send(anonymous, "shout", { n: 1 });
+    await settle(anonymous);
+    expect(shouts(into)).toEqual([]);
   });
 });
 

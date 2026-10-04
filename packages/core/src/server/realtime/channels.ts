@@ -13,11 +13,13 @@
 // against the channel's schema, synchronously, and dropped when it fails; the
 // access check runs in memory (the service-wide grant a `{ service }` access
 // names, then the contract's `requires`: the socket must already hold the
-// entity or collection subscription the payload names); then the handler
-// runs with the parsed payload. A socket whose dropped messages within 10 s
-// exceed 100 times the channel's rate is disconnected: sustained flooding,
-// not a burst. The rate limiter never counts `qd:ch`
-// (`transports/middleware.ts`).
+// entity or collection subscription the payload names, or be in the app room
+// the requirement names, joined by a call over this very socket); then the
+// handler runs with the parsed payload. 4.1's `requireRoom` skipped its check
+// when it named no room; every form here drops the message instead. A socket
+// whose dropped messages within 10 s exceed 100 times the channel's rate is
+// disconnected: sustained flooding, not a burst. The rate limiter never
+// counts `qd:ch` (`transports/middleware.ts`).
 //
 // A handler's throw or rejection is logged and does not stop the channel:
 // at error, or at debug for a `QuickdrawError` the client caused (any code
@@ -119,6 +121,32 @@ function parse(
   return result.issues === undefined ? { value: result.value } : undefined;
 }
 
+/**
+ * Whether the socket holds what `requires` names for `key`: the entity
+ * subscription, the collection scope subscription, or the app room (one a
+ * call over this socket joined with `ctx.rooms.join`). All three are the
+ * socket's own records, kept on the node it is connected to, so the check
+ * holds behind a cluster adapter without asking another node.
+ */
+function holds(
+  requires: NonNullable<ServiceChannel["requires"]>,
+  socket: QuickdrawServerSocket,
+  service: string,
+  key: string,
+): boolean {
+  switch (requires.kind) {
+    case "entity":
+      return ownRecord(ownRecord(socket.data.entities, service), key) !== undefined;
+    case "collection":
+      return (
+        ownRecord(socket.data.collections, collectionRoom(service, requires.collection, key)) !==
+        undefined
+      );
+    default:
+      return ownRecord(socket.data.appRooms, key) !== undefined;
+  }
+}
+
 /** The in-memory access check: the service grant `access` names, then the contract's `requires`. */
 function allowed(
   channel: ServiceChannel,
@@ -137,15 +165,7 @@ function allowed(
     return true;
   }
   const key = requires.select(value);
-  if (key === undefined) {
-    return false;
-  }
-  return requires.kind === "entity"
-    ? ownRecord(ownRecord(socket.data.entities, channel.service), key) !== undefined
-    : ownRecord(
-        socket.data.collections,
-        collectionRoom(channel.service, requires.collection, key),
-      ) !== undefined;
+  return key !== undefined && holds(requires, socket, channel.service, key);
 }
 
 function contextOf(deps: ChannelDeps, state: SocketChannels, principal: Principal): ChannelContext {
