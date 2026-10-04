@@ -72,8 +72,21 @@ export function rotate(io: QuickdrawIo, withinMs: number): void {
   io.emit(SERVER_EVENTS.rotate, { withinMs });
 }
 
+const REGRANTS = new WeakMap<object, number>();
+
+/**
+ * How many times this process applied new grants to a user of the server
+ * `io` serves (`access.refresh`, a written grant, another node's broadcast):
+ * the server's in-process callers load the grants they hold again once it
+ * rises (`../caller.ts`).
+ */
+export function regrantsOf(io: object): number {
+  return REGRANTS.get(io) ?? 0;
+}
+
 /** Puts `serviceAccess` in the principal of this process's sockets of `userId`. */
 function regrant(io: QuickdrawIo, userId: string, serviceAccess: ServiceGrants): void {
+  REGRANTS.set(io, regrantsOf(io) + 1);
   for (const socketId of io.sockets.adapter.rooms.get(userRoom(userId)) ?? []) {
     const socket = io.sockets.sockets.get(socketId);
     const principal = socket?.data.principal;

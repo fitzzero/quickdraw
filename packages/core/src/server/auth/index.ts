@@ -61,6 +61,8 @@ export {
 } from "./routes/socketAuth";
 export {
   requireSession,
+  sessionOf,
+  type RequestSession,
   type RequireSessionOptions,
   type SessionMiddleware,
   type SessionRequest,

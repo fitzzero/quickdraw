@@ -1048,7 +1048,13 @@ over three transports (design: sections 3, 8 and 10):
   `./server/express`), which refuses with the `RATE_LIMITED` reply.
 - **In process**: `server.dispatcher.caller(principal)` or
   `qd.caller(principal)`: `await qd.caller(user).taskService.rename(input)`,
-  typed by the `contracts` of `initQuickdraw`'s types.
+  typed by the `contracts` of `initQuickdraw`'s types. A principal that
+  carries no `serviceAccess` gets the grants `auth.loadServiceAccess`
+  loads, as a socket's handshake and an HTTP call do: at the caller's first
+  call, and again at its next call after the server applied new grants to
+  a user (`server.access.refresh`, a tracked write to
+  `auth.serviceAccessSource`). One that carries grants (even `{}`) keeps
+  exactly those. A load that fails rejects the call with `INTERNAL`.
 
 `authenticate` takes one request (`{ transport, auth, headers, socket | req }`)
 for both transports and returns a principal, a user id, or nothing for an
@@ -2356,11 +2362,11 @@ nothing is cached:
   session's token, for clients that keep no cookies (a game engine, a page
   in a third-party iframe), at the cost of the token being readable by the
   page's scripts.
-- `requireSession({ sessions, jwtSecret })` guards the app's own REST
-  routes: the credential is read as `/me` reads it, the JWT verified once
-  and the session checked in the store, then `req.userId` and
-  `req.sessionId` are set; otherwise 401 `{ error: "UNAUTHENTICATED", message }`.
-  4.1's `createRequireAuth` stays for token-keyed sessions.
+- `requireSession({ sessions, jwtSecret }, { loadPrincipal? })` guards the
+  app's own REST routes (below): the credential is read as `/me` reads it,
+  the JWT verified once and the session checked in the store; otherwise
+  401 `{ error: "UNAUTHENTICATED", message }`. 4.1's `createRequireAuth`
+  stays for token-keyed sessions.
 - Rate limits: the sign-in routes share `createAuthLimiter({ max: 60 })` (60
   requests per 15 minutes per IP) and the session routes
   `createAuthStatusLimiter()` (120); pass `rateLimit: { signIn, session }`
@@ -2440,6 +2446,46 @@ export function SignOut() {
     </button>
   );
 }
+```
+
+An app's own REST route (a service worker's renewal, a webhook) signs the
+user in with `requireSession` and calls the services in process, so the
+method's validation, access check and tracked writes are a socket call's.
+`sessionOf(req)` gives the route `{ userId, sessionId, principal }`, typed,
+with no cast of `req` (`sessionOf<AppPrincipal>(req)` when `loadPrincipal`,
+like `socketAuth`'s, builds the app's own principal; by default it is
+`{ userId, kind: "user" }`); they are also set as `req.userId`,
+`req.sessionId` and `req.principal`. `qd.caller(principal)` then loads the
+user's grants as the user's sockets get them, so a method behind
+`{ service: L }` passes or answers `FORBIDDEN` as it would over a socket:
+
+<!-- example: apps/api/src/auth/routes.ts#rest -->
+
+```ts
+import { httpStatus, toWire } from "@fitzzero/quickdraw-core";
+import { requireSession, sessionOf } from "@fitzzero/quickdraw-core/server/auth";
+
+// 401 without a live session; the principal built as socketAuth builds a socket's
+const signedIn = requireSession(
+  { sessions, jwtSecret: env.JWT_SECRET },
+  { loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }) },
+);
+
+app.get("/api/projects/:projectId/task-count", signedIn, (req, res) => {
+  void (async () => {
+    const { principal } = sessionOf<AppPrincipal>(req);
+    try {
+      // the method's validation, access check (with the user's grants) and writes, as over a socket
+      const count = await qd.caller(principal).taskService.countOnBoard({
+        projectId: req.params.projectId,
+      });
+      res.json({ count });
+    } catch (error) {
+      const failure = toWire(error);
+      res.status(httpStatus(failure.code)).json(failure);
+    }
+  })();
+});
 ```
 
 `createMemorySessionStore()` keeps sessions in the process, for development
@@ -2913,7 +2959,7 @@ bunx @fitzzero/quickdraw-codemod@next v5 .
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `.`                | `defineContract`, `query`, `mutation`, `nullable`, `listOf`, `via`, the kits' contract halves, inference types, `QuickdrawError`, error codes, protocol types, room and topic names                                                             |
 | `./server`         | `initQuickdraw`, `createServer`, `createDispatcher`, `createHttpRouter`, policies, `custom`, the kits' handlers, `requireRow`, `nextOrdinal`, `storageOf`, dev warnings, the Redis adapter, the socket rate limiter, env and encryption helpers |
-| `./server/auth`    | `createAuthRoutes`, `socketAuth`, providers (`google`, `discord`, `mock`, `guest`), session stores, `issueSession`, `liveSession`, JWT, cookie and origin helpers                                                                               |
+| `./server/auth`    | `createAuthRoutes`, `socketAuth`, `requireSession` and `sessionOf`, providers (`google`, `discord`, `mock`, `guest`), session stores, `issueSession`, `liveSession`, JWT, cookie and origin helpers                                             |
 | `./server/express` | Express rate limits: `createAuthLimiter`, `createAuthStatusLimiter`, `createCallLimiter`, `createPublicApiLimiter`, `createWebhookLimiter`                                                                                                      |
 | `./server/mcp`     | `createMcpRegistry`, `describeTools`, `createMcpStdioServer`, `createMcpHttpRouter`, `bootstrapMcpServer`                                                                                                                                       |
 | `./server/otel`    | `otelOnCall`                                                                                                                                                                                                                                    |

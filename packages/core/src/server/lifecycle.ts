@@ -5,7 +5,13 @@
 
 import type { Server as HttpServer } from "node:http";
 import type { Logger } from "../contract/logger";
-import { createCaller, type Caller } from "./caller";
+import {
+  callerGrantsOf,
+  createCaller,
+  setCallerGrants,
+  type Caller,
+  type CallerGrants,
+} from "./caller";
 import { DEFAULT_CLUSTER_TIMEOUT_MS, within } from "./cluster/acks";
 import type { ContractOfServices, Dispatcher, PrincipalOfServices } from "./dispatcher";
 import {
@@ -46,11 +52,18 @@ export interface TrackedDispatcher<S extends readonly AnyService[]> {
   readonly dispatcher: Dispatcher<S>;
   /** Resolves once no call is in flight. */
   idle(): Promise<void>;
+  /**
+   * Makes the in-process callers of both dispatchers, the tracked one and
+   * the one it wraps (and `qd.caller` through either), load the grants of a
+   * principal that carries none through `grants`.
+   */
+  loadGrantsWith(grants: CallerGrants): void;
 }
 
 /**
  * Counts the calls in flight through `dispatcher`, the transports' and the
- * in-process caller's alike, so `close()` can wait for them.
+ * in-process caller's alike, so `close()` can wait for them. Its caller loads
+ * grants once `loadGrantsWith` gave it where from.
  */
 export function trackCalls<S extends readonly AnyService[]>(
   dispatcher: Dispatcher<S>,
@@ -65,17 +78,24 @@ export function trackCalls<S extends readonly AnyService[]>(
     void result.then(done, done);
     return result;
   };
+  const tracked: Dispatcher<S> = Object.freeze({
+    ...dispatcher,
+    call,
+    caller: (principal: PrincipalOfServices<S> | null) =>
+      createCaller(() => call, principal, {
+        grants: () => callerGrantsOf(tracked),
+      }) as Caller<ContractOfServices<S>>,
+  });
   return {
-    dispatcher: Object.freeze({
-      ...dispatcher,
-      call,
-      caller: (principal: PrincipalOfServices<S> | null) =>
-        createCaller(() => call, principal) as Caller<ContractOfServices<S>>,
-    }),
+    dispatcher: tracked,
     async idle() {
       while (running.size > 0) {
         await Promise.allSettled([...running]);
       }
+    },
+    loadGrantsWith(grants) {
+      setCallerGrants(tracked, grants);
+      setCallerGrants(dispatcher, grants);
     },
   };
 }

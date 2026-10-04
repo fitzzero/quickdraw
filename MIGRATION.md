@@ -1494,8 +1494,12 @@ environment (development without a Google app) is left out in place with
 `google.optional(...)`. 4.x's development sign-in by a user id in the
 handshake becomes `socketAuth({ devCredentials })`, which cannot run in
 production. `createRequireAuth({ getSession })` on REST routes becomes
-`requireSession(keys)`, which verifies the JWT once. `onRevoke` ends the
-sockets of a revoked session:
+`requireSession(keys)`, which verifies the JWT once; the route reads the
+user with `sessionOf(req)` instead of `req.userId` (Express's `Request` type
+has no such member), and calls the services as `sessionOf(req).principal`
+through `qd.caller`, which loads the user's grants as a socket's handshake
+does (the README's auth routes kit section shows such a route). `onRevoke`
+ends the sockets of a revoked session:
 
 <!-- example: apps/api/src/auth/migrating.ts#wiring -->
 
@@ -1506,6 +1510,7 @@ import {
   google,
   mock,
   requireSession,
+  sessionOf,
   socketAuth,
   type SessionKeys,
 } from "@fitzzero/quickdraw-core/server/auth";
@@ -1546,9 +1551,10 @@ app.use(
   }),
 );
 
-// the app's own REST routes: was createRequireAuth({ getSession })
+// the app's own REST routes: was createRequireAuth({ getSession }) and req.userId
 app.post("/api/push/resubscribe", express.json(), requireSession(keys), (req, res) => {
-  const { userId } = req as typeof req & { userId: string };
+  // the session's user and principal, typed; call the services as it (the README's REST example)
+  const { userId } = sessionOf(req);
   res.json({ userId });
 });
 
