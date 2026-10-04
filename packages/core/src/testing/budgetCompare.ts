@@ -116,10 +116,16 @@ function describe(each: NumberChange): string {
   return `${line} (${percent > 0 ? "+" : ""}${percent.toFixed(1)}%; bytes may move by ${BUDGET_BYTES_TOLERANCE * 100}%)`;
 }
 
-/** The lines of a failure message: each number that grew, and changed calls, with old and new values. */
-export function describeChanges(comparison: Comparison): string {
-  const lines = comparison.changes.filter((each) => each.direction === "grew").map(describe);
-  if (comparison.callsChanged) {
+/**
+ * The lines of a failure message: each number that moved `direction` (grew,
+ * by default) with its old and new values, and for growth the changed calls.
+ */
+export function describeChanges(
+  comparison: Comparison,
+  direction: "grew" | "fell" = "grew",
+): string {
+  const lines = comparison.changes.filter((each) => each.direction === direction).map(describe);
+  if (direction === "grew" && comparison.callsChanged) {
     const list = (calls: readonly BudgetCall[]): string =>
       calls.length === 0 ? "none" : calls.map(signature).join(", ");
     lines.push(`  calls: was ${list(comparison.was.calls)}; now ${list(comparison.now.calls)}`);

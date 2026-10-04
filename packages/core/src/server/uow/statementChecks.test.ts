@@ -98,6 +98,34 @@ describe("statement checks", () => {
     expect(unit.raised.map((warning) => warning.kind)).toEqual(["n-plus-one"]);
   });
 
+  it("count no statement filtered by an id list: one per chunk of ids, as lint allows", () => {
+    const { check, raised } = checks();
+    for (let index = 0; index < 20; index += 1) {
+      const chunk = [`t${index}`, `u${index}`];
+      check(
+        { model: "task", operation: "findMany", args: { where: { id: { in: chunk } } } },
+        "unit",
+      );
+      check(
+        {
+          model: "task",
+          operation: "updateMany",
+          args: { where: { id: { in: chunk }, status: "open" }, data: { seen: true } },
+        },
+        "unit",
+      );
+    }
+    expect(raised).toEqual([]);
+    // An id filter that is not a list is still a shape that counts.
+    for (let index = 0; index < 10; index += 1) {
+      check(
+        { model: "task", operation: "findMany", args: { where: { id: { not: "x" } }, take: 1 } },
+        "unit",
+      );
+    }
+    expect(raised.map((warning) => warning.kind)).toEqual(["n-plus-one"]);
+  });
+
   it("know an unbounded read: findMany with neither take nor ids to read", () => {
     const read = (args: Statement["args"]): Statement => ({
       model: "task",

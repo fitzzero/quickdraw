@@ -1961,11 +1961,17 @@ machine and on PGlite or PostgreSQL. It records:
 What it does with them:
 
 - A missing entry is written. A step that costs less rewrites its entry, so
-  the budget tightens as the code improves.
+  the budget tightens as the code improves; under CI (`CI=1` or `CI=true`)
+  it fails instead ("budget changed; rerun locally to accept"), so removed
+  work is noticed and the lower budget is committed from a local run.
 - A step that costs more fails, naming every number that grew with its old
-  and new values. Set `QD_ALLOW_BUDGET_GROWTH=1` to accept the new budget
-  instead, and commit the file. A step whose calls changed (other methods,
+  and new values. Set `QD_ALLOW_BUDGET_GROWTH=1` to accept every new budget,
+  or `QD_ALLOW_BUDGET_GROWTH="list a page,count a board"` for the ones it
+  names, and commit the file. A step whose calls changed (other methods,
   outcomes or how many) counts as growth.
+- Each step of a test file has its own name: a name another test of the
+  file already measured is a `TypeError` (the same test measuring it again,
+  a retry, is fine).
 - Statements must match exactly; bytes may move by up to 5% either way
   (ids and timestamps vary in length) without counting as a change.
 - Await, inside `run`, everything the step should cost: the replies and the
@@ -2000,7 +2006,10 @@ toward `n-plus-one`: that is how per-row writes are written (see tracked
 writes). Each is logged once per kind, service, method and subject (the
 model, or the field of a nested write), under `category: "quickdraw.dev"`.
 Only an app's own statements are checked: the framework's reads and the
-kits' handlers are not. In tests, `createTestApp({ strictWarnings: true })`
+kits' own reads are not, while the app's callbacks a kit calls (`prepare`,
+`onChange`, `resolveUser`, a search strategy) are. A statement filtered by
+an `id` list (`{ id: { in: ids } }`, one per chunk of ids) never counts
+toward `n-plus-one`. In tests, `createTestApp({ strictWarnings: true })`
 (under vitest or jest) throws every warning raised in that app's method
 calls as a `DevWarningError` where it is raised, so the test that caused it
 fails: the call it happened in fails with `INTERNAL` and the error as its

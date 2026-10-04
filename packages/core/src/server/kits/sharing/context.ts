@@ -6,6 +6,7 @@
 
 import { QuickdrawError } from "../../../protocol/errors";
 import type { AccessForm } from "../../access/types";
+import { checked } from "../../devWarnings";
 import type { SharingCall } from "./runtime";
 import type { SharingOnChange, SharingResolveUser, SharingUserLookup } from "./types";
 
@@ -39,7 +40,8 @@ export async function resolveTarget(
     ...(given.name === undefined ? {} : { name: given.name }),
     ...(given.email === undefined ? {} : { email: given.email }),
   });
-  const found: unknown = await context.resolveUser(lookup, call.ctx, call.db);
+  const { resolveUser } = context;
+  const found: unknown = await checked(() => resolveUser(lookup, call.ctx, call.db));
   if (found === null || found === undefined) {
     throw new QuickdrawError("NOT_FOUND", "No such user");
   }

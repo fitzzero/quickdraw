@@ -28,7 +28,7 @@ import { allowedIds, rowsWhere } from "../crud/access";
 import { readPage } from "../crud/page";
 import { projectionOf, type Row } from "../crud/runtime";
 import type { AnyStrategy, SearchRun } from "./context";
-import { allOf, rankedIds, scopeWhere, searchOrder, textWhere } from "./filters";
+import { allOf, scopeWhere, searchOrder, strategyIds, textWhere } from "./filters";
 import { emptyPage, resultsPage } from "./results";
 
 /** Stops a call that its caller cancelled, or that ran out of time, before it reads its rows. */
@@ -82,7 +82,7 @@ export async function idsPage(
   if (scope === "none") {
     return emptyPage();
   }
-  const ranked = rankedIds(run, await ids(run.query.q, run.ctx, { limit: run.query.limit }));
+  const ranked = await strategyIds(run, ids);
   stopIfAborted(run);
   if (ranked.length === 0) {
     return emptyPage();

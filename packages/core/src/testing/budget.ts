@@ -12,10 +12,13 @@
 //
 // Counts and bytes, never time, so a budget is the same on every machine. A
 // missing entry is written. A rise fails with the old and new numbers, unless
-// QD_ALLOW_BUDGET_GROWTH=1 is set, which writes the new budget instead. A
-// fall is written, so the budget tightens as the code improves. Bytes move by
-// up to 5% either way without counting as a change (ids and timestamps vary
-// in length); statements must match exactly.
+// QD_ALLOW_BUDGET_GROWTH allows it (`1` for every budget, or a comma-separated
+// list of budget names), which writes the new budget instead. A fall is
+// written locally, so the budget tightens as the code improves; under CI
+// (`CI=1` or `CI=true`) it fails too, so removed work is noticed and accepted
+// by running the tests locally. Bytes move by up to 5% either way without
+// counting as a change (ids and timestamps vary in length); statements must
+// match exactly. Two tests of one file may not name a step alike.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
@@ -30,8 +33,25 @@ import {
 
 export type { Budget, BudgetCall };
 
-/** The environment variable that lets a budget grow: `QD_ALLOW_BUDGET_GROWTH=1`. */
+/**
+ * The environment variable that lets a budget grow: `QD_ALLOW_BUDGET_GROWTH=1`
+ * for every budget, or a comma-separated list of budget names.
+ */
 export const BUDGET_GROWTH_ENV = "QD_ALLOW_BUDGET_GROWTH";
+
+/** Whether {@link BUDGET_GROWTH_ENV} lets the budget `name` grow: `1`, or a list naming it. */
+export function growthAllowed(name: string, value = process.env[BUDGET_GROWTH_ENV]): boolean {
+  if (value === undefined) {
+    return false;
+  }
+  const allowed = value.split(",").map((item) => item.trim());
+  return (allowed.length === 1 && allowed[0] === "1") || allowed.includes(name);
+}
+
+/** Whether the tests run under CI (`CI=1` or `CI=true`), where a budget that fell fails. */
+export function underCi(value = process.env.CI): boolean {
+  return value === "1" || value === "true";
+}
 
 /** Options of {@link expectBudget}. */
 export interface BudgetOptions {
@@ -120,11 +140,19 @@ function callOf(record: CallRecord): BudgetCall {
   };
 }
 
+/** Strings by UTF-16 code unit: the same order on every machine, whatever its locale. */
+function byCodeUnit(a: string, b: string): number {
+  if (a === b) {
+    return 0;
+  }
+  return a < b ? -1 : 1;
+}
+
 /** Calls in a stable order, so concurrent calls compare the same on every run. */
-function byCall(a: BudgetCall, b: BudgetCall): number {
+export function byCall(a: BudgetCall, b: BudgetCall): number {
   return (
-    a.call.localeCompare(b.call) ||
-    (a.outcome ?? "").localeCompare(b.outcome ?? "") ||
+    byCodeUnit(a.call, b.call) ||
+    byCodeUnit(a.outcome ?? "", b.outcome ?? "") ||
     a.statements - b.statements ||
     a.bytes - b.bytes
   );
@@ -171,19 +199,65 @@ async function measure(run: () => unknown): Promise<Budget> {
 
 const EXPECT_GLOBAL = Symbol.for("expect-global");
 
-/** The running test's file, from vitest's global `expect` (or jest's). */
-function currentTestFile(): string | undefined {
+/** The test runner's global `expect` (vitest's, or jest's), and the running test's file and name. */
+interface RunnerState {
+  readonly runner: object | undefined;
+  readonly testPath: string | undefined;
+  readonly testName: string | undefined;
+}
+
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** What the test runner's global `expect` says about the running test. */
+function runnerState(): RunnerState {
   const holder = globalThis as Record<PropertyKey, unknown>;
   for (const candidate of [holder[EXPECT_GLOBAL], holder.expect]) {
     const getState = (candidate as { readonly getState?: unknown } | undefined)?.getState;
     if (typeof getState === "function") {
-      const state = (getState as () => unknown).call(candidate) as { readonly testPath?: unknown };
-      if (typeof state.testPath === "string" && state.testPath.length > 0) {
-        return state.testPath;
-      }
+      const state = (getState as () => unknown).call(candidate) as {
+        readonly testPath?: unknown;
+        readonly currentTestName?: unknown;
+      };
+      return {
+        runner: candidate as object,
+        testPath: nonEmpty(state.testPath),
+        testName: nonEmpty(state.currentTestName),
+      };
     }
   }
-  return undefined;
+  return { runner: undefined, testPath: undefined, testName: undefined };
+}
+
+/** Per test runner, the steps measured so far: `budget file\0name` to the test that measured it. */
+const claimed = new WeakMap<object, Map<string, string>>();
+const NO_RUNNER = {};
+
+/**
+ * Refuses a step name another test of the same file used: two tests sharing
+ * an entry would rewrite each other's budget. The same test measuring it
+ * again (a retry) is allowed.
+ */
+function claimName(path: string, name: string, state: RunnerState): void {
+  const runner = state.runner ?? NO_RUNNER;
+  const names = claimed.get(runner) ?? new Map<string, string>();
+  claimed.set(runner, names);
+  const key = `${path}\u0000${name}`;
+  const test = state.testName ?? "";
+  const owner = names.get(key);
+  if (owner !== undefined && owner !== test) {
+    throw new TypeError(
+      `expectBudget: two tests of ${shownPath(path)} name a step "${name}" ("${owner}" and "${test}"); give each step its own name`,
+    );
+  }
+  names.set(key, test);
+}
+
+/** `path` relative to the working directory when it is inside it. */
+function shownPath(path: string): string {
+  const near = relative(process.cwd(), path);
+  return near.startsWith("..") ? path : near;
 }
 
 /** The budget file of `testFile`: `__budgets__/<its name>.json` in its directory. */
@@ -271,13 +345,16 @@ function checkOptions(options: BudgetOptions): { readonly name: string; readonly
   if (typeof name !== "string" || name.trim().length === 0) {
     throw new TypeError("expectBudget: name must be a non-empty string");
   }
-  const file = options.file ?? currentTestFile();
+  const state = runnerState();
+  const file = options.file ?? state.testPath;
   if (file === undefined) {
     throw new TypeError(
       "expectBudget: no test file is running to put the budget beside; pass { file }",
     );
   }
-  return { name, path: budgetFileOf(file) };
+  const path = budgetFileOf(file);
+  claimName(path, name, state);
+  return { name, path };
 }
 
 /**
@@ -286,8 +363,11 @@ function checkOptions(options: BudgetOptions): { readonly name: string; readonly
  * database statements and reply bytes of each call it made, and every
  * statement and socket byte of the step. Rejects when the step costs more
  * than its budget, naming each number that grew with its old and new values,
- * unless `QD_ALLOW_BUDGET_GROWTH=1` is set; writes the entry when it is new,
- * lower, or allowed to grow. Measure one step at a time.
+ * unless `QD_ALLOW_BUDGET_GROWTH` allows it (`1`, or a comma-separated list
+ * of names); writes the entry when it is new, lower, or allowed to grow.
+ * Under CI (`CI=1` or `CI=true`) a lower step fails as well ("budget
+ * changed; rerun locally to accept"). Two tests of one file may not name a
+ * step alike (`TypeError`). Measure one step at a time.
  *
  * A call's statements are its handler's, as its completion record counts
  * them: the access check before the handler is not among them, a kit's reads
@@ -315,18 +395,22 @@ export async function expectBudget(
     return { name, path, measured, change: "written" };
   }
   const comparison = compareBudgets(stored, measured);
-  const allowGrowth = process.env[BUDGET_GROWTH_ENV] === "1";
-  if (comparison.grew && !allowGrowth) {
-    const near = relative(process.cwd(), path);
-    const where = near.startsWith("..") ? path : near;
+  if (comparison.grew && !growthAllowed(name)) {
     throw new Error(
-      `expectBudget("${name}"): the step costs more than its budget (${where}):\n` +
+      `expectBudget("${name}"): the step costs more than its budget (${shownPath(path)}):\n` +
         `${describeChanges(comparison)}\n` +
-        `Make it cheaper, or set ${BUDGET_GROWTH_ENV}=1 to accept the new budget.`,
+        `Make it cheaper, or set ${BUDGET_GROWTH_ENV}=1 (or ${BUDGET_GROWTH_ENV}="${name}") to accept the new budget.`,
     );
   }
   if (!comparison.grew && !comparison.fell) {
     return { name, path, measured, change: "unchanged" };
+  }
+  if (!comparison.grew && underCi()) {
+    throw new Error(
+      `expectBudget("${name}"): budget changed; rerun locally to accept (${shownPath(path)}):\n` +
+        `${describeChanges(comparison, "fell")}\n` +
+        "The step costs less than its budget: run the tests without CI to write the lower budget, and commit it.",
+    );
   }
   writeBudget(path, name, mergeBudget(stored, measured, comparison));
   return { name, path, measured, change: comparison.grew ? "grown" : "lowered" };

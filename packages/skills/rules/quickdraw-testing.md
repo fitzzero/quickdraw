@@ -77,12 +77,14 @@ await expectBudget(() => app.as(ada).taskService.list({ limit: 20 }), { name: "l
 
 - It records SQL statements and bytes (never time) per call and for the
   whole step, in `__budgets__/<test file>.json` beside the test: commit it.
-  A missing entry is written, a cheaper step rewrites its entry, a costlier
-  one fails naming each number that grew. Statements must match exactly;
-  bytes may move 5%.
-- Accept a deliberate rise with `QD_ALLOW_BUDGET_GROWTH=1`, then commit the
-  file. Await everything the step should cost inside `run`, measure one
-  step at a time, and run a step once first when it may pay a one-time read.
+  A missing entry is written, a cheaper step rewrites its entry (under CI it
+  fails: rerun locally and commit), a costlier one fails naming each number
+  that grew. Statements must match exactly; bytes may move 5%.
+- Accept a deliberate rise with `QD_ALLOW_BUDGET_GROWTH=1` (every budget) or
+  `QD_ALLOW_BUDGET_GROWTH="list a page"` (the ones named), then commit the
+  file. Give each step of a test file its own name. Await everything the
+  step should cost inside `run`, measure one step at a time, and run a step
+  once first when it may pay a one-time read.
 
 ## Development warnings
 

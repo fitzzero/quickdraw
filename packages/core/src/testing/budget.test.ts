@@ -20,6 +20,7 @@ import {
 } from "../server/access/__tests__/board";
 import { captureLogger } from "../server/__tests__/fixtures";
 import { initQuickdraw, type Principal } from "../server/index";
+import { byCall, growthAllowed, underCi } from "./budget";
 import {
   budgetFileOf,
   createTestApp,
@@ -94,6 +95,9 @@ beforeEach(async (context) => {
   board = await seedBoard(h.prisma);
   extraStatement = false;
   file = join(dir, `${context.task.id}.test.ts`);
+  // As a local run: CI changes what a lower budget does.
+  vi.stubEnv("CI", "");
+  vi.stubEnv("QD_ALLOW_BUDGET_GROWTH", undefined);
 });
 
 afterEach(async () => {
@@ -161,7 +165,7 @@ describe("expectBudget", () => {
       "  stepService.page (call 1) statements: was 1, now 2\n",
     );
     expect((error as Error).message).toContain(
-      "set QD_ALLOW_BUDGET_GROWTH=1 to accept the new budget",
+      'set QD_ALLOW_BUDGET_GROWTH=1 (or QD_ALLOW_BUDGET_GROWTH="page") to accept the new budget',
     );
     expect(stored("page")?.statements).toBe(1);
   });
@@ -173,9 +177,50 @@ describe("expectBudget", () => {
     extraStatement = true;
     vi.stubEnv("QD_ALLOW_BUDGET_GROWTH", "1");
     expect((await expectBudget(step, { name: "page", file })).change).toBe("grown");
-    vi.unstubAllEnvs();
+    vi.stubEnv("QD_ALLOW_BUDGET_GROWTH", undefined);
     expect(stored("page")).toMatchObject({ statements: 2, calls: [{ statements: 2 }] });
     expect((await expectBudget(step, { name: "page", file })).change).toBe("unchanged");
+  });
+
+  it("accepts growth only for the budgets QD_ALLOW_BUDGET_GROWTH names", async () => {
+    const app = await start();
+    const step = () => app.as(ada).stepService.page({ projectId: board.p1 });
+    await expectBudget(step, { name: "page", file });
+    extraStatement = true;
+    vi.stubEnv("QD_ALLOW_BUDGET_GROWTH", "list as owner");
+    await expect(expectBudget(step, { name: "page", file })).rejects.toThrow(
+      "the step costs more than its budget",
+    );
+    vi.stubEnv("QD_ALLOW_BUDGET_GROWTH", "list as owner, page");
+    expect((await expectBudget(step, { name: "page", file })).change).toBe("grown");
+    expect(growthAllowed("page", "1")).toBe(true);
+    expect(growthAllowed("page", " 1 ")).toBe(true);
+    expect(growthAllowed("1", "page,1")).toBe(true);
+    expect(growthAllowed("page", "pages,list")).toBe(false);
+    expect(growthAllowed("page", "")).toBe(false);
+  });
+
+  it("fails a lower step under CI, writing nothing, so removed work is noticed", async () => {
+    const app = await start();
+    const step = () => app.as(ada).stepService.page({ projectId: board.p1 });
+    extraStatement = true;
+    await expectBudget(step, { name: "page", file });
+    extraStatement = false;
+    vi.stubEnv("CI", "true");
+    const error: unknown = await expectBudget(step, { name: "page", file }).catch(
+      (reason: unknown) => reason,
+    );
+    expect((error as Error).message).toContain(
+      'expectBudget("page"): budget changed; rerun locally to accept',
+    );
+    expect((error as Error).message).toContain("  statements: was 2, now 1\n");
+    expect(stored("page")).toMatchObject({ statements: 2 });
+    expect([underCi("1"), underCi("true"), underCi("false"), underCi("")]).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
   });
 
   it("lowers the budget when the step gets cheaper", async () => {
@@ -313,6 +358,18 @@ describe("expectBudget", () => {
     );
   });
 
+  it("orders a step's calls by code unit, the same in every locale", () => {
+    const call = (name: string) => ({ call: name, statements: 0, bytes: 0 });
+    const calls = [call("b.get"), call("B.get"), call("a.get"), call("é.get"), call("e.get")];
+    expect([...calls].sort(byCall).map((each) => each.call)).toEqual([
+      "B.get",
+      "a.get",
+      "b.get",
+      "e.get",
+      "é.get",
+    ]);
+  });
+
   it("refuses a file or an entry that is not a budget, and an inherited name", async () => {
     const app = await start();
     const step = () => app.as(ada).stepService.text({ size: 1 });
@@ -333,5 +390,32 @@ describe("expectBudget", () => {
       "__proto__",
       "x",
     ]);
+  });
+});
+
+describe("expectBudget's step names", () => {
+  // Both tests use one budget file, as two tests of one test file do.
+  let shared = "";
+  beforeAll(() => {
+    shared = join(dir, "shared.test.ts");
+  });
+
+  it("lets a test measure its step again (a retry)", async () => {
+    const app = await start();
+    const step = () => app.as(ada).stepService.text({ size: 1 });
+    expect((await expectBudget(step, { name: "text", file: shared })).change).toBe("written");
+    expect((await expectBudget(step, { name: "text", file: shared })).change).toBe("unchanged");
+  });
+
+  it("refuses a step name another test of the same file used", async () => {
+    const app = await start();
+    const step = () => app.as(ada).stepService.text({ size: 2 });
+    const error: unknown = await expectBudget(step, { name: "text", file: shared }).catch(
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(TypeError);
+    expect((error as Error).message).toMatch(
+      /expectBudget: two tests of .*shared\.test\.ts\.json name a step "text" \("expectBudget's step names > lets a test measure its step again \(a retry\)" and "expectBudget's step names > refuses a step name another test of the same file used"\); give each step its own name/,
+    );
   });
 });

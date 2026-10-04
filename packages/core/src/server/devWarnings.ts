@@ -21,7 +21,10 @@
 // where they were before; they gained the format and the call. Only an app's
 // own statements are checked for the first two: the framework's reads through
 // the storage adapter, the tracker's own reads and the kits' handlers run
-// `quietly`. Warnings are off when NODE_ENV is "production". In a test app
+// `quietly`, while the app's callbacks a kit calls (`prepare`, `onChange`,
+// `resolveUser`, a search strategy) run `checked`. A query by an `id` list
+// (`{ id: { in: ids } }`) is one query per list, not per row, so it never
+// counts toward an N+1. Warnings are off when NODE_ENV is "production". In a test app
 // made with `strictWarnings` (under vitest or jest) every warning raised in
 // one of its method calls throws a `DevWarningError` where it is raised
 // instead, so the test fails; warnings outside its calls (an ambient write
@@ -150,7 +153,7 @@ export function strictWarningsOf(options: object): boolean {
   return Reflect.get(options, STRICT_WARNINGS) === true;
 }
 
-const QUIET = new AsyncLocalStorage<true>();
+const QUIET = new AsyncLocalStorage<boolean>();
 
 /**
  * Runs `fn` with the development checks of statements off, awaiting its
@@ -161,7 +164,17 @@ export async function quietly<T>(fn: () => T | PromiseLike<T>): Promise<T> {
   return await QUIET.run(true, async () => await fn());
 }
 
-/** True inside {@link quietly}. */
+/**
+ * Runs `fn` with the development checks of statements on again, inside a
+ * kit's quiet handler: the app's own callbacks a kit calls (`prepare`,
+ * `onChange`, `resolveUser`, a search strategy) are the app's code, checked
+ * like a handler's.
+ */
+export async function checked<T>(fn: () => T | PromiseLike<T>): Promise<T> {
+  return await QUIET.run(false, async () => await fn());
+}
+
+/** True inside {@link quietly}, and not inside a {@link checked} within it. */
 export function isQuiet(): boolean {
   return QUIET.getStore() === true;
 }

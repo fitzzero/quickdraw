@@ -95,6 +95,17 @@ function isRowWriteInTransaction(statement: Statement, place: StatementPlace): b
   return keys.length === 1 && keys[0] === "id";
 }
 
+/**
+ * A statement filtered by an `id` list (`{ id: { in: ids } }`): one query
+ * per list, as in a loop over chunks of ids, so never an N+1. The lint rule
+ * `no-db-call-in-loop` makes the same exception.
+ */
+function readsIdList(statement: Statement): boolean {
+  const where = statement.args?.where;
+  const id = isRecord(where) ? where.id : undefined;
+  return isRecord(id) && Array.isArray(id.in);
+}
+
 function nPlusOne(
   statement: Statement,
   keys: readonly string[],
@@ -126,7 +137,8 @@ function unboundedRead(statement: Statement): Omit<DevWarning, "service" | "meth
  * at an unbounded read. Statements batched in an array-form `$transaction`
  * are sent together, which is the fix for an N+1, so they are not counted;
  * neither are updates and deletes by id inside an interactive transaction,
- * the form per-row writes take when each row's data differs.
+ * the form per-row writes take when each row's data differs, nor statements
+ * filtered by an `id` list (one per chunk of ids).
  */
 export function createStatementChecks(raise: RaiseWarning): StatementCheck {
   const shapes = new Map<string, number>();
@@ -134,7 +146,7 @@ export function createStatementChecks(raise: RaiseWarning): StatementCheck {
     if (isUnboundedRead(statement)) {
       raise(unboundedRead(statement));
     }
-    if (place === "batch" || isRowWriteInTransaction(statement, place)) {
+    if (place === "batch" || isRowWriteInTransaction(statement, place) || readsIdList(statement)) {
       return;
     }
     const keys = whereKeys(statement);

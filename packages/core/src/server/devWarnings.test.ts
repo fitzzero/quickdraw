@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { captureLogger } from "./__tests__/fixtures";
 import {
+  checked,
   createDevWarnings,
   DevWarningError,
   formatDevWarning,
@@ -97,5 +98,16 @@ describe("development warnings", () => {
     expect(await quietly(() => lazy)).toBe("done");
     expect(seen).toEqual([true]);
     expect(isQuiet()).toBe(false);
+  });
+
+  it("check the app's callbacks again inside a quiet kit handler", async () => {
+    const inside = await quietly(async () => [
+      isQuiet(),
+      await checked(() => isQuiet()),
+      await checked(async () => await quietly(() => isQuiet())),
+      isQuiet(),
+    ]);
+    expect(inside).toEqual([true, false, true, true]);
+    expect(await checked(() => isQuiet())).toBe(false);
   });
 });
