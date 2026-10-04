@@ -23,11 +23,21 @@
 // clients that keep cookies. A bearer token is not ambient and needs no
 // Origin; HTTP calls are guarded by their required JSON content type instead
 // (RFC 0003 section 10).
+//
+// Without a configured `cookieName`, a handshake over HTTPS reads only
+// `__Host-session`, and one over plain HTTP then the plain `session` too
+// (`sessionCookieNames`): a site under the same parent domain can plant a
+// plain `session` cookie, and a secure handshake must not take it in place of
+// the host-only one.
 
 import type { IncomingHttpHeaders } from "node:http";
 import { QuickdrawError } from "../../../protocol/errors";
-import { recordSocketSession, type AuthenticateRequest } from "../../transports/auth";
-import { cookiesOf, cookieToken, sessionCookieNames } from "../../transports/body";
+import {
+  recordSocketSession,
+  type AuthenticateRequest,
+  type SocketAuthenticateRequest,
+} from "../../transports/auth";
+import { cookiesOf, cookieToken, isSecureRequest, sessionCookieNames } from "../../transports/body";
 import type { MaybePromise, Principal } from "../../types";
 import { originAllowlist, type AllowedOrigin, type OriginAllowlist } from "./origins";
 import type { AuthSession, SessionStore } from "./sessions";
@@ -55,9 +65,12 @@ export interface SocketAuthOptions<P extends Principal = Principal> {
   readonly allowMissingOrigin?: boolean;
   /**
    * The session cookie's name. Default: `"__Host-session"` (what the auth
-   * routes set on a secure request when no cookie domain is configured), or
-   * else `"session"`. A name given here is the only one read. A name the
-   * handshake repeats counts as no credential.
+   * routes set on a secure request when no cookie domain is configured),
+   * and over plain HTTP then `"session"`; a handshake over HTTPS never reads
+   * the plain name, which a sibling site could plant. A name given here is
+   * the only one read, on any handshake: name the cookie when the routes set
+   * `session` over HTTPS (a cookie `domain`). A name the handshake repeats
+   * counts as no credential.
    */
   readonly cookieName?: string;
   /**
@@ -80,9 +93,17 @@ interface Credential {
   readonly checkOrigin: boolean;
 }
 
+/** Whether a socket's handshake came over HTTPS: TLS ended here, or as its headers say (`isSecureRequest`). */
+function secureHandshake(request: SocketAuthenticateRequest): boolean {
+  const { handshake } = request.socket as Partial<
+    Pick<SocketAuthenticateRequest["socket"], "handshake">
+  >;
+  return isSecureRequest(request.headers, handshake?.secure === true);
+}
+
 function credentialOf(
   request: AuthenticateRequest,
-  cookieNames: readonly string[],
+  cookieName: string | undefined,
 ): Credential | null {
   const { token } = request.auth;
   if (typeof token === "string" && token !== "") {
@@ -91,7 +112,8 @@ function credentialOf(
   if (request.transport === "http") {
     return null;
   }
-  const cookie = cookieToken(cookiesOf({ headers: request.headers }), cookieNames);
+  const names = sessionCookieNames(cookieName, secureHandshake(request));
+  const cookie = cookieToken(cookiesOf({ headers: request.headers }), names);
   return cookie === null ? null : { token: cookie, checkOrigin: true };
 }
 
@@ -122,14 +144,14 @@ export function socketAuth(options: SocketAuthOptions): SessionAuthenticate<Prin
 export function socketAuth(options: SocketAuthOptions): SessionAuthenticate<Principal> {
   const keys = checkSessionKeys(options, "socketAuth");
   const origins = originAllowlist(options.allowedOrigins, "socketAuth", true);
-  const cookieNames = sessionCookieNames(options.cookieName);
+  const { cookieName } = options;
   const allowMissing = options.allowMissingOrigin === true;
   const { loadPrincipal } = options;
   if (loadPrincipal !== undefined && typeof loadPrincipal !== "function") {
     throw new TypeError("socketAuth: loadPrincipal must be a function");
   }
   return async (request) => {
-    const credential = credentialOf(request, cookieNames);
+    const credential = credentialOf(request, cookieName);
     if (credential === null) {
       return null;
     }

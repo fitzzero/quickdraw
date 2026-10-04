@@ -783,8 +783,9 @@ over three transports (design: sections 3, 8 and 10):
 - **HTTP**: `POST /qd/{service}/{method}` with the input as a JSON body and
   `Content-Type: application/json` (required, even without a body, so a
   cross-site page cannot use a session cookie without a CORS preflight). The
-  principal comes from the `session` cookie or an `Authorization: Bearer`
-  token through the same `authenticate`; the reply is `{ ok: true, d }` or
+  principal comes from the session cookie (`__Host-session`, or `session`
+  over plain HTTP) or an `Authorization: Bearer` token through the same
+  `authenticate`; the reply is `{ ok: true, d }` or
   `{ ok: false, e: { code, message, data? } }` with the code's HTTP status.
   Works on Express 4 and 5, and on a bare Node server. Move it with
   `http: { path }`, turn it off with `http: false`, or mount
@@ -1807,10 +1808,19 @@ nothing is cached:
   (`ENABLE_MOCK_OAUTH=true` and `NODE_ENV` other than `production`), and
   every request checks again. Set `mock({ internalUrl })` where the API
   cannot reach itself at `publicUrl`.
-- `socketAuth` and the HTTP transport read `__Host-session`, else
-  `session`, by default. A changed cookie name must be named in all three
-  places: `createAuthRoutes({ cookie: { name } })`,
-  `socketAuth({ cookieName })` and `createServer({ http: { cookieName } })`.
+- `socketAuth` and the HTTP transport read `__Host-session` by default,
+  and the plain `session` only on a plain HTTP request (development). A
+  request over HTTPS (`req.secure`, `X-Forwarded-Proto: https`, or the
+  `Origin` of an `https:` page) never reads `session`: another site under
+  the same parent domain can set that cookie for the whole domain, and while
+  the user holds no `__Host-session` it would sign them in as whoever set
+  it. A configured name is read as it is, on any request. So a changed
+  cookie name, or a `cookie.domain` (which makes the routes set `session`
+  over HTTPS), must be named in all three places:
+  `createAuthRoutes({ cookie: { name } })`, `socketAuth({ cookieName })`
+  and `createServer({ http: { cookieName } })`. Behind a proxy that ends
+  TLS, set Express's `trust proxy`, so the routes see HTTPS as the
+  transports do.
 - A socket keeps the principal it authenticated with until it reconnects,
   so a revoked session's open sockets are ended with
   `server.access.disconnectUser(userId, { sessionId?, reason? })`: every

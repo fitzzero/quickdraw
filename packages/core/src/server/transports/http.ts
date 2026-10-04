@@ -50,8 +50,11 @@ export interface HttpTransportOptions {
   readonly maxBodyBytes?: number;
   /**
    * The session cookie a token is read from. Default: `"__Host-session"`,
-   * or else `"session"`; a name given here is the only one read. A name the
-   * request repeats counts as no cookie.
+   * and on a plain HTTP request then `"session"`; a request over HTTPS
+   * (`req.secure`, `X-Forwarded-Proto: https` or an `https:` `Origin`) never
+   * reads the plain name, which a sibling site could plant. A name given
+   * here is the only one read, on any request. A name the request repeats
+   * counts as no cookie.
    */
   readonly cookieName?: string;
   /**

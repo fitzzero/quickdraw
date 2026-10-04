@@ -251,6 +251,43 @@ describe("credentials", () => {
     expect(await namedUser("__Host-session=alice-token")).toBeNull();
   });
 
+  it("reads the plain session cookie over plain HTTP only, unless a cookie name is given", async () => {
+    // Express trusting the local proxy (`req.secure`), and a bare Node server.
+    const app = express();
+    app.set("trust proxy", "loopback");
+    const servers = [await serve({ app }), await serve()];
+    const planted = { cookie: "session=alice-token" };
+    const secure: readonly Record<string, string>[] = [
+      // a proxy that ended TLS: req.secure behind `trust proxy`, read from the header otherwise
+      { "x-forwarded-proto": "https" },
+      { "x-forwarded-proto": "https, http" },
+      // a page served over HTTPS, which a browser lets call only HTTPS URLs
+      { origin: "https://app.example" },
+    ];
+    for (const { url } of servers) {
+      const userOf = async (headers: Record<string, string>) =>
+        (
+          (await post(url, "/qd/probeService/echo", { body: '{"text":"hi"}', headers })).body as {
+            d?: { userId: unknown };
+          }
+        ).d?.userId;
+      expect(await userOf(planted)).toBe("alice");
+      expect(await userOf({ ...planted, origin: "http://app.example" })).toBe("alice");
+      for (const over of secure) {
+        // A sibling site can plant `session`; a secure request reads only `__Host-session`.
+        expect(await userOf({ ...planted, ...over })).toBeNull();
+        expect(await userOf({ cookie: "__Host-session=alice-token", ...over })).toBe("alice");
+        expect(await userOf({ ...planted, ...over, ...bearer("alice-token") })).toBe("alice");
+      }
+    }
+    const named = await serve({ http: { cookieName: "session" } });
+    const response = await post(named.url, "/qd/probeService/echo", {
+      body: '{"text":"hi"}',
+      headers: { ...planted, "x-forwarded-proto": "https" },
+    });
+    expect((response.body as { d?: { userId: unknown } }).d?.userId).toBe("alice");
+  });
+
   it("answers 401 when authenticate throws", async () => {
     const { url, logger } = await serve();
     expect(

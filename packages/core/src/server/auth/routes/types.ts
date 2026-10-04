@@ -18,9 +18,10 @@ export interface AuthCookieOptions {
    * Its name. Default: `"__Host-session"` when no domain is configured and
    * the cookie is Secure (a browser then keeps it host-only on `/`, so no
    * other site under the same parent domain can plant or replace it), else
-   * `"session"`. `socketAuth` and the HTTP transport read both by default;
-   * name the same cookie there (`cookieName`, `http.cookieName`) when
-   * changing it.
+   * `"session"`. `socketAuth` and the HTTP transport read `__Host-session`
+   * by default, and `session` only over plain HTTP; name the same cookie
+   * there (`cookieName`, `http.cookieName`) when changing it, or when a
+   * `domain` makes it `session` over HTTPS.
    */
   readonly name?: string;
   /** How long a session lasts: the cookie, the JWT and the stored session end together. Default 7 days. */

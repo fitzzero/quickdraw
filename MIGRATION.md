@@ -1257,8 +1257,13 @@ export function TaskBoard({ projectId }: { readonly projectId: string }) {
   show to the next.
 - **`createAuthRoutes` names its cookies `__Host-session` and
   `__Host-qd_oauth`** (with `Path=/`) when the session cookie is Secure and
-  has no domain; `socketAuth` and the HTTP transport read `__Host-session`,
-  then `session`.
+  has no domain. `socketAuth` and the HTTP transport read `__Host-session`,
+  and the plain `session` only over plain HTTP: over HTTPS a `session`
+  cookie a sibling site planted is never read. An app whose session cookie
+  has a domain (`cookie.domain` or `COOKIE_DOMAIN`, which 4.x apps sharing
+  the cookie with subdomains set) gets `session` over HTTPS too, so it names
+  it: `socketAuth({ cookieName: "session" })` and
+  `createServer({ http: { cookieName: "session" } })`.
 - **No default CORS origin.** 4.1 allowed `*`; pass `cors`.
 - **Errors that are not `QuickdrawError` reach callers as `INTERNAL`** with a
   generic message (the original is logged). A Prisma unique violation is
