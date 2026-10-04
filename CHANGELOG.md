@@ -222,6 +222,17 @@ against 10 ms (the deliberate 0 to 2 s refetch jitter, now
 `reconnectJitterMs`); peak memory in that storm 1.17× (not explained yet).
 Measured on 5.0.0-alpha.0, before the finale round.
 
+## [4.1.1] - 2026-10-04
+
+### Fixed
+
+- The socket rate limiter no longer crashes the process when a client sends
+  an event whose name is not a string. Socket.IO accepts a numeric event
+  name; `applyRateLimitMiddleware` called `eventName.startsWith` on it inside
+  `process.nextTick`, an uncaught `TypeError` that exited the server. Such
+  events now pass the limiter uncounted. (A 4.x patch released from `main`;
+  5.0 carries the same guard.)
+
 ## [4.1.0] - 2026-08-01
 
 Client portability groundwork for non-DOM runtimes (React Native, workers).
