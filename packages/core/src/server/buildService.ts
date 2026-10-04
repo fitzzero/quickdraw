@@ -195,6 +195,7 @@ function checkMethods(
 function checkWatches(
   contract: AnyContract,
   collections: ReadonlyMap<string, unknown>,
+  data: ServiceData,
   fail: Fail,
 ): void {
   for (const [name, def] of Object.entries(contract.methods)) {
@@ -206,6 +207,11 @@ function checkWatches(
       fail(`method "${name}" is a mutation; only a query can watch`);
     }
     if (watch === "service") {
+      if (data.watchAccess === undefined) {
+        fail(
+          `method "${name}" watches the service's topic, which is closed without watchAccess: declare who may watch it ("public", "authenticated" or { service: level })`,
+        );
+      }
       continue;
     }
     if (!isRecord(watch) || typeof watch.scope !== "function") {
@@ -310,7 +316,7 @@ export function buildService(
     definition.collections,
     fail,
   );
-  checkWatches(checked, collections, fail);
+  checkWatches(checked, collections, data, fail);
   const methods = checkMethods(checked, projections, definition.methods, fail);
   checkRowForms(methods, data, fail);
   checkRowless(methods, data, fail);

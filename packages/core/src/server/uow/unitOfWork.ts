@@ -277,6 +277,8 @@ function recordAmbient(state: TrackerState, writes: readonly WriteRecord[]): voi
 interface LooseRun {
   /** The writes of each tracked client, until the run settles. */
   readonly writes: Map<TrackerState, WriteRecord[]>;
+  /** False once the run settled: work it started and did not await writes as ambient then. */
+  open: boolean;
 }
 
 const looseRuns = new AsyncLocalStorage<LooseRun>();
@@ -284,7 +286,7 @@ const looseRuns = new AsyncLocalStorage<LooseRun>();
 /** Keeps `writes` in the loose run this runs in, if any; false outside one. */
 function keptLoose(state: TrackerState, writes: readonly WriteRecord[]): boolean {
   const run = looseRuns.getStore();
-  if (run === undefined) {
+  if (run === undefined || !run.open) {
     return false;
   }
   run.writes.set(state, [...(run.writes.get(state) ?? []), ...writes]);
@@ -322,10 +324,11 @@ export async function runBeforeAnyDispatcher<R>(
  * attached to then, which before any server is none.
  */
 async function runLoose<T>(fn: () => T | PromiseLike<T>): Promise<T> {
-  const run: LooseRun = { writes: new Map() };
+  const run: LooseRun = { writes: new Map(), open: true };
   try {
     return await looseRuns.run(run, async () => await fn());
   } finally {
+    run.open = false;
     const flushed = [...run.writes].map(async ([state, writes]) => {
       const scope: UnitOfWorkScope = {
         requestId: randomUUID(),

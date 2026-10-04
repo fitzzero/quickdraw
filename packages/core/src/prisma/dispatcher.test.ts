@@ -374,6 +374,22 @@ describe("qd.run and writes outside methods", () => {
     await db.task.update({ where: { id: taskId }, data: { title: "ambient" } });
     await nextTick();
     expect(logger.warnings).toEqual([expect.stringContaining("ambient-write")]);
+    // Work a run started and did not await writes after it settled: ambient too (a project
+    // here, since a warning names its model once).
+    const { projectId } = await h.prisma.task.findUniqueOrThrow({ where: { id: taskId } });
+    let late: Promise<unknown> = Promise.resolve();
+    await lone.run(() => {
+      late = (async () => {
+        await nextTick();
+        await db.project.update({ where: { id: projectId }, data: { name: "late" } });
+      })();
+    });
+    await late;
+    await nextTick();
+    expect(logger.warnings).toEqual([
+      expect.stringContaining("ambient-write"),
+      expect.stringMatching(/ambient-write[\s\S]*project/),
+    ]);
   });
 
   it("flushes a loose run's writes to a dispatcher attached to the client meanwhile", async () => {

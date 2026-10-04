@@ -82,8 +82,9 @@ room or is taken out of it is revoked from the feed at once
   topic, and a query may declare `watch: "service"` (its client then joins
   the service topic, which `watchAccess` opens), so a query over a model no
   service owns (a game's high scores) is invalidated without an app event.
-  A service without a model may now be watched when it writes something
-  (F4.9).
+  A service without a model may now be watched when it writes something,
+  and `defineService` refuses a query that watches `"service"` on a
+  service without `watchAccess`, whose topic would stay closed (F4.9).
 - `streams: { <name>: { validate: "development" } }` checks pushed items
   (and computed seeds) only while the dispatcher checks outputs
   (`outputValidation`, on unless `NODE_ENV` is `"production"`); unchecked,
@@ -125,7 +126,8 @@ where?, scope?)` and `eventFrames(contract, event, where?)`, which match
   throwing: its tracked writes raise no ambient warning and flush once it
   settles to the dispatcher the client is attached to by then, which before
   any server is none, so they reach no one (no socket can be subscribed
-  yet). `ctx.touch` records nothing there (F4.10).
+  yet). Work the run started and did not await writes as ambient once it
+  settled. `ctx.touch` records nothing there (F4.10).
 - `qd:hello` carries `serverId`, random and new each time a server starts,
   so a client tells a restarted server (or another node) from a network
   blip; `docs/protocol-v5.md`, the JS client's hello and the GDScript

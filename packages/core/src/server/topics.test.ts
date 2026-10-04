@@ -509,6 +509,17 @@ describe("definition", () => {
     expect(() => defineLoosely(taskContract, definition)).not.toThrow();
   });
 
+  it("refuses a query that watches its service's topic when the service keeps it closed", () => {
+    expect(() =>
+      defineLoosely(scoresContract, {
+        writes: ["label"],
+        methods: { best: { access: "authenticated", handler: () => 0 } },
+      }),
+    ).toThrow(
+      'defineService("scoresService"): method "best" watches the service\'s topic, which is closed without watchAccess',
+    );
+  });
+
   it("takes watchAccess as public, authenticated or a service grant, and none by default", () => {
     expect(defineTaskService().watchAccess).toBeUndefined();
     expect(defineTaskService({ watchAccess: "authenticated" }).watchAccess).toBe("authenticated");
