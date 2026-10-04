@@ -23,6 +23,7 @@ import {
   listenForGrants,
   refreshGrants,
   rotate,
+  serveBroadcasts,
   type ClusterOptions,
   type DisconnectUserOptions,
   type LiveData,
@@ -67,6 +68,8 @@ export interface SocketServer {
   refresh(userId: string): Promise<ServiceGrants>;
   /** Disconnects `userId`'s sockets (of one session) on every node; returns how many this node ended. */
   disconnectUser(userId: string, options?: DisconnectUserOptions): number;
+  /** Stops what runs in the background (a degraded node's probes): the server closes. */
+  stop(): void;
 }
 
 /** The part of `qd:hello` every socket of the server shares; `onConnection` adds the principal's. */
@@ -106,7 +109,8 @@ export function createSocketServer(
     meter,
   };
   const probe = adapterProbe(io, settings.socket?.adapter !== undefined);
-  settings.live?.attach(io, probe, settings.cluster);
+  const broadcasts = serveBroadcasts(io, settings.logger, settings.cluster);
+  settings.live?.attach(io, probe, settings.cluster, broadcasts);
   listenForGrants(io, settings.live, settings.logger);
   listenForDisconnects(io);
   io.use(protocolMiddleware(settings.legacyWire, context));
@@ -138,12 +142,14 @@ export function createSocketServer(
           load: settings.loadServiceAccess,
           live: settings.live,
           probe,
-          logger: settings.logger,
-          cluster: settings.cluster,
+          broadcasts,
         },
         userId,
       ),
     disconnectUser: (userId, options) =>
       disconnectUser(io, probe, settings.logger, userId, options),
+    stop: () => {
+      broadcasts.close();
+    },
   };
 }

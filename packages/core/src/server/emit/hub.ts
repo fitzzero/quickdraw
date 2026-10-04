@@ -7,7 +7,12 @@
 import type { Logger } from "../../contract/logger";
 import { QuickdrawError } from "../../protocol/errors";
 import type { AccessEngine, PolicyEngine } from "../access/api";
-import { createRevisions, type ClusterOptions, type Revisions } from "../cluster/revisions";
+import {
+  createRevisions,
+  type ClusterBroadcasts,
+  type ClusterOptions,
+  type Revisions,
+} from "../cluster/revisions";
 import type { Registry } from "../registry";
 import type { StorageAdapter } from "../storage";
 import type { QuickdrawIo } from "../transports/types";
@@ -61,6 +66,8 @@ export interface Hub {
   probe: AdapterProbe;
   /** `createServer`'s `cluster` option: where the cluster's shared state lives, behind a cluster adapter. */
   cluster: ClusterOptions | undefined;
+  /** The server's answered broadcasts to the other nodes, once `createServer` attached them. */
+  broadcasts: ClusterBroadcasts | undefined;
   /**
    * The revisions flushes take and reads claim: the process's clock, or
    * behind a cluster adapter the cluster's shared counter (`cluster/revisions.ts`).
@@ -92,6 +99,7 @@ export function createHub(options: HubOptions): Hub {
     io: undefined,
     probe: ALWAYS_LOCAL,
     cluster: undefined,
+    broadcasts: undefined,
     inFlight: new Set(),
   };
   return Object.assign(hub, { revisions: createRevisions(hub) });

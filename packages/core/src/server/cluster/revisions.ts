@@ -32,6 +32,7 @@ import {
   type SharedCounter,
 } from "./counter";
 
+export type { ClusterBroadcasts } from "./broadcasts";
 export type { ClusterClient } from "./counter";
 
 /** An ioredis client, as the cluster helpers use one. */

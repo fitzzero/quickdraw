@@ -29,7 +29,7 @@
 
 import { SERVER_EVENTS, userRoom } from "../../contract/names";
 import type { AccessChange } from "../access/changes";
-import { answerOf, DEFAULT_CLUSTER_TIMEOUT_MS, within } from "../cluster/acks";
+import { answerOf } from "../cluster/acks";
 import { describeError } from "../pipeline/metrics";
 import type { QuickdrawServerSocket } from "../transports/types";
 import type { Hub } from "./hub";
@@ -217,23 +217,14 @@ function withRowState(hub: Hub, change: AccessChange): BroadcastChange {
  * has re-resolved what it concerns (each answers once it is done), at most
  * `cluster.timeoutMs`: the access sinks run before the frame sinks, so a
  * flush that revokes a subscription on another node sends that flush's
- * frames only once the subscription is gone there too. A node that does not
- * answer in time is logged, and the frames go out.
+ * frames only once the subscription is gone there too. The wait holds this
+ * node's later flushes too, so it is skipped while Valkey is not connected,
+ * and after a node failed to answer in time until every node answers a
+ * probe again (`../cluster/broadcasts.ts`): the frames then go out at once,
+ * and a slower node may still hold a socket the change revoked.
  */
 async function broadcastChange(hub: Hub, change: BroadcastChange): Promise<void> {
-  const { io } = hub;
-  if (io === undefined) {
-    return;
-  }
-  const timeoutMs = hub.cluster?.timeoutMs ?? DEFAULT_CLUSTER_TIMEOUT_MS;
-  try {
-    await within(io.serverSideEmitWithAck(ACCESS_CHANGED_EVENT, change), timeoutMs);
-  } catch (error) {
-    hub.logger.warn(
-      "Not every node confirmed in time that it applied an access change; the flush's frames go out anyway",
-      { category: "quickdraw.access", service: change.service, error: describeError(error) },
-    );
-  }
+  await hub.broadcasts?.broadcast(ACCESS_CHANGED_EVENT, change);
 }
 
 /** What the subscriptions of a dispatcher do when access changes. */

@@ -15,7 +15,12 @@
 
 import type { Logger } from "../../contract/logger";
 import { SERVER_EVENTS, userRoom } from "../../contract/names";
-import { answerOf, DEFAULT_CLUSTER_TIMEOUT_MS, within } from "../cluster/acks";
+import { answerOf } from "../cluster/acks";
+import {
+  answerProbes,
+  createClusterBroadcasts,
+  type ClusterBroadcasts,
+} from "../cluster/broadcasts";
 import type { ClusterOptions } from "../cluster/revisions";
 import type { AdapterProbe } from "../emit/hub";
 import { describeError } from "../pipeline/metrics";
@@ -42,7 +47,12 @@ export interface DisconnectUserOptions {
 /** What the socket server needs of its dispatcher's live data (`emit/live.ts`). */
 export interface LiveData {
   readonly extension: SocketExtension;
-  attach(io: QuickdrawIo, probe: AdapterProbe, cluster?: ClusterOptions): void;
+  attach(
+    io: QuickdrawIo,
+    probe: AdapterProbe,
+    cluster?: ClusterOptions,
+    broadcasts?: ClusterBroadcasts,
+  ): void;
   regranted(userId: string): Promise<void>;
 }
 
@@ -55,6 +65,19 @@ export interface LiveData {
 export function adapterProbe(io: QuickdrawIo, configured: boolean): AdapterProbe {
   const initial = configured ? undefined : io.adapter();
   return Object.freeze({ local: () => initial !== undefined && io.adapter() === initial });
+}
+
+/**
+ * The server's answered broadcasts to the other nodes of a cluster
+ * (`../cluster/broadcasts.ts`); the server answers their probes from now on.
+ */
+export function serveBroadcasts(
+  io: QuickdrawIo,
+  logger: Logger,
+  cluster: ClusterOptions | undefined,
+): ClusterBroadcasts {
+  answerProbes(io);
+  return createClusterBroadcasts({ io, logger, timeoutMs: cluster?.timeoutMs });
 }
 
 /** Sends `qd:rotate` to every client. */
@@ -186,39 +209,23 @@ export function listenForGrants(io: QuickdrawIo, live: LiveData | undefined, log
   });
 }
 
-/** Broadcasts reloaded grants and waits, at most `timeoutMs`, until every other node applied them. */
-async function broadcastGrants(
-  io: QuickdrawIo,
-  logger: Logger,
-  grants: { readonly userId: string; readonly serviceAccess: ServiceGrants },
-  timeoutMs: number,
-): Promise<void> {
-  try {
-    await within(io.serverSideEmitWithAck(GRANTS_EVENT, grants), timeoutMs);
-  } catch (error) {
-    logger.warn("Not every node confirmed in time that it applied a user's reloaded grants", {
-      category: "quickdraw.access",
-      userId: grants.userId,
-      error: describeError(error),
-    });
-  }
-}
-
 /** What `refreshGrants` works with besides the user. */
 export interface GrantsContext {
   readonly io: QuickdrawIo;
   readonly load: ServerAuth["loadServiceAccess"];
   readonly live: LiveData | undefined;
   readonly probe: AdapterProbe;
-  readonly logger: Logger;
-  readonly cluster: ClusterOptions | undefined;
+  /** Sends the reloaded grants to the other nodes, behind a cluster adapter. */
+  readonly broadcasts: ClusterBroadcasts;
 }
 
 /**
  * `server.access.refresh(userId)`: reloads the user's grants, applies them on
  * every node (broadcast behind a cluster adapter, resolving once every node
- * applied them), sends them to the user's sockets as `qd:access`, and
- * resolves this node's subscriptions of the user again.
+ * applied them, at most `cluster.timeoutMs`, and without waiting while the
+ * broadcasts are degraded: `../cluster/broadcasts.ts`), sends them to the
+ * user's sockets as `qd:access`, and resolves this node's subscriptions of
+ * the user again.
  */
 export async function refreshGrants(
   context: GrantsContext,
@@ -229,10 +236,9 @@ export async function refreshGrants(
     throw new TypeError("access.refresh needs auth.loadServiceAccess to reload a user's grants");
   }
   const serviceAccess = (await load(userId)) ?? {};
-  const timeoutMs = context.cluster?.timeoutMs ?? DEFAULT_CLUSTER_TIMEOUT_MS;
   const others = probe.local()
     ? undefined
-    : broadcastGrants(io, context.logger, { userId, serviceAccess }, timeoutMs);
+    : context.broadcasts.broadcast(GRANTS_EVENT, { userId, serviceAccess });
   regrant(io, userId, serviceAccess);
   io.to(userRoom(userId)).emit(SERVER_EVENTS.access, { serviceAccess });
   await Promise.all([others, live?.regranted(userId)]);

@@ -54,9 +54,15 @@ export interface Live {
    * Gives the live data its Socket.IO server: frames go out on it, and
    * access changes broadcast by other nodes arrive on it. What such a change
    * names is evicted from the access cache (`cacheMs`) before it is resolved
-   * again. `cluster` says where a cluster's shared state lives.
+   * again. `cluster` says where a cluster's shared state lives, and
+   * `broadcasts` sends access changes to the other nodes.
    */
-  attach(io: NonNullable<Hub["io"]>, probe: AdapterProbe, cluster?: Hub["cluster"]): void;
+  attach(
+    io: NonNullable<Hub["io"]>,
+    probe: AdapterProbe,
+    cluster?: Hub["cluster"],
+    broadcasts?: Hub["broadcasts"],
+  ): void;
   /**
    * Re-resolves the subscriptions of `userId`'s sockets on this process after
    * their grants changed, reading the user's levels afresh.
@@ -101,10 +107,16 @@ export function createLive(options: HubOptions): Live {
     },
     realtime,
     revisions: hub.revisions,
-    attach(io: NonNullable<Hub["io"]>, probe: AdapterProbe, cluster?: Hub["cluster"]): void {
+    attach(
+      io: NonNullable<Hub["io"]>,
+      probe: AdapterProbe,
+      cluster?: Hub["cluster"],
+      broadcasts?: Hub["broadcasts"],
+    ): void {
       hub.io = io;
       hub.probe = probe;
       hub.cluster = cluster;
+      hub.broadcasts = broadcasts;
       collections.listen();
       realtime.listen();
       listenForChanges(hub, revocation, (change) => {

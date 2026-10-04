@@ -92,10 +92,10 @@ revision + 1)`, so revisions stay in the clock range that clients and
 - **Access everywhere first.** Access changes and reloaded grants are
   broadcast to every node and answered once the node has resolved its
   subscriptions again; the flushing node sends the flush's frames only after
-  every node answered (at most `cluster.timeoutMs`, then it logs a warning and
-  sends them). A broadcast carries the changed row's state, so a deleted
-  row's subscribers on any node get its removal, and a row created again with
-  a deleted row's id is authorized again before its first frame.
+  every node answered. A broadcast carries the changed row's state, so a
+  deleted row's subscribers on any node get its removal, and a row created
+  again with a deleted row's id is authorized again before its first frame.
+  The wait is bounded and fails open: see "When a node stops answering".
 - **Users and rooms.** `server.access.disconnectUser` (logout everywhere),
   `access.refresh`, presence (`isOnline`, `users`, `count`, `lastSeen`), app
   rooms and typed events work across nodes. A channel's
@@ -131,16 +131,39 @@ statements and bytes) and the split end-to-end suite:
 - changes go out whole: that step sends 400 bytes against 268;
 - a flush that changes access waits for every node's answer: a few Valkey
   round trips and the slowest node's re-resolution, at most
-  `cluster.timeoutMs`;
+  `cluster.timeoutMs`. The wait is in line with the node's flushes, which run
+  one after another: every flush behind it waits too;
 - a collection resume (`qd:col:sub` with `since`) always reads a page, and
   "not modified" comes from `versionColumn` only: a process's change log and
   delta buffer see its own flushes.
 
+## When a node stops answering
+
+A node that stays subscribed in Valkey but does not answer (a frozen or
+CPU-starved instance, one killed before Valkey dropped its connection, a
+version that does not know the event) would put `cluster.timeoutMs` on every
+flush of the other nodes that changes access, and on every flush behind it.
+So the first broadcast a node does not answer in time puts the flushing node in a
+degraded mode, logged once at error ("A node did not answer a broadcast in
+time; this node sends access changes without waiting for the other nodes
+until every node answers a probe"): its access changes and reloaded grants
+go out without waiting, and it broadcasts a probe every second until every
+node answers one, which ends the mode (logged once at info, "Every node
+answers broadcasts again; access changes wait for them again").
+
+Not waiting is the same trade-off a timed-out wait makes: the flush's frames
+go out, and a node that has not applied the change yet still has the sockets
+it revoked in their rooms, so they can receive frames the change should have
+kept from them (a field above their new level, a row they lost) until that
+node applies it. Live frames are fail-open across nodes for that long; calls
+and subscription reads are always authorized on the node that serves them.
+
 ## When Valkey stops answering
 
-- **Frames.** The adapter cannot reach the other nodes: each node keeps
-  serving its own sockets, and what it publishes waits in the client's queue
-  until Valkey answers again (clients apply late frames by revision).
+- **Frames.** A node's frames to its own sockets go out at once: while its
+  connection to Valkey is down, no step of a flush waits on Valkey (the
+  counter and the access broadcasts skip it). The adapter cannot reach the
+  other nodes meanwhile: what a node publishes waits in its client's queue.
 - **Revisions.** A node takes revisions from its own clock, never below one it
   issued, and logs one error per outage ("The shared revision counter did not
   answer; this node takes revisions from its own clock until it does"). It
@@ -148,10 +171,10 @@ statements and bytes) and the split end-to-end suite:
   second later once it is, and logs "The shared revision counter answers
   again". Until then its revisions compare with other nodes' only within their
   clocks' skew.
-- **Access and presence.** Waiting for the other nodes' answers to an access
-  change times out after `cluster.timeoutMs` (logged at warn); presence across
-  nodes waits on `fetchSockets` up to the adapter's `requestsTimeout`;
-  `lastSeen` answers from the node's own records.
+- **Access and presence.** While the node's connection is down, its access
+  changes are broadcast without waiting (they wait in the client's queue);
+  presence across nodes waits on `fetchSockets` up to the adapter's
+  `requestsTimeout`; `lastSeen` answers from the node's own records.
 
 ## Cloud Run
 

@@ -301,6 +301,7 @@ export function createServer<const S extends readonly AnyService[]>(
     options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
   );
   const { onClose } = shutdown;
+  onClose(sockets.stop);
   // Once stopped, and once what its sockets' last events started has settled (presence read
   // from every node, behind a cluster adapter), the tracked client goes back to the dispatcher
   // attached before.
