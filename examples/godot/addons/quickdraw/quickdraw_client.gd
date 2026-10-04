@@ -18,10 +18,12 @@ extends Node
 ##             Quickdraw.send_channel("gameService", "move", {"dx": 1, "dy": 0})
 ##
 ## App rooms are per socket: `connected` fires again after every reconnect,
-## and the new socket is in no room until a call joins it, so join there.
+## and the new socket is in no room until a call joins it, so join there
+## (streams are subscribed again by the client itself, rooms are not).
 ## Numbers in replies and frames arrive as floats (Godot's JSON).
 
-## `qd:hello` arrived: the socket is ready, again after each reconnect.
+## `qd:hello` arrived: the socket is ready, again after each reconnect. Each
+## time it is a new socket in no app room: make the joining calls here.
 signal connected(hello: Dictionary)
 ## The socket closed. The client reconnects unless `close()` or the server ended it.
 signal disconnected(reason: String)

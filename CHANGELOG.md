@@ -33,6 +33,17 @@ onRoomLeave(leave, ctx) })`, typed as `createServer`'s option. Every
   service's name or `"createServer"`) and stops none of the others. A
   server root that forgot to pass the game's handler leaked players
   silently (F4.2).
+- Rooms are joined again after a reconnect: `useJoin(member, input, {
+enabled?, onJoined? })` on `./client` runs a joining call (any query or
+  mutation member, a mock's too) on every `qd:hello` (first connect, every
+  reconnect, new credentials) and when its input changes by value, never
+  on a re-render, and returns `{ status: "idle" | "joining" | "joined" |
+"error", isJoined, data, error }` for the current socket; a refusal
+  stands until the next hello, `RATE_LIMITED` is tried again after its
+  backoff. `connection.onHello(listener)` is the React-free form (each
+  hello, and the current one in a microtask). The README's board example
+  joins with it; a room joined once from a query was silently lost on
+  every reconnect (F4.3).
 
 ### Client
 

@@ -2038,14 +2038,17 @@ export function TaskRoom({
   readonly projectId: string;
   readonly taskId: string;
 }) {
+  // the socket is in the board's room on every connection: a reconnect is a new socket in no room
+  const board = useJoin(qd.task.enterBoard, { projectId });
   const { items } = qd.task.logs.useStream(taskId, { max: 200 });
   const { send, isReady } = qd.task.cursor.useChannel();
   const [lastX, setLastX] = useState(0);
   qd.task.cursorMoved.useEvent((cursor) => setLastX(cursor.x));
-  // user ids, after enterBoard joined the room
+  // user ids, once enterBoard joined the room
   const here = usePresence(`board:${projectId}`);
+  const move = (x: number) => isReady && board.isJoined && send({ projectId, taskId, x });
   return (
-    <div onMouseMove={(event) => isReady && send({ projectId, taskId, x: event.clientX })}>
+    <div onMouseMove={(event) => move(event.clientX)}>
       <p>{`${String(here.length)} here; a cursor at ${String(lastX)}`}</p>
       <pre>{items.map((item) => item.line).join("\n")}</pre>
     </div>
@@ -2102,6 +2105,16 @@ export function TaskRoom({
   `emitToUser(userId, ...)` check the payload first (`INTERNAL`, nothing
   sent, when it fails), then send the validated payload as
   `qd:event [service, event, payload]`; `useEvent` hears them.
+- Rooms belong to a socket: a reconnect (a lost network, `qd:rotate`, new
+  credentials) is a new socket in no room, which hears none of its events
+  and whose channel messages requiring it are dropped. `useJoin(member,
+input, { enabled?, onJoined? })` (from `./client`) runs the joining call
+  (`enterBoard` above) on every `qd:hello` and when its input changes by
+  value, never on a re-render, and shows `status` (`idle` with no socket to
+  join with, `joining`, `joined`, `error`), `isJoined`, `data` and `error`;
+  a refusal stands until the next hello, `RATE_LIMITED` is tried again after
+  its backoff, and it never leaves the room itself.
+  `connection.onHello(listener)` is the same hook without React.
 
 Code that is not a handler (a game loop, a timer, a job) reaches rooms
 through `qd.rooms` (also `server.rooms`); the service's `onRoomLeave` (above)

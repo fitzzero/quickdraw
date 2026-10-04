@@ -118,6 +118,12 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   in React state.
 - Presence: `usePresence(room)` returns the user ids in an app room, after a
   method joined the socket to it (`ctx.rooms.join`).
+- Joining a room: `useJoin(qd.task.enterBoard, { projectId })` runs the
+  joining call on every connection (a reconnect is a new socket in no room)
+  and when the input changes, never on a re-render, with `status`,
+  `isJoined`, `data` and `error`. Never join from a plain `useQuery` or a
+  mount effect: a reconnect leaves the socket out of the room while the
+  cached answer still looks fine. Without React, `connection.onHello`.
 - Admin screens: `qd.task.admin.adminList.useQuery(input)` and the other
   admin kit members; `useAdminServices(qd)` lists the services whose
   `adminMeta` answers the user, asking only those the hello's grants allow

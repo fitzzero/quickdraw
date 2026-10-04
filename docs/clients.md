@@ -88,9 +88,14 @@ the socket is connected to, so it holds behind a cluster with no round trip:
 - A room another socket of the same user joined does not count. A player
   whose page and game client are two sockets makes the joining call from
   the client that sends.
-- A reconnected socket is in no room: the client calls the joining method
-  again when it reconnects (the GDScript client's `connected` signal fires
-  then).
+- A room joined by a call belongs to that socket, and a reconnect (a lost
+  network, `qd:rotate`, new credentials) is a new socket in no room: the
+  client makes the joining call again on every `qd:hello`, or it hears
+  nothing of the room while its cached answers still look fine. In React,
+  `useJoin(qd.game.watchWorld, { worldId })` does it (on every hello and
+  when its input changes, never on a re-render; `status` says where it
+  stands); without React, `connection.onHello(listener)`; in the GDScript
+  client, the `connected` signal, which fires after every reconnect.
 - Leaving the room (`ctx.rooms.leave`), being taken out of it
   (`rooms.leave(room, { userId })`) or disconnecting ends it for the next
   message.

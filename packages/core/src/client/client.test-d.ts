@@ -27,12 +27,14 @@ import {
   createQuickdrawClient,
   createServerCaller,
   overlaysOf,
+  useJoin,
   useQuickdraw,
   type InvalidationCoordinator,
   type MethodQueryKey,
   type OverlayStore,
   type QuickdrawProviderProps,
   type UseEntityResult,
+  type UseJoinResult,
 } from "./index";
 import { counter } from "./__tests__/fixtures";
 import { taskContract as board } from "./__tests__/live";
@@ -157,6 +159,24 @@ describe("the typed client", () => {
 
   test("useQuickdraw names the user the hello said", () => {
     expectTypeOf<ReturnType<typeof useQuickdraw>["userId"]>().toEqualTypeOf<string | null>();
+  });
+
+  test("useJoin takes a query or mutation member with its input, and returns its output", () => {
+    const useRenameJoin = () => useJoin(qd.taskService.rename, { id: "t1", title: "x" });
+    expectTypeOf<ReturnType<typeof useRenameJoin>>().toEqualTypeOf<UseJoinResult<TaskRow>>();
+    const useGetJoin = () => useJoin(qd.taskService.get, { id: "t1" }, { enabled: false });
+    expectTypeOf<ReturnType<typeof useGetJoin>["data"]>().toEqualTypeOf<TaskRow | undefined>();
+    expectTypeOf<ReturnType<typeof useGetJoin>["status"]>().toEqualTypeOf<
+      "idle" | "joining" | "joined" | "error"
+    >();
+    // @ts-expect-error -- get takes { id }
+    const useWrong = () => useJoin(qd.taskService.get, { title: "x" });
+    expectTypeOf(useWrong).toBeFunction();
+    useJoin(qd.misc.reset, undefined, {
+      onJoined: (data) => {
+        expectTypeOf(data).toEqualTypeOf<null>();
+      },
+    });
   });
 });
 

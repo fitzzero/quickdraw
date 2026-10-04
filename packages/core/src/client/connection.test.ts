@@ -270,6 +270,43 @@ describe("createQuickdrawConnection", () => {
     expect(reconnects).toHaveBeenCalledTimes(1);
   });
 
+  it("tells onHello of every hello: the current one, each reconnect's and new credentials'", async () => {
+    const { app } = await harness.start();
+    const connection = await harness.connect(app.url);
+    await until(() => connection.getState().hello !== null);
+    const hellos: (string | null)[] = [];
+    const stop = connection.onHello((hello) => {
+      hellos.push(hello.userId);
+    });
+    // The hello the connection has: in a microtask, not while onHello runs.
+    expect(hellos).toEqual([]);
+    await until(() => hellos.length === 1);
+    const first = connection.socket.id;
+    app.server.rotate({ withinMs: 0 });
+    await until(() => hellos.length === 2);
+    expect(connection.socket.id).not.toBe(first);
+    connection.setAuth({ principal: bob });
+    await until(() => hellos.length === 3);
+    expect(hellos).toEqual([alice.userId, alice.userId, bob.userId]);
+    stop();
+    const later: unknown[] = [];
+    connection.onHello((hello) => later.push(hello));
+    await until(() => later.length === 1);
+    app.server.rotate({ withinMs: 0 });
+    await until(() => later.length === 2);
+    expect(hellos).toHaveLength(3);
+  });
+
+  it("calls an onHello listener that stopped before its microtask with nothing", async () => {
+    const { app } = await harness.start();
+    const connection = await harness.connect(app.url);
+    await until(() => connection.getState().hello !== null);
+    const listener = vi.fn();
+    connection.onHello(listener)();
+    await tick();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("reconnects within the window a qd:rotate frame gives", async () => {
     const { app } = await harness.start();
     const connection = await harness.connect(app.url);

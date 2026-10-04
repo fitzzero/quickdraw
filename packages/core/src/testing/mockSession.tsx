@@ -153,9 +153,37 @@ function mockConnection(store: MockStore): QuickdrawConnection {
     reportRateLimited: nothing,
     backoffRemaining: () => 0,
     onReconnect: () => nothing,
+    onHello: (listener: (hello: HelloFrame) => void) => mockHellos(getState, store, listener),
     watch: () => nothing,
     waitForJoin: () => undefined,
   });
+}
+
+/**
+ * `onHello` on a mock's connection: each session that is connected and
+ * known is a hello (`$session(...)` that sets one is a reconnect), the
+ * current one in a microtask, as a real connection gives it.
+ */
+function mockHellos(
+  getState: () => ConnectionState,
+  store: MockStore,
+  listener: (hello: HelloFrame) => void,
+): () => void {
+  let last: HelloFrame | null = null;
+  let stopped = false;
+  const deliver = (): void => {
+    const { status, hello } = getState();
+    if (!stopped && status === "connected" && hello !== null && hello !== last) {
+      last = hello;
+      listener(hello);
+    }
+  };
+  queueMicrotask(deliver);
+  const stop = store.subscribe(deliver);
+  return () => {
+    stopped = true;
+    stop();
+  };
 }
 
 /** The key of a room's users in the mock's store. */
