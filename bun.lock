@@ -75,7 +75,7 @@
     },
     "packages/codemod": {
       "name": "@fitzzero/quickdraw-codemod",
-      "version": "5.0.0-alpha.0",
+      "version": "5.0.0-rc.0",
       "bin": {
         "quickdraw-codemod": "./bin/cli.mjs",
       },
@@ -102,7 +102,7 @@
     },
     "packages/core": {
       "name": "@fitzzero/quickdraw-core",
-      "version": "5.0.0-alpha.0",
+      "version": "5.0.0-rc.0",
       "bin": {
         "quickdraw-docs": "./dist/cli/quickdraw-docs.js",
       },
@@ -177,7 +177,7 @@
     },
     "packages/lint": {
       "name": "@fitzzero/quickdraw-lint",
-      "version": "5.0.0-alpha.0",
+      "version": "5.0.0-rc.0",
       "bin": {
         "quickdraw-lint": "./bin/quickdraw-lint.mjs",
       },
@@ -191,7 +191,7 @@
     },
     "packages/skills": {
       "name": "@fitzzero/quickdraw-skills",
-      "version": "5.0.0-alpha.0",
+      "version": "5.0.0-rc.0",
       "bin": {
         "quickdraw-skills": "./bin/cli.mjs",
       },
