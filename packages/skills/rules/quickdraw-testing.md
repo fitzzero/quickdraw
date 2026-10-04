@@ -45,7 +45,8 @@ await app.close();
   production (`trackPrisma(new PrismaClient({ adapter }))`). The
   `./testing/prisma` helpers give each worker a database:
   `createPrismaTestGlobalSetup`, `workerDatabaseUrl` and `resetDatabase`
-  (PostgreSQL, or PGlite when no `TEST_DATABASE_URL` is set).
+  (PostgreSQL, or PGlite when no `TEST_DATABASE_URL` is set; each worker
+  boots its PGlite with `openPgliteFromTemplate`, which works under jsdom).
 - Seed rows with the untracked client (`prisma`), or inside `qd.run` once an
   app runs: a tracked write outside any unit of work flushes on its own with
   an `ambient-write` warning.
@@ -106,7 +107,11 @@ logged, and `app.close()` ends it. Turn it on for service suites.
   `const view = await renderWithQuickdraw(<Board projectId={id} />, { app, as: ada, client: qd })`
   from `./testing/client` returns Testing Library's result plus
   `connection`, `queryClient`, `disconnect()` and `reconnect()`. Change
-  data with `app.as(...)` and wait for the screen (`findByText`).
+  data with `app.as(...)` and wait for the screen (`findByText`). Run these
+  in a jsdom project of their own, with the API's global setup (its test
+  database template) and a setup file calling `installJsdomShims()` from
+  `./testing/client` (element scrolling, `Blob.arrayBuffer`); they import
+  the API's services across apps.
 - Without a server: `createMockClient({ task, project })` has the typed
   client's shape with stubs: `qd.task.get.mockResolvedValue(row)`,
   `mockRejectedValue(error)`, `mockImplementation(fn)`, `calls`;

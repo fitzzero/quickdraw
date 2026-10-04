@@ -37,6 +37,7 @@ import type { AnyService } from "../server/service";
 import type { TestApp } from "./createTestApp";
 
 export * from "./mock";
+export { installJsdomShims } from "./jsdom";
 
 /** Options of {@link renderWithQuickdraw}. */
 export interface RenderWithQuickdrawOptions<

@@ -2643,6 +2643,17 @@ async (Testing Library, an optional peer, is loaded lazily) and returns
 Testing Library's result plus `connection`, `queryClient`, `disconnect()`
 and `reconnect()`, which drop and restore the socket as a lost network does.
 
+The web app's test imports the API's services across apps, as above, and
+needs a database: run such tests in a jsdom project of their own, with the
+API's global setup (the template its test databases boot from, below) and a
+setup file that calls `installJsdomShims()` from `./testing/client`. That
+adds what jsdom lacks, and keeps what it has: `scrollTo`, `scrollBy` and
+`scrollIntoView` on elements (they do nothing; a list that follows its newest
+item calls them) and `Blob.prototype.arrayBuffer` (PGlite reads a database
+dump through it). This repository runs the README's example app that way:
+`packages/core/vitest.config.ts`, project `readme`, with
+`test/readme/globalSetup.ts` and `test/readme/workerSetup.ts`.
+
 For a component test or a story without a server, `createMockClient(contracts)`
 gives the typed client's shape with stubs; give it to the components in place
 of the app's client (a module mock of the file that exports `qd`, say). It
@@ -2694,9 +2705,25 @@ story's `beforeEach` sets its session (`qd.$session(...)`) beside its data.
 `@fitzzero/quickdraw-core/testing/prisma` gives each vitest worker a database
 of its own: `createPrismaTestGlobalSetup` migrates a template once per run
 and clones a database per worker on PostgreSQL (`TEST_DATABASE_URL`), or
-boots PGlite from a cached dump without one; `workerDatabaseUrl` and
-`resetDatabase` (truncates every table) do the rest. Apply `trackPrisma` to
-the test client exactly as in production.
+builds a PGlite dump without one; `workerDatabaseUrl` and `resetDatabase`
+(truncates every table) do the rest. On PGlite each worker boots its own
+database from the dump with `openPgliteFromTemplate`, in milliseconds and
+under jsdom too (it reads the dump through Node's `Blob`); the app's db
+package gives its test client from it while tests run:
+
+<!-- example: packages/db/src/testing.ts#worker -->
+
+```ts
+// this worker's own database: the migrated template, loaded in milliseconds
+const pglite = await openPgliteFromTemplate(TEST_TEMPLATE);
+export const prisma = new PrismaClient({ adapter: new PrismaPGlite(pglite) });
+```
+
+`TEST_TEMPLATE` is `{ migrationsDir, cacheDir, templateName }`, the same the
+global setup builds with (`buildPgliteTemplate(TEST_TEMPLATE)`, or
+`createPrismaTestGlobalSetup`), and a setup file empties the database before
+each test (`beforeEach(() => resetDatabase(prisma))`). Apply `trackPrisma`
+to the test client exactly as in production.
 
 ## Observability
 

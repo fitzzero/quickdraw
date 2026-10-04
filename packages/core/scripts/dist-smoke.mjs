@@ -297,8 +297,14 @@ const expectations = {
     ],
     client: false,
   },
-  "./testing/prisma": { symbols: ["createPrismaTestGlobalSetup"], client: false },
-  "./testing/client": { symbols: ["renderWithQuickdraw", "createMockClient"], client: false },
+  "./testing/prisma": {
+    symbols: ["createPrismaTestGlobalSetup", "openPgliteFromTemplate", "resetDatabase"],
+    client: false,
+  },
+  "./testing/client": {
+    symbols: ["renderWithQuickdraw", "createMockClient", "installJsdomShims"],
+    client: false,
+  },
   "./testing/mock": { symbols: ["createMockClient"], client: false },
 };
 
