@@ -184,14 +184,23 @@ describe("with Valkey stopped mid-run", () => {
     await vi.waitFor(() => {
       expect(ready(a) && ready(b)).toBe(true);
     }, 10_000);
-    // The counter is tried again once its retry delay passed.
+    // The counter is tried again once its retry delay passed: a flush then probes it in the
+    // background, and takes its own revision from the clock without waiting.
     await new Promise((resolve) => {
       setTimeout(resolve, 1100);
     });
+    const answersAgain = (logger: CapturingLogger) =>
+      logger
+        .at("info")
+        .some(({ message }) => message === "The shared revision counter answers again");
+    await both("probe");
+    await vi.waitFor(() => {
+      expect(answersAgain(loggers.a) && answersAgain(loggers.b)).toBe(true);
+    }, 5000);
     for (let round = 0; round < 5; round += 1) {
       await both(`after ${round}`);
     }
-    const after = flushed.slice(60);
+    const after = flushed.slice(62);
     expect(increasing(after.map(({ rev }) => rev))).toBe(true);
     expect(await counterOf(prefix)).toBe(after.at(-1)?.rev);
     for (const logger of [loggers.a, loggers.b]) {

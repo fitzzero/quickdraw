@@ -24,10 +24,11 @@ import { isName, isRecord } from "./guards";
 import type { HelloFrame } from "./version";
 
 /**
- * A revision: a number in the range of `Date.now()` that every flush raises
- * (RFC 0003 section 5.3), `max(Date.now(), last + 1)` on one process and
- * the shared counter's next value behind a cluster. Compare revisions; do
- * not read them as times.
+ * A revision: a whole number of microseconds since the epoch that every
+ * flush raises (RFC 0003 section 5.3), `max(Date.now() * 1000, last + 1)` on
+ * one process and the shared counter's next value (Valkey's clock in
+ * microseconds) behind a cluster; a safe integer, about 1.8e15. Compare
+ * revisions as numbers; do not read them as times.
  */
 export type Revision = number;
 
@@ -187,8 +188,8 @@ export interface CollectionSubscribe extends CollectionScopeRef {
  * A scope member in the collection's index (RFC 0003 section 7.4): its id,
  * its revision, then its index field values in the order `index` declares.
  * The revision is the time in the service's `versionColumn` when it declares
- * one, else the revision the snapshot (or, in an `added` delta, the flush)
- * was read at.
+ * one (in microseconds, as revisions are), else the revision the snapshot
+ * (or, in an `added` delta, the flush) was read at.
  */
 export type WireIndexRow = readonly [id: string, rev: Revision, ...fields: unknown[]];
 

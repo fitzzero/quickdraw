@@ -59,15 +59,31 @@ and pub/sub. Use a single-shard instance (cluster mode disabled) or give
 policy that never evicts keys without a TTL (`noeviction` or a `volatile-*`
 policy; Memorystore's default `volatile-lru` is fine): the counter has none.
 
+The counter's key must also outlive a Valkey restart or failover: turn on
+persistence (RDB or AOF) or replication with automatic failover (Memorystore
+for Valkey with a replica). Without it the key is lost with the instance,
+and the next flush starts it again at Valkey's clock, above that node's last
+revision. Since the counter keeps to the clock, that is above every revision
+issued before unless Valkey's clock stepped back (a failover to a replica
+whose clock runs behind); a node that had seen the key logs "The revision
+counter key was lost; configure persistence or replication for it", and a
+read made before the next flush claims its own clock. A subscribe running
+while the key is lost may miss the frames of a flush made in between until
+the row's next change.
+
 ## What holds across nodes
 
 - **One order of revisions.** Each flush takes its revision from the shared
   counter, in one round trip, before it reads any row (RFC 0003 section 5.3).
   Revisions from all nodes are one total order: a flush that starts after
   another one took its revision gets a greater one, whichever node runs it.
-  The counter moves to `max(last + 1, Valkey's time in ms, the node's last
-revision + 1)`, so revisions stay in the clock range that clients and
-  `versionColumn` times already compare with.
+  A revision is a whole number of microseconds since the epoch (on one
+  server too: `max(Date.now() * 1000, last + 1)`), and the counter moves to
+  `max(last + 1, Valkey's time in microseconds, the node's last revision +
+1)`: it runs ahead of Valkey's clock only above a million flushes a second
+  across the cluster, so revisions stay comparable with `versionColumn`
+  times (a time's milliseconds times 1,000) and with the clock a node falls
+  back to.
 - **Frames applied by revision, never losing a field.** Each process sends
   its flushes' frames in revision order, but frames from two nodes can reach a
   client out of order. Clients apply frames by revision, and behind a cluster
@@ -164,13 +180,18 @@ and subscription reads are always authorized on the node that serves them.
   connection to Valkey is down, no step of a flush waits on Valkey (the
   counter and the access broadcasts skip it). The adapter cannot reach the
   other nodes meanwhile: what a node publishes waits in its client's queue.
-- **Revisions.** A node takes revisions from its own clock, never below one it
-  issued, and logs one error per outage ("The shared revision counter did not
-  answer; this node takes revisions from its own clock until it does"). It
-  sends no counter command while its client is not connected, tries again a
-  second later once it is, and logs "The shared revision counter answers
-  again". Until then its revisions compare with other nodes' only within their
-  clocks' skew.
+- **Revisions.** A node takes revisions from its own clock in microseconds,
+  never below one it issued, and logs one error per outage ("The shared
+  revision counter did not answer; this node takes revisions from its own
+  clock until it does"). Its reads claim the clock too, never a revision
+  older than it (`max(now, its last revision)`). While degraded no flush or
+  read sends a counter command or waits for one: once a second, while the
+  client is connected, one `GET` goes out in the background, and the first
+  that answers ends the outage ("The shared revision counter answers
+  again"). A Valkey that stops answering without the connection closing
+  costs one `cluster.timeoutMs` wait, on the flush that finds out. Until the
+  counter answers, the node's revisions compare with other nodes' within the
+  skew between its clock and Valkey's.
 - **Access and presence.** While the node's connection is down, its access
   changes are broadcast without waiting (they wait in the client's queue);
   presence across nodes waits on `fetchSockets` up to the adapter's
@@ -202,7 +223,8 @@ and subscription reads are always authorized on the node that serves them.
 - Frames of one row from two nodes still arrive out of revision order;
   sending changes whole makes that safe at a cost in bytes. Per-field
   revisions on the client would allow patches again.
-- A degraded node (Valkey not answering) orders revisions by its own clock.
+- A degraded node (Valkey not answering) orders revisions by its own clock,
+  which agrees with the counter only within the clocks' skew.
 - A room's presence list read from the other nodes can race a `joined` or
   `left` another node sends meanwhile (this node's own joins are counted).
 - A subscribe that sees the counter move reads every row it joined again, not

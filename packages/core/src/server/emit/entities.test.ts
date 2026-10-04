@@ -471,7 +471,8 @@ describe("not modified", () => {
     const { app } = await start({ versionColumn: "updatedAt", changeLog: false });
     const { connection } = await connect(app, as(board.ada));
     const row = await h.prisma.task.findUniqueOrThrow({ where: { id: board.t1 } });
-    const at = row.updatedAt.getTime();
+    // A version column's time compares with revisions in microseconds.
+    const at = row.updatedAt.getTime() * 1000;
     expect(await sub(connection, "taskService", [board.t1], [at])).toMatchObject({
       r: [{ ok: true, nm: true }],
     });

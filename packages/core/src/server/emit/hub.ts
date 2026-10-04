@@ -152,19 +152,3 @@ export function liveService(hub: Hub, name: string): LiveService {
   }
   return { service, model: service.model };
 }
-
-/** The time a version column holds, in milliseconds, or `undefined` when it holds none. */
-export function versionTime(value: unknown): number | undefined {
-  if (value instanceof Date) {
-    const time = value.getTime();
-    return Number.isNaN(time) ? undefined : time;
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const time = Date.parse(value);
-    return Number.isNaN(time) ? undefined : time;
-  }
-  return undefined;
-}

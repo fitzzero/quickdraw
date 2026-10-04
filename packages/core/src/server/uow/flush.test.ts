@@ -42,11 +42,13 @@ function scopeWith(sink: FlushSink): UnitOfWorkScope {
 }
 
 describe("nextRev", () => {
-  it("is the time in milliseconds, and always more than the last one", () => {
+  it("is the time in microseconds, a safe integer, and always more than the last one", () => {
+    const before = Date.now() * 1000;
     const first = nextRev();
     const second = nextRev();
     expect(second).toBeGreaterThan(first);
-    expect(first).toBeGreaterThanOrEqual(Date.now() - 1000);
+    expect(first).toBeGreaterThanOrEqual(before);
+    expect(Number.isSafeInteger(second)).toBe(true);
   });
 
   it("keeps rising when the clock steps back", () => {
@@ -54,8 +56,23 @@ describe("nextRev", () => {
     try {
       now.mockReturnValue(2_000_000_000_000);
       const ahead = nextRev();
+      expect(ahead).toBe(2_000_000_000_000_000);
       now.mockReturnValue(1_000_000_000_000);
       expect(nextRev()).toBe(ahead + 1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("takes a thousand revisions in one millisecond and is back on the clock the next", () => {
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(3_000_000_000_000);
+      const revs = Array.from({ length: 1000 }, () => nextRev());
+      expect(revs[0]).toBe(3_000_000_000_000_000);
+      expect(revs.at(-1)).toBe(3_000_000_000_000_999);
+      now.mockReturnValue(3_000_000_000_001);
+      expect(nextRev()).toBe(3_000_000_000_001_000);
     } finally {
       now.mockRestore();
     }

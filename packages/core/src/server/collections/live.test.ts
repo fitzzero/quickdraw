@@ -179,7 +179,7 @@ describe("resume", () => {
     const { connection } = await connect(app, as(board.ada));
     const first = await colSub(connection, "byProject", board.p1);
     const old = await colSub(connection, "byProject", board.p1, {
-      since: (first.rev as number) - 600_000,
+      since: (first.rev as number) - 600_000_000,
     });
     expect(old).toMatchObject({ ok: true, items: [{ id: board.t1 }], total: 1, cursor: null });
     expect(old).not.toHaveProperty("resumed");

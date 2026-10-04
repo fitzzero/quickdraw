@@ -5,6 +5,7 @@
 // one statement (two for a `via` scope), with no access reads.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { inCluster } from "../../../test/cluster/mode";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
 import { as, seedBoard, type Board } from "../access/__tests__/board";
@@ -78,16 +79,18 @@ describe("qd:col:items", () => {
       two,
       done,
     ]);
-    // The revision the items were read at, as a page carries it: none was taken since.
+    // The revision the items were read at, as a page carries it: none was taken since. Behind
+    // a cluster's counter with no key yet (no flush), a read claims the clock, which moved on.
     expect(reply).toEqual({
       ok: true,
-      rev: page.rev,
+      rev: inCluster() ? expect.any(Number) : page.rev,
       items: [
         expect.objectContaining({ id: two, title: "Task 2", ordinal: 2 }),
         expect.objectContaining({ id: board.t1, title: "T1", ordinal: 0 }),
         expect.objectContaining({ id: done, status: "done" }),
       ],
     });
+    expect(reply.rev as number).toBeGreaterThanOrEqual(page.rev as number);
     expect(Object.keys((reply.items as object[])[0] ?? {}).sort()).toEqual(
       ["assigneeId", "id", "ordinal", "projectId", "status", "title", "updatedAt"].sort(),
     );

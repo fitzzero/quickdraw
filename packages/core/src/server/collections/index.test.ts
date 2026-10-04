@@ -89,10 +89,13 @@ function write<T>(app: App, fn: (db: PrismaClient) => Promise<T>): Promise<T> {
   return app.server.dispatcher.run(async () => await fn(h.db));
 }
 
-/** The time a task's `updatedAt` holds, as an index row's `rev` with `versionColumn: "updatedAt"`. */
+/**
+ * The time a task's `updatedAt` holds, as an index row's `rev` with
+ * `versionColumn: "updatedAt"`: in microseconds, as revisions are.
+ */
 async function versionOf(id: string): Promise<number> {
   const task = await h.prisma.task.findUniqueOrThrow({ where: { id } });
-  return task.updatedAt.getTime();
+  return task.updatedAt.getTime() * 1000;
 }
 
 /** The board's order: ordinal, then id. */
@@ -199,7 +202,7 @@ describe("the first page of an indexed scope", () => {
     const { connection } = await connect(app, as(board.ada));
     const first = await colSub(connection, "board", board.p1);
     const old = await colSub(connection, "board", board.p1, {
-      since: (first.rev as number) - 600_000,
+      since: (first.rev as number) - 600_000_000,
     });
     expect(old).not.toHaveProperty("resumed");
     expect(old.index).toEqual([[board.t1, old.rev, "open", 0, null]]);
@@ -294,7 +297,7 @@ describe("index rows after a flush", () => {
       db.task.update({ where: { id: created.id }, data: { notes: "outside the item" } }),
     );
     await scopes.settle();
-    const updatedAt = new Date(await versionOf(created.id)).toISOString();
+    const updatedAt = new Date((await versionOf(created.id)) / 1000).toISOString();
     expect(scopes.frames.map(({ deltas }) => deltas)).toEqual([
       [
         {
@@ -308,7 +311,7 @@ describe("index rows after a flush", () => {
             assigneeId: null,
             updatedAt: created.updatedAt.toISOString(),
           },
-          index: [created.id, created.updatedAt.getTime(), "open", 4, null],
+          index: [created.id, created.updatedAt.getTime() * 1000, "open", 4, null],
         },
       ],
       [

@@ -3,7 +3,7 @@
   "budgets": {
     "first collection snapshot": {
       "statements": 5,
-      "bytes": 11813,
+      "bytes": 12743,
       "calls": []
     },
     "kit list": {
@@ -41,7 +41,7 @@
     },
     "subscribe to 60 tasks": {
       "statements": 4,
-      "bytes": 10803,
+      "bytes": 11703,
       "calls": []
     }
   }

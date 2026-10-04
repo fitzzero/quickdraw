@@ -18,12 +18,16 @@
 //   client holding a newer frame from another node would keep its stale row;
 // - when Valkey does not answer, the node falls back to its own clock (one
 //   error logged per outage), still never below a revision it issued, and
-//   reads claim its own last revision: comparisons with other nodes' hold
-//   within their clocks' skew again until the counter answers.
+//   reads claim its clock too (`max(now, the last revision this process
+//   took, the last it issued)`): comparisons with other nodes' hold within
+//   the skew between this node's clock and Valkey's (the counter keeps to
+//   Valkey's clock) until the counter answers again. A key Valkey does not
+//   have (none taken since it was made or lost) is read the same way, never
+//   as 0.
 
 import type { Logger } from "../../contract/logger";
 import type { Revision } from "../../protocol/envelope";
-import { currentRev, nextRev, observeRev } from "../rev";
+import { clockRev, currentRev, nextRev, observeRev } from "../rev";
 import type { QuickdrawIo } from "../transports/types";
 import {
   clusterClientOf,
@@ -76,7 +80,11 @@ export interface Revisions {
    * call when the flush's turn comes, which resolves with its revision.
    */
   forFlush(): (() => Promise<Revision>) | undefined;
-  /** The revision a read made from now on is no older than: at once on one server. */
+  /**
+   * The revision a read made from now on is no older than: at once on one
+   * server; behind a counter its last revision, or the clock's when it does
+   * not answer or has no key. Never 0.
+   */
   claim(): Revision | Promise<Revision>;
   /** Behind a counter, the counter's revision when it moved past `rev`; `undefined` otherwise. */
   movedPast(rev: Revision): Promise<Revision | undefined>;
@@ -148,8 +156,9 @@ export function createRevisions(hub: RevisionHub): Revisions {
     return rev;
   };
 
-  const fresh = (value: Revision | undefined): Revision => {
-    const rev = Math.max(value ?? currentRev(), issued);
+  /** The revision a read claims: the counter's, or without one (no answer, no key) the clock's. */
+  const fresh = (value: Revision | null | undefined): Revision => {
+    const rev = Math.max(value ?? Math.max(clockRev(), currentRev()), issued);
     observeRev(rev);
     return rev;
   };
@@ -169,8 +178,10 @@ export function createRevisions(hub: RevisionHub): Revisions {
       return counter === undefined ? currentRev() : counter.current().then(fresh);
     },
     async movedPast(rev: Revision) {
+      // No answer: nothing reaches this node from the others either. No key: no node took a
+      // revision since it was made or lost.
       const value = await counterOf()?.current();
-      return value !== undefined && value > rev ? fresh(value) : undefined;
+      return typeof value === "number" && value > rev ? fresh(value) : undefined;
     },
     shared: () => counterOf() !== undefined,
     counterClient: () => {
