@@ -91,7 +91,7 @@ async function mineSnapshot(ownerId: string, opts: { cursor: string | null; limi
  */
 export const projectService = qd.defineService(projectContract, {
   model: "project",
-  // 4.x's hasEntryACL read the row's `acl` column ([{ userId, level }]).
+  // quickdraw-migrate: review [access] 4.x's hasEntryACL read the row's `acl` column ([{ userId, level }]), and so does jsonAcl("acl"), with one difference: a user with several entries in a row's list gets the highest of their levels, where 4.x took the first. Check the stored lists for duplicate entries
   access: jsonAcl("acl"),
   methods: {
     createProject: {

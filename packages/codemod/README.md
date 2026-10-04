@@ -51,7 +51,10 @@ template's layout; the options move each part:
   | `"Moderate"` or `"Admin"` without a row id | `{ service: L }`                     |
 
   A row id is `resolveEntryId`, or a payload with `id`, which 4.x read
-  implicitly.
+  implicitly. The service's policy is `jsonAcl("acl")` where 4.x set
+  `hasEntryACL: true`, with one difference from 4.x, marked once per
+  service: a user with several entries in a row's list gets the highest of
+  their levels, where 4.x took the first.
 
 - **The web app.** `useService`, `useServiceQuery`, `useSubscription` and
   `useCollection` become `qd.<service>.<member>` hooks, through the app's

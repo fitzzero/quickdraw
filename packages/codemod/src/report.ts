@@ -27,7 +27,7 @@ const SECTIONS: readonly Section[] = [
     title: "Access",
     categories: ["access"],
     intro:
-      'The forms admit exactly the callers 4.x admitted. "Read" without a row id was open to every signed-in user; decide whether that was meant.',
+      'The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 4.x\'s `hasEntryACL` did, but for a user listed twice in a row\'s list (marked). "Read" without a row id was open to every signed-in user; decide whether that was meant.',
   },
   {
     title: "Access overrides to turn into a policy",

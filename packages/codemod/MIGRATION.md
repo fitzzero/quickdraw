@@ -148,6 +148,13 @@ gets the policy the forms need: `jsonAcl("acl")` for `hasEntryACL: true`
 overrode `checkAccess` or `checkEntryACL`, which grants no row until you
 port the override.
 
+`jsonAcl` keeps 4.x's semantics but one: a user with several entries in a
+row's list gets the highest of their levels, where 4.x's `checkEntryACL`
+took the first entry (`[{ userId: "u1", level: "Read" }, { userId: "u1",
+level: "Admin" }]` was `Read` and is `Admin`). The highest agrees with what
+the list filters match; the codemod marks each `jsonAcl("acl")` it writes,
+once per service, so check the stored lists for duplicate entries.
+
 ## Work through the report
 
 In this order, because each step leans on the one before:

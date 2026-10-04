@@ -33,11 +33,10 @@ export function policyLines(
     return { lines: [markerText("access-override", message), placeholder], builder: "resolver" };
   }
   if (service.readsAclColumn) {
+    const message =
+      "4.x's hasEntryACL read the row's `acl` column ([{ userId, level }]), and so does jsonAcl(\"acl\"), with one difference: a user with several entries in a row's list gets the highest of their levels, where 4.x took the first. Check the stored lists for duplicate entries";
     return {
-      lines: [
-        "// 4.x's hasEntryACL read the row's `acl` column ([{ userId, level }]).",
-        'access: jsonAcl("acl"),',
-      ],
+      lines: [markerText("access", message), 'access: jsonAcl("acl"),'],
       builder: "jsonAcl",
     };
   }

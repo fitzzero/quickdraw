@@ -170,12 +170,21 @@ describe("each policy's levels", () => {
     expect(await grantsTo([{ user: di, level: "Admin" }])).toBeNull();
     expect(await grantsTo([[{ userId: di, level: "Admin" }]])).toBeNull();
     expect(await grantsTo([null, 3, "x", { userId: di, level: "Read" }])).toBe("Read");
+    // Several entries for one user: the highest, in any order. 4.x's checkEntryACL took the
+    // first (`acl.find`), so it granted Read for both lists (MIGRATION.md, "The access mapping").
     expect(
       await grantsTo([
         { userId: di, level: "Read" },
         { userId: di, level: "Moderate" },
       ]),
     ).toBe("Moderate");
+    expect(
+      await grantsTo([
+        { userId: di, level: "Read" },
+        { userId: di, level: "Admin" },
+        { userId: board.ada, level: "Read" },
+      ]),
+    ).toBe("Admin");
   });
 
   it("members: the member's role, mapped through levels when given", async () => {
