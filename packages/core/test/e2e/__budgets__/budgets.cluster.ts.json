@@ -6,6 +6,11 @@
       "bytes": 12743,
       "calls": []
     },
+    "junction write refreshing a via item": {
+      "statements": 3,
+      "bytes": 202,
+      "calls": []
+    },
     "kit list": {
       "statements": 3,
       "bytes": 2951,

@@ -31,6 +31,7 @@ export const CATEGORIES = [
   "channel",
   "this",
   "context",
+  "error",
   "client",
   "server",
   "v4-api",

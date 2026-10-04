@@ -13,7 +13,9 @@
 //   client, so the adapter's own reads see the transaction's writes;
 // - a unit begun inside another open frame (an in-process call made from a
 //   handler, `qd.run` inside a transaction) joins it: its writes go where
-//   the enclosing frame's go, and its own flush does nothing;
+//   the enclosing frame's go, and its own flush does nothing; a detached
+//   unit (`qd.run(fn, { detached: true })`, a handler's background work)
+//   never joins: it starts a stack of its own and flushes on its own;
 // - `countStatements` frames only count.
 //
 // A write with no open buffer above it (a job that did not use `qd.run`, or
@@ -376,10 +378,13 @@ function createUnit(state: TrackerState, scope: UnitOfWorkScope): UnitOfWork {
       return statements;
     },
     run<T>(fn: () => T | PromiseLike<T>): Promise<T> {
-      // Inside an open buffer (a transaction, another unit), this unit joins it.
-      const joins = frameWhere(state, (candidate) => candidate.buffer !== undefined) !== undefined;
+      // Inside an open buffer (a transaction, another unit), this unit joins it, unless it is
+      // detached: then it stands alone, outside every frame open where it was begun.
+      const detached = scope.detached === true;
+      const joins =
+        !detached && frameWhere(state, (candidate) => candidate.buffer !== undefined) !== undefined;
       const own: Frame = {
-        parent: state.als.getStore(),
+        parent: detached ? undefined : state.als.getStore(),
         buffer: joins ? undefined : writes,
         durable: true,
         tx: undefined,

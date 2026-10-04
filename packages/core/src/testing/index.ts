@@ -30,5 +30,7 @@ export {
   type AccessMatrixCell,
   type AccessMatrixOptions,
   type AccessMatrixReport,
+  type MatrixCell,
+  type MatrixInputFactory,
   type MatrixOutcome,
 } from "./accessMatrix";

@@ -197,7 +197,7 @@ describe("quickdraw-docs", () => {
       },
       collections: {
         mine: {
-          scope: via({ model: "chatMember", entry: "chatId", scope: "userId" }),
+          scope: via({ model: "chatMember", entry: "chatId", scope: "userId", refreshEntry: true }),
           item: "item",
           order: [["id", "asc"]],
           where: { archived: false },
@@ -221,7 +221,9 @@ describe("quickdraw-docs", () => {
     expect(page).toContain("Input: none.");
     expect(page).toContain("Output: rows as the `item` projection.");
     expect(page).toContain("Input: `unknown (no JSON Schema)`.");
-    expect(page).toContain("`userId` of the `chatMember` rows whose `chatId` is the item's id");
+    expect(page).toContain(
+      "`userId` of the `chatMember` rows whose `chatId` is the item's id; a write to those rows sends the item again to every scope that holds it",
+    );
     expect(page).toContain("`archived = false`");
     expect(page).toContain("one feed per `chatId`");
     expect(page).toContain('`{ entry: "Read" }`');

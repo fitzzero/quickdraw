@@ -76,7 +76,13 @@ export interface McpRegistryOptions<
 
 /** The tools an MCP transport serves, and the one way to call them. */
 export interface McpRegistry {
-  /** Every tool, generated ones first, as `tools/list` returns them. */
+  /**
+   * Every tool, generated ones first, as `tools/list` and `GET /mcp/tools`
+   * return them: the same list for every caller, never filtered by the
+   * principal, so an agent may see tools whose calls are refused. A
+   * registry's `include`/`exclude` decide the list; serve agents of
+   * different reach from separate registries.
+   */
   readonly tools: readonly McpTool[];
   /** True when a tool has this name. */
   has(name: string): boolean;

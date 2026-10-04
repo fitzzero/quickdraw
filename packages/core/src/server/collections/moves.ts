@@ -20,6 +20,8 @@
 // | `via` junction create / delete | the entry's links without | its links now  |
 // |                                | this flush's, with the    | (read)         |
 // |                                | ones it removed           |                |
+// | `via` entry created or touched | the same (its links       | its links now  |
+// |                                | before this flush)        | (read)         |
 //
 // Left gives `removed`, entered `added` with the full item (never a patch: a
 // client cannot patch a row it never had), stayed `patched` or `updated` as
@@ -31,6 +33,19 @@
 // write does not carry (a touch with `removed`, or a `via` entry whose links
 // a cascade removed) left scopes nobody can name: every scope of the
 // collection subscribed on this process gets `removed`.
+//
+// A `via` entry's scopes before the flush are known whatever wrote the
+// entry: its links now, without the ones this flush's junction writes made,
+// with the ones they removed. So an entry created or touched (an `upsert`
+// that may have updated it is recorded as a create) is `added`, whole, to
+// every scope it is in now (a client upserts it where it already was, which
+// also covers links an untracked write made), and `removed` from the scopes
+// this flush's junction writes took it out of: a touch beside the removal of
+// a member's link no longer leaves the chat in that member's list.
+//
+// A `via` collection whose item reads the junction (`via`'s `refreshEntry`,
+// a member count) also sends every entry a junction write named again,
+// whole, to the scopes it stayed in: the count changed there too.
 //
 // Behind a cluster adapter (`current`) a write that committed first can
 // flush last (`deltas.ts`), so membership comes from what is read at flush
@@ -217,6 +232,8 @@ export async function columnMoves(
 interface LinkEvents {
   readonly linked: Map<string, Set<string>>;
   readonly unlinked: Map<string, Set<string>>;
+  /** Every entry a junction write named, whatever it changed: `refreshEntry` sends them again. */
+  readonly named: Set<string>;
   /** Junction rows whose link the write does not carry: read them. */
   readonly unknown: string[];
   /** A junction row was removed without values. */
@@ -243,13 +260,20 @@ function linkEvents(via: Via, writes: readonly WriteRecord[]): LinkEvents {
   const events: LinkEvents = {
     linked: new Map(),
     unlinked: new Map(),
+    named: new Set(),
     unknown: [],
     resetAll: false,
+  };
+  const name = (link: readonly [string, string] | undefined): void => {
+    if (link !== undefined) {
+      events.named.add(link[0]);
+    }
   };
   for (const write of writes) {
     if (write.op === "delete") {
       const link = linkOf(via, write.before);
       addLink(events.unlinked, link);
+      name(link);
       events.resetAll ||= link === undefined;
       continue;
     }
@@ -258,12 +282,15 @@ function linkEvents(via: Via, writes: readonly WriteRecord[]): LinkEvents {
       events.unknown.push(write.id);
       continue;
     }
+    name(now);
     const moved = write.fields.some((field) => field === via.entry || field === via.scope);
     if (write.op === "create" || moved) {
       addLink(events.linked, now);
     }
     if (write.op === "update" && moved) {
-      addLink(events.unlinked, linkOf(via, { ...write.after, ...write.before }));
+      const old = linkOf(via, { ...write.after, ...write.before });
+      addLink(events.unlinked, old);
+      name(old);
     }
   }
   return events;
@@ -303,7 +330,8 @@ function filtered(collection: BoundCollection): boolean {
  * A `via` entry's move: its links before the flush against its links now,
  * both filtered by `where`. A deleted entry left scopes nobody can name;
  * with `current` (behind a cluster adapter), the scopes it is linked to at
- * the read keep it.
+ * the read keep it. An entry created or touched is `added` to every scope it
+ * is in now and `removed` from the ones it left.
  */
 function viaMove(
   collection: BoundCollection,
@@ -321,17 +349,26 @@ function viaMove(
       ? movedTo(id, unlinked, NONE, after, true)
       : moveOf(id, unlinked, NONE, undefined, true);
   }
-  if (write?.op === "create" || write?.fields.includes(ANY_FIELD) === true) {
-    return moveOf(id, NONE, after, undefined);
-  }
   const linked = events.linked.get(id) ?? NONE;
   const linksBefore = new Set([...[...links].filter((scope) => !linked.has(scope)), ...unlinked]);
   const before = matches(row === undefined ? undefined : { ...row, ...write?.before })
     ? linksBefore
     : NONE;
+  if (write?.op === "create" || write?.fields.includes(ANY_FIELD) === true) {
+    // Whole wherever it is now (an upsert where a client held it), gone where it left.
+    return {
+      id,
+      left: [...before].filter((scope) => !after.has(scope)),
+      entered: [...after],
+      stayed: [],
+      kind: WHOLE,
+      unknownLeft: false,
+    };
+  }
   const changed = write !== undefined || entry.refreshed;
+  // A refreshed entry's item changed beyond its own write (a count over the junction): whole.
   const kind =
-    write === undefined
+    write === undefined || entry.refreshed
       ? WHOLE
       : frameKind(collection.item, write, collection.service.versionColumn);
   return moveOf(id, before, after, changed ? kind : undefined);
@@ -378,7 +415,8 @@ export function movesOf(
 /**
  * The moves of a `via` collection: from its entry rows' writes, its
  * junction's writes and `affects` hops. With `current`, a deleted entry
- * linked to scopes at the read stays in them.
+ * linked to scopes at the read stays in them. With `refreshEntry`, every
+ * entry a junction write named is sent again to the scopes it stayed in.
  */
 export async function viaMoves(
   storage: StorageAdapter,
@@ -397,13 +435,20 @@ export async function viaMoves(
   );
   if (events.unknown.length > 0) {
     for (const [entry, scopes] of await readLinks(storage, via, { id: { in: events.unknown } })) {
+      events.named.add(entry);
       for (const scope of scopes) {
         addLink(events.linked, [entry, scope]);
       }
     }
   }
+  const refreshed = new Set([...refresh, ...(via.refreshEntry ? events.named : [])]);
   const ids = [
-    ...new Set([...entries.keys(), ...events.linked.keys(), ...events.unlinked.keys(), ...refresh]),
+    ...new Set([
+      ...entries.keys(),
+      ...events.linked.keys(),
+      ...events.unlinked.keys(),
+      ...refreshed,
+    ]),
   ];
   if (ids.length === 0) {
     return { moves: [], rows: new Map(), resetAll: events.resetAll };
@@ -413,7 +458,6 @@ export async function viaMoves(
     readLinks(storage, via, { [via.entry]: { in: ids } }),
     filtered(collection) ? readRows(storage, collection, ids) : new Map<string, StorageRow>(),
   ]);
-  const refreshed = new Set(refresh);
   const moves = ids.map((id) =>
     viaMove(
       collection,

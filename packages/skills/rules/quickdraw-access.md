@@ -85,12 +85,17 @@ compile time.
 | `inherit({ from: projectContract, via: "projectId" })` | the level on the parent row in another service  |
 | `anyOf(policyA, policyB)`                              | the highest level any of them gives             |
 | `resolver({ levelsFor, where? })`                      | your code, one batched read for all ids         |
+| `everyone("Read")`                                     | every signed-in user, on every row; no read     |
 
 - `entry` forms need a policy and `scope` forms a `model`; a service without
   a model may use only `"public"`, `"authenticated"`, `{ service }` and
   `custom`.
 - `inherit` uses the parent's policy only: grants on the parent's service do
   not flow down.
+- Rows everyone signed in may read (public profiles) take
+  `anyOf(owner("id"), everyone("Read"))`, never a hand-written `resolver`
+  answering `Read` for every id: `rowless: true` covers one method, not
+  subscriptions.
 - Lookups are batched per call: checking 60 ids costs what one does.
   `createServer({ access: { cacheMs } })` keeps them across calls; tracked
   writes to the columns and tables a policy reads evict them.

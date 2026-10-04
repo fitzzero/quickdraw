@@ -3,7 +3,8 @@
 // service (`../../emit/__tests__/live.ts`): a task service whose collections
 // cover each kind of scope, an indexed board (and an indexed mapped item) for
 // whole-scope loading, a query that watches a scope's change topic, and a
-// label service a `via` collection is anchored on.
+// label service the `via` collections are anchored on (one of them,
+// `taggedByLabel`, counts the junction's rows and declares `refreshEntry`).
 //
 //            owner   access list    members
 //   P1       ada     di: Read       bo: Moderate, cy: Read
@@ -47,6 +48,13 @@ export const tileSchema = cardSchema.extend({
 /** The board's index fields, in the order the contract declares them. */
 export const BOARD_INDEX = ["status", "ordinal", "assigneeId"] as const;
 
+/** A task with how many labels it has: an item computed from the TaskLabel junction. */
+export const taggedSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  labelCount: z.number(),
+});
+
 export const taskContract = defineContract("taskService", {
   entity: z.object({
     id: z.string(),
@@ -63,6 +71,7 @@ export const taskContract = defineContract("taskService", {
     card: cardSchema,
     label: z.object({ id: z.string(), label: z.string() }),
     tile: tileSchema,
+    tagged: taggedSchema,
   },
   fields: { notes: "Admin" },
   methods: {
@@ -127,6 +136,12 @@ export const taskContract = defineContract("taskService", {
       item: "card",
       order: [["id", "asc"]],
     },
+    /** The same, with each task's label count: a junction write sends the task again everywhere. */
+    taggedByLabel: {
+      scope: via({ model: "taskLabel", entry: "taskId", scope: "labelId", refreshEntry: true }),
+      item: "tagged",
+      order: [["id", "asc"]],
+    },
     /** The tasks assigned to the subscriber, newest ordinal first. */
     mine: {
       scope: "assigneeId",
@@ -164,6 +179,12 @@ interface LabelSource {
   readonly status: string;
 }
 
+interface TaggedSource {
+  readonly id: string;
+  readonly title: string;
+  readonly labels: readonly { readonly id: string }[];
+}
+
 /** Options of {@link defineTaskService}. */
 export interface TaskServiceOptions {
   /** For the bulk tests. */
@@ -186,6 +207,15 @@ export function defineTaskService(options: TaskServiceOptions = {}) {
         select: { title: true, status: true },
         map: (row: LabelSource) => ({ id: row.id, label: `${row.status}: ${row.title}` }),
       },
+      tagged: {
+        // the junction's rows of the tasks read, counted: Prisma's _count would aggregate the whole table
+        select: { title: true, labels: { select: { id: true } } },
+        map: (row: TaggedSource) => ({
+          id: row.id,
+          title: row.title,
+          labelCount: row.labels.length,
+        }),
+      },
     },
     collections: {
       board: { anchor: projectContract },
@@ -195,6 +225,7 @@ export function defineTaskService(options: TaskServiceOptions = {}) {
       rows: { anchor: projectContract },
       labelled: { anchor: projectContract },
       byLabel: { anchor: labelContract },
+      taggedByLabel: { anchor: labelContract },
       mine: { scopeAccess: "self" },
       byParent: { anchor: projectContract },
     },

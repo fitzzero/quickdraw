@@ -1,5 +1,7 @@
 // `createTestApp` (RFC 0003 section 13): the app's real server on a free
-// port, with an `authenticate` that trusts the principal a test connects as,
+// port, with an `authenticate` that trusts the principal a test connects as
+// (its grants loaded by `auth.loadServiceAccess` when it carries none, for
+// sockets and `as(principal)` alike),
 // and a recorder of every frame the server sends (`frames.ts`). Its
 // dispatcher becomes the current one of the `initQuickdraw` instance that
 // defined the services, so `qd.stream`, `qd.presence` and `qd.run` reach
@@ -15,7 +17,7 @@ import type { Caller } from "../server/caller";
 import { createServer, type QuickdrawServer, type ServerOptions } from "../server/createServer";
 import type { ContractOfServices, PrincipalOfServices } from "../server/dispatcher";
 import { runtimeOf, type AnyService } from "../server/service";
-import { isPrincipal } from "../server/transports/auth";
+import { isPrincipal, type ServerAuth } from "../server/transports/auth";
 import { recordFrames, type FrameRecorder } from "./frames";
 import {
   instrumentOptions,
@@ -37,6 +39,30 @@ function adoptDispatcher(services: readonly AnyService[], dispatcher: object): v
   for (const runtime of runtimes) {
     runtime?.adopt?.(dispatcher);
   }
+}
+
+type Call = QuickdrawServer["dispatcher"]["call"];
+
+/**
+ * `call`, with the grants `load` gives a principal that carries none, at
+ * each call: what `createServer`'s principal resolver does for a socket's
+ * handshake and an HTTP call.
+ */
+function withGrants(call: Call, load: ServerAuth["loadServiceAccess"]): Call {
+  if (load === undefined) {
+    return call;
+  }
+  return async (request) => {
+    const { principal } = request;
+    if (
+      principal === null ||
+      (principal.serviceAccess !== undefined && principal.serviceAccess !== null)
+    ) {
+      return await call(request);
+    }
+    const serviceAccess = (await load(principal.userId)) ?? {};
+    return await call({ ...request, principal: { ...principal, serviceAccess } });
+  };
 }
 
 /**
@@ -78,7 +104,11 @@ export interface TestApp<S extends readonly AnyService[] = readonly AnyService[]
   /**
    * A typed in-process caller acting as `principal` (`null` for anonymous).
    * Its calls' completion records carry their reply's size as JSON, as an
-   * HTTP call's do, so `expectBudget` sees their bytes.
+   * HTTP call's do, so `expectBudget` sees their bytes. A principal that
+   * carries no `serviceAccess` gets its grants from the server's
+   * `auth.loadServiceAccess` at every call, as an HTTP call's and a
+   * socket's principal do, so in-process and socket calls authorize alike;
+   * one that carries grants (even `{}`) keeps them.
    */
   as(principal: PrincipalOfServices<S> | null): Caller<ContractOfServices<S>>;
   /**
@@ -141,7 +171,10 @@ export async function createTestApp<const S extends readonly AnyService[]>(
     server,
     frames,
     as: (principal) =>
-      measuredCaller(server.dispatcher.call, principal) as Caller<ContractOfServices<S>>,
+      measuredCaller(
+        withGrants(server.dispatcher.call, options.auth?.loadServiceAccess),
+        principal,
+      ) as Caller<ContractOfServices<S>>,
     async connect(principal) {
       const { socket, hello } = await connectV5(
         url,

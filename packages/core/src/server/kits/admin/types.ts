@@ -74,9 +74,27 @@ export interface AdminHandlersOptions<C extends AnyContract, A> {
   /**
    * Fields the kit leaves out entirely: from `adminMeta`, from the rows it
    * returns and from what it writes. `acl`, `serviceAccess` and
-   * `service_access` are always hidden, as in 4.1.
+   * `service_access` are always hidden, as in 4.1, unless `grants` shows
+   * the last two.
    */
   readonly hiddenFields?: readonly Exclude<AdminFieldOf<C>, "id">[];
+  /**
+   * Show and write the entity's `serviceAccess` (or `service_access`), the
+   * user's service-wide grants, which the kit hides by default: an admin
+   * screen then edits grants through `adminUpdate` (a JSON field, checked by
+   * the entity's schema). Only a caller whose own service-wide grant on this
+   * service is `Admin` reads or writes it, whatever `access` gives a method;
+   * anyone else is refused a write, filter or sort naming it (`FORBIDDEN`)
+   * and gets rows without it. Such an Admin can grant any service,
+   * themself included, so give that grant only to those who may. With
+   * `auth.serviceAccessSource` naming the column, a change reaches the
+   * user's open sockets on every node at once (`qd:access`, their
+   * subscriptions resolved again), as any tracked write to it does. Only for
+   * an entity with such a field. Default `false`.
+   */
+  readonly grants?: [Extract<AdminFieldOf<C>, "serviceAccess" | "service_access">] extends [never]
+    ? never
+    : boolean;
   /** Changes to the configuration `adminMeta` derives, per field. */
   readonly fieldOverrides?: { readonly [Field in AdminFieldOf<C>]?: AdminFieldOverride };
   /**

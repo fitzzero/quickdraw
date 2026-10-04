@@ -12,7 +12,9 @@
 // `Admin`, which reaches every tier; a service that gives a method a lower
 // form shows that method's callers less, and refuses them a filter, a sort
 // or a write that names a field they cannot see (it would tell what the
-// field holds).
+// field holds). The grant fields `grants: true` shows (`serviceAccess`) are
+// seen only by callers whose service-wide grant is `Admin`, whatever form
+// the method runs under: editing grants never comes with a lowered form.
 
 import { QuickdrawError } from "../../../protocol/errors";
 import { serviceGrant } from "../../access/levels";
@@ -70,7 +72,8 @@ export function adminCall(ctx: KitHandlerArgs["ctx"], db: unknown, fields: Admin
   }
   const { principal } = ctx;
   const level = principal === null ? null : (serviceGrant(principal, runtime.service.name) ?? null);
-  const unseen = projection.tiers.hidden(level);
+  const tiered = projection.tiers.hidden(level);
+  const unseen = level === "Admin" ? tiered : new Set([...tiered, ...fields.grants]);
   return {
     runtime,
     model: modelKey(model),

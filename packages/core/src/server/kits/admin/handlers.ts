@@ -1,6 +1,6 @@
 // `admin.handlers(contract, { access?, displayName?, hiddenFields?,
-// fieldOverrides?, rowless? })` (RFC 0003 section 12.4): the admin kit's
-// server half.
+// fieldOverrides?, rowless?, grants? })` (RFC 0003 section 12.4): the admin
+// kit's server half.
 // It finds the methods `admin.contract` made in the contract and returns an
 // implementation of each, to spread into `defineService`'s `methods`:
 //
@@ -24,6 +24,14 @@
 // `adminDelete`) given a form that checks no row below `Admin` (`{ service:
 // "Moderate" }`, `"authenticated"`) unless `rowless` names it, since such a
 // method reaches any row by its id.
+//
+// `grants: true` (a users service) shows and writes the entity's
+// `serviceAccess`, hidden by default, so an admin screen can edit grants
+// through `adminUpdate`; only a caller whose own service-wide grant is
+// `Admin` reads or writes it, whatever `access` says. The write goes through
+// the tracked client, so with `auth.serviceAccessSource` naming that column
+// the user's open sockets get the new grants on every node, as for any
+// grant change.
 
 import type { AnyContract } from "../../../contract/defineContract";
 import { admin as contractHalf, adminSpecOf, type AdminSpec } from "../../../contract/kits/admin";
@@ -50,6 +58,7 @@ const OPTION_KEYS: readonly string[] = [
   "hiddenFields",
   "fieldOverrides",
   "rowless",
+  "grants",
 ];
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -93,7 +102,9 @@ function checkOptions(options: unknown): UnknownRecord {
     return {};
   }
   if (!isRecord(options)) {
-    fail("options must be { access?, displayName?, hiddenFields?, fieldOverrides?, rowless? }");
+    fail(
+      "options must be { access?, displayName?, hiddenFields?, fieldOverrides?, rowless?, grants? }",
+    );
   }
   const unknownKey = Object.keys(options).find((key) => !OPTION_KEYS.includes(key));
   if (unknownKey !== undefined) {
@@ -142,6 +153,7 @@ function fieldsOf(
       displayName: options.displayName,
       hiddenFields: options.hiddenFields,
       fieldOverrides: options.fieldOverrides,
+      grants: options.grants,
     },
     fail,
   );
@@ -179,9 +191,9 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty>
 
 /**
  * The admin kit: `admin.handlers(contract, { access?, displayName?,
- * hiddenFields?, fieldOverrides?, rowless? })` implements the methods
- * `admin.contract` made in `contract`, each open to a service-wide `Admin`
- * grant unless `access` gives another form. `admin.contract` is here too,
- * for server code; a shared package imports it from the root export.
+ * hiddenFields?, fieldOverrides?, rowless?, grants? })` implements the
+ * methods `admin.contract` made in `contract`, each open to a service-wide
+ * `Admin` grant unless `access` gives another form. `admin.contract` is here
+ * too, for server code; a shared package imports it from the root export.
  */
 export const admin = Object.freeze({ contract: contractHalf.contract, handlers });

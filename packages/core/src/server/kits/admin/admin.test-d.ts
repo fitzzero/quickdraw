@@ -198,6 +198,21 @@ describe("admin.handlers", () => {
     // @ts-expect-error plainService has no method admin.contract made
     admin.handlers(plain);
   });
+
+  test("grants is for an entity that holds serviceAccess", () => {
+    const userRow = z.object({
+      id: z.string(),
+      name: z.string(),
+      serviceAccess: z.record(z.string(), z.string()).nullable(),
+    });
+    const users = defineContract("userService", {
+      entity: userRow,
+      methods: { ...adminContract.contract({ entity: userRow }) },
+    });
+    admin.handlers(users, { grants: true });
+    // @ts-expect-error the task entity holds no grants
+    admin.handlers(task, { grants: true });
+  });
 });
 
 describe("the client", () => {

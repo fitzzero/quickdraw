@@ -206,7 +206,7 @@ describe("the stdio server", () => {
     );
   });
 
-  it("ends when its input ends, cancelling the calls in flight", async () => {
+  it("ends when its input ends, once the calls in flight have answered", async () => {
     const { send, input, server, services, messages } = open();
     send({
       jsonrpc: "2.0",
@@ -215,11 +215,33 @@ describe("the stdio server", () => {
       params: { name: "noteService_wait", arguments: { key: "end" } },
     });
     await vi.waitFor(() => expect(services.signals.has("end")).toBe(true));
+    // A client that writes its requests and closes stdin, as `echo ... | node server` does.
     input.end();
+    let ended = false;
+    void server.closed.then(() => {
+      ended = true;
+    });
+    await tick(10);
+    expect(ended).toBe(false);
+    expect(services.signals.get("end")?.aborted).toBe(false);
+    services.gates.get("end")?.resolve("finished");
     await server.closed;
-    expect(services.signals.get("end")?.aborted).toBe(true);
-    expect(messages.some((message) => message.id === 13)).toBe(false);
+    expect(textOf(messages.find((message) => message.id === 13) ?? {})).toBe("finished");
     await expect(server.close()).resolves.toBeUndefined();
+  });
+
+  it("cancels the calls in flight on close(), answering none of them", async () => {
+    const { send, server, services, messages } = open();
+    send({
+      jsonrpc: "2.0",
+      id: 14,
+      method: "tools/call",
+      params: { name: "noteService_wait", arguments: { key: "closed" } },
+    });
+    await vi.waitFor(() => expect(services.signals.has("closed")).toBe(true));
+    await server.close();
+    expect(services.signals.get("closed")?.aborted).toBe(true);
+    expect(messages.some((message) => message.id === 14)).toBe(false);
   });
 
   it("ends when its output fails, logging why", async () => {

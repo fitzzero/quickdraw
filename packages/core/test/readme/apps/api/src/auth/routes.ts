@@ -21,8 +21,9 @@ const env = {
   CLIENT_URL: setting("CLIENT_URL"),
   API_URL: setting("API_URL"),
   JWT_SECRET: setting("JWT_SECRET"),
-  GOOGLE_CLIENT_ID: setting("GOOGLE_CLIENT_ID"),
-  GOOGLE_CLIENT_SECRET: setting("GOOGLE_CLIENT_SECRET"),
+  // a provider's credentials may be unset where the app has none (development)
+  GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
   DISCORD_CLIENT_ID: setting("DISCORD_CLIENT_ID"),
   DISCORD_CLIENT_SECRET: setting("DISCORD_CLIENT_SECRET"),
 };
@@ -52,7 +53,8 @@ app.set("trust proxy", 1);
 app.use(
   createAuthRoutes({
     providers: [
-      google({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }),
+      // nothing without its credentials: the routes skip it
+      google.optional({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }),
       discord({ clientId: env.DISCORD_CLIENT_ID, clientSecret: env.DISCORD_CLIENT_SECRET }),
       // served only while isMockOAuthEnabled()
       mock({ listUsers: listSeededUsers }),

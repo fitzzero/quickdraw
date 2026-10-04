@@ -117,12 +117,26 @@ the row's next change.
   The wait is bounded and fails open: see "When a node stops answering".
 - **Users and rooms.** `server.access.disconnectUser` (logout everywhere),
   `access.refresh`, presence (`isOnline`, `users`, `count`, `lastSeen`), app
-  rooms and typed events work across nodes. A channel's
+  rooms and typed events work across nodes, also from code that is not a
+  handler (`qd.rooms.emit`). A channel's
   `requires: { room }` is checked on the node the sending socket is
   connected to, against the app rooms that socket joined: a socket's rooms
   live on its node and only a call over the socket joins it, so the check
   holds with no round trip (a room the user joined from a socket on another
   node does not count, by design).
+- **Taking a user out of a room.** `rooms.leave(room, { userId })` is
+  broadcast to every node and answered, like an access change: once it
+  resolves, no node has a socket of the user in the room, so they hear none
+  of its events and their channel messages that require it are dropped. The
+  wait is bounded and fails open the same way. Each node sends `left` for
+  its own last socket of the user, so the room may hear it more than once.
+- **Leave hooks.** `onRoomLeave` runs on the node that held the socket. Its
+  `last` (no socket of the user left in the room) is decided by asking
+  every node once the socket left, as the room's `left` frame is: two
+  sockets of one user leaving rooms on two nodes at the same moment can
+  each still see the other, and neither is told it was the last; when the
+  nodes cannot be asked, `last` is true. For a removal each node reports its
+  own last socket as last, without asking.
 - **Stream seeds.** A push to a stream that keeps a `seed` goes to every node
   (one publish, as a room broadcast costs), and each node keeps its own seed
   in memory and sends the items to its own subscribers, so no subscriber gets

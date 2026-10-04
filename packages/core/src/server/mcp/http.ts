@@ -232,7 +232,8 @@ function resolveSettings(options: McpHttpRouterOptions): Settings {
 }
 
 /**
- * Serves `registry`'s tools over HTTP: `GET /mcp/tools` lists them, and
+ * Serves `registry`'s tools over HTTP: `GET /mcp/tools` lists them (the
+ * same list for every caller: it is not filtered by the principal), and
  * `POST /mcp/invoke` calls one with `{ name, arguments }`, or a method's
  * tool with 4.1's `{ service, method, payload }`, as the bearer token's
  * principal. Mount it with `app.use(router)` on Express 4 or 5, or pass it to

@@ -10,6 +10,7 @@ export const createTask = {
   access: "authenticated",
   handler: async ({ input, ctx, db }) => {
     const allowed = await checkProjectAccess(ctx.principal.userId, input.projectId, "Moderate");
+    // quickdraw-migrate: review [error] 4.x sent this error's message to the caller; 5.0 answers an error that is not a QuickdrawError with INTERNAL and a generic message: throw new QuickdrawError(code, message) with the code that fits (NOT_FOUND, FORBIDDEN, CONFLICT, VALIDATION) if the caller should see it
     if (!allowed) throw new Error("Access denied to project");
 
     const task = await db.task.create({

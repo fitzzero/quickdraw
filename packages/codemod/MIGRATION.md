@@ -20,6 +20,7 @@ keep 4.x clients working while you ship.
 - [Work through the report](#work-through-the-report)
 - [4.x to 5.0, one API at a time](#4x-to-50-one-api-at-a-time)
 - [Boards: from a watched query to a collection](#boards-from-a-watched-query-to-a-collection)
+- [Hand-built auth to the auth routes kit](#hand-built-auth-to-the-auth-routes-kit)
 - [Defaults that changed](#defaults-that-changed)
 - [Running 4.x and 5.0 clients together](#running-4x-and-50-clients-together)
 - [Lint, skills and agents](#lint-skills-and-agents)
@@ -498,7 +499,9 @@ private initMethods(): void {
 
 The 5.0 methods are the `methods` object of the service above. Errors are
 thrown as `QuickdrawError(code, message)`: anything else reaches the caller
-as `INTERNAL` with a generic message, where 4.x sent the thrown message.
+as `INTERNAL` with a generic message, where 4.x sent the thrown message. The
+codemod marks each `throw new Error(...)` in a handler `[error]`: give it the
+code that fits wherever the caller should still see the message.
 
 ### `verifyAllMethods` is compile-time
 
@@ -595,14 +598,16 @@ export const taskService = qd.defineService(task, {
   // a write to a subtask sends its parent again
   affects: [{ service: task, id: "parentTaskId" }],
   project: {
-    // a relation count: read with select, built by a pure, synchronous map
+    // a relation count: read with select, built by a pure, synchronous map. Read the relation's
+    // ids, which Prisma fetches for the rows read only; its _count aggregates the whole TaskLabel
+    // table (a GROUP BY over every row) on every snapshot and flush
     card: {
-      select: { title: true, status: true, _count: { select: { labels: true } } },
-      map: (row: { id: string; title: string; status: string; _count: { labels: number } }) => ({
+      select: { title: true, status: true, labels: { select: { id: true } } },
+      map: (row: { id: string; title: string; status: string; labels: { id: string }[] }) => ({
         id: row.id,
         title: row.title,
         status: row.status,
-        labelCount: row._count.labels,
+        labelCount: row.labels.length,
       }),
     },
   },
@@ -615,7 +620,7 @@ export const taskService = qd.defineService(task, {
       handler: ({ input, db }) =>
         db.task.findUniqueOrThrow({
           where: { id: input.id },
-          select: { id: true, title: true, status: true, _count: { select: { labels: true } } },
+          select: { id: true, title: true, status: true, labels: { select: { id: true } } },
         }),
     },
   },
@@ -1343,6 +1348,249 @@ export function TaskBoard({ projectId }: { readonly projectId: string }) {
   );
 }
 ```
+
+## Hand-built auth to the auth routes kit
+
+A 4.x app built its own sign-in: a route pair per OAuth provider, a callback
+that found or created the user, a `Session` row holding each JWT, a guest
+route, `DELETE` routes to log out, and an `authenticate` that verified the
+token and looked its row up. The codemod leaves this code alone. 5.0's auth
+routes kit (`createAuthRoutes` on `./server/auth`, the README's "Auth routes
+kit") serves the same flows as one Express middleware over a session store
+the app owns, and `socketAuth` authenticates sockets and HTTP calls by those
+sessions. Moving onto it takes a database migration, a new set of URLs for
+the web app, and these steps.
+
+**1. The `Session` table.** The kit's `SessionStore` creates, reads and
+revokes sessions by id. A session's JWT names its row in its `sid` claim,
+so the row no longer stores the token: drop the `token` column, and add how
+the user signed in (`provider`) and, for a list of where a user is signed
+in, the request's user agent and IP. 4.x tokens carry no `sid`, so every
+existing session ends and everyone signs in once more; the migration
+deletes the old rows:
+
+```sql
+-- A 4.x Session table ("sessions": id, user_id, token, expires_at, created_at)
+DELETE FROM "sessions";
+DROP INDEX "sessions_token_key";
+ALTER TABLE "sessions"
+  DROP COLUMN "token",
+  ADD COLUMN "provider" TEXT NOT NULL,
+  ADD COLUMN "user_agent" TEXT,
+  ADD COLUMN "ip" TEXT;
+CREATE INDEX "sessions_user_id_idx" ON "sessions"("user_id");
+CREATE INDEX "sessions_expires_at_idx" ON "sessions"("expires_at");
+```
+
+```prisma
+model Session {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  // "google", "discord", "mock", "guest", or an app's own flow
+  provider  String
+  userAgent String?  @map("user_agent")
+  ip        String?
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+```
+
+The store over it is four calls. Sessions are not live data, so write them
+through the untracked client (or inside `qd.run`), and delete expired rows
+now and then:
+
+<!-- example: apps/api/src/auth/sessions.ts#store -->
+
+```ts
+import type { SessionStore } from "@fitzzero/quickdraw-core/server/auth";
+
+/** The methods of Prisma's `db.session` delegate the store calls. */
+interface SessionTable {
+  create(args: { data: SessionMeta & { userId: string } }): Promise<AuthSession>;
+  findUnique(args: { where: { id: string } }): Promise<AuthSession | null>;
+  deleteMany(args: { where: { id: string } | { userId: string } }): Promise<unknown>;
+}
+
+export function prismaSessions(sessions: SessionTable): SessionStore {
+  return {
+    create: (userId, meta) => sessions.create({ data: { userId, ...meta } }),
+    get: (id) => sessions.findUnique({ where: { id } }),
+    revoke: (id) => sessions.deleteMany({ where: { id } }),
+    revokeAll: (userId) => sessions.deleteMany({ where: { userId } }),
+  };
+}
+```
+
+**2. The routes.** Under `basePath` (default `/auth`), with the web app's
+links and calls changed to match. Every POST needs
+`Content-Type: application/json`; a failure answers
+`{ error: <code>, message }` with the code's HTTP status:
+
+| 4.x (hand-built)                                  | 5.0 (the kit)                                                                                       |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `GET /auth/google`, `/auth/discord`, `/auth/mock` | `GET /auth/{provider}/start?returnTo=<page>`                                                        |
+| `GET /auth/{provider}/callback`                   | the same path; register `{publicUrl}/auth/{provider}/callback` with the provider                    |
+| `POST /auth/guest`                                | the same, with a JSON body; answers `{ userId, name? }` (and `token` with `guest({ token: true })`) |
+| `DELETE /auth/logout`                             | `POST /auth/logout`: 204, revokes the session and clears the cookie                                 |
+| `DELETE /auth/sessions` (every device)            | `POST /auth/logout-all`: 204, or 401 without a live session                                         |
+| (none)                                            | `GET /auth/me`: `{ userId }`, or 401                                                                |
+
+`returnTo` is only a page's origin, and only one `allowedOrigins` lists: the
+sign-in lands on `{origin}{successPath}` with the session cookie set. A
+failed one lands on `{origin}{errorPath}?error=<code>`, with new codes for
+the login page to read:
+
+| 4.x `?error=`   | 5.0 `?error=` | When                                                                             |
+| --------------- | ------------- | -------------------------------------------------------------------------------- |
+| `invalid_state` | `state`       | the OAuth state is missing, forged, expired, used twice, or for another provider |
+| `no_code`       | `denied`      | the provider sent no code or an error (the user declined)                        |
+| (none)          | `denied`      | `onLogin` returned `null`: the app refused the sign-in                           |
+| `oauth_failed`  | `failed`      | the code exchange, `onLogin` (it threw) or creating the session failed           |
+
+**3. The callback becomes `onLogin`.** What 4.x's callback did after the code
+exchange (find the user by the provider account, link one by a verified
+email, create one, store the provider's tokens) moves into
+`onLogin(profile, provider)`, which returns the user's id, or `null` to
+refuse. `profile` carries `providerAccountId`, `email`, `emailVerified`,
+`name`, `image`, the provider's `tokens` and its `raw` answer. Link an
+existing user by email only when `emailVerified` is true.
+
+**4. Wire it.** One `{ sessions, jwtSecret }` serves the routes, `socketAuth`
+and the app's own REST routes. A provider without credentials in an
+environment (development without a Google app) is left out in place with
+`google.optional(...)`. 4.x's development sign-in by a user id in the
+handshake becomes `socketAuth({ devCredentials })`, which cannot run in
+production. `createRequireAuth({ getSession })` on REST routes becomes
+`requireSession(keys)`, which verifies the JWT once. `onRevoke` ends the
+sockets of a revoked session:
+
+<!-- example: apps/api/src/auth/migrating.ts#wiring -->
+
+```ts
+import {
+  createAuthRoutes,
+  discord,
+  google,
+  mock,
+  requireSession,
+  socketAuth,
+  type SessionKeys,
+} from "@fitzzero/quickdraw-core/server/auth";
+
+// `sessions`: a SessionStore over the Session table, `prismaSessions(db.session)`
+const keys: SessionKeys = { sessions, jwtSecret: env.JWT_SECRET };
+const allowedOrigins = [env.CLIENT_URL];
+
+/** A development handshake's user (`auth: { userId }`): the Godot editor, load-test bots. */
+async function devUser(userId: string): Promise<AppPrincipal | null> {
+  const user = await db.user.findUnique({ where: { id: userId }, select: { id: true } });
+  return user === null ? null : { userId: user.id, kind: "user" };
+}
+
+export const app: Express = express();
+app.set("trust proxy", 1);
+app.use(
+  createAuthRoutes({
+    ...keys,
+    providers: [
+      // each is left out where its credentials are not set
+      google.optional({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }),
+      discord.optional({
+        clientId: env.DISCORD_CLIENT_ID,
+        clientSecret: env.DISCORD_CLIENT_SECRET,
+      }),
+      mock({ listUsers: listSeededUsers }),
+    ],
+    // 4.x's callback tail: find or create the user (and its account row); null refuses
+    onLogin: (profile) => upsertUser(profile),
+    allowedOrigins,
+    publicUrl: env.API_URL,
+    // the web app's pages: /auth/callback signed in, /auth/login?error=state|denied|failed
+    successPath: "/auth/callback",
+    errorPath: "/auth/login",
+    onRevoke: (userId, sessionId) =>
+      server.access.disconnectUser(userId, sessionId === null ? {} : { sessionId }),
+  }),
+);
+
+// the app's own REST routes: was createRequireAuth({ getSession })
+app.post("/api/push/resubscribe", express.json(), requireSession(keys), (req, res) => {
+  const { userId } = req as typeof req & { userId: string };
+  res.json({ userId });
+});
+
+export const server = qd.createServer({
+  app,
+  services: [projectService, taskService],
+  db,
+  auth: {
+    authenticate: socketAuth({
+      ...keys,
+      allowedOrigins,
+      loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
+      // never in production: socketAuth refuses it there
+      devCredentials: env.ENABLE_DEV_CREDENTIALS === "true" ? devUser : undefined,
+    }),
+    loadServiceAccess: (userId) => loadGrants(userId),
+    serviceAccessSource: { model: "user", column: "serviceAccess" },
+  },
+});
+```
+
+**5. Flows the kit does not redirect for.** A sign-in that is not a
+redirect to a provider (a Discord Activity's embedded SDK, login codes)
+stays an app route, ending in `issueSession`: an ordinary session that
+`socketAuth`, `requireSession` and `/auth/me` accept like any other. Answer
+the token in the body for a client that cannot keep the cookie:
+
+<!-- example: apps/api/src/auth/migrating.ts#activity -->
+
+```ts
+import { issueSession, setSessionCookie } from "@fitzzero/quickdraw-core/server/auth";
+
+// A sign-in the kit's redirecting providers do not cover, such as a Discord Activity's embedded
+// SDK handing the page a code: the app exchanges it, then starts an ordinary session, which
+// socketAuth and requireSession accept like any other.
+app.post("/auth/discord/activity", express.json(), (req, res) => {
+  void (async () => {
+    const { code } = req.body as { readonly code?: unknown };
+    if (typeof code !== "string" || code === "") {
+      res.status(422).json({ error: "VALIDATION", message: "Send the Activity's code" });
+      return;
+    }
+    const userId = await upsertUser(await activityProfile(code));
+    if (userId === null) {
+      res.status(401).json({ error: "UNAUTHENTICATED", message: "Sign-in refused" });
+      return;
+    }
+    const { token } = await issueSession(keys, userId, {
+      provider: "discord-activity",
+      userAgent: req.get("user-agent"),
+      ip: req.ip,
+    });
+    // best effort: a third-party iframe may refuse the cookie, so the page sends auth.token
+    setSessionCookie(res, token);
+    res.json({ token });
+  })();
+});
+```
+
+**6. The cookie's name.** 4.x's `setSessionCookie` always wrote `session`.
+5.0 writes `__Host-session` on a request over HTTPS (with no domain) and
+reads only that name there, so an old `session` cookie no longer signs
+anyone in over HTTPS; with the `sid` change above, nobody keeps a 4.x
+session anyway. `COOKIE_DOMAIN` keeps the name `session` everywhere, and a
+name of the app's own goes in all three places
+(`createAuthRoutes({ cookie: { name } })`, `socketAuth({ cookieName })`,
+`createServer({ http: { cookieName } })`); "Defaults that changed" has the
+whole rule. A web app on another origin calls `/auth/*` with
+`credentials: "include"` (the client's socket sends cookies already), and a
+native client sends the token as `auth.token`.
 
 ## Defaults that changed
 

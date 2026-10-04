@@ -7,7 +7,10 @@
 // where access already requires a principal: 4.x had answered such a caller
 // before the handler ran too. In a file that imports the tracked `db` (its
 // helper functions use it), a handler uses that one rather than taking `db`
-// as well, which would shadow it: it is the same client.
+// as well, which would shadow it: it is the same client. A `throw new
+// Error(message)` in a handler gets an `[error]` marker: 4.x sent its message
+// to the caller, 5.0 answers it with `INTERNAL` and a generic message unless
+// it is a `QuickdrawError` with a code.
 
 import {
   type ArrowFunction,
@@ -233,6 +236,20 @@ function payloadBindingOf(
     : `input: ${nameNode.getText()}`;
 }
 
+/** The error classes whose message 4.x sent to the caller and 5.0 answers with a generic `INTERNAL`. */
+const PLAIN_ERRORS: ReadonlySet<string> = new Set(["Error", "TypeError", "RangeError"]);
+
+const ERROR_MESSAGE =
+  "4.x sent this error's message to the caller; 5.0 answers an error that is not a QuickdrawError with INTERNAL and a generic message: throw new QuickdrawError(code, message) with the code that fits (NOT_FOUND, FORBIDDEN, CONFLICT, VALIDATION) if the caller should see it";
+
+/** The `throw new Error(...)` statements in a handler's body, nested callbacks included. */
+function plainErrorThrows(body: Node): Node[] {
+  return body.getDescendantsOfKind(SyntaxKind.ThrowStatement).filter((statement) => {
+    const thrown = statement.getExpression();
+    return Node.isNewExpression(thrown) && PLAIN_ERRORS.has(thrown.getExpression().getText());
+  });
+}
+
 /** The handler's new code, and what it needs. */
 function buildHandler(
   handler: Handler,
@@ -267,11 +284,12 @@ function buildHandler(
   }
   const payloadBinding = payloadBindingOf(payloadParam, body, edits);
   let usesCtx = mapped.usesCtx;
+  let removedRanges: (readonly [number, number])[] = [];
   if (ctxParam !== undefined && !isUnused(ctxParam)) {
     const context = mapContext(ctxParam, body, form);
     edits.push(...context.edits, ...context.removed.map((statement) => removal(statement)));
     context.markers.forEach((marker) => mark(marker.node, "context", marker.message));
-    const removedRanges = context.removed.map(
+    removedRanges = context.removed.map(
       (statement) => [statement.getStart(), statement.getEnd()] as const,
     );
     usesCtx ||= referencesTo(ctxParam, body).some(
@@ -280,6 +298,14 @@ function buildHandler(
           ([start, end]) => reference.getStart() >= start && reference.getEnd() <= end,
         ),
     );
+  }
+  for (const thrown of plainErrorThrows(body)) {
+    const removed = removedRanges.some(
+      ([start, end]) => thrown.getStart() >= start && thrown.getEnd() <= end,
+    );
+    if (!removed) {
+      mark(thrown, "error", ERROR_MESSAGE);
+    }
   }
   const ctxBinding = usesCtx ? (ctxName === "ctx" ? "ctx" : `ctx: ${ctxName}`) : undefined;
   const range = paramRange(handler);

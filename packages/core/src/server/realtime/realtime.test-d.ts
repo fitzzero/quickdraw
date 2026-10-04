@@ -2,7 +2,8 @@
 // section 12.5), on the server and the client: `push` takes `(scope, item)`
 // for a scoped stream and `(item)` for a global one; a channel handler gets
 // the parsed payload and an authenticated `ctx`; `defineService` needs one
-// handler per channel; `ctx.rooms` and `ctx.presence` are typed; the client's
+// handler per channel; `ctx.rooms`, `qd.rooms`, `onRoomLeave` and `ctx.presence`
+// are typed; the client's
 // members follow the contract, and so do a mock client's. `bun run
 // typecheck` checks this file, and each `@ts-expect-error` sits on the line
 // the compiler reports.
@@ -24,6 +25,10 @@ import {
   type ContextRooms,
   type Presence,
   type Principal,
+  type RoomLeave,
+  type RoomLeft,
+  type RunContext,
+  type ServerRooms,
   type StreamHandle,
 } from "../index";
 
@@ -161,6 +166,53 @@ describe("the server", () => {
     // @ts-expect-error -- lobbyService has no stream "nope"
     qd.stream(lobby, "nope");
     expectTypeOf(dispatcher.presence).toEqualTypeOf<Presence>();
+  });
+
+  test("rooms outside a handler: typed events, and a user taken out of a room", () => {
+    expectTypeOf(qd.rooms).toEqualTypeOf<ServerRooms>();
+    qd.rooms.emit("world", lobby, "moved", { x: 1, y: 2 });
+    qd.rooms.emitToUser("user-1", lobby, "moved", { x: 1, y: 2 });
+    // @ts-expect-error -- lobbyService declares no event "jumped"
+    qd.rooms.emit("world", lobby, "jumped", { x: 1, y: 2 });
+    // @ts-expect-error -- moved's y is a number after its schema ran
+    qd.rooms.emit("world", lobby, "moved", { x: 1 });
+    expectTypeOf(qd.rooms.leave("world", { userId: "user-1" })).toEqualTypeOf<Promise<void>>();
+    // @ts-expect-error -- outside a handler there is no calling socket to take out
+    void qd.rooms.leave("world");
+    qd.defineService(lobby, {
+      methods: {
+        enter: {
+          access: "authenticated",
+          handler: async ({ ctx, input }) => {
+            expectTypeOf(ctx.rooms.leave(input.room)).toEqualTypeOf<boolean>();
+            expectTypeOf(ctx.rooms.leave(input.room, { userId: "user-1" })).toEqualTypeOf<
+              Promise<void>
+            >();
+            await ctx.rooms.leave(input.room, { userId: ctx.principal.userId });
+            return true;
+          },
+        },
+      },
+      channels: { cursor: () => undefined },
+    });
+  });
+
+  test("onRoomLeave hears the app's principal, the rooms left and a run context", () => {
+    const service = qd.defineService(lobby, {
+      methods: { enter: { access: "authenticated", handler: () => true } },
+      channels: { cursor: () => undefined },
+    });
+    qd.createServer({
+      services: [service],
+      http: false,
+      onRoomLeave: (leave, ctx) => {
+        expectTypeOf(leave).toEqualTypeOf<RoomLeave<AppPrincipal>>();
+        expectTypeOf(leave.principal).toEqualTypeOf<AppPrincipal | null>();
+        expectTypeOf(leave.reason).toEqualTypeOf<"leave" | "removed" | "disconnect">();
+        expectTypeOf(leave.rooms).toEqualTypeOf<readonly RoomLeft[]>();
+        expectTypeOf(ctx).toEqualTypeOf<RunContext>();
+      },
+    });
   });
 });
 

@@ -397,8 +397,8 @@ describe("behind a cluster adapter", () => {
     const { app, reads } = await start({ adapter: peeredCluster().adapter });
     reads.length = 0;
     await write(app, (db) => db.task.update({ where: { id: board.t1 }, data: { title: "Far" } }));
-    // The via collection's links: only the collection sink reads them.
-    expect(reads.filter((read) => read.model === "taskLabel")).toHaveLength(1);
+    // The two via collections' links (byLabel, taggedByLabel): only the collection sink reads them.
+    expect(reads.filter((read) => read.model === "taskLabel")).toHaveLength(2);
     expect(itemReads(reads).length).toBeGreaterThan(0);
     const { connection } = await connect(app, as(board.ada));
     const first = await colSub(connection, "byProject", board.p1);

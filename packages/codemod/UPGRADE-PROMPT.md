@@ -109,10 +109,15 @@ and says what to do. Work through it in this order, one commit per step:
    the hook options 5.0 dropped (`invalidateOn` becomes a contract `watch`),
    and replace the 4.x `QuickdrawProvider` props.
 
-Then the rest (`[this]`, `[context]`, `[channel]`, `[server]`, `[v4-api]`):
-instance state, the 4.x context, channels, and the server set-up
+Then the rest (`[this]`, `[context]`, `[error]`, `[channel]`, `[server]`,
+`[v4-api]`): instance state, the 4.x context, the errors whose message the
+caller saw in 4.x (throw `QuickdrawError` with a code where it should still
+see it), channels, and the server set-up
 (`qd.createServer`; keep 4.x clients working with `legacyWire: true` while
-they update, `MIGRATION.md`, "Running 4.x and 5.0 clients together").
+they update, `MIGRATION.md`, "Running 4.x and 5.0 clients together"). A
+hand-built sign-in, which the codemod leaves alone, moves onto the auth
+routes kit last, with its `Session` table migration (`MIGRATION.md`,
+"Hand-built auth to the auth routes kit"): everyone signs in once more.
 
 Delete each marker when its item is done, and run the codemod again: it
 changes no code a second time, and rewrites the report from the markers that

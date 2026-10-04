@@ -13,6 +13,9 @@ import {
   createRealtime,
   type Presence,
   type Realtime,
+  type RoomLeave,
+  type RoomLeaveHandler,
+  type ServerRooms,
   type StreamHandle,
 } from "../realtime/realtime";
 import { createTopics } from "../topics";
@@ -22,7 +25,7 @@ import { createHub, drain, type AdapterProbe, type Hub, type HubOptions } from "
 import { createRevocation, listenForChanges } from "./revocation";
 import { createVersionSource } from "./versions";
 
-export type { Presence, StreamHandle };
+export type { Presence, RoomLeave, RoomLeaveHandler, ServerRooms, StreamHandle };
 
 type Sinks = ReturnType<typeof createEntitySinks>;
 

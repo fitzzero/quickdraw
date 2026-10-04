@@ -1,40 +1,39 @@
-// `ctx.rooms` (RFC 0003 sections 3 and 12.5): app-defined rooms a method puts
-// its calling socket in (a lobby, a document's viewers), and the typed events
-// sent to rooms (`events.ts`). Joining works for calls that arrived over a v5
-// socket; any other call gets `false` back. The framework's own rooms (`qd:`
-// entity, collection, topic and stream rooms, and `user:` rooms) are refused:
-// a socket enters them only through their authorized paths, so a method
-// cannot be talked into putting a socket in another user's room.
+// `ctx.rooms` and `qd.rooms` (RFC 0003 sections 3 and 12.5): app-defined
+// rooms a method puts its calling socket in (a lobby, a document's viewers),
+// the typed events sent to rooms (`events.ts`), taking a user's sockets out
+// of a room from anywhere and hearing sockets leave (`leaving.ts`).
+//
+// Joining works for calls that arrived over a v5 socket; any other call gets
+// `false` back. The framework's own rooms (`qd:` entity, collection, topic
+// and stream rooms, and `user:` rooms) are refused (`roomNames.ts`).
 //
 // Each socket keeps the app rooms it joined on `socket.data.appRooms` (at
 // most `MAX_APP_ROOMS`, in an object without a prototype), so presence knows
 // what a disconnect leaves; `qd:presence` frames tell each room who comes and
 // goes (`roomFrames.ts`).
 
-import { RESERVED_ROOM_PREFIXES, userRoom } from "../../contract/names";
+import { userRoom } from "../../contract/names";
 import { QuickdrawError } from "../../protocol/errors";
-import { MAX_SCOPE_LENGTH } from "../../protocol/version";
 import { emptyRecords, ownRecord } from "../emit/subscriptions";
-import { unreadable } from "../transports/ack";
 import type { QuickdrawServerSocket } from "../transports/types";
 import { createRoomEvents } from "./events";
+import {
+  leaveAll,
+  leaveListener,
+  leaveRoom,
+  listenForRemovals,
+  removeUser,
+  type DetachedRun,
+  type LeavingState,
+} from "./leaving";
 import { markSeen, MAX_APP_ROOMS } from "./presence";
-import { entered, exited, type RoomState } from "./roomFrames";
-import type { ContextRooms } from "./types";
+import { entered, type RoomState } from "./roomFrames";
+import { checkRoom } from "./roomNames";
+import type { ContextRooms, RoomLeaveHandler, RoomTarget, ServerRooms } from "./types";
 
-/** Throws `VALIDATION` unless `room` can name an app room. */
-function checkRoom(room: unknown): asserts room is string {
-  if (typeof room !== "string" || room === "" || room.length > MAX_SCOPE_LENGTH) {
-    throw unreadable(`A room name is a string of 1 to ${MAX_SCOPE_LENGTH} characters`);
-  }
-  if (RESERVED_ROOM_PREFIXES.some((prefix) => room.startsWith(prefix))) {
-    throw unreadable(
-      `Room "${room}" is reserved: rooms starting with ${RESERVED_ROOM_PREFIXES.join(" or ")} are joined only through their own subscriptions`,
-    );
-  }
-}
+export { ROOM_LEAVE_EVENT, type DetachedRun } from "./leaving";
 
-function join(state: RoomState, socket: QuickdrawServerSocket, room: string): boolean {
+function join(state: LeavingState, socket: QuickdrawServerSocket, room: string): boolean {
   checkRoom(room);
   if (!socket.connected) {
     return false;
@@ -55,31 +54,46 @@ function join(state: RoomState, socket: QuickdrawServerSocket, room: string): bo
   return true;
 }
 
-function leave(state: RoomState, socket: QuickdrawServerSocket, room: string): boolean {
-  checkRoom(room);
-  const joined = socket.data.appRooms;
-  if (joined === undefined || ownRecord(joined, room) === undefined) {
-    return false;
-  }
-  delete joined[room];
-  void socket.leave(room);
-  exited(state, socket, room, socket.connected);
-  return true;
-}
-
-/** The `ctx.rooms` of each socket, and of calls without one, for one dispatcher. */
+/** The `ctx.rooms` of each socket, of calls without one, and `qd.rooms`, for one dispatcher. */
 export interface Rooms {
   /** The `ctx.rooms` of calls and channel messages from `socket`: made once per socket. */
   of(socket: QuickdrawServerSocket): ContextRooms;
-  /** The `ctx.rooms` of calls without a socket: `join` and `leave` answer `false`. */
+  /** The `ctx.rooms` of calls without a socket: `join` and `leave(room)` answer `false`. */
   readonly detached: ContextRooms;
+  /** `qd.rooms`, `server.rooms`, `dispatcher.rooms`: what needs no calling socket. */
+  readonly server: ServerRooms;
   /** A socket disconnected (Socket.IO has emptied its rooms): its users leave its app rooms. */
   disconnected(socket: QuickdrawServerSocket): void;
+  /**
+   * Runs `handler` for every socket that leaves app rooms from now on
+   * (`createServer`'s `onRoomLeave`), through `run`, a detached unit of work.
+   */
+  onLeave(handler: RoomLeaveHandler, run: DetachedRun): void;
+  /** Takes this node's sockets out of rooms other nodes' `leave(room, { userId })` name. */
+  listen(): void;
+}
+
+/** `leave(room)` and `leave(room, target)` in one function: `own` leaves the calling socket, if any. */
+function leaveOf(
+  own: (room: string) => boolean,
+  removal: (room: string, target: RoomTarget) => Promise<void>,
+): ContextRooms["leave"] {
+  return ((room: string, target?: RoomTarget) => {
+    if (target !== undefined) {
+      return removal(room, target);
+    }
+    checkRoom(room);
+    return own(room);
+  }) as ContextRooms["leave"];
 }
 
 /** Creates the rooms of one dispatcher, and their typed events (`events.ts`). */
-export function createRooms(state: RoomState): Rooms {
+export function createRooms(base: RoomState): Rooms {
+  const state: LeavingState = { ...base, listener: undefined };
   const events = createRoomEvents(state.hub);
+  const removal = (room: string, target: RoomTarget): Promise<void> =>
+    removeUser(state, room, target);
+  const server: ServerRooms = Object.freeze({ ...events, leave: removal });
   const bySocket = new WeakMap<QuickdrawServerSocket, ContextRooms>();
   const detached: ContextRooms = Object.freeze({
     ...events,
@@ -87,10 +101,7 @@ export function createRooms(state: RoomState): Rooms {
       checkRoom(room);
       return false;
     },
-    leave: (room: string) => {
-      checkRoom(room);
-      return false;
-    },
+    leave: leaveOf(() => false, removal),
   });
   return Object.freeze({
     of(socket: QuickdrawServerSocket): ContextRooms {
@@ -99,18 +110,16 @@ export function createRooms(state: RoomState): Rooms {
         rooms = Object.freeze({
           ...events,
           join: (room: string) => join(state, socket, room),
-          leave: (room: string) => leave(state, socket, room),
+          leave: leaveOf((room) => leaveRoom(state, socket, room, "leave"), removal),
         });
         bySocket.set(socket, rooms);
       }
       return rooms;
     },
     detached,
+    server,
     disconnected(socket: QuickdrawServerSocket): void {
-      for (const room of Object.keys(socket.data.appRooms ?? {})) {
-        exited(state, socket, room, false);
-      }
-      socket.data.appRooms = emptyRecords();
+      leaveAll(state, socket);
       const userId = socket.data.principal?.userId;
       const sockets =
         typeof userId === "string"
@@ -120,14 +129,21 @@ export function createRooms(state: RoomState): Rooms {
         markSeen(state.hub, state.records, userId, Date.now());
       }
     },
+    onLeave(handler: RoomLeaveHandler, run: DetachedRun): void {
+      state.listener = leaveListener(handler, run, state.hub.logger);
+    },
+    listen(): void {
+      listenForRemovals(state);
+    },
   });
 }
 
 /**
- * `rooms` whose `join` and `leave` throw `INTERNAL`: the `ctx.rooms` of a
- * method that shares its runs (`share`). A shared run serves several callers
- * with the first one's `ctx`, so it would join or leave that caller's socket
- * only. Its events (`emit`, `emitToUser`) stay: they name their room.
+ * `rooms` whose `join` and own `leave` throw `INTERNAL`: the `ctx.rooms` of
+ * a method that shares its runs (`share`). A shared run serves several
+ * callers with the first one's `ctx`, so it would join or leave that
+ * caller's socket only. Its events (`emit`, `emitToUser`) and
+ * `leave(room, { userId })` stay: they name their room or user.
  */
 export function unjoinable(rooms: ContextRooms, share: string): ContextRooms {
   const refuse = (member: string): never => {
@@ -139,6 +155,7 @@ export function unjoinable(rooms: ContextRooms, share: string): ContextRooms {
   return Object.freeze({
     ...rooms,
     join: () => refuse("join"),
-    leave: () => refuse("leave"),
+    leave: ((room: string, target?: RoomTarget) =>
+      target === undefined ? refuse("leave") : rooms.leave(room, target)) as ContextRooms["leave"],
   });
 }

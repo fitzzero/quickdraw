@@ -142,6 +142,27 @@ export interface RunContext {
   readonly principal: null;
 }
 
+/** Options of `qd.run(fn, options)` and `dispatcher.run(fn, options)`. */
+export interface RunOptions {
+  /**
+   * Run `fn` in a unit of work of its own even inside a method call or a
+   * transaction: for background work a handler starts and does not await
+   * (a push sent after the reply, pruning what it reports dead). Its writes
+   * flush once `fn` settles, on their own, instead of joining the handler's
+   * unit, which may have flushed long before (they would then flush as
+   * ambient writes, with a development warning). A failed flush is logged.
+   * Default `false`: inside an open unit of work or transaction, `fn` joins
+   * it.
+   *
+   * @example
+   * // in a handler, not awaited: the reply does not wait for the push
+   * void qd.run(() => sendPushes(db, message), { detached: true }).catch((error) => {
+   *   ctx.log.error("Pushing the message failed", { error: String(error) });
+   * });
+   */
+  readonly detached?: boolean;
+}
+
 /** Builds the app's fields of `ctx` from the framework's: the `context` option of `initQuickdraw`. */
 export type ContextExtender = (base: AnyContext) => object;
 
@@ -263,7 +284,8 @@ const SERVICES: ContextServices = unavailable("ctx.services");
 /** The `ctx.rooms` of a context no dispatcher built: no socket to join with, no server to send through. */
 const NO_ROOMS: ContextRooms = Object.freeze({
   join: () => false,
-  leave: () => false,
+  leave: ((_room: string, target?: unknown) =>
+    target === undefined ? false : Promise.resolve()) as ContextRooms["leave"],
   emit: untracked,
   emitToUser: untracked,
 });

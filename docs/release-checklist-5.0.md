@@ -115,6 +115,12 @@ state; tick each item as it is done.
   git push origin core-v5.0.0-rc.1
   ```
 
+  Push the four tags one at a time, one `git push origin <tag>` each: GitHub
+  creates no push events, and so starts no Publish run, when more than
+  three tags arrive in one push (what happened with `5.0.0-rc.2`). Tags
+  already pushed together are published by running the workflow by hand
+  per package (`docs/releasing.md`, "Re-running, and running it by hand").
+
   Later release candidates repeat this step with their own number: a
   version-bump pull request into `dev` (the four `package.json` files, the
   codemod's devDependency ranges, `QUICKDRAW_VERSION`, the lockfile's
@@ -190,8 +196,8 @@ state; tick each item as it is done.
       which keeps the `4.1.1` entry below `5.0.0`. 5.0 already has the guard
       4.1.1 adds (`packages/core/src/server/rateLimit.ts`).
 - [ ] 5.0.0 published by the owner from `main`: the tags `core-v5.0.0`,
-      `lint-v5.0.0`, `skills-v5.0.0` and `codemod-v5.0.0`, published under
-      `latest`. Then point `next` at it as well, for each package
+      `lint-v5.0.0`, `skills-v5.0.0` and `codemod-v5.0.0`, each pushed on its
+      own (four in one push start no run), published under `latest`. Then point `next` at it as well, for each package
       (`npm dist-tag add @fitzzero/quickdraw-core@5.0.0 next`), so `@next`
       never resolves to an older release candidate. Once an automated
       publish has worked for a package, step 3 of the one-time setup

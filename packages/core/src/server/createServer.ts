@@ -23,7 +23,7 @@ import {
   type DispatcherOptions,
   type PrincipalOfServices,
 } from "./dispatcher";
-import { liveOf } from "./emit/live";
+import { liveOf, type RoomLeaveHandler } from "./emit/live";
 import {
   closer,
   prepareWatchdog,
@@ -138,6 +138,29 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
    * `docs/deploying.md`.
    */
   readonly cluster?: ClusterOptions;
+  /**
+   * Called once for every socket that leaves app rooms: its own
+   * `ctx.rooms.leave(room)` (`reason: "leave"`), `rooms.leave(room, { userId })`
+   * (`"removed"`), or a disconnect, which leaves every app room it was in
+   * (`"disconnect"`). It gets the socket's principal (`null` when
+   * anonymous), its id and the rooms it left, each with `last`: true when
+   * no socket of that user is in the room any more, on any node (a second
+   * tab keeps it false; a socket reconnecting after `qd:rotate` is a new
+   * socket, so the old one's disconnect is the user's last only if they had
+   * no other). It runs on the node that held the socket, after the room
+   * heard the socket go, in a unit of work of its own (`qd.run` with
+   * `detached`: never the unit of the handler that left), with that run's
+   * `ctx`; an error it throws is logged, and `close()` waits for it.
+   *
+   * @example
+   * onRoomLeave: ({ principal, rooms }) => {
+   *   if (principal !== null && rooms.some(({ room, last }) => room === WORLD_ROOM && last)) {
+   *     removePlayer(principal.userId);
+   *     qd.rooms.emit(WORLD_ROOM, gameContract, "playerLeft", { id: principal.userId });
+   *   }
+   * },
+   */
+  readonly onRoomLeave?: RoomLeaveHandler<P>;
 }
 
 /**
@@ -205,6 +228,12 @@ export interface QuickdrawServer<S extends readonly AnyService[] = readonly AnyS
   readonly presence: Dispatcher<S>["presence"];
   /** The handle of one of the services' streams: `server.stream(task, "logs").push(taskId, line)`. */
   readonly stream: Dispatcher<S>["stream"];
+  /**
+   * App rooms from code that is not a handler (RFC 0003 section 12.5): typed
+   * room events and `leave(room, { userId })`, on every node; the same as
+   * `qd.rooms` and the socket-free half of `ctx.rooms`.
+   */
+  readonly rooms: Dispatcher<S>["rooms"];
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -227,6 +256,27 @@ function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void 
   const timeout = options.shutdownTimeoutMs;
   if (timeout !== undefined && !(Number.isSafeInteger(timeout) && timeout >= 0)) {
     throw new TypeError("createServer: shutdownTimeoutMs must be a whole number of milliseconds");
+  }
+  if (options.onRoomLeave !== undefined && typeof options.onRoomLeave !== "function") {
+    throw new TypeError(
+      "createServer: onRoomLeave must be a function of the leave and a run context",
+    );
+  }
+}
+
+/**
+ * Runs `onRoomLeave` for every socket that leaves app rooms, in a detached
+ * unit of work of the dispatcher; what it throws is logged.
+ */
+function listenForLeaves<P extends Principal>(
+  dispatcher: Dispatcher,
+  handler: RoomLeaveHandler<P> | undefined,
+): void {
+  if (handler !== undefined) {
+    liveOf(dispatcher)?.realtime.onRoomLeave(
+      handler as RoomLeaveHandler,
+      async (fn) => await dispatcher.run(fn, { detached: true }),
+    );
   }
 }
 
@@ -275,6 +325,7 @@ export function createServer<const S extends readonly AnyService[]>(
   );
   const calls = trackCalls(created);
   const { dispatcher } = calls;
+  listenForLeaves(created as Dispatcher, options.onRoomLeave);
   const resolvePrincipal = createPrincipalResolver(options.auth);
   const router = mountRouter(options, { call: dispatcher.call, resolvePrincipal, logger });
   const httpServer = options.httpServer ?? createHttpServer(options.app ?? router ?? notFound);
@@ -334,5 +385,6 @@ export function createServer<const S extends readonly AnyService[]>(
     }),
     presence: dispatcher.presence,
     stream: dispatcher.stream,
+    rooms: dispatcher.rooms,
   });
 }
