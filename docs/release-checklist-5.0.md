@@ -19,27 +19,39 @@ state; tick each item as it is done.
       (`ft/quickdraw-5-0-pack-g-benchmark-proof-migration-tooling-and-r`):
       the benchmark (#42), the codemod and migration guide (#43), and this
       release candidate with the upgrade briefs.
-- [ ] Pack G's finale round puts these fixes in the release candidate:
-  - [ ] a shared run's reply is encoded once per distinct stripped variant,
-        not once per caller (the event-loop delay regression in
-        `bench/reports/5.0.0.md`);
-  - [ ] the default socket rate limit is 600 events per minute per socket;
-  - [ ] the provider's reconnect refetch jitter is an option,
-        `reconnectJitterMs` (default 0 to 2,000 ms);
-  - [ ] the two `defineService` typing fixes: an unannotated function `id`
+- [ ] Pack G's finale round puts these fixes in the release candidate
+      (on the pack branch, each with its tests; the RFC entry is left):
+  - [x] a shared run's result is stripped and JSON-encoded once per group
+        of callers whose levels hide the same fields, not once per caller,
+        and the socket transport sends each caller of a group the same
+        bytes (the event-loop delay regression in `bench/reports/5.0.0.md`;
+        not measured again, a benchmark rerun being the owner's call);
+  - [x] the default socket rate limit is 600 events per minute per socket,
+        in `createServer` and in `createRateLimiter()`; `bench/apps/v5`
+        runs at the default, which its workload stays under;
+  - [x] `<QuickdrawProvider reconnectJitterMs>`, the longest random delay
+        before a watched or stale query is refetched after a reconnect:
+        2,000 ms by default, `0` at once (`jitterMs` on the coordinator's
+        `refetchAfterReconnect`);
+  - [x] the two `defineService` typing fixes: an unannotated function `id`
         selector in one method no longer widens `ctx.principal` to nullable
         in every other method, and `MethodImplementation<…, "authenticated">`
-        with `satisfies` accepts `{ service, entry }`;
-  - [ ] the `__Host-` hardening: `socketAuth` and the HTTP transport honor
-        the plain `session` cookie only over plain HTTP, so a planted plain
-        cookie cannot stand in for `__Host-session`;
-  - [ ] the docs follow the fixes: `README.md` and `MIGRATION.md`
-        ("Defaults that changed") say 600 instead of 100 "in this
-        prerelease", the `cookieName` advice in
-        [`downstream/quickdraw-chat.md`](downstream/quickdraw-chat.md) is
-        updated, the `5.0.0-rc.0` entry of `CHANGELOG.md` (written ahead of
-        the round) lists exactly what it shipped, and `bun run readme:sync`
-        (in `packages/core`) has copied the guide;
+        with `satisfies` takes every form but `"public"`,
+        `{ service, entry }` included; the codemod dropped its workarounds
+        (unannotated `id` functions, `MethodOf` typed for `"authenticated"`);
+  - [x] the `__Host-` hardening: without a configured `cookieName`,
+        `socketAuth` and the HTTP transport read the plain `session` cookie
+        only over plain HTTP, so a planted plain cookie cannot stand in for
+        `__Host-session`; a session cookie with a domain is `session` over
+        HTTPS and must be named (`cookieName: "session"`);
+  - [x] the docs follow the fixes: `README.md` and `MIGRATION.md`
+        ("Defaults that changed") say 600, `reconnectJitterMs` and the
+        cookie rule; the `cookieName: "__Host-session"` advice is gone from
+        [`downstream/quickdraw-chat.md`](downstream/quickdraw-chat.md) and
+        [`downstream/seneschal.md`](downstream/seneschal.md); the
+        `5.0.0-rc.0` entry of `CHANGELOG.md` lists exactly what shipped; and
+        `bun run readme:sync` (in `packages/core`) and `bun run guide:sync`
+        (in `packages/codemod`) have copied the guide;
   - [ ] the round's decisions are recorded in RFC 0003 section 17.
 - [ ] Pack G merged to `dev`, so all seven packs are on `dev`.
 - [ ] CI green on `dev` at that merge commit.

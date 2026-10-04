@@ -79,14 +79,30 @@ rollout. The design is [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md)
   `quickdraw-migrate-v5` skill); the release checklist
   (`docs/release-checklist-5.0.md`) and an upgrade brief per app
   (`docs/downstream/`).
-- The pack G finale round fixes: a shared run's reply is encoded once per
-  stripped variant, not once per caller; the default socket rate limit is
-  600 events per minute (it was 100); the provider's reconnect refetch
-  jitter is an option (`reconnectJitterMs`); an unannotated `id` selector no
-  longer widens `ctx.principal` in a service's other methods, and
-  `MethodImplementation<…, "authenticated">` with `satisfies` accepts
-  `{ service, entry }`; `socketAuth` and the HTTP transport honor the plain
-  `session` cookie only over plain HTTP.
+- The pack G finale round fixes:
+  - A shared run's result is stripped and JSON-encoded once per group of
+    callers whose levels hide the same fields, not once per caller, and the
+    socket transport sends each caller of a group the same bytes; a
+    transport's `respond` receives that copy (`SharedData`).
+  - The socket rate limiter allows 600 events per minute per socket by
+    default (it was 100), in `createServer` and in `createRateLimiter()`
+    without `maxRequests`.
+  - `<QuickdrawProvider reconnectJitterMs>` sets the longest random delay
+    before a watched or stale query is refetched after a reconnect (2,000 ms
+    by default, `0` at once); the coordinator's `refetchAfterReconnect`
+    takes the same as `jitterMs`.
+  - An unannotated function `id` selector in one method no longer widens
+    `ctx.principal` to nullable in a service's other methods, and
+    `MethodImplementation<…, "authenticated">` with `satisfies` takes every
+    access form but `"public"`, `{ service, entry }` included. The codemod
+    writes `id` functions unannotated and types `MethodOf` for
+    `"authenticated"`.
+  - Without a configured `cookieName`, `socketAuth` and the HTTP transport
+    read the plain `session` cookie only over plain HTTP; over HTTPS
+    (`req.secure`, `X-Forwarded-Proto: https`, an `https:` `Origin`) only
+    `__Host-session`, so a planted plain cookie cannot stand in for it. A
+    session cookie with a domain is `session` over HTTPS too and must be
+    named.
 
 ### Benchmark
 
@@ -100,9 +116,9 @@ the fix: `MIGRATION.md`, "Boards"); event-loop delay p99 1.7× to 3.7×, from
 a shared run's replies encoded back to back (the finale round's first fix);
 drain after the last write 0.51 s against 0.26 s (the coordinator's 250 ms
 window); restoring a watched query after a reconnect storm, p50 968 ms
-against 10 ms (the deliberate 0 to 2 s refetch jitter); peak memory in that
-storm 1.17× (not explained yet). Measured on 5.0.0-alpha.0, before the
-finale round.
+against 10 ms (the deliberate 0 to 2 s refetch jitter, now
+`reconnectJitterMs`); peak memory in that storm 1.17× (not explained yet).
+Measured on 5.0.0-alpha.0, before the finale round.
 
 ## [4.1.0] - 2026-08-01
 
