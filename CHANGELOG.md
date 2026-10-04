@@ -2,7 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
-## [5.0.0-rc.1] (unreleased)
+## [5.0.0-rc.1]
+
+The first published release candidate (`5.0.0-rc.0` below was cut on
+`dev` but never published; this one carries it plus pack H).
 
 The next release candidate: pack H on top of `5.0.0-rc.0`. The four
 packages move to `5.0.0-rc.1` when it is tagged
@@ -77,7 +80,7 @@ packages move to `5.0.0-rc.1` when it is tagged
   Godot 4 that CI runs against a real server, which keeps its socket
   through a `qd:rotate` window and reconnects with full jitter.
 
-## [5.0.0-rc.0]
+## [5.0.0-rc.0] (never published)
 
 The release candidate for quickdraw 5.0, published under npm's `next`
 dist-tag for all four packages: `@fitzzero/quickdraw-core`,

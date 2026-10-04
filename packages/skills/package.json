@@ -1,6 +1,6 @@
 {
   "name": "@fitzzero/quickdraw-skills",
-  "version": "5.0.0-rc.0",
+  "version": "5.0.0-rc.1",
   "description": "Agent rules and skills for quickdraw 5.0 apps, linked into .claude/ by the quickdraw-skills command",
   "keywords": [
     "agents",
