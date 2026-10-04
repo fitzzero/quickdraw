@@ -89,3 +89,27 @@ answered, so a slow server cannot lower the load it is offered.
    why each worse metric is worse, and for each missed target a CPU profile
    of the server (`--cpu-prof` on a separate run) and a fix or a follow-up.
    Quote failed requests with the latencies, and state the load average.
+
+## Behind a cluster adapter
+
+The harness runs one server; a cluster run (`--cluster 2`) is a follow-up.
+What several nodes behind Valkey add is measured instead by the cluster test
+projects (`bun run test:cluster` in `packages/core`) and kept in
+`packages/core/test/e2e/__budgets__/budgets.cluster.ts.json` (both nodes'
+statements and bytes, the same steps as `budgets.test.ts.json`):
+
+| Step                           | One server (statements, bytes) | Two nodes behind Valkey |
+| ------------------------------ | ------------------------------ | ----------------------- |
+| One update with one subscriber | 8, 268                         | 9, 400                  |
+| Subscribe to 60 tasks          | 4, 11,523                      | 4, 10,803               |
+| First collection snapshot      | 5, 12,557                      | 5, 11,813               |
+| Kit list, kit search           | unchanged                      | unchanged               |
+
+The update costs one more statement (the writer reads every touched scope,
+since other nodes' rooms are invisible to it) and more bytes (changes go out
+whole). The subscribe steps send fewer bytes only because the test cluster's
+counter starts at 0 (a revision of one digit instead of thirteen). Besides
+statements, every flush costs one Valkey round trip (the counter script)
+before its first read, every subscription read one or two `GET`s, and a flush
+that changes access waits for every node's answer: `docs/deploying.md`, "What
+it costs".

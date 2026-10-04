@@ -6,6 +6,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { inCluster } from "../../../test/cluster/mode";
 import type { PrismaClient } from "../../../test/prisma/setup";
 import { collectionRoom, defineContract } from "../../index";
 import type { Logger } from "../../contract/logger";
@@ -28,6 +29,7 @@ import {
   defineTaskService,
   labelService,
   receiveScopes,
+  taskContract,
 } from "./__tests__/fixture";
 
 let h: Harness;
@@ -106,6 +108,19 @@ function itemReads(reads: readonly Read[]): Read[] {
 function card(id: string, projectId: string, title: string, ordinal = 0, status = "open") {
   return { id, projectId, title, status, ordinal };
 }
+
+/**
+ * The delta of a title change in place: a patch, or behind a cluster adapter
+ * the whole item (frames from two nodes can reach a client out of order).
+ */
+function retitled(id: string, projectId: string, title: string) {
+  return inCluster()
+    ? { t: "updated", item: card(id, projectId, title) }
+    : { t: "patched", id, d: { title } };
+}
+
+/** The keys of the task entity: what its entity frames read. */
+const ENTITY_KEYS = Object.keys(taskContract.entity.shape).sort();
 
 describe("qd:col:sub", () => {
   it("answers the first page in order, with the total, the next cursor and the revision, and joins", async () => {
@@ -408,7 +423,7 @@ describe("deltas after a flush", () => {
     await write(app, (db) => db.task.update({ where: { id: board.t1 }, data: { notes: "n" } }));
     await scopes.settle();
     expect(scopes.frames.map(({ deltas }) => deltas)).toEqual([
-      [{ t: "patched", id: board.t1, d: { title: "Prime" } }],
+      [retitled(board.t1, board.p1, "Prime")],
       [{ t: "updated", item: card(board.t1, board.p1, "Prime") }],
     ]);
   });
@@ -530,7 +545,7 @@ describe("deltas after a flush", () => {
     await scopes.settle();
     expect(scopes.frames.map(({ scope, deltas }) => ({ scope, deltas }))).toEqual([
       { scope: bug.id, deltas: [{ t: "added", item: card(board.t1, board.p1, "T1") }] },
-      { scope: bug.id, deltas: [{ t: "patched", id: board.t1, d: { title: "Linked" } }] },
+      { scope: bug.id, deltas: [retitled(board.t1, board.p1, "Linked")] },
       { scope: bug.id, deltas: [{ t: "removed", id: board.t1 }] },
     ]);
   });
@@ -640,7 +655,11 @@ describe("batches, bulk writes and statements", () => {
     expect(scopes.frames).toEqual([
       expect.objectContaining({ scope: board.p1, deltas: [{ t: "reset" }] }),
     ]);
-    expect(itemReads(reads)).toEqual([]);
+    // Behind a cluster adapter the writer still reads the rows for their entity frames: whose
+    // rooms hold subscribers is not visible to it. No collection item is read either way.
+    expect(itemReads(reads).map((read) => Object.keys(read.args.select ?? {}).sort())).toEqual(
+      inCluster() ? [ENTITY_KEYS] : [],
+    );
   });
 
   it("uses the collection's bulkThreshold", async () => {
@@ -663,11 +682,19 @@ describe("batches, bulk writes and statements", () => {
     const { app, reads } = await start();
     reads.length = 0;
     await write(app, (db) => db.task.update({ where: { id: board.t1 }, data: { title: "Alone" } }));
-    expect(reads).toEqual([]);
+    const alone = [...reads];
     const { connection } = await connect(app, as(board.ada));
     await colSub(connection, "byProject", board.p1);
     reads.length = 0;
     await write(app, (db) => db.task.update({ where: { id: board.t1 }, data: { title: "Seen" } }));
+    if (inCluster()) {
+      // Behind a cluster adapter the writer cannot see who subscribes on other nodes: it reads
+      // the same whether anyone does or not, whole items for every collection and the entity.
+      expect(alone).not.toEqual([]);
+      expect(reads).toEqual(alone);
+      return;
+    }
+    expect(alone).toEqual([]);
     expect(reads).toEqual([
       {
         model: "task",
@@ -707,11 +734,13 @@ describe("batches, bulk writes and statements", () => {
   });
 
   it("reads a row's old scope first only when the write sets a membership column", async () => {
-    const { app } = await start();
+    // The app registers its collections' interest; the writes flush to nobody, so only the
+    // write and its pre-read count (behind a cluster adapter an app's flush would read more).
+    await start();
     const count = async (data: Record<string, unknown>) =>
       (
         await h.storage.countStatements(() =>
-          write(app, (db) => db.task.update({ where: { id: board.t1 }, data })),
+          h.inUnit(() => h.db.task.update({ where: { id: board.t1 }, data })),
         )
       ).statements;
     expect(await count({ title: "No read" })).toBe(1);
@@ -738,7 +767,7 @@ describe("batches, bulk writes and statements", () => {
     await write(app, (db) => db.task.update({ where: { id: board.t1 }, data: { title: "Then" } }));
     await scopes.settle();
     expect(scopes.frames.map(({ deltas }) => deltas)).toEqual([
-      [{ t: "patched", id: board.t1, d: { title: "Then" } }],
+      [retitled(board.t1, board.p1, "Then")],
       [{ t: "reset" }],
     ]);
     expect(errors).toEqual(["A flush sink failed; the response was already sent"]);
@@ -748,18 +777,20 @@ describe("batches, bulk writes and statements", () => {
     const { app } = await start();
     const { connection, scopes } = await connect(app, as(board.ada));
     await colSub(connection, "byProject", board.p1);
-    const { taskContract } = await import("./__tests__/fixture");
     app.server.dispatcher.collections.reset(taskContract, "byProject", board.p1);
     await scopes.settle();
-    expect(scopes.frames).toEqual([
-      {
-        s: "taskService",
-        c: "byProject",
-        scope: board.p1,
-        rev: expect.any(Number),
-        deltas: [{ t: "reset" }],
-      },
-    ]);
+    // Behind a cluster adapter the reset reaches the reader's node through Valkey.
+    await expect
+      .poll(() => scopes.frames)
+      .toEqual([
+        {
+          s: "taskService",
+          c: "byProject",
+          scope: board.p1,
+          rev: expect.any(Number),
+          deltas: [{ t: "reset" }],
+        },
+      ]);
     expect(() =>
       app.server.dispatcher.collections.reset(taskContract, "nope" as "byProject", board.p1),
     ).toThrow('collections.reset: taskService has no collection "nope" this dispatcher serves');

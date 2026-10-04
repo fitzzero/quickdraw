@@ -9,7 +9,6 @@
 
 import type { AnyContract } from "../../contract/defineContract";
 import { createLiveCollections } from "../collections/live";
-import { describeError } from "../pipeline/metrics";
 import {
   createRealtime,
   type Presence,
@@ -19,8 +18,8 @@ import {
 import { createTopics } from "../topics";
 import { createEntitySinks } from "./entitySink";
 import { entitySubscriptions } from "./extension";
-import { createHub, type AdapterProbe, type Hub, type HubOptions } from "./hub";
-import { ACCESS_CHANGED_EVENT, createRevocation } from "./revocation";
+import { createHub, drain, type AdapterProbe, type Hub, type HubOptions } from "./hub";
+import { createRevocation, listenForChanges } from "./revocation";
 import { createVersionSource } from "./versions";
 
 export type { Presence, StreamHandle };
@@ -49,13 +48,15 @@ export interface Live {
   readonly extension: ReturnType<typeof entitySubscriptions>;
   /** Presence, streams, channels and typed room events: `ctx.rooms`, `ctx.presence`, `qd.stream`. */
   readonly realtime: Realtime;
+  /** The revisions flushes take and reads claim: the process's clock, or a cluster's shared counter. */
+  readonly revisions: Hub["revisions"];
   /**
    * Gives the live data its Socket.IO server: frames go out on it, and
    * access changes broadcast by other nodes arrive on it. What such a change
    * names is evicted from the access cache (`cacheMs`) before it is resolved
-   * again.
+   * again. `cluster` says where a cluster's shared state lives.
    */
-  attach(io: NonNullable<Hub["io"]>, probe: AdapterProbe): void;
+  attach(io: NonNullable<Hub["io"]>, probe: AdapterProbe, cluster?: Hub["cluster"]): void;
   /**
    * Re-resolves the subscriptions of `userId`'s sockets on this process after
    * their grants changed, reading the user's levels afresh.
@@ -63,26 +64,10 @@ export interface Live {
   regranted(userId: string): Promise<void>;
   /** Sends a `reset` to one scope of a collection: `dispatcher.collections.reset`. */
   resetCollection(contract: AnyContract, collection: string, scope: string): void;
+  /** Resolves once the work the live data started for sockets' events has settled: a server's `close()`. */
+  drain(): Promise<void>;
   /** The sockets in a room of the attached server, for the kits (`KitRuntime.occupancy`). */
   readonly occupancy: Realtime["occupancy"];
-}
-
-type Change = Parameters<ReturnType<typeof createRevocation>["changed"]>[0];
-
-/** The access change another node broadcast, `{ service, id?, userId? }`, or `undefined` for anything else. */
-function readChange(value: unknown): Change | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const { service, id, userId } = value as Readonly<Record<string, unknown>>;
-  if (typeof service !== "string" || service.length === 0) {
-    return undefined;
-  }
-  return {
-    service,
-    ...(typeof id === "string" && id.length > 0 ? { id } : {}),
-    ...(typeof userId === "string" && userId.length > 0 ? { userId } : {}),
-  };
 }
 
 /**
@@ -115,22 +100,15 @@ export function createLive(options: HubOptions): Live {
       realtime.extension(...args);
     },
     realtime,
-    attach(io: NonNullable<Hub["io"]>, probe: AdapterProbe): void {
+    revisions: hub.revisions,
+    attach(io: NonNullable<Hub["io"]>, probe: AdapterProbe, cluster?: Hub["cluster"]): void {
       hub.io = io;
       hub.probe = probe;
-      io.on(ACCESS_CHANGED_EVENT, (broadcast: unknown) => {
-        const change = readChange(broadcast);
-        if (change !== undefined) {
-          // Another node flushed the write, so this node's cache still holds what it changed.
-          options.policies.forget(change);
-          revocation.changed(change, true).catch((error: unknown) => {
-            hub.logger.error("Revoking for an access change another node broadcast failed", {
-              category: "quickdraw.access",
-              service: change.service,
-              error: describeError(error),
-            });
-          });
-        }
+      hub.cluster = cluster;
+      collections.listen();
+      realtime.listen();
+      listenForChanges(hub, revocation, (change) => {
+        options.policies.forget(change);
       });
     },
     regranted: (userId: string) => {
@@ -142,6 +120,7 @@ export function createLive(options: HubOptions): Live {
       collections.reset(contract, collection, scope);
     },
     occupancy: realtime.occupancy,
+    drain: () => drain(hub),
   });
 }
 

@@ -150,7 +150,12 @@ export async function loadItems(
       "qd:col:items needs the scope subscribed with qd:col:sub",
     );
   }
-  return { ok: true, ...(await readItemsById(storage, collection, request.scope, request.ids)) };
+  // The revision is claimed before any read: behind a cluster's counter, the counter's.
+  const rev = await hub.revisions.claim();
+  return {
+    ok: true,
+    ...(await readItemsById(storage, collection, request.scope, request.ids, rev)),
+  };
 }
 
 /**

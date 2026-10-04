@@ -1,0 +1,352 @@
+// Two nodes behind Valkey (pack H, child 2), beyond what the split suites
+// show: revisions that compare across nodes, a quiet node answering a
+// client that holds newer frames from the other node, writes to one row on
+// both nodes whose frames arrive out of order, a resume on the other node,
+// logout everywhere, and a removal no scope could be named for reaching
+// subscribers on both nodes. Clients connect to node A (`app.connect`), or
+// to node B through `nodesOf(app)`; writes go through node B.
+
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  applyEntityFrame,
+  applyEntityResult,
+  type EntityEntry,
+} from "../../src/client/live/entities";
+import type { EntityFrame, EntityResult } from "../../src/index";
+import { createHarness, type Harness } from "../../src/prisma/__tests__/harness";
+import { deferred } from "../../src/server/__tests__/fixtures";
+import { as, seedBoard, type Board } from "../../src/server/access/__tests__/board";
+import {
+  colSub,
+  defineTaskService as defineCollectionTasks,
+  labelService,
+  receiveScopes,
+} from "../../src/server/collections/__tests__/fixture";
+import {
+  defineTaskService,
+  projectService,
+  receive,
+  recordingStorage,
+  sub,
+  type Read,
+} from "../../src/server/emit/__tests__/live";
+import { setupRedisAdapter, type Principal, type StorageAdapter } from "../../src/server/index";
+import { createTestApp, type TestApp, type TestConnection } from "../../src/testing/index";
+import type * as Testing from "../../src/testing/createTestApp";
+import {
+  createBarrier,
+  nodesOf,
+  startNode,
+  stopNodes,
+  type ClusterNode,
+  type CreateTestApp,
+} from "./nodes";
+import { closeClient, uniquePrefix, VALKEY_URL, valkeyClient } from "./valkey";
+
+let h: Harness;
+let board: Board;
+const apps: TestApp[] = [];
+const running: ClusterNode[][] = [];
+
+beforeAll(async () => {
+  h = await createHarness();
+}, 60_000);
+
+afterAll(async () => {
+  await h.close();
+});
+
+beforeEach(async () => {
+  await h.database.reset();
+  board = await seedBoard(h.prisma);
+});
+
+afterEach(async () => {
+  await Promise.all(apps.splice(0).map(async (app) => await app.close()));
+  await Promise.all(running.splice(0).map(stopNodes));
+});
+
+/** A test app as two nodes: `createTestApp` boots both in the cluster projects. */
+async function start(storage?: StorageAdapter) {
+  const app = await createTestApp({
+    services: [projectService, labelService, defineCollectionTasks()],
+    db: h.db,
+    ...(storage === undefined ? {} : { storage }),
+  });
+  apps.push(app as unknown as TestApp);
+  return app;
+}
+
+type App = Awaited<ReturnType<typeof start>>;
+
+/** A socket on node B, the writer node, with the entity frames it receives. */
+async function connectToWriter(app: App, principal: Principal) {
+  const [, writer] = nodesOf(app);
+  const connection = await writer.app.connect(principal);
+  return { connection, frames: receive(connection) };
+}
+
+async function connectToReader(app: App, principal: Principal) {
+  const connection = await app.connect(principal);
+  return { connection, frames: receive(connection) };
+}
+
+type Rename = { rename(input: { id: string; title: string }): Promise<unknown> };
+
+function tasks(
+  app: Pick<TestApp, "as">,
+  principal: Principal,
+): Rename & {
+  setStatus(input: { id: string; status: string }): Promise<unknown>;
+} {
+  return (app.as(principal) as unknown as { readonly taskService: never }).taskService;
+}
+
+describe("revisions across nodes", () => {
+  it("gives a write on node B a revision above every frame node A sent before", async () => {
+    const app = await start();
+    const reader = await connectToReader(app, as(board.cy));
+    await sub(reader.connection, "taskService", [board.t1]);
+    const [nodeA] = nodesOf(app);
+    // A write on node A, then one on node B: the subscriber on node A gets both.
+    await nodeA.app.server.dispatcher.run(() =>
+      h.db.task.update({ where: { id: board.t1 }, data: { title: "On A" } }),
+    );
+    await app.server.dispatcher.run(() =>
+      h.db.task.update({ where: { id: board.t1 }, data: { title: "On B" } }),
+    );
+    await reader.frames.settle();
+    const revs = reader.frames.entity.map((frame) => frame.rev);
+    const titles = reader.frames.entity.map(
+      (frame) => (frame as { d?: { title?: string } }).d?.title,
+    );
+    expect(titles).toEqual(["On A", "On B"]);
+    expect(revs[1]).toBeGreaterThan(revs[0] ?? Number.POSITIVE_INFINITY);
+  });
+
+  it("answers a re-subscribe on a quiet node no older than the newer frames the client holds", async () => {
+    const app = await start();
+    // Node A never flushes: every write goes through node B.
+    const first = await connectToReader(app, as(board.cy));
+    await sub(first.connection, "taskService", [board.t1]);
+    await app.server.dispatcher.run(() =>
+      h.db.task.update({ where: { id: board.t1 }, data: { title: "Seen" } }),
+    );
+    await first.frames.settle();
+    const held = first.frames.entity.at(-1) as { d?: unknown; rev: number } | undefined;
+    expect(held?.d).toMatchObject({ title: "Seen" });
+    first.connection.close();
+    await app.server.dispatcher.run(() =>
+      h.db.task.update({ where: { id: board.t1 }, data: { title: "Missed" } }),
+    );
+    // The client comes back to node A holding the row at the revision of the frame it saw.
+    const again = await connectToReader(app, as(board.cy));
+    const reply = (await sub(again.connection, "taskService", [board.t1], [held?.rev ?? 0])) as {
+      readonly r: readonly [{ readonly d: { readonly title: string }; readonly rev: number }];
+    };
+    expect(reply.r[0].d.title).toBe("Missed");
+    expect(reply.r[0].rev).toBeGreaterThan(held?.rev ?? Number.POSITIVE_INFINITY);
+    // As the client applies it: the reply replaces the row it held, since it is not older.
+    const entry: EntityEntry<unknown> = {
+      data: held?.d,
+      rev: held?.rev,
+      removed: false,
+      error: null,
+      readAt: undefined,
+    };
+    const result = reply.r[0] as unknown as EntityResult;
+    expect(applyEntityResult(entry, result, undefined).entry.data).toMatchObject({
+      title: "Missed",
+    });
+  });
+});
+
+/** A storage adapter whose next entity-frame read of a task row waits for `release`. */
+function holdingFrameReads(storage: StorageAdapter) {
+  let armed = false;
+  const reached = deferred();
+  const released = deferred();
+  const isFrameRead = (read: Read): boolean =>
+    read.model === "task" &&
+    typeof read.args.select === "object" &&
+    read.args.select !== null &&
+    "updatedAt" in read.args.select;
+  const recorded = recordingStorage(storage, undefined, (read) => {
+    if (!armed || !isFrameRead(read)) {
+      return undefined;
+    }
+    armed = false;
+    reached.resolve();
+    return released.promise;
+  });
+  return {
+    storage: recorded.storage,
+    arm: () => {
+      armed = true;
+    },
+    reached: reached.promise,
+    release: () => {
+      released.resolve();
+    },
+  };
+}
+
+describe("two writes to one row on two nodes", () => {
+  it("leave every subscriber with both, though the first node's frames arrive last", async () => {
+    // Node A reads its frames' rows through a storage that can hold the read.
+    const create = (await vi.importActual<typeof Testing>("../../src/testing/createTestApp"))
+      .createTestApp as CreateTestApp;
+    const prefix = uniquePrefix("order");
+    const holding = holdingFrameReads(h.storage);
+    const services = [projectService, defineTaskService()];
+    const a = await startNode(create, { services, db: h.db, storage: holding.storage }, { prefix });
+    const b = await startNode(create, { services, db: h.db }, { prefix });
+    running.push([a, b]);
+    const watcher = await b.app.connect(as(board.cy));
+    const frames: EntityFrame[] = [];
+    watcher.socket.on("qd:e", (frame: EntityFrame) => frames.push(frame));
+    await sub(watcher, "taskService", [board.t1]);
+
+    // Node A writes first, and its flush is held before it reads the row for its frames.
+    holding.arm();
+    const first = tasks(a.app, as(board.ada)).rename({ id: board.t1, title: "From A" });
+    await holding.reached;
+    // Node B writes next: its revision is greater, and its frames go out at once.
+    await tasks(b.app, as(board.ada)).setStatus({ id: board.t1, status: "done" });
+    holding.release();
+    await first;
+    await createBarrier(a.app.server.io, b.app.server.io)();
+    await receive({ socket: watcher.socket }).settle();
+
+    expect(frames).toHaveLength(2);
+    const [fromB, fromA] = frames;
+    expect(fromA?.rev).toBeLessThan(fromB?.rev ?? 0);
+    // Applied by revision as the client does: node A's older frame is dropped, and node B's
+    // (read after node A's write) carries both changes, because it went out whole.
+    let entry: EntityEntry<unknown> | undefined;
+    for (const frame of frames) {
+      entry = applyEntityFrame(entry, frame).entry;
+    }
+    expect(entry?.data).toMatchObject({ title: "From A", status: "done" });
+  });
+});
+
+describe("the other node", () => {
+  it("answers a resume there with a page: its buffer saw none of the flushes", async () => {
+    const app = await start();
+    const reader = await app.connect(as(board.ada));
+    const first = await colSub(reader, "byProject", board.p1);
+    await app.server.dispatcher.run(() =>
+      h.db.task.update({ where: { id: board.t1 }, data: { title: "Moved on" } }),
+    );
+    const elsewhere = await connectToWriter(app, as(board.ada));
+    const resumed = await colSub(elsewhere.connection, "byProject", board.p1, {
+      since: first.rev as number,
+    });
+    expect(resumed).toMatchObject({ ok: true, items: [{ id: board.t1, title: "Moved on" }] });
+    expect(resumed).not.toHaveProperty("resumed");
+  });
+
+  it("disconnects a user's sockets on every node: logout everywhere", async () => {
+    const app = await start();
+    const onA = await app.connect(as(board.bo));
+    const onB = (await connectToWriter(app, as(board.bo))).connection;
+    const other = await app.connect(as(board.cy));
+    const closed = (connection: Pick<TestConnection, "socket">) =>
+      new Promise<string>((resolve) => {
+        connection.socket.once("disconnect", resolve);
+      });
+    const gone = Promise.all([closed(onA), closed(onB)]);
+    // Node B ends its own socket, and tells node A to end its one.
+    expect(app.server.access.disconnectUser(board.bo, { reason: "logout everywhere" })).toBe(1);
+    expect(await gone).toEqual(["io server disconnect", "io server disconnect"]);
+    expect(other.socket.connected).toBe(true);
+  });
+
+  it("removes a row touched as removed from the scopes subscribed on both nodes", async () => {
+    const app = await start();
+    const onA = await app.connect(as(board.ada));
+    const onB = (await connectToWriter(app, as(board.ada))).connection;
+    const scopesA = receiveScopes(onA);
+    const scopesB = receiveScopes(onB);
+    await colSub(onA, "byProject", board.p1);
+    await colSub(onB, "byProject", board.p1);
+    await colSub(onA, "board", board.p1);
+    // The write names no scope: the row's old scope went with it (`ctx.touch` with removed).
+    await app.server.dispatcher.run((ctx) => {
+      ctx.touch("task", [board.t1], { removed: true });
+    });
+    await Promise.all([scopesA.settle(), scopesB.settle()]);
+    const removals = (scopes: ReturnType<typeof receiveScopes>, c: string) =>
+      scopes.frames
+        .filter((frame) => frame.c === c)
+        .flatMap((frame) => frame.deltas)
+        .filter((delta) => delta.t === "removed" && delta.id === board.t1);
+    // Each subscribed scope hears of it; one subscribed on both nodes may hear twice.
+    expect(removals(scopesB, "byProject").length).toBeGreaterThanOrEqual(1);
+    expect(removals(scopesA, "byProject").length).toBeGreaterThanOrEqual(1);
+    expect(removals(scopesA, "board")).toHaveLength(1);
+  });
+});
+
+describe("a via scope on the other node", () => {
+  it("resets when junction rows go without values: no node can name the scopes they left", async () => {
+    const app = await start();
+    const bug = await h.prisma.label.create({ data: { projectId: board.p1, name: "Bug" } });
+    const link = await h.prisma.taskLabel.create({ data: { taskId: board.t1, labelId: bug.id } });
+    const reader = await app.connect(as(board.ada));
+    const scopes = receiveScopes(reader);
+    await colSub(reader, "byLabel", bug.id);
+    // A raw SQL delete the app reports with ctx.touch: the junction row's values are gone.
+    await app.server.dispatcher.run((ctx) => {
+      ctx.touch("taskLabel", [link.id], { removed: true });
+    });
+    await scopes.settle();
+    expect(scopes.frames).toEqual([
+      expect.objectContaining({ c: "byLabel", scope: bug.id, deltas: [{ t: "reset" }] }),
+    ]);
+  });
+});
+
+describe("setupRedisAdapter", () => {
+  it("wires the shared counter too: the documented way to run several nodes", async () => {
+    const create = (await vi.importActual<typeof Testing>("../../src/testing/createTestApp"))
+      .createTestApp as CreateTestApp;
+    const prefix = uniquePrefix("setup");
+    const { hostname, port } = new URL(VALKEY_URL);
+    const boot = async () => {
+      const app = await create({
+        services: [projectService, defineTaskService()],
+        db: h.db,
+        cluster: { keyPrefix: prefix },
+      });
+      const redis = await setupRedisAdapter(app.server.io, {
+        host: hostname,
+        port: Number(port),
+        keyPrefix: prefix,
+      });
+      expect(redis.success).toBe(true);
+      return { app: app as unknown as TestApp, redis };
+    };
+    const a = await boot();
+    const b = await boot();
+    try {
+      const reader = await a.app.connect(as(board.cy));
+      const frames = receive(reader);
+      await sub(reader, "taskService", [board.t1]);
+      await tasks(b.app, as(board.ada)).rename({ id: board.t1, title: "Through the helper" });
+      await createBarrier(b.app.server.io, a.app.server.io)();
+      await frames.settle();
+      const [frame] = frames.entity;
+      expect(frame).toMatchObject({ t: "u", d: { title: "Through the helper" } });
+      const client = valkeyClient();
+      await client.connect();
+      const counter = Number(await client.get(`${prefix}:rev`));
+      await closeClient(client);
+      expect(frame?.rev).toBe(counter);
+    } finally {
+      await Promise.all([a.app.close(), b.app.close()]);
+      await Promise.all([a.redis.cleanup(), b.redis.cleanup()]);
+    }
+  });
+});

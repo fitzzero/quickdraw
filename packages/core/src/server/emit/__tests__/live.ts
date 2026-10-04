@@ -9,6 +9,7 @@
 //   T2 in P2 (owner ed)                                  ed Admin
 
 import { z } from "zod";
+import { settleCluster } from "../../../../test/cluster/mode";
 import type { PrismaClient } from "../../../../test/prisma/setup";
 import {
   defineContract,
@@ -337,6 +338,7 @@ export function receive(connection: Connected): Received {
     revoked,
     // The socket answers in order: frames sent before this acknowledgement arrive before it.
     settle: async () => {
+      await settleCluster();
       await emitWithAck(connection.socket, "qd:unsub", { s: "noService", ids: [] });
     },
     clear: () => {

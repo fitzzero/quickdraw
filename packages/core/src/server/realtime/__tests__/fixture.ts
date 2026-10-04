@@ -11,6 +11,7 @@
 
 import { expect } from "vitest";
 import { z } from "zod";
+import { settleCluster } from "../../../../test/cluster/mode";
 import { QuickdrawError, defineContract, mutation, query } from "../../../index";
 import { emitWithAck, type TestConnection } from "../../../testing/index";
 import { projectContract, qd } from "../../access/__tests__/board";
@@ -179,9 +180,11 @@ export function send(connection: Connected, channel: string, payload: unknown, s
 /**
  * Waits until the server has handled every event the socket sent before now:
  * Socket.IO handles one socket's packets in order, so the acknowledgement of
- * an event sent after them arrives once they ran.
+ * an event sent after them arrives once they ran. In the cluster projects it
+ * first waits for what the writer node pushed to reach the socket's node.
  */
 export async function settle(connection: Connected): Promise<void> {
+  await settleCluster();
   await emitWithAck(connection.socket, "qd:unsub", { s: "noService", ids: [] });
 }
 

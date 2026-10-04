@@ -7,6 +7,7 @@ import { waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { createQuickdrawClient } from "../../src/client/index";
 import { renderWithQuickdraw } from "../../src/testing/client";
+import { inCluster } from "../cluster/mode";
 import { as, e2eApp, projectContract, taskContract } from "../fixtures/app";
 
 const e2e = e2eApp();
@@ -79,10 +80,12 @@ describe("useCollection", () => {
       .flatMap((frame) =>
         frame.data.deltas.map((delta) => [frame.data.scope === board.p1 ? "P1" : "P3", delta.t]),
       );
+    // Behind a cluster adapter a change in place goes out whole.
+    const inPlace = inCluster() ? "updated" : "patched";
     expect(deltas).toEqual([
       ["P1", "added"],
-      ["P1", "patched"],
-      ["P1", "patched"],
+      ["P1", inPlace],
+      ["P1", inPlace],
       ["P1", "removed"],
       ["P3", "added"],
       ["P1", "removed"],

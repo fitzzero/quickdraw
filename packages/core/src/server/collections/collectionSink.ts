@@ -16,7 +16,9 @@
 //    `bulkThreshold` (`deltas.ts`);
 // 4. leave out scopes nobody here subscribes to, which raises their resume
 //    floor instead; behind a cluster adapter other nodes' rooms are not
-//    visible, so every scope is sent;
+//    visible, so every scope is sent, and what no scope could be named for
+//    (a removal without its scope, junction rows removed without values) is
+//    broadcast for the other nodes' subscribed scopes (`unnamed.ts`);
 // 5. read the items the remaining deltas need, in one query per collection,
 //    and send one `qd:c` frame per scope, which the resume buffer keeps. An
 //    indexed collection's `added` deltas carry index rows built from those
@@ -36,6 +38,7 @@ import type { BoundCollection, CollectionHub } from "./bind";
 import { buildDeltas, planScopes, readItems, type ScopePlan } from "./deltas";
 import { movesOf } from "./moves";
 import { closeAnchors, resetTouched, sendFrame, skipTouched } from "./send";
+import { broadcastUnnamed, unnamedOf } from "./unnamed";
 
 type Io = NonNullable<CollectionHub["io"]>;
 
@@ -102,6 +105,8 @@ async function emitCollection(
     return;
   }
   const moves = await movesOf(hub.collections.moves, storage, collection, writes, refresh);
+  // What no scope could be named for reaches the scopes subscribed on the other nodes too.
+  broadcastUnnamed(hub, unnamedOf(collection, moves, rev));
   const sending: ScopePlan[] = [];
   for (const plan of planScopes(collection, moves, subscribed)) {
     if (closed.has(plan.room)) {
@@ -116,9 +121,12 @@ async function emitCollection(
   if (sending.length === 0) {
     return;
   }
-  const rows = await readItems(storage, collection, sending, moves.rows);
+  // Behind a cluster adapter, changes go out whole: frames of two nodes can arrive out of order.
+  const whole = !hub.probe.local();
+  const rows = await readItems(storage, collection, sending, moves.rows, whole);
   for (const plan of sending) {
-    sendFrame(hub, io, collection, plan.scope, rev, buildDeltas(collection, plan, rows, rev));
+    const deltas = buildDeltas(collection, plan, rows, rev, whole);
+    sendFrame(hub, io, collection, plan.scope, rev, deltas);
   }
 }
 

@@ -878,8 +878,13 @@ export const taskService = qd.defineService(task, {
   running several processes without a Socket.IO cluster adapter declares
   `versionColumn`s or passes `changeLog: false`.
 - Behind a cluster adapter (`setupRedisAdapter`), every touched row is read
-  and sent, since other nodes' rooms are not visible, and access changes and
-  refreshed grants are broadcast to every node.
+  and sent, whole, since other nodes' rooms are not visible and frames from
+  two nodes can arrive out of order; access changes and refreshed grants are
+  broadcast to every node, and a flush sends its frames once every node
+  applied them. Flushes take their revisions from a counter in the cluster's
+  Valkey, so revisions from all nodes are one order:
+  [docs/deploying.md](docs/deploying.md) has the wiring, what holds across
+  nodes, what it costs, and what happens when Valkey stops answering.
 
 ## Collections and change topics
 
@@ -1014,7 +1019,9 @@ created from (or with `http: false`).
 
 `server.close()` disconnects every socket, waits for the calls still in
 flight (a mutation runs to its end) and closes the HTTP server, giving up
-after `shutdownTimeoutMs` (default 10 s); `handleSignals: true` calls it on
+after `shutdownTimeoutMs` (default 10 s); behind a cluster adapter it also
+waits for the presence work its sockets' last events started, so the app can
+close its Valkey clients next. `handleSignals: true` calls it on
 SIGTERM and SIGINT. `server.rotate({ withinMs })` asks clients to reconnect
 within a window; `server.access.refresh(userId)` reloads a user's grants,
 pushes `qd:access` and resolves the user's entity subscriptions again;

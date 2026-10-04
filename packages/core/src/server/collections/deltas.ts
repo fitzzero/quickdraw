@@ -14,6 +14,11 @@
 // In a collection that declares `index`, an `added` delta also carries its
 // member's index row, built from the item it sends (`index.ts`), with the
 // service's `versionColumn` read alongside the item for the row's `rev`.
+//
+// Behind a cluster adapter (`whole`) a change that would be `patched` goes
+// out `updated`, with the whole item: frames from two nodes can reach a
+// client out of revision order, and a patch it dropped as older would lose
+// its fields. One that would be dropped as empty is still dropped.
 
 import { collectionRoom } from "../../contract/names";
 import type { CollectionDelta, Revision } from "../../protocol/envelope";
@@ -87,12 +92,16 @@ export function planScopes(
   return [...plans.values()];
 }
 
-/** The rows the plans' deltas take items from: those the moves read, and one read for the others. */
+/**
+ * The rows the plans' deltas take items from: those the moves read, and one
+ * read for the others; whole items for every change when `wholeItems`.
+ */
 export async function readItems(
   storage: StorageAdapter,
   collection: BoundCollection,
   plans: readonly ScopePlan[],
   read: ReadonlyMap<string, StorageRow>,
+  wholeItems = false,
 ): Promise<ReadonlyMap<string, StorageRow>> {
   const kinds = new Map<string, FrameKind>();
   for (const plan of plans.filter(({ reset }) => !reset)) {
@@ -100,8 +109,8 @@ export async function readItems(
       if (delta.t === "removed" || read.has(delta.id)) {
         continue;
       }
-      const whole = delta.t !== "patched" || kinds.get(delta.id)?.t === "u";
-      kinds.set(delta.id, whole ? { t: "u" } : { t: "p", fields: delta.fields });
+      const item = wholeItems || delta.t !== "patched" || kinds.get(delta.id)?.t === "u";
+      kinds.set(delta.id, item ? { t: "u" } : { t: "p", fields: delta.fields });
     }
   }
   if (kinds.size === 0) {
@@ -130,12 +139,16 @@ function added(collection: BoundCollection, row: StorageRow, rev: Revision): Col
     : { t: "added", item, index: indexRowFrom(collection, item, row, rev) };
 }
 
-/** The deltas of one scope's frame for the flush at `rev`, from its plan and the rows read. */
+/**
+ * The deltas of one scope's frame for the flush at `rev`, from its plan and
+ * the rows read; `whole` sends `updated` items where a patch would go.
+ */
 export function buildDeltas(
   collection: BoundCollection,
   plan: ScopePlan,
   rows: ReadonlyMap<string, StorageRow>,
   rev: Revision,
+  whole = false,
 ): CollectionDelta[] {
   if (plan.reset) {
     return [{ t: "reset" }];
@@ -153,7 +166,11 @@ export function buildDeltas(
     if (delta.t === "patched") {
       const d = patchOf(collection, row, delta.fields);
       if (Object.keys(d).length > 0) {
-        deltas.push({ t: "patched", id: delta.id, d });
+        deltas.push(
+          whole
+            ? { t: "updated", item: itemOf(collection, row) }
+            : { t: "patched", id: delta.id, d },
+        );
       }
       continue;
     }

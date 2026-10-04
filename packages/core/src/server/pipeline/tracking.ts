@@ -14,7 +14,7 @@ import { QuickdrawError } from "../../protocol/errors";
 import type { BaseContext } from "../context";
 import type { Registry } from "../registry";
 import { modelKey, storageOf, type StorageAdapter } from "../storage";
-import { combineSinks, inRevisionOrder } from "../uow/flush";
+import { combineSinks, inRevisionOrder, type FlushRevisions } from "../uow/flush";
 import type { FlushSink } from "../uow/flushSink";
 import type { UnitOfWorkFactory } from "../uow/types";
 import { untrackedUnitOfWork } from "../uow/untracked";
@@ -100,7 +100,8 @@ export function storageFor(options: TrackingOptions, db: unknown): StorageAdapte
  * intake, the access cache's evictions and access-change events,
  * `createServer`'s grants refresh, the entity frames, the collection deltas,
  * the change topics), so nothing a flush revokes gets its frames, and the
- * app's sinks after them read access afresh.
+ * app's sinks after them read access afresh. `revisions` hand flushes the
+ * cluster's shared revisions when the server is behind a counter.
  */
 export function resolveTracking(
   options: TrackingOptions,
@@ -108,6 +109,7 @@ export function resolveTracking(
   db: unknown,
   logger: Logger,
   framework: readonly (FlushSink | undefined)[] = [],
+  revisions?: FlushRevisions,
 ): Tracking {
   const storage = storageFor(options, db);
   const unitOfWork = options.unitOfWork ?? storage?.unitOfWork ?? untrackedUnitOfWork;
@@ -120,7 +122,10 @@ export function resolveTracking(
   return {
     storage,
     unitOfWork,
-    flushSink: inRevisionOrder(combineSinks([...own, ...sinksOf(options.flushSink)], logger)),
+    flushSink: inRevisionOrder(
+      combineSinks([...own, ...sinksOf(options.flushSink)], logger),
+      revisions,
+    ),
     touch,
   };
 }

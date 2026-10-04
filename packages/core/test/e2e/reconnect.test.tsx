@@ -8,6 +8,7 @@ import { within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { createQuickdrawClient } from "../../src/client/index";
 import { renderWithQuickdraw } from "../../src/testing/client";
+import { inCluster } from "../cluster/mode";
 import { as, e2eApp, projectContract, taskContract } from "../fixtures/app";
 
 const e2e = e2eApp();
@@ -65,7 +66,12 @@ describe("disconnect() and reconnect()", () => {
     await ada.view.reconnect();
     await ada.shown.findByText("board While away,New");
     await ada.shown.findByText("row While away");
-    expect(pageReads()).toBe(before);
+    if (inCluster()) {
+      // Behind a cluster adapter a resume reads a page: a process's buffer sees its own flushes only.
+      expect(pageReads()).toBeGreaterThan(before);
+    } else {
+      expect(pageReads()).toBe(before);
+    }
     expect(ada.view.connection.getState()).toMatchObject({
       status: "connected",
       reconnecting: false,

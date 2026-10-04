@@ -6,6 +6,7 @@
 // the cap says `indexTruncated`; and what each read costs.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { inCluster } from "../../../test/cluster/mode";
 import type { PrismaClient } from "../../../test/prisma/setup";
 import type { CollectionFrame, WireIndexRow } from "../../index";
 import type { Logger } from "../../contract/logger";
@@ -310,7 +311,12 @@ describe("index rows after a flush", () => {
           index: [created.id, created.updatedAt.getTime(), "open", 4, null],
         },
       ],
-      [{ t: "patched", id: created.id, d: { status: "doing", updatedAt: expect.any(String) } }],
+      [
+        // Behind a cluster adapter a change in place goes out whole.
+        inCluster()
+          ? { t: "updated", item: expect.objectContaining({ id: created.id, status: "doing" }) }
+          : { t: "patched", id: created.id, d: { status: "doing", updatedAt: expect.any(String) } },
+      ],
       [
         {
           t: "updated",
@@ -348,7 +354,7 @@ describe("index rows after a flush", () => {
       await db.task.update({ where: { id: made.id }, data: { status: "doing", ordinal: 7 } });
     });
     await scopes.settle();
-    expect(scopes.frames.flatMap(({ deltas }) => deltas.map(({ t }) => t))).toEqual([
+    const kinds = [
       "added",
       "patched",
       "patched",
@@ -361,7 +367,11 @@ describe("index rows after a flush", () => {
       "added",
       "updated",
       "added",
-    ]);
+    ];
+    // Behind a cluster adapter a change in place goes out whole: the index ends the same.
+    expect(scopes.frames.flatMap(({ deltas }) => deltas.map(({ t }) => t))).toEqual(
+      inCluster() ? kinds.map((t) => (t === "patched" ? "updated" : t)) : kinds,
+    );
     const held = applyFrames(first.index as WireIndexRow[], scopes.frames);
     const fresh = (await colSub(connection, "board", board.p1)).index as WireIndexRow[];
     expect(withoutRev(held)).toEqual(withoutRev(fresh));
@@ -407,10 +417,13 @@ describe("index rows after a flush", () => {
     const resumed = await colSub(away.connection, "board", board.p1, {
       since: first.rev as number,
     });
-    expect(resumed).toMatchObject({
-      resumed: true,
-      deltas: [{ t: "added", index: [created.id, expect.any(Number), "open", 3, null] }],
-    });
+    const row = [created.id, expect.any(Number), "open", 3, null];
+    // Behind a cluster adapter a resume reads a page: a process's buffer sees its own flushes only.
+    expect(resumed).toMatchObject(
+      inCluster()
+        ? { index: expect.arrayContaining([row]) as unknown }
+        : { resumed: true, deltas: [{ t: "added", index: row }] },
+    );
   });
 });
 

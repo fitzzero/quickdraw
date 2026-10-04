@@ -110,7 +110,12 @@ export function next<T = unknown>(socket: ClientSocket, event: string): Promise<
   });
 }
 
-/** A Socket.IO adapter that hands `serverSideEmit` to the other servers it was made for: a cluster in one process. */
+/**
+ * A Socket.IO adapter that hands `serverSideEmit` to the other servers it was
+ * made for: a cluster in one process. A broadcast that asks for answers
+ * (`serverSideEmitWithAck`) gets one from each peer, as the Redis adapter's
+ * does.
+ */
 export function peeredCluster(): {
   readonly adapter: NonNullable<Partial<IoServerOptions>["adapter"]>;
   readonly servers: QuickdrawIo[];
@@ -120,14 +125,30 @@ export function peeredCluster(): {
   const Base = new Server().of("/").adapter.constructor as new (
     nsp: Namespace,
   ) => Namespace["adapter"];
+  type Peer = { _onServerSideEmit(args: unknown[]): void };
   class PeeredAdapter extends Base {
     override serverSideEmit(packet: unknown[]): void {
-      for (const peer of servers) {
-        if (peer.sockets !== this.nsp) {
-          (
-            peer.sockets as unknown as { _onServerSideEmit(args: unknown[]): void }
-          )._onServerSideEmit(packet);
+      const peers = servers.filter((peer) => peer.sockets !== this.nsp);
+      const last = packet.at(-1);
+      if (typeof last !== "function") {
+        for (const peer of peers) {
+          (peer.sockets as unknown as Peer)._onServerSideEmit(packet);
         }
+        return;
+      }
+      const ack = last as (error: Error | null, responses: unknown[]) => void;
+      const responses: unknown[] = [];
+      if (peers.length === 0) {
+        ack(null, responses);
+      }
+      for (const peer of peers) {
+        const answer = (response: unknown): void => {
+          responses.push(response);
+          if (responses.length === peers.length) {
+            ack(null, responses);
+          }
+        };
+        (peer.sockets as unknown as Peer)._onServerSideEmit([...packet.slice(0, -1), answer]);
       }
     }
   }
