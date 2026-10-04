@@ -1189,10 +1189,15 @@ export function TitleField({ task }: { task: TaskDTO }) {
 
 The auth helpers, the Express rate limits, the socket rate limiter (apart
 from its default, under "Defaults that changed"), the Redis adapter helper,
-the env and encryption utilities, and the client's auth and formatting
+the env and encryption utilities, the client's token storage
+(`getAuthToken`, `setAuthToken`, `clearAuthToken`) and its formatting
 utilities. Some auth helpers moved to
 `@fitzzero/quickdraw-core/server/auth` (and the MCP bridge to
-`./server/mcp`); lint's `no-v4-api` names the new entry point of each.
+`./server/mcp`); lint's `no-v4-api` names the new entry point of each. The
+client's `getOAuthUrl`, `logout` and `logoutAllDevices` called routes the
+auth routes kit does not serve, so they are replaced by `signInUrl`,
+`signOut` and `signOutEverywhere` (below, "Hand-built auth to the auth
+routes kit").
 
 ## Boards: from a watched query to a collection
 
@@ -1451,6 +1456,23 @@ the login page to read:
 | `no_code`       | `denied`      | the provider sent no code or an error (the user declined)                        |
 | (none)          | `denied`      | `onLogin` returned `null`: the app refused the sign-in                           |
 | `oauth_failed`  | `failed`      | the code exchange, `onLogin` (it threw) or creating the session failed           |
+
+In the web app, `./client`'s helpers call these routes. 4.x's `getOAuthUrl`,
+`logout` and `logoutAllDevices` called the hand-built ones (and sent only a
+stored token, so with cookie sessions they signed nobody out); 5.0 replaces
+them, and lint's `no-v4-api` reports the old names:
+
+| 4.x (`./client`)                 | 5.0 (`./client`)                                                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `getOAuthUrl(provider, apiUrl?)` | `signInUrl(provider, { apiUrl?, basePath?, returnTo? })`: the start route, back to the current page's origin       |
+| `logout(apiUrl?)`                | `signOut({ apiUrl?, basePath? })`: `POST /auth/logout` with the cookie (and a stored token); rejects when refused  |
+| `logoutAllDevices(apiUrl?)`      | `signOutEverywhere({ apiUrl?, basePath? })`: `POST /auth/logout-all`; resolves with nothing (4.x returned a count) |
+
+Each POST sends the session cookie (`credentials: "include"`: allow the web
+app's origin with credentials in the API's CORS) and forgets the stored
+token. A socket keeps the user it signed in as until it connects again:
+after `signOut()`, reconnect the provider's connection
+(`useQuickdraw().connection.close()`, then `open()`), or load the next page.
 
 **3. The callback becomes `onLogin`.** What 4.x's callback did after the code
 exchange (find the user by the provider account, link one by a verified
@@ -1909,6 +1931,9 @@ Generated from `@fitzzero/quickdraw-lint`'s `no-v4-api` rule, which reports each
 | `UseChannelSendResult`         | Send on a channel with `qd.<service>.<channel>.useChannel()`.                                                                                                                                                                   |
 | `useQuickdrawSocket`           | Read the connection with `useQuickdraw()` (`connection`, `status`, `userId`, `serviceAccess`), and talk to the server through the typed client rather than the socket.                                                          |
 | `QuickdrawSocketContextValue`  | Read the connection with `useQuickdraw()` (`connection`, `status`, `userId`, `serviceAccess`), and talk to the server through the typed client rather than the socket.                                                          |
+| `getOAuthUrl`                  | Link to `signInUrl(provider, { returnTo })` from `./client`: the auth routes kit starts a sign-in at `GET /auth/{provider}/start`.                                                                                              |
+| `logout`                       | Call `signOut()` from `./client`: `POST /auth/logout` with the session cookie (and a stored token) revokes the session; it rejects when refused.                                                                                |
+| `logoutAllDevices`             | Call `signOutEverywhere()` from `./client`: `POST /auth/logout-all` revokes every session of the user; it resolves with nothing.                                                                                                |
 | `ServiceCallError`             | Failed calls throw `QuickdrawError`: branch on `error.code` (`FORBIDDEN`, `NOT_FOUND`, `VALIDATION`, `CONFLICT`, ...).                                                                                                          |
 | `ClientServiceMethodMap`       | The typed client infers every type from the contracts passed to `createQuickdrawClient(contracts)`.                                                                                                                             |
 | `SubscriptionDataMap`          | The typed client infers every type from the contracts passed to `createQuickdrawClient(contracts)`.                                                                                                                             |

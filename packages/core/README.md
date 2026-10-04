@@ -1293,7 +1293,7 @@ export function AuthGate({ children }: { readonly children: ReactNode }) {
     return <p>Connecting…</p>;
   }
   if (userId === null) {
-    return <p>Signed out.</p>;
+    return <SignIn />;
   }
   // a reconnect keeps the user and the page: say so, unmount nothing
   return (
@@ -2316,6 +2316,43 @@ nothing is cached:
 - `issueSession({ sessions, jwtSecret }, userId, { provider })` starts a
   session for an app's own sign-in flow (login codes, an embedded activity),
   and `liveSession` reads a token back; both work with `socketAuth`.
+
+From the browser, `./client` speaks to these routes: `signInUrl(provider,
+{ apiUrl, returnTo })` is the start route's URL (to navigate to; `returnTo`
+defaults to the current page's origin), and `signOut()` and
+`signOutEverywhere()` post to `logout` and `logout-all`. Each POST sends the
+session cookie (`credentials: "include"`, so the API's CORS must allow the
+web app's origin with credentials) with `Content-Type: application/json`,
+and the token `setAuthToken` stored, if any, as a bearer token; the stored
+token is forgotten either way, and a refusal or an unreachable server
+rejects with a `QuickdrawError`. A socket keeps the user it signed in as
+until it connects again, so reconnect the provider's connection after
+signing out (with a token in `auth`, clearing it does that):
+
+<!-- example: apps/web/src/components/SignIn.tsx#browser -->
+
+```tsx
+export function SignIn() {
+  // the kit's GET /auth/google/start: back to this page's origin with the session cookie
+  return <a href={signInUrl("google", { apiUrl: API_URL })}>Sign in with Google</a>;
+}
+
+export function SignOut() {
+  const { connection } = useQuickdraw();
+  const leave = async (): Promise<void> => {
+    // POST /auth/logout with the cookie: the session is revoked, the cookie cleared
+    await signOut({ apiUrl: API_URL });
+    // the socket keeps its user until it connects again, as nobody now
+    connection.close();
+    connection.open();
+  };
+  return (
+    <button type="button" onClick={() => void leave()}>
+      Sign out
+    </button>
+  );
+}
+```
 
 `createMemorySessionStore()` keeps sessions in the process, for development
 and tests. In production, store them in the database. Sessions are not live

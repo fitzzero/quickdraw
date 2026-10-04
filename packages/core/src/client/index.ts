@@ -18,14 +18,17 @@
 // Isomorphic helpers, the HTTP server caller and the cache keys (also on ./utils).
 export * from "../utils";
 
-// Token storage and logout helpers, which read localStorage (browser only).
+// The auth routes kit's browser side (sign in, sign out) and bearer-token
+// storage, which reads localStorage where there is one.
 export {
   clearAuthToken,
   getAuthToken,
-  getOAuthUrl,
-  logout,
-  logoutAllDevices,
   setAuthToken,
+  signInUrl,
+  signOut,
+  signOutEverywhere,
+  type AuthRoutesTarget,
+  type SignInUrlOptions,
 } from "./auth";
 
 // The connection and calls, without React.

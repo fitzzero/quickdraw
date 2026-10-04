@@ -2,6 +2,7 @@
 
 import { useQuickdraw } from "@fitzzero/quickdraw-core/client";
 import type { ReactNode } from "react";
+import { SignIn } from "./SignIn";
 
 // #region gate
 export function AuthGate({ children }: { readonly children: ReactNode }) {
@@ -11,7 +12,7 @@ export function AuthGate({ children }: { readonly children: ReactNode }) {
     return <p>Connecting…</p>;
   }
   if (userId === null) {
-    return <p>Signed out.</p>;
+    return <SignIn />;
   }
   // a reconnect keeps the user and the page: say so, unmount nothing
   return (
