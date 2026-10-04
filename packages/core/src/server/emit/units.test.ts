@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { z as z3 } from "zod3";
-import { defineContract, query } from "../../index";
+import { defineContract, query, todoSchema } from "../../index";
 import { initQuickdraw, type AnyService } from "../index";
 import { createRegistry } from "../registry";
 import { ANY_FIELD } from "../uow/types";
@@ -46,6 +46,15 @@ describe("a projection's keys", () => {
   it("come from the schema's Standard JSON Schema, following a top-level $ref", () => {
     expect(schemaKeys(taskSchema)).toEqual(["id", "title", "notes", "dueAt", "parentTaskId"]);
     expect(schemaKeys(z.object({ id: z.string() }).meta({ id: "Named" }))).toEqual(["id"]);
+  });
+
+  it("come from a migrated todoSchema's keys, and are unknown without them", () => {
+    /* oxlint-disable quickdraw/no-todo-schema -- the placeholder is what this tests */
+    expect(
+      schemaKeys(todoSchema<{ id: string; title: string }>({ keys: ["id", "title"] })),
+    ).toEqual(["id", "title"]);
+    expect(schemaKeys(todoSchema<{ id: string }>())).toBeUndefined();
+    /* oxlint-enable quickdraw/no-todo-schema */
   });
 
   it("are unknown for a schema that cannot describe itself", () => {

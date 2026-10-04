@@ -8,6 +8,8 @@ export { consoleLogger, type Logger } from "./contract/logger";
 export {
   hasJsonSchema,
   isStandardSchema,
+  TODO_SCHEMA_VENDOR,
+  todoSchema,
   validate,
   type InferInput,
   type InferOutput,
@@ -15,6 +17,7 @@ export {
   type StandardSchemaV1,
   type StandardSchemaWithJSON,
   type StandardTypedV1,
+  type TodoSchemaOptions,
   type ValidationIssue,
   type ValidationResult,
 } from "./contract/standardSchema";
