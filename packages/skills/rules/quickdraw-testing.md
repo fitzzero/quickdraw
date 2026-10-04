@@ -9,13 +9,28 @@ paths:
 # quickdraw 5.0: testing
 
 > From `@fitzzero/quickdraw-skills` (`quickdraw-skills link`). `paths` follow
-> the quickdraw template: tests beside the code in `apps/api` and `apps/web`.
-> Another layout replaces this link with a copy and edits them.
+> the quickdraw template: integration tests in `apps/*/src/__tests__/`, unit
+> tests beside the code. Another layout replaces this link with a copy and
+> edits them; when the app's own rules name other paths, theirs win.
 
 Test through the real server: the same dispatcher, access engine, tracked
 writes and frames production runs. Helpers come from
 `@fitzzero/quickdraw-core/testing`, `@fitzzero/quickdraw-core/testing/client`
 and `@fitzzero/quickdraw-core/testing/prisma`.
+
+## Where a test goes
+
+The template runs two lanes, and a file's name picks its lane:
+
+| Test                                                                            | File (template)                                      | Lane                                                  |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------- |
+| a service: `createTestApp`, `describeAccessMatrix`, `expectBudget`, live frames | `apps/api/src/__tests__/services/<name>.int.test.ts` | integration (`vitest.int.config.ts`): a test database |
+| a component against the real server (`renderWithQuickdraw`)                     | `apps/web/src/__tests__/<name>.int.test.tsx`         | the web app's integration lane, under jsdom           |
+| pure logic: a helper, a reducer, a game's simulation step                       | beside it, `<file>.test.ts`                          | unit (`vitest.config.ts`): no database                |
+
+A test that boots the app but is named `<name>.test.ts` runs in the unit
+lane and fails at its first query. Budgets go to `__budgets__/` beside the
+test file that measures them.
 
 ## The test app
 
@@ -51,9 +66,13 @@ await app.close();
   `createPrismaTestGlobalSetup`, `workerDatabaseUrl` and `resetDatabase`
   (PostgreSQL, or PGlite when no `TEST_DATABASE_URL` is set; each worker
   boots its PGlite with `openPgliteFromTemplate`, which works under jsdom).
-- Seed rows with the untracked client (`prisma`), or inside `qd.run` once an
-  app runs: a tracked write outside any unit of work flushes on its own with
-  an `ambient-write` warning.
+- Seed rows with the untracked client (`prisma`), or inside `qd.run` (before
+  the app starts too, when its writes reach no one): a tracked write outside
+  any unit of work flushes on its own with an `ambient-write` warning.
+- An app's own REST route is tested over HTTP against the app's Express app,
+  signed in as the auth routes sign in: its call runs with the grants a
+  socket of the same user gets (`qd.caller` loads them), so a method behind
+  a service grant passes or answers 403 as it does over a socket.
 
 ## Every service gets an access matrix
 

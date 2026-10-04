@@ -17,7 +17,7 @@ paths:
 // apps/web/src/lib/quickdraw.ts: the keys of this map become qd.<key>
 export const qd = createQuickdrawClient({ task, project });
 
-// apps/web/src/app/providers.tsx, a "use client" module
+// apps/web/src/providers/index.tsx, a "use client" module
 export function Providers({ children }: { readonly children: React.ReactNode }) {
   return (
     <QuickdrawProvider client={qd} url={API_URL}>
@@ -29,7 +29,9 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
 
 - `createQuickdrawClient` and `QuickdrawProvider` come from
   `@fitzzero/quickdraw-core/client`; the contracts from the shared package.
-  Every member is typed from them: no wrapper hooks, no codegen.
+  Every member is typed from them: no wrapper hooks, no codegen. The
+  template passes the shared `contracts` map, keyed by service name
+  (`qd.taskService.board`); the examples here key theirs short (`qd.task`).
 - `auth` is a token (sent as `auth.token`) or handshake fields; leave it out
   for cookie sessions. Changing it reconnects, and a hello naming another
   user empties everything quickdraw cached.
@@ -39,6 +41,13 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   final, `null` meaning signed out), never on `isConnected` or `userId`
   alone: `userId` is `null` before the hello too, `isConnected` turns true
   before it and false while reconnecting, and `reconnecting` keeps the user.
+  `hello.serverId` changes when the server restarts (or the socket lands
+  on another node): compare it to tell a new server from a network blip.
+- Sign-in and out in the browser go through the auth routes kit's routes:
+  `signInUrl(provider, { returnTo })` is the provider button's link,
+  `signOut()` and `signOutEverywhere()` end the session (they reject when
+  refused). Never call `/auth/...` by hand; 4.x's `getOAuthUrl`, `logout`
+  and `logoutAllDevices` are gone.
 
 ## Reading
 
@@ -131,7 +140,9 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   `adminMeta` wider). A screen served from metadata for every service takes
   `adminOf(qd, key)`, one shape typed by field name: never cast
   `qd[key].admin`. The kit's rows are not live: after the screen's own
-  write, `onSuccess: () => qd.invalidate(qd.task.admin.adminList)`.
+  write, `onSuccess: () => qd.invalidate(qd.task.admin.adminList)`. A
+  generic form shows the fields whose `showInForm` is not `false`; a user's
+  grants field says `kind: "grants"`: find it by that, never by its name.
 
 ## Server components and other runtimes
 

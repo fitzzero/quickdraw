@@ -7,7 +7,9 @@ description: Add a service to a quickdraw 5.0 app end to end - its contract in t
 
 Five steps, in this order, because each one is typed by the one before it.
 Paths follow the quickdraw template (`packages/shared`, `apps/api`,
-`apps/web`); use the app's own if they differ. The rules
+`apps/web`). When the app's own rules (`.claude/rules/`, `CLAUDE.md`) name
+other paths, theirs win: read one existing service, its registration and
+its tests first, and put the new ones beside them. The rules
 `quickdraw-services.md`, `quickdraw-access.md`, `quickdraw-client.md` and
 `quickdraw-testing.md` (linked into `.claude/rules/`) hold the details.
 
@@ -58,16 +60,21 @@ export const labelContract = defineContract("labelService", {
   stored in users' grants and sent on the wire.
 - Use Zod 4.2 or later for every schema; give each method a `describe`
   sentence when agents or MCP clients will call it.
-- Export the contract from the shared package's index, next to the others.
+- Export the contract from `packages/shared/src/contracts/index.ts`, next to
+  the others, and add it to the `contracts` map there: that map types the
+  web client and `qd.caller`.
 
-## 2. The service (`apps/api/src/services/<name>.ts`)
+## 2. The service (`apps/api/src/services/<name>/index.ts`)
 
-<!-- example: apps/api/src/services/label.ts -->
+One directory per service: its helpers and its own unit-tested logic sit
+beside `index.ts`.
+
+<!-- example: apps/api/src/services/label/index.ts -->
 
 ```ts
 import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 import { labelContract, projectContract } from "@project/shared";
-import { qd } from "../quickdraw";
+import { qd } from "../../quickdraw";
 
 export const labelService = qd.defineService(labelContract, {
   model: "label",
@@ -102,16 +109,22 @@ export const labelService = qd.defineService(labelContract, {
   `prefer-kit` warns on a hand-written `get`, `list`, `create` or
   `getLabel`-style method in a service that uses no kit.
 
-## 3. Register it (`apps/api/src/index.ts`)
+## 3. Register it (`apps/api/src/services/index.ts`)
 
-Add the service to `qd.createServer({ services: [...] })`. If the app has an
-MCP registry (`createMcpRegistry({ services, dispatcher })`), add it there
-too, or exclude the methods agents must not call.
+Add the service to the `services` list there. The server
+(`apps/api/src/index.ts`, `qd.createServer({ services })`), the MCP server,
+the tests and the benchmark all take their services from that list, so the
+new one reaches every root at once; never add it to one root by hand. If
+the MCP registry must not offer some of its methods to agents, exclude them
+there.
 
 ## 4. Use it from the web app
 
-Add the contract to the map given to `createQuickdrawClient` (the key you
-pick becomes `qd.<key>`), then use the hooks:
+The web client is made from the shared `contracts` map
+(`apps/web/src/lib/quickdraw.ts`, `createQuickdrawClient(contracts)`), so the
+contract added in step 1 is already there: its key becomes `qd.<key>` (the
+template keys the map by service name, `qd.labelService`; this example's
+map uses `label`). Then use the hooks:
 
 <!-- example: apps/web/src/components/Labels.tsx -->
 
@@ -140,7 +153,16 @@ export function Labels({ projectId }: { readonly projectId: string }) {
 Read with `useEntity` and `useCollection` before `useQuery`; never refetch
 or invalidate after a mutation by hand.
 
-## 5. Test it (`apps/api/src/services/<name>.test.ts`)
+## 5. Test it (`apps/api/src/__tests__/services/<name>.int.test.ts`)
+
+A test that boots the app (`createTestApp`, `describeAccessMatrix`,
+`expectBudget`) needs the test database, so it is an integration test:
+`<name>.int.test.ts`, which the database lane (`vitest.int.config.ts`, whose
+global setup makes the database) runs. A plain `<name>.test.ts` runs in the
+unit lane, without a database, and fails at its first query: keep it for
+pure logic beside the service (`apps/api/src/services/<name>/*.test.ts`).
+Components rendered against the server go in
+`apps/web/src/__tests__/<name>.int.test.tsx`.
 
 - `describeAccessMatrix` over every method, as an owner, a member, a
   stranger and anonymously.
@@ -156,6 +178,7 @@ or invalidate after a mutation by hand.
 ## Finish
 
 Run the app's lint (the quickdraw rules catch untracked writes, foreign
-writes, unbounded reads and raw socket use), typecheck and tests. If the app
-generates API docs with `quickdraw-docs`, regenerate them and commit the
-result.
+writes, unbounded reads and raw socket use), typecheck and the unit and
+integration tests. If the app generates API docs with `quickdraw-docs`
+(with `--services`, its pages also say who may call each method),
+regenerate them and commit the result.
