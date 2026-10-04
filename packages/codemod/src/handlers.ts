@@ -5,7 +5,9 @@
 // (`ctx.userId` is `ctx.principal.userId`), and receiver references go
 // through `receiver.ts`. The template's `requireAuth(ctx)` guard is dropped
 // where access already requires a principal: 4.x had answered such a caller
-// before the handler ran too.
+// before the handler ran too. In a file that imports the tracked `db` (its
+// helper functions use it), a handler uses that one rather than taking `db`
+// as well, which would shadow it: it is the same client.
 
 import {
   type ArrowFunction,
@@ -16,7 +18,7 @@ import {
   SyntaxKind,
 } from "ts-morph";
 import type { AccessForm } from "./access";
-import { MarkerSet, markerText } from "./markers";
+import { MarkerSet, markerAnchor, markerText } from "./markers";
 import type { MethodCall } from "./model";
 import { type Hoisted, mapReceiver, type ReceiverScope } from "./receiver";
 import { type Edit, editedText, statementOf } from "./text";
@@ -237,6 +239,7 @@ function buildHandler(
   form: AccessForm,
   scope: Omit<ReceiverScope, "ctxName">,
   entryMarkers: string[],
+  moduleDb: boolean,
 ): { text: string; imports: Hoisted[] } {
   const [payloadParam, ctxParam] = handler.getParameters();
   const body = handler.getBody();
@@ -245,15 +248,18 @@ function buildHandler(
   const edits: Edit[] = [...mapped.edits];
   const markers = new MarkerSet(handler.getSourceFile());
   const mark = (node: Node, category: Parameters<MarkerSet["add"]>[1], message: string): void => {
-    const target = statementOf(node);
+    const target = markerAnchor(statementOf(node));
     if (
-      target.getStart() >= body.getStart() &&
+      target.getStart() > body.getStart() &&
       target.getEnd() <= body.getEnd() &&
       target !== body
     ) {
       markers.addAbove(target, category, message);
     } else {
-      entryMarkers.push(markerText(category, message));
+      const line = markerText(category, message);
+      if (!entryMarkers.includes(line)) {
+        entryMarkers.push(line);
+      }
     }
   };
   for (const marker of mapped.markers) {
@@ -280,16 +286,21 @@ function buildHandler(
   edits.push({
     start: range.start,
     end: range.end,
-    text: paramsText(payloadBinding, ctxBinding, mapped.usesDb),
+    text: paramsText(payloadBinding, ctxBinding, mapped.usesDb && !moduleDb),
   });
   return { text: editedText(handler, [...edits, ...markers.edits]), imports: mapped.imports };
 }
 
-/** Builds the method object for `call`, with `form` as its access. */
+/**
+ * Builds the method object for `call`, with `form` as its access. With
+ * `moduleDb`, the file imports the tracked `db`, which the handler uses.
+ */
 export function buildMethod(
   call: MethodCall,
   form: AccessForm,
   scope: Omit<ReceiverScope, "ctxName">,
+  moduleDb = false,
+  notes: readonly string[] = [],
 ): MethodEntry {
   const entryMarkers: string[] = [];
   const accessMarkers = form.notes.map((note) => markerText(note.category, note.message));
@@ -304,7 +315,7 @@ export function buildMethod(
       ),
     );
   } else {
-    const built = buildHandler(call.handler, form, scope, entryMarkers);
+    const built = buildHandler(call.handler, form, scope, entryMarkers, moduleDb);
     handlerText = built.text;
     imports = built.imports;
   }
@@ -313,6 +324,7 @@ export function buildMethod(
     ...accessMarkers,
     `access: ${form.code},`,
     ...(form.rowless ? ["rowless: true,"] : []),
+    ...notes,
     ...entryMarkers,
     `handler: ${handlerText},`,
     "}",

@@ -1,10 +1,12 @@
 // One run of the 4.x to 5.0 codemod over an app laid out like the quickdraw
-// template (see migrate.ts for the order of the transforms), then the report,
-// read back from the markers the run left.
+// template (see migrate.ts for the order of the transforms), then the app's
+// own formatter over the files it wrote (format.ts), then the report, read
+// back from the markers the formatted files hold.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createContext, type Stats } from "./context";
+import { findFormatter, FORMATTED } from "./format";
 import { findLayout, type LayoutOptions, repoPath } from "./layout";
 import { migrate } from "./migrate";
 import { loadProject } from "./project";
@@ -27,6 +29,8 @@ export interface RunResult {
   readonly deleted: readonly string[];
   readonly report: string;
   readonly items: number;
+  /** The app's formatter the run formatted its files with, and whether that worked. */
+  readonly formatter?: { readonly name: string; readonly ok: boolean };
 }
 
 /** Runs the codemod on the app at `options.root`. */
@@ -35,29 +39,45 @@ export function runCodemod(options: RunOptions): RunResult {
   const project = loadProject(layout);
   const ctx = createContext(project, layout);
   migrate(ctx);
-  const report = buildReport(ctx);
   const relative = (path: string): string => repoPath(layout, path);
-  const changed = project
+  const written = project
     .getSourceFiles()
-    .filter((file) => !file.isSaved() && !ctx.created.has(file.getFilePath()))
-    .map((file) => relative(file.getFilePath()));
+    .filter((file) => !file.isSaved())
+    .map((file) => file.getFilePath());
+  const changed = written.filter((path) => !ctx.created.has(path)).map(relative);
   const reportPath = join(layout.root, REPORT_FILE);
-  const reportExists = existsSync(reportPath);
-  const reportChanged = !reportExists || readFileSync(reportPath, "utf8") !== report.text;
+  const before = existsSync(reportPath) ? readFileSync(reportPath, "utf8") : undefined;
+  const formatter = options.dryRun === true ? undefined : findFormatter(layout.root);
+  let formatted = true;
   if (options.dryRun !== true) {
     project.saveSync();
-    if (reportChanged) {
-      writeFileSync(reportPath, report.text);
+    if (formatter !== undefined) {
+      const files = written.filter((path) => FORMATTED.test(path));
+      formatted = formatter.format(files);
+      for (const path of files) {
+        project.getSourceFile(path)?.refreshFromFileSystemSync();
+      }
     }
   }
+  const report = buildReport(ctx);
+  let text = report.text;
+  if (options.dryRun !== true && before !== text) {
+    writeFileSync(reportPath, text);
+    if (formatter?.markdown === true) {
+      formatted = formatter.format([reportPath]) && formatted;
+      text = readFileSync(reportPath, "utf8");
+    }
+  }
+  const reportChanged = before !== text;
   const created = [...ctx.created].map(relative);
   return {
     stats: ctx.stats,
     // The report is created by the first run, and changed by a later one that finds other markers.
-    changed: reportExists && reportChanged ? [...changed, REPORT_FILE] : changed,
-    created: reportExists ? created : [...created, REPORT_FILE],
+    changed: before !== undefined && reportChanged ? [...changed, REPORT_FILE] : changed,
+    created: before === undefined ? [...created, REPORT_FILE] : created,
     deleted: [...ctx.deleted].map(relative),
-    report: report.text,
+    report: text,
     items: report.count,
+    ...(formatter === undefined ? {} : { formatter: { name: formatter.name, ok: formatted } }),
   };
 }

@@ -26,8 +26,8 @@ export const projectContract = defineContract("projectService", {
     createProject: mutation({ input: createProjectSchema, output: todoSchema<{ id: string }>() }),
     // quickdraw-migrate: review [contract] query, chosen from its name
     getProject: query({ input: byIdSchema, output: nullable("entity") }),
-    // quickdraw-migrate: review [contract] mutation, chosen from its name
-    renameProject: mutation({ input: z.object({ id: cuidSchema("project ID"), name: z.string().min(1).max(100) }), output: nullable("entity") }),
+    // quickdraw-migrate: review [contract] mutation, chosen from its name; output: "entity", where 4.x answered ProjectDTO | null (null for a missing row, which a tracked write answers with NOT_FOUND instead); only an exact "entity" output is optimistic by default. Use nullable("entity") if the handler still answers null
+    renameProject: mutation({ input: z.object({ id: cuidSchema("project ID"), name: z.string().min(1).max(100) }), output: "entity" }),
     // quickdraw-migrate: review [contract] query, chosen from its name
     listMyProjects: query({ input: paginationSchema, output: listOf("entity") }),
     // quickdraw-migrate: review [contract] mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type

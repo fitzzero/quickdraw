@@ -114,6 +114,11 @@ function chainOf(cls: ClassDeclaration): ClassDeclaration[] | undefined {
   return undefined;
 }
 
+/** Whether `cls` is a 4.x service class: it extends `BaseService` or `BaseRpcService`, directly or not. */
+export function isServiceClass(cls: ClassDeclaration): boolean {
+  return chainOf(cls) !== undefined;
+}
+
 /** A string literal's value. */
 function literal(node: Node | undefined): string | undefined {
   return node !== undefined && Node.isStringLiteral(node) ? node.getLiteralValue() : undefined;

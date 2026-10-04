@@ -1,96 +1,42 @@
 // What happens to the rest of a 4.x service class. A service object has no
 // members, so each member becomes module-level code in the class's file:
-// helper methods become functions (exported when they were public, since
-// other files may call them), overridden 4.x hooks become functions under a
+// helper methods and getters become functions (exported when they were
+// public, since other files may call them), fields become module bindings
+// under a marker (a field's initializer kept; a field its constructor set is
+// set by the setup function), overridden 4.x hooks become functions under a
 // marker, `defineCollection` and `installAdminMethods` options become consts
-// under a marker, and any other constructor code goes into a marked setup
-// function. Nothing the codemod cannot translate is deleted.
+// under a marker, and any other constructor code, its field assignments
+// included, goes into a marked, exported setup function that takes the
+// constructor's parameters it uses. Nothing the codemod cannot translate is
+// deleted. Only the Prisma client's field goes (it is the tracked `db`), and a
+// field holding another 4.x service, whose uses are marked: services call
+// each other through `ctx.services`.
 
 import {
   type ClassDeclaration,
   type ConstructorDeclaration,
+  type GetAccessorDeclaration,
   type MethodDeclaration,
   Node,
+  type ParameterDeclaration,
+  type PropertyDeclaration,
+  type SetAccessorDeclaration,
   type Statement,
+  SyntaxKind,
 } from "ts-morph";
-import { type Category, MarkerSet, markerText } from "./markers";
+import {
+  assignedMember,
+  isFunctionProperty,
+  keptFields,
+  localNames,
+  reassigned,
+  setByConstructor,
+} from "./fields";
+import { HOOK_NOTES } from "./hookNotes";
+import { type Category, MarkerSet, markerAnchor, markerText } from "./markers";
 import type { ServiceModel } from "./model";
 import { type Hoisted, mapReceiver, type ReceiverScope } from "./receiver";
-import { editedText, statementOf } from "./text";
-
-/** The marker each overridden 4.x hook gets, by name. */
-const HOOK_NOTES: Readonly<Record<string, { category: Category; message: string }>> = {
-  checkAccess: {
-    category: "access-override",
-    message:
-      "4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, anyOf or resolver), then delete this function",
-  },
-  checkEntryACL: {
-    category: "access-override",
-    message:
-      "4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, anyOf or resolver), then delete this function",
-  },
-  checkSubscriptionAccess: {
-    category: "access-override",
-    message:
-      "4.x subscription access override: subscriptions use the service's policy in 5.0; port it there, then delete this function",
-  },
-  checkBatchSubscriptionAccess: {
-    category: "access-override",
-    message:
-      "4.x subscription access override: subscriptions use the service's policy in 5.0; port it there, then delete this function",
-  },
-  hasServiceAccess: {
-    category: "access-override",
-    message:
-      "4.x service-grant override: 5.0 reads grants from principal.serviceAccess; port it to the policy or the method forms, then delete this function",
-  },
-  toDto: {
-    category: "projection",
-    message:
-      "4.x toDto: subscribers now receive the contract entity's keys, projected from the row (dates as ISO strings); fold computed fields into a projection's select and map, then delete this function",
-  },
-  getProtectedFields: {
-    category: "projection",
-    message:
-      'protected fields: declare them in the contract\'s fields with the level that may read each one (fields: { email: "Admin" }), then delete this function',
-  },
-  hasElevatedAccess: {
-    category: "projection",
-    message:
-      "who saw protected fields: in 5.0 the contract's fields levels decide it per row; delete this function once they are declared",
-  },
-  beforeCreate: {
-    category: "lifecycle",
-    message:
-      "4.x lifecycle hook, run only by this.create: move what it does into the methods that create rows, then delete it",
-  },
-  afterCreate: {
-    category: "lifecycle",
-    message:
-      "4.x lifecycle hook, run only by this.create: move what it does into the methods that create rows (or affects, for rows of other services), then delete it",
-  },
-  beforeUpdate: {
-    category: "lifecycle",
-    message:
-      "4.x lifecycle hook, run only by this.update: move what it does into the methods that update rows, then delete it",
-  },
-  afterUpdate: {
-    category: "lifecycle",
-    message:
-      "4.x lifecycle hook, run only by this.update: move what it does into the methods that update rows (or affects), then delete it",
-  },
-  beforeDelete: {
-    category: "lifecycle",
-    message:
-      "4.x lifecycle hook, run only by this.delete: move what it does into the methods that delete rows, then delete it",
-  },
-  afterDelete: {
-    category: "lifecycle",
-    message:
-      "4.x lifecycle hook, run only by this.delete: move what it does into the methods that delete rows (or affects), then delete it",
-  },
-};
+import { editedText, statementOf, upperFirst } from "./text";
 
 const CONSTRUCTION = new Set(["setDelegate", "verifyAllMethods", "defineMethod"]);
 
@@ -172,9 +118,11 @@ export function hoistedNames(
   setupOnly: ReadonlySet<string>,
 ): Map<string, Hoisted> {
   const hoisted = new Map<string, Hoisted>();
+  const locals = localNames(service);
   for (const cls of service.chain) {
     const file = cls.getSourceFile();
     const taken = new Set([
+      ...locals,
       ...file
         .getImportDeclarations()
         .flatMap((declaration) =>
@@ -186,16 +134,13 @@ export function hoistedNames(
       ...file.getVariableDeclarations().map((variable) => variable.getName()),
       ...RESERVED,
     ]);
-    const members = [
+    const members: (MethodDeclaration | PropertyDeclaration | GetAccessorDeclaration)[] = [
       ...cls
         .getMethods()
         .filter((method) => !setupOnly.has(method.getName()) && method.getBody() !== undefined),
-      ...cls.getProperties().filter((property) => {
-        const init = property.getInitializer();
-        return (
-          init !== undefined && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))
-        );
-      }),
+      ...cls.getProperties().filter(isFunctionProperty),
+      ...keptFields(cls, service),
+      ...cls.getGetAccessors().filter((getter) => getter.getBody() !== undefined),
     ];
     for (const member of members) {
       const name = member.getName();
@@ -208,6 +153,7 @@ export function hoistedNames(
         name: moduleName,
         file,
         exported: publicMember && !member.hasModifier("override"),
+        ...(Node.isGetAccessorDeclaration(member) ? { getter: true } : {}),
       });
     }
   }
@@ -232,25 +178,48 @@ function leadingComments(node: Node): string[] {
   );
 }
 
-/** `node`'s text with its receiver references mapped and marked. */
 /** Statements of a hoisted body that only set the 4.x service up: they vanish. */
 function vanishing(body: Node, service: ServiceModel, setupOnly: ReadonlySet<string>): Set<Node> {
   const statements = Node.isBlock(body) ? body.getStatements() : [];
   return new Set(statements.filter((statement) => isSetup(statement, service, setupOnly)));
 }
 
+/** Hoisted code: its text, whether it reads the tracked `db`, and the markers to put above it. */
+interface Mapped {
+  readonly text: string;
+  readonly usesDb: boolean;
+  /** Markers about `node` itself, or about a line it starts: they go above the code that holds it. */
+  readonly outer: readonly string[];
+}
+
+/**
+ * `node`'s text with its receiver references mapped and marked. A marker
+ * that belongs above `node` itself (or above a line `node` starts) cannot go
+ * inside its text: it is returned in `outer`, for the caller to put above
+ * the code it writes.
+ */
 function mapped(
   node: Node,
   scope: ReceiverScope,
   imports: Hoisted[],
   removed: ReadonlySet<Node> = new Set(),
-): { text: string; usesDb: boolean } {
+): Mapped {
   const result = mapReceiver(node, scope);
   const markers = new MarkerSet(node.getSourceFile());
   const text = node.getSourceFile().getFullText();
+  const outer: string[] = [];
   for (const marker of result.markers) {
-    if (!removed.has(statementOf(marker.node))) {
-      markers.add(marker.node, marker.category, marker.message);
+    const target = statementOf(marker.node);
+    if (removed.has(target)) {
+      continue;
+    }
+    if (markerAnchor(target).getStart() > node.getStart()) {
+      markers.addAbove(target, marker.category, marker.message);
+    } else {
+      const line = markerText(marker.category, marker.message);
+      if (!outer.includes(line)) {
+        outer.push(line);
+      }
     }
   }
   imports.push(...result.imports);
@@ -265,12 +234,49 @@ function mapped(
       text: "",
     };
   });
-  const edits = [
-    ...result.edits,
-    ...removals,
-    ...markers.edits.filter((edit) => edit.start > node.getStart()),
+  const edits = [...result.edits, ...removals, ...markers.edits];
+  return { text: editedText(node, edits), usesDb: result.usesDb, outer };
+}
+
+/** The function a method, a getter or a setter is hoisted into, with its markers. */
+function functionText(
+  member: MethodDeclaration | GetAccessorDeclaration | SetAccessorDeclaration,
+  name: string,
+  exported: boolean,
+  notes: readonly { category: Category; message: string }[],
+  scope: ReceiverScope,
+  imports: Hoisted[],
+  setupOnly: ReadonlySet<string>,
+): { text: string; usesDb: boolean } {
+  const body = member.getBody();
+  const bodyText =
+    body === undefined
+      ? { text: "{}", usesDb: false, outer: [] }
+      : mapped(body, scope, imports, vanishing(body, scope.service, setupOnly));
+  const params = member
+    .getParameters()
+    .map((param) => param.getText())
+    .join(", ");
+  const typeParams = member
+    .getTypeParameters()
+    .map((param) => param.getText())
+    .join(", ");
+  const returns = member.getReturnTypeNode()?.getText();
+  const signature = [
+    exported ? "export " : "",
+    Node.isMethodDeclaration(member) && member.isAsync() ? "async " : "",
+    `function ${name}`,
+    typeParams === "" ? "" : `<${typeParams}>`,
+    `(${params})`,
+    returns === undefined ? "" : `: ${returns}`,
+  ].join("");
+  const lines = [
+    ...leadingComments(member),
+    ...notes.map((note) => markerText(note.category, note.message)),
+    ...bodyText.outer,
+    `${signature} ${bodyText.text}`,
   ];
-  return { text: editedText(node, edits), usesDb: result.usesDb };
+  return { text: lines.join("\n"), usesDb: bodyText.usesDb };
 }
 
 function methodText(
@@ -280,11 +286,6 @@ function methodText(
   imports: Hoisted[],
   setupOnly: ReadonlySet<string>,
 ): { text: string; usesDb: boolean } {
-  const body = method.getBody();
-  const bodyText =
-    body === undefined
-      ? { text: "{}", usesDb: false }
-      : mapped(body, scope, imports, vanishing(body, scope.service, setupOnly));
   const note =
     HOOK_NOTES[method.getName()] ??
     (method.hasModifier("override")
@@ -293,29 +294,15 @@ function methodText(
           message: `overrode the 4.x BaseService method ${method.getName()}, which 5.0 does not have: keep what it still needs elsewhere, then delete it`,
         }
       : undefined);
-  const params = method
-    .getParameters()
-    .map((param) => param.getText())
-    .join(", ");
-  const typeParams = method
-    .getTypeParameters()
-    .map((param) => param.getText())
-    .join(", ");
-  const returns = method.getReturnTypeNode()?.getText();
-  const signature = [
-    target.exported ? "export " : "",
-    method.isAsync() ? "async " : "",
-    `function ${target.name}`,
-    typeParams === "" ? "" : `<${typeParams}>`,
-    `(${params})`,
-    returns === undefined ? "" : `: ${returns}`,
-  ].join("");
-  const lines = [
-    ...leadingComments(method),
-    ...(note === undefined ? [] : [markerText(note.category, note.message)]),
-    `${signature} ${bodyText.text}`,
-  ];
-  return { text: lines.join("\n"), usesDb: bodyText.usesDb };
+  return functionText(
+    method,
+    target.name,
+    target.exported,
+    note === undefined ? [] : [note],
+    scope,
+    imports,
+    setupOnly,
+  );
 }
 
 /** `defineCollection(name, options)` or `installAdminMethods(options)`, kept as a marked const. */
@@ -332,7 +319,9 @@ function setupConst(
   const options = collection ? second : first;
   const label = collection ? (first?.getText().replace(/["']/gu, "") ?? "collection") : "admin";
   const value =
-    options === undefined ? { text: "{}", usesDb: false } : mapped(options, scope, imports);
+    options === undefined
+      ? { text: "{}", usesDb: false, outer: [] }
+      : mapped(options, scope, imports);
   const note = collection
     ? markerText(
         "collection",
@@ -345,58 +334,99 @@ function setupConst(
   const text = [
     ...leadingComments(statement),
     note,
+    ...value.outer,
     `const ${collection ? `${label}Collection` : "adminMethods"} = ${value.text};`,
   ].join("\n");
   return { text, usesDb: value.usesDb };
 }
 
-/** Whether a constructor statement vanishes: `super(...)`, a field assignment, or set-up. */
+/**
+ * Whether a constructor statement vanishes: `super(...)`, set-up, or an
+ * assignment of a field that is not kept (the Prisma client, which is `db`
+ * now; a field holding another 4.x service, whose uses are marked).
+ */
 function vanishes(
   statement: Statement,
-  service: ServiceModel,
+  scope: ReceiverScope,
   setupOnly: ReadonlySet<string>,
 ): boolean {
   const isSuper =
     Node.isExpressionStatement(statement) &&
     statement.getExpression().getText().startsWith("super(");
-  return isSuper || isThisAssignment(statement) || isSetup(statement, service, setupOnly);
+  const field = assignedMember(statement);
+  return (
+    isSuper ||
+    (field !== undefined && scope.hoisted.get(field)?.getter !== undefined) ||
+    (field !== undefined && !scope.hoisted.has(field)) ||
+    isSetup(statement, scope.service, setupOnly)
+  );
+}
+
+/** A parameter as a function's parameter: a parameter property loses its modifiers. */
+function parameterText(param: ParameterDeclaration): string {
+  const type = param.getTypeNode()?.getText();
+  const init = param.getInitializer()?.getText();
+  return [
+    param.isRestParameter() ? "..." : "",
+    param.getNameNode().getText(),
+    param.hasQuestionToken() ? "?" : "",
+    type === undefined ? "" : `: ${type}`,
+    init === undefined ? "" : ` = ${init}`,
+  ].join("");
+}
+
+/** The name of the setup function a class's leftover constructor code goes into. */
+export function setupName(service: ServiceModel): string {
+  return `setUp${service.className}`;
 }
 
 /** What a class's constructor still says, as module code. */
 function constructorText(
   ctor: ConstructorDeclaration,
-  service: ServiceModel,
   scope: ReceiverScope,
   setupOnly: ReadonlySet<string>,
   imports: Hoisted[],
 ): { texts: string[]; usesDb: boolean } {
+  const { service } = scope;
   const texts: string[] = [];
-  const leftovers: string[] = [];
+  const leftovers: Statement[] = [];
+  const leftoverTexts: string[] = [];
   let usesDb = false;
   for (const statement of ctor.getStatements()) {
-    if (vanishes(statement, service, setupOnly)) {
+    if (vanishes(statement, scope, setupOnly)) {
       continue;
     }
     const name = thisCallName(statement);
-    const value =
-      name === "defineCollection" || name === "installAdminMethods"
-        ? setupConst(statement, name, scope, imports)
-        : mapped(statement, scope, imports);
+    if (name === "defineCollection" || name === "installAdminMethods") {
+      const value = setupConst(statement, name, scope, imports);
+      usesDb ||= value.usesDb;
+      texts.push(value.text);
+      continue;
+    }
+    const value = mapped(statement, scope, imports);
     usesDb ||= value.usesDb;
-    (name === "defineCollection" || name === "installAdminMethods" ? texts : leftovers).push(
-      value.text,
-    );
+    leftovers.push(statement);
+    leftoverTexts.push([...value.outer, value.text].join("\n"));
   }
   if (leftovers.length > 0) {
-    const setup = `setUp${service.className}`;
+    // the setup function takes the constructor's parameters its code uses
+    const used = (param: ParameterDeclaration): boolean => {
+      const symbol = param.getSymbol();
+      return leftovers.some((statement) =>
+        statement
+          .getDescendantsOfKind(SyntaxKind.Identifier)
+          .some((identifier) => identifier.getSymbol() === symbol),
+      );
+    };
+    const params = ctor.getParameters().filter(used).map(parameterText).join(", ");
     texts.push(
       [
         markerText(
           "this",
-          `4.x constructor code of ${service.className}: a service object has no constructor; move what still matters to module scope, a job or the server's start-up, then delete this function`,
+          `4.x constructor code of ${service.className}, its fields' values included: a service object has no constructor; call ${setupName(service)}(...) once where the server starts (or move each part to module scope or a job), then delete this function`,
         ),
-        `function ${setup}(): void {`,
-        ...leftovers,
+        `export function ${setupName(service)}(${params}): void {`,
+        ...leftoverTexts,
         "}",
       ].join("\n"),
     );
@@ -404,16 +434,39 @@ function constructorText(
   return { texts, usesDb };
 }
 
-function isThisAssignment(statement: Statement): boolean {
-  if (!Node.isExpressionStatement(statement)) {
-    return false;
-  }
-  const expression = statement.getExpression();
-  return (
-    Node.isBinaryExpression(expression) &&
-    expression.getOperatorToken().getText() === "=" &&
-    /^this\.\w+$/u.test(expression.getLeft().getText())
+/** A field as a module binding, under a marker: `const` when nothing writes it after its initializer. */
+function fieldText(
+  field: PropertyDeclaration,
+  target: Hoisted,
+  scope: ReceiverScope,
+  imports: Hoisted[],
+): { text: string; usesDb: boolean } {
+  const { service } = scope;
+  const name = field.getName();
+  const init = field.getInitializer();
+  const value = init === undefined ? undefined : mapped(init, scope, imports);
+  const type = field.getTypeNode()?.getText();
+  const fixed = value !== undefined && (field.isReadonly() || !reassigned(service, name));
+  const where =
+    value === undefined && setByConstructor(service, name)
+      ? `, set by its constructor: now a module binding ${setupName(service)}(...) sets`
+      : ": now module state";
+  const note = markerText(
+    "this",
+    `4.x instance field ${name} of ${service.className}${where}, one value for the whole process (a service object has no instance); keep it if that is right, else move it where it belongs`,
   );
+  const declaration = [
+    target.exported ? "export " : "",
+    fixed ? "const " : "let ",
+    target.name,
+    type === undefined ? "" : `: ${type}`,
+    value === undefined ? "" : ` = ${value.text}`,
+    ";",
+  ].join("");
+  return {
+    text: [...leadingComments(field), note, ...(value?.outer ?? []), declaration].join("\n"),
+    usesDb: value?.usesDb ?? false,
+  };
 }
 
 /** The module-level code that replaces `cls`, and whether it reads the tracked `db`. */
@@ -433,34 +486,54 @@ export function hoistClass(
   };
   const texts: string[] = [];
   let usesDb = false;
+  const own = (name: string): Hoisted | undefined => {
+    const target = hoisted.get(name);
+    return target?.file === cls.getSourceFile() ? target : undefined;
+  };
+  const add = (built: { text: string; usesDb: boolean }): void => {
+    texts.push(built.text);
+    usesDb ||= built.usesDb;
+  };
   for (const member of cls.getMembers()) {
     if (Node.isConstructorDeclaration(member)) {
-      const built = constructorText(member, service, scope, setupOnly, imports);
+      const built = constructorText(member, scope, setupOnly, imports);
       texts.push(...built.texts);
       usesDb ||= built.usesDb;
-    } else if (
-      Node.isMethodDeclaration(member) &&
-      hoisted.get(member.getName())?.file === cls.getSourceFile() &&
-      member.getBody() !== undefined
-    ) {
-      const target = hoisted.get(member.getName());
+    } else if (Node.isMethodDeclaration(member) && member.getBody() !== undefined) {
+      const target = own(member.getName());
       if (target !== undefined) {
-        const built = methodText(member, target, scope, imports, setupOnly);
-        texts.push(built.text);
-        usesDb ||= built.usesDb;
+        add(methodText(member, target, scope, imports, setupOnly));
       }
-    } else if (Node.isPropertyDeclaration(member) && hoisted.has(member.getName())) {
+    } else if (Node.isGetAccessorDeclaration(member)) {
+      const target = own(member.getName());
+      if (target !== undefined) {
+        add(functionText(member, target.name, target.exported, [], scope, imports, setupOnly));
+      }
+    } else if (Node.isSetAccessorDeclaration(member) && member.getBody() !== undefined) {
+      const name = `set${upperFirst(member.getName())}`;
+      const note = {
+        category: "this" as const,
+        message: `4.x setter ${member.getName()} of ${service.className}, now the function ${name}: where code assigned this.${member.getName()}, call it`,
+      };
+      add(functionText(member, name, false, [note], scope, imports, setupOnly));
+    } else if (Node.isPropertyDeclaration(member) && own(member.getName()) !== undefined) {
+      const target = own(member.getName());
       const init = member.getInitializer();
-      const target = hoisted.get(member.getName());
-      if (init !== undefined && target !== undefined) {
+      if (target === undefined) {
+        continue;
+      }
+      if (init !== undefined && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) {
         const value = mapped(init, scope, imports);
-        usesDb ||= value.usesDb;
-        texts.push(
-          [
+        add({
+          text: [
             ...leadingComments(member),
+            ...value.outer,
             `${target.exported ? "export " : ""}const ${target.name} = ${value.text};`,
           ].join("\n"),
-        );
+          usesDb: value.usesDb,
+        });
+      } else {
+        add(fieldText(member, target, scope, imports));
       }
     }
   }

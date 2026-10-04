@@ -130,8 +130,8 @@ interface OxlintReport {
   }[];
 }
 
-/** Runs the repository's oxlint over `cwd` with the `.oxlintrc.json` there. */
-export function lint(cwd: string): LintDiagnostic[] {
+/** Runs the repository's oxlint over `cwd` with the config there (`.oxlintrc.json` by default). */
+export function lint(cwd: string, config = ".oxlintrc.json"): LintDiagnostic[] {
   const require = createRequire(join(REPO, "package.json"));
   const manifest =
     (require.resolve.paths("oxlint") ?? [])
@@ -141,11 +141,11 @@ export function lint(cwd: string): LintDiagnostic[] {
     JSON.parse(readFileSync(manifest, "utf8")) as { bin: string | Record<string, string> }
   ).bin;
   const entry = join(manifest, "..", typeof bin === "string" ? bin : (bin.oxlint ?? ""));
-  const result = spawnSync(
-    process.execPath,
-    [entry, "--format", "json", "--config", ".oxlintrc.json", "."],
-    { cwd, encoding: "utf8", maxBuffer: 1024 ** 3 },
-  );
+  const result = spawnSync(process.execPath, [entry, "--format", "json", "--config", config, "."], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 1024 ** 3,
+  });
   const report = JSON.parse(result.stdout) as OxlintReport;
   return report.diagnostics.map((diagnostic) => ({
     rule: diagnostic.code ?? "",

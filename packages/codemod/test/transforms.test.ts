@@ -1,8 +1,10 @@
 // The codemod on the 4.1 fixture app (test/fixtures/v4-app): the output and
 // the report match the committed snapshot (test/fixtures/v4-app.expected;
-// `vitest run -u` rewrites it), the access mapping writes the four forms the
-// 4.x semantics call for, the report lists every manual item of the fixture
-// at its file and line, and a second run changes nothing.
+// `vitest run -u` rewrites it, and a file the codemod stops writing must be
+// deleted from it by hand), the access mapping writes the four forms the 4.x
+// semantics call for, the report lists every manual item of the fixture at
+// its file and line, a service class's fields, getters, constructor and
+// overrides survive as marked module code, and a second run changes nothing.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -50,10 +52,12 @@ describe("the output on the 4.1 fixture app", () => {
       contracts: 5,
       schemasMoved: 14,
       todoSchemas: 21,
-      clientCalls: 7,
+      clientCalls: 8,
       wrappersDeleted: 3,
     });
+    // the wrappers, and the file of types only they imported
     expect(result.deleted.toSorted()).toEqual([
+      "apps/web/src/hooks/service-types.ts",
       "apps/web/src/hooks/useService.ts",
       "apps/web/src/hooks/useServiceQuery.ts",
       "apps/web/src/hooks/useSubscription.ts",
@@ -70,6 +74,70 @@ describe("the output on the 4.1 fixture app", () => {
     });
     expect(readTree(root)).toEqual(output);
     expect(again.report).toBe(result.report);
+  });
+});
+
+describe("a 4.x service class's members (label.ts)", () => {
+  const label = (): string => output.get("apps/api/src/services/label.ts") ?? "";
+
+  it("keeps every field as a marked module binding, with its initializer", () => {
+    expect(label()).toMatch(
+      /\[this\] 4\.x instance field renamed of LabelService: now module state[^\n]*\nconst renamed = new Set<string>\(\);/u,
+    );
+    expect(label()).toMatch(
+      /\[this\] 4\.x instance field onChange[^\n]*\nlet onChange: LabelListener \| undefined;/u,
+    );
+    // a method binds a local `room`, so the field's binding takes another name
+    expect(label()).toMatch(
+      /\[this\] 4\.x instance field room[^\n]*\nexport let roomOfLabelService: string;/u,
+    );
+    // uses of the fields read the bindings
+    expect(label()).toContain("renamed.add(label.id);");
+    expect(label()).toContain("const room = roomOfLabelService;");
+    expect(label()).not.toMatch(/this\.(?:renamed|onChange|room)\b/u);
+  });
+
+  it("keeps the constructor's assignments in a setup function that takes the parameters they use", () => {
+    expect(label()).toContain(
+      "export function setUpLabelService(options: { onChange?: LabelListener } = {}): void {\n  onChange = options.onChange;",
+    );
+  });
+
+  it("hoists a getter into a function, which its reads call", () => {
+    expect(label()).toContain("export function renamedCount(): number {\n  return renamed.size;");
+  });
+
+  it("drops a call of the 4.x base class under a marker that names it: super does not parse outside a class", () => {
+    const code = label()
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("//"));
+    expect(code.filter((line) => /\bsuper\b/u.test(line))).toEqual([]);
+    expect(label()).toContain(
+      "// quickdraw-migrate: review [this] dropped super.unsubscribeSocket(socket), a call of the 4.x base class",
+    );
+    expect(label()).toMatch(
+      /\[this\] super\.adminCreate\(data\) called the 4\.x base class[^\n]*\n {2}const created = await undefined;/u,
+    );
+  });
+
+  it("puts a marker about a one-line literal above the statement holding it", () => {
+    expect(label()).toMatch(
+      /\[this\] this\.subscribers was 4\.x service-instance state[^\n]*\n {2}return \{ room, sockets: this\.subscribers/u,
+    );
+  });
+});
+
+describe("the web app's 4.x types", () => {
+  it("drop a local type only a rewritten hook call's type arguments named", () => {
+    const text = output.get("apps/web/src/components/RenameLabel.tsx") ?? "";
+    expect(text).not.toContain("RenameLabelPayload");
+    expect(text).not.toContain("type argument: nothing else names it");
+  });
+
+  it("give a one-argument UseCollectionResult 5.0's second argument", () => {
+    expect(output.get("apps/web/src/hooks/useMyProjects.ts")).toContain(
+      "export function useMyProjects(): UseCollectionResult<ProjectListItem, { readonly id: string }> {",
+    );
   });
 });
 
@@ -262,7 +330,23 @@ describe("the report", () => {
   });
 
   it("lists a contract item for every migrated method and entity", () => {
-    expect(section("Contracts")).toHaveLength(result.stats.methods + 4);
+    // and one above each handler whose 4.x DTO | null output became "entity"
+    const nonNull = section("Contracts").filter((line) =>
+      line.includes('the contract\'s output is "entity"'),
+    );
+    expect(nonNull.map((line) => /`([^`:]+):/u.exec(line)?.[1])).toEqual([
+      "apps/api/src/services/project.ts",
+      "apps/api/src/services/task/methods/update-task.ts",
+    ]);
+    expect(section("Contracts")).toHaveLength(result.stats.methods + 4 + nonNull.length);
+  });
+
+  it("lists each new file of a carve-out", () => {
+    expect(section("Carve-outs")).toEqual([
+      expect.stringMatching(
+        /^- \[ \] `packages\/shared\/src\/contracts\/label\.ts:5` this file belongs to the quickdraw-labels carve-out/u,
+      ),
+    ]);
   });
 
   it("lists every method of a kit method's shape, marked above the method", () => {

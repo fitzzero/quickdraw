@@ -2,7 +2,10 @@
 // kind (from its name), the row id 4.x would have checked, its input (the
 // moved schema, or a `todoSchema` of the 4.x payload type) and its output
 // (`"entity"` when the 4.x response was the service's DTO, else a
-// `todoSchema` of the response type).
+// `todoSchema` of the response type). A mutation of one row whose 4.x
+// response was `DTO | null` answers `"entity"`: 4.x's `this.update` gave null
+// for a missing row, where a tracked write throws `NOT_FOUND`, and only an
+// exact `"entity"` output is optimistic by default.
 
 import { join } from "node:path";
 import {
@@ -12,6 +15,7 @@ import {
   type TypeNode,
 } from "ts-morph";
 import { type EntryId, entryKeyOf } from "./access";
+import { carveOutOf } from "./carveOuts";
 import type { RunContext } from "./context";
 import {
   findMethodMap,
@@ -21,6 +25,7 @@ import {
   type MethodMapEntry,
 } from "./methodMaps";
 import type { MethodCall, ServiceModel } from "./model";
+import { markerText } from "./markers";
 import { moveSchema, type MovedSchema } from "./schemas";
 import { quote } from "./text";
 
@@ -46,6 +51,8 @@ export interface MethodPlan {
   readonly payload: TypeNode | undefined;
   /** The 4.x response type, when the output is a `todoSchema` of it. */
   readonly todoResponse: TypeNode | undefined;
+  /** Markers for the service's method object, above its handler. */
+  readonly handlerNotes: readonly string[];
 }
 
 /** A service's planned contract. */
@@ -65,6 +72,8 @@ export interface ServicePlan {
   readonly methods: readonly MethodPlan[];
   /** Methods of the 4.x method map that no defineMethod call implements. */
   readonly unimplemented: readonly string[];
+  /** The template carve-out (`quickdraw-game`) the 4.x service sat in, if any. */
+  readonly carveOut: string | undefined;
 }
 
 const QUERY = /^(?:get|list|search|find|count)(?![a-z0-9])/u;
@@ -83,12 +92,13 @@ function compact(text: string): string {
   return text.replace(/\s+/gu, "");
 }
 
-/** The contract output for a 4.x response type. */
+/** The contract output for a 4.x response type; `oneRow` for a mutation whose input names a row. */
 function outputFor(
   response: TypeNode | undefined,
   dto: string | undefined,
   hasEntity: boolean,
-): { code: string; todo: boolean } {
+  oneRow: boolean,
+): { code: string; todo: boolean; nonNull?: boolean } {
   if (response === undefined) {
     return { code: "todoSchema<unknown>()", todo: true };
   }
@@ -98,13 +108,26 @@ function outputFor(
       return { code: quote("entity"), todo: false };
     }
     if (text === `${dto}|null` || text === `null|${dto}`) {
-      return { code: 'nullable("entity")', todo: false };
+      return oneRow
+        ? { code: quote("entity"), todo: false, nonNull: true }
+        : { code: 'nullable("entity")', todo: false };
     }
     if (text === `${dto}[]` || text === `Array<${dto}>` || text === `readonly${dto}[]`) {
       return { code: 'listOf("entity")', todo: false };
     }
   }
   return { code: `todoSchema<${response.getText()}>()`, todo: true };
+}
+
+/** What the contract and the handler say of a 4.x `DTO | null` mutation of one row, now `"entity"`. */
+function nonNullNotes(dto: string): { contract: string; handler: string } {
+  return {
+    contract: `output: "entity", where 4.x answered ${dto} | null (null for a missing row, which a tracked write answers with NOT_FOUND instead); only an exact "entity" output is optimistic by default. Use nullable("entity") if the handler still answers null`,
+    handler: markerText(
+      "contract",
+      `the contract's output is "entity" (4.x answered ${dto} | null): return the row, and let a missing one fail with NOT_FOUND (db.<model>.update throws it)`,
+    ),
+  };
 }
 
 /** Whether an inline `z.object({ id: ... })` schema has an `id` key. */
@@ -167,10 +190,17 @@ function planMethod(
     );
     ctx.stats.todoSchemas += 1;
   }
-  const output = outputFor(entry?.response, dto, hasEntity);
+  const inputHasId = payload?.getType().getProperty("id") !== undefined || schemaHasId(call.schema);
+  const output = outputFor(entry?.response, dto, hasEntity, kind === "mutation" && inputHasId);
   if (output.todo) {
     notes.push("output: todoSchema of the 4.x response type");
     ctx.stats.todoSchemas += 1;
+  }
+  const handlerNotes: string[] = [];
+  if (output.nonNull === true) {
+    const nonNull = nonNullNotes(dto ?? "the DTO");
+    notes.push(nonNull.contract);
+    handlerNotes.push(nonNull.handler);
   }
   if (entry === undefined) {
     notes.push("the 4.x method map has no entry for it");
@@ -180,7 +210,7 @@ function planMethod(
     name: call.name,
     kind,
     entryId: entryIdOf(call, entry),
-    inputHasId: payload?.getType().getProperty("id") !== undefined || schemaHasId(call.schema),
+    inputHasId,
     input,
     fallbackInput,
     output: output.code,
@@ -188,6 +218,7 @@ function planMethod(
     notes,
     payload,
     todoResponse: output.todo ? entry?.response : undefined,
+    handlerNotes,
   };
 }
 
@@ -245,5 +276,6 @@ export function planService(
     entity,
     methods,
     unimplemented: [...(map?.entries.keys() ?? [])].filter((name) => !byName.has(name)),
+    carveOut: carveOutOf(ctx.project, ctx.layout, service),
   };
 }
