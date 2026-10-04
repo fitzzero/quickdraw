@@ -251,6 +251,14 @@ export function applyRateLimitMiddleware(
   io.on("connection", (socket) => {
     // Use Socket.io's built-in middleware for incoming packets
     socket.use(([eventName, ...args], next) => {
+      // Socket.IO accepts a number as an event name, and this middleware runs
+      // inside process.nextTick: a string method on it would throw uncaught and
+      // exit the process. No listener serves one, so it passes uncounted.
+      if (typeof eventName !== "string") {
+        next();
+        return;
+      }
+
       // Skip excluded events
       if (excludeEvents.includes(eventName)) {
         next();
