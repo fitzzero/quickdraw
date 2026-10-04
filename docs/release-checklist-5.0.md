@@ -79,14 +79,12 @@ state; tick each item as it is done.
       tests (the fixture's snapshot, its output typechecking against the
       built core and passing lint apart from its markers, a second run
       changing nothing).
-- [ ] Pack H (agent guardrails, the multi-node proof and non-JS clients,
-      PR #50) merged to `dev` after its finale review and its two fixer
-      rounds, with CI green there (the path-gated `cluster` and `godot` jobs
-      included). It is not in `5.0.0-rc.0`, tagged at the pack G merge
-      commit (`1429b82`): the release candidate that carries it is
-      `5.0.0-rc.1` (its `CHANGELOG.md` entry waits under that heading; the
-      versions move when it is tagged, part 2 again), and quickdraw-chat's
-      game client needs it.
+- [x] Pack H (agent guardrails, the multi-node proof and non-JS clients,
+      PR #50) merged to `dev` (`69b0da3`) after its finale review and its two
+      fixer rounds, with CI green there (the path-gated `cluster` and `godot`
+      jobs included). `5.0.0-rc.0` (pack G's commit `1429b82`) was never
+      published, so the first published release candidate is `5.0.0-rc.1`,
+      which carries pack H; quickdraw-chat's game client needs it.
 
 ## 2. Publish the release candidate (owner)
 
@@ -101,24 +99,24 @@ state; tick each item as it is done.
   | `@fitzzero/quickdraw-skills`  | no                                        | step 1, then step 2                                               |
   | `@fitzzero/quickdraw-codemod` | no                                        | step 1 (it has a build step), then step 2                         |
 
-  The first hand publish can be `5.0.0-rc.0` itself, from the commit the
+  The first hand publish can be `5.0.0-rc.1` itself, from the commit the
   release candidate is tagged on (`npm publish --access public --tag next`
   in the package's directory). Pushing that package's tag afterwards is
   harmless, since the workflow skips a version already on npm, and keeps
   the tag record. A hand-published version has no provenance.
 
-- [ ] Tag the release candidate on `dev` at the pack G merge commit
-      (`1429b82`; a later commit carries pack H, which is `5.0.0-rc.1`) with
-      a clean tree, for each of `core`, `lint`, `skills` and `codemod`:
+- [ ] Tag the release candidate on `dev` at the commit that sets the
+      versions to `5.0.0-rc.1` (after pack H), with a clean tree, for each
+      of `core`, `lint`, `skills` and `codemod`:
 
   ```bash
-  bash scripts/release-tag.sh core 5.0.0-rc.0   # prints core-v5.0.0-rc.0
-  git tag -a core-v5.0.0-rc.0 -m "@fitzzero/quickdraw-core 5.0.0-rc.0"
-  git push origin core-v5.0.0-rc.0
+  bash scripts/release-tag.sh core 5.0.0-rc.1   # prints core-v5.0.0-rc.1
+  git tag -a core-v5.0.0-rc.1 -m "@fitzzero/quickdraw-core 5.0.0-rc.1"
+  git push origin core-v5.0.0-rc.1
   ```
 
 - [ ] The four Publish runs are green, each package's `next` dist-tag is
-      `5.0.0-rc.0` (`npm view @fitzzero/quickdraw-core dist-tags`), and
+      `5.0.0-rc.1` (`npm view @fitzzero/quickdraw-core dist-tags`), and
       core's `latest` is still 4.1.0.
 - [ ] The published codemod gives the repository's dry run: in a copy of
       quickdraw-chat at the commit
@@ -135,7 +133,7 @@ state; tick each item as it is done.
 
 - [ ] A migration card on the quickdraw-chat project, drafted from
       [`downstream/quickdraw-chat.md`](downstream/quickdraw-chat.md).
-- [ ] quickdraw-chat migrated on a branch against `5.0.0-rc.0`, with its own
+- [ ] quickdraw-chat migrated on a branch against `5.0.0-rc.1`, with its own
       test suites green (lint on the 5.0 base config, typecheck, unit and
       integration tests).
 - [ ] quickdraw-chat exercised by hand against the release candidate: sign
