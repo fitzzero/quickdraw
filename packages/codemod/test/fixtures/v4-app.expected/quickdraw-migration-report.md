@@ -36,14 +36,14 @@ Each method's kind was chosen from its name (get, list, search, find and count r
 - [ ] `packages/shared/src/contracts/label.ts:19` query, chosen from its name
 - [ ] `packages/shared/src/contracts/label.ts:21` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
 - [ ] `packages/shared/src/contracts/project.ts:22` the entity is the 4.x DTO ProjectDTO: give it a real schema. Its keys are the fields subscribers receive, read from model "project": drop any that is not a column, or give it a projection select and map
-- [ ] `packages/shared/src/contracts/project.ts:25` mutation, chosen from its name; output: todoSchema of the 4.x response type
-- [ ] `packages/shared/src/contracts/project.ts:27` query, chosen from its name
-- [ ] `packages/shared/src/contracts/project.ts:29` mutation, chosen from its name; output: "entity", where 4.x answered ProjectDTO | null (null for a missing row, which a tracked write answers with NOT_FOUND instead); only an exact "entity" output is optimistic by default. Use nullable("entity") if the handler still answers null
-- [ ] `packages/shared/src/contracts/project.ts:31` query, chosen from its name
-- [ ] `packages/shared/src/contracts/project.ts:33` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
 - [ ] `packages/shared/src/contracts/project.ts:35` mutation, chosen from its name; output: todoSchema of the 4.x response type
-- [ ] `packages/shared/src/contracts/project.ts:37` query, chosen from its name; output: todoSchema of the 4.x response type
-- [ ] `packages/shared/src/contracts/project.ts:39` mutation, chosen from its name; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/project.ts:37` query, chosen from its name
+- [ ] `packages/shared/src/contracts/project.ts:39` mutation, chosen from its name; output: "entity", where 4.x answered ProjectDTO | null (null for a missing row, which a tracked write answers with NOT_FOUND instead); only an exact "entity" output is optimistic by default. Use nullable("entity") if the handler still answers null
+- [ ] `packages/shared/src/contracts/project.ts:41` query, chosen from its name
+- [ ] `packages/shared/src/contracts/project.ts:43` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/project.ts:45` mutation, chosen from its name; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/project.ts:47` query, chosen from its name; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/project.ts:49` mutation, chosen from its name; output: todoSchema of the 4.x response type
 - [ ] `packages/shared/src/contracts/task.ts:23` the entity is the 4.x DTO TaskDTO: give it a real schema. Its keys are the fields subscribers receive, read from model "task": drop any that is not a column, or give it a projection select and map
 - [ ] `packages/shared/src/contracts/task.ts:26` mutation, chosen from its name
 - [ ] `packages/shared/src/contracts/task.ts:28` query, chosen from its name; output: todoSchema of the 4.x response type

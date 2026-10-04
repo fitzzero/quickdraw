@@ -55,7 +55,7 @@ export function regionsOf(text: string): Region[] {
 }
 
 /** The carve-out holding `node`, if any. */
-function regionOf(node: Node): string | undefined {
+export function regionOf(node: Node): string | undefined {
   const position = node.getStart();
   return regionsOf(node.getSourceFile().getFullText()).find(
     (region) => region.start <= position && position <= region.end,

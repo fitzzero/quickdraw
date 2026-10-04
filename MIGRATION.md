@@ -146,7 +146,9 @@ faithfully. What it does:
   around its `ServiceMethodsMap` entry) keeps them: its lines in
   `contracts/index.ts` sit between the same comments, and its new contract
   file carries a `[carve-out]` marker, so a fork that strips the carve-out
-  can delete it too.
+  can delete it too. An entity key the 4.x DTO declares inside a carve-out
+  (a game-only `isGuest` on `UserDTO`) keeps the carve-out's comments
+  around it in the contract's `keys`.
 - **Formatting.** It formats every file it writes, the report too, with the
   app's formatter (oxfmt, prettier or Biome, when the root `package.json`
   has it and it is installed), so the output passes the app's format check

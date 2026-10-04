@@ -96,7 +96,8 @@ ChatService(prisma)`, a parameter `pushService: PushService`) imports the
   carve-out's comments (`quickdraw-game:start`, `quickdraw-game:end`, around
   its `ServiceMethodsMap` entry) keeps them in `contracts/index.ts`, and its
   new contract file carries a `[carve-out]` marker, so the report lists it
-  for the fork script that deletes the carve-out's files.
+  for the fork script that deletes the carve-out's files. An entity key the
+  DTO declares inside a carve-out keeps its comments in the contract.
 
 ## What it leaves
 

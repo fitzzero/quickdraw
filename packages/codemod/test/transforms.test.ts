@@ -341,6 +341,12 @@ describe("the report", () => {
     expect(section("Contracts")).toHaveLength(result.stats.methods + 4 + nonNull.length);
   });
 
+  it("keeps a carve-out's markers around an entity key the DTO declares inside it", () => {
+    expect(output.get("packages/shared/src/contracts/project.ts")).toMatch(
+      /keys: \[\n\s+"id",\n\s+"name",\n\s+"ownerId",\n\s+"acl",\n\s+\/\/ ── quickdraw-archive:start ──\n\s+"archived",\n\s+\/\/ ── quickdraw-archive:end ──\n\s+\]/u,
+    );
+  });
+
   it("lists each new file of a carve-out", () => {
     expect(section("Carve-outs")).toEqual([
       expect.stringMatching(

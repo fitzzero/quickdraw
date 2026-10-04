@@ -15,7 +15,7 @@ import {
   type TypeNode,
 } from "ts-morph";
 import { type EntryId, entryKeyOf } from "./access";
-import { carveOutOf } from "./carveOuts";
+import { carveOutOf, regionMarkers, regionOf } from "./carveOuts";
 import type { RunContext } from "./context";
 import {
   findMethodMap,
@@ -222,10 +222,42 @@ function planMethod(
   };
 }
 
+/**
+ * The entity's keys as an array literal. A key the DTO declares inside a
+ * template carve-out other than the service's own keeps that carve-out's
+ * markers, on lines of their own, so stripping the carve-out drops it.
+ */
+function keysCode(
+  dto: InterfaceDeclaration | TypeAliasDeclaration,
+  keys: readonly string[],
+  carveOut: string | undefined,
+): string {
+  const regionOfKey = (key: string): string | undefined => {
+    const declaration = dto.getType().getProperty(key)?.getDeclarations()[0];
+    const region = declaration === undefined ? undefined : regionOf(declaration);
+    return region === carveOut ? undefined : region;
+  };
+  const regions = keys.map(regionOfKey);
+  if (regions.every((region) => region === undefined)) {
+    return `[${keys.map((key) => quote(key)).join(", ")}]`;
+  }
+  const lines = keys.flatMap((key, index) => {
+    const region = regions[index];
+    const markers = region === undefined ? undefined : regionMarkers(region);
+    return [
+      ...(markers !== undefined && regions[index - 1] !== region ? [markers.start] : []),
+      `${quote(key)},`,
+      ...(markers !== undefined && regions[index + 1] !== region ? [markers.end] : []),
+    ];
+  });
+  return ["[", ...lines, "]"].join("\n");
+}
+
 function entityOf(
   ctx: RunContext,
   service: ServiceModel,
   hasEntity: boolean,
+  carveOut: string | undefined,
 ): ServicePlan["entity"] {
   if (!hasEntity) {
     return undefined;
@@ -239,9 +271,9 @@ function entityOf(
     };
   }
   const keys = keysOf(dto);
-  const list = (keys.includes("id") ? keys : ["id", ...keys]).map((key) => quote(key)).join(", ");
+  const list = keysCode(dto, keys.includes("id") ? keys : ["id", ...keys], carveOut);
   return {
-    code: `todoSchema<${dto.getName()}>({ keys: [${list}] })`,
+    code: `todoSchema<${dto.getName()}>({ keys: ${list} })`,
     dto,
     note: `the entity is the 4.x DTO ${dto.getName()}: give it a real schema. Its keys are the fields subscribers receive, read from model "${service.model ?? ""}": drop any that is not a column, or give it a projection select and map`,
   };
@@ -255,7 +287,8 @@ export function planService(
 ): ServicePlan {
   const map = findMethodMap(ctx.project, ctx.layout, service.methodMapName);
   const hasEntity = !service.rpc && service.model !== undefined;
-  const entity = entityOf(ctx, service, hasEntity);
+  const carveOut = carveOutOf(ctx.project, ctx.layout, service);
+  const entity = entityOf(ctx, service, hasEntity, carveOut);
   const byName = new Map(service.methods.map((call) => [call.name, call]));
   const methods = [...byName.values()].map((call) =>
     planMethod(
@@ -276,6 +309,6 @@ export function planService(
     entity,
     methods,
     unimplemented: [...(map?.entries.keys() ?? [])].filter((name) => !byName.has(name)),
-    carveOut: carveOutOf(ctx.project, ctx.layout, service),
+    carveOut,
   };
 }

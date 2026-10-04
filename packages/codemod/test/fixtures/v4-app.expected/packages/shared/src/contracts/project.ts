@@ -20,7 +20,17 @@ const shareProjectSchema = z.object({
 
 export const projectContract = defineContract("projectService", {
   // quickdraw-migrate: review [contract] the entity is the 4.x DTO ProjectDTO: give it a real schema. Its keys are the fields subscribers receive, read from model "project": drop any that is not a column, or give it a projection select and map
-  entity: todoSchema<ProjectDTO>({ keys: ["id", "name", "ownerId", "acl", "archived"] }),
+  entity: todoSchema<ProjectDTO>({
+    keys: [
+      "id",
+      "name",
+      "ownerId",
+      "acl",
+      // ── quickdraw-archive:start ──
+      "archived",
+      // ── quickdraw-archive:end ──
+    ]
+  }),
   methods: {
     // quickdraw-migrate: review [contract] mutation, chosen from its name; output: todoSchema of the 4.x response type
     createProject: mutation({ input: createProjectSchema, output: todoSchema<{ id: string }>() }),

@@ -65,8 +65,9 @@ cut.
   than answering null, and only `"entity"` is optimistic by default (F1.12).
 - A service inside a template carve-out (`quickdraw-game:start` ...
   `:end`) keeps its markers in `contracts/index.ts` (and around helpers only
-  it uses), and its new contract file carries a `[carve-out]` marker the
-  report lists under "Carve-outs" (F1.13).
+  it uses), its new contract file carries a `[carve-out]` marker the report
+  lists under "Carve-outs", and an entity key a DTO declares inside a
+  carve-out keeps the carve-out's markers in the contract's `keys` (F1.13).
 
 ### Packaging and guides
 
