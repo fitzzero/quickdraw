@@ -49,8 +49,10 @@ reads (no HTTP long polling, no binary attachments).
    PONG, \`3\`, or the server closes the connection after \`pingTimeout\`. A
    client that hears nothing for \`pingInterval + pingTimeout\` has lost the
    connection.
-7. Either side ends the socket with DISCONNECT, \`41\`, or by closing the
-   WebSocket. A message longer than \`maxPayload\` bytes closes it too.`;
+7. A client leaves with Socket.IO's DISCONNECT, \`41\`, then closes the
+   WebSocket itself. The server ends a socket with \`41\` and closes the
+   WebSocket after it; a message longer than \`maxPayload\` bytes closes it
+   too.`;
 
 /** The packets a WebSocket-only client sees: the text they start with, what they are, who sends them. */
 export const PACKETS: readonly (readonly [string, string, string])[] = [

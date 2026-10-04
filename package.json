@@ -9,6 +9,7 @@
   },
   "workspaces": [
     "packages/*",
+    "examples/*",
     "bench",
     "bench/apps/*"
   ],
