@@ -91,6 +91,12 @@ const SECTIONS: readonly Section[] = [
       "A service is an object now: no constructor, no fields, no `this`; handlers read `ctx.principal`.",
   },
   {
+    title: "Errors the caller no longer sees",
+    categories: ["error"],
+    intro:
+      "4.x sent a thrown error's message to the caller; 5.0 answers any error that is not a `QuickdrawError` with `INTERNAL` and a generic message (the original is logged). Throw `new QuickdrawError(code, message)` with the code that fits (`NOT_FOUND`, `FORBIDDEN`, `CONFLICT`, `VALIDATION`, ...) wherever the caller should see the message.",
+  },
+  {
     title: "Client",
     categories: ["client"],
     intro:

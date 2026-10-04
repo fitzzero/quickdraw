@@ -57,6 +57,13 @@ is [`release-checklist-5.0.md`](release-checklist-5.0.md).
    commit must contain `.github/workflows/publish.yml`. Until 5.0 is released
    that means a commit on `dev`; `main` is still 4.1 and has no workflow.
 
+   Push release tags one at a time (one `git push origin <tag>` each), never
+   several in one push: GitHub creates no push events, so runs no workflow,
+   when more than three tags are pushed at once (found publishing
+   `5.0.0-rc.2`, whose four tags went up together and started nothing). If
+   that happened, run the workflow by hand for each package (below) rather
+   than deleting and pushing the tags again.
+
 4. Watch the Publish run under the repository's Actions tab. It fails before
    publishing anything if the tag's version and the package's `package.json`
    disagree, or if the package is private.
@@ -80,6 +87,11 @@ To publish without pushing a tag, open the Publish workflow in the Actions
 tab, choose "Run workflow", pick the ref to publish from under "Use workflow
 from" (the release tag, or the branch at the release commit), and enter the
 `package` and `version`. The version must equal that ref's `package.json`.
+From a terminal:
+
+```bash
+gh workflow run publish.yml --ref core-v5.0.0-rc.2 -f package=core -f version=5.0.0-rc.2
+```
 
 ## One-time npm setup for each package
 

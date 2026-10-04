@@ -80,9 +80,12 @@ guide's sections as the report sends you to them.
       settle dropped hook options (`invalidateOn` becomes `watch`), replace
       the 4.x `QuickdrawProvider` props.
 
-   Then `[this]`, `[context]`, `[channel]`, `[server]` and `[v4-api]`:
-   instance state, the 4.x context, channels, the server set-up
-   (`qd.createServer`, with `legacyWire: true` while 4.x clients remain).
+   Then `[this]`, `[context]`, `[error]`, `[channel]`, `[server]` and
+   `[v4-api]`: instance state, the 4.x context, `throw new Error(message)`
+   in handlers (5.0 answers it with a generic `INTERNAL`: throw
+   `QuickdrawError(code, message)` where the caller should see the message),
+   channels, the server set-up (`qd.createServer`, with `legacyWire: true`
+   while 4.x clients remain).
    A hand-built sign-in (unmarked: the codemod leaves it) moves onto the
    auth routes kit last, with its `Session` table migration (MIGRATION.md,
    "Hand-built auth to the auth routes kit").

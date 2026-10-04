@@ -499,7 +499,9 @@ private initMethods(): void {
 
 The 5.0 methods are the `methods` object of the service above. Errors are
 thrown as `QuickdrawError(code, message)`: anything else reaches the caller
-as `INTERNAL` with a generic message, where 4.x sent the thrown message.
+as `INTERNAL` with a generic message, where 4.x sent the thrown message. The
+codemod marks each `throw new Error(...)` in a handler `[error]`: give it the
+code that fits wherever the caller should still see the message.
 
 ### `verifyAllMethods` is compile-time
 

@@ -158,6 +158,7 @@ export const projectService = qd.defineService(projectContract, {
       handler: async ({ input, ctx }) => {
         // quickdraw-migrate: review [write] 4.x CRUD helper this.delete: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.delete(...) instead (frames follow the tracked write; hooks do not run; 4.x returned false for a missing row where db.delete throws NOT_FOUND)
         const deleted = await this.delete(input.id);
+        // quickdraw-migrate: review [error] 4.x sent this error's message to the caller; 5.0 answers an error that is not a QuickdrawError with INTERNAL and a generic message: throw new QuickdrawError(code, message) with the code that fits (NOT_FOUND, FORBIDDEN, CONFLICT, VALIDATION) if the caller should see it
         if (!deleted) throw new Error("Project not found");
         if (ctx.principal.userId) {
           // quickdraw-migrate: review [emit] hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
@@ -189,6 +190,7 @@ export const projectService = qd.defineService(projectContract, {
             where: { id: input.id },
             select: { acl: true },
           });
+          // quickdraw-migrate: review [error] 4.x sent this error's message to the caller; 5.0 answers an error that is not a QuickdrawError with INTERNAL and a generic message: throw new QuickdrawError(code, message) with the code that fits (NOT_FOUND, FORBIDDEN, CONFLICT, VALIDATION) if the caller should see it
           if (!project) throw new Error("Project not found");
           const acl = ((project.acl as unknown as ACL) ?? []).filter(
             (entry) => entry.userId !== input.userId,

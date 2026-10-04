@@ -133,6 +133,21 @@ describe("a 4.x service class's members (label.ts)", () => {
   });
 });
 
+describe("a handler's thrown errors", () => {
+  it("marks each throw new Error, whose message 5.0 no longer sends, but not a guard the codemod dropped", () => {
+    const user = output.get("apps/api/src/services/user.ts") ?? "";
+    expect(user).toMatch(
+      /\[error\] 4\.x sent this error's message to the caller[^\n]*QuickdrawError[^\n]*\n\s*throw new Error\("Cannot update other users"\);/u,
+    );
+    const create = output.get("apps/api/src/services/task/methods/create-task.ts") ?? "";
+    // The `if (!ctx.userId) throw ...` guard the access form makes needless is dropped, unmarked.
+    expect(create).not.toContain("Authentication required");
+    expect(create.match(/\[error\]/gu)).toHaveLength(1);
+    const report = output.get(REPORT_FILE) ?? "";
+    expect(report).toContain("## Errors the caller no longer sees");
+  });
+});
+
 describe("the web app's 4.x types", () => {
   it("drop a local type only a rewritten hook call's type arguments named", () => {
     const text = output.get("apps/web/src/components/RenameLabel.tsx") ?? "";

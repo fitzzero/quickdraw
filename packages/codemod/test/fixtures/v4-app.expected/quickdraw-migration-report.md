@@ -2,7 +2,7 @@
 
 Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review` markers in the code; running the codemod again rewrites it from the markers that remain. Work through the sections in order (contracts, access, emits, client), delete each marker once its item is done, and see the migration guide (`MIGRATION.md`, shipped in `@fitzzero/quickdraw-codemod`) for each kind of item. Then run lint (`no-v4-api` names every 4.x API left, `no-todo-schema` every placeholder) and the typecheck.
 
-120 items in 27 files.
+125 items in 27 files.
 
 | Section                                                        | Items |
 | -------------------------------------------------------------- | ----: |
@@ -18,6 +18,7 @@ Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review`
 | installAdminMethods to replace with the admin kit              |     1 |
 | Methods a kit implements                                       |     9 |
 | Service instance state and the 4.x context                     |    12 |
+| Errors the caller no longer sees                               |     5 |
 | Client                                                         |    11 |
 | Server wiring and other 4.x APIs                               |    22 |
 | Carve-outs                                                     |     1 |
@@ -68,7 +69,7 @@ The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 
 - [ ] `apps/api/src/services/task/methods/create-task.ts:9` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/task/methods/queries.ts:6` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/user.ts:40` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
-- [ ] `apps/api/src/services/user.ts:74` this method takes an id but its access "public" checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant
+- [ ] `apps/api/src/services/user.ts:75` this method takes an id but its access "public" checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant
 
 ## Access overrides to turn into a policy
 
@@ -102,13 +103,13 @@ A 4.x `defineCollection` becomes a contract collection (`scope`, `item`, `order`
 
 - [ ] `apps/api/src/services/project.ts:69` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
 - [ ] `apps/api/src/services/project.ts:148` room event: declare it in the contract's events and send it with ctx.rooms.emit(room, contract, event, payload)
-- [ ] `apps/api/src/services/project.ts:163` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
-- [ ] `apps/api/src/services/task/methods/create-task.ts:18` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
-- [ ] `apps/api/src/services/task/methods/queries.ts:28` hand emit: send a reset with qd.collections.reset(contract, collection, scope), if one is still needed
+- [ ] `apps/api/src/services/project.ts:164` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
+- [ ] `apps/api/src/services/task/methods/create-task.ts:19` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
+- [ ] `apps/api/src/services/task/methods/queries.ts:29` hand emit: send a reset with qd.collections.reset(contract, collection, scope), if one is still needed
 - [ ] `apps/api/src/services/task/methods/update-task.ts:13` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
 - [ ] `apps/api/src/services/task/methods/update-task.ts:26` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
 - [ ] `apps/api/src/services/task/methods/update-task.ts:28` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
-- [ ] `apps/api/src/services/user.ts:62` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
+- [ ] `apps/api/src/services/user.ts:63` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
 
 ## this.create, this.update and this.delete to write through db
 
@@ -123,7 +124,7 @@ The 4.x CRUD helpers also emitted and ran lifecycle hooks; `db.<model>` writes a
 
 Tracked writes cannot see raw SQL; `ctx.touch(model, ids)` records the rows it changed (lint: `no-raw-sql-write`).
 
-- [ ] `apps/api/src/services/task/methods/queries.ts:25` raw SQL write: tracked writes cannot see it, so subscribers would miss it; record the rows with ctx.touch(model, ids), or reset a scope with qd.collections.reset (lint: no-raw-sql-write)
+- [ ] `apps/api/src/services/task/methods/queries.ts:26` raw SQL write: tracked writes cannot see it, so subscribers would miss it; record the rows with ctx.touch(model, ids), or reset a scope with qd.collections.reset (lint: no-raw-sql-write)
 
 ## Lifecycle hooks
 
@@ -167,6 +168,16 @@ A service is an object now: no constructor, no fields, no `this`; handlers read 
 - [ ] `apps/api/src/services/label.ts:55` overrode the 4.x BaseService method adminCreate, which 5.0 does not have: keep what it still needs elsewhere, then delete it
 - [ ] `apps/api/src/services/label.ts:57` super.adminCreate(data) called the 4.x base class, which 5.0 does not have: it is undefined here; do what this code still needs of it
 - [ ] `apps/api/src/services/task/methods/queries.ts:9` inline auth guard: the access form already requires a principal, so the !ctx.principal.userId part never holds; drop it (lint: no-inline-auth-guard)
+
+## Errors the caller no longer sees
+
+4.x sent a thrown error's message to the caller; 5.0 answers any error that is not a `QuickdrawError` with `INTERNAL` and a generic message (the original is logged). Throw `new QuickdrawError(code, message)` with the code that fits (`NOT_FOUND`, `FORBIDDEN`, `CONFLICT`, `VALIDATION`, ...) wherever the caller should see the message.
+
+- [ ] `apps/api/src/services/project.ts:161` 4.x sent this error's message to the caller; 5.0 answers an error that is not a QuickdrawError with INTERNAL and a generic message: throw new QuickdrawError(code, message) with the code that fits (NOT_FOUND, FORBIDDEN, CONFLICT, VALIDATION) if the caller should see it
+- [ ] `apps/api/src/services/project.ts:193` 4.x sent this error's message to the caller; 5.0 answers an error that is not a QuickdrawError with INTERNAL and a generic message: throw new QuickdrawError(code, message) with the code that fits (NOT_FOUND, FORBIDDEN, CONFLICT, VALIDATION) if the caller should see it
+- [ ] `apps/api/src/services/task/methods/create-task.ts:13` 4.x sent this error's message to the caller; 5.0 answers an error that is not a QuickdrawError with INTERNAL and a generic message: throw new QuickdrawError(code, message) with the code that fits (NOT_FOUND, FORBIDDEN, CONFLICT, VALIDATION) if the caller should see it
+- [ ] `apps/api/src/services/task/methods/queries.ts:11` 4.x sent this error's message to the caller; 5.0 answers an error that is not a QuickdrawError with INTERNAL and a generic message: throw new QuickdrawError(code, message) with the code that fits (NOT_FOUND, FORBIDDEN, CONFLICT, VALIDATION) if the caller should see it
+- [ ] `apps/api/src/services/user.ts:54` 4.x sent this error's message to the caller; 5.0 answers an error that is not a QuickdrawError with INTERNAL and a generic message: throw new QuickdrawError(code, message) with the code that fits (NOT_FOUND, FORBIDDEN, CONFLICT, VALIDATION) if the caller should see it
 
 ## Client
 

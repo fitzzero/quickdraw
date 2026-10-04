@@ -51,6 +51,7 @@ export const userService = qd.defineService(userContract, {
       handler: async ({ input, ctx, db }) => {
         // Users can only update themselves unless they have service-level access
         if (input.id !== ctx.principal.userId && !(ctx.principal.serviceAccess ?? {}).userService) {
+          // quickdraw-migrate: review [error] 4.x sent this error's message to the caller; 5.0 answers an error that is not a QuickdrawError with INTERNAL and a generic message: throw new QuickdrawError(code, message) with the code that fits (NOT_FOUND, FORBIDDEN, CONFLICT, VALIDATION) if the caller should see it
           throw new Error("Cannot update other users");
         }
         try {
