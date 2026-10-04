@@ -1,8 +1,9 @@
+import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { compare } from "./compare";
-import { renderComparison } from "./compare-report";
+import { analysisOf, renderComparison } from "./compare-report";
 import { BENCH_DIR } from "./paths";
 import { resultSchema, type BenchResult } from "./result-schema";
 
@@ -11,14 +12,16 @@ import { resultSchema, type BenchResult } from "./result-schema";
  * sitting (docs/benchmarks.md, "Comparing a new version"):
  *
  *   bun run --filter bench compare -- --before <old.json> --after <new.json> \
- *     --again <old-again.json> --out reports/<new>.md [--analysis <notes.md>]
+ *     --again <old-again.json> --out reports/<new>.md
  *
  * Paths are relative to bench/. It refuses results whose workload,
- * parameters, limits, machine or runtime versions differ.
+ * parameters, limits, machine or runtime versions differ. The report's
+ * analysis section is written by hand in the report itself; rendering it
+ * again keeps that section.
  */
 
 const USAGE =
-  "usage: bun run --filter bench compare -- --before <old.json> --after <new.json> --again <old-again.json> --out <report.md> [--analysis <notes.md>]\n";
+  "usage: bun run --filter bench compare -- --before <old.json> --after <new.json> --again <old-again.json> --out <report.md>\n";
 
 async function readResult(path: string): Promise<BenchResult> {
   return resultSchema.parse(JSON.parse(await readFile(path, "utf8")));
@@ -33,7 +36,6 @@ async function main(): Promise<number> {
       after: { type: "string" },
       again: { type: "string" },
       out: { type: "string" },
-      analysis: { type: "string" },
     },
   });
   const { before, after, again, out } = values;
@@ -47,8 +49,7 @@ async function main(): Promise<number> {
     await readResult(path(after)),
     await readResult(path(again)),
   );
-  const analysis =
-    values.analysis === undefined ? null : await readFile(path(values.analysis), "utf8");
+  const analysis = existsSync(path(out)) ? analysisOf(await readFile(path(out), "utf8")) : null;
   const shown = (file: string): string => relative(BENCH_DIR, path(file));
   const markdown = renderComparison(
     comparison,
@@ -56,7 +57,9 @@ async function main(): Promise<number> {
     analysis,
   );
   await writeFile(path(out), markdown);
-  process.stdout.write(`wrote ${path(out)}\n`);
+  process.stdout.write(
+    `wrote ${path(out)}${analysis === null ? " (its analysis section is still to write)" : ""}\n`,
+  );
   return 0;
 }
 

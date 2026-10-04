@@ -104,7 +104,9 @@ export class V5Viewer implements BoardViewer {
   private readonly topic: string;
   private readonly observer: QueryObserver<unknown, QuickdrawError>;
   private readonly releases: Array<() => void> = [];
+  /** When the last `qd:changed` arrived, and when the last read of the query started. */
   private lastChangedAt = Number.NEGATIVE_INFINITY;
+  private lastReadAt = Number.NEGATIVE_INFINITY;
   private load: Load | null = null;
 
   constructor(
@@ -154,8 +156,21 @@ export class V5Viewer implements BoardViewer {
       this.load !== null ||
       lane.inFlight() + lane.waiting() > 0 ||
       query?.state.fetchStatus === "fetching" ||
-      performance.now() - this.lastChangedAt < DEFAULT_INVALIDATION_WINDOW_MS + WINDOW_SLACK_MS
+      this.refetchOwed()
     );
+  }
+
+  /**
+   * True while the coordinator may still owe the query a refetch: a change
+   * arrived after its last read started, and the window that read opened
+   * (when the coordinator fires the owed refetch) has not ended yet. A change
+   * with no window open starts its read at once, and a change during a read
+   * is served when the read settles, so both show as a read in flight.
+   */
+  private refetchOwed(): boolean {
+    if (this.lastChangedAt <= this.lastReadAt) return false;
+    const since = Number.isFinite(this.lastReadAt) ? this.lastReadAt : this.lastChangedAt;
+    return performance.now() < since + DEFAULT_INVALIDATION_WINDOW_MS + WINDOW_SLACK_MS;
   }
 
   public close(): void {
@@ -209,6 +224,7 @@ export class V5Viewer implements BoardViewer {
    * a schema without a `version`, so no version is sent or kept.
    */
   private async readBoard(signal: AbortSignal | undefined): Promise<unknown> {
+    this.lastReadAt = performance.now();
     const joined = this.connection.waitForJoin({
       service: SERVICE,
       topic: this.topic,

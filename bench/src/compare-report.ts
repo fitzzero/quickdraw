@@ -35,6 +35,11 @@ function ratioText(ratio: number | null): string {
   return ratio === null ? "n/a" : `${ratio.toFixed(ratio >= 10 ? 1 : 2)}×`;
 }
 
+/** When a run finished, as an ISO time. */
+function endOf(result: BenchResult): string {
+  return new Date(Date.parse(result.createdAt) + result.totalDurationMs).toISOString();
+}
+
 function versionOf(result: BenchResult): string {
   return result.label === result.app.quickdrawCore
     ? result.label
@@ -184,7 +189,7 @@ function worseSection(comparison: Comparison): string {
   rows.sort((a, b) => (b.row.ratio ?? 0) - (a.row.ratio ?? 0));
   return [
     `Every metric where 5.0 is worse than both 4.1 runs (${rows.length}), the largest ratio first. ` +
-      "A metric marked noisy is one the two 4.1 runs themselves disagree on by more than 10%.",
+      "A metric marked noisy is one the two 4.1 runs themselves disagree on by more than 10%. The analysis below says why each one is worse.",
     "",
     "| Scenario | Metric | 4.1 first | 5.0 | 4.1 second | 5.0 / 4.1 | 4.1 drift | |",
     "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
@@ -340,7 +345,13 @@ function scenarioSection(comparison: Comparison, scenario: ScenarioComparison): 
 }
 
 function notesSection(comparison: Comparison): string {
-  const notes = [...new Set([...comparison.before.notes, ...comparison.after.notes])];
+  const { before, after } = comparison;
+  const common = before.notes.filter((note) => after.notes.includes(note));
+  const notes = [
+    ...common,
+    ...before.notes.filter((note) => !common.includes(note)).map((note) => `4.1 runs: ${note}`),
+    ...after.notes.filter((note) => !common.includes(note)).map((note) => `5.0 run: ${note}`),
+  ];
   return [
     "- Medians of every scenario's repetitions, per run. `5.0 / 4.1` divides the 5.0 median by the mean of the two 4.1 medians; `4.1 drift` is how far the two 4.1 medians differ, as a share of their mean. A metric is marked worse when 5.0 is worse than both 4.1 runs, and noisy when the 4.1 drift is above 10%.",
     "- 4.1 and 5.0 name some things differently on the wire; rows use one name for both: entity subscribe is 4.1's batchSubscribe and 5.0's qd:sub, collection subscribe is collection:subscribe and qd:col:sub, entity and collection unsubscribe likewise; topic watch (qd:watch) exists only in 5.0. A count of something only one version does (requests sent, handler runs, snapshots) shows 0 for the other and is marked `4.1 only` or `5.0 only`: a difference in design, never judged worse; any other metric a version does not have shows n/a.",
@@ -358,6 +369,27 @@ function notMeasuredSection(comparison: Comparison): string {
   return notes.length === 0 ? "Nothing." : notes.map((note) => `- ${note}`).join("\n");
 }
 
+/**
+ * The markers around a report's analysis: Markdown written by hand for one
+ * comparison (profiles, explanations, follow-ups), kept when the report is
+ * rendered again (`analysisOf`).
+ */
+export const ANALYSIS_START =
+  "<!-- analysis: written by hand; kept when this report is rendered again -->";
+export const ANALYSIS_END = "<!-- end of analysis -->";
+
+const NO_ANALYSIS =
+  "Nothing written yet: profile what the targets missed and explain every metric where 5.0 is worse here.";
+
+/** The hand-written analysis of an earlier rendering of a report, or null when it has none. */
+export function analysisOf(report: string): string | null {
+  const start = report.indexOf(ANALYSIS_START);
+  const end = report.indexOf(ANALYSIS_END);
+  if (start < 0 || end < start) return null;
+  const text = report.slice(start + ANALYSIS_START.length, end).trim();
+  return text === "" || text === NO_ANALYSIS ? null : text;
+}
+
 /** The report, with `analysis` (Markdown written for this comparison) under its own heading. */
 export function renderComparison(
   comparison: Comparison,
@@ -368,7 +400,7 @@ export function renderComparison(
   const reps = Math.max(...after.scenarios.map((scenario) => scenario.repetitions.length));
   const sections = [
     `# quickdraw-core ${after.label} against ${before.label}`,
-    `Measured on \`${before.machine.hostname}\` in one sitting, ${before.createdAt.slice(0, 16)}Z to ${again.createdAt.slice(0, 16)}Z: ` +
+    `Measured on \`${before.machine.hostname}\` in one sitting, ${before.createdAt.slice(0, 16)}Z to ${endOf(again).slice(0, 16)}Z: ` +
       `${versionOf(before)}, then ${versionOf(after)}, then ${versionOf(again)} again, every scenario ${reps} times per run ` +
       "(interleaved), medians reported. The three result files are " +
       `\`${sources.before}\`, \`${sources.after}\` and \`${sources.again}\`; the measurement rules are in docs/benchmarks.md.`,
@@ -380,7 +412,8 @@ export function renderComparison(
     goalsTable(comparison),
     "Listeners per connected socket when each window closed:",
     listenersTable(comparison),
-    ...(analysis === null ? [] : ["## Analysis", analysis.trim()]),
+    "## Analysis",
+    [ANALYSIS_START, analysis?.trim() ?? NO_ANALYSIS, ANALYSIS_END].join("\n\n"),
     "## Summary",
     summarySection(comparison),
     "## Setup",

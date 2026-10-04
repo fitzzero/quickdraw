@@ -6,7 +6,9 @@ in a PR, a release note or an RFC, if it was measured under the rules below.
 The harness is a release tool, not a CI gate.
 
 The 4.1.0 baseline is `bench/baselines/4.1.0.json`, with the readable report
-in `bench/reports/4.1.0.md`.
+in `bench/reports/4.1.0.md`. 5.0.0 was measured against 4.1.0 in one sitting:
+the report is `bench/reports/5.0.0.md`, the 5.0 run `bench/baselines/5.0.0.json`,
+and the two 4.1 runs around it `bench/comparisons/5.0.0/`.
 
 ## Rules
 
@@ -19,9 +21,10 @@ in `bench/reports/4.1.0.md`.
    file records the limits that were used.
 2. **Baseline, change, baseline.** Compare versions on one machine in one
    sitting: run the old version, then the new one, then the old one again.
-   If the two old runs disagree by more than their own spread, the machine was
-   too noisy; rerun rather than compare. A baseline committed on another day
-   is a reference point, not a replacement for the fresh old-version runs.
+   Where the two old runs disagree on a metric by more than 10% of their mean,
+   the machine was too noisy for that metric: say so, and rerun rather than
+   claim anything from it. A baseline committed on another day is a reference
+   point, not a replacement for the fresh old-version runs.
 3. **Three repetitions, median reported.** Each scenario runs three times,
    interleaved with the other scenarios so that noise spreads across them.
    Reports give the median of every metric and its spread (max minus min, as
@@ -50,8 +53,9 @@ in `bench/reports/4.1.0.md`.
 | Event-loop delay p99 and max            | How late a 10 ms `perf_hooks.monitorEventLoopDelay` timer fired on the server (its histogram minus the 10 ms interval)                       |
 | Bytes sent                              | TCP bytes the server wrote, including HTTP and WebSocket framing                                                                             |
 | SQL statements                          | Prisma `query` events (Prisma merges `findUnique` calls made in the same tick into one statement)                                            |
-| Snapshots served                        | Collection snapshots and entity rows returned by subscribe calls                                                                             |
-| Handler runs per method                 | Every method handler and subscription call, counted by wrapping the services from outside                                                    |
+| Snapshots served                        | Collection snapshots and entity rows returned by subscribe calls; 5.0's resumes and "not modified" rows are counted apart                    |
+| Handler runs per method                 | Every method handler and subscription call: wrapped from outside in 4.1, from 5.0's completion records (a joined shared run is not a run)    |
+| Listeners per socket                    | The most listeners any connected socket had when the window closed                                                                           |
 | Peak RSS                                | The server's resident memory, sampled every 250 ms                                                                                           |
 | Load generator CPU and event-loop delay | To show the client side was not the bottleneck                                                                                               |
 
@@ -63,9 +67,25 @@ answered, so a slow server cannot lower the load it is offered.
 
 1. Add an app for the new version under `bench/apps/` that keeps the app
    contract in `bench/README.md`, serving the same board from the same
-   workload file.
-2. On the machine and cpus the baseline records, run the old app, the new
-   app, then the old app again:
-   `bun run --filter bench bench -- --app <name> --repetitions 3`.
-3. Compare medians only where the matching rules hold, quote the failed
-   requests with the latencies, and state the load average.
+   workload file, and a driver for its wire protocol under
+   `bench/src/drivers/` when the protocol changed. The new app does the
+   same work as the old one (same schema, seed, subscriptions, queries and
+   writes) and is written the way its version's README teaches, not tuned
+   for the benchmark.
+2. On the machine and cpus the baseline records, in one sitting, run the old
+   app, the new app, then the old app again, keeping the benchmark's
+   Postgres up between runs:
+   `bun run --filter bench bench -- --target <old> --repetitions 3 --keep-db`,
+   then `--target <new> --repetitions 3 --baseline --label <version> --keep-db`,
+   then the old one again; stop Postgres afterwards
+   (`docker compose -f bench/docker-compose.yml -p quickdraw-bench down -v`).
+3. Copy the two old runs into `bench/comparisons/<version>/` and render the
+   report with `bun run --filter bench compare` (`bench/README.md`, "Comparing
+   two versions", has the command). It refuses runs whose workload,
+   parameters, limits, machine or runtime versions differ, and lists first
+   every metric where the new version is worse than both old runs, then
+   every metric the old runs disagree on by more than 10%.
+4. Write the report's analysis section by hand (rendering again keeps it):
+   why each worse metric is worse, and for each missed target a CPU profile
+   of the server (`--cpu-prof` on a separate run) and a fix or a follow-up.
+   Quote failed requests with the latencies, and state the load average.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { betterFor, canonicalKey, compare, mismatches, rowOf } from "./compare";
-import { renderComparison } from "./compare-report";
+import { analysisOf, renderComparison } from "./compare-report";
 import { repetition, sampleResult } from "./fixtures";
 
 const SOURCES = { before: "a.json", after: "b.json", again: "c.json" };
@@ -142,7 +142,8 @@ describe("a comparison", () => {
     expect(markdown).toContain(
       "| board-steady | server cpuSeconds | 30 | 45 | 30 | 1.50× | 0.0% | worse |",
     );
-    expect(markdown).toContain("## Analysis\n\nProfiles and follow-ups.");
+    expect(markdown).toContain("## Analysis");
+    expect(analysisOf(markdown)).toBe("Profiles and follow-ups.");
     expect(markdown).toContain("`a.json`, `b.json` and `c.json`");
     expect(markdown).toContain(
       "| board-steady bytes sent per write (KB) | 9.80 | 2 | at most 30% of 4.1 | met |",
@@ -153,6 +154,14 @@ describe("a comparison", () => {
     const markdown = renderComparison(compare(before, newRun(40, 20), again), SOURCES, null);
     expect(markdown).toContain("Nowhere: on every metric");
     expect(markdown).toContain("Nothing: the two 4.1 runs agree within 10%");
-    expect(markdown).not.toContain("## Analysis");
+    expect(analysisOf(markdown)).toBeNull();
+    // A hand-written analysis survives rendering the report again.
+    const written = markdown.replace(/Nothing written yet:[^\n]*/, "The profile says why.");
+    const rendered = renderComparison(
+      compare(before, newRun(40, 20), again),
+      SOURCES,
+      analysisOf(written),
+    );
+    expect(analysisOf(rendered)).toBe("The profile says why.");
   });
 });

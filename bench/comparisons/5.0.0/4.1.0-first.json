@@ -1,0 +1,3089 @@
+{
+  "$schema": "../../result.schema.json",
+  "schemaVersion": 1,
+  "kind": "run",
+  "label": "4.1.0",
+  "quick": false,
+  "command": "bun run --filter bench bench -- --target v4 --repetitions 3 --keep-db",
+  "createdAt": "2026-10-04T01:46:36.670Z",
+  "totalDurationMs": 259702,
+  "app": {
+    "name": "v4",
+    "quickdrawCore": "4.1.0",
+    "versions": {
+      "@fitzzero/quickdraw-core": "4.1.0",
+      "socket.io": "4.8.4",
+      "@prisma/client": "7.10.0",
+      "@prisma/adapter-pg": "7.10.0",
+      "pg": "8.21.0"
+    },
+    "dbPoolMax": 10,
+    "logging": "4.1 defaults: method logging on, console logger"
+  },
+  "machine": {
+    "hostname": "reaper0",
+    "cpuModel": "AMD Ryzen 9 7900 12-Core Processor",
+    "nproc": 24,
+    "kernel": "7.2.8-1-cachyos",
+    "os": "CachyOS",
+    "totalMemoryGb": 30.4,
+    "cpuGovernor": "powersave",
+    "cpuBoost": "1"
+  },
+  "runtime": {
+    "node": "v24.18.0",
+    "bun": "1.3.13",
+    "docker": "29.8.1",
+    "socketIoClient": "4.8.4",
+    "postgres": "16.13"
+  },
+  "limits": {
+    "server": {
+      "method": "taskset",
+      "cpus": "2,3",
+      "cpuCount": 2,
+      "detail": "taskset -c 2,3 node --import tsx src/server.ts (2 CPUs, affinity checked in /proc/<pid>/status)"
+    },
+    "loadgen": {
+      "method": "taskset",
+      "cpus": "10,11",
+      "cpuCount": 2,
+      "detail": "the runner pins itself with taskset -a -cp 10,11; every simulated client is a socket.io-client connection in that one Node process"
+    },
+    "postgres": {
+      "method": "docker cpuset",
+      "cpus": "6-9",
+      "cpuCount": 4,
+      "detail": "Docker container (compose project quickdraw-bench) with cpuset 6-9, data in tmpfs"
+    }
+  },
+  "workload": {
+    "tasks": 2000,
+    "members": 60,
+    "writerMembers": 10,
+    "viewerMembers": 50,
+    "hotTasks": 60,
+    "boardColumns": 6,
+    "meanPlanBytes": 4096
+  },
+  "order": [
+    "board-steady#1",
+    "board-burst#1",
+    "reconnect-storm#1",
+    "fat-read#1",
+    "board-steady#2",
+    "board-burst#2",
+    "reconnect-storm#2",
+    "fat-read#2",
+    "board-steady#3",
+    "board-burst#3",
+    "reconnect-storm#3",
+    "fat-read#3"
+  ],
+  "notes": [
+    "Client latency is timed in the load generator from emit to acknowledgement, only for calls answered successfully within the client's timeout; every other call is counted by kind, not timed. Calls abandoned because the client itself dropped the connection are counted separately and are not failures.",
+    "Delivery is the time from a writer emitting updateTask to a viewer receiving that change (collection delta or entity update), on the load generator's single clock.",
+    "Server CPU is process.cpuUsage() of the server process over the window. Event-loop delay is how late a 10 ms perf_hooks.monitorEventLoopDelay timer fired (the histogram value minus its 10 ms interval). Bytes are TCP bytes the server wrote, including HTTP and WebSocket framing.",
+    "SQL statements are the Prisma client's query events: every statement the server sent, access checks and the reads that build live frames included.",
+    "Machine noise comes from /proc: the time other processes spent on the server's pinned cpus during each window (those cpus' busy time minus the server process's own), and how busy the cpus the benchmark did not use were. Interrupt time on the server's cpus, mostly the benchmark's own network traffic, is kept apart in the result file.",
+    "Every run starts a fresh server process on a freshly seeded database.",
+    "Writes are open-loop: they are issued on schedule whether or not earlier writes have been answered, so a slow server cannot reduce the offered load.",
+    "Clients speak the 4.1 wire protocol as the 4.1 React hooks do (bench/src/drivers/v4/viewer.ts lists the behaviors copied). Failed requests are timeouts (no answer within the 10 s the 4.1 hooks wait), error answers, and calls with no client timeout still unanswered when the window closed.",
+    "Prisma batches findUnique calls made in the same tick into one statement, so the 60 per-row access checks and reads of a batchSubscribe cost a handful of statements rather than 180.",
+    "The server logs with 4.1's defaults (two info lines per method call) to a file on local disk."
+  ],
+  "notMeasured": [],
+  "scenarios": [
+    {
+      "name": "board-steady",
+      "description": "Viewers hold the board open (the cardsByProject collection, 60 entity subscriptions and a getTasksByStatus query fetched again whenever the board changes) while a writer fleet edits the on-screen cards at a steady rate.",
+      "parameters": {
+        "viewers": 50,
+        "entitySubscriptions": 60,
+        "writers": 5,
+        "writesPerSecondPerWriter": 2,
+        "durationSeconds": 60,
+        "drainCapSeconds": 30
+      },
+      "repetitions": [
+        {
+          "index": 1,
+          "startedAt": "2026-10-04T01:46:38.712Z",
+          "loadAverage": {
+            "one": 0.91,
+            "five": 1.35,
+            "fifteen": 1.32
+          },
+          "completed": true,
+          "outcome": "600 writes issued over 59.9 s; server and clients idle 0.3 s after the load ended",
+          "windowMs": 60157.208,
+          "requests": {
+            "taskService:updateTask": {
+              "sent": 600,
+              "succeeded": 600,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            },
+            "taskService:getTasksByStatus": {
+              "sent": 13423,
+              "succeeded": 13423,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            }
+          },
+          "failedRequests": 0,
+          "latencyMs": {
+            "taskService:updateTask": {
+              "count": 600,
+              "p50": 16.634,
+              "p95": 115.372,
+              "p99": 128.122,
+              "max": 178.726,
+              "mean": 36.974
+            },
+            "taskService:getTasksByStatus": {
+              "count": 13423,
+              "p50": 72.211,
+              "p95": 119.54,
+              "p99": 128.303,
+              "max": 179.947,
+              "mean": 71.181
+            }
+          },
+          "deliveryMs": {
+            "entityUpdate": {
+              "count": 30000,
+              "p50": 14.795,
+              "p95": 114.807,
+              "p99": 127.77,
+              "max": 177.613,
+              "mean": 36.468
+            },
+            "collectionDelta": {
+              "count": 30000,
+              "p50": 15.307,
+              "p95": 115.105,
+              "p99": 128.456,
+              "max": 177.774,
+              "mean": 36.905
+            }
+          },
+          "server": {
+            "windowMs": 60166.667,
+            "cpuUserSeconds": 28.987,
+            "cpuSystemSeconds": 7.504,
+            "cpuSeconds": 36.491,
+            "eventLoopDelayMs": {
+              "p50": 0.068,
+              "p99": 7.777,
+              "max": 11.479,
+              "mean": 0.547
+            },
+            "bytesSent": 7247552604,
+            "bytesReceived": 1072053,
+            "sqlStatements": 176299,
+            "snapshotsServed": {
+              "collection": 0,
+              "collectionPages": 0,
+              "entity": 0
+            },
+            "handlerRuns": {
+              "taskService:updateTask": 600,
+              "taskService:getTasksByStatus": 13423
+            },
+            "inFlight": 0,
+            "rssPeakMb": 518.82,
+            "connections": 55,
+            "listenersPerSocket": 15
+          },
+          "serverError": null,
+          "loadgen": {
+            "cpuSeconds": 15.838,
+            "eventLoopDelayP99Ms": 4.361,
+            "eventLoopDelayMaxMs": 9.382
+          },
+          "noise": {
+            "otherWorkOnServerCpusPct": 2.61,
+            "interruptsOnServerCpusPct": 4.213,
+            "restOfMachineBusyPct": 1.969
+          },
+          "scenario": {
+            "writesIssued": 600,
+            "issueSeconds": 59.9,
+            "drainSeconds": 0.257
+          },
+          "errors": []
+        },
+        {
+          "index": 2,
+          "startedAt": "2026-10-04T01:48:04.854Z",
+          "loadAverage": {
+            "one": 1.99,
+            "five": 1.65,
+            "fifteen": 1.43
+          },
+          "completed": true,
+          "outcome": "600 writes issued over 59.9 s; server and clients idle 0.5 s after the load ended",
+          "windowMs": 60407.923,
+          "requests": {
+            "taskService:updateTask": {
+              "sent": 600,
+              "succeeded": 600,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            },
+            "taskService:getTasksByStatus": {
+              "sent": 13332,
+              "succeeded": 13332,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            }
+          },
+          "failedRequests": 0,
+          "latencyMs": {
+            "taskService:updateTask": {
+              "count": 600,
+              "p50": 14.917,
+              "p95": 116.089,
+              "p99": 127.849,
+              "max": 156.851,
+              "mean": 37.011
+            },
+            "taskService:getTasksByStatus": {
+              "count": 13332,
+              "p50": 73.636,
+              "p95": 121.878,
+              "p99": 131.856,
+              "max": 162.687,
+              "mean": 72.647
+            }
+          },
+          "deliveryMs": {
+            "entityUpdate": {
+              "count": 30000,
+              "p50": 14.342,
+              "p95": 115.375,
+              "p99": 127.75,
+              "max": 156.607,
+              "mean": 36.505
+            },
+            "collectionDelta": {
+              "count": 30000,
+              "p50": 14.543,
+              "p95": 115.564,
+              "p99": 127.751,
+              "max": 157.186,
+              "mean": 36.951
+            }
+          },
+          "server": {
+            "windowMs": 60417.1,
+            "cpuUserSeconds": 29.73,
+            "cpuSystemSeconds": 7.397,
+            "cpuSeconds": 37.127,
+            "eventLoopDelayMs": {
+              "p50": 0.068,
+              "p99": 8.219,
+              "max": 14.084,
+              "mean": 0.61
+            },
+            "bytesSent": 7200018529,
+            "bytesReceived": 1065972,
+            "sqlStatements": 175116,
+            "snapshotsServed": {
+              "collection": 0,
+              "collectionPages": 0,
+              "entity": 0
+            },
+            "handlerRuns": {
+              "taskService:updateTask": 600,
+              "taskService:getTasksByStatus": 13332
+            },
+            "inFlight": 0,
+            "rssPeakMb": 522.883,
+            "connections": 55,
+            "listenersPerSocket": 15
+          },
+          "serverError": null,
+          "loadgen": {
+            "cpuSeconds": 16.7,
+            "eventLoopDelayP99Ms": 4.778,
+            "eventLoopDelayMaxMs": 10.955
+          },
+          "noise": {
+            "otherWorkOnServerCpusPct": 2.847,
+            "interruptsOnServerCpusPct": 4.064,
+            "restOfMachineBusyPct": 2.052
+          },
+          "scenario": {
+            "writesIssued": 600,
+            "issueSeconds": 59.904,
+            "drainSeconds": 0.504
+          },
+          "errors": []
+        },
+        {
+          "index": 3,
+          "startedAt": "2026-10-04T01:49:31.422Z",
+          "loadAverage": {
+            "one": 2.58,
+            "five": 1.99,
+            "fifteen": 1.57
+          },
+          "completed": true,
+          "outcome": "600 writes issued over 59.9 s; server and clients idle 0.3 s after the load ended",
+          "windowMs": 60163.338,
+          "requests": {
+            "taskService:updateTask": {
+              "sent": 600,
+              "succeeded": 600,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            },
+            "taskService:getTasksByStatus": {
+              "sent": 13359,
+              "succeeded": 13359,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            }
+          },
+          "failedRequests": 0,
+          "latencyMs": {
+            "taskService:updateTask": {
+              "count": 600,
+              "p50": 12.88,
+              "p95": 115.151,
+              "p99": 126.2,
+              "max": 143.028,
+              "mean": 36.878
+            },
+            "taskService:getTasksByStatus": {
+              "count": 13359,
+              "p50": 73.418,
+              "p95": 121.399,
+              "p99": 131.479,
+              "max": 166.193,
+              "mean": 72.847
+            }
+          },
+          "deliveryMs": {
+            "entityUpdate": {
+              "count": 30000,
+              "p50": 12.356,
+              "p95": 114.729,
+              "p99": 125.589,
+              "max": 142.949,
+              "mean": 36.434
+            },
+            "collectionDelta": {
+              "count": 30000,
+              "p50": 12.78,
+              "p95": 115.133,
+              "p99": 125.904,
+              "max": 143.303,
+              "mean": 36.887
+            }
+          },
+          "server": {
+            "windowMs": 60172.515,
+            "cpuUserSeconds": 29.642,
+            "cpuSystemSeconds": 7.657,
+            "cpuSeconds": 37.299,
+            "eventLoopDelayMs": {
+              "p50": 0.076,
+              "p99": 8.563,
+              "max": 13.97,
+              "mean": 0.602
+            },
+            "bytesSent": 7214449361,
+            "bytesReceived": 1068033,
+            "sqlStatements": 175467,
+            "snapshotsServed": {
+              "collection": 0,
+              "collectionPages": 0,
+              "entity": 0
+            },
+            "handlerRuns": {
+              "taskService:updateTask": 600,
+              "taskService:getTasksByStatus": 13359
+            },
+            "inFlight": 0,
+            "rssPeakMb": 524.168,
+            "connections": 55,
+            "listenersPerSocket": 15
+          },
+          "serverError": null,
+          "loadgen": {
+            "cpuSeconds": 16.301,
+            "eventLoopDelayP99Ms": 4.778,
+            "eventLoopDelayMaxMs": 11.447
+          },
+          "noise": {
+            "otherWorkOnServerCpusPct": 2.526,
+            "interruptsOnServerCpusPct": 4.171,
+            "restOfMachineBusyPct": 1.939
+          },
+          "scenario": {
+            "writesIssued": 600,
+            "issueSeconds": 59.9,
+            "drainSeconds": 0.263
+          },
+          "errors": []
+        }
+      ],
+      "summary": {
+        "delivery.collectionDelta.p50": {
+          "values": [
+            15.307,
+            14.543,
+            12.78
+          ],
+          "median": 14.543,
+          "min": 12.78,
+          "max": 15.307,
+          "spreadPct": 17.4
+        },
+        "delivery.collectionDelta.p95": {
+          "values": [
+            115.105,
+            115.564,
+            115.133
+          ],
+          "median": 115.133,
+          "min": 115.105,
+          "max": 115.564,
+          "spreadPct": 0.4
+        },
+        "delivery.collectionDelta.p99": {
+          "values": [
+            128.456,
+            127.751,
+            125.904
+          ],
+          "median": 127.751,
+          "min": 125.904,
+          "max": 128.456,
+          "spreadPct": 2
+        },
+        "delivery.entityUpdate.p50": {
+          "values": [
+            14.795,
+            14.342,
+            12.356
+          ],
+          "median": 14.342,
+          "min": 12.356,
+          "max": 14.795,
+          "spreadPct": 17
+        },
+        "delivery.entityUpdate.p95": {
+          "values": [
+            114.807,
+            115.375,
+            114.729
+          ],
+          "median": 114.807,
+          "min": 114.729,
+          "max": 115.375,
+          "spreadPct": 0.6
+        },
+        "delivery.entityUpdate.p99": {
+          "values": [
+            127.77,
+            127.75,
+            125.589
+          ],
+          "median": 127.75,
+          "min": 125.589,
+          "max": 127.77,
+          "spreadPct": 1.7
+        },
+        "latency.taskService:getTasksByStatus.p50": {
+          "values": [
+            72.211,
+            73.636,
+            73.418
+          ],
+          "median": 73.418,
+          "min": 72.211,
+          "max": 73.636,
+          "spreadPct": 1.9
+        },
+        "latency.taskService:getTasksByStatus.p95": {
+          "values": [
+            119.54,
+            121.878,
+            121.399
+          ],
+          "median": 121.399,
+          "min": 119.54,
+          "max": 121.878,
+          "spreadPct": 1.9
+        },
+        "latency.taskService:getTasksByStatus.p99": {
+          "values": [
+            128.303,
+            131.856,
+            131.479
+          ],
+          "median": 131.479,
+          "min": 128.303,
+          "max": 131.856,
+          "spreadPct": 2.7
+        },
+        "latency.taskService:updateTask.p50": {
+          "values": [
+            16.634,
+            14.917,
+            12.88
+          ],
+          "median": 14.917,
+          "min": 12.88,
+          "max": 16.634,
+          "spreadPct": 25.2
+        },
+        "latency.taskService:updateTask.p95": {
+          "values": [
+            115.372,
+            116.089,
+            115.151
+          ],
+          "median": 115.372,
+          "min": 115.151,
+          "max": 116.089,
+          "spreadPct": 0.8
+        },
+        "latency.taskService:updateTask.p99": {
+          "values": [
+            128.122,
+            127.849,
+            126.2
+          ],
+          "median": 127.849,
+          "min": 126.2,
+          "max": 128.122,
+          "spreadPct": 1.5
+        },
+        "loadgen.cpuSeconds": {
+          "values": [
+            15.838,
+            16.7,
+            16.301
+          ],
+          "median": 16.301,
+          "min": 15.838,
+          "max": 16.7,
+          "spreadPct": 5.3
+        },
+        "loadgen.eventLoopDelayP99Ms": {
+          "values": [
+            4.361,
+            4.778,
+            4.778
+          ],
+          "median": 4.778,
+          "min": 4.361,
+          "max": 4.778,
+          "spreadPct": 8.7
+        },
+        "noise.otherWorkOnServerCpusPct": {
+          "values": [
+            2.61,
+            2.85,
+            2.53
+          ],
+          "median": 2.61,
+          "min": 2.53,
+          "max": 2.85,
+          "spreadPct": 12.3
+        },
+        "noise.restOfMachineBusyPct": {
+          "values": [
+            1.97,
+            2.05,
+            1.94
+          ],
+          "median": 1.97,
+          "min": 1.94,
+          "max": 2.05,
+          "spreadPct": 5.6
+        },
+        "requests.failed": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:getTasksByStatus.abandoned": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:getTasksByStatus.failed": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:getTasksByStatus.sent": {
+          "values": [
+            13423,
+            13332,
+            13359
+          ],
+          "median": 13359,
+          "min": 13332,
+          "max": 13423,
+          "spreadPct": 0.7
+        },
+        "requests.taskService:updateTask.abandoned": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:updateTask.failed": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:updateTask.sent": {
+          "values": [
+            600,
+            600,
+            600
+          ],
+          "median": 600,
+          "min": 600,
+          "max": 600,
+          "spreadPct": 0
+        },
+        "scenario.drainSeconds": {
+          "values": [
+            0.257,
+            0.504,
+            0.263
+          ],
+          "median": 0.263,
+          "min": 0.257,
+          "max": 0.504,
+          "spreadPct": 93.9
+        },
+        "scenario.issueSeconds": {
+          "values": [
+            59.9,
+            59.904,
+            59.9
+          ],
+          "median": 59.9,
+          "min": 59.9,
+          "max": 59.904,
+          "spreadPct": 0
+        },
+        "scenario.writesIssued": {
+          "values": [
+            600,
+            600,
+            600
+          ],
+          "median": 600,
+          "min": 600,
+          "max": 600,
+          "spreadPct": 0
+        },
+        "server.bytesSentMb": {
+          "values": [
+            6911.805,
+            6866.473,
+            6880.235
+          ],
+          "median": 6880.235,
+          "min": 6866.473,
+          "max": 6911.805,
+          "spreadPct": 0.7
+        },
+        "server.cpuSeconds": {
+          "values": [
+            36.491,
+            37.127,
+            37.299
+          ],
+          "median": 37.127,
+          "min": 36.491,
+          "max": 37.299,
+          "spreadPct": 2.2
+        },
+        "server.eventLoopDelayMaxMs": {
+          "values": [
+            11.479,
+            14.084,
+            13.97
+          ],
+          "median": 13.97,
+          "min": 11.479,
+          "max": 14.084,
+          "spreadPct": 18.6
+        },
+        "server.eventLoopDelayP99Ms": {
+          "values": [
+            7.777,
+            8.219,
+            8.563
+          ],
+          "median": 8.219,
+          "min": 7.777,
+          "max": 8.563,
+          "spreadPct": 9.6
+        },
+        "server.handlerRuns.taskService:getTasksByStatus": {
+          "values": [
+            13423,
+            13332,
+            13359
+          ],
+          "median": 13359,
+          "min": 13332,
+          "max": 13423,
+          "spreadPct": 0.7
+        },
+        "server.handlerRuns.taskService:updateTask": {
+          "values": [
+            600,
+            600,
+            600
+          ],
+          "median": 600,
+          "min": 600,
+          "max": 600,
+          "spreadPct": 0
+        },
+        "server.listenersPerSocket": {
+          "values": [
+            15,
+            15,
+            15
+          ],
+          "median": 15,
+          "min": 15,
+          "max": 15,
+          "spreadPct": 0
+        },
+        "server.rssPeakMb": {
+          "values": [
+            518.8,
+            522.9,
+            524.2
+          ],
+          "median": 522.9,
+          "min": 518.8,
+          "max": 524.2,
+          "spreadPct": 1
+        },
+        "server.snapshots.collection": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "server.snapshots.entity": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "server.sqlStatements": {
+          "values": [
+            176299,
+            175116,
+            175467
+          ],
+          "median": 175467,
+          "min": 175116,
+          "max": 176299,
+          "spreadPct": 0.7
+        }
+      }
+    },
+    {
+      "name": "board-burst",
+      "description": "The same viewers as board-steady, then a burst of writes spread evenly over two seconds (a bulk edit or an agent fleet landing at once); measured until every client and the server are idle again.",
+      "parameters": {
+        "viewers": 50,
+        "entitySubscriptions": 60,
+        "writers": 5,
+        "writes": 100,
+        "burstSeconds": 2,
+        "drainCapSeconds": 45
+      },
+      "repetitions": [
+        {
+          "index": 1,
+          "startedAt": "2026-10-04T01:47:42.696Z",
+          "loadAverage": {
+            "one": 2.12,
+            "five": 1.65,
+            "fifteen": 1.43
+          },
+          "completed": true,
+          "outcome": "100 writes issued over 1.98 s; server and clients idle 0.3 s after the load ended",
+          "windowMs": 2239.158,
+          "requests": {
+            "taskService:updateTask": {
+              "sent": 100,
+              "succeeded": 100,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            },
+            "taskService:getTasksByStatus": {
+              "sent": 482,
+              "succeeded": 482,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            }
+          },
+          "failedRequests": 0,
+          "latencyMs": {
+            "taskService:updateTask": {
+              "count": 100,
+              "p50": 39.021,
+              "p95": 154.622,
+              "p99": 178.309,
+              "max": 198.986,
+              "mean": 55.585
+            },
+            "taskService:getTasksByStatus": {
+              "count": 482,
+              "p50": 84.519,
+              "p95": 149.007,
+              "p99": 165.857,
+              "max": 172.991,
+              "mean": 84.776
+            }
+          },
+          "deliveryMs": {
+            "entityUpdate": {
+              "count": 5000,
+              "p50": 38.519,
+              "p95": 154.599,
+              "p99": 178.259,
+              "max": 198.976,
+              "mean": 54.45
+            },
+            "collectionDelta": {
+              "count": 5000,
+              "p50": 38.955,
+              "p95": 155.29,
+              "p99": 178.259,
+              "max": 198.976,
+              "mean": 54.95
+            }
+          },
+          "server": {
+            "windowMs": 2244.39,
+            "cpuUserSeconds": 1.41,
+            "cpuSystemSeconds": 0.334,
+            "cpuSeconds": 1.744,
+            "eventLoopDelayMs": {
+              "p50": 0.15,
+              "p99": 8.366,
+              "max": 9.661,
+              "mean": 0.764
+            },
+            "bytesSent": 279235303,
+            "bytesReceived": 50742,
+            "sqlStatements": 6566,
+            "snapshotsServed": {
+              "collection": 0,
+              "collectionPages": 0,
+              "entity": 0
+            },
+            "handlerRuns": {
+              "taskService:updateTask": 100,
+              "taskService:getTasksByStatus": 482
+            },
+            "inFlight": 0,
+            "rssPeakMb": 456.512,
+            "connections": 55,
+            "listenersPerSocket": 15
+          },
+          "serverError": null,
+          "loadgen": {
+            "cpuSeconds": 0.789,
+            "eventLoopDelayP99Ms": 2.616,
+            "eventLoopDelayMaxMs": 4.205
+          },
+          "noise": {
+            "otherWorkOnServerCpusPct": 4.24,
+            "interruptsOnServerCpusPct": 4.464,
+            "restOfMachineBusyPct": 2.232
+          },
+          "scenario": {
+            "writesIssued": 100,
+            "issueSeconds": 1.98,
+            "settleSeconds": 2.239
+          },
+          "errors": []
+        },
+        {
+          "index": 2,
+          "startedAt": "2026-10-04T01:49:09.095Z",
+          "loadAverage": {
+            "one": 3.16,
+            "five": 2.04,
+            "fifteen": 1.58
+          },
+          "completed": true,
+          "outcome": "100 writes issued over 1.98 s; server and clients idle 0.5 s after the load ended",
+          "windowMs": 2495.665,
+          "requests": {
+            "taskService:updateTask": {
+              "sent": 100,
+              "succeeded": 100,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            },
+            "taskService:getTasksByStatus": {
+              "sent": 700,
+              "succeeded": 700,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            }
+          },
+          "failedRequests": 0,
+          "latencyMs": {
+            "taskService:updateTask": {
+              "count": 100,
+              "p50": 118.616,
+              "p95": 251.564,
+              "p99": 266.319,
+              "max": 281.295,
+              "mean": 114.375
+            },
+            "taskService:getTasksByStatus": {
+              "count": 700,
+              "p50": 103.682,
+              "p95": 163.595,
+              "p99": 178.447,
+              "max": 193.741,
+              "mean": 103.968
+            }
+          },
+          "deliveryMs": {
+            "entityUpdate": {
+              "count": 5000,
+              "p50": 118.608,
+              "p95": 251.286,
+              "p99": 266.306,
+              "max": 281.25,
+              "mean": 113.864
+            },
+            "collectionDelta": {
+              "count": 5000,
+              "p50": 118.609,
+              "p95": 251.905,
+              "p99": 266.307,
+              "max": 281.251,
+              "mean": 114.306
+            }
+          },
+          "server": {
+            "windowMs": 2498.704,
+            "cpuUserSeconds": 1.877,
+            "cpuSystemSeconds": 0.468,
+            "cpuSeconds": 2.345,
+            "eventLoopDelayMs": {
+              "p50": 0.265,
+              "p99": 9.661,
+              "max": 13.806,
+              "mean": 0.924
+            },
+            "bytesSent": 394578837,
+            "bytesReceived": 66538,
+            "sqlStatements": 9400,
+            "snapshotsServed": {
+              "collection": 0,
+              "collectionPages": 0,
+              "entity": 0
+            },
+            "handlerRuns": {
+              "taskService:updateTask": 100,
+              "taskService:getTasksByStatus": 700
+            },
+            "inFlight": 0,
+            "rssPeakMb": 438.035,
+            "connections": 55,
+            "listenersPerSocket": 15
+          },
+          "serverError": null,
+          "loadgen": {
+            "cpuSeconds": 0.902,
+            "eventLoopDelayP99Ms": 5.86,
+            "eventLoopDelayMaxMs": 7.007
+          },
+          "noise": {
+            "otherWorkOnServerCpusPct": 3.004,
+            "interruptsOnServerCpusPct": 5.006,
+            "restOfMachineBusyPct": 2.228
+          },
+          "scenario": {
+            "writesIssued": 100,
+            "issueSeconds": 1.98,
+            "settleSeconds": 2.496
+          },
+          "errors": []
+        },
+        {
+          "index": 3,
+          "startedAt": "2026-10-04T01:50:35.431Z",
+          "loadAverage": {
+            "one": 2.5,
+            "five": 2.17,
+            "fifteen": 1.67
+          },
+          "completed": true,
+          "outcome": "100 writes issued over 1.98 s; server and clients idle 0.3 s after the load ended",
+          "windowMs": 2242.3,
+          "requests": {
+            "taskService:updateTask": {
+              "sent": 100,
+              "succeeded": 100,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            },
+            "taskService:getTasksByStatus": {
+              "sent": 450,
+              "succeeded": 450,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            }
+          },
+          "failedRequests": 0,
+          "latencyMs": {
+            "taskService:updateTask": {
+              "count": 100,
+              "p50": 28.742,
+              "p95": 140.547,
+              "p99": 168.106,
+              "max": 168.436,
+              "mean": 49.329
+            },
+            "taskService:getTasksByStatus": {
+              "count": 450,
+              "p50": 82.849,
+              "p95": 153.497,
+              "p99": 167.454,
+              "max": 176.299,
+              "mean": 82.349
+            }
+          },
+          "deliveryMs": {
+            "entityUpdate": {
+              "count": 5000,
+              "p50": 27.646,
+              "p95": 140.54,
+              "p99": 166.924,
+              "max": 168.092,
+              "mean": 48.667
+            },
+            "collectionDelta": {
+              "count": 5000,
+              "p50": 28.124,
+              "p95": 141.102,
+              "p99": 166.925,
+              "max": 168.641,
+              "mean": 49.136
+            }
+          },
+          "server": {
+            "windowMs": 2245.541,
+            "cpuUserSeconds": 1.352,
+            "cpuSystemSeconds": 0.312,
+            "cpuSeconds": 1.664,
+            "eventLoopDelayMs": {
+              "p50": 0.101,
+              "p99": 8.383,
+              "max": 10.906,
+              "mean": 0.668
+            },
+            "bytesSent": 262344237,
+            "bytesReceived": 48538,
+            "sqlStatements": 6150,
+            "snapshotsServed": {
+              "collection": 0,
+              "collectionPages": 0,
+              "entity": 0
+            },
+            "handlerRuns": {
+              "taskService:updateTask": 100,
+              "taskService:getTasksByStatus": 450
+            },
+            "inFlight": 0,
+            "rssPeakMb": 441.137,
+            "connections": 55,
+            "listenersPerSocket": 15
+          },
+          "serverError": null,
+          "loadgen": {
+            "cpuSeconds": 0.635,
+            "eventLoopDelayP99Ms": 3.984,
+            "eventLoopDelayMaxMs": 6.318
+          },
+          "noise": {
+            "otherWorkOnServerCpusPct": 2.229,
+            "interruptsOnServerCpusPct": 4.68,
+            "restOfMachineBusyPct": 1.588
+          },
+          "scenario": {
+            "writesIssued": 100,
+            "issueSeconds": 1.98,
+            "settleSeconds": 2.242
+          },
+          "errors": []
+        }
+      ],
+      "summary": {
+        "delivery.collectionDelta.p50": {
+          "values": [
+            38.955,
+            118.609,
+            28.124
+          ],
+          "median": 38.955,
+          "min": 28.124,
+          "max": 118.609,
+          "spreadPct": 232.3
+        },
+        "delivery.collectionDelta.p95": {
+          "values": [
+            155.29,
+            251.905,
+            141.102
+          ],
+          "median": 155.29,
+          "min": 141.102,
+          "max": 251.905,
+          "spreadPct": 71.4
+        },
+        "delivery.collectionDelta.p99": {
+          "values": [
+            178.259,
+            266.307,
+            166.925
+          ],
+          "median": 178.259,
+          "min": 166.925,
+          "max": 266.307,
+          "spreadPct": 55.8
+        },
+        "delivery.entityUpdate.p50": {
+          "values": [
+            38.519,
+            118.608,
+            27.646
+          ],
+          "median": 38.519,
+          "min": 27.646,
+          "max": 118.608,
+          "spreadPct": 236.1
+        },
+        "delivery.entityUpdate.p95": {
+          "values": [
+            154.599,
+            251.286,
+            140.54
+          ],
+          "median": 154.599,
+          "min": 140.54,
+          "max": 251.286,
+          "spreadPct": 71.6
+        },
+        "delivery.entityUpdate.p99": {
+          "values": [
+            178.259,
+            266.306,
+            166.924
+          ],
+          "median": 178.259,
+          "min": 166.924,
+          "max": 266.306,
+          "spreadPct": 55.8
+        },
+        "latency.taskService:getTasksByStatus.p50": {
+          "values": [
+            84.519,
+            103.682,
+            82.849
+          ],
+          "median": 84.519,
+          "min": 82.849,
+          "max": 103.682,
+          "spreadPct": 24.6
+        },
+        "latency.taskService:getTasksByStatus.p95": {
+          "values": [
+            149.007,
+            163.595,
+            153.497
+          ],
+          "median": 153.497,
+          "min": 149.007,
+          "max": 163.595,
+          "spreadPct": 9.5
+        },
+        "latency.taskService:getTasksByStatus.p99": {
+          "values": [
+            165.857,
+            178.447,
+            167.454
+          ],
+          "median": 167.454,
+          "min": 165.857,
+          "max": 178.447,
+          "spreadPct": 7.5
+        },
+        "latency.taskService:updateTask.p50": {
+          "values": [
+            39.021,
+            118.616,
+            28.742
+          ],
+          "median": 39.021,
+          "min": 28.742,
+          "max": 118.616,
+          "spreadPct": 230.3
+        },
+        "latency.taskService:updateTask.p95": {
+          "values": [
+            154.622,
+            251.564,
+            140.547
+          ],
+          "median": 154.622,
+          "min": 140.547,
+          "max": 251.564,
+          "spreadPct": 71.8
+        },
+        "latency.taskService:updateTask.p99": {
+          "values": [
+            178.309,
+            266.319,
+            168.106
+          ],
+          "median": 178.309,
+          "min": 168.106,
+          "max": 266.319,
+          "spreadPct": 55.1
+        },
+        "loadgen.cpuSeconds": {
+          "values": [
+            0.789,
+            0.902,
+            0.635
+          ],
+          "median": 0.789,
+          "min": 0.635,
+          "max": 0.902,
+          "spreadPct": 33.8
+        },
+        "loadgen.eventLoopDelayP99Ms": {
+          "values": [
+            2.616,
+            5.86,
+            3.984
+          ],
+          "median": 3.984,
+          "min": 2.616,
+          "max": 5.86,
+          "spreadPct": 81.4
+        },
+        "noise.otherWorkOnServerCpusPct": {
+          "values": [
+            4.24,
+            3,
+            2.23
+          ],
+          "median": 3,
+          "min": 2.23,
+          "max": 4.24,
+          "spreadPct": 67
+        },
+        "noise.restOfMachineBusyPct": {
+          "values": [
+            2.23,
+            2.23,
+            1.59
+          ],
+          "median": 2.23,
+          "min": 1.59,
+          "max": 2.23,
+          "spreadPct": 28.7
+        },
+        "requests.failed": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:getTasksByStatus.abandoned": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:getTasksByStatus.failed": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:getTasksByStatus.sent": {
+          "values": [
+            482,
+            700,
+            450
+          ],
+          "median": 482,
+          "min": 450,
+          "max": 700,
+          "spreadPct": 51.9
+        },
+        "requests.taskService:updateTask.abandoned": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:updateTask.failed": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:updateTask.sent": {
+          "values": [
+            100,
+            100,
+            100
+          ],
+          "median": 100,
+          "min": 100,
+          "max": 100,
+          "spreadPct": 0
+        },
+        "scenario.issueSeconds": {
+          "values": [
+            1.98,
+            1.98,
+            1.98
+          ],
+          "median": 1.98,
+          "min": 1.98,
+          "max": 1.98,
+          "spreadPct": 0
+        },
+        "scenario.settleSeconds": {
+          "values": [
+            2.239,
+            2.496,
+            2.242
+          ],
+          "median": 2.242,
+          "min": 2.239,
+          "max": 2.496,
+          "spreadPct": 11.5
+        },
+        "scenario.writesIssued": {
+          "values": [
+            100,
+            100,
+            100
+          ],
+          "median": 100,
+          "min": 100,
+          "max": 100,
+          "spreadPct": 0
+        },
+        "server.bytesSentMb": {
+          "values": [
+            266.3,
+            376.3,
+            250.191
+          ],
+          "median": 266.3,
+          "min": 250.191,
+          "max": 376.3,
+          "spreadPct": 47.4
+        },
+        "server.cpuSeconds": {
+          "values": [
+            1.744,
+            2.345,
+            1.664
+          ],
+          "median": 1.744,
+          "min": 1.664,
+          "max": 2.345,
+          "spreadPct": 39
+        },
+        "server.eventLoopDelayMaxMs": {
+          "values": [
+            9.661,
+            13.806,
+            10.906
+          ],
+          "median": 10.906,
+          "min": 9.661,
+          "max": 13.806,
+          "spreadPct": 38
+        },
+        "server.eventLoopDelayP99Ms": {
+          "values": [
+            8.366,
+            9.661,
+            8.383
+          ],
+          "median": 8.383,
+          "min": 8.366,
+          "max": 9.661,
+          "spreadPct": 15.4
+        },
+        "server.handlerRuns.taskService:getTasksByStatus": {
+          "values": [
+            482,
+            700,
+            450
+          ],
+          "median": 482,
+          "min": 450,
+          "max": 700,
+          "spreadPct": 51.9
+        },
+        "server.handlerRuns.taskService:updateTask": {
+          "values": [
+            100,
+            100,
+            100
+          ],
+          "median": 100,
+          "min": 100,
+          "max": 100,
+          "spreadPct": 0
+        },
+        "server.listenersPerSocket": {
+          "values": [
+            15,
+            15,
+            15
+          ],
+          "median": 15,
+          "min": 15,
+          "max": 15,
+          "spreadPct": 0
+        },
+        "server.rssPeakMb": {
+          "values": [
+            456.5,
+            438,
+            441.1
+          ],
+          "median": 441.1,
+          "min": 438,
+          "max": 456.5,
+          "spreadPct": 4.2
+        },
+        "server.snapshots.collection": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "server.snapshots.entity": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "server.sqlStatements": {
+          "values": [
+            6566,
+            9400,
+            6150
+          ],
+          "median": 6566,
+          "min": 6150,
+          "max": 9400,
+          "spreadPct": 49.5
+        }
+      }
+    },
+    {
+      "name": "reconnect-storm",
+      "description": "Board viewers that are all connected drop and reconnect within two seconds, as when a platform caps connection lifetime (Cloud Run reconnects about 190 sockets at once). Each viewer redoes its whole board load; measured until every board is restored or the cap hits.",
+      "parameters": {
+        "clients": 190,
+        "entitySubscriptions": 60,
+        "dropWindowSeconds": 2,
+        "restoreCapSeconds": 45,
+        "drainCapSeconds": 15
+      },
+      "repetitions": [
+        {
+          "index": 1,
+          "startedAt": "2026-10-04T01:47:48.758Z",
+          "loadAverage": {
+            "one": 2.03,
+            "five": 1.64,
+            "fifteen": 1.42
+          },
+          "completed": true,
+          "outcome": "190/190 boards restored",
+          "windowMs": 2003.281,
+          "requests": {
+            "taskService:collection:subscribe": {
+              "sent": 190,
+              "succeeded": 190,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            },
+            "taskService:batchSubscribe": {
+              "sent": 190,
+              "succeeded": 190,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            },
+            "taskService:getTasksByStatus": {
+              "sent": 190,
+              "succeeded": 190,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            }
+          },
+          "failedRequests": 0,
+          "latencyMs": {
+            "taskService:getTasksByStatus": {
+              "count": 190,
+              "p50": 6.018,
+              "p95": 12.145,
+              "p99": 16.41,
+              "max": 18.087,
+              "mean": 6.916
+            },
+            "taskService:collection:subscribe": {
+              "count": 190,
+              "p50": 5.624,
+              "p95": 13.619,
+              "p99": 17.96,
+              "max": 18.841,
+              "mean": 6.392
+            },
+            "taskService:batchSubscribe": {
+              "count": 190,
+              "p50": 7.63,
+              "p95": 16.842,
+              "p99": 24.235,
+              "max": 25.017,
+              "mean": 9.209
+            }
+          },
+          "deliveryMs": {},
+          "server": {
+            "windowMs": 2008.038,
+            "cpuUserSeconds": 1.61,
+            "cpuSystemSeconds": 0.22,
+            "cpuSeconds": 1.83,
+            "eventLoopDelayMs": {
+              "p50": 0.109,
+              "p99": 5.303,
+              "max": 6.179,
+              "mean": 0.344
+            },
+            "bytesSent": 159288252,
+            "bytesReceived": 959674,
+            "sqlStatements": 3686,
+            "snapshotsServed": {
+              "collection": 190,
+              "collectionPages": 0,
+              "entity": 11400
+            },
+            "handlerRuns": {
+              "taskService:collection:unsubscribe": 190,
+              "taskService:unsubscribe": 11400,
+              "taskService:collection:subscribe": 190,
+              "taskService:batchSubscribe": 190,
+              "taskService:getTasksByStatus": 190
+            },
+            "inFlight": 0,
+            "rssPeakMb": 419.289,
+            "connections": 190,
+            "listenersPerSocket": 15
+          },
+          "serverError": null,
+          "loadgen": {
+            "cpuSeconds": 0.648,
+            "eventLoopDelayP99Ms": 5.368,
+            "eventLoopDelayMaxMs": 8.547
+          },
+          "noise": {
+            "otherWorkOnServerCpusPct": 2.994,
+            "interruptsOnServerCpusPct": 4.491,
+            "restOfMachineBusyPct": 1.497
+          },
+          "scenario": {
+            "restored": 190,
+            "notRestoredWithinCap": 0,
+            "failedRestores": 0,
+            "restoreP50Ms": 9.409,
+            "restoreP95Ms": 26.049,
+            "restoreP99Ms": 30.714,
+            "restoreMaxMs": 33.544,
+            "liveRestoreP50Ms": 9.409,
+            "liveRestoreP95Ms": 26.048,
+            "lastRestoreSeconds": 1.996
+          },
+          "errors": []
+        },
+        {
+          "index": 2,
+          "startedAt": "2026-10-04T01:49:15.380Z",
+          "loadAverage": {
+            "one": 3.31,
+            "five": 2.09,
+            "fifteen": 1.6
+          },
+          "completed": true,
+          "outcome": "190/190 boards restored",
+          "windowMs": 2010.402,
+          "requests": {
+            "taskService:collection:subscribe": {
+              "sent": 190,
+              "succeeded": 190,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            },
+            "taskService:batchSubscribe": {
+              "sent": 190,
+              "succeeded": 190,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            },
+            "taskService:getTasksByStatus": {
+              "sent": 190,
+              "succeeded": 190,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            }
+          },
+          "failedRequests": 0,
+          "latencyMs": {
+            "taskService:collection:subscribe": {
+              "count": 190,
+              "p50": 4.301,
+              "p95": 12.048,
+              "p99": 16.679,
+              "max": 16.823,
+              "mean": 5.706
+            },
+            "taskService:getTasksByStatus": {
+              "count": 190,
+              "p50": 5.942,
+              "p95": 12.569,
+              "p99": 14.789,
+              "max": 16.524,
+              "mean": 6.848
+            },
+            "taskService:batchSubscribe": {
+              "count": 190,
+              "p50": 7.734,
+              "p95": 14.439,
+              "p99": 18.3,
+              "max": 22.14,
+              "mean": 8.723
+            }
+          },
+          "deliveryMs": {},
+          "server": {
+            "windowMs": 2013.073,
+            "cpuUserSeconds": 1.614,
+            "cpuSystemSeconds": 0.22,
+            "cpuSeconds": 1.834,
+            "eventLoopDelayMs": {
+              "p50": 0.199,
+              "p99": 5.516,
+              "max": 6.343,
+              "mean": 0.477
+            },
+            "bytesSent": 159288255,
+            "bytesReceived": 959674,
+            "sqlStatements": 3717,
+            "snapshotsServed": {
+              "collection": 190,
+              "collectionPages": 0,
+              "entity": 11400
+            },
+            "handlerRuns": {
+              "taskService:collection:unsubscribe": 190,
+              "taskService:unsubscribe": 11400,
+              "taskService:collection:subscribe": 190,
+              "taskService:batchSubscribe": 190,
+              "taskService:getTasksByStatus": 190
+            },
+            "inFlight": 0,
+            "rssPeakMb": 421.387,
+            "connections": 190,
+            "listenersPerSocket": 15
+          },
+          "serverError": null,
+          "loadgen": {
+            "cpuSeconds": 0.654,
+            "eventLoopDelayP99Ms": 5.802,
+            "eventLoopDelayMaxMs": 6.417
+          },
+          "noise": {
+            "otherWorkOnServerCpusPct": 2.237,
+            "interruptsOnServerCpusPct": 3.978,
+            "restOfMachineBusyPct": 1.771
+          },
+          "scenario": {
+            "restored": 190,
+            "notRestoredWithinCap": 0,
+            "failedRestores": 0,
+            "restoreP50Ms": 10.042,
+            "restoreP95Ms": 19.092,
+            "restoreP99Ms": 30.681,
+            "restoreMaxMs": 31.812,
+            "liveRestoreP50Ms": 10.041,
+            "liveRestoreP95Ms": 19.091,
+            "lastRestoreSeconds": 1.997
+          },
+          "errors": []
+        },
+        {
+          "index": 3,
+          "startedAt": "2026-10-04T01:50:41.482Z",
+          "loadAverage": {
+            "one": 2.3,
+            "five": 2.13,
+            "fifteen": 1.66
+          },
+          "completed": true,
+          "outcome": "190/190 boards restored",
+          "windowMs": 2001.889,
+          "requests": {
+            "taskService:collection:subscribe": {
+              "sent": 190,
+              "succeeded": 190,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            },
+            "taskService:batchSubscribe": {
+              "sent": 190,
+              "succeeded": 190,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            },
+            "taskService:getTasksByStatus": {
+              "sent": 190,
+              "succeeded": 190,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            }
+          },
+          "failedRequests": 0,
+          "latencyMs": {
+            "taskService:collection:subscribe": {
+              "count": 190,
+              "p50": 5.676,
+              "p95": 14.997,
+              "p99": 21.343,
+              "max": 24.891,
+              "mean": 6.664
+            },
+            "taskService:getTasksByStatus": {
+              "count": 190,
+              "p50": 6.118,
+              "p95": 13.231,
+              "p99": 21.051,
+              "max": 22.894,
+              "mean": 7.23
+            },
+            "taskService:batchSubscribe": {
+              "count": 190,
+              "p50": 7.744,
+              "p95": 19.827,
+              "p99": 25.463,
+              "max": 31.869,
+              "mean": 9.629
+            }
+          },
+          "deliveryMs": {},
+          "server": {
+            "windowMs": 2004.285,
+            "cpuUserSeconds": 1.607,
+            "cpuSystemSeconds": 0.224,
+            "cpuSeconds": 1.831,
+            "eventLoopDelayMs": {
+              "p50": 0.24,
+              "p99": 4.787,
+              "max": 4.975,
+              "mean": 0.545
+            },
+            "bytesSent": 159288259,
+            "bytesReceived": 959674,
+            "sqlStatements": 3690,
+            "snapshotsServed": {
+              "collection": 190,
+              "collectionPages": 0,
+              "entity": 11400
+            },
+            "handlerRuns": {
+              "taskService:collection:unsubscribe": 190,
+              "taskService:unsubscribe": 11400,
+              "taskService:collection:subscribe": 190,
+              "taskService:batchSubscribe": 190,
+              "taskService:getTasksByStatus": 190
+            },
+            "inFlight": 0,
+            "rssPeakMb": 437.617,
+            "connections": 190,
+            "listenersPerSocket": 15
+          },
+          "serverError": null,
+          "loadgen": {
+            "cpuSeconds": 0.646,
+            "eventLoopDelayP99Ms": 2.968,
+            "eventLoopDelayMaxMs": 9.235
+          },
+          "noise": {
+            "otherWorkOnServerCpusPct": 3.496,
+            "interruptsOnServerCpusPct": 3.995,
+            "restOfMachineBusyPct": 1.904
+          },
+          "scenario": {
+            "restored": 190,
+            "notRestoredWithinCap": 0,
+            "failedRestores": 0,
+            "restoreP50Ms": 10.146,
+            "restoreP95Ms": 27.466,
+            "restoreP99Ms": 38.923,
+            "restoreMaxMs": 43.585,
+            "liveRestoreP50Ms": 10.146,
+            "liveRestoreP95Ms": 27.466,
+            "lastRestoreSeconds": 1.997
+          },
+          "errors": []
+        }
+      ],
+      "summary": {
+        "latency.taskService:batchSubscribe.p50": {
+          "values": [
+            7.63,
+            7.734,
+            7.744
+          ],
+          "median": 7.734,
+          "min": 7.63,
+          "max": 7.744,
+          "spreadPct": 1.5
+        },
+        "latency.taskService:batchSubscribe.p95": {
+          "values": [
+            16.842,
+            14.439,
+            19.827
+          ],
+          "median": 16.842,
+          "min": 14.439,
+          "max": 19.827,
+          "spreadPct": 32
+        },
+        "latency.taskService:batchSubscribe.p99": {
+          "values": [
+            24.235,
+            18.3,
+            25.463
+          ],
+          "median": 24.235,
+          "min": 18.3,
+          "max": 25.463,
+          "spreadPct": 29.6
+        },
+        "latency.taskService:collection:subscribe.p50": {
+          "values": [
+            5.624,
+            4.301,
+            5.676
+          ],
+          "median": 5.624,
+          "min": 4.301,
+          "max": 5.676,
+          "spreadPct": 24.4
+        },
+        "latency.taskService:collection:subscribe.p95": {
+          "values": [
+            13.619,
+            12.048,
+            14.997
+          ],
+          "median": 13.619,
+          "min": 12.048,
+          "max": 14.997,
+          "spreadPct": 21.7
+        },
+        "latency.taskService:collection:subscribe.p99": {
+          "values": [
+            17.96,
+            16.679,
+            21.343
+          ],
+          "median": 17.96,
+          "min": 16.679,
+          "max": 21.343,
+          "spreadPct": 26
+        },
+        "latency.taskService:getTasksByStatus.p50": {
+          "values": [
+            6.018,
+            5.942,
+            6.118
+          ],
+          "median": 6.018,
+          "min": 5.942,
+          "max": 6.118,
+          "spreadPct": 2.9
+        },
+        "latency.taskService:getTasksByStatus.p95": {
+          "values": [
+            12.145,
+            12.569,
+            13.231
+          ],
+          "median": 12.569,
+          "min": 12.145,
+          "max": 13.231,
+          "spreadPct": 8.6
+        },
+        "latency.taskService:getTasksByStatus.p99": {
+          "values": [
+            16.41,
+            14.789,
+            21.051
+          ],
+          "median": 16.41,
+          "min": 14.789,
+          "max": 21.051,
+          "spreadPct": 38.2
+        },
+        "loadgen.cpuSeconds": {
+          "values": [
+            0.648,
+            0.654,
+            0.646
+          ],
+          "median": 0.648,
+          "min": 0.646,
+          "max": 0.654,
+          "spreadPct": 1.2
+        },
+        "loadgen.eventLoopDelayP99Ms": {
+          "values": [
+            5.368,
+            5.802,
+            2.968
+          ],
+          "median": 5.368,
+          "min": 2.968,
+          "max": 5.802,
+          "spreadPct": 52.8
+        },
+        "noise.otherWorkOnServerCpusPct": {
+          "values": [
+            2.99,
+            2.24,
+            3.5
+          ],
+          "median": 2.99,
+          "min": 2.24,
+          "max": 3.5,
+          "spreadPct": 42.1
+        },
+        "noise.restOfMachineBusyPct": {
+          "values": [
+            1.5,
+            1.77,
+            1.9
+          ],
+          "median": 1.77,
+          "min": 1.5,
+          "max": 1.9,
+          "spreadPct": 22.6
+        },
+        "requests.failed": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:batchSubscribe.abandoned": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:batchSubscribe.failed": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:batchSubscribe.sent": {
+          "values": [
+            190,
+            190,
+            190
+          ],
+          "median": 190,
+          "min": 190,
+          "max": 190,
+          "spreadPct": 0
+        },
+        "requests.taskService:collection:subscribe.abandoned": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:collection:subscribe.failed": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:collection:subscribe.sent": {
+          "values": [
+            190,
+            190,
+            190
+          ],
+          "median": 190,
+          "min": 190,
+          "max": 190,
+          "spreadPct": 0
+        },
+        "requests.taskService:getTasksByStatus.abandoned": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:getTasksByStatus.failed": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:getTasksByStatus.sent": {
+          "values": [
+            190,
+            190,
+            190
+          ],
+          "median": 190,
+          "min": 190,
+          "max": 190,
+          "spreadPct": 0
+        },
+        "scenario.failedRestores": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "scenario.lastRestoreSeconds": {
+          "values": [
+            1.996,
+            1.997,
+            1.997
+          ],
+          "median": 1.997,
+          "min": 1.996,
+          "max": 1.997,
+          "spreadPct": 0.1
+        },
+        "scenario.liveRestoreP50Ms": {
+          "values": [
+            9.409,
+            10.041,
+            10.146
+          ],
+          "median": 10.041,
+          "min": 9.409,
+          "max": 10.146,
+          "spreadPct": 7.3
+        },
+        "scenario.liveRestoreP95Ms": {
+          "values": [
+            26.048,
+            19.091,
+            27.466
+          ],
+          "median": 26.048,
+          "min": 19.091,
+          "max": 27.466,
+          "spreadPct": 32.2
+        },
+        "scenario.notRestoredWithinCap": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "scenario.restoreMaxMs": {
+          "values": [
+            33.544,
+            31.812,
+            43.585
+          ],
+          "median": 33.544,
+          "min": 31.812,
+          "max": 43.585,
+          "spreadPct": 35.1
+        },
+        "scenario.restoreP50Ms": {
+          "values": [
+            9.409,
+            10.042,
+            10.146
+          ],
+          "median": 10.042,
+          "min": 9.409,
+          "max": 10.146,
+          "spreadPct": 7.3
+        },
+        "scenario.restoreP95Ms": {
+          "values": [
+            26.049,
+            19.092,
+            27.466
+          ],
+          "median": 26.049,
+          "min": 19.092,
+          "max": 27.466,
+          "spreadPct": 32.1
+        },
+        "scenario.restoreP99Ms": {
+          "values": [
+            30.714,
+            30.681,
+            38.923
+          ],
+          "median": 30.714,
+          "min": 30.681,
+          "max": 38.923,
+          "spreadPct": 26.8
+        },
+        "scenario.restored": {
+          "values": [
+            190,
+            190,
+            190
+          ],
+          "median": 190,
+          "min": 190,
+          "max": 190,
+          "spreadPct": 0
+        },
+        "server.bytesSentMb": {
+          "values": [
+            151.909,
+            151.909,
+            151.909
+          ],
+          "median": 151.909,
+          "min": 151.909,
+          "max": 151.909,
+          "spreadPct": 0
+        },
+        "server.cpuSeconds": {
+          "values": [
+            1.83,
+            1.834,
+            1.831
+          ],
+          "median": 1.831,
+          "min": 1.83,
+          "max": 1.834,
+          "spreadPct": 0.2
+        },
+        "server.eventLoopDelayMaxMs": {
+          "values": [
+            6.179,
+            6.343,
+            4.975
+          ],
+          "median": 6.179,
+          "min": 4.975,
+          "max": 6.343,
+          "spreadPct": 22.1
+        },
+        "server.eventLoopDelayP99Ms": {
+          "values": [
+            5.303,
+            5.516,
+            4.787
+          ],
+          "median": 5.303,
+          "min": 4.787,
+          "max": 5.516,
+          "spreadPct": 13.7
+        },
+        "server.handlerRuns.taskService:batchSubscribe": {
+          "values": [
+            190,
+            190,
+            190
+          ],
+          "median": 190,
+          "min": 190,
+          "max": 190,
+          "spreadPct": 0
+        },
+        "server.handlerRuns.taskService:collection:subscribe": {
+          "values": [
+            190,
+            190,
+            190
+          ],
+          "median": 190,
+          "min": 190,
+          "max": 190,
+          "spreadPct": 0
+        },
+        "server.handlerRuns.taskService:collection:unsubscribe": {
+          "values": [
+            190,
+            190,
+            190
+          ],
+          "median": 190,
+          "min": 190,
+          "max": 190,
+          "spreadPct": 0
+        },
+        "server.handlerRuns.taskService:getTasksByStatus": {
+          "values": [
+            190,
+            190,
+            190
+          ],
+          "median": 190,
+          "min": 190,
+          "max": 190,
+          "spreadPct": 0
+        },
+        "server.handlerRuns.taskService:unsubscribe": {
+          "values": [
+            11400,
+            11400,
+            11400
+          ],
+          "median": 11400,
+          "min": 11400,
+          "max": 11400,
+          "spreadPct": 0
+        },
+        "server.listenersPerSocket": {
+          "values": [
+            15,
+            15,
+            15
+          ],
+          "median": 15,
+          "min": 15,
+          "max": 15,
+          "spreadPct": 0
+        },
+        "server.rssPeakMb": {
+          "values": [
+            419.3,
+            421.4,
+            437.6
+          ],
+          "median": 421.4,
+          "min": 419.3,
+          "max": 437.6,
+          "spreadPct": 4.3
+        },
+        "server.snapshots.collection": {
+          "values": [
+            190,
+            190,
+            190
+          ],
+          "median": 190,
+          "min": 190,
+          "max": 190,
+          "spreadPct": 0
+        },
+        "server.snapshots.entity": {
+          "values": [
+            11400,
+            11400,
+            11400
+          ],
+          "median": 11400,
+          "min": 11400,
+          "max": 11400,
+          "spreadPct": 0
+        },
+        "server.sqlStatements": {
+          "values": [
+            3686,
+            3717,
+            3690
+          ],
+          "median": 3690,
+          "min": 3686,
+          "max": 3717,
+          "spreadPct": 0.8
+        }
+      }
+    },
+    {
+      "name": "fat-read",
+      "description": "Clients issue the same getTasksByStatus call (full rows, about 4 KB each) in the same tick, round after round: what the server pays for identical concurrent reads (4.1 runs each one; 5.0 can share them).",
+      "parameters": {
+        "clients": 20,
+        "rounds": 10,
+        "roundGapMs": 500,
+        "drainCapSeconds": 15
+      },
+      "repetitions": [
+        {
+          "index": 1,
+          "startedAt": "2026-10-04T01:47:55.751Z",
+          "loadAverage": {
+            "one": 2.35,
+            "five": 1.71,
+            "fifteen": 1.45
+          },
+          "completed": true,
+          "outcome": "10 rounds of 20 identical calls; every call answered",
+          "windowMs": 5792.338,
+          "requests": {
+            "taskService:getTasksByStatus": {
+              "sent": 200,
+              "succeeded": 200,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            }
+          },
+          "failedRequests": 0,
+          "latencyMs": {
+            "taskService:getTasksByStatus": {
+              "count": 200,
+              "p50": 49.081,
+              "p95": 89.012,
+              "p99": 117.299,
+              "max": 122.103,
+              "mean": 50.475
+            }
+          },
+          "deliveryMs": {},
+          "server": {
+            "windowMs": 5803.59,
+            "cpuUserSeconds": 0.72,
+            "cpuSystemSeconds": 0.21,
+            "cpuSeconds": 0.929,
+            "eventLoopDelayMs": {
+              "p50": 0.068,
+              "p99": 5.925,
+              "max": 10.054,
+              "mean": 0.261
+            },
+            "bytesSent": 105608434,
+            "bytesReceived": 14564,
+            "sqlStatements": 2600,
+            "snapshotsServed": {
+              "collection": 0,
+              "collectionPages": 0,
+              "entity": 0
+            },
+            "handlerRuns": {
+              "taskService:getTasksByStatus": 200
+            },
+            "inFlight": 0,
+            "rssPeakMb": 366.004,
+            "connections": 20,
+            "listenersPerSocket": 15
+          },
+          "serverError": null,
+          "loadgen": {
+            "cpuSeconds": 0.281,
+            "eventLoopDelayP99Ms": 0.813,
+            "eventLoopDelayMaxMs": 7.662
+          },
+          "noise": {
+            "otherWorkOnServerCpusPct": 3.105,
+            "interruptsOnServerCpusPct": 3.105,
+            "restOfMachineBusyPct": 1.229
+          },
+          "scenario": {
+            "roundP50Ms": 72.532,
+            "roundMaxMs": 122.31,
+            "firstRoundMs": 122.31,
+            "lastRoundMs": 66.307,
+            "failedRounds": 0,
+            "drainSeconds": 0.004
+          },
+          "errors": []
+        },
+        {
+          "index": 2,
+          "startedAt": "2026-10-04T01:49:22.312Z",
+          "loadAverage": {
+            "one": 3.05,
+            "five": 2.06,
+            "fifteen": 1.59
+          },
+          "completed": true,
+          "outcome": "10 rounds of 20 identical calls; every call answered",
+          "windowMs": 5797.209,
+          "requests": {
+            "taskService:getTasksByStatus": {
+              "sent": 200,
+              "succeeded": 200,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            }
+          },
+          "failedRequests": 0,
+          "latencyMs": {
+            "taskService:getTasksByStatus": {
+              "count": 200,
+              "p50": 49.302,
+              "p95": 88.815,
+              "p99": 110.311,
+              "max": 115.324,
+              "mean": 51.182
+            }
+          },
+          "deliveryMs": {},
+          "server": {
+            "windowMs": 5799.354,
+            "cpuUserSeconds": 0.742,
+            "cpuSystemSeconds": 0.196,
+            "cpuSeconds": 0.938,
+            "eventLoopDelayMs": {
+              "p50": 0.068,
+              "p99": 4.59,
+              "max": 12.708,
+              "mean": 0.269
+            },
+            "bytesSent": 105608431,
+            "bytesReceived": 14564,
+            "sqlStatements": 2600,
+            "snapshotsServed": {
+              "collection": 0,
+              "collectionPages": 0,
+              "entity": 0
+            },
+            "handlerRuns": {
+              "taskService:getTasksByStatus": 200
+            },
+            "inFlight": 0,
+            "rssPeakMb": 372.172,
+            "connections": 20,
+            "listenersPerSocket": 15
+          },
+          "serverError": null,
+          "loadgen": {
+            "cpuSeconds": 0.261,
+            "eventLoopDelayP99Ms": 1.313,
+            "eventLoopDelayMaxMs": 4.5
+          },
+          "noise": {
+            "otherWorkOnServerCpusPct": 2.587,
+            "interruptsOnServerCpusPct": 3.018,
+            "restOfMachineBusyPct": 0.981
+          },
+          "scenario": {
+            "roundP50Ms": 74.876,
+            "roundMaxMs": 115.451,
+            "firstRoundMs": 115.451,
+            "lastRoundMs": 71.143,
+            "failedRounds": 0,
+            "drainSeconds": 0.002
+          },
+          "errors": []
+        },
+        {
+          "index": 3,
+          "startedAt": "2026-10-04T01:50:48.452Z",
+          "loadAverage": {
+            "one": 2.79,
+            "five": 2.24,
+            "fifteen": 1.7
+          },
+          "completed": true,
+          "outcome": "10 rounds of 20 identical calls; every call answered",
+          "windowMs": 5795.899,
+          "requests": {
+            "taskService:getTasksByStatus": {
+              "sent": 200,
+              "succeeded": 200,
+              "timeout": 0,
+              "error": 0,
+              "abandoned": 0,
+              "unanswered": 0,
+              "late": 0
+            }
+          },
+          "failedRequests": 0,
+          "latencyMs": {
+            "taskService:getTasksByStatus": {
+              "count": 200,
+              "p50": 49.829,
+              "p95": 91.391,
+              "p99": 118.286,
+              "max": 122.976,
+              "mean": 51.289
+            }
+          },
+          "deliveryMs": {},
+          "server": {
+            "windowMs": 5798.124,
+            "cpuUserSeconds": 0.735,
+            "cpuSystemSeconds": 0.201,
+            "cpuSeconds": 0.936,
+            "eventLoopDelayMs": {
+              "p50": 0.068,
+              "p99": 3.099,
+              "max": 12.118,
+              "mean": 0.214
+            },
+            "bytesSent": 105608431,
+            "bytesReceived": 14564,
+            "sqlStatements": 2600,
+            "snapshotsServed": {
+              "collection": 0,
+              "collectionPages": 0,
+              "entity": 0
+            },
+            "handlerRuns": {
+              "taskService:getTasksByStatus": 200
+            },
+            "inFlight": 0,
+            "rssPeakMb": 367.094,
+            "connections": 20,
+            "listenersPerSocket": 15
+          },
+          "serverError": null,
+          "loadgen": {
+            "cpuSeconds": 0.283,
+            "eventLoopDelayP99Ms": 1.158,
+            "eventLoopDelayMaxMs": 5.434
+          },
+          "noise": {
+            "otherWorkOnServerCpusPct": 2.933,
+            "interruptsOnServerCpusPct": 3.191,
+            "restOfMachineBusyPct": 1.014
+          },
+          "scenario": {
+            "roundP50Ms": 75.663,
+            "roundMaxMs": 123.098,
+            "firstRoundMs": 123.098,
+            "lastRoundMs": 76.039,
+            "failedRounds": 0,
+            "drainSeconds": 0.002
+          },
+          "errors": []
+        }
+      ],
+      "summary": {
+        "latency.taskService:getTasksByStatus.p50": {
+          "values": [
+            49.081,
+            49.302,
+            49.829
+          ],
+          "median": 49.302,
+          "min": 49.081,
+          "max": 49.829,
+          "spreadPct": 1.5
+        },
+        "latency.taskService:getTasksByStatus.p95": {
+          "values": [
+            89.012,
+            88.815,
+            91.391
+          ],
+          "median": 89.012,
+          "min": 88.815,
+          "max": 91.391,
+          "spreadPct": 2.9
+        },
+        "latency.taskService:getTasksByStatus.p99": {
+          "values": [
+            117.299,
+            110.311,
+            118.286
+          ],
+          "median": 117.299,
+          "min": 110.311,
+          "max": 118.286,
+          "spreadPct": 6.8
+        },
+        "loadgen.cpuSeconds": {
+          "values": [
+            0.281,
+            0.261,
+            0.283
+          ],
+          "median": 0.281,
+          "min": 0.261,
+          "max": 0.283,
+          "spreadPct": 7.8
+        },
+        "loadgen.eventLoopDelayP99Ms": {
+          "values": [
+            0.813,
+            1.313,
+            1.158
+          ],
+          "median": 1.158,
+          "min": 0.813,
+          "max": 1.313,
+          "spreadPct": 43.2
+        },
+        "noise.otherWorkOnServerCpusPct": {
+          "values": [
+            3.1,
+            2.59,
+            2.93
+          ],
+          "median": 2.93,
+          "min": 2.59,
+          "max": 3.1,
+          "spreadPct": 17.4
+        },
+        "noise.restOfMachineBusyPct": {
+          "values": [
+            1.23,
+            0.98,
+            1.01
+          ],
+          "median": 1.01,
+          "min": 0.98,
+          "max": 1.23,
+          "spreadPct": 24.8
+        },
+        "requests.failed": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:getTasksByStatus.abandoned": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:getTasksByStatus.failed": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "requests.taskService:getTasksByStatus.sent": {
+          "values": [
+            200,
+            200,
+            200
+          ],
+          "median": 200,
+          "min": 200,
+          "max": 200,
+          "spreadPct": 0
+        },
+        "scenario.drainSeconds": {
+          "values": [
+            0.004,
+            0.002,
+            0.002
+          ],
+          "median": 0.002,
+          "min": 0.002,
+          "max": 0.004,
+          "spreadPct": 100
+        },
+        "scenario.failedRounds": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "scenario.firstRoundMs": {
+          "values": [
+            122.31,
+            115.451,
+            123.098
+          ],
+          "median": 122.31,
+          "min": 115.451,
+          "max": 123.098,
+          "spreadPct": 6.3
+        },
+        "scenario.lastRoundMs": {
+          "values": [
+            66.307,
+            71.143,
+            76.039
+          ],
+          "median": 71.143,
+          "min": 66.307,
+          "max": 76.039,
+          "spreadPct": 13.7
+        },
+        "scenario.roundMaxMs": {
+          "values": [
+            122.31,
+            115.451,
+            123.098
+          ],
+          "median": 122.31,
+          "min": 115.451,
+          "max": 123.098,
+          "spreadPct": 6.3
+        },
+        "scenario.roundP50Ms": {
+          "values": [
+            72.532,
+            74.876,
+            75.663
+          ],
+          "median": 74.876,
+          "min": 72.532,
+          "max": 75.663,
+          "spreadPct": 4.2
+        },
+        "server.bytesSentMb": {
+          "values": [
+            100.716,
+            100.716,
+            100.716
+          ],
+          "median": 100.716,
+          "min": 100.716,
+          "max": 100.716,
+          "spreadPct": 0
+        },
+        "server.cpuSeconds": {
+          "values": [
+            0.929,
+            0.938,
+            0.936
+          ],
+          "median": 0.936,
+          "min": 0.929,
+          "max": 0.938,
+          "spreadPct": 1
+        },
+        "server.eventLoopDelayMaxMs": {
+          "values": [
+            10.054,
+            12.708,
+            12.118
+          ],
+          "median": 12.118,
+          "min": 10.054,
+          "max": 12.708,
+          "spreadPct": 21.9
+        },
+        "server.eventLoopDelayP99Ms": {
+          "values": [
+            5.925,
+            4.59,
+            3.099
+          ],
+          "median": 4.59,
+          "min": 3.099,
+          "max": 5.925,
+          "spreadPct": 61.6
+        },
+        "server.handlerRuns.taskService:getTasksByStatus": {
+          "values": [
+            200,
+            200,
+            200
+          ],
+          "median": 200,
+          "min": 200,
+          "max": 200,
+          "spreadPct": 0
+        },
+        "server.listenersPerSocket": {
+          "values": [
+            15,
+            15,
+            15
+          ],
+          "median": 15,
+          "min": 15,
+          "max": 15,
+          "spreadPct": 0
+        },
+        "server.rssPeakMb": {
+          "values": [
+            366,
+            372.2,
+            367.1
+          ],
+          "median": 367.1,
+          "min": 366,
+          "max": 372.2,
+          "spreadPct": 1.7
+        },
+        "server.snapshots.collection": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "server.snapshots.entity": {
+          "values": [
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "spreadPct": null
+        },
+        "server.sqlStatements": {
+          "values": [
+            2600,
+            2600,
+            2600
+          ],
+          "median": 2600,
+          "min": 2600,
+          "max": 2600,
+          "spreadPct": 0
+        }
+      }
+    }
+  ]
+}

@@ -13,7 +13,8 @@ export const fatRead: Scenario<FatReadParameters> = {
   name: "fat-read",
   description:
     "Clients issue the same getTasksByStatus call (full rows, about 4 KB each) in the same tick, " +
-    "round after round: what the server pays for identical reads it cannot share.",
+    "round after round: what the server pays for identical concurrent reads (4.1 runs each one; 5.0 " +
+    "can share them).",
   parameters: (quick) => ({
     clients: quick ? 5 : 20,
     rounds: quick ? 3 : 10,

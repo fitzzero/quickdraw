@@ -6,6 +6,7 @@
     "bench/apps/*/generated/**",
     "packages/core/test/prisma/generated/**",
     "bench/baselines/**",
+    "bench/comparisons/**",
     "bench/reports/**",
     "bench/results/**"
   ]
