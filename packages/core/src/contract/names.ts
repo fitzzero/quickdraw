@@ -57,6 +57,14 @@ export function userRoom(userId: string): string {
  */
 export const RESERVED_ROOM_PREFIXES: readonly string[] = Object.freeze(["qd:", "user:"]);
 
+/**
+ * The reserved prefix `room` starts with (`qd:` or `user:`), or `undefined`
+ * when an app room may have that name.
+ */
+export function reservedRoomPrefix(room: string): string | undefined {
+  return RESERVED_ROOM_PREFIXES.find((prefix) => room.startsWith(prefix));
+}
+
 /** Events a client sends to the server (RFC 0003 section 8.2). */
 export const CLIENT_EVENTS = Object.freeze({
   /** A method call: `{ id, s, m, i, v? }`, answered by ack. */

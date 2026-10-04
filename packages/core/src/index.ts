@@ -68,6 +68,7 @@ export {
   type ChannelRequires,
   type EventDef,
   type PayloadSelector,
+  type RoomSelector,
   type StreamAccess,
   type StreamDef,
 } from "./contract/realtime";

@@ -318,6 +318,11 @@ function requiresText(requires: ChannelDef["requires"]): string | undefined {
   }
   const selector = (value: unknown): string =>
     typeof value === "string" ? code(value) : "a function of the payload";
+  if (requires.room !== undefined) {
+    return typeof requires.room === "string"
+      ? `the sending socket in the app room ${code(requires.room)}`
+      : "the sending socket in the app room a function of the payload names";
+  }
   return requires.collection === undefined
     ? `a subscription to the row ${selector(requires.entity)} names`
     : `a subscription to the ${code(requires.collection)} scope ${selector(requires.scope)} names`;

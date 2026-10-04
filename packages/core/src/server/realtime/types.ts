@@ -184,7 +184,7 @@ export type StreamSubscriptions = Record<string, StreamSubscription>;
 /** A channel handler as the dispatcher calls it, whatever its declared types. */
 export type AnyChannelHandler = (payload: unknown, ctx: ChannelContext) => unknown;
 
-/** Where a channel requirement reads its row id or scope value from a parsed payload. */
+/** Where a channel requirement reads its row id, scope value or app room from a parsed payload. */
 export type CompiledSelector = (payload: unknown) => string | undefined;
 
 /** One channel of a defined service, checked and ready to serve. */
@@ -202,6 +202,7 @@ export interface ServiceChannel {
         readonly collection: string;
         readonly select: CompiledSelector;
       }
+    | { readonly kind: "room"; readonly select: CompiledSelector }
     | undefined;
   readonly access: ChannelAccess;
   readonly handler: AnyChannelHandler;

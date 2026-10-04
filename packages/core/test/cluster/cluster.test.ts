@@ -2,8 +2,9 @@
 // show: revisions that compare across nodes, a quiet node answering a
 // client that holds newer frames from the other node, writes to one row on
 // both nodes whose frames arrive out of order, a resume on the other node,
-// logout everywhere, and a removal no scope could be named for reaching
-// subscribers on both nodes. Clients connect to node A (`app.connect`), or
+// logout everywhere, a removal no scope could be named for reaching
+// subscribers on both nodes, and a channel's app room requirement checked on
+// the sending socket's own node. Clients connect to node A (`app.connect`), or
 // to node B through `nodesOf(app)`; writes go through node B.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +16,12 @@ import {
 import type { EntityFrame, EntityResult } from "../../src/index";
 import { createHarness, type Harness } from "../../src/prisma/__tests__/harness";
 import { deferred } from "../../src/server/__tests__/fixtures";
-import { as, seedBoard, type Board } from "../../src/server/access/__tests__/board";
+import {
+  as,
+  projectService as boardProjects,
+  seedBoard,
+  type Board,
+} from "../../src/server/access/__tests__/board";
 import {
   colSub,
   defineTaskService as defineCollectionTasks,
@@ -31,6 +37,13 @@ import {
   type Read,
 } from "../../src/server/emit/__tests__/live";
 import { setupRedisAdapter, type Principal, type StorageAdapter } from "../../src/server/index";
+import {
+  defineLiveService,
+  LOBBY,
+  received,
+  send,
+  settle,
+} from "../../src/server/realtime/__tests__/fixture";
 import { createTestApp, type TestApp, type TestConnection } from "../../src/testing/index";
 import type * as Testing from "../../src/testing/createTestApp";
 import {
@@ -286,6 +299,28 @@ describe("the other node", () => {
     expect(removals(scopesB, "byProject").length).toBeGreaterThanOrEqual(1);
     expect(removals(scopesA, "byProject").length).toBeGreaterThanOrEqual(1);
     expect(removals(scopesA, "board")).toHaveLength(1);
+  });
+});
+
+describe("a channel's app room across nodes", () => {
+  it("is checked on the node the sending socket is on: a join there counts for that socket only", async () => {
+    const into = received();
+    const app = await createTestApp({
+      services: [boardProjects, defineLiveService(into)],
+      db: h.db,
+    });
+    apps.push(app as unknown as TestApp);
+    const nodeB = nodesOf(app)[1].app as unknown as typeof app;
+    // One player with a socket on each node: the one on node B joins the lobby.
+    const onA = await app.connect(as(board.cy));
+    const onB = await nodeB.connect(as(board.cy));
+    expect(await onB.call.taskService.enter({ room: LOBBY })).toBe(true);
+    send(onA, "shout", { n: 1 });
+    send(onB, "shout", { n: 2 });
+    await Promise.all([settle(onA), settle(onB)]);
+    expect(into.shout).toEqual([{ userId: board.cy, socketId: onB.socket.id, n: 2 }]);
+    // Presence answers for the whole cluster; the channel asks the sending socket only.
+    expect(await app.server.presence.users(LOBBY)).toEqual([board.cy]);
   });
 });
 

@@ -207,6 +207,11 @@ describe("quickdraw-docs", () => {
       streams: { log: { item: z.string(), scope: "chatId", seed: 10, access: { entry: "Read" } } },
       channels: {
         typing: { payload: z.object({ chatId: z.string() }), requires: { entity: "chatId" } },
+        wave: { payload: z.object({ n: z.number() }), requires: { room: "lounge" } },
+        nudge: {
+          payload: z.object({ lobby: z.string() }),
+          requires: { room: (payload) => `lobby:${payload.lobby}` },
+        },
       },
       events: { joined: { payload: z.object({ userId: z.string() }) } },
     });
@@ -221,6 +226,8 @@ describe("quickdraw-docs", () => {
     expect(page).toContain("one feed per `chatId`");
     expect(page).toContain('`{ entry: "Read" }`');
     expect(page).toContain("a subscription to the row `chatId` names");
+    expect(page).toContain("the sending socket in the app room `lounge`");
+    expect(page).toContain("the sending socket in the app room a function of the payload names");
     expect(page).toContain("Shown in lists");
     expect(page.startsWith(`${GENERATED_MARKER}\n\n# chatService\n`)).toBe(true);
   });
