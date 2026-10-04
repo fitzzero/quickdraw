@@ -34,7 +34,11 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   for cookie sessions. Changing it reconnects, and a hello naming another
   user empties everything quickdraw cached.
 - `useQuickdraw()` gives
-  `{ connection, status, isConnected, userId, serviceAccess, hello, refusal, isRateLimited }`.
+  `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, refusal, isRateLimited }`.
+  Gate on `isKnown` (the server's hello named the user; `userId` is then
+  final, `null` meaning signed out), never on `isConnected` or `userId`
+  alone: `userId` is `null` before the hello too, `isConnected` turns true
+  before it and false while reconnecting, and `reconnecting` keeps the user.
 
 ## Reading
 

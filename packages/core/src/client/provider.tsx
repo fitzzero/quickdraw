@@ -78,13 +78,32 @@ export interface QuickdrawStatus {
   /** The provider's connection, for non-hook code such as `call`. */
   readonly connection: QuickdrawConnection;
   readonly status: ConnectionStatus;
-  /** True while the connection is connected. */
+  /**
+   * True while the connection is connected. It turns true before the
+   * server's hello names the user (see `isKnown`) and false while it
+   * reconnects (see `reconnecting`).
+   */
   readonly isConnected: boolean;
+  /**
+   * True once the server's hello on the current credentials has arrived:
+   * `userId` is then final, `null` meaning anonymous. False before it, and
+   * again from new credentials (`auth` changed) until their hello; it stays
+   * true while the connection reconnects with the same credentials. Gate on
+   * it, not on `isConnected`, to tell "signed out" from "not known yet".
+   */
+  readonly isKnown: boolean;
+  /**
+   * True while the connection is connecting again after it was connected
+   * with its current credentials (the network dropped, or the server asked
+   * it to rotate). What it showed stays meanwhile, and `userId` is kept.
+   */
+  readonly reconnecting: boolean;
   /** The server's `qd:hello` on the current credentials: its version, limits and who the socket acts for. */
   readonly hello: HelloFrame | null;
   /**
    * The user the connection acts for, from the server's hello: `null` while
-   * anonymous, and before the hello on the current credentials arrives.
+   * anonymous, and before the hello on the current credentials arrives
+   * (`isKnown` tells the two apart).
    */
   readonly userId: string | null;
   /**
@@ -204,10 +223,16 @@ export function QuickdrawProvider<Contracts extends ContractMap>(
 }
 
 /**
- * The provider's connection state: whether it is connected, the server's
- * hello, who the connection acts for and their grants, why the server
- * refused the connection, and whether calls are backing off after
+ * The provider's connection state: whether it is connected, whether the
+ * server's hello has named the user (`isKnown`) and whether it is
+ * reconnecting, the hello, who the connection acts for and their grants, why
+ * the server refused the connection, and whether calls are backing off after
  * `RATE_LIMITED`.
+ *
+ * @example
+ * const { isKnown, userId } = useQuickdraw();
+ * if (!isKnown) return <Spinner />;
+ * return userId === null ? <SignIn /> : <App />;
  */
 export function useQuickdraw(): QuickdrawStatus {
   const { connection } = useQuickdrawContext("useQuickdraw");
@@ -217,6 +242,8 @@ export function useQuickdraw(): QuickdrawStatus {
       connection,
       status: state.status,
       isConnected: state.status === "connected",
+      isKnown: state.hello !== null,
+      reconnecting: state.reconnecting,
       hello: state.hello,
       userId: state.hello?.userId ?? null,
       serviceAccess: state.serviceAccess,

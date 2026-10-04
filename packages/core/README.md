@@ -1154,15 +1154,15 @@ the method's kind does not have, is a compile error.
 `QueryClient` (5-minute stale time by default), and works without DOM
 globals (React Native).
 
-| Member                                                                    | Gives                                                                                          |
-| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `qd.task.get.useQuery(input, options)`                                    | TanStack's `useQuery`; errors are `QuickdrawError` with a `code`                               |
-| `qd.task.rename.useMutation(options)`                                     | TanStack's `useMutation`; `mutate` returns nothing, `mutateAsync` the output                   |
-| `qd.task.useEntity(id)`, `useEntities(ids)`                               | live rows at the user's level: `{ data, isLoading, isRemoved, error }`                         |
-| `qd.task.board.useCollection(scope, { view, load, limit })`               | a live scope: `{ items, index, byId, totalCount, hasMore, isLoading, loadMore, refresh, ... }` |
-| `qd.task.get.call(input)`, `.key(input)`, `.prefetch(queryClient, input)` | a call over the mounted provider's connection, the cache key, a prefetch                       |
-| `qd.invalidate(qd.task.get, input?)`                                      | invalidates through the coordinator: a read in flight is never cancelled                       |
-| `useQuickdraw()`                                                          | `{ connection, status, isConnected, userId, serviceAccess, hello, refusal, isRateLimited }`    |
+| Member                                                                    | Gives                                                                                           |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `qd.task.get.useQuery(input, options)`                                    | TanStack's `useQuery`; errors are `QuickdrawError` with a `code`                                |
+| `qd.task.rename.useMutation(options)`                                     | TanStack's `useMutation`; `mutate` returns nothing, `mutateAsync` the output                    |
+| `qd.task.useEntity(id)`, `useEntities(ids)`                               | live rows at the user's level: `{ data, isLoading, isRemoved, error }`                          |
+| `qd.task.board.useCollection(scope, { view, load, limit })`               | a live scope: `{ items, index, byId, totalCount, hasMore, isLoading, loadMore, refresh, ... }`  |
+| `qd.task.get.call(input)`, `.key(input)`, `.prefetch(queryClient, input)` | a call over the mounted provider's connection, the cache key, a prefetch                        |
+| `qd.invalidate(qd.task.get, input?)`                                      | invalidates through the coordinator: a read in flight is never cancelled                        |
+| `useQuickdraw()`                                                          | `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, ... }` |
 
 <!-- example: apps/web/src/components/TaskDetail.tsx#detail -->
 
@@ -1227,6 +1227,35 @@ export function TaskDetail({ id }: { readonly id: string }) {
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
   kind of work.
+
+`useQuickdraw()` says who the connection acts for. `userId` is `null` both
+for an anonymous socket and before the server's hello, so a gate waits for
+`isKnown` (the hello on the current credentials arrived; false again from
+new credentials until theirs). `isConnected` turns true before the hello and
+false while the connection reconnects; `reconnecting` says the user and the
+page stay meanwhile:
+
+<!-- example: apps/web/src/components/AuthGate.tsx#gate -->
+
+```tsx
+export function AuthGate({ children }: { readonly children: ReactNode }) {
+  // isKnown: the server's hello named the user, so userId is final (null: signed out)
+  const { isKnown, userId, reconnecting } = useQuickdraw();
+  if (!isKnown) {
+    return <p>Connecting…</p>;
+  }
+  if (userId === null) {
+    return <a href="/login">Sign in</a>;
+  }
+  // a reconnect keeps the user and the page: say so, unmount nothing
+  return (
+    <>
+      {reconnecting ? <p role="status">Reconnecting…</p> : null}
+      {children}
+    </>
+  );
+}
+```
 
 ### Server components and other runtimes
 

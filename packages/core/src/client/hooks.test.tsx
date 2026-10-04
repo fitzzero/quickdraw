@@ -14,6 +14,7 @@ import { QuickdrawContext } from "./context";
 import { createInvalidationCoordinator, type InvalidationCoordinator } from "./coordinator";
 import { createQuickdrawClient } from "./createClient";
 import { QuickdrawProvider, useQuickdraw, type QuickdrawStatus } from "./provider";
+import { renderWithQuickdraw } from "../testing/client";
 import {
   alice,
   bob,
@@ -303,6 +304,34 @@ describe("QuickdrawProvider", () => {
     view.unmount();
     await until(() => view.result.current.connection.getState().status === "idle");
     await expect(qd.counter.total.call()).rejects.toMatchObject({ code: "INTERNAL" });
+  });
+
+  it("says when the user is known and while it reconnects, and forgets the user on new credentials until their hello", async () => {
+    const { app } = await harness.start();
+    const seen: { isKnown: boolean; userId: string | null }[] = [];
+    function Gate() {
+      const { isKnown, isConnected, reconnecting, userId } = useQuickdraw();
+      seen.push({ isKnown, userId });
+      if (!isKnown) {
+        return <p>unknown</p>;
+      }
+      const state = reconnecting ? "reconnecting" : isConnected ? "connected" : "offline";
+      return <p>{`${userId ?? "anonymous"} ${state}`}</p>;
+    }
+    const view = await renderWithQuickdraw(<Gate />, { app, as: alice, client: qd });
+    // Before the hello the user is not known: never shown as signed out.
+    expect(seen[0]).toEqual({ isKnown: false, userId: null });
+    await view.findByText("alice connected");
+    await view.disconnect();
+    await view.findByText("alice reconnecting");
+    await view.reconnect();
+    await view.findByText("alice connected");
+    act(() => {
+      view.connection.setAuth({ principal: bob });
+    });
+    expect(view.getByText("unknown")).toBeTruthy();
+    await view.findByText("bob connected");
+    expect(seen.some((entry) => !entry.isKnown && entry.userId !== null)).toBe(false);
   });
 
   it("throws a clear error for a hook rendered outside a provider", () => {
