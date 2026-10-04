@@ -102,6 +102,10 @@ const EXAMPLES = {
     "packages/shared/src/contracts/migrated.ts",
     `import { todoSchema } from "@fitzzero/quickdraw-core";\nexport const input = todoSchema<{ id: string }>();\n`,
   ],
+  "prefer-kit": [
+    "apps/api/src/services/hand.ts",
+    `export const s = qd.defineService(task, { model: "task", methods: { getTask: { access: { entry: "Read" }, handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }) } } });\n`,
+  ],
   "no-raw-button-strings": [
     "apps/web/src/components/Button.tsx",
     `export const B = () => <Button>Save</Button>;\n`,
@@ -235,6 +239,18 @@ describe("the core package's fixture apps as service files", () => {
     "src/server/collections/__tests__/fixture.ts",
     "src/server/realtime/__tests__/fixture.ts",
   ];
+
+  it("leave the e2e fixture app to prefer-kit: it uses the kits beside its own methods", () => {
+    const root = createApp();
+    roots.push(root);
+    writeFiles(root, [
+      [
+        "apps/api/src/services/app.ts",
+        fs.readFileSync(path.join(CORE, "test/fixtures/app.ts"), "utf8"),
+      ],
+    ]);
+    expect(lint(root).filter((report) => report.rule === "prefer-kit")).toEqual([]);
+  });
 
   it.each(SERVICE_DEFINITION_RULES)("pass %s", (rule) => {
     const root = createApp();

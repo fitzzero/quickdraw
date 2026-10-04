@@ -104,6 +104,8 @@
     "quickdraw/no-untyped-client": "error",
     "quickdraw/no-manual-refetch": "error",
     "quickdraw/no-raw-socket": "error",
+    // A hand-written method a kit implements, in a service that uses no kit.
+    "quickdraw/prefer-kit": "warn",
     // Every 4.x API 5.0 removed, with its replacement.
     "quickdraw/no-v4-api": "error",
     // The migration's placeholder schema, until a real schema replaces it.

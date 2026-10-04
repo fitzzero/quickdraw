@@ -230,6 +230,7 @@ export const taskService = qd.defineService(taskContract, {
   // a board opens with Read on its project
   collections: { byProject: { anchor: projectContract } },
   methods: {
+    // quickdraw: hand-written because it answers null for a missing task, as 4.x did
     getTask: {
       // 4.x read payload.id implicitly, and a service grant passed too
       access: { service: "Read", entry: "Read", id: "id" },
@@ -537,7 +538,7 @@ protected override getProtectedFields(): (keyof TaskDTO)[] {
 <!-- example: apps/api/src/services/examples/projections.ts#projections -->
 
 ```ts
-import { inherit } from "@fitzzero/quickdraw-core/server";
+import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(task, {
   model: "task",
@@ -559,12 +560,9 @@ export const taskService = qd.defineService(task, {
     },
   },
   methods: {
-    // returns the database row: the projection's keys are sent, dates as ISO strings
-    get: {
-      access: { entry: "Read" },
-      handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }),
-    },
-    // returns what `map` takes
+    // the kit's get reads the entity's keys only, and sends dates as ISO strings
+    ...crud.handlers(task, { access: { get: { entry: "Read" } } }),
+    // returns the database row `map` takes: the framework builds the card from it
     card: {
       access: { entry: "Read" },
       handler: ({ input, db }) =>
@@ -620,7 +618,7 @@ protected override checkAccess(
 <!-- example: apps/api/src/services/examples/access.ts#access -->
 
 ```ts
-import { anyOf, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
+import { anyOf, crud, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
 
 export const projectService = qd.defineService(project, {
   // the Prisma model the rows live in
@@ -631,9 +629,14 @@ export const projectService = qd.defineService(project, {
     members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),
   ),
   methods: {
-    get: {
-      access: { entry: "Read" },
-      handler: ({ input, db }) => db.project.findUniqueOrThrow({ where: { id: input.id } }),
+    // the read/write kit's get: Read on the project itself
+    ...crud.handlers(project, { access: { get: { entry: "Read" } } }),
+    title: {
+      // anyone may read any project's name by its id: the form is the whole check, on purpose
+      access: "public",
+      rowless: true,
+      handler: async ({ input, db }) =>
+        await db.project.findUniqueOrThrow({ where: { id: input.id }, select: { name: true } }),
     },
   },
 });
@@ -648,10 +651,10 @@ export const taskService = qd.defineService(task, {
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { title: input.title } }),
     },
-    create: {
-      access: { scope: "Moderate", of: project, id: "projectId" },
-      handler: ({ input, db }) => db.task.create({ data: input }),
-    },
+    // the kit's create: Moderate on the project the task goes into
+    ...crud.handlers(task, {
+      access: { create: { scope: "Moderate", of: project, id: "projectId" } },
+    }),
     archiveAll: {
       access: { service: "Admin" },
       handler: async ({ db }) => (await db.task.updateMany({ data: { status: "archived" } })).count,
@@ -979,7 +982,7 @@ export function Members({ projectId }: { projectId: string }) {
 <!-- example: packages/shared/src/contracts/task.ts -->
 
 ```ts
-import { defineContract, mutation, query } from "@fitzzero/quickdraw-core";
+import { crud, defineContract, mutation, query } from "@fitzzero/quickdraw-core";
 import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
@@ -991,10 +994,11 @@ export const taskContract = defineContract("taskService", {
   // only callers with Admin on the task receive notes
   fields: { notes: "Admin" },
   methods: {
-    get: query({ input: z.object({ id: z.string() }), output: "entity" }),
-    create: mutation({
-      input: z.object({ projectId: z.string(), title: z.string() }),
-      output: "entity",
+    // the read/write kit's get (one task by id) and create
+    ...crud.contract({
+      entity: taskSchema,
+      get: true,
+      create: { input: z.object({ projectId: z.string(), title: z.string() }) },
     }),
     rename: mutation({
       input: z.object({ id: z.string(), title: z.string() }),
@@ -1195,7 +1199,7 @@ rows, like a count.
 <!-- example: packages/shared/src/contracts/task.ts -->
 
 ```ts
-import { defineContract, mutation, query } from "@fitzzero/quickdraw-core";
+import { crud, defineContract, mutation, query } from "@fitzzero/quickdraw-core";
 import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
@@ -1207,10 +1211,11 @@ export const taskContract = defineContract("taskService", {
   // only callers with Admin on the task receive notes
   fields: { notes: "Admin" },
   methods: {
-    get: query({ input: z.object({ id: z.string() }), output: "entity" }),
-    create: mutation({
-      input: z.object({ projectId: z.string(), title: z.string() }),
-      output: "entity",
+    // the read/write kit's get (one task by id) and create
+    ...crud.contract({
+      entity: taskSchema,
+      get: true,
+      create: { input: z.object({ projectId: z.string(), title: z.string() }) },
     }),
     rename: mutation({
       input: z.object({ id: z.string(), title: z.string() }),
@@ -1445,6 +1450,7 @@ export const taskService = qd.defineService(taskContract, {
   channels: { cursor: () => undefined },
   methods: {
     renameTask,
+    // quickdraw: hand-written because it answers null for a missing task, as 4.x did
     getTask: {
       access: { service: "Read", entry: "Read", id: "id" },
       handler: ({ input, db }) => db.task.findUnique({ where: { id: input.id } }),
