@@ -29,7 +29,7 @@ export function policyLines(
     "checkBatchSubscriptionAccess",
   ].filter((name) => service.overrides.has(name));
   if (overrides.length > 0) {
-    const message = `4.x decided row access in ${overrides.join(" and ")} (now functions in this file): port them to a policy (owner, jsonAcl, members, inherit, anyOf or resolver). Until then this policy grants no row, so only service grants pass`;
+    const message = `4.x decided row access in ${overrides.join(" and ")} (now functions in this file): port them to a policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver). Until then this policy grants no row, so only service grants pass`;
     return { lines: [markerText("access-override", message), placeholder], builder: "resolver" };
   }
   if (service.readsAclColumn) {

@@ -68,7 +68,7 @@ guide's sections as the report sends you to them.
       `"authenticated"` forms and the `rowless: true` flags (keep one only
       for a lookup open to anyone; else an `entry` form); port
       `checkAccess`/`checkEntryACL` overrides into the service's policy
-      (`owner`, `jsonAcl`, `members`, `inherit`, `anyOf`, `resolver`).
+      (`owner`, `jsonAcl`, `members`, `inherit`, `everyone`, `anyOf`, `resolver`).
    3. **Emits** (`[emit]`, `[write]`, `[raw-sql]`, `[lifecycle]`,
       `[collection]`, `[projection]`, `[admin]`, `[kit]`): write through
       `db`, declare the collections (boards: `index`, `views`,

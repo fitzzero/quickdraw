@@ -75,10 +75,10 @@ The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 
 
 4.x decided row access in overridden methods; 5.0 decides it in the service's `access` policy, for every surface at once.
 
-- [ ] `apps/api/src/services/task/index.ts:11` 4.x decided row access in checkEntryACL (now functions in this file): port them to a policy (owner, jsonAcl, members, inherit, anyOf or resolver). Until then this policy grants no row, so only service grants pass
-- [ ] `apps/api/src/services/task/service-core.ts:22` 4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, anyOf or resolver), then delete this function
-- [ ] `apps/api/src/services/user.ts:20` 4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, anyOf or resolver), then delete this function
-- [ ] `apps/api/src/services/user.ts:36` 4.x decided row access in checkAccess (now functions in this file): port them to a policy (owner, jsonAcl, members, inherit, anyOf or resolver). Until then this policy grants no row, so only service grants pass
+- [ ] `apps/api/src/services/task/index.ts:11` 4.x decided row access in checkEntryACL (now functions in this file): port them to a policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver). Until then this policy grants no row, so only service grants pass
+- [ ] `apps/api/src/services/task/service-core.ts:22` 4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver), then delete this function
+- [ ] `apps/api/src/services/user.ts:20` 4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver), then delete this function
+- [ ] `apps/api/src/services/user.ts:36` 4.x decided row access in checkAccess (now functions in this file): port them to a policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver). Until then this policy grants no row, so only service grants pass
 
 ## toDto and protected fields to turn into projections and fields
 

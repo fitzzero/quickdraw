@@ -2,6 +2,70 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0-rc.4] (unreleased)
+
+Round 3 of the fixes the quickdraw-chat migration found on `5.0.0-rc.1`
+(findings F3.1 to F3.11, from its web port). No version moves until the
+release candidate is cut.
+
+### Client
+
+- `useQuickdraw()` gains `isKnown` (the server's hello on the current
+  credentials arrived: `userId` is final, `null` meaning anonymous; false
+  again from new credentials until their hello) and `reconnecting`. A gate
+  on `isConnected` or `userId` alone flashed the signed-out state before the
+  hello and unmounted the page on every reconnect (F3.4).
+- An optimistic update can add a row: `cache.addItem(collection, scope,
+item)` and `cache.addEntity(row)` in a mutation's `optimistic` show the
+  item at once, in its place by the collection's `order`;
+  `useCollection` returns `pending`, the ids of added items whose call is
+  in flight. A refused call removes it; the reply's `id` and values replace
+  its own; the scope's own copy replaces it with no gap and no second copy
+  (F3.2).
+- Breaking: `getOAuthUrl`, `logout` and `logoutAllDevices` are removed (they
+  called routes the auth routes kit does not serve and, with cookie
+  sessions, signed nobody out). `signInUrl(provider, { apiUrl?, basePath?,
+returnTo? })`, `signOut()` and `signOutEverywhere()` use the kit's routes
+  with the session cookie and the stored token, and reject when refused;
+  lint's `no-v4-api` names them (F3.3).
+- Hydration reads the state a server renders, never the live connection:
+  `useQuickdraw()`, the hello the hooks wait for, `usePresence`, streams and
+  overlays hydrate as a connection that never opened, then render the live
+  state, so a boundary that hydrates after the provider connected no longer
+  fails ("Hydration failed", a regression from 4.1) (F3.5).
+- `useAdminServices` asks only the services the user's grants allow (from
+  the hello; `Admin` by default, `{ requires }` to change it), and a refused
+  service is not asked again until the grant changes, reconnects included
+  (F3.6). `adminOf(qd, key)` gives every service's admin members one shape
+  typed by field name (`AdminScreen`), for a screen driven by `adminMeta`
+  (F3.7). The README's admin example reads the list again after its own
+  write: the kit's rows are not live (F3.8).
+- `qd.<service>.<query>.setData(input, updater)` writes a query's cached
+  result for an event that carries it; a read in flight is followed by one
+  more (F3.9).
+
+### Testing
+
+- `createMockClient` has a provider of its own, `mock.$Provider`, in which
+  the real `useQuickdraw()` and `usePresence` read the mock's session:
+  `createMockClient(contracts, { session })`, `mock.$session({ userId,
+serviceAccess, isConnected, isKnown })` and `mock.$presence(room, users)`.
+  Its views select for the session's user and `useAdminServices(mock)`
+  follows its grants (F3.1).
+- `@fitzzero/quickdraw-core/testing/mock`: the mock alone, naming no Testing
+  Library, for browser bundles such as Storybook; `./testing/client`
+  re-exports it (F3.10).
+- `installJsdomShims()` on `./testing/client` (element scrolling,
+  `Blob.prototype.arrayBuffer`) and `openPgliteFromTemplate(options)` on
+  `./testing/prisma` (a worker's PGlite database from the global setup's
+  template, under jsdom too). The README's `renderWithQuickdraw` example now
+  runs in CI, with the per-worker database pattern documented (F3.11).
+
+### Lint and codemod
+
+- The policy builders listed in `no-v4-api`'s messages, the codemod's
+  access markers and the upgrade procedure name `everyone`.
+
 ## [5.0.0-rc.3]
 
 Round 2 of the fixes the quickdraw-chat migration found on `5.0.0-rc.1`

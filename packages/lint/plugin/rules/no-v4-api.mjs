@@ -55,7 +55,7 @@ const COLLECTION_STATE =
 const TRACKED_DELTAS =
   "Collection deltas follow tracked writes: write through `db.<model>`, or record a write the client cannot see with `ctx.touch(model, ids)`.";
 const POLICIES =
-  "Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `anyOf`, `resolver`) and each method's `access` form.";
+  "Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `everyone`, `anyOf`, `resolver`) and each method's `access` form.";
 const FIELD_TIERS =
   'Field tiers are declared in the contract\'s `fields` (`fields: { notes: "Admin" }`) and stripped per caller.';
 
