@@ -5,7 +5,14 @@
 
 import { describe, expectTypeOf, test } from "vitest";
 import { z } from "zod";
-import { createQuickdrawClient, useAdminServices } from "../../../client/index";
+import {
+  adminOf,
+  createQuickdrawClient,
+  useAdminServices,
+  type AdminKeysOf,
+  type AdminRow,
+  type AdminScreen,
+} from "../../../client/index";
 import {
   admin as adminContract,
   defineContract,
@@ -243,6 +250,43 @@ describe("the client", () => {
     expectTypeOf(services[0]?.key).toEqualTypeOf<"taskService" | undefined>();
     expectTypeOf(services[0]?.displayName).toEqualTypeOf<string | undefined>();
     expectTypeOf(isLoading).toBeBoolean();
+  });
+
+  test("useAdminServices takes the grant a service's adminMeta needs, or null for none", () => {
+    void useAdminServices(client, { requires: "Moderate" });
+    void useAdminServices(client, { requires: null });
+    // @ts-expect-error a requirement is an access level
+    void useAdminServices(client, { requires: "Owner" });
+  });
+
+  test("adminOf gives every service's admin members one shape, by field name", () => {
+    const other = defineContract("noteService", {
+      entity: z.object({ id: z.string(), body: z.string() }),
+      methods: {
+        ...adminContract.contract({
+          entity: z.object({ id: z.string(), body: z.string() }),
+          sort: ["body"],
+          expose: ["adminList", "adminMeta"],
+        }),
+      },
+    });
+    const both = createQuickdrawClient({ taskService: task, notes: other, plain });
+    const pick = (key: AdminKeysOf<typeof both>) => adminOf(both, key);
+    expectTypeOf(pick).returns.toEqualTypeOf<AdminScreen>();
+    const screen = pick("notes");
+    // A field named at run time, from adminMeta, for either service.
+    const field: string = "body";
+    expectTypeOf(screen.adminList.useQuery({ page: 1, sort: { field } }).data).toEqualTypeOf<
+      AdminPage<AdminRow> | undefined
+    >();
+    expectTypeOf(screen.adminMeta.useQuery(undefined).data).toEqualTypeOf<
+      AdminServiceMeta | undefined
+    >();
+    // A method the contract may not expose is optional.
+    expectTypeOf(screen.adminUpdate).toEqualTypeOf<AdminScreen["adminUpdate"]>();
+    screen.adminUpdate?.useMutation().mutate({ id: "n1", data: { body: "x" } });
+    // @ts-expect-error a key without the admin kit
+    adminOf(both, "plain");
   });
 
   test("a mock client has the same admin member, with stubs", () => {

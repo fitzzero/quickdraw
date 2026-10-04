@@ -96,7 +96,7 @@ and says what to do. Work through it in this order, one commit per step:
    it for a lookup open to anyone, else give the method an `entry` form),
    and port each `checkAccess` or `checkEntryACL` override into the
    service's `access` policy (`owner`, `jsonAcl`, `members`, `inherit`,
-   `anyOf`, `resolver`).
+   `everyone`, `anyOf`, `resolver`).
 3. **Emits** (`[emit]`, `[write]`, `[raw-sql]`, `[lifecycle]`, `[collection]`,
    `[projection]`, `[admin]`, `[kit]`): write through `db` instead of
    `this.create/update/delete`, declare each 4.x collection in its contract

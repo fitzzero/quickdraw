@@ -18,14 +18,17 @@
 // Isomorphic helpers, the HTTP server caller and the cache keys (also on ./utils).
 export * from "../utils";
 
-// Token storage and logout helpers, which read localStorage (browser only).
+// The auth routes kit's browser side (sign in, sign out) and bearer-token
+// storage, which reads localStorage where there is one.
 export {
   clearAuthToken,
   getAuthToken,
-  getOAuthUrl,
-  logout,
-  logoutAllDevices,
   setAuthToken,
+  signInUrl,
+  signOut,
+  signOutEverywhere,
+  type AuthRoutesTarget,
+  type SignInUrlOptions,
 } from "./auth";
 
 // The connection and calls, without React.
@@ -160,7 +163,8 @@ export type {
   UseSearchResult,
 } from "./live/searchTypes";
 // The admin kit's client half (RFC 0003 section 12.4): `qd.<service>.admin`
-// on the typed client, and the services an admin screen can show.
+// on the typed client, the services an admin screen can show, and one
+// shape of every service's admin members for a screen driven by `adminMeta`.
 export {
   useAdminServices,
   type AdminKeysOf,
@@ -168,6 +172,15 @@ export {
   type UseAdminServicesOptions,
   type UseAdminServicesResult,
 } from "./admin";
+export {
+  adminOf,
+  type AdminListRequest,
+  type AdminMutationMember,
+  type AdminQueryMember,
+  type AdminRow,
+  type AdminScreen,
+  type AdminWriteData,
+} from "./adminScreen";
 export type { MethodMutationOptions, MethodQueryOptions } from "./hooks";
 export {
   QuickdrawProvider,

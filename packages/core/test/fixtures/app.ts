@@ -77,7 +77,7 @@ export const taskContract = defineContract("taskService", {
       input: z.object({ projectId: z.string(), title: z.string(), ordinal: z.number().optional() }),
       output: "entity",
     }),
-    /** Waits for the test's gate; the title "conflict" is refused with CONFLICT. */
+    /** Waits for the test's gate, as `create` does; the title "conflict" is refused with CONFLICT. */
     rename: mutation({ input: z.object({ id: z.string(), title: z.string() }), output: "entity" }),
     reorder: mutation({
       input: z.object({ id: z.string(), ordinal: z.number() }),
@@ -117,7 +117,7 @@ export const taskContract = defineContract("taskService", {
   },
 });
 
-/** Holds `rename` before it writes, until the returned function runs. */
+/** Holds `rename` and `create` before they write, until the returned function runs. */
 export interface Gate {
   hold(): () => void;
   wait(): Promise<void>;
@@ -153,7 +153,13 @@ function defineTaskService(gate: Gate) {
       },
       create: {
         access: { scope: "Moderate", of: projectContract, id: "projectId" },
-        handler: ({ input, db }) => db.task.create({ data: input }),
+        handler: async ({ input, db }) => {
+          await gate.wait();
+          if (input.title === "conflict") {
+            throw new QuickdrawError("CONFLICT", "That title is taken");
+          }
+          return await db.task.create({ data: input });
+        },
       },
       rename: {
         access: { entry: "Moderate" },

@@ -1,7 +1,9 @@
 // End to end (RFC 0003 section 11.4): an optimistic mutation through the
 // real hooks. The user's edit shows on the live row and on the board's card
 // before the server answers, settles to the server's data once the server
-// has written it, and rolls back when the server refuses it.
+// has written it, and rolls back when the server refuses it. A create shows
+// its new card at once (`cache.addItem`), flagged pending, and becomes the
+// server's own card with no gap and no second copy, or goes when refused.
 
 import { fireEvent } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -89,5 +91,109 @@ describe("an optimistic mutation", () => {
     expect(view.getByText("card T1")).toBeTruthy();
     expect(await storedTitle(board.t1)).toBe("T1");
     expect(app.frames({ event: "qd:e", userId: board.bo })).toEqual([]);
+  });
+});
+
+/** P1's board as Bo sees it, with a create that adds its card at once. */
+function Board({ projectId, seen }: { readonly projectId: string; readonly seen: string[][] }) {
+  const { items, pending } = qd.task.board.useCollection(projectId);
+  const create = qd.task.create.useMutation({
+    optimistic: (input, cache) =>
+      cache.addItem("board", input.projectId, {
+        projectId: input.projectId,
+        title: input.title,
+        status: "open",
+        ordinal: input.ordinal ?? 0,
+        assigneeId: null,
+      }),
+  });
+  const shown = items.map((item) => `${pending.has(item.id) ? "sending" : "card"} ${item.title}`);
+  seen.push(shown);
+  return (
+    <>
+      <ul>
+        {shown.map((text, index) => (
+          <li key={items[index]?.id}>{text}</li>
+        ))}
+      </ul>
+      <button
+        type="button"
+        onClick={() => create.mutate({ projectId, title: "Added", ordinal: 99 })}
+      >
+        add
+      </button>
+      <button
+        type="button"
+        onClick={() => create.mutate({ projectId, title: "conflict", ordinal: 99 })}
+      >
+        add a title in use
+      </button>
+      <p>{create.error === null ? `create ${create.status}` : `refused ${create.error.code}`}</p>
+    </>
+  );
+}
+
+async function renderBoard() {
+  const started = await e2e.start();
+  const board = e2e.board();
+  const seen: string[][] = [];
+  const view = await renderWithQuickdraw(<Board projectId={board.p1} seen={seen} />, {
+    app: started.app,
+    as: as(board.bo),
+    client: qd,
+  });
+  await view.findByText("card T1");
+  started.app.frames.clear();
+  return { ...started, board, view, seen };
+}
+
+async function titlesOf(projectId: string): Promise<string[]> {
+  const rows = await e2e.prisma().task.findMany({ where: { projectId }, orderBy: { id: "asc" } });
+  return rows.map((row) => row.title);
+}
+
+describe("an optimistic create", () => {
+  it("shows its card at once, pending, then settles into the server's card with no gap and no copy", async () => {
+    const { app, gate, board, view, seen } = await renderBoard();
+    const before = await titlesOf(board.p1);
+    const release = gate.hold();
+    fireEvent.click(view.getByText("add"));
+    await view.findByText("sending Added");
+    // Nothing is written yet: the server holds the call at the gate.
+    expect(await titlesOf(board.p1)).toEqual(before);
+    const shownAt = seen.length - 1;
+
+    release();
+    await view.findByText("create success");
+    await app.frames.waitFor({ event: "qd:c", userId: board.bo });
+    await view.findByText("card Added");
+    const after = await titlesOf(board.p1);
+    expect(after).toHaveLength(before.length + 1);
+    expect(after.filter((title) => title === "Added")).toHaveLength(1);
+    // From the first render that showed it, every render showed the new card exactly once, last.
+    for (const shown of seen.slice(shownAt)) {
+      expect(shown.filter((text) => text.endsWith(" Added"))).toHaveLength(1);
+      expect(shown.at(-1)).toMatch(/ Added$/);
+    }
+    // The card shown now is the server's: its frames keep it current.
+    const created = await e2e.prisma().task.findFirst({ where: { title: "Added" } });
+    await app.as(as(board.ada)).taskService.rename({ id: created?.id ?? "", title: "Renamed" });
+    await view.findByText("card Renamed");
+    expect(view.queryByText(/Added/)).toBeNull();
+  });
+
+  it("removes the card when the server refuses the create", async () => {
+    const { app, gate, board, view } = await renderBoard();
+    const before = await titlesOf(board.p1);
+    const release = gate.hold();
+    fireEvent.click(view.getByText("add a title in use"));
+    await view.findByText("sending conflict");
+
+    release();
+    await view.findByText("refused CONFLICT");
+    expect(view.queryByText(/conflict$/)).toBeNull();
+    expect(view.getByText("card T1")).toBeTruthy();
+    expect(await titlesOf(board.p1)).toEqual(before);
+    expect(app.frames({ event: "qd:c", userId: board.bo })).toEqual([]);
   });
 });

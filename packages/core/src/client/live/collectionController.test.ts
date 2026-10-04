@@ -12,7 +12,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { deferred, tick } from "../../server/__tests__/fixtures";
 import { collectionKey } from "../keys";
-import { mutateOptimistically, overlaysOf } from "../optimistic";
+import { overlaysOf } from "../optimistic";
+import { mutateOptimistically } from "../optimisticCall";
 import { fakeConnection, testQueryClient } from "./__tests__/fakeSocket";
 import type { CollectionEntry, CollectionTarget } from "./collectionLoads";
 import { loadedIds } from "./collectionStore";

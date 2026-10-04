@@ -8,6 +8,7 @@
 import type {
   QueryClient,
   QueryKey,
+  Updater,
   UseMutationResult,
   UseQueryResult,
 } from "@tanstack/react-query";
@@ -79,15 +80,31 @@ export interface QueryMember<C extends AnyContract, M extends MethodName<C>> {
   key(...args: InputArgs<C, M, []>): MethodQueryKey<InputOf<C, M>>;
   /** Fetches the query into `queryClient` over the provider's connection, as `prefetchQuery` does. */
   prefetch(queryClient: QueryClient, ...args: InputArgs<C, M, []>): Promise<void>;
+  /**
+   * Writes the cached result of `input`, for an event that carries the new
+   * state (a roster, a score): `updater` is the new result, or a function
+   * of the cached one (`undefined` when nothing is cached; returning
+   * `undefined` writes nothing). Hooks showing it render it at once, with
+   * the overlays of optimistic mutations over it. Coordinated: a read of
+   * the key in flight, which may predate the event, is followed by one more
+   * (never cancelled). Returns what the cache then holds. Throws `INTERNAL`
+   * while no `QuickdrawProvider` is mounted for the client.
+   */
+  setData(
+    input: InputOf<C, M>,
+    updater: Updater<OutputOf<C, M> | undefined, OutputOf<C, M> | undefined>,
+  ): OutputOf<C, M> | undefined;
 }
 
 /**
  * What a custom optimistic update of a mutation of contract `C` writes
- * through: layers over its entity's rows and its collections' items.
+ * through: layers over its entity's rows and its collections' items, and
+ * items added to its collections' scopes.
  */
 export type OptimisticCacheOf<C extends AnyContract> = OptimisticCache<
   EntityOf<C>,
-  { readonly [K in CollectionName<C>]: ItemOf<C, K> }
+  { readonly [K in CollectionName<C>]: ItemOf<C, K> },
+  { readonly [K in CollectionName<C>]: ScopeOf<C, K> }
 >;
 
 /** `qd.<key>.<mutation>`. */

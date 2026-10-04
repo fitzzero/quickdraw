@@ -21,7 +21,8 @@ import { useQuickdrawContext } from "./context";
 import { methodKeyPrefix } from "./keys";
 import { createMutationTrace, loopGuardOf, type MutationTrace } from "./loopGuard";
 import type { MethodTarget } from "./members";
-import { mutateOptimistically, type OptimisticCache, type OptimisticUpdate } from "./optimistic";
+import type { OptimisticCache, OptimisticUpdate } from "./optimistic";
+import { mutateOptimistically } from "./optimisticCall";
 
 /**
  * Options of a mutation hook: TanStack's `useMutation` options, without the
@@ -61,7 +62,11 @@ export function useMethodMutation<Output, Variables, Context = unknown, Cache = 
   traced.current ??= createMutationTrace();
   const trace = traced.current;
   const { optimistic, ...rest } = options;
-  const optimisticTarget = { service: target.service, entityOutput: target.output === "entity" };
+  const optimisticTarget = {
+    service: target.service,
+    entityOutput: target.output === "entity",
+    collections: target.collections,
+  };
   return useMutation<Output, QuickdrawError, Variables, Context>({
     mutationKey: methodKeyPrefix(target.service, target.method),
     ...rest,

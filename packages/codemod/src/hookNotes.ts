@@ -8,12 +8,12 @@ export const HOOK_NOTES: Readonly<Record<string, { category: Category; message: 
   checkAccess: {
     category: "access-override",
     message:
-      "4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, anyOf or resolver), then delete this function",
+      "4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver), then delete this function",
   },
   checkEntryACL: {
     category: "access-override",
     message:
-      "4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, anyOf or resolver), then delete this function",
+      "4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver), then delete this function",
   },
   checkSubscriptionAccess: {
     category: "access-override",

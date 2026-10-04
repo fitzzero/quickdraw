@@ -16,7 +16,13 @@ describe("createQuickdrawClient", () => {
     const qd = createQuickdrawClient({ counter, probe });
     expect(Object.keys(qd)).toEqual(["counter", "probe"]);
     expect(Object.keys(qd.counter)).toEqual(["read", "bump", "total"]);
-    expect(Object.keys(qd.counter.read)).toEqual(["useQuery", "call", "key", "prefetch"]);
+    expect(Object.keys(qd.counter.read)).toEqual([
+      "useQuery",
+      "call",
+      "key",
+      "setData",
+      "prefetch",
+    ]);
     expect(Object.keys(qd.counter.bump)).toEqual(["useMutation", "call"]);
     expect(qd.counter.read).toBe(qd.counter.read);
     expect(qd.counter.read.useQuery).toBe(qd.counter.read.useQuery);

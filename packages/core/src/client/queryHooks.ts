@@ -13,7 +13,8 @@ import type { QuickdrawConnection } from "./connection";
 import type { InvalidationCoordinator } from "./coordinator";
 import type { MethodQueryKey } from "./keys";
 import type { MethodTarget } from "./members";
-import { overlaysOf, rowShapeOf, showRows, type OverlayView } from "./optimistic";
+import { NO_OVERLAYS, overlaysOf, type OverlayView } from "./optimistic";
+import { rowShapeOf, showRows } from "./overlayRows";
 import { readAtOf } from "./versions";
 
 /**
@@ -152,7 +153,7 @@ export function useTopicWatch({
 
 const ignoreChanges = (): (() => void) => () => undefined;
 
-const NO_VIEW: OverlayView = Object.freeze({ apply: <T>(row: T) => row });
+const noOverlays = (): OverlayView => NO_OVERLAYS;
 
 /**
  * The `select` a query of `target` runs: the overlays of optimistic
@@ -168,11 +169,12 @@ export function useOverlaySelect<Output, Data>(
   const overlays = overlaysOf(queryClient);
   const shape = rowShapeOf(target.output);
   const { service } = target;
-  const snapshot = (): OverlayView => (shape === undefined ? NO_VIEW : overlays.view(service));
+  const snapshot = (): OverlayView => (shape === undefined ? NO_OVERLAYS : overlays.view(service));
+  // No mutation runs on a server: its render, and the hydration, show none.
   const view = useSyncExternalStore(
     shape === undefined ? ignoreChanges : overlays.subscribe,
     snapshot,
-    snapshot,
+    noOverlays,
   );
   return useMemo(() => {
     if (shape === undefined) {

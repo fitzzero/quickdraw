@@ -15,7 +15,8 @@
 //   connection, calls, change topics, coordinator and live data.
 // - `createMockClient(contracts)` (`mockClient.ts`) is a client of the same
 //   type whose members are stubs, for component tests that do not care
-//   about the transport.
+//   about the transport. It is its own entry too, `./testing/mock`, which
+//   a browser bundle (Storybook) can import: this one names Testing Library.
 //
 // The published package does not depend on Testing Library: it is an
 // optional peer, imported only when `renderWithQuickdraw` runs, so a test
@@ -35,23 +36,8 @@ import type { PrincipalOfServices } from "../server/dispatcher";
 import type { AnyService } from "../server/service";
 import type { TestApp } from "./createTestApp";
 
-export { createMockClient } from "./mockClient";
-export type {
-  EntityMock,
-  MethodStub,
-  MockChannelMember,
-  MockClient,
-  MockClientOptions,
-  MockCollectionMember,
-  MockEntityMembers,
-  MockEventMember,
-  MockMethodMember,
-  MockRealtimeMembers,
-  MockScope,
-  MockServiceClient,
-  MockStreamMember,
-  StreamMock,
-} from "./mockTypes";
+export * from "./mock";
+export { installJsdomShims } from "./jsdom";
 
 /** Options of {@link renderWithQuickdraw}. */
 export interface RenderWithQuickdrawOptions<

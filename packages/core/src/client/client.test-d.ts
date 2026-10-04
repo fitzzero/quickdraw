@@ -74,8 +74,10 @@ describe("the typed client", () => {
     // @ts-expect-error a query has no useMutation
     void qd.taskService.get.useMutation;
     expectTypeOf<keyof typeof qd.taskService.get>().toEqualTypeOf<
-      "useQuery" | "call" | "key" | "prefetch"
+      "useQuery" | "call" | "key" | "prefetch" | "setData"
     >();
+    // @ts-expect-error a mutation has no cached result to set
+    void qd.taskService.rename.setData;
     expectTypeOf<keyof typeof qd.taskService.rename>().toEqualTypeOf<"useMutation" | "call">();
   });
 
@@ -184,6 +186,21 @@ describe("qd.invalidate", () => {
   });
 });
 
+describe("setData", () => {
+  test("takes the query's input and its output, or a function of the cached output", () => {
+    expectTypeOf(qd.counter.read.setData).parameter(0).toEqualTypeOf<{ name: string }>();
+    expectTypeOf(qd.counter.read.setData({ name: "a" }, { name: "a", value: 1 })).toEqualTypeOf<
+      { name: string; value: number } | undefined
+    >();
+    qd.counter.read.setData({ name: "a" }, (cached) =>
+      cached === undefined ? undefined : { ...cached, value: cached.value + 1 },
+    );
+    qd.counter.total.setData(undefined, 3);
+    // @ts-expect-error the output is the method's
+    qd.counter.read.setData({ name: "a" }, { name: "a" });
+  });
+});
+
 describe("optimistic mutations", () => {
   test("take false or a function typed by the contract's entity and collections", () => {
     const useQuiet = () => qd.taskService.rename.useMutation({ optimistic: false });
@@ -206,6 +223,29 @@ describe("optimistic mutations", () => {
     void useCustom;
     // @ts-expect-error true is the default; only false or a function may be given
     void (() => qd.taskService.rename.useMutation({ optimistic: true }));
+  });
+
+  test("add items typed by each collection's item and scope, and entity rows typed by the entity", () => {
+    const useCreate = () =>
+      qd.board.rename.useMutation({
+        optimistic: (input, cache) => {
+          // A card of the board: every field but id, which may be given or left to the server.
+          cache.addItem("board", "p1", { title: input.title });
+          cache.addItem("board", "p1", { id: "client-made", title: input.title });
+          cache.addEntity({ projectId: "p1", title: input.title, status: "open", ordinal: 1 });
+          // @ts-expect-error a card has a title
+          cache.addItem("board", "p1", {});
+          // @ts-expect-error a card has no status
+          cache.addItem("board", "p1", { title: "x", status: "open" });
+          // @ts-expect-error a scope is the scope column's value
+          cache.addItem("board", 1, { title: "x" });
+          // @ts-expect-error an entity row has every field of the entity
+          cache.addEntity({ title: "x" });
+        },
+      });
+    void useCreate;
+    const useBoard = () => qd.board.board.useCollection("p1");
+    expectTypeOf<ReturnType<typeof useBoard>["pending"]>().toEqualTypeOf<ReadonlySet<string>>();
   });
 
   test("mutate returns nothing and mutateAsync the output's promise", () => {

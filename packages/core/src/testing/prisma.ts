@@ -8,16 +8,20 @@
  * vitest workers never share state. PGlite mode (no TEST_DATABASE_URL):
  * migrations run once into an in-memory PGlite instance whose data dir is
  * dumped to a gzip cache keyed by a migrations fingerprint — later test
- * processes boot from the dump in milliseconds with no PostgreSQL at all.
+ * processes boot from the dump in milliseconds with no PostgreSQL at all
+ * (`openPgliteFromTemplate`, one database per worker, which reads the dump
+ * through Node's Blob so it works under jsdom too).
  *
  * `pg` and `@electric-sql/pglite` are optional peers, loaded via dynamic
  * import only inside the mode that needs them. App-specific pieces (the
  * generated PrismaClient, adapter choice, seed helpers) stay in the app.
  */
 
+import { Blob as NodeBlob } from "node:buffer";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { PGlite } from "@electric-sql/pglite";
 
 export interface RawSqlClient {
   $executeRawUnsafe(sql: string): Promise<unknown>;
@@ -161,6 +165,29 @@ export async function buildPgliteTemplate(
 
   await pg.close();
   return { templatePath, rebuilt: true };
+}
+
+/**
+ * A PGlite database for one test worker (one test file's process): booted
+ * from the template `buildPgliteTemplate` cached (the global setup of
+ * `createPrismaTestGlobalSetup` builds it once per run), building it first
+ * when it is missing or its migrations changed. The dump is read through
+ * Node's `Blob`, so it loads under jsdom too, whose `Blob` has no
+ * `arrayBuffer`. Give it to the app's Prisma client
+ * (`new PrismaClient({ adapter: new PrismaPGlite(pglite) })`), empty it
+ * between tests with `resetDatabase`, and `close()` it after the file.
+ *
+ * @example
+ * const pglite = await openPgliteFromTemplate({ migrationsDir, cacheDir, templateName: "app-test" });
+ * export const prisma = new PrismaClient({ adapter: new PrismaPGlite(pglite) });
+ */
+export async function openPgliteFromTemplate(options: PgliteTemplateOptions): Promise<PGlite> {
+  const { templatePath } = await buildPgliteTemplate(options);
+  const { PGlite: Database } = await import("@electric-sql/pglite");
+  const dump = new NodeBlob([readFileSync(templatePath)], { type: "application/x-gzip" });
+  const pglite = new Database({ loadDataDir: dump as unknown as Blob });
+  await pglite.waitReady;
+  return pglite;
 }
 
 export interface PostgresWorkerOptions {

@@ -228,7 +228,8 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 /** How much longer than the server's time limit a call waits, so the server's `TIMEOUT` arrives first. */
 const HELLO_TIMEOUT_MARGIN_MS = 2_000;
 
-const INITIAL_STATE: ConnectionState = Object.freeze({
+/** The state every connection starts in, and the one a server renders (no socket opens there). */
+export const INITIAL_CONNECTION_STATE: ConnectionState = Object.freeze({
   status: "idle",
   reconnecting: false,
   hello: null,
@@ -244,7 +245,7 @@ interface StateStore {
 }
 
 function createStore(): StateStore {
-  let state = INITIAL_STATE;
+  let state = INITIAL_CONNECTION_STATE;
   const listeners = new Set<() => void>();
   return {
     get: () => state,

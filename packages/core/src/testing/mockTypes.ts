@@ -10,6 +10,7 @@
 // members of the client (a contract map may not use `$` names).
 
 import type { QueryClient } from "@tanstack/react-query";
+import type { ReactElement, ReactNode } from "react";
 import type {
   CollectionMember,
   EntityMembers,
@@ -17,6 +18,7 @@ import type {
   QuickdrawInvalidate,
 } from "../client/clientTypes";
 import type { ChannelMember, EventMember, StreamMember } from "../client/live/memberTypes";
+import type { AccessLevel } from "../contract/access";
 import type { AnyContract } from "../contract/defineContract";
 import type { AdminMethodsOf } from "../contract/kits/admin";
 import type {
@@ -161,6 +163,35 @@ export type MockServiceClient<C extends AnyContract> = {
   } & MockRealtimeMembers<C> &
   MockAdminMembers<C>;
 
+/**
+ * Who a mock client acts for, as the real `useQuickdraw()` and
+ * `usePresence(room)` show it under the mock's provider (`mock.$Provider`),
+ * and the user its collections' views select members for. A field left out
+ * keeps the value the mock started with (`createMockClient`'s `session` and
+ * `userId` options), else its default.
+ */
+export interface MockSession {
+  /** The signed-in user; `null` is an anonymous socket. Default: the `userId` option, else `null`. */
+  readonly userId?: string | null;
+  /** The user's service-wide grants, as the server's hello gives them: `{ taskService: "Admin" }`. Default `{}`. */
+  readonly serviceAccess?: Readonly<Record<string, AccessLevel>>;
+  /**
+   * `false`: the socket is connecting, for the first time (with `isKnown:
+   * false`) or again (with `isKnown`: `reconnecting`). Default `true`.
+   */
+  readonly isConnected?: boolean;
+  /** `false`: the server's hello has not named the user yet (`userId` is `null` meanwhile). Default `true`. */
+  readonly isKnown?: boolean;
+}
+
+/** A session with every field set: what a mock's connection state is made from (`mockSession.tsx`). */
+export interface SessionState {
+  readonly userId: string | null;
+  readonly serviceAccess: Readonly<Record<string, AccessLevel>>;
+  readonly isConnected: boolean;
+  readonly isKnown: boolean;
+}
+
 /** What `createMockClient` returns: the typed client of `Contracts`, with stubs. */
 export type MockClient<Contracts extends ContractMap> = {
   readonly [Key in keyof Contracts]: MockServiceClient<Contracts[Key]>;
@@ -170,9 +201,31 @@ export type MockClient<Contracts extends ContractMap> = {
   /** The cache the mock's query and mutation hooks use. */
   readonly $queryClient: QueryClient;
   /**
-   * Forgets every answer set, call recorded, row, scope and cached result;
-   * for a `beforeEach`, while nothing is mounted. The mock does the same on
-   * its own after each test, unless it was made with `resetAfterEach: false`.
+   * Renders its children with the mock as their provider: the real
+   * `useQuickdraw()` and `usePresence(room)` read the mock's session
+   * (`$session`, `$presence`), and TanStack's `useQueryClient()` the mock's
+   * cache. Its members' hooks need no provider. Testing Library takes it as
+   * a wrapper (`render(<UserMenu />, { wrapper: mock.$Provider })`), and a
+   * Storybook decorator renders the story inside it.
+   */
+  readonly $Provider: (props: { readonly children?: ReactNode }) => ReactElement;
+  /**
+   * Sets who the mock acts for: each field given replaces the one the mock
+   * started with, each left out keeps it (so a story's session never leaks
+   * into the next). Mounted components show it at once; wrap it in `act`
+   * once they are rendered.
+   */
+  $session(session: MockSession): void;
+  /**
+   * Sets the users `usePresence(room)` shows for `room` under
+   * `$Provider` (nobody while the session is not known); `[]` empties it.
+   */
+  $presence(room: string, users: readonly string[]): void;
+  /**
+   * Forgets every answer set, call recorded, row, scope, room and cached
+   * result, and puts back the session the mock started with; for a
+   * `beforeEach`, while nothing is mounted. The mock does the same on its
+   * own after each test, unless it was made with `resetAfterEach: false`.
    */
   $reset(): void;
 };
@@ -181,8 +234,14 @@ export type MockClient<Contracts extends ContractMap> = {
 export interface MockClientOptions {
   /** The cache the mock's hooks use. Default: a fresh one with retries off. */
   readonly queryClient?: QueryClient;
-  /** The user views select members for (`who.userId`), as a connection's hello names it. Default `""`. */
+  /**
+   * The user the mock acts for: the session's `userId`, and the user views
+   * select members for (`who.userId`). Short for `session: { userId }`.
+   * Default: none (anonymous, and views see `""`).
+   */
   readonly userId?: string;
+  /** The session the mock starts with, and goes back to after each test (`$session` sets another). */
+  readonly session?: MockSession;
   /**
    * Default `true`: when the test runner has a global `afterEach` (vitest
    * with `globals: true`, jest), the mock registers a reset with it when it

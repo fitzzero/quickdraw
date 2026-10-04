@@ -14,6 +14,7 @@
 //
 // React-free.
 
+import type { CollectionDef } from "../contract/collections";
 import type { AnyContract } from "../contract/defineContract";
 import type { MethodDef, MethodKind, MethodOutput, Watch } from "../contract/methods";
 import type { ContractMap } from "../contract/infer";
@@ -28,6 +29,8 @@ export interface MethodTarget {
   readonly output?: MethodOutput;
   /** The query's `watch` declaration, when it has one. */
   readonly watch?: Watch<string> | undefined;
+  /** The collections of the method's contract, for a mutation's `addEntity`. */
+  readonly collections?: Readonly<Record<string, CollectionDef>>;
 }
 
 function isContract(value: unknown): value is AnyContract {
@@ -94,6 +97,7 @@ export function buildCaller(
           kind: definition.kind,
           output: definition.output,
           watch: definition.watch,
+          collections: contract.collections,
         },
         definition,
         contract,

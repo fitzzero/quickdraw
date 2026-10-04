@@ -10,7 +10,10 @@ export function AdminTasks() {
   // [{ key: "task", serviceName, displayName }]
   const { services } = useAdminServices(qd);
   const { data } = qd.task.admin.adminList.useQuery({ page: 1, sort: { field: "title" } });
-  const update = qd.task.admin.adminUpdate.useMutation();
+  const update = qd.task.admin.adminUpdate.useMutation({
+    // adminList is a query, not live data: read the page again after this screen's own write
+    onSuccess: () => qd.invalidate(qd.task.admin.adminList),
+  });
   return (
     <table aria-label={services[0]?.displayName}>
       <tbody>

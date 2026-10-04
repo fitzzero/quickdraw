@@ -6,8 +6,8 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
 import type { QuickdrawConnection } from "../connection";
-import { useAwaitingHello, useHello, useQuickdrawContext } from "../context";
-import { overlaysOf, type OverlayView } from "../optimistic";
+import { serverStateOf, useAwaitingHello, useHello, useQuickdrawContext } from "../context";
+import { NO_OVERLAYS, overlaysOf, type OverlayView } from "../optimistic";
 import { userOf } from "../session";
 import { liveDataOf, type LiveData } from "./liveData";
 
@@ -33,15 +33,24 @@ export function useLiveData(hook: string): {
   return { connection, queryClient, live: liveDataOf(connection, queryClient), awaiting };
 }
 
-/** The overlays of `service`, re-rendering when one of them changes. */
+const noOverlays = (): OverlayView => NO_OVERLAYS;
+
+/** The overlays of `service`, re-rendering when one of them changes; none on a server and while hydrating. */
 export function useOverlayView(queryClient: QueryClient, service: string): OverlayView {
   const overlays = overlaysOf(queryClient);
   const snapshot = (): OverlayView => overlays.view(service);
-  return useSyncExternalStore(overlays.subscribe, snapshot, snapshot);
+  return useSyncExternalStore(overlays.subscribe, snapshot, noOverlays);
 }
 
-/** The user the connection acts for, from its `qd:hello`: `null` while anonymous or before the hello. */
+/**
+ * The user the connection acts for, from its `qd:hello`: `null` while
+ * anonymous or before the hello; on a server and while hydrating, the one
+ * its server state names (`../context.ts`).
+ */
 export function useUserId(connection: QuickdrawConnection): string | null {
-  const userId = (): string | null => userOf(connection.getState().hello);
-  return useSyncExternalStore(connection.subscribe, userId, userId);
+  return useSyncExternalStore(
+    connection.subscribe,
+    () => userOf(connection.getState().hello),
+    () => userOf(serverStateOf(connection).hello),
+  );
 }

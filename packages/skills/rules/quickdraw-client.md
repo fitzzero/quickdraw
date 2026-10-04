@@ -34,7 +34,11 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   for cookie sessions. Changing it reconnects, and a hello naming another
   user empties everything quickdraw cached.
 - `useQuickdraw()` gives
-  `{ connection, status, isConnected, userId, serviceAccess, hello, refusal, isRateLimited }`.
+  `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, refusal, isRateLimited }`.
+  Gate on `isKnown` (the server's hello named the user; `userId` is then
+  final, `null` meaning signed out), never on `isConnected` or `userId`
+  alone: `userId` is `null` before the hello too, `isConnected` turns true
+  before it and false while reconnecting, and `reconnecting` keeps the user.
 
 ## Reading
 
@@ -49,12 +53,12 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
 
 - Prefer live data: `useEntity` and `useCollection` stay current from the
   server's frames, resume by revision after a reconnect, and cost no refetch.
-- `useCollection` returns `items`, `index`, `byId`, `totalCount`,
-  `hasMore`, `isLoading`, `isLoadingMore`, `error`, `loadMore`, `loadItems`,
-  `refresh`, `clamped` and `indexTruncated`. `view` names a view the
-  contract declares (filtered on the client over the index); `load: "all"`
-  keeps every page loaded. A `null` scope or id holds nothing;
-  `enabled: false` subscribes to nothing.
+- `useCollection` returns `items`, `index`, `byId`, `pending`,
+  `totalCount`, `hasMore`, `isLoading`, `isLoadingMore`, `error`,
+  `loadMore`, `loadItems`, `refresh`, `clamped` and `indexTruncated`.
+  `view` names a view the contract declares (filtered on the client over
+  the index); `load: "all"` keeps every page loaded. A `null` scope or id
+  holds nothing; `enabled: false` subscribes to nothing.
 - A query whose result follows writes declares `watch` in its contract; the
   client then joins that change topic and refetches when it changes.
 - Errors are `QuickdrawError` instances: switch on `error.code`
@@ -74,6 +78,13 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   the server's frame. `useMutation({ optimistic: false })` turns that off;
   `optimistic: (input, cache) => cache.patchEntity(input.id, { ... })`
   (`removeEntity(id)`, `patchItem(collection, id, fields)`) writes your own.
+- A create (sending a message, adding a card) shows at once with
+  `optimistic: (input, cache) => cache.addItem(collection, scope, item)`
+  (give the item the collection's `order` fields; `addEntity(row)` for
+  collections of entity rows): it shows in its place, `useCollection`'s
+  `pending.has(item.id)` is true while the call is in flight, a refusal
+  removes it, and the server's own item replaces it without a gap or a
+  copy. Never render a mutation's `variables` as a fake row instead.
 - Never refetch or invalidate after a mutation by hand: the frames update
   live rows and collections, and watched queries refetch themselves. For
   anything else use `qd.invalidate(qd.task.stats, input?)`, never
@@ -101,12 +112,20 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   `requires` a room takes messages only from a socket a method joined to it:
   the client that sends must make the joining call itself.
 - Events: `qd.task.cursorMoved.useEvent((payload) => ...)` hears the
-  contract's events sent to a room the socket is in.
+  contract's events sent to a room the socket is in. An event that carries
+  a query's new result writes it into the cache with
+  `qd.task.members.setData(input, updater)` instead of a refetch or a copy
+  in React state.
 - Presence: `usePresence(room)` returns the user ids in an app room, after a
   method joined the socket to it (`ctx.rooms.join`).
 - Admin screens: `qd.task.admin.adminList.useQuery(input)` and the other
   admin kit members; `useAdminServices(qd)` lists the services whose
-  `adminMeta` answers the user.
+  `adminMeta` answers the user, asking only those the hello's grants allow
+  (`Admin`; `{ requires: "Moderate" }` or `null` when the service opened
+  `adminMeta` wider). A screen served from metadata for every service takes
+  `adminOf(qd, key)`, one shape typed by field name: never cast
+  `qd[key].admin`. The kit's rows are not live: after the screen's own
+  write, `onSuccess: () => qd.invalidate(qd.task.admin.adminList)`.
 
 ## Server components and other runtimes
 

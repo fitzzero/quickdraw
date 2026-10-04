@@ -12,6 +12,7 @@
       "@fitzzero/quickdraw-core/server/otel": ["../../src/server/observability/otel.ts"],
       "@fitzzero/quickdraw-core/testing": ["../../src/testing/index.ts"],
       "@fitzzero/quickdraw-core/testing/client": ["../../src/testing/client.tsx"],
+      "@fitzzero/quickdraw-core/testing/mock": ["../../src/testing/mock.ts"],
       "@fitzzero/quickdraw-core/testing/prisma": ["../../src/testing/prisma.ts"],
       "@fitzzero/quickdraw-core/utils": ["../../src/utils/index.ts"],
       "@project/db": ["./packages/db/src/index.ts"],

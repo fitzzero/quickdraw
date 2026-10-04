@@ -4,11 +4,26 @@
 // `QueryClient` the hooks cache in, and that client's invalidation
 // coordinator. Hooks read them from here, so they follow the provider they
 // are rendered under.
+//
+// What the hooks read of the connection, they read through React's
+// `useSyncExternalStore`, whose third argument is the snapshot a server
+// renders and the browser hydrates. It is the connection's state on a
+// server, never its live state: the state every connection starts in (no
+// socket opens on a server), or for a mock client's connection its session
+// (`serverStateOf`). A boundary that hydrates after the provider connected
+// (a Suspense boundary, a lazy route) then hydrates what the server
+// rendered, and shows the live state in the render that follows; with the
+// live state as the server snapshot, a signed-in page failed to hydrate
+// (finding F3.5).
 
 import type { QueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useSyncExternalStore } from "react";
 import type { HelloFrame } from "../protocol/version";
-import type { ConnectionState, QuickdrawConnection } from "./connection";
+import {
+  INITIAL_CONNECTION_STATE,
+  type ConnectionState,
+  type QuickdrawConnection,
+} from "./connection";
 import type { InvalidationCoordinator } from "./coordinator";
 import { awaitingHello } from "./session";
 
@@ -31,9 +46,34 @@ export function useQuickdrawContext(user: string): QuickdrawContextValue {
   return value;
 }
 
-/** The connection's state, re-rendering when it changes. */
+/** The state each connection is rendered with on a server, when it is not the starting state. */
+const serverStates = new WeakMap<QuickdrawConnection, () => ConnectionState>();
+
+/**
+ * Makes `state` what `connection` is rendered with on a server and hydrated
+ * with: a mock client's connection (`../testing/mockSession.tsx`), whose
+ * session is the same on both sides.
+ */
+export function renderOnServerAs(
+  connection: QuickdrawConnection,
+  state: () => ConnectionState,
+): void {
+  serverStates.set(connection, state);
+}
+
+/**
+ * The connection's state as a server renders it and the browser hydrates
+ * it: the state every connection starts in, unless `renderOnServerAs` gave
+ * another.
+ */
+export function serverStateOf(connection: QuickdrawConnection): ConnectionState {
+  return serverStates.get(connection)?.() ?? INITIAL_CONNECTION_STATE;
+}
+
+/** The connection's state, re-rendering when it changes; on a server and while hydrating, `serverStateOf`. */
 export function useConnectionState(connection: QuickdrawConnection): ConnectionState {
-  return useSyncExternalStore(connection.subscribe, connection.getState, connection.getState);
+  const onServer = (): ConnectionState => serverStateOf(connection);
+  return useSyncExternalStore(connection.subscribe, connection.getState, onServer);
 }
 
 /**
@@ -49,12 +89,15 @@ export function useConnectionState(connection: QuickdrawConnection): ConnectionS
  * a query hook shows the emptied cache after another user's hello.
  */
 export function useQueriesHello(connection: QuickdrawConnection): HelloFrame | null {
-  const ready = (): HelloFrame | null => {
-    const state = connection.getState();
+  const readyIn = (state: ConnectionState): HelloFrame | null => {
     const open = state.status === "connected" || state.reconnecting;
     return open && state.backoff.query === undefined ? state.hello : null;
   };
-  return useSyncExternalStore(connection.subscribe, ready, ready);
+  return useSyncExternalStore(
+    connection.subscribe,
+    () => readyIn(connection.getState()),
+    () => readyIn(serverStateOf(connection)),
+  );
 }
 
 /**
@@ -65,8 +108,11 @@ export function useQueriesHello(connection: QuickdrawConnection): HelloFrame | n
  * observers.
  */
 export function useHello(connection: QuickdrawConnection): HelloFrame | null {
-  const hello = (): HelloFrame | null => connection.getState().hello;
-  return useSyncExternalStore(connection.subscribe, hello, hello);
+  return useSyncExternalStore(
+    connection.subscribe,
+    () => connection.getState().hello,
+    () => serverStateOf(connection).hello,
+  );
 }
 
 /**
@@ -79,5 +125,6 @@ export function useAwaitingHello(
   queryClient: QueryClient,
 ): boolean {
   const awaiting = (): boolean => awaitingHello(connection, queryClient);
-  return useSyncExternalStore(connection.subscribe, awaiting, awaiting);
+  // A server renders before any hello settled a cache: nothing awaits there.
+  return useSyncExternalStore(connection.subscribe, awaiting, () => false);
 }

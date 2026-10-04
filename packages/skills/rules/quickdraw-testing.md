@@ -45,7 +45,8 @@ await app.close();
   production (`trackPrisma(new PrismaClient({ adapter }))`). The
   `./testing/prisma` helpers give each worker a database:
   `createPrismaTestGlobalSetup`, `workerDatabaseUrl` and `resetDatabase`
-  (PostgreSQL, or PGlite when no `TEST_DATABASE_URL` is set).
+  (PostgreSQL, or PGlite when no `TEST_DATABASE_URL` is set; each worker
+  boots its PGlite with `openPgliteFromTemplate`, which works under jsdom).
 - Seed rows with the untracked client (`prisma`), or inside `qd.run` once an
   app runs: a tracked write outside any unit of work flushes on its own with
   an `ambient-write` warning.
@@ -106,7 +107,11 @@ logged, and `app.close()` ends it. Turn it on for service suites.
   `const view = await renderWithQuickdraw(<Board projectId={id} />, { app, as: ada, client: qd })`
   from `./testing/client` returns Testing Library's result plus
   `connection`, `queryClient`, `disconnect()` and `reconnect()`. Change
-  data with `app.as(...)` and wait for the screen (`findByText`).
+  data with `app.as(...)` and wait for the screen (`findByText`). Run these
+  in a jsdom project of their own, with the API's global setup (its test
+  database template) and a setup file calling `installJsdomShims()` from
+  `./testing/client` (element scrolling, `Blob.arrayBuffer`); they import
+  the API's services across apps.
 - Without a server: `createMockClient({ task, project })` has the typed
   client's shape with stubs: `qd.task.get.mockResolvedValue(row)`,
   `mockRejectedValue(error)`, `mockImplementation(fn)`, `calls`;
@@ -116,6 +121,18 @@ logged, and `app.close()` ends it. Turn it on for service suites.
   after each test only when the runner has a global `afterEach` (vitest
   with `globals: true`, or jest); otherwise add
   `afterEach(() => mock.$reset())`. It shows no optimistic updates.
+- A component that reads the connection (`useQuickdraw()`,
+  `usePresence(room)`) renders inside the mock's provider:
+  `render(<UserMenu />, { wrapper: mock.$Provider })`, with
+  `mock.$session({ userId, serviceAccess, isConnected, isKnown })` (fields
+  left out keep the starting session, `createMockClient(contracts, { session })`)
+  and `mock.$presence(room, userIds)`. Never re-export `useQuickdraw` from
+  the module you mock to fake it. `useAdminServices(mock)` asks only the
+  services the session's `serviceAccess` allows.
+- Storybook and other browser bundles import the mock from
+  `@fitzzero/quickdraw-core/testing/mock`, which names no Testing Library:
+  a decorator wraps every story in `qd.$Provider`, and a story's
+  `beforeEach` sets its session beside its data.
 
 ## What a new service's tests cover
 

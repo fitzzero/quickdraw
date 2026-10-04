@@ -1154,15 +1154,16 @@ the method's kind does not have, is a compile error.
 `QueryClient` (5-minute stale time by default), and works without DOM
 globals (React Native).
 
-| Member                                                                    | Gives                                                                                          |
-| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `qd.task.get.useQuery(input, options)`                                    | TanStack's `useQuery`; errors are `QuickdrawError` with a `code`                               |
-| `qd.task.rename.useMutation(options)`                                     | TanStack's `useMutation`; `mutate` returns nothing, `mutateAsync` the output                   |
-| `qd.task.useEntity(id)`, `useEntities(ids)`                               | live rows at the user's level: `{ data, isLoading, isRemoved, error }`                         |
-| `qd.task.board.useCollection(scope, { view, load, limit })`               | a live scope: `{ items, index, byId, totalCount, hasMore, isLoading, loadMore, refresh, ... }` |
-| `qd.task.get.call(input)`, `.key(input)`, `.prefetch(queryClient, input)` | a call over the mounted provider's connection, the cache key, a prefetch                       |
-| `qd.invalidate(qd.task.get, input?)`                                      | invalidates through the coordinator: a read in flight is never cancelled                       |
-| `useQuickdraw()`                                                          | `{ connection, status, isConnected, userId, serviceAccess, hello, refusal, isRateLimited }`    |
+| Member                                                                    | Gives                                                                                           |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `qd.task.get.useQuery(input, options)`                                    | TanStack's `useQuery`; errors are `QuickdrawError` with a `code`                                |
+| `qd.task.rename.useMutation(options)`                                     | TanStack's `useMutation`; `mutate` returns nothing, `mutateAsync` the output                    |
+| `qd.task.useEntity(id)`, `useEntities(ids)`                               | live rows at the user's level: `{ data, isLoading, isRemoved, error }`                          |
+| `qd.task.board.useCollection(scope, { view, load, limit })`               | a live scope: `{ items, index, byId, pending, totalCount, hasMore, isLoading, loadMore, ... }`  |
+| `qd.task.get.call(input)`, `.key(input)`, `.prefetch(queryClient, input)` | a call over the mounted provider's connection, the cache key, a prefetch                        |
+| `qd.invalidate(qd.task.get, input?)`                                      | invalidates through the coordinator: a read in flight is never cancelled                        |
+| `qd.task.get.setData(input, updater)`                                     | writes a cached result an event carries, at once; a read in flight is followed by one more      |
+| `useQuickdraw()`                                                          | `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, ... }` |
 
 <!-- example: apps/web/src/components/TaskDetail.tsx#detail -->
 
@@ -1203,12 +1204,18 @@ export function TaskDetail({ id }: { readonly id: string }) {
   collection items from the moment it is sent, are dropped if it fails, and
   give way to the server's frame. `optimistic: false` turns that off;
   `optimistic: (input, cache) => ...` writes its own layers with
-  `patchEntity`, `removeEntity` and `patchItem`.
+  `patchEntity`, `removeEntity` and `patchItem`, and adds rows with
+  `addItem` and `addEntity` (below).
 - Live rows and collections need no refetching: frames keep them current,
   and after a reconnect they resume by revision. A query whose result
   follows writes declares `watch` in its contract; the coordinator fetches
   it again once per change, with at most one read in flight per key. Do not
   call `refetch` or `invalidateQueries` on quickdraw keys after a mutation.
+- An event that carries a query's new result (a room's roster, a score)
+  writes it with `qd.<service>.<query>.setData(input, updater)` rather than
+  refetching: the hooks show it at once, under the overlays of optimistic
+  mutations, and a read of that key already in flight (which may predate
+  the event) is followed by one more, never cancelled.
 - After a reconnect, the queries that are watched (they missed the changes
   meanwhile) or stale are refetched, each after a random delay of up to
   `reconnectJitterMs` (2,000 ms by default), so clients that reconnect
@@ -1227,6 +1234,87 @@ export function TaskDetail({ id }: { readonly id: string }) {
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
   kind of work.
+- Server rendering: a server never connects, so `useQuickdraw()`,
+  `usePresence`, streams and overlays render the state a new connection has
+  (nobody known, no rooms, nothing loaded), and the browser hydrates that
+  same state even where the provider connected first (a Suspense boundary
+  that hydrates late), then renders the live one.
+
+A create shows its row before the server answers with `cache.addItem(collection,
+scope, item)`: the item appears in the scope at once, in its place by the
+collection's `order` (give it the order's fields; without them it goes
+last), and `useCollection`'s `pending` names it while the call is in flight.
+A refused call removes it. The reply's `id` (the created row's) and values
+replace the item's own, and once the scope's own copy arrives (its `added`
+delta, or a load) that copy shows in its place: never both, never a gap.
+`cache.addEntity(row)` adds a row to every collection of entity rows whose
+scope column (and `where`) it matches; a collection of a projection takes
+`addItem`. The item may give its own `id`, one the client made and the
+server keeps:
+
+<!-- example: apps/web/src/components/AddTask.tsx#add -->
+
+```tsx
+export function TaskList({ projectId }: { readonly projectId: string }) {
+  const { items, pending } = qd.task.board.useCollection(projectId);
+  const create = qd.task.create.useMutation({
+    // the new card shows at once, last on the board (its ordinal), until the server's arrives
+    optimistic: (input, cache) =>
+      cache.addItem("board", input.projectId, {
+        projectId: input.projectId,
+        title: input.title,
+        status: "open",
+        ordinal: Number.MAX_SAFE_INTEGER,
+        assigneeId: null,
+      }),
+  });
+  return (
+    <>
+      <ul>
+        {items.map((task) => (
+          // pending: the create is on its way; the card is the server's once it answers
+          <li key={task.id} style={{ opacity: pending.has(task.id) ? 0.5 : 1 }}>
+            {task.title}
+          </li>
+        ))}
+      </ul>
+      <button type="button" onClick={() => create.mutate({ projectId, title: "New task" })}>
+        Add
+      </button>
+      {create.error === null ? null : <p>{`Not added: ${create.error.code}`}</p>}
+    </>
+  );
+}
+```
+
+`useQuickdraw()` says who the connection acts for. `userId` is `null` both
+for an anonymous socket and before the server's hello, so a gate waits for
+`isKnown` (the hello on the current credentials arrived; false again from
+new credentials until theirs). `isConnected` turns true before the hello and
+false while the connection reconnects; `reconnecting` says the user and the
+page stay meanwhile:
+
+<!-- example: apps/web/src/components/AuthGate.tsx#gate -->
+
+```tsx
+export function AuthGate({ children }: { readonly children: ReactNode }) {
+  // isKnown: the server's hello named the user, so userId is final (null: signed out)
+  const { isKnown, userId, reconnecting } = useQuickdraw();
+  if (!isKnown) {
+    return <p>Connecting…</p>;
+  }
+  if (userId === null) {
+    return <SignIn />;
+  }
+  // a reconnect keeps the user and the page: say so, unmount nothing
+  return (
+    <>
+      {reconnecting ? <p role="status">Reconnecting…</p> : null}
+      {children}
+    </>
+  );
+}
+```
 
 ### Server components and other runtimes
 
@@ -1759,7 +1847,10 @@ export function AdminTasks() {
   // [{ key: "task", serviceName, displayName }]
   const { services } = useAdminServices(qd);
   const { data } = qd.task.admin.adminList.useQuery({ page: 1, sort: { field: "title" } });
-  const update = qd.task.admin.adminUpdate.useMutation();
+  const update = qd.task.admin.adminUpdate.useMutation({
+    // adminList is a query, not live data: read the page again after this screen's own write
+    onSuccess: () => qd.invalidate(qd.task.admin.adminList),
+  });
   return (
     <table aria-label={services[0]?.displayName}>
       <tbody>
@@ -1834,6 +1925,21 @@ export function AdminTasks() {
   `qd.admin`, since `admin` is reserved per service). `useAdminServices(qd)`
   lists the client's services whose `adminMeta` answers the user, with their
   display names, sharing the cache of `qd.<service>.admin.adminMeta.useQuery()`.
+  It asks only the services the user's grants (from the server's hello)
+  allow: `Admin` by default, what the kit's methods require;
+  `useAdminServices(qd, { requires: "Moderate" })` for an `adminMeta` given
+  another form, `requires: null` for every service. A service that refused
+  is not asked again until the user's grant on it changes, reconnects
+  included.
+- The kit's rows are not live: `adminList` and `adminGet` are queries that
+  watch nothing, so a screen reads them again after its own writes (the
+  `onSuccess` above), and sees other admins' writes when it next reads.
+- A screen that serves every service from its metadata (the route names the
+  service) takes `adminOf(qd, key)`: the same members, keyed by what the kit
+  made them for and typed by field name (`AdminScreen`: rows are
+  `AdminRow`, `adminList` takes `{ page, pageSize, filter, sort: { field, direction } }`
+  with names read from `adminMeta`), so no cast is needed over a union of
+  keys; a method the contract does not expose is absent.
 
 ### Presence, streams and channels
 
@@ -2240,6 +2346,43 @@ nothing is cached:
   session for an app's own sign-in flow (login codes, an embedded activity),
   and `liveSession` reads a token back; both work with `socketAuth`.
 
+From the browser, `./client` speaks to these routes: `signInUrl(provider,
+{ apiUrl, returnTo })` is the start route's URL (to navigate to; `returnTo`
+defaults to the current page's origin), and `signOut()` and
+`signOutEverywhere()` post to `logout` and `logout-all`. Each POST sends the
+session cookie (`credentials: "include"`, so the API's CORS must allow the
+web app's origin with credentials) with `Content-Type: application/json`,
+and the token `setAuthToken` stored, if any, as a bearer token; the stored
+token is forgotten either way, and a refusal or an unreachable server
+rejects with a `QuickdrawError`. A socket keeps the user it signed in as
+until it connects again, so reconnect the provider's connection after
+signing out (with a token in `auth`, clearing it does that):
+
+<!-- example: apps/web/src/components/SignIn.tsx#browser -->
+
+```tsx
+export function SignIn() {
+  // the kit's GET /auth/google/start: back to this page's origin with the session cookie
+  return <a href={signInUrl("google", { apiUrl: API_URL })}>Sign in with Google</a>;
+}
+
+export function SignOut() {
+  const { connection } = useQuickdraw();
+  const leave = async (): Promise<void> => {
+    // POST /auth/logout with the cookie: the session is revoked, the cookie cleared
+    await signOut({ apiUrl: API_URL });
+    // the socket keeps its user until it connects again, as nobody now
+    connection.close();
+    connection.open();
+  };
+  return (
+    <button type="button" onClick={() => void leave()}>
+      Sign out
+    </button>
+  );
+}
+```
+
 `createMemorySessionStore()` keeps sessions in the process, for development
 and tests. In production, store them in the database. Sessions are not live
 data, so nothing needs their writes tracked: with the tracked client, the
@@ -2500,9 +2643,22 @@ async (Testing Library, an optional peer, is loaded lazily) and returns
 Testing Library's result plus `connection`, `queryClient`, `disconnect()`
 and `reconnect()`, which drop and restore the socket as a lost network does.
 
-For a component test without a server, `createMockClient(contracts)` gives
-the typed client's shape with stubs; give it to the components in place of
-the app's client (a module mock of the file that exports `qd`, say):
+The web app's test imports the API's services across apps, as above, and
+needs a database: run such tests in a jsdom project of their own, with the
+API's global setup (the template its test databases boot from, below) and a
+setup file that calls `installJsdomShims()` from `./testing/client`. That
+adds what jsdom lacks, and keeps what it has: `scrollTo`, `scrollBy` and
+`scrollIntoView` on elements (they do nothing; a list that follows its newest
+item calls them) and `Blob.prototype.arrayBuffer` (PGlite reads a database
+dump through it). This repository runs the README's example app that way:
+`packages/core/vitest.config.ts`, project `readme`, with
+`test/readme/globalSetup.ts` and `test/readme/workerSetup.ts`.
+
+For a component test or a story without a server, `createMockClient(contracts)`
+gives the typed client's shape with stubs; give it to the components in place
+of the app's client (a module mock of the file that exports `qd`, say). It
+comes from `./testing/client`, or from `@fitzzero/quickdraw-core/testing/mock`,
+which names no Testing Library, for a browser bundle (Storybook):
 
 <!-- example: apps/web/src/components/TaskBoard.test.tsx#mock -->
 
@@ -2522,14 +2678,52 @@ each test only when the test runner has a global `afterEach` (vitest with
 (`resetAfterEach: false` opts out); otherwise call `mock.$reset()` in an
 `afterEach` of your own, as above. Optimistic updates are not shown.
 
+The members' hooks need no provider. A component that reads the connection
+(`useQuickdraw()`, `usePresence(room)`) renders inside the mock's own
+provider, `mock.$Provider`, where those real hooks read the mock's session:
+who it acts for, set with `createMockClient(contracts, { session })` and
+`mock.$session({ userId, serviceAccess, isConnected, isKnown })` (each field
+left out keeps its starting value, and the reset after each test puts the
+starting session back), and the rooms `mock.$presence(room, userIds)` sets.
+Its views select members for the session's user:
+
+<!-- example: apps/web/src/components/TaskBoard.test.tsx#session -->
+
+```tsx
+it("lets a signed-in user through the gate", () => {
+  mock.$session({ userId: "ada", serviceAccess: { taskService: "Admin" } }); // useQuickdraw() shows it
+  render(<AuthGate>Board</AuthGate>, { wrapper: mock.$Provider });
+  expect(screen.getByText("Board")).toBeTruthy();
+});
+```
+
+In Storybook, a decorator renders every story inside `qd.$Provider`, and a
+story's `beforeEach` sets its session (`qd.$session(...)`) beside its data.
+
 ### Test databases
 
 `@fitzzero/quickdraw-core/testing/prisma` gives each vitest worker a database
 of its own: `createPrismaTestGlobalSetup` migrates a template once per run
 and clones a database per worker on PostgreSQL (`TEST_DATABASE_URL`), or
-boots PGlite from a cached dump without one; `workerDatabaseUrl` and
-`resetDatabase` (truncates every table) do the rest. Apply `trackPrisma` to
-the test client exactly as in production.
+builds a PGlite dump without one; `workerDatabaseUrl` and `resetDatabase`
+(truncates every table) do the rest. On PGlite each worker boots its own
+database from the dump with `openPgliteFromTemplate`, in milliseconds and
+under jsdom too (it reads the dump through Node's `Blob`); the app's db
+package gives its test client from it while tests run:
+
+<!-- example: packages/db/src/testing.ts#worker -->
+
+```ts
+// this worker's own database: the migrated template, loaded in milliseconds
+const pglite = await openPgliteFromTemplate(TEST_TEMPLATE);
+export const prisma = new PrismaClient({ adapter: new PrismaPGlite(pglite) });
+```
+
+`TEST_TEMPLATE` is `{ migrationsDir, cacheDir, templateName }`, the same the
+global setup builds with (`buildPgliteTemplate(TEST_TEMPLATE)`, or
+`createPrismaTestGlobalSetup`), and a setup file empties the database before
+each test (`beforeEach(() => resetDatabase(prisma))`). Apply `trackPrisma`
+to the test client exactly as in production.
 
 ## Observability
 
@@ -2663,7 +2857,8 @@ bunx @fitzzero/quickdraw-codemod@next v5 .
 | `./utils`          | `createServerCaller`, cache keys (`methodKey`, `entityKey`, `collectionKey`), formatting, navigation, `parseJWTPayload`                                                                                                                         |
 | `./parser`         | the JSON-only Socket.IO parser                                                                                                                                                                                                                  |
 | `./testing`        | `createTestApp`, `describeAccessMatrix`, `expectBudget`, `createRecordingSink`, `DevWarningError`                                                                                                                                               |
-| `./testing/client` | `renderWithQuickdraw`, `createMockClient`                                                                                                                                                                                                       |
+| `./testing/client` | `renderWithQuickdraw`, and everything in `./testing/mock`                                                                                                                                                                                       |
+| `./testing/mock`   | `createMockClient` alone, without Testing Library: for browser bundles such as Storybook                                                                                                                                                        |
 | `./testing/prisma` | test databases on PostgreSQL or PGlite                                                                                                                                                                                                          |
 
 The package also ships the `quickdraw-docs` command.
