@@ -67,6 +67,18 @@ entity in three components.
    broadcasts, so it needs a port to protocol v5; and the channel's
    `requireRoom` (an app room) has no 5.0 form, since `requires` names an
    entity or a collection subscription.
+5. **Zod 3 in the api.** `apps/api` is on `zod ^3.25.76`, and
+   `packages/shared`, which now holds the contracts and the 31 schemas the
+   codemod moved there, lists no `zod` at all. 5.0 validates Zod 3.25
+   schemas, but reads a schema's JSON Schema only from Zod 4.2 or later
+   (`MIGRATION.md`, "Before you start"): the MCP server (`mcp-bootstrap.ts`,
+   `mcp-server.ts`, whose tools come from the contracts' inputs) and the 7
+   admin items (the admin kit's field metadata comes from the entity
+   schema) fail when the registry or the service is built, naming the
+   method. Give `packages/shared` and `apps/api` `zod ^4.2.0` before the
+   contracts get their real schemas. The socket packages need a bump too:
+   `socket.io` and `socket.io-client` are `^4.7.4` here, and 5.0's peers
+   start at `^4.8.0`.
 
 Also: the two `defineService` typing issues the dry run found are fixed in
 the release candidate (an unannotated `id` function no longer widens the

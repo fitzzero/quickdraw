@@ -39,6 +39,13 @@ keep 4.x clients working while you ship.
   kit's field metadata, a projection's keys, and `quickdraw-docs`. A Zod 3
   schema there fails when the service or the MCP registry is built, naming
   the method.
+- **The peers' new floors.** 5.0's optional peer dependencies start
+  higher than 4.1's: `react` `^19.0.0` (4.1: `>=18.0.0`),
+  `@tanstack/react-query` `^5.20.0` (4.1: `>=5.0.0`), `socket.io` and
+  `socket.io-client` `^4.8.0` (4.1: `>=4.0.0`), `@prisma/client` `^7.0.0`
+  (4.1: `>=5.0.0`), `pg` `^8.13.0` (4.1: `>=8.0.0`) and
+  `@electric-sql/pglite` `^0.3.16` (4.1: `>=0.3.0`). Upgrade the ones the
+  app installs before the packages below.
 - **A clean working tree.** The codemod rewrites files in place; review its
   changes as a diff.
 
