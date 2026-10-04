@@ -1245,7 +1245,7 @@ export function AuthGate({ children }: { readonly children: ReactNode }) {
     return <p>Connecting…</p>;
   }
   if (userId === null) {
-    return <a href="/login">Sign in</a>;
+    return <p>Signed out.</p>;
   }
   // a reconnect keeps the user and the page: say so, unmount nothing
   return (
@@ -2529,9 +2529,11 @@ async (Testing Library, an optional peer, is loaded lazily) and returns
 Testing Library's result plus `connection`, `queryClient`, `disconnect()`
 and `reconnect()`, which drop and restore the socket as a lost network does.
 
-For a component test without a server, `createMockClient(contracts)` gives
-the typed client's shape with stubs; give it to the components in place of
-the app's client (a module mock of the file that exports `qd`, say):
+For a component test or a story without a server, `createMockClient(contracts)`
+gives the typed client's shape with stubs; give it to the components in place
+of the app's client (a module mock of the file that exports `qd`, say). It
+comes from `./testing/client`, or from `@fitzzero/quickdraw-core/testing/mock`,
+which names no Testing Library, for a browser bundle (Storybook):
 
 <!-- example: apps/web/src/components/TaskBoard.test.tsx#mock -->
 
@@ -2550,6 +2552,28 @@ each test only when the test runner has a global `afterEach` (vitest with
 `globals: true`, or jest), where the mock registers its own reset
 (`resetAfterEach: false` opts out); otherwise call `mock.$reset()` in an
 `afterEach` of your own, as above. Optimistic updates are not shown.
+
+The members' hooks need no provider. A component that reads the connection
+(`useQuickdraw()`, `usePresence(room)`) renders inside the mock's own
+provider, `mock.$Provider`, where those real hooks read the mock's session:
+who it acts for, set with `createMockClient(contracts, { session })` and
+`mock.$session({ userId, serviceAccess, isConnected, isKnown })` (each field
+left out keeps its starting value, and the reset after each test puts the
+starting session back), and the rooms `mock.$presence(room, userIds)` sets.
+Its views select members for the session's user:
+
+<!-- example: apps/web/src/components/TaskBoard.test.tsx#session -->
+
+```tsx
+it("lets a signed-in user through the gate", () => {
+  mock.$session({ userId: "ada", serviceAccess: { taskService: "Admin" } }); // useQuickdraw() shows it
+  render(<AuthGate>Board</AuthGate>, { wrapper: mock.$Provider });
+  expect(screen.getByText("Board")).toBeTruthy();
+});
+```
+
+In Storybook, a decorator renders every story inside `qd.$Provider`, and a
+story's `beforeEach` sets its session (`qd.$session(...)`) beside its data.
 
 ### Test databases
 
@@ -2692,7 +2716,8 @@ bunx @fitzzero/quickdraw-codemod@next v5 .
 | `./utils`          | `createServerCaller`, cache keys (`methodKey`, `entityKey`, `collectionKey`), formatting, navigation, `parseJWTPayload`                                                                                                                         |
 | `./parser`         | the JSON-only Socket.IO parser                                                                                                                                                                                                                  |
 | `./testing`        | `createTestApp`, `describeAccessMatrix`, `expectBudget`, `createRecordingSink`, `DevWarningError`                                                                                                                                               |
-| `./testing/client` | `renderWithQuickdraw`, `createMockClient`                                                                                                                                                                                                       |
+| `./testing/client` | `renderWithQuickdraw`, and everything in `./testing/mock`                                                                                                                                                                                       |
+| `./testing/mock`   | `createMockClient` alone, without Testing Library: for browser bundles such as Storybook                                                                                                                                                        |
 | `./testing/prisma` | test databases on PostgreSQL or PGlite                                                                                                                                                                                                          |
 
 The package also ships the `quickdraw-docs` command.

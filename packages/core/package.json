@@ -77,6 +77,10 @@
       "types": "./dist/testing/client.d.ts",
       "import": "./dist/testing/client.js"
     },
+    "./testing/mock": {
+      "types": "./dist/testing/mock.d.ts",
+      "import": "./dist/testing/mock.js"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {

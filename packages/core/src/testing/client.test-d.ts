@@ -1,4 +1,5 @@
-// Type tests for `./testing/client` and the test app's frame recorder.
+// Type tests for `./testing/client` (and `./testing/mock`, which it
+// re-exports) and the test app's frame recorder.
 // `bun run typecheck` checks this file, and vitest's typecheck mode reports
 // each block as a test; nothing here runs.
 
@@ -26,6 +27,9 @@ import {
   type RenderWithQuickdrawOptions,
 } from "./client";
 import type { RecordedFrame, TestApp } from "./index";
+import { createMockClient as createMockFromMockEntry, type MockSession } from "./mock";
+import type { AccessLevel } from "../index";
+import type { ReactElement, ReactNode } from "react";
 
 const card = z.object({ id: z.string(), projectId: z.string(), title: z.string() });
 
@@ -61,6 +65,21 @@ describe("createMockClient", () => {
       .toEqualTypeOf<{ name: string }>();
     // @ts-expect-error a title is not a task
     mock.task.get.mockResolvedValue({ title: "no id" });
+  });
+
+  test("its session takes who it acts for, and its provider is a wrapper component", () => {
+    expectTypeOf(mock.$session).parameter(0).toEqualTypeOf<MockSession>();
+    expectTypeOf<MockSession["userId"]>().toEqualTypeOf<string | null | undefined>();
+    expectTypeOf<NonNullable<MockSession["serviceAccess"]>>().toEqualTypeOf<
+      Readonly<Record<string, AccessLevel>>
+    >();
+    expectTypeOf(mock.$presence).parameters.toEqualTypeOf<[string, readonly string[]]>();
+    expectTypeOf(mock.$Provider).parameter(0).toEqualTypeOf<{ readonly children?: ReactNode }>();
+    expectTypeOf(mock.$Provider).returns.toEqualTypeOf<ReactElement>();
+    // @ts-expect-error a grant is an access level
+    mock.$session({ serviceAccess: { taskService: "Owner" } });
+    // The mock entry gives the same function, without Testing Library.
+    expectTypeOf(createMockFromMockEntry).toEqualTypeOf(createMockClient);
   });
 
   test("the live controls take the contract's rows and items", () => {

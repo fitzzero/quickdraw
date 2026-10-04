@@ -11,7 +11,7 @@ export function AuthGate({ children }: { readonly children: ReactNode }) {
     return <p>Connecting…</p>;
   }
   if (userId === null) {
-    return <a href="/login">Sign in</a>;
+    return <p>Signed out.</p>;
   }
   // a reconnect keeps the user and the page: say so, unmount nothing
   return (

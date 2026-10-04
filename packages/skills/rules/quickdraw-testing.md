@@ -116,6 +116,17 @@ logged, and `app.close()` ends it. Turn it on for service suites.
   after each test only when the runner has a global `afterEach` (vitest
   with `globals: true`, or jest); otherwise add
   `afterEach(() => mock.$reset())`. It shows no optimistic updates.
+- A component that reads the connection (`useQuickdraw()`,
+  `usePresence(room)`) renders inside the mock's provider:
+  `render(<UserMenu />, { wrapper: mock.$Provider })`, with
+  `mock.$session({ userId, serviceAccess, isConnected, isKnown })` (fields
+  left out keep the starting session, `createMockClient(contracts, { session })`)
+  and `mock.$presence(room, userIds)`. Never re-export `useQuickdraw` from
+  the module you mock to fake it.
+- Storybook and other browser bundles import the mock from
+  `@fitzzero/quickdraw-core/testing/mock`, which names no Testing Library:
+  a decorator wraps every story in `qd.$Provider`, and a story's
+  `beforeEach` sets its session beside its data.
 
 ## What a new service's tests cover
 

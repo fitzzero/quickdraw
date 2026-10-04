@@ -103,21 +103,51 @@ function createLiveData(connection: QuickdrawConnection, queryClient: QueryClien
   return live;
 }
 
+function livesOf(connection: QuickdrawConnection): WeakMap<QueryClient, LiveData> {
+  let byClient = lives.get(connection);
+  if (byClient === undefined) {
+    byClient = new WeakMap();
+    lives.set(connection, byClient);
+  }
+  return byClient;
+}
+
 /**
  * The live data of `connection` and `queryClient`, made on first use. The
  * hooks use it; code without React can too, holding rows and scopes through
  * its `entities` and `collections`.
  */
 export function liveDataOf(connection: QuickdrawConnection, queryClient: QueryClient): LiveData {
-  let byClient = lives.get(connection);
-  if (byClient === undefined) {
-    byClient = new WeakMap();
-    lives.set(connection, byClient);
-  }
+  const byClient = livesOf(connection);
   let live = byClient.get(queryClient);
   if (live === undefined) {
     live = createLiveData(connection, queryClient);
     byClient.set(queryClient, live);
   }
+  return live;
+}
+
+/**
+ * The live data of a connection that never opens (a mock client's,
+ * `../../testing/mockSession.tsx`): its stores, with no frame listener and
+ * nothing following the connection, and `presence` in place of the store
+ * frames feed, so `usePresence` shows what a test sets. It becomes what
+ * `liveDataOf(connection, queryClient)` returns, so call it before anything
+ * asks for that.
+ */
+export function inertLiveData(
+  connection: QuickdrawConnection,
+  queryClient: QueryClient,
+  presence: PresenceStore,
+): LiveData {
+  const host = { connection, queryClient, overlays: overlaysOf(queryClient) };
+  const live: LiveData = Object.freeze({
+    entities: createEntityStore(host),
+    collections: createCollectionHub(host),
+    streams: createStreamStore(host),
+    events: createEventBus(),
+    presence,
+  });
+  livesOf(connection).set(queryClient, live);
   return live;
 }
