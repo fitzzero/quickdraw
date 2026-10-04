@@ -2,6 +2,101 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0-rc.3] (unreleased)
+
+Round 2 of the fixes the quickdraw-chat migration found on `5.0.0-rc.1`
+(findings F2.1 to F2.18, from its server port), and the room primitives
+its game port needs. No version moves until the release candidate is cut.
+
+### Core
+
+- A `via` collection's entry created or touched (`ctx.touch`, or an
+  `upsert` that may have updated it) in a flush that also deletes one of its
+  junction rows is `removed` from the scope that lost the link; before, the
+  member kept the chat in their list (F2.1).
+- `via({ model, entry, scope, refreshEntry: true })`: for an item read from
+  the junction (a member count), every junction create, update or delete
+  sends the entry again, `updated`, to each scope that still holds it, on one
+  server and behind a cluster (F2.2).
+- Rooms outside handlers: `qd.rooms`, `server.rooms` and `dispatcher.rooms`
+  (`ServerRooms`) send a contract's room event (`emit`, `emitToUser`) from a
+  game loop or a job, to every node. `rooms.leave(room, { userId })` (also
+  on `ctx.rooms`) takes every socket of a user out of an app room on every
+  node: they stop hearing it, a channel that requires the room drops their
+  messages, each is sent `qd:presence { room, users: [] }`. Behind a cluster
+  it is broadcast and answered (F2.9).
+- `createServer({ onRoomLeave })`: once per socket that leaves app rooms
+  (its own leave, a removal, a disconnect), on the node holding it, with the
+  principal, the reason and each room's `last` (no socket of that user left
+  in the room on any node, for a game's `playerLeft`), in a unit of work of
+  its own; a throw is logged and `close()` waits for it.
+- `qd.run(fn, { detached: true })` (and `dispatcher.run`): a unit of work of
+  its own even inside a handler or a transaction, for background work the
+  handler does not await (F2.8).
+- `everyone(level)`: every signed-in user has `level` on every row (public
+  profiles: `anyOf(owner("id"), everyone("Read"))`), covering subscriptions
+  and lists as `rowless: true` on a method does not. `anyOf` with a member
+  that lets every row through filters nothing out (Prisma reads `{}` inside
+  `OR` as matching nothing) (F2.7).
+- The admin kit edits grants with `admin.handlers(contract, { grants: true })`:
+  `serviceAccess` is shown and written, for callers whose service-wide grant
+  is `Admin` only, whatever form a method runs under; the tracked write
+  refreshes the user's sockets like any grant change. Hidden and unwritten
+  by default, as before (F2.3).
+- Behind a cluster, a joining socket's presence list, read from every node,
+  is dropped when the socket left the room before it arrived.
+
+### Auth
+
+- `requireSession({ sessions, jwtSecret })`: an Express middleware for the
+  app's own REST routes over the auth routes kit's sessions, verifying the
+  JWT once and setting `req.userId` and `req.sessionId` (F2.11).
+- The guest route answers `{ userId, name? }` when `createUser` returns
+  `{ userId, name }`, and the session's `token` with
+  `guest({ createUser, token: true })`, for clients without cookies (F2.12).
+- `socketAuth({ devCredentials })` signs a socket in by the user id its
+  handshake names, for editors and load-test bots; it throws when given in
+  production and refuses such a handshake there anyway (F2.13).
+- `google.optional(...)` and `discord.optional(...)` build nothing without
+  credentials, and `createAuthRoutes` skips `undefined`, `null` and `false`
+  providers (F2.14).
+
+### MCP
+
+- When stdin ends, the stdio server lets the calls in flight finish and
+  writes their replies before `closed` resolves; `close()` still cancels
+  them (F2.10).
+- The docs say the tool list is the same for every caller, not filtered by
+  the principal (F2.17).
+
+### Testing
+
+- `app.as(principal)` loads a principal's grants through
+  `auth.loadServiceAccess` when it carries none, at each call, as a socket's
+  and an HTTP call's are loaded (F2.6).
+- `describeAccessMatrix`: a case's `input` may be a function of the cell
+  (`{ name, principal }`), so a mutation that runs once per row gets a fresh
+  row in every cell, whatever the order of the principals (F2.16).
+
+### Codemod
+
+- An `[error]` marker on each `throw new Error(...)` in a migrated handler:
+  4.x sent the message to the caller, 5.0 answers it with a generic
+  `INTERNAL` unless it is a `QuickdrawError` with a code (F2.5). The report
+  is formatted with the app's formatter since `5.0.0-rc.2` (F2.18).
+
+### Docs
+
+- `MIGRATION.md`: "Hand-built auth to the auth routes kit": the `Session`
+  table and its migration from a 4.x token-keyed table, the route and
+  `?error=` code renames, `onLogin`, optional providers, development
+  credentials, a custom flow on `issueSession`, the cookie's name (F2.4).
+- A projection's relation count selects the relation's ids and counts them
+  in `map`: Prisma's `_count` aggregates the whole relation table on every
+  read (F2.15).
+- `docs/releasing.md`: push release tags one at a time; GitHub starts no
+  workflow for more than three tags in one push.
+
 ## [5.0.0-rc.2]
 
 Round 1 of the fixes the quickdraw-chat migration found on `5.0.0-rc.1`
