@@ -2342,8 +2342,11 @@ HTTP) are not counted.
 The client names the same loops from its side, in development, with the
 same format: `repeated-mutation` when one `useMutation` issues its mutation
 more than 5 times within a second (with the component that holds it), and
-`repeated-invalidation` when a query key is invalidated more than 20 times
-within a second.
+`repeated-invalidation` when `qd.invalidate` asks for one query key more
+than 20 times within a second, or the invalidation coordinator refetches
+or marks it stale that often. The coordinator's work is counted after its
+coalescing, so a watched topic that changes 25 times a second (a few
+refetches) is not named a loop.
 
 ### Components
 

@@ -27,8 +27,11 @@
 // after, drops a key when its last observer leaves or the query leaves the
 // cache, and coordinates at most `maxKeys` keys at once; past that a key is
 // refetched without a window or a follow-up, still without cancelling. In
-// development, a key invalidated more than 20 times within a second is
-// named as a loop (`loopGuard.ts`).
+// development, a key the coordinator refetches or marks stale more than 20
+// times within a second is named as a loop (`loopGuard.ts`): counted at the
+// refetch it issues, after coalescing, so a watched topic that changes many
+// times a second (a few refetches) is not; what an app asks with
+// `qd.invalidate` is counted as it is asked (`binding.ts`).
 //
 // React-free: the provider makes one per `QueryClient` and retains it while
 // mounted, so its windows and delayed refetches stop a tick after it
@@ -37,7 +40,7 @@
 
 import type { Query, QueryCacheNotifyEvent, QueryClient, QueryKey } from "@tanstack/react-query";
 import { KEY_ROOT } from "./keys";
-import { loopGuardOf } from "./loopGuard";
+import { loopGuardOf, type LoopGuard } from "./loopGuard";
 
 /** How long after a refetch further invalidations of the key are served together, by default. */
 export const DEFAULT_INVALIDATION_WINDOW_MS = 250;
@@ -130,6 +133,8 @@ interface Entry {
 
 interface State {
   readonly queryClient: QueryClient;
+  /** Counts each refetch and stale mark issued, for the loop warning. */
+  readonly loops: LoopGuard;
   readonly windowMs: number;
   readonly maxKeys: number;
   /** By query hash. */
@@ -152,6 +157,7 @@ function isReading(query: Query): boolean {
 
 /** Refetches `query` if it is active, keeping a read in flight. */
 function refetchNow(state: State, query: Query): void {
+  state.loops.issued(query.queryKey, query.queryHash);
   void state.queryClient.invalidateQueries(
     { queryKey: query.queryKey, exact: true },
     { cancelRefetch: false },
@@ -160,6 +166,7 @@ function refetchNow(state: State, query: Query): void {
 
 /** Marks `query` stale without reading it: its next observer refetches it. */
 function markStale(state: State, query: Query): void {
+  state.loops.issued(query.queryKey, query.queryHash);
   void state.queryClient.invalidateQueries({
     queryKey: query.queryKey,
     exact: true,
@@ -415,6 +422,7 @@ export function createInvalidationCoordinator(
   }
   const state: State = {
     queryClient,
+    loops: loopGuardOf(queryClient),
     windowMs: checkCount("windowMs", options.windowMs, DEFAULT_INVALIDATION_WINDOW_MS),
     maxKeys: checkCount("maxKeys", options.maxKeys, DEFAULT_MAX_COORDINATED_KEYS),
     entries: new Map(),
@@ -424,14 +432,12 @@ export function createInvalidationCoordinator(
     users: 0,
     disposeTimer: undefined,
   };
-  const loops = loopGuardOf(queryClient);
   const coordinator: InvalidationCoordinator = Object.freeze({
     queryClient,
     invalidate(queryKey: QueryKey, invalidateOptions: InvalidateOptions = {}): void {
       const windowMs = checkCount("windowMs", invalidateOptions.windowMs, state.windowMs);
       const filters = { queryKey, exact: invalidateOptions.exact === true };
       for (const query of queryClient.getQueryCache().findAll(filters)) {
-        loops.invalidated(query.queryKey, query.queryHash);
         request(state, query, windowMs);
       }
     },

@@ -1,9 +1,11 @@
 // The client's loop warnings (`loopGuard.ts`): a component that mutates from
-// an effect with no guard is named once, with its component; a query key
-// invalidated more than 20 times within a second is named once; the stack
-// parsing behind the component's name; and nothing outside development.
+// an effect with no guard is named once, with its component; a query key an
+// app invalidates more than 20 times within a second, or the coordinator
+// refetches or marks stale that often, is named once, while a watched topic
+// the coordinator coalesces is not; the stack parsing behind the component's
+// name; and nothing outside development.
 
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +37,12 @@ function quickdrawWarnings(spy: {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 /** Mutates after every render, with no guard: each mutation re-renders it, so it never stops. */
 function RunawayBump() {
@@ -74,6 +82,80 @@ describe("a mutation fired from an effect with no guard", () => {
   });
 });
 
+/** Once its query has data, invalidates it from an effect its own run runs again (30 runs). */
+function RunawayInvalidate() {
+  const read = qd.counter.read.useQuery({ name: "loop" });
+  const [runs, setRuns] = React.useState(0);
+  const loaded = read.data !== undefined;
+  React.useEffect(() => {
+    if (loaded && runs < 30) {
+      qd.invalidate(qd.counter.read, { name: "loop" });
+      setRuns(runs + 1);
+    }
+  }, [loaded, runs]);
+  return <p>{runs === 30 && read.data !== undefined ? "settled" : "looping"}</p>;
+}
+
+describe("a query invalidated from an effect that runs itself again", () => {
+  it("is named once, though the coordinator reads it only a few times", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { app, records } = await harness.start();
+    const view = render(
+      <QuickdrawProvider
+        client={qd}
+        url={app.url}
+        auth={{ principal: alice }}
+        transports={["websocket"]}
+        queryClient={new QueryClient()}
+      >
+        <RunawayInvalidate />
+      </QuickdrawProvider>,
+    );
+    await screen.findByText("settled");
+    await sleep(300);
+    view.unmount();
+    expect(quickdrawWarnings(warn)).toEqual([
+      "[quickdraw:repeated-invalidation] counterService.read: invalidated 21 times within a second: " +
+        "an effect or a render that invalidates it on every run loops with the read it causes. " +
+        "Invalidate from an event handler or once a mutation settles; a scope that changes this often reads better as a collection",
+    ]);
+    const reads = records.filter((record) => record.method === "read");
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.length).toBeLessThan(6);
+  });
+});
+
+describe("a watched topic that changes 25 times a second", () => {
+  it("is not named: the coordinator refetches it a few times, and counts those", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const queryClient = new QueryClient();
+    const key = qd.counter.read.key({ name: "busy" });
+    let fetches = 0;
+    const observer = new QueryObserver(queryClient, {
+      queryKey: key,
+      queryFn: async () => {
+        fetches += 1;
+        await sleep(5);
+        return { name: "busy", value: fetches };
+      },
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    await waitFor(() => expect(fetches).toBe(1));
+    const coordinator = createInvalidationCoordinator(queryClient);
+    // What useTopicWatch does for each qd:changed of the topic.
+    for (let change = 0; change < 25; change += 1) {
+      coordinator.invalidate(key, { exact: true });
+      await sleep(38);
+    }
+    await sleep(400);
+    expect(fetches - 1).toBeGreaterThan(1);
+    expect(fetches - 1).toBeLessThan(10);
+    expect(quickdrawWarnings(warn)).toEqual([]);
+    unsubscribe();
+    coordinator.dispose();
+  });
+});
+
 describe("the loop guard", () => {
   const trace = () => ({ times: [], origin: undefined });
 
@@ -98,7 +180,7 @@ describe("the loop guard", () => {
     );
   });
 
-  it("names a query key invalidated more than 20 times within a second through the coordinator, once", () => {
+  it("names a query key the coordinator marks stale more than 20 times within a second, once", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const queryClient = new QueryClient();
     const key = qd.counter.read.key({ name: "a" });
@@ -116,17 +198,23 @@ describe("the loop guard", () => {
     coordinator.dispose();
   });
 
-  it("counts invalidations per key, within the window", () => {
+  it("counts invalidations per key, within the window, apart from the coordinator's refetches", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     let now = 0;
     const guard = createLoopGuard(() => now);
     for (let round = 0; round < 40; round += 1) {
-      guard.invalidated(["qd", "taskService", "m", "list", { round }], `list-${String(round % 2)}`);
+      const key = ["qd", "taskService", "m", "list", { round }];
+      guard.asked(key, `list-${String(round % 2)}`);
+      guard.issued(key, `list-${String(round % 2)}`);
       now += 60;
+    }
+    for (let round = 0; round < 20; round += 1) {
+      guard.asked(["qd", "taskService", "m", "get", {}], "get");
+      guard.issued(["qd", "taskService", "m", "get", {}], "get");
     }
     expect(quickdrawWarnings(warn)).toEqual([]);
     for (let round = 0; round < 21; round += 1) {
-      guard.invalidated(["other", "key"], "other");
+      guard.asked(["other", "key"], "other");
     }
     expect(quickdrawWarnings(warn)).toEqual([
       expect.stringMatching(
@@ -176,7 +264,8 @@ describe("the loop guard", () => {
       const quiet = createMutationTrace();
       for (let round = 0; round < 30; round += 1) {
         guard.mutated(quiet, "taskService", "rename");
-        guard.invalidated(["qd"], "qd");
+        guard.asked(["qd"], "qd");
+        guard.issued(["qd"], "qd");
       }
       expect(quickdrawWarnings(warn)).toEqual([]);
     } finally {

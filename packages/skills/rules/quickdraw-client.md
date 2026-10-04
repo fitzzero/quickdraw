@@ -83,8 +83,10 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   writes. In development the client warns
   `[quickdraw:repeated-mutation]` (one `useMutation` issuing more than 5
   within a second, naming its component) and
-  `[quickdraw:repeated-invalidation]` (one query key invalidated more than
-  20 times within a second), and the server `[quickdraw:repeated-call]`.
+  `[quickdraw:repeated-invalidation]` (`qd.invalidate` asking for one query
+  key more than 20 times within a second; a busy watched topic is not
+  counted, the coordinator coalesces it), and the server
+  `[quickdraw:repeated-call]`.
   An effect that must mutate runs once per change: give it the inputs as
   dependencies and compare them with what it last sent.
 - Outside React, through the mounted provider's connection:

@@ -4,17 +4,21 @@
 // - `repeated-mutation`: one `useMutation` hook instance issues its mutation
 //   more than 5 times within a second, as a mutation fired from an effect or
 //   from render does. The warning names the component that holds the hook.
-// - `repeated-invalidation`: one cached query is invalidated through the
-//   coordinator (`qd.invalidate`, a watched topic) more than 20 times within
-//   a second: an effect or a render that invalidates on every run, or a
-//   topic that changes faster than a query should be read again.
+// - `repeated-invalidation`: one cached query is asked to be invalidated
+//   with `qd.invalidate` more than 20 times within a second, as an effect or
+//   a render that invalidates on every run does; or the coordinator itself
+//   refetches it or marks it stale more than 20 times within a second. The
+//   coordinator's work is counted after its coalescing, at the refetch it
+//   issues: its window turns a watched topic that changes 25 times a second
+//   into a few refetches, which is the coordinator doing its job, not a loop.
 //
-// The coordinator keeps such a loop from flooding the server (one read in
-// flight per key, one queued), so it would otherwise go unseen until the
-// socket's rate limit answers `RATE_LIMITED`. Each warning is logged once
-// per kind and member per `QueryClient`, with the root's `consoleLogger`,
-// and only in development: never where `process.env.NODE_ENV` is
-// "production" or cannot be read.
+// The coordinator keeps a loop from flooding the server (one read in flight
+// per key, one queued, one refetch per window), so an app's loop would
+// otherwise go unseen until the socket's rate limit answers `RATE_LIMITED`;
+// that is why what an app asks is counted as it is asked. Each warning is
+// logged once per kind and member per `QueryClient`, with the root's
+// `consoleLogger`, and only in development: never where
+// `process.env.NODE_ENV` is "production" or cannot be read.
 //
 // React-free: the hooks hand in a trace of where they were rendered, made
 // once per hook instance in development, whose stack names the component
@@ -28,11 +32,14 @@ import { KEY_ROOT } from "./keys";
 export const MUTATION_LIMIT = 5;
 export const MUTATION_WINDOW_MS = 1_000;
 
-/** Invalidations one cached query may get within {@link INVALIDATION_WINDOW_MS}. */
+/**
+ * Invalidations one cached query may be asked for, and refetches (or stale
+ * marks) the coordinator may issue for it, within {@link INVALIDATION_WINDOW_MS}.
+ */
 export const INVALIDATION_LIMIT = 20;
 export const INVALIDATION_WINDOW_MS = 1_000;
 
-/** How many queries' invalidation times a guard keeps; the least recently invalidated go first. */
+/** How many queries' times a guard keeps per count; the least recently counted go first. */
 const MAX_QUERIES = 1_000;
 
 /** What one mutation hook instance counts: when it mutated, and where it was rendered. */
@@ -46,8 +53,10 @@ export interface MutationTrace {
 export interface LoopGuard {
   /** Counts one mutation `trace`'s hook instance issued, of `service.method`. */
   mutated(trace: MutationTrace, service: string, method: string): void;
-  /** Counts one invalidation of the cached query `queryKey` (hashed `queryHash`). */
-  invalidated(queryKey: QueryKey, queryHash: string): void;
+  /** Counts one invalidation an app asked for (`qd.invalidate`) of the cached query `queryKey` (hashed `queryHash`). */
+  asked(queryKey: QueryKey, queryHash: string): void;
+  /** Counts one refetch or stale mark the coordinator issued for the cached query, after coalescing. */
+  issued(queryKey: QueryKey, queryHash: string): void;
 }
 
 /** True in development: `process.env.NODE_ENV` can be read and is not "production". */
@@ -123,13 +132,27 @@ function memberOf(queryKey: QueryKey): string {
 
 const OFF: LoopGuard = Object.freeze({
   mutated: () => undefined,
-  invalidated: () => undefined,
+  asked: () => undefined,
+  issued: () => undefined,
 });
+
+/** The times kept for `queryHash` in `counts`, most recently counted last; at most {@link MAX_QUERIES} queries. */
+function timesOf(counts: Map<string, number[]>, queryHash: string): number[] {
+  const times = counts.get(queryHash) ?? [];
+  counts.delete(queryHash);
+  counts.set(queryHash, times);
+  if (counts.size > MAX_QUERIES) {
+    const [oldest] = counts.keys();
+    counts.delete(oldest ?? queryHash);
+  }
+  return times;
+}
 
 /** A loop guard: counts, and logs each kind of warning once per member. */
 export function createLoopGuard(now: () => number = Date.now): LoopGuard {
   const warned = new Set<string>();
-  const invalidations = new Map<string, number[]>();
+  const asked = new Map<string, number[]>();
+  const issued = new Map<string, number[]>();
   const warn = (kind: string, member: string, message: string): void => {
     const key = `${kind}\u0000${member}`;
     if (!warned.has(key)) {
@@ -139,6 +162,18 @@ export function createLoopGuard(now: () => number = Date.now): LoopGuard {
         warning: kind,
       });
     }
+  };
+  const invalidated = (counts: Map<string, number[]>, queryKey: QueryKey, hash: string): void => {
+    const times = timesOf(counts, hash);
+    if (!crossed(times, now(), INVALIDATION_LIMIT, INVALIDATION_WINDOW_MS)) {
+      return;
+    }
+    warn(
+      "repeated-invalidation",
+      memberOf(queryKey),
+      `invalidated ${String(times.length)} times within a second: an effect or a render that invalidates it on every run loops with the read it causes. ` +
+        "Invalidate from an event handler or once a mutation settles; a scope that changes this often reads better as a collection",
+    );
   };
   return Object.freeze({
     mutated(trace: MutationTrace, service: string, method: string): void {
@@ -154,23 +189,11 @@ export function createLoopGuard(now: () => number = Date.now): LoopGuard {
           "Fire it from an event handler, or guard the effect so it runs once per change",
       );
     },
-    invalidated(queryKey: QueryKey, queryHash: string): void {
-      const times = invalidations.get(queryHash) ?? [];
-      invalidations.delete(queryHash);
-      invalidations.set(queryHash, times);
-      if (invalidations.size > MAX_QUERIES) {
-        const [oldest] = invalidations.keys();
-        invalidations.delete(oldest ?? queryHash);
-      }
-      if (!crossed(times, now(), INVALIDATION_LIMIT, INVALIDATION_WINDOW_MS)) {
-        return;
-      }
-      warn(
-        "repeated-invalidation",
-        memberOf(queryKey),
-        `invalidated ${String(times.length)} times within a second: an effect or a render that invalidates it on every run loops with the read it causes. ` +
-          "Invalidate from an event handler or once a mutation settles; a scope that changes this often reads better as a collection",
-      );
+    asked(queryKey: QueryKey, queryHash: string): void {
+      invalidated(asked, queryKey, queryHash);
+    },
+    issued(queryKey: QueryKey, queryHash: string): void {
+      invalidated(issued, queryKey, queryHash);
     },
   });
 }
