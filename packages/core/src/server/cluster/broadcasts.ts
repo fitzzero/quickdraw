@@ -24,6 +24,7 @@ import type { Logger } from "../../contract/logger";
 import { describeError } from "../pipeline/metrics";
 import type { QuickdrawIo } from "../transports/types";
 import { answerOf, DEFAULT_CLUSTER_TIMEOUT_MS, within } from "./acks";
+import { watchAdapterClients } from "./adapterClients";
 import { clusterClientOf } from "./counter";
 
 /** The server-to-server event a degraded node probes the others with; each answers it at once. */
@@ -140,4 +141,19 @@ export function answerProbes(io: QuickdrawIo): void {
   io.on(PROBE_EVENT, (...rest: unknown[]) => {
     answerOf(rest)(true);
   });
+}
+
+/**
+ * What a server keeps with the other nodes of its cluster: its answered
+ * broadcasts, its answers to their probes, and a watch on its adapter's
+ * Valkey clients (`./adapterClients.ts`).
+ */
+export function serveBroadcasts(
+  io: QuickdrawIo,
+  logger: Logger,
+  timeoutMs: number | undefined,
+): ClusterBroadcasts {
+  answerProbes(io);
+  watchAdapterClients(io, logger);
+  return createClusterBroadcasts({ io, logger, timeoutMs });
 }

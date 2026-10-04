@@ -5,7 +5,10 @@
  * to enable running multiple server instances. Behind the adapter, the
  * server also takes its flush revisions from a shared counter on the same
  * client and keeps users' last-seen times there (`createServer`'s `cluster`
- * option; docs/deploying.md).
+ * option; docs/deploying.md). When the subscribing connection comes back
+ * after a drop, the node's clients are told to reconnect within 2 seconds,
+ * so they catch up on what the node missed; a publish Valkey did not take
+ * is logged rather than left unhandled (`cluster/adapterClients.ts`).
  *
  * @example
  * ```typescript
@@ -28,7 +31,9 @@
 import type { Server as SocketIOServer } from "socket.io";
 import type { Logger } from "../contract/logger";
 import { consoleLogger } from "../contract/logger";
+import { watchAdapterClients } from "./cluster/adapterClients";
 import { isModuleNotFound, loadRedisPeers } from "./redisPeers";
+import type { QuickdrawIo } from "./transports/types";
 
 /**
  * Redis adapter configuration options.
@@ -181,6 +186,8 @@ export async function setupRedisAdapter(
     io.adapter(
       createAdapter(pubClient, subClient, { key: keyPrefix }) as Parameters<typeof io.adapter>[0],
     );
+    // When the subscription comes back, this node's clients catch up; a failed publish is logged.
+    watchAdapterClients(io as unknown as QuickdrawIo, logger);
 
     logger.info(`Redis adapter connected to ${host}:${port}`);
 

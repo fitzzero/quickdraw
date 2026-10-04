@@ -109,7 +109,7 @@ export function createSocketServer(
     meter,
   };
   const probe = adapterProbe(io, settings.socket?.adapter !== undefined);
-  const broadcasts = serveBroadcasts(io, settings.logger, settings.cluster);
+  const broadcasts = serveBroadcasts(io, settings.logger, settings.cluster?.timeoutMs);
   settings.live?.attach(io, probe, settings.cluster, broadcasts);
   listenForGrants(io, settings.live, settings.logger);
   listenForDisconnects(io);

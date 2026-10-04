@@ -16,11 +16,7 @@
 import type { Logger } from "../../contract/logger";
 import { SERVER_EVENTS, userRoom } from "../../contract/names";
 import { answerOf } from "../cluster/acks";
-import {
-  answerProbes,
-  createClusterBroadcasts,
-  type ClusterBroadcasts,
-} from "../cluster/broadcasts";
+import type { ClusterBroadcasts } from "../cluster/broadcasts";
 import type { ClusterOptions } from "../cluster/revisions";
 import type { AdapterProbe } from "../emit/hub";
 import { describeError } from "../pipeline/metrics";
@@ -29,6 +25,7 @@ import type { SocketExtension } from "./socketio";
 import type { QuickdrawIo } from "./types";
 
 export type { ClusterOptions } from "../cluster/revisions";
+export { serveBroadcasts } from "../cluster/broadcasts";
 
 /** The server-to-server event reloaded grants are broadcast on behind a cluster adapter. */
 export const GRANTS_EVENT = "quickdraw:grants";
@@ -65,19 +62,6 @@ export interface LiveData {
 export function adapterProbe(io: QuickdrawIo, configured: boolean): AdapterProbe {
   const initial = configured ? undefined : io.adapter();
   return Object.freeze({ local: () => initial !== undefined && io.adapter() === initial });
-}
-
-/**
- * The server's answered broadcasts to the other nodes of a cluster
- * (`../cluster/broadcasts.ts`); the server answers their probes from now on.
- */
-export function serveBroadcasts(
-  io: QuickdrawIo,
-  logger: Logger,
-  cluster: ClusterOptions | undefined,
-): ClusterBroadcasts {
-  answerProbes(io);
-  return createClusterBroadcasts({ io, logger, timeoutMs: cluster?.timeoutMs });
 }
 
 /** Sends `qd:rotate` to every client. */

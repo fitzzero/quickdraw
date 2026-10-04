@@ -32,7 +32,9 @@ process.on("SIGTERM", async () => {
 ```
 
 or pass `createAdapter(pub, sub)` from `@socket.io/redis-adapter` as
-`socket.adapter` to `createServer`. Either way the server finds the adapter's
+`socket.adapter` to `createServer` (an adapter an app sets later with
+`io.adapter(...)` itself misses the watch on its connections described in
+"When Valkey stops answering"). Either way the server finds the adapter's
 publishing client and keeps two kinds of keys there:
 
 | Key                         | What                                                                      |
@@ -179,7 +181,21 @@ and subscription reads are always authorized on the node that serves them.
 - **Frames.** A node's frames to its own sockets go out at once: while its
   connection to Valkey is down, no step of a flush waits on Valkey (the
   counter and the access broadcasts skip it). The adapter cannot reach the
-  other nodes meanwhile: what a node publishes waits in its client's queue.
+  other nodes meanwhile: what a node publishes waits in its client's queue,
+  and is dropped once the client gives up on it (node-redis 5 and later:
+  after its command timeout, 5 seconds by default), logged once per outage
+  ("Valkey did not take a message for the other nodes in time; ..."), never
+  left as an unhandled rejection.
+- **Catching up.** Valkey keeps no messages for a subscriber that is away:
+  what other nodes published while a node's subscription was down never
+  reaches its sockets. So when that subscription is back, the node sends its
+  own clients `qd:rotate` with a 2-second window ("This node's Valkey
+  subscription is back; its clients reconnect to catch up on what it
+  missed"): each reconnects at a random moment within it and subscribes
+  again with the revisions it holds, and behind a cluster that always reads
+  (a collection resume reads a page), so it ends at the current rows. Every
+  node whose subscription dropped does the same, so after a Valkey restart
+  every client catches up.
 - **Revisions.** A node takes revisions from its own clock in microseconds,
   never below one it issued, and logs one error per outage ("The shared
   revision counter did not answer; this node takes revisions from its own
@@ -224,7 +240,10 @@ and subscription reads are always authorized on the node that serves them.
   sending changes whole makes that safe at a cost in bytes. Per-field
   revisions on the client would allow patches again.
 - A degraded node (Valkey not answering) orders revisions by its own clock,
-  which agrees with the counter only within the clocks' skew.
+  which agrees with the counter (Valkey's `TIME`) only within the skew
+  between the two clocks.
+- Catching up after a node's subscription comes back reconnects all of its
+  clients, even after a short drop that lost nothing.
 - A room's presence list read from the other nodes can race a `joined` or
   `left` another node sends meanwhile (this node's own joins are counted).
 - A subscribe that sees the counter move reads every row it joined again, not
