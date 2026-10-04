@@ -52,8 +52,14 @@ export interface AuthCookieOptions {
 
 /** Options of `createAuthRoutes`. */
 export interface AuthRoutesOptions {
-  /** The ways to sign in. Provider ids are unique. */
-  readonly providers: readonly AuthProvider[];
+  /**
+   * The ways to sign in. Provider ids are unique. `undefined`, `null` and
+   * `false` entries are skipped, so a provider whose credentials an
+   * environment lacks can be left out in place (`google.optional(...)`, or
+   * `env.GOOGLE_CLIENT_ID !== undefined && google(...)`); at least one must
+   * remain.
+   */
+  readonly providers: readonly (AuthProvider | null | undefined | false)[];
   /** Where sessions are stored; `createMemorySessionStore()` in development and tests. */
   readonly sessions: SessionStore;
   /** Signs the session JWTs; at least 32 characters. `socketAuth` needs the same secret. */

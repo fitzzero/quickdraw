@@ -96,8 +96,18 @@ function addProvider(table: RouteTable, settings: RouteSettings, provider: AuthP
   });
 }
 
-function routeTable(settings: RouteSettings, providers: readonly AuthProvider[]): RouteTable {
-  if (!Array.isArray(providers) || providers.length === 0) {
+function routeTable(
+  settings: RouteSettings,
+  listed: readonly (AuthProvider | null | undefined | false)[],
+): RouteTable {
+  // An entry left out in place (`google.optional(...)` without credentials) is skipped.
+  const providers = Array.isArray(listed)
+    ? listed.filter(
+        (provider): provider is AuthProvider =>
+          provider !== undefined && provider !== null && provider !== false,
+      )
+    : [];
+  if (providers.length === 0) {
     throw new TypeError("createAuthRoutes: providers must list at least one provider");
   }
   const seen = new Set<string>();

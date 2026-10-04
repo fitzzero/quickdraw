@@ -133,4 +133,17 @@ describe("the provider builders", () => {
     expect(() => mock({} as never)).toThrow("mock(): listUsers is required");
     expect(() => guest({} as never)).toThrow("guest(): createUser is required");
   });
+
+  it("build nothing for a provider without credentials, with optional(), but refuse half of them", () => {
+    expect(google.optional({ clientId: undefined, clientSecret: undefined })).toBeUndefined();
+    expect(discord.optional({ clientId: "", clientSecret: "" })).toBeUndefined();
+    expect(google.optional({ clientId: "c", clientSecret: "s" })).toMatchObject({
+      kind: "oauth",
+      id: "google",
+    });
+    expect(discord.optional({ clientId: "c", clientSecret: "s" })).toMatchObject({ id: "discord" });
+    expect(() => google.optional({ clientId: "c", clientSecret: undefined })).toThrow(
+      "google(): clientSecret is required",
+    );
+  });
 });

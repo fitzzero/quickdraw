@@ -2058,7 +2058,8 @@ app.set("trust proxy", 1);
 app.use(
   createAuthRoutes({
     providers: [
-      google({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }),
+      // nothing without its credentials: the routes skip it
+      google.optional({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }),
       discord({ clientId: env.DISCORD_CLIENT_ID, clientSecret: env.DISCORD_CLIENT_SECRET }),
       // served only while isMockOAuthEnabled()
       mock({ listUsers: listSeededUsers }),
@@ -2107,7 +2108,7 @@ nothing is cached:
 | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `GET /{provider}/start?returnTo=<url>` | 302 to the provider                                                                                                   |
 | `GET /{provider}/callback`             | 302 to `{origin}{successPath}` with the session cookie, or to `{origin}{errorPath}?error=state`, `denied` or `failed` |
-| `POST /guest`                          | `createUser(body)`, then `{ userId }` with the session cookie                                                         |
+| `POST /guest`                          | `createUser(body)`, then `{ userId, name? }` with the session cookie (and `token` with `guest({ token: true })`)      |
 | `GET /me`                              | `{ userId }`, or 401                                                                                                  |
 | `POST /logout`                         | 204: revokes the session, clears the cookie                                                                           |
 | `POST /logout-all`                     | 204: revokes every session of the user; 401 without a live session                                                    |
@@ -2156,6 +2157,27 @@ nothing is cached:
   `allowMissingOrigin: true` is set for native clients that keep cookies.
   Bearer tokens need no Origin, and HTTP calls are guarded by their JSON
   content type instead.
+- `socketAuth({ devCredentials })` signs a socket in by the user id its
+  handshake names (`auth: { userId }`, no token), as the function answers
+  (the principal, or `null` to refuse): for a game editor or load-test bots
+  in development. `socketAuth` throws when it is given while `NODE_ENV` is
+  `production`, and refuses such a handshake there anyway; pass it only
+  behind the app's own flag.
+- `google.optional(...)` and `discord.optional(...)` build nothing when
+  neither credential is set (only one is a misconfiguration, refused), and
+  `providers` skips `undefined`, `null` and `false` entries, so an
+  environment without a provider's app leaves it out in place.
+- A guest's `createUser` may return `{ userId, name }` when the name it gave
+  differs from the one asked (a numbered one after a collision), and the
+  route answers it; `guest({ createUser, token: true })` also answers the
+  session's token, for clients that keep no cookies (a game engine, a page
+  in a third-party iframe), at the cost of the token being readable by the
+  page's scripts.
+- `requireSession({ sessions, jwtSecret })` guards the app's own REST
+  routes: the credential is read as `/me` reads it, the JWT verified once
+  and the session checked in the store, then `req.userId` and
+  `req.sessionId` are set; otherwise 401 `{ error: "UNAUTHENTICATED", message }`.
+  4.1's `createRequireAuth` stays for token-keyed sessions.
 - Rate limits: the sign-in routes share `createAuthLimiter({ max: 60 })` (60
   requests per 15 minutes per IP) and the session routes
   `createAuthStatusLimiter()` (120); pass `rateLimit: { signIn, session }`

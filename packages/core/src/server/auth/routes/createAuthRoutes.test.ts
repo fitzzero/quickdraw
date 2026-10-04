@@ -525,6 +525,32 @@ describe("the guest route", () => {
     expect(guests).toEqual([{ name: "Zed" }, undefined]);
   });
 
+  it("answers the name createUser gave, and the token for cookie-less clients when asked", async () => {
+    const { url } = await harness.boot({
+      providers: [
+        guest({ createUser: () => ({ userId: "guest:ada", name: "Ada#4821" }), token: true }),
+      ],
+    });
+    const response = await post(`${url}/auth/guest`, { body: { name: "Ada" } });
+    const answer = (await response.json()) as { userId: string; name: string; token: string };
+    expect(answer).toEqual({ userId: "guest:ada", name: "Ada#4821", token: expect.any(String) });
+    // The token is the cookie's: a bearer token signs the guest in too.
+    expect(answer.token).toBe(cookieValue(response, "session"));
+    const me = await get(`${url}/auth/me`, undefined, { authorization: `Bearer ${answer.token}` });
+    expect(await me.json()).toEqual({ userId: "guest:ada" });
+    expect(() => guest({ createUser: () => "u", token: "yes" as never })).toThrow(
+      "guest(): token must be true or false",
+    );
+  });
+
+  it("refuses a createUser answer that is neither an id nor { userId, name? }", async () => {
+    const { url } = await harness.boot({
+      providers: [guest({ createUser: () => ({ userId: "u", name: 3 }) as never })],
+    });
+    const failed = await post(`${url}/auth/guest`, { body: {} });
+    expect(failed.status).toBe(500);
+  });
+
   it("reads a body the app's own JSON parser already read", async () => {
     const app = express();
     app.use(express.json());
@@ -695,6 +721,10 @@ describe("the options", () => {
     ],
     [{ providers: [] }, "createAuthRoutes: providers must list at least one provider"],
     [
+      { providers: [undefined, google.optional({ clientId: undefined, clientSecret: undefined })] },
+      "createAuthRoutes: providers must list at least one provider",
+    ],
+    [
       {
         providers: [
           google({ clientId: "a", clientSecret: "b" }),
@@ -709,6 +739,26 @@ describe("the options", () => {
     ],
   ])("refuses %j", (overrides, message) => {
     expect(() => createAuthRoutes({ ...base, ...(overrides as object) } as never)).toThrow(message);
+  });
+
+  it("skips the providers left out in place", async () => {
+    vi.stubEnv("ENABLE_MOCK_OAUTH", "true");
+    const app = express();
+    app.use(
+      createAuthRoutes({
+        ...base,
+        providers: [
+          google.optional({ clientId: undefined, clientSecret: undefined }),
+          false,
+          null,
+          ...base.providers,
+        ],
+      }),
+    );
+    const { server, url } = await listen(app);
+    harness.servers.push(server);
+    expect((await get(`${url}/auth/google/start`)).status).toBe(404);
+    expect((await get(`${url}/auth/mock/start?returnTo=http://app.test/x`)).status).toBe(302);
   });
 
   it("normalizes allowed origins and publicUrl", async () => {

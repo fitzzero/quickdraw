@@ -30,6 +30,13 @@
 // only `__Host-session` (a site under the same parent domain can plant a
 // plain `session` cookie, and a secure handshake must not take it in place of
 // the host-only one), and over plain HTTP `session`, then `__Host-session`.
+//
+// `devCredentials` (finding F2.13 of the quickdraw-chat migration) signs a
+// socket in by the user id its handshake names (`auth: { userId }`), for a
+// game editor or load-test bots in development. It cannot be used in
+// production: `socketAuth` throws when it is given and `NODE_ENV` is
+// `"production"`, and a handshake is refused it there whatever the
+// environment says later.
 
 import type { IncomingHttpHeaders } from "node:http";
 import { QuickdrawError } from "../../../protocol/errors";
@@ -87,7 +94,23 @@ export interface SocketAuthOptions<P extends Principal = Principal> {
    * `auth.loadServiceAccess` then loads.
    */
   readonly loadPrincipal?: PrincipalLoader<P>;
+  /**
+   * Development sign-in without a session: a socket whose handshake carries
+   * `auth: { userId }` and no token is that user, as this function answers:
+   * their principal (its `userId` the one named), or `null` to refuse the
+   * handshake (an unknown id). For a game editor or load-test bots. Never in
+   * production: `socketAuth` throws when it is given while `NODE_ENV` is
+   * `"production"`, and refuses such a handshake there anyway. HTTP calls
+   * never use it. Pass it only when the app's own flag is on:
+   * `devCredentials: env.ENABLE_DEV_CREDENTIALS ? findDevUser : undefined`.
+   */
+  readonly devCredentials?: DevCredentials<P>;
 }
+
+/** `socketAuth`'s `devCredentials`: the principal of the user a development handshake names, or `null`. */
+export type DevCredentials<P extends Principal> = (
+  userId: string,
+) => MaybePromise<P | null | undefined>;
 
 /** What {@link socketAuth} returns: an `authenticate` for `createServer`'s `auth`. */
 export type SessionAuthenticate<P extends Principal> = (
@@ -140,6 +163,55 @@ function refused(message: string): QuickdrawError {
   return new QuickdrawError("UNAUTHENTICATED", message);
 }
 
+function production(): boolean {
+  return process.env.NODE_ENV === "production";
+}
+
+/** `devCredentials`, checked: a function, and never in production. */
+function checkDevCredentials(
+  devCredentials: DevCredentials<Principal> | undefined,
+): DevCredentials<Principal> | undefined {
+  if (devCredentials === undefined) {
+    return undefined;
+  }
+  if (typeof devCredentials !== "function") {
+    throw new TypeError("socketAuth: devCredentials must be a function of the user id");
+  }
+  if (production()) {
+    throw new TypeError(
+      "socketAuth: devCredentials signs sockets in by a user id alone, so it cannot be used when NODE_ENV is production",
+    );
+  }
+  return devCredentials;
+}
+
+/** The user a development socket handshake names (`auth: { userId }` without a token), or `undefined`. */
+function devUserOf(request: AuthenticateRequest): string | undefined {
+  const { token, userId } = request.auth;
+  const tokenless = token === undefined || token === null || token === "";
+  return request.transport === "socket" && tokenless && typeof userId === "string" && userId !== ""
+    ? userId
+    : undefined;
+}
+
+/** The principal of a development handshake's user; refused in production and for an unknown user. */
+async function devPrincipal(
+  devCredentials: DevCredentials<Principal>,
+  userId: string,
+): Promise<Principal> {
+  if (production()) {
+    throw refused("Development credentials are refused in production");
+  }
+  const principal = await devCredentials(userId);
+  if (principal === null || principal === undefined) {
+    throw refused("No development user has that id");
+  }
+  if (principal.userId !== userId) {
+    throw new TypeError("socketAuth: devCredentials must return the principal of the user named");
+  }
+  return principal;
+}
+
 /**
  * The `authenticate` for `createServer` over the auth routes' sessions:
  * `createServer({ auth: { authenticate: socketAuth({ sessions, jwtSecret, allowedOrigins }) } })`.
@@ -157,7 +229,12 @@ export function socketAuth(options: SocketAuthOptions): SessionAuthenticate<Prin
   if (loadPrincipal !== undefined && typeof loadPrincipal !== "function") {
     throw new TypeError("socketAuth: loadPrincipal must be a function");
   }
+  const devCredentials = checkDevCredentials(options.devCredentials);
   return async (request) => {
+    const devUser = devCredentials === undefined ? undefined : devUserOf(request);
+    if (devCredentials !== undefined && devUser !== undefined) {
+      return await devPrincipal(devCredentials, devUser);
+    }
     const credential = credentialOf(request, naming);
     if (credential === null) {
       return null;

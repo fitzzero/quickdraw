@@ -366,6 +366,67 @@ describe("a socket without the cookie", () => {
   });
 });
 
+describe("devCredentials", () => {
+  const known = new Set(["dev-1"]);
+  const withDev: Authenticate = (sessions) => ({
+    authenticate: socketAuth({
+      sessions,
+      jwtSecret: SECRET,
+      allowedOrigins: [APP_ORIGIN],
+      loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
+      devCredentials: (userId): AppPrincipal | null =>
+        known.has(userId) ? { userId, kind: "agent" } : null,
+    }),
+  });
+
+  it("signs a socket in by the user id its handshake names, and refuses an unknown one", async () => {
+    const { url } = await boot(withDev);
+    expect(await connect(url, {}, { ...v5Auth(null), userId: "dev-1" })).toEqual({
+      whoami: { ok: true, d: { userId: "dev-1", kind: "agent" } },
+    });
+    expect(await connect(url, {}, { ...v5Auth(null), userId: "nobody" })).toEqual(REFUSED);
+  });
+
+  it("leaves a token or the cookie in charge, and HTTP calls alone", async () => {
+    const { url } = await boot(withDev);
+    const { session } = await signIn(url, "bob@demo.local");
+    const token = session.slice("session=".length);
+    // A token wins over a named user.
+    expect(await connect(url, {}, { ...v5Auth(null), token, userId: "dev-1" })).toEqual(
+      signedIn(userIdOf("bob@demo.local")),
+    );
+    // Without either, the socket is anonymous as before.
+    expect(await connect(url, {}, v5Auth(null))).toMatchObject({
+      whoami: { ok: false, e: { code: "UNAUTHENTICATED" } },
+    });
+  });
+
+  it("cannot be used in production: refused when made, and at a handshake", async () => {
+    const sessions = createMemorySessionStore();
+    const dev = (userId: string): AppPrincipal => ({ userId, kind: "user" });
+    vi.stubEnv("NODE_ENV", "production");
+    expect(() =>
+      socketAuth({ sessions, jwtSecret: SECRET, allowedOrigins: [], devCredentials: dev }),
+    ).toThrow("devCredentials signs sockets in by a user id alone");
+    vi.unstubAllEnvs();
+    const authenticate = socketAuth({
+      sessions,
+      jwtSecret: SECRET,
+      allowedOrigins: [],
+      devCredentials: dev,
+    });
+    vi.stubEnv("NODE_ENV", "production");
+    await expect(
+      authenticate({
+        transport: "socket",
+        auth: { userId: "dev-1" },
+        headers: {},
+        socket: {} as never,
+      }),
+    ).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+  });
+});
+
 describe("loadPrincipal", () => {
   it("builds the principal, and refuses when it returns none or another user's", async () => {
     const loadPrincipal = vi.fn((userId: string): AppPrincipal | null => {
@@ -488,6 +549,9 @@ describe("the options", () => {
     );
     expect(() => socketAuth({ ...base, loadPrincipal: 1 as never })).toThrow(
       "socketAuth: loadPrincipal must be a function",
+    );
+    expect(() => socketAuth({ ...base, devCredentials: "u1" as never })).toThrow(
+      "socketAuth: devCredentials must be a function of the user id",
     );
     // An empty list is allowed: no page may then use the cookie on a socket.
     expect(socketAuth({ ...base, allowedOrigins: [] })).toBeTypeOf("function");
