@@ -111,12 +111,6 @@ state; tick each item as it is done.
 
 ## 4. Release 5.0.0
 
-- [ ] 4.1.1 out for the apps still on 4.x: the card
-      `4-1-1-hotfix-socket-rate-limiter-crashes-the-process-on-a-no` (in
-      Planning on 2026-10-03), built from `main` and published by hand from
-      `main`, which has no Publish workflow. Ship it as early as possible,
-      and before 5.0.0 takes `latest`: after that, npm refuses to give 4.1.1
-      the implicit `latest` tag and it needs an explicit `--tag`.
 - [ ] `legacy-src` removed: delete `packages/core/legacy-src/`, its ignore
       in `.oxlintrc.json` (`**/legacy-src/**` in `ignorePatterns`) and in
       `.oxfmtrc.json`, its excludes in `packages/core/tsconfig.json` and
@@ -135,12 +129,20 @@ state; tick each item as it is done.
       publint and arethetypeswrong green; and for all four packages,
       `bash scripts/release-tag.sh <package> 5.0.0` clean.
 - [ ] The final review and checks pass on `dev` (the owner's release gate).
+- [ ] 4.1.1 out for the apps still on 4.x: the card
+      `4-1-1-hotfix-socket-rate-limiter-crashes-the-process-on-a-no` (in
+      Planning on 2026-10-03), merged to `main` and published by hand from
+      there, since `main` has no Publish workflow. It waits for nothing in
+      this list, so ship it as early as possible, but no later than here:
+      it is built from `main`, which stops being 4.x once `dev` is merged,
+      and once 5.0.0 takes `latest`, npm refuses to give 4.1.1 the implicit
+      `latest` tag without an explicit `--tag`.
 - [ ] `dev` merged to `main` (the card "Release quickdraw-core 5.0.0 to
-      main"). If 4.1.1 reached `main` first, resolve the conflicts in favor
-      of `dev` (the 4.x `src/` tree and its root `package.json` are gone
-      there), except `CHANGELOG.md`, which keeps the `4.1.1` entry below
-      `5.0.0`. 5.0 already has the guard 4.1.1 adds
-      (`packages/core/src/server/rateLimit.ts`).
+      main" opens the pull request; the owner merges it). With 4.1.1 on
+      `main`, resolve the conflicts in favor of `dev` (the 4.x `src/` tree
+      and its root `package.json` are gone there), except `CHANGELOG.md`,
+      which keeps the `4.1.1` entry below `5.0.0`. 5.0 already has the guard
+      4.1.1 adds (`packages/core/src/server/rateLimit.ts`).
 - [ ] 5.0.0 published by the owner from `main`: the tags `core-v5.0.0`,
       `lint-v5.0.0`, `skills-v5.0.0` and `codemod-v5.0.0`, published under
       `latest`. Then point `next` at it as well, for each package
