@@ -16,7 +16,8 @@ export const server = qd.createServer({
   app,
   services,
   db,
-  stallWatchdog: true, // warns when the event loop's p99 delay passes 200 ms
+  // warns when the event loop's p99 delay passes 200 ms
+  stallWatchdog: true,
   onCall: otelOnCall({ meter: metrics.getMeter("api"), tracer: trace.getTracer("api") }),
 });
 // #endregion

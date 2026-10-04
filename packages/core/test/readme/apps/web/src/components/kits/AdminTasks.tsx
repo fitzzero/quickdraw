@@ -7,7 +7,8 @@ const qd = createQuickdrawClient({ task });
 
 // #region component
 export function AdminTasks() {
-  const { services } = useAdminServices(qd); // [{ key: "task", serviceName, displayName }]
+  // [{ key: "task", serviceName, displayName }]
+  const { services } = useAdminServices(qd);
   const { data } = qd.task.admin.adminList.useQuery({ page: 1, sort: { field: "title" } });
   const update = qd.task.admin.adminUpdate.useMutation();
   return (

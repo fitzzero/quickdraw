@@ -22,6 +22,8 @@ datasource db {
   provider = "postgresql"
 }
 
+// The models the README's examples use (its quick start shows them).
+// #region models
 model User {
   id            String          @id @default(cuid())
   email         String          @unique
@@ -68,7 +70,7 @@ model Task {
   title        String
   assigneeId   String?
   notes        String?
-  // A flag and a JSON column, so the admin kit's tests write every field type.
+  // A flag and a JSON column: every field type the admin kit edits.
   pinned       Boolean     @default(false)
   details      Json?
   createdAt    DateTime    @default(now())
@@ -100,6 +102,7 @@ model TaskLabel {
   @@unique([taskId, labelId])
   @@index([labelId])
 }
+// #endregion
 
 // A model without an `id` column (the shape of an auth library's token
 // table). Its writes cannot be tracked, and must still work.

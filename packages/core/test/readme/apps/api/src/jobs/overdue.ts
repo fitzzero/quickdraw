@@ -21,10 +21,11 @@ export async function spreadOrdinals(projectId: string): Promise<void> {
   await qd.run(async (ctx) => {
     const rows = await db.$queryRaw<{ id: string }[]>`
       UPDATE "Task" SET "ordinal" = "ordinal" * 2 WHERE "projectId" = ${projectId} RETURNING "id"`;
+    // raw SQL is invisible to the tracked client: record the rows it changed
     ctx.touch(
       "task",
       rows.map((row) => row.id),
-    ); // raw SQL is invisible to the tracked client: record the rows it changed
+    );
   });
 }
 // #endregion

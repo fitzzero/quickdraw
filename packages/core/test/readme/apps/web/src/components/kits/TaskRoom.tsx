@@ -18,7 +18,8 @@ export function TaskRoom({
   const { send, isReady } = qd.task.cursor.useChannel();
   const [lastX, setLastX] = useState(0);
   qd.task.cursorMoved.useEvent((cursor) => setLastX(cursor.x));
-  const here = usePresence(`board:${projectId}`); // user ids, after enterBoard joined the room
+  // user ids, after enterBoard joined the room
+  const here = usePresence(`board:${projectId}`);
   return (
     <div onMouseMove={(event) => isReady && send({ projectId, taskId, x: event.clientX })}>
       <p>{`${String(here.length)} here; a cursor at ${String(lastX)}`}</p>

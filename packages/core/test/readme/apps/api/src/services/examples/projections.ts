@@ -9,7 +9,8 @@ const cardSchema = z.object({
   id: z.string(),
   title: z.string(),
   status: z.string(),
-  labelCount: z.number(), // computed: not a column
+  // computed: not a column
+  labelCount: z.number(),
 });
 
 const task = defineContract("taskService", {
@@ -27,8 +28,10 @@ import { inherit } from "@fitzzero/quickdraw-core/server";
 export const taskService = qd.defineService(task, {
   model: "task",
   access: inherit({ from: projectContract, via: "projectId" }),
-  versionColumn: "updatedAt", // answers "not modified" from the row's own time
-  affects: [{ service: task, id: "parentTaskId" }], // a write to a subtask sends its parent again
+  // answers "not modified" from the row's own time
+  versionColumn: "updatedAt",
+  // a write to a subtask sends its parent again
+  affects: [{ service: task, id: "parentTaskId" }],
   project: {
     // a relation count: read with select, built by a pure, synchronous map
     card: {

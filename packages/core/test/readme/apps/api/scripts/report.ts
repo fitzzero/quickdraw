@@ -5,7 +5,8 @@ import { callData, createQuickdrawConnection } from "@fitzzero/quickdraw-core/cl
 
 const connection = createQuickdrawConnection({
   url: "http://localhost:4000",
-  auth: process.env.API_TOKEN, // sent as auth.token
+  // sent as auth.token
+  auth: process.env.API_TOKEN,
 });
 connection.open();
 const count = await callData<number>(connection, {

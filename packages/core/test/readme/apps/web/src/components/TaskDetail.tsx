@@ -4,7 +4,8 @@ import { qd } from "../lib/quickdraw";
 
 // #region detail
 export function TaskDetail({ id }: { readonly id: string }) {
-  const { data: task, isRemoved, error } = qd.task.useEntity(id); // live, at the user's level
+  // live, at the user's level
+  const { data: task, isRemoved, error } = qd.task.useEntity(id);
   const rename = qd.task.rename.useMutation({
     // the default for a mutation with `id` and an "entity" output, written out
     optimistic: (input, cache) => cache.patchEntity(input.id, { title: input.title }),

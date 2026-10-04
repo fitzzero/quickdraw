@@ -17,10 +17,14 @@ export const qd = createQuickdrawClient({
 
 // #region hooks
 export function TaskPanel({ taskId, projectId }: { taskId: string; projectId: string }) {
-  const { data: task } = qd.taskService.useEntity(taskId); // was useSubscription
-  const { items } = qd.taskService.byProject.useCollection(projectId); // was useCollection
-  const { data: health } = qd.healthService.ping.useQuery(); // was useServiceQuery
-  const rename = qd.taskService.renameTask.useMutation(); // was useService
+  // was useSubscription
+  const { data: task } = qd.taskService.useEntity(taskId);
+  // was useCollection
+  const { items } = qd.taskService.byProject.useCollection(projectId);
+  // was useServiceQuery
+  const { data: health } = qd.healthService.ping.useQuery();
+  // was useService
+  const rename = qd.taskService.renameTask.useMutation();
   return (
     <button type="button" onClick={() => rename.mutate({ id: taskId, title: "Renamed" })}>
       {`${task?.title ?? ""}: ${String(items.length)} on the board, up since ${health?.at ?? "?"}`}
@@ -31,12 +35,14 @@ export function TaskPanel({ taskId, projectId }: { taskId: string; projectId: st
 
 // #region events
 export function Board({ projectId, onArchived }: { projectId: string; onArchived: () => void }) {
+  // was useRoomEvents
   qd.taskService.archived.useEvent((event) => {
     if (event.projectId === projectId) {
       onArchived();
     }
-  }); // was useRoomEvents
-  const cursor = qd.taskService.cursor.useChannel(); // was useChannelSend
+  });
+  // was useChannelSend
+  const cursor = qd.taskService.cursor.useChannel();
   return <div onMouseMove={(event) => cursor.send({ projectId, x: event.clientX })} />;
 }
 // #endregion

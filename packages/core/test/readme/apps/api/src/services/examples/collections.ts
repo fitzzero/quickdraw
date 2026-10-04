@@ -12,17 +12,23 @@ export const task = defineContract("taskService", {
   methods: { get: query({ input: z.object({ id: z.string() }), output: "entity" }) },
   collections: {
     byProject: {
-      scope: "projectId", // a column holding the scope value
-      item: "card", // the projection each item is sent as
-      where: { status: "open" }, // membership: only open tasks
+      // a column holding the scope value
+      scope: "projectId",
+      // the projection each item is sent as
+      item: "card",
+      // membership: only open tasks
+      where: { status: "open" },
+      // ends in "id": the keyset cursor
       order: [
         ["ordinal", "asc"],
         ["id", "asc"],
-      ], // ends in "id": the keyset cursor
-      index: ["ordinal", "assigneeId"], // sent for the whole scope
+      ],
+      // sent for the whole scope
+      index: ["ordinal", "assigneeId"],
       views: { mine: (row, who) => row.assigneeId === who.userId },
     },
-    assigned: { scope: "assigneeId", item: "card", order: [["id", "asc"]] }, // each user's own
+    // each user's own
+    assigned: { scope: "assigneeId", item: "card", order: [["id", "asc"]] },
   },
 });
 // #endregion
@@ -32,12 +38,16 @@ import { inherit } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(task, {
   model: "task",
-  access: inherit({ from: projectContract, via: "projectId" }), // derived from the anchor
+  // derived from the anchor
+  access: inherit({ from: projectContract, via: "projectId" }),
   collections: {
-    byProject: { anchor: projectContract }, // Read on the project opens its scope
-    assigned: { scopeAccess: "self" }, // a user opens only the scope that is their id
+    // Read on the project opens its scope
+    byProject: { anchor: projectContract },
+    // a user opens only the scope that is their id
+    assigned: { scopeAccess: "self" },
   },
-  watchAccess: { service: "Read" }, // opens the service topic to Read grants; closed without it
+  // opens the service topic to Read grants; closed without it
+  watchAccess: { service: "Read" },
   methods: {
     get: {
       access: { entry: "Read" },

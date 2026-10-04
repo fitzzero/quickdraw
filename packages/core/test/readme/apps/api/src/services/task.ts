@@ -3,9 +3,12 @@ import { projectContract, taskContract } from "@project/shared";
 import { qd } from "../quickdraw";
 
 export const taskService = qd.defineService(taskContract, {
-  model: "task", // the Prisma model its rows live in
-  access: inherit({ from: projectContract, via: "projectId" }), // the level on the task's project
-  collections: { board: { anchor: projectContract } }, // a board opens with Read on its project
+  // the Prisma model its rows live in
+  model: "task",
+  // the level on the task's project
+  access: inherit({ from: projectContract, via: "projectId" }),
+  // a board opens with Read on its project
+  collections: { board: { anchor: projectContract } },
   methods: {
     get: {
       access: { entry: "Read" },
@@ -23,7 +26,8 @@ export const taskService = qd.defineService(taskContract, {
     },
     countOnBoard: {
       access: { scope: "Read", of: projectContract, id: "projectId" },
-      share: "caller", // identical concurrent calls by one user run once
+      // identical concurrent calls by one user run once
+      share: "caller",
       handler: ({ input, db }) => db.task.count({ where: { projectId: input.projectId } }),
     },
   },

@@ -13,7 +13,8 @@ export const task = defineContract("taskService", {
   streams: {
     // one feed per task; a subscriber needs Read on the task, and first gets the latest 50 lines
     logs: { item: logLineSchema, scope: "taskId", seed: 50, access: { entry: "Read" } },
-    load: { item: z.number(), volatile: true, access: "authenticated" }, // one feed for everyone
+    // one feed for everyone
+    load: { item: z.number(), volatile: true, access: "authenticated" },
   },
   channels: {
     // 20 a second per socket; only from a socket subscribed to the task the payload names

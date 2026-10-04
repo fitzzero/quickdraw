@@ -9,12 +9,14 @@ import { qd } from "../../quickdraw";
 import { inherit } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(taskContract, {
-  model: "task", // was setDelegate(prisma.task)
+  // was setDelegate(prisma.task)
+  model: "task",
   // was checkEntryACL: the caller's role on the task's project, now one policy for every surface
   access: inherit({ from: projectContract, via: "projectId" }),
   // was afterUpdate touching the project: send the project row again after each flush
   affects: [{ service: projectContract, id: "projectId" }],
-  collections: { byProject: { anchor: projectContract } }, // a board opens with Read on its project
+  // a board opens with Read on its project
+  collections: { byProject: { anchor: projectContract } },
   methods: {
     getTask: {
       // 4.x read payload.id implicitly, and a service grant passed too
@@ -28,7 +30,8 @@ export const taskService = qd.defineService(taskContract, {
         db.task.update({ where: { id: input.id }, data: { title: input.title } }),
     },
     archiveAll: {
-      access: { service: "Admin" }, // "Admin" with no row id needed the service grant in 4.x too
+      // "Admin" with no row id needed the service grant in 4.x too
+      access: { service: "Admin" },
       handler: async ({ input, ctx, db }) => {
         const { count } = await db.task.updateMany({
           where: { projectId: input.projectId },

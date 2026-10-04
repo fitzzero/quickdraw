@@ -17,8 +17,10 @@ const taskEntity = z.object({
 });
 
 export const taskContract = defineContract("taskService", {
-  entity: taskEntity, // was TaskDTO; a schema now, so it validates and lists its keys
-  fields: { notes: "Moderate" }, // was getProtectedFields(): notes reach Moderate and up
+  // was TaskDTO; a schema now, so it validates and lists its keys
+  entity: taskEntity,
+  // was getProtectedFields(): notes reach Moderate and up
+  fields: { notes: "Moderate" },
   methods: {
     getTask: query({ input: z.object({ id: z.string() }), output: nullable("entity") }),
     renameTask: mutation({
@@ -46,7 +48,8 @@ export const taskContract = defineContract("taskService", {
     archived: { payload: z.object({ projectId: z.string() }) },
     cursorMoved: { payload: cursorSchema },
   },
-  channels: { cursor: { payload: cursorSchema } }, // was defineChannel
+  // was defineChannel
+  channels: { cursor: { payload: cursorSchema } },
 });
 // #endregion
 

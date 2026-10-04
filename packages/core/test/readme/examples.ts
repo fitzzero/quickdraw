@@ -141,9 +141,11 @@ export function sourceOf(file: string, region: string | undefined): string | und
     .join("\n");
 }
 
+const LANGUAGES: Readonly<Record<string, string>> = { ".tsx": "tsx", ".prisma": "prisma" };
+
 /** The fence language a source file's examples use. */
 export function langOf(file: string): string {
-  return extname(file) === ".tsx" ? "tsx" : "ts";
+  return LANGUAGES[extname(file)] ?? "ts";
 }
 
 /** Every way a document's examples differ from their sources. */

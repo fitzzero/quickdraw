@@ -9,8 +9,10 @@ export const projectService = qd.defineService(projectContract, {
     owner("ownerId"),
     members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),
   ),
-  writes: ["projectMember"], // the sharing kit's invites and removals
-  collections: { mine: { scopeAccess: "self" } }, // a user opens only their own list
+  // the sharing kit's invites and removals
+  writes: ["projectMember"],
+  // a user opens only their own list
+  collections: { mine: { scopeAccess: "self" } },
   methods: {
     get: {
       access: { entry: "Read" },

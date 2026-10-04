@@ -8,7 +8,8 @@ export const task = defineContract("taskService", {
     // looks in title and notes; a call may keep to one scope of byProject
     ...search.contract({
       entity: taskSchema,
-      item: cardSchema, // a scoped search's results are its collection's items
+      // a scoped search's results are its collection's items
+      item: cardSchema,
       fields: ["title", "notes"],
       scope: "byProject",
     }),

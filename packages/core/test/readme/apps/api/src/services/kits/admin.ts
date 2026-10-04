@@ -10,8 +10,10 @@ export const taskService = qd.defineService(task, {
   access: inherit({ from: projectContract, via: "projectId" }),
   methods: {
     ...admin.handlers(task, {
-      displayName: "Tasks", // the default: from the service name
-      hiddenFields: ["notes"], // never shown, returned or written
+      // the default: from the service name
+      displayName: "Tasks",
+      // never shown, returned or written
+      hiddenFields: ["notes"],
       fieldOverrides: { assigneeId: { type: "relation", relationService: "userService" } },
     }),
   },

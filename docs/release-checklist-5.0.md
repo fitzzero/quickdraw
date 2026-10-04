@@ -138,9 +138,12 @@ state; tick each item as it is done.
       (`packages/core/src/index.test.ts`), and in the workspace entries of
       `bun.lock` (bun does not rewrite them itself); a dated `5.0.0` entry in
       `CHANGELOG.md`; the install commands moved from `@next` to the release
-      in `README.md`, `MIGRATION.md` (then `readme:sync`),
-      `UPGRADE-PROMPT.md`, `packages/codemod/README.md` and the
-      `quickdraw-migrate-v5` skill; the full gate, the dist smoke test,
+      (with the sentences about the `next` dist-tag beside them) in
+      `README.md`, `MIGRATION.md` (then `readme:sync`), `UPGRADE-PROMPT.md`,
+      `packages/codemod/README.md`, `packages/lint/README.md`,
+      `packages/skills/README.md` and the `quickdraw-migrate-v5` skill; the
+      README's links to the example app (`tree/dev/packages/core/test/readme`,
+      twice) pointed at `main`; the full gate, the dist smoke test,
       publint and arethetypeswrong green; and for all four packages,
       `bash scripts/release-tag.sh <package> 5.0.0` clean.
 - [ ] The final review and checks pass on `dev` (the owner's release gate).

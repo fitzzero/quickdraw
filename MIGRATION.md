@@ -192,12 +192,14 @@ export class TaskService extends BaseService<
 import { inherit } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(taskContract, {
-  model: "task", // was setDelegate(prisma.task)
+  // was setDelegate(prisma.task)
+  model: "task",
   // was checkEntryACL: the caller's role on the task's project, now one policy for every surface
   access: inherit({ from: projectContract, via: "projectId" }),
   // was afterUpdate touching the project: send the project row again after each flush
   affects: [{ service: projectContract, id: "projectId" }],
-  collections: { byProject: { anchor: projectContract } }, // a board opens with Read on its project
+  // a board opens with Read on its project
+  collections: { byProject: { anchor: projectContract } },
   methods: {
     getTask: {
       // 4.x read payload.id implicitly, and a service grant passed too
@@ -211,7 +213,8 @@ export const taskService = qd.defineService(taskContract, {
         db.task.update({ where: { id: input.id }, data: { title: input.title } }),
     },
     archiveAll: {
-      access: { service: "Admin" }, // "Admin" with no row id needed the service grant in 4.x too
+      // "Admin" with no row id needed the service grant in 4.x too
+      access: { service: "Admin" },
       handler: async ({ input, ctx, db }) => {
         const { count } = await db.task.updateMany({
           where: { projectId: input.projectId },
@@ -251,8 +254,10 @@ const taskEntity = z.object({
 });
 
 export const taskContract = defineContract("taskService", {
-  entity: taskEntity, // was TaskDTO; a schema now, so it validates and lists its keys
-  fields: { notes: "Moderate" }, // was getProtectedFields(): notes reach Moderate and up
+  // was TaskDTO; a schema now, so it validates and lists its keys
+  entity: taskEntity,
+  // was getProtectedFields(): notes reach Moderate and up
+  fields: { notes: "Moderate" },
   methods: {
     getTask: query({ input: z.object({ id: z.string() }), output: nullable("entity") }),
     renameTask: mutation({
@@ -280,7 +285,8 @@ export const taskContract = defineContract("taskService", {
     archived: { payload: z.object({ projectId: z.string() }) },
     cursorMoved: { payload: cursorSchema },
   },
-  channels: { cursor: { payload: cursorSchema } }, // was defineChannel
+  // was defineChannel
+  channels: { cursor: { payload: cursorSchema } },
 });
 ```
 
@@ -359,9 +365,12 @@ export interface SubscriptionDataMap {
 <!-- example: packages/shared/src/contracts/examples.ts#types -->
 
 ```ts
-export type RenameInput = InputOf<typeof taskContract, "rename">; // { id: string; title: string }
-export type Task = OutputOf<typeof taskContract, "get">; // the entity, as the wire has it
-export type Card = ItemOf<typeof taskContract, "board">; // one item of the board
+// { id: string; title: string }
+export type RenameInput = InputOf<typeof taskContract, "rename">;
+// the entity, as the wire has it
+export type Task = OutputOf<typeof taskContract, "get">;
+// one item of the board
+export type Card = ItemOf<typeof taskContract, "board">;
 ```
 
 ### `defineMethod` becomes `methods: { name: { access, handler } }`
@@ -504,8 +513,10 @@ import { inherit } from "@fitzzero/quickdraw-core/server";
 export const taskService = qd.defineService(task, {
   model: "task",
   access: inherit({ from: projectContract, via: "projectId" }),
-  versionColumn: "updatedAt", // answers "not modified" from the row's own time
-  affects: [{ service: task, id: "parentTaskId" }], // a write to a subtask sends its parent again
+  // answers "not modified" from the row's own time
+  versionColumn: "updatedAt",
+  // a write to a subtask sends its parent again
+  affects: [{ service: task, id: "parentTaskId" }],
   project: {
     // a relation count: read with select, built by a pure, synchronous map
     card: {
@@ -583,9 +594,11 @@ protected override checkAccess(
 import { anyOf, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
 
 export const projectService = qd.defineService(project, {
-  model: "project", // the Prisma model the rows live in
+  // the Prisma model the rows live in
+  model: "project",
   access: anyOf(
-    jsonAcl("acl", { owner: "ownerId" }), // [{ userId, level }] plus Admin for the owner
+    // [{ userId, level }] plus Admin for the owner
+    jsonAcl("acl", { owner: "ownerId" }),
     members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),
   ),
   methods: {
@@ -598,7 +611,8 @@ export const projectService = qd.defineService(project, {
 
 export const taskService = qd.defineService(task, {
   model: "task",
-  access: inherit({ from: project, via: "projectId" }), // the level on the task's project
+  // the level on the task's project
+  access: inherit({ from: project, via: "projectId" }),
   methods: {
     rename: {
       access: { entry: "Moderate" },
@@ -743,7 +757,8 @@ import { admin, defineContract } from "@fitzzero/quickdraw-core";
 import { taskSchema } from "../schemas";
 
 export const task = defineContract("taskService", {
-  entity: taskSchema, // Zod 4.2 or later: the fields come from its JSON Schema
+  // Zod 4.2 or later: the fields come from its JSON Schema
+  entity: taskSchema,
   methods: {
     // adminList, adminGet, adminCreate, adminUpdate, adminDelete,
     // adminMeta, adminSubscribers, adminReemit; `expose` picks fewer
@@ -762,8 +777,10 @@ export const taskService = qd.defineService(task, {
   access: inherit({ from: projectContract, via: "projectId" }),
   methods: {
     ...admin.handlers(task, {
-      displayName: "Tasks", // the default: from the service name
-      hiddenFields: ["notes"], // never shown, returned or written
+      // the default: from the service name
+      displayName: "Tasks",
+      // never shown, returned or written
+      hiddenFields: ["notes"],
       fieldOverrides: { assigneeId: { type: "relation", relationService: "userService" } },
     }),
   },
@@ -862,10 +879,14 @@ export const qd = createQuickdrawClient({
 
 ```tsx
 export function TaskPanel({ taskId, projectId }: { taskId: string; projectId: string }) {
-  const { data: task } = qd.taskService.useEntity(taskId); // was useSubscription
-  const { items } = qd.taskService.byProject.useCollection(projectId); // was useCollection
-  const { data: health } = qd.healthService.ping.useQuery(); // was useServiceQuery
-  const rename = qd.taskService.renameTask.useMutation(); // was useService
+  // was useSubscription
+  const { data: task } = qd.taskService.useEntity(taskId);
+  // was useCollection
+  const { items } = qd.taskService.byProject.useCollection(projectId);
+  // was useServiceQuery
+  const { data: health } = qd.healthService.ping.useQuery();
+  // was useService
+  const rename = qd.taskService.renameTask.useMutation();
   return (
     <button type="button" onClick={() => rename.mutate({ id: taskId, title: "Renamed" })}>
       {`${task?.title ?? ""}: ${String(items.length)} on the board, up since ${health?.at ?? "?"}`}
@@ -892,12 +913,14 @@ export function Board({ projectId }: { projectId: string }) {
 
 ```tsx
 export function Board({ projectId, onArchived }: { projectId: string; onArchived: () => void }) {
+  // was useRoomEvents
   qd.taskService.archived.useEvent((event) => {
     if (event.projectId === projectId) {
       onArchived();
     }
-  }); // was useRoomEvents
-  const cursor = qd.taskService.cursor.useChannel(); // was useChannelSend
+  });
+  // was useChannelSend
+  const cursor = qd.taskService.cursor.useChannel();
   return <div onMouseMove={(event) => cursor.send({ projectId, x: event.clientX })} />;
 }
 ```
@@ -932,9 +955,12 @@ import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
 export const taskContract = defineContract("taskService", {
-  entity: taskSchema, // the full row; it must contain `id: string`
-  projections: { card: cardSchema }, // lean shapes of the row
-  fields: { notes: "Admin" }, // only callers with Admin on the task receive notes
+  // the full row; it must contain `id: string`
+  entity: taskSchema,
+  // lean shapes of the row
+  projections: { card: cardSchema },
+  // only callers with Admin on the task receive notes
+  fields: { notes: "Admin" },
   methods: {
     get: query({ input: z.object({ id: z.string() }), output: "entity" }),
     create: mutation({
@@ -962,7 +988,8 @@ export const taskContract = defineContract("taskService", {
         ["ordinal", "asc"],
         ["id", "asc"],
       ],
-      index: ["status", "ordinal", "assigneeId"], // sent for the whole board
+      // sent for the whole board
+      index: ["status", "ordinal", "assigneeId"],
       views: { mine: (row, who) => row.assigneeId === who.userId },
     },
   },
@@ -1144,9 +1171,12 @@ import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
 export const taskContract = defineContract("taskService", {
-  entity: taskSchema, // the full row; it must contain `id: string`
-  projections: { card: cardSchema }, // lean shapes of the row
-  fields: { notes: "Admin" }, // only callers with Admin on the task receive notes
+  // the full row; it must contain `id: string`
+  entity: taskSchema,
+  // lean shapes of the row
+  projections: { card: cardSchema },
+  // only callers with Admin on the task receive notes
+  fields: { notes: "Admin" },
   methods: {
     get: query({ input: z.object({ id: z.string() }), output: "entity" }),
     create: mutation({
@@ -1174,7 +1204,8 @@ export const taskContract = defineContract("taskService", {
         ["ordinal", "asc"],
         ["id", "asc"],
       ],
-      index: ["status", "ordinal", "assigneeId"], // sent for the whole board
+      // sent for the whole board
+      index: ["status", "ordinal", "assigneeId"],
       views: { mine: (row, who) => row.assigneeId === who.userId },
     },
   },

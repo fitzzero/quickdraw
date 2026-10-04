@@ -28,6 +28,7 @@ export function logLine(taskId: string, line: string): void {
 }
 
 export async function isOnline(userId: string): Promise<boolean> {
-  return await qd.presence.isOnline(userId); // also ctx.presence and server.presence
+  // also ctx.presence and server.presence
+  return await qd.presence.isOnline(userId);
 }
 // #endregion

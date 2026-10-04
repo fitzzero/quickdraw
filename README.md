@@ -30,15 +30,15 @@ Design record: [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md).
 ## Install
 
 ```bash
-bun add @fitzzero/quickdraw-core zod
+bun add @fitzzero/quickdraw-core@next zod
 bun add express socket.io @prisma/client                   # the server
 bun add socket.io-client @tanstack/react-query react        # the web app
-bun add -d @fitzzero/quickdraw-lint @fitzzero/quickdraw-skills oxlint
+bun add -d @fitzzero/quickdraw-lint@next @fitzzero/quickdraw-skills@next oxlint
 ```
 
-5.0 prereleases are published under the `next` dist-tag
-(`@fitzzero/quickdraw-core@next`). Node 24 or later. Every peer dependency
-is optional: install the ones the entries you import need.
+Until 5.0.0 is released, 5.0 is published under the `next` dist-tag, which
+these commands name; without it they install 4.x. Node 24 or later. Every
+peer dependency is optional: install the ones the entries you import need.
 
 | Entry                                   | Needs                                                                   |
 | --------------------------------------- | ----------------------------------------------------------------------- |
@@ -59,8 +59,10 @@ is optional: install the ones the entries you import need.
 A board of tasks in the quickdraw template's layout: contracts in
 `packages/shared`, the server in `apps/api`, the web app in `apps/web`. The
 examples in this README compile: they are copies of
-[`packages/core/test/readme/`](packages/core/test/readme), which the package's
-typecheck builds.
+[`packages/core/test/readme/`](https://github.com/fitzzero/quickdraw/tree/dev/packages/core/test/readme),
+which the package's typecheck builds. The pieces the quick start imports
+without showing (the schemas, the auth helpers, the Prisma models) are under
+[The example app](#the-example-app).
 
 ### 1. The contract
 
@@ -76,9 +78,12 @@ import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
 export const taskContract = defineContract("taskService", {
-  entity: taskSchema, // the full row; it must contain `id: string`
-  projections: { card: cardSchema }, // lean shapes of the row
-  fields: { notes: "Admin" }, // only callers with Admin on the task receive notes
+  // the full row; it must contain `id: string`
+  entity: taskSchema,
+  // lean shapes of the row
+  projections: { card: cardSchema },
+  // only callers with Admin on the task receive notes
+  fields: { notes: "Admin" },
   methods: {
     get: query({ input: z.object({ id: z.string() }), output: "entity" }),
     create: mutation({
@@ -106,7 +111,8 @@ export const taskContract = defineContract("taskService", {
         ["ordinal", "asc"],
         ["id", "asc"],
       ],
-      index: ["status", "ordinal", "assigneeId"], // sent for the whole board
+      // sent for the whole board
+      index: ["status", "ordinal", "assigneeId"],
       views: { mine: (row, who) => row.assigneeId === who.userId },
     },
   },
@@ -159,9 +165,12 @@ import { projectContract, taskContract } from "@project/shared";
 import { qd } from "../quickdraw";
 
 export const taskService = qd.defineService(taskContract, {
-  model: "task", // the Prisma model its rows live in
-  access: inherit({ from: projectContract, via: "projectId" }), // the level on the task's project
-  collections: { board: { anchor: projectContract } }, // a board opens with Read on its project
+  // the Prisma model its rows live in
+  model: "task",
+  // the level on the task's project
+  access: inherit({ from: projectContract, via: "projectId" }),
+  // a board opens with Read on its project
+  collections: { board: { anchor: projectContract } },
   methods: {
     get: {
       access: { entry: "Read" },
@@ -179,7 +188,8 @@ export const taskService = qd.defineService(taskContract, {
     },
     countOnBoard: {
       access: { scope: "Read", of: projectContract, id: "projectId" },
-      share: "caller", // identical concurrent calls by one user run once
+      // identical concurrent calls by one user run once
+      share: "caller",
       handler: ({ input, db }) => db.task.count({ where: { projectId: input.projectId } }),
     },
   },
@@ -193,29 +203,40 @@ export const taskService = qd.defineService(taskContract, {
 <!-- example: apps/api/src/index.ts -->
 
 ```ts
+import { socketAuth } from "@fitzzero/quickdraw-core/server/auth";
 import express, { type Express } from "express";
-import { loadGrants, verifySession } from "./auth";
+import { jwtSecret, loadGrants, sessions } from "./auth";
 import { db } from "./db";
-import { qd } from "./quickdraw";
+import { qd, type AppPrincipal } from "./quickdraw";
 import { labelService } from "./services/label";
 import { projectService } from "./services/project";
 import { taskService } from "./services/task";
 
+// the web app's origins: CORS, and the pages that may open a socket with the session cookie
+const webOrigins = ["http://localhost:3000"];
+
 export const app: Express = express();
 
 export const server = qd.createServer({
-  app, // the HTTP transport is mounted on it: POST /qd/{service}/{method}
+  // the HTTP transport is mounted on it: POST /qd/{service}/{method}
+  app,
   services: [labelService, projectService, taskService],
   db,
-  cors: { origin: ["http://localhost:3000"], credentials: true },
+  cors: { origin: webOrigins, credentials: true },
   auth: {
-    // a principal, a user id, or nothing for an anonymous caller
-    authenticate: ({ auth }) => verifySession(auth.token),
+    // the session cookie the auth routes set, else a bearer token (`auth.token`); none is anonymous
+    authenticate: socketAuth({
+      sessions,
+      jwtSecret,
+      allowedOrigins: webOrigins,
+      loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
+    }),
     loadServiceAccess: (userId) => loadGrants(userId),
     // a tracked write to User.serviceAccess refreshes that user's open sockets
     serviceAccessSource: { model: "user", column: "serviceAccess" },
   },
-  handleSignals: true, // close on SIGTERM and SIGINT; the process is never exited
+  // close on SIGTERM and SIGINT; the process is never exited
+  handleSignals: true,
 });
 
 server.httpServer.listen(4000);
@@ -290,6 +311,165 @@ export function TaskBoard({ projectId }: { readonly projectId: string }) {
 When another user adds, renames or moves a task, the board changes at once,
 and `countOnBoard` is fetched again because it watches the board.
 
+### The example app
+
+The quick start is part of a small app in the template's layout, whose
+every file compiles with the package:
+[`packages/core/test/readme/`](https://github.com/fitzzero/quickdraw/tree/dev/packages/core/test/readme).
+The label and project services the server registers are there, with the
+other sections' examples. These are the pieces the quick start imports
+without showing, which an app writes itself.
+
+The schemas the contracts are built on, `packages/shared/src/schemas.ts`
+(the shared package exports them beside the contracts):
+
+<!-- example: packages/shared/src/schemas.ts -->
+
+```ts
+import { z } from "zod";
+
+export const projectSchema = z.object({ id: z.string(), name: z.string(), ownerId: z.string() });
+
+export const taskSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  title: z.string(),
+  status: z.string(),
+  ordinal: z.number(),
+  assigneeId: z.string().nullable(),
+  notes: z.string().nullable(),
+});
+
+/** The lean shape a board shows. */
+export const cardSchema = taskSchema.omit({ notes: true });
+```
+
+The sessions, the secret and the grants the server reads,
+`apps/api/src/auth.ts`. Sessions are issued by the auth routes, mounted on
+the same `app` (see the [auth routes kit](#auth-routes-kit)):
+
+<!-- example: apps/api/src/auth.ts -->
+
+```ts
+// The app's sessions, token check and grants, for the README's server examples.
+
+import type { AccessLevel } from "@fitzzero/quickdraw-core";
+import { createMemorySessionStore, verifyJWT } from "@fitzzero/quickdraw-core/server/auth";
+import { db } from "./db";
+import type { AppPrincipal } from "./quickdraw";
+
+/** Signs the session JWTs: one secret for the auth routes and `socketAuth`, 32 characters or more. */
+export const jwtSecret = process.env.JWT_SECRET ?? "";
+
+/** The sessions the auth routes issue. In production, a store over the database (see the auth routes kit). */
+export const sessions = createMemorySessionStore();
+
+/** The user a bearer token signs in, or `null` for no token. */
+export async function verifySession(token: unknown): Promise<AppPrincipal | null> {
+  if (typeof token !== "string") {
+    return null;
+  }
+  const payload = await verifyJWT(token, jwtSecret);
+  return payload === null ? null : { userId: payload.userId, kind: "user" };
+}
+
+/** A user's service-wide grants, as stored in `User.serviceAccess`. */
+export async function loadGrants(userId: string): Promise<Record<string, AccessLevel>> {
+  const user = await db.user.findUnique({ where: { id: userId }, select: { serviceAccess: true } });
+  const stored: unknown = user?.serviceAccess;
+  return typeof stored === "object" && stored !== null
+    ? (stored as Record<string, AccessLevel>)
+    : {};
+}
+```
+
+The Prisma models of `@project/db` (`packages/db/prisma/schema.prisma`),
+`User.serviceAccess` among them, which `loadGrants` reads and
+`serviceAccessSource` watches:
+
+<!-- example: ../prisma/schema.prisma#models -->
+
+```prisma
+model User {
+  id            String          @id @default(cuid())
+  email         String          @unique
+  name          String
+  // Service-wide grants, as 4.x apps store them: { "taskService": "Admin" }.
+  serviceAccess Json?
+  ownedProjects Project[]
+  memberships   ProjectMember[]
+  assigned      Task[]
+}
+
+model Project {
+  id        String          @id @default(cuid())
+  name      String
+  ownerId   String
+  // A JSON access list, [{ userId, level }].
+  acl       Json?
+  archived  Boolean         @default(false)
+  owner     User            @relation(fields: [ownerId], references: [id])
+  members   ProjectMember[]
+  tasks     Task[]
+  labels    Label[]
+}
+
+// A membership table: role holds an access level ("Read" | "Moderate" | "Admin").
+model ProjectMember {
+  id        String  @id @default(cuid())
+  projectId String
+  userId    String
+  role      String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+model Task {
+  id           String      @id @default(cuid())
+  projectId    String
+  parentTaskId String?
+  status       String      @default("open")
+  ordinal      Int         @default(0)
+  title        String
+  assigneeId   String?
+  notes        String?
+  // A flag and a JSON column: every field type the admin kit edits.
+  pinned       Boolean     @default(false)
+  details      Json?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  project      Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent       Task?       @relation("Subtasks", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  subtasks     Task[]      @relation("Subtasks")
+  assignee     User?       @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  labels       TaskLabel[]
+
+  @@index([projectId, status, ordinal])
+}
+
+model Label {
+  id        String      @id @default(cuid())
+  projectId String
+  name      String
+  project   Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks     TaskLabel[]
+}
+
+model TaskLabel {
+  id      String @id @default(cuid())
+  taskId  String
+  labelId String
+  task    Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  label   Label  @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, labelId])
+  @@index([labelId])
+}
+```
+
 ## Contracts
 
 A contract is plain data plus schemas, so browser code imports it without
@@ -340,9 +520,12 @@ Types come from the contract too:
 <!-- example: packages/shared/src/contracts/examples.ts#types -->
 
 ```ts
-export type RenameInput = InputOf<typeof taskContract, "rename">; // { id: string; title: string }
-export type Task = OutputOf<typeof taskContract, "get">; // the entity, as the wire has it
-export type Card = ItemOf<typeof taskContract, "board">; // one item of the board
+// { id: string; title: string }
+export type RenameInput = InputOf<typeof taskContract, "rename">;
+// the entity, as the wire has it
+export type Task = OutputOf<typeof taskContract, "get">;
+// one item of the board
+export type Card = ItemOf<typeof taskContract, "board">;
 ```
 
 `InputOf`, `ParsedInputOf`, `OutputOf`, `EntityOf`, `ProjectionOf`,
@@ -364,11 +547,13 @@ export const taskService = qd.defineService(task, {
   methods: {
     assign: {
       access: { service: "Moderate" },
-      timeoutMs: 5_000, // instead of the dispatcher's callTimeoutMs (30 s)
+      // instead of the dispatcher's callTimeoutMs (30 s)
+      timeoutMs: 5_000,
       handler: async ({ input, ctx, db }) => {
         const found = await db.task.findUnique({ where: { id: input.id } });
         if (found === null) {
-          throw new QuickdrawError("NOT_FOUND", "No such task"); // the caller receives the code
+          // the caller receives the code
+          throw new QuickdrawError("NOT_FOUND", "No such task");
         }
         ctx.log.info("assigning", { by: ctx.principal.userId, transport: ctx.transport });
         return db.task.update({ where: { id: input.id }, data: { assigneeId: input.assigneeId } });
@@ -452,9 +637,11 @@ not exist or a malformed access list denies.
 import { anyOf, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
 
 export const projectService = qd.defineService(project, {
-  model: "project", // the Prisma model the rows live in
+  // the Prisma model the rows live in
+  model: "project",
   access: anyOf(
-    jsonAcl("acl", { owner: "ownerId" }), // [{ userId, level }] plus Admin for the owner
+    // [{ userId, level }] plus Admin for the owner
+    jsonAcl("acl", { owner: "ownerId" }),
     members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),
   ),
   methods: {
@@ -467,7 +654,8 @@ export const projectService = qd.defineService(project, {
 
 export const taskService = qd.defineService(task, {
   model: "task",
-  access: inherit({ from: project, via: "projectId" }), // the level on the task's project
+  // the level on the task's project
+  access: inherit({ from: project, via: "projectId" }),
   methods: {
     rename: {
       access: { entry: "Moderate" },
@@ -588,10 +776,11 @@ export async function spreadOrdinals(projectId: string): Promise<void> {
   await qd.run(async (ctx) => {
     const rows = await db.$queryRaw<{ id: string }[]>`
       UPDATE "Task" SET "ordinal" = "ordinal" * 2 WHERE "projectId" = ${projectId} RETURNING "id"`;
+    // raw SQL is invisible to the tracked client: record the rows it changed
     ctx.touch(
       "task",
       rows.map((row) => row.id),
-    ); // raw SQL is invisible to the tracked client: record the rows it changed
+    );
   });
 }
 ```
@@ -614,8 +803,10 @@ import { inherit } from "@fitzzero/quickdraw-core/server";
 export const taskService = qd.defineService(task, {
   model: "task",
   access: inherit({ from: projectContract, via: "projectId" }),
-  versionColumn: "updatedAt", // answers "not modified" from the row's own time
-  affects: [{ service: task, id: "parentTaskId" }], // a write to a subtask sends its parent again
+  // answers "not modified" from the row's own time
+  versionColumn: "updatedAt",
+  // a write to a subtask sends its parent again
+  affects: [{ service: task, id: "parentTaskId" }],
   project: {
     // a relation count: read with select, built by a pure, synchronous map
     card: {
@@ -692,17 +883,23 @@ export const task = defineContract("taskService", {
   methods: { get: query({ input: z.object({ id: z.string() }), output: "entity" }) },
   collections: {
     byProject: {
-      scope: "projectId", // a column holding the scope value
-      item: "card", // the projection each item is sent as
-      where: { status: "open" }, // membership: only open tasks
+      // a column holding the scope value
+      scope: "projectId",
+      // the projection each item is sent as
+      item: "card",
+      // membership: only open tasks
+      where: { status: "open" },
+      // ends in "id": the keyset cursor
       order: [
         ["ordinal", "asc"],
         ["id", "asc"],
-      ], // ends in "id": the keyset cursor
-      index: ["ordinal", "assigneeId"], // sent for the whole scope
+      ],
+      // sent for the whole scope
+      index: ["ordinal", "assigneeId"],
       views: { mine: (row, who) => row.assigneeId === who.userId },
     },
-    assigned: { scope: "assigneeId", item: "card", order: [["id", "asc"]] }, // each user's own
+    // each user's own
+    assigned: { scope: "assigneeId", item: "card", order: [["id", "asc"]] },
   },
 });
 ```
@@ -714,12 +911,16 @@ import { inherit } from "@fitzzero/quickdraw-core/server";
 
 export const taskService = qd.defineService(task, {
   model: "task",
-  access: inherit({ from: projectContract, via: "projectId" }), // derived from the anchor
+  // derived from the anchor
+  access: inherit({ from: projectContract, via: "projectId" }),
   collections: {
-    byProject: { anchor: projectContract }, // Read on the project opens its scope
-    assigned: { scopeAccess: "self" }, // a user opens only the scope that is their id
+    // Read on the project opens its scope
+    byProject: { anchor: projectContract },
+    // a user opens only the scope that is their id
+    assigned: { scopeAccess: "self" },
   },
-  watchAccess: { service: "Read" }, // opens the service topic to Read grants; closed without it
+  // opens the service topic to Read grants; closed without it
+  watchAccess: { service: "Read" },
   methods: {
     get: {
       access: { entry: "Read" },
@@ -852,13 +1053,16 @@ const registry = createMcpRegistry({
   // who a stdio session or an HTTP bearer token stands for; nothing is anonymous
   principal: (request) =>
     verifySession(request.transport === "http" ? request.token : process.env.AGENT_TOKEN),
-  context: () => ({ scopes: ["tasks"] }), // handlers read it as ctx.mcp
-  exclude: ["projectService.invite"], // or include: [...]; name: (service, method) => ...
+  // handlers read it as ctx.mcp
+  context: () => ({ scopes: ["tasks"] }),
+  // or include: [...]; name: (service, method) => ...
+  exclude: ["projectService.invite"],
   customTools: [
     {
       name: "summarize",
       description: "Counts the tasks of a project.",
-      inputSchema: summarizeInput, // validated before the handler runs, and types `arguments`
+      // validated before the handler runs, and types `arguments`
+      inputSchema: summarizeInput,
       // access: "authenticated" is the default; "public" lets anonymous callers in
       handler: async ({ arguments: { projectId }, caller }) =>
         `${String(await caller.taskService.countOnBoard({ projectId }))} tasks`,
@@ -866,8 +1070,10 @@ const registry = createMcpRegistry({
   ],
 });
 
-app.use(createMcpHttpRouter({ registry })); // GET /mcp/tools, POST /mcp/invoke
-createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" }); // in an MCP client's process
+// GET /mcp/tools, POST /mcp/invoke
+app.use(createMcpHttpRouter({ registry }));
+// in an MCP client's process
+createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
 ```
 
 - **stdio** speaks JSON-RPC (MCP protocol version 2024-11-05). One process is
@@ -908,7 +1114,8 @@ globals (React Native).
 
 ```tsx
 export function TaskDetail({ id }: { readonly id: string }) {
-  const { data: task, isRemoved, error } = qd.task.useEntity(id); // live, at the user's level
+  // live, at the user's level
+  const { data: task, isRemoved, error } = qd.task.useEntity(id);
   const rename = qd.task.rename.useMutation({
     // the default for a mutation with `id` and an "entity" output, written out
     optimistic: (input, cache) => cache.patchEntity(input.id, { title: input.title }),
@@ -978,7 +1185,8 @@ export async function TasksPage({ projectId, cookie }: { projectId: string; cook
   // forwards the user's session cookie to the API's HTTP transport
   const caller = createServerCaller(contracts, { url: "http://api:4000", headers: { cookie } });
   const queryClient = new QueryClient();
-  await caller.task.countOnBoard.prefetch(queryClient, { projectId }); // the key useQuery reads
+  // the key useQuery reads
+  await caller.task.countOnBoard.prefetch(queryClient, { projectId });
   return (
     <HydrationBoundary state={dehydrate(queryClient)}>
       <TaskBoard projectId={projectId} />
@@ -997,7 +1205,8 @@ import { callData, createQuickdrawConnection } from "@fitzzero/quickdraw-core/cl
 
 const connection = createQuickdrawConnection({
   url: "http://localhost:4000",
-  auth: process.env.API_TOKEN, // sent as auth.token
+  // sent as auth.token
+  auth: process.env.API_TOKEN,
 });
 connection.open();
 const count = await callData<number>(connection, {
@@ -1033,7 +1242,8 @@ import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
 const newTaskSchema = z.object({ projectId: z.string(), title: z.string() });
-const taskPatch = z.object({ title: z.string(), status: z.string() }).partial(); // every field optional
+// every field optional
+const taskPatch = z.object({ title: z.string(), status: z.string() }).partial();
 
 export const task = defineContract("taskService", {
   entity: taskSchema,
@@ -1045,10 +1255,12 @@ export const task = defineContract("taskService", {
       getMany: true,
       list: { item: cardSchema, filter: ["projectId", "status"], sort: ["ordinal", "title"] },
       create: { input: newTaskSchema },
-      update: { input: taskPatch }, // the kit adds `id`
+      // the kit adds `id`
+      update: { input: taskPatch },
       delete: true,
       reorder: { column: "ordinal", within: "projectId" },
-      bulkUpdate: { input: taskPatch }, // the kit adds `ids`
+      // the kit adds `ids`
+      bulkUpdate: { input: taskPatch },
       bulkDelete: true,
     }),
     archive: mutation({ input: z.object({ id: z.string() }), output: "entity" }),
@@ -1202,7 +1414,8 @@ export const task = defineContract("taskService", {
     // looks in title and notes; a call may keep to one scope of byProject
     ...search.contract({
       entity: taskSchema,
-      item: cardSchema, // a scoped search's results are its collection's items
+      // a scoped search's results are its collection's items
+      item: cardSchema,
       fields: ["title", "notes"],
       scope: "byProject",
     }),
@@ -1440,7 +1653,8 @@ import { admin, defineContract } from "@fitzzero/quickdraw-core";
 import { taskSchema } from "../schemas";
 
 export const task = defineContract("taskService", {
-  entity: taskSchema, // Zod 4.2 or later: the fields come from its JSON Schema
+  // Zod 4.2 or later: the fields come from its JSON Schema
+  entity: taskSchema,
   methods: {
     // adminList, adminGet, adminCreate, adminUpdate, adminDelete,
     // adminMeta, adminSubscribers, adminReemit; `expose` picks fewer
@@ -1459,8 +1673,10 @@ export const taskService = qd.defineService(task, {
   access: inherit({ from: projectContract, via: "projectId" }),
   methods: {
     ...admin.handlers(task, {
-      displayName: "Tasks", // the default: from the service name
-      hiddenFields: ["notes"], // never shown, returned or written
+      // the default: from the service name
+      displayName: "Tasks",
+      // never shown, returned or written
+      hiddenFields: ["notes"],
       fieldOverrides: { assigneeId: { type: "relation", relationService: "userService" } },
     }),
   },
@@ -1471,7 +1687,8 @@ export const taskService = qd.defineService(task, {
 
 ```tsx
 export function AdminTasks() {
-  const { services } = useAdminServices(qd); // [{ key: "task", serviceName, displayName }]
+  // [{ key: "task", serviceName, displayName }]
+  const { services } = useAdminServices(qd);
   const { data } = qd.task.admin.adminList.useQuery({ page: 1, sort: { field: "title" } });
   const update = qd.task.admin.adminUpdate.useMutation();
   return (
@@ -1563,7 +1780,8 @@ export const task = defineContract("taskService", {
   streams: {
     // one feed per task; a subscriber needs Read on the task, and first gets the latest 50 lines
     logs: { item: logLineSchema, scope: "taskId", seed: 50, access: { entry: "Read" } },
-    load: { item: z.number(), volatile: true, access: "authenticated" }, // one feed for everyone
+    // one feed for everyone
+    load: { item: z.number(), volatile: true, access: "authenticated" },
   },
   channels: {
     // 20 a second per socket; only from a socket subscribed to the task the payload names
@@ -1601,7 +1819,8 @@ export function logLine(taskId: string, line: string): void {
 }
 
 export async function isOnline(userId: string): Promise<boolean> {
-  return await qd.presence.isOnline(userId); // also ctx.presence and server.presence
+  // also ctx.presence and server.presence
+  return await qd.presence.isOnline(userId);
 }
 ```
 
@@ -1619,7 +1838,8 @@ export function TaskRoom({
   const { send, isReady } = qd.task.cursor.useChannel();
   const [lastX, setLastX] = useState(0);
   qd.task.cursorMoved.useEvent((cursor) => setLastX(cursor.x));
-  const here = usePresence(`board:${projectId}`); // user ids, after enterBoard joined the room
+  // user ids, after enterBoard joined the room
+  const here = usePresence(`board:${projectId}`);
   return (
     <div onMouseMove={(event) => isReady && send({ projectId, taskId, x: event.clientX })}>
       <p>{`${String(here.length)} here; a cursor at ${String(lastX)}`}</p>
@@ -1696,25 +1916,32 @@ import {
 } from "@fitzzero/quickdraw-core/server/auth";
 import { createCallLimiter } from "@fitzzero/quickdraw-core/server/express";
 
-const allowedOrigins = [env.CLIENT_URL]; // the web app's origins: one list for both
-const sessions = createMemorySessionStore(); // in production: a store over your database (below)
+// the web app's origins: one list for both
+const allowedOrigins = [env.CLIENT_URL];
+// in production: a store over your database (below)
+const sessions = createMemorySessionStore();
 
 export const app: Express = express();
-app.set("trust proxy", 1); // behind a proxy, so the rate limits see the client's IP
+// behind a proxy, so the rate limits see the client's IP
+app.set("trust proxy", 1);
 // a web app on another origin also needs CORS with credentials on these routes
 app.use(
   createAuthRoutes({
     providers: [
       google({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }),
       discord({ clientId: env.DISCORD_CLIENT_ID, clientSecret: env.DISCORD_CLIENT_SECRET }),
-      mock({ listUsers: listSeededUsers }), // served only while isMockOAuthEnabled()
+      // served only while isMockOAuthEnabled()
+      mock({ listUsers: listSeededUsers }),
       guest({ createUser: (input) => createGuestUser(input) }),
     ],
     sessions,
-    jwtSecret: env.JWT_SECRET, // 32 characters or more
-    onLogin: (profile) => upsertUser(profile), // the user's id, or null to refuse
+    // 32 characters or more
+    jwtSecret: env.JWT_SECRET,
+    // the user's id, or null to refuse
+    onLogin: (profile) => upsertUser(profile),
     allowedOrigins,
-    publicUrl: env.API_URL, // redirect URIs: {publicUrl}/auth/{provider}/callback
+    // redirect URIs: {publicUrl}/auth/{provider}/callback
+    publicUrl: env.API_URL,
     successPath: "/auth/callback",
     errorPath: "/auth/login",
     // a revoked session's open sockets: logout ends its own, logout-all every one of the user
@@ -1736,7 +1963,8 @@ export const server = qd.createServer({
     }),
     loadServiceAccess: (userId) => loadGrants(userId),
   },
-  http: { rateLimit: createCallLimiter() }, // the HTTP transport has no limit of its own
+  // the HTTP transport has no limit of its own
+  http: { rateLimit: createCallLimiter() },
 });
 ```
 
@@ -2138,7 +2366,8 @@ export const server = qd.createServer({
   app,
   services,
   db,
-  stallWatchdog: true, // warns when the event loop's p99 delay passes 200 ms
+  // warns when the event loop's p99 delay passes 200 ms
+  stallWatchdog: true,
   onCall: otelOnCall({ meter: metrics.getMeter("api"), tracer: trace.getTracer("api") }),
 });
 ```

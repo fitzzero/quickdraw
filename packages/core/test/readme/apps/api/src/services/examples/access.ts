@@ -27,9 +27,11 @@ const task = defineContract("taskService", {
 import { anyOf, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
 
 export const projectService = qd.defineService(project, {
-  model: "project", // the Prisma model the rows live in
+  // the Prisma model the rows live in
+  model: "project",
   access: anyOf(
-    jsonAcl("acl", { owner: "ownerId" }), // [{ userId, level }] plus Admin for the owner
+    // [{ userId, level }] plus Admin for the owner
+    jsonAcl("acl", { owner: "ownerId" }),
     members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),
   ),
   methods: {
@@ -42,7 +44,8 @@ export const projectService = qd.defineService(project, {
 
 export const taskService = qd.defineService(task, {
   model: "task",
-  access: inherit({ from: project, via: "projectId" }), // the level on the task's project
+  // the level on the task's project
+  access: inherit({ from: project, via: "projectId" }),
   methods: {
     rename: {
       access: { entry: "Moderate" },

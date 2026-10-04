@@ -12,7 +12,8 @@ export async function TasksPage({ projectId, cookie }: { projectId: string; cook
   // forwards the user's session cookie to the API's HTTP transport
   const caller = createServerCaller(contracts, { url: "http://api:4000", headers: { cookie } });
   const queryClient = new QueryClient();
-  await caller.task.countOnBoard.prefetch(queryClient, { projectId }); // the key useQuery reads
+  // the key useQuery reads
+  await caller.task.countOnBoard.prefetch(queryClient, { projectId });
   return (
     <HydrationBoundary state={dehydrate(queryClient)}>
       <TaskBoard projectId={projectId} />
