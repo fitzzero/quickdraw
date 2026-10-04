@@ -114,6 +114,8 @@ bun run build          # turbo: tsup → packages/core/dist/ (ESM + d.ts + sourc
 bun run typecheck      # turbo: tsgo --noEmit per package (core: src + tests, then test/readme)
 bun run lint           # turbo: oxlint -c ../../.oxlintrc.json per package (core: src test)
 bun run test           # turbo: vitest run per package; node --test for packages/skills
+                       #   (the two-node cluster suite is separate: `bun run test:cluster` in
+                       #   packages/core, QD_CLUSTER=1, Valkey from test/cluster/docker-compose.yml)
 bun run format         # oxfmt --write . (repo-wide, not through turbo)
 bun run format:check   # oxfmt --check . (repo-wide)
 ```
