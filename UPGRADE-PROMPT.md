@@ -63,15 +63,19 @@ and says what to do. Work through it in this order, one commit per step:
    schema, and check each method's kind (a query only reads).
 2. **Access** (`[access]`, `[access-override]`): decide each `"authenticated"`
    form (4.x let every signed-in user call a `"Read"` method that named no
-   row), and port each `checkAccess` or `checkEntryACL` override into the
+   row) and each `rowless: true` (a `"Public"` method that named a row: keep
+   it for a lookup open to anyone, else give the method an `entry` form),
+   and port each `checkAccess` or `checkEntryACL` override into the
    service's `access` policy (`owner`, `jsonAcl`, `members`, `inherit`,
    `anyOf`, `resolver`).
 3. **Emits** (`[emit]`, `[write]`, `[raw-sql]`, `[lifecycle]`, `[collection]`,
-   `[projection]`, `[admin]`): write through `db` instead of
+   `[projection]`, `[admin]`, `[kit]`): write through `db` instead of
    `this.create/update/delete`, declare each 4.x collection in its contract
    (boards with `index` and `views`; `MIGRATION.md`, "Boards"), then delete
    the hand emits; turn `toDto` and protected fields into projections and
-   `fields`; replace `installAdminMethods` with the admin kit.
+   `fields`; replace `installAdminMethods` with the admin kit, and move each
+   method a kit implements to its kit (or keep it with a
+   `// quickdraw: hand-written because <reason>` comment above it).
 4. **Client** (`[client]`): declare the collections the web app reads, settle
    the hook options 5.0 dropped (`invalidateOn` becomes a contract `watch`),
    and replace the 4.x `QuickdrawProvider` props.
@@ -88,7 +92,8 @@ remain.
 ## 4. Check
 
 - `oxlint`: `no-v4-api` names every 4.x API that is left, with its
-  replacement; `no-todo-schema` every placeholder.
+  replacement; `no-todo-schema` every placeholder; `prefer-kit` every
+  hand-written method a kit implements that does not say why.
 - The typecheck: the codemod's output typechecks against 5.0 apart from what
   its markers cover, so what fails is the work that is left.
 - The tests, and the app itself: sign in, open a board, change a row from a

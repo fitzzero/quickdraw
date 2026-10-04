@@ -692,6 +692,16 @@ export const taskService = qd.defineService(task, {
   `custom(fn)`. Without a principal every form but `"public"` answers
   `UNAUTHENTICATED`; a principal that fails gets `FORBIDDEN`. The levels,
   lowest first, are `Public`, `Read`, `Moderate` and `Admin`.
+- On a service with a policy, a method whose input has `id` under a form
+  that checks no row (`"public"`, `"authenticated"`, `{ service: L }` below
+  `Admin`) would let anyone that form admits reach any row by its id, so
+  `defineService` refuses it, naming the method and the two ways out: a form
+  the policy decides (`{ entry: L }`, or `{ service: L, entry: L }` to keep
+  the grant), or `rowless: true` on the method when every such caller may
+  reach any row on purpose (the `title` method above; public profiles,
+  lookups by an id that tells nothing). A kit's methods take it as
+  `rowless: ["get"]` in the kit's options. The input's keys come from its
+  JSON Schema, so an input without one (Zod 3) is not checked.
 - A service-wide `Admin` grant passes every check on its service
   (`adminBypass: false` turns that off). A grant below `Admin` counts only
   where the form names `service`: a `Read` grant does not read every row.
@@ -1224,7 +1234,11 @@ the hooks do.
 
 The methods most services write by hand, as one-line opt-ins (design:
 section 12). Each kit's contract half comes from the package root and makes
-ordinary contract entries; its handlers come from `./server`.
+ordinary contract entries; its handlers come from `./server`. Lint's
+`prefer-kit` reports a method written by hand that a kit implements (`get`,
+`list`, `create`, `getTask`, ...) in a service that uses no kit; one that
+must stay hand-written says why in a `// quickdraw: hand-written because ...`
+comment above it.
 
 ### Read/write kit
 
@@ -2263,6 +2277,7 @@ one format and names the method call it happened in:
 | `ambient-write`      | a tracked write ran outside any unit of work                                                         |
 | `batch-read`         | a write in an array-form `$transaction` read its rows outside the batch                              |
 | `batch-create-many`  | a `createMany` in an array-form `$transaction` could not report its rows                             |
+| `repeated-call`      | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                 |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
@@ -2281,6 +2296,20 @@ once the reply was recorded (over a socket or HTTP the reply was already
 sent, so that error is logged, not thrown). Strictness belongs to the app:
 warnings outside its calls (an ambient write while seeding, another app's
 calls) are logged as usual, and `app.close()` ends it.
+
+A `repeated-call` warning names a client caught in a loop (a mutation fired
+from an effect that its own result runs again, a refetch that triggers
+itself) before the socket's rate limit answers `RATE_LIMITED` without saying
+why: when one connection (a socket, an MCP session) calls a method with the
+same input more than 10 times within a second, once per connection, service
+and method; and when one is refused `RATE_LIMITED` more than 30 times within
+a minute, once per connection. Calls without a connection (in-process,
+HTTP) are not counted.
+The client names the same loops from its side, in development, with the
+same format: `repeated-mutation` when one `useMutation` issues its mutation
+more than 5 times within a second (with the component that holds it), and
+`repeated-invalidation` when a query key is invalidated more than 20 times
+within a second.
 
 ### Components
 
@@ -2416,8 +2445,16 @@ nothing. Run `--check` in CI next to the lint step.
 config every 5.0 app extends: it reports untracked and foreign writes, nested
 and raw SQL writes, hand-sent frames, inline auth guards, unbounded reads,
 database calls and emits in loops, layering breaks, bypasses of the typed
-client, and every removed 4.x API with its replacement. Each rule supports a
-baseline, so an app can adopt it before fixing old code.
+client, hand-written copies of kit methods (`prefer-kit`, a warning), and
+every removed 4.x API with its replacement. Each rule supports a baseline,
+so an app can adopt it before fixing old code.
+
+The guards follow one order of preference, so an agent moving fast meets a
+mistake as early as it can be caught: a type error; then a refusal when the
+service is defined (an access form that checks no row on a method that
+takes an `id`, unless it says `rowless: true`); then lint; then a
+development warning as it happens (`repeated-call`, `repeated-mutation` and
+`repeated-invalidation` name a client loop before the rate limit does).
 
 [`@fitzzero/quickdraw-skills`](../../packages/skills) ships agent rules and skills
 for quickdraw apps and links them into `.claude/` with

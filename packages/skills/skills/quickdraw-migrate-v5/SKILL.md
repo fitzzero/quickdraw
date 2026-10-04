@@ -50,14 +50,17 @@ you to them.
    1. **Contracts** (`[contract]`): real schemas for the entity and each
       `todoSchema`; check each method's kind (chosen from its name).
    2. **Access** (`[access]`, `[access-override]`): decide the
-      `"authenticated"` forms; port `checkAccess`/`checkEntryACL` overrides
-      into the service's policy (`owner`, `jsonAcl`, `members`, `inherit`,
-      `anyOf`, `resolver`).
+      `"authenticated"` forms and the `rowless: true` flags (keep one only
+      for a lookup open to anyone; else an `entry` form); port
+      `checkAccess`/`checkEntryACL` overrides into the service's policy
+      (`owner`, `jsonAcl`, `members`, `inherit`, `anyOf`, `resolver`).
    3. **Emits** (`[emit]`, `[write]`, `[raw-sql]`, `[lifecycle]`,
-      `[collection]`, `[projection]`, `[admin]`): write through `db`, declare
-      the collections (boards: `index`, `views`, `useCollection`; never a fat
-      query with `watch`), delete the hand emits, turn `toDto` and protected
-      fields into projections and `fields`, use the admin kit.
+      `[collection]`, `[projection]`, `[admin]`, `[kit]`): write through
+      `db`, declare the collections (boards: `index`, `views`,
+      `useCollection`; never a fat query with `watch`), delete the hand
+      emits, turn `toDto` and protected fields into projections and
+      `fields`, use the admin kit, and move each method a kit implements to
+      its kit (or keep it with `// quickdraw: hand-written because ...`).
    4. **Client** (`[client]`): declare the collections the web app reads,
       settle dropped hook options (`invalidateOn` becomes `watch`), replace
       the 4.x `QuickdrawProvider` props.
@@ -70,9 +73,9 @@ you to them.
    it changes no code a second time and rewrites the report from the markers
    left.
 5. **Check**: `oxlint` (`no-v4-api` lists every 4.x API left, with its
-   replacement; `no-todo-schema` every placeholder), the typecheck, the
-   tests, and the running app (a change from a second session arrives
-   live).
+   replacement; `no-todo-schema` every placeholder; `prefer-kit` every
+   hand-written method a kit implements), the typecheck, the tests, and the
+   running app (a change from a second session arrives live).
 
 Done when the report says nothing is left to review and lint, the
 typecheck and the tests are clean.

@@ -155,6 +155,19 @@ gets the policy the forms need: `jsonAcl("acl")` for `hasEntryACL: true`
 overrode `checkAccess` or `checkEntryACL`, which grants no row until you
 port the override.
 
+5.0 refuses, when a service with an access policy is defined, a method
+whose input has `id` under a form that checks no row (`"public"`,
+`"authenticated"`, `{ service: L }` below `Admin`): anyone the form admits
+would reach any row by its id. A 4.x `"Public"` method that named a row is
+that shape, and 4.x did let everyone call it, so the codemod writes
+`rowless: true` beside its `"public"`, marked: the method still admits
+exactly the 4.x callers, and the marker asks whether a lookup open to
+anyone was meant. Keep `rowless: true` when it was (a public profile, a
+lookup by an id that tells nothing); otherwise drop the flag and give the
+method an `entry` form. An input that has no JSON Schema yet (a Zod 3 schema,
+a `todoSchema`) is not checked, so the refusal can first appear when the
+schema moves to Zod 4: it names the method and both ways out.
+
 `jsonAcl` keeps 4.x's semantics but one: a user with several entries in a
 row's list gets the highest of their levels, where 4.x's `checkEntryACL`
 took the first entry (`[{ userId: "u1", level: "Read" }, { userId: "u1",
@@ -170,8 +183,8 @@ In this order, because each step leans on the one before:
    `no-todo-schema` lists them), give the entity a schema, and check each
    method's kind: a query can be shared, cached and refetched; a mutation
    cannot.
-2. **Access.** Decide the `"authenticated"` forms, and port each access
-   override into the service's policy.
+2. **Access.** Decide the `"authenticated"` forms and the `rowless`
+   flags, and port each access override into the service's policy.
 3. **Emits.** Delete the hand emits once the writes go through `db` and the
    collections are declared; replace `this.create/update/delete` and the
    lifecycle hooks.
@@ -1380,8 +1393,12 @@ so ship the clients soon after the server.
 }
 ```
 
-`no-v4-api` reports every 4.x API that is left, with its replacement, and
-`no-todo-schema` every placeholder schema. `quickdraw-lint baseline` writes
+`no-v4-api` reports every 4.x API that is left, with its replacement,
+`no-todo-schema` every placeholder schema, and `prefer-kit` (a warning)
+every migrated method a kit implements (`getProject`, `listTasks`, ...;
+the report lists them under "Methods a kit implements"): move it to the
+kit, or keep it with a `// quickdraw: hand-written because <reason>`
+comment above it. `quickdraw-lint baseline` writes
 a baseline file, so the rules can be adopted before every old violation is
 fixed. The 4.x rules were removed (oxlint refuses a config that names them):
 
