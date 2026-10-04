@@ -45,6 +45,7 @@ export const userService = qd.defineService(userContract, {
         return user ? toDto(user) : null;
       },
     },
+    // quickdraw-migrate: review [kit] updateUser has the shape of the read/write kit's update, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
     updateUser: {
       access: { service: "Read", entry: "Read", id: "id" },
       handler: async ({ input, ctx, db }) => {

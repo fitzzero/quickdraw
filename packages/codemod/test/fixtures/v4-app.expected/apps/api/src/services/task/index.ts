@@ -16,6 +16,7 @@ export const taskService = qd.defineService(taskContract, {
     // quickdraw-migrate: review [kit] listTasks has the shape of the read/write kit's list, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
     listTasks,
     reindexProject,
+    // quickdraw-migrate: review [kit] updateTask has the shape of the read/write kit's update, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
     updateTask,
     moveTask,
   },

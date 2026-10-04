@@ -75,6 +75,67 @@ run("prefer-kit", {
         listTasks: ${LIST},
       `),
     },
+    {
+      name: "a model the rule cannot read: a let, a const of a call, a parameter",
+      filename: SERVICE,
+      code: `
+        let mutable = "task";
+        const computed = modelFor("task");
+        const { named } = { named: "task" };
+        export const a = qd.defineService(c, { model: mutable, methods: { get: ${GET} } });
+        export const b = qd.defineService(c, { model: computed, methods: { get: ${GET} } });
+        export const d = qd.defineService(c, { model: named, methods: { get: ${GET} } });
+        export function make(model) {
+          return qd.defineService(c, { model, methods: { get: ${GET} } });
+        }
+      `,
+    },
+    // kits spread through a variable or a call
+    {
+      name: "a kit bound to a const and spread by name",
+      filename: SERVICE,
+      code: `
+        const taskCrud = crud.handlers(contract, { access: { list: "authenticated" } });
+        export const s = qd.defineService(contract, {
+          model: "task",
+          methods: { ...taskCrud, search: ${LIST}, getTask: ${GET} },
+        });
+      `,
+    },
+    {
+      name: "a spread the rule cannot see into: an import, a parameter, another call",
+      filename: SERVICE,
+      code: `
+        import { handlers } from "./kit";
+        export const a = qd.defineService(c, { model: "task", methods: { ...handlers, get: ${GET} } });
+        export function make(crudHandlers) {
+          return qd.defineService(c, { model: "task", methods: { ...crudHandlers, list: ${LIST} } });
+        }
+        export const b = qd.defineService(c, { model: "task", methods: { ...taskKit(c), get: ${GET} } });
+        const { crudKit } = { crudKit: {} };
+        export const d = qd.defineService(c, { model: "task", methods: { ...crudKit, get: ${GET} } });
+      `,
+    },
+    {
+      name: "a const object that spreads a kit",
+      filename: SERVICE,
+      code: `
+        const kits = { ...crud.handlers(contract, { access: {} }), ...search.handlers(contract) };
+        export const s = qd.defineService(contract, { model: "task", methods: { ...kits, get: ${GET} } });
+      `,
+    },
+    // wrapped methods
+    {
+      name: "a call wrapping a kit's member, or building a method from a name",
+      filename: SERVICE,
+      code: service(`get: withAudit(taskKit.get), list: makeList(contract), create: makeCreate()`),
+    },
+    // remove
+    {
+      name: "remove on a service of its own rows deletes one of them",
+      filename: SERVICE,
+      code: service(`remove: ${GET}, rename: ${GET}, leave: ${GET}`),
+    },
     // the search kit
     {
       name: "a search beside the search kit's handlers",
@@ -194,6 +255,60 @@ run("prefer-kit", {
       `,
       errors: [{ messageId: "preferKit", line: 3 }],
     },
+    {
+      name: "updateTask and deleteTask for model task",
+      filename: SERVICE,
+      code: service(`updateTask: ${CREATE}, deleteTask: ${GET}, removeTask: ${GET}`),
+      errors: [
+        {
+          message:
+            "`updateTask` is written by hand, and the read/write kit's `update` implements it: `...crud.handlers(contract, { access })` (with `crud.contract` in the contract) checks access on every row it touches, pages and stays live. " +
+            "Use the kit, or, if this method must be hand-written, say why in a `// quickdraw: hand-written because ...` comment above it.",
+        },
+        {
+          message:
+            "`deleteTask` is written by hand, and the read/write kit's `delete` implements it: `...crud.handlers(contract, { access })` (with `crud.contract` in the contract) checks access on every row it touches, pages and stays live. " +
+            "Use the kit, or, if this method must be hand-written, say why in a `// quickdraw: hand-written because ...` comment above it.",
+        },
+      ],
+    },
+    {
+      name: "a model given as a const of a string in the file",
+      filename: SERVICE,
+      code: `
+        const MODEL = "task";
+        const CATEGORY = \`category\`;
+        export const a = qd.defineService(c, { model: MODEL, methods: { get: ${GET}, getTask: ${GET} } });
+        export const b = qd.defineService(c, { model: CATEGORY, methods: { listCategories: ${LIST} } });
+      `,
+      errors: [
+        { messageId: "preferKit", line: 4 },
+        { messageId: "preferKit", line: 4 },
+        { messageId: "preferKit", line: 5 },
+      ],
+    },
+    // spreads that are not a kit
+    {
+      name: "a const object of hand-written methods is no kit",
+      filename: SERVICE,
+      code: `
+        const extra = { rename: ${GET} };
+        const more = { ...extra };
+        export const s = qd.defineService(contract, { model: "task", methods: { ...more, get: ${GET} } });
+      `,
+      errors: [{ messageId: "preferKit", line: 4 }],
+    },
+    // wrapped methods
+    {
+      name: "a method wrapped in a call, through nested calls",
+      filename: SERVICE,
+      code: service(`
+        get: withAudit(${GET}),
+        list: withLogging(async ({ input, db }) => db.task.findMany({ take: 50 })),
+        create: audit("task", withLogging(${CREATE})),
+      `),
+      errors: [{ messageId: "preferKit" }, { messageId: "preferKit" }, { messageId: "preferKit" }],
+    },
     // the search kit
     {
       name: "a hand-written search",
@@ -242,6 +357,26 @@ run("prefer-kit", {
       filename: SERVICE,
       code: service(`invite: ${CREATE}, remove: ${GET}`, "project"),
       errors: [{ messageId: "preferKit" }, { messageId: "preferKit" }],
+    },
+    {
+      name: "remove beside another sharing method, or on a membership model",
+      filename: SERVICE,
+      code: `
+        export const a = qd.defineService(c, { model: "project", methods: { listMembers: ${LIST}, remove: ${GET} } });
+        export const b = qd.defineService(c, { model: "projectMember", methods: { remove: ${GET} } });
+        export const d = qd.defineService(c, { model: "membership", methods: { remove: ${GET} } });
+      `,
+      errors: [
+        { messageId: "preferKit", line: 2 },
+        {
+          line: 2,
+          message:
+            "`remove` is written by hand, and the sharing kit's `remove` implements it: `...sharing.handlers(contract)` (with `sharing.contract` in the contract) checks access on every row it touches, pages and stays live. " +
+            "Use the kit, or, if this method must be hand-written, say why in a `// quickdraw: hand-written because ...` comment above it.",
+        },
+        { messageId: "preferKit", line: 3 },
+        { messageId: "preferKit", line: 4 },
+      ],
     },
     {
       name: "a by-name invite",

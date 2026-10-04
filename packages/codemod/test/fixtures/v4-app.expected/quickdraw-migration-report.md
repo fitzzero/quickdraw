@@ -2,7 +2,7 @@
 
 Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review` markers in the code; running the codemod again rewrites it from the markers that remain. Work through the sections in order (contracts, access, emits, client), delete each marker once its item is done, and see the migration guide (`MIGRATION.md`, shipped in `@fitzzero/quickdraw-codemod`) for each kind of item. Then run lint (`no-v4-api` names every 4.x API left, `no-todo-schema` every placeholder) and the typecheck.
 
-102 items in 27 files.
+105 items in 27 files.
 
 | Section | Items |
 | --- | ---: |
@@ -16,7 +16,7 @@ Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review`
 | Raw SQL writes to record with ctx.touch | 1 |
 | Lifecycle hooks | 1 |
 | installAdminMethods to replace with the admin kit | 1 |
-| Methods a kit implements | 6 |
+| Methods a kit implements | 9 |
 | Service instance state and the 4.x context | 1 |
 | Client | 11 |
 | Server wiring and other 4.x APIs | 21 |
@@ -65,7 +65,7 @@ The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 
 - [ ] `apps/api/src/services/task/methods/create-task.ts:9` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/task/methods/queries.ts:6` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/user.ts:40` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
-- [ ] `apps/api/src/services/user.ts:73` this method takes an id but its access "public" checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant
+- [ ] `apps/api/src/services/user.ts:74` this method takes an id but its access "public" checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant
 
 ## Access overrides to turn into a policy
 
@@ -99,13 +99,13 @@ A 4.x `defineCollection` becomes a contract collection (`scope`, `item`, `order`
 
 - [ ] `apps/api/src/services/project.ts:69` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
 - [ ] `apps/api/src/services/project.ts:147` room event: declare it in the contract's events and send it with ctx.rooms.emit(room, contract, event, payload)
-- [ ] `apps/api/src/services/project.ts:161` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
+- [ ] `apps/api/src/services/project.ts:162` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
 - [ ] `apps/api/src/services/task/methods/create-task.ts:18` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
 - [ ] `apps/api/src/services/task/methods/queries.ts:28` hand emit: send a reset with qd.collections.reset(contract, collection, scope), if one is still needed
 - [ ] `apps/api/src/services/task/methods/update-task.ts:12` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
 - [ ] `apps/api/src/services/task/methods/update-task.ts:25` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
 - [ ] `apps/api/src/services/task/methods/update-task.ts:27` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
-- [ ] `apps/api/src/services/user.ts:61` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
+- [ ] `apps/api/src/services/user.ts:62` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
 
 ## this.create, this.update and this.delete to write through db
 
@@ -114,7 +114,7 @@ The 4.x CRUD helpers also emitted and ran lifecycle hooks; `db.<model>` writes a
 - [ ] `apps/api/src/services/project.ts:102` 4.x CRUD helper this.create: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.create(...) instead (frames follow the tracked write; hooks do not run; db.create throws on failure)
 - [ ] `apps/api/src/services/project.ts:123` 4.x CRUD helper this.update: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.update(...) instead (frames follow the tracked write; hooks do not run; 4.x returned null for a missing row where db.update throws NOT_FOUND)
 - [ ] `apps/api/src/services/project.ts:145` 4.x CRUD helper this.update: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.update(...) instead (frames follow the tracked write; hooks do not run; 4.x returned null for a missing row where db.update throws NOT_FOUND)
-- [ ] `apps/api/src/services/project.ts:157` 4.x CRUD helper this.delete: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.delete(...) instead (frames follow the tracked write; hooks do not run; 4.x returned false for a missing row where db.delete throws NOT_FOUND)
+- [ ] `apps/api/src/services/project.ts:158` 4.x CRUD helper this.delete: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.delete(...) instead (frames follow the tracked write; hooks do not run; 4.x returned false for a missing row where db.delete throws NOT_FOUND)
 
 ## Raw SQL writes to record with ctx.touch
 
@@ -142,8 +142,11 @@ Methods of a kit method's shape (`get`, `list`, `create`, `getTask`, ...): the k
 - [ ] `apps/api/src/services/label.ts:25` listLabels has the shape of the read/write kit's list, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/project.ts:97` createProject has the shape of the read/write kit's create, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/project.ts:111` getProject has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/project.ts:154` deleteProject has the shape of the read/write kit's delete, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/task/index.ts:14` createTask has the shape of the read/write kit's create, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/task/index.ts:16` listTasks has the shape of the read/write kit's list, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/task/index.ts:19` updateTask has the shape of the read/write kit's update, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/user.ts:48` updateUser has the shape of the read/write kit's update, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 
 ## Service instance state and the 4.x context
 

@@ -3,9 +3,12 @@
 // the two in step): a kit method's own name (`get`, `list`, `create`,
 // `search`, `share`, `adminList`, ...), or a name the service's model forms
 // the way a hand-written kit method does (`getTask`, `listTasks`,
-// `createTask` for model `"task"`). A migrated method of that shape gets a
-// marker: the kit checks access on every row it touches, pages and stays
-// live, and lint warns until the method is replaced or says why it is not.
+// `createTask`, `updateTask`, `deleteTask` for model `"task"`). `remove` is
+// the sharing kit's only on a membership model (`projectMember`) or beside
+// another sharing method (`share`, `invite`, `listMembers`, ...). A migrated
+// method of that shape gets a marker: the kit checks access on every row it
+// touches, pages and stays live, and lint warns until the method is replaced
+// or says why it is not.
 
 import { markerText } from "./markers";
 
@@ -47,6 +50,16 @@ const KIT_METHODS = new Map<string, Kit>([
   ),
 ]);
 
+/** The sharing kit's other methods: beside one of them, `remove` removes a member. */
+const SHARING_SIBLINGS = new Set(
+  [...KIT_METHODS]
+    .filter(([name, kit]) => kit === SHARING && name !== "remove")
+    .map(([name]) => name),
+);
+
+/** A model of member rows (`member`, `projectMember`, `membership`): its `remove` removes a member. */
+const MEMBERSHIP_MODEL = /member/iu;
+
 function capitalized(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
@@ -59,12 +72,23 @@ function plural(word: string): string {
   return /(?:s|x|z|ch|sh)$/u.test(word) ? `${word}es` : `${word}s`;
 }
 
-/** The kit method `name` has the shape of, on a service of `model`; `undefined` for none. */
+/**
+ * The kit method `name` has the shape of, on a service of `model` whose
+ * methods are named `methods`; `undefined` for none.
+ */
 export function kitShapeOf(
   name: string,
   model: string | undefined,
+  methods: readonly string[] = [],
 ): { readonly method: string; readonly kit: string; readonly use: string } | undefined {
   if (model === undefined) {
+    return undefined;
+  }
+  if (
+    name === "remove" &&
+    !MEMBERSHIP_MODEL.test(model) &&
+    !methods.some((method) => SHARING_SIBLINGS.has(method))
+  ) {
     return undefined;
   }
   const kit = KIT_METHODS.get(name);
@@ -75,14 +99,23 @@ export function kitShapeOf(
     [`get${capitalized(model)}`, "get"],
     [`list${capitalized(plural(model))}`, "list"],
     [`create${capitalized(model)}`, "create"],
+    [`update${capitalized(model)}`, "update"],
+    [`delete${capitalized(model)}`, "delete"],
   ]);
   const method = shapes.get(name);
   return method === undefined ? undefined : { method, ...CRUD };
 }
 
-/** The marker above a migrated method of a kit method's shape, with its line break; `""` for any other. */
-export function kitMarker(name: string, model: string | undefined): string {
-  const shape = kitShapeOf(name, model);
+/**
+ * The marker above a migrated method of a kit method's shape, on a service
+ * whose methods are named `methods`, with its line break; `""` for any other.
+ */
+export function kitMarker(
+  name: string,
+  model: string | undefined,
+  methods: readonly string[],
+): string {
+  const shape = kitShapeOf(name, model, methods);
   if (shape === undefined) {
     return "";
   }

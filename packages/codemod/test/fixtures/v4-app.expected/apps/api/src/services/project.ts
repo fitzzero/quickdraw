@@ -151,6 +151,7 @@ export const projectService = qd.defineService(projectContract, {
         return { id: input.id, archived: true as const };
       },
     },
+    // quickdraw-migrate: review [kit] deleteProject has the shape of the read/write kit's delete, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
     deleteProject: {
       access: { service: "Admin", entry: "Admin", id: "id" },
       handler: async ({ input, ctx }) => {

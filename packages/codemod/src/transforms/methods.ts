@@ -50,6 +50,7 @@ export function buildMethods(
     anyEntry: false,
   };
   const leafFile = plan.service.chain[0]?.getSourceFile();
+  const names = plan.methods.map((method) => method.name);
   for (const method of plan.methods) {
     const { call } = method;
     const form = accessFor(call.level, call.levelText, {
@@ -66,7 +67,7 @@ export function buildMethods(
       inHandler: true,
     });
     ctx.stats.methods += 1;
-    const kit = kitMarker(method.name, plan.service.model);
+    const kit = kitMarker(method.name, plan.service.model, names);
     if (call.register === undefined) {
       build.inline.push(`${kit}${method.name}: ${entry.text},`);
       if (leafFile !== undefined) {

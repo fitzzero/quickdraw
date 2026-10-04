@@ -269,7 +269,10 @@ describe("the report", () => {
     const listed = section("Methods a kit implements");
     expect(
       listed.map((line) => /^- \[ \] `[^`]+` (\w+) has the shape of/u.exec(line)?.[1]),
-    ).toEqual(["getLabel", "listLabels", "createProject", "getProject", "createTask", "listTasks"]);
+    ).toEqual([
+      ...["getLabel", "listLabels", "createProject", "getProject", "deleteProject"],
+      ...["createTask", "listTasks", "updateTask", "updateUser"],
+    ]);
     for (const line of listed) {
       const name = /^- \[ \] `[^`]+` (\w+)/u.exec(line)?.[1] ?? "";
       expect(codeAt(line)).toMatch(new RegExp(`^\\s*${name}[:,]`, "u"));
@@ -284,14 +287,24 @@ describe("the kit shapes", () => {
       ...["bulkDelete", "search", "share", "shareByName", "unshare", "listShares", "invite"],
       ...["inviteByName", "remove", "listMembers", "leave", "setRole", "setLevel"],
       ...["adminList", "adminGet", "adminCreate", "adminUpdate", "adminDelete", "adminMeta"],
-      ...["getTask", "listTasks", "createTask", "updateTask", "getProject", "listCategories"],
+      ...["getTask", "listTasks", "createTask", "updateTask", "deleteTask", "removeTask"],
+      ...["getProject", "listCategories", "deleteCategory", "updateProjectMember"],
       ...["listAddresses", "listTaskes", "getCategory", "rename", "getMe", "find"],
     ];
-    for (const model of ["task", "category", "address", undefined]) {
-      for (const name of names) {
-        const lint = model === undefined ? undefined : preferKit(name, model);
-        expect(kitShapeOf(name, model)?.method, `${name} on ${String(model)}`).toBe(lint?.method);
+    const models = ["task", "category", "address", "projectMember", "membership", undefined];
+    const siblings = [[], ["rename", "leave"], ["share"], ["invite"], ["listMembers"]];
+    for (const model of models) {
+      for (const methods of siblings) {
+        for (const name of names) {
+          const lint = model === undefined ? undefined : preferKit(name, model, methods);
+          const label = `${name} on ${String(model)} beside ${methods.join(", ")}`;
+          expect(kitShapeOf(name, model, methods)?.method, label).toBe(lint?.method);
+        }
       }
     }
+    expect(kitShapeOf("remove", "task")).toBeUndefined();
+    expect(kitShapeOf("remove", "task", ["invite"])?.method).toBe("remove");
+    expect(kitShapeOf("remove", "projectMember")?.method).toBe("remove");
+    expect(kitShapeOf("deleteTask", "task")?.method).toBe("delete");
   });
 });
