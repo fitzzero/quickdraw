@@ -1,4 +1,3 @@
-import { CLIENT_TIMEOUT_MS, EVENTS } from "../drivers/v4";
 import { summarize } from "../stats";
 import { closeAll, openConnections, SETTLE_MS, sleep, waitForQuiet, type Quiet } from "./shared";
 import type { Scenario } from "./types";
@@ -14,7 +13,8 @@ export const fatRead: Scenario<FatReadParameters> = {
   name: "fat-read",
   description:
     "Clients issue the same getTasksByStatus call (full rows, about 4 KB each) in the same tick, " +
-    "round after round: what the server pays for identical reads it cannot share.",
+    "round after round: what the server pays for identical concurrent reads (4.1 runs each one; 5.0 " +
+    "can share them).",
   parameters: (quick) => ({
     clients: quick ? 5 : 20,
     rounds: quick ? 3 : 10,
@@ -28,15 +28,12 @@ export const fatRead: Scenario<FatReadParameters> = {
       const roundMs: number[] = [];
       let failedRounds = 0;
       let quiet: Quiet = { quiet: false, ms: 0 };
-      const payload = { projectId: ctx.workload.project.id };
+      const projectId = ctx.workload.project.id;
       const measurement = await ctx.measure(async () => {
         for (let round = 0; round < p.rounds; round += 1) {
           const startedAt = performance.now();
           const outcomes = await Promise.all(
-            connections.map(
-              async (connection) =>
-                await connection.request(EVENTS.getTasksByStatus, payload, CLIENT_TIMEOUT_MS),
-            ),
+            connections.map(async (connection) => await connection.readBoard(projectId)),
           );
           roundMs.push(performance.now() - startedAt);
           if (outcomes.some((outcome) => !outcome.ok)) failedRounds += 1;

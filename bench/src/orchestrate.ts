@@ -80,6 +80,7 @@ export async function orchestrate(options: Options): Promise<void> {
     const base: Base = {
       options,
       label: prepared.label,
+      coreVersion: prepared.coreVersion,
       startedAt,
       machine: describeMachine(options.serverCpus),
       runtime: runtimeVersions(),
@@ -90,6 +91,9 @@ export async function orchestrate(options: Options): Promise<void> {
     await writeResult(result, prepared.outputs.json, prepared.outputs.markdown);
     const minutes = (result.totalDurationMs / 60_000).toFixed(1);
     log(`wrote ${prepared.outputs.json} and ${prepared.outputs.markdown} (${minutes} min)`);
+    if (prepared.profileDirectory !== null) {
+      log(`server CPU profiles in ${prepared.profileDirectory}`);
+    }
   } finally {
     await cleanup();
   }

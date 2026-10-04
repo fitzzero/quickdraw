@@ -1,4 +1,4 @@
-import type { LoadResult, Viewer } from "../drivers/v4";
+import type { BoardViewer, LoadResult } from "../drivers/types";
 import { summarize } from "../stats";
 import { closeAll, openViewers, SETTLE_MS, sleep, waitForQuiet, type Quiet } from "./shared";
 import type { Scenario } from "./types";
@@ -17,7 +17,7 @@ interface Restore extends LoadResult {
 }
 
 async function dropAndRestore(
-  viewer: Viewer,
+  viewer: BoardViewer,
   delayMs: number,
   capMs: number,
   t0: number,
@@ -66,6 +66,9 @@ export const reconnectStorm: Scenario<ReconnectStormParameters> = {
       );
       const failed = restores.length - restored.length - capped.length;
       const times = summarize(restored.map((restore) => restore.ms));
+      const live = summarize(
+        restored.flatMap((restore) => (restore.liveMs === undefined ? [] : [restore.liveMs])),
+      );
       const lastRestore = Math.max(0, ...restored.map((restore) => restore.doneAtMs));
       return {
         measurement,
@@ -85,6 +88,8 @@ export const reconnectStorm: Scenario<ReconnectStormParameters> = {
           restoreP95Ms: times.p95,
           restoreP99Ms: times.p99,
           restoreMaxMs: times.max,
+          liveRestoreP50Ms: live.p50,
+          liveRestoreP95Ms: live.p95,
           lastRestoreSeconds: restored.length > 0 ? lastRestore / 1_000 : null,
         },
       };

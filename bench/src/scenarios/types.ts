@@ -1,3 +1,4 @@
+import type { Driver } from "../drivers/types";
 import type { MachineNoise } from "../env/noise";
 import type { RecordedWindow, Recorder } from "../recorder";
 import type { Workload } from "../workload";
@@ -20,11 +21,21 @@ export interface ServerMetrics {
   bytesSent: number;
   bytesReceived: number;
   sqlStatements: number;
-  snapshotsServed: { collection: number; collectionPages: number; entity: number };
+  snapshotsServed: {
+    collection: number;
+    collectionPages: number;
+    entity: number;
+    /** Collection subscriptions answered by a resume instead of a snapshot (5.0). */
+    collectionResumes?: number;
+    /** Entity subscriptions answered "not modified" instead of the row (5.0). */
+    entityNotModified?: number;
+  };
   handlerRuns: Record<string, number>;
   inFlight: number;
   rssPeakMb: number;
   connections: number;
+  /** The most socket listeners any connected socket had; null with none connected. */
+  listenersPerSocket?: number | null;
 }
 
 export interface LoadgenMetrics {
@@ -48,6 +59,8 @@ export interface ScenarioContext {
   tokens: Record<string, string>;
   workload: Workload;
   recorder: Recorder;
+  /** The client of the target under test. */
+  driver: Driver;
   log(message: string): void;
   /** Reset the server's counters, run `work`, then read the client and server numbers. */
   measure(work: () => Promise<void>): Promise<Measurement>;

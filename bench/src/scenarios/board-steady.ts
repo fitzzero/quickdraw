@@ -42,7 +42,7 @@ export const boardSteady: Scenario<BoardSteadyParameters> = {
   name: "board-steady",
   description:
     "Viewers hold the board open (the cardsByProject collection, 60 entity subscriptions and a " +
-    "getTasksByStatus query invalidated by every collection delta) while a writer fleet edits the " +
+    "getTasksByStatus query fetched again whenever the board changes) while a writer fleet edits the " +
     "on-screen cards at a steady rate.",
   parameters: (quick) => ({
     viewers: quick ? 10 : 50,

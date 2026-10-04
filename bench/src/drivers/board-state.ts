@@ -1,5 +1,5 @@
-import { pick, type Rng } from "../../prng";
-import type { TaskStatus, Workload } from "../../workload";
+import { pick, type Rng } from "../prng";
+import type { TaskStatus, Workload } from "../workload";
 
 /**
  * What the writer fleet believes each on-screen card looks like, so a status

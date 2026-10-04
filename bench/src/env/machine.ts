@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { cpus, hostname, loadavg, release, totalmem } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { BENCH_DIR } from "../paths";
 import { textOf } from "./exec";
 
@@ -117,10 +117,19 @@ export function runtimeVersions(): Runtime {
   };
 }
 
-/** The quickdraw-core version an app installs: the label its results are filed under. */
+/**
+ * The quickdraw-core version an app installs, as the app resolves it (the
+ * published 4.1.0 for apps/v4, this workspace's package for apps/v5): the
+ * label its results are filed under unless `--label` names another.
+ */
 export function appCoreVersion(appDirectory: string): string {
-  const path = join(appDirectory, "node_modules", "@fitzzero", "quickdraw-core", "package.json");
-  const version = packageVersion(path);
-  if (!version) throw new Error(`cannot read ${path}; run bun install`);
-  return version;
+  // Node's lookup: the nearest node_modules up from the app (4.1.0 exports no package.json to resolve).
+  for (let dir = appDirectory; ; dir = dirname(dir)) {
+    const version = packageVersion(
+      join(dir, "node_modules", "@fitzzero", "quickdraw-core", "package.json"),
+    );
+    if (version) return version;
+    if (dirname(dir) === dir) break;
+  }
+  throw new Error(`cannot find @fitzzero/quickdraw-core from ${appDirectory}; run bun install`);
 }
