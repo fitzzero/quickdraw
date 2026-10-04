@@ -43,11 +43,21 @@ const serverMetrics = z.object({
   bytesSent: count,
   bytesReceived: count,
   sqlStatements: count,
-  snapshotsServed: z.object({ collection: count, collectionPages: count, entity: count }),
+  snapshotsServed: z.object({
+    collection: count,
+    collectionPages: count,
+    entity: count,
+    /** Collection subscriptions answered by a resume rather than a snapshot (5.0 only). */
+    collectionResumes: count.optional(),
+    /** Entity subscriptions answered "not modified" rather than with the row (5.0 only). */
+    entityNotModified: count.optional(),
+  }),
   handlerRuns: z.record(z.string(), count),
   inFlight: count,
   rssPeakMb: z.number(),
   connections: count,
+  /** The most listeners any connected socket had when the window closed (absent before 5.0's run). */
+  listenersPerSocket: count.nullable().optional(),
 });
 
 const repetition = z.object({

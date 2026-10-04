@@ -25,6 +25,7 @@ export interface ServerMetrics {
   inFlight: number;
   rssPeakMb: number;
   connections: number;
+  listenersPerSocket: number | null;
 }
 
 interface PublicMethod {
@@ -141,7 +142,20 @@ export class Metrics {
       inFlight: this.inFlight,
       rssPeakMb: Math.max(this.rssPeak, process.memoryUsage.rss()) / (1024 * 1024),
       connections: this.io?.engine.clientsCount ?? 0,
+      listenersPerSocket: this.listenersPerSocket(),
     };
+  }
+
+  /** The most listeners any connected socket has (4.1 registers some per method and per service). */
+  private listenersPerSocket(): number | null {
+    let most: number | null = null;
+    for (const socket of this.io?.of("/").sockets.values() ?? []) {
+      const listeners = socket
+        .eventNames()
+        .reduce((sum, name) => sum + socket.listenerCount(name), 0);
+      most = Math.max(most ?? 0, listeners);
+    }
+    return most;
   }
 
   private totalBytes(direction: "sent" | "received"): number {

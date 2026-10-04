@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, openSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { sleep } from "../time";
 import { runOrThrow } from "./exec";
 import { cpusAllowed, sameCpus } from "./machine";
@@ -49,6 +50,28 @@ export interface ServerOptions {
   cpus: string;
   databaseUrl: string;
   logFile: string;
+  /** Write a V8 CPU profile of the server to this directory under this file name. */
+  profile?: { dir: string; name: string };
+}
+
+/** Exits the profiled server on SIGTERM, so Node writes its profile (`exit-on-signal.mjs`). */
+const EXIT_ON_SIGNAL = fileURLToPath(new URL("./exit-on-signal.mjs", import.meta.url));
+
+/** Node's arguments for the server: the profiler's when profiling, then tsx and the entry point. */
+function serverArgs(profile: ServerOptions["profile"]): string[] {
+  const profiling =
+    profile === undefined
+      ? []
+      : [
+          "--cpu-prof",
+          "--cpu-prof-dir",
+          profile.dir,
+          "--cpu-prof-name",
+          profile.name,
+          "--import",
+          EXIT_ON_SIGNAL,
+        ];
+  return [...profiling, "--import", "tsx", "src/server.ts"];
 }
 
 export class AppServer {
@@ -69,21 +92,17 @@ export class AppServer {
   /** Start the server pinned to `cpus` with taskset, and wait for /health. */
   public static async start(options: ServerOptions): Promise<AppServer> {
     const log = openSync(options.logFile, "a");
-    const child = spawn(
-      "taskset",
-      ["-c", options.cpus, "node", "--import", "tsx", "src/server.ts"],
-      {
-        cwd: options.appDir,
-        env: {
-          ...process.env,
-          NODE_ENV: "production",
-          PORT: String(options.port),
-          DATABASE_URL: options.databaseUrl,
-          JWT_SECRET,
-        },
-        stdio: ["ignore", log, log],
+    const child = spawn("taskset", ["-c", options.cpus, "node", ...serverArgs(options.profile)], {
+      cwd: options.appDir,
+      env: {
+        ...process.env,
+        NODE_ENV: "production",
+        PORT: String(options.port),
+        DATABASE_URL: options.databaseUrl,
+        JWT_SECRET,
       },
-    );
+      stdio: ["ignore", log, log],
+    });
     closeSync(log);
     const server = new AppServer(child, `http://127.0.0.1:${options.port}`, options.logFile);
     await server.waitForHealth();

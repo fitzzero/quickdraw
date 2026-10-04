@@ -1,16 +1,13 @@
 import { io, type Socket } from "socket.io-client";
-import type { Outcome, Recorder } from "../../recorder";
+import type { Outcome } from "../../recorder";
+import type { DriverContext, PlainConnection } from "../types";
+import { CLIENT_TIMEOUT_MS, EVENTS } from "./protocol";
 
 /**
  * One client connection speaking the 4.1 wire protocol: `<service>:<method>`
  * events acknowledged with `{ success, data | error }`, exactly as the 4.1
  * React hooks emit them.
  */
-
-export interface DriverContext {
-  url: string;
-  recorder: Recorder;
-}
 
 interface Envelope {
   success: boolean;
@@ -21,7 +18,7 @@ interface Envelope {
 /** How long a connection attempt may take before the client gives up on it. */
 const CONNECT_TIMEOUT_MS = 30_000;
 
-export class V4Connection {
+export class V4Connection implements PlainConnection {
   public readonly socket: Socket;
   private readonly inFlight = new Set<(outcome: Outcome) => void>();
 
@@ -101,6 +98,11 @@ export class V4Connection {
         );
       });
     });
+  }
+
+  /** One getTasksByStatus call, as useServiceQuery sends it (10 s timeout). */
+  public async readBoard(projectId: string): Promise<Outcome> {
+    return await this.request(EVENTS.getTasksByStatus, { projectId }, CLIENT_TIMEOUT_MS);
   }
 
   public close(): void {
