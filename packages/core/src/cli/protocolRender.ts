@@ -10,12 +10,14 @@ import type { Field, Shape, TypeDoc } from "./protocolSource";
 import {
   CLIENT_EVENTS_INTRO,
   CLIENT_RULES,
+  DEFAULTS_INTRO,
   ERRORS_INTRO,
   EXAMPLE,
   HANDSHAKE_INTRO,
   INTRO,
   JSON_ONLY,
   LIMITS_INTRO,
+  LIMITS_OUTCOMES,
   NAMES_INTRO,
   PACKETS,
   SERVER_EVENTS_INTRO,
@@ -261,19 +263,31 @@ function namesSection(model: ProtocolModel): string[] {
 function limitsSection(model: ProtocolModel): string[] {
   const row = (name: string, unit: string): string[] => {
     const found = model.constants.get(name);
-    return [code(name), `${found?.value ?? ""}${unit}`, found?.doc ?? ""];
+    if (found === undefined) {
+      throw new Error(
+        `quickdraw-protocol: no protocol source declares ${name}, which it documents`,
+      );
+    }
+    return [code(name), `${found.value}${unit}`, found.doc];
   };
+  const header = ["Constant", "Value", "Meaning"];
   return section("## Limits", [
     paragraph(LIMITS_INTRO),
-    table(
-      ["Constant", "Value", "Meaning"],
-      [
-        row("MAX_SUBSCRIBE_IDS", " ids"),
-        row("MAX_SCOPE_LENGTH", " characters"),
-        row("DEFAULT_MAX_REQUESTS", " events a minute per socket"),
-        row("DEFAULT_BACKOFF_MS", " ms"),
-      ],
-    ),
+    table(header, [
+      row("MAX_SUBSCRIBE_IDS", " ids"),
+      row("MAX_ITEM_IDS", " ids"),
+      row("MAX_SCOPE_LENGTH", " characters"),
+      row("MAX_STREAMS_PER_SOCKET", " feeds"),
+      row("CHANNEL_ABUSE_WINDOW_MS", " ms"),
+      row("CHANNEL_ABUSE_MULTIPLIER", " times the channel's rate"),
+    ]),
+    paragraph(DEFAULTS_INTRO),
+    table(header, [
+      row("DEFAULT_MAX_REQUESTS", " events a minute per socket"),
+      row("CHANNEL_DEFAULT_RATE", " messages a second per socket"),
+      row("DEFAULT_BACKOFF_MS", " ms"),
+    ]),
+    paragraph(LIMITS_OUTCOMES),
     `The socket rate limiter never counts ${model.unlimited.map(code).join(", ")}.`,
   ]);
 }

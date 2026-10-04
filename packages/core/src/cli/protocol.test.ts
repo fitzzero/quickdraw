@@ -1,16 +1,22 @@
 // `quickdraw-protocol` (src/cli/protocol.ts): `docs/protocol-v5.md` is what
 // the protocol's sources generate, the same on every run; `--check` passes
 // on the committed file and fails once `envelope.ts` changes; the document
-// names every event, error code and frame type the sources declare; and the
-// prose names only types that exist.
+// names every event, error code and frame type the sources declare, and
+// every limit with its value; and the prose names only types that exist.
 
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { DEFAULT_BACKOFF_MS } from "../client/backoff";
 import { CLIENT_EVENTS, SERVER_EVENTS } from "../contract/names";
+import { CHANNEL_DEFAULT_RATE } from "../contract/realtime";
 import { ERROR_CODES, httpStatus } from "../protocol/errors";
-import { PROTOCOL_VERSION } from "../protocol/version";
+import { MAX_SCOPE_LENGTH, MAX_SUBSCRIBE_IDS, PROTOCOL_VERSION } from "../protocol/version";
+import { MAX_ITEM_IDS } from "../server/collections/items";
+import { createRateLimiter } from "../server/rateLimit";
+import { CHANNEL_ABUSE_MULTIPLIER, CHANNEL_ABUSE_WINDOW_MS } from "../server/realtime/channels";
+import { MAX_STREAMS_PER_SOCKET } from "../server/realtime/streamSubscriptions";
 import { defaultPaths, generateProtocol, main, type ProtocolOutput } from "./protocol";
 import { protocolModel } from "./protocolModel";
 import { PROTOCOL_MARKER } from "./protocolRender";
@@ -97,6 +103,44 @@ describe("quickdraw-protocol", () => {
     }
     expect(text).toContain(`A 5.0 server speaks protocol \`${String(PROTOCOL_VERSION)}\``);
     expect(text.startsWith(`${PROTOCOL_MARKER}\n\n# quickdraw protocol v5\n`)).toBe(true);
+  });
+
+  it("names every limit with the value the code holds, the fixed ones apart from the defaults", () => {
+    const text = generateProtocol(paths.packageDir);
+    const limits = text.slice(text.indexOf("## Limits"));
+    const defaultsAt = limits.indexOf("These are defaults.");
+    const listed = (from: string, name: string, value: number): void => {
+      expect(from, name).toMatch(new RegExp(`^\\| \`${name}\` +\\| ${String(value)} `, "m"));
+    };
+    const fixed = {
+      MAX_SUBSCRIBE_IDS,
+      MAX_ITEM_IDS,
+      MAX_SCOPE_LENGTH,
+      MAX_STREAMS_PER_SOCKET,
+      CHANNEL_ABUSE_WINDOW_MS,
+      CHANNEL_ABUSE_MULTIPLIER,
+    };
+    for (const [name, value] of Object.entries(fixed)) {
+      listed(limits.slice(0, defaultsAt), name, value);
+    }
+    const defaults = {
+      DEFAULT_MAX_REQUESTS: createRateLimiter().options.maxRequests,
+      CHANNEL_DEFAULT_RATE,
+      DEFAULT_BACKOFF_MS,
+    };
+    for (const [name, value] of Object.entries(defaults)) {
+      listed(limits.slice(defaultsAt), name, value);
+    }
+    // And what a client meets past them, or without an ack id.
+    const flat = text.replace(/\s+/g, " ");
+    expect(flat).toContain("the server ignores a `qd:call` sent without one, with no reply");
+    expect(flat).toContain(
+      "or a `qd:col:items` more than `MAX_ITEM_IDS`, fails whole with `VALIDATION`",
+    );
+    expect(flat).toContain(
+      "exceed `CHANNEL_ABUSE_MULTIPLIER` times that rate is disconnected (Socket.IO DISCONNECT, `41`",
+    );
+    expect(flat).not.toContain("These hold for every server");
   });
 
   it("documents every frame type an event reaches, with its fields", () => {

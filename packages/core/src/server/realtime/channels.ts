@@ -38,7 +38,7 @@ import type { Rooms } from "./rooms";
 import type { ChannelContext, Presence, ServiceChannel } from "./types";
 import { validateNow } from "./validate";
 
-/** How long the abuse guard counts a socket's dropped messages before it starts over. */
+/** How long the abuse guard counts a socket's messages dropped for one channel's rate before it starts over. */
 export const CHANNEL_ABUSE_WINDOW_MS = 10_000;
 
 /** A socket is disconnected once its drops within the window exceed this many times the channel's rate. */

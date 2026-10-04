@@ -217,22 +217,26 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
 - Wait for `qd:hello` before the first call: it says who the socket acts for
   (`userId`, `serviceAccess`) and the limits to stay within.
 - Give each `qd:call` an `id` no call in flight on the socket has; `qd:cancel`
-  names it, and the call's acknowledgement still arrives. Wait for an
-  acknowledgement at most `limits.callTimeoutMs` and 2 seconds more: the
-  server answers `TIMEOUT` itself before that.
+  names it, and the call's acknowledgement still arrives. Send it with an ack
+  id: the server ignores a `qd:call` sent without one, with no reply and no
+  error. Wait for an acknowledgement at most `limits.callTimeoutMs` and 2
+  seconds more: the server answers `TIMEOUT` itself before that.
 - Back off on `RATE_LIMITED`: wait `e.data.retryAfterMs` (the default
   below when it is absent) and a random part of it more before sending that
   kind of work again, calls or subscription events. A client that retries at
   once loops, and in development the server names it in a `repeated-call`
   warning.
 - Keep the subscription events within `limits.subscriptions`: at most
-  `maxInFlight` awaiting their acknowledgement, and a `qd:sub` naming at
-  most `limits.maxSubscribeIds` ids.
+  `maxInFlight` awaiting their acknowledgement, a `qd:sub` naming at most
+  `limits.maxSubscribeIds` ids and a `qd:col:items` at most
+  `MAX_ITEM_IDS` (below); a frame naming more fails whole with
+  `VALIDATION`.
 - Send `qd:ch` and forget it: there is no acknowledgement and no error, so
   never wait for one, and drop a message rather than queue it while the
   connection is backed up (Socket.IO calls that volatile). The server drops
   a message silently when it is over the channel's rate, fails its schema,
-  or fails its `requires`.
+  or fails its `requires`, and ends the socket of a client that keeps
+  sending far over a channel's rate (below).
 - Apply `qd:e` and `qd:c` frames by `rev`, not by arrival: behind a
   cluster, frames from two nodes can arrive out of order.
 - App rooms are per socket. A method joins the socket that called it
@@ -801,14 +805,38 @@ collection scope's.
 
 ## Limits
 
-A server announces its call and subscription limits in `qd:hello` (above).
-These hold for every server:
+A server announces its call and subscription limits in `qd:hello` (above):
+the defaults shown there are the server's own, and an app may set others,
+so read them from the hello. The limits below are fixed: every 5.0 server
+holds them, and no option changes them.
 
-| Constant               | Value                          | Meaning                                                                                                                                                                                                                                                                      |
-| ---------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MAX_SUBSCRIBE_IDS`    | 500 ids                        | The most ids one `qd:sub` may name (RFC 0003 section 6), as `qd:hello` announces it.                                                                                                                                                                                         |
-| `MAX_SCOPE_LENGTH`     | 256 characters                 | The longest collection scope value or change topic a frame may name, in characters.                                                                                                                                                                                          |
-| `DEFAULT_MAX_REQUESTS` | 600 events a minute per socket | Requests allowed per window by default: 600 a minute, so a socket can refetch a watched query four times a second (the coordinator's window) with room to spare. 4.x allowed 100, which refused part of a busy board's work in the 5.0 benchmark (`bench/reports/5.0.0.md`). |
-| `DEFAULT_BACKOFF_MS`   | 5000 ms                        | The wait when a `RATE_LIMITED` answer carries no `retryAfterMs`, as in 4.1.                                                                                                                                                                                                  |
+| Constant                   | Value                        | Meaning                                                                                                   |
+| -------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `MAX_SUBSCRIBE_IDS`        | 500 ids                      | The most ids one `qd:sub` may name (RFC 0003 section 6), as `qd:hello` announces it.                      |
+| `MAX_ITEM_IDS`             | 200 ids                      | The most ids one `qd:col:items` may name.                                                                 |
+| `MAX_SCOPE_LENGTH`         | 256 characters               | The longest collection scope value or change topic a frame may name, in characters.                       |
+| `MAX_STREAMS_PER_SOCKET`   | 500 feeds                    | The most stream feeds one socket may subscribe to at once.                                                |
+| `CHANNEL_ABUSE_WINDOW_MS`  | 10000 ms                     | How long the abuse guard counts a socket's messages dropped for one channel's rate before it starts over. |
+| `CHANNEL_ABUSE_MULTIPLIER` | 100 times the channel's rate | A socket is disconnected once its drops within the window exceed this many times the channel's rate.      |
+
+These are defaults. An app changes the socket rate limiter with
+`createServer({ rateLimit })` and a channel's rate with its contract's
+`ratePerSecond` and `burst` (twice the rate when absent); the backoff is
+the client's own, for an answer that names no wait:
+
+| Constant               | Value                           | Meaning                                                                                                                                                                                                                                                                      |
+| ---------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEFAULT_MAX_REQUESTS` | 600 events a minute per socket  | Requests allowed per window by default: 600 a minute, so a socket can refetch a watched query four times a second (the coordinator's window) with room to spare. 4.x allowed 100, which refused part of a busy board's work in the 5.0 benchmark (`bench/reports/5.0.0.md`). |
+| `CHANNEL_DEFAULT_RATE` | 30 messages a second per socket | A channel's sustained rate when it declares none: messages per second per socket.                                                                                                                                                                                            |
+| `DEFAULT_BACKOFF_MS`   | 5000 ms                         | The wait when a `RATE_LIMITED` answer carries no `retryAfterMs`, as in 4.1.                                                                                                                                                                                                  |
+
+A `qd:sub` naming more than `MAX_SUBSCRIBE_IDS` ids, or a
+`qd:col:items` more than `MAX_ITEM_IDS`, fails whole with `VALIDATION`; a
+`qd:stream:sub` past `MAX_STREAMS_PER_SOCKET` feeds fails with `CONFLICT`.
+A socket whose `qd:ch` messages dropped for one channel's rate within
+`CHANNEL_ABUSE_WINDOW_MS` exceed `CHANNEL_ABUSE_MULTIPLIER` times that rate
+is disconnected (Socket.IO DISCONNECT, `41`, then the WebSocket closes): that
+is sustained flooding, not a burst. As after any DISCONNECT the server
+sends, a client does not reconnect on its own.
 
 The socket rate limiter never counts `qd:ch`, `qd:cancel`, `qd:sub`, `qd:unsub`, `qd:col:sub`, `qd:col:unsub`, `qd:col:items`, `qd:watch`, `qd:unwatch`, `qd:stream:sub`, `qd:stream:unsub`.
