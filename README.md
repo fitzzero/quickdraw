@@ -384,8 +384,14 @@ export const taskService = qd.defineService(task, {
   `"public"` method called anonymously), `signal` (aborts on cancel or time
   limit), `log`, `requestId`, `transport` (`"socket"`, `"http"`, `"mcp"`,
   `"internal"` or `"legacy"`), `touch` (below), `rooms` and `presence`
-  (realtime, below) and `mcp` (the MCP bridge's context). `ctx.services` is
-  reserved: it is not implemented in this release and throws `INTERNAL`.
+  (realtime, below), `mcp` (the MCP bridge's context) and `services`.
+- `ctx.services` calls the app's services in process, as the same
+  principal, by service name: `await ctx.services.projectService.get({ id })`.
+  Each call runs the whole pipeline with transport `"internal"` (input
+  check, access, handler, output check), so access is checked on the inner
+  call too; its writes join the calling method's unit of work, so both
+  flush together once; and it is cancelled with `ctx.signal`. It is typed
+  by the `contracts` of `initQuickdraw`'s types, as `qd.caller` is.
 - `share: "caller"` runs identical concurrent calls of one principal once,
   `share: "all"` across principals (not with `custom` access); `ttlMs` keeps
   a shared result. `version(input, ctx)` answers "not modified" for a query

@@ -53,6 +53,8 @@ interface Pipeline {
   readonly settings: PipelineSettings;
   readonly limiter: ConcurrencyLimiter;
   readonly shares: ShareTable<Run>;
+  /** The pipeline's own dispatch function, which `ctx.services` calls through. */
+  dispatch: Dispatch;
 }
 
 interface CallState extends ExecuteCall {
@@ -85,7 +87,7 @@ async function proceed(
   const { request } = call;
   const label = `${target.service.name}.${target.method.name}`;
   const input = await stage(call, parseInput(target.method.input, request.input, label));
-  const ctx = contextFor(settings, request, call.requestId, target, call.signal);
+  const ctx = contextFor(settings, request, call.requestId, target, call.signal, pipeline.dispatch);
   const access = {
     service: target.service,
     method: target.method.name,
@@ -248,8 +250,9 @@ export function createPipeline(settings: PipelineSettings): Dispatch {
       retryAfterMs: settings.limits.retryAfterMs,
     }),
     shares: createShareTable<Run>(),
+    dispatch: () => Promise.reject(new Error("the pipeline is being created")),
   };
-  return async (request) => {
+  pipeline.dispatch = async (request) => {
     const startedAt = performance.now();
     const call: CallState = {
       request,
@@ -274,4 +277,5 @@ export function createPipeline(settings: PipelineSettings): Dispatch {
     });
     return result;
   };
+  return pipeline.dispatch;
 }

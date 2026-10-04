@@ -39,7 +39,9 @@ import {
   crud as crudKit,
   inherit,
   search as searchKit,
+  type AnyService,
   type CallRecord,
+  type FlushSink,
 } from "../../src/server/index";
 import { createTestApp, type TestApp } from "../../src/testing/index";
 import type { PrismaClient } from "../prisma/setup";
@@ -214,16 +216,28 @@ export function tick(ms = 0): Promise<void> {
   });
 }
 
+/**
+ * What a test adds to the app: services of its own (callable through
+ * `app.as(...)` untyped, since the app's type covers the fixture's), and a
+ * sink that sees every flush.
+ */
+export interface StartOptions {
+  readonly services?: readonly AnyService[];
+  readonly flushSink?: FlushSink;
+}
+
 /** Boots the app on `harness`'s database; `records` are its completed calls, `reads` its storage reads. */
-async function startApp(harness: Harness) {
+async function startApp(harness: Harness, options: StartOptions = {}) {
   const gate = createGate();
   const records: CallRecord[] = [];
   const { storage, reads } = recordingStorage(harness.storage);
+  const fixture = [projectService, defineTaskService(gate)] as const;
   const app = await createTestApp({
-    services: [projectService, defineTaskService(gate)],
+    services: [...fixture, ...(options.services ?? [])] as unknown as typeof fixture,
     db: harness.db,
     storage,
     onCall: (record) => records.push(record),
+    ...(options.flushSink === undefined ? {} : { flushSink: options.flushSink }),
   });
   /** Runs `fn` on the tracked client in a unit of work, as a job does: its writes send frames. */
   const write = <T>(fn: (db: PrismaClient) => Promise<T>): Promise<T> =>
@@ -272,9 +286,9 @@ export function e2eApp() {
     },
     /** An untracked client on the test database: what is stored, seen past the server. */
     prisma: (): PrismaClient => current().prisma,
-    /** Starts this test's app. */
-    async start() {
-      const started = await startApp(current());
+    /** Starts this test's app, with the test's own services and flush sink when given. */
+    async start(options: StartOptions = {}) {
+      const started = await startApp(current(), options);
       apps.push(started.app as unknown as TestApp);
       return started;
     },

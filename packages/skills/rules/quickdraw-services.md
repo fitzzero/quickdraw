@@ -72,7 +72,7 @@ export const taskService = qd.defineService(task, {
   (`"caller"` or `"all"`), `ttlMs` and `version`.
 - A handler receives `{ input, ctx, db }`: the parsed input, the context
   (`principal`, `signal`, `log`, `requestId`, `transport`, `touch`, `rooms`,
-  `presence`, `mcp`) and the tracked client.
+  `presence`, `mcp`, `services`) and the tracked client.
 - For a projection output, return the database row (a `Date` where the wire
   has a string, extra columns allowed): the framework selects and projects
   it. Never build the wire shape by hand. A relation or computed field is
@@ -81,8 +81,13 @@ export const taskService = qd.defineService(task, {
   `CONFLICT`, `VALIDATION`, `FORBIDDEN`, and so on. Anything else thrown
   reaches the caller as `INTERNAL`, except Prisma's unique violation
   (`CONFLICT`) and missing row (`NOT_FOUND`, as from `findUniqueOrThrow`).
-- `ctx.services` is reserved and not implemented in this release (it throws
-  `INTERNAL`): share code between services as plain functions taking `db`.
+- To use another service's method, call it through `ctx.services`, by
+  service name: `await ctx.services.projectService.get({ id })`. It runs as
+  the same principal with transport `"internal"`, checks that method's
+  access, joins this call's unit of work (its writes flush with this call's)
+  and is cancelled with `ctx.signal`; it is typed by the app's `contracts`
+  (`initQuickdraw<{ ...; contracts }>()`). Never write another service's
+  model directly to skip its access checks.
 
 ## Writes are tracked; frames are derived
 

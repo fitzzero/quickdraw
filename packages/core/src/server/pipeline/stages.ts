@@ -4,7 +4,7 @@
 
 import type { Version } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
-import { createContext, NEVER_ABORTED, type AnyContext } from "../context";
+import { createContext, NEVER_ABORTED, type AnyContext, type ContextFields } from "../context";
 import type { RegisteredMethod, Registry } from "../registry";
 import { runtimeOf } from "../service";
 import type { QuerySlot, ConcurrencyLimiter } from "./concurrency";
@@ -96,13 +96,18 @@ export function untilStopped<T>(work: PromiseLike<T>, signal: AbortSignal | unde
   });
 }
 
-/** The context of one call: the framework's fields, then the app's from `initQuickdraw({ context })`. */
+/**
+ * The context of one call: the framework's fields, then the app's from
+ * `initQuickdraw({ context })`. `dispatch` is the dispatcher's own, which
+ * `ctx.services` calls through.
+ */
 export function contextFor(
   settings: PipelineSettings,
   request: DispatchRequest,
   requestId: string,
   target: RegisteredMethod,
   signal: AbortSignal | undefined,
+  dispatch: NonNullable<ContextFields["dispatch"]>,
 ): AnyContext {
   const log = settings.logger.child({
     service: target.service.name,
@@ -120,6 +125,9 @@ export function contextFor(
     touch: settings.touch,
     rooms: realtime.roomsFor(request.transport, request.connectionId, target.method.share),
     presence: realtime.presence,
+    // `ctx.services` calls the app's services as this principal through this
+    // dispatcher; their units of work join this call's, so their writes flush with it.
+    dispatch,
     kit: {
       service: target.service,
       access: settings.policies,
