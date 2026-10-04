@@ -701,7 +701,11 @@ export const taskService = qd.defineService(task, {
   reach any row on purpose (the `title` method above; public profiles,
   lookups by an id that tells nothing). A kit's methods take it as
   `rowless: ["get"]` in the kit's options. The input's keys come from its
-  JSON Schema, so an input without one (Zod 3) is not checked.
+  JSON Schema: an `id` in any branch of a union counts, and so does one
+  beside a value JSON Schema cannot write (a `Date`, a `Set`). Not checked:
+  an input without JSON Schema (Zod 3), one that is no object (a bare string
+  that is the id itself) and a row named by another key (`ids`, `taskId`, a
+  nested `where.id`).
 - A service-wide `Admin` grant passes every check on its service
   (`adminBypass: false` turns that off). A grant below `Admin` counts only
   where the form names `service`: a `Read` grant does not read every row.

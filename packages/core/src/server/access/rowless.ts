@@ -10,12 +10,17 @@
 // says every caller the form admits may reach any row on purpose (public
 // profiles, lookups by an id that tells nothing).
 //
-// The input's keys come from its Standard JSON Schema. An input that has
-// none (a Zod 3 schema) cannot say whether it holds an `id`, so its method is
-// not checked. `custom` forms decide for themselves, and so do the kit
+// The input's keys come from its Standard JSON Schema (`inputKeys`): the
+// top-level keys of every object the input may be, so `id` in any branch of a
+// union counts, with values JSON Schema cannot write (a `Date`, a `Set`, a
+// `bigint`, a custom type) read as any value. Not checked: an input without
+// JSON Schema (a Zod 3 schema), which cannot say whether it holds an `id`; an
+// input that is no object (a bare string that is the id itself, an array, a
+// record); and a row named another way (`ids`, `taskId`, a nested
+// `where.id`). `custom` forms decide for themselves, and so do the kit
 // handlers that check the row whatever their form (`checksRowsItself`).
 
-import { schemaKeys } from "../emit/projection";
+import { inputKeys } from "../emit/projection";
 import { isKitHandler, isRowChecked, type ServiceMethod } from "../service";
 import { isCustomAccess } from "./forms";
 import type { AccessForm } from "./types";
@@ -69,7 +74,7 @@ export function rowlessProblem(method: ServiceMethod): string | undefined {
   if (method.rowless || !checksNoRow(access) || isRowChecked(handler)) {
     return undefined;
   }
-  if (schemaKeys(method.input, "input")?.includes("id") !== true) {
+  if (inputKeys(method.input)?.includes("id") !== true) {
     return undefined;
   }
   const optOut = isKitHandler(handler)

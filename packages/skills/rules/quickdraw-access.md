@@ -52,8 +52,11 @@ defined. Fix the form, not the error:
   (`crud.handlers`, `admin.handlers`, `sharing.handlers`).
 - The read/write kit's `update`, `delete`, `reorder` and `create` check the
   row themselves and need neither.
-- The check reads the input's keys from its JSON Schema: an input without
-  one (a Zod 3 schema) is not checked, so the form is all yours there.
+- The check reads the input's keys from its JSON Schema: an `id` in any
+  branch of a union counts, as does one beside a `Date` or a `Set`. An input
+  without JSON Schema (a Zod 3 schema), a bare string that is the id itself
+  and a row named by another key (`taskId`, `ids`) are not checked, so the
+  form is all yours there (`{ entry: L, id: "taskId" }` names another key).
 
 ## Service-wide grants
 

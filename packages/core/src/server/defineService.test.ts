@@ -287,6 +287,59 @@ describe("the rowless check", () => {
     }
   });
 
+  it("finds the id in any branch of a union and beside values JSON Schema cannot write", () => {
+    /** Defines a service whose one method `m` takes `input` under `"authenticated"`. */
+    const defineWith = (input: z.ZodType) => () =>
+      defineLoosely(
+        defineContract("probeService", {
+          entity: taskSchema,
+          methods: { m: query({ input, output: z.null() }) },
+        }),
+        {
+          model: "task",
+          access: policy,
+          methods: { m: { access: "authenticated", handler: () => null } },
+        },
+      );
+    const id = z.object({ id: z.string() });
+    const refused: Record<string, z.ZodType> = {
+      "{ id }": id,
+      "{ id, at: z.date() }": id.extend({ at: z.date() }),
+      "{ id, at: z.coerce.date() }": id.extend({ at: z.coerce.date() }),
+      "{ id, tags: z.set() }": id.extend({ tags: z.set(z.string()) }),
+      "{ id, n: z.bigint() }": id.extend({ n: z.bigint() }),
+      "{ id: z.custom() }": z.object({ id: z.custom<string>((v) => typeof v === "string") }),
+      "{ id: z.string().transform() }": z.object({ id: z.string().transform((s) => s.trim()) }),
+      "{ id }.transform()": id.transform((v) => v),
+      "{ id }.nullable()": id.nullable(),
+      "{ id }.optional()": id.optional(),
+      "z.union, id in both": z.union([id, id.extend({ slug: z.string() })]),
+      "z.union, id in one": z.union([z.object({ slug: z.string() }), id]),
+      "z.union of a union, nullable": z.union([id, z.object({ x: z.number() })]).nullable(),
+      "z.discriminatedUnion": z.discriminatedUnion("kind", [
+        id.extend({ kind: z.literal("a") }),
+        z.object({ kind: z.literal("b"), slug: z.string() }),
+      ]),
+      "z.intersection": z.intersection(id, z.object({ x: z.number() })),
+      "a named branch ($ref)": z.union([id.meta({ id: "ById" }), z.object({ slug: z.string() })]),
+      "z.lazy": z.lazy(() => id),
+      "z.preprocess": z.preprocess((v) => v, id),
+    };
+    for (const [label, input] of Object.entries(refused)) {
+      expect(defineWith(input), label).toThrow(`method "m" ${refusal}`);
+    }
+    // Not checked: no object at the top (the id itself), or the row named another way.
+    const unchecked: Record<string, z.ZodType> = {
+      "z.string()": z.string(),
+      "{ ids: string[] }": z.object({ ids: z.array(z.string()) }),
+      "{ where: { id } }": z.object({ where: id }),
+      "z.record()": z.record(z.string(), z.string()),
+    };
+    for (const [label, input] of Object.entries(unchecked)) {
+      expect(defineWith(input), label).not.toThrow();
+    }
+  });
+
   it("cannot read the keys of an input without JSON Schema (Zod 3), so it does not refuse it", () => {
     const zod3 = defineContract("taskService", {
       entity: taskSchema,

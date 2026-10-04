@@ -10,7 +10,8 @@
 // or the service fails when it is defined (section 2). `project` also gives a
 // projection a `select` of its own and a `map`, for relations and computed
 // fields: reads use that select, and `map` turns the row read into the
-// projection's row.
+// projection's row. The rowless check reads an input's keys here too, more
+// widely (`inputKeys`).
 
 import type { AccessLevel } from "../../contract/access";
 import type { AnyContract } from "../../contract/defineContract";
@@ -57,40 +58,109 @@ function isPlain(value: unknown): value is object {
   return Array.isArray(value) || prototype === Object.prototype || prototype === null;
 }
 
-/** The object schema a JSON Schema document describes, following one top-level `$ref`. */
-function objectSchema(json: UnknownRecord): UnknownRecord | undefined {
-  const ref = json.$ref;
+/**
+ * The node a JSON Schema node stands for: the one its `$ref` names in the
+ * document `root` (`#`, `#/definitions/<name>` or `#/$defs/<name>`), or
+ * itself without one; `undefined` for a reference it cannot follow.
+ */
+function referenced(node: UnknownRecord, root: UnknownRecord): UnknownRecord | undefined {
+  const ref = node.$ref;
   if (typeof ref !== "string") {
-    return json;
+    return node;
+  }
+  if (ref === "#") {
+    return root;
   }
   const match = /^#\/(definitions|\$defs)\/(.+)$/.exec(ref);
-  const defs = match === null ? undefined : json[match[1] ?? ""];
+  const defs = match === null ? undefined : root[match[1] ?? ""];
   const target = isRecord(defs) ? defs[match?.[2] ?? ""] : undefined;
   return isRecord(target) ? target : undefined;
 }
 
 /**
- * The keys a schema's output (or, with `side` `"input"`, its input) has,
- * read from its Standard JSON Schema, or `undefined` when it cannot say: no
- * JSON Schema (a Zod 3 schema), a value JSON Schema cannot write (a `Date`,
- * a transform), or a value that is not one object (a union).
+ * The keys a schema's output has, read from its Standard JSON Schema, or
+ * `undefined` when it cannot say: no JSON Schema (a Zod 3 schema), a value
+ * JSON Schema cannot write (a `Date`, a transform), or a value that is not
+ * one object (a union).
  */
-export function schemaKeys(
-  schema: StandardSchemaV1,
-  side: "input" | "output" = "output",
-): readonly string[] | undefined {
+export function schemaKeys(schema: StandardSchemaV1): readonly string[] | undefined {
   if (!hasJsonSchema(schema)) {
     return undefined;
   }
   let json: unknown;
   try {
-    json = schema["~standard"].jsonSchema[side]({ target: "draft-07" });
+    json = schema["~standard"].jsonSchema.output({ target: "draft-07" });
   } catch {
     return undefined;
   }
-  const described = isRecord(json) ? objectSchema(json) : undefined;
+  const described = isRecord(json) ? referenced(json, json) : undefined;
   const properties = described?.properties;
   return isRecord(properties) ? Object.keys(properties) : undefined;
+}
+
+/** The keywords whose members are the alternatives (`anyOf`, `oneOf`) or the parts (`allOf`) of a value. */
+const BRANCHES = ["anyOf", "oneOf", "allOf"] as const;
+
+/** Writes values JSON Schema has no form for as `{}` (any value), keeping the keys beside them (Zod 4). */
+const UNREPRESENTABLE_AS_ANY = Object.freeze({ unrepresentable: "any" });
+
+/** Adds to `keys` the top-level keys of every object `node` may be: its own and its branches'. */
+function addBranchKeys(
+  node: unknown,
+  root: UnknownRecord,
+  keys: Set<string>,
+  seen: Set<UnknownRecord>,
+): void {
+  const target = isRecord(node) ? referenced(node, root) : undefined;
+  if (target === undefined || seen.has(target)) {
+    return;
+  }
+  seen.add(target);
+  if (isRecord(target.properties)) {
+    for (const key of Object.keys(target.properties)) {
+      keys.add(key);
+    }
+  }
+  for (const keyword of BRANCHES) {
+    const members = target[keyword];
+    if (Array.isArray(members)) {
+      for (const member of members) {
+        addBranchKeys(member, root, keys, seen);
+      }
+    }
+  }
+}
+
+/**
+ * The keys an input may have at its top level, read from its Standard JSON
+ * Schema more widely than {@link schemaKeys}, for the rowless check
+ * (`../access/rowless.ts`): a key that any branch of a union or an
+ * intersection has counts (`anyOf`, `oneOf`, `allOf`, through `$ref`s and
+ * past a `null` branch), since that branch may carry it, and a value JSON
+ * Schema cannot write (a `Date`, a `Set`, a `bigint`, a custom type) is
+ * written as any value rather than hiding the keys beside it. Empty for an
+ * input that is no object (a bare string, an array, a record); `undefined`
+ * when the schema has no JSON Schema (a Zod 3 schema) or cannot write one.
+ */
+export function inputKeys(schema: StandardSchemaV1): readonly string[] | undefined {
+  if (!hasJsonSchema(schema)) {
+    return undefined;
+  }
+  let json: unknown;
+  try {
+    json = schema["~standard"].jsonSchema.input({
+      target: "draft-07",
+      libraryOptions: UNREPRESENTABLE_AS_ANY,
+    });
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(json)) {
+    return undefined;
+  }
+  const keys = new Set<string>();
+  addBranchKeys(json, json, keys, new Set());
+  return [...keys];
 }
 
 const OPTION_KEYS = new Set(["keys", "select", "map"]);
