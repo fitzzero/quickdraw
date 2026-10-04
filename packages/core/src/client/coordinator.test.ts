@@ -358,6 +358,35 @@ describe("refetchAfterReconnect", () => {
     expect(readsOf(elsewhere)).toHaveLength(1);
   });
 
+  it("refetches the watched and stale queries at once with jitterMs 0, and leaves fresh ones", async () => {
+    const { coordinator, readsOf, watched, fresh, stale, elsewhere, isWatched } = await connected();
+    const random = vi.spyOn(Math, "random");
+    coordinator.refetchAfterReconnect({
+      watched: (query) => isWatched(query.queryKey),
+      jitterMs: 0,
+    });
+    // Sent before any timer runs.
+    expect(readsOf(watched)).toHaveLength(2);
+    expect(readsOf(stale)).toHaveLength(2);
+    expect(random).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(readsOf(fresh)).toHaveLength(1);
+    expect(readsOf(elsewhere)).toHaveLength(1);
+  });
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "refuses a jitterMs of %s",
+    async (jitterMs) => {
+      const { coordinator, isWatched } = await connected();
+      expect(() =>
+        coordinator.refetchAfterReconnect({
+          watched: (query) => isWatched(query.queryKey),
+          jitterMs,
+        }),
+      ).toThrow("refetchAfterReconnect: jitterMs must be a number of milliseconds, 0 or more");
+    },
+  );
+
   it("skips a query read since the reconnect, or reading when its turn comes", async () => {
     const { client, coordinator, readsOf, watched, stale, isWatched } = await connected();
     vi.spyOn(Math, "random").mockReturnValue(0.5);

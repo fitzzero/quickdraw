@@ -29,12 +29,14 @@ interface Setup {
   readonly url: string;
   readonly principal: Principal;
   readonly queryClient: QueryClient;
+  readonly reconnectJitterMs?: number;
 }
 
 function Provider({
   url,
   principal,
   queryClient,
+  reconnectJitterMs,
   children,
 }: Setup & { readonly children?: React.ReactNode }) {
   return (
@@ -44,6 +46,7 @@ function Provider({
       auth={{ principal }}
       transports={["websocket"]}
       queryClient={queryClient}
+      reconnectJitterMs={reconnectJitterMs}
     >
       {children}
     </QuickdrawProvider>
@@ -296,6 +299,62 @@ describe("after a reconnect", () => {
     await tick(300);
     expect(reads("get", other.id)).toBe(0);
     expect([reads("countOnBoard"), reads("get", board.t1)]).toEqual([1, 1]);
+  });
+});
+
+describe("after a reconnect with reconnectJitterMs 0", () => {
+  it("refetches the watched and the stale queries at once, and leaves fresh ones", async () => {
+    const { app } = await live.start();
+    const board = live.board();
+    const other = await live.prisma().task.create({ data: { projectId: board.p1, title: "T3" } });
+    const { wrapper, grabbed } = wrapperFor({
+      url: app.url,
+      principal: as(board.ada),
+      queryClient: freshClient(),
+      reconnectJitterMs: 0,
+    });
+    const { result } = renderHook(
+      () => ({
+        watched: qd.task.countOnBoard.useQuery({ projectId: board.p1 }),
+        stale: qd.task.get.useQuery({ id: board.t1 }, { staleTime: 0 }),
+        fresh: qd.task.get.useQuery({ id: other.id }),
+      }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.fresh.data?.title).toBe("T3"));
+    await waitFor(() => expect(result.current.stale.data?.title).toBe("T1"));
+    await until(() => watchersOf(app, board.p1) === 1);
+    const connection = grabbed.connection as QuickdrawConnection;
+    const sent = grabbed.sent;
+    await until(() => callsOf(sent, "countOnBoard").length === 1);
+    await tick(300);
+    const before = sent.length;
+    const reads = (m: string, id?: string): number =>
+      callsOf(sent.slice(before), m).filter(
+        (call) => id === undefined || (call.i as { id?: string }).id === id,
+      ).length;
+    // With the default jitter these would wait 1,980 ms.
+    vi.spyOn(Math, "random").mockReturnValue(0.99);
+    const first = connection.socket.id;
+    app.server.rotate({ withinMs: 0 });
+    await until(
+      () => connection.socket.id !== first && connection.getState().status === "connected",
+    );
+    await until(() => reads("countOnBoard") >= 1 && reads("get", board.t1) === 1, 500);
+    await tick(300);
+    expect(reads("get", other.id)).toBe(0);
+    expect(reads("get", board.t1)).toBe(1);
+  });
+
+  it("is refused below 0 when the provider mounts", () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(() =>
+      render(
+        <QuickdrawProvider client={qd} url="http://127.0.0.1:1" reconnectJitterMs={-1}>
+          {null}
+        </QuickdrawProvider>,
+      ),
+    ).toThrow("QuickdrawProvider: reconnectJitterMs must be a number of milliseconds, 0 or more");
   });
 });
 

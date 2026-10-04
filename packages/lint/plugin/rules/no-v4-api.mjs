@@ -344,7 +344,7 @@ export const REMOVED_PROVIDER_PROPS = Object.freeze({
     "Pass Socket.IO options in `socketOptions`: `socketOptions={{ withCredentials: true }}`.",
   socketPath: "Pass Socket.IO options in `socketOptions`: `socketOptions={{ path }}`.",
   reconnectBehavior:
-    "Removed: after a reconnect only watched or stale queries refetch, spread over 0 to 2 s.",
+    "Removed: after a reconnect only watched or stale queries refetch, each after a random delay of up to `reconnectJitterMs` (2,000 ms by default; `0` refetches at once).",
 });
 
 function importedName(specifier) {

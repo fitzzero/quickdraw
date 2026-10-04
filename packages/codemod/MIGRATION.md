@@ -1230,6 +1230,12 @@ export function TaskBoard({ projectId }: { readonly projectId: string }) {
 - **Invalidation never cancels a read.** The coordinator keeps one read in
   flight per query; an invalidation during it runs exactly one more when it
   settles. 4.x cancelled the read and issued it again.
+- **A reconnect refetches less, and later.** 4.x invalidated every query at
+  once after a reconnect. 5.0 resumes rows and collections by revision and
+  refetches only the queries that are watched or stale, each after a random
+  delay of up to 2,000 ms, so a fleet reconnecting after a restart does not
+  refetch in one burst; cached data stays on screen meanwhile.
+  `<QuickdrawProvider reconnectJitterMs={0}>` refetches them at once.
 - **Timeouts are not retried.** A query that times out rejects with
   `TIMEOUT` once.
 - **Mutations of an entity are optimistic.** A mutation whose input has `id`
@@ -1616,13 +1622,13 @@ Generated from `@fitzzero/quickdraw-lint`'s `no-v4-api` rule, which reports each
 
 ### QuickdrawProvider props
 
-| 4.x prop            | In 5.0                                                                                                  |
-| ------------------- | ------------------------------------------------------------------------------------------------------- |
-| `serverUrl`         | Pass `url`, and the typed client as `client`: `<QuickdrawProvider client={qd} url={url} auth={token}>`. |
-| `authToken`         | Pass the credentials as `auth`: a token string or handshake fields.                                     |
-| `autoConnect`       | The provider connects when it mounts; render it once the credentials are known, or change `auth`.       |
-| `withCredentials`   | Pass Socket.IO options in `socketOptions`: `socketOptions={{ withCredentials: true }}`.                 |
-| `socketPath`        | Pass Socket.IO options in `socketOptions`: `socketOptions={{ path }}`.                                  |
-| `reconnectBehavior` | Removed: after a reconnect only watched or stale queries refetch, spread over 0 to 2 s.                 |
+| 4.x prop            | In 5.0                                                                                                                                                                 |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serverUrl`         | Pass `url`, and the typed client as `client`: `<QuickdrawProvider client={qd} url={url} auth={token}>`.                                                                |
+| `authToken`         | Pass the credentials as `auth`: a token string or handshake fields.                                                                                                    |
+| `autoConnect`       | The provider connects when it mounts; render it once the credentials are known, or change `auth`.                                                                      |
+| `withCredentials`   | Pass Socket.IO options in `socketOptions`: `socketOptions={{ withCredentials: true }}`.                                                                                |
+| `socketPath`        | Pass Socket.IO options in `socketOptions`: `socketOptions={{ path }}`.                                                                                                 |
+| `reconnectBehavior` | Removed: after a reconnect only watched or stale queries refetch, each after a random delay of up to `reconnectJitterMs` (2,000 ms by default; `0` refetches at once). |
 
 <!-- removed-names:end -->

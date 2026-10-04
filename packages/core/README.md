@@ -941,6 +941,13 @@ export function TaskDetail({ id }: { readonly id: string }) {
   follows writes declares `watch` in its contract; the coordinator fetches
   it again once per change, with at most one read in flight per key. Do not
   call `refetch` or `invalidateQueries` on quickdraw keys after a mutation.
+- After a reconnect, the queries that are watched (they missed the changes
+  meanwhile) or stale are refetched, each after a random delay of up to
+  `reconnectJitterMs` (2,000 ms by default), so clients that reconnect
+  together, after a server restart say, do not refetch in one burst; cached
+  data stays on screen until then. `reconnectJitterMs={0}` refetches them at
+  once; a client without React passes `jitterMs` to the coordinator's
+  `refetchAfterReconnect`.
 - `useCollection` holds one scope: its index (the members, in order), the
   items loaded, and `loadMore`/`loadItems`; `view` filters the members by a
   view of the contract, for the user the server's hello names; `load: "all"`
