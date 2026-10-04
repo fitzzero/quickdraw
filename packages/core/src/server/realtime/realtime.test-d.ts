@@ -253,6 +253,25 @@ describe("the server", () => {
       },
     });
   });
+
+  test("a service declares its own onRoomLeave, typed alike", () => {
+    qd.defineService(lobby, {
+      methods: { enter: { access: "authenticated", handler: () => true } },
+      channels: { cursor: () => undefined },
+      onRoomLeave: async (leave, ctx) => {
+        expectTypeOf(leave).toEqualTypeOf<RoomLeave<AppPrincipal>>();
+        expectTypeOf(leave.principal?.team).toEqualTypeOf<string | undefined>();
+        expectTypeOf(ctx).toEqualTypeOf<RunContext>();
+        await Promise.resolve();
+      },
+    });
+    qd.defineService(lobby, {
+      methods: { enter: { access: "authenticated", handler: () => true } },
+      channels: { cursor: () => undefined },
+      // @ts-expect-error -- a hook is a function of the leave and a run context
+      onRoomLeave: { onLeave: () => undefined },
+    });
+  });
 });
 
 describe("the client", () => {

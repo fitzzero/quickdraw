@@ -109,8 +109,10 @@ The server side of a game needs no handler to reach the room:
   `qd:presence { room, users: [] }` unasked, which a client reads as "out
   of the room": it stops sending on the room's channels until a joining
   call lets it back.
-- `createServer({ onRoomLeave })` hears every socket that leaves (its own
-  leave, a removal, a disconnect) once, with each room and `last`: true when
+- The game service's own `onRoomLeave` (`defineService(game, { onRoomLeave
+})`, run by every server the service runs in) hears every socket that
+  leaves (its own leave, a removal, a disconnect) once, with each room and
+  `last`: true when
   the player has no socket left in the room on any node, the moment to
   send `playerLeft`. A socket that reconnects after `qd:rotate` is a new
   socket; the old one's disconnect is the player's last only when they had

@@ -176,10 +176,14 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   takes all their sockets out on every node, before anything they must not
   hear is sent. 4.x's "emit to the user instead of the room" workaround is
   not needed.
-- React to a socket leaving with `createServer({ onRoomLeave })`, never with
-  `socket.on("disconnect")`: it runs once per socket in a unit of work of its
-  own, and each room carries `last` (the user's last socket there, on any
-  node), which is when a 4.x `playerLeft` fires.
+- React to a socket leaving with the service's own `onRoomLeave`
+  (`defineService(game, { onRoomLeave })`, beside `methods`), never with
+  `socket.on("disconnect")` or a hook each server root must remember:
+  every server the service runs in (tests and benchmarks too) runs it once
+  per socket in a unit of work of its own, and each room carries `last`
+  (the user's last socket there, on any node), which is when a 4.x
+  `playerLeft` fires. `createServer({ onRoomLeave })` is for a hook of the
+  whole app.
 
 ## Performance
 

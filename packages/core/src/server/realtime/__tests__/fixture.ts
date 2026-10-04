@@ -15,7 +15,7 @@ import { settleCluster } from "../../../../test/cluster/mode";
 import { QuickdrawError, defineContract, mutation, query } from "../../../index";
 import { emitWithAck, type TestConnection } from "../../../testing/index";
 import { projectContract, qd } from "../../access/__tests__/board";
-import { inherit } from "../../index";
+import { inherit, type RoomLeaveHandler } from "../../index";
 
 const taskRow = z.object({ id: z.string(), projectId: z.string(), title: z.string() });
 const roomInput = z.object({ room: z.string() });
@@ -118,9 +118,13 @@ export function received(): Received {
   };
 }
 
-/** The live task service: channel handlers record into `into`. */
-export function defineLiveService(into: Received) {
+/** The live task service: channel handlers record into `into`; `onRoomLeave` is the service's own hook. */
+export function defineLiveService(
+  into: Received,
+  options: { readonly onRoomLeave?: RoomLeaveHandler } = {},
+) {
   return qd.defineService(liveContract, {
+    ...(options.onRoomLeave === undefined ? {} : { onRoomLeave: options.onRoomLeave }),
     model: "task",
     access: inherit({ from: projectContract, via: "projectId" }),
     collections: { byProject: { anchor: projectContract } },

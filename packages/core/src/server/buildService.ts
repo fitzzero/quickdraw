@@ -37,6 +37,7 @@ const DEFINITION_KEYS = new Set([
   "methods",
   "channels",
   "streams",
+  "onRoomLeave",
   "adminBypass",
 ]);
 
@@ -290,9 +291,12 @@ export function buildService(
     fail("the definition must be an object");
   }
   checkKeys(definition, DEFINITION_KEYS, "the definition", fail);
-  const { adminBypass = true } = definition;
+  const { adminBypass = true, onRoomLeave } = definition;
   if (typeof adminBypass !== "boolean") {
     fail("adminBypass must be a boolean");
+  }
+  if (onRoomLeave !== undefined && typeof onRoomLeave !== "function") {
+    fail("onRoomLeave must be a function of the leave and a run context");
   }
   const data = checkServiceData(definition, fail);
   const projections = compileProjections(checked, definition.project, fail);
@@ -322,6 +326,7 @@ export function buildService(
       definition.streams,
       fail,
     ),
+    onRoomLeave: onRoomLeave as AnyService["onRoomLeave"],
   });
   checkHandlers(service, fail);
   registerRuntime(service, runtime);

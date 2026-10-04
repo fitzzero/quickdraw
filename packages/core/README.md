@@ -2005,6 +2005,16 @@ export const taskService = qd.defineService(task, {
       ctx.rooms.emit(`board:${payload.projectId}`, task, "cursorMoved", payload);
     },
   },
+  // once per socket that leaves app rooms, in every server this service runs in, in a unit of its own
+  onRoomLeave: ({ principal, rooms }) => {
+    for (const { room, last } of rooms) {
+      // last: no socket of the user is in the room any more (a second tab keeps it false)
+      if (principal !== null && last && room.startsWith("board:")) {
+        const projectId = room.slice("board:".length);
+        qd.rooms.emit(room, task, "leftBoard", { projectId, userId: principal.userId });
+      }
+    }
+  },
 });
 
 // in handlers, jobs and timers
@@ -2094,14 +2104,12 @@ export function TaskRoom({
   `qd:event [service, event, payload]`; `useEvent` hears them.
 
 Code that is not a handler (a game loop, a timer, a job) reaches rooms
-through `qd.rooms` (also `server.rooms`), and `onRoomLeave` hears sockets
-leave:
+through `qd.rooms` (also `server.rooms`); the service's `onRoomLeave` (above)
+hears sockets leave:
 
 <!-- example: apps/api/src/services/kits/rooms.ts#rooms -->
 
 ```ts
-import type { RoomLeaveHandler } from "@fitzzero/quickdraw-core/server";
-
 const boardRoom = (projectId: string): string => `board:${projectId}`;
 
 // a timer or a game loop's tick, outside any handler: every socket in the room, on every node
@@ -2114,17 +2122,6 @@ export function showCursor(projectId: string, taskId: string, x: number): void {
 export async function removeFromBoard(projectId: string, userId: string): Promise<void> {
   await qd.rooms.leave(boardRoom(projectId), { userId });
 }
-
-// qd.createServer({ ..., onRoomLeave }): once per socket that leaves app rooms, in a unit of its own
-export const onRoomLeave: RoomLeaveHandler<AppPrincipal> = ({ principal, rooms }) => {
-  for (const { room, last } of rooms) {
-    // last: no socket of the user is in the room any more (a second tab keeps it false)
-    if (principal !== null && last && room.startsWith("board:")) {
-      const projectId = room.slice("board:".length);
-      qd.rooms.emit(room, task, "leftBoard", { projectId, userId: principal.userId });
-    }
-  }
-};
 ```
 
 - `qd.rooms.emit` and `emitToUser` are `ctx.rooms`' own, from anywhere,
@@ -2136,8 +2133,13 @@ export const onRoomLeave: RoomLeaveHandler<AppPrincipal> = ({ principal, rooms }
   `qd:presence { room, users: [] }`, and the room hears `left`. Behind a
   cluster it is broadcast and answered, so await it before sending what the
   user must not receive. Joining again is the app's to refuse.
-- `createServer({ onRoomLeave })` runs once per socket that leaves app
-  rooms, on the node that held it: its own `leave` (`reason: "leave"`), a
+- A service's `onRoomLeave` runs once per socket that leaves app rooms, in
+  every server the service runs in (`createTestApp` and a benchmark's
+  server included, with nothing to wire), beside every other service's and
+  `createServer({ onRoomLeave })`, the app's own; each runs in a unit of
+  work of its own, and one that throws stops none of the others. It hears
+  every app room a socket leaves, so check the room's name. It runs on
+  the node that held the socket: its own `leave` (`reason: "leave"`), a
   removal (`"removed"`), or a disconnect, which leaves every app room it was
   in (`"disconnect"`; `qd:rotate` reconnects with a new socket). Each room
   comes with `last`: true when no socket of that user is in the room any

@@ -24,6 +24,15 @@ protocol v5). No version moves until the release candidate is cut.
   items, kept per node) and a seed function cannot be declared together. A
   node that started after the pushes now seeds such a stream correctly
   (F4.1).
+- A service declares its own room-leave hook: `defineService(contract, {
+onRoomLeave(leave, ctx) })`, typed as `createServer`'s option. Every
+  server the service runs in (`createServer`, so `createTestApp` and a
+  benchmark's server too) runs each service's hook and its own
+  `onRoomLeave`, which stays, once per socket leave, each in a detached
+  unit of work of its own; one that throws is logged (with `owner`: the
+  service's name or `"createServer"`) and stops none of the others. A
+  server root that forgot to pass the game's handler leaked players
+  silently (F4.2).
 
 ### Client
 

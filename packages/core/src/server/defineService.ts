@@ -37,7 +37,12 @@ import type { Version } from "../protocol/envelope";
 import type { ModelColumn, ModelName, PolicyFor } from "./access/policy";
 import type { AccessFor, CustomAccess, PublicAccess, RowForms, WatchAccess } from "./access/types";
 import type { HandlerArgs, HandlerContext } from "./context";
-import type { ChannelOptions, ChannelsRequired, StreamOptions } from "./realtime/types";
+import type {
+  ChannelOptions,
+  ChannelsRequired,
+  RoomLeaveHandler,
+  StreamOptions,
+} from "./realtime/types";
 import type { Service, ShareMode } from "./service";
 import type {
   AffectsOption,
@@ -293,6 +298,27 @@ export interface ServiceDefinition<
    * streams: { world: { seed: (worldId) => [game.world(worldId).snapshot()] } }
    */
   readonly streams?: StreamOptions<T, C>;
+  /**
+   * Called once for every socket that leaves app rooms (RFC 0003 section
+   * 12.5), as `createServer`'s option of the same name is: a method's
+   * `ctx.rooms.leave(room)` (`reason: "leave"`), `rooms.leave(room, { userId
+   * })` (`"removed"`), or a disconnect, which leaves every app room the
+   * socket was in (`"disconnect"`), each room with `last`: no socket of the
+   * user is in it any more, on any node. Declared on the service that joins
+   * its sockets to the rooms (a game's world), so every server the service
+   * runs in calls it: `createServer`, and so `createTestApp`, run each
+   * service's hook and the server's own, each in a unit of work of its own,
+   * once per leave; one that throws is logged and the others still run. It
+   * hears every app room a socket leaves: check the room's name.
+   *
+   * @example
+   * onRoomLeave: ({ principal, rooms }) => {
+   *   if (principal !== null && rooms.some(({ room, last }) => room === WORLD && last)) {
+   *     removePlayer(principal.userId);
+   *   }
+   * },
+   */
+  readonly onRoomLeave?: RoomLeaveHandler<PrincipalOf<T>>;
   /**
    * Whether a service-wide `Admin` grant passes every access check of this
    * service (RFC 0003 section 4.1). Default `true`.

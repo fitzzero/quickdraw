@@ -25,13 +25,14 @@ import {
   removeUser,
   type DetachedRun,
   type LeavingState,
+  type RoomLeaveHook,
 } from "./leaving";
 import { markSeen, MAX_APP_ROOMS } from "./presence";
 import { entered, type RoomState } from "./roomFrames";
 import { checkRoom } from "./roomNames";
-import type { ContextRooms, RoomLeaveHandler, RoomTarget, ServerRooms } from "./types";
+import type { ContextRooms, RoomTarget, ServerRooms } from "./types";
 
-export { ROOM_LEAVE_EVENT, type DetachedRun } from "./leaving";
+export { ROOM_LEAVE_EVENT, type DetachedRun, type RoomLeaveHook } from "./leaving";
 
 function join(state: LeavingState, socket: QuickdrawServerSocket, room: string): boolean {
   checkRoom(room);
@@ -65,10 +66,11 @@ export interface Rooms {
   /** A socket disconnected (Socket.IO has emptied its rooms): its users leave its app rooms. */
   disconnected(socket: QuickdrawServerSocket): void;
   /**
-   * Runs `handler` for every socket that leaves app rooms from now on
-   * (`createServer`'s `onRoomLeave`), through `run`, a detached unit of work.
+   * Runs `hooks` for every socket that leaves app rooms from now on (each
+   * service's `onRoomLeave` and `createServer`'s), each through `run`, a
+   * detached unit of work of its own.
    */
-  onLeave(handler: RoomLeaveHandler, run: DetachedRun): void;
+  onLeave(hooks: readonly RoomLeaveHook[], run: DetachedRun): void;
   /** Takes this node's sockets out of rooms other nodes' `leave(room, { userId })` name. */
   listen(): void;
 }
@@ -129,8 +131,8 @@ export function createRooms(base: RoomState): Rooms {
         markSeen(state.hub, state.records, userId, Date.now());
       }
     },
-    onLeave(handler: RoomLeaveHandler, run: DetachedRun): void {
-      state.listener = leaveListener(handler, run, state.hub.logger);
+    onLeave(hooks: readonly RoomLeaveHook[], run: DetachedRun): void {
+      state.listener = hooks.length === 0 ? undefined : leaveListener(hooks, run, state.hub.logger);
     },
     listen(): void {
       listenForRemovals(state);
