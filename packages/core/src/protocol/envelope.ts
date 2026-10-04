@@ -384,7 +384,7 @@ export type RevokedFrame =
       readonly scope?: string;
     };
 
-/** `qd:rotate`: reconnect at a random moment within `withinMs`. */
+/** `qd:rotate`: stay connected until a random moment within `withinMs`, then reconnect. */
 export interface RotateFrame {
   readonly withinMs: number;
 }

@@ -37,6 +37,10 @@ signal stream_seeded(service: String, stream: String, scope: String, seed: Array
 signal presence_changed(room: String, users: Array)
 ## The server ended a subscription (`qd:revoked`).
 signal revoked(frame: Dictionary)
+## The server asked the client to reconnect (`qd:rotate`): the socket stays
+## open, calls still answered, until a random moment within `within_ms`; then
+## the client reconnects and `connected` fires again.
+signal rotating(within_ms: int)
 ## The user's service grants changed (`qd:access`).
 signal access_changed(service_access: Dictionary)
 ## Every other server event (`qd:e`, `qd:c`, `qd:changed`), for frames this client does not route.
@@ -46,8 +50,22 @@ const PROTOCOL := 5
 const CLIENT := "quickdraw-gdscript/5.0.0"
 ## A RATE_LIMITED reply without `retryAfterMs` waits this long (docs/protocol-v5.md, Limits).
 const DEFAULT_BACKOFF_MS := 5000
+## After a lost connection the client waits a random time up to this (full
+## jitter), doubling after each failed attempt up to RECONNECT_MAX_S.
 const RECONNECT_MIN_S := 1.0
 const RECONNECT_MAX_S := 15.0
+## Frames waiting to be read hold at most this many bytes: a reply as large as
+## the server's default `maxResponseBytes` (1 MiB) with its envelope, and the
+## frames that arrive with it. Godot drops a frame that does not fit.
+const INBOUND_BUFFER_BYTES := 1 << 21
+## And at most this many frames.
+const MAX_QUEUED_PACKETS := 4096
+## An acknowledgement nobody takes with `reply` is dropped after this long
+## (a call started with `start_call` and never awaited, a refusal, a failure
+## when the connection was lost)...
+const UNCLAIMED_REPLY_MS := 60000
+## ...or sooner, the oldest first, when more than this many wait.
+const MAX_UNCLAIMED_REPLIES := 256
 ## A channel message is dropped, not queued, while more than this waits to be sent (volatile).
 const BACKED_UP_BYTES := 65536
 const SUBSCRIPTION_EVENTS := ["qd:sub", "qd:col:sub", "qd:col:items", "qd:watch", "qd:stream:sub"]
@@ -62,6 +80,10 @@ var user_id: Variant = null
 var service_access: Dictionary = {}
 ## Print every frame sent (`>> `) and received (`<< `), pings and pongs aside.
 var trace := false
+## Draws the client's random waits: the reconnect backoff, the moment a
+## `qd:rotate` chooses, and the spread of a RATE_LIMITED backoff. Seed it to
+## repeat a run.
+var rng := RandomNumberGenerator.new()
 
 var _ws := WebSocketPeer.new()
 var _url := ""
@@ -70,16 +92,22 @@ var _headers := PackedStringArray()
 var _reconnect := true
 var _reconnect_delay := RECONNECT_MIN_S
 var _reconnect_at_ms := 0
+var _rotate_at_ms := 0  # when to leave for a `qd:rotate`, while one is due
 var _lost_at_ms := 0
 var _heartbeat_ms := 45000
 var _next_id := 0
-var _replies: Dictionary = {}  # ack id -> the acknowledgement, once it arrived
-var _deadlines: Dictionary = {}  # ack id -> when to stop waiting, while awaited
+var _replies: Dictionary = {}  # ack id -> [the acknowledgement, when it arrived], until `reply` takes it
+var _awaited: Dictionary = {}  # ack ids a `reply` waits for
+var _deadlines: Dictionary = {}  # ack id -> when to stop waiting, while in flight
 var _lane: Dictionary = {}  # ack ids of subscription events awaiting their acknowledgement
 var _backoff_until := {"call": 0, "subscription": 0}
 var _streams: Dictionary = {}  # "service/stream/scope" -> the qd:stream:sub frame
 var _rooms: Dictionary = {}  # room -> {user id: true}
 var _handlers: Dictionary = {}  # "service/event" -> [Callable]
+
+
+func _init() -> void:
+	rng.randomize()
 
 
 ## Connects to `base_url` ("https://api.example.com"). Options: `token`, sent
@@ -131,7 +159,7 @@ func start_call(service: String, method: String, input: Variant = null, version:
 	var id := _take_id()
 	var refusal := _refusal("call")
 	if not refusal.is_empty():
-		_replies[id] = refusal
+		_keep_reply(id, refusal)
 		return id
 	var envelope := {"id": id, "s": service, "m": method}
 	if input != null:
@@ -143,15 +171,19 @@ func start_call(service: String, method: String, input: Variant = null, version:
 	return id
 
 
-## Waits for the acknowledgement of call or request `id`.
+## Waits for the acknowledgement of call or request `id`. One that arrived
+## before is kept for `UNCLAIMED_REPLY_MS`, so `reply` may come later.
 func reply(id: int) -> Dictionary:
+	_awaited[id] = true
 	while not _replies.has(id):
 		if not _deadlines.has(id) or Time.get_ticks_msec() > int(_deadlines[id]):
 			_deadlines.erase(id)
 			_lane.erase(id)
+			_awaited.erase(id)
 			return _failure("TIMEOUT", "No acknowledgement in time")
 		await get_tree().process_frame
-	var answer: Dictionary = _replies[id]
+	_awaited.erase(id)
+	var answer: Dictionary = _replies[id][0]
 	_replies.erase(id)
 	_note_rate_limit(answer, "subscription" if _lane.has(id) else "call")
 	_lane.erase(id)
@@ -231,7 +263,8 @@ func request(event: String, payload: Variant) -> Dictionary:
 
 func _open() -> void:
 	_ws = WebSocketPeer.new()
-	_ws.inbound_buffer_size = 1 << 20
+	_ws.inbound_buffer_size = INBOUND_BUFFER_BYTES
+	_ws.max_queued_packets = MAX_QUEUED_PACKETS
 	_ws.outbound_buffer_size = 1 << 18
 	if not _headers.is_empty():
 		_ws.handshake_headers = _headers
@@ -247,6 +280,9 @@ func _process(_delta: float) -> void:
 			_reconnect_at_ms = 0
 			_open()
 		return
+	if _rotate_at_ms > 0 and now >= _rotate_at_ms:
+		_rotate()
+		return
 	_ws.poll()
 	match _ws.get_ready_state():
 		WebSocketPeer.STATE_OPEN:
@@ -261,18 +297,28 @@ func _process(_delta: float) -> void:
 			_lost("transport close", true)
 
 
+## The moment a `qd:rotate` chose: leave, and connect again at once with a fresh handshake.
+func _rotate() -> void:
+	_send("41")
+	_ws.close()
+	_lost("rotate", false)
+	if _reconnect:
+		_reconnect_at_ms = maxi(1, Time.get_ticks_msec())
+
+
 ## The socket is gone: answer what waits, forget its rooms, and reconnect when wanted.
 func _lost(reason: String, retry: bool) -> void:
 	var was := state
 	state = State.CLOSED
+	_rotate_at_ms = 0
 	for id in _deadlines.keys():
-		_replies[id] = _failure("INTERNAL", "The connection was lost")
+		_keep_reply(id, _failure("INTERNAL", "The connection was lost"))
 	_deadlines.clear()
 	_rooms.clear()
 	if was == State.READY:
 		disconnected.emit(reason)
 	if retry and _reconnect:
-		_reconnect_at_ms = Time.get_ticks_msec() + int(_reconnect_delay * randf_range(0.8, 1.2) * 1000.0)
+		_reconnect_at_ms = Time.get_ticks_msec() + int(rng.randf_range(0.0, _reconnect_delay) * 1000.0)
 		_reconnect_delay = minf(_reconnect_delay * 2.0, RECONNECT_MAX_S)
 
 
@@ -336,7 +382,7 @@ func _on_packet(text: String) -> void:
 func _on_ack(id: int, answer: Variant) -> void:
 	if _deadlines.has(id) and answer is Dictionary:
 		_deadlines.erase(id)
-		_replies[id] = answer
+		_keep_reply(id, answer)
 
 
 func _on_refused(body: Variant) -> void:
@@ -367,11 +413,12 @@ func _on_event(event: String, data: Variant) -> void:
 			service_access = data.get("serviceAccess", {})
 			access_changed.emit(service_access)
 		"qd:rotate":
-			# Reconnect at a random moment within the window, spreading the clients out.
-			_reconnect_at_ms = Time.get_ticks_msec() + randi_range(0, maxi(0, int(data.get("withinMs", 0))))
-			_send("41")
-			_ws.close()
-			_lost("rotate", false)
+			# Stay on this socket until a random moment within the window, then
+			# reconnect (`_rotate`), so the server's clients come back spread out.
+			if _rotate_at_ms == 0:
+				var within := maxi(0, int(data.get("withinMs", 0)))
+				_rotate_at_ms = maxi(1, Time.get_ticks_msec() + rng.randi_range(0, within))
+				rotating.emit(within)
 		_:
 			frame_received.emit(event, data)
 
@@ -429,6 +476,19 @@ func _take_id() -> int:
 	return id
 
 
+## Keeps the acknowledgement of `id` until `reply` takes it. One nobody awaits
+## is dropped once it is UNCLAIMED_REPLY_MS old, or when more than
+## MAX_UNCLAIMED_REPLIES wait, the oldest first.
+func _keep_reply(id: int, answer: Dictionary) -> void:
+	var now := Time.get_ticks_msec()
+	_replies[id] = [answer, now]
+	for old in _replies.keys():
+		if _replies.size() <= MAX_UNCLAIMED_REPLIES and now - int(_replies[old][1]) < UNCLAIMED_REPLY_MS:
+			break
+		if not _awaited.has(old):
+			_replies.erase(old)
+
+
 func _call_timeout_ms() -> int:
 	return int(hello.get("limits", {}).get("callTimeoutMs", 30000)) + 2000
 
@@ -454,7 +514,7 @@ func _note_rate_limit(answer: Dictionary, kind: String) -> void:
 	var data: Variant = error.get("data")
 	var wait := float(data.get("retryAfterMs", DEFAULT_BACKOFF_MS)) if data is Dictionary else float(DEFAULT_BACKOFF_MS)
 	wait = clampf(wait, 250.0, 300000.0)
-	_backoff_until[kind] = Time.get_ticks_msec() + int(wait * randf_range(1.0, 1.5))
+	_backoff_until[kind] = Time.get_ticks_msec() + int(wait * rng.randf_range(1.0, 1.5))
 
 
 func _failure(code: String, message: String) -> Dictionary:

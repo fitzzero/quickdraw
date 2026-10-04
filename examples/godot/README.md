@@ -37,7 +37,7 @@ func _on_event(service: String, event: String, payload: Variant) -> void:
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `connect_to(url, options)`                        | Connects. `token` is sent as `auth.token`; `auth` adds keys; `path` (default `/socket.io`); `headers` for the handshake (a `Cookie` on desktop); `reconnect` (default on). |
 | `call_method(service, method, input, version)`    | Awaits the acknowledgement: `{ok: true, d}`, `{ok: true, nm: true, v}` or `{ok: false, e: {code, message, data?}}`.                                                        |
-| `start_call(...)`, `reply(id)`, `cancel_call(id)` | A call in two steps, so it can be cancelled (`qd:cancel`; the answer is `CANCELLED`).                                                                                      |
+| `start_call(...)`, `reply(id)`, `cancel_call(id)` | A call in two steps, so it can be cancelled (`qd:cancel`; the answer is `CANCELLED`). An answer `reply` has not taken yet is kept for 60 s (at most 256 of them).          |
 | `send_channel(service, channel, payload)`         | Fire and forget: never acknowledged, never awaited. Returns false when dropped here (not connected, or the connection backed up).                                          |
 | `subscribe_stream(service, stream, scope)`        | Awaits the seed; items then arrive as `stream_item`. Subscribed again after each reconnect.                                                                                |
 | `unsubscribe_stream(service, stream, scope)`      | Leaves the feed.                                                                                                                                                           |
@@ -45,9 +45,12 @@ func _on_event(service: String, event: String, payload: Variant) -> void:
 | `presence(room)`                                  | The users in an app room the socket is in.                                                                                                                                 |
 | `request(event, payload)`                         | Any other acknowledged event of the protocol (`qd:sub`, `qd:watch`, ...), paced by the hello's subscription lane.                                                          |
 | `close()`                                         | Disconnects for good.                                                                                                                                                      |
+| `rng`                                             | The `RandomNumberGenerator` behind the client's random waits (reconnect backoff, the `qd:rotate` moment); seed it to repeat a run.                                         |
 
 Signals: `connected(hello)`, `disconnected(reason)`, `refused(code, message)`
 (`PROTOCOL_MISMATCH` or `UNAUTHENTICATED`; it does not reconnect),
+`rotating(within_ms)` (`qd:rotate`: the socket stays open until the client's
+moment within the window),
 `event_received(service, event, payload)`,
 `stream_item(service, stream, scope, item)`,
 `stream_seeded(service, stream, scope, seed)`, `presence_changed(room, users)`,
@@ -58,16 +61,19 @@ Signals: `connected(hello)`, `disconnected(reason)`, `refused(code, message)`
 What it does for you, as `docs/protocol-v5.md` asks of a client:
 
 - answers the server's pings, and treats a silent server as gone;
-- reconnects after a dropped connection (1 s, doubling to 15 s, with
-  jitter) and at a random moment within a `qd:rotate` window, with a fresh
-  handshake; it does not reconnect after the server ended the socket or
-  refused the handshake;
+- reconnects after a dropped connection, after a random wait of up to 1 s
+  that doubles up to 15 s (full jitter); on `qd:rotate` it keeps the socket,
+  calls still answered, until a random moment within the window, then
+  reconnects with a fresh handshake; it does not reconnect after the server
+  ended the socket or refused the handshake;
 - waits for a call's acknowledgement at most the hello's `callTimeoutMs`
   and 2 s more, and fails calls in flight with `INTERNAL` when the
   connection drops;
 - after a `RATE_LIMITED` answer, refuses the same kind of work itself, with
   no frame, for `retryAfterMs` and up to half again (5 s without one);
-- keeps subscription events within the hello's `subscriptions.maxInFlight`.
+- keeps subscription events within the hello's `subscriptions.maxInFlight`;
+- reads a reply as large as the server's default `maxResponseBytes` (1 MiB)
+  with its envelope: frames waiting to be read may hold 2 MiB.
 
 Numbers in replies and frames arrive as floats (Godot's JSON); compare
 with `int(...)`.

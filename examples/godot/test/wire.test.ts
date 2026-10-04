@@ -239,29 +239,34 @@ describe("the GDScript client's session, frame by frame", () => {
     });
   });
 
-  it("rotates, and a new socket handshakes, resubscribes and must join again", async () => {
+  it("answers calls during a rotate window, then a new socket handshakes, resubscribes and must join again", async () => {
     const server = await start();
     const first = await connect(server, "ada");
     await ask(first.wire, SESSION[4] ?? "");
     await ask(first.wire, SESSION[5] ?? "");
     first.wire.send(SESSION[6] ?? "");
     await first.wire.next(moved(1));
-    server.server.rotate({ withinMs: 100 });
-    expect(payloadOf(await first.wire.next(isEvent("qd:rotate")))).toEqual({ withinMs: 100 });
-    // Socket.IO DISCONNECT, then the client closes the WebSocket itself, as smoke.gd does.
-    first.wire.send(SESSION[12] ?? "");
+    server.server.rotate({ withinMs: 1000 });
+    expect(payloadOf(await first.wire.next(isEvent("qd:rotate")))).toEqual({ withinMs: 1000 });
+    // The socket stays the client's until its moment within the window: a call is answered.
+    expect(await ask(first.wire, SESSION[12] ?? "")).toEqual({
+      ok: true,
+      d: { text: "rotating", userId: "ada" },
+    });
+    // At the moment: Socket.IO DISCONNECT, then the client closes the WebSocket itself.
+    first.wire.send(SESSION[13] ?? "");
     first.wire.close();
 
     const { wire } = await connect(server, "ada");
-    expect(await ask(wire, SESSION[14] ?? "")).toEqual({ ok: true, seed: [{ n: 1 }] });
+    expect(await ask(wire, SESSION[15] ?? "")).toEqual({ ok: true, seed: [{ n: 1 }] });
     // Not in the world yet: the new socket's move is dropped.
-    wire.send(SESSION[15] ?? "");
-    expect(await ask(wire, SESSION[16] ?? "")).toEqual({ ok: true, d: { players: ["ada"] } });
-    wire.send(SESSION[17] ?? "");
+    wire.send(SESSION[16] ?? "");
+    expect(await ask(wire, SESSION[17] ?? "")).toEqual({ ok: true, d: { players: ["ada"] } });
+    wire.send(SESSION[18] ?? "");
     await wire.next(moved(3));
     expect(payloadOf(await wire.next(isEvent("qd:stream")))).toMatchObject({ item: { n: 2 } });
     expect(wire.frames.filter((frame) => moved(8)(frame) || moved(9)(frame))).toEqual([]);
-    wire.send(SESSION[18] ?? "");
+    wire.send(SESSION[19] ?? "");
     wire.close();
     await expect.poll(async () => await server.server.presence.users(WORLD)).toEqual([]);
   });
@@ -270,7 +275,7 @@ describe("the GDScript client's session, frame by frame", () => {
     const server = await start();
     const wire = await Wire.open(server);
     await wire.next((frame) => frame.startsWith("0"));
-    wire.send(SESSION[19] ?? "");
+    wire.send(SESSION[20] ?? "");
     expect(await wire.next((frame) => frame.startsWith("44"))).toBe(
       '44{"message":"Authentication failed","data":{"code":"UNAUTHENTICATED"}}',
     );

@@ -1,7 +1,8 @@
 // The Godot check, `bun run check:godot` (after `bun run build` at the
 // repository root): starts the game server (`game.ts`), runs the GDScript
 // client headless through `smoke.gd` with Godot 4 (`GODOT`, else `godot` on
-// the PATH), sends `qd:rotate` when the script asks, and passes when every
+// the PATH), sends `qd:rotate` (a window of `ROTATE_WITHIN_MS`, which the
+// script knows too) when the script asks, and passes when every
 // check of the script held and the client wrote exactly the frames of
 // `frames.ts`, the ones the Node wire test writes too.
 
@@ -15,6 +16,8 @@ import { startServer, type GameServer } from "./game";
 
 const PROJECT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TIMEOUT_MS = 60_000;
+/** The `qd:rotate` window; `smoke.gd`'s `ROTATE_WITHIN_MS` is the same. */
+const ROTATE_WITHIN_MS = 1000;
 
 interface Run {
   readonly code: number;
@@ -38,7 +41,7 @@ function runGodot(server: GameServer): Promise<Run> {
     if (line.startsWith(">> ")) {
       sent.push(line.slice(3));
     } else if (line === "STEP rotate") {
-      server.server.rotate({ withinMs: 100 });
+      server.server.rotate({ withinMs: ROTATE_WITHIN_MS });
     } else if (line.startsWith("RESULT ")) {
       result = JSON.parse(line.slice("RESULT ".length)) as Run["result"];
     }

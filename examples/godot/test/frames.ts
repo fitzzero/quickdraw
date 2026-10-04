@@ -42,10 +42,11 @@ export function ticksFrame(id: number): string {
  * lacks; a move before joining the world (dropped by the server); the ticks
  * stream; joining the world; a move; two concurrent slow queries (the second
  * is RATE_LIMITED, call 6 is then refused by the client itself, unsent) and
- * a call after the backoff; a slow query cancelled; Socket.IO DISCONNECT
- * after `qd:rotate`, then the new socket's handshake, its stream
- * resubscription, a move before joining again (dropped), the join and a
- * move; DISCONNECT on `close()`; and a client with a token the server
+ * a call after the backoff; a slow query cancelled; a call during the
+ * `qd:rotate` window, on the socket the client keeps until its moment;
+ * Socket.IO DISCONNECT at that moment, then the new socket's handshake, its
+ * stream resubscription, a move before joining again (dropped), the join and
+ * a move; DISCONNECT on `close()`; and a client with a token the server
  * refuses.
  */
 export const SESSION: readonly string[] = [
@@ -61,11 +62,12 @@ export const SESSION: readonly string[] = [
   callFrame(7, "echo", { text: "again" }),
   callFrame(8, "wait", { ms: 5000 }),
   `42${godotJson(["qd:cancel", { id: 8 }])}`,
+  callFrame(9, "echo", { text: "rotating" }),
   "41",
   connectFrame("ada"),
-  ticksFrame(9),
+  ticksFrame(10),
   moveFrame(8, 0),
-  callFrame(10, "join", { name: "ada" }),
+  callFrame(11, "join", { name: "ada" }),
   moveFrame(3, 0),
   "41",
   connectFrame("nobody"),

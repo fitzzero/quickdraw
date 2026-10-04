@@ -5,6 +5,12 @@ extends SceneTree
 ## when the harness should send qd:rotate, and a last line "RESULT {json}";
 ## exits 0 when every check held. Run it with `bun run check:godot`.
 
+## The window of the harness's qd:rotate (test/godot.ts sends the same), and
+## the part of it the seeded client's moment falls in.
+const ROTATE_WITHIN_MS := 1000
+const ROTATE_EARLIEST_MS := 400
+const ROTATE_LATEST_MS := 700
+
 var failures: Array[String] = []
 var checks := 0
 var events: Array = []
@@ -55,8 +61,11 @@ func _run() -> void:
 	await _calls(client)
 	await _world(client)
 	await _limits(client)
+	_seed_mid_window(client)
 	print("STEP rotate")
+	await _rotating(client)
 	await _reconnected(client)
+	await _unclaimed(client)
 	await _refused(url, client.trace)
 	print("RESULT ", JSON.stringify({"checks": checks, "failures": failures}))
 	quit(0 if failures.is_empty() else 1)
@@ -100,8 +109,32 @@ func _limits(client) -> void:
 	check(not cancelled.ok and cancelled.e.code == "CANCELLED", "a cancelled query answers CANCELLED")
 
 
+## Seeds the client's random waits so the moment its next draw picks within
+## the qd:rotate window falls in its middle: the call made during the window
+## then always has the time to be answered. Nothing else draws before it.
+func _seed_mid_window(client) -> void:
+	var probe := RandomNumberGenerator.new()
+	for candidate in 1000:
+		probe.seed = candidate
+		var moment := probe.randi_range(0, ROTATE_WITHIN_MS)
+		if moment >= ROTATE_EARLIEST_MS and moment <= ROTATE_LATEST_MS:
+			client.rng.seed = candidate
+			return
+
+
+func _rotating(client) -> void:
+	var within: int = await client.rotating
+	var started := Time.get_ticks_msec()
+	check(within == ROTATE_WITHIN_MS and client.is_ready(), "qd:rotate leaves the socket open")
+	var during: Dictionary = await client.call_method("gameService", "echo", {"text": "rotating"})
+	check(during.ok and during.d.text == "rotating", "a call during the rotate window is answered")
+	await client.connected
+	var waited := Time.get_ticks_msec() - started
+	check(waited >= ROTATE_EARLIEST_MS and waited < ROTATE_WITHIN_MS + 1000, "the client reconnects at its moment within the window")
+
+
 func _reconnected(client) -> void:
-	var hello: Dictionary = await client.connected
+	var hello: Dictionary = client.hello
 	check(hello.userId == "ada", "after qd:rotate the client reconnects with a new handshake")
 	check(client.presence("world:main").is_empty(), "the new socket is in no room")
 	client.send_channel("gameService", "move", {"dx": 8, "dy": 0})
@@ -112,6 +145,20 @@ func _reconnected(client) -> void:
 	check(not moved(9) and not moved(8), "the moves from outside the world were dropped")
 	check(seeds[1].size() == 1 and int(seeds[1][0].n) == 1, "the stream was subscribed again, its seed the tick before")
 	client.close()
+
+
+## Answers nobody takes with `reply` are capped, the oldest dropped first;
+## here the closed client's refusals, which write no frame.
+func _unclaimed(client) -> void:
+	var cap: int = load("res://addons/quickdraw/quickdraw_client.gd").MAX_UNCLAIMED_REPLIES
+	var ids: Array[int] = []
+	for n in cap + 50:
+		ids.append(client.start_call("gameService", "echo", {"text": "never sent"}))
+	check(client._replies.size() == cap, "answers nobody takes are capped")
+	var newest: Dictionary = await client.reply(ids[-1])
+	check(not newest.ok and newest.e.message == "Not connected", "the newest is kept for reply")
+	var oldest: Dictionary = await client.reply(ids[0])
+	check(not oldest.ok and oldest.e.code == "TIMEOUT", "the oldest was dropped")
 
 
 func _refused(url: String, trace: bool) -> void:

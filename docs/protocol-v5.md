@@ -240,7 +240,10 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
   call made over the same connection, and after a reconnect the new socket
   is in no app room until a call joins it again. Subscriptions are per
   socket too: subscribe again after a reconnect, sending the revisions held.
-- On `qd:rotate`, reconnect at a random moment within `withinMs`.
+- On `qd:rotate`, pick a random moment within `withinMs` and stay
+  connected until then: calls are still answered on that socket. At that
+  moment, disconnect and reconnect with a fresh handshake, so the server's
+  clients come back spread over the window.
 - When the handshake is refused, reconnecting with the same client and
   credentials is refused again: `PROTOCOL_MISMATCH` needs a client that
   speaks the server's protocol, `UNAUTHENTICATED` other credentials.
@@ -704,7 +707,7 @@ One of:
 
 #### `RotateFrame`
 
-`qd:rotate`: reconnect at a random moment within `withinMs`.
+`qd:rotate`: stay connected until a random moment within `withinMs`, then reconnect.
 
 | Field      | Type     |
 | ---------- | -------- |
