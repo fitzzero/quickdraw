@@ -123,14 +123,20 @@ the row's next change.
   connected to, against the app rooms that socket joined: a socket's rooms
   live on its node and only a call over the socket joins it, so the check
   holds with no round trip (a room the user joined from a socket on another
-  node does not count, by design).
+  node does not count, by design). A stream's `access: { room }` is checked
+  the same way when a socket subscribes, and the feed is revoked on the
+  socket's node when the socket leaves the room or a removal takes it out.
+  `rooms.size(room)` counts the room's sockets on the node that asks, never
+  another's: a game loop that runs on one node and wants every node's
+  audience asks `presence.count(room)` (users, by a round trip) instead.
 - **Taking a user out of a room.** `rooms.leave(room, { userId })` is
   broadcast to every node and answered, like an access change: once it
   resolves, no node has a socket of the user in the room, so they hear none
   of its events and their channel messages that require it are dropped. The
   wait is bounded and fails open the same way. Each node sends `left` for
   its own last socket of the user, so the room may hear it more than once.
-- **Leave hooks.** `onRoomLeave` runs on the node that held the socket. Its
+- **Leave hooks.** `onRoomLeave` (each service's and the server's) runs on
+  the node that held the socket. Its
   `last` (no socket of the user left in the room) is decided by asking
   every node once the socket left, as the room's `left` frame is: two
   sockets of one user leaving rooms on two nodes at the same moment can
