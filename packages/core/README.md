@@ -1912,7 +1912,7 @@ export function AdminTasks() {
   value is checked by the entity schema itself, and a value the database
   refuses is `VALIDATION`. A missing row is `NOT_FOUND`.
 - `adminMeta()` returns `{ serviceName, displayName, fields }`, one
-  `{ name, type, label, required, editable, showInTable, sortable, filterable, enumValues?, relationService? }`
+  `{ name, type, label, required, editable, showInTable, sortable, filterable, enumValues?, relationService?, kind?, showInForm? }`
   per field: `type` is
   `string`, `number`, `boolean`, `date` (an ISO string with a date format),
   `enum` or `json` from the field's JSON Schema, and `relation` by override;
@@ -1929,7 +1929,12 @@ export function AdminTasks() {
   rows without it and `FORBIDDEN` for a write, filter or sort naming it.
   The write is tracked, so with `auth.serviceAccessSource` naming the column
   the user's open sockets get the new grants at once, on every node. Such
-  an Admin can grant any service, themself included.
+  an Admin can grant any service, themself included. The field's
+  configuration says `kind: "grants"`, so a screen with a grants editor of
+  its own finds it without its name, and
+  `fieldOverrides: { serviceAccess: { showInForm: false } }` keeps it out
+  of a generic create or edit form (a form shows the fields whose
+  `showInForm` is not `false`); the kit still reads and writes it.
 - `admin.handlers(contract, { onWrite })` runs `onWrite({ method, id,
 before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   `adminDelete`, in one transaction with the write (`db` is the

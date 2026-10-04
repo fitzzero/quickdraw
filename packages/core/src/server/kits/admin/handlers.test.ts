@@ -109,6 +109,13 @@ describe("admin.handlers", () => {
     expect(refuse({ fieldOverrides: { title: { type: "text" } } })).toThrow(
       'fieldOverrides for "title" has a type, label, enumValues or relationService of the wrong kind',
     );
+    expect(refuse({ fieldOverrides: { title: { showInForm: "no" } } })).toThrow(
+      'fieldOverrides for "title" showInForm must be true or false',
+    );
+    // What a field holds is the kit's to say.
+    expect(refuse({ fieldOverrides: { title: { kind: "grants" } } })).toThrow(
+      'fieldOverrides for "title" has an unknown key "kind"',
+    );
   });
 });
 

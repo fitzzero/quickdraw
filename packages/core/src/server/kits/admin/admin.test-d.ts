@@ -132,6 +132,11 @@ describe("AdminFieldConfig", () => {
     expectTypeOf(legacy).toExtend<AdminFieldConfig>();
     expectTypeOf<AdminFieldConfig["filterable"]>().toEqualTypeOf<boolean | undefined>();
   });
+
+  test("says what the grants field holds, and whether a form shows a field (finding F5.5)", () => {
+    expectTypeOf<AdminFieldConfig["kind"]>().toEqualTypeOf<"grants" | undefined>();
+    expectTypeOf<AdminFieldConfig["showInForm"]>().toEqualTypeOf<boolean | undefined>();
+  });
 });
 
 describe("admin.handlers", () => {
@@ -256,6 +261,13 @@ describe("admin.handlers", () => {
     admin.handlers(users, { grants: true });
     // @ts-expect-error the task entity holds no grants
     admin.handlers(task, { grants: true });
+    // A grants editor of the app's own keeps the field out of a generic form.
+    admin.handlers(users, {
+      grants: true,
+      fieldOverrides: { serviceAccess: { showInForm: false } },
+    });
+    // @ts-expect-error what a field holds is the kit's to say
+    admin.handlers(users, { grants: true, fieldOverrides: { serviceAccess: { kind: "grants" } } });
   });
 });
 
