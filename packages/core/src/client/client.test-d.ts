@@ -12,7 +12,10 @@ import { describe, expectTypeOf, test } from "vitest";
 import { z } from "zod";
 import {
   defineContract,
+  listOf,
   mutation,
+  nullable,
+  query,
   type EntityOf,
   type ItemOf,
   type QuickdrawError,
@@ -252,6 +255,37 @@ describe("live members", () => {
   test("a contract without an entity has no entity members", () => {
     // @ts-expect-error the counter has no entity
     void qd.counter.useEntity;
+  });
+
+  test("a field the contract's fields tier is optional wherever a reader receives the row", () => {
+    // Only callers with Admin on a user receive its email (and its grants).
+    const userSchema = z.object({ id: z.string(), name: z.string(), email: z.string() });
+    const users = defineContract("userService", {
+      entity: userSchema,
+      projections: { profile: userSchema },
+      fields: { email: "Admin" },
+      methods: {
+        getMe: query({ input: z.object({}), output: nullable("entity") }),
+        rename: mutation({
+          input: z.object({ id: z.string(), name: z.string() }),
+          output: "entity",
+        }),
+        listProfiles: query({ input: z.object({}), output: listOf("profile") }),
+      },
+      collections: { all: { scope: "name", item: "profile", order: [["id", "asc"]] } },
+    });
+    type Received = { id: string; name: string; email?: string };
+    const client = createQuickdrawClient({ users });
+    const useMe = () => client.users.useEntity("u1");
+    expectTypeOf<ReturnType<typeof useMe>["data"]>().toEqualTypeOf<Received | undefined>();
+    const useAll = () => client.users.all.useCollection("n");
+    expectTypeOf<ReturnType<typeof useAll>["items"]>().toEqualTypeOf<readonly Received[]>();
+    expectTypeOf(client.users.getMe.call).returns.resolves.toEqualTypeOf<Received | null>();
+    expectTypeOf(client.users.rename.call).returns.resolves.toEqualTypeOf<Received>();
+    expectTypeOf(client.users.listProfiles.call).returns.resolves.toEqualTypeOf<Received[]>();
+    // the email is read with a guard
+    const useEmail = () => client.users.useEntity("u1").data?.email ?? "hidden";
+    expectTypeOf<ReturnType<typeof useEmail>>().toEqualTypeOf<string>();
   });
 });
 

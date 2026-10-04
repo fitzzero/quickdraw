@@ -1153,6 +1153,7 @@ export function TaskDetail({ id }: { readonly id: string }) {
   if (isRemoved) {
     return <p>This task was deleted.</p>;
   }
+  // notes reach Admins only (the contract's fields), so its type is optional: guard it
   return (
     <div>
       <h1>{task?.title}</h1>
@@ -1166,6 +1167,10 @@ export function TaskDetail({ id }: { readonly id: string }) {
 }
 ```
 
+- A field the contract's `fields` map tiers (`notes` here) is optional in
+  every row type a reader gets (`useEntity`, collection items, `"entity"`
+  outputs, `EntityOf`, `ItemOf`), because a reader below its level receives
+  the row without it. Handlers still return the full row.
 - A mutation whose input has `id` and whose output is `"entity"` is
   optimistic by default: its input's fields show over the cached row and its
   collection items from the moment it is sent, are dropped if it fails, and
