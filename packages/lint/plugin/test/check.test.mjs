@@ -129,6 +129,28 @@ describe("quickdraw-lint check", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("src/services/task.ts:6:9");
   });
+});
+
+describe("quickdraw-lint check's options and limits", () => {
+  const unused = (name) => `export function ${name}(): void {\n  const ${name}Left = 1;\n}\n`;
+
+  it("takes the baseline file from --baseline, a path from where it runs", () => {
+    // an app whose config names no baseline: only the option points at the file
+    const root = createApp();
+    roots.push(root);
+    writeFiles(root, [["apps/api/src/util.ts", unused("first")]]);
+    baseline(root);
+    const api = path.join(root, "apps", "api");
+    expect(CHECK(api, ["-c", "../../.oxlintrc.json", "src"]).status).toBe(1);
+    const allowed = CHECK(api, [
+      "-c",
+      "../../.oxlintrc.json",
+      "--baseline",
+      "../../.quickdraw-lint-baseline.json",
+      "src",
+    ]);
+    expect(allowed).toEqual({ status: 0, stdout: "Found 0 warnings and 0 errors.\n", stderr: "" });
+  });
 
   it("always reports a file oxlint cannot parse: no baseline holds a syntax error", () => {
     const root = app();

@@ -39,7 +39,7 @@ no violation uses any more are reported as no-unused-baseline warnings.
 Exits 1 when an error remains. Use it as the app's lint command.
 
 Options:
-      --baseline <file>     baseline file (default: the config's settings.quickdraw.baseline)
+      --baseline <file>     baseline file, from here (default: the config's settings.quickdraw.baseline)
   -f, --format <format>     default or json (oxlint's JSON report, filtered)
       --quiet               report errors only
       --deny-warnings       exit 1 when a warning remains
@@ -188,10 +188,14 @@ function endOfString(text, start) {
   return index + 1;
 }
 
-/** The baseline file's name: the option, else the config's `settings.quickdraw.baseline`. */
+/**
+ * The baseline file's name: the option (a path from the current directory),
+ * else the config's `settings.quickdraw.baseline` (looked up from each
+ * linted file's directory upwards, as the rules look it up).
+ */
 function baselineName(options, cwd) {
   if (options.baseline !== undefined) {
-    return options.baseline;
+    return path.resolve(cwd, options.baseline);
   }
   const config = path.resolve(cwd, options.config ?? ".oxlintrc.json");
   const name = readJsonc(config)?.settings?.quickdraw?.baseline;
