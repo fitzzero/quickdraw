@@ -53,6 +53,7 @@
     "**/generated/**",
     "**/fixtures/v4-app/**",
     "**/fixtures/v4-app.expected/**",
+    "**/guide-v4/**",
     "**/.test-output/**"
   ]
 }

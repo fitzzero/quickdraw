@@ -5,5 +5,5 @@
     "types": ["node"]
   },
   "include": ["src/**/*", "test/**/*", "*.config.ts"],
-  "exclude": ["node_modules", "dist", ".test-output", "test/fixtures"]
+  "exclude": ["node_modules", "dist", ".test-output", "test/fixtures", "test/guide-v4"]
 }

@@ -5,7 +5,7 @@
 // 4.1 code: it typechecks against the published @fitzzero/quickdraw-core
 // 4.1.0, and the 5.0 rules report it.
 
-import { writeFileSync } from "node:fs";
+import { cpSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ModuleKind, ModuleResolutionKind, Project, ScriptTarget, ts } from "ts-morph";
@@ -14,6 +14,7 @@ import { copyFixture, coveredLines, lint, PACKAGE, readTree, removeCopies, REPO 
 
 const CORE = join(REPO, "packages", "core");
 const V4 = join(PACKAGE, "node_modules", "quickdraw-core-v4");
+const GUIDE_V4 = join(PACKAGE, "test", "guide-v4");
 
 let root = "";
 
@@ -109,16 +110,41 @@ describe("the output", () => {
   });
 });
 
-describe("the fixture app", () => {
-  it("is 4.1 code: it typechecks against the published @fitzzero/quickdraw-core 4.1.0", () => {
-    const appRoot = copyFixture("input");
-    const v4 = {
-      "@fitzzero/quickdraw-core": [join(V4, "dist/shared/index.d.ts")],
-      "@fitzzero/quickdraw-core/server": [join(V4, "dist/server/index.d.ts")],
-      "@fitzzero/quickdraw-core/client": [join(V4, "dist/client/index.d.ts")],
-      // 4.1 apps are on Zod 3, and so are 4.1's own types
-      zod: [join(PACKAGE, "node_modules", "zod3")],
+/** Module paths that resolve quickdraw to the published 4.1.0. */
+const V4_PATHS = {
+  "@fitzzero/quickdraw-core": [join(V4, "dist/shared/index.d.ts")],
+  "@fitzzero/quickdraw-core/server": [join(V4, "dist/server/index.d.ts")],
+  "@fitzzero/quickdraw-core/client": [join(V4, "dist/client/index.d.ts")],
+  // 4.1 apps are on Zod 3, and so are 4.1's own types
+  zod: [join(PACKAGE, "node_modules", "zod3")],
+};
+
+describe("the 4.x code the codemod and the guide start from", () => {
+  it("the fixture app is 4.1 code: it typechecks against the published @fitzzero/quickdraw-core 4.1.0", () => {
+    expect(typecheck(copyFixture("input"), V4_PATHS)).toEqual([]);
+  });
+
+  it("the migration guide's 4.x examples typecheck against 4.1.0 too", () => {
+    expect(typecheck(GUIDE_V4, V4_PATHS)).toEqual([]);
+  });
+
+  it("and the 5.0 lint rule no-v4-api reports every file of them", () => {
+    const config = {
+      extends: [join(REPO, "packages/lint/oxlint.base.jsonc")],
+      plugins: ["typescript", "import", "react", "nextjs", "jsx_a11y"],
+      ignorePatterns: ["**/node_modules/**", "**/README.md"],
     };
-    expect(typecheck(appRoot, v4)).toEqual([]);
+    const scratch = copyFixture("guide");
+    cpSync(GUIDE_V4, join(scratch, "guide"), { recursive: true });
+    writeFileSync(join(scratch, "guide", ".oxlintrc.json"), JSON.stringify(config));
+    const reported = new Set(
+      lint(join(scratch, "guide"))
+        .filter((diagnostic) => diagnostic.rule === "quickdraw(no-v4-api)")
+        .map((diagnostic) => diagnostic.file),
+    );
+    const files = [...readTree(GUIDE_V4).keys()].filter(
+      (file) => /\.tsx?$/u.test(file) && !file.startsWith("packages/db/"),
+    );
+    expect(files.filter((file) => !reported.has(file))).toEqual([]);
   });
 });

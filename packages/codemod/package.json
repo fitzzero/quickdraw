@@ -19,7 +19,8 @@
   },
   "files": [
     "bin",
-    "dist"
+    "dist",
+    "MIGRATION.md"
   ],
   "type": "module",
   "publishConfig": {
@@ -28,8 +29,9 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsgo --noEmit",
-    "lint": "oxlint -c ../../.oxlintrc.json src bin test",
+    "lint": "oxlint -c ../../.oxlintrc.json src bin scripts test",
     "test": "vitest run",
+    "guide:sync": "node scripts/guide-names.mjs",
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
