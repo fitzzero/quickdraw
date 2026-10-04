@@ -71,17 +71,17 @@ export function findMarkers(text: string, file: string): FoundMarker[] {
   return found;
 }
 
-/** Whether the comments right above `node` already hold a marker of `category`. */
-export function hasMarker(node: Node, category: Category): boolean {
-  const tag = `${MARKER} [${category}]`;
-  return node.getLeadingCommentRanges().some((range) => range.getText().includes(tag));
+/** Whether the comments right above `node` already hold this marker. */
+export function hasMarker(node: Node, category: Category, message: string): boolean {
+  const text = markerText(category, message);
+  return node.getLeadingCommentRanges().some((range) => range.getText().trim() === text);
 }
 
 /**
  * Collects marker insertions for one file. Each marker goes above the
  * statement (or member, or property) holding the node it is about, once per
- * category and statement, and never twice: a statement that already carries
- * a marker of that category (from an earlier run) gets none.
+ * statement, and never twice: a statement that already carries the same
+ * marker (from an earlier run) gets none.
  */
 export class MarkerSet {
   private readonly seen = new Set<string>();
@@ -96,8 +96,8 @@ export class MarkerSet {
 
   /** Marks `target` itself. */
   addAbove(target: Node, category: Category, message: string): void {
-    const key = `${String(target.getStart())}:${category}`;
-    if (this.seen.has(key) || hasMarker(target, category)) {
+    const key = `${String(target.getStart())}:${category}:${message}`;
+    if (this.seen.has(key) || hasMarker(target, category, message)) {
       return;
     }
     this.seen.add(key);

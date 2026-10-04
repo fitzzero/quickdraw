@@ -2,7 +2,7 @@
 
 Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review` markers in the code; running the codemod again rewrites it from the markers that remain. Work through the sections in order (contracts, access, emits, client), delete each marker once its item is done, and see the migration guide (`MIGRATION.md`, shipped in `@fitzzero/quickdraw-codemod`) for each kind of item. Then run lint (`no-v4-api` names every 4.x API left, `no-todo-schema` every placeholder) and the typecheck.
 
-84 items in 24 files.
+86 items in 24 files.
 
 | Section | Items |
 | --- | ---: |
@@ -17,7 +17,7 @@ Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review`
 | Lifecycle hooks | 1 |
 | installAdminMethods to replace with the admin kit | 1 |
 | Service instance state and the 4.x context | 1 |
-| Client | 8 |
+| Client | 10 |
 | Server wiring and other 4.x APIs | 15 |
 
 ## Contracts
@@ -144,9 +144,11 @@ Hook calls now go through the typed client (`qd.<service>.<member>`); these need
 - [ ] `apps/web/src/components/Members.tsx:7` invalidateOn is gone: give the query a watch in its contract entry (it is fetched again when that collection scope changes), or read a collection
 - [ ] `apps/web/src/components/Members.tsx:13` room events: declare them in the contract's events and listen with qd.<service>.<event>.useEvent(handler)
 - [ ] `apps/web/src/components/ProjectList.tsx:14` onError receives a QuickdrawError now (4.x passed the message string): read error.message or error.code
-- [ ] `apps/web/src/components/TaskBoard.tsx:7` compare is gone: items follow the contract collection's order (put the sort there)
-- [ ] `apps/web/src/components/TaskBoard.tsx:15` manual refetch: live data, watch and the invalidation coordinator keep quickdraw queries current; delete it, or give the query a watch
-- [ ] `apps/web/src/hooks/useMyProjects.ts:16` compare is gone: items follow the contract collection's order (put the sort there)
+- [ ] `apps/web/src/components/TaskBoard.tsx:7` declare the collection "byProject" in the taskService contract (see the [collection] marker where 4.x defined it): qd.taskService.byProject does not exist until then, and the cast to the 4.x item type stands in for its type; delete the cast once it is declared
+- [ ] `apps/web/src/components/TaskBoard.tsx:8` compare is gone: items follow the contract collection's order (put the sort there)
+- [ ] `apps/web/src/components/TaskBoard.tsx:16` manual refetch: live data, watch and the invalidation coordinator keep quickdraw queries current; delete it, or give the query a watch
+- [ ] `apps/web/src/hooks/useMyProjects.ts:16` declare the collection "mine" in the projectService contract (see the [collection] marker where 4.x defined it): qd.projectService.mine does not exist until then, and the cast to the 4.x item type stands in for its type; delete the cast once it is declared
+- [ ] `apps/web/src/hooks/useMyProjects.ts:17` compare is gone: items follow the contract collection's order (put the sort there)
 - [ ] `apps/web/src/providers.tsx:7` 4.x QuickdrawProvider props (serverUrl, authToken, autoConnect): 5.0 takes client={qd} (lib/quickdraw), url, auth and socketOptions
 
 ## Server wiring and other 4.x APIs
