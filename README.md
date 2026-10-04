@@ -1798,6 +1798,15 @@ export function AdminTasks() {
   configurations written for 4.x still type); `id` and the
   timestamps come first and are not editable; `acl`, `serviceAccess` and
   `service_access` are hidden.
+- Grants: on a users service, `admin.handlers(user, { grants: true })`
+  shows and writes the entity's `serviceAccess` (a `json` field the entity
+  schema checks), so the admin screen edits grants through `adminUpdate`.
+  Only a caller whose own service-wide grant on that service is `Admin`
+  reads or writes it, whatever `access` gives the method: anyone else gets
+  rows without it and `FORBIDDEN` for a write, filter or sort naming it.
+  The write is tracked, so with `auth.serviceAccessSource` naming the column
+  the user's open sockets get the new grants at once, on every node. Such
+  an Admin can grant any service, themself included.
 - `adminSubscribers({ id })` counts the sockets subscribed to a row per
   access level (`{ id, count, levels, complete }`; behind a Redis adapter
   the counts are this server's and `complete` is `false`), and

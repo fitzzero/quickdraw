@@ -149,6 +149,9 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 - `sharing.contract({ mode: "acl" | "members" })` with `sharing.handlers(project)`,
   on a service whose policy has a `jsonAcl` or `members`.
 - `admin.contract({ entity })` with `admin.handlers(task)` (`{ service: "Admin" }` by default).
+  On a users service, `admin.handlers(user, { grants: true })` lets the admin
+  screen edit `serviceAccess` through `adminUpdate` (service-wide Admins
+  only); never hand-write a `setServiceAccess` method for it.
 
 ## Realtime
 
