@@ -66,7 +66,7 @@ describe("quickdraw-codemod", () => {
     const { code, out } = run("v5", root, "--dry-run");
     expect(code).toBe(0);
     expect(out).toContain("quickdraw-codemod v5 (dry run: nothing written)");
-    expect(out).toContain("5 services, 21 methods, 5 contracts");
+    expect(out).toContain("5 services, 22 methods, 5 contracts");
     expect(out).toContain("  A packages/shared/src/contracts/project.ts");
     expect(out).toContain("  D apps/web/src/hooks/useService.ts");
     // The report does not exist yet: the run would create it.

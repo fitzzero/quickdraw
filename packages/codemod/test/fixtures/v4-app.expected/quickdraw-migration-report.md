@@ -2,12 +2,12 @@
 
 Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review` markers in the code; running the codemod again rewrites it from the markers that remain. Work through the sections in order (contracts, access, emits, client), delete each marker once its item is done, and see the migration guide (`MIGRATION.md`, shipped in `@fitzzero/quickdraw-codemod`) for each kind of item. Then run lint (`no-v4-api` names every 4.x API left, `no-todo-schema` every placeholder) and the typecheck.
 
-94 items in 27 files.
+102 items in 27 files.
 
 | Section | Items |
 | --- | ---: |
-| Contracts | 25 |
-| Access | 9 |
+| Contracts | 26 |
+| Access | 10 |
 | Access overrides to turn into a policy | 4 |
 | toDto and protected fields to turn into projections and fields | 5 |
 | Collections to declare in contracts | 2 |
@@ -16,6 +16,7 @@ Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review`
 | Raw SQL writes to record with ctx.touch | 1 |
 | Lifecycle hooks | 1 |
 | installAdminMethods to replace with the admin kit | 1 |
+| Methods a kit implements | 6 |
 | Service instance state and the 4.x context | 1 |
 | Client | 11 |
 | Server wiring and other 4.x APIs | 21 |
@@ -49,20 +50,22 @@ Each method's kind was chosen from its name (get, list, search, find and count r
 - [ ] `packages/shared/src/contracts/user.ts:17` the entity is the 4.x DTO UserDTO: give it a real schema. Its keys are the fields subscribers receive, read from model "user": drop any that is not a column, or give it a projection select and map
 - [ ] `packages/shared/src/contracts/user.ts:20` query, chosen from its name
 - [ ] `packages/shared/src/contracts/user.ts:22` mutation, chosen from its name; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/user.ts:24` query, chosen from its name; output: todoSchema of the 4.x response type
 
 ## Access
 
-The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 4.x's `hasEntryACL` did, but for a user listed twice in a row's list (marked). "Read" without a row id was open to every signed-in user; decide whether that was meant.
+The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 4.x's `hasEntryACL` did, but for a user listed twice in a row's list (marked). "Read" without a row id was open to every signed-in user; decide whether that was meant. A method whose input has `id` under a form that checks no row ("public", say) carries `rowless: true` (marked): 5.0 refuses to define that shape on a service with an access policy without it, and it keeps the 4.x callers.
 
 - [ ] `apps/api/src/services/label.ts:8` 4.x had no row-level access here (no hasEntryACL, no checkAccess): only service grants opened rows, which this empty policy keeps. Give it a real policy if rows belong to someone
-- [ ] `apps/api/src/services/label.ts:18` 4.x's resolveEntryId was a function, kept here: where it returns nothing, the "" makes the row check fail, so only the service grant passes (4.x then applied the plain level)
-- [ ] `apps/api/src/services/label.ts:25` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
+- [ ] `apps/api/src/services/label.ts:19` 4.x's resolveEntryId was a function, kept here: where it returns nothing, the "" makes the row check fail, so only the service grant passes (4.x then applied the plain level)
+- [ ] `apps/api/src/services/label.ts:27` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/project.ts:94` 4.x's hasEntryACL read the row's `acl` column ([{ userId, level }]), and so does jsonAcl("acl"), with one difference: a user with several entries in a row's list gets the highest of their levels, where 4.x took the first. Check the stored lists for duplicate entries
-- [ ] `apps/api/src/services/project.ts:98` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
-- [ ] `apps/api/src/services/project.ts:127` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
+- [ ] `apps/api/src/services/project.ts:99` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
+- [ ] `apps/api/src/services/project.ts:129` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/task/methods/create-task.ts:9` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/task/methods/queries.ts:6` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/user.ts:40` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
+- [ ] `apps/api/src/services/user.ts:73` this method takes an id but its access "public" checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant
 
 ## Access overrides to turn into a policy
 
@@ -95,8 +98,8 @@ A 4.x `defineCollection` becomes a contract collection (`scope`, `item`, `order`
 5.0 sends entity frames and collection deltas from tracked writes; room events become contract events.
 
 - [ ] `apps/api/src/services/project.ts:69` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
-- [ ] `apps/api/src/services/project.ts:145` room event: declare it in the contract's events and send it with ctx.rooms.emit(room, contract, event, payload)
-- [ ] `apps/api/src/services/project.ts:159` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
+- [ ] `apps/api/src/services/project.ts:147` room event: declare it in the contract's events and send it with ctx.rooms.emit(room, contract, event, payload)
+- [ ] `apps/api/src/services/project.ts:161` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
 - [ ] `apps/api/src/services/task/methods/create-task.ts:18` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
 - [ ] `apps/api/src/services/task/methods/queries.ts:28` hand emit: send a reset with qd.collections.reset(contract, collection, scope), if one is still needed
 - [ ] `apps/api/src/services/task/methods/update-task.ts:12` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
@@ -108,10 +111,10 @@ A 4.x `defineCollection` becomes a contract collection (`scope`, `item`, `order`
 
 The 4.x CRUD helpers also emitted and ran lifecycle hooks; `db.<model>` writes are tracked and throw on failure.
 
-- [ ] `apps/api/src/services/project.ts:101` 4.x CRUD helper this.create: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.create(...) instead (frames follow the tracked write; hooks do not run; db.create throws on failure)
-- [ ] `apps/api/src/services/project.ts:121` 4.x CRUD helper this.update: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.update(...) instead (frames follow the tracked write; hooks do not run; 4.x returned null for a missing row where db.update throws NOT_FOUND)
-- [ ] `apps/api/src/services/project.ts:143` 4.x CRUD helper this.update: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.update(...) instead (frames follow the tracked write; hooks do not run; 4.x returned null for a missing row where db.update throws NOT_FOUND)
-- [ ] `apps/api/src/services/project.ts:155` 4.x CRUD helper this.delete: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.delete(...) instead (frames follow the tracked write; hooks do not run; 4.x returned false for a missing row where db.delete throws NOT_FOUND)
+- [ ] `apps/api/src/services/project.ts:102` 4.x CRUD helper this.create: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.create(...) instead (frames follow the tracked write; hooks do not run; db.create throws on failure)
+- [ ] `apps/api/src/services/project.ts:123` 4.x CRUD helper this.update: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.update(...) instead (frames follow the tracked write; hooks do not run; 4.x returned null for a missing row where db.update throws NOT_FOUND)
+- [ ] `apps/api/src/services/project.ts:145` 4.x CRUD helper this.update: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.update(...) instead (frames follow the tracked write; hooks do not run; 4.x returned null for a missing row where db.update throws NOT_FOUND)
+- [ ] `apps/api/src/services/project.ts:157` 4.x CRUD helper this.delete: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.delete(...) instead (frames follow the tracked write; hooks do not run; 4.x returned false for a missing row where db.delete throws NOT_FOUND)
 
 ## Raw SQL writes to record with ctx.touch
 
@@ -130,6 +133,17 @@ Hooks ran only inside the CRUD helpers; move their work into the methods that wr
 `admin.contract({ entity })` and `admin.handlers(contract, options)`.
 
 - [ ] `apps/api/src/services/project.ts:29` installAdminMethods: use the admin kit (...admin.contract({ entity }) in the contract, ...admin.handlers(contract, { displayName, hiddenFields, fieldOverrides }) in methods), then delete this; it is no longer used
+
+## Methods a kit implements
+
+Methods of a kit method's shape (`get`, `list`, `create`, `getTask`, ...): the kit checks access on every row it touches, pages and stays live (lint: `prefer-kit`). Replace each with its kit, or keep it with a `// quickdraw: hand-written because <reason>` comment above it.
+
+- [ ] `apps/api/src/services/label.ts:11` getLabel has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/label.ts:25` listLabels has the shape of the read/write kit's list, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/project.ts:97` createProject has the shape of the read/write kit's create, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/project.ts:111` getProject has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/task/index.ts:14` createTask has the shape of the read/write kit's create, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/task/index.ts:16` listTasks has the shape of the read/write kit's list, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 
 ## Service instance state and the 4.x context
 

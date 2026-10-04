@@ -12,6 +12,14 @@
 //   `"authenticated"`, marked, since that was rarely meant.
 // - `"Moderate"` or `"Admin"` without a row id needed the service grant:
 //   `{ service: L }`.
+//
+// 5.0 refuses, when a service with an access policy is defined, a method
+// whose input has `id` under a form that checks no row (`"public"`,
+// `"authenticated"`, `{ service: L }` below `Admin`) unless it says
+// `rowless: true`. Where the mapping writes such a form for a method whose
+// input has `id` (a "Public" method that named a row, which 4.x let anyone
+// call), it writes `rowless: true` beside it, marked: still exactly the
+// callers 4.x admitted, and a decision to review.
 
 import type { Node } from "ts-morph";
 import type { Category } from "./markers";
@@ -39,14 +47,52 @@ export interface AccessForm {
   readonly isPublic: boolean;
   /** Whether it is an `entry` form, which needs an access policy on the service. */
   readonly entry: boolean;
+  /** Whether the method says `rowless: true`: the form is its whole check, on a method that takes an `id`. */
+  readonly rowless: boolean;
   readonly notes: readonly Note[];
+}
+
+/** What the mapping knows about a method besides its level. */
+export interface MethodFacts {
+  /** The row 4.x checked, if any. */
+  readonly entryId: EntryId;
+  /** Whether the service has rows (a model), and so an access policy: an `entry` form is possible. */
+  readonly rows: boolean;
+  /** Whether the method's input has an `id` key (its 4.x payload type's or its schema's). */
+  readonly inputHasId: boolean;
 }
 
 const READ_OPEN =
   '"Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant';
 
 function form(code: string, notes: Note[] = [], entry = false): AccessForm {
-  return { code, isPublic: code === quote("public"), entry, notes };
+  return { code, isPublic: code === quote("public"), entry, rowless: false, notes };
+}
+
+/** The forms that check no row: `"public"`, `"authenticated"` and `{ service: L }` below `Admin`. */
+function checksNoRow(access: AccessForm): boolean {
+  return (
+    access.isPublic ||
+    access.code === quote("authenticated") ||
+    access.code === `{ service: ${quote("Read")} }` ||
+    access.code === `{ service: ${quote("Moderate")} }`
+  );
+}
+
+/**
+ * `access` with `rowless: true` and its marker when it checks no row on a
+ * method whose input has `id`, of a service with rows: 5.0 refuses that
+ * shape without the flag.
+ */
+function withRowless(access: AccessForm, facts: MethodFacts): AccessForm {
+  if (!facts.rows || !facts.inputHasId || !checksNoRow(access)) {
+    return access;
+  }
+  const note: Note = {
+    category: "access",
+    message: `this method takes an id but its access ${access.code} checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant`,
+  };
+  return { ...access, rowless: true, notes: [...access.notes, note] };
 }
 
 function entryForm(level: Level, id: string, notes: Note[] = []): AccessForm {
@@ -77,10 +123,23 @@ function withRow(level: Level, entryId: NonNullable<EntryId>): AccessForm {
 }
 
 /**
+ * The 5.0 form for a method of `level`, given what the mapping knows about
+ * it (`facts`): with `rowless: true` where 5.0 would refuse the form
+ * without it.
+ */
+export function accessFor(
+  level: Level | undefined,
+  levelText: string,
+  facts: MethodFacts,
+): AccessForm {
+  return withRowless(formFor(level, levelText, facts.entryId, facts.rows), facts);
+}
+
+/**
  * The 5.0 form for a method of `level`, naming `entryId`. `rows` is false
  * for a service without a model, which cannot use an `entry` form.
  */
-export function accessFor(
+function formFor(
   level: Level | undefined,
   levelText: string,
   entryId: EntryId,
