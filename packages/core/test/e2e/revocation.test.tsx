@@ -75,6 +75,10 @@ describe("revoking a member", () => {
     expect(app.frames({ userId: board.cy })).toEqual([]);
     expect(removed.getByText("row FORBIDDEN")).toBeTruthy();
     expect(removed.getByText("board FORBIDDEN")).toBeTruthy();
-    expect(removed.getByText("count FORBIDDEN")).toBeTruthy();
+    // Both revocations invalidate the count, the second inside the first read's coordinator
+    // window, so the count is read once more about 250 ms after the first refusal; a refused
+    // query shows neither data nor error while it reads again. This line used to check it at
+    // once, and failed whenever a busy machine stretched the steps above into that read.
+    await removed.findByText("count FORBIDDEN");
   });
 });

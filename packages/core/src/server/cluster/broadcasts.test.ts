@@ -6,7 +6,7 @@
 // project's (`test/cluster/broadcasts.test.ts`).
 
 import { afterEach, describe, expect, it } from "vitest";
-import { captureLogger, tick } from "../__tests__/fixtures";
+import { beforeAnyTimer, captureLogger, tick } from "../__tests__/fixtures";
 import type { QuickdrawIo } from "../transports/types";
 import { answerProbes, createClusterBroadcasts, PROBE_EVENT } from "./broadcasts";
 
@@ -83,9 +83,10 @@ describe("a node's answered broadcasts", () => {
     state.ready = false;
     state.answering = false;
     const { broadcasts, logger } = broadcastsOf(io);
-    const started = performance.now();
-    await broadcasts.broadcast("quickdraw:grants", { userId: "u1" });
-    expect(performance.now() - started).toBeLessThan(25);
+    // It answers before any timer could fire, the 30 ms timeout's included.
+    expect(await beforeAnyTimer(broadcasts.broadcast("quickdraw:grants", { userId: "u1" }))).toBe(
+      undefined,
+    );
     expect(sent).toEqual([{ event: "quickdraw:grants", answered: false }]);
     // Not connected is not a node that failed to answer: nothing is degraded or logged.
     expect(broadcasts.degraded()).toBe(false);
@@ -102,11 +103,13 @@ describe("a node's answered broadcasts", () => {
     expect(outage).toEqual([
       "A node did not answer a broadcast in time; this node sends access changes without waiting for the other nodes until every node answers a probe",
     ]);
-    // Degraded: later broadcasts go out at once, unanswered.
-    const started = performance.now();
-    await broadcasts.broadcast("quickdraw:access-changed", { n: 2 });
-    await broadcasts.broadcast("quickdraw:access-changed", { n: 3 });
-    expect(performance.now() - started).toBeLessThan(25);
+    // Degraded: later broadcasts go out at once, unanswered, before any timer could fire.
+    expect(await beforeAnyTimer(broadcasts.broadcast("quickdraw:access-changed", { n: 2 }))).toBe(
+      undefined,
+    );
+    expect(await beforeAnyTimer(broadcasts.broadcast("quickdraw:access-changed", { n: 3 }))).toBe(
+      undefined,
+    );
     expect(sent.slice(1, 3)).toEqual([
       { event: "quickdraw:access-changed", answered: false },
       { event: "quickdraw:access-changed", answered: false },
