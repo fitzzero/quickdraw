@@ -91,6 +91,10 @@ const EXAMPLES = {
     "apps/web/src/legacy.ts",
     `import { useSubscription } from "@fitzzero/quickdraw-core/client";\n`,
   ],
+  "no-todo-schema": [
+    "packages/shared/src/contracts/migrated.ts",
+    `import { todoSchema } from "@fitzzero/quickdraw-core";\nexport const input = todoSchema<{ id: string }>();\n`,
+  ],
   "no-raw-button-strings": [
     "apps/web/src/components/Button.tsx",
     `export const B = () => <Button>Save</Button>;\n`,

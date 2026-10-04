@@ -55,11 +55,12 @@ correct code; each rule's file says what it leaves alone.
 | `no-manual-refetch`                                                            | a quickdraw query's `refetch()` right after (or in the callbacks of) a quickdraw mutation, and `invalidateQueries`/`refetchQueries`/`resetQueries` on a quickdraw key            | client code            |
 | `no-raw-socket`                                                                | `socket.emit`, `socket.on`, `socket.off` and the other raw Socket.IO calls                                                                                                       | client code            |
 | `no-v4-api`                                                                    | every 4.x API 5.0 removed or moved; each message names the replacement                                                                                                           | everywhere             |
+| `no-todo-schema`                                                               | `todoSchema()`, the placeholder schema the 4.x migration (`@fitzzero/quickdraw-codemod`) leaves where a method had none: it validates nothing                                    | everywhere             |
 | `no-unused-baseline`                                                           | an allowance in the baseline file that no violation uses any more (below)                                                                                                        | baselined files        |
 | `no-raw-button-strings`, `no-raw-tooltip-strings`, `no-raw-typography-strings` | raw strings in MUI `Button`, `Typography` and `Tooltip` titles (`oxlint.template.jsonc`)                                                                                         | `*.tsx`, `*.jsx`       |
 
 The base config turns on all but the last three, at `error`, except
-`no-unused-baseline`, which warns.
+`no-unused-baseline` and `no-todo-schema`, which warn.
 
 ### Which files a rule checks
 
