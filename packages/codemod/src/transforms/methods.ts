@@ -71,6 +71,7 @@ export function buildMethods(
       service: plan.service,
       hoisted,
       receiver: call.receiver,
+      receiverParam: call.register?.getParameters()[0],
       inHandler: true,
     });
     ctx.stats.methods += 1;

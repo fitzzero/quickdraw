@@ -178,8 +178,12 @@ export function hoistedNames(
       ...file
         .getImportDeclarations()
         .flatMap((declaration) =>
-          declaration.getNamedImports().map((specifier) => specifier.getName()),
+          declaration
+            .getNamedImports()
+            .map((specifier) => (specifier.getAliasNode() ?? specifier.getNameNode()).getText()),
         ),
+      ...file.getFunctions().map((fn) => fn.getName() ?? ""),
+      ...file.getVariableDeclarations().map((variable) => variable.getName()),
       ...RESERVED,
     ]);
     const members = [

@@ -26,6 +26,8 @@ export interface ReceiverScope {
   readonly hoisted: ReadonlyMap<string, Hoisted>;
   /** `"this"`, or the method module's parameter name. */
   readonly receiver: string;
+  /** The method module's parameter itself, so a nested parameter of the same name is not it. */
+  readonly receiverParam?: Node | undefined;
   /** Whether the code is a method handler, which has `ctx`. */
   readonly inHandler: boolean;
   /** What the handler calls its context. */
@@ -131,11 +133,14 @@ function receivers(root: Node, scope: ReceiverScope): Node[] {
   }
   return root
     .getDescendantsOfKind(SyntaxKind.Identifier)
-    .filter(
-      (node) =>
+    .filter((node) => {
+      const declaration = node.getSymbol()?.getDeclarations()[0];
+      return (
         node.getText() === scope.receiver &&
-        node.getSymbol()?.getDeclarations()[0]?.getKind() === SyntaxKind.Parameter,
-    )
+        declaration?.getKind() === SyntaxKind.Parameter &&
+        (scope.receiverParam === undefined || declaration === scope.receiverParam)
+      );
+    })
     .filter((node) => {
       const parent = node.getParent();
       return !(Node.isPropertyAccessExpression(parent) && parent.getNameNode() === node);
