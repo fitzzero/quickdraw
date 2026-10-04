@@ -15,23 +15,33 @@ export type AuthProvider = OAuthSignInProvider | MockSignInProvider | GuestProvi
 /** The session cookie. */
 export interface AuthCookieOptions {
   /**
-   * Its name. Default: `"__Host-session"` when no domain is configured and
-   * the cookie is Secure (a browser then keeps it host-only on `/`, so no
-   * other site under the same parent domain can plant or replace it), else
-   * `"session"`. `socketAuth` and the HTTP transport read `__Host-session`
-   * by default, and `session` only over plain HTTP; name the same cookie
-   * there (`cookieName`, `http.cookieName`) when changing it, or when a
-   * `domain` makes it `session` over HTTPS.
+   * Its name. Default, by the rule `socketAuth`, the HTTP transport and
+   * `setSessionCookie` share: `"session"` when the cookie has a domain
+   * (which a `__Host-` cookie cannot have); else `"__Host-session"` on a
+   * request over HTTPS (`req.secure`, `X-Forwarded-Proto: https`, an
+   * `https:` `Origin`, or for an OAuth callback an `https:` return origin),
+   * which a browser keeps host-only on `/`, so no other site under the same
+   * parent domain can plant or replace it; and `"session"` over plain HTTP.
+   * A name given here must be given to `socketAuth` and the HTTP transport
+   * too (`cookieName`, `http.cookieName`).
    */
   readonly name?: string;
   /** How long a session lasts: the cookie, the JWT and the stored session end together. Default 7 days. */
   readonly maxAgeMs?: number;
   /**
-   * Its domain, to share it with subdomains. Default `process.env.COOKIE_DOMAIN`
-   * (read when the routes are made), else the API's host only.
+   * Its domain, to share it with subdomains; the cookie is then `session`
+   * on every request. Default `process.env.COOKIE_DOMAIN` (read when the
+   * routes are made), else the API's host only. `socketAuth` and the HTTP
+   * transport see the domain only through `COOKIE_DOMAIN`: a domain given
+   * only here needs `cookieName: "session"` there, and the routes warn at
+   * startup until the cookie is named.
    */
   readonly domain?: string;
-  /** Default: true when `NODE_ENV` is `"production"` or the request came over HTTPS (`req.secure`). */
+  /**
+   * Default: true when `NODE_ENV` is `"production"` or the request came
+   * over HTTPS (as for the name). A `__Host-` cookie is always Secure, so
+   * `false` applies to a cookie set over plain HTTP.
+   */
   readonly secure?: boolean;
   /**
    * Default `"lax"`. `"none"` (always Secure) lets the cookie ride

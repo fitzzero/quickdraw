@@ -213,7 +213,7 @@ describe("credentials", () => {
     expect(await echo({})).toMatchObject({ status: 200, body: { d: { userId: null } } });
   });
 
-  it("reads __Host-session before session, only a cookie name it is given, and no repeated name", async () => {
+  it("reads session before __Host-session over plain HTTP, only a cookie name it is given, and no repeated name", async () => {
     const { url } = await serve();
     const echo = (headers: Record<string, string>) =>
       post(url, "/qd/probeService/echo", { body: '{"text":"hi"}', headers });
@@ -222,20 +222,26 @@ describe("credentials", () => {
     // The moderator token is Alice's, with a Moderate grant.
     const grantsOf = async (headers: Record<string, string>) =>
       ((await echo(headers)).body as { d?: { grants?: unknown } }).d?.grants;
+    // Over plain HTTP the routes set `session`, so it is read first.
     expect(
-      await grantsOf({ cookie: "session=moderator-token; __Host-session=alice-token" }),
+      await grantsOf({ cookie: "__Host-session=moderator-token; session=alice-token" }),
     ).toBeNull();
-    expect(await userOf({ cookie: "session=moderator-token; __Host-session=alice-token" })).toBe(
-      "alice",
-    );
+    expect(await grantsOf({ cookie: "__Host-session=moderator-token" })).toEqual({
+      probeService: "Moderate",
+    });
     // Two cookies of one name: one may have been planted by a sibling site, so neither counts.
     expect(await userOf({ cookie: "session=alice-token; session=moderator-token" })).toBeNull();
     expect(
       await grantsOf({ cookie: "session=alice-token; session=x", ...bearer("moderator-token") }),
     ).toEqual({ probeService: "Moderate" });
-    // A repeated __Host-session does not let session stand in for it.
+    // A repeated session does not let __Host-session stand in for it, and over HTTPS a
+    // repeated __Host-session is no credential either.
+    expect(await userOf({ cookie: "session=a; session=b; __Host-session=alice-token" })).toBeNull();
     expect(
-      await userOf({ cookie: "__Host-session=a; __Host-session=b; session=alice-token" }),
+      await userOf({
+        cookie: "__Host-session=a; __Host-session=b; session=alice-token",
+        "x-forwarded-proto": "https",
+      }),
     ).toBeNull();
     const named = await serve({ http: { cookieName: "sid" } });
     const namedUser = async (cookie: string) =>

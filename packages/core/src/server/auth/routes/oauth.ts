@@ -134,7 +134,8 @@ async function complete(
     redirect(res, landingOf(settings, origin, "failed"));
     return;
   }
-  setSession(res, settings, req, token);
+  // The callback is a navigation with no Origin of its own: name the cookie for the return page.
+  setSession(res, settings, req, token, origin);
   settings.logger.info("Signed in", { category: CATEGORY, provider: flow.id, userId });
   redirect(res, landingOf(settings, origin));
 }

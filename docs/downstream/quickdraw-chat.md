@@ -43,10 +43,12 @@ writes 7, hooks 2, admin 7, instance state 42, client 23, server and other
    default at 600 events per minute per socket and never counts subscription
    events, channels or cancels (`rateLimit: { keyGenerator }` keeps keying
    by user). The Discord Activity sign-in stays an app route on
-   `issueSession`. Over HTTPS `socketAuth` and the HTTP transport read only
-   `__Host-session`, which the routes set when the cookie has no domain;
-   if the deployment shares the cookie with subdomains (`COOKIE_DOMAIN`),
-   the routes set `session` instead, and both need `cookieName: "session"`.
+   `issueSession`, and its `setSessionCookie(res, token)` keeps working: it
+   now sets the name the routes give the same request (`__Host-session`
+   over HTTPS), which `socketAuth` and the HTTP transport read. A cookie
+   shared with subdomains through `COOKIE_DOMAIN` is `session` everywhere,
+   with nothing to name; only a `cookie.domain` passed to the routes alone
+   needs `cookieName: "session"` on `socketAuth` and `http`.
 4. **The Godot client speaks the 4.x wire.** The codemod does not touch
    `apps/game/godot/addons/quickdraw/quickdraw_client.gd`. `legacyWire`
    serves its method calls, not its `input` channel or the world

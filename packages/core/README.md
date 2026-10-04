@@ -783,8 +783,9 @@ over three transports (design: sections 3, 8 and 10):
 - **HTTP**: `POST /qd/{service}/{method}` with the input as a JSON body and
   `Content-Type: application/json` (required, even without a body, so a
   cross-site page cannot use a session cookie without a CORS preflight). The
-  principal comes from the session cookie (`__Host-session`, or `session`
-  over plain HTTP) or an `Authorization: Bearer` token through the same
+  principal comes from the session cookie (`__Host-session` over HTTPS,
+  `session` over plain HTTP or with `COOKIE_DOMAIN`, as the auth routes name
+  it) or an `Authorization: Bearer` token through the same
   `authenticate`; the reply is `{ ok: true, d }` or
   `{ ok: false, e: { code, message, data? } }` with the code's HTTP status.
   Works on Express 4 and 5, and on a bare Node server. Move it with
@@ -1770,10 +1771,13 @@ nothing is cached:
   It is HttpOnly and SameSite=Lax, Secure in production or over HTTPS, and
   lasts `cookie.maxAgeMs` (7 days), as do the JWT and the stored session.
   `cookie.sameSite: "none"` (always Secure) serves a web app on another
-  site; `cookie.domain` (or `COOKIE_DOMAIN`) shares it with subdomains. Its
-  name is `cookie.name`, else `__Host-session` when it is Secure and has no
-  domain (a browser then keeps it host-only on `/`, so no other site under
-  the same parent domain can plant or replace it), else `session`.
+  site; `COOKIE_DOMAIN` (or `cookie.domain`) shares it with subdomains. Its
+  name is `cookie.name`; else `session` when it has a domain; else
+  `__Host-session` on a request that came over HTTPS (`req.secure`,
+  `X-Forwarded-Proto: https`, the `Origin` of an `https:` page, or for an
+  OAuth callback an `https:` return origin), which a browser keeps only as
+  a Secure, host-only cookie on `/`, so no other site under the same parent
+  domain can plant or replace it; else, over plain HTTP, `session`.
 - A cookie name a request repeats counts as no credential, for the session
   and the OAuth state alike: a sibling site can plant a second cookie of
   the same name, and the server cannot tell which is its own.
@@ -1808,19 +1812,23 @@ nothing is cached:
   (`ENABLE_MOCK_OAUTH=true` and `NODE_ENV` other than `production`), and
   every request checks again. Set `mock({ internalUrl })` where the API
   cannot reach itself at `publicUrl`.
-- `socketAuth` and the HTTP transport read `__Host-session` by default,
-  and the plain `session` only on a plain HTTP request (development). A
-  request over HTTPS (`req.secure`, `X-Forwarded-Proto: https`, or the
-  `Origin` of an `https:` page) never reads `session`: another site under
-  the same parent domain can set that cookie for the whole domain, and while
-  the user holds no `__Host-session` it would sign them in as whoever set
-  it. A configured name is read as it is, on any request. So a changed
-  cookie name, or a `cookie.domain` (which makes the routes set `session`
-  over HTTPS), must be named in all three places:
+- One rule names the session cookie, written and read: the routes,
+  `setSessionCookie`, `socketAuth` and the HTTP transport give a request
+  the same name, and read first the name they would set on it. Without a
+  domain, a request over HTTPS reads only `__Host-session`, never
+  `session`: another site under the same parent domain can set that cookie
+  for the whole domain, and while the user holds no `__Host-session` it
+  would sign them in as whoever set it. A plain HTTP request reads
+  `session`, then `__Host-session`. A configured name is read as it is, on
+  any request, so a changed name goes in all three places:
   `createAuthRoutes({ cookie: { name } })`, `socketAuth({ cookieName })`
-  and `createServer({ http: { cookieName } })`. Behind a proxy that ends
-  TLS, set Express's `trust proxy`, so the routes see HTTPS as the
-  transports do.
+  and `createServer({ http: { cookieName } })`. The transports see the
+  cookie's domain through `COOKIE_DOMAIN` only: share the cookie with
+  subdomains by setting `COOKIE_DOMAIN`; a `cookie.domain` given only to
+  the routes needs `cookieName: "session"` on the other two, and the routes
+  warn at startup until the cookie is named. Behind a proxy that ends TLS,
+  have it send `X-Forwarded-Proto`, which every request carries, so the
+  name does not depend on which requests carry an `Origin`.
 - A socket keeps the principal it authenticated with until it reconnects,
   so a revoked session's open sockets are ended with
   `server.access.disconnectUser(userId, { sessionId?, reason? })`: every

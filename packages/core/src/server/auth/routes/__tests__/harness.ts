@@ -146,9 +146,16 @@ export function cookieValue(response: Response, name: string): string {
   return cookie.value;
 }
 
-/** A GET that does not follow redirects, with the cookies given. */
-export function get(url: string, cookie?: string): Promise<Response> {
-  return fetch(url, { redirect: "manual", headers: cookie === undefined ? {} : { cookie } });
+/** A GET that does not follow redirects, with the cookies and headers given. */
+export function get(
+  url: string,
+  cookie?: string,
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  return fetch(url, {
+    redirect: "manual",
+    headers: { ...(cookie === undefined ? {} : { cookie }), ...headers },
+  });
 }
 
 /** A JSON POST with the cookies given. */

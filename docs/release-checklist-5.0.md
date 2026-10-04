@@ -41,9 +41,12 @@ state; tick each item as it is done.
         (unannotated `id` functions, `MethodOf` typed for `"authenticated"`);
   - [x] the `__Host-` hardening: without a configured `cookieName`,
         `socketAuth` and the HTTP transport read the plain `session` cookie
-        only over plain HTTP, so a planted plain cookie cannot stand in for
-        `__Host-session`; a session cookie with a domain is `session` over
-        HTTPS and must be named (`cookieName: "session"`);
+        over HTTPS only when the cookie has a domain, so a planted plain
+        cookie cannot stand in for `__Host-session`; the routes,
+        `setSessionCookie` and the transports name the cookie by one rule
+        (`sessionCookieNameFor`, review fix A), the transports read
+        `COOKIE_DOMAIN`, and a `cookie.domain` given only to the routes
+        warns at startup until it is named;
   - [x] the docs follow the fixes: `README.md` and `MIGRATION.md`
         ("Defaults that changed") say 600, `reconnectJitterMs` and the
         cookie rule; the `cookieName: "__Host-session"` advice is gone from

@@ -97,12 +97,18 @@ rollout. The design is [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md)
     access form but `"public"`, `{ service, entry }` included. The codemod
     writes `id` functions unannotated and types `MethodOf` for
     `"authenticated"`.
-  - Without a configured `cookieName`, `socketAuth` and the HTTP transport
-    read the plain `session` cookie only over plain HTTP; over HTTPS
-    (`req.secure`, `X-Forwarded-Proto: https`, an `https:` `Origin`) only
-    `__Host-session`, so a planted plain cookie cannot stand in for it. A
-    session cookie with a domain is `session` over HTTPS too and must be
-    named.
+  - One rule names the session cookie, written and read
+    (`sessionCookieNameFor`): `createAuthRoutes`, `setSessionCookie`,
+    `socketAuth`, the HTTP transport and `extractBearerOrCookieToken` give
+    a request a configured name, else `session` when the cookie has a
+    domain, else `__Host-session` over HTTPS (`req.secure`,
+    `X-Forwarded-Proto: https`, an `https:` `Origin`, or an OAuth
+    callback's `https:` return origin) and `session` over plain HTTP, and
+    each reads first the name it would set. Over HTTPS without a domain the
+    plain `session` is never read, so a planted plain cookie cannot stand in
+    for `__Host-session`. The transports read `COOKIE_DOMAIN` as the routes
+    do; a `cookie.domain` given only to the routes logs a startup warning
+    until the cookie is named.
 
 ### Benchmark
 

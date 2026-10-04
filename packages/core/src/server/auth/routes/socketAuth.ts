@@ -24,11 +24,12 @@
 // Origin; HTTP calls are guarded by their required JSON content type instead
 // (RFC 0003 section 10).
 //
-// Without a configured `cookieName`, a handshake over HTTPS reads only
-// `__Host-session`, and one over plain HTTP then the plain `session` too
-// (`sessionCookieNames`): a site under the same parent domain can plant a
+// The cookie is read under the names the auth routes' rule gives the
+// handshake (`sessionCookieNamesFor`): a configured `cookieName`; else
+// `session` when `COOKIE_DOMAIN` gives the cookie a domain; else, over HTTPS,
+// only `__Host-session` (a site under the same parent domain can plant a
 // plain `session` cookie, and a secure handshake must not take it in place of
-// the host-only one.
+// the host-only one), and over plain HTTP `session`, then `__Host-session`.
 
 import type { IncomingHttpHeaders } from "node:http";
 import { QuickdrawError } from "../../../protocol/errors";
@@ -37,8 +38,13 @@ import {
   type AuthenticateRequest,
   type SocketAuthenticateRequest,
 } from "../../transports/auth";
-import { cookiesOf, cookieToken, isSecureRequest, sessionCookieNames } from "../../transports/body";
+import { cookiesOf, cookieToken, transportCookieNaming } from "../../transports/body";
 import type { MaybePromise, Principal } from "../../types";
+import {
+  sessionCookieNamesFor,
+  type SessionCookieNaming,
+  type SessionCookieRequest,
+} from "../sessionCookie";
 import { originAllowlist, type AllowedOrigin, type OriginAllowlist } from "./origins";
 import type { AuthSession, SessionStore } from "./sessions";
 import { checkSessionKeys, liveSession } from "./tokens";
@@ -64,13 +70,14 @@ export interface SocketAuthOptions<P extends Principal = Principal> {
    */
   readonly allowMissingOrigin?: boolean;
   /**
-   * The session cookie's name. Default: `"__Host-session"` (what the auth
-   * routes set on a secure request when no cookie domain is configured),
-   * and over plain HTTP then `"session"`; a handshake over HTTPS never reads
-   * the plain name, which a sibling site could plant. A name given here is
-   * the only one read, on any handshake: name the cookie when the routes set
-   * `session` over HTTPS (a cookie `domain`). A name the handshake repeats
-   * counts as no credential.
+   * The session cookie's name. Default: the name the auth routes set on the
+   * same handshake: `"session"` when `COOKIE_DOMAIN` gives the cookie a
+   * domain; else `"__Host-session"` over HTTPS, where the plain name a
+   * sibling site could plant is never read, and `"session"` (then
+   * `"__Host-session"`) over plain HTTP. A name given here is the only one
+   * read, on any handshake: give the routes' `cookie.name` here, or
+   * `"session"` when their `cookie.domain` is set without `COOKIE_DOMAIN`. A
+   * name the handshake repeats counts as no credential.
    */
   readonly cookieName?: string;
   /**
@@ -93,17 +100,17 @@ interface Credential {
   readonly checkOrigin: boolean;
 }
 
-/** Whether a socket's handshake came over HTTPS: TLS ended here, or as its headers say (`isSecureRequest`). */
-function secureHandshake(request: SocketAuthenticateRequest): boolean {
+/** A socket's handshake, as its session cookie's name depends on it: its headers, and whether TLS ended here. */
+function handshakeOf(request: SocketAuthenticateRequest): SessionCookieRequest {
   const { handshake } = request.socket as Partial<
     Pick<SocketAuthenticateRequest["socket"], "handshake">
   >;
-  return isSecureRequest(request.headers, handshake?.secure === true);
+  return { headers: request.headers, secure: handshake?.secure === true };
 }
 
 function credentialOf(
   request: AuthenticateRequest,
-  cookieName: string | undefined,
+  naming: SessionCookieNaming,
 ): Credential | null {
   const { token } = request.auth;
   if (typeof token === "string" && token !== "") {
@@ -112,7 +119,7 @@ function credentialOf(
   if (request.transport === "http") {
     return null;
   }
-  const names = sessionCookieNames(cookieName, secureHandshake(request));
+  const names = sessionCookieNamesFor(handshakeOf(request), naming);
   const cookie = cookieToken(cookiesOf({ headers: request.headers }), names);
   return cookie === null ? null : { token: cookie, checkOrigin: true };
 }
@@ -144,14 +151,14 @@ export function socketAuth(options: SocketAuthOptions): SessionAuthenticate<Prin
 export function socketAuth(options: SocketAuthOptions): SessionAuthenticate<Principal> {
   const keys = checkSessionKeys(options, "socketAuth");
   const origins = originAllowlist(options.allowedOrigins, "socketAuth", true);
-  const { cookieName } = options;
+  const naming = transportCookieNaming(options.cookieName);
   const allowMissing = options.allowMissingOrigin === true;
   const { loadPrincipal } = options;
   if (loadPrincipal !== undefined && typeof loadPrincipal !== "function") {
     throw new TypeError("socketAuth: loadPrincipal must be a function");
   }
   return async (request) => {
-    const credential = credentialOf(request, cookieName);
+    const credential = credentialOf(request, naming);
     if (credential === null) {
       return null;
     }

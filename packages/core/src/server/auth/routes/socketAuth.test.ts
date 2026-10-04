@@ -217,26 +217,33 @@ describe("a socket with the session cookie", () => {
     }
   });
 
-  it("is read from __Host-session first, and not at all when its name is repeated", async () => {
+  it("is read over plain HTTP from session, the name the routes set there, then __Host-session, and not at all when its name is repeated", async () => {
     const { url } = await boot();
     const { session } = await signIn(url, "ada@demo.local");
     const token = session.slice("session=".length);
     const ada = signedIn(userIdOf("ada@demo.local"));
+    const anonymous = {
+      whoami: { ok: false, e: expect.objectContaining({ code: "UNAUTHENTICATED" }) },
+    };
     expect(await connect(url, { cookie: `__Host-session=${token}`, origin: APP_ORIGIN })).toEqual(
       ada,
     );
     expect(
       await connect(url, {
-        cookie: `session=garbage; __Host-session=${token}`,
+        cookie: `__Host-session=garbage; session=${token}`,
         origin: APP_ORIGIN,
       }),
     ).toEqual(ada);
     // Two cookies of one name: one may have been planted by a sibling site. No credential, so
-    // the socket is anonymous.
+    // the socket is anonymous, and a later name does not stand in for it.
     const twice = await connect(url, { cookie: `${session}; session=planted`, origin: APP_ORIGIN });
-    expect(twice).toEqual({
-      whoami: { ok: false, e: expect.objectContaining({ code: "UNAUTHENTICATED" }) },
-    });
+    expect(twice).toEqual(anonymous);
+    expect(
+      await connect(url, {
+        cookie: `${session}; session=planted; __Host-session=${token}`,
+        origin: APP_ORIGIN,
+      }),
+    ).toEqual(anonymous);
   });
 
   it("is read from the plain session cookie over plain HTTP only, unless its name is given", async () => {

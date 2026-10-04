@@ -261,6 +261,11 @@ export const MOVED_NAMES = Object.freeze({
       ],
       `Moved: import it from "${AUTH}".`,
     ),
+    // Same position in the table; these four also changed their default cookie name.
+    setSessionCookie: `Moved: import it from "${AUTH}". Without a \`cookieName\` it sets the name the auth routes give the response's request (\`__Host-session\` over HTTPS when the cookie has no domain, else \`session\`), which \`socketAuth\` and the HTTP transport read.`,
+    clearSessionCookie: `Moved: import it from "${AUTH}". Without a \`cookieName\` it clears the name \`setSessionCookie\` sets on the same request.`,
+    extractBearerOrCookieToken: `Moved: import it from "${AUTH}". Without a \`cookieName\` it reads the names \`setSessionCookie\` sets on the same request (only \`__Host-session\` over HTTPS when the cookie has no domain).`,
+    createRequireAuth: `Moved: import it from "${AUTH}". Without a \`cookieName\` it reads the names \`setSessionCookie\` sets on the same request (only \`__Host-session\` over HTTPS when the cookie has no domain).`,
     ...each(
       ["bootstrapMcpServer", "createMcpStdioServer", "McpStdioServerOptions", "McpRegistryOptions"],
       `Moved: import it from "${MCP}".`,

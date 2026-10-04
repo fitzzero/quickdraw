@@ -21,9 +21,10 @@ against the code before planning:
    bootstrap and auth files become `qd.createServer`, `createAuthRoutes` and
    `socketAuth`, with a `SessionStore` over the app's own session model.
    The new tokens carry a session id (`sid`), so everyone signs in once
-   more. A session cookie shared with subdomains (`COOKIE_DOMAIN`) is
-   `session`, which `socketAuth` and the HTTP transport read over HTTPS
-   only when named (`cookieName: "session"`).
+   more. A session cookie shared with subdomains through `COOKIE_DOMAIN`
+   is `session`, which `socketAuth` and the HTTP transport read too; a
+   domain passed only as the routes' `cookie.domain` needs
+   `cookieName: "session"` on both (the routes warn until it is named).
 2. **Access the template decided in code.** `checkEntryACL` or
    `checkAccess` overrides become policies (`owner`, `jsonAcl`, `members`,
    `inherit`); until each is ported, the codemod's placeholder grants no

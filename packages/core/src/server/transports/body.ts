@@ -2,9 +2,13 @@
 // the HTTP transport works the same under Express 4, Express 5 or a bare
 // Node HTTP server, with or without the app's own body and cookie parsers.
 
-import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { extractBearerOrCookieToken } from "../auth/restMiddleware";
-import { HOST_SESSION_COOKIE, SESSION_COOKIE } from "../auth/sessionCookie";
+import {
+  cookieDomainFromEnv,
+  sessionCookieNamesFor,
+  type SessionCookieNaming,
+} from "../auth/sessionCookie";
 import { unreadable } from "./ack";
 
 /**
@@ -174,73 +178,24 @@ export function cookieToken(
   return value === undefined || value === "" ? null : value;
 }
 
-const PLAIN_HTTP_SESSION_COOKIES: readonly string[] = Object.freeze([
-  HOST_SESSION_COOKIE,
-  SESSION_COOKIE,
-]);
-
-const SECURE_SESSION_COOKIES: readonly string[] = Object.freeze([HOST_SESSION_COOKIE]);
+export type { SessionCookieNaming };
 
 /**
- * True when a request or a socket handshake came over HTTPS: `tls` says its
- * connection did (TLS ended at this server, or Express's `req.secure`, which
- * follows `X-Forwarded-Proto` behind `trust proxy`), a proxy says so
- * (`X-Forwarded-Proto: https`), or it came from an `https:` page (`Origin`),
- * which a browser lets reach only `https:` and `wss:` URLs. Each signal only
- * narrows the session cookies read (`sessionCookieNames`), so none of them
- * needs to be trusted.
+ * How a transport names the session cookie: the `cookieName` it was given,
+ * and the domain `COOKIE_DOMAIN` gives the cookie, read now, as the auth
+ * routes read it (a cookie with a domain is `session`).
  */
-export function isSecureRequest(headers: IncomingHttpHeaders, tls: boolean): boolean {
-  if (tls) {
-    return true;
-  }
-  const forwarded = headers["x-forwarded-proto"];
-  const proto = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",", 1)[0];
-  if (proto?.trim().toLowerCase() === "https") {
-    return true;
-  }
-  const { origin } = headers;
-  return typeof origin === "string" && origin.toLowerCase().startsWith("https:");
-}
-
-/** {@link isSecureRequest} for an HTTP request: a TLS connection, or Express's `req.secure`. */
-export function isSecureHttpRequest(req: HttpRequest): boolean {
-  const connection: unknown = req.socket;
-  const encrypted =
-    typeof connection === "object" &&
-    connection !== null &&
-    (connection as { readonly encrypted?: unknown }).encrypted === true;
-  return isSecureRequest(req.headers, req.secure === true || encrypted);
+export function transportCookieNaming(cookieName: string | undefined): SessionCookieNaming {
+  return { cookieName, domain: cookieDomainFromEnv() };
 }
 
 /**
- * The cookie names a session is read from. A configured `cookieName` is
- * read as it is, on any request. Without one, `__Host-session` (what the auth
- * routes set on a secure request with no cookie domain), and on a plain HTTP
- * request then `session` (what they set over plain HTTP in development).
- * A secure request never reads the plain name: a site under the same parent
- * domain can set a `session` cookie for the whole domain, and while the user
- * holds no `__Host-session` that planted cookie would sign them in as
- * whoever planted it.
+ * The token an HTTP call authenticates with: its session cookie, under the
+ * names `sessionCookieNamesFor` gives the request (by how the app named the
+ * cookie and whether the request came over HTTPS), or else its bearer token.
  */
-export function sessionCookieNames(
-  cookieName: string | undefined,
-  secure: boolean,
-): readonly string[] {
-  if (cookieName !== undefined) {
-    return [cookieName];
-  }
-  return secure ? SECURE_SESSION_COOKIES : PLAIN_HTTP_SESSION_COOKIES;
-}
-
-/**
- * The token an HTTP call authenticates with: its session cookie
- * (`sessionCookieNames`, by whether the request came over HTTPS), or else
- * its bearer token.
- */
-export function tokenOf(req: HttpRequest, cookieName: string | undefined): string | null {
-  const names = sessionCookieNames(cookieName, isSecureHttpRequest(req));
-  const cookie = cookieToken(cookiesOf(req), names);
+export function tokenOf(req: HttpRequest, naming: SessionCookieNaming): string | null {
+  const cookie = cookieToken(cookiesOf(req), sessionCookieNamesFor(req, naming));
   if (cookie !== null) {
     return cookie;
   }
