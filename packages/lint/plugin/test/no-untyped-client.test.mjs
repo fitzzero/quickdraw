@@ -116,6 +116,26 @@ run("no-untyped-client", {
       ],
     },
     {
+      // The review's bad2 U4 and U5.
+      name: "a fetch of the HTTP transport through a template, a concatenation or new URL",
+      filename: COMPONENT,
+      code: `
+        import { useQuery } from "@tanstack/react-query";
+        export function Tasks() {
+          const u4 = useQuery({ queryKey: ["t"], queryFn: () => fetch(\`\${base}/qd/taskService/get\`, { method: "POST" }) });
+          const u5 = useQuery({ queryKey: ["t2"], queryFn: () => fetch(url + "/qd/taskService/get") });
+          const u6 = useQuery({ queryKey: ["t3"], queryFn: () => fetch(new URL(\`/qd/\${service}/get\`, origin)) });
+          const ok = useQuery({ queryKey: ["t4"], queryFn: () => fetch(\`\${base}/api/qd-stats\`) });
+          return <List items={[u4, u5, u6, ok]} />;
+        }
+      `,
+      errors: [
+        { messageId: "untypedClient", data: { hook: "useQuery" } },
+        { messageId: "untypedClient", data: { hook: "useQuery" } },
+        { messageId: "untypedClient", data: { hook: "useQuery" } },
+      ],
+    },
+    {
       name: "a keyed hook still reports a key or a fetch that is not a member's",
       filename: COMPONENT,
       code: `

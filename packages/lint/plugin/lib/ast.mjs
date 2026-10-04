@@ -127,6 +127,35 @@ export function leadingText(node) {
   return undefined;
 }
 
+/** What `stringShape` writes for a part of a string it cannot know. */
+export const UNKNOWN_TEXT = "\u0000";
+
+/**
+ * A string expression's text with every part it cannot know (an
+ * interpolation, an operand that is not a literal) written as
+ * {@link UNKNOWN_TEXT}: `${base}/qd/${s}` and `base + "/qd/" + s` both give
+ * `"\0/qd/\0"`. Literals, template literals and `+` concatenations of them
+ * are read; anything else is one unknown part.
+ */
+export function stringShape(node) {
+  const value = unwrap(node);
+  if (value === undefined || value === null) {
+    return UNKNOWN_TEXT;
+  }
+  if (value.type === "Literal") {
+    return typeof value.value === "string" ? value.value : UNKNOWN_TEXT;
+  }
+  if (value.type === "TemplateLiteral") {
+    return value.quasis
+      .map((quasi, index) => (index === 0 ? "" : UNKNOWN_TEXT) + (quasi.value.cooked ?? ""))
+      .join("");
+  }
+  if (value.type === "BinaryExpression" && value.operator === "+") {
+    return stringShape(value.left) + stringShape(value.right);
+  }
+  return UNKNOWN_TEXT;
+}
+
 /** Whether `inner` lies within `outer`'s source range. */
 export function contains(outer, inner) {
   return outer.range[0] <= inner.range[0] && inner.range[1] <= outer.range[1];

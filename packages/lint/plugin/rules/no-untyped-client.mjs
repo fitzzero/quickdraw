@@ -18,9 +18,9 @@ import { CLIENT_FILE_OPTIONS, inClientScope } from "../lib/files.mjs";
 import {
   chainNames,
   keyName,
-  leadingText,
   memberName,
   staticString,
+  stringShape,
   unwrap,
   walk,
 } from "../lib/ast.mjs";
@@ -64,6 +64,22 @@ const KEYED_HOOKS = new Set([
   "usePrefetchQuery",
   "usePrefetchInfiniteQuery",
 ]);
+
+/**
+ * Whether a `fetch` argument is a URL of the HTTP transport: a `/qd/`
+ * segment in a string, a template (`${API_URL}/qd/taskService/get`) or a
+ * concatenation (`base + "/qd/taskService/get"`), also as `new URL(...)`'s.
+ */
+function fetchesQuickdraw(argument) {
+  const value = unwrap(argument);
+  const url =
+    value?.type === "NewExpression" &&
+    unwrap(value.callee).type === "Identifier" &&
+    unwrap(value.callee).name === "URL"
+      ? value.arguments[0]
+      : value;
+  return stringShape(url).includes("/qd/");
+}
 
 function importedName(specifier) {
   return specifier.imported.type === "Identifier"
@@ -148,7 +164,7 @@ export default {
       if (callee.type === "Identifier") {
         return (
           helpers.has(callee.name) ||
-          (callee.name === "fetch" && (leadingText(call.arguments[0]) ?? "").includes("/qd/"))
+          (callee.name === "fetch" && fetchesQuickdraw(call.arguments[0]))
         );
       }
       if (callee.type !== "MemberExpression") {
