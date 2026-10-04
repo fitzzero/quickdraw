@@ -1,7 +1,9 @@
 // `quickdraw-docs` (src/cli/docs.ts): the pages it writes for the end-to-end
 // fixture app's contracts (test/fixtures/app.ts) are committed under
 // `__docs__/` as a snapshot, which `bun run format:check` also checks, so
-// the output stays as oxfmt formats Markdown. Update it with
+// the output stays as oxfmt formats Markdown; the pages it writes with
+// `--services` for the access app (`__tests__/accessApp.ts`) under
+// `__docs__/access/`. Update them with
 // `bun run --filter @fitzzero/quickdraw-core test -- src/cli -u`.
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -13,6 +15,18 @@ import { z } from "zod";
 import * as zod3 from "zod3";
 import { projectContract, taskContract } from "../../test/fixtures/app";
 import { defineContract, listOf, mutation, nullable, query, via } from "../index";
+import {
+  anyOf,
+  custom,
+  everyone,
+  inherit,
+  jsonAcl,
+  members,
+  owner,
+  resolver,
+} from "../server/index";
+import * as accessApp from "./__tests__/accessApp";
+import { accessFormText, policyText, servicesOf } from "./access";
 import {
   contractsOf,
   failedToLoad,
@@ -28,6 +42,7 @@ import { jsonSchemaOf, schemaFields, schemaNotes, schemaText } from "./schemaTex
 const here = fileURLToPath(new URL(".", import.meta.url));
 const packageDir = join(here, "..", "..");
 const fixtureModule = relative(packageDir, join(packageDir, "test", "fixtures", "app.ts"));
+const accessModule = relative(packageDir, join(here, "__tests__", "accessApp.ts"));
 
 const temporary: string[] = [];
 afterAll(() => {
@@ -235,6 +250,144 @@ describe("quickdraw-docs", () => {
   });
 });
 
+describe("quickdraw-docs --services (finding F5.3)", () => {
+  it("says who may call what, from the services' definitions", async () => {
+    const files = generateDocs(contractsOf(accessApp), { services: servicesOf(accessApp) });
+    expect([...files.keys()]).toEqual([
+      "noteService.md",
+      "playerService.md",
+      "teamService.md",
+      INDEX_FILE,
+    ]);
+    for (const [name, content] of files) {
+      await expect(content).toMatchFileSnapshot(`./__docs__/access/${name}`);
+    }
+    const team = files.get("teamService.md") ?? "";
+    expect(team).toContain(
+      "| Row policy         | `anyOf`: the highest level of (`owner`: Admin for the user the `ownerId` column names), (`members`: the role in the user's `teamMember` row (`teamId` names the row, `userId` the user, `role` the role)) |",
+    );
+    expect(team).toContain('| Change topic       | `"authenticated"`: any signed-in caller');
+    expect(team).toContain("| Field levels       | `notes`: Admin");
+    expect(team).toContain(
+      'Access: `{ entry: "Read" }`: Read or more on the row `input.id` names.',
+    );
+    expect(team).toContain(
+      'Access: `"public"`: anyone, signed in or not.\n\n`rowless`: every caller the form admits may reach any row its input names, on purpose.',
+    );
+    expect(team).toContain(
+      'Access: `{ service: "Admin", entry: "Moderate" }`: a service-wide grant of Admin or more, or Moderate or more on the row `input.id` names.',
+    );
+    expect(team).toContain(
+      "Access: `custom(check)`: a signed-in caller the service's own check lets through.",
+    );
+    expect(team).toContain(
+      'Access: `{ entry: "Read", id: "teamId" }`: Read or more on the row `input.teamId` names.',
+    );
+    expect(team).toContain("computed by the service when a socket subscribes");
+    expect(team).toContain('in development only (`validate: "development"`)');
+    expect(team).toContain(
+      '| Access   | `{ service: "Read" }`: a service-wide grant of Read or more',
+    );
+    const players = files.get("playerService.md") ?? "";
+    expect(players).toContain(
+      "| Row policy         | `inherit`: the level on the `teamService` row the `teamId` column names |",
+    );
+    expect(players).toContain("passes only the forms that name `service` (`adminBypass: false`)");
+    expect(players).toContain(
+      'Access: `{ scope: "Moderate", of: teamService, id: "teamId" }`: Moderate or more on the `teamService` row `input.teamId` names.',
+    );
+    expect(players).toContain("Read or more on the `teamService` row the scope names");
+    expect(players).toContain('the subscriber\'s own user id (`scopeAccess: "self"`)');
+    expect(players).toContain("closed: the service declares no `watchAccess`");
+    expect(files.get("noteService.md")).toContain(
+      "The services module defines no `noteService`: who may call its methods is not documented.",
+    );
+    // Without --services, the pages are the contracts' alone.
+    const plain = generateDocs(contractsOf(accessApp)).get("teamService.md") ?? "";
+    expect(plain).not.toContain("## Access");
+    expect(plain).not.toContain("Access: ");
+    // A stream's room forms (the contract's own) are written either way, a seed of one in words.
+    for (const page of [team, plain]) {
+      expect(page).toContain('`{ room: "lobby" }`');
+      expect(page).toContain('`{ room: { prefix: "team:" } }`');
+      expect(page).toContain("`{ room: (scope) => ... }`");
+      expect(page).toContain("| Seed     | the latest item");
+    }
+  });
+
+  it("reads the services module from the command line, and checks it", async () => {
+    const out = tempDir();
+    const written = await run(accessModule, "--services", accessModule, "--out", out);
+    expect(written).toMatchObject({ code: 0, err: "" });
+    expect(readFileSync(join(out, "teamService.md"), "utf8")).toContain("## Access");
+    expect(
+      await run(accessModule, "--services", accessModule, "--out", out, "--check"),
+    ).toMatchObject({ code: 0, err: "" });
+    // The same pages without --services differ: the check names them.
+    const plain = await run(accessModule, "--out", out, "--check");
+    expect(plain.code).toBe(1);
+    expect(plain.err).toContain("teamService.md differs from the contracts");
+    expect((await run(accessModule, "--services")).err).toContain("--services needs a module");
+    const empty = await run(accessModule, "--services", "src/version.ts", "--out", tempDir());
+    expect(empty).toMatchObject({
+      code: 1,
+      err: "quickdraw-docs: src/version.ts exports no service\n",
+    });
+  });
+
+  it("refuses a service no contract documents, and two services of one name", () => {
+    const services = servicesOf(accessApp);
+    expect(() => generateDocs([accessApp.teamContract], { services })).toThrow(
+      "the services module defines playerService, but the contracts module exports no contract of that name",
+    );
+    const twin = { ...accessApp.teamService };
+    expect(() => servicesOf({ teamService: accessApp.teamService, twin })).toThrow(
+      'two different services are named "teamService"',
+    );
+    // Found alone, in a list or in a map, once each.
+    expect([
+      ...servicesOf({
+        services: accessApp.services,
+        byName: { team: accessApp.teamService },
+        notAService: { name: "x" },
+      }).keys(),
+    ]).toEqual(["playerService", "teamService"]);
+  });
+
+  it("writes every access form and row policy", () => {
+    const of = defineContract("parentService", { methods: {} });
+    expect(accessFormText({ scope: "Read", of, id: (input: unknown) => String(input) })).toBe(
+      '`{ scope: "Read", of: parentService, id: (input) => ... }`: Read or more on the `parentService` row a function of the input names',
+    );
+    expect(accessFormText({ entry: "Admin", id: () => "x" })).toBe(
+      '`{ entry: "Admin", id: (input) => ... }`: Admin or more on the row a function of the input names',
+    );
+    expect(policyText(jsonAcl("acl", { owner: "ownerId" }))).toBe(
+      "`jsonAcl`: the level the `acl` column lists for the user, and Admin for the user the `ownerId` column names",
+    );
+    expect(policyText(jsonAcl("acl"))).toBe(
+      "`jsonAcl`: the level the `acl` column lists for the user",
+    );
+    expect(policyText(resolver({ levelsFor: () => ({}) }))).toBe(
+      "`resolver`: the service's own code",
+    );
+    expect(policyText(everyone("Read"))).toBe(
+      "`everyone`: Read for every signed-in user, on every row",
+    );
+    expect(policyText(inherit({ from: of, via: "parentId" }))).toBe(
+      "`inherit`: the level on the `parentService` row the `parentId` column names",
+    );
+    expect(policyText(anyOf(owner("ownerId"), everyone("Read")))).toBe(
+      "`anyOf`: the highest level of (`owner`: Admin for the user the `ownerId` column names), (`everyone`: Read for every signed-in user, on every row)",
+    );
+    expect(policyText(undefined)).toBe("none: its methods take no `entry` form");
+    expect(accessFormText(custom(() => true))).toContain("`custom(check)`");
+    expect(policyText(members({ model: "m", entry: "e", user: "u", level: "l" }))).toContain(
+      "`members`",
+    );
+  });
+});
+
 describe("schema text", () => {
   const text = (schema: z.ZodType): string => schemaText(jsonSchemaOf(schema, "output") ?? {});
 
@@ -282,5 +435,27 @@ describe("schema text", () => {
       },
     ]);
     expect(schemaNotes({ minLength: 2 })).toBe("at least 2 characters");
+  });
+
+  it("says one character, one item and a non-negative integer as such (finding F5.6)", () => {
+    const notes = (schema: z.ZodType): string => schemaNotes(jsonSchemaOf(schema, "input") ?? {});
+    expect(notes(z.string().min(1))).toBe("at least 1 character");
+    expect(notes(z.string().length(1))).toBe("exactly 1 character");
+    expect(notes(z.string().max(1))).toBe("at most 1 character");
+    expect(notes(z.string().min(1).max(200))).toBe("1 to 200 characters");
+    expect(notes(z.array(z.string()).min(1))).toBe("at least 1 item");
+    expect(notes(z.array(z.string()).max(3))).toBe("at most 3 items");
+    expect(notes(z.number().int())).toBe("");
+    expect(notes(z.number().int().nonnegative())).toBe("non-negative");
+    expect(notes(z.number().nonnegative())).toBe("non-negative");
+    expect(notes(z.number().int().positive())).toBe("positive");
+    expect(notes(z.number().negative())).toBe("negative");
+    expect(notes(z.number().int().nonpositive())).toBe("non-positive");
+    expect(notes(z.number().int().min(1))).toBe("at least 1");
+    expect(notes(z.number().int().max(10))).toBe("at most 10");
+    expect(notes(z.number().int().gt(5))).toBe("more than 5");
+    expect(notes(z.number().lt(5))).toBe("less than 5");
+    expect(notes(z.number().int().min(1).max(200))).toBe("1 to 200");
+    expect(notes(z.number().int().min(0).lt(10))).toBe("non-negative, less than 10");
   });
 });

@@ -2887,16 +2887,29 @@ is also a server span named `service.method`, with an error status for
 
 ## API docs from contracts
 
-The `quickdraw-docs` command writes Markdown API docs from the contracts
-alone: one page per service (its entity and field tiers, projections,
-methods with their kind, input fields and output, collections, streams,
-channels and events, from the schemas' JSON Schema where they have one) and
-a `README.md` index. It reads contracts, never source code.
+The `quickdraw-docs` command writes Markdown API docs from the contracts:
+one page per service (its entity and field tiers, projections, methods
+with their kind, input fields and output, collections, streams, channels
+and events, from the schemas' JSON Schema where they have one) and a
+`README.md` index. It reads contracts (and, with `--services`, the
+services' definitions), never source code.
 
 ```bash
 quickdraw-docs packages/shared/src/index.ts --out docs/api           # write the pages
 quickdraw-docs packages/shared/src/index.ts --out docs/api --check   # exit 1 when they are stale
+quickdraw-docs packages/shared/src/index.ts --services apps/api/src/services/index.ts --out docs/api
 ```
+
+With `--services <module>` (a module exporting the services, each or in a
+list, as the server takes them; importing it must not start the server),
+each page also says who may call what, read from the services'
+definitions: an "Access" section with the row policy, whether a
+service-wide `Admin` grant passes every check, who may watch the change
+topic (`watchAccess`) and the field levels; each method's access form, in
+words, and its `rowless`; who may open a collection's scope; a channel's
+access; a stream's computed seed and when its items are checked. A
+contract the services module has no service for says so, and a service
+without a contract is an error. Pass the same flag to `--check`.
 
 The module may export each contract, or a map of them as given to
 `createQuickdrawClient`. A TypeScript module loads through Node's type
