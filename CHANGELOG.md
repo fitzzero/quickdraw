@@ -4,10 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [5.0.0-rc.4] (unreleased)
 
-Rounds 3 and 4 of the fixes the quickdraw-chat migration found: round 3 on
-`5.0.0-rc.1` (findings F3.1 to F3.11, from its web port), round 4 on
+Rounds 3, 4 and 5 of the fixes the quickdraw-chat migration found: round 3
+on `5.0.0-rc.1` (findings F3.1 to F3.11, from its web port), round 4 on
 `5.0.0-rc.3` (findings F4.1 to F4.14, from its game and the Godot client on
-protocol v5). No version moves until the release candidate is cut.
+protocol v5), round 5 on `5.0.0-rc.3` (findings F5.1 to F5.7, from its
+template polish). No version moves until the release candidate is cut.
 
 ### Protocol
 
@@ -101,6 +102,15 @@ after }, ctx, db)` runs after each `adminCreate`, `adminUpdate` and
   (default `never`, as before), and the admin kit's handlers resolve with
   their method's output type, so a wrapper reads what a handler returned
   and returns it on with no cast (F4.8).
+- With `admin.handlers(contract, { grants: true })`, the grants field's
+  configuration in `adminMeta` says `kind: "grants"`, so a screen with a
+  grants editor of its own finds it without its name, and
+  `fieldOverrides` take `showInForm`: `{ serviceAccess: { showInForm: false } }`
+  keeps the field out of a generic create or edit form while the kit still
+  reads and writes it. Both are optional members of `AdminFieldConfig`,
+  present only on the grants field and on an overridden one, so other
+  `adminMeta` answers do not change; an override may not set `kind`
+  (F5.5).
 
 ### Testing
 
@@ -132,6 +142,33 @@ where?, scope?)` and `eventFrames(contract, event, where?)`, which match
   so a client tells a restarted server (or another node) from a network
   blip; `docs/protocol-v5.md`, the JS client's hello and the GDScript
   client's `server_id` carry it (F4.11).
+- `qd.caller(principal)` and `server.dispatcher.caller(principal)` give a
+  principal that carries no `serviceAccess` the grants the server's
+  `auth.loadServiceAccess` loads, as a socket's handshake and an HTTP call
+  do: once per caller, at its first call, and again at the next call after
+  the server applied new grants to a user (`server.access.refresh`, a
+  tracked write to `auth.serviceAccessSource`, another node's broadcast),
+  as a socket's are refreshed. A principal that carries grants (even `{}`)
+  keeps exactly those; a failed load rejects the call with `INTERNAL` (the
+  error as `cause`) and is tried again at the next call; a dispatcher
+  without a server's `auth` loads nothing. Before, an app's REST route that
+  called a service in process ran with no grants at all, not even the ones
+  every user gets by default, so a method behind `{ service: L }` answered
+  `FORBIDDEN` (F5.1).
+
+### Auth
+
+- `requireSession(keys, { loadPrincipal? })` builds the request's principal
+  as `socketAuth` builds a socket's (default `{ userId, kind: "user" }`; a
+  `loadPrincipal` answering `null` is a 401, one naming another user an
+  error passed to `next`), and `sessionOf(req)` on `./server/auth` returns
+  `{ userId, sessionId, principal }` for a request it let through, typed
+  (`sessionOf<AppPrincipal>(req)`), with no cast of `req`; it throws a
+  `TypeError` for a route mounted without `requireSession`. `req.userId`,
+  `req.sessionId` and now `req.principal` are set as well. The README's
+  auth routes kit section shows a REST route calling a service in process
+  (`requireSession`, `sessionOf`, `qd.caller`) as a compiled example, and
+  MIGRATION's example lost its cast (F5.1, F5.4).
 
 ### Client
 
@@ -190,6 +227,58 @@ serviceAccess, isConnected, isKnown })` and `mock.$presence(room, users)`.
 
 - The policy builders listed in `no-v4-api`'s messages, the codemod's
   access markers and the upgrade procedure name `everyone`.
+
+### API docs
+
+- `quickdraw-docs <contracts> --services <module>` reads the services'
+  definitions (each export, or in a list or map) and adds to each page who
+  may call what: an "Access" section (the row policy in words, whether a
+  service-wide `Admin` grant passes every check, `watchAccess`, the field
+  levels), each method's access form in words and its `rowless`, who may
+  open a collection's scope, a channel's access, a stream's computed seed
+  and validation. A contract with no service says so; a service with no
+  contract is an error. Pass the flag to `--check` too. Without it the
+  pages are as before (F5.3).
+- Wording: one character, one item and a seed of one are singular ("at
+  least 1 character", "the latest item"); the safe-integer bounds Zod
+  gives every integer are not written, and a bound of 0 reads
+  "non-negative" (an exclusive one "positive"); other exclusive bounds read
+  "more than" and "less than". A stream's `access: { room }` was written
+  as `{  }` (F5.6). Regenerate committed pages (`docs:check` reports them).
+
+### Skills
+
+- `quickdraw-new-service` and `quickdraw-testing.md` follow the template's
+  layout: a service at `apps/api/src/services/<name>/index.ts`, registered
+  in the `services` list of `apps/api/src/services/index.ts` that every
+  root takes, its integration test at
+  `apps/api/src/__tests__/services/<name>.int.test.ts` (the database lane;
+  a `<name>.test.ts` runs in the unit lane, without a database), and an
+  app's own rules win where they name other paths. The rules describe REST
+  routes (`requireSession`, `sessionOf`, `qd.caller` with the user's
+  grants), `qd.run` before `createServer`, the admin kit's grants field and
+  `onWrite`, `hello.serverId`, `signInUrl` and `signOut`, and the
+  template's provider path (F5.2).
+
+### Packaging
+
+- The README the core package ships links what lies outside
+  `packages/core` (the lint, skills and codemod packages, `docs/`, the
+  migration guide) on GitHub: its relative links were dead inside
+  `node_modules`. A test checks that no shipped Markdown copy links out of
+  its package (F5.7).
+
+### The framework's own tests
+
+- The end-to-end revocation test failed now and then on a busy machine:
+  both `qd:revoked` frames of one access change invalidate the service's
+  method queries, the second inside the coordinator's window after the
+  first read, so a refused query is read once more about 250 ms later and
+  shows neither data nor error meanwhile; the test checked that view at
+  once. It now waits for that read's answer. The shared counter's and the
+  cluster broadcasts' "does not wait" tests check that the call settles
+  before any timer could fire instead of a 10 ms and a 25 ms wall-clock
+  bound.
 
 ## [5.0.0-rc.3]
 
