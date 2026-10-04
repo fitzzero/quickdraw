@@ -89,6 +89,35 @@ room or is taken out of it is revoked from the feed at once
   (`outputValidation`, on unless `NODE_ENV` is `"production"`); unchecked,
   an item goes out as pushed. The default stays `"always"` (F4.14).
 
+### Kits
+
+- `admin.handlers(contract, { onWrite })`: `onWrite({ method, id, before?,
+after }, ctx, db)` runs after each `adminCreate`, `adminUpdate` and
+  `adminDelete`, in one transaction with the write (`db` its tracked
+  client; a throw undoes the write and fails the call), with the entity's
+  rows before and after, every field. Without it nothing changes: no
+  transaction, no extra read. `KitHandler<Db, Out>` gains its output type
+  (default `never`, as before), and the admin kit's handlers resolve with
+  their method's output type, so a wrapper reads what a handler returned
+  and returns it on with no cast (F4.8).
+
+### Testing
+
+- `app.frames` and `frames.waitFor` take an event query with `where`, a
+  predicate over the event's frames with `data` typed by the event
+  (`EventQuery<E, D>`), and `./testing` adds `streamFrames(contract, stream,
+where?, scope?)` and `eventFrames(contract, event, where?)`, which match
+  one stream's items or one event's payloads typed by the contract. Realtime
+  tests cast `StreamFrame` and `EventFrame` by hand before (F4.13).
+
+### GDScript reference client
+
+- `is_subscribed(service, stream, scope)` (true while the client holds
+  the feed, which it subscribes to again after each reconnect) and
+  `off_event(service, event, callback)`; `check:godot` checks both, and
+  `server_id` (F4.11). Re-copy `addons/quickdraw/quickdraw_client.gd`: it
+  also reads the positional `qd:stream` frame (F4.7, F4.12).
+
 ### Server
 
 - `qd.run(fn)` before the app created any dispatcher (a boot-time seed

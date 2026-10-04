@@ -83,8 +83,13 @@ func _calls(client) -> void:
 
 func _world(client) -> void:
 	check(client.send_channel("gameService", "move", {"dx": 9, "dy": 0}), "a move is written before joining")
+	check(not client.is_subscribed("gameService", "ticks"), "no feed held before subscribing")
 	var sub: Dictionary = await client.subscribe_stream("gameService", "ticks")
 	check(sub.ok and (sub.seed as Array).is_empty(), "the stream's seed is empty: that move was dropped")
+	check(client.is_subscribed("gameService", "ticks") and not client.is_subscribed("gameService", "ticks", "elsewhere"), "is_subscribed knows the feed held")
+	var unheard := func(payload: Variant) -> void: events.append(["unheard", payload])
+	client.on_event("gameService", "moved", unheard)
+	check(client.off_event("gameService", "moved", unheard) and not client.off_event("gameService", "moved", unheard), "off_event removes a handler, once")
 	var joined: Dictionary = await client.call_method("gameService", "join", {"name": "ada"})
 	check(joined.ok and joined.d.players == ["ada"], "joining the world answers its players")
 	check(client.presence("world:main") == ["ada"], "qd:presence lists the player")

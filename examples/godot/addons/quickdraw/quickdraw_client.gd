@@ -234,12 +234,34 @@ func unsubscribe_stream(service: String, stream: String, scope := "") -> void:
 		_emit("qd:stream:unsub", frame)
 
 
+## True while the client holds the feed: from `subscribe_stream` until
+## `unsubscribe_stream` or a `qd:revoked` for it. The client subscribes to a
+## held feed again after each reconnect, so a caller that asks first never
+## sends a second `qd:stream:sub`.
+func is_subscribed(service: String, stream: String, scope := "") -> bool:
+	return _streams.has(_stream_key(service, stream, scope))
+
+
 ## Calls `callback(payload)` for each `qd:event` of `service` named `event`.
 func on_event(service: String, event: String, callback: Callable) -> void:
 	var key := "%s/%s" % [service, event]
 	if not _handlers.has(key):
 		_handlers[key] = []
 	(_handlers[key] as Array).append(callback)
+
+
+## Stops calling `callback` for `qd:event` of `service` named `event`, once
+## per `on_event` that added it. Returns false when it was not registered.
+func off_event(service: String, event: String, callback: Callable) -> bool:
+	var key := "%s/%s" % [service, event]
+	var callbacks: Array = _handlers.get(key, [])
+	var index := callbacks.find(callback)
+	if index < 0:
+		return false
+	callbacks.remove_at(index)
+	if callbacks.is_empty():
+		_handlers.erase(key)
+	return true
 
 
 ## The users in an app room the socket is in, as its `qd:presence` frames said.

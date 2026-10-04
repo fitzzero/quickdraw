@@ -1924,6 +1924,15 @@ export function AdminTasks() {
   The write is tracked, so with `auth.serviceAccessSource` naming the column
   the user's open sockets get the new grants at once, on every node. Such
   an Admin can grant any service, themself included.
+- `admin.handlers(contract, { onWrite })` runs `onWrite({ method, id,
+before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
+  `adminDelete`, in one transaction with the write (`db` is the
+  transaction's tracked client; a throw undoes the write and fails the
+  call): what an admin edit must set off, such as a game reloading its
+  tunables, without wrapping the kit's handlers. The rows are the entity,
+  every field. Without it the kit opens no transaction. Each handler
+  `admin.handlers` returns resolves with its method's output type, so a
+  wrapper reads the row and returns it with no cast.
 - `adminSubscribers({ id })` counts the sockets subscribed to a row per
   access level (`{ id, count, levels, complete }`; behind a Redis adapter
   the counts are this server's and `complete` is `false`), and
@@ -2513,8 +2522,14 @@ it("sends a rename to the other members' boards", async () => {
 - `app.as(principal)` calls in process and `app.connect(principal)` over a
   real socket (`{ call, socket, hello, close }`); both are keyed by service
   name. `app.frames(match?)` lists every frame the server sent, with its
-  socket and user; `frames.waitFor(match)` waits for one. `emitWithAck` and
-  `waitForEvent` send raw frames and wait for events.
+  socket and user; `frames.waitFor(match)` waits for one. A query of one
+  event takes `where`, a predicate over its frames typed by the event
+  (`{ event: "qd:presence", where: ({ data }) => data.joined === id }`), and
+  `streamFrames(contract, stream, where?, scope?)` and
+  `eventFrames(contract, event, where?)` match one stream's items or one
+  event's payloads, typed by the contract, to spread beside `socketId` or
+  `userId`. `emitWithAck` and `waitForEvent` send raw frames and wait for
+  events.
 
 ### Access matrices
 

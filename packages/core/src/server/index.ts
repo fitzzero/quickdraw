@@ -250,6 +250,9 @@ export type {
   AdminFieldOverride,
   AdminHandlersOptions,
   AdminImplementations,
+  AdminOnWrite,
+  AdminOutputOf,
+  AdminWrite,
 } from "./kits/admin/types";
 
 // The seams later cards implement: tracked writes, "not modified" versions

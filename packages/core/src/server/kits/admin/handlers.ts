@@ -1,6 +1,6 @@
 // `admin.handlers(contract, { access?, displayName?, hiddenFields?,
-// fieldOverrides?, rowless?, grants? })` (RFC 0003 section 12.4): the admin
-// kit's server half.
+// fieldOverrides?, rowless?, grants?, onWrite? })` (RFC 0003 section 12.4):
+// the admin kit's server half.
 // It finds the methods `admin.contract` made in the contract and returns an
 // implementation of each, to spread into `defineService`'s `methods`:
 //
@@ -46,6 +46,7 @@ import type {
   AdminContract,
   AdminHandlersOptions,
   AdminImplementations,
+  AdminOnWrite,
 } from "./types";
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -59,6 +60,7 @@ const OPTION_KEYS: readonly string[] = [
   "fieldOverrides",
   "rowless",
   "grants",
+  "onWrite",
 ];
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -103,7 +105,7 @@ function checkOptions(options: unknown): UnknownRecord {
   }
   if (!isRecord(options)) {
     fail(
-      "options must be { access?, displayName?, hiddenFields?, fieldOverrides?, rowless?, grants? }",
+      "options must be { access?, displayName?, hiddenFields?, fieldOverrides?, rowless?, grants?, onWrite? }",
     );
   }
   const unknownKey = Object.keys(options).find((key) => !OPTION_KEYS.includes(key));
@@ -169,24 +171,28 @@ function serviceProblem(service: AnyService, contract: AnyContract): string | un
     : undefined;
 }
 
-function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty>(
+function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty, Db = unknown>(
   contract: C & NoInfer<AdminContract<C>>,
-  options?: AdminHandlersOptions<C, A>,
-): AdminImplementations<C, A> {
+  options?: AdminHandlersOptions<C, A, Db>,
+): AdminImplementations<C, A, Db> {
   const kit = kitMethods(contract);
   const checked = checkOptions(options);
   const names = kit.map(([name]) => name);
   const access = checkAccess(checked.access, names);
   const rowless = rowlessMethods(checked.rowless, names, fail);
   const fields = fieldsOf(contract, kit, checked);
+  const { onWrite } = checked;
+  if (onWrite !== undefined && typeof onWrite !== "function") {
+    fail("onWrite must be a function of (write, ctx, db)");
+  }
   const entries: Record<string, object> = {};
   for (const [name, spec] of kit) {
     const form = (access[name] as AccessForm | undefined) ?? ADMIN_DEFAULT_ACCESS;
-    const handler = handlerOf({ spec, fields, form });
+    const handler = handlerOf({ spec, fields, form, onWrite: onWrite as AdminOnWrite | undefined });
     checkWhenDefined(handler, (service) => serviceProblem(service, contract));
     entries[name] = kitEntry(name, form, handler, rowless);
   }
-  return Object.freeze(entries) as AdminImplementations<C, A>;
+  return Object.freeze(entries) as AdminImplementations<C, A, Db>;
 }
 
 /**

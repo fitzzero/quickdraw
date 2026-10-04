@@ -16,7 +16,14 @@ import type { StreamFrame } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { connectV5 } from "../../testing/socket";
-import { createTestApp, emitWithAck, type TestApp, type TestConnection } from "../../testing/index";
+import {
+  createTestApp,
+  emitWithAck,
+  eventFrames,
+  streamFrames,
+  type TestApp,
+  type TestConnection,
+} from "../../testing/index";
 import { as, projectService, qd, seedBoard, type Board } from "../access/__tests__/board";
 import { recordingStorage, type Read } from "../emit/__tests__/live";
 import { createDispatcher, initQuickdraw, type Principal } from "../index";
@@ -795,6 +802,37 @@ describe('validate: "development"', () => {
         streams: { snaps: { validate: "sometimes" } },
       }),
     ).toThrow('streams.snaps.validate must be "always" or "development"');
+  });
+});
+
+describe("app.frames, typed", () => {
+  it("waits for a contract's stream item, room event and presence frame, their data typed", async () => {
+    const app = await start();
+    const cy = await app.connect(as(board.cy));
+    await streamSub(cy, "logs", board.t1);
+    for (const line of ["one", "two"]) {
+      logs(app).push(board.t1, { line });
+    }
+    const item = await app.frames.waitFor({
+      ...streamFrames(liveContract, "logs", (logLine) => logLine.line === "two", board.t1),
+      socketId: cy.socket.id,
+    });
+    expect(item.data[3].line).toBe("two");
+    expect(app.frames(streamFrames(liveContract, "logs")).map(({ data }) => data[3].line)).toEqual([
+      "one",
+      "two",
+    ]);
+    await cy.call.taskService.enter({ room: LOBBY });
+    const joined = await app.frames.waitFor({
+      event: "qd:presence",
+      where: ({ data }) => data.users?.includes(board.cy) === true,
+    });
+    expect(joined.data.room).toBe(LOBBY);
+    await cy.call.taskService.celebrate({ room: LOBBY, taskId: board.t1 });
+    const event = await app.frames.waitFor(
+      eventFrames(liveContract, "celebrated", (payload) => payload.taskId === board.t1),
+    );
+    expect(event.data[2].taskId).toBe(board.t1);
   });
 });
 
