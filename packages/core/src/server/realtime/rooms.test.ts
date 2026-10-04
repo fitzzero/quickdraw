@@ -19,7 +19,13 @@ import type { EventFrame, PresenceFrame } from "../../protocol/envelope";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
 import { as, projectService, qd, seedBoard, type Board } from "../access/__tests__/board";
-import { initQuickdraw, type Principal, type RoomLeave, type RoomLeaveHandler } from "../index";
+import {
+  createDispatcher,
+  initQuickdraw,
+  type Principal,
+  type RoomLeave,
+  type RoomLeaveHandler,
+} from "../index";
 import {
   defineLiveService,
   frames,
@@ -424,6 +430,54 @@ describe("onRoomLeave", () => {
         onRoomLeave: "nope" as unknown as RoomLeaveHandler,
       }),
     ).rejects.toThrow("onRoomLeave must be a function");
+  });
+});
+
+describe("rooms.size(room)", () => {
+  it("counts the sockets in an app room on this node, anonymous ones too, at once", async () => {
+    const { app } = await start();
+    const ada1 = await member(app, as(board.ada));
+    const ada2 = await member(app, as(board.ada));
+    const spectator = await member(app, null);
+    await ada1.connection.call.taskService.enter({ room: "lobby" });
+    await ada2.connection.call.taskService.enter({ room: "lobby" });
+    await spectator.connection.call.taskService.enterAnyone({ room: "lobby" });
+    // ctx.rooms.size, in a call over a socket: on the node that socket is connected to.
+    const where = () => spectator.connection.call.taskService.whereAmI({ room: "lobby" });
+    expect(await where()).toEqual({ socketId: spectator.connection.socket.id, size: 3 });
+    // Presence counts users, the anonymous spectator not at all, on every node.
+    expect(await app.server.presence.count("lobby")).toBe(1);
+    // Local: in the cluster projects app.server is the writer node, where no socket is.
+    expect(app.server.rooms.size("lobby")).toBe(inCluster() ? 0 : 3);
+    expect(qd.rooms.size("lobby")).toBe(inCluster() ? 0 : 3);
+    ada2.connection.close();
+    await vi.waitFor(async () => {
+      expect((await where()).size).toBe(2);
+    });
+    expect(app.server.rooms.size("nowhere")).toBe(0);
+    expect(() => app.server.rooms.size("qd:e:taskService:t1@Read")).toThrow(
+      expect.objectContaining({ code: "VALIDATION" }) as Error,
+    );
+  });
+
+  it("is 0 on a dispatcher without a server", () => {
+    const dispatcher = createDispatcher({ services: [projectService], db: h.db });
+    expect(dispatcher.rooms.size("lobby")).toBe(0);
+  });
+});
+
+describe("ctx.socketId", () => {
+  it("names the socket a call arrived on, and nothing for a call in process", async () => {
+    const { app } = await start();
+    const ada = await member(app, as(board.ada));
+    expect(await ada.connection.call.taskService.whereAmI({ room: "lobby" })).toEqual({
+      socketId: ada.connection.socket.id,
+      size: 0,
+    });
+    expect(await app.as(as(board.ada)).taskService.whereAmI({ room: "lobby" })).toEqual({
+      socketId: null,
+      size: 0,
+    });
   });
 });
 

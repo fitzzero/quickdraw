@@ -78,7 +78,9 @@ describe("the server", () => {
       channels: {
         cursor: (payload, ctx) => {
           expectTypeOf(payload).toEqualTypeOf<{ x: number; y: number }>();
-          expectTypeOf(ctx).toEqualTypeOf<ChannelContext<AppPrincipal>>();
+          // cursor requires no room: ctx.room is undefined
+          expectTypeOf(ctx).toEqualTypeOf<ChannelContext<AppPrincipal, undefined>>();
+          expectTypeOf(ctx.room).toEqualTypeOf<undefined>();
           expectTypeOf(ctx.principal.team).toBeString();
         },
       },
@@ -103,6 +105,7 @@ describe("the server", () => {
       channels: {
         move: { payload: cursor, requires: { room: "world" } },
         wave: { payload: z.object({ lobby: z.string() }), requires: { room: (p) => p.lobby } },
+        steer: { payload: cursor, requires: { room: { prefix: "world:" } } },
       },
     });
     expectTypeOf(world.channels.move.requires).toExtend<ChannelRequires>();
@@ -114,12 +117,18 @@ describe("the server", () => {
         move: (payload, ctx) => {
           expectTypeOf(payload).toEqualTypeOf<{ x: number; y: number }>();
           expectTypeOf(ctx.principal.team).toBeString();
+          // the room the requirement matched
+          expectTypeOf(ctx.room).toEqualTypeOf<string>();
         },
         wave: {
           access: { service: "Read" },
-          handler: (payload) => {
+          handler: (payload, ctx) => {
             expectTypeOf(payload).toEqualTypeOf<{ lobby: string }>();
+            expectTypeOf(ctx.room).toEqualTypeOf<string>();
           },
+        },
+        steer: (_payload, ctx) => {
+          expectTypeOf(ctx).toEqualTypeOf<ChannelContext<AppPrincipal, string>>();
         },
       },
     });

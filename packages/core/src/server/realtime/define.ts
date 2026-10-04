@@ -13,6 +13,7 @@ import {
   isScopedStream,
   type ChannelDef,
   type PayloadSelector,
+  type RoomPrefix,
   type RoomSelector,
   type StreamAccess,
   type StreamDef,
@@ -58,7 +59,7 @@ function compileSelector(selector: PayloadSelector): CompiledSelector {
  * room when it is not a string, is empty or is reserved (`qd:`, `user:`),
  * since a socket is never in such a room as an app room.
  */
-function compileRoom(room: RoomSelector): CompiledSelector {
+function compileRoom(room: Exclude<RoomSelector, RoomPrefix>): CompiledSelector {
   if (typeof room === "string") {
     return () => room;
   }
@@ -74,8 +75,12 @@ function compileRequires(def: ChannelDef): ServiceChannel["requires"] {
   if (requires === undefined) {
     return undefined;
   }
-  if (requires.room !== undefined) {
-    return { kind: "room", select: compileRoom(requires.room) };
+  const { room } = requires;
+  if (typeof room === "object") {
+    return { kind: "roomPrefix", prefix: room.prefix };
+  }
+  if (room !== undefined) {
+    return { kind: "room", select: compileRoom(room) };
   }
   if (requires.collection === undefined) {
     return { kind: "entity", select: compileSelector(requires.entity) };

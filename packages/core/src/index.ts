@@ -68,6 +68,7 @@ export {
   type ChannelRequires,
   type EventDef,
   type PayloadSelector,
+  type RoomPrefix,
   type RoomSelector,
   type StreamAccess,
   type StreamDef,

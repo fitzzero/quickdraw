@@ -359,7 +359,7 @@ describe("a channel's app room across nodes", () => {
     send(onA, "shout", { n: 1 });
     send(onB, "shout", { n: 2 });
     await Promise.all([settle(onA), settle(onB)]);
-    expect(into.shout).toEqual([{ userId: board.cy, socketId: onB.socket.id, n: 2 }]);
+    expect(into.shout).toEqual([{ userId: board.cy, socketId: onB.socket.id, room: LOBBY, n: 2 }]);
     // Presence answers for the whole cluster; the channel asks the sending socket only.
     expect(await app.server.presence.users(LOBBY)).toEqual([board.cy]);
   });

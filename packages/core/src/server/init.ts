@@ -216,6 +216,7 @@ function roomsOf(current: Current): ServerRooms {
     },
     leave: async (room: string, target: Parameters<ServerRooms["leave"]>[1]) =>
       await rooms().leave(room, target),
+    size: (room: string) => rooms().size(room),
   }) as ServerRooms;
 }
 

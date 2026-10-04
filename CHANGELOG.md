@@ -58,6 +58,19 @@ enabled?, onJoined? })` on `./client` runs a joining call (any query or
   hello, and the current one in a microtask). The README's board example
   joins with it; a room joined once from a query was silently lost on
   every reconnect (F4.3).
+- `rooms.size(room)` on `qd.rooms`, `server.rooms`, `dispatcher.rooms` and
+  `ctx.rooms`: the sockets in an app room on this node, anonymous ones
+  included, synchronous, for a tick loop (local by design; `presence.count`
+  stays the cluster-wide count of users). A method's `ctx.socketId` names
+  the socket its call arrived on (`undefined` over HTTP, MCP or in process)
+  (F4.4).
+- A channel's `requires: { room: { prefix: "world:" } }` takes a socket in
+  any app room whose name starts with the prefix (the one it joined first,
+  if several); refused at definition for an empty or reserved prefix. Every
+  room form gives the handler the room it matched as `ctx.room` (typed
+  `string` for a channel that requires a room, `undefined` otherwise), so a
+  game of many worlds need not repeat the world's id in every input frame
+  (F4.5).
 
 ### Client
 

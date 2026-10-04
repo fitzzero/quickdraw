@@ -55,6 +55,15 @@ function join(state: LeavingState, socket: QuickdrawServerSocket, room: string):
   return true;
 }
 
+/**
+ * `rooms.size(room)`: this node's sockets in app room `room`, anonymous ones
+ * included, read from the adapter's own room at once.
+ */
+function sizeOf(state: LeavingState, room: string): number {
+  checkRoom(room);
+  return state.hub.io?.sockets.adapter.rooms.get(room)?.size ?? 0;
+}
+
 /** The `ctx.rooms` of each socket, of calls without one, and `qd.rooms`, for one dispatcher. */
 export interface Rooms {
   /** The `ctx.rooms` of calls and channel messages from `socket`: made once per socket. */
@@ -95,10 +104,12 @@ export function createRooms(base: RoomState): Rooms {
   const events = createRoomEvents(state.hub);
   const removal = (room: string, target: RoomTarget): Promise<void> =>
     removeUser(state, room, target);
-  const server: ServerRooms = Object.freeze({ ...events, leave: removal });
+  const size = (room: string): number => sizeOf(state, room);
+  const server: ServerRooms = Object.freeze({ ...events, leave: removal, size });
   const bySocket = new WeakMap<QuickdrawServerSocket, ContextRooms>();
   const detached: ContextRooms = Object.freeze({
     ...events,
+    size,
     join: (room: string) => {
       checkRoom(room);
       return false;
@@ -111,6 +122,7 @@ export function createRooms(base: RoomState): Rooms {
       if (rooms === undefined) {
         rooms = Object.freeze({
           ...events,
+          size,
           join: (room: string) => join(state, socket, room),
           leave: leaveOf((room) => leaveRoom(state, socket, room, "leave"), removal),
         });

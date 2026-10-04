@@ -52,6 +52,11 @@ export const liveContract = defineContract("taskService", {
       output: z.null(),
     }),
     celebrateBadly: mutation({ input: roomInput, output: z.null() }),
+    /** The calling socket's id (`ctx.socketId`), and how many sockets are in a room on this node. */
+    whereAmI: query({
+      input: roomInput,
+      output: z.object({ socketId: z.string().nullable(), size: z.number() }),
+    }),
   },
   collections: {
     byProject: { scope: "projectId", item: "entity", order: [["id", "asc"]] },
@@ -91,6 +96,8 @@ export const liveContract = defineContract("taskService", {
       payload: z.object({ room: z.string(), n: z.number() }),
       requires: { room: (payload) => payload.room },
     },
+    /** Only from a socket in an app room whose name starts with `world:` (a game of many worlds). */
+    steer: { payload: z.object({ n: z.number() }), requires: { room: { prefix: "world:" } } },
   },
   events: { celebrated: { payload: z.object({ taskId: z.string() }) } },
 });
@@ -101,8 +108,17 @@ export interface Received {
   readonly typing: { readonly userId: string; readonly projectId: string }[];
   readonly adminPings: string[];
   readonly tight: number[];
-  readonly shout: { readonly userId: string; readonly socketId: string; readonly n: number }[];
-  readonly move: { readonly room: string; readonly n: number }[];
+  readonly shout: {
+    readonly userId: string;
+    readonly socketId: string;
+    readonly room: string;
+    readonly n: number;
+  }[];
+  readonly move: { readonly room: string; readonly matched: string; readonly n: number }[];
+  /** `steer` messages, with the room the prefix matched (`ctx.room`). */
+  readonly steer: { readonly room: string; readonly n: number }[];
+  /** `ctx.room` of the channels that require no room (`input`, `typing`): always undefined. */
+  readonly roomless: (string | undefined)[];
   handlerErrors: number;
 }
 
@@ -114,6 +130,8 @@ export function received(): Received {
     tight: [],
     shout: [],
     move: [],
+    steer: [],
+    roomless: [],
     handlerErrors: 0,
   };
 }
@@ -165,6 +183,13 @@ export function defineLiveService(
           return null;
         },
       },
+      whereAmI: {
+        access: "public",
+        handler: ({ input, ctx }) => ({
+          socketId: ctx.socketId ?? null,
+          size: ctx.rooms.size(input.room),
+        }),
+      },
     },
     channels: {
       input: (payload, ctx) => {
@@ -181,10 +206,12 @@ export function defineLiveService(
           throw new QuickdrawError("FORBIDDEN", "not yours");
         }
         into.input.push({ userId: ctx.principal.userId, socketId: ctx.socketId, seq: payload.seq });
+        into.roomless.push(ctx.room);
         return undefined;
       },
       typing: (payload, ctx) => {
         into.typing.push({ userId: ctx.principal.userId, projectId: payload.projectId });
+        into.roomless.push(ctx.room);
       },
       adminPing: {
         access: { service: "Admin" },
@@ -199,10 +226,18 @@ export function defineLiveService(
         ctx.rooms.emit(payload.room, liveContract, "celebrated", { taskId: payload.taskId });
       },
       shout: (payload, ctx) => {
-        into.shout.push({ userId: ctx.principal.userId, socketId: ctx.socketId, n: payload.n });
+        into.shout.push({
+          userId: ctx.principal.userId,
+          socketId: ctx.socketId,
+          room: ctx.room,
+          n: payload.n,
+        });
       },
-      move: (payload) => {
-        into.move.push({ room: payload.room, n: payload.n });
+      move: (payload, ctx) => {
+        into.move.push({ room: payload.room, matched: ctx.room, n: payload.n });
+      },
+      steer: (payload, ctx) => {
+        into.steer.push({ room: ctx.room, n: payload.n });
       },
     },
   });

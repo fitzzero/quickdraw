@@ -121,6 +121,9 @@ export function contextFor(
     log,
     requestId,
     transport: request.transport,
+    ...(request.transport === "socket" && request.connectionId !== undefined
+      ? { socketId: request.connectionId }
+      : {}),
     ...(request.mcp === undefined ? {} : { mcp: request.mcp }),
     touch: settings.touch,
     rooms: realtime.roomsFor(request.transport, request.connectionId, target.method.share),

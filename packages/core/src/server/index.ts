@@ -86,6 +86,7 @@ export type {
   ChannelHandler,
   ChannelImplementation,
   ChannelOptions,
+  ChannelRoomOf,
   ChannelsRequired,
   Presence,
   RoomLeave,

@@ -14,4 +14,10 @@ export function showCursor(projectId: string, taskId: string, x: number): void {
 export async function removeFromBoard(projectId: string, userId: string): Promise<void> {
   await qd.rooms.leave(boardRoom(projectId), { userId });
 }
+
+// a tick loop's "is anyone watching?", at its tick rate: this node's sockets in the room,
+// anonymous ones too, with no promise (presence.count asks every node for users)
+export function hasAudience(projectId: string): boolean {
+  return qd.rooms.size(boardRoom(projectId)) > 0;
+}
 // #endregion

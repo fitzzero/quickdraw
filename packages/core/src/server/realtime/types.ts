@@ -93,6 +93,17 @@ export interface ServerRooms {
    * app's to refuse.
    */
   leave(room: string, target: RoomTarget): Promise<void>;
+  /**
+   * How many sockets are in the app room `room` on this node: every socket a
+   * method joined to it, anonymous ones (a spectator) included, counted at
+   * once, with no promise and no round trip, so a game loop can ask it at
+   * its tick rate ("is anyone watching this world?"). Local: behind a
+   * cluster adapter it never counts another node's sockets; ask
+   * `presence.count(room)` for the users in the room on every node. Room
+   * names are checked as `join` checks them (`VALIDATION`); without a server
+   * it is 0.
+   */
+  size(room: string): number;
 }
 
 /**
@@ -265,12 +276,24 @@ export type ChannelAccess = "authenticated" | { readonly service: AccessLevel };
 
 /**
  * What a channel handler receives beside the payload. Channels need a
- * principal, so `principal` is never `null`.
+ * principal, so `principal` is never `null`. `Room` is `string` for a
+ * channel that `requires: { room }`, `undefined` for any other.
  */
-export interface ChannelContext<P = Principal> {
+export interface ChannelContext<
+  P = Principal,
+  Room extends string | undefined = string | undefined,
+> {
   readonly principal: P;
   /** The socket the message arrived on. */
   readonly socketId: string;
+  /**
+   * The app room the channel's `requires: { room }` matched: its name, the
+   * one the payload computed, or for `{ prefix }` the sending socket's room
+   * with that prefix (the one it joined first, if several), so a game of
+   * many worlds knows the sender's world without the payload repeating it.
+   * `undefined` for a channel that requires no room.
+   */
+  readonly room: Room;
   /** The dispatcher's logger. Messages are not logged one by one. */
   readonly log: Logger;
   /** Joins and leaves apply to the sending socket. */
@@ -279,23 +302,42 @@ export interface ChannelContext<P = Principal> {
 }
 
 /** A channel's handler. It runs synchronously per message; a promise it returns is not awaited. */
-export type ChannelHandler<T extends QuickdrawTypes, Payload> = (
-  payload: Payload,
-  ctx: ChannelContext<PrincipalOf<T>>,
-) => void | PromiseLike<void>;
+export type ChannelHandler<
+  T extends QuickdrawTypes,
+  Payload,
+  Room extends string | undefined = string | undefined,
+> = (payload: Payload, ctx: ChannelContext<PrincipalOf<T>, Room>) => void | PromiseLike<void>;
 
 /** One channel's implementation in `defineService`: its handler, or `{ access, handler }`. */
-export type ChannelImplementation<T extends QuickdrawTypes, Payload> =
-  | ChannelHandler<T, Payload>
+export type ChannelImplementation<
+  T extends QuickdrawTypes,
+  Payload,
+  Room extends string | undefined = string | undefined,
+> =
+  | ChannelHandler<T, Payload, Room>
   | {
       /** Default `"authenticated"`. */
       readonly access?: ChannelAccess;
-      readonly handler: ChannelHandler<T, Payload>;
+      readonly handler: ChannelHandler<T, Payload, Room>;
     };
+
+/** What a channel's handler gets as `ctx.room`: `string` when it requires a room, else `undefined`. */
+export type ChannelRoomOf<
+  C extends AnyContract,
+  K extends ChannelName<C>,
+> = C["channels"][K] extends {
+  readonly requires: { readonly room: string | object };
+}
+  ? string
+  : undefined;
 
 /** `defineService`'s `channels`: one implementation per channel of the contract. */
 export type ChannelOptions<T extends QuickdrawTypes, C extends AnyContract> = {
-  readonly [K in ChannelName<C>]: ChannelImplementation<T, ChannelPayloadOf<C, K>>;
+  readonly [K in ChannelName<C>]: ChannelImplementation<
+    T,
+    ChannelPayloadOf<C, K>,
+    ChannelRoomOf<C, K>
+  >;
 };
 
 /** `{ channels }` is required when the contract declares channels: every message needs a handler. */
@@ -353,6 +395,7 @@ export interface ServiceChannel {
         readonly select: CompiledSelector;
       }
     | { readonly kind: "room"; readonly select: CompiledSelector }
+    | { readonly kind: "roomPrefix"; readonly prefix: string }
     | undefined;
   readonly access: ChannelAccess;
   readonly handler: AnyChannelHandler;

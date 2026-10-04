@@ -160,10 +160,31 @@ function isSelector(value: unknown): boolean {
 
 const REQUIRES_FORMS = "requires must be { entity }, { collection, scope } or { room }";
 
+/** The longest app room name `ctx.rooms.join` takes, so the longest prefix one can start with. */
+const MAX_ROOM_LENGTH = 256;
+
+/** Checks `requires: { room: { prefix } }`: a prefix some app room's name could start with. */
+function checkRoomPrefix(owner: string, room: UnknownRecord, fail: Fail): void {
+  const { prefix } = room;
+  const extra = Object.keys(room).find((key) => key !== "prefix");
+  if (extra !== undefined || !isName(prefix) || prefix.length > MAX_ROOM_LENGTH) {
+    fail(
+      `${owner}: requires.room as an object is { prefix }, a string of 1 to ${MAX_ROOM_LENGTH} characters`,
+    );
+  }
+  const reserved = reservedRoomPrefix(prefix);
+  if (reserved !== undefined) {
+    fail(
+      `${owner}: requires.room's prefix "${prefix}" names no app room: names starting with "${reserved}" are the framework's own rooms, which ctx.rooms.join refuses`,
+    );
+  }
+}
+
 /**
- * Checks `requires: { room }`: a function of the payload, or the name of an
+ * Checks `requires: { room }`: a function of the payload, the name of an
  * app room, which is never empty and never starts with a reserved prefix
- * (`ctx.rooms.join` refuses those, so no socket could ever be in it).
+ * (`ctx.rooms.join` refuses those, so no socket could ever be in it), or
+ * `{ prefix }`, held to the same rule.
  */
 function checkRoomRequirement(owner: string, form: UnknownRecord, fail: Fail): void {
   if (form.entity !== undefined || form.collection !== undefined || form.scope !== undefined) {
@@ -173,8 +194,14 @@ function checkRoomRequirement(owner: string, form: UnknownRecord, fail: Fail): v
   if (typeof room === "function") {
     return;
   }
+  if (isRecord(room)) {
+    checkRoomPrefix(owner, room, fail);
+    return;
+  }
   if (!isName(room)) {
-    fail(`${owner}: requires.room must be an app room's name or a function of the payload`);
+    fail(
+      `${owner}: requires.room must be an app room's name, a function of the payload or { prefix }`,
+    );
   }
   const prefix = reservedRoomPrefix(room);
   if (prefix !== undefined) {

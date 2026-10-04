@@ -905,6 +905,15 @@ describe("streams, channels and events", () => {
         move: { payload: cursorSchema, requires: { entity: "docId", room: "world" } },
       },
     });
+    defineContract("prefixRoom", {
+      channels: { move: { payload: cursorSchema, requires: { room: { prefix: "world:" } } } },
+    });
+    defineContract("reservedPrefix", {
+      channels: {
+        // @ts-expect-error -- a prefix of the framework's rooms names no app room
+        move: { payload: cursorSchema, requires: { room: { prefix: "user:" } } },
+      },
+    });
   });
 
   test("streams, channels and events share the namespace of methods and collections", () => {

@@ -2088,10 +2088,13 @@ export function TaskRoom({
   scope; `{ room }`: the app room, a name like `"world"` or a function of
   the payload, which a call over that same socket joined) is dropped.
   Nothing is logged per message; a handler's error is. The socket rate
-  limiter does not count channels. Every requirement is the sending
-  socket's own: a room another socket of the user joined does not count, a
-  reconnected socket must join again, and behind a cluster the check runs
-  on the node the socket is connected to, with no round trip.
+  limiter does not count channels. `{ room: { prefix: "world:" } }` takes
+  a socket in any app room whose name starts with the prefix (a game of many
+  worlds), and every room form gives the handler the room it matched as
+  `ctx.room`, so the payload need not repeat it. Every requirement is the
+  sending socket's own: a room another socket of the user joined does not
+  count, a reconnected socket must join again, and behind a cluster the
+  check runs on the node the socket is connected to, with no round trip.
 - Presence: `isOnline`, `lastSeen` (now while online, else when the user's
   last socket on this process disconnected), `count` and `users` (each user
   once, anonymous sockets left out; app rooms only) come from this process's
@@ -2136,10 +2139,21 @@ export function showCursor(projectId: string, taskId: string, x: number): void {
 export async function removeFromBoard(projectId: string, userId: string): Promise<void> {
   await qd.rooms.leave(boardRoom(projectId), { userId });
 }
+
+// a tick loop's "is anyone watching?", at its tick rate: this node's sockets in the room,
+// anonymous ones too, with no promise (presence.count asks every node for users)
+export function hasAudience(projectId: string): boolean {
+  return qd.rooms.size(boardRoom(projectId)) > 0;
+}
 ```
 
 - `qd.rooms.emit` and `emitToUser` are `ctx.rooms`' own, from anywhere,
   reaching every node behind a cluster adapter.
+- `rooms.size(room)` (on `qd.rooms`, `server.rooms` and `ctx.rooms`) counts
+  the sockets in an app room on this node, anonymous ones included, at once:
+  a game loop can ask it every tick. It is local by design; `presence.count`
+  counts users on every node. A handler's `ctx.socketId` names the socket
+  its call arrived on (`undefined` over HTTP, MCP or in process).
 - `leave(room, { userId })` (on `qd.rooms`, and on `ctx.rooms` beside the
   calling socket's own `leave(room)`) takes every socket of the user out of
   an app room, on every node: they hear nothing more of it, a channel that

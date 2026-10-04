@@ -79,8 +79,14 @@ channels: {
   move: { payload: moveSchema, requires: { room: "world" } },
   // many lobbies: the room computed from the payload
   chat: { payload: chatSchema, requires: { room: (message) => `lobby:${message.lobbyId}` } },
+  // many worlds: any room the socket is in whose name starts with "world:"
+  steer: { payload: steerSchema, requires: { room: { prefix: "world:" } } },
 },
 ```
+
+The handler gets the room that matched as `ctx.room` (for the prefix form,
+the sending socket's world), so a 20 Hz input frame need not carry its
+world's id.
 
 The requirement is the sending socket's own, checked in memory on the node
 the socket is connected to, so it holds behind a cluster with no round trip:

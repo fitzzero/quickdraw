@@ -164,7 +164,12 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   subscription to the row the payload's key names), `{ collection, scope }`,
   or an app room a method joined that socket to: `{ room: "world" }` names
   the room itself (not a payload key), ``{ room: (p) => `lobby:${p.lobbyId}` }``
-  computes it. 4.x's `requireRoom` becomes `{ room }`.
+  computes it, `{ room: { prefix: "world:" } }` takes any room with that
+  prefix. The handler reads the matched room as `ctx.room`; never repeat a
+  world's id in every input frame. 4.x's `requireRoom` becomes `{ room }`.
+- A game loop asks `qd.rooms.size(room)` (this node's sockets, spectators
+  included, synchronous) at its tick rate, never Socket.IO's adapter;
+  `ctx.socketId` names the calling socket in a method.
 - Events: `events: { moved: { payload } }`, sent with
   `ctx.rooms.emit(room, task, "moved", payload)` to an app room
   (`ctx.rooms.join(room)` in a method puts the caller's socket in one).

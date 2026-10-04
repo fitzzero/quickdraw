@@ -550,7 +550,7 @@ describe("streams, channels and events (RFC 0003 section 12.5)", () => {
     );
   });
 
-  it("takes an app room's name or a function of the payload as requires.room", () => {
+  it("takes an app room's name, a function of the payload or { prefix } as requires.room", () => {
     const rooms = defineContract("roomService", {
       channels: {
         move: { payload: cursor, requires: { room: "world" } },
@@ -559,6 +559,10 @@ describe("streams, channels and events (RFC 0003 section 12.5)", () => {
     });
     expect(rooms.channels.move.requires).toEqual({ room: "world" });
     expect(typeof rooms.channels.lobby.requires?.room).toBe("function");
+    const worlds = defineContract("worldsService", {
+      channels: { steer: { payload: cursor, requires: { room: { prefix: "world:" } } } },
+    });
+    expect(worlds.channels.steer.requires).toEqual({ room: { prefix: "world:" } });
   });
 
   it("refuses a room requirement no socket could meet, or one mixed with another form", () => {
@@ -570,11 +574,23 @@ describe("streams, channels and events (RFC 0003 section 12.5)", () => {
       'requires.room "qd:e:taskService:t1@Read" is not an app room: names starting with "qd:" are the framework\'s own rooms',
     );
     expect(channel({ room: "user:ada" })).toThrow('names starting with "user:"');
-    for (const room of ["", 42, null, { name: "world" }]) {
+    for (const room of ["", 42, null]) {
       expect(channel({ room })).toThrow(
-        "requires.room must be an app room's name or a function of the payload",
+        "requires.room must be an app room's name, a function of the payload or { prefix }",
       );
     }
+    for (const room of [
+      { name: "world" },
+      { prefix: "" },
+      { prefix: "w", also: 1 },
+      { prefix: 3 },
+    ]) {
+      expect(channel({ room })).toThrow("requires.room as an object is { prefix }");
+    }
+    expect(channel({ room: { prefix: "user:" } })).toThrow(
+      'requires.room\'s prefix "user:" names no app room: names starting with "user:"',
+    );
+    expect(channel({ room: { prefix: "qd:e:" } })).toThrow('names starting with "qd:"');
     expect(channel({ room: "world", entity: "docId" }, { entity: taskSchema })).toThrow(
       "requires must be { entity }, { collection, scope } or { room }",
     );
