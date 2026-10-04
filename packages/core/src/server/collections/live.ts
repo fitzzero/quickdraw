@@ -13,6 +13,7 @@ import { createCollectionSink } from "./collectionSink";
 import { collectionSubscriptions } from "./extension";
 import { createScopeRevocation } from "./revocation";
 import { sendFrame } from "./send";
+import { listenForUnnamed } from "./unnamed";
 
 /** What a dispatcher's live data gets from its collections. */
 export interface LiveCollections {
@@ -26,6 +27,8 @@ export interface LiveCollections {
   readonly revocation: ReturnType<typeof createScopeRevocation>;
   /** Sends one scope a `reset`, so its clients load it again. */
   reset(contract: AnyContract, collection: string, scope: string): void;
+  /** Listens on the server the hub was given for what other nodes' flushes could not address. */
+  listen(): void;
 }
 
 /** Gives `hub` its collections. Throws a `TypeError` for an anchor the dispatcher cannot authorize through. */
@@ -53,6 +56,9 @@ export function createLiveCollections(hub: Hub): LiveCollections {
         throw new TypeError("collections.reset: scope must be the scope's value, as in its room");
       }
       sendFrame(withCollections, withCollections.io, found, scope, nextRev(), [{ t: "reset" }]);
+    },
+    listen: () => {
+      listenForUnnamed(withCollections);
     },
   });
 }

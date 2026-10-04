@@ -23,6 +23,7 @@ import {
   listenForGrants,
   refreshGrants,
   rotate,
+  type ClusterOptions,
   type DisconnectUserOptions,
   type LiveData,
 } from "./pushes";
@@ -30,7 +31,7 @@ import { onConnection, type ServerHello, type SocketExtension } from "./socketio
 import type { QuickdrawIo, SocketContext } from "./types";
 
 export type { SocketRateLimitOptions } from "./middleware";
-export type { DisconnectUserOptions } from "./pushes";
+export type { ClusterOptions, DisconnectUserOptions } from "./pushes";
 export type { QuickdrawIo } from "./types";
 
 /** Socket.IO server options `createServer` passes through; it sets `parser` and `cors` itself. */
@@ -51,6 +52,8 @@ export interface SocketServerSettings extends Omit<SocketContext, "meter"> {
   readonly extensions: readonly SocketExtension[];
   /** The dispatcher's live data: its extension serves `qd:sub`, and it is given the server. */
   readonly live?: LiveData;
+  /** Where a cluster's shared state lives, behind a cluster adapter (`createServer`'s `cluster`). */
+  readonly cluster?: ClusterOptions;
   /** The dispatcher's loop watch, which counts the rate limiter's refusals too. */
   readonly loops?: SocketLimitContext["loops"];
 }
@@ -103,7 +106,7 @@ export function createSocketServer(
     meter,
   };
   const probe = adapterProbe(io, settings.socket?.adapter !== undefined);
-  settings.live?.attach(io, probe);
+  settings.live?.attach(io, probe, settings.cluster);
   listenForGrants(io, settings.live, settings.logger);
   listenForDisconnects(io);
   io.use(protocolMiddleware(settings.legacyWire, context));
@@ -129,7 +132,17 @@ export function createSocketServer(
     io,
     rotate: (withinMs) => rotate(io, withinMs),
     refresh: (userId) =>
-      refreshGrants(io, settings.loadServiceAccess, settings.live, probe, userId),
+      refreshGrants(
+        {
+          io,
+          load: settings.loadServiceAccess,
+          live: settings.live,
+          probe,
+          logger: settings.logger,
+          cluster: settings.cluster,
+        },
+        userId,
+      ),
     disconnectUser: (userId, options) =>
       disconnectUser(io, probe, settings.logger, userId, options),
   };

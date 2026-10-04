@@ -12,7 +12,6 @@
 import type { Revision } from "../../protocol/envelope";
 import { pickKeys, projectRow } from "../emit/projection";
 import { strip } from "../emit/tiers";
-import { currentRev } from "../rev";
 import type { StorageAdapter, StorageRow, StorageWhere } from "../storage";
 import type { BoundCollection } from "./bind";
 import type { ServiceCollection } from "./define";
@@ -125,18 +124,17 @@ async function membersAmong(
 
 /**
  * The items of the members of `scope` among `ids`, in the order of `ids`,
- * each once, and the revision they were read at (taken before the first
- * read, the last one taken): one read for a column scope, two for a `via`
- * scope (its links among `ids`, then the rows). An id that is not a member
- * is left out.
+ * each once, and the revision they were read at (`rev`, claimed before the
+ * first read): one read for a column scope, two for a `via` scope (its
+ * links among `ids`, then the rows). An id that is not a member is left out.
  */
 export async function readItemsById(
   storage: StorageAdapter,
   collection: BoundCollection,
   scope: string,
   ids: readonly string[],
+  rev: Revision,
 ): Promise<{ readonly rev: Revision; readonly items: unknown[] }> {
-  const rev = currentRev();
   const wanted = [...new Set(ids)];
   const members =
     wanted.length === 0 ? undefined : await membersAmong(storage, collection, scope, wanted);

@@ -133,6 +133,7 @@ export function contextFor(
       access: settings.policies,
       storage: settings.storage,
       occupancy: settings.live.occupancy,
+      claimRevision: settings.live.revisions.claim,
     },
   };
   return createContext(fields, runtimeOf(target.service)?.extendContext);

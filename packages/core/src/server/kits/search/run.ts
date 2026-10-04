@@ -5,6 +5,7 @@
 // strategy's `ids` (`idsPage`) or with a condition (`wherePage`).
 
 import type { SearchPage, SearchQuery } from "../../../contract/kits/searchSchemas";
+import { kitRuntimeOf } from "../../context";
 import { currentRev } from "../../rev";
 import { rowLevel } from "../crud/access";
 import { crudCall, type KitHandler, type KitHandlerArgs } from "../crud/runtime";
@@ -27,7 +28,7 @@ export function searchHandler(context: SearchContext): KitHandler {
       ctx: ctx as SearchStrategyContext,
       db,
       level: rowLevel(context.form, "Read"),
-      rev: currentRev(),
+      rev: await (kitRuntimeOf(ctx)?.claimRevision ?? currentRev)(),
     };
     const ids = context.strategy?.ids;
     return ids === undefined ? await wherePage(run) : await idsPage(run, ids);

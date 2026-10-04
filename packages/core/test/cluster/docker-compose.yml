@@ -1,0 +1,17 @@
+# Valkey for the cluster test project only (`bun run test:cluster` in
+# packages/core). The compose project name and the host port (6399) keep it
+# apart from any other Redis or Valkey on the machine. Nothing is persisted:
+# every `up` starts empty.
+name: quickdraw-cluster
+
+services:
+  valkey:
+    image: valkey/valkey:8.1-alpine
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${QD_VALKEY_PORT:-6399}:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

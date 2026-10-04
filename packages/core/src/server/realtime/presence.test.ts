@@ -8,6 +8,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { inCluster } from "../../../test/cluster/mode";
 import { defineContract, query } from "../../index";
 import type { PresenceFrame } from "../../protocol/envelope";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
@@ -44,7 +45,8 @@ async function start(options: { readonly cluster?: boolean } = {}) {
     db: h.db,
   });
   apps.push(app as unknown as TestApp);
-  if (options.cluster === true) {
+  // In the cluster projects the app is behind a real cluster adapter already.
+  if (options.cluster === true && !inCluster()) {
     // Any adapter other than the one the server was created with counts as a
     // cluster adapter (`transports/pushes.ts`): this one is still in memory,
     // so `fetchSockets` answers from this process, through the cluster path.
@@ -57,6 +59,23 @@ async function start(options: { readonly cluster?: boolean } = {}) {
 }
 
 type App = Awaited<ReturnType<typeof start>>;
+
+/** The users a client holding `frames` sees in the room: a list replaces, `joined` adds, `left` removes. */
+function seenIn(sent: readonly PresenceFrame[]): string[] {
+  let users = new Set<string>();
+  for (const frame of sent) {
+    if (frame.users !== undefined) {
+      users = new Set(frame.users);
+    }
+    if (frame.joined !== undefined) {
+      users.add(frame.joined);
+    }
+    if (frame.left !== undefined) {
+      users.delete(frame.left);
+    }
+  }
+  return [...users].sort();
+}
 
 /** A socket acting as `principal`, with the `qd:presence` frames it receives. */
 async function connect(app: App, principal: Principal | null) {
@@ -171,18 +190,30 @@ describe("qd:presence", () => {
     await cy1.connection.call.taskService.enter({ room: "lobby" });
     await cy2.connection.call.taskService.enter({ room: "lobby" });
     await Promise.all([settle(ada.connection), settle(cy1.connection), settle(cy2.connection)]);
-    expect(ada.presence).toEqual([
-      { room: "lobby", users: [board.ada] },
-      { room: "lobby", joined: board.cy },
-    ]);
-    expect(cy1.presence).toEqual([{ room: "lobby", users: [board.ada, board.cy] }]);
-    expect(cy2.presence).toEqual([{ room: "lobby", users: [board.ada, board.cy] }]);
+    const both = [board.ada, board.cy].sort();
+    if (inCluster()) {
+      // Behind a cluster adapter each list is read from every node, after the join's reply, so
+      // it may arrive after a `joined` it already counts: the room as a client applies it.
+      await expect.poll(() => seenIn(ada.presence)).toEqual(both);
+      await expect.poll(() => seenIn(cy1.presence)).toEqual(both);
+      await expect.poll(() => seenIn(cy2.presence)).toEqual(both);
+    } else {
+      expect(ada.presence).toEqual([
+        { room: "lobby", users: [board.ada] },
+        { room: "lobby", joined: board.cy },
+      ]);
+      expect(cy1.presence).toEqual([{ room: "lobby", users: [board.ada, board.cy] }]);
+      expect(cy2.presence).toEqual([{ room: "lobby", users: [board.ada, board.cy] }]);
+    }
+    const before = ada.presence.length;
     // Cy keeps a socket in the room: nobody hears of the first one leaving but itself.
     await cy1.connection.call.taskService.exit({ room: "lobby" });
     await close(app, cy2.connection);
     await settle(ada.connection);
     expect(cy1.presence.at(-1)).toEqual({ room: "lobby", users: [] });
-    expect(ada.presence.slice(2)).toEqual([{ room: "lobby", left: board.cy }]);
+    await expect
+      .poll(() => ada.presence.slice(before))
+      .toEqual([{ room: "lobby", left: board.cy }]);
   });
 
   it("lists no anonymous socket, and tells nobody of one", async () => {
@@ -192,7 +223,8 @@ describe("qd:presence", () => {
     await ada.connection.call.taskService.enter({ room: "lobby" });
     expect(await anonymous.connection.call.taskService.enterAnyone({ room: "lobby" })).toBe(true);
     await settle(ada.connection);
-    expect(ada.presence).toEqual([{ room: "lobby", users: [board.ada] }]);
+    // Behind a cluster adapter the list is read from every node, after the join's reply.
+    await expect.poll(() => ada.presence).toEqual([{ room: "lobby", users: [board.ada] }]);
   });
 });
 
@@ -335,13 +367,22 @@ describe("behind a cluster adapter", () => {
       return frame.event === "qd:presence" && data.left === board.cy;
     });
     await settle(ada.connection);
-    expect(ada.presence[0]).toEqual({ room: "lobby", users: [board.ada] });
+    if (inCluster()) {
+      // Behind Valkey the list is read from every node after the join's reply: it may come
+      // after a `joined` it already counts. What a client makes of the frames is the same.
+      expect(seenIn(ada.presence)).toEqual([board.ada]);
+    } else {
+      expect(ada.presence[0]).toEqual({ room: "lobby", users: [board.ada] });
+    }
     expect(ada.presence.filter((frame) => frame.left !== undefined)).toEqual([
       { room: "lobby", left: board.cy },
     ]);
     expect(await app.server.presence.isOnline(board.cy)).toBe(true);
     expect(await app.server.presence.users("lobby")).toEqual([board.ada]);
-    expect(asked).toEqual(expect.arrayContaining(["lobby", `user:${board.cy}`]));
+    // In the cluster projects `server.io` is the reader node's, and `server.presence` asks
+    // through the writer node's server: this one sees the rooms its own sockets' frames read.
+    const rooms = inCluster() ? ["lobby"] : ["lobby", `user:${board.cy}`];
+    expect(asked).toEqual(expect.arrayContaining(rooms));
   });
 });
 

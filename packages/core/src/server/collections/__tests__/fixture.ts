@@ -11,6 +11,7 @@
 //   T1 in P1, T2 in P2
 
 import { z } from "zod";
+import { settleCluster } from "../../../../test/cluster/mode";
 import type { PrismaClient } from "../../../../test/prisma/setup";
 import {
   defineContract,
@@ -258,6 +259,7 @@ export function receiveScopes(connection: Connected): Scopes {
     revoked,
     // The socket answers in order: frames sent before this acknowledgement arrive before it.
     settle: async () => {
+      await settleCluster();
       await emitWithAck(connection.socket, "qd:col:unsub", { s: "none", c: "none", scope: "none" });
     },
     clear: () => {

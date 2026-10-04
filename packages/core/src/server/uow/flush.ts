@@ -104,6 +104,19 @@ async function reportFailures(
 }
 
 /**
+ * Where a dispatcher's flushes take their revision when it is not the one
+ * `flushWrites` took: a cluster's shared counter (`../cluster/revisions.ts`).
+ */
+export interface FlushRevisions {
+  /**
+   * Called when a flush arrives: `undefined` to keep the flush's own
+   * revision, or a function that resolves with the revision to use instead,
+   * called when the flush's turn comes.
+   */
+  forFlush(): (() => Promise<number>) | undefined;
+}
+
+/**
  * A sink that runs the flushes it receives one at a time, in the order they
  * arrive, which is revision order: `flushWrites` takes a flush's revision
  * and hands the batch over in one synchronous step. A flush waits until the
@@ -111,16 +124,26 @@ async function reportFailures(
  * the next. A flush started from inside one of these runs (a sink that
  * writes through `qd.run`) runs at once instead: waiting for the run that
  * started it would never end.
+ *
+ * With `revisions` that hand out their own (a cluster's shared counter), a
+ * flush asks for its revision when it arrives, and its sinks run with it
+ * once its turn comes and the answer is in: still in arrival order, which
+ * the revisions keep increasing.
  */
-export function inRevisionOrder(sink: FlushSink): FlushSink {
+export function inRevisionOrder(sink: FlushSink, revisions?: FlushRevisions): FlushSink {
   const running = new AsyncLocalStorage<true>();
   let last: Promise<void> = Promise.resolve();
   return Object.freeze({
     flush(writes: readonly WriteRecord[], info: FlushInfo): Promise<void> {
+      const shared = revisions?.forFlush();
+      const flushOne =
+        shared === undefined
+          ? () => sink.flush(writes, info)
+          : async () => await sink.flush(writes, { ...info, rev: await shared() });
       if (running.getStore() === true) {
-        return sink.flush(writes, info);
+        return flushOne();
       }
-      const run = last.then(() => running.run(true, () => sink.flush(writes, info)));
+      const run = last.then(() => running.run(true, flushOne));
       last = run.catch(() => undefined);
       return run;
     },

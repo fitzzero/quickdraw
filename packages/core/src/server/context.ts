@@ -159,6 +159,12 @@ export interface KitRuntime {
   readonly storage: StorageAdapter | undefined;
   /** How many sockets sit in a room, for the admin kit's subscriber counts. */
   readonly occupancy?: RoomOccupancy;
+  /**
+   * The revision a read made from now on is no older than (the search
+   * kit's pages): the process's last one, or behind a cluster's counter the
+   * counter's.
+   */
+  readonly claimRevision?: () => number | Promise<number>;
 }
 
 /** The sockets in a room (RFC 0003 section 6), as this process sees its rooms. */

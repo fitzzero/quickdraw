@@ -18,7 +18,7 @@ import { emptyRecords, ownRecord } from "../emit/subscriptions";
 import { unreadable } from "../transports/ack";
 import type { QuickdrawServerSocket } from "../transports/types";
 import { createRoomEvents } from "./events";
-import { MAX_APP_ROOMS } from "./presence";
+import { markSeen, MAX_APP_ROOMS } from "./presence";
 import { entered, exited, type RoomState } from "./roomFrames";
 import type { ContextRooms } from "./types";
 
@@ -117,7 +117,7 @@ export function createRooms(state: RoomState): Rooms {
           ? state.hub.io?.sockets.adapter.rooms.get(userRoom(userId))
           : undefined;
       if (typeof userId === "string" && userId !== "" && (sockets?.size ?? 0) === 0) {
-        state.records.seen(userId, Date.now());
+        markSeen(state.hub, state.records, userId, Date.now());
       }
     },
   });

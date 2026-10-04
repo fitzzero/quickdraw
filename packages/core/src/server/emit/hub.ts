@@ -7,8 +7,8 @@
 import type { Logger } from "../../contract/logger";
 import { QuickdrawError } from "../../protocol/errors";
 import type { AccessEngine, PolicyEngine } from "../access/api";
+import { createRevisions, type ClusterOptions, type Revisions } from "../cluster/revisions";
 import type { Registry } from "../registry";
-import type { AnyService } from "../service";
 import type { StorageAdapter } from "../storage";
 import type { QuickdrawIo } from "../transports/types";
 import { routesOf, type Routes } from "./affects";
@@ -59,13 +59,27 @@ export interface Hub {
   /** The Socket.IO server, once `createServer` attached one. */
   io: QuickdrawIo | undefined;
   probe: AdapterProbe;
+  /** `createServer`'s `cluster` option: where the cluster's shared state lives, behind a cluster adapter. */
+  cluster: ClusterOptions | undefined;
+  /**
+   * The revisions flushes take and reads claim: the process's clock, or
+   * behind a cluster adapter the cluster's shared counter (`cluster/revisions.ts`).
+   */
+  readonly revisions: Revisions;
+  /**
+   * Work started for a socket's event that may still send frames once it
+   * settles (a room's presence read from every node): a server's `close()`
+   * waits for it, so nothing is sent through an adapter the app is about to
+   * close.
+   */
+  readonly inFlight: Set<Promise<unknown>>;
 }
 
 const ALWAYS_LOCAL: AdapterProbe = Object.freeze({ local: () => true });
 
 /** Creates the live-data state of a dispatcher. Throws a `TypeError` for an `affects` it cannot follow. */
 export function createHub(options: HubOptions): Hub {
-  return {
+  const hub: Omit<Hub, "revisions"> = {
     registry: options.registry,
     storage: options.storage,
     policies: options.policies,
@@ -77,7 +91,26 @@ export function createHub(options: HubOptions): Hub {
     subscriptions: new SubscriptionIndex(),
     io: undefined,
     probe: ALWAYS_LOCAL,
+    cluster: undefined,
+    inFlight: new Set(),
   };
+  return Object.assign(hub, { revisions: createRevisions(hub) });
+}
+
+/** Keeps `work` in the hub's work in flight until it settles. */
+export function track(hub: Pick<Hub, "inFlight">, work: Promise<unknown>): void {
+  hub.inFlight.add(work);
+  const done = (): void => {
+    hub.inFlight.delete(work);
+  };
+  work.then(done, done);
+}
+
+/** Resolves once the hub's work in flight, and any it started meanwhile, has settled. */
+export async function drain(hub: Pick<Hub, "inFlight">): Promise<void> {
+  while (hub.inFlight.size > 0) {
+    await Promise.allSettled([...hub.inFlight]);
+  }
 }
 
 /**
@@ -88,9 +121,12 @@ export function usableChangeLog(hub: Hub): ChangeLog | undefined {
   return hub.answers && hub.probe.local() ? hub.changeLog : undefined;
 }
 
+/** A service the registry holds. */
+type RegisteredService = Registry["services"] extends ReadonlyMap<string, infer S> ? S : never;
+
 /** A service whose rows can be subscribed to and sent: it has an entity and a model. */
 export interface LiveService {
-  readonly service: AnyService;
+  readonly service: RegisteredService;
   readonly model: string;
 }
 

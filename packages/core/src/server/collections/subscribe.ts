@@ -163,13 +163,33 @@ async function settleRaces(attempt: Attempt): Promise<void> {
  * Step 2: the revision a page is read at. The last one taken, unless it is
  * below the scope's resume floor (a reset or a change nobody here received
  * was the last thing to happen): then a new one, so a client resuming from
- * the page is covered.
+ * the page is covered. Behind a cluster's counter, the counter's last one:
+ * a resume there always reads a page, and the floor is this process's.
  */
-function pageRev(attempt: Attempt): Revision {
+function pageRev(attempt: Attempt): Revision | Promise<Revision> {
   const { hub, request, room } = attempt;
+  if (hub.revisions.shared()) {
+    return hub.revisions.claim();
+  }
   const rev = currentRev();
   const floor = hub.collections.buffer.floor(room, groupOf(request.s, request.c));
   return rev < floor ? nextRev() : rev;
+}
+
+/**
+ * Step 6: the revision to read the page again at when a flush changed the
+ * scope after `rev` (its frame may have gone out before the join), or
+ * `undefined`. This process's buffer knows its own flushes only, so behind
+ * a cluster's counter any revision any node took after `rev` counts.
+ */
+async function changedSince(attempt: Attempt, rev: Revision): Promise<Revision | undefined> {
+  const { hub, request, room } = attempt;
+  if (hub.revisions.shared()) {
+    return await hub.revisions.movedPast(rev);
+  }
+  return hub.collections.buffer.lastChange(room, groupOf(request.s, request.c)) > rev
+    ? pageRev(attempt)
+    : undefined;
 }
 
 /** Steps 4 to 6. */
@@ -188,12 +208,14 @@ async function answer(
       return { ok: true, resumed: true, rev: replay.rev, deltas: replay.deltas };
     }
   }
-  const rev = pageRev(attempt);
+  const claimed = pageRev(attempt);
+  const rev = typeof claimed === "number" ? claimed : await claimed;
   let page = await readPage(storage, collection, request, rev);
   join(attempt, anchors);
   await recheckAccess(attempt);
-  if (attempt.record !== undefined && hub.collections.buffer.lastChange(room, group) > rev) {
-    page = await readPage(storage, collection, request, pageRev(attempt));
+  const again = attempt.record === undefined ? undefined : await changedSince(attempt, rev);
+  if (again !== undefined) {
+    page = await readPage(storage, collection, request, again);
   }
   await settleRaces(attempt);
   return page;
@@ -237,7 +259,7 @@ export async function subscribeScope(
       throw forbidden();
     }
     if (request.cursor !== undefined) {
-      return await readPage(storage, collection, request, pageRev(attempt));
+      return await readPage(storage, collection, request, await pageRev(attempt));
     }
     return await answer(attempt, anchors);
   } catch (error) {

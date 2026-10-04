@@ -4,6 +4,11 @@
 // drop frames older than what they hold, so two flushes in one millisecond
 // must still get different revisions, and a clock that steps back must not
 // reuse one.
+//
+// Behind a cluster adapter with a shared counter (`cluster/revisions.ts`),
+// flushes take their revisions from the counter instead; the revisions it
+// hands out are observed here, so a revision this process takes later is
+// never below one it already sent.
 
 import type { Revision } from "../protocol/envelope";
 
@@ -26,4 +31,9 @@ export function nextRev(): Revision {
  */
 export function currentRev(): Revision {
   return last === 0 ? nextRev() : last;
+}
+
+/** Records a revision taken elsewhere (the cluster's counter): later ones taken here are above it. */
+export function observeRev(rev: Revision): void {
+  last = Math.max(last, rev);
 }

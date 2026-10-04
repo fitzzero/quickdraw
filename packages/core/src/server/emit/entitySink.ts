@@ -18,7 +18,11 @@
 //
 // Room occupancy is read from this process's adapter. Behind a cluster
 // adapter (Redis) other nodes' rooms are invisible, so every touched row is
-// read and its frame sent to every tier.
+// read and its frame sent to every tier. Frames sent there go out whole
+// (`u`, never `p`): frames from two nodes can reach a client out of revision
+// order, and a patch it dropped as older would lose its fields, while an
+// older whole row is rightly dropped (the newer one was read after the older
+// write). A tier that would have got an empty patch still gets nothing.
 
 import type { AccessLevel } from "../../contract/access";
 import { entityRoom, SERVER_EVENTS } from "../../contract/names";
@@ -38,6 +42,27 @@ interface Target {
   readonly id: string;
   readonly kind: FrameKind;
   readonly rooms: ReadonlyMap<AccessLevel, string>;
+  /** Behind a cluster adapter, the fields a patch would have carried: the row goes out whole. */
+  readonly patched?: readonly string[];
+}
+
+const WHOLE: FrameKind = Object.freeze({ t: "u" });
+
+/** How a row goes out: as `frameKind` says, but whole instead of a patch behind a cluster adapter. */
+function targetOf(
+  id: string,
+  kind: FrameKind,
+  rooms: ReadonlyMap<AccessLevel, string>,
+  local: boolean,
+): Target {
+  return local || kind.t !== "p"
+    ? { id, kind, rooms }
+    : { id, kind: WHOLE, rooms, patched: kind.fields };
+}
+
+/** True when the tier sees none of the fields the write changed: it gets no frame, as it would get no patch. */
+function seesNoChange(target: Target, hidden: ReadonlySet<string>): boolean {
+  return target.patched !== undefined && target.patched.every((field) => hidden.has(field));
 }
 
 /** The tier rooms of a row that have subscribers here; behind a cluster adapter, every tier room. */
@@ -68,7 +93,9 @@ function send(io: Io, frame: EntityFrame, target: Target, service: AnyService): 
   for (const group of tiers?.groups ?? []) {
     const rooms = group.levels.flatMap((level) => target.rooms.get(level) ?? []);
     const data = strip(frame.d as Readonly<Record<string, unknown>>, group.hidden);
-    if (rooms.length === 0 || (frame.t === "p" && Object.keys(data).length === 0)) {
+    const empty =
+      frame.t === "p" ? Object.keys(data).length === 0 : seesNoChange(target, group.hidden);
+    if (rooms.length === 0 || empty) {
       continue;
     }
     io.to(rooms).emit(SERVER_EVENTS.entity, { ...frame, d: data });
@@ -114,7 +141,7 @@ async function emitService(
   for (const [id, touch] of touched) {
     const rooms = occupiedRooms(io, service.name, id, local);
     if (rooms.size > 0) {
-      targets.push({ id, kind: frameKind(projection, touch, service.versionColumn), rooms });
+      targets.push(targetOf(id, frameKind(projection, touch, service.versionColumn), rooms, local));
     }
   }
   if (targets.length === 0) {

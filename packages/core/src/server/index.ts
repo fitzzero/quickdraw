@@ -321,13 +321,15 @@ export type {
 } from "./transports/socketServer";
 export type { LegacyReply } from "./transports/legacy";
 
-// Redis adapter for horizontal scaling
+// Redis adapter for horizontal scaling, and the cluster's shared state
+// behind it (the revision counter, last-seen times): docs/deploying.md
 export {
   setupRedisAdapter,
   isRedisAdapterAvailable,
   type RedisAdapterOptions,
   type RedisAdapterResult,
 } from "./redis";
+export type { ClusterClient, ClusterOptions, IoRedisLike } from "./cluster/revisions";
 
 // Rate limiting
 export {

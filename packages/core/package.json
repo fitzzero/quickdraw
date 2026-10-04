@@ -88,6 +88,7 @@
     "typecheck": "tsgo --noEmit && tsgo --noEmit -p test/readme",
     "lint": "oxlint -c ../../.oxlintrc.json src test",
     "test": "vitest run",
+    "test:cluster": "QD_CLUSTER=1 vitest run --project cluster --project cluster-dom",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "readme:sync": "tsx test/readme/sync.ts",
