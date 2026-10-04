@@ -1,0 +1,32 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "agentGuidance": false,
+  "globalDependencies": [
+    "tsconfig.base.json",
+    ".oxlintrc.json",
+    "packages/lint/oxlint.base.jsonc",
+    "packages/lint/plugin/**"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"]
+    },
+    "db:generate": {
+      "inputs": ["test/prisma/schema.prisma", "test/prisma/prisma.config.ts"],
+      "outputs": ["test/prisma/generated/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build", "db:generate"],
+      "outputs": []
+    },
+    "lint": {
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["^build", "db:generate"],
+      "env": ["DATABASE_URL", "CI", "QD_ALLOW_BUDGET_GROWTH"],
+      "outputs": []
+    }
+  }
+}

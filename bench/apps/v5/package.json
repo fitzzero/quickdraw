@@ -1,0 +1,40 @@
+{
+  "name": "bench-app-v5",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The benchmark board app on this workspace's @fitzzero/quickdraw-core (5.0)",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./contracts": "./src/contracts/index.ts"
+  },
+  "scripts": {
+    "generate": "prisma generate",
+    "db:generate": "prisma generate",
+    "schema:sql": "prisma migrate diff --from-empty --to-schema prisma/schema.prisma --script -o prisma/schema.sql",
+    "seed": "node --import tsx src/seed.ts",
+    "start": "node --import tsx src/server.ts",
+    "typecheck": "tsgo --noEmit",
+    "lint": "oxlint -c ../../../.oxlintrc.json src",
+    "check": "prisma generate && bun run schema:sql && git diff --exit-code -- prisma/schema.sql && tsgo --noEmit"
+  },
+  "dependencies": {
+    "@fitzzero/quickdraw-core": "workspace:*",
+    "@prisma/adapter-pg": "^7.0.0",
+    "@prisma/client": "^7.0.0",
+    "express": "^4.18.0",
+    "pg": "^8.13.0",
+    "socket.io": "^4.8.0",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.11.0",
+    "prisma": "^7.0.0",
+    "tsx": "^4.20.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

@@ -1,0 +1,250 @@
+// The Standard Schema interfaces, copied from `@standard-schema/spec` 1.1.0
+// (MIT, https://standardschema.dev) as the spec recommends, so the contract
+// layer depends on no schema library. Zod 3.24 or later, Zod 4, Valibot and
+// ArkType schemas all implement `StandardSchemaV1`.
+//
+// `StandardJSONSchemaV1` is the optional capability to describe a schema as
+// JSON Schema (Zod 4.2 or later). Nothing in the contract requires it; the MCP
+// bridge and the admin kit ask for it with `hasJsonSchema`.
+//
+// Two changes from the spec, both for the linter: `Target` spells its open
+// string as `string & Record<never, never>` instead of `{} & string`, and the
+// namespaces' `InferInput` and `InferOutput` helpers are the module-level
+// `InferInput` and `InferOutput` below instead.
+
+/** The Standard Typed interface. This is a base type extended by other specs. */
+export interface StandardTypedV1<Input = unknown, Output = Input> {
+  /** The Standard properties. */
+  readonly "~standard": StandardTypedV1.Props<Input, Output>;
+}
+
+export declare namespace StandardTypedV1 {
+  /** The Standard Typed properties interface. */
+  interface Props<Input = unknown, Output = Input> {
+    /** The version number of the standard. */
+    readonly version: 1;
+    /** The vendor name of the schema library. */
+    readonly vendor: string;
+    /** Inferred types associated with the schema. */
+    readonly types?: Types<Input, Output> | undefined;
+  }
+
+  /** The Standard Typed types interface. */
+  interface Types<Input = unknown, Output = Input> {
+    /** The input type of the schema. */
+    readonly input: Input;
+    /** The output type of the schema. */
+    readonly output: Output;
+  }
+}
+
+/** The Standard Schema interface. */
+export interface StandardSchemaV1<Input = unknown, Output = Input> {
+  /** The Standard Schema properties. */
+  readonly "~standard": StandardSchemaV1.Props<Input, Output>;
+}
+
+export declare namespace StandardSchemaV1 {
+  /** The Standard Schema properties interface. */
+  interface Props<Input = unknown, Output = Input> extends StandardTypedV1.Props<Input, Output> {
+    /** Validates unknown input values. */
+    readonly validate: (
+      value: unknown,
+      options?: StandardSchemaV1.Options | undefined,
+    ) => Result<Output> | Promise<Result<Output>>;
+  }
+
+  /** The result interface of the validate function. */
+  type Result<Output> = SuccessResult<Output> | FailureResult;
+
+  /** The result interface if validation succeeds. */
+  interface SuccessResult<Output> {
+    /** The typed output value. */
+    readonly value: Output;
+    /** A falsy value for `issues` indicates success. */
+    readonly issues?: undefined;
+  }
+
+  interface Options {
+    /** Explicit support for additional vendor-specific parameters, if needed. */
+    readonly libraryOptions?: Record<string, unknown> | undefined;
+  }
+
+  /** The result interface if validation fails. */
+  interface FailureResult {
+    /** The issues of failed validation. */
+    readonly issues: ReadonlyArray<Issue>;
+  }
+
+  /** The issue interface of the failure output. */
+  interface Issue {
+    /** The error message of the issue. */
+    readonly message: string;
+    /** The path of the issue, if any. */
+    readonly path?: ReadonlyArray<PropertyKey | PathSegment> | undefined;
+  }
+
+  /** The path segment interface of the issue. */
+  interface PathSegment {
+    /** The key representing a path segment. */
+    readonly key: PropertyKey;
+  }
+
+  /** The Standard types interface. */
+  type Types<Input = unknown, Output = Input> = StandardTypedV1.Types<Input, Output>;
+}
+
+/** The Standard JSON Schema interface. */
+export interface StandardJSONSchemaV1<Input = unknown, Output = Input> {
+  /** The Standard JSON Schema properties. */
+  readonly "~standard": StandardJSONSchemaV1.Props<Input, Output>;
+}
+
+export declare namespace StandardJSONSchemaV1 {
+  /** The Standard JSON Schema properties interface. */
+  interface Props<Input = unknown, Output = Input> extends StandardTypedV1.Props<Input, Output> {
+    /** Methods for generating the input/output JSON Schema. */
+    readonly jsonSchema: StandardJSONSchemaV1.Converter;
+  }
+
+  /** The Standard JSON Schema converter interface. */
+  interface Converter {
+    /** Converts the input type to JSON Schema. May throw if conversion is not supported. */
+    readonly input: (options: StandardJSONSchemaV1.Options) => Record<string, unknown>;
+    /** Converts the output type to JSON Schema. May throw if conversion is not supported. */
+    readonly output: (options: StandardJSONSchemaV1.Options) => Record<string, unknown>;
+  }
+
+  /**
+   * The target version of the generated JSON Schema.
+   *
+   * It is *strongly recommended* that implementers support `"draft-2020-12"` and `"draft-07"`, as they are both in wide use. All other targets can be implemented on a best-effort basis. Libraries should throw if they don't support a specified target.
+   *
+   * The `"openapi-3.0"` target is intended as a standardized specifier for OpenAPI 3.0 which is a superset of JSON Schema `"draft-04"`.
+   */
+  type Target = "draft-2020-12" | "draft-07" | "openapi-3.0" | (string & Record<never, never>);
+
+  /** The options for the input/output methods. */
+  interface Options {
+    /** Specifies the target version of the generated JSON Schema. Support for all versions is on a best-effort basis. If a given version is not supported, the library should throw. */
+    readonly target: Target;
+    /** Explicit support for additional vendor-specific parameters, if needed. */
+    readonly libraryOptions?: Record<string, unknown> | undefined;
+  }
+
+  /** The Standard types interface. */
+  type Types<Input = unknown, Output = Input> = StandardTypedV1.Types<Input, Output>;
+}
+
+/** A Standard Schema that can also describe itself as JSON Schema (Zod 4.2 or later). */
+export interface StandardSchemaWithJSON<Input = unknown, Output = Input> {
+  readonly "~standard": StandardSchemaV1.Props<Input, Output> &
+    StandardJSONSchemaV1.Props<Input, Output>;
+}
+
+/** The type a schema accepts: what a caller passes in. */
+export type InferInput<Schema extends StandardTypedV1> = NonNullable<
+  Schema["~standard"]["types"]
+>["input"];
+
+/** The type a schema produces: what a successful validation returns. */
+export type InferOutput<Schema extends StandardTypedV1> = NonNullable<
+  Schema["~standard"]["types"]
+>["output"];
+
+/** One validation problem, as the schema library reports it. */
+export type ValidationIssue = StandardSchemaV1.Issue;
+
+/** `{ value }` when the value is valid, `{ issues }` when it is not. */
+export type ValidationResult<Output> = StandardSchemaV1.Result<Output>;
+
+function isObjectLike(value: unknown): value is object {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
+}
+
+/** True when `value` implements Standard Schema v1, whatever library made it. */
+export function isStandardSchema(value: unknown): value is StandardSchemaV1 {
+  if (!isObjectLike(value) || !("~standard" in value)) {
+    return false;
+  }
+  const props: unknown = value["~standard"];
+  return (
+    isObjectLike(props) &&
+    "version" in props &&
+    props.version === 1 &&
+    "validate" in props &&
+    typeof props.validate === "function"
+  );
+}
+
+/** True when the schema can also describe itself as JSON Schema (Standard JSON Schema v1). */
+export function hasJsonSchema<Schema extends StandardSchemaV1>(
+  schema: Schema,
+): schema is Schema & StandardSchemaWithJSON<InferInput<Schema>, InferOutput<Schema>> {
+  const props: object = schema["~standard"];
+  if (!("jsonSchema" in props) || !isObjectLike(props.jsonSchema)) {
+    return false;
+  }
+  const converter = props.jsonSchema;
+  return (
+    "input" in converter &&
+    typeof converter.input === "function" &&
+    "output" in converter &&
+    typeof converter.output === "function"
+  );
+}
+
+/**
+ * Validates `value` against any Standard Schema. A schema may validate
+ * synchronously or asynchronously; either way the result is awaited here, so
+ * callers always get a promise of `{ value }` or `{ issues }`.
+ */
+export async function validate<Output>(
+  schema: StandardSchemaV1<unknown, Output>,
+  value: unknown,
+): Promise<ValidationResult<Output>> {
+  return await schema["~standard"].validate(value);
+}
+
+/** Options of {@link todoSchema}. */
+export interface TodoSchemaOptions<T> {
+  /**
+   * The keys of the object the schema stands for. They become the properties
+   * of its JSON Schema, so a projection (the contract's `entity`, say) whose
+   * schema is a `todoSchema` can still list its keys.
+   */
+  readonly keys?: readonly Extract<keyof T, string>[];
+}
+
+/** The vendor name a {@link todoSchema} reports in its Standard Schema properties. */
+export const TODO_SCHEMA_VENDOR = "quickdraw-todo";
+
+/**
+ * A placeholder schema for code migrated from quickdraw 4.x, whose methods
+ * declared types without schemas (`@fitzzero/quickdraw-codemod` writes it
+ * where it found none). It types its value as `T` and validates nothing:
+ * every value passes unchanged, as an unvalidated 4.x payload did. It also
+ * describes itself as a permissive JSON Schema (any object; `keys` as its
+ * properties), so MCP tools, admin metadata and projection keys keep working.
+ * Replace each one with a real schema (Zod 4.2 or later where JSON Schema is
+ * needed); the lint rule `quickdraw/no-todo-schema` reports every use.
+ *
+ * @example
+ * entity: todoSchema<ProjectDTO>({ keys: ["id", "name", "ownerId"] }),
+ * methods: { create: mutation({ input: todoSchema<{ name: string }>(), output: "entity" }) },
+ */
+export function todoSchema<T>(options: TodoSchemaOptions<T> = {}): StandardSchemaWithJSON<T, T> {
+  const keys = options.keys ?? [];
+  const describe = (): Record<string, unknown> =>
+    keys.length === 0
+      ? { type: "object" }
+      : { type: "object", properties: Object.fromEntries(keys.map((key) => [key, {}])) };
+  return Object.freeze({
+    "~standard": Object.freeze({
+      version: 1,
+      vendor: TODO_SCHEMA_VENDOR,
+      validate: (value: unknown) => ({ value: value as T }),
+      jsonSchema: Object.freeze({ input: describe, output: describe }),
+    }),
+  });
+}

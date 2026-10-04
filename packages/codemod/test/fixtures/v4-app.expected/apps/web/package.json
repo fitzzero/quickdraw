@@ -1,0 +1,10 @@
+{
+  "name": "@project/web",
+  "private": true,
+  "dependencies": {
+    "@fitzzero/quickdraw-core": "^4.1.0",
+    "@project/shared": "workspace:*",
+    "@tanstack/react-query": "^5.20.0",
+    "react": "^19.0.0"
+  }
+}

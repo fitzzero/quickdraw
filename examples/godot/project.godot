@@ -1,0 +1,13 @@
+; The Godot project of the quickdraw GDScript reference client: the client
+; (addons/quickdraw/quickdraw_client.gd, the autoload "Quickdraw") and its
+; headless check (test/smoke.gd). See README.md.
+
+config_version=5
+
+[application]
+
+config/name="quickdraw GDScript client"
+
+[autoload]
+
+Quickdraw="*res://addons/quickdraw/quickdraw_client.gd"

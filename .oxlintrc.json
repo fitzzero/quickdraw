@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
-  "extends": ["./oxlint.base.jsonc"],
+  "extends": ["./packages/lint/oxlint.base.jsonc"],
   "plugins": ["typescript", "import", "react", "nextjs", "jsx_a11y"],
   "rules": {
     "no-console": "warn",
@@ -8,7 +8,6 @@
     "no-negated-condition": "warn",
     "no-promise-executor-return": "warn",
     "no-warning-comments": "warn",
-    "eqeqeq": "warn",
     "require-await": "warn",
     "complexity": "warn",
     "max-classes-per-file": "warn",
@@ -18,12 +17,43 @@
   },
   "overrides": [
     {
-      "files": ["src/client/**"],
+      "files": ["**/src/client/**"],
       "rules": {
-        "quickdraw/no-raw-socket-emit": "off",
-        "quickdraw/no-raw-socket-on": "off"
+        "quickdraw/no-raw-socket": "off",
+        "quickdraw/no-untyped-client": "off",
+        "quickdraw/no-manual-refetch": "off",
+        "quickdraw/no-await-void-mutate": "off"
+      }
+    },
+    {
+      "files": ["**/src/testing/**", "**/src/drivers/**"],
+      "rules": {
+        "quickdraw/no-raw-socket": "off"
+      }
+    },
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "quickdraw/no-nested-write": "off",
+        "quickdraw/no-foreign-write": "off"
+      }
+    },
+    {
+      "files": ["**/test/readme/**"],
+      "rules": {
+        "no-inline-comments": "off"
       }
     }
   ],
-  "ignorePatterns": ["node_modules", "dist", "coverage"]
+  "ignorePatterns": [
+    "node_modules",
+    "dist",
+    "coverage",
+    "**/legacy-src/**",
+    "**/generated/**",
+    "**/fixtures/v4-app/**",
+    "**/fixtures/v4-app.expected/**",
+    "**/guide-v4/**",
+    "**/.test-output/**"
+  ]
 }

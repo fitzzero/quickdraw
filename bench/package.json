@@ -1,0 +1,34 @@
+{
+  "name": "bench",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Load scenarios and recorded baselines for quickdraw-core releases (a release tool, not a CI gate)",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "bench": "turbo run build --filter=bench^... --output-logs=errors-only && node --import tsx src/runner.ts",
+    "compare": "node --import tsx src/compare-cli.ts",
+    "report": "node --import tsx src/render.ts",
+    "schema": "node --import tsx src/write-schema.ts && oxfmt result.schema.json",
+    "typecheck": "tsgo --noEmit",
+    "lint": "oxlint -c ../.oxlintrc.json src",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fitzzero/quickdraw-core": "workspace:*",
+    "@tanstack/react-query": "^5.20.0",
+    "bench-app-v5": "workspace:*",
+    "react": "^19.0.0",
+    "socket.io-client": "^4.8.0",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "ajv": "^8.17.1",
+    "tsx": "^4.20.0",
+    "vitest": "^4.0.17"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

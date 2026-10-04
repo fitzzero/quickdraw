@@ -2,6 +2,226 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0-rc.1]
+
+The first published release candidate (`5.0.0-rc.0` below was cut on
+`dev` but never published; this one carries it plus pack H).
+
+The next release candidate: pack H on top of `5.0.0-rc.0`. The four
+packages move to `5.0.0-rc.1` when it is tagged
+([`docs/release-checklist-5.0.md`](docs/release-checklist-5.0.md)).
+
+### Pack H: agent guardrails, the multi-node proof and non-JS clients
+
+- **Breaking for `5.0.0-rc.0` users.** On a service with an access policy,
+  `defineService` refuses a method whose input may carry a top-level `id`
+  (in any branch of a union, and beside a `Date`, a `Set` or another value
+  JSON Schema cannot write) under a form that checks no row (`"public"`,
+  `"authenticated"`, `{ service: L }` below `Admin`): anyone the form admits
+  would reach any row by its id. The message names the method and the two
+  ways out: a form the policy decides (`{ entry: L }`, or
+  `{ service: L, entry: L }` to keep a grant), or `rowless: true` on the
+  method when every caller the form admits may reach any row on purpose.
+  Kits take it as `rowless: [names]` in their options (`crud.handlers`,
+  `admin.handlers`, `sharing.handlers`). Not checked: an input without JSON
+  Schema (Zod 3), an input that is the id itself, and a row named by
+  another key. The codemod writes `rowless: true`, marked, where it maps a
+  4.x method that named a row to a form that checks none.
+- Revisions are microseconds since the epoch: Valkey's clock behind a
+  cluster, and on one server `max(Date.now() * 1000, last + 1)`. A client
+  still compares them as opaque numbers (safe integers); `versionColumn`
+  times compare as their milliseconds times 1,000.
+- Lint: `prefer-kit` (a warning) reports a method written by hand that a
+  kit implements (`get`, `list`, `create`, `search`, `share`, `adminList`,
+  ..., or `getTask`, `listTasks`, `createTask`, `updateTask` and
+  `deleteTask` for model `"task"`; `remove` only on a membership model or
+  beside another sharing method) in a service that spreads no kit (a spread
+  variable or call counts as one). A
+  `// quickdraw: hand-written because <reason>` comment above it keeps it.
+  The codemod marks such methods `[kit]` in its report.
+- Loop warnings, in development: the server's `repeated-call` (one
+  connection sends the same call with the same input more than 10 times
+  within a second, or is refused `RATE_LIMITED` more than 30 times within a
+  minute; thrown in a test app made with `strictWarnings`); the client's
+  `repeated-mutation` (one `useMutation` mutates more than 5 times within a
+  second, named with its component) and `repeated-invalidation`
+  (`qd.invalidate` asks for one query key more than 20 times within a
+  second, or the invalidation coordinator refetches it that often; counted
+  after the coordinator's coalescing, so a busy watched topic is not named).
+- `createServer({ cluster: { client?, keyPrefix?, timeoutMs? } })` runs
+  several nodes behind `@socket.io/redis-adapter` on Valkey
+  ([`docs/deploying.md`](docs/deploying.md)). Flushes share one order from a
+  counter key (`{keyPrefix}:rev`) that needs persistence or replication: a
+  lost key is warned about once and starts again at Valkey's clock, and a
+  counter that does not answer puts the node on its own clock until a
+  probe answers. Behind a cluster, unlike on one server: entity and
+  collection changes go out as whole rows (`u`, `updated`), decided by the
+  row read at flush time; a flush costs one counter round trip and a read a
+  GET of it; access changes and reloaded grants are broadcast and
+  acknowledged, failing open after `timeoutMs`, and after one goes
+  unanswered broadcasts stop waiting until every node answers a probe; a
+  push to a seeded stream goes to every node; `lastSeen` is kept in Valkey
+  for 30 days; a node whose Valkey subscription comes back sends its own
+  clients `qd:rotate` so they catch up; `close()` lets the node's sockets
+  leave while the other nodes still hear it. A publish node-redis rejects
+  while Valkey is down is logged once per outage instead of ending the
+  process as an unhandled rejection. The proof is `bun run test:cluster`
+  (two nodes, a real Valkey) and CI's `cluster` job.
+- Channels take `requires: { room: RoomSelector }`: the app room the
+  sending socket itself must have joined, a name or a function of the
+  payload, checked in memory and failing closed.
+- Docs and examples: [`docs/protocol-v5.md`](docs/protocol-v5.md), the
+  wire for clients in other languages, generated from the protocol's
+  sources (`bun run protocol:sync` in `packages/core`; CI checks it), with
+  its fixed limits apart from its defaults;
+  [`docs/clients.md`](docs/clients.md), the ways in;
+  [`docs/deploying.md`](docs/deploying.md), several nodes, Valkey and Cloud
+  Run; and [`examples/godot`](examples/godot), a GDScript client for
+  Godot 4 that CI runs against a real server, which keeps its socket
+  through a `qd:rotate` window and reconnects with full jitter.
+
+## [5.0.0-rc.0] (never published)
+
+The release candidate for quickdraw 5.0, published under npm's `next`
+dist-tag for all four packages: `@fitzzero/quickdraw-core`,
+`@fitzzero/quickdraw-lint`, `@fitzzero/quickdraw-skills` and
+`@fitzzero/quickdraw-codemod`. 5.0 rebuilds what a 4.x app is written
+against (services, access, the wire protocol, the client hooks), so every
+app migrates: start with [`MIGRATION.md`](MIGRATION.md), which lists every
+removed 4.x name with its replacement, and run the codemod it describes.
+`legacyWire: true` keeps 4.x request and response callers working during a
+rollout. The design is [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md)
+(section 17 records each decision made while building it), the rationale
+[`docs/rfcs/0003-v5-audit.md`](docs/rfcs/0003-v5-audit.md).
+
+### Pack A: foundations
+
+- A bun workspace with turbo holding the four packages and the private
+  benchmark harness, with the 4.1.0 baseline recorded. CI on every pull
+  request (lint, format, typecheck including tests, build, dist smoke test,
+  publint, arethetypeswrong, tests, secret scan) and owner-triggered,
+  tag-driven publishing with npm trusted publishing (`docs/releasing.md`).
+- The 4.1 modules 5.0 keeps (auth helpers, Express rate limits, the socket
+  rate limiter, the Redis adapter helper, env and encryption utilities),
+  with 4.1's packaging defects fixed.
+
+### Pack B: core runtime
+
+- Contracts (`defineContract`, `query`, `mutation`) shared by server and
+  client; protocol v5, one `qd:call` envelope with a version handshake and a
+  JSON-only parser; a method pipeline with validation, access,
+  not-modified replies, `share`, cancellation, time limits and per-socket
+  concurrency caps; `QuickdrawError` codes.
+- `qd.createServer` on the app's own Express app, transports for Socket.IO,
+  HTTP (`POST /qd/{service}/{method}`), in-process callers and MCP, and the
+  `legacyWire` shim for 4.x callers.
+
+### Pack C: data plane
+
+- Tracked writes (`trackPrisma`): entity frames and collection deltas
+  follow from the writes themselves, so hand emits are gone.
+- Access is declared and closed by default: a form per method and one row
+  policy (`owner`, `jsonAcl`, `members`, `inherit`, `anyOf`, `resolver`) for
+  every surface, with automatic revocation. Projections and field tiers,
+  entity subscriptions by revision, and collections with keyset paging,
+  resume, a whole-scope index, views and change topics.
+
+### Pack D: client
+
+- `createQuickdrawClient(contracts)`: typed `qd.<service>.<member>` hooks
+  with no wrapper files or string names, and a provider that runs without
+  DOM globals. An invalidation coordinator, optimistic entity mutations,
+  live entities and collections, and `./testing/client`.
+
+### Pack E: kits
+
+- Read/write, search, sharing and membership, admin, presence, streams and
+  channels, and auth routes (`createAuthRoutes`, `socketAuth`: Google,
+  Discord, mock and guest sign-in, sessions, `__Host-` cookies), all through
+  the same pipeline, access and emits.
+
+### Pack F: enforcement
+
+- `@fitzzero/quickdraw-lint`: 19 oxlint rules with tests and baselines;
+  `no-v4-api` names every removed 4.x API and its replacement. Budgets
+  (`expectBudget`), development warnings, a stall watchdog and an
+  OpenTelemetry hook.
+- `@fitzzero/quickdraw-skills`: agent rules and skills, linked into
+  `.claude/` by `quickdraw-skills link`; `quickdraw-docs` renders API pages
+  from contracts.
+
+### Pack G: proof and release
+
+- The benchmark against 4.1.0 (below); `@fitzzero/quickdraw-codemod` with
+  the migration guide (`MIGRATION.md`, `UPGRADE-PROMPT.md`, the
+  `quickdraw-migrate-v5` skill); the release checklist
+  (`docs/release-checklist-5.0.md`) and an upgrade brief per app
+  (`docs/downstream/`).
+- The pack G finale round fixes:
+  - A shared run's result is stripped and JSON-encoded once per group of
+    callers whose levels hide the same fields, not once per caller, and the
+    socket transport sends each caller of a group the same bytes; a
+    transport's `respond` receives that copy (`SharedData`).
+  - The socket rate limiter allows 600 events per minute per socket by
+    default (it was 100), in `createServer` and in `createRateLimiter()`
+    without `maxRequests`.
+  - `<QuickdrawProvider reconnectJitterMs>` sets the longest random delay
+    before a watched or stale query is refetched after a reconnect (2,000 ms
+    by default, `0` at once); the coordinator's `refetchAfterReconnect`
+    takes the same as `jitterMs`.
+  - An unannotated function `id` selector in one method no longer widens
+    `ctx.principal` to nullable in a service's other methods, and
+    `MethodImplementation<…, "authenticated">` with `satisfies` takes every
+    access form but `"public"`, `{ service, entry }` included. The codemod
+    writes `id` functions unannotated and types `MethodOf` for
+    `"authenticated"`.
+  - One rule names the session cookie, written and read
+    (`sessionCookieNameFor`): `createAuthRoutes`, `setSessionCookie`,
+    `socketAuth`, the HTTP transport and `extractBearerOrCookieToken` give
+    a request a configured name, else `session` when the cookie has a
+    domain, else `__Host-session` over HTTPS (`req.secure`,
+    `X-Forwarded-Proto: https`, an `https:` `Origin`, or an OAuth
+    callback's `https:` return origin) and `session` over plain HTTP, and
+    each reads first the name it would set. Over HTTPS without a domain the
+    plain `session` is never read, so a planted plain cookie cannot stand in
+    for `__Host-session`. The transports read `COOKIE_DOMAIN` as the routes
+    do; a `cookie.domain` given only to the routes logs a startup warning
+    until the cookie is named.
+  - `AdminFieldConfig.filterable` is optional (default `false`), so 4.x
+    field configurations still type.
+  - The codemod: a file that already binds a service object's name imports
+    it under an alias (no more `const chatService = chatService`); every
+    workspace package that depends on quickdraw is migrated, with
+    `server/testing/prisma` rewritten to `testing/prisma`; uses of a 4.x
+    instance's members, a dynamic `import()` of a service class and a
+    hook's `error` read as a string are marked; a `jsonAcl("acl")` it
+    writes is marked for duplicate list entries (5.0 takes the highest
+    level, 4.x took the first); a dry run lists the report as `A` when it
+    would create it; and its published manifest names no `workspace:`
+    range.
+  - The docs: the README's installs carry `@next`, its quick start
+    authenticates with `socketAuth` and shows the pieces it imports, and
+    no example keeps a trailing comment (a test lints every example with
+    `oxlint.base.jsonc`); `MIGRATION.md` lists the peers' new floors; the
+    benchmark report's figures are recomputed from its data.
+
+### Benchmark
+
+5.0 against 4.1.0 on one machine in one sitting (`bench/reports/5.0.0.md`;
+board-steady: 600 writes to a board 50 viewers watch): the board query's p95
+is 0.28× (122 to 34.6 ms), SQL statements per write 0.25×, server CPU per
+write 0.55×, and a reconnect storm serves no snapshots (11,590 in 4.1).
+Missed or worse: bytes per write 0.89×, against a target of 0.30×, because
+the benchmark app keeps a fat watched board query (a collection's index is
+the fix: `MIGRATION.md`, "Boards"); event-loop delay p99 1.7× to 3.7× (5.1×
+in fat-read, where the two 4.1 runs disagree by 43%), from a shared run's
+replies encoded back to back (the finale round's first fix);
+drain after the last write 0.51 s against 0.26 s (the coordinator's 250 ms
+window); restoring a watched query after a reconnect storm, p50 968 ms
+against 10 ms (the deliberate 0 to 2 s refetch jitter, now
+`reconnectJitterMs`); peak memory in that storm 1.17× (not explained yet).
+Measured on 5.0.0-alpha.0, before the finale round.
+
 ## [4.1.1] - 2026-10-04
 
 ### Fixed
@@ -10,7 +230,8 @@ All notable changes to this project will be documented in this file.
   an event whose name is not a string. Socket.IO accepts a numeric event
   name; `applyRateLimitMiddleware` called `eventName.startsWith` on it inside
   `process.nextTick`, an uncaught `TypeError` that exited the server. Such
-  events now pass the limiter uncounted.
+  events now pass the limiter uncounted. (A 4.x patch released from `main`;
+  5.0 carries the same guard.)
 
 ## [4.1.0] - 2026-08-01
 

@@ -1,0 +1,346 @@
+name: CI
+
+# `pull_request` deliberately has no `branches` filter: pack children open pull
+# requests into `ft/...` feature branches, and those need CI as much as pull
+# requests into `dev` or `main` do.
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+# Every job sets up the same toolchain: Node from .nvmrc, bun at the version
+# pinned by the root package.json `packageManager` field, then a frozen install.
+# `--ignore-scripts` also skips the root `prepare` script (husky and
+# conveyor-skills link), which CI does not need.
+jobs:
+  # The secret scan blocks and reports verified secrets only, so it has almost
+  # no false positives. The dependency audit is advisory and never fails the job.
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # trufflehog scans the commits between the pull request's base and
+          # head (or a push's before and after), so it needs the full history.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan the diff for secrets
+        uses: trufflesecurity/trufflehog@v3.97.9
+        with:
+          extra_args: --results=verified
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Dependency audit (advisory)
+        run: bun audit
+        continue-on-error: true
+
+  lint-and-typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      # The agent rules and skills linked into .claude/ from
+      # @fitzzero/quickdraw-skills (packages/skills) must match the package:
+      # no link missing, stale or dangling.
+      - name: Check the quickdraw-skills links
+        run: ./node_modules/.bin/quickdraw-skills link --check
+
+      # docs/protocol-v5.md, the wire specification for non-JS clients, is
+      # generated from packages/core/src/protocol/envelope.ts and the sources
+      # beside it: it must be what they generate now.
+      - name: Check the protocol document
+        working-directory: packages/core
+        run: bun run protocol:check
+
+      - run: bun run lint
+
+      - run: bun run format:check
+
+      - run: bun run typecheck
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      - run: bun run build
+
+      # Imports every export of the built core package through its export map,
+      # and checks that only ./client opens with "use client", that entries
+      # share chunks instead of duplicating modules, and that no dependency is
+      # bundled.
+      - name: Smoke-test the built core package
+        run: node packages/core/scripts/dist-smoke.mjs
+
+      # Checks what npm would receive from every package that is not
+      # `"private": true`. publint runs on all of them. arethetypeswrong runs
+      # only on packages that ship type declarations: @fitzzero/quickdraw-lint
+      # ships plain .mjs with no types, so attw has nothing to check there. The
+      # packages are ESM-only, so attw uses its esm-only profile (node10 and
+      # require() resolution are not supported targets).
+      - name: Check the published package shape
+        run: |
+          for manifest in packages/*/package.json; do
+            dir="$(dirname "$manifest")"
+            name="$(jq -r .name "$manifest")"
+            if [ "$(jq -r '.private // false' "$manifest")" = true ]; then
+              echo "Skipping $name: private"
+              continue
+            fi
+
+            echo "::group::publint $name"
+            (cd "$dir" && bunx publint@^0.3.25)
+            echo "::endgroup::"
+
+            if jq -e '(.types // .typings) != null or ([.exports | .. | objects | has("types")] | any)' "$manifest" > /dev/null; then
+              echo "::group::arethetypeswrong $name"
+              (cd "$dir" && bunx @arethetypeswrong/cli@^0.18.5 --pack --profile esm-only)
+              echo "::endgroup::"
+            else
+              echo "Skipping arethetypeswrong for $name: it ships no type declarations"
+            fi
+          done
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Postgres for the integration tests later packs add; nothing connects to it
+    # yet, and local runs default to PGlite. turbo.json lists DATABASE_URL in the
+    # test task's `env`, without which turbo's strict env mode would hide it
+    # from vitest.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: quickdraw_test
+          POSTGRES_USER: quickdraw
+          POSTGRES_PASSWORD: quickdraw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U quickdraw -d quickdraw_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://quickdraw:quickdraw@localhost:5432/quickdraw_test
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      - run: bun run test
+
+      - name: Test scripts/release-tag.sh
+        run: bash scripts/release-tag.test.sh
+
+  # Whether the godot job has anything to prove: on pushes and manual runs
+  # always, on a pull request only when it touches the GDScript client, the
+  # wire (the protocol sources, the realtime and transport code, the protocol
+  # document they generate), the test app the client runs against, the
+  # dependencies or this workflow.
+  godot-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The pull request's changes are its merge commit against its base.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          paths='^(examples/godot/|packages/core/src/(protocol|server/realtime|server/transports|testing)/|packages/core/package\.json|docs/protocol-v5\.md|bun\.lock|package\.json|\.github/workflows/ci\.yml)'
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BASE" HEAD | grep -qE "$paths"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The GDScript reference client (examples/godot), run by Godot itself against
+  # a real server: the session of examples/godot/test/smoke.gd, whose frames
+  # the Node wire test (in `test`) writes too. The official Godot build,
+  # checked against the SHA-512 Godot publishes for it. Skipped when
+  # godot-changes finds nothing to prove, which a required check counts as
+  # passed.
+  godot:
+    needs: godot-changes
+    if: needs.godot-changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GODOT_VERSION: 4.7.2-stable
+      GODOT_SHA512: 9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Install Godot
+        run: |
+          curl -fsSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip"
+          echo "${GODOT_SHA512}  godot.zip" | sha512sum --check
+          unzip -q godot.zip -d "$RUNNER_TEMP/godot"
+          echo "GODOT=$RUNNER_TEMP/godot/Godot_v${GODOT_VERSION}_linux.x86_64" >> "$GITHUB_ENV"
+
+      - name: Build the core package
+        working-directory: packages/core
+        run: bun run build
+
+      - name: Run the GDScript client against a real server
+        working-directory: examples/godot
+        run: bun run check:godot
+
+  # Whether the cluster job has anything to prove: on pushes and manual runs
+  # always, on a pull request only when it touches core's sources or tests
+  # (the cluster projects run the server, client, testing, prisma, protocol
+  # and contract code, and the test schema), its vitest config or manifest,
+  # the lockfile, the root manifest or tsconfig, or this workflow.
+  cluster-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The pull request's changes are its merge commit against its base.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          paths='^(packages/core/(src|test)/|packages/core/(vitest\.config\.ts|package\.json)|bun\.lock|package\.json|tsconfig\.base\.json|\.github/workflows/ci\.yml)'
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BASE" HEAD | grep -qE "$paths"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The multi-node proof (pack H): the end-to-end suite and the realtime,
+  # collection and revocation tests with every test app booted as two servers
+  # behind a real Valkey, plus the cluster's own tests (packages/core/test/cluster).
+  # Skipped when cluster-changes finds nothing to prove, which a required check
+  # counts as passed: make `cluster` a required check of `dev` only.
+  cluster:
+    needs: cluster-changes
+    if: needs.cluster-changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      valkey:
+        image: valkey/valkey:8.1-alpine
+        ports:
+          - 6399:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      QD_VALKEY_URL: redis://127.0.0.1:6399
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      # The test Prisma client, which turbo generates before `bun run test`.
+      - name: Generate the test Prisma client
+        working-directory: packages/core
+        run: bun run db:generate
+
+      - name: Run the cluster projects
+        working-directory: packages/core
+        run: bun run test:cluster

@@ -1,8 +1,23 @@
 # Dependencies
 node_modules/
 
-# Build output
+# Build output (every workspace package builds to its own dist/)
 dist/
+
+# Turborepo cache
+.turbo/
+
+# Benchmark harness: ad-hoc results, server logs and the generated workload;
+# each bench app's generated Prisma client
+bench/results/
+bench/apps/*/generated/
+
+# Core's test Prisma client (`bun run db:generate`; turbo runs it before
+# typecheck and test)
+packages/core/test/prisma/generated/
+
+# The codemod tests' copies of the fixture app
+packages/codemod/.test-output/
 
 # Test coverage
 coverage/

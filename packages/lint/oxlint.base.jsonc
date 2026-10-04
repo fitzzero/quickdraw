@@ -1,0 +1,150 @@
+// Shared oxlint base config for quickdraw apps (RFC 0003 section 14).
+//
+// Consume from a project by extending it in your root .oxlintrc.json:
+//
+//   {
+//     "extends": ["./node_modules/@fitzzero/quickdraw-lint/oxlint.base.jsonc"],
+//     ...project-specific config
+//   }
+//
+// Apps built from the quickdraw template also extend `oxlint.template.jsonc`
+// (the design-system rules) after this file.
+//
+// oxlint merge semantics (v1.x): `rules` and `categories` merge per-key with
+// the extending config winning; `overrides` concatenate (base first, so a
+// consumer override on the same glob wins); `jsPlugins` concatenate.
+// NOT inherited — declare these in the consumer config:
+//   - `ignorePatterns`, `env`, `globals`, `settings`
+//   - `plugins`: if the consumer omits its `plugins` array, oxlint unions the
+//     DEFAULT plugin set into the merge — mirror the list below to avoid
+//     surprise diagnostics from plugins you didn't opt into.
+{
+  "plugins": ["typescript", "import", "react", "nextjs", "jsx_a11y"],
+  "categories": {
+    "correctness": "deny",
+    "suspicious": "deny",
+    "pedantic": "deny",
+  },
+  // The quickdraw framework rules, shipped alongside this file.
+  // The relative specifier resolves against this file's location, i.e. inside
+  // the installed package — consumers don't need their own jsPlugins entry.
+  "jsPlugins": [
+    {
+      "name": "quickdraw",
+      "specifier": "./plugin/index.mjs",
+    },
+  ],
+  "rules": {
+    "react/rules-of-hooks": "error",
+    "no-console": "error",
+    "no-var": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/no-import-type-side-effects": "error",
+
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/restrict-template-expressions": "off",
+    "typescript/no-redundant-type-constituents": "off",
+
+    "require-await": "error",
+    "no-inline-comments": "error",
+    "no-unmodified-loop-condition": "error",
+    "no-promise-executor-return": "error",
+    "eqeqeq": "error",
+    "import/max-dependencies": ["error", { "max": 10 }],
+
+    // Complexity budgets: keep units small enough to reason about (and small
+    // enough for focused AI edits).
+    "complexity": ["error", { "max": 15 }],
+    "max-depth": ["error", { "max": 4 }],
+    "max-lines": ["error", { "max": 500, "skipBlankLines": true, "skipComments": true }],
+    "max-lines-per-function": [
+      "error",
+      { "max": 80, "skipBlankLines": true, "skipComments": true },
+    ],
+
+    // The quickdraw rules. A rule about one layer checks only that layer's
+    // files, through its own `files` and `ignore` options; the defaults follow
+    // the template's layout (services in `**/services/**`, jobs in
+    // `**/jobs/**`, routes in `**/routes/**` and `**/routes.*`, client code in
+    // `**/*.tsx`, `**/*.jsx` and `**/apps/web/**` plus any file importing
+    // TanStack Query, the Socket.IO client or quickdraw's client, tests
+    // skipped where they write or read data directly). Another layout passes
+    // `files`, e.g.
+    //   "quickdraw/no-unbounded-read": ["error", { "files": ["**/server/services/**"] }]
+    // Every rule takes `baseline` (or, for all of them at once,
+    // `"settings": { "quickdraw": { "baseline": ".quickdraw-lint-baseline.json" } }`
+    // in your own config): run `quickdraw-lint baseline` to adopt the rules
+    // without fixing existing violations first. `no-unused-baseline` warns
+    // when the file allows a violation that no longer occurs, so it shrinks.
+    "quickdraw/no-unused-baseline": "warn",
+
+    // Writes subscribers can see (RFC 0003 section 5).
+    "quickdraw/no-untracked-write": "error",
+    "quickdraw/no-foreign-write": "error",
+    "quickdraw/no-nested-write": "error",
+    "quickdraw/no-raw-sql-write": "error",
+    // Frames come from tracked writes; access is declared.
+    "quickdraw/no-manual-emit": "error",
+    "quickdraw/no-inline-auth-guard": "error",
+    // Performance.
+    "quickdraw/no-unbounded-read": "error",
+    "quickdraw/no-db-call-in-loop": "error",
+    "quickdraw/no-emit-in-loop": "error",
+    "quickdraw/no-load-then-filter": "error",
+    // Layering.
+    "quickdraw/no-prisma-in-routes": "error",
+    "quickdraw/no-cross-service-internal-imports": "error",
+    // The typed client and its invalidation coordinator.
+    "quickdraw/no-await-void-mutate": "error",
+    "quickdraw/no-untyped-client": "error",
+    "quickdraw/no-manual-refetch": "error",
+    "quickdraw/no-raw-socket": "error",
+    // A hand-written method a kit implements, in a service that uses no kit.
+    "quickdraw/prefer-kit": "warn",
+    // Every 4.x API 5.0 removed, with its replacement.
+    "quickdraw/no-v4-api": "error",
+    // The migration's placeholder schema, until a real schema replaces it.
+    "quickdraw/no-todo-schema": "warn",
+  },
+  "overrides": [
+    // Client/React code: relax server-oriented strictness.
+    {
+      "files": ["apps/web/**", "**/*.tsx"],
+      "rules": {
+        "typescript/explicit-function-return-type": "off",
+        "jsx_a11y/no-autofocus": "off",
+        "react/react-in-jsx-scope": "off",
+        "import/no-unassigned-import": "off",
+        "import/max-dependencies": "off",
+        "max-lines-per-function": "off",
+        "max-lines": "off",
+        "no-warning-comments": "off",
+      },
+    },
+    // Shared/db packages: public surface — explicit types required.
+    {
+      "files": ["packages/shared/**", "packages/db/**"],
+      "rules": {
+        "typescript/explicit-function-return-type": "error",
+        "typescript/explicit-module-boundary-types": "error",
+        "no-console": "error",
+      },
+    },
+    // Tests: size and style budgets don't apply.
+    {
+      "files": ["**/__tests__/**", "**/*.test.ts", "**/*.test.tsx", "**/*.test-d.ts"],
+      "rules": {
+        "max-lines-per-function": "off",
+        "max-lines": "off",
+        "no-inline-comments": "off",
+        "require-await": "off",
+        "import/max-dependencies": "off",
+      },
+    },
+  ],
+}
