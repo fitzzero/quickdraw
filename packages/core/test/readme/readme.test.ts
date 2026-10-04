@@ -91,6 +91,14 @@ describe("the files the packages ship beside their code", () => {
     },
   );
 
+  it.each(["core", "lint", "skills", "codemod"])(
+    "@fitzzero/quickdraw-%s's package.json names no workspace: range, which npm publish ships as it is",
+    (name) => {
+      const manifest = readFileSync(documentPath(`packages/${name}/package.json`), "utf8");
+      expect(manifest).not.toContain("workspace:");
+    },
+  );
+
   it("make the README's relative links relative to the package directory", () => {
     expect(
       fromPackageDirectory(

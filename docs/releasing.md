@@ -21,6 +21,13 @@ Agents never bump versions for a release, create or push tags, or publish.
 All four packages are public. The workflow and `scripts/release-tag.sh`
 refuse to release a package marked `private`.
 
+`npm publish` ships a package's `package.json` as it is, and npm does not
+know bun's `workspace:` ranges, so no published package names one: the
+codemod's devDependencies on core and lint are semver ranges
+(`^5.0.0-rc.0`), which bun links to the workspace packages all the same
+while their versions match. `packages/core/test/readme/readme.test.ts`
+checks the four manifests.
+
 For 5.0, the whole sequence from the release candidate to 5.0.0 on `main`
 is [`release-checklist-5.0.md`](release-checklist-5.0.md).
 
