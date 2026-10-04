@@ -25,13 +25,14 @@ import {
   removeUser,
   type DetachedRun,
   type LeavingState,
+  type RoomLeaveHook,
 } from "./leaving";
 import { markSeen, MAX_APP_ROOMS } from "./presence";
 import { entered, type RoomState } from "./roomFrames";
 import { checkRoom } from "./roomNames";
-import type { ContextRooms, RoomLeaveHandler, RoomTarget, ServerRooms } from "./types";
+import type { ContextRooms, RoomTarget, ServerRooms } from "./types";
 
-export { ROOM_LEAVE_EVENT, type DetachedRun } from "./leaving";
+export { ROOM_LEAVE_EVENT, type DetachedRun, type RoomLeaveHook } from "./leaving";
 
 function join(state: LeavingState, socket: QuickdrawServerSocket, room: string): boolean {
   checkRoom(room);
@@ -54,6 +55,15 @@ function join(state: LeavingState, socket: QuickdrawServerSocket, room: string):
   return true;
 }
 
+/**
+ * `rooms.size(room)`: this node's sockets in app room `room`, anonymous ones
+ * included, read from the adapter's own room at once.
+ */
+function sizeOf(state: LeavingState, room: string): number {
+  checkRoom(room);
+  return state.hub.io?.sockets.adapter.rooms.get(room)?.size ?? 0;
+}
+
 /** The `ctx.rooms` of each socket, of calls without one, and `qd.rooms`, for one dispatcher. */
 export interface Rooms {
   /** The `ctx.rooms` of calls and channel messages from `socket`: made once per socket. */
@@ -65,10 +75,11 @@ export interface Rooms {
   /** A socket disconnected (Socket.IO has emptied its rooms): its users leave its app rooms. */
   disconnected(socket: QuickdrawServerSocket): void;
   /**
-   * Runs `handler` for every socket that leaves app rooms from now on
-   * (`createServer`'s `onRoomLeave`), through `run`, a detached unit of work.
+   * Runs `hooks` for every socket that leaves app rooms from now on (each
+   * service's `onRoomLeave` and `createServer`'s), each through `run`, a
+   * detached unit of work of its own.
    */
-  onLeave(handler: RoomLeaveHandler, run: DetachedRun): void;
+  onLeave(hooks: readonly RoomLeaveHook[], run: DetachedRun): void;
   /** Takes this node's sockets out of rooms other nodes' `leave(room, { userId })` name. */
   listen(): void;
 }
@@ -87,16 +98,25 @@ function leaveOf(
   }) as ContextRooms["leave"];
 }
 
-/** Creates the rooms of one dispatcher, and their typed events (`events.ts`). */
-export function createRooms(base: RoomState): Rooms {
-  const state: LeavingState = { ...base, listener: undefined };
+/**
+ * Creates the rooms of one dispatcher, and their typed events (`events.ts`).
+ * `left` hears each socket that left an app room and is still connected
+ * (the streams open to a room's sockets check it again).
+ */
+export function createRooms(
+  base: RoomState,
+  left?: (socket: QuickdrawServerSocket) => void,
+): Rooms {
+  const state: LeavingState = { ...base, listener: undefined, left };
   const events = createRoomEvents(state.hub);
   const removal = (room: string, target: RoomTarget): Promise<void> =>
     removeUser(state, room, target);
-  const server: ServerRooms = Object.freeze({ ...events, leave: removal });
+  const size = (room: string): number => sizeOf(state, room);
+  const server: ServerRooms = Object.freeze({ ...events, leave: removal, size });
   const bySocket = new WeakMap<QuickdrawServerSocket, ContextRooms>();
   const detached: ContextRooms = Object.freeze({
     ...events,
+    size,
     join: (room: string) => {
       checkRoom(room);
       return false;
@@ -109,6 +129,7 @@ export function createRooms(base: RoomState): Rooms {
       if (rooms === undefined) {
         rooms = Object.freeze({
           ...events,
+          size,
           join: (room: string) => join(state, socket, room),
           leave: leaveOf((room) => leaveRoom(state, socket, room, "leave"), removal),
         });
@@ -129,8 +150,8 @@ export function createRooms(base: RoomState): Rooms {
         markSeen(state.hub, state.records, userId, Date.now());
       }
     },
-    onLeave(handler: RoomLeaveHandler, run: DetachedRun): void {
-      state.listener = leaveListener(handler, run, state.hub.logger);
+    onLeave(hooks: readonly RoomLeaveHook[], run: DetachedRun): void {
+      state.listener = hooks.length === 0 ? undefined : leaveListener(hooks, run, state.hub.logger);
     },
     listen(): void {
       listenForRemovals(state);

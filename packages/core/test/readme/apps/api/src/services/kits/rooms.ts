@@ -1,9 +1,7 @@
 import { task } from "../../../../../packages/shared/src/kits/realtime";
-import { qd, type AppPrincipal } from "../../quickdraw";
+import { qd } from "../../quickdraw";
 
 // #region rooms
-import type { RoomLeaveHandler } from "@fitzzero/quickdraw-core/server";
-
 const boardRoom = (projectId: string): string => `board:${projectId}`;
 
 // a timer or a game loop's tick, outside any handler: every socket in the room, on every node
@@ -17,14 +15,9 @@ export async function removeFromBoard(projectId: string, userId: string): Promis
   await qd.rooms.leave(boardRoom(projectId), { userId });
 }
 
-// qd.createServer({ ..., onRoomLeave }): once per socket that leaves app rooms, in a unit of its own
-export const onRoomLeave: RoomLeaveHandler<AppPrincipal> = ({ principal, rooms }) => {
-  for (const { room, last } of rooms) {
-    // last: no socket of the user is in the room any more (a second tab keeps it false)
-    if (principal !== null && last && room.startsWith("board:")) {
-      const projectId = room.slice("board:".length);
-      qd.rooms.emit(room, task, "leftBoard", { projectId, userId: principal.userId });
-    }
-  }
-};
+// a tick loop's "is anyone watching?", at its tick rate: this node's sockets in the room,
+// anonymous ones too, with no promise (presence.count asks every node for users)
+export function hasAudience(projectId: string): boolean {
+  return qd.rooms.size(boardRoom(projectId)) > 0;
+}
 // #endregion

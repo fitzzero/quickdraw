@@ -54,6 +54,25 @@ const pingService = qd.defineService(pingContract, {
   methods: { ping: { access: "public", handler: () => "pong" as const } },
 });
 
+/**
+ * A service with no model that writes labels (a game's high scores, which
+ * no service owns): its topic changes with every label written, so a query
+ * over them can watch it.
+ */
+const scoresContract = defineContract("scoresService", {
+  methods: {
+    best: query({ input: z.undefined(), output: z.number(), watch: "service" }),
+  },
+});
+
+const scoresService = qd.defineService(scoresContract, {
+  writes: ["label"],
+  watchAccess: "authenticated",
+  methods: {
+    best: { access: "authenticated", handler: async ({ db }) => await db.label.count() },
+  },
+});
+
 interface StartOptions extends TaskServiceOptions {
   readonly after?: (read: Read) => Promise<void> | undefined;
   readonly rateLimit?: { readonly maxRequests: number };
@@ -63,7 +82,13 @@ interface StartOptions extends TaskServiceOptions {
 async function start(options: StartOptions = {}) {
   const recorded = recordingStorage(h.storage, options.after);
   const app = await createTestApp({
-    services: [projectService, labelService, defineTaskService(options), pingService],
+    services: [
+      projectService,
+      labelService,
+      defineTaskService(options),
+      pingService,
+      scoresService,
+    ],
     db: h.db,
     storage: recorded.storage,
     ...(options.rateLimit === undefined ? {} : { rateLimit: options.rateLimit }),
@@ -179,6 +204,26 @@ describe("qd:changed", () => {
     expect(await emitWithAck(connection.socket, "qd:unwatch", { s: "taskService" })).toMatchObject(
       refused("VALIDATION"),
     );
+  });
+});
+
+describe("a model a service writes", () => {
+  it('changes the writing service\'s topic, which a query over it watches with watch: "service"', async () => {
+    const { app } = await start();
+    const { connection, scopes } = await connect(app, as(board.ada));
+    expect(await watch(connection, "service", "scoresService")).toEqual(ok);
+    await write(app, (db) =>
+      db.task.update({ where: { id: board.t1 }, data: { title: "Not a label" } }),
+    );
+    await scopes.settle();
+    expect(scopes.changed).toEqual([]);
+    await write(app, (db) => db.label.create({ data: { projectId: board.p1, name: "Bug" } }));
+    await scopes.settle();
+    expect(scopes.changed).toEqual([
+      { s: "scoresService", topic: "service", rev: expect.any(Number) },
+    ]);
+    expect(scoresContract.methods.best.watch).toBe("service");
+    expect(await app.as(as(board.ada)).scoresService.best()).toBe(1);
   });
 });
 
@@ -462,6 +507,17 @@ describe("definition", () => {
       'method "countOnBoard" is a mutation; only a query can watch',
     );
     expect(() => defineLoosely(taskContract, definition)).not.toThrow();
+  });
+
+  it("refuses a query that watches its service's topic when the service keeps it closed", () => {
+    expect(() =>
+      defineLoosely(scoresContract, {
+        writes: ["label"],
+        methods: { best: { access: "authenticated", handler: () => 0 } },
+      }),
+    ).toThrow(
+      'defineService("scoresService"): method "best" watches the service\'s topic, which is closed without watchAccess',
+    );
   });
 
   it("takes watchAccess as public, authenticated or a service grant, and none by default", () => {

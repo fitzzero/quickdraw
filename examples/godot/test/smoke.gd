@@ -13,6 +13,7 @@ const ROTATE_LATEST_MS := 700
 
 var failures: Array[String] = []
 var checks := 0
+var first_server_id := ""
 var events: Array = []
 var items: Array = []
 var seeds: Array = []
@@ -58,6 +59,8 @@ func _run() -> void:
 	var hello: Dictionary = await client.connected
 	check(int(hello.protocol) == 5 and client.user_id == "ada", "qd:hello names protocol 5 and the user")
 	check((hello.limits as Dictionary).has("callTimeoutMs"), "qd:hello carries the limits")
+	check(client.server_id != "" and client.server_id == hello.serverId, "qd:hello names the server")
+	first_server_id = client.server_id
 	await _calls(client)
 	await _world(client)
 	await _limits(client)
@@ -80,8 +83,13 @@ func _calls(client) -> void:
 
 func _world(client) -> void:
 	check(client.send_channel("gameService", "move", {"dx": 9, "dy": 0}), "a move is written before joining")
+	check(not client.is_subscribed("gameService", "ticks"), "no feed held before subscribing")
 	var sub: Dictionary = await client.subscribe_stream("gameService", "ticks")
 	check(sub.ok and (sub.seed as Array).is_empty(), "the stream's seed is empty: that move was dropped")
+	check(client.is_subscribed("gameService", "ticks") and not client.is_subscribed("gameService", "ticks", "elsewhere"), "is_subscribed knows the feed held")
+	var unheard := func(payload: Variant) -> void: events.append(["unheard", payload])
+	client.on_event("gameService", "moved", unheard)
+	check(client.off_event("gameService", "moved", unheard) and not client.off_event("gameService", "moved", unheard), "off_event removes a handler, once")
 	var joined: Dictionary = await client.call_method("gameService", "join", {"name": "ada"})
 	check(joined.ok and joined.d.players == ["ada"], "joining the world answers its players")
 	check(client.presence("world:main") == ["ada"], "qd:presence lists the player")
@@ -136,6 +144,7 @@ func _rotating(client) -> void:
 func _reconnected(client) -> void:
 	var hello: Dictionary = client.hello
 	check(hello.userId == "ada", "after qd:rotate the client reconnects with a new handshake")
+	check(client.server_id == first_server_id, "the same server, so the same server id")
 	check(client.presence("world:main").is_empty(), "the new socket is in no room")
 	client.send_channel("gameService", "move", {"dx": 8, "dy": 0})
 	var joined: Dictionary = await client.call_method("gameService", "join", {"name": "ada"})

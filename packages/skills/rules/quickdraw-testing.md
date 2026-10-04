@@ -38,7 +38,11 @@ await app.close();
 - `app.frames(match?)` lists every frame the server sent, each with its
   `event`, `data`, `socketId`, `userId` and `at`;
   `frames.waitFor(match, timeoutMs?)` waits for one, `frames.clear()`
-  forgets them. Assert on frames, not internals.
+  forgets them. Assert on frames, not internals. For realtime frames use
+  the typed matchers, never a cast of `data`:
+  `waitFor({ ...streamFrames(game, "world", (snap) => snap.tick === tick), socketId })`,
+  `eventFrames(game, "death", (death) => death.id === id)`, or an event
+  query's `where` (`{ event: "qd:presence", where: ({ data }) => ... }`).
 - The app's dispatcher becomes current for the services' `qd`, so
   `qd.run`, `qd.stream(...).push` and `qd.presence` reach it.
 - `db` is the tracked client over a test database, made exactly as in

@@ -47,6 +47,14 @@ export interface Watch<Collection extends string = string, Input = never> {
   readonly scope: (input: Input) => string;
 }
 
+/**
+ * `watch: "service"`: the query reads what the service's change topic covers
+ * (its rows, its collections, and the models it lists in `writes`, such as
+ * a game's high scores), so it is invalidated after every flush that
+ * changes any of them. The service must open its topic with `watchAccess`.
+ */
+export type ServiceWatch = "service";
+
 /** A `query` as `defineContract` stores it. */
 export interface QueryDef<
   Input extends StandardSchemaV1 = StandardSchemaV1,
@@ -56,7 +64,13 @@ export interface QueryDef<
   readonly kind: "query";
   readonly input: Input;
   readonly output: Output;
-  readonly watch?: Watch<Watched, InferInput<Input>> | undefined;
+  /**
+   * The topic the query watches: a collection scope (`Watched` is then the
+   * collection's name), or `"service"`, its service's own topic.
+   */
+  readonly watch?:
+    | ([Watched] extends [never] ? ServiceWatch : Watch<Watched, InferInput<Input>>)
+    | undefined;
   /** What the method does, in a sentence or two. The MCP bridge uses it as the tool's description. */
   readonly describe?: string | undefined;
 }
@@ -79,7 +93,7 @@ export interface MethodDef {
   readonly kind: MethodKind;
   readonly input: StandardSchemaV1;
   readonly output: MethodOutput;
-  readonly watch?: Watch<string> | undefined;
+  readonly watch?: Watch<string> | ServiceWatch | undefined;
   readonly describe?: string | undefined;
 }
 
@@ -99,20 +113,21 @@ export function query<
 >(def: {
   readonly input: Input;
   readonly output: Output;
-  readonly watch?: Watch<Watched, InferInput<Input>>;
+  readonly watch?: Watch<Watched, InferInput<Input>> | ServiceWatch;
   readonly describe?: string;
 }): QueryDef<Input, Output, NoInfer<Watched>> {
   // `NoInfer` in the return type: inside `defineContract`, TypeScript would
   // otherwise infer `Watched` from the surrounding contract as `string` for a
   // query that does not watch, and the watch check would then reject it.
   // Absent options stay absent rather than becoming `undefined` members.
-  const method: QueryDef<Input, Output, Watched> = {
+  // A collection watch names `Watched`; `"service"` leaves it `never`, as the type says.
+  const method = {
     kind: "query",
     input: def.input,
     output: def.output,
     ...(def.watch === undefined ? {} : { watch: def.watch }),
     ...(def.describe === undefined ? {} : { describe: def.describe }),
-  };
+  } as QueryDef<Input, Output, Watched>;
   return Object.freeze(method);
 }
 

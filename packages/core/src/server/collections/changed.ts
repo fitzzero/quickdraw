@@ -8,8 +8,9 @@
 //
 // - the service topic of every service the flush changed: one of its rows
 //   (written, touched, or reached by an `affects` hop), a junction link of
-//   one of its `via` collections, or a scope it lost when the row it was
-//   anchored on was deleted;
+//   one of its `via` collections, a row of a model it lists in `writes` (a
+//   game's high scores: a query over them watches the service), or a scope
+//   it lost when the row it was anchored on was deleted;
 // - the topic of every collection scope a touched row was in before or after
 //   the flush, from the same moves the collection sink finds (`moves.ts`,
 //   shared, so a flush reads their rows once); a row that left scopes nobody
@@ -40,10 +41,14 @@ type Io = NonNullable<CollectionHub["io"]>;
 /** The `qd:changed` frames of one flush, by topic room: one per topic. */
 type Frames = Map<string, ChangedFrame>;
 
+/** Per model (`modelKey`), the services that list it in their `writes`. */
+type Writers = ReadonlyMap<string, readonly BoundCollection["service"][]>;
+
 /** What finding a flush's topics needs. */
 interface Flush {
   readonly hub: CollectionHub;
   readonly index: TopicIndex;
+  readonly writers: Writers;
   readonly writes: readonly WriteRecord[];
   readonly touched: TouchedRows;
   readonly rev: Revision;
@@ -64,13 +69,33 @@ function markScope(flush: Flush, collection: BoundCollection, scope: string): vo
   }
 }
 
-/** The services whose rows or collection scopes the flush changed. */
+/** The services that list each model in their `writes`, by `modelKey`. */
+function writersOf(hub: CollectionHub): Writers {
+  const writers = new Map<string, BoundCollection["service"][]>();
+  for (const service of hub.registry.services.values()) {
+    for (const model of service.writes) {
+      const key = modelKey(model);
+      writers.set(key, [...(writers.get(key) ?? []), service]);
+    }
+  }
+  return writers;
+}
+
+/**
+ * The services whose rows or collection scopes the flush changed, and those
+ * that list a written model in their `writes` (a query over such a model
+ * watches the writing service's topic).
+ */
 function changedServices(flush: Flush): Set<BoundCollection["service"]> {
   const services = new Set(flush.touched.keys());
   const { routes } = flush.hub.collections;
   for (const write of flush.writes) {
-    for (const collection of routes.byJunction.get(modelKey(write.model)) ?? []) {
+    const key = modelKey(write.model);
+    for (const collection of routes.byJunction.get(key) ?? []) {
       services.add(collection.service);
+    }
+    for (const writer of flush.writers.get(key) ?? []) {
+      services.add(writer);
     }
   }
   for (const [collection] of anchoredScopes(routes, flush.writes)) {
@@ -151,6 +176,7 @@ function send(io: Io, frames: Frames): void {
 
 /** The topic sink of a dispatcher: after the collection sink on the dispatcher's list. */
 export function createTopicSink(hub: CollectionHub, index: TopicIndex): FlushSink {
+  const writers = writersOf(hub);
   return Object.freeze({
     async flush(writes: readonly WriteRecord[], info: FlushInfo): Promise<void> {
       const { io, storage } = hub;
@@ -160,6 +186,7 @@ export function createTopicSink(hub: CollectionHub, index: TopicIndex): FlushSin
       const flush: Flush = {
         hub,
         index,
+        writers,
         writes,
         touched: touchedRows(writes, hub.routes),
         rev: info.rev,

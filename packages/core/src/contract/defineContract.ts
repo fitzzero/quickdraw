@@ -157,8 +157,11 @@ type PayloadKeyOf<Parsed> = [Parsed] extends [never]
 
 type SelectorOf<Parsed> = PayloadKeyOf<Parsed> | ((payload: Parsed) => string | null | undefined);
 
-/** An app room's name, or a function of the parsed payload that returns one. */
-type RoomOf<Parsed> = string | ((payload: Parsed) => string | null | undefined);
+/** An app room's name, a function of the parsed payload that returns one, or `{ prefix }`. */
+type RoomOf<Parsed> =
+  | string
+  | ((payload: Parsed) => string | null | undefined)
+  | { readonly prefix: string };
 
 // One form at a time: the keys of the other forms are absent.
 interface ChannelContext<Payload> {
@@ -251,7 +254,10 @@ type CheckKeys<Value, Allowed, Owner extends string> = {
 
 interface MethodCheck<Def> {
   readonly output: StandardSchemaV1 | ProjectionRef<ProjectionNameIn<Def> & string>;
-  readonly watch?: { readonly collection: keyof CollectionsIn<Def> & string } | undefined;
+  readonly watch?:
+    | { readonly collection: keyof CollectionsIn<Def> & string }
+    | "service"
+    | undefined;
 }
 
 type CheckMethods<Def> = {
@@ -363,13 +369,17 @@ type PayloadKeys<Channel> = Channel extends { readonly payload: infer Payload }
  * the other forms, so naming a key is almost always meant as
  * `(payload) => payload.key`).
  */
-type RoomProblem<Name, Room, Channel> = string extends Room
-  ? never
-  : Room extends `${"qd:" | "user:"}${string}`
-    ? `channel "${Name & string}": requires.room "${Room & string}" is not an app room: names starting with "qd:" or "user:" are the framework's own rooms`
-    : Room extends PayloadKeys<Channel>
-      ? `channel "${Name & string}": requires.room is a room's name and "${Room & string}" is a key of the payload; to read the room from the payload write (payload) => payload.${Room & string}, and for a fixed room of that name () => "${Room & string}"`
-      : never;
+type RoomProblem<Name, Room, Channel> = Room extends { readonly prefix: infer Prefix }
+  ? Prefix extends `${"qd:" | "user:"}${string}`
+    ? `channel "${Name & string}": requires.room's prefix "${Prefix & string}" names no app room: names starting with "qd:" or "user:" are the framework's own rooms`
+    : never
+  : string extends Room
+    ? never
+    : Room extends `${"qd:" | "user:"}${string}`
+      ? `channel "${Name & string}": requires.room "${Room & string}" is not an app room: names starting with "qd:" or "user:" are the framework's own rooms`
+      : Room extends PayloadKeys<Channel>
+        ? `channel "${Name & string}": requires.room is a room's name and "${Room & string}" is a key of the payload; to read the room from the payload write (payload) => payload.${Room & string}, and for a fixed room of that name () => "${Room & string}"`
+        : never;
 
 /** A channel's `requires` names a collection of the contract, a row of an entity it has, or an app room. */
 type RequiresProblem<Def, Name, Channel> = Channel extends {

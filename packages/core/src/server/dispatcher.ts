@@ -16,10 +16,10 @@ import {
   type PipelineSettings,
 } from "./pipeline/settings";
 import { createRegistry, type Registry } from "./registry";
-import type { AnyService } from "./service";
+import type { AnyService, Service } from "./service";
 import type { DbOf, Principal, PrincipalOf } from "./types";
 
-export type { Presence, ServerRooms, StreamHandle };
+export type { Presence, ServerRooms, Service, StreamHandle };
 
 type TypesOf<S extends readonly AnyService[]> = NonNullable<S[number]["~types"]>;
 

@@ -20,6 +20,16 @@ export const taskService = qd.defineService(task, {
       ctx.rooms.emit(`board:${payload.projectId}`, task, "cursorMoved", payload);
     },
   },
+  // once per socket that leaves app rooms, in every server this service runs in, in a unit of its own
+  onRoomLeave: ({ principal, rooms }) => {
+    for (const { room, last } of rooms) {
+      // last: no socket of the user is in the room any more (a second tab keeps it false)
+      if (principal !== null && last && room.startsWith("board:")) {
+        const projectId = room.slice("board:".length);
+        qd.rooms.emit(room, task, "leftBoard", { projectId, userId: principal.userId });
+      }
+    }
+  },
 });
 
 // in handlers, jobs and timers

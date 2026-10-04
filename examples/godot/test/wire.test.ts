@@ -175,6 +175,7 @@ describe("the GDScript client's session, frame by frame", () => {
     expect(hello).toEqual({
       protocol: 5,
       server: expect.any(String),
+      serverId: expect.any(String),
       limits: {
         maxInFlightQueries: 1,
         maxQueuedQueries: 0,
@@ -205,11 +206,13 @@ describe("the GDScript client's session, frame by frame", () => {
     expect(payloadOf(await wire.next(isAck(3)))).toEqual({ ok: true, d: { players: ["ada"] } });
     wire.send(SESSION[6] ?? "");
     await wire.next(moved(1));
-    expect(payloadOf(await wire.next(isEvent("qd:stream")))).toEqual({
-      s: "gameService",
-      stream: "ticks",
-      item: { n: 1 },
-    });
+    // [service, stream, scope, item], scope null for a global stream: no key names on the wire.
+    const item = await wire.next(isEvent("qd:stream"));
+    expect(item).toBe('42["qd:stream",["gameService","ticks",null,{"n":1}]]');
+    // rc.3 sent the object { s, stream, scope?, item }: 15 bytes more for this global stream's
+    // frame, 28 for a scoped one's (its scope key too), per frame and per subscriber.
+    const rc3 = `42${JSON.stringify(["qd:stream", { s: "gameService", stream: "ticks", item: { n: 1 } }])}`;
+    expect(Buffer.byteLength(rc3) - Buffer.byteLength(item)).toBe(15);
   });
 
   it("answers a second query in flight RATE_LIMITED, and a cancelled one CANCELLED", async () => {
@@ -264,7 +267,12 @@ describe("the GDScript client's session, frame by frame", () => {
     expect(await ask(wire, SESSION[17] ?? "")).toEqual({ ok: true, d: { players: ["ada"] } });
     wire.send(SESSION[18] ?? "");
     await wire.next(moved(3));
-    expect(payloadOf(await wire.next(isEvent("qd:stream")))).toMatchObject({ item: { n: 2 } });
+    expect(payloadOf(await wire.next(isEvent("qd:stream")))).toEqual([
+      "gameService",
+      "ticks",
+      null,
+      { n: 2 },
+    ]);
     expect(wire.frames.filter((frame) => moved(8)(frame) || moved(9)(frame))).toEqual([]);
     wire.send(SESSION[19] ?? "");
     wire.close();

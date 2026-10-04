@@ -36,6 +36,8 @@ const DEFINITION_KEYS = new Set([
   "watchAccess",
   "methods",
   "channels",
+  "streams",
+  "onRoomLeave",
   "adminBypass",
 ]);
 
@@ -193,6 +195,7 @@ function checkMethods(
 function checkWatches(
   contract: AnyContract,
   collections: ReadonlyMap<string, unknown>,
+  data: ServiceData,
   fail: Fail,
 ): void {
   for (const [name, def] of Object.entries(contract.methods)) {
@@ -202,6 +205,14 @@ function checkWatches(
     }
     if (def.kind !== "query") {
       fail(`method "${name}" is a mutation; only a query can watch`);
+    }
+    if (watch === "service") {
+      if (data.watchAccess === undefined) {
+        fail(
+          `method "${name}" watches the service's topic, which is closed without watchAccess: declare who may watch it ("public", "authenticated" or { service: level })`,
+        );
+      }
+      continue;
     }
     if (!isRecord(watch) || typeof watch.scope !== "function") {
       fail(`method "${name}": watch needs a scope function, which finds the scope from the input`);
@@ -289,9 +300,12 @@ export function buildService(
     fail("the definition must be an object");
   }
   checkKeys(definition, DEFINITION_KEYS, "the definition", fail);
-  const { adminBypass = true } = definition;
+  const { adminBypass = true, onRoomLeave } = definition;
   if (typeof adminBypass !== "boolean") {
     fail("adminBypass must be a boolean");
+  }
+  if (onRoomLeave !== undefined && typeof onRoomLeave !== "function") {
+    fail("onRoomLeave must be a function of the leave and a run context");
   }
   const data = checkServiceData(definition, fail);
   const projections = compileProjections(checked, definition.project, fail);
@@ -302,7 +316,7 @@ export function buildService(
     definition.collections,
     fail,
   );
-  checkWatches(checked, collections, fail);
+  checkWatches(checked, collections, data, fail);
   const methods = checkMethods(checked, projections, definition.methods, fail);
   checkRowForms(methods, data, fail);
   checkRowless(methods, data, fail);
@@ -318,8 +332,10 @@ export function buildService(
     streams: compileStreams(
       checked,
       { model: data.model, hasPolicy: data.access !== undefined },
+      definition.streams,
       fail,
     ),
+    onRoomLeave: onRoomLeave as AnyService["onRoomLeave"],
   });
   checkHandlers(service, fail);
   registerRuntime(service, runtime);

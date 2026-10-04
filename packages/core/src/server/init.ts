@@ -21,10 +21,11 @@ import {
   type DispatcherOptions,
   type Presence,
   type ServerRooms,
+  type Service,
   type StreamHandle,
 } from "./dispatcher";
-import type { Service } from "./service";
 import type { ContextExtensionOf, McpContextOf, PrincipalOf, QuickdrawTypes } from "./types";
+import { runBeforeAnyDispatcher } from "./uow/unitOfWork";
 
 /**
  * Builds the app's fields of `ctx` from the framework's. It runs once per
@@ -76,6 +77,15 @@ export interface Quickdraw<T extends QuickdrawTypes> {
    * a handler starts and does not await (see {@link RunOptions}).
    * `fn` gets a {@link RunContext} (`{ touch, log, principal: null }`):
    * `ctx.touch` records the rows a raw SQL write changed.
+   *
+   * Before this instance created any dispatcher (a boot-time seed that runs
+   * before `createServer`), `fn` still runs in a unit of work of its own:
+   * its tracked writes raise no ambient warning and flush once it settles,
+   * to the dispatcher the tracked client is attached to then, which before
+   * any server is none, so they reach no one (no socket can be subscribed
+   * yet; behind a cluster, other nodes' subscribers do not hear of them
+   * either: write after `createServer` when they must). `ctx.touch` records
+   * nothing there, and `ctx.log` is the console's.
    *
    * @example
    * await qd.run(() => db.task.updateMany({ where: { dueAt: { lt: now } }, data: { status: "late" } }));
@@ -144,7 +154,6 @@ function contextOption(options: unknown): ContextExtender | undefined {
 }
 
 const NEEDS: Readonly<Record<string, string>> = Object.freeze({
-  "qd.run": "flush through",
   "qd.collections.reset": "send through",
   "qd.stream": "push through",
   "qd.presence": "ask",
@@ -216,6 +225,7 @@ function roomsOf(current: Current): ServerRooms {
     },
     leave: async (room: string, target: Parameters<ServerRooms["leave"]>[1]) =>
       await rooms().leave(room, target),
+    size: (room: string) => rooms().size(room),
   }) as ServerRooms;
 }
 
@@ -247,7 +257,10 @@ export function initQuickdraw<T extends QuickdrawTypes = QuickdrawTypes>(
     },
     caller: (principal) =>
       createCaller(() => (current ?? noDispatcher("qd.caller")).call, principal) as CallerFor<T>,
-    run: async (fn, options) => await (current ?? noDispatcher("qd.run")).run(fn, options),
+    run: async (fn, options) =>
+      current === undefined
+        ? await runBeforeAnyDispatcher(fn, options)
+        : await current.run(fn, options),
     collections: Object.freeze({
       reset: (contract, collection, scope) => {
         (current ?? noDispatcher("qd.collections.reset")).collections.reset(

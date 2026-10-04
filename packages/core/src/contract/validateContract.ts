@@ -185,8 +185,13 @@ function checkWatch(name: string, method: UnknownRecord, scope: MethodScope, fai
   if (method.kind !== "query") {
     fail(`method "${name}" is a mutation; only a query can watch`);
   }
+  if (watch === "service") {
+    return;
+  }
   if (!isRecord(watch) || typeof watch.scope !== "function") {
-    fail(`method "${name}": watch must be { collection, scope } with a scope function`);
+    fail(
+      `method "${name}": watch must be "service", or { collection, scope } with a scope function`,
+    );
   }
   if (typeof watch.collection !== "string" || !scope.collections.has(watch.collection)) {
     fail(

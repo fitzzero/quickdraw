@@ -8,7 +8,7 @@
 
 import { hashKey, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { collectionTopic } from "../contract/names";
+import { collectionTopic, SERVICE_TOPIC } from "../contract/names";
 import type { QuickdrawConnection } from "./connection";
 import type { InvalidationCoordinator } from "./coordinator";
 import type { MethodQueryKey } from "./keys";
@@ -18,15 +18,18 @@ import { rowShapeOf, showRows } from "./overlayRows";
 import { readAtOf } from "./versions";
 
 /**
- * The change topic a query of `target` with `input` watches:
- * `{collection}:{scope}`, with the scope from the contract's
- * `watch.scope(input)`. `undefined` when the method watches nothing, or the
- * scope function throws or returns no scope.
+ * The change topic a query of `target` with `input` watches: the service's
+ * own (`watch: "service"`), or `{collection}:{scope}`, with the scope from
+ * the contract's `watch.scope(input)`. `undefined` when the method watches
+ * nothing, or the scope function throws or returns no scope.
  */
 export function topicOf(target: MethodTarget, input: unknown): string | undefined {
   const { watch } = target;
   if (watch === undefined) {
     return undefined;
+  }
+  if (watch === SERVICE_TOPIC) {
+    return SERVICE_TOPIC;
   }
   let scope: unknown;
   try {

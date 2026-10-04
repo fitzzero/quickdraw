@@ -774,6 +774,10 @@ tracked client as `db`; the server finds the rest on it.
   not wait for (a push sent after a message, pruning what it reports dead)
   runs in `qd.run(fn, { detached: true })`, a unit of its own that flushes
   when `fn` settles (catch what the promise rejects with: nothing awaits it).
+  Before any server exists (a seed at boot, before `createServer`),
+  `qd.run(fn)` still runs `fn` in a unit of its own, and its writes reach no
+  one: no socket can be subscribed yet (behind a cluster, write after
+  `createServer` when other nodes' subscribers must hear of it).
 
 <!-- example: apps/api/src/jobs/overdue.ts#run -->
 
@@ -1001,7 +1005,9 @@ export const taskService = qd.defineService(task, {
   scope after a change tracked writes cannot describe.
 - `qd:watch { s, topic }` joins a change topic: `{collection}:{scope}`,
   authorized like a subscribe to that scope, or `service`, which changes
-  whenever any row of the service does. The service topic is closed
+  whenever any row of the service does, or a row of a model it lists in
+  `writes` (a game's high scores, which no service owns). A query declares
+  `watch: "service"` to be invalidated by it. The service topic is closed
   (`FORBIDDEN`) unless the service declares `watchAccess` (`"public"`,
   `"authenticated"` or `{ service: level }`). A watcher that loses access
   leaves the topic after one last `qd:changed`.
@@ -1018,7 +1024,9 @@ over three transports (design: sections 3, 8 and 10):
 
 - **Socket.IO** (protocol 5): a client connects with
   `auth: { token, qd: { protocol: 5, client } }`, receives `qd:hello` with the
-  server's limits and who it acts for, and calls through `qd:call` and
+  server's limits, who it acts for and the server's id (`serverId`, new
+  each time a server starts: a reconnect that brings another one reached a
+  restarted server, or another node), and calls through `qd:call` and
   `qd:cancel`. Every socket gets the same few listeners however many methods
   the services have. The JSON-only parser is the default; `binary: true`
   restores the stock one. The socket rate limiter is on by default (600
@@ -1916,6 +1924,15 @@ export function AdminTasks() {
   The write is tracked, so with `auth.serviceAccessSource` naming the column
   the user's open sockets get the new grants at once, on every node. Such
   an Admin can grant any service, themself included.
+- `admin.handlers(contract, { onWrite })` runs `onWrite({ method, id,
+before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
+  `adminDelete`, in one transaction with the write (`db` is the
+  transaction's tracked client; a throw undoes the write and fails the
+  call): what an admin edit must set off, such as a game reloading its
+  tunables, without wrapping the kit's handlers. The rows are the entity,
+  every field. Without it the kit opens no transaction. Each handler
+  `admin.handlers` returns resolves with its method's output type, so a
+  wrapper reads the row and returns it with no cast.
 - `adminSubscribers({ id })` counts the sockets subscribed to a row per
   access level (`{ id, count, levels, complete }`; behind a Redis adapter
   the counts are this server's and `complete` is `false`), and
@@ -2005,6 +2022,16 @@ export const taskService = qd.defineService(task, {
       ctx.rooms.emit(`board:${payload.projectId}`, task, "cursorMoved", payload);
     },
   },
+  // once per socket that leaves app rooms, in every server this service runs in, in a unit of its own
+  onRoomLeave: ({ principal, rooms }) => {
+    for (const { room, last } of rooms) {
+      // last: no socket of the user is in the room any more (a second tab keeps it false)
+      if (principal !== null && last && room.startsWith("board:")) {
+        const projectId = room.slice("board:".length);
+        qd.rooms.emit(room, task, "leftBoard", { projectId, userId: principal.userId });
+      }
+    }
+  },
 });
 
 // in handlers, jobs and timers
@@ -2028,14 +2055,17 @@ export function TaskRoom({
   readonly projectId: string;
   readonly taskId: string;
 }) {
+  // the socket is in the board's room on every connection: a reconnect is a new socket in no room
+  const board = useJoin(qd.task.enterBoard, { projectId });
   const { items } = qd.task.logs.useStream(taskId, { max: 200 });
   const { send, isReady } = qd.task.cursor.useChannel();
   const [lastX, setLastX] = useState(0);
   qd.task.cursorMoved.useEvent((cursor) => setLastX(cursor.x));
-  // user ids, after enterBoard joined the room
+  // user ids, once enterBoard joined the room
   const here = usePresence(`board:${projectId}`);
+  const move = (x: number) => isReady && board.isJoined && send({ projectId, taskId, x });
   return (
-    <div onMouseMove={(event) => isReady && send({ projectId, taskId, x: event.clientX })}>
+    <div onMouseMove={(event) => move(event.clientX)}>
       <p>{`${String(here.length)} here; a cursor at ${String(lastX)}`}</p>
       <pre>{items.map((item) => item.line).join("\n")}</pre>
     </div>
@@ -2049,20 +2079,33 @@ export function TaskRoom({
   latest `seed` items per scope in memory on that process (at most 1,000 per
   scope and 10,000 scopes per stream; a restart empties them, and durable
   history is the app's: store the rows and expose a collection), and sends
-  `qd:stream { s, stream, scope?, item }` to the feed's subscribers,
-  volatile when the stream says so. `pushMany(scope, items)`
+  `qd:stream [service, stream, scope, item]` (`scope` null for a global
+  stream; positional, so a fast stream's frames carry no key names) to the
+  feed's subscribers, volatile when the stream says so. `pushMany(scope, items)`
   (`pushMany(items)` for a global stream) pushes several items to one feed
   at once: every item is checked before any is kept or sent, and each goes
   out as its own frame, in order; use it rather than `push` in a loop
   (`no-emit-in-loop`). `qd:stream:sub` is authorized with the
   stream's `access` through the access engine, the scope being the row an
-  `entry` or `scope` form checks; a stream without `access` is closed. The
-  answer is the seed; `useStream` then appends, keeps the latest `max`
-  (default 500), and subscribes again after a reconnect, when the seed
-  replaces what it held. A socket holds at most 500 feeds. A subscriber
-  whose access is lowered is authorized again; one refused leaves the feed
-  and gets `qd:revoked { kind: "stream", reason: "access", s, stream, scope? }`,
-  and `useStream` shows `FORBIDDEN` until the next connect.
+  `entry` or `scope` form checks; `access: { room }` (a name, `{ prefix }`,
+  or for a scoped stream a function of the scope) opens it to the sockets
+  in that app room instead, signed in or not, and a socket that leaves the
+  room, or is taken out, leaves the feed; a stream without `access` is
+  closed. The answer is the seed; `useStream` then appends, keeps the
+  latest `max` (default 500), and subscribes again after a reconnect, when
+  the seed replaces what it held. A socket holds at most 500 feeds. A
+  subscriber whose access is lowered is authorized again; one refused
+  leaves the feed and gets
+  `qd:revoked { kind: "stream", reason: "access", s, stream, scope? }`, and
+  `useStream` shows `FORBIDDEN` until the next connect.
+- A service's `streams: { <name>: { seed, validate } }` computes a stream's
+  seed per subscriber, `seed: (scope, ctx) => items` (the current state,
+  where the items that follow are deltas; on whichever node the subscriber
+  is on, under its principal, in the tick it joins the feed; a contract
+  `seed: n` and a seed function cannot both be declared), and
+  `validate: "development"` checks pushed items only while the dispatcher
+  checks outputs (`outputValidation`, off in production), for a hot stream:
+  unchecked, an item goes out as pushed, extra keys included.
 - Channels: each message is `qd:ch [service, channel, payload]`, sent
   volatile and never answered. Per socket and channel a token bucket
   (`ratePerSecond`, default 30; `burst`, default twice that) drops what is
@@ -2074,10 +2117,13 @@ export function TaskRoom({
   scope; `{ room }`: the app room, a name like `"world"` or a function of
   the payload, which a call over that same socket joined) is dropped.
   Nothing is logged per message; a handler's error is. The socket rate
-  limiter does not count channels. Every requirement is the sending
-  socket's own: a room another socket of the user joined does not count, a
-  reconnected socket must join again, and behind a cluster the check runs
-  on the node the socket is connected to, with no round trip.
+  limiter does not count channels. `{ room: { prefix: "world:" } }` takes
+  a socket in any app room whose name starts with the prefix (a game of many
+  worlds), and every room form gives the handler the room it matched as
+  `ctx.room`, so the payload need not repeat it. Every requirement is the
+  sending socket's own: a room another socket of the user joined does not
+  count, a reconnected socket must join again, and behind a cluster the
+  check runs on the node the socket is connected to, with no round trip.
 - Presence: `isOnline`, `lastSeen` (now while online, else when the user's
   last socket on this process disconnected), `count` and `users` (each user
   once, anonymous sockets left out; app rooms only) come from this process's
@@ -2092,16 +2138,24 @@ export function TaskRoom({
   `emitToUser(userId, ...)` check the payload first (`INTERNAL`, nothing
   sent, when it fails), then send the validated payload as
   `qd:event [service, event, payload]`; `useEvent` hears them.
+- Rooms belong to a socket: a reconnect (a lost network, `qd:rotate`, new
+  credentials) is a new socket in no room, which hears none of its events
+  and whose channel messages requiring it are dropped. `useJoin(member,
+input, { enabled?, onJoined? })` (from `./client`) runs the joining call
+  (`enterBoard` above) on every `qd:hello` and when its input changes by
+  value, never on a re-render, and shows `status` (`idle` with no socket to
+  join with, `joining`, `joined`, `error`), `isJoined`, `data` and `error`;
+  a refusal stands until the next hello, `RATE_LIMITED` is tried again after
+  its backoff, and it never leaves the room itself.
+  `connection.onHello(listener)` is the same hook without React.
 
 Code that is not a handler (a game loop, a timer, a job) reaches rooms
-through `qd.rooms` (also `server.rooms`), and `onRoomLeave` hears sockets
-leave:
+through `qd.rooms` (also `server.rooms`); the service's `onRoomLeave` (above)
+hears sockets leave:
 
 <!-- example: apps/api/src/services/kits/rooms.ts#rooms -->
 
 ```ts
-import type { RoomLeaveHandler } from "@fitzzero/quickdraw-core/server";
-
 const boardRoom = (projectId: string): string => `board:${projectId}`;
 
 // a timer or a game loop's tick, outside any handler: every socket in the room, on every node
@@ -2115,20 +2169,20 @@ export async function removeFromBoard(projectId: string, userId: string): Promis
   await qd.rooms.leave(boardRoom(projectId), { userId });
 }
 
-// qd.createServer({ ..., onRoomLeave }): once per socket that leaves app rooms, in a unit of its own
-export const onRoomLeave: RoomLeaveHandler<AppPrincipal> = ({ principal, rooms }) => {
-  for (const { room, last } of rooms) {
-    // last: no socket of the user is in the room any more (a second tab keeps it false)
-    if (principal !== null && last && room.startsWith("board:")) {
-      const projectId = room.slice("board:".length);
-      qd.rooms.emit(room, task, "leftBoard", { projectId, userId: principal.userId });
-    }
-  }
-};
+// a tick loop's "is anyone watching?", at its tick rate: this node's sockets in the room,
+// anonymous ones too, with no promise (presence.count asks every node for users)
+export function hasAudience(projectId: string): boolean {
+  return qd.rooms.size(boardRoom(projectId)) > 0;
+}
 ```
 
 - `qd.rooms.emit` and `emitToUser` are `ctx.rooms`' own, from anywhere,
   reaching every node behind a cluster adapter.
+- `rooms.size(room)` (on `qd.rooms`, `server.rooms` and `ctx.rooms`) counts
+  the sockets in an app room on this node, anonymous ones included, at once:
+  a game loop can ask it every tick. It is local by design; `presence.count`
+  counts users on every node. A handler's `ctx.socketId` names the socket
+  its call arrived on (`undefined` over HTTP, MCP or in process).
 - `leave(room, { userId })` (on `qd.rooms`, and on `ctx.rooms` beside the
   calling socket's own `leave(room)`) takes every socket of the user out of
   an app room, on every node: they hear nothing more of it, a channel that
@@ -2136,8 +2190,13 @@ export const onRoomLeave: RoomLeaveHandler<AppPrincipal> = ({ principal, rooms }
   `qd:presence { room, users: [] }`, and the room hears `left`. Behind a
   cluster it is broadcast and answered, so await it before sending what the
   user must not receive. Joining again is the app's to refuse.
-- `createServer({ onRoomLeave })` runs once per socket that leaves app
-  rooms, on the node that held it: its own `leave` (`reason: "leave"`), a
+- A service's `onRoomLeave` runs once per socket that leaves app rooms, in
+  every server the service runs in (`createTestApp` and a benchmark's
+  server included, with nothing to wire), beside every other service's and
+  `createServer({ onRoomLeave })`, the app's own; each runs in a unit of
+  work of its own, and one that throws stops none of the others. It hears
+  every app room a socket leaves, so check the room's name. It runs on
+  the node that held the socket: its own `leave` (`reason: "leave"`), a
   removal (`"removed"`), or a disconnect, which leaves every app room it was
   in (`"disconnect"`; `qd:rotate` reconnects with a new socket). Each room
   comes with `last`: true when no socket of that user is in the room any
@@ -2463,8 +2522,14 @@ it("sends a rename to the other members' boards", async () => {
 - `app.as(principal)` calls in process and `app.connect(principal)` over a
   real socket (`{ call, socket, hello, close }`); both are keyed by service
   name. `app.frames(match?)` lists every frame the server sent, with its
-  socket and user; `frames.waitFor(match)` waits for one. `emitWithAck` and
-  `waitForEvent` send raw frames and wait for events.
+  socket and user; `frames.waitFor(match)` waits for one. A query of one
+  event takes `where`, a predicate over its frames typed by the event
+  (`{ event: "qd:presence", where: ({ data }) => data.joined === id }`), and
+  `streamFrames(contract, stream, where?, scope?)` and
+  `eventFrames(contract, event, where?)` match one stream's items or one
+  event's payloads, typed by the contract, to spread beside `socketId` or
+  `userId`. `emitWithAck` and `waitForEvent` send raw frames and wait for
+  events.
 
 ### Access matrices
 

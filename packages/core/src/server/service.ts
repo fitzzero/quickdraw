@@ -10,7 +10,7 @@ import type { AccessForm, AnyAccessPolicy, WatchAccess } from "./access/types";
 import type { ServiceCollection } from "./collections/define";
 import type { AnyContext, ContextExtender } from "./context";
 import type { ProjectedOutput, Projection } from "./emit/projection";
-import type { ServiceChannel, ServiceStream } from "./realtime/types";
+import type { RoomLeaveHandler, ServiceChannel, ServiceStream } from "./realtime/types";
 import type { MaybePromise, QuickdrawTypes } from "./types";
 
 /**
@@ -115,6 +115,12 @@ export interface Service<
   readonly channels: ReadonlyMap<string, ServiceChannel>;
   /** The contract's streams, with their access forms as the access engine decides them. */
   readonly streams: ReadonlyMap<string, ServiceStream>;
+  /**
+   * The service's own `onRoomLeave`: `createServer` runs it, beside every
+   * other service's and its own option's, for each socket that leaves app
+   * rooms. `undefined` when the service declares none.
+   */
+  readonly onRoomLeave: RoomLeaveHandler | undefined;
   /** Type-only: the app types the service was defined with. Never set. */
   readonly "~types"?: T;
 }

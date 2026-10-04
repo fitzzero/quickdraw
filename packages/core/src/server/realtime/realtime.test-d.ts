@@ -30,6 +30,7 @@ import {
   type RunContext,
   type ServerRooms,
   type StreamHandle,
+  type StreamSeedContext,
 } from "../index";
 
 interface AppPrincipal extends Principal {
@@ -77,7 +78,9 @@ describe("the server", () => {
       channels: {
         cursor: (payload, ctx) => {
           expectTypeOf(payload).toEqualTypeOf<{ x: number; y: number }>();
-          expectTypeOf(ctx).toEqualTypeOf<ChannelContext<AppPrincipal>>();
+          // cursor requires no room: ctx.room is undefined
+          expectTypeOf(ctx).toEqualTypeOf<ChannelContext<AppPrincipal, undefined>>();
+          expectTypeOf(ctx.room).toEqualTypeOf<undefined>();
           expectTypeOf(ctx.principal.team).toBeString();
         },
       },
@@ -102,6 +105,7 @@ describe("the server", () => {
       channels: {
         move: { payload: cursor, requires: { room: "world" } },
         wave: { payload: z.object({ lobby: z.string() }), requires: { room: (p) => p.lobby } },
+        steer: { payload: cursor, requires: { room: { prefix: "world:" } } },
       },
     });
     expectTypeOf(world.channels.move.requires).toExtend<ChannelRequires>();
@@ -113,12 +117,18 @@ describe("the server", () => {
         move: (payload, ctx) => {
           expectTypeOf(payload).toEqualTypeOf<{ x: number; y: number }>();
           expectTypeOf(ctx.principal.team).toBeString();
+          // the room the requirement matched
+          expectTypeOf(ctx.room).toEqualTypeOf<string>();
         },
         wave: {
           access: { service: "Read" },
-          handler: (payload) => {
+          handler: (payload, ctx) => {
             expectTypeOf(payload).toEqualTypeOf<{ lobby: string }>();
+            expectTypeOf(ctx.room).toEqualTypeOf<string>();
           },
+        },
+        steer: (_payload, ctx) => {
+          expectTypeOf(ctx).toEqualTypeOf<ChannelContext<AppPrincipal, string>>();
         },
       },
     });
@@ -168,6 +178,69 @@ describe("the server", () => {
     expectTypeOf(dispatcher.presence).toEqualTypeOf<Presence>();
   });
 
+  test("a stream's seed function gets its scope and the subscriber, and returns its items", () => {
+    const world = defineContract("worldService", {
+      streams: {
+        snaps: { item: cursor, scope: "worldId", access: "public" },
+        news: { item: z.string(), access: "authenticated" },
+      },
+    });
+    qd.defineService(world, {
+      methods: {},
+      streams: {
+        snaps: {
+          seed: (worldId, ctx) => {
+            expectTypeOf(worldId).toEqualTypeOf<string>();
+            expectTypeOf(ctx).toEqualTypeOf<StreamSeedContext<AppPrincipal>>();
+            expectTypeOf(ctx.principal).toEqualTypeOf<AppPrincipal | null>();
+            return [{ x: 1, y: 2 }];
+          },
+        },
+        news: {
+          seed: async (scope) => {
+            expectTypeOf(scope).toEqualTypeOf<undefined>();
+            return await Promise.resolve(["hello"]);
+          },
+        },
+      },
+    });
+    qd.defineService(world, {
+      methods: {},
+      // @ts-expect-error -- a snapshot's y is a number
+      streams: { snaps: { seed: () => [{ x: 1 }] } },
+    });
+    qd.defineService(world, {
+      methods: {},
+      // @ts-expect-error -- worldService has no stream "nope"
+      streams: { nope: { seed: () => [] } },
+    });
+    qd.defineService(world, {
+      methods: {},
+      streams: { snaps: { validate: "development" } },
+    });
+    qd.defineService(world, {
+      methods: {},
+      // @ts-expect-error -- validate is "always" or "development"
+      streams: { snaps: { validate: "never" } },
+    });
+  });
+
+  test("a stream's access may be an app room: its name, a prefix, or computed from the scope", () => {
+    defineContract("roomStreamService", {
+      streams: {
+        lobby: { item: z.number(), access: { room: "lobby" } },
+        anyWorld: { item: z.number(), access: { room: { prefix: "world:" } } },
+        world: { item: z.number(), scope: "worldId", access: { room: (id) => `world:${id}` } },
+      },
+    });
+    defineContract("mixedRoomStreamService", {
+      streams: {
+        // @ts-expect-error -- a room form is { room } and nothing else
+        lobby: { item: z.number(), access: { room: "lobby", service: "Read" } },
+      },
+    });
+  });
+
   test("rooms outside a handler: typed events, and a user taken out of a room", () => {
     expectTypeOf(qd.rooms).toEqualTypeOf<ServerRooms>();
     qd.rooms.emit("world", lobby, "moved", { x: 1, y: 2 });
@@ -212,6 +285,25 @@ describe("the server", () => {
         expectTypeOf(leave.rooms).toEqualTypeOf<readonly RoomLeft[]>();
         expectTypeOf(ctx).toEqualTypeOf<RunContext>();
       },
+    });
+  });
+
+  test("a service declares its own onRoomLeave, typed alike", () => {
+    qd.defineService(lobby, {
+      methods: { enter: { access: "authenticated", handler: () => true } },
+      channels: { cursor: () => undefined },
+      onRoomLeave: async (leave, ctx) => {
+        expectTypeOf(leave).toEqualTypeOf<RoomLeave<AppPrincipal>>();
+        expectTypeOf(leave.principal?.team).toEqualTypeOf<string | undefined>();
+        expectTypeOf(ctx).toEqualTypeOf<RunContext>();
+        await Promise.resolve();
+      },
+    });
+    qd.defineService(lobby, {
+      methods: { enter: { access: "authenticated", handler: () => true } },
+      channels: { cursor: () => undefined },
+      // @ts-expect-error -- a hook is a function of the leave and a run context
+      onRoomLeave: { onLeave: () => undefined },
     });
   });
 });

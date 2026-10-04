@@ -78,6 +78,8 @@ function helloFrame(settings: SocketServerSettings): ServerHello {
   return Object.freeze({
     protocol: PROTOCOL_VERSION,
     server: QUICKDRAW_VERSION,
+    // New each time a server starts: a client tells a restart from a blip by it.
+    serverId: crypto.randomUUID(),
     limits: Object.freeze({
       maxInFlightQueries: limits.maxInFlightQueries,
       maxQueuedQueries: limits.maxQueuedQueries,

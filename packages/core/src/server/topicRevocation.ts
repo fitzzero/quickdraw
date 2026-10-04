@@ -29,13 +29,13 @@ export function targetOf(hub: CollectionHub, watch: TopicWatch): WatchTarget {
   if (service === undefined) {
     throw new QuickdrawError("NOT_FOUND", `Unknown service "${watch.s}"`);
   }
-  if (service.model === undefined) {
+  const { c, scope } = watch;
+  if (service.model === undefined && (c !== undefined || service.writes.length === 0)) {
     throw new QuickdrawError(
       "NOT_FOUND",
-      `${watch.s} has no rows whose changes could be watched: it declares no model`,
+      `${watch.s} has no rows whose changes could be watched: it declares no model and writes nothing`,
     );
   }
-  const { c, scope } = watch;
   if (c === undefined || scope === undefined) {
     return { kind: "service", service };
   }

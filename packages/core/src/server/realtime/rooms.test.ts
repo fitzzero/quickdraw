@@ -14,11 +14,18 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { inCluster } from "../../../test/cluster/mode";
+import { defineContract } from "../../contract/defineContract";
 import type { EventFrame, PresenceFrame } from "../../protocol/envelope";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
 import { as, projectService, qd, seedBoard, type Board } from "../access/__tests__/board";
-import { initQuickdraw, type Principal, type RoomLeave, type RoomLeaveHandler } from "../index";
+import {
+  createDispatcher,
+  initQuickdraw,
+  type Principal,
+  type RoomLeave,
+  type RoomLeaveHandler,
+} from "../index";
 import {
   defineLiveService,
   frames,
@@ -423,5 +430,142 @@ describe("onRoomLeave", () => {
         onRoomLeave: "nope" as unknown as RoomLeaveHandler,
       }),
     ).rejects.toThrow("onRoomLeave must be a function");
+  });
+});
+
+describe("rooms.size(room)", () => {
+  it("counts the sockets in an app room on this node, anonymous ones too, at once", async () => {
+    const { app } = await start();
+    const ada1 = await member(app, as(board.ada));
+    const ada2 = await member(app, as(board.ada));
+    const spectator = await member(app, null);
+    await ada1.connection.call.taskService.enter({ room: "lobby" });
+    await ada2.connection.call.taskService.enter({ room: "lobby" });
+    await spectator.connection.call.taskService.enterAnyone({ room: "lobby" });
+    // ctx.rooms.size, in a call over a socket: on the node that socket is connected to.
+    const where = () => spectator.connection.call.taskService.whereAmI({ room: "lobby" });
+    expect(await where()).toEqual({ socketId: spectator.connection.socket.id, size: 3 });
+    // Presence counts users, the anonymous spectator not at all, on every node.
+    expect(await app.server.presence.count("lobby")).toBe(1);
+    // Local: in the cluster projects app.server is the writer node, where no socket is.
+    expect(app.server.rooms.size("lobby")).toBe(inCluster() ? 0 : 3);
+    expect(qd.rooms.size("lobby")).toBe(inCluster() ? 0 : 3);
+    ada2.connection.close();
+    await vi.waitFor(async () => {
+      expect((await where()).size).toBe(2);
+    });
+    expect(app.server.rooms.size("nowhere")).toBe(0);
+    expect(() => app.server.rooms.size("qd:e:taskService:t1@Read")).toThrow(
+      expect.objectContaining({ code: "VALIDATION" }) as Error,
+    );
+  });
+
+  it("is 0 on a dispatcher without a server", () => {
+    const dispatcher = createDispatcher({ services: [projectService], db: h.db });
+    expect(dispatcher.rooms.size("lobby")).toBe(0);
+  });
+});
+
+describe("ctx.socketId", () => {
+  it("names the socket a call arrived on, and nothing for a call in process", async () => {
+    const { app } = await start();
+    const ada = await member(app, as(board.ada));
+    expect(await ada.connection.call.taskService.whereAmI({ room: "lobby" })).toEqual({
+      socketId: ada.connection.socket.id,
+      size: 0,
+    });
+    expect(await app.as(as(board.ada)).taskService.whereAmI({ room: "lobby" })).toEqual({
+      socketId: null,
+      size: 0,
+    });
+  });
+});
+
+describe("a service's own onRoomLeave", () => {
+  /** A service that only hears leaves: its hook is all it declares. */
+  const hall = defineContract("hallService", {});
+
+  it("runs in every server the service runs in, createTestApp included, with no option of its own", async () => {
+    const { heard, hook } = leaves();
+    const app = await createTestApp({
+      services: [projectService, defineLiveService(received(), { onRoomLeave: hook })],
+      db: h.db,
+    });
+    apps.push(app as unknown as TestApp);
+    const ada = await member(app, as(board.ada));
+    await ada.connection.call.taskService.enter({ room: "lobby" });
+    await ada.connection.call.taskService.enter({ room: "hall" });
+    await ada.connection.call.taskService.exit({ room: "hall" });
+    await vi.waitFor(() => {
+      expect(heard).toHaveLength(1);
+    });
+    ada.connection.close();
+    await vi.waitFor(() => {
+      expect(heard).toHaveLength(2);
+    });
+    expect(heard.map(({ reason, rooms }) => ({ reason, rooms }))).toEqual([
+      { reason: "leave", rooms: [{ room: "hall", last: true }] },
+      { reason: "disconnect", rooms: [{ room: "lobby", last: true }] },
+    ]);
+  });
+
+  it("runs beside every other service's and the server's, once each per leave; one that throws stops none", async () => {
+    const live = leaves();
+    const server = leaves();
+    const errors: Record<string, unknown>[] = [];
+    let hallRuns = 0;
+    const hallService = qd.defineService(hall, {
+      methods: {},
+      onRoomLeave: () => {
+        hallRuns += 1;
+        throw new Error("hall boom");
+      },
+    });
+    const app = await createTestApp({
+      services: [
+        projectService,
+        defineLiveService(received(), { onRoomLeave: live.hook }),
+        hallService,
+      ],
+      db: h.db,
+      logger: {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: (message: string, meta?: Record<string, unknown>) => {
+          errors.push({ message, ...meta });
+        },
+        child() {
+          return this;
+        },
+      },
+      onRoomLeave: server.hook,
+    });
+    apps.push(app as unknown as TestApp);
+    const cy = await member(app, as(board.cy));
+    await cy.connection.call.taskService.enter({ room: "lobby" });
+    await app.server.rooms.leave("lobby", { userId: board.cy });
+    await vi.waitFor(() => {
+      expect([live.heard.length, server.heard.length, hallRuns]).toEqual([1, 1, 1]);
+    });
+    expect(live.heard[0]).toEqual(server.heard[0]);
+    expect(live.heard[0]).toMatchObject({
+      reason: "removed",
+      rooms: [{ room: "lobby", last: true }],
+    });
+    await vi.waitFor(() => {
+      expect(errors).toContainEqual(
+        expect.objectContaining({ message: "onRoomLeave threw", owner: "hallService" }),
+      );
+    });
+  });
+
+  it("refuses a hook that is not a function when the service is defined", () => {
+    expect(() =>
+      (qd.defineService as unknown as (contract: unknown, definition: unknown) => unknown)(hall, {
+        methods: {},
+        onRoomLeave: { onLeave: () => undefined },
+      }),
+    ).toThrow('defineService("hallService"): onRoomLeave must be a function');
   });
 });

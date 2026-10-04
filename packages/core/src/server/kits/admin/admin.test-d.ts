@@ -169,6 +169,43 @@ describe("admin.handlers", () => {
     qd.defineService(unguarded, { model: "task", methods: { ...admin.handlers(unguarded) } });
   });
 
+  test("a handler resolves with its method's output, so a wrapper reads it with no cast", () => {
+    const made = admin.handlers(task);
+    expectTypeOf(made.adminUpdate.handler).returns.resolves.toEqualTypeOf<
+      OutputOf<typeof task, "adminUpdate">
+    >();
+    qd.defineService(task, {
+      model: "task",
+      access: inherit({ from: project, via: "projectId" }),
+      methods: {
+        ...made,
+        adminUpdate: {
+          ...made.adminUpdate,
+          handler: async (args) => {
+            const row = await made.adminUpdate.handler(args);
+            expectTypeOf(row.id).toBeString();
+            return row;
+          },
+        },
+        get: {
+          access: { entry: "Read" },
+          handler: ({ input, db }) => db.task.findUnique({ where: { id: input.id } }),
+        },
+      },
+    });
+  });
+
+  test("onWrite hears the method, the id and the entity's rows", () => {
+    admin.handlers(task, {
+      onWrite: (write, ctx) => {
+        expectTypeOf(write.method).toEqualTypeOf<"adminCreate" | "adminUpdate" | "adminDelete">();
+        expectTypeOf(write.after).toEqualTypeOf<TaskRow | null>();
+        expectTypeOf(write.before).toEqualTypeOf<TaskRow | undefined>();
+        expectTypeOf(ctx.principal).toEqualTypeOf<Principal>();
+      },
+    });
+  });
+
   test("access replaces a method's form, typed by that method's input", () => {
     const made = admin.handlers(task, {
       access: {

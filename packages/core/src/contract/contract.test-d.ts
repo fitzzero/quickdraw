@@ -879,6 +879,21 @@ describe("streams, channels and events", () => {
     });
   });
 
+  test("a query watches a collection scope or its service's own topic", () => {
+    const scores = defineContract("scoresService", {
+      methods: {
+        best: query({ input: z.undefined(), output: z.number(), watch: "service" }),
+      },
+    });
+    expectTypeOf(scores.methods.best.watch).toEqualTypeOf<"service" | undefined>();
+    query({
+      input: z.undefined(),
+      output: z.number(),
+      // @ts-expect-error -- a watch is "service" or { collection, scope }
+      watch: "all",
+    });
+  });
+
   test("a room requirement is never reserved, never a payload key, never mixed with another form", () => {
     defineContract("reservedRoom", {
       channels: {
@@ -903,6 +918,15 @@ describe("streams, channels and events", () => {
       channels: {
         // @ts-expect-error -- one form at a time
         move: { payload: cursorSchema, requires: { entity: "docId", room: "world" } },
+      },
+    });
+    defineContract("prefixRoom", {
+      channels: { move: { payload: cursorSchema, requires: { room: { prefix: "world:" } } } },
+    });
+    defineContract("reservedPrefix", {
+      channels: {
+        // @ts-expect-error -- a prefix of the framework's rooms names no app room
+        move: { payload: cursorSchema, requires: { room: { prefix: "user:" } } },
       },
     });
   });

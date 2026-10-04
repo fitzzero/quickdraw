@@ -23,7 +23,7 @@ import {
   type DispatcherOptions,
   type PrincipalOfServices,
 } from "./dispatcher";
-import { liveOf, type RoomLeaveHandler } from "./emit/live";
+import { liveOf, type RoomLeaveHandler, type RoomLeaveHook } from "./emit/live";
 import {
   closer,
   prepareWatchdog,
@@ -152,6 +152,11 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
    * `detached`: never the unit of the handler that left), with that run's
    * `ctx`; an error it throws is logged, and `close()` waits for it.
    *
+   * A service that joins sockets to rooms declares its own hook instead
+   * (`defineService`'s `onRoomLeave`), so no server root can forget it:
+   * every service's hook runs beside this one, each in a unit of work of
+   * its own, and one that throws stops none of the others.
+   *
    * @example
    * onRoomLeave: ({ principal, rooms }) => {
    *   if (principal !== null && rooms.some(({ room, last }) => room === WORLD_ROOM && last)) {
@@ -265,19 +270,27 @@ function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void 
 }
 
 /**
- * Runs `onRoomLeave` for every socket that leaves app rooms, in a detached
- * unit of work of the dispatcher; what it throws is logged.
+ * Runs every service's `onRoomLeave` and the server's own for every socket
+ * that leaves app rooms, each in a detached unit of work of the dispatcher
+ * of its own; what one throws is logged, and the others still run.
  */
 function listenForLeaves<P extends Principal>(
   dispatcher: Dispatcher,
   handler: RoomLeaveHandler<P> | undefined,
 ): void {
+  const services = [...dispatcher.registry.services.values()];
+  const hooks: RoomLeaveHook[] = services.flatMap((service) =>
+    service.onRoomLeave === undefined
+      ? []
+      : [{ owner: service.name, handler: service.onRoomLeave }],
+  );
   if (handler !== undefined) {
-    liveOf(dispatcher)?.realtime.onRoomLeave(
-      handler as RoomLeaveHandler,
-      async (fn) => await dispatcher.run(fn, { detached: true }),
-    );
+    hooks.push({ owner: "createServer", handler: handler as RoomLeaveHandler });
   }
+  liveOf(dispatcher)?.realtime.onRoomLeave(
+    hooks,
+    async (fn) => await dispatcher.run(fn, { detached: true }),
+  );
 }
 
 /** The HTTP transport, mounted on `app` when there is one. */

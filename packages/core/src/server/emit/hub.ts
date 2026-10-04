@@ -41,6 +41,12 @@ export interface HubOptions {
   readonly logger: Logger;
   /** The change log's options, or `false` for none. */
   readonly changeLog: ChangeLogOptions | false | undefined;
+  /**
+   * The dispatcher's `outputValidation` (on unless `NODE_ENV` is
+   * `"production"`): whether a stream declared `validate: "development"`
+   * checks what is pushed to it.
+   */
+  readonly outputValidation?: boolean;
 }
 
 /** The live-data state of one dispatcher. */
@@ -51,6 +57,8 @@ export interface Hub {
   /** The dispatcher's access engine (RFC 0003 section 4.1): stream subscribers are authorized through it. */
   readonly access: AccessEngine;
   readonly logger: Logger;
+  /** Whether a stream declared `validate: "development"` checks its items: the dispatcher's `outputValidation`. */
+  readonly outputValidation: boolean;
   readonly routes: Routes;
   /**
    * The rows recent flushes touched. Always kept: subscriptions use it to
@@ -92,6 +100,7 @@ export function createHub(options: HubOptions): Hub {
     policies: options.policies,
     access: options.access,
     logger: options.logger,
+    outputValidation: options.outputValidation ?? process.env.NODE_ENV !== "production",
     routes: routesOf(options.registry, options.storage),
     changeLog: createChangeLog(options.changeLog === false ? undefined : options.changeLog),
     answers: options.changeLog !== false,

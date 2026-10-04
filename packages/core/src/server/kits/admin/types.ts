@@ -7,13 +7,39 @@
 // service-wide `Admin` grant unless `access` gives another.
 
 import type { AnyContract } from "../../../contract/defineContract";
-import type { EntityOf, ParsedInputOf } from "../../../contract/infer";
+import type { EntityOf, MethodName, OutputOf, ParsedInputOf } from "../../../contract/infer";
 import type { AdminMethodsOf, AdminSpec } from "../../../contract/kits/admin";
 import type { AdminFieldConfig } from "../../../contract/kits/adminFields";
 import type { AccessFor, AccessForm } from "../../access/types";
 import type { KitHandler } from "../crud/runtime";
 import type { KitContext } from "../crud/types";
 import type { AdminFields } from "./meta";
+
+/** A write the admin kit made, as `onWrite` hears it. */
+export interface AdminWrite<Row = unknown> {
+  /** The method that wrote. */
+  readonly method: "adminCreate" | "adminUpdate" | "adminDelete";
+  /** The written row's id. */
+  readonly id: string;
+  /** The row before the write: for `adminUpdate` and `adminDelete`; absent for `adminCreate`. */
+  readonly before?: Row;
+  /** The row after the write; `null` after `adminDelete`. */
+  readonly after: Row | null;
+}
+
+/**
+ * `admin.handlers`' `onWrite`: runs after each write the kit makes, inside
+ * one transaction with it, with that transaction's tracked client as `db`
+ * (the app's client type `Db`, when `db` is annotated): its own writes
+ * commit with the edit, and a throw undoes the edit and fails the call. The
+ * rows are the entity as the kit reads it, every field (the hook is the
+ * server's own), dates as the entity's schema has them.
+ */
+export type AdminOnWrite<Row = unknown, Db = unknown> = (
+  write: AdminWrite<Row>,
+  ctx: KitContext,
+  db: Db,
+) => void | PromiseLike<void>;
 
 /** What one admin method's handler is made from. */
 export interface AdminContext {
@@ -23,6 +49,8 @@ export interface AdminContext {
   readonly fields: AdminFields;
   /** The method's access form: a write's row level comes from it. */
   readonly form: AccessForm;
+  /** The app's hook after each write, if it gave one. */
+  readonly onWrite: AdminOnWrite | undefined;
 }
 
 /**
@@ -60,8 +88,8 @@ type NotAnAdminMethod<C extends AnyContract, A> = [Exclude<keyof A, AdminMethods
   ? unknown
   : `admin.handlers: ${Exclude<keyof A, AdminMethodsOf<C>> & string} is not a method admin.contract made for ${C["name"]}`;
 
-/** The options of `admin.handlers(contract, options)`. */
-export interface AdminHandlersOptions<C extends AnyContract, A> {
+/** The options of `admin.handlers(contract, options)`. `Db` comes from an annotated `onWrite` `db`. */
+export interface AdminHandlersOptions<C extends AnyContract, A, Db = unknown> {
   /**
    * Forms that replace the kit's default, `{ service: "Admin" }`, per method.
    * Whatever the form, an admin method reaches every row of the service: the
@@ -106,6 +134,21 @@ export interface AdminHandlersOptions<C extends AnyContract, A> {
    * caller the form admits reaches any row by its id.
    */
   readonly rowless?: readonly AdminMethodsOf<C>[];
+  /**
+   * Runs after each write `adminCreate`, `adminUpdate` or `adminDelete`
+   * makes, in one transaction with it: `{ method, id, before?, after }` and
+   * the call's `ctx`, with the transaction's tracked client as `db`. A
+   * throw undoes the write and fails the call. For what an admin edit must
+   * set off (a game reloading its tunables, an audit row) without wrapping
+   * the kit's handlers. Without it the kit opens no transaction and reads
+   * no `before`.
+   *
+   * @example
+   * onWrite: ({ method, after }) => {
+   *   if (method !== "adminDelete" && after !== null) tunables.reload(after);
+   * },
+   */
+  readonly onWrite?: AdminOnWrite<EntityOf<C>, Db>;
 }
 
 type FormOf<A, M> = M extends keyof A
@@ -114,14 +157,20 @@ type FormOf<A, M> = M extends keyof A
     : Exclude<A[M], undefined>
   : AdminDefaultAccess;
 
+/** What admin method `M`'s handler resolves with: its output type, so a wrapper reads it with no cast. */
+export type AdminOutputOf<C extends AnyContract, M> =
+  M extends MethodName<C> ? OutputOf<C, M> : never;
+
 /**
  * What `admin.handlers` returns: one `{ access, handler }` per admin method
- * (with `rowless: true` for those `rowless` names), for `defineService`.
+ * (with `rowless: true` for those `rowless` names), for `defineService`. A
+ * handler resolves with its method's output type: a wrapper that awaits it
+ * reads the row it returned and returns it on, with no cast.
  */
-export type AdminImplementations<C extends AnyContract, A> = {
+export type AdminImplementations<C extends AnyContract, A, Db = unknown> = {
   readonly [M in AdminMethodsOf<C>]: {
     readonly access: FormOf<A, M>;
-    readonly handler: KitHandler;
+    readonly handler: KitHandler<Db, AdminOutputOf<C, M>>;
     readonly rowless?: true;
   };
 };

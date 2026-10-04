@@ -10,7 +10,7 @@ import type { Hub } from "../emit/hub";
 import type { QuickdrawServerSocket, SocketContext } from "../transports/types";
 import { channelMessages } from "./channels";
 import { createPresence, PresenceRecords } from "./presence";
-import { createRooms, unjoinable, type DetachedRun } from "./rooms";
+import { createRooms, unjoinable, type DetachedRun, type RoomLeaveHook } from "./rooms";
 import { createStreams, type Streams } from "./streams";
 import type {
   ContextRooms,
@@ -21,7 +21,15 @@ import type {
   StreamHandle,
 } from "./types";
 
-export type { DetachedRun, Presence, RoomLeave, RoomLeaveHandler, ServerRooms, StreamHandle };
+export type {
+  DetachedRun,
+  Presence,
+  RoomLeave,
+  RoomLeaveHandler,
+  RoomLeaveHook,
+  ServerRooms,
+  StreamHandle,
+};
 
 /** The realtime half of one dispatcher's live data. */
 export interface Realtime {
@@ -32,10 +40,11 @@ export interface Realtime {
   /** `qd.rooms`, `dispatcher.rooms` and `server.rooms`: app rooms from code that is not a handler. */
   readonly rooms: ServerRooms;
   /**
-   * Runs `handler` for every socket that leaves app rooms, through `run`, a
-   * detached unit of work of the dispatcher: `createServer`'s `onRoomLeave`.
+   * Runs `hooks` for every socket that leaves app rooms, each through `run`,
+   * a detached unit of work of the dispatcher: every service's `onRoomLeave`
+   * and `createServer`'s.
    */
-  onRoomLeave(handler: RoomLeaveHandler, run: DetachedRun): void;
+  onRoomLeave(hooks: readonly RoomLeaveHook[], run: DetachedRun): void;
   /**
    * The `ctx.rooms` of a call: its socket's for a call over a v5 socket, else
    * one that joins nothing. For a method that shares its runs (`share`),
@@ -60,8 +69,8 @@ export interface Realtime {
 export function createRealtime(hub: Hub): Realtime {
   const records = new PresenceRecords();
   const presence = createPresence(hub, records);
-  const rooms = createRooms({ hub, records });
   const streams = createStreams(hub);
+  const rooms = createRooms({ hub, records }, streams.leftRooms);
   const channels = channelMessages({ hub, rooms, presence, warned: new WeakSet() });
   return Object.freeze({
     extension(socket: QuickdrawServerSocket, context: SocketContext): void {
@@ -73,8 +82,8 @@ export function createRealtime(hub: Hub): Realtime {
     },
     presence,
     rooms: rooms.server,
-    onRoomLeave: (handler: RoomLeaveHandler, run: DetachedRun) => {
-      rooms.onLeave(handler, run);
+    onRoomLeave: (hooks: readonly RoomLeaveHook[], run: DetachedRun) => {
+      rooms.onLeave(hooks, run);
     },
     roomsFor(transport: string, connectionId: string | undefined, share?: string): ContextRooms {
       const socket =

@@ -17,6 +17,7 @@ export function fakeHello(userId: string | null = "u1"): HelloFrame {
   return {
     protocol: 5,
     server: "test",
+    serverId: "test-server",
     limits: {} as HelloFrame["limits"],
     features: [],
     userId,

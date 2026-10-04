@@ -7,8 +7,9 @@
 // service or stream. A subscriber is authorized with the stream's access
 // form through the dispatcher's access engine, as a method call with input
 // `{ scope }` would be: the scope is the row an `entry` or `scope` form
-// checks. A stream whose contract declares no access is closed: `FORBIDDEN`
-// for everyone.
+// checks. `access: { room }` asks no engine: the subscribing socket must be
+// in that app room (a method joined it), signed in or not. A stream whose
+// contract declares no access is closed: `FORBIDDEN` for everyone.
 
 import { streamRoom } from "../../contract/names";
 import { QuickdrawError } from "../../protocol/errors";
@@ -19,7 +20,7 @@ import type { Hub } from "../emit/hub";
 import type { AnyService } from "../service";
 import { unreadable } from "../transports/ack";
 import type { QuickdrawServerSocket } from "../transports/types";
-import type { ServiceStream } from "./types";
+import type { ServiceStream, StreamRoomAccess } from "./types";
 
 /** One feed of a served stream: one scope of a scoped stream, or a global stream. */
 export interface StreamTarget {
@@ -78,8 +79,33 @@ export function streamTarget(hub: Hub, value: unknown, event: string): StreamTar
 }
 
 /**
+ * Whether `socket` is in the app room a stream's `access: { room }` names for
+ * `scope`: one its own calls joined (`socket.data.appRooms`, which has no
+ * prototype), the named one, any with the prefix, or the one computed from
+ * the scope.
+ */
+export function inStreamRoom(
+  socket: QuickdrawServerSocket,
+  access: StreamRoomAccess,
+  scope: string | undefined,
+): boolean {
+  const joined = socket.data.appRooms;
+  if (access.kind === "prefix") {
+    for (const room in joined) {
+      if (room.startsWith(access.prefix)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  const room = access.kind === "name" ? access.room : access.select(scope);
+  return room !== undefined && joined !== undefined && Object.hasOwn(joined, room);
+}
+
+/**
  * Authorizes a subscriber of `target`: rejects with `FORBIDDEN` for a closed
- * stream, and otherwise as the access engine decides the stream's form
+ * stream, or for a socket outside the app room `access: { room }` names, and
+ * otherwise as the access engine decides the stream's form
  * (`UNAUTHENTICATED` for an anonymous socket unless the form is `"public"`).
  */
 export async function authorizeStream(
@@ -87,6 +113,16 @@ export async function authorizeStream(
   socket: QuickdrawServerSocket,
   target: StreamTarget,
 ): Promise<void> {
+  const { room } = target.stream;
+  if (room !== undefined) {
+    if (!inStreamRoom(socket, room, target.scope)) {
+      throw new QuickdrawError(
+        "FORBIDDEN",
+        `${target.service.name}.${target.stream.name} is open to the sockets in its app room: join the room first`,
+      );
+    }
+    return;
+  }
   const form = target.stream.access;
   if (form === undefined) {
     throw new QuickdrawError(
@@ -145,9 +181,10 @@ export async function streamAnchors(
   return [];
 }
 
-/** An unsubscribe needs a principal, unless the stream is public. */
+/** An unsubscribe needs a principal, unless the stream is public or open to an app room's sockets. */
 export function checkUnsubscriber(socket: QuickdrawServerSocket, target: StreamTarget): void {
-  if (socket.data.principal === null && target.stream.access !== "public") {
+  const { access, room } = target.stream;
+  if (socket.data.principal === null && access !== "public" && room === undefined) {
     throw new QuickdrawError("UNAUTHENTICATED", "Authentication required");
   }
 }

@@ -157,14 +157,29 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 
 - Streams: `streams: { logs: { item, scope: "taskId", seed: 50, access } }`;
   push with `qd.stream(task, "logs").push(taskId, item)`, and several items
-  at once with `pushMany(taskId, items)`, never `push` in a loop.
+  at once with `pushMany(taskId, items)`, never `push` in a loop. When the
+  items are deltas (a game's ticks), give the service a computed seed,
+  `streams: { world: { seed: (worldId, ctx) => [snapshotOf(worldId)] } }`,
+  never a bootstrap call beside the stream; `validate: "development"` there
+  skips the per-item schema check in production for a hot stream. A feed
+  only a room's sockets may read takes `access: { room }` (a name,
+  `{ prefix }`, or `(scope) => room`), never an entry policy that repeats
+  the room's membership.
+- A query over a model the service only `writes` (no service owns it)
+  declares `watch: "service"`, with `watchAccess` on the service; never an
+  app event the client invalidates by hand.
 - Channels: `channels: { cursor: { payload, ratePerSecond, requires } }` in
   the contract, `channels: { cursor: (payload, ctx) => ... }` on the service.
   `requires` is what the sending socket must hold: `{ entity: "taskId" }` (a
   subscription to the row the payload's key names), `{ collection, scope }`,
   or an app room a method joined that socket to: `{ room: "world" }` names
   the room itself (not a payload key), ``{ room: (p) => `lobby:${p.lobbyId}` }``
-  computes it. 4.x's `requireRoom` becomes `{ room }`.
+  computes it, `{ room: { prefix: "world:" } }` takes any room with that
+  prefix. The handler reads the matched room as `ctx.room`; never repeat a
+  world's id in every input frame. 4.x's `requireRoom` becomes `{ room }`.
+- A game loop asks `qd.rooms.size(room)` (this node's sockets, spectators
+  included, synchronous) at its tick rate, never Socket.IO's adapter;
+  `ctx.socketId` names the calling socket in a method.
 - Events: `events: { moved: { payload } }`, sent with
   `ctx.rooms.emit(room, task, "moved", payload)` to an app room
   (`ctx.rooms.join(room)` in a method puts the caller's socket in one).
@@ -176,10 +191,14 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   takes all their sockets out on every node, before anything they must not
   hear is sent. 4.x's "emit to the user instead of the room" workaround is
   not needed.
-- React to a socket leaving with `createServer({ onRoomLeave })`, never with
-  `socket.on("disconnect")`: it runs once per socket in a unit of work of its
-  own, and each room carries `last` (the user's last socket there, on any
-  node), which is when a 4.x `playerLeft` fires.
+- React to a socket leaving with the service's own `onRoomLeave`
+  (`defineService(game, { onRoomLeave })`, beside `methods`), never with
+  `socket.on("disconnect")` or a hook each server root must remember:
+  every server the service runs in (tests and benchmarks too) runs it once
+  per socket in a unit of work of its own, and each room carries `last`
+  (the user's last socket there, on any node), which is when a 4.x
+  `playerLeft` fires. `createServer({ onRoomLeave })` is for a hook of the
+  whole app.
 
 ## Performance
 

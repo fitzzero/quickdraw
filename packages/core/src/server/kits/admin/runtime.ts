@@ -41,8 +41,8 @@ export interface AdminCall {
   readonly omitted: ReadonlySet<string>;
 }
 
-/** The delegate of `model` on the dispatcher's database client. */
-function tableOf(db: unknown, model: string): ModelDelegate {
+/** The delegate of `model` on the dispatcher's database client (or a transaction's client). */
+export function tableOf(db: unknown, model: string): ModelDelegate {
   const name = modelKey(model);
   const isClient = (typeof db === "object" || typeof db === "function") && db !== null;
   const delegate: unknown = isClient ? Reflect.get(db, name) : undefined;
@@ -88,6 +88,13 @@ export function adminCall(ctx: KitHandlerArgs["ctx"], db: unknown, fields: Admin
 /** A row as the call returns it: projected, without the fields it omits. */
 export function rowOut(call: AdminCall, row: object): unknown {
   return pageItem(call.projection, row, call.omitted);
+}
+
+const NOTHING_OMITTED: ReadonlySet<string> = Object.freeze(new Set<string>());
+
+/** A row as `onWrite` hears it: projected, every field (the hook is the server's own). */
+export function rowWhole(call: AdminCall, row: object): unknown {
+  return pageItem(call.projection, row, NOTHING_OMITTED);
 }
 
 /** `FORBIDDEN` when the call names a field above the caller's level. */

@@ -65,6 +65,14 @@ export interface BaseContext<P = Principal, M = McpContext> {
   /** How the call arrived. */
   readonly transport: Transport;
   /**
+   * The socket the call arrived on: its id, as the client socket's `id`,
+   * `onRoomLeave`'s `socketId` and a channel handler's `ctx.socketId` name
+   * it (a game keys a player's input by it). `undefined` for a call that
+   * did not arrive over a socket: HTTP, MCP, in process, `ctx.services`. In
+   * a method that shares its runs (`share`), the first caller's.
+   */
+  readonly socketId?: string;
+  /**
    * The fields the MCP bridge's `context` option produced for this call, such
    * as the scopes of the agent's token; typed by `QuickdrawTypes["mcp"]`.
    * `undefined` unless the call arrived over MCP.
@@ -209,7 +217,7 @@ export interface RoomOccupancy {
  */
 export type ContextFields = Pick<
   AnyContext,
-  "principal" | "signal" | "log" | "requestId" | "transport" | "mcp"
+  "principal" | "signal" | "log" | "requestId" | "transport" | "socketId" | "mcp"
 > &
   Partial<Pick<AnyContext, "touch" | "rooms" | "presence">> & {
     readonly kit?: KitRuntime;
@@ -288,6 +296,7 @@ const NO_ROOMS: ContextRooms = Object.freeze({
     target === undefined ? false : Promise.resolve()) as ContextRooms["leave"],
   emit: untracked,
   emitToUser: untracked,
+  size: () => 0,
 });
 
 /** The `ctx.presence` of a context no dispatcher built: no server, so nobody is online. */

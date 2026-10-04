@@ -34,6 +34,18 @@ export function validateNow(schema: StandardSchemaV1, value: unknown): SyncValid
 }
 
 /**
+ * Whether a stream's items are checked: always, unless it declared
+ * `validate: "development"` and the dispatcher does not check outputs
+ * (`outputValidation`, off in production).
+ */
+export function checksItems(
+  stream: { readonly validate: "always" | "development" },
+  outputValidation: boolean,
+): boolean {
+  return stream.validate === "always" || outputValidation;
+}
+
+/**
  * Checks what the server is about to send (a stream item, an event payload)
  * against its schema and returns the validated value, which is what goes
  * out: streams and events have no projections, so the schema is what keeps

@@ -3,9 +3,11 @@
 // checked against the stream's item schema (a mismatch throws `INTERNAL`,
 // nothing is kept or sent); the validated item (a Zod object strips keys its
 // schema does not name) is kept in the scope's seed when the stream declares
-// one (`seeds.ts`), and sent to the feed's room as `qd:stream { s, stream,
-// scope?, item }`, volatile when the stream says so. A push is synchronous
-// and logs nothing: it may run at a game loop's tick rate.
+// one (`seeds.ts`), and sent to the feed's room as `qd:stream [service,
+// stream, scope, item]` (`scope` null for a global stream: positional, so a
+// frame at a game's tick rate carries no key names), volatile when the stream
+// says so. A push is synchronous and logs nothing: it may run at a game
+// loop's tick rate.
 //
 // `pushMany(scope, items)` (`pushMany(items)`) is the batch form: every item
 // is checked before any is kept or sent, then each goes out as its own frame
@@ -29,7 +31,7 @@ import { StreamSeeds, streamKey } from "./seeds";
 import { createStreamFeeds, type StreamFeeds } from "./streamFeeds";
 import { scopeProblem } from "./streamTargets";
 import type { ServiceStream, StreamHandle } from "./types";
-import { checkOutgoing } from "./validate";
+import { checkOutgoing, checksItems } from "./validate";
 
 interface Served {
   readonly service: AnyService;
@@ -113,11 +115,9 @@ function send(
   }
   const room = (replicated ? io.local : io).to(streamRoom(service.name, stream.name, feed));
   const target = stream.volatile ? room.volatile : room;
+  const scope = feed ?? null;
   for (const item of items) {
-    const frame: StreamFrame =
-      feed === undefined
-        ? { s: service.name, stream: stream.name, item }
-        : { s: service.name, stream: stream.name, scope: feed, item };
+    const frame: StreamFrame = [service.name, stream.name, scope, item];
     target.emit(SERVER_EVENTS.stream, frame);
   }
 }
@@ -126,7 +126,9 @@ function push(hub: Hub, seeds: StreamSeeds, served: Served, args: readonly unkno
   const { feed, value } = feedOf(served, "push", "item", args);
   const label = `${served.service.name}.${served.stream.name}`;
   // What is kept and sent is the validated item: streams have no projections.
-  const checked = checkOutgoing(served.stream.item, value, `An item pushed to ${label}`);
+  const checked = checksItems(served.stream, hub.outputValidation)
+    ? checkOutgoing(served.stream.item, value, `An item pushed to ${label}`)
+    : value;
   send(hub, seeds, served, feed, [checked]);
 }
 
@@ -135,6 +137,10 @@ function pushMany(hub: Hub, seeds: StreamSeeds, served: Served, args: readonly u
   const label = `${served.service.name}.${served.stream.name}`;
   if (!Array.isArray(value)) {
     throw new TypeError(`${label}.pushMany: pass the items as an array`);
+  }
+  if (!checksItems(served.stream, hub.outputValidation)) {
+    send(hub, seeds, served, feed, value);
+    return;
   }
   // Every item is checked before any is kept or sent.
   const checked = value.map((item: unknown, index) =>
@@ -174,6 +180,8 @@ export interface Streams {
   readonly revocation: Feeds["revocation"];
   /** Keeps and sends the items other nodes push to seeded streams, on the server the hub was given. */
   listen(): void;
+  /** The socket left an app room: revokes its feeds open to a room it is no longer in. */
+  readonly leftRooms: Feeds["leftRooms"];
 }
 
 type Feeds = StreamFeeds;
@@ -196,6 +204,7 @@ export function createStreams(hub: Hub): Streams {
     },
     extension: feeds.extension,
     revocation: feeds.revocation,
+    leftRooms: feeds.leftRooms,
     listen: () => {
       hub.io?.on(STREAM_PUSH_EVENT, (broadcast: unknown) => {
         const received = readPush(hub, broadcast);

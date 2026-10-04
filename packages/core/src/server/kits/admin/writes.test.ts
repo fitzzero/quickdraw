@@ -6,10 +6,12 @@
 // tier rooms and `adminReemit` sends the row to them again.
 
 import { describe, expect, it } from "vitest";
+import { QuickdrawError } from "../../../protocol/errors";
 import type { RecordedFrame } from "../../../testing/index";
 import { colSub } from "../../collections/__tests__/fixture";
 import { sub } from "../../emit/__tests__/live";
-import { adminApp, as, ENTITY_KEYS, serviceAdmin } from "./__tests__/fixture";
+import { admin as adminKit, type AdminOnWrite } from "../../index";
+import { adminApp, as, ENTITY_KEYS, serviceAdmin, taskContract } from "./__tests__/fixture";
 
 const kit = adminApp();
 
@@ -265,5 +267,70 @@ describe("adminSubscribers and adminReemit", () => {
     await expect(admin.adminReemit({ id: "missing" })).rejects.toMatchObject({
       code: "NOT_FOUND",
     });
+  });
+});
+
+describe("onWrite", () => {
+  it("hears each write with the row before and after, every field, in one transaction with it", async () => {
+    const heard: { method: string; id: string; before?: unknown; after: unknown }[] = [];
+    const { app } = await kit.start({
+      onWrite: async (write, ctx, db) => {
+        heard.push(write);
+        expect(ctx.principal?.userId).toBe(kit.board().ed);
+        // The hook's own writes go through the transaction's client and commit with the edit.
+        if (write.method === "adminCreate") {
+          await db.task.update({ where: { id: write.id }, data: { pinned: true } });
+        }
+      },
+    });
+    const board = kit.board();
+    const edits = app.as(serviceAdmin(board.ed)).taskService;
+    const created = await edits.adminCreate({
+      data: {
+        projectId: board.p1,
+        title: "New",
+        status: "open",
+        ordinal: 5,
+        pinned: false,
+        details: {},
+      },
+    });
+    await edits.adminUpdate({ id: created.id, data: { title: "Renamed" } });
+    await edits.adminDelete({ id: created.id });
+    expect(heard.map(({ method, id }) => [method, id])).toEqual([
+      ["adminCreate", created.id],
+      ["adminUpdate", created.id],
+      ["adminDelete", created.id],
+    ]);
+    const [create, update, remove] = heard;
+    expect(create).not.toHaveProperty("before");
+    expect(create?.after).toMatchObject({ id: created.id, title: "New", pinned: false });
+    // Every field, notes (an Admin tier) and dates included, as the entity's schema has them.
+    expect(Object.keys(create?.after ?? {}).sort()).toEqual([...ENTITY_KEYS].sort());
+    expect(update?.before).toMatchObject({ title: "New", pinned: true });
+    expect(update?.after).toMatchObject({ title: "Renamed" });
+    expect(remove).toMatchObject({ before: { title: "Renamed" }, after: null });
+  });
+
+  it("undoes the write and fails the call when it throws", async () => {
+    const { app } = await kit.start({
+      onWrite: () => {
+        throw new QuickdrawError("CONFLICT", "Not now");
+      },
+    });
+    const board = kit.board();
+    await expect(
+      app
+        .as(serviceAdmin(board.ed))
+        .taskService.adminUpdate({ id: board.t1, data: { title: "Never" } }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const row = await kit.harness().prisma.task.findUniqueOrThrow({ where: { id: board.t1 } });
+    expect(row.title).toBe("T1");
+  });
+
+  it("is refused when it is not a function", () => {
+    expect(() =>
+      adminKit.handlers(taskContract, { onWrite: "later" as unknown as AdminOnWrite }),
+    ).toThrow("admin.handlers: onWrite must be a function of (write, ctx, db)");
   });
 });

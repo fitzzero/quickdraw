@@ -24,11 +24,21 @@ export const STREAM_MAX_SEED = 1000;
 export const CHANNEL_DEFAULT_RATE = 30;
 
 /**
+ * The app room a stream's subscriber must be in (`access: { room }`): the
+ * room's name, `{ prefix }` for any room whose name starts with it, or for a
+ * scoped stream a function of the scope (`(worldId) => \`world:${worldId}\``).
+ */
+export type StreamRoom = string | RoomPrefix | ((scope: string) => string | null | undefined);
+
+/**
  * Who may subscribe to a stream (RFC 0003 section 4.1's forms, as data). A
  * scoped stream's scope value is the row an `entry` or `scope` form is about:
  * `{ entry: L }` needs level `L` on the row of this service whose id is the
- * scope, `{ scope: L, of }` level `L` on that row of `of`'s service. A
- * stream that declares none is closed: no client may subscribe.
+ * scope, `{ scope: L, of }` level `L` on that row of `of`'s service.
+ * `{ room }` opens it to the sockets in an app room a method joined them to
+ * (signed in or not), as a channel's `requires: { room }` does its messages:
+ * a socket that leaves the room, or is taken out of it, leaves the feed too.
+ * A stream that declares none is closed: no client may subscribe.
  */
 export type StreamAccess =
   | "public"
@@ -38,18 +48,28 @@ export type StreamAccess =
       readonly entry?: undefined;
       readonly scope?: undefined;
       readonly of?: undefined;
+      readonly room?: undefined;
     }
   | {
       readonly entry: AccessLevel;
       readonly service?: AccessLevel;
       readonly scope?: undefined;
       readonly of?: undefined;
+      readonly room?: undefined;
     }
   | {
       readonly scope: AccessLevel;
       readonly of: AnyContract;
       readonly service?: undefined;
       readonly entry?: undefined;
+      readonly room?: undefined;
+    }
+  | {
+      readonly room: StreamRoom;
+      readonly service?: undefined;
+      readonly entry?: undefined;
+      readonly scope?: undefined;
+      readonly of?: undefined;
     };
 
 /** A server-to-client stream of append-only items (RFC 0003 section 12.5). */
@@ -79,26 +99,38 @@ export interface StreamDef<Item extends StandardSchemaV1 = StandardSchemaV1> {
 export type PayloadSelector = string | ((payload: never) => string | null | undefined);
 
 /**
+ * Any app room whose name starts with `prefix` (`{ prefix: "world:" }`, a
+ * game of many worlds): the sending socket passes when it is in one, and
+ * the channel's handler gets the one it matched as `ctx.room`, so the
+ * payload need not repeat which room it is for.
+ */
+export interface RoomPrefix {
+  readonly prefix: string;
+}
+
+/**
  * The app room a channel requirement names: the room itself (`"world"`, a
- * game's one world), or a function of the parsed payload that returns it
- * (`(payload) => \`lobby:${payload.lobbyId}\``). Unlike a
+ * game's one world), a function of the parsed payload that returns it
+ * (`(payload) => \`lobby:${payload.lobbyId}\``), or `{ prefix }`, any room
+ * whose name starts with it (`{ prefix: "world:" }`). Unlike a
  * {@link PayloadSelector}, a string here is the room's name, not a payload
  * key. A name starting with `qd:` or `user:` is never an app room: a literal
- * one is refused when the contract is defined, and a computed one drops the
- * message.
+ * one (or such a prefix) is refused when the contract is defined, and a
+ * computed one drops the message.
  */
-export type RoomSelector = string | ((payload: never) => string | null | undefined);
+export type RoomSelector = string | ((payload: never) => string | null | undefined) | RoomPrefix;
 
 /**
  * What a channel message requires of the socket that sends it: a live
  * subscription (`qd:sub`) to the row of this service `entity` names, or
  * (`qd:col:sub`) to the scope of `collection` that `scope` names; or that
- * the socket is in the app room `room` names, which a method called over
- * that same socket joined with `ctx.rooms.join` (a room another socket of
- * the user joined does not count, and a reconnected socket is in none until
- * it joins again). Each is checked in memory against the sending socket's
- * own records, on the node it is connected to. A message whose payload names
- * none is dropped.
+ * the socket is in the app room `room` names (or, for `{ prefix }`, in any
+ * app room whose name starts with it), which a method called over that
+ * same socket joined with `ctx.rooms.join` (a room another socket of the
+ * user joined does not count, and a reconnected socket is in none until it
+ * joins again). The handler gets the room that matched as `ctx.room`. Each
+ * is checked in memory against the sending socket's own records, on the
+ * node it is connected to. A message whose payload names none is dropped.
  */
 export type ChannelRequires =
   | {

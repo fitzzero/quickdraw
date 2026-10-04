@@ -4,9 +4,134 @@ All notable changes to this project will be documented in this file.
 
 ## [5.0.0-rc.4] (unreleased)
 
-Round 3 of the fixes the quickdraw-chat migration found on `5.0.0-rc.1`
-(findings F3.1 to F3.11, from its web port). No version moves until the
-release candidate is cut.
+Rounds 3 and 4 of the fixes the quickdraw-chat migration found: round 3 on
+`5.0.0-rc.1` (findings F3.1 to F3.11, from its web port), round 4 on
+`5.0.0-rc.3` (findings F4.1 to F4.14, from its game and the Godot client on
+protocol v5). No version moves until the release candidate is cut.
+
+### Protocol
+
+- Breaking wire change for `5.0.0-rc.3` clients: `qd:stream` is a
+  positional array, `[service, stream, scope, item]` (`scope` `null` for a
+  global stream), like `qd:event`, instead of the object `{ s, stream,
+scope?, item }`. A frame carries no key names: 28 bytes fewer per scoped
+  frame and 15 per global one, per subscriber (measured in the stream and
+  wire tests; at quickdraw-chat's 20 Hz that is 560 bytes a second per
+  client). Positions are fixed and a later protocol only appends after
+  `item`, so a client reads four elements and ignores the rest. The JS
+  client, the GDScript reference client and `docs/protocol-v5.md` move
+  together: an app that copied `examples/godot/addons/quickdraw/quickdraw_client.gd`
+  must copy it again (F4.7).
+
+### Realtime
+
+- A stream's seed can be computed when a socket subscribes: `defineService(contract, { streams:
+{ world: { seed: (scope, ctx) => items } } })` answers each `qd:stream:sub`
+  with what the function returns (the current world, where the items that
+  follow are deltas), on whichever node the subscriber is connected to,
+  under its principal once the stream's `access` admitted it. The socket
+  joins the feed in the tick the function is called, so one that returns at
+  once misses nothing and repeats nothing; one that returns a promise may
+  also see items pushed while it runs, which then arrive both ways. A throw
+  answers the subscribe with that error and leaves the feed; items are
+  checked against the stream's schema. A contract `seed: n` (the latest
+  items, kept per node) and a seed function cannot be declared together. A
+  node that started after the pushes now seeds such a stream correctly
+  (F4.1).
+- A service declares its own room-leave hook: `defineService(contract, {
+onRoomLeave(leave, ctx) })`, typed as `createServer`'s option. Every
+  server the service runs in (`createServer`, so `createTestApp` and a
+  benchmark's server too) runs each service's hook and its own
+  `onRoomLeave`, which stays, once per socket leave, each in a detached
+  unit of work of its own; one that throws is logged (with `owner`: the
+  service's name or `"createServer"`) and stops none of the others. A
+  server root that forgot to pass the game's handler leaked players
+  silently (F4.2).
+- Rooms are joined again after a reconnect: `useJoin(member, input, {
+enabled?, onJoined? })` on `./client` runs a joining call (any query or
+  mutation member, a mock's too) on every `qd:hello` (first connect, every
+  reconnect, new credentials) and when its input changes by value, never
+  on a re-render, and returns `{ status: "idle" | "joining" | "joined" |
+"error", isJoined, data, error }` for the current socket; a refusal
+  stands until the next hello, `RATE_LIMITED` is tried again after its
+  backoff. `connection.onHello(listener)` is the React-free form (each
+  hello, and the current one in a microtask). The README's board example
+  joins with it; a room joined once from a query was silently lost on
+  every reconnect (F4.3).
+- `rooms.size(room)` on `qd.rooms`, `server.rooms`, `dispatcher.rooms` and
+  `ctx.rooms`: the sockets in an app room on this node, anonymous ones
+  included, synchronous, for a tick loop (local by design; `presence.count`
+  stays the cluster-wide count of users). A method's `ctx.socketId` names
+  the socket its call arrived on (`undefined` over HTTP, MCP or in process)
+  (F4.4).
+- A channel's `requires: { room: { prefix: "world:" } }` takes a socket in
+  any app room whose name starts with the prefix (the one it joined first,
+  if several); refused at definition for an empty or reserved prefix. Every
+  room form gives the handler the room it matched as `ctx.room` (typed
+  `string` for a channel that requires a room, `undefined` otherwise), so a
+  game of many worlds need not repeat the world's id in every input frame
+  (F4.5).
+- A stream's `access: { room }`: open to the sockets in that app room,
+  signed in or not (a name, `{ prefix }`, or for a scoped stream a function
+  of the scope, `(worldId) => \`world:${worldId}\``); a socket that leaves the
+room or is taken out of it is revoked from the feed at once
+(`qd:revoked { kind: "stream" }`). Refused at definition for a reserved
+  room, a form mixed with another, or a computed room on a global stream
+  (F4.6).
+- A write to a model a service lists in `writes` changes that service's
+  topic, and a query may declare `watch: "service"` (its client then joins
+  the service topic, which `watchAccess` opens), so a query over a model no
+  service owns (a game's high scores) is invalidated without an app event.
+  A service without a model may now be watched when it writes something,
+  and `defineService` refuses a query that watches `"service"` on a
+  service without `watchAccess`, whose topic would stay closed (F4.9).
+- `streams: { <name>: { validate: "development" } }` checks pushed items
+  (and computed seeds) only while the dispatcher checks outputs
+  (`outputValidation`, on unless `NODE_ENV` is `"production"`); unchecked,
+  an item goes out as pushed. The default stays `"always"` (F4.14).
+
+### Kits
+
+- `admin.handlers(contract, { onWrite })`: `onWrite({ method, id, before?,
+after }, ctx, db)` runs after each `adminCreate`, `adminUpdate` and
+  `adminDelete`, in one transaction with the write (`db` its tracked
+  client; a throw undoes the write and fails the call), with the entity's
+  rows before and after, every field. Without it nothing changes: no
+  transaction, no extra read. `KitHandler<Db, Out>` gains its output type
+  (default `never`, as before), and the admin kit's handlers resolve with
+  their method's output type, so a wrapper reads what a handler returned
+  and returns it on with no cast (F4.8).
+
+### Testing
+
+- `app.frames` and `frames.waitFor` take an event query with `where`, a
+  predicate over the event's frames with `data` typed by the event
+  (`EventQuery<E, D>`), and `./testing` adds `streamFrames(contract, stream,
+where?, scope?)` and `eventFrames(contract, event, where?)`, which match
+  one stream's items or one event's payloads typed by the contract. Realtime
+  tests cast `StreamFrame` and `EventFrame` by hand before (F4.13).
+
+### GDScript reference client
+
+- `is_subscribed(service, stream, scope)` (true while the client holds
+  the feed, which it subscribes to again after each reconnect) and
+  `off_event(service, event, callback)`; `check:godot` checks both, and
+  `server_id` (F4.11). Re-copy `addons/quickdraw/quickdraw_client.gd`: it
+  also reads the positional `qd:stream` frame (F4.7, F4.12).
+
+### Server
+
+- `qd.run(fn)` before the app created any dispatcher (a boot-time seed
+  before `createServer`) runs `fn` in a unit of work of its own instead of
+  throwing: its tracked writes raise no ambient warning and flush once it
+  settles to the dispatcher the client is attached to by then, which before
+  any server is none, so they reach no one (no socket can be subscribed
+  yet). Work the run started and did not await writes as ambient once it
+  settled. `ctx.touch` records nothing there (F4.10).
+- `qd:hello` carries `serverId`, random and new each time a server starts,
+  so a client tells a restarted server (or another node) from a network
+  blip; `docs/protocol-v5.md`, the JS client's hello and the GDScript
+  client's `server_id` carry it (F4.11).
 
 ### Client
 

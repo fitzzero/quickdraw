@@ -10,13 +10,17 @@
 // more of the room on any node, and a channel that requires the room drops
 // their messages (the requirement reads `socket.data.appRooms`).
 //
-// Whenever a socket leaves app rooms the hook hears of it once, on the node
+// Whenever a socket leaves app rooms the hooks hear of it once, on the node
 // that held the socket, with each room and whether the socket was its user's
 // last one there (`roomFrames.ts` decides it with the room's `left` frame).
-// The app's handler runs in a detached unit of work (`qd.run(fn, { detached:
-// true })`): a leave a handler causes never joins that handler's unit. What
-// it throws is logged; the hub keeps its run in flight, so a server's
-// `close()` waits for it.
+// The hooks are every service's own `onRoomLeave` (`defineService`) and the
+// server's (`createServer`), composed by `createServer` so no server root
+// can forget a service's. Each runs in a detached unit of work of its own
+// (`qd.run(fn, { detached: true })`): a leave a handler causes never joins
+// that handler's unit, and one hook's writes never flush with another's.
+// What one throws is logged with whose hook it is, and the others run all
+// the same; the hub keeps their runs in flight, so a server's `close()`
+// waits for them.
 
 import { userRoom } from "../../contract/names";
 import { answerOf } from "../cluster/acks";
@@ -31,7 +35,7 @@ import type { RoomLeave, RoomLeaveHandler, RoomLeaveReason, RoomLeft } from "./t
 /** The server-to-server event `rooms.leave(room, { userId })` is broadcast on behind a cluster adapter. */
 export const ROOM_LEAVE_EVENT = "quickdraw:room-leave";
 
-/** Hears every socket that left app rooms: the app's `onRoomLeave`, wrapped by {@link leaveListener}. */
+/** Hears every socket that left app rooms: the app's `onRoomLeave` hooks, wrapped by {@link leaveListener}. */
 export type RoomLeaveListener = (leave: RoomLeave) => Promise<void>;
 
 /** Runs a function in a detached unit of work of the dispatcher: `dispatcher.run(fn, { detached: true })`. */
@@ -39,31 +43,48 @@ export type DetachedRun = (
   fn: (ctx: Parameters<RoomLeaveHandler>[1]) => Promise<void>,
 ) => Promise<void>;
 
+/** One `onRoomLeave` hook, and whose it is for the logs: a service's name, or `"createServer"`. */
+export interface RoomLeaveHook {
+  readonly owner: string;
+  readonly handler: RoomLeaveHandler;
+}
+
 /** What the app rooms of one dispatcher share, with who hears sockets leave. */
 export interface LeavingState extends RoomState {
   listener: RoomLeaveListener | undefined;
+  /** Hears a socket that left an app room and is still connected, before the hooks do. */
+  readonly left?: ((socket: QuickdrawServerSocket) => void) | undefined;
 }
 
-/** The app's `onRoomLeave`, run in a detached unit of work, with what it throws logged. */
+/**
+ * The app's `onRoomLeave` hooks as one listener: for each leave, every hook
+ * in a detached unit of work of its own, all at once, each with what it
+ * throws logged, so one failing hook stops none of the others.
+ */
 export function leaveListener(
-  handler: RoomLeaveHandler,
+  hooks: readonly RoomLeaveHook[],
   run: DetachedRun,
   logger: Hub["logger"],
 ): RoomLeaveListener {
   return async (leave) => {
-    try {
-      await run(async (ctx) => {
-        await handler(leave, ctx);
-      });
-    } catch (error) {
-      logger.error("onRoomLeave threw", {
-        category: "quickdraw.rooms",
-        socketId: leave.socketId,
-        reason: leave.reason,
-        rooms: leave.rooms.map(({ room }) => room),
-        error: describeError(error),
-      });
-    }
+    await Promise.all(
+      hooks.map(async ({ owner, handler }) => {
+        try {
+          await run(async (ctx) => {
+            await handler(leave, ctx);
+          });
+        } catch (error) {
+          logger.error("onRoomLeave threw", {
+            category: "quickdraw.rooms",
+            owner,
+            socketId: leave.socketId,
+            reason: leave.reason,
+            rooms: leave.rooms.map(({ room }) => room),
+            error: describeError(error),
+          });
+        }
+      }),
+    );
   };
 }
 
@@ -112,6 +133,9 @@ export function leaveRoom(
   }
   delete joined[room];
   void socket.leave(room);
+  if (socket.connected) {
+    state.left?.(socket);
+  }
   const last = exited(state, socket, room, socket.connected, reason === "removed");
   heard(state, socket, reason, [[room, last]]);
   return true;

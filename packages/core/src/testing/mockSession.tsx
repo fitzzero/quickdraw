@@ -98,12 +98,16 @@ export function sessionOver(
   });
 }
 
+/** The id a mock's hello names its server by: one mock server, never restarted. */
+const MOCK_SERVER_ID = "mock";
+
 /** The connection state a session shows: connected or connecting, with a hello once it is known. */
 function stateOf(session: SessionState): ConnectionState {
   const hello: HelloFrame | null = session.isKnown
     ? Object.freeze({
         protocol: PROTOCOL_VERSION,
         server: QUICKDRAW_VERSION,
+        serverId: MOCK_SERVER_ID,
         limits: MOCK_LIMITS,
         features: Object.freeze([]),
         userId: session.userId,
@@ -153,9 +157,37 @@ function mockConnection(store: MockStore): QuickdrawConnection {
     reportRateLimited: nothing,
     backoffRemaining: () => 0,
     onReconnect: () => nothing,
+    onHello: (listener: (hello: HelloFrame) => void) => mockHellos(getState, store, listener),
     watch: () => nothing,
     waitForJoin: () => undefined,
   });
+}
+
+/**
+ * `onHello` on a mock's connection: each session that is connected and
+ * known is a hello (`$session(...)` that sets one is a reconnect), the
+ * current one in a microtask, as a real connection gives it.
+ */
+function mockHellos(
+  getState: () => ConnectionState,
+  store: MockStore,
+  listener: (hello: HelloFrame) => void,
+): () => void {
+  let last: HelloFrame | null = null;
+  let stopped = false;
+  const deliver = (): void => {
+    const { status, hello } = getState();
+    if (!stopped && status === "connected" && hello !== null && hello !== last) {
+      last = hello;
+      listener(hello);
+    }
+  };
+  queueMicrotask(deliver);
+  const stop = store.subscribe(deliver);
+  return () => {
+    stopped = true;
+    stop();
+  };
 }
 
 /** The key of a room's users in the mock's store. */

@@ -61,6 +61,7 @@ describe("a v5 call", () => {
     expect(await opened.hello).toEqual({
       protocol: 5,
       server: QUICKDRAW_VERSION,
+      serverId: expect.any(String),
       limits: {
         maxInFlightQueries: 4,
         maxQueuedQueries: 64,

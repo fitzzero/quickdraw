@@ -155,6 +155,14 @@ export type { UseChannelResult } from "./live/useChannel";
 export type { UseEventOptions } from "./live/useEvent";
 export type { UseStreamOptions, UseStreamResult } from "./live/useStream";
 export { usePresence } from "./live/usePresence";
+// Joining an app room again on every connection: `useJoin(qd.game.watchWorld, input)`.
+export {
+  useJoin,
+  type JoinMember,
+  type JoinStatus,
+  type UseJoinOptions,
+  type UseJoinResult,
+} from "./join";
 export { SEARCH_DEBOUNCE_MS } from "./live/useSearch";
 export type {
   SearchMember,
