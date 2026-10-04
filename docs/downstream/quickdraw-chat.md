@@ -37,8 +37,13 @@ writes 7, hooks 2, admin 7, instance state 42, client 23, server and other
 3. **The copied bootstrap and auth.** The 323-line `apps/api/src/index.ts`
    becomes `qd.createServer`; the OAuth, mock and guest routes become
    `createAuthRoutes` with a `SessionStore` over the app's `Session` model,
-   whose tokens carry `sid`, so everyone signs in once more. The Discord
-   Activity sign-in stays an app route on `issueSession`. In production pass
+   whose tokens carry `sid`, so everyone signs in once more. The hand-built
+   socket rate limiter (100 events a minute keyed by user id, subscriptions
+   and channels excluded by name) goes too: `createServer`'s is on by
+   default at 600 events per minute per socket and never counts subscription
+   events, channels or cancels (`rateLimit: { keyGenerator }` keeps keying
+   by user). The Discord Activity sign-in stays an app route on
+   `issueSession`. In production pass
    `cookieName: "__Host-session"` to `socketAuth` until the release
    candidate under test carries the finale round's `__Host-` hardening.
 4. **The Godot client speaks the 4.x wire.** The codemod does not touch

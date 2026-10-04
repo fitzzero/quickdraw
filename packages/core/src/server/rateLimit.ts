@@ -33,7 +33,8 @@ export interface RateLimitOptions {
   windowMs?: number;
 
   /**
-   * Maximum number of requests per window (default: 100)
+   * Maximum number of requests per window (default: 600, which `createServer`'s
+   * socket limiter uses too; 4.x defaulted to 100)
    */
   maxRequests?: number;
 
@@ -72,6 +73,14 @@ export interface RateLimitOptions {
    */
   logger?: Logger;
 }
+
+/**
+ * Requests allowed per window by default: 600 a minute, so a socket can
+ * refetch a watched query four times a second (the coordinator's window)
+ * with room to spare. 4.x allowed 100, which refused part of a busy
+ * board's work in the 5.0 benchmark (`bench/reports/5.0.0.md`).
+ */
+const DEFAULT_MAX_REQUESTS = 600;
 
 /**
  * Rate limit entry tracking requests in a window.
@@ -135,7 +144,12 @@ export interface RateLimiter {
  * ```
  */
 export function createRateLimiter(options: RateLimitOptions = {}): RateLimiter {
-  const { windowMs = 60000, maxRequests = 100, excludeEvents = [], excludePrefixes = [] } = options;
+  const {
+    windowMs = 60000,
+    maxRequests = DEFAULT_MAX_REQUESTS,
+    excludeEvents = [],
+    excludePrefixes = [],
+  } = options;
 
   const entries = new Map<string, RateLimitEntry>();
 

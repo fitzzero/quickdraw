@@ -776,7 +776,7 @@ over three transports (design: sections 3, 8 and 10):
   server's limits and who it acts for, and calls through `qd:call` and
   `qd:cancel`. Every socket gets the same few listeners however many methods
   the services have. The JSON-only parser is the default; `binary: true`
-  restores the stock one. The socket rate limiter is on by default (100
+  restores the stock one. The socket rate limiter is on by default (600
   events per minute per socket; channels, cancels and subscription events not
   counted); configure it with `rateLimit`, or turn it off with
   `rateLimit: false`. There is no default CORS origin: pass `cors`.

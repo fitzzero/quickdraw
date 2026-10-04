@@ -17,7 +17,5 @@ export const server = qd.createServer({
   auth: { authenticate: ({ auth }) => verifySession(auth.token) },
   // 4.x clients keep calling `socket.emit("taskService:renameTask", ...)` until they update
   legacyWire: true,
-  // a busy board sends more than the default 100 socket events per minute
-  rateLimit: { maxRequests: 1_000 },
 });
 // #endregion

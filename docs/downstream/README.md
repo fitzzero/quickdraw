@@ -77,8 +77,8 @@ reads 4.x code, so each needs a decision first: migrate, or stay on 3.x.
 - `db.<model>.update` throws `NOT_FOUND` where `this.update` returned
   `null`, and no lifecycle hook runs.
 - There is no default CORS origin, and the socket rate limiter is on (600
-  events per minute per socket in the release candidate; subscription
-  events, channels and cancels are not counted).
+  events per minute per socket; subscription events, channels and cancels
+  are not counted).
 - Moving sign-in to `createAuthRoutes` and `socketAuth` signs everyone out
   once: their tokens carry a session id (`sid`), and 4.x tokens do not.
 - A board ported as one fat watched query sends nearly as many bytes as

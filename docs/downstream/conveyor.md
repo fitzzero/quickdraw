@@ -46,8 +46,8 @@ call sites in non-browser clients. Recount before planning.
    revisions, tombstones and resume cover these; delete each one with a
    test that proves the 5.0 behavior, not before.
 6. **Limits at its scale.** The socket rate limiter is on (600 events per
-   minute per socket in the release candidate) and subscription events run
-   8 in flight, 64 queued per socket. Measure its busiest sockets against
+   minute per socket) and subscription events run 8 in flight, 64 queued
+   per socket. Measure its busiest sockets against
    both; Cloud Run's 60-minute socket cap becomes `qd:rotate` plus resume.
 
 ## Suggested order

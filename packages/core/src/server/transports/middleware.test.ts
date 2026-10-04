@@ -22,7 +22,12 @@ import {
   taskDefaults,
   type AppPrincipal,
 } from "../__tests__/fixtures";
-import { initQuickdraw, type PipelineOptions, type ServerOnlyOptions } from "../index";
+import {
+  createRateLimiter,
+  initQuickdraw,
+  type PipelineOptions,
+  type ServerOnlyOptions,
+} from "../index";
 import { call, trustingAuth, transportHarness, v5Auth } from "./__tests__/harness";
 import { createProbe } from "./__tests__/probe";
 
@@ -180,6 +185,21 @@ describe("authentication", () => {
 });
 
 describe("the socket rate limiter", () => {
+  it("allows 600 events per minute per socket by default, then answers RATE_LIMITED", async () => {
+    expect(createRateLimiter().options).toMatchObject({ maxRequests: 600, windowMs: 60_000 });
+    const { url } = await serve();
+    const opened = harness.open(url, v5Auth(alice));
+    await opened.hello;
+    const { socket } = opened;
+    // Calls without an acknowledgement are counted, then ignored by the transport.
+    for (let id = 0; id < 599; id += 1) {
+      socket.emit("qd:call", { id, s: "taskService", m: "get", i: { id: "t1" } });
+    }
+    const get = (id: number) => call(socket, { id, s: "taskService", m: "get", i: { id: "t1" } });
+    expect(await get(600)).toMatchObject({ ok: true });
+    expect(await get(601)).toMatchObject({ ok: false, e: { code: "RATE_LIMITED" } });
+  });
+
   it("answers a v5 call over the limit with RATE_LIMITED, and never counts qd:cancel", async () => {
     const { url } = await serve({ rateLimit: { maxRequests: 2, windowMs: 60_000 } });
     const opened = harness.open(url, v5Auth(alice));

@@ -805,8 +805,6 @@ export const server = qd.createServer({
   auth: { authenticate: ({ auth }) => verifySession(auth.token) },
   // 4.x clients keep calling `socket.emit("taskService:renameTask", ...)` until they update
   legacyWire: true,
-  // a busy board sends more than the default 100 socket events per minute
-  rateLimit: { maxRequests: 1_000 },
 });
 ```
 
@@ -1061,9 +1059,10 @@ export function TitleField({ task }: { task: TaskDTO }) {
 
 ### Unchanged
 
-The auth helpers, the Express rate limits, the socket rate limiter, the
-Redis adapter helper, the env and encryption utilities, and the client's
-auth and formatting utilities. Some auth helpers moved to
+The auth helpers, the Express rate limits, the socket rate limiter (apart
+from its default, under "Defaults that changed"), the Redis adapter helper,
+the env and encryption utilities, and the client's auth and formatting
+utilities. Some auth helpers moved to
 `@fitzzero/quickdraw-core/server/auth` (and the MCP bridge to
 `./server/mcp`); lint's `no-v4-api` names the new entry point of each.
 
@@ -1241,10 +1240,12 @@ export function TaskBoard({ projectId }: { readonly projectId: string }) {
   `qd:watch` on a whole service is `FORBIDDEN` without it.
 - **`logout-all` disconnects** the user's sockets (`createAuthRoutes` wires
   `onRevoke` to `server.access.disconnectUser`).
-- **The socket rate limiter is on**: 100 events per minute per socket in this
-  prerelease, not counting subscription events, channels and cancels. A busy
-  board needs more (the benchmark's app allows 1,000 with `rateLimit`); the
-  5.0.0 release raises the default to 600.
+- **The socket rate limiter is on**: 600 events per minute per socket, not
+  counting subscription events, channels and cancels, enough for a board
+  whose watched query refetches four times a second. `createRateLimiter()`
+  without `maxRequests` allows 600 too (4.x: 100). An app that built the
+  limiter itself (`createRateLimiter` plus `applyRateLimitMiddleware`) drops
+  that code and passes the same options as `rateLimit`, or `false`.
 - **The client drops its cache when the user changes**: a hello naming
   another user removes everything quickdraw cached, so one user's rows never
   show to the next.

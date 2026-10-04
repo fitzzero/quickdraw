@@ -170,9 +170,11 @@ rows.
   tracked client, so subscribers get the entity frame, the collection delta
   and the change signal without a hand-written emit.
 - `qd.createServer` on an Express app with JWT auth and every option at its
-  default, except the socket rate limiter: 1,000 events per minute per socket
-  instead of 100, since the default would refuse part of this workload, which
-  4.1 serves without any limiter (`reports/5.0.0.md` measures the default).
+  default, the socket rate limiter included: its 600 events per minute per
+  socket cover this workload (a writer sends 120 writes a minute, a viewer
+  reads the board at most 240 times), which 4.1 serves without any limiter.
+  The 5.0.0 report's runs raised it to 1,000, because the default was 100
+  then and refused part of the work (`reports/5.0.0.md`).
 - `src/instrument.ts` reports the same fields as `apps/v4`, from the
   completion record each call produces (`onCall`), the Prisma client's query
   events, and a Socket.IO middleware that watches every frame; `src/harness.ts`

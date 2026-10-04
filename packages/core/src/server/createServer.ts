@@ -96,7 +96,7 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
   readonly legacyWire?: boolean;
   /**
    * The socket rate limiter (`createRateLimiter`'s options), or `false` for
-   * none. Default: 100 events per minute per socket. `qd:ch` (channels keep
+   * none. Default: 600 events per minute per socket. `qd:ch` (channels keep
    * their own per-socket token buckets), `qd:cancel`, the entity and
    * collection subscription events (`qd:sub`, `qd:unsub`, `qd:col:sub`,
    * `qd:col:unsub`, `qd:col:items`), the topic watches (`qd:watch`,
