@@ -9,6 +9,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { settleCluster } from "../../../test/cluster/mode";
 import { defineContract } from "../../contract/defineContract";
 import type { Logger } from "../../contract/logger";
 import type { StreamFrame } from "../../protocol/envelope";
@@ -76,6 +77,15 @@ async function start(options: StartOptions = {}) {
 
 type App = Awaited<ReturnType<typeof start>>;
 
+/**
+ * In the cluster projects a push goes out on the writer node and reaches the
+ * reader node's seeds through Valkey: waits for it there before a subscriber
+ * on the reader node reads a seed. Nothing on one server.
+ */
+async function pushed(): Promise<void> {
+  await settleCluster();
+}
+
 function logs(app: App) {
   return app.server.stream(liveContract, "logs");
 }
@@ -95,6 +105,7 @@ describe("qd:stream:sub", () => {
     const app = await start();
     logs(app).push(board.t1, { line: "one" });
     logs(app).push(board.t1, { line: "two" });
+    await pushed();
     const { connection, items } = await connect(app, as(board.cy));
     expect(await streamSub(connection, "logs", board.t1)).toEqual({
       ok: true,
@@ -116,6 +127,7 @@ describe("qd:stream:sub", () => {
     for (const line of ["a", "b", "c", "d"]) {
       logs(app).push(board.t1, { line });
     }
+    await pushed();
     const second = await connect(app, as(board.bo));
     expect(await streamSub(second.connection, "logs", board.t1)).toEqual({
       ok: true,
@@ -133,6 +145,7 @@ describe("qd:stream:sub", () => {
     logs(app).push(board.t2, { line: "on t2" });
     const status = app.server.stream(liveContract, "status");
     status.push("up");
+    await pushed();
     const cy = await connect(app, as(board.cy));
     expect(await streamSub(cy.connection, "logs", board.t1)).toEqual({
       ok: true,
