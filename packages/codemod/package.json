@@ -15,12 +15,13 @@
     "directory": "packages/codemod"
   },
   "bin": {
-    "quickdraw-codemod": "./bin/cli.mjs"
+    "quickdraw-codemod": "bin/cli.mjs"
   },
   "files": [
     "bin",
     "dist",
-    "MIGRATION.md"
+    "MIGRATION.md",
+    "UPGRADE-PROMPT.md"
   ],
   "type": "module",
   "publishConfig": {

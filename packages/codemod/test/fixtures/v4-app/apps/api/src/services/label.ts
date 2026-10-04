@@ -1,7 +1,10 @@
 import type { Label, Prisma, PrismaClient } from "@project/db";
 import type { LabelDTO, LabelServiceMethods } from "@project/shared";
-import { BaseService } from "@fitzzero/quickdraw-core/server";
+import { BaseService, type QuickdrawSocket } from "@fitzzero/quickdraw-core/server";
 import { z } from "zod";
+
+/** Called with a label's id whenever one is renamed or created. */
+export type LabelListener = (labelId: string) => void;
 
 /** Labels have no row-level access: only service grants open them. */
 export class LabelService extends BaseService<
@@ -12,9 +15,21 @@ export class LabelService extends BaseService<
   Record<string, never>,
   LabelDTO
 > {
-  constructor(private readonly prisma: PrismaClient) {
+  // Labels renamed since start-up, as quickdraw-chat's game keeps its players
+  private readonly renamed = new Set<string>();
+  // Set from the constructor's options, as quickdraw-chat's push service keeps its transport
+  private readonly onChange: LabelListener | undefined;
+  /** The room every label editor joins. */
+  public readonly room: string;
+
+  constructor(
+    private readonly prisma: PrismaClient,
+    options: { onChange?: LabelListener } = {},
+  ) {
     super({ serviceName: "labelService" });
     this.setDelegate(prisma.label);
+    this.onChange = options.onChange;
+    this.room = this.getRoomName("all");
 
     this.defineMethod("getLabel", "Read", async (payload) => {
       return await this.prisma.label.findUnique({ where: { id: payload.id } });
@@ -24,7 +39,10 @@ export class LabelService extends BaseService<
       "renameLabel",
       "Moderate",
       async ({ labelId, name }) => {
-        return await this.prisma.label.update({ where: { id: labelId }, data: { name } });
+        const label = await this.prisma.label.update({ where: { id: labelId }, data: { name } });
+        this.renamed.add(label.id);
+        this.onChange?.(label.id);
+        return label;
       },
       { resolveEntryId: (p) => p.labelId ?? null },
     );
@@ -48,5 +66,34 @@ export class LabelService extends BaseService<
       this.logger.info(`Deleted ${count} labels`, { userId: ctx.userId, service: this.serviceName });
       return { count };
     });
+  }
+
+  /** How many labels were renamed since start-up. */
+  public get renamedCount(): number {
+    return this.renamed.size;
+  }
+
+  /** The class's name, for logs: a member every object has, which the codemod must not take for one of its tables' keys. */
+  public kind(): string {
+    return this.constructor.name;
+  }
+
+  /** The label room and how many sockets are in it, for the admin page. */
+  public roomStats(): { room: string; sockets: number } {
+    const room = this.room;
+    return { room, sockets: this.subscribers.get("all")?.size ?? 0 };
+  }
+
+  // The base class does the leaving; this only tells the listener
+  public override unsubscribeSocket(socket: QuickdrawSocket): void {
+    super.unsubscribeSocket(socket);
+    this.onChange?.(`left:${socket.id}`);
+  }
+
+  // Admin creates tell the listener too, as quickdraw-chat's definitions do
+  protected override async adminCreate(data: Prisma.LabelUncheckedCreateInput): Promise<Label> {
+    const created = await super.adminCreate(data);
+    this.onChange?.(created.id);
+    return created;
   }
 }

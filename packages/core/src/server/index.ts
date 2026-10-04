@@ -28,6 +28,7 @@ export type {
   CollectionsRequired,
   HandlerOutputOf,
   HandlerRow,
+  JsonColumnValue,
   ProjectCheck,
   ProjectionOption,
   RowFor,

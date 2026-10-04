@@ -1,23 +1,28 @@
 // What becomes of `this.<member>` (or `service.<member>` in a method module)
 // once a service is an object instead of a class. Mechanical cases are
 // rewritten: the Prisma field becomes the tracked `db`, `getDelegate()` and
-// `findById` become `db.<model>` calls, helper methods become the module
-// functions they were hoisted into, `this.logger` in a handler becomes
-// `ctx.log`. Everything else stays as written, under a marker that says what
-// replaces it, because it needs a decision: hand emits, the CRUD helpers
-// (which also emitted and ran lifecycle hooks), injected services.
+// `findById` become `db.<model>` calls, helper methods, fields and getters
+// become the module functions and bindings they were hoisted into (a getter
+// is called: `this.enabled` is `enabled()`), `this.logger` in a handler
+// becomes `ctx.log`. Everything else stays as written, under a marker that
+// says what replaces it, because it needs a decision: hand emits, the CRUD
+// helpers (which also emitted and ran lifecycle hooks), injected services. A
+// call of the 4.x base class (`super.x(...)`) is dropped under a marker that
+// names it: `super` outside a class does not parse.
 
 import { Node, type PropertyAccessExpression, type SourceFile, SyntaxKind } from "ts-morph";
-import type { Category } from "./markers";
+import { type Category, markerText } from "./markers";
 import type { ServiceModel } from "./model";
 import type { Edit } from "./text";
 import { quote } from "./text";
 
-/** A class member hoisted into a module-level function or const. */
+/** A class member hoisted into a module-level function, const or binding. */
 export interface Hoisted {
   readonly name: string;
   readonly file: SourceFile;
   readonly exported: boolean;
+  /** A getter is hoisted into a function its reads call; anything else is used as it was. */
+  readonly getter?: boolean;
 }
 
 /** Where the code being mapped sits. */
@@ -199,8 +204,14 @@ function mapAccess(
     result.usesDb = true;
   } else if (name === "serviceName") {
     replace(quote(service.serviceName));
+  } else if (hoisted?.getter === true && isWritten(access)) {
+    result.markers.push({
+      node: access,
+      category: "this",
+      message: `writes ${scope.receiver}.${name}, a 4.x getter (now the function ${hoisted.name}()) that may have had a setter: write what the setter did instead`,
+    });
   } else if (hoisted !== undefined) {
-    replace(hoisted.name);
+    replace(hoisted.getter === true ? `${hoisted.name}()` : hoisted.name);
     result.imports.push(hoisted);
   } else if (name === "logger" && scope.inHandler) {
     replace(`${scope.ctxName}.log`);
@@ -211,7 +222,8 @@ function mapAccess(
 }
 
 function markerFor(name: string, service: ServiceModel): { category: Category; message: string } {
-  const emit = EMITS[name];
+  // own keys only: `this.constructor` must not find Object.prototype's
+  const emit = Object.hasOwn(EMITS, name) ? EMITS[name] : undefined;
   if (emit !== undefined) {
     return { category: "emit", message: emit };
   }
@@ -225,7 +237,9 @@ function markerFor(name: string, service: ServiceModel): { category: Category; m
         "the 4.x service logger: take a Logger argument, or log from the handler that calls this with ctx.log",
     };
   }
-  const construction = CONSTRUCTION_MARKERS[name];
+  const construction = Object.hasOwn(CONSTRUCTION_MARKERS, name)
+    ? CONSTRUCTION_MARKERS[name]
+    : undefined;
   if (construction !== undefined) {
     return construction;
   }
@@ -239,6 +253,83 @@ function markerFor(name: string, service: ServiceModel): { category: Category; m
     category: "this",
     message: `this.${name} was 4.x service-instance state: a service object has none. Import what it held, pass it in, or call another service with ctx.services`,
   };
+}
+
+/** Whether `access` is written: the target of an assignment, `++` or `--`. */
+function isWritten(access: Node): boolean {
+  const parent = access.getParent();
+  if (Node.isBinaryExpression(parent)) {
+    const operator = parent.getOperatorToken().getKind();
+    return (
+      parent.getLeft() === access &&
+      operator >= SyntaxKind.FirstAssignment &&
+      operator <= SyntaxKind.LastAssignment
+    );
+  }
+  return (
+    (Node.isPrefixUnaryExpression(parent) || Node.isPostfixUnaryExpression(parent)) &&
+    [SyntaxKind.PlusPlusToken, SyntaxKind.MinusMinusToken].includes(parent.getOperatorToken())
+  );
+}
+
+/** One line of code for a marker: its whitespace collapsed, long text shortened. */
+function oneLine(text: string): string {
+  const collapsed = text.replace(/\s+/gu, " ").trim();
+  return collapsed.length > 120 ? `${collapsed.slice(0, 117)}...` : collapsed;
+}
+
+/**
+ * Drops each use of `super` (the 4.x base class): a statement that only
+ * calls it (`super.x(...)`, awaited or voided) becomes the marker naming the
+ * call, and a call inside an expression becomes `undefined` under one.
+ * `super` outside a class does not parse, so nothing that uses it is kept.
+ */
+function dropSuper(
+  root: Node,
+  result: ReceiverResult,
+): { ranges: (readonly [number, number])[]; markers: PendingMarker[] } {
+  const dropped: (readonly [number, number])[] = [];
+  const markers: PendingMarker[] = [];
+  for (const keyword of root.getDescendantsOfKind(SyntaxKind.SuperKeyword)) {
+    const access = keyword.getParent();
+    if (access === undefined) {
+      continue;
+    }
+    const outer = access.getParent();
+    const used = Node.isCallExpression(outer) && outer.getExpression() === access ? outer : access;
+    let statement: Node = used;
+    let parent = used.getParent();
+    while (
+      parent !== undefined &&
+      (Node.isAwaitExpression(parent) ||
+        Node.isVoidExpression(parent) ||
+        Node.isParenthesizedExpression(parent))
+    ) {
+      statement = parent;
+      parent = parent.getParent();
+    }
+    const shown = oneLine(used.getText());
+    if (Node.isExpressionStatement(parent)) {
+      result.edits.push({
+        start: parent.getStart(),
+        end: parent.getEnd(),
+        text: markerText(
+          "this",
+          `dropped ${shown}, a call of the 4.x base class, which 5.0 does not have: do here what this code still needs of it`,
+        ),
+      });
+      dropped.push([parent.getStart(), parent.getEnd()]);
+    } else {
+      result.edits.push({ start: used.getStart(), end: used.getEnd(), text: "undefined" });
+      markers.push({
+        node: statement,
+        category: "this",
+        message: `${shown} called the 4.x base class, which 5.0 does not have: it is undefined here; do what this code still needs of it`,
+      });
+      dropped.push([used.getStart(), used.getEnd()]);
+    }
+  }
+  return { ranges: dropped, markers };
 }
 
 const RAW_WRITE = /\b(?:insert|update|delete|merge|truncate)\b/iu;
@@ -276,14 +367,7 @@ export function mapReceiver(root: Node, scope: ReceiverScope): ReceiverResult {
     usesCtx: false,
   };
   markRawSql(root, result);
-  for (const superKeyword of root.getDescendantsOfKind(SyntaxKind.SuperKeyword)) {
-    result.markers.push({
-      node: superKeyword,
-      category: "this",
-      message:
-        "calls the 4.x base class, which 5.0 does not have: keep what this code still needs without it",
-    });
-  }
+  const dropped = dropSuper(root, result);
   for (const receiver of receivers(root, scope)) {
     const parent = receiver.getParent();
     if (
@@ -301,5 +385,11 @@ export function mapReceiver(root: Node, scope: ReceiverScope): ReceiverResult {
       });
     }
   }
+  // nothing inside a dropped call is kept, so nothing there needs a marker
+  const kept = result.markers.filter(
+    ({ node }) =>
+      !dropped.ranges.some(([start, end]) => node.getStart() >= start && node.getEnd() <= end),
+  );
+  result.markers.splice(0, result.markers.length, ...kept, ...dropped.markers);
   return result;
 }

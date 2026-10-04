@@ -15,7 +15,7 @@
     "directory": "packages/skills"
   },
   "bin": {
-    "quickdraw-skills": "./bin/cli.mjs"
+    "quickdraw-skills": "bin/cli.mjs"
   },
   "files": [
     "bin",

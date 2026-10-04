@@ -2,10 +2,14 @@
 // (`contracts/<name>.ts`), the helpers their moved schemas need
 // (`contracts/helpers.ts`), the `contracts` map the web client is built from
 // (`contracts/index.ts`), and the shared package's export of them. Service
-// names are kept exactly: stored grants (`User.serviceAccess`) name them.
+// names are kept exactly: stored grants (`User.serviceAccess`) name them. A
+// service of a template carve-out (`carveOuts.ts`) keeps its markers: its
+// lines in `contracts/index.ts` and the helpers only it uses sit between
+// them, and its contract file says it belongs to the carve-out.
 
 import { join } from "node:path";
 import { Node, SyntaxKind, type SourceFile, type TypeNode } from "ts-morph";
+import { regionMarkers } from "../carveOuts";
 import type { RunContext } from "../context";
 import { relativeSpecifier } from "../imports";
 import { repoPath } from "../layout";
@@ -107,6 +111,14 @@ function builders(plan: ServicePlan): string[] {
   return used.toSorted();
 }
 
+/** The `[carve-out]` marker a new file of carve-out `name` carries. */
+export function carveOutMarker(name: string): string {
+  return markerText(
+    "carve-out",
+    `this file belongs to the ${name} carve-out (it was written from code between its markers): list it wherever the carve-out's own files are (a fork script's delete list), then delete this line`,
+  );
+}
+
 function header(ctx: RunContext, plan: ServicePlan): string {
   const service = plan.service;
   const files = [
@@ -121,6 +133,7 @@ function header(ctx: RunContext, plan: ServicePlan): string {
     `// ${service.methodMapName ?? "its 4.x method map"} and the defineMethod calls of ${service.className}`,
     `// (${files.join(", ") || repoPath(ctx.layout, service.chain[0]?.getSourceFile().getFilePath() ?? "")}).`,
     "// Every marker below says what to check.",
+    ...(plan.carveOut === undefined ? [] : [carveOutMarker(plan.carveOut)]),
   ].join("\n");
 }
 
@@ -249,6 +262,32 @@ function withoutHelperClashes(plans: readonly ServicePlan[]): ServicePlan[] {
   }));
 }
 
+/** `lines` between the markers of carve-out `name`, or as they are without one. */
+function inRegion(name: string | undefined, lines: readonly string[]): string[] {
+  if (name === undefined || lines.length === 0) {
+    return [...lines];
+  }
+  const markers = regionMarkers(name);
+  return [markers.start, ...lines, markers.end];
+}
+
+/** The carve-out a helper belongs to: the one every contract using it belongs to, if any. */
+function helperRegions(plans: readonly ServicePlan[]): Map<string, string | undefined> {
+  const regions = new Map<string, Set<string | undefined>>();
+  for (const plan of plans) {
+    for (const declaration of plan.methods.flatMap((method) => method.moved?.declarations ?? [])) {
+      if (declaration.place === "helper") {
+        const set = regions.get(declaration.key) ?? new Set();
+        set.add(plan.carveOut);
+        regions.set(declaration.key, set);
+      }
+    }
+  }
+  return new Map(
+    [...regions].map(([key, set]) => [key, set.size === 1 ? [...set][0] : undefined] as const),
+  );
+}
+
 /** Writes `contracts/helpers.ts` with the helpers the moved schemas need; returns their names. */
 function writeHelpers(ctx: RunContext, plans: readonly ServicePlan[]): Set<string> {
   const moved = plans.flatMap((plan) =>
@@ -259,6 +298,7 @@ function writeHelpers(ctx: RunContext, plans: readonly ServicePlan[]): Set<strin
       .flatMap((schema) => schema.declarations)
       .filter((declaration) => declaration.place === "helper"),
   );
+  const regions = helperRegions(plans);
   const names = new Set(helpers.map((helper) => helper.name));
   if (helpers.length === 0) {
     return names;
@@ -271,7 +311,11 @@ function writeHelpers(ctx: RunContext, plans: readonly ServicePlan[]): Set<strin
     ...zod,
     "",
     helpers
-      .map((helper) => `${helper.docs === "" ? "" : `${helper.docs}\n`}export ${helper.code}`)
+      .map((helper) =>
+        inRegion(regions.get(helper.key), [
+          `${helper.docs === "" ? "" : `${helper.docs}\n`}export ${helper.code}`,
+        ]).join("\n"),
+      )
       .join("\n\n"),
     "",
   ].join("\n");
@@ -286,17 +330,32 @@ function writeIndex(ctx: RunContext, plans: readonly ServicePlan[]): void {
     relativeSpecifier(path, plan.contractFile, ctx.js.shared);
   const existing = ctx.project.getSourceFile(path);
   if (existing === undefined) {
+    // the plans of each carve-out together, after those of none, each group between its markers
+    const names = [...new Set(plans.flatMap((plan) => plan.carveOut ?? []))].toSorted();
+    const groups = [undefined, ...names]
+      .map((name) => ({ name, plans: plans.filter((plan) => plan.carveOut === name) }))
+      .filter((group) => group.plans.length > 0);
+    const each = (line: (plan: ServicePlan) => string, indent = ""): string[] =>
+      groups.flatMap((group) =>
+        inRegion(group.name, group.plans.map(line)).map((text) =>
+          text.startsWith("//") ? `${indent}${text}` : text,
+        ),
+      );
     const text = [
       "// The app's contracts, written by @fitzzero/quickdraw-codemod. The web client is",
       "// built from `contracts` (`createQuickdrawClient(contracts)`), keyed by service",
       "// name so every 4.x call site keeps its name: `qd.projectService.getProject`.",
       "",
-      ...plans.map((plan) => `import { ${plan.contractVar} } from ${quote(specifier(plan))};`),
+      ...each((plan) => `import { ${plan.contractVar} } from ${quote(specifier(plan))};`),
       "",
-      `export { ${plans.map((plan) => plan.contractVar).join(", ")} };`,
+      ...groups.flatMap((group) =>
+        inRegion(group.name, [
+          `export { ${group.plans.map((plan) => plan.contractVar).join(", ")} };`,
+        ]),
+      ),
       "",
       "export const contracts = {",
-      ...plans.map((plan) => `  ${plan.service.serviceName}: ${plan.contractVar},`),
+      ...each((plan) => `  ${plan.service.serviceName}: ${plan.contractVar},`, "  "),
       "};",
       "",
     ].join("\n");
@@ -310,12 +369,22 @@ function writeIndex(ctx: RunContext, plans: readonly ServicePlan[]): void {
     if (map?.getProperty(plan.service.serviceName) !== undefined) {
       continue;
     }
+    const markers = plan.carveOut === undefined ? undefined : regionMarkers(plan.carveOut);
+    const around =
+      markers === undefined
+        ? {}
+        : { leadingTrivia: `${markers.start}\n`, trailingTrivia: `\n${markers.end}` };
     existing.addImportDeclaration({
       moduleSpecifier: specifier(plan),
       namedImports: [plan.contractVar],
+      ...around,
     });
-    existing.addExportDeclaration({ namedExports: [plan.contractVar] });
-    map?.addPropertyAssignment({ name: plan.service.serviceName, initializer: plan.contractVar });
+    existing.addExportDeclaration({ namedExports: [plan.contractVar], ...around });
+    map?.addPropertyAssignment({
+      name: plan.service.serviceName,
+      initializer: plan.contractVar,
+      ...around,
+    });
   }
 }
 

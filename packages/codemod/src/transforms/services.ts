@@ -4,7 +4,7 @@
 // (`registerX(service)`) stay in that module as exported, typed method
 // objects the service lists. The rest of the class is hoisted (`hoist.ts`).
 
-import type { ClassDeclaration } from "ts-morph";
+import type { ClassDeclaration, SourceFile } from "ts-morph";
 import type { Work } from "../apply";
 import type { RunContext } from "../context";
 import { hoistClass, hoistedNames, setupOnlyMethods } from "../hoist";
@@ -42,9 +42,10 @@ function migrateService(ctx: RunContext, plan: ServicePlan, work: Work): void {
   }
   const setupOnly = setupOnlyMethods(service);
   const hoisted = hoistedNames(service, setupOnly);
-  const build = buildMethods(ctx, plan, hoisted, work);
-  const policy = policyLines(service, build.anyEntry);
   const paths = infraPaths(ctx);
+  // The hoisted code first: a file whose helpers use the tracked `db` imports
+  // it, and its handlers use that one.
+  const dbFiles = new Set<SourceFile>();
   for (const cls of ancestors) {
     const imports: Hoisted[] = [];
     const hoistedCode = hoistClass(cls, service, hoisted, setupOnly, imports);
@@ -52,10 +53,16 @@ function migrateService(ctx: RunContext, plan: ServicePlan, work: Work): void {
     addHoistedImports(work, cls.getSourceFile(), imports);
     if (hoistedCode.usesDb) {
       work.for(cls.getSourceFile()).imports.push({ name: "db", from: paths.db });
+      dbFiles.add(cls.getSourceFile());
     }
   }
   const imports: Hoisted[] = [];
   const leafCode = hoistClass(leaf, service, hoisted, setupOnly, imports);
+  if (leafCode.usesDb) {
+    dbFiles.add(leaf.getSourceFile());
+  }
+  const build = buildMethods(ctx, plan, hoisted, work, dbFiles);
+  const policy = policyLines(service, build.anyEntry);
   replaceClass(
     leaf,
     [

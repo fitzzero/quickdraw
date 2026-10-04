@@ -1,15 +1,18 @@
-// What the codemod writes is 5.0 code: on the fixture app's output, the
-// TypeScript compiler (against the built @fitzzero/quickdraw-core) and the
-// 5.0 lint rules (@fitzzero/quickdraw-lint's base config) report problems
-// only on what a review marker covers. The input, for contrast, is genuine
-// 4.1 code: it typechecks against the published @fitzzero/quickdraw-core
-// 4.1.0, and the 5.0 rules report it.
+// What the codemod writes is 5.0 code: on the fixture app's output, every
+// file parses (oxlint, whose parser also refuses `super` outside a class),
+// no review marker trails code on its line, and the TypeScript compiler
+// (against the built @fitzzero/quickdraw-core) and the 5.0 lint rules
+// (@fitzzero/quickdraw-lint's base config) report problems only on what a
+// review marker covers. The input, for contrast, is genuine 4.1 code: it
+// typechecks against the published @fitzzero/quickdraw-core 4.1.0, and the
+// 5.0 rules report it.
 
 import { cpSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ModuleKind, ModuleResolutionKind, Project, ScriptTarget, ts } from "ts-morph";
 import { runCodemod } from "../src/index";
+import { MARKER } from "../src/markers";
 import { copyFixture, coveredLines, lint, PACKAGE, readTree, removeCopies, REPO } from "./helpers";
 
 const CORE = join(REPO, "packages", "core");
@@ -91,6 +94,23 @@ function uncovered<T extends { file: string; line: number }>(
 }
 
 describe("the output", () => {
+  it("parses: oxlint finds no syntax error in any file (no baseline could hold one)", () => {
+    writeFileSync(join(root, "parse-only.json"), JSON.stringify({ plugins: [], categories: {} }));
+    const unparsed = lint(root, "parse-only.json").filter((diagnostic) => diagnostic.rule === "");
+    expect(unparsed).toEqual([]);
+  });
+
+  it("puts every review marker on a line of its own, never after code", () => {
+    const code = [...readTree(root)].filter(([file]) => /\.tsx?$/u.test(file));
+    const trailing = code.flatMap(([file, text]) =>
+      text
+        .split("\n")
+        .map((line, index) => ({ file, line: index + 1, text: line }))
+        .filter(({ text: line }) => line.includes(MARKER) && !line.trimStart().startsWith("//")),
+    );
+    expect(trailing).toEqual([]);
+  });
+
   it("typechecks against the built 5.0 core, apart from what review markers cover", () => {
     const diagnostics = typecheck(root, {});
     expect(diagnostics.length).toBeGreaterThan(0);

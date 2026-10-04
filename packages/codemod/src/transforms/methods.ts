@@ -36,12 +36,17 @@ export function addHoistedImports(work: Work, file: SourceFile, imports: readonl
   }
 }
 
-/** Builds every method of the service: inline entries, and method module objects. */
+/**
+ * Builds every method of the service: inline entries, and method module
+ * objects. A handler in one of `dbFiles` uses the tracked `db` its file
+ * imports.
+ */
 export function buildMethods(
   ctx: RunContext,
   plan: ServicePlan,
   hoisted: ReadonlyMap<string, Hoisted>,
   work: Work,
+  dbFiles: ReadonlySet<SourceFile> = new Set(),
 ): ServiceBuild {
   const build: ServiceBuild = {
     inline: [],
@@ -59,13 +64,19 @@ export function buildMethods(
       inputHasId: method.inputHasId,
     });
     build.anyEntry ||= form.entry;
-    const entry = buildMethod(call, form, {
-      service: plan.service,
-      hoisted,
-      receiver: call.receiver,
-      receiverParam: call.register?.getParameters()[0],
-      inHandler: true,
-    });
+    const entry = buildMethod(
+      call,
+      form,
+      {
+        service: plan.service,
+        hoisted,
+        receiver: call.receiver,
+        receiverParam: call.register?.getParameters()[0],
+        inHandler: true,
+      },
+      dbFiles.has(call.call.getSourceFile()),
+      method.handlerNotes,
+    );
     ctx.stats.methods += 1;
     const kit = kitMarker(method.name, plan.service.model, names);
     if (call.register === undefined) {

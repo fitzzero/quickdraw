@@ -19,9 +19,19 @@
 // the repository root serves lint runs started from any package directory.
 // Its keys are paths relative to the directory holding it.
 //
-// File format (version 2; version 1 held counts per file and is refused):
+// The file records every rule's violations, oxlint's own rules too. The
+// quickdraw rules apply it themselves, so a plain `oxlint` run (an editor's
+// too) reports only their new violations. oxlint's native rules cannot be
+// wrapped by a JS plugin: `quickdraw-lint check` (../bin/check.mjs) runs
+// oxlint and applies the file to them, and reports their unused allowances
+// as `no-unused-baseline` does for the quickdraw rules.
+//
+// File format (version 2; version 1 held counts per file and is refused). A
+// quickdraw rule is keyed by its name, any other rule by the code oxlint
+// reports it under:
 //   { "version": 2, "files": { "apps/api/src/services/task.ts": {
-//       "no-unbounded-read": { "<fingerprint>": 1 } } } }
+//       "no-unbounded-read": { "<fingerprint>": 1 },
+//       "eslint(no-unused-vars)": { "<fingerprint>": 2 } } } }
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -42,6 +52,33 @@ export const BASELINE_ENV = "QUICKDRAW_LINT_BASELINE";
 
 /** The rule that reports allowances no violation uses (`rules/no-unused-baseline.mjs`). */
 export const UNUSED_RULE = "no-unused-baseline";
+
+/** The name the quickdraw plugin is loaded under by the shipped configs. */
+export const PLUGIN = "quickdraw";
+
+/**
+ * The baseline key of a diagnostic's code (`quickdraw(no-unbounded-read)`,
+ * `eslint(no-unused-vars)`): a rule of the quickdraw plugin (loaded as
+ * `plugin`) by its name, any other rule by the code itself. `null` for no
+ * code (a file oxlint could not parse) and for `no-unused-baseline`, which
+ * is never recorded.
+ */
+export function baselineKey(code, plugin = PLUGIN) {
+  if (typeof code !== "string" || code === "") {
+    return null;
+  }
+  const prefix = `${plugin}(`;
+  if (code.startsWith(prefix) && code.endsWith(")")) {
+    const rule = code.slice(prefix.length, -1);
+    return rule === UNUSED_RULE ? null : rule;
+  }
+  return code;
+}
+
+/** Whether a baseline key names a quickdraw rule, which applies the baseline itself. */
+export function isPluginKey(key) {
+  return !key.includes("(");
+}
 
 const BASELINE_OPTION = Object.freeze({
   type: "string",
@@ -95,7 +132,7 @@ const located = new Map();
 const parsed = new Map();
 
 /** The baseline file `name` resolves to for a file in `directory`, or `null`. */
-function locate(name, directory) {
+export function locateBaseline(name, directory) {
   if (path.isAbsolute(name)) {
     return fs.existsSync(name) ? name : null;
   }
@@ -109,7 +146,7 @@ function locate(name, directory) {
   if (fs.existsSync(candidate)) {
     found = candidate;
   } else if (parent !== directory) {
-    found = locate(name, parent);
+    found = locateBaseline(name, parent);
   }
   located.set(key, found);
   return found;
@@ -163,7 +200,7 @@ function allowances(context) {
   if (typeof name !== "string" || name === "") {
     return null;
   }
-  const file = locate(name, path.dirname(context.filename));
+  const file = locateBaseline(name, path.dirname(context.filename));
   if (file === null) {
     return null;
   }

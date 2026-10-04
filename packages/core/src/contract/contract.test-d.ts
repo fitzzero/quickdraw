@@ -21,6 +21,7 @@ import {
   type EntityOf,
   type EventName,
   type EventPayloadOf,
+  type FullProjectionOf,
   type IndexRowOf,
   type InferOutput,
   type InputOf,
@@ -117,6 +118,21 @@ type CardRow = {
   assigneeId: string | null;
 };
 
+/**
+ * A task as a reader receives it: `fields` tiers `internalNotes` at Admin,
+ * so a reader below Admin gets the row without it.
+ */
+type ReceivedTaskRow = {
+  id: string;
+  projectId: string;
+  title: string;
+  status: "todo" | "doing" | "done";
+  ordinal: number;
+  assigneeId: string | null;
+  internalNotes?: string;
+  archived: boolean;
+};
+
 // ---------------------------------------------------------------------------
 // Consumer-side derivations: what `defineService` (RFC 0003 section 3) and the
 // client proxy (section 11) will build from a contract. If these are awkward
@@ -171,11 +187,24 @@ describe("the RFC sample contract", () => {
   });
 
   test("derives the entity and the projections", () => {
-    expectTypeOf<EntityOf<Task>>().toEqualTypeOf<TaskRow>();
+    expectTypeOf<EntityOf<Task>>().toEqualTypeOf<ReceivedTaskRow>();
     expectTypeOf<ProjectionName<Task>>().toEqualTypeOf<"entity" | "card">();
     expectTypeOf<ProjectionOf<Task, "card">>().toEqualTypeOf<CardRow>();
-    expectTypeOf<ProjectionOf<Task, "entity">>().toEqualTypeOf<TaskRow>();
+    expectTypeOf<ProjectionOf<Task, "entity">>().toEqualTypeOf<ReceivedTaskRow>();
     expectTypeOf(task.fields).toEqualTypeOf<{ readonly internalNotes: "Admin" }>();
+  });
+
+  test("makes a field the contract's fields tier optional for readers, and keeps the full row", () => {
+    // A reader below Admin receives the task without internalNotes; a handler returns it whole.
+    expectTypeOf<FullProjectionOf<Task, "entity">>().toEqualTypeOf<TaskRow>();
+    expectTypeOf<EntityOf<Task>>().toEqualTypeOf<ReceivedTaskRow>();
+    // A projection without a tiered key is the same either way.
+    expectTypeOf<FullProjectionOf<Task, "card">>().toEqualTypeOf<CardRow>();
+    expectTypeOf<ProjectionOf<Task, "card">>().toEqualTypeOf<CardRow>();
+    // So reading a tiered field needs a guard.
+    const received = {} as EntityOf<Task>;
+    expectTypeOf(received.internalNotes).toEqualTypeOf<string | undefined>();
+    expectTypeOf(received.title).toEqualTypeOf<string>();
   });
 
   test("derives method names, kinds, inputs and outputs", () => {
@@ -183,8 +212,8 @@ describe("the RFC sample contract", () => {
     expectTypeOf<KindOf<Task, "get">>().toEqualTypeOf<"query">();
     expectTypeOf<KindOf<Task, "rename">>().toEqualTypeOf<"mutation">();
     expectTypeOf<InputOf<Task, "rename">>().toEqualTypeOf<{ id: string; title: string }>();
-    expectTypeOf<OutputOf<Task, "get">>().toEqualTypeOf<TaskRow>();
-    expectTypeOf<OutputOf<Task, "rename">>().toEqualTypeOf<TaskRow>();
+    expectTypeOf<OutputOf<Task, "get">>().toEqualTypeOf<ReceivedTaskRow>();
+    expectTypeOf<OutputOf<Task, "rename">>().toEqualTypeOf<ReceivedTaskRow>();
     expectTypeOf<OutputOf<Task, "stats">>().toEqualTypeOf<{ open: number; done: number }>();
   });
 
@@ -241,13 +270,13 @@ describe("derivations for defineService and the client", () => {
   test("the client proxy exposes hooks by kind", () => {
     expectTypeOf(qd.task.get.kind).toEqualTypeOf<"query">();
     expectTypeOf(qd.task.get.call).parameter(0).toEqualTypeOf<{ id: string }>();
-    expectTypeOf(qd.task.get.call).returns.resolves.toEqualTypeOf<TaskRow>();
+    expectTypeOf(qd.task.get.call).returns.resolves.toEqualTypeOf<ReceivedTaskRow>();
     expectTypeOf(qd.task.rename.kind).toEqualTypeOf<"mutation">();
     expectTypeOf(qd.task.rename.useMutation().mutateAsync)
       .parameter(0)
       .toEqualTypeOf<{ id: string; title: string }>();
     expectTypeOf(qd.task.stats.useQuery).toBeCallableWith({ projectId: "p1" });
-    expectTypeOf(qd.task.useEntity).returns.toEqualTypeOf<TaskRow | undefined>();
+    expectTypeOf(qd.task.useEntity).returns.toEqualTypeOf<ReceivedTaskRow | undefined>();
   });
 
   test("collections take their scope type and view names", () => {
@@ -407,11 +436,17 @@ describe("schemas from any Standard Schema library", () => {
   test("accepts Zod 3.25 schemas everywhere, mixed with Zod 4", () => {
     expectTypeOf(chat3).toExtend<AnyContract>();
     expectTypeOf<{ task: Task; chat: Chat3 }>().toExtend<ContractMap>();
-    expectTypeOf<EntityOf<Chat3>>().toEqualTypeOf<Chat3Row>();
+    expectTypeOf<EntityOf<Chat3>>().toEqualTypeOf<{
+      id: string;
+      ownerId: string;
+      title: string;
+      pinned?: boolean;
+    }>();
+    expectTypeOf<FullProjectionOf<Chat3, "entity">>().toEqualTypeOf<Chat3Row>();
     expectTypeOf<OutputOf<Chat3, "rename">>().toEqualTypeOf<{
       id: string;
       title: string;
-      pinned: boolean;
+      pinned?: boolean;
     }>();
     expectTypeOf<OutputOf<Chat3, "count">>().toEqualTypeOf<number>();
     expectTypeOf<InputOf<Chat3, "mixed">>().toEqualTypeOf<{ id: string }>();

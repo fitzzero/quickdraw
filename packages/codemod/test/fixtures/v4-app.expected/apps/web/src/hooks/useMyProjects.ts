@@ -11,7 +11,7 @@ function byName(a: ProjectListItem, b: ProjectListItem): number {
 }
 
 /** The signed-in user's live project list: the `mine` collection. */
-export function useMyProjects() {
+export function useMyProjects(): UseCollectionResult<ProjectListItem, { readonly id: string }> {
   const { userId } = useQuickdrawSocket();
   // quickdraw-migrate: review [client] declare the collection "mine" in the projectService contract (see the [collection] marker where 4.x defined it): qd.projectService.mine does not exist until then, and the cast to the 4.x item type stands in for its type; delete the cast once it is declared
   // quickdraw-migrate: review [client] compare is gone: items follow the contract collection's order (put the sort there)

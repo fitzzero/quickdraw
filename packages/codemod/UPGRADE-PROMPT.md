@@ -2,7 +2,7 @@
 
 Paste this file to a coding agent (or follow it yourself) to move an app from
 quickdraw-core 4.x to 5.0. The details of every step are in
-[`MIGRATION.md`](MIGRATION.md); this page is the procedure. Both ship with the
+[`MIGRATION.md`](https://github.com/fitzzero/quickdraw/blob/dev/MIGRATION.md); this page is the procedure. Both ship with the
 codemod: `node_modules/@fitzzero/quickdraw-codemod/MIGRATION.md` and
 `node_modules/@fitzzero/quickdraw-codemod/UPGRADE-PROMPT.md`.
 

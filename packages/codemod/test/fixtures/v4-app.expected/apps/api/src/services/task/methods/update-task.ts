@@ -4,6 +4,7 @@ import type { taskContract } from "@project/shared";
 
 export const updateTask = {
   access: { service: "Moderate", entry: "Moderate", id: "id" },
+  // quickdraw-migrate: review [contract] the contract's output is "entity" (4.x answered TaskDTO | null): return the row, and let a missing one fail with NOT_FOUND (db.<model>.update throws it)
   handler: async ({ input, db }) => {
     const task = await db.task.update({
       where: { id: input.id },

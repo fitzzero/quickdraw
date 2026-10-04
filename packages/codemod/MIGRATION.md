@@ -7,7 +7,7 @@ package, access is declared per method and decided by one row policy, frames
 and deltas follow tracked writes instead of hand emits, and the web app calls
 a typed client instead of string-named hooks. The concepts carry over: a
 service, its methods, levels, rooms, collections, channels. The design record
-is [`docs/rfcs/0003-v5.md`](../../docs/rfcs/0003-v5.md); section 15 lists every
+is [`docs/rfcs/0003-v5.md`](https://github.com/fitzzero/quickdraw/blob/dev/docs/rfcs/0003-v5.md); section 15 lists every
 4.x API and what replaces it, and this guide takes them one at a time.
 
 Most of the move is mechanical, and `@fitzzero/quickdraw-codemod` does it:
@@ -82,7 +82,11 @@ faithfully. What it does:
   into the shared package with the helpers it uses (`cuidSchema`, say, into
   `contracts/helpers.ts`); without one, `todoSchema<Payload>()`. An output is
   `"entity"` (or `nullable("entity")`, `listOf("entity")`) when the 4.x
-  response was the service's DTO, `todoSchema<Response>()` otherwise. The
+  response was the service's DTO, `todoSchema<Response>()` otherwise. A
+  mutation of one row whose 4.x response was `DTO | null` answers `"entity"`,
+  marked in the contract and above its handler: 4.x's `this.update` gave
+  `null` for a missing row, a tracked write throws `NOT_FOUND` instead, and
+  only an exact `"entity"` output is optimistic by default. The
   entity is `todoSchema<DTO>({ keys })`, the DTO's fields. A method is a
   `query` when its name starts with get, list, search, find or count, or the
   web app reads it with `useServiceQuery`, and a `mutation` otherwise.
@@ -96,16 +100,31 @@ faithfully. What it does:
   `input`, `ctx.userId` becomes `ctx.principal.userId`, `this.prisma`
   becomes the tracked `db`, and the template's `requireAuth(ctx)` guard goes
   where access already requires a principal. The access mapping is below.
-  Helper methods become module functions; overridden 4.x hooks,
+  Helper methods and getters become module functions (a getter's reads call
+  it: `this.enabled` is `enabled()`); overridden 4.x hooks,
   `defineCollection` options and `installAdminMethods` options stay in the
-  file, marked. A split service's method modules keep their files, with
-  typed method objects (see [Splitting large services](#splitting-large-services)).
+  file, marked. Each field becomes a marked module binding with its
+  initializer (`const playingUsers = new Set<string>()`), and `this.x`
+  reads it; the constructor's other code, the values it gave fields
+  included, goes into an exported `setUp<Service>(...)` function that takes
+  the constructor's parameters it uses, marked: call it once where the
+  server starts, or move each part. Only the Prisma client's field goes (it
+  is `db`), and a field holding another 4.x service, whose uses are marked
+  (`ctx.services` replaces it). A call of the 4.x base class
+  (`super.unsubscribe(...)`) is dropped under a marker naming it, since
+  `super` outside a class does not parse. A split service's method modules
+  keep their files, with typed method objects (see
+  [Splitting large services](#splitting-large-services)).
 - **The web app.** `useService`, `useServiceQuery`, `useSubscription` and
   `useCollection` calls become `qd.<service>.<method>.useMutation()`,
   `.useQuery(input)`, `qd.<service>.useEntity(id)` and
   `qd.<service>.<collection>.useCollection(scope)`, whether the call reaches
   quickdraw directly or through the template's typed wrappers
-  (`hooks/useService.ts`), which it deletes once nothing uses them.
+  (`hooks/useService.ts`), which it deletes once nothing uses them, with a
+  file of types only they imported (`hooks/service-types.ts`). A local type
+  that only a rewritten hook's type arguments named goes, a one-argument
+  `UseCollectionResult<Item>` gets 5.0's second argument, and an import left
+  holding only types becomes `import type`.
 - **Other uses of a service class.** Its import becomes one of the service
   object, `new ChatService(prisma)` becomes `chatService` (marked: the
   server takes services in `qd.createServer({ services })`) and the class
@@ -122,16 +141,31 @@ faithfully. What it does:
 - **New files**: `apps/api/src/db.ts` (`trackPrisma(prisma)`),
   `apps/api/src/quickdraw.ts` (`initQuickdraw<AppTypes>()`) and
   `apps/web/src/lib/quickdraw.ts` (`createQuickdrawClient(contracts)`).
+- **Template carve-outs.** A service whose 4.x code sat between a template
+  carve-out's comments (`quickdraw-game:start` and `quickdraw-game:end`,
+  around its `ServiceMethodsMap` entry) keeps them: its lines in
+  `contracts/index.ts` sit between the same comments, and its new contract
+  file carries a `[carve-out]` marker, so a fork that strips the carve-out
+  can delete it too. An entity key the 4.x DTO declares inside a carve-out
+  (a game-only `isGuest` on `UserDTO`) keeps the carve-out's comments
+  around it in the contract's `keys`.
+- **Formatting.** It formats every file it writes, the report too, with the
+  app's formatter (oxfmt, prettier or Biome, when the root `package.json`
+  has it and it is installed), so the output passes the app's format check
+  as it is written.
 - **The report.** Wherever a person has to decide, it leaves a
-  `// quickdraw-migrate: review [kind] ...` marker above the code in
-  question (a hook's `error` read as the 4.x message string among them: it
-  is a `QuickdrawError` now), and writes `quickdraw-migration-report.md` at
-  the root: every marker, with its file and line, grouped by kind. A dry run
-  lists it as `A` (created) on the first run.
+  `// quickdraw-migrate: review [kind] ...` marker on its own line above the
+  code in question (a hook's `error` read as the 4.x message string among
+  them: it is a `QuickdrawError` now), and writes
+  `quickdraw-migration-report.md` at the root: every marker, with its file
+  and line in the formatted file, grouped by kind. A dry run lists it as `A`
+  (created) on the first run.
 
-Running it again changes nothing, apart from rewriting the report from the
-markers that remain, so delete each marker once its item is done and run it
-again to see what is left.
+Running it again changes nothing at all, so delete each marker once its
+item is done and run it again: the report is rewritten from the markers
+that remain. Commit the output as it is, then adopt lint with a baseline
+([Lint, skills and agents](#lint-skills-and-agents)): the output breaks
+rules (unused 4.x hooks kept for review, say) until its markers are done.
 
 ### The access mapping
 
@@ -589,7 +623,18 @@ export const taskService = qd.defineService(task, {
 ```
 
 The 5.0 contract above declares `fields: { notes: "Moderate" }` where the
-4.x service listed `notes` as protected.
+4.x service listed `notes` as protected. In the types a reader gets (the
+data of `useEntity`, `useEntities` and `useCollection`, an `"entity"`
+output, `EntityOf`, `ItemOf`), a tiered field is optional, since a reader
+below its level receives the row without it: `task.notes` is
+`string | null | undefined` there, so read it with a guard. A handler still
+returns the whole row. A 4.x DTO type that kept protected fields optional by
+hand can become `EntityOf<typeof taskContract>`.
+
+A handler returns database rows for a projection output, and a Prisma `Json`
+column, typed `JsonValue`, is accepted where the projection has an object,
+an array or a record (`acl: [{ userId, level }]`); the output schema checks
+its shape outside production.
 
 ### `checkAccess`, `checkEntryACL`, `checkBatchSubscriptionAccess` and `hasEntryACL` become policies
 
@@ -1383,18 +1428,17 @@ so ship the clients soon after the server.
 ## Lint, skills and agents
 
 **`@fitzzero/quickdraw-lint`** is the oxlint plugin and base config every
-5.0 app extends:
+5.0 app extends (an app built from the quickdraw template extends
+`oxlint.template.jsonc` instead: it extends the base and adds the
+design-system rules):
 
 ```jsonc
 // .oxlintrc.json
 {
-  "extends": [
-    "./node_modules/@fitzzero/quickdraw-lint/oxlint.base.jsonc",
-    // apps built from the quickdraw template: the design-system rules
-    "./node_modules/@fitzzero/quickdraw-lint/oxlint.template.jsonc",
-  ],
+  "extends": ["./node_modules/@fitzzero/quickdraw-lint/oxlint.base.jsonc"],
   "plugins": ["typescript", "import", "react", "nextjs", "jsx_a11y"],
   "ignorePatterns": ["**/dist/**", "**/node_modules/**"],
+  "settings": { "quickdraw": { "baseline": ".quickdraw-lint-baseline.json" } },
 }
 ```
 
@@ -1403,9 +1447,19 @@ so ship the clients soon after the server.
 every migrated method a kit implements (`getProject`, `listTasks`, ...;
 the report lists them under "Methods a kit implements"): move it to the
 kit, or keep it with a `// quickdraw: hand-written because <reason>`
-comment above it. `quickdraw-lint baseline` writes
-a baseline file, so the rules can be adopted before every old violation is
-fixed. The 4.x rules were removed (oxlint refuses a config that names them):
+comment above it.
+
+Adopt it on the codemod's output with a baseline:
+`quickdraw-lint baseline -c .oxlintrc.json` records every violation lint
+reports now, the quickdraw rules' and oxlint's own (the 4.x hooks the
+codemod keeps for review are unused functions until you delete them), and
+`quickdraw-lint check`, the app's lint command in place of `oxlint` (per
+package: `quickdraw-lint check -c ../../.oxlintrc.json src`), reports only
+what is new. The quickdraw rules read the baseline themselves, so an editor
+running oxlint leaves their recorded violations out too. A fixed violation
+leaves an allowance unused, which `no-unused-baseline` reports: run the
+baseline command again, so the file only shrinks. The 4.x rules were
+removed (oxlint refuses a config that names them):
 
 | 4.x rule                      | In 5.0                                                                                       |
 | ----------------------------- | -------------------------------------------------------------------------------------------- |
@@ -1434,7 +1488,7 @@ which walks an agent through this guide). Link them into `.claude/` from
 ```
 
 An agent doing the migration can start from
-[`UPGRADE-PROMPT.md`](../../UPGRADE-PROMPT.md).
+[`UPGRADE-PROMPT.md`](https://github.com/fitzzero/quickdraw/blob/dev/UPGRADE-PROMPT.md).
 
 ## Splitting large services
 
@@ -1502,7 +1556,7 @@ Conveyor. makiel (on 3.7) and quickdraw-sunfall (on 3.9.1) need their own
 path: the codemod reads 4.x code.
 
 Each of these apps has an upgrade brief in
-[`docs/downstream/`](../../docs/downstream/README.md): its size, its top hazards
+[`docs/downstream/`](https://github.com/fitzzero/quickdraw/blob/dev/docs/downstream/README.md): its size, its top hazards
 and a suggested order of work, which its migration card starts from.
 
 ## Every removed 4.x name

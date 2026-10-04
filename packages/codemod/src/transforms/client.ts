@@ -7,10 +7,13 @@
 //
 // whether the call reaches quickdraw's hook directly or through the app's
 // typed wrapper (the template's hooks/useService.ts and friends), which is
-// deleted once nothing uses it. Options 5.0 dropped, a kind the contract
-// disagrees with, and manual refetches are marked, never silently removed, as
-// is a hook's `error` read as the 4.x message string (`error.includes(...)`):
-// it is a `QuickdrawError` now.
+// deleted once nothing uses it, with a file of types only the wrappers
+// imported (the template's hooks/service-types.ts). Options 5.0 dropped, a
+// kind the contract disagrees with, and manual refetches are marked, never
+// silently removed, as is a hook's `error` read as the 4.x message string
+// (`error.includes(...)`): it is a `QuickdrawError` now. A file's local type
+// that only a rewritten call's type arguments named goes, and 4.x's
+// one-argument `UseCollectionResult<Item>` gets 5.0's second argument.
 
 import { type CallExpression, type Identifier, Node, type SourceFile, SyntaxKind } from "ts-morph";
 import type { Work } from "../apply";
@@ -20,6 +23,7 @@ import type { MethodKind, ServicePlan } from "../plan";
 import { isUnder } from "../project";
 import { infraPaths } from "./infra";
 import { resolveHook, WRAPPED } from "./hookResolution";
+import { completeCollectionResults, deleteOrphanTypes, localTypesOf } from "./webTypes";
 
 /** What the client transform knows of each migrated service. */
 interface ServiceShape {
@@ -171,9 +175,13 @@ class FileRewrite {
 
   /**
    * Replaces the callee and the arguments before `kept` with `callee(`, so
-   * edits inside the kept arguments (markers, nested rewrites) survive.
+   * edits inside the kept arguments (markers, nested rewrites) survive. The
+   * file's own types that only the call's type arguments named go too.
    */
   private replace(call: CallExpression, callee: string, kept: number): void {
+    for (const name of localTypesOf(call)) {
+      this.work.for(this.file).dropIfUnused.add(name);
+    }
     const first = call.getArguments()[kept];
     const open = call.getFirstChildByKindOrThrow(SyntaxKind.OpenParenToken);
     const firstArg = call.getArguments()[0];
@@ -379,6 +387,7 @@ export function migrateClient(
       visitIdentifier(identifier, rewrite, wrappers);
     }
     markRefetches(rewrite);
+    completeCollectionResults(file, work);
     work.for(file).edits.push(...rewrite.markers.edits);
     for (const type of rewrite.collectionTypes) {
       work.for(file).imports.push({ name: type, from: ctx.layout.shared.name, typeOnly: true });
@@ -494,7 +503,8 @@ function trimCoreReExports(ctx: RunContext): void {
 
 /**
  * Deletes the app's wrapper hooks that every call site stopped using, with
- * their barrels' re-exports. Runs after the rewrites are applied.
+ * their barrels' re-exports and the files of types only they imported. Runs
+ * after the rewrites are applied.
  */
 export function deleteWrappers(ctx: RunContext, wrappers: ReadonlyMap<string, boolean>): void {
   const byFile = new Map<string, Set<string>>();
@@ -506,6 +516,7 @@ export function deleteWrappers(ctx: RunContext, wrappers: ReadonlyMap<string, bo
     }
     byFile.set(path, names);
   }
+  const typeFiles = new Set<SourceFile>();
   for (const [path, names] of byFile) {
     const file = ctx.project.getSourceFile(path);
     if (file === undefined || names.size === 0) {
@@ -517,10 +528,17 @@ export function deleteWrappers(ctx: RunContext, wrappers: ReadonlyMap<string, bo
       continue;
     }
     removeReExports(ctx, file, new Set(exported));
+    for (const declaration of file.getImportDeclarations()) {
+      const target = declaration.getModuleSpecifierSourceFile();
+      if (target !== undefined && declaration.getModuleSpecifierValue().startsWith(".")) {
+        typeFiles.add(target);
+      }
+    }
     ctx.deleted.add(path);
     ctx.stats.wrappersDeleted += 1;
     file.delete();
   }
+  deleteOrphanTypes(ctx, typeFiles);
   trimCoreReExports(ctx);
 }
 

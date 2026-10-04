@@ -1153,6 +1153,7 @@ export function TaskDetail({ id }: { readonly id: string }) {
   if (isRemoved) {
     return <p>This task was deleted.</p>;
   }
+  // notes reach Admins only (the contract's fields), so its type is optional: guard it
   return (
     <div>
       <h1>{task?.title}</h1>
@@ -1166,6 +1167,10 @@ export function TaskDetail({ id }: { readonly id: string }) {
 }
 ```
 
+- A field the contract's `fields` map tiers (`notes` here) is optional in
+  every row type a reader gets (`useEntity`, collection items, `"entity"`
+  outputs, `EntityOf`, `ItemOf`), because a reader below its level receives
+  the row without it. Handlers still return the full row.
 - A mutation whose input has `id` and whose output is `"entity"` is
   optimistic by default: its input's fields show over the cached row and its
   collection items from the moment it is sent, are dropped if it fails, and
@@ -2514,7 +2519,9 @@ contracts from the method maps, `defineService` from the service classes,
 the typed client for the hooks, and a report of everything left to decide.
 [`MIGRATION.md`](../../MIGRATION.md) explains each step, the access mapping and
 the defaults that changed; [`UPGRADE-PROMPT.md`](../../UPGRADE-PROMPT.md) is the
-procedure for an agent.
+procedure for an agent. Both ship with the codemod, at
+`node_modules/@fitzzero/quickdraw-codemod/MIGRATION.md` and
+`node_modules/@fitzzero/quickdraw-codemod/UPGRADE-PROMPT.md`.
 
 ```bash
 bunx @fitzzero/quickdraw-codemod@next v5 .

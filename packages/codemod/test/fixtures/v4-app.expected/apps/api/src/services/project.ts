@@ -111,7 +111,7 @@ export const projectService = qd.defineService(projectContract, {
     // quickdraw-migrate: review [kit] getProject has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
     getProject: {
       access: { service: "Read", entry: "Read", id: "id" },
-      handler: async ({ input, db }) => {
+      handler: async ({ input }) => {
         const project = await db.project.findUnique({ where: { id: input.id } });
         if (!project) return null;
         return toDto(project);
@@ -119,6 +119,7 @@ export const projectService = qd.defineService(projectContract, {
     },
     renameProject: {
       access: { service: "Moderate", entry: "Moderate", id: "id" },
+      // quickdraw-migrate: review [contract] the contract's output is "entity" (4.x answered ProjectDTO | null): return the row, and let a missing one fail with NOT_FOUND (db.<model>.update throws it)
       handler: async ({ input }) => {
         // quickdraw-migrate: review [write] 4.x CRUD helper this.update: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.update(...) instead (frames follow the tracked write; hooks do not run; 4.x returned null for a missing row where db.update throws NOT_FOUND)
         const updated = await this.update(input.id, { name: input.name });
@@ -128,7 +129,7 @@ export const projectService = qd.defineService(projectContract, {
     listMyProjects: {
       // quickdraw-migrate: review [access] "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
       access: "authenticated",
-      handler: async ({ input, ctx, db }) => {
+      handler: async ({ input, ctx }) => {
         const pageSize = input.pageSize ?? 20;
         const projects = await db.project.findMany({
           where: { ownerId: ctx.principal.userId },
@@ -167,7 +168,7 @@ export const projectService = qd.defineService(projectContract, {
     },
     getMembers: {
       access: { service: "Read", entry: "Read", id: "projectId" },
-      handler: async ({ input, db }) => {
+      handler: async ({ input }) => {
         const members = await db.projectMember.findMany({
           where: { projectId: input.projectId },
           orderBy: { id: "asc" },
@@ -182,7 +183,7 @@ export const projectService = qd.defineService(projectContract, {
     },
     shareProject: {
       access: { service: "Admin", entry: "Admin", id: "id" },
-      handler: async ({ input, db }) => {
+      handler: async ({ input }) => {
         await db.$transaction(async (tx) => {
           const project = await tx.project.findUnique({
             where: { id: input.id },

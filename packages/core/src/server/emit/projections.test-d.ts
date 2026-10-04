@@ -10,7 +10,7 @@ import { describe, expectTypeOf, test } from "vitest";
 import { z } from "zod";
 import type { PrismaClient } from "../../../test/prisma/setup";
 import { defineContract, listOf, nullable, query } from "../../index";
-import { initQuickdraw, type HandlerRow, type RowFor } from "../index";
+import { initQuickdraw, type HandlerRow, type JsonColumnValue, type RowFor } from "../index";
 
 const qd = initQuickdraw<{ db: PrismaClient }>();
 
@@ -121,6 +121,107 @@ describe("a projection handler's result", () => {
         ...plain,
         // @ts-expect-error -- map takes a status, which the wire shape does not have
         card: { access: "public", handler: () => ({ id: "t1", title: "T", label: "L" }) },
+      },
+    });
+  });
+});
+
+// The test schema's Json columns: Project.acl ([{ userId, level }]), User.serviceAccess
+// ({ [service]: level }) and Task.details. Prisma types each one `JsonValue | null`.
+const level = z.enum(["Public", "Read", "Moderate", "Admin"]);
+const projectEntity = z.object({
+  id: z.string(),
+  name: z.string(),
+  acl: z.array(z.object({ userId: z.string(), level })).nullable(),
+  archived: z.boolean(),
+});
+const project = defineContract("projectService", {
+  entity: projectEntity,
+  methods: {
+    get: query({ input: id, output: "entity" }),
+    find: query({ input: id, output: nullable("entity") }),
+    list: query({ input: z.object({}), output: listOf("entity") }),
+  },
+});
+const user = defineContract("userService", {
+  entity: z.object({
+    id: z.string(),
+    email: z.string(),
+    serviceAccess: z.record(z.string(), level).nullable(),
+  }),
+  fields: { email: "Admin", serviceAccess: "Admin" },
+  methods: { me: query({ input: id, output: nullable("entity") }) },
+});
+const noProject = {
+  get: { access: "public", handler: () => ({ id: "p1", name: "P", acl: null, archived: false }) },
+  find: { access: "public", handler: () => null },
+  list: { access: "public", handler: () => [] },
+} as const;
+
+describe("a JSON column", () => {
+  test("may be returned where the wire has an object, an array or a record", () => {
+    expectTypeOf<RowFor<{ id: string; acl: { userId: string }[] | null }>>().toEqualTypeOf<{
+      readonly id: string | Date;
+      readonly acl: readonly { readonly userId: string | Date }[] | JsonColumnValue | null;
+    }>();
+    qd.defineService(project, {
+      model: "project",
+      methods: {
+        get: {
+          access: "public",
+          handler: ({ db }) => db.project.findUniqueOrThrow({ where: { id: "p1" } }),
+        },
+        find: {
+          access: "public",
+          handler: ({ db }) => db.project.findUnique({ where: { id: "p1" } }),
+        },
+        list: { access: "public", handler: ({ db }) => db.project.findMany({ take: 10 }) },
+      },
+    });
+    qd.defineService(user, {
+      model: "user",
+      methods: {
+        // a tiered field is part of the full row a handler returns
+        me: { access: "public", handler: ({ db }) => db.user.findUnique({ where: { id: "u1" } }) },
+      },
+    });
+    // the shape the wire describes is accepted as it always was
+    qd.defineService(project, {
+      methods: {
+        ...noProject,
+        get: {
+          access: "public",
+          handler: () => ({
+            id: "p1",
+            name: "P",
+            acl: [{ userId: "u1", level: "Admin" as const }],
+            archived: false,
+          }),
+        },
+      },
+    });
+  });
+
+  test("is not accepted where the wire has a string, a number or a boolean", () => {
+    const string = defineContract("taskService", {
+      entity: z.object({ id: z.string(), details: z.string().nullable() }),
+      methods: { get: query({ input: id, output: "entity" }) },
+    });
+    qd.defineService(string, {
+      model: "task",
+      methods: {
+        get: {
+          access: "public",
+          // @ts-expect-error -- details is a Json column, and the wire has a string
+          handler: ({ db }) => db.task.findUniqueOrThrow({ where: { id: "t1" } }),
+        },
+      },
+    });
+    qd.defineService(project, {
+      methods: {
+        ...noProject,
+        // @ts-expect-error -- archived is a boolean on the wire: a number is still refused
+        get: { access: "public", handler: () => ({ id: "p1", name: "P", acl: null, archived: 1 }) },
       },
     });
   });

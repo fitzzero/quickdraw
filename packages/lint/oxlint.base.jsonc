@@ -7,8 +7,12 @@
 //     ...project-specific config
 //   }
 //
-// Apps built from the quickdraw template also extend `oxlint.template.jsonc`
-// (the design-system rules) after this file.
+// Apps built from the quickdraw template extend `oxlint.template.jsonc`
+// instead, which extends this file and adds the design-system rules.
+//
+// The `overrides` globs are `**/`-prefixed: oxlint matches a glob against a
+// path it can see from wherever it runs, and an app lints from the root and
+// from each package directory alike (`oxlint -c ../../.oxlintrc.json src`).
 //
 // oxlint merge semantics (v1.x): `rules` and `categories` merge per-key with
 // the extending config winning; `overrides` concatenate (base first, so a
@@ -79,8 +83,10 @@
     // Every rule takes `baseline` (or, for all of them at once,
     // `"settings": { "quickdraw": { "baseline": ".quickdraw-lint-baseline.json" } }`
     // in your own config): run `quickdraw-lint baseline` to adopt the rules
-    // without fixing existing violations first. `no-unused-baseline` warns
-    // when the file allows a violation that no longer occurs, so it shrinks.
+    // without fixing existing violations first, and lint with
+    // `quickdraw-lint check`, which applies the file to oxlint's own rules
+    // too. `no-unused-baseline` warns when the file allows a violation that
+    // no longer occurs, so it shrinks.
     "quickdraw/no-unused-baseline": "warn",
 
     // Writes subscribers can see (RFC 0003 section 5).
@@ -114,7 +120,7 @@
   "overrides": [
     // Client/React code: relax server-oriented strictness.
     {
-      "files": ["apps/web/**", "**/*.tsx"],
+      "files": ["**/apps/web/**", "**/*.tsx"],
       "rules": {
         "typescript/explicit-function-return-type": "off",
         "jsx_a11y/no-autofocus": "off",
@@ -128,7 +134,7 @@
     },
     // Shared/db packages: public surface — explicit types required.
     {
-      "files": ["packages/shared/**", "packages/db/**"],
+      "files": ["**/packages/shared/**", "**/packages/db/**"],
       "rules": {
         "typescript/explicit-function-return-type": "error",
         "typescript/explicit-module-boundary-types": "error",
