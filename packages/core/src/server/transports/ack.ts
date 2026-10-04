@@ -8,11 +8,22 @@
 // Socket.IO's server-side `ack()` marks itself sent only after the packet was
 // written, so when encoding the reply throws (a `BigInt` or a cycle that
 // `JSON.stringify` refuses), the same `ack()` can still send a fallback.
+//
+// A reply whose data came from a shared run is handed to `ack()` pre-encoded
+// around that data's JSON text, which every caller of the same copy shares,
+// so the run's result is encoded once rather than once per caller.
 
 import { PacketType } from "socket.io-parser";
 import type { Failure } from "../../protocol/envelope";
 import { INTERNAL_MESSAGE, QuickdrawError, type WireIssue } from "../../protocol/errors";
 import { createJsonParser, type JsonParser } from "../../protocol/parser";
+import { PreEncoded } from "../../protocol/preEncoded";
+import {
+  callReplyJson,
+  toCallReply,
+  type DispatchResult,
+  type SharedData,
+} from "../pipeline/request";
 
 /**
  * A `VALIDATION` error for a frame or request the transport could not read,
@@ -81,6 +92,29 @@ export function createReplyMeter(binary: boolean): ReplyMeter {
       return measurement.bytes;
     },
   };
+}
+
+/**
+ * What a call's `ack` is given for `result`: its `qd:call` reply. When the
+ * data came from a shared run and the JSON parser writes the reply, the
+ * reply is pre-encoded around the data's shared JSON text, so every caller
+ * of that copy is sent the same text, encoded once (RFC 0003 section 9,
+ * step 6). The text is written when the reply is encoded, inside `ack()`,
+ * so a value `JSON.stringify` refuses still gets the `INTERNAL` fallback.
+ */
+export function callAcknowledgement(
+  meter: ReplyMeter,
+  result: DispatchResult,
+  shared: SharedData | undefined,
+): unknown {
+  const reply = toCallReply(result);
+  if (shared === undefined || meter.parser === undefined || !("d" in reply)) {
+    return reply;
+  }
+  return new PreEncoded(reply, () => {
+    const data = shared.json();
+    return data === undefined ? JSON.stringify(reply) : callReplyJson(reply, data);
+  });
 }
 
 /**

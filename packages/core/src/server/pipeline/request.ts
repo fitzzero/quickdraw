@@ -4,7 +4,7 @@
 // can measure its size and flush only after it was sent (RFC 0003 section 9,
 // step 9).
 
-import type { CallReply, Version } from "../../protocol/envelope";
+import type { CallReply, CallSuccess, Version } from "../../protocol/envelope";
 import { toWire, type QuickdrawError } from "../../protocol/errors";
 import type { McpContext, Principal, Transport } from "../types";
 
@@ -28,6 +28,23 @@ export type DispatchResult =
       /** Why the call failed. For `INTERNAL`, `cause` holds the original error; `toWire` never sends it. */
       readonly error: QuickdrawError;
     };
+
+/**
+ * A shared run's result as one group of its callers receives it: every
+ * caller whose levels hide the same fields gets the same `data`, and its JSON
+ * text is written once for all of them (RFC 0003 section 9, step 6). The
+ * dispatcher hands it to `respond` beside the result.
+ */
+export interface SharedData {
+  /** The `data` of the result it was handed with. */
+  readonly data: unknown;
+  /**
+   * `data` as JSON text, written the first time any caller of the group asks
+   * and reused after: what `JSON.stringify(data)` returns, `undefined`
+   * included. Throws what `JSON.stringify` throws.
+   */
+  json(): string | undefined;
+}
 
 /** One method call, as a transport hands it to the dispatcher. */
 export interface DispatchRequest {
@@ -60,9 +77,12 @@ export interface DispatchRequest {
    * Sends the result to the caller and returns the reply's size in bytes,
    * when the transport measured it. Called once, before the flush and the
    * completion record. An error it throws is logged and does not change the
-   * result.
+   * result. For data taken from a shared run, `shared` carries that data's
+   * JSON text, written once for every caller that receives the same copy;
+   * a transport that writes JSON may send it instead of encoding the data
+   * again.
    */
-  readonly respond?: (result: DispatchResult) => number | undefined;
+  readonly respond?: (result: DispatchResult, shared?: SharedData) => number | undefined;
 }
 
 /** A dispatch result in the acknowledgement shape of `qd:call` (RFC 0003 section 8.2). */
@@ -76,4 +96,14 @@ export function toCallReply(result: DispatchResult): CallReply {
   return result.version === undefined
     ? { ok: true, d: result.data }
     : { ok: true, d: result.data, v: result.version };
+}
+
+/**
+ * The JSON text of a `qd:call` acknowledgement that carries data, written
+ * around `dataJson`, the data's own JSON text: what `JSON.stringify(reply)`
+ * writes, without encoding the data again.
+ */
+export function callReplyJson(reply: CallSuccess, dataJson: string): string {
+  const version = reply.v === undefined ? "" : `,"v":${JSON.stringify(reply.v)}`;
+  return `{"ok":true,"d":${dataJson}${version}}`;
 }

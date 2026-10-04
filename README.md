@@ -394,8 +394,10 @@ export const taskService = qd.defineService(task, {
   by the `contracts` of `initQuickdraw`'s types, as `qd.caller` is.
 - `share: "caller"` runs identical concurrent calls of one principal once,
   `share: "all"` across principals (not with `custom` access); `ttlMs` keeps
-  a shared result. `version(input, ctx)` answers "not modified" for a query
-  whose result the caller already holds.
+  a shared result. Callers of a shared run whose levels hide the same fields
+  get one copy of its result, encoded once for all of their sockets.
+  `version(input, ctx)` answers "not modified" for a query whose result the
+  caller already holds.
 - Every call runs a pipeline: look up, concurrency (16 queries in flight per
   socket and 64 queued, then `RATE_LIMITED`; mutations are not queued behind
   queries), input validation, access, "not modified", sharing, the handler

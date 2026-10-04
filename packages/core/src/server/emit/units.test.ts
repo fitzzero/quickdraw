@@ -6,14 +6,14 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { z as z3 } from "zod3";
-import { defineContract, query, todoSchema } from "../../index";
+import { defineContract, query, todoSchema, type AccessLevel } from "../../index";
 import { initQuickdraw, type AnyService } from "../index";
 import { createRegistry } from "../registry";
 import { ANY_FIELD } from "../uow/types";
 import { routesOf, touchedRows } from "./affects";
 import { createChangeLog } from "./changeLog";
 import { frameKind, selectFor } from "./frames";
-import { isoDates, projectOutput, projectRow, schemaKeys, stripForReader } from "./projection";
+import { isoDates, projectOutput, projectRow, readerView, schemaKeys } from "./projection";
 import { strip, tiersOf } from "./tiers";
 
 const qd = initQuickdraw();
@@ -200,7 +200,7 @@ describe("projecting a row", () => {
       { id: "a", title: "A", notes: "n", dueAt: "d" },
       { id: "b", title: "B", notes: "n", dueAt: "d" },
     ];
-    const stripped = await stripForReader({ projection: entity, kind: "list" }, rows, (ids) => {
+    const view = await readerView({ projection: entity, kind: "list" }, rows, (ids) => {
       asked.push(ids);
       return Promise.resolve(
         new Map([
@@ -209,7 +209,7 @@ describe("projecting a row", () => {
         ] as const),
       );
     });
-    expect(stripped).toEqual([
+    expect(view.strip()).toEqual([
       { id: "a", title: "A", notes: "n" },
       { id: "b", title: "B" },
     ]);
@@ -218,11 +218,36 @@ describe("projecting a row", () => {
     const card = service.projections.get("card");
     expect(card?.tiers.tiered).toBe(false);
     if (card !== undefined) {
-      const untiered = await stripForReader({ projection: card, kind: "one" }, { id: "a" }, () =>
+      const untiered = await readerView({ projection: card, kind: "one" }, { id: "a" }, () =>
         Promise.reject(new Error("a projection without tiered keys asks for no levels")),
       );
-      expect(untiered).toEqual({ id: "a" });
+      expect(untiered.strip()).toEqual({ id: "a" });
+      expect(untiered.key).toBe("");
     }
+  });
+
+  it("gives readers who see the same fields on every row the same view key, and no one else", async () => {
+    const rows = [
+      { id: "a", title: "A", notes: "n", dueAt: "d" },
+      { id: "b", title: "B", notes: "n", dueAt: "d" },
+    ];
+    const keyFor = async (levels: Record<string, AccessLevel | null>): Promise<string> => {
+      const view = await readerView({ projection: entity, kind: "list" }, rows, () =>
+        Promise.resolve(new Map(Object.entries(levels))),
+      );
+      return view.key;
+    };
+    // `notes` needs Moderate and `dueAt` Admin: no level, Public and Read hide the same fields.
+    expect(await keyFor({ a: "Read", b: "Read" })).toBe(await keyFor({ a: null, b: "Public" }));
+    expect(await keyFor({ a: "Read", b: "Read" })).not.toBe(
+      await keyFor({ a: "Read", b: "Moderate" }),
+    );
+    expect(await keyFor({ a: "Admin", b: "Read" })).not.toBe(
+      await keyFor({ a: "Read", b: "Admin" }),
+    );
+    expect(await keyFor({ a: "Admin", b: "Admin" })).not.toBe(
+      await keyFor({ a: "Moderate", b: "Admin" }),
+    );
   });
 });
 
@@ -235,8 +260,12 @@ describe("field tiers", () => {
     expect([...tiers.hidden("Moderate")]).toEqual(["dueAt"]);
     expect([...tiers.hidden("Admin")]).toEqual([]);
     expect(tiers.groups.map((group) => group.levels)).toEqual([["Read"], ["Moderate"], ["Admin"]]);
+    const levels = [null, "Public", "Read", "Moderate", "Admin"] as const;
+    expect(levels.map((level) => tiers.label(level))).toEqual(["a", "a", "a", "b", "c"]);
     const one = tiersOf({ notes: "Admin" }, ["id", "notes"]);
     expect(one.groups.map((group) => group.levels)).toEqual([["Read", "Moderate"], ["Admin"]]);
+    expect(one.label("Admin")).not.toBe(one.label("Moderate"));
+    expect(one.label("Read")).toBe(one.label("Moderate"));
     expect(tiersOf({}, ["id"]).tiered).toBe(false);
     const row = { id: "a", notes: "n" };
     expect(strip(row, new Set())).toBe(row);

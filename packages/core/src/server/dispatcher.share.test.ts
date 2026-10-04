@@ -2,7 +2,8 @@
 // dispatcher.
 
 import { describe, expect, it, vi } from "vitest";
-import { QuickdrawError } from "../index";
+import { z } from "zod";
+import { QuickdrawError, defineContract, listOf, query } from "../index";
 import {
   alice,
   bob,
@@ -15,7 +16,7 @@ import {
   tick,
   type Deferred,
 } from "./__tests__/fixtures";
-import type { DispatchResult } from "./index";
+import type { DispatchResult, SharedData } from "./index";
 
 function codeOf(result: DispatchResult): string {
   return result.ok ? "ok" : result.error.code;
@@ -304,6 +305,74 @@ describe("errors, cancellation and ttlMs", () => {
     expect(runs).toHaveLength(3);
     runs[2]?.resolve(cards);
     expect(codeOf(await fresh)).toBe("ok");
+  });
+});
+
+describe("a shared run's copies", () => {
+  const tiered = defineContract("tieredService", {
+    entity: z.object({ id: z.string(), notes: z.string() }),
+    fields: { notes: "Admin" },
+    methods: { list: query({ input: z.object({}), output: listOf("entity") }) },
+  });
+
+  it("are one per group of callers who see the same fields, handed to respond with JSON written once", async () => {
+    const opened = deferred();
+    const service = qd.defineService(tiered, {
+      methods: {
+        list: {
+          access: "authenticated",
+          share: "all",
+          handler: async () => {
+            await opened.promise;
+            return [{ id: "r1", notes: "n" }];
+          },
+        },
+      },
+    });
+    const { call } = setup([service]);
+    const handed: (SharedData | undefined)[] = [];
+    const respond = (_result: DispatchResult, shared?: SharedData): undefined => {
+      handed.push(shared);
+      return undefined;
+    };
+    const admin = granted(alice, { tieredService: "Admin" });
+    const calls = [alice, admin, bob, admin].map(
+      async (principal) =>
+        await call({ service: "tieredService", method: "list", input: {}, principal, respond }),
+    );
+    await tick();
+    opened.resolve();
+    const data = (await Promise.all(calls)).map(dataOf);
+    expect(data).toEqual([
+      [{ id: "r1" }],
+      [{ id: "r1", notes: "n" }],
+      [{ id: "r1" }],
+      [{ id: "r1", notes: "n" }],
+    ]);
+    expect(data[2]).toBe(data[0]);
+    expect(data[3]).toBe(data[1]);
+    expect(Object.isFrozen(data[0])).toBe(true);
+    expect(handed.map((shared) => shared?.data)).toEqual(data);
+    expect(handed[2]).toBe(handed[0]);
+    const stringify = vi.spyOn(JSON, "stringify");
+    const texts = handed.map((shared) => shared?.json());
+    expect(stringify).toHaveBeenCalledTimes(2);
+    stringify.mockRestore();
+    expect(texts).toEqual(data.map((value) => JSON.stringify(value)));
+  });
+
+  it("are not made for a call that runs unshared", async () => {
+    const handed: (SharedData | undefined)[] = [];
+    const respond = (_result: DispatchResult, shared?: SharedData): undefined => {
+      handed.push(shared);
+      return undefined;
+    };
+    const service = qd.defineService(tiered, {
+      methods: { list: { access: "authenticated", handler: () => [{ id: "r1", notes: "n" }] } },
+    });
+    const { call } = setup([service]);
+    await call({ service: "tieredService", method: "list", input: {}, respond });
+    expect(handed).toEqual([undefined]);
   });
 });
 
