@@ -115,6 +115,13 @@ state; tick each item as it is done.
   git push origin core-v5.0.0-rc.1
   ```
 
+  Later release candidates repeat this step with their own number: a
+  version-bump pull request into `dev` (the four `package.json` files, the
+  codemod's devDependency ranges, `QUICKDRAW_VERSION`, the lockfile's
+  workspace entries, the changelog heading), then the four tags at that
+  commit. `5.0.0-rc.2` carries round 1 of the fixes from the quickdraw-chat
+  migration.
+
 - [ ] The four Publish runs are green, each package's `next` dist-tag is
       `5.0.0-rc.1` (`npm view @fitzzero/quickdraw-core dist-tags`), and
       core's `latest` is still 4.1.0.

@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [5.0.0-rc.2] (unreleased)
+## [5.0.0-rc.2]
 
 Round 1 of the fixes the quickdraw-chat migration found on `5.0.0-rc.1`
 (findings F1.1 to F1.15). No version moves until the release candidate is
