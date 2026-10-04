@@ -68,7 +68,9 @@ export function useStream<Item>(
   // Awaiting new credentials' hello, it shows none of the last user's items.
   const read = (): StreamState =>
     active ? (awaiting ? PENDING_STREAM : live.streams.state(key)) : IDLE;
-  const state = useSyncExternalStore(listen, read, read);
+  // A server holds no feed: loading, as the browser hydrates it too.
+  const onServer = (): StreamState => (active ? PENDING_STREAM : IDLE);
+  const state = useSyncExternalStore(listen, read, onServer);
   return useMemo(() => {
     const items =
       state.items.length > max ? state.items.slice(state.items.length - max) : state.items;

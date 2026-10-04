@@ -1228,6 +1228,11 @@ export function TaskDetail({ id }: { readonly id: string }) {
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
   kind of work.
+- Server rendering: a server never connects, so `useQuickdraw()`,
+  `usePresence`, streams and overlays render the state a new connection has
+  (nobody known, no rooms, nothing loaded), and the browser hydrates that
+  same state even where the provider connected first (a Suspense boundary
+  that hydrates late), then renders the live one.
 
 A create shows its row before the server answers with `cache.addItem(collection,
 scope, item)`: the item appears in the scope at once, in its place by the

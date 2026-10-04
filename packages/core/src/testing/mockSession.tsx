@@ -8,7 +8,8 @@
 // - The provider fills the same context `QuickdrawProvider` fills, with a
 //   connection that never opens: its state is made from the session (a
 //   hello naming `userId` with `serviceAccess`, connected or connecting,
-//   known or not), and every hook that reads the context reads it.
+//   known or not), and every hook that reads the context reads it, on a
+//   server too (`renderOnServerAs`).
 // - `usePresence(room)` shows the users `$presence(room, users)` set, while
 //   the session is known (a socket is in no room before its hello).
 // - The views of the mock's collections select members for the session's
@@ -24,7 +25,7 @@ import {
   type ConnectionState,
   type QuickdrawConnection,
 } from "../client/connection";
-import { QuickdrawContext, type QuickdrawContextValue } from "../client/context";
+import { QuickdrawContext, renderOnServerAs, type QuickdrawContextValue } from "../client/context";
 import { createInvalidationCoordinator, type InvalidationCoordinator } from "../client/coordinator";
 import { inertLiveData } from "../client/live/liveData";
 import type { PresenceStore } from "../client/live/presence";
@@ -218,6 +219,8 @@ export function mockSessionControls(
 ): MockSessionControls {
   const coordinator = createInvalidationCoordinator(queryClient);
   const connection = mockConnection(store);
+  // A server renders the session too, so a story or a test that renders on one hydrates it.
+  renderOnServerAs(connection, connection.getState);
   inertLiveData(connection, queryClient, mockPresence(store));
   const value: QuickdrawContextValue = Object.freeze({ connection, queryClient, coordinator });
   function MockQuickdrawProvider({ children }: { readonly children?: ReactNode }): ReactElement {

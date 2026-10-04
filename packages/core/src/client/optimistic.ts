@@ -175,6 +175,15 @@ export interface OverlayView {
   added(collection: string, scope: string): readonly AddedItem[];
 }
 
+/**
+ * The overlays of nothing: what a server renders (no mutation runs there),
+ * and so what the browser hydrates (`context.ts`).
+ */
+export const NO_OVERLAYS: OverlayView = Object.freeze({
+  apply: <T>(row: T) => row,
+  added: () => Object.freeze([]),
+});
+
 /** One layer of one mutation call. */
 export interface Layer {
   readonly key: string;

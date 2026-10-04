@@ -7,18 +7,22 @@
 // disconnects, the list is empty.
 
 import { useCallback, useSyncExternalStore } from "react";
+import { serverStateOf } from "../context";
 import { useLiveData } from "./liveHooks";
 
 const NOBODY: readonly string[] = Object.freeze([]);
 
 /** The users in `room`, as the server last said: the same array until it changes. */
 export function usePresence(room: string): readonly string[] {
-  const { live, awaiting } = useLiveData("usePresence");
+  const { connection, live, awaiting } = useLiveData("usePresence");
   const listen = useCallback(
     (listener: () => void) => live.presence.listen(room, listener),
     [live, room],
   );
   // Awaiting new credentials' hello, it shows nobody the last user's socket saw.
   const read = (): readonly string[] => (awaiting ? NOBODY : live.presence.users(room));
-  return useSyncExternalStore(listen, read, read);
+  // A server's socket is in no room: nobody, unless its state has a hello (a mock's session).
+  const onServer = (): readonly string[] =>
+    serverStateOf(connection).hello === null ? NOBODY : live.presence.users(room);
+  return useSyncExternalStore(listen, read, onServer);
 }
