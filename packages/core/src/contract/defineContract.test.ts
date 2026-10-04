@@ -274,7 +274,16 @@ describe("definition-time checks", () => {
     );
     expect(
       withMethod({ kind: "query", input: idInput, output: "entity", watch: { collection: "c" } }),
-    ).toThrow('method "m": watch must be { collection, scope } with a scope function');
+    ).toThrow(
+      'method "m": watch must be "service", or { collection, scope } with a scope function',
+    );
+    expect(withMethod({ kind: "query", input: idInput, output: "entity", watch: "all" })).toThrow(
+      'watch must be "service", or { collection, scope }',
+    );
+    expect(withMethod(query({ input: idInput, output: "entity", watch: "service" }))).not.toThrow();
+    expect(
+      withMethod({ kind: "mutation", input: idInput, output: "entity", watch: "service" }),
+    ).toThrow('method "m" is a mutation; only a query can watch');
   });
 
   it("rejects methods that are not query or mutation declarations", () => {

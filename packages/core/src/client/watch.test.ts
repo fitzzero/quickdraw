@@ -12,6 +12,7 @@ import { as } from "../server/access/__tests__/board";
 import type { Principal } from "../server/index";
 import { createQuickdrawConnection, type QuickdrawConnection } from "./connection";
 import { outgoing, until, whenStatus } from "./__tests__/fixtures";
+import { topicOf } from "./queryHooks";
 import { framesOf, liveHarness, watchersOf } from "./__tests__/live";
 
 const live = liveHarness();
@@ -314,5 +315,20 @@ describe("connection.watch", () => {
     await until(() => told.length === 1);
     expect(scheduled).toHaveLength(1);
     expect(() => scheduled[0]?.()).toThrow("a broken listener");
+  });
+});
+
+describe("the topic a query watches", () => {
+  it("is its service's own for watch: \"service\", and a scope's for a collection watch", () => {
+    const query = { service: "scoresService", method: "best", kind: "query" } as const;
+    expect(topicOf({ ...query, watch: "service" }, undefined)).toBe("service");
+    const scoped = {
+      collection: "board",
+      scope: (input: { projectId: string }) => input.projectId,
+    };
+    expect(topicOf({ ...query, watch: scoped as never }, { projectId: "p1" })).toBe(
+      collectionTopic("board", "p1"),
+    );
+    expect(topicOf(query, undefined)).toBeUndefined();
   });
 });

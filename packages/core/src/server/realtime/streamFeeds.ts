@@ -6,9 +6,10 @@
 
 import type { Hub } from "../emit/hub";
 import type { RevocationHook } from "../emit/revocation";
+import type { QuickdrawServerSocket } from "../transports/types";
 import type { StreamSeeds } from "./seeds";
 import { StreamIndex } from "./streamIndex";
-import { createStreamRevocation } from "./streamRevocation";
+import { createStreamRevocation, revokeOutsideRooms } from "./streamRevocation";
 import { streamSubscriptions } from "./streamSubscriptions";
 
 /** One dispatcher's stream feeds. */
@@ -17,6 +18,8 @@ export interface StreamFeeds {
   readonly extension: ReturnType<typeof streamSubscriptions>;
   /** Authorizes the feeds an access change or a changed grant concerns again. */
   readonly revocation: RevocationHook;
+  /** The socket left an app room: revokes its feeds open to a room it is no longer in. */
+  leftRooms(socket: QuickdrawServerSocket): void;
 }
 
 /** Creates the feeds of the dispatcher whose hub this is, over its streams' seeds. */
@@ -25,5 +28,8 @@ export function createStreamFeeds(hub: Hub, seeds: StreamSeeds): StreamFeeds {
   return Object.freeze({
     extension: streamSubscriptions(hub, seeds, index),
     revocation: createStreamRevocation(hub, index),
+    leftRooms: (socket: QuickdrawServerSocket) => {
+      revokeOutsideRooms(hub, index, socket);
+    },
   });
 }

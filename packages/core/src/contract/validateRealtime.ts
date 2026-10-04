@@ -34,6 +34,9 @@ const CHANNEL_KEYS: ReadonlySet<string> = new Set([
 ]);
 const EVENT_KEYS: ReadonlySet<string> = new Set(["payload"]);
 
+/** The longest app room name `ctx.rooms.join` takes, so the longest prefix one can start with. */
+const MAX_ROOM_LENGTH = 256;
+
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -91,10 +94,32 @@ function checkMember(
   return value;
 }
 
+/** Why `access: { room }` names no app room a subscriber could be in, or `undefined`. */
+function streamRoomProblem(access: UnknownRecord, scoped: boolean): string | undefined {
+  const { room } = access;
+  if (Object.keys(access).length !== 1) {
+    return "a room form is { room } and nothing else";
+  }
+  if (typeof room === "function") {
+    return scoped ? undefined : "a room computed from the scope needs a scoped stream";
+  }
+  const name = isRecord(room) && Object.keys(room).length === 1 ? room.prefix : room;
+  if (!isName(name) || name.length > MAX_ROOM_LENGTH) {
+    return `room must be an app room's name, { prefix } or a function of the scope, of 1 to ${MAX_ROOM_LENGTH} characters`;
+  }
+  const reserved = reservedRoomPrefix(name);
+  return reserved === undefined
+    ? undefined
+    : `room "${name}" is no app room: names starting with "${reserved}" are the framework's own rooms`;
+}
+
 /** Why `access` is not a stream access form, or `undefined` when it is one. */
-function streamAccessProblem(access: unknown): string | undefined {
+function streamAccessProblem(access: unknown, scoped: boolean): string | undefined {
   if (access === "public" || access === "authenticated") {
     return undefined;
+  }
+  if (isRecord(access) && access.room !== undefined) {
+    return streamRoomProblem(access, scoped);
   }
   const levels = isRecord(access)
     ? ["service", "entry", "scope"].filter((key) => access[key] !== undefined)
@@ -141,7 +166,10 @@ function checkStream(name: string, value: unknown, fail: Fail): StreamDef {
     fail(`${owner}: volatile must be a boolean`);
   }
   if (stream.access !== undefined) {
-    const problem = streamAccessProblem(stream.access);
+    const problem = streamAccessProblem(
+      stream.access,
+      isScopedStream(stream as Pick<StreamDef, "scope">),
+    );
     if (problem !== undefined) {
       fail(`${owner}: access ${problem}`);
     }
@@ -159,9 +187,6 @@ function isSelector(value: unknown): boolean {
 }
 
 const REQUIRES_FORMS = "requires must be { entity }, { collection, scope } or { room }";
-
-/** The longest app room name `ctx.rooms.join` takes, so the longest prefix one can start with. */
-const MAX_ROOM_LENGTH = 256;
 
 /** Checks `requires: { room: { prefix } }`: a prefix some app room's name could start with. */
 function checkRoomPrefix(owner: string, room: UnknownRecord, fail: Fail): void {

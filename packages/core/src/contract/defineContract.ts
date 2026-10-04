@@ -254,7 +254,10 @@ type CheckKeys<Value, Allowed, Owner extends string> = {
 
 interface MethodCheck<Def> {
   readonly output: StandardSchemaV1 | ProjectionRef<ProjectionNameIn<Def> & string>;
-  readonly watch?: { readonly collection: keyof CollectionsIn<Def> & string } | undefined;
+  readonly watch?:
+    | { readonly collection: keyof CollectionsIn<Def> & string }
+    | "service"
+    | undefined;
 }
 
 type CheckMethods<Def> = {

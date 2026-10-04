@@ -205,6 +205,9 @@ function checkWatches(
     if (def.kind !== "query") {
       fail(`method "${name}" is a mutation; only a query can watch`);
     }
+    if (watch === "service") {
+      continue;
+    }
     if (!isRecord(watch) || typeof watch.scope !== "function") {
       fail(`method "${name}": watch needs a scope function, which finds the scope from the input`);
     }

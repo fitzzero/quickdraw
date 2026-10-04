@@ -94,7 +94,13 @@ async function subscribe(
     // Called in this tick, the one the socket joined the feed in.
     return {
       ok: true,
-      seed: await computeSeed(target.service.name, target.stream, target.scope, ctx),
+      seed: await computeSeed(
+        target.service.name,
+        target.stream,
+        target.scope,
+        ctx,
+        state.hub.outputValidation,
+      ),
     };
   } catch (error) {
     // The subscriber is answered the failure, so it hears none of the items that follow.

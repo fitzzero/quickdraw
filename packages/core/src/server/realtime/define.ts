@@ -26,6 +26,7 @@ import type {
   CompiledSelector,
   ServiceChannel,
   ServiceStream,
+  StreamRoomAccess,
 } from "./types";
 
 type Fail = (message: string) => never;
@@ -171,6 +172,10 @@ function engineForm(access: StreamAccess | undefined): AccessForm | undefined {
   if (access === undefined || typeof access === "string") {
     return access;
   }
+  if (access.room !== undefined) {
+    // The app room the subscriber's socket is in decides, not the engine.
+    return undefined;
+  }
   if (access.scope !== undefined) {
     return Object.freeze({ scope: access.scope, of: access.of, id: "scope" });
   }
@@ -181,27 +186,46 @@ function engineForm(access: StreamAccess | undefined): AccessForm | undefined {
   return Object.freeze({ service: access.service });
 }
 
+/** A stream's `access: { room }`, compiled; `undefined` for any other form. */
+function roomAccess(access: StreamAccess | undefined): StreamRoomAccess | undefined {
+  if (typeof access !== "object" || access.room === undefined) {
+    return undefined;
+  }
+  const { room } = access;
+  if (typeof room === "string") {
+    return Object.freeze({ kind: "name", room });
+  }
+  if (typeof room === "object") {
+    return Object.freeze({ kind: "prefix", prefix: room.prefix });
+  }
+  const computed = compileRoom(room as (payload: never) => string | null | undefined);
+  return Object.freeze({
+    kind: "computed",
+    select: (scope: string | undefined) => computed(scope),
+  });
+}
+
 /** What a service declares that its streams' row-level access forms need. */
 export interface StreamNeeds {
   readonly model: string | undefined;
   readonly hasPolicy: boolean;
 }
 
-const STREAM_OPTION_KEYS = ["seed"];
+const STREAM_OPTION_KEYS = ["seed", "validate"];
 
-/** One stream's entry in `defineService`'s `streams`, checked: its seed function, if any. */
+/** One stream's entry in `defineService`'s `streams`, checked: its seed function and when it validates. */
 function checkStreamOptions(
   name: string,
   def: StreamDef,
   entry: unknown,
   fail: Fail,
-): AnyStreamSeed | undefined {
+): Pick<ServiceStream, "computeSeed" | "validate"> {
   const owner = `streams.${name}`;
   if (entry === undefined) {
-    return undefined;
+    return { computeSeed: undefined, validate: "always" };
   }
   if (!isRecord(entry)) {
-    fail(`${owner} must be an object: { seed }`);
+    fail(`${owner} must be an object: { seed?, validate? }`);
   }
   const unknownKey = Object.keys(entry).find((key) => !STREAM_OPTION_KEYS.includes(key));
   if (unknownKey !== undefined) {
@@ -218,7 +242,11 @@ function checkStreamOptions(
       `${owner}.seed computes the seed, but the contract's stream keeps the latest ${String(def.seed)} items as its seed; declare one of the two`,
     );
   }
-  return seed as AnyStreamSeed | undefined;
+  const { validate = "always" } = entry;
+  if (validate !== "always" && validate !== "development") {
+    fail(`${owner}.validate must be "always" or "development"`);
+  }
+  return { computeSeed: seed as AnyStreamSeed | undefined, validate };
 }
 
 function checkStream(
@@ -244,9 +272,10 @@ function checkStream(
     item: def.item,
     scoped: isScopedStream(def),
     seed: def.seed ?? 0,
-    computeSeed: checkStreamOptions(name, def, options, fail),
+    ...checkStreamOptions(name, def, options, fail),
     volatile: def.volatile === true,
     access,
+    room: roomAccess(def.access),
   });
 }
 
@@ -262,7 +291,9 @@ export function compileStreams(
   fail: Fail,
 ): ReadonlyMap<string, ServiceStream> {
   if (value !== undefined && !isRecord(value)) {
-    fail("streams must be an object of options per contract stream: { <stream>: { seed } }");
+    fail(
+      "streams must be an object of options per contract stream: { <stream>: { seed?, validate? } }",
+    );
   }
   const options = value ?? {};
   const unknownStream = Object.keys(options).find((name) => !Object.hasOwn(contract.streams, name));

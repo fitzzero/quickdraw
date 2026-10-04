@@ -15,7 +15,7 @@
 // `__proto__` is an ordinary one.
 
 import type { ServiceStream, StreamSeedContext } from "./types";
-import { checkOutgoing } from "./validate";
+import { checkOutgoing, checksItems } from "./validate";
 
 /** The most scopes one stream keeps a seed for; the scope pushed to least recently goes first. */
 export const STREAM_MAX_SCOPES = 10_000;
@@ -23,7 +23,8 @@ export const STREAM_MAX_SCOPES = 10_000;
 /**
  * The seed `stream`'s service computes for one subscriber (`streams: {
  * <name>: { seed } }`), each item checked against the stream's schema, and
- * the checked items are what is sent, as `push` sends. The function is
+ * the checked items are what is sent, as `push` sends (unchecked as `push`
+ * leaves them, for a stream that validates in development only). The function is
  * called before this awaits anything: in the caller's tick, the one it
  * joined the socket to the feed in. A function that returns something other
  * than an array, or an item that does not fit, throws for `INTERNAL`.
@@ -33,12 +34,16 @@ export async function computeSeed(
   stream: ServiceStream,
   scope: string | undefined,
   ctx: StreamSeedContext,
+  outputValidation: boolean,
 ): Promise<unknown[]> {
   const compute = stream.computeSeed;
   const items: unknown = await compute?.(scope, ctx);
   const label = `The seed of ${service}.${stream.name}`;
   if (!Array.isArray(items)) {
     throw new TypeError(`${label}: its seed function must return an array of items`);
+  }
+  if (!checksItems(stream, outputValidation)) {
+    return items as unknown[];
   }
   return items.map((item: unknown, index) =>
     checkOutgoing(stream.item, item, `Item ${String(index)} of ${label}`),

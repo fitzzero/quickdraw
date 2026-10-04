@@ -24,6 +24,7 @@ import {
   defineLiveService,
   frames,
   liveContract,
+  LOBBY,
   received,
   refused,
   settle,
@@ -673,6 +674,127 @@ describe("a seed the service computes", () => {
       ok: true,
       seed: ["welcome"],
     });
+  });
+});
+
+describe("access: { room }", () => {
+  /** A socket of `app` with its typed calls, and the stream items it receives. */
+  async function member(app: App, principal: Principal | null) {
+    const connection = await app.connect(principal);
+    return { connection, items: frames<StreamFrame>(connection, "qd:stream") };
+  }
+
+  it("opens a feed to the sockets in its app room, and revokes it when they leave", async () => {
+    const app = await start();
+    const cy = await member(app, as(board.cy));
+    const revoked = frames(cy.connection, "qd:revoked");
+    expect(await streamSub(cy.connection, "lobbyFeed")).toEqual(refused("FORBIDDEN"));
+    await cy.connection.call.taskService.enter({ room: LOBBY });
+    expect(await streamSub(cy.connection, "lobbyFeed")).toEqual({ ok: true, seed: [] });
+    const lobby = app.server.stream(liveContract, "lobbyFeed");
+    lobby.push(1);
+    await settle(cy.connection);
+    await cy.connection.call.taskService.exit({ room: LOBBY });
+    expect(revoked).toEqual([
+      { kind: "stream", reason: "access", s: "taskService", stream: "lobbyFeed" },
+    ]);
+    lobby.push(2);
+    await settle(cy.connection);
+    expect(cy.items).toEqual([["taskService", "lobbyFeed", null, 1]]);
+  });
+
+  it("computes a scoped feed's room from its scope, takes a prefix, and follows a removal", async () => {
+    const app = await start();
+    const cy = await member(app, as(board.cy));
+    const revoked = frames<{ stream: string; scope?: string }>(cy.connection, "qd:revoked");
+    await cy.connection.call.taskService.enter({ room: "world:1" });
+    expect(await streamSub(cy.connection, "worldFeed", "1")).toEqual({ ok: true, seed: [] });
+    expect(await streamSub(cy.connection, "worldFeed", "2")).toEqual(refused("FORBIDDEN"));
+    expect(await streamSub(cy.connection, "anyWorld")).toEqual({ ok: true, seed: [] });
+    await app.server.rooms.leave("world:1", { userId: board.cy });
+    await vi.waitFor(() => {
+      expect(revoked.map(({ stream, scope }) => `${stream}/${scope ?? ""}`).sort()).toEqual([
+        "anyWorld/",
+        "worldFeed/1",
+      ]);
+    });
+    app.server.stream(liveContract, "worldFeed").push("1", 7);
+    app.server.stream(liveContract, "anyWorld").push(8);
+    await settle(cy.connection);
+    expect(cy.items).toEqual([]);
+  });
+
+  it("lets an anonymous socket in the room subscribe and unsubscribe", async () => {
+    const app = await start();
+    const spectator = await member(app, null);
+    await spectator.connection.call.taskService.enterAnyone({ room: LOBBY });
+    expect(await streamSub(spectator.connection, "lobbyFeed")).toEqual({ ok: true, seed: [] });
+    expect(await streamUnsub(spectator.connection, "lobbyFeed")).toEqual({ ok: true });
+  });
+
+  it("refuses a room no socket could be in, when the contract is defined", () => {
+    const stream = (access: unknown, scope?: string) => () =>
+      (defineContract as unknown as (name: string, def: unknown) => unknown)("roomFeedService", {
+        streams: { feed: { item: z.number(), access, ...(scope === undefined ? {} : { scope }) } },
+      });
+    expect(stream({ room: "qd:e:x" })).toThrow('room "qd:e:x" is no app room');
+    expect(stream({ room: { prefix: "user:" } })).toThrow('room "user:" is no app room');
+    expect(stream({ room: "" })).toThrow("room must be an app room's name");
+    expect(stream({ room: "lobby", service: "Read" })).toThrow(
+      "a room form is { room } and nothing else",
+    );
+    expect(stream({ room: () => "lobby" })).toThrow(
+      "a room computed from the scope needs a scoped stream",
+    );
+    expect(stream({ room: () => "lobby" }, "lobbyId")).not.toThrow();
+  });
+});
+
+describe('validate: "development"', () => {
+  const hot = defineContract("hotService", {
+    streams: {
+      snaps: { item: z.object({ tick: z.number() }), access: "public" },
+      strict: { item: z.object({ tick: z.number() }), access: "public" },
+    },
+  });
+  const defineHot = () =>
+    qd.defineService(hot, {
+      methods: {},
+      streams: { snaps: { validate: "development" } },
+    });
+
+  async function startHot(outputValidation: boolean) {
+    const app = await createTestApp({ services: [defineHot()], db: h.db, outputValidation });
+    apps.push(app as unknown as TestApp);
+    return app;
+  }
+
+  it("checks pushed items only while the dispatcher checks outputs", async () => {
+    const bad = { tick: "late", extra: true } as unknown as { tick: number };
+    const checked = await startHot(true);
+    expect(() => {
+      checked.server.stream(hot, "snaps").push(bad);
+    }).toThrow(expect.objectContaining({ code: "INTERNAL" }) as Error);
+    const production = await startHot(false);
+    const { connection, items } = await connect(production, null);
+    await streamSub(connection, "snaps", undefined, "hotService");
+    // Unchecked: the item goes out as pushed, its extra key included.
+    production.server.stream(hot, "snaps").push(bad);
+    // A stream that keeps the default still checks.
+    expect(() => {
+      production.server.stream(hot, "strict").push(bad);
+    }).toThrow(expect.objectContaining({ code: "INTERNAL" }) as Error);
+    await settle(connection);
+    expect(items).toEqual([["hotService", "snaps", null, { tick: "late", extra: true }]]);
+  });
+
+  it("refuses any other value", () => {
+    expect(() =>
+      (qd.defineService as unknown as (contract: unknown, definition: unknown) => unknown)(hot, {
+        methods: {},
+        streams: { snaps: { validate: "sometimes" } },
+      }),
+    ).toThrow('streams.snaps.validate must be "always" or "development"');
   });
 });
 

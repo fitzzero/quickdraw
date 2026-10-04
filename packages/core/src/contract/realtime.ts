@@ -24,11 +24,21 @@ export const STREAM_MAX_SEED = 1000;
 export const CHANNEL_DEFAULT_RATE = 30;
 
 /**
+ * The app room a stream's subscriber must be in (`access: { room }`): the
+ * room's name, `{ prefix }` for any room whose name starts with it, or for a
+ * scoped stream a function of the scope (`(worldId) => \`world:${worldId}\``).
+ */
+export type StreamRoom = string | RoomPrefix | ((scope: string) => string | null | undefined);
+
+/**
  * Who may subscribe to a stream (RFC 0003 section 4.1's forms, as data). A
  * scoped stream's scope value is the row an `entry` or `scope` form is about:
  * `{ entry: L }` needs level `L` on the row of this service whose id is the
- * scope, `{ scope: L, of }` level `L` on that row of `of`'s service. A
- * stream that declares none is closed: no client may subscribe.
+ * scope, `{ scope: L, of }` level `L` on that row of `of`'s service.
+ * `{ room }` opens it to the sockets in an app room a method joined them to
+ * (signed in or not), as a channel's `requires: { room }` does its messages:
+ * a socket that leaves the room, or is taken out of it, leaves the feed too.
+ * A stream that declares none is closed: no client may subscribe.
  */
 export type StreamAccess =
   | "public"
@@ -38,18 +48,28 @@ export type StreamAccess =
       readonly entry?: undefined;
       readonly scope?: undefined;
       readonly of?: undefined;
+      readonly room?: undefined;
     }
   | {
       readonly entry: AccessLevel;
       readonly service?: AccessLevel;
       readonly scope?: undefined;
       readonly of?: undefined;
+      readonly room?: undefined;
     }
   | {
       readonly scope: AccessLevel;
       readonly of: AnyContract;
       readonly service?: undefined;
       readonly entry?: undefined;
+      readonly room?: undefined;
+    }
+  | {
+      readonly room: StreamRoom;
+      readonly service?: undefined;
+      readonly entry?: undefined;
+      readonly scope?: undefined;
+      readonly of?: undefined;
     };
 
 /** A server-to-client stream of append-only items (RFC 0003 section 12.5). */

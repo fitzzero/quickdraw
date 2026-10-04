@@ -157,7 +157,17 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 
 - Streams: `streams: { logs: { item, scope: "taskId", seed: 50, access } }`;
   push with `qd.stream(task, "logs").push(taskId, item)`, and several items
-  at once with `pushMany(taskId, items)`, never `push` in a loop.
+  at once with `pushMany(taskId, items)`, never `push` in a loop. When the
+  items are deltas (a game's ticks), give the service a computed seed,
+  `streams: { world: { seed: (worldId, ctx) => [snapshotOf(worldId)] } }`,
+  never a bootstrap call beside the stream; `validate: "development"` there
+  skips the per-item schema check in production for a hot stream. A feed
+  only a room's sockets may read takes `access: { room }` (a name,
+  `{ prefix }`, or `(scope) => room`), never an entry policy that repeats
+  the room's membership.
+- A query over a model the service only `writes` (no service owns it)
+  declares `watch: "service"`, with `watchAccess` on the service; never an
+  app event the client invalidates by hand.
 - Channels: `channels: { cursor: { payload, ratePerSecond, requires } }` in
   the contract, `channels: { cursor: (payload, ctx) => ... }` on the service.
   `requires` is what the sending socket must hold: `{ entity: "taskId" }` (a

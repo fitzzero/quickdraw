@@ -19,7 +19,10 @@
 //   for everyone, since it changes whenever any row of the service does.
 //
 // A malformed frame is `VALIDATION`, an unknown service or collection (or a
-// service without a model, whose rows never change) `NOT_FOUND`.
+// service without a model that writes nothing, whose topic never changes)
+// `NOT_FOUND`. A service's topic also changes with every write to a model it
+// lists in `writes`, so a query over such a model declares `watch:
+// "service"`.
 // `qd:unwatch { s, topic }` is checked the same way, leaves the room,
 // optionally acknowledged, and stops a watch still being authorized from
 // joining. Neither counts against the socket rate limiter

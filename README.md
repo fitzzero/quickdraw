@@ -1001,7 +1001,9 @@ export const taskService = qd.defineService(task, {
   scope after a change tracked writes cannot describe.
 - `qd:watch { s, topic }` joins a change topic: `{collection}:{scope}`,
   authorized like a subscribe to that scope, or `service`, which changes
-  whenever any row of the service does. The service topic is closed
+  whenever any row of the service does, or a row of a model it lists in
+  `writes` (a game's high scores, which no service owns). A query declares
+  `watch: "service"` to be invalidated by it. The service topic is closed
   (`FORBIDDEN`) unless the service declares `watchAccess` (`"public"`,
   `"authenticated"` or `{ service: level }`). A watcher that loses access
   leaves the topic after one last `qd:changed`.
@@ -2070,13 +2072,25 @@ export function TaskRoom({
   out as its own frame, in order; use it rather than `push` in a loop
   (`no-emit-in-loop`). `qd:stream:sub` is authorized with the
   stream's `access` through the access engine, the scope being the row an
-  `entry` or `scope` form checks; a stream without `access` is closed. The
-  answer is the seed; `useStream` then appends, keeps the latest `max`
-  (default 500), and subscribes again after a reconnect, when the seed
-  replaces what it held. A socket holds at most 500 feeds. A subscriber
-  whose access is lowered is authorized again; one refused leaves the feed
-  and gets `qd:revoked { kind: "stream", reason: "access", s, stream, scope? }`,
-  and `useStream` shows `FORBIDDEN` until the next connect.
+  `entry` or `scope` form checks; `access: { room }` (a name, `{ prefix }`,
+  or for a scoped stream a function of the scope) opens it to the sockets
+  in that app room instead, signed in or not, and a socket that leaves the
+  room, or is taken out, leaves the feed; a stream without `access` is
+  closed. The answer is the seed; `useStream` then appends, keeps the
+  latest `max` (default 500), and subscribes again after a reconnect, when
+  the seed replaces what it held. A socket holds at most 500 feeds. A
+  subscriber whose access is lowered is authorized again; one refused
+  leaves the feed and gets
+  `qd:revoked { kind: "stream", reason: "access", s, stream, scope? }`, and
+  `useStream` shows `FORBIDDEN` until the next connect.
+- A service's `streams: { <name>: { seed, validate } }` computes a stream's
+  seed per subscriber, `seed: (scope, ctx) => items` (the current state,
+  where the items that follow are deltas; on whichever node the subscriber
+  is on, under its principal, in the tick it joins the feed; a contract
+  `seed: n` and a seed function cannot both be declared), and
+  `validate: "development"` checks pushed items only while the dispatcher
+  checks outputs (`outputValidation`, off in production), for a hot stream:
+  unchecked, an item goes out as pushed, extra keys included.
 - Channels: each message is `qd:ch [service, channel, payload]`, sent
   volatile and never answered. Per socket and channel a token bucket
   (`ratePerSecond`, default 30; `burst`, default twice that) drops what is

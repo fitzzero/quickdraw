@@ -79,6 +79,12 @@ export const liveContract = defineContract("taskService", {
     adminFeed: { item: z.number(), access: { service: "Admin" } },
     rooms: { item: z.number(), scope: "room", access: "public" },
     closed: { item: z.number(), scope: "taskId", seed: 5 },
+    /** Only for sockets in the app room `lobby:main`, signed in or not. */
+    lobbyFeed: { item: z.number(), access: { room: LOBBY } },
+    /** One feed per world, for the sockets in that world's room. */
+    worldFeed: { item: z.number(), scope: "worldId", access: { room: (id) => `world:${id}` } },
+    /** For sockets in any world's room. */
+    anyWorld: { item: z.number(), access: { room: { prefix: "world:" } } },
   },
   channels: {
     input: { payload: inputSchema, ratePerSecond: 30, burst: 60, requires: { entity: "taskId" } },

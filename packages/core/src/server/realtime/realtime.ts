@@ -69,8 +69,8 @@ export interface Realtime {
 export function createRealtime(hub: Hub): Realtime {
   const records = new PresenceRecords();
   const presence = createPresence(hub, records);
-  const rooms = createRooms({ hub, records });
   const streams = createStreams(hub);
+  const rooms = createRooms({ hub, records }, streams.leftRooms);
   const channels = channelMessages({ hub, rooms, presence, warned: new WeakSet() });
   return Object.freeze({
     extension(socket: QuickdrawServerSocket, context: SocketContext): void {

@@ -52,6 +52,8 @@ export interface RoomLeaveHook {
 /** What the app rooms of one dispatcher share, with who hears sockets leave. */
 export interface LeavingState extends RoomState {
   listener: RoomLeaveListener | undefined;
+  /** Hears a socket that left an app room and is still connected, before the hooks do. */
+  readonly left?: ((socket: QuickdrawServerSocket) => void) | undefined;
 }
 
 /**
@@ -131,6 +133,9 @@ export function leaveRoom(
   }
   delete joined[room];
   void socket.leave(room);
+  if (socket.connected) {
+    state.left?.(socket);
+  }
   const last = exited(state, socket, room, socket.connected, reason === "removed");
   heard(state, socket, reason, [[room, last]]);
   return true;

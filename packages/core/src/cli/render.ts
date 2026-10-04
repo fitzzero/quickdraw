@@ -136,6 +136,9 @@ function kindLine(method: MethodDef): string {
   if (method.watch === undefined) {
     return method.kind === "query" ? "A query." : "A mutation.";
   }
+  if (method.watch === "service") {
+    return "A query that watches its service: a cached result is fetched again after every change to the service's rows, collections or the models it writes.";
+  }
   return `A query that watches the ${code(method.watch.collection)} collection: a cached result is fetched again when the scope its input names changes.`;
 }
 

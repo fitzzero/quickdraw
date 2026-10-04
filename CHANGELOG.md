@@ -71,6 +71,23 @@ enabled?, onJoined? })` on `./client` runs a joining call (any query or
   `string` for a channel that requires a room, `undefined` otherwise), so a
   game of many worlds need not repeat the world's id in every input frame
   (F4.5).
+- A stream's `access: { room }`: open to the sockets in that app room,
+  signed in or not (a name, `{ prefix }`, or for a scoped stream a function
+  of the scope, `(worldId) => \`world:${worldId}\``); a socket that leaves the
+room or is taken out of it is revoked from the feed at once
+(`qd:revoked { kind: "stream" }`). Refused at definition for a reserved
+  room, a form mixed with another, or a computed room on a global stream
+  (F4.6).
+- A write to a model a service lists in `writes` changes that service's
+  topic, and a query may declare `watch: "service"` (its client then joins
+  the service topic, which `watchAccess` opens), so a query over a model no
+  service owns (a game's high scores) is invalidated without an app event.
+  A service without a model may now be watched when it writes something
+  (F4.9).
+- `streams: { <name>: { validate: "development" } }` checks pushed items
+  (and computed seeds) only while the dispatcher checks outputs
+  (`outputValidation`, on unless `NODE_ENV` is `"production"`); unchecked,
+  an item goes out as pushed. The default stays `"always"` (F4.14).
 
 ### Client
 

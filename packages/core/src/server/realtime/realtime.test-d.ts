@@ -214,6 +214,31 @@ describe("the server", () => {
       // @ts-expect-error -- worldService has no stream "nope"
       streams: { nope: { seed: () => [] } },
     });
+    qd.defineService(world, {
+      methods: {},
+      streams: { snaps: { validate: "development" } },
+    });
+    qd.defineService(world, {
+      methods: {},
+      // @ts-expect-error -- validate is "always" or "development"
+      streams: { snaps: { validate: "never" } },
+    });
+  });
+
+  test("a stream's access may be an app room: its name, a prefix, or computed from the scope", () => {
+    defineContract("roomStreamService", {
+      streams: {
+        lobby: { item: z.number(), access: { room: "lobby" } },
+        anyWorld: { item: z.number(), access: { room: { prefix: "world:" } } },
+        world: { item: z.number(), scope: "worldId", access: { room: (id) => `world:${id}` } },
+      },
+    });
+    defineContract("mixedRoomStreamService", {
+      streams: {
+        // @ts-expect-error -- a room form is { room } and nothing else
+        lobby: { item: z.number(), access: { room: "lobby", service: "Read" } },
+      },
+    });
   });
 
   test("rooms outside a handler: typed events, and a user taken out of a room", () => {

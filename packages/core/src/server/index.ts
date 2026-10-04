@@ -105,6 +105,7 @@ export type {
   StreamSeed,
   StreamSeedContext,
   StreamSubscriptions,
+  StreamValidation,
 } from "./realtime/types";
 export { CHANNEL_ABUSE_MULTIPLIER, CHANNEL_ABUSE_WINDOW_MS } from "./realtime/channels";
 export { MAX_APP_ROOMS, PRESENCE_MAX_LAST_SEEN } from "./realtime/presence";

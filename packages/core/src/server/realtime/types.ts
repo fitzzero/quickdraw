@@ -258,11 +258,24 @@ export interface StreamImplementation<
    * streams: { world: { seed: (worldId) => [worlds.get(worldId).snapshot()] } }
    */
   readonly seed?: StreamSeed<T, C, K>;
+  /**
+   * When pushed items (and computed seeds) are checked against the item
+   * schema: `"always"`, the default, or `"development"`, only while the
+   * dispatcher checks its methods' outputs (`outputValidation`: on unless
+   * `NODE_ENV` is `"production"`, so always in tests). For a hot stream
+   * whose items the app builds itself (a game's snapshots at its tick
+   * rate): unchecked, an item goes out as pushed, so the schema neither
+   * refuses it nor strips keys it does not name.
+   */
+  readonly validate?: StreamValidation;
 }
+
+/** When a stream checks its items: always, or only where outputs are checked (development and tests). */
+export type StreamValidation = "always" | "development";
 
 /**
  * `defineService`'s `streams`: options per stream of the contract (any
- * subset): a seed computed at subscribe time.
+ * subset): a seed computed at subscribe time, and when items are checked.
  */
 export type StreamOptions<T extends QuickdrawTypes, C extends AnyContract> = {
   readonly [K in StreamName<C>]?: StreamImplementation<T, C, K>;
@@ -411,11 +424,25 @@ export interface ServiceStream {
   readonly seed: number;
   /** The service's `seed` function, computing each subscriber's seed instead; `undefined` when it has none. */
   readonly computeSeed: AnyStreamSeed | undefined;
+  /** When items are checked against `item`: always, or only while the dispatcher checks outputs. */
+  readonly validate: StreamValidation;
   readonly volatile: boolean;
   /**
    * The contract's access form as the access engine decides it, with the
    * scope as the `id` of an `entry` or `scope` form (the engine's input is
-   * `{ scope }`); `undefined` for a closed stream.
+   * `{ scope }`); `undefined` for a closed stream, or one whose `room`
+   * decides instead.
    */
   readonly access: AccessForm | undefined;
+  /** The contract's `access: { room }`: the app room a subscriber's socket must be in. */
+  readonly room: StreamRoomAccess | undefined;
 }
+
+/** A stream's `access: { room }`, compiled: the app room a subscriber's socket must be in. */
+export type StreamRoomAccess =
+  | { readonly kind: "name"; readonly room: string }
+  | { readonly kind: "prefix"; readonly prefix: string }
+  | {
+      readonly kind: "computed";
+      readonly select: (scope: string | undefined) => string | undefined;
+    };

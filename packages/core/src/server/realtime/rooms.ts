@@ -98,9 +98,16 @@ function leaveOf(
   }) as ContextRooms["leave"];
 }
 
-/** Creates the rooms of one dispatcher, and their typed events (`events.ts`). */
-export function createRooms(base: RoomState): Rooms {
-  const state: LeavingState = { ...base, listener: undefined };
+/**
+ * Creates the rooms of one dispatcher, and their typed events (`events.ts`).
+ * `left` hears each socket that left an app room and is still connected
+ * (the streams open to a room's sockets check it again).
+ */
+export function createRooms(
+  base: RoomState,
+  left?: (socket: QuickdrawServerSocket) => void,
+): Rooms {
+  const state: LeavingState = { ...base, listener: undefined, left };
   const events = createRoomEvents(state.hub);
   const removal = (room: string, target: RoomTarget): Promise<void> =>
     removeUser(state, room, target);
