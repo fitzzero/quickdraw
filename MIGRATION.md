@@ -50,12 +50,11 @@ keep 4.x clients working while you ship.
 - **A clean working tree.** The codemod rewrites files in place; review its
   changes as a diff.
 
-Then upgrade the packages (5.0 prereleases are published under the `next`
-dist-tag):
+Then upgrade the packages:
 
 ```bash
-bun add @fitzzero/quickdraw-core@next            # in every package that imports it
-bun add -d @fitzzero/quickdraw-lint@next @fitzzero/quickdraw-skills@next oxlint
+bun add @fitzzero/quickdraw-core            # in every package that imports it
+bun add -d @fitzzero/quickdraw-lint @fitzzero/quickdraw-skills oxlint
 ```
 
 The shared package now holds the contracts, so it needs `zod` among its
@@ -66,8 +65,8 @@ dependencies when it did not have it.
 From the app's repository root:
 
 ```bash
-bunx @fitzzero/quickdraw-codemod@next v5 . --dry-run   # what it would change
-bunx @fitzzero/quickdraw-codemod@next v5 .
+bunx @fitzzero/quickdraw-codemod v5 . --dry-run   # what it would change
+bunx @fitzzero/quickdraw-codemod v5 .
 ```
 
 It expects the template's layout (`packages/shared`, `apps/api`, `apps/web`,
@@ -1701,11 +1700,10 @@ native client sends the token as `auth.token`.
 - **A session cookie on an HTTP call must come from an allowed page.**
   `socketAuth` applies its `allowedOrigins` to `/qd/...` calls that
   authenticate with the cookie, as it does to sockets: a call whose
-  `Origin` is not listed is answered `FORBIDDEN` (403). Up to rc.4 only
-  sockets were checked. A call without `Origin` (curl, server-side
-  rendering that forwards the user's cookie) and a bearer token are
-  unaffected. A page on another origin that calls `/qd` with the cookie
-  needs its origin in `allowedOrigins`.
+  `Origin` is not listed is answered `FORBIDDEN` (403). A call without
+  `Origin` (curl, server-side rendering that forwards the user's cookie)
+  and a bearer token are unaffected. A page on another origin that calls
+  `/qd` with the cookie needs its origin in `allowedOrigins`.
 - **`setSessionCookie` sets SameSite=Lax** (4.x: `None` in production),
   as the auth routes' own cookie is, so the cookie never rides a request
   another site's page makes. A web app on another site, or a page in a
@@ -1715,9 +1713,8 @@ native client sends the token as `auth.token`.
   projection's keys, stripped per caller, and a method whose output is a
   schema of its own sends only what that schema's JSON Schema declares
   (Zod 4.2 or later), on every transport: a handler may return the whole
-  row, and the keys the schema leaves out never leave the server. Up to
-  rc.5 such a schema output was sent as returned. An output schema without
-  JSON Schema (Zod 3) still is.
+  row, and the keys the schema leaves out never leave the server. An
+  output schema without JSON Schema (Zod 3) is sent as returned.
 - **No default CORS origin.** 4.1 allowed `*`; pass `cors`.
 - **Errors that are not `QuickdrawError` reach callers as `INTERNAL`** with a
   generic message (the original is logged). A Prisma unique violation is

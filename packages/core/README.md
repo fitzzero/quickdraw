@@ -25,20 +25,19 @@ single hand-written event.
 - **Testing**: a real test server, access matrices, performance budgets that
   count statements and bytes, strict development warnings.
 
-Design record: [`docs/rfcs/0003-v5.md`](https://github.com/fitzzero/quickdraw/blob/dev/docs/rfcs/0003-v5.md).
+Design record: [`docs/rfcs/0003-v5.md`](https://github.com/fitzzero/quickdraw/blob/main/docs/rfcs/0003-v5.md).
 
 ## Install
 
 ```bash
-bun add @fitzzero/quickdraw-core@next zod
+bun add @fitzzero/quickdraw-core zod
 bun add express socket.io @prisma/client                   # the server
 bun add socket.io-client @tanstack/react-query react        # the web app
-bun add -d @fitzzero/quickdraw-lint@next @fitzzero/quickdraw-skills@next oxlint
+bun add -d @fitzzero/quickdraw-lint @fitzzero/quickdraw-skills oxlint
 ```
 
-Until 5.0.0 is released, 5.0 is published under the `next` dist-tag, which
-these commands name; without it they install 4.x. Node 24 or later. Every
-peer dependency is optional: install the ones the entries you import need.
+Node 24 or later. Every peer dependency is optional: install the ones the
+entries you import need.
 
 | Entry                                   | Needs                                                                   |
 | --------------------------------------- | ----------------------------------------------------------------------- |
@@ -59,7 +58,7 @@ peer dependency is optional: install the ones the entries you import need.
 A board of tasks in the quickdraw template's layout: contracts in
 `packages/shared`, the server in `apps/api`, the web app in `apps/web`. The
 examples in this README compile: they are copies of
-[`packages/core/test/readme/`](https://github.com/fitzzero/quickdraw/tree/dev/packages/core/test/readme),
+[`packages/core/test/readme/`](https://github.com/fitzzero/quickdraw/tree/main/packages/core/test/readme),
 which the package's typecheck builds. The pieces the quick start imports
 without showing (the schemas, the auth helpers, the Prisma models) are under
 [The example app](#the-example-app).
@@ -316,7 +315,7 @@ and `countOnBoard` is fetched again because it watches the board.
 
 The quick start is part of a small app in the template's layout, whose
 every file compiles with the package:
-[`packages/core/test/readme/`](https://github.com/fitzzero/quickdraw/tree/dev/packages/core/test/readme).
+[`packages/core/test/readme/`](https://github.com/fitzzero/quickdraw/tree/main/packages/core/test/readme).
 The label and project services the server registers are there, with the
 other sections' examples. These are the pieces the quick start imports
 without showing, which an app writes itself.
@@ -954,7 +953,7 @@ export const taskService = qd.defineService(task, {
   Valkey's clock in microseconds, so revisions from all nodes are one order;
   its key needs persistence or replication. A node whose Valkey connection
   comes back has its clients reconnect to catch up.
-  [docs/deploying.md](https://github.com/fitzzero/quickdraw/blob/dev/docs/deploying.md) has the wiring, what holds across
+  [docs/deploying.md](https://github.com/fitzzero/quickdraw/blob/main/docs/deploying.md) has the wiring, what holds across
   nodes, what it costs, and what happens when a node or Valkey stops
   answering.
 
@@ -1473,9 +1472,9 @@ such code, and `createInvalidationCoordinator(queryClient)` invalidates as
 the hooks do.
 
 A client in another language (a Godot game, a native app) speaks the wire
-itself: [`docs/protocol-v5.md`](https://github.com/fitzzero/quickdraw/blob/dev/docs/protocol-v5.md) is its specification,
-generated from the protocol's source, and [`examples/godot`](https://github.com/fitzzero/quickdraw/tree/dev/examples/godot)
-holds a GDScript client written from it. [`docs/clients.md`](https://github.com/fitzzero/quickdraw/blob/dev/docs/clients.md)
+itself: [`docs/protocol-v5.md`](https://github.com/fitzzero/quickdraw/blob/main/docs/protocol-v5.md) is its specification,
+generated from the protocol's source, and [`examples/godot`](https://github.com/fitzzero/quickdraw/tree/main/examples/godot)
+holds a GDScript client written from it. [`docs/clients.md`](https://github.com/fitzzero/quickdraw/blob/main/docs/clients.md)
 compares the three ways in.
 
 ## Kits
@@ -3087,7 +3086,7 @@ nothing. Run `--check` in CI next to the lint step.
 
 ## Lint rules and agent guidance
 
-[`@fitzzero/quickdraw-lint`](https://github.com/fitzzero/quickdraw/tree/dev/packages/lint) is the oxlint plugin and base
+[`@fitzzero/quickdraw-lint`](https://github.com/fitzzero/quickdraw/tree/main/packages/lint) is the oxlint plugin and base
 config every 5.0 app extends: it reports untracked and foreign writes, nested
 and raw SQL writes, hand-sent frames, inline auth guards, unbounded reads,
 database calls and emits in loops, layering breaks, bypasses of the typed
@@ -3102,7 +3101,7 @@ takes an `id`, unless it says `rowless: true`); then lint; then a
 development warning as it happens (`repeated-call`, `repeated-mutation` and
 `repeated-invalidation` name a client loop before the rate limit does).
 
-[`@fitzzero/quickdraw-skills`](https://github.com/fitzzero/quickdraw/tree/dev/packages/skills) ships agent rules and skills
+[`@fitzzero/quickdraw-skills`](https://github.com/fitzzero/quickdraw/tree/main/packages/skills) ships agent rules and skills
 for quickdraw apps and links them into `.claude/` with
 `quickdraw-skills link`, so every app's agents read the same, current
 guidance:
@@ -3118,17 +3117,17 @@ guidance:
 
 ## Migrating from 4.x
 
-[`@fitzzero/quickdraw-codemod`](https://github.com/fitzzero/quickdraw/tree/dev/packages/codemod) moves a 4.x app to 5.0:
+[`@fitzzero/quickdraw-codemod`](https://github.com/fitzzero/quickdraw/tree/main/packages/codemod) moves a 4.x app to 5.0:
 contracts from the method maps, `defineService` from the service classes,
 the typed client for the hooks, and a report of everything left to decide.
-[`MIGRATION.md`](https://github.com/fitzzero/quickdraw/blob/dev/MIGRATION.md) explains each step, the access mapping and
-the defaults that changed; [`UPGRADE-PROMPT.md`](https://github.com/fitzzero/quickdraw/blob/dev/UPGRADE-PROMPT.md) is the
+[`MIGRATION.md`](https://github.com/fitzzero/quickdraw/blob/main/MIGRATION.md) explains each step, the access mapping and
+the defaults that changed; [`UPGRADE-PROMPT.md`](https://github.com/fitzzero/quickdraw/blob/main/UPGRADE-PROMPT.md) is the
 procedure for an agent. Both ship with the codemod, at
 `node_modules/@fitzzero/quickdraw-codemod/MIGRATION.md` and
 `node_modules/@fitzzero/quickdraw-codemod/UPGRADE-PROMPT.md`.
 
 ```bash
-bunx @fitzzero/quickdraw-codemod@next v5 .
+bunx @fitzzero/quickdraw-codemod v5 .
 ```
 
 ## Package exports
@@ -3156,7 +3155,7 @@ The package also ships the `quickdraw-docs` command.
 
 A bun workspace with turbo: `packages/core` (this package), `packages/lint`,
 `packages/skills` and `packages/codemod`. See
-[CONTRIBUTING.md](https://github.com/fitzzero/quickdraw/blob/dev/CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/fitzzero/quickdraw/blob/main/CONTRIBUTING.md).
 
 ```bash
 bun install

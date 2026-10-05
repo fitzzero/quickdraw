@@ -39,8 +39,8 @@ part and marks everything that needs a decision.
 3. Upgrade the packages:
 
    ```bash
-   bun add @fitzzero/quickdraw-core@next      # in every package that imports it
-   bun add -d @fitzzero/quickdraw-lint@next @fitzzero/quickdraw-skills@next oxlint
+   bun add @fitzzero/quickdraw-core      # in every package that imports it
+   bun add -d @fitzzero/quickdraw-lint @fitzzero/quickdraw-skills oxlint
    ```
 
    Add `zod` to the shared package's dependencies if it has none. Extend
@@ -59,8 +59,8 @@ part and marks everything that needs a decision.
 ## 2. Run the codemod
 
 ```bash
-bunx @fitzzero/quickdraw-codemod@next v5 . --dry-run   # read what it would change
-bunx @fitzzero/quickdraw-codemod@next v5 .
+bunx @fitzzero/quickdraw-codemod v5 . --dry-run   # read what it would change
+bunx @fitzzero/quickdraw-codemod v5 .
 ```
 
 It formats what it writes with the app's formatter (oxfmt, prettier or Biome,

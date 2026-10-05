@@ -6,11 +6,8 @@ the same guidance, written against the API as built, and it updates with
 the package instead of drifting per app.
 
 ```bash
-bun add -d @fitzzero/quickdraw-skills@next
+bun add -d @fitzzero/quickdraw-skills
 ```
-
-Until 5.0.0 is released, 5.0 is published under the `next` dist-tag,
-which the command names.
 
 ```jsonc
 // package.json

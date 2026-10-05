@@ -40,12 +40,12 @@ reads 4.x code, so each needs a decision first: migrate, or stay on 3.x.
    where 5.0 reads JSON Schema: MCP tools, the admin kit, projection keys,
    `quickdraw-docs`), and a clean tree on a new branch. An app that stays on
    4.x for a while takes 4.1.1 first, the socket rate limiter crash fix.
-2. **Upgrade the packages** from the `next` dist-tag:
+2. **Upgrade the packages**:
    `@fitzzero/quickdraw-core` in every package that imports it;
    `@fitzzero/quickdraw-lint`, `@fitzzero/quickdraw-skills` and `oxlint` as
    dev dependencies; `zod` in the shared package.
 3. **Run the codemod**, a dry run first, and commit its output as it is:
-   `bunx @fitzzero/quickdraw-codemod@next v5 .` (with `--shared`, `--api`,
+   `bunx @fitzzero/quickdraw-codemod v5 .` (with `--shared`, `--api`,
    `--web` or `--db-package` for a layout other than the template's).
 4. **Work through the report**, `quickdraw-migration-report.md`, one commit
    per step: contracts, access, emits, client, then the rest (instance

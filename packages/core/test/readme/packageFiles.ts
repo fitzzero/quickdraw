@@ -26,7 +26,7 @@ export const RELATIVE_LINK = /\]\((?![a-z][\d+.a-z-]*:|#|\/)([^\s)#]+)(#[^\s)]*)
 
 /** The repository's files on GitHub, on the branch the guide describes. */
 export const GITHUB = "https://github.com/fitzzero/quickdraw";
-const BRANCH = "dev";
+const BRANCH = "main";
 
 /** A link to a file or directory of the repository (`path` from its root) on GitHub. */
 function onGitHub(path: string, anchor: string): string {

@@ -8,11 +8,8 @@ calls that no longer exist. Every rule is tested, and every rule can be
 adopted without fixing old code first (baselines, below).
 
 ```bash
-bun add -d @fitzzero/quickdraw-lint@next oxlint
+bun add -d @fitzzero/quickdraw-lint oxlint
 ```
-
-Until 5.0.0 is released, 5.0 is published under the `next` dist-tag,
-which the command names.
 
 ```jsonc
 // .oxlintrc.json in your app

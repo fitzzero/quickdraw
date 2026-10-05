@@ -125,7 +125,7 @@ describe("the files the packages ship beside their code", () => {
         "[a](docs/clients.md#hooks) [b](packages/lint) [c](https://x.dev/y) [d](#install) [e](/abs) [f](mailto:a@b.c) [g](packages/core/CHANGELOG.md)",
       ),
     ).toBe(
-      `[a](${GITHUB}/blob/dev/docs/clients.md#hooks) [b](${GITHUB}/tree/dev/packages/lint) [c](https://x.dev/y) [d](#install) [e](/abs) [f](mailto:a@b.c) [g](CHANGELOG.md)`,
+      `[a](${GITHUB}/blob/main/docs/clients.md#hooks) [b](${GITHUB}/tree/main/packages/lint) [c](https://x.dev/y) [d](#install) [e](/abs) [f](mailto:a@b.c) [g](CHANGELOG.md)`,
     );
   });
 
