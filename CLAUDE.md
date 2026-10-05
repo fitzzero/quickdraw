@@ -149,9 +149,9 @@ from `no-raw-socket` (the test helpers and the load harness drive sockets by
 hand), exempts the framework's own `*.test.ts(x)` from
 `no-nested-write` and `no-foreign-write` (they make those writes on purpose),
 and lets the README examples (`**/test/readme/**`) keep inline comments.
-oxlint matches `overrides` and
-`ignorePatterns` globs against paths as seen from where it runs, so keep them
-`**/`-prefixed: lint runs from each package directory. When adding a lint rule
+oxlint matches `overrides` and `ignorePatterns` globs against paths as seen
+from where it runs, so keep them `**/`-prefixed: lint runs from each package
+directory. When adding a lint rule
 that all quickdraw apps should get, put it in `packages/lint/oxlint.base.jsonc`
 (or a new rule in `packages/lint/plugin/`, with a test under
 `packages/lint/plugin/test/`), not in downstream repos.

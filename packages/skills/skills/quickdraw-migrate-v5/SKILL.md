@@ -36,8 +36,9 @@ guide's sections as the report sends you to them.
    later (4.2 or later where JSON Schema is read: MCP tools, the admin kit,
    projection keys). Upgrade `@fitzzero/quickdraw-core` to 5.0 in every
    package that imports it, add `@fitzzero/quickdraw-lint`,
-   `@fitzzero/quickdraw-skills` and `oxlint` as dev dependencies, extend `oxlint.base.jsonc` (a template app:
-   `oxlint.template.jsonc`, which extends the base), set
+   `@fitzzero/quickdraw-skills` and `oxlint` as dev dependencies, extend
+   `oxlint.base.jsonc` (a template app: `oxlint.template.jsonc`, which
+   extends the base), set
    `settings.quickdraw.baseline` to `.quickdraw-lint-baseline.json`, make the
    lint scripts run `quickdraw-lint check` instead of `oxlint`, add
    `quickdraw-skills link` to `prepare`, and add `zod` to the shared package

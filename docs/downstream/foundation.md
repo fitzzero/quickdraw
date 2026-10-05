@@ -14,9 +14,10 @@ run for the report's counts before planning.
 
 1. **223 handlers return `{ error }`.** In 5.0 a returned object is a
    successful reply: nothing rejects, and `{ error }` reaches the caller as
-   data only where the output schema declares it. Each becomes a thrown `QuickdrawError` with a code that says what
-   happened (`NOT_FOUND`, `FORBIDDEN`, `VALIDATION`, `CONFLICT`), and
-   callers read `error.code` from the rejected call. A plain `Error` is no
+   data only where the output schema declares it. Each becomes a thrown
+   `QuickdrawError` with a code that says what happened (`NOT_FOUND`,
+   `FORBIDDEN`, `VALIDATION`, `CONFLICT`), and callers read `error.code`
+   from the rejected call. A plain `Error` is no
    substitute: it reaches the caller as `INTERNAL` with a generic message.
    The codemod does not rewrite these returns; it marks a thrown `Error`
    whose message 4.x sent (`[error]`).

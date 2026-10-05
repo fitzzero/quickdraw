@@ -205,9 +205,10 @@ requests (fitzzero/quickdraw-chat #46 to #53) are the worked example, and
   `emitToUser`), and reached outside handlers through `qd.rooms` and
   `server.rooms` (a game loop, a job), on every node:
   `rooms.leave(room, { userId })` takes a user out everywhere, and
-  `rooms.size` counts a room's sockets on this node. `onRoomLeave`, on `createServer` and on any service,
-  runs once per socket that leaves, with each room's `last`. Presence
-  (`usePresence`, `qd.presence`) tells who is in a room and who is online.
+  `rooms.size` counts a room's sockets on this node. `onRoomLeave`, on
+  `createServer` and on any service, runs once per socket that leaves, with
+  each room's `last`. Presence (`usePresence`, `qd.presence`) tells who is
+  in a room and who is online.
 - **Events** are typed room events declared in the contract (`useEvent`).
 - **Channels** carry fire-and-forget input (cursors, a game's moves);
   `requires: { room }` (a name, a function of the payload, or `{ prefix }`)
