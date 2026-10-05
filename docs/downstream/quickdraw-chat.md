@@ -1,107 +1,61 @@
-# quickdraw-chat: upgrade brief
+# quickdraw-chat: done, the worked example
 
-On 4.1.0. The template the other apps were copied from, and the reference
-migration: 5.0.0 is released only after quickdraw-chat runs on the release
-candidate ([`release-checklist-5.0.md`](../release-checklist-5.0.md)).
-**Anything awkward found here is a framework bug, to fix in quickdraw before
-the release**, not to work around in the app.
+Migrated. The template the other apps were copied from moved from 4.1 to
+5.0 on the release candidates and was the release gate: 5.0.0 shipped only
+after it ran on one, and everything awkward it found was fixed in quickdraw
+first (findings F1 to F10, round by round in RFC 0003 section 17 and the
+changelog's release-candidate sections). On 2026-10-05 its `dev` runs
+`5.0.0-rc.5`, deployed as the hosted dev instance, with `5.0.0-rc.6` in
+progress.
 
-## Size
+## The pull requests (fitzzero/quickdraw-chat)
 
-7 services (chat, definition, document, game, message, push-subscription,
-user), 31 methods, 2 collections (`myChats`, `byChat`), 1 channel (the
-game's `input`): the audit of 2026-10-02. The codemod's dry run of
-2026-10-03, on the checkout at `8769870` (its `apps/` and `packages/` match
-quickdraw-chat's `dev`): 7 contracts, 31 schemas moved, 26 `todoSchema`
-placeholders, 18 web files rewritten, 3 wrapper hooks deleted; 66 files
-changed, 12 created, 3 deleted; 214 report items in 59 files: contracts 38,
-access 15, access overrides 10, projections 6, collections 2, emits 9,
-writes 7, hooks 2, admin 7, instance state 42, client 23, server and other
-4.x APIs 53. Rerun on 2026-10-04 with the review's codemod fixes (no
-self-referential `const chatService = chatService`, `packages/db` scanned,
-instance members marked by type): 67 files changed, 13 created (the report
-among them), 3 deleted; 247 items in 61 files (client 24, server and other
-4.x APIs 85: the 31 new ones are uses of 4.x instance members, 20 of them in
-`game.int.test.ts`). Typecheck errors with `@project/shared` and
-`@project/db` read from source: shared 3, api 238, web 37 (were 3, 233, 44);
-the errors no marker covers are 4.x collection deltas read in two
-integration tests (`delta.type`, `delta.item`), parameters left unused once
-`new X(prisma, options)` became the service object (`build-services.ts`),
-two helpers only the 4.x constructors called, implicit `any`s downstream of
-removed types, and 5.0's readonly items and `undefined` for a missing
-entity in three components.
+| PR  | What                                                                                                                        |
+| --- | --------------------------------------------------------------------------------------------------------------------------- |
+| #46 | packages, the codemod's output, contracts and lint on `5.0.0-rc.1`                                                          |
+| #47 | the server: access policies, tracked writes, collections, `createServer`, the auth routes kit, MCP                          |
+| #48 | the web app on the typed client, admin kit screens, Storybook on the mock client, `renderWithQuickdraw` tests               |
+| #49 | the game on the realtime kit, the Godot client on protocol 5, a headless two-client check                                   |
+| #50 | polish: rules and docs for 5.0, the `quickdraw-docs` reference, budgets, carve-outs, the manual run                         |
+| #51 | `5.0.0-rc.4`, every workaround replaced by the framework's primitive                                                        |
+| #52 | the migration into `dev`, with its review's fixes (verified emails, the chat roles, `updateUser`'s output) and `5.0.0-rc.5` |
+| #53 | hosted dev sign-in: only the providers the API serves, `API_URL` off localhost, the proxy trusted                           |
 
-## Top hazards
+Its `CHANGELOG.md` ("quickdraw 5.0") lists every access change a fork
+inherits, and `DEPLOYMENT.md` ("Upgrading to quickdraw 5.0") what an
+operator does once.
 
-1. **Chat access is a membership table.** The `checkEntryACL` override over
-   `ChatMember` becomes a `members` policy, and `myChats` (each chat fanned
-   out to every member's list) a `via` collection on `chatMember` with
-   `scopeAccess: "self"`; its computed `memberCount` and `lastMessageAt`
-   become a projection `map`, kept fresh by an `affects` from a message to
-   its chat. **Ordering:** a contract `order` names columns only, so the
-   sort by `lastMessageAt ?? createdAt` (`useMyChats.ts`) needs a maintained
-   `Chat.lastMessageAt` column or stays a client-side sort.
-2. **Access overrides and open reads.** Port the overrides in chat,
-   document (`jsonAcl("acl", { owner: "ownerId" })`, plus the sharing kit
-   for its share and unshare methods), game and user into policies; until
-   then the codemod's placeholder grants no row. Decide the 12
-   `"authenticated"` forms: 4.x let every signed-in user call them.
-3. **The copied bootstrap and auth.** The 323-line `apps/api/src/index.ts`
-   becomes `qd.createServer`; the OAuth, mock and guest routes become
-   `createAuthRoutes` with a `SessionStore` over the app's `Session` model,
-   whose tokens carry `sid`, so everyone signs in once more. The hand-built
-   socket rate limiter (100 events a minute keyed by user id, subscriptions
-   and channels excluded by name) goes too: `createServer`'s is on by
-   default at 600 events per minute per socket and never counts subscription
-   events, channels or cancels (`rateLimit: { keyGenerator }` keeps keying
-   by user). The Discord Activity sign-in stays an app route on
-   `issueSession`, and its `setSessionCookie(res, token)` keeps working: it
-   now sets the name the routes give the same request (`__Host-session`
-   over HTTPS), which `socketAuth` and the HTTP transport read. A cookie
-   shared with subdomains through `COOKIE_DOMAIN` is `session` everywhere,
-   with nothing to name; only a `cookie.domain` passed to the routes alone
-   needs `cookieName: "session"` on `socketAuth` and `http`.
-4. **The Godot client speaks the 4.x wire.** The codemod does not touch
-   `apps/game/godot/addons/quickdraw/quickdraw_client.gd`. `legacyWire`
-   serves its method calls, not its `input` channel or the world
-   broadcasts, so it moves to protocol v5: quickdraw's
-   `examples/godot/addons/quickdraw/quickdraw_client.gd` (same path, a v5
-   client written from `docs/protocol-v5.md`) replaces it, and
-   `game.gd`'s calls move from `{success, data}` to `{ok, d}`. The
-   channel's `requireRoom` becomes `requires: { room: <the world's room> }`;
-   the world's room is joined by a method the Godot socket calls itself
-   (`watchWorld`, say), since a room the page's socket joined does not
-   count for the game client's socket.
-5. **Zod 3 in the api.** `apps/api` is on `zod ^3.25.76`, and
-   `packages/shared`, which now holds the contracts and the 31 schemas the
-   codemod moved there, lists no `zod` at all. 5.0 validates Zod 3.25
-   schemas, but reads a schema's JSON Schema only from Zod 4.2 or later
-   (`MIGRATION.md`, "Before you start"): the MCP server (`mcp-bootstrap.ts`,
-   `mcp-server.ts`, whose tools come from the contracts' inputs) and the 7
-   admin items (the admin kit's field metadata comes from the entity
-   schema) fail when the registry or the service is built, naming the
-   method. Give `packages/shared` and `apps/api` `zod ^4.2.0` before the
-   contracts get their real schemas. The socket packages need a bump too:
-   `socket.io` and `socket.io-client` are `^4.7.4` here, and 5.0's peers
-   start at `^4.8.0`.
+## What it taught the other apps
 
-Also: the two `defineService` typing issues the dry run found are fixed in
-the release candidate (an unannotated `id` function no longer widens the
-other methods' `ctx.principal`; `MethodOf`, typed for `"authenticated"`,
-takes `{ service, entry }`), so either one showing up again is a framework
-bug. The admin screens name services at run time (they move to
-`qd.<service>.admin.*` and `useAdminServices(qd)`), and production stays on
-4.x until this ships, so take 4.1.1 when it is out.
+- **Size, from the final codemod** on `0227ee0`: 4 files deleted (the
+  wrapper hooks and their types), 264 report items in 61 files, every output
+  file parsing, and lint clean on it with a baseline.
+- **Order.** Zod 4 in the shared package and the api before the contracts
+  get real schemas; the codemod's output committed as it is, lint adopted
+  with a baseline at once; then contracts, access with an access matrix
+  per service, the server, the web app, the game.
+- **Access.** Chat membership is a `members` policy, and `myChats` a `via`
+  collection on `chatMember` with maintained `Chat.memberCount` and
+  `Chat.lastMessageAt` columns (an `order` names columns only); documents
+  are `jsonAcl` with the sharing kit; public profiles use
+  `everyone("Read")`. Every narrowing or widening is named in its pull
+  request.
+- **Auth.** The auth routes kit over a `Session` table (everyone signs in
+  once more); an email counts only once a provider verified it, so
+  `ADMIN_EMAILS` admins sign in once through one that does; REST routes
+  take `requireSession`, `sessionOf` and `qd.caller(principal)`.
+- **Writes.** It reads first only where it must know what a write did (a
+  new member, a new best score); everything else goes through `db`.
+- **The game.** Its input channel requires the world's room, its snapshot
+  stream is volatile with a seed computed per subscriber, its rooms are
+  joined with `useJoin` and left in its own `onRoomLeave`, and its Godot
+  client is quickdraw's `examples/godot` client.
+- **Tests.** An access matrix per service, live-delta tests over real
+  sockets, component tests against a real server, and budgets for the chat
+  list, a message send, a document share and the game's join.
 
-## Suggested order
+## What remains
 
-1. Codemod, committed as it is; contracts (the 26 placeholders, the
-   `ChatListItem` projection, the user's protected fields as `fields`).
-2. Access: the four policies, then the 12 `"authenticated"` decisions.
-3. Emits: writes through `db`, both collections declared, the 9 hand emits
-   deleted, the `lastMessageAt` decision.
-4. Server and auth, then the web client and the tests (`./testing`).
-5. The game last, Godot client included, or carved out: the owner's call,
-   since the release gate's manual run does not cover it.
-6. Lint presets, `quickdraw-skills link`, budgets (the chat list, a message
-   send with subscribers), then the release checklist's manual run.
+- `5.0.0-rc.6` (in progress), then `5.0.0` after the release: a card on the
+  quickdraw-chat project, which also replaces the app's own
+  `GET /auth/providers` route with the kit's.

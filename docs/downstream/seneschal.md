@@ -1,52 +1,44 @@
-# seneschal: upgrade brief
+# seneschal: re-fork from the template
 
-On 4.1.0. Close to the template, and small: migrate it straight after
-quickdraw-chat, using quickdraw-chat's finished migration as the worked
-example and starting from a release candidate that carries whatever
-quickdraw-chat turned up.
-
-## Size
-
-5 services and 22 methods (the audit of 2026-10-02). Its collections and
-channels were not counted: the migration card counts them, and runs the
-codemod's dry run for the report's counts, before planning.
+On 4.1.0, close to the template, and small: 5 services and 22 methods (the
+audit of 2026-10-02; its collections and channels were not counted). It
+does not run the codemod: it re-forks from the migrated quickdraw-chat and
+ports its own features onto the fork (an owner decision, 2026-10-04). The
+template already holds the 5.0 server, sign-in, typed client, tests, lint
+and agent rules seneschal would otherwise rebuild, so what is left to port
+is only what seneschal added.
 
 ## Top hazards
 
-The audit records no seneschal-specific findings. Because it follows the
-template, expect quickdraw-chat's template-level hazards; confirm each one
-against the code before planning:
-
-1. **The copied bootstrap and auth files.** The template's server
-   bootstrap and auth files become `qd.createServer`, `createAuthRoutes` and
-   `socketAuth`, with a `SessionStore` over the app's own session model.
-   The new tokens carry a session id (`sid`), so everyone signs in once
-   more. A session cookie shared with subdomains through `COOKIE_DOMAIN`
-   is `session`, which `socketAuth` and the HTTP transport read too; a
-   domain passed only as the routes' `cookie.domain` needs
-   `cookieName: "session"` on both (the routes warn until it is named).
-2. **Access the template decided in code.** `checkEntryACL` or
-   `checkAccess` overrides become policies (`owner`, `jsonAcl`, `members`,
-   `inherit`); until each is ported, the codemod's placeholder grants no
-   row. Every `"Read"` method without a row id becomes a marked
-   `"authenticated"` form: 4.x let every signed-in user call it.
-3. **Hand emits and the CRUD helpers.** Writes move to the tracked `db`;
-   `this.update` returned `null` for a missing row where `db` throws
-   `NOT_FOUND`; lifecycle hooks no longer run, so their work moves into the
-   methods that write; hand emits are deleted once each collection is
-   declared in its contract.
-4. **The template's typed hook wrappers and admin hooks.** The codemod
-   rewrites hook calls onto the typed client and deletes the wrappers;
-   admin screens that name services at run time move to
-   `qd.<service>.admin.*` by hand.
+1. **Knowing what is seneschal's own.** Diff it against the template
+   commit it was forked from before planning: each service, route, screen
+   and table it added is ported; whatever it kept from the template comes
+   from the new fork as it is. Count its collections and channels then.
+2. **Access, decided per method.** Each of its own services becomes a 5.0
+   service by the `quickdraw-new-service` skill, with a declared form per
+   method. 4.x admitted every signed-in user to a `"Read"` method that named
+   no row: write the form 4.x actually meant, say so where it changes, and
+   pin it with an access matrix.
+3. **Its database.** The template's 5.0 migrations apply to a 4.x database
+   of the template (quickdraw-chat's `DEPLOYMENT.md`, "Upgrading to
+   quickdraw 5.0"); seneschal's own tables follow as migrations on top of
+   the fork's. Rehearse the whole cutover on a copy of production: sessions
+   end (everyone signs in once more), emails count only once a provider
+   verified them, and `ADMIN_EMAILS` admins sign in once through one that
+   does.
+4. **Its deployment.** The fork's sign-in cookie is `SameSite=Lax`, so the
+   web app and the API sit on one site (or the cookie is
+   `sameSite: "none"`); a hosted instance off localhost sets `API_URL`, and
+   one behind a proxy sets `TRUST_PROXY`.
 
 ## Suggested order
 
-1. Wait for quickdraw-chat's migration to merge, and for the release
-   candidate with its fixes.
-2. Follow [`MIGRATION.md`](../../MIGRATION.md) in one card: codemod, then
-   contracts, access, emits, client, each a commit.
-3. Lint presets, `quickdraw-skills link`, budgets for its busiest screen.
-4. Ship the server and web client together unless another client (mobile,
-   a script) still speaks 4.x; then use `legacyWire: true` for the
-   rollout.
+1. After the release: fork quickdraw-chat at its `5.0.0` commit with
+   `./scripts/init-fork.sh seneschal [port] [--scope @org]`, adding
+   `--without-game` and `--without-storybook` for what it does not use.
+2. Port seneschal's own features one service per commit: Prisma model and
+   migration, contract, service, client hooks, access matrix.
+3. Its screens on the typed client; budgets for its busiest screen.
+4. The cutover rehearsed on a copy of production data, then shipped server
+   and web together (`legacyWire: true` only if another 4.x client
+   remains).

@@ -1869,10 +1869,11 @@ export const taskService = qd.defineService(taskContract, {
 Within one app: contracts, access, emits, client, as in
 [Work through the report](#work-through-the-report).
 
-Across the apps on 4.x: quickdraw-chat first (the template, and the release
-gate for 5.0.0), then seneschal, x-tokage-siege, foundation, farseer and
-Conveyor. makiel (on 3.7) and quickdraw-sunfall (on 3.9.1) need their own
-path: the codemod reads 4.x code.
+Across the apps on 4.x: quickdraw-chat went first (the template, and the
+release gate for 5.0.0), and its pull requests are the worked example;
+seneschal re-forks from it instead of migrating; then x-tokage-siege,
+foundation, farseer and Conveyor. makiel (on 3.7) and quickdraw-sunfall
+(on 3.9.1) stay on 3.x: the codemod reads 4.x code.
 
 Each of these apps has an upgrade brief in
 [`docs/downstream/`](docs/downstream/README.md): its size, its top hazards
