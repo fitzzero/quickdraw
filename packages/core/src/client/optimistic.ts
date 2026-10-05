@@ -267,6 +267,9 @@ export interface StoreInternals extends OverlayStore {
 /** The most layers a store keeps; past it the oldest finished ones go first. */
 const MAX_LAYERS = 1000;
 
+/** The most additions a store keeps; past it the oldest go first. */
+const MAX_ADDITIONS = 1000;
+
 /** The most rows without a layer whose last revision a store remembers. */
 const MAX_REVISIONS = 1000;
 
@@ -375,15 +378,18 @@ function remove(layers: Layers, layer: Layer): boolean {
   return true;
 }
 
-/** Drops the oldest finished layers (or else the oldest) while the store holds too many. */
-function trim(layers: Layers): void {
+/** Drops the oldest finished layers (or else the oldest) while the store holds too many; returns them. */
+function trim(layers: Layers): Layer[] {
+  const trimmed: Layer[] = [];
   while (layers.count > MAX_LAYERS) {
     const all = [...layers.byRow.values()].flat();
     const oldest = all.find((layer) => layer.finished !== undefined) ?? all[0];
     if (oldest === undefined || !remove(layers, oldest)) {
-      return;
+      break;
     }
+    trimmed.push(oldest);
   }
+  return trimmed;
 }
 
 /** The last revision seen of the row `key`. */
@@ -451,11 +457,16 @@ function stopExpiry(layers: Layers): void {
   layers.expiry = undefined;
 }
 
-/** Drops `dropped` and `additions`, and tells the listeners. */
+/**
+ * Drops `dropped` and `additions`, then tells the listeners once: for the
+ * services of those it held, and of `alsoChanged` (what else the caller
+ * changed). The one place additions are dropped, so none ends unseen.
+ */
 function discard(
   layers: Layers,
   dropped: readonly Layer[],
   additions: readonly Addition[] = [],
+  alsoChanged: readonly string[] = [],
 ): void {
   const removed = dropped.filter((layer) => remove(layers, layer));
   const gone = layers.additions.remove(additions);
@@ -465,6 +476,7 @@ function discard(
   changed(layers, [
     ...removed.map((layer) => layer.service),
     ...gone.map((addition) => addition.service),
+    ...alsoChanged,
   ]);
 }
 
@@ -554,8 +566,8 @@ function addLayer(
     layers.pinned.set(key, base);
   }
   layers.count += 1;
-  trim(layers);
-  changed(layers, [service]);
+  // A layer trimmed past the limit may be another service's: its views change too.
+  changed(layers, [service, ...trim(layers).map((trimmed) => trimmed.service)]);
   return layer;
 }
 
@@ -573,12 +585,12 @@ function finishLayers(layers: Layers, opened: Opened, data: unknown): void {
     layer.expiresAt = expiresAt;
   }
   // Those the reply names no id for, or whose scope holds it already, go now.
-  layers.additions.finish(opened.additions, data, layers.clock, expiresAt);
-  armExpiry(layers);
-  changed(layers, [
+  const ending = layers.additions.finish(opened.additions, data, layers.clock, expiresAt);
+  discard(layers, [], ending, [
     ...opened.layers.map((layer) => layer.service),
     ...opened.additions.map((addition) => addition.service),
   ]);
+  armExpiry(layers);
 }
 
 /** A call failed without an outcome: its layers go, its additions wait for their scopes' next loads. */
@@ -598,17 +610,15 @@ function settleScope(layers: Layers, ref: ScopeRef, evidence: ScopeEvidence): vo
   if (layers.additions.size === 0) {
     return;
   }
-  const { ended, refused } = layers.additions.settle(
+  const { ending, refused } = layers.additions.settle(
     ref.service,
     ref.collection,
     ref.scope,
     evidence,
   );
-  discard(layers, [], ended);
-  if (refused) {
-    // Those of unknown outcome a load answered without moved from the items to `refused`.
-    changed(layers, [ref.service]);
-  }
+  // Dropped here, so the views hear of an end that leaves the scope's state as it was
+  // (finding F11.1); those of unknown outcome a load answered without moved to `refused`.
+  discard(layers, [], ending, refused ? [ref.service] : []);
 }
 
 /** Drops every layer and every revision seen, and tells the views of every service shown. */
@@ -667,7 +677,9 @@ function createStore(queryClient: QueryClient): StoreInternals {
       keep = false,
     ): Addition {
       const addition = layers.additions.add(service, collection, scope, item, keep);
-      changed(layers, [service]);
+      // One at a time, so at most one past the limit: the oldest goes, perhaps another service's.
+      const oldest = layers.additions.size > MAX_ADDITIONS ? layers.additions.all()[0] : undefined;
+      discard(layers, [], oldest === undefined ? [] : [oldest], [service]);
       return addition;
     },
     finish(opened: Opened, data: unknown): void {
@@ -678,10 +690,11 @@ function createStore(queryClient: QueryClient): StoreInternals {
     },
     refuse(opened: Opened, refusal: Refusal): void {
       const dropped = layers.additions.refuse(opened.additions, refusal);
-      discard(layers, opened.layers, dropped);
       // The kept ones moved from the items to `refused`: their scopes' views change too.
-      changed(
+      discard(
         layers,
+        opened.layers,
+        dropped,
         opened.additions.filter((addition) => addition.refusal !== undefined).map((a) => a.service),
       );
     },

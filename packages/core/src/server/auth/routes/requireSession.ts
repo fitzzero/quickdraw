@@ -22,10 +22,15 @@
 // `allowedOrigins` is answered 403 `FORBIDDEN`, and a request without one
 // (curl, a server forwarding the cookie) is accepted unless `Sec-Fetch-Site`
 // names another site. The list defaults to the one the `createAuthRoutes`
-// writing to the same session store was given; without either, no page may
-// use the cookie here. A bearer token needs no Origin.
+// writing to the same session store object was given (the object, not its
+// table: a second store over the same table is another object); without
+// either, no page may use the cookie here, and the first cookie refused for
+// want of a list logs an error naming both fixes, which a page in
+// development is told too (finding F11.4 of the quickdraw-chat migration).
+// A bearer token needs no Origin.
 
 import type { ServerResponse } from "node:http";
+import { consoleLogger, type Logger } from "../../../contract/logger";
 import { httpCredentialOf, transportCookieNaming, type HttpRequest } from "../../transports/body";
 import type { Principal } from "../../types";
 import { originAllowlist, routeOriginsOf, type AllowedOrigin } from "./origins";
@@ -54,11 +59,20 @@ export interface RequireSessionOptions<P extends Principal = Principal> {
    * `createAuthRoutes` and `socketAuth` take them: a request with the cookie
    * and an `Origin` outside the list is answered 403 `FORBIDDEN`. Default:
    * the list of the `createAuthRoutes` that writes to the same session store
-   * (`keys.sessions`), else none, so only a request without `Origin` (curl,
-   * a server forwarding the cookie) uses the cookie. A bearer token needs no
-   * Origin.
+   * object (`keys.sessions` must be the object the routes were given: a
+   * second store over the same table is another object), else none, so only
+   * a request without `Origin` (curl, a server forwarding the cookie) uses
+   * the cookie, and the first one refused for want of a list is logged. A
+   * bearer token needs no Origin.
    */
   readonly allowedOrigins?: readonly AllowedOrigin[];
+  /**
+   * Where a session cookie refused for want of any origin list (no
+   * `allowedOrigins`, and no `createAuthRoutes` over the same session store
+   * object) is logged, once, as an error naming both fixes. Default: the
+   * console.
+   */
+  readonly logger?: Logger;
 }
 
 /** What {@link sessionOf} answers for a request `requireSession` let through. */
@@ -96,6 +110,17 @@ const SESSIONS = new WeakMap<object, RequestSession>();
 
 /** No page may use the cookie: what applies without `allowedOrigins` and without the routes' list. */
 const NO_ORIGINS = originAllowlist([], "requireSession", true);
+
+/** What a page whose Origin may not use the session cookie is told. */
+const COOKIE_REFUSED =
+  "This page's origin may not use the session cookie; send it from an allowed origin or use a bearer token";
+
+/**
+ * Why the cookie is refused when there is no list at all (finding F11.4):
+ * logged once, and what a page in development is told.
+ */
+const NO_LIST =
+  "requireSession has no origin list, so no page may use the session cookie: pass it the sessions object createAuthRoutes was given (the same store object: a second store over the same table is another), or pass allowedOrigins";
 
 /**
  * A middleware that lets a request through only with a live session of the
@@ -135,18 +160,22 @@ export function requireSession(
     options.allowedOrigins === undefined
       ? undefined
       : originAllowlist(options.allowedOrigins, "requireSession", true);
+  const logger = options.logger ?? consoleLogger;
+  let toldNoList = false;
   return (req, res, next) => {
     const check = async (): Promise<void> => {
       const credential = httpCredentialOf(req, naming);
       if (credential?.from === "cookie") {
         // Read now: the routes may be made after this middleware.
-        const origins = given ?? routeOriginsOf(keys.sessions) ?? NO_ORIGINS;
-        if (!httpCookieOriginAllowed(req.headers, origins)) {
-          refuse(
-            res,
-            "FORBIDDEN",
-            "This page's origin may not use the session cookie; send it from an allowed origin or use a bearer token",
-          );
+        const routes = given === undefined ? routeOriginsOf(keys.sessions) : undefined;
+        if (!httpCookieOriginAllowed(req.headers, given ?? routes ?? NO_ORIGINS)) {
+          const noList = given === undefined && routes === undefined;
+          if (noList && !toldNoList) {
+            toldNoList = true;
+            logger.error(NO_LIST, { category: "quickdraw.auth", origin: req.headers.origin });
+          }
+          const development = process.env.NODE_ENV !== "production";
+          refuse(res, "FORBIDDEN", noList && development ? NO_LIST : COOKIE_REFUSED);
           return;
         }
       }

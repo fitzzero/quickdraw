@@ -13,7 +13,7 @@
 // | `GET /{provider}/start?returnTo=` | sign-in | 302 to the provider |
 // | `GET /{provider}/callback` | sign-in | 302 to the return origin, with the session cookie |
 // | `POST /guest` (with `guest()`) | sign-in | `{ userId }`, with the session cookie |
-// | `GET /providers` | session | `{ providers: [{ id, name, kind }] }`: the sign-ins served now |
+// | `GET /providers` | providers | `{ providers: [{ id, name, kind }] }`: the sign-ins served now |
 // | `GET /me` | session | `{ userId }`, or 401 |
 // | `POST /logout` | session | 204 |
 // | `POST /logout-all` | session | 204, or 401 |
@@ -150,7 +150,7 @@ function routeTable(
     handle: (_req, res) => {
       sendJson(res, 200, { providers: servedProviders(mounted) });
     },
-    limit: "session",
+    limit: "providers",
   });
   table.set(`GET ${base}/me`, { handle: meRoute(settings), limit: "session" });
   table.set(`POST ${base}/logout`, { handle: logoutRoute(settings), limit: "session", json: true });

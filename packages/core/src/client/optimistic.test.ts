@@ -601,6 +601,233 @@ describe("an added item", () => {
       where("mine", ""),
     ]).toEqual([1, 1, 0, 0, 0]);
   });
+
+  describe("tells the views once whenever it ends, though the scope's state is unchanged (finding F11.1)", () => {
+    const settle = (client: QueryClient, evidence: Parameters<typeof settleAdditions>[4]) => () => {
+      settleAdditions(client, "taskService", "board", "p1", evidence);
+    };
+    const nobody = (): boolean => false;
+    const holds = (held: string) => (id: string) => id === held;
+
+    /** A create whose reply named `t9`: a finished addition. */
+    async function finished(client: QueryClient): Promise<void> {
+      const { reply, done } = create(client, { title: "Draft" });
+      reply.resolve({ id: "t9" });
+      await done;
+    }
+
+    /** A create of `m1` (an id the client made) whose call failed with `error`, kept if refused. */
+    async function failed(client: QueryClient, error: Error, keep = true): Promise<void> {
+      const done = mutateOptimistically(
+        client,
+        board,
+        (_input, cache) =>
+          cache.addItem(
+            "board",
+            "p1",
+            { id: "m1", title: "Lost" },
+            { onRefused: keep ? "keep" : "drop" },
+          ),
+        {},
+        () => Promise.reject(error),
+      );
+      await expect(done).rejects.toBe(error);
+    }
+    const timedOut = (): QuickdrawError => new QuickdrawError("TIMEOUT", "No answer");
+    const conflict = (): QuickdrawError => new QuickdrawError("CONFLICT", "Taken");
+
+    /** Readies an addition, and returns what ends it. */
+    type Prepare = (client: QueryClient) => Promise<() => unknown>;
+
+    /** What ends an addition, how, and how many items the scope shows as refused after. */
+    const ends: [string, Prepare, number][] = [
+      [
+        "its reply names no id",
+        async (client) => {
+          const { reply, done } = create(client, { title: "Draft" });
+          return async () => {
+            reply.resolve(null);
+            await done;
+          };
+        },
+        0,
+      ],
+      [
+        "its reply names an id its scope holds already",
+        async (client) => {
+          const { reply, done } = create(client, { title: "Draft" });
+          hold(client, ["t9"]);
+          return async () => {
+            reply.resolve({ id: "t9" });
+            await done;
+          };
+        },
+        0,
+      ],
+      [
+        "its call is refused, beside an item of the same call kept as refused",
+        async (client) => {
+          const reply = deferred<unknown>();
+          const done = mutateOptimistically(
+            client,
+            board,
+            (_input, cache) => {
+              cache.addItem("board", "p1", { title: "Dropped" });
+              cache.addItem("board", "p1", { title: "Kept" }, { onRefused: "keep" });
+            },
+            {},
+            () => reply.promise,
+          );
+          return async () => {
+            reply.reject(conflict());
+            await expect(done).rejects.toThrow("Taken");
+          };
+        },
+        1,
+      ],
+      [
+        "its scope holds the id its reply named",
+        async (client) => {
+          await finished(client);
+          return settle(client, { holds: holds("t9") });
+        },
+        0,
+      ],
+      [
+        "a delta names it",
+        async (client) => {
+          await finished(client);
+          return settle(client, { holds: nobody, named: new Set(["t9"]) });
+        },
+        0,
+      ],
+      [
+        "a load sent after its reply answers without it: not a member of its scope",
+        async (client) => {
+          await finished(client);
+          return settle(client, { holds: nobody, readAt: overlaysOf(client).now() });
+        },
+        0,
+      ],
+      [
+        "its outcome is unknown, and its scope holds its id (the reconnect's load)",
+        async (client) => {
+          await failed(client, timedOut());
+          return settle(client, { holds: holds("m1") });
+        },
+        0,
+      ],
+      [
+        "its outcome is unknown, and a later load answers without it",
+        async (client) => {
+          await failed(client, timedOut(), false);
+          return settle(client, { holds: nobody, readAt: overlaysOf(client).now() });
+        },
+        0,
+      ],
+      [
+        "its outcome is unknown, and a later load answers without it: kept as refused",
+        async (client) => {
+          await failed(client, timedOut());
+          return settle(client, { holds: nobody, readAt: overlaysOf(client).now() });
+        },
+        1,
+      ],
+      [
+        "it was refused and kept, and its scope holds its id",
+        async (client) => {
+          await failed(client, conflict());
+          return settle(client, { holds: holds("m1") });
+        },
+        0,
+      ],
+      [
+        "it was refused and kept, and is dismissed",
+        async (client) => {
+          await failed(client, conflict());
+          const [refused] = overlaysOf(client).view("taskService").refused("board", "p1");
+          return () => {
+            storeOf(client).dismiss(refused?.addition as never);
+          };
+        },
+        0,
+      ],
+      [
+        "its update throws",
+        async (client) => {
+          const addition = storeOf(client).addItem("taskService", "board", "p1", { id: "x" });
+          return () => {
+            storeOf(client).discard({ layers: [], additions: [addition] });
+          };
+        },
+        0,
+      ],
+      [
+        "nothing ended it 10 s after its reply",
+        async (client) => {
+          vi.useFakeTimers();
+          await finished(client);
+          return () => {
+            vi.advanceTimersByTime(10_000);
+          };
+        },
+        0,
+      ],
+      [
+        "the store is reset",
+        async (client) => {
+          await finished(client);
+          return () => {
+            resetOverlays(client);
+          };
+        },
+        0,
+      ],
+    ];
+
+    it.each(ends)("when %s", async (_label, prepare, refusedAfter) => {
+      const client = new QueryClient();
+      const overlays = overlaysOf(client);
+      const shown = () => {
+        const view = overlays.view("taskService");
+        return [...view.added("board", "p1"), ...view.refused("board", "p1")];
+      };
+      try {
+        const end = await prepare(client);
+        const before = overlays.view("taskService");
+        expect(shown()).not.toEqual([]);
+        const listener = vi.fn();
+        const stop = overlays.subscribe(listener);
+        await end();
+        stop();
+        expect(listener).toHaveBeenCalledTimes(1);
+        // A new view: what `useCollection` shows is computed again.
+        expect(overlays.view("taskService")).not.toBe(before);
+        expect(overlays.view("taskService").added("board", "p1")).toEqual([]);
+        expect(overlays.view("taskService").refused("board", "p1")).toHaveLength(refusedAfter);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("when it is the oldest past 1,000, another service's views too", () => {
+      const client = new QueryClient();
+      const overlays = overlaysOf(client);
+      const store = storeOf(client);
+      store.addItem("taskService", "board", "p1", { id: "oldest" });
+      for (let index = 1; index < 1000; index += 1) {
+        store.addItem("labelService", "all", "p1", { id: `l${String(index)}` });
+      }
+      const tasks = overlays.view("taskService");
+      const listener = vi.fn();
+      overlays.subscribe(listener);
+      store.addItem("labelService", "all", "p1", { id: "l1000" });
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(overlays.view("taskService")).not.toBe(tasks);
+      expect(overlays.view("taskService").added("board", "p1")).toEqual([]);
+      expect(overlays.view("labelService").added("all", "p1")).toHaveLength(1000);
+    });
+  });
 });
 
 describe("calls that open no layer", () => {
@@ -676,6 +903,33 @@ describe("the store", () => {
       title: "Pending",
     });
     void pending;
+  });
+
+  it("tells the views of a layer it drops past 1,000, another service's too", async () => {
+    const client = new QueryClient();
+    const overlays = overlaysOf(client);
+    const label = { service: "labelService", entityOutput: true } as const;
+    await mutateOptimistically(
+      client,
+      label,
+      undefined,
+      { id: "l1", name: "New" },
+      async () => null,
+    );
+    for (let index = 0; index < 999; index += 1) {
+      send(client, { id: `t${String(index)}`, title: "Many" });
+    }
+    const labels = overlays.view("labelService");
+    expect(labels.apply({ id: "l1", name: "Old" })).toEqual({ id: "l1", name: "New" });
+    const listener = vi.fn();
+    overlays.subscribe(listener);
+    send(client, { id: "t999", title: "Many" });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(overlays.view("labelService")).not.toBe(labels);
+    expect(overlays.view("labelService").apply({ id: "l1", name: "Old" })).toEqual({
+      id: "l1",
+      name: "Old",
+    });
   });
 });
 

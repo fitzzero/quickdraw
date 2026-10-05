@@ -56,6 +56,7 @@ export {
   type CallResult,
 } from "./call";
 export { reloadOncePerSession } from "./reload";
+export { newId } from "./newId";
 export type { JoinWait, TopicWatch } from "./watch";
 export {
   DEFAULT_SUBSCRIPTION_LANE,

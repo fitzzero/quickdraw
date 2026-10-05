@@ -1,5 +1,6 @@
 "use client";
 
+import { newId } from "@fitzzero/quickdraw-core/client";
 import { qd } from "../lib/quickdraw";
 
 // #region add
@@ -9,6 +10,8 @@ export function TaskList({ projectId }: { readonly projectId: string }) {
     // the new card shows at once, last on the board (its ordinal), until the server's arrives
     optimistic: (input, cache) =>
       cache.addItem("board", input.projectId, {
+        // the id the client made: after a lost answer the board's next load finds the card
+        id: input.id,
         projectId: input.projectId,
         title: input.title,
         status: "open",
@@ -26,7 +29,10 @@ export function TaskList({ projectId }: { readonly projectId: string }) {
           </li>
         ))}
       </ul>
-      <button type="button" onClick={() => create.mutate({ projectId, title: "New task" })}>
+      <button
+        type="button"
+        onClick={() => create.mutate({ id: newId(), projectId, title: "New task" })}
+      >
         Add
       </button>
       {create.error === null ? null : <p>{`Not added: ${create.error.code}`}</p>}

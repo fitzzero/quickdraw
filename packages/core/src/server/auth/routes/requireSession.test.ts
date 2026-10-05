@@ -16,6 +16,7 @@ import {
   requireSession,
   sessionOf,
   type RequestSession,
+  type SessionMiddleware,
   type SessionRequest,
 } from "./requireSession";
 import { createMemorySessionStore } from "./sessions";
@@ -306,7 +307,8 @@ describe("the session cookie's Origin (finding F8.5, and the final review of the
     const sessions = createMemorySessionStore();
     const { issueSession } = await import("./tokens");
     const issued = await issueSession({ sessions, jwtSecret: SECRET }, "ada", { provider: "mock" });
-    const app = formApp(() => ({ sessions, jwtSecret: SECRET }));
+    const logger = captureLogger();
+    const app = formApp(() => ({ sessions, jwtSecret: SECRET }), { logger });
     const booted = await harness.boot({}, () => app);
     const send = (headers: Record<string, string>) =>
       fetch(`${booted.url}/api/items/delete`, {
@@ -319,7 +321,70 @@ describe("the session cookie's Origin (finding F8.5, and the final review of the
         body: "{}",
       });
     expect((await send({ origin: APP_ORIGIN })).status).toBe(403);
+    expect(logger.at("error")).toHaveLength(1);
     expect((await send({})).status).toBe(200);
+  });
+
+  it("logs once, and tells a page in development, how to give it a list when it has none (finding F11.4)", async () => {
+    const logger = captureLogger();
+    let guard: SessionMiddleware | undefined;
+    const booted = await harness.boot({}, () => {
+      const app = express();
+      app.post(
+        "/api/items/delete",
+        (req, res, next) => {
+          guard?.(req as SessionRequest, res, next);
+        },
+        (_req, res) => {
+          res.json({ deleted: true });
+        },
+      );
+      return app;
+    });
+    // A second store over the routes' sessions, as a second prismaSessions(prisma) over one table is.
+    const other = requireSession(
+      { sessions: { ...booted.sessions }, jwtSecret: SECRET },
+      { logger },
+    );
+    const same = requireSession({ sessions: booted.sessions, jwtSecret: SECRET }, { logger });
+    const { session } = await signIn(booted.url, "ada@demo.local");
+    const send = (origin: string) =>
+      fetch(`${booted.url}/api/items/delete`, {
+        method: "POST",
+        headers: { cookie: session, origin, "content-type": "application/json" },
+        body: "{}",
+      });
+    const generic = {
+      error: "FORBIDDEN",
+      message:
+        "This page's origin may not use the session cookie; send it from an allowed origin or use a bearer token",
+    };
+    guard = other;
+    const refused = await send(APP_ORIGIN);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({
+      error: "FORBIDDEN",
+      message: expect.stringMatching(
+        /^requireSession has no origin list, .*the sessions object createAuthRoutes was given .*or pass allowedOrigins$/,
+      ),
+    });
+    expect((await send(APP_ORIGIN)).status).toBe(403);
+    expect(logger.at("error")).toEqual([
+      {
+        level: "error",
+        message: expect.stringMatching(/^requireSession has no origin list/),
+        meta: { category: "quickdraw.auth", origin: APP_ORIGIN },
+      },
+    ]);
+    // The store object the routes were given takes their list; a page outside it is refused, unlogged.
+    guard = same;
+    expect((await send(APP_ORIGIN)).status).toBe(200);
+    expect(await (await send("http://evil.example")).json()).toEqual(generic);
+    // In production a page is told only that its origin may not use the cookie.
+    guard = other;
+    vi.stubEnv("NODE_ENV", "production");
+    expect(await (await send(APP_ORIGIN)).json()).toEqual(generic);
+    expect(logger.at("error")).toHaveLength(1);
   });
 });
 

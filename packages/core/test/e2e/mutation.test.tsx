@@ -7,8 +7,9 @@
 
 import { fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { createQuickdrawClient } from "../../src/client/index";
+import { createQuickdrawClient, overlaysOf, type CollectionEntry } from "../../src/client/index";
 import { renderWithQuickdraw } from "../../src/testing/client";
+import { collectionKey } from "../../src/utils/index";
 import { as, e2eApp, projectContract, taskContract } from "../fixtures/app";
 
 const e2e = e2eApp();
@@ -464,5 +465,53 @@ describe("an optimistic create whose connection drops before its answer (the fin
     fireEvent.click(view.getByText("retry conflict"));
     await view.findByText("failed conflict CONFLICT");
     expect(await rows(board.p1, "conflict")).toEqual([]);
+  });
+
+  it("shows the server's card, sent, once a reconnect's load that brings nothing new ends it (finding F11.1)", async () => {
+    const { app } = await e2e.start();
+    const board = e2e.board();
+    const view = await renderWithQuickdraw(<ClientIdBoard projectId={board.p1} />, {
+      app,
+      as: as(board.bo),
+      client: qd,
+    });
+    await view.findByText("card T1");
+    // The server runs the next create and sends its frames; its answer never leaves.
+    let lost = false;
+    const loseAnswer = (packet: unknown[], next: () => void): void => {
+      const call = packet[1] as { readonly m?: unknown } | undefined;
+      if (!lost && packet[0] === "qd:call" && call?.m === "create") {
+        lost = true;
+        packet.splice(2, 1, () => undefined);
+      }
+      next();
+    };
+    for (const socket of app.server.io.sockets.sockets.values()) {
+      socket.use(loseAnswer);
+    }
+    const scope = collectionKey("taskService", "board", board.p1);
+    const held = () => view.queryClient.getQueryData<CollectionEntry>(scope)?.state?.byId;
+    const additions = () =>
+      overlaysOf(view.queryClient).view("taskService").added("board", board.p1);
+    fireEvent.click(view.getByText("add First"));
+    // Its frame arrived: the scope holds the server's row, and the call is still in flight.
+    await waitFor(() => {
+      expect(held()?.has("made-First")).toBe(true);
+    });
+    expect(view.getByText("sending First")).toBeTruthy();
+    // The connection drops before the answer: its outcome is unknown.
+    await view.disconnect();
+    await view.findByText("checking First");
+    // The reconnect's load brings nothing new (the frame did), and holds its id: it ends.
+    await view.reconnect();
+    await waitFor(() => {
+      expect(additions()).toEqual([]);
+    });
+    // Ended in the store, so ended on screen, though the scope's state did not change.
+    await view.findByText("card First");
+    expect(
+      view.queryAllByText(/^(card|sending|checking|failed) First/).map((node) => node.textContent),
+    ).toEqual(["card First"]);
+    expect(await rows(board.p1, "First")).toHaveLength(1);
   });
 });
