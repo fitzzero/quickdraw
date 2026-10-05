@@ -753,18 +753,16 @@ tracked client as `db`; the server finds the rest on it.
   recorded with its row ids, merged per row, and handed to the flush sinks
   once the response has been sent, with one revision per flush. A handler
   may return `db.task.update(...)` without awaiting it.
-- A write that changed nothing is not recorded, so it sends no frame, no
-  collection delta, no topic change and no `refreshEntry`: an
-  `updateMany`, `updateManyAndReturn` or `deleteMany` that matched no row;
-  a `data` (or an upsert's `update`) with nothing to write, `{}`; and an
-  update that sets only columns the framework reads before writing (scope,
-  `where`, membership, owner and access columns) to the values they held.
-  An upsert with `update: {}` ("make sure this row exists") reads the row
+- A write that certainly changed nothing is not recorded, so it sends no
+  frame, no collection delta, no topic change and no `refreshEntry`: an
+  `updateMany`, `updateManyAndReturn` or `deleteMany` that matched no row,
+  and a `data` (or an upsert's `update`) with nothing to write, `{}`. An
+  upsert with `update: {}` ("make sure this row exists") reads the row
   first in its place: one statement when the row is there, and the upsert
-  after it when it is not. A write that sets any other column is recorded
-  whatever it wrote, since its old value was never read; the `@updatedAt`
-  column Prisma moves on an unchanged write is not signalled, as no write's
-  is on its own.
+  after it when it is not. Every other write is recorded, one that sets a
+  column to the value it already held too: the values the framework reads
+  before a write cannot prove it changed nothing, since another write may
+  land between that read and the write.
 - Writes inside `db.$transaction` join the unit only when it commits; a
   rollback drops them. Prefer the interactive form
   (`db.$transaction(async (tx) => ...)`): an array-form

@@ -40,6 +40,52 @@ export function captureLogger(): CapturingLogger {
   return logger;
 }
 
+/** A statement held at the database: see {@link pauseNext}. */
+export interface PausedStatement {
+  /** Resolves when a matching statement arrived; it waits there until `release()`. */
+  readonly reached: Promise<void>;
+  release(): void;
+  /** Stops watching statements, and releases one it holds. */
+  restore(): void;
+}
+
+/**
+ * Holds the next statement PGlite receives whose SQL matches `pattern` until
+ * `release()`. PGlite runs one statement at a time, so this is how a test
+ * runs other work between a tracked write's own read and its write.
+ */
+export function pauseNext(database: TestDatabase, pattern: RegExp): PausedStatement {
+  const pglite = database.pglite as unknown as {
+    query: (sql: string, ...rest: unknown[]) => Promise<unknown>;
+  };
+  const original = pglite.query;
+  let release = (): void => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let arrive = (): void => undefined;
+  const reached = new Promise<void>((resolve) => {
+    arrive = resolve;
+  });
+  let armed = true;
+  pglite.query = async (sql: string, ...rest: unknown[]): Promise<unknown> => {
+    if (armed && pattern.test(sql)) {
+      armed = false;
+      arrive();
+      await gate;
+    }
+    return original.call(database.pglite, sql, ...rest);
+  };
+  return {
+    reached,
+    release,
+    restore: () => {
+      pglite.query = original;
+      release();
+    },
+  };
+}
+
 /** What `inUnit` returns: the function's value and the merged writes its unit flushed. */
 export interface UnitResult<T> {
   readonly value: T;

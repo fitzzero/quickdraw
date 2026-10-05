@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0-rc.6] (unreleased)
+
+The fixes from the final independent review of the release candidates
+(`5.0.0-rc.2` to `rc.5`), the template's last open findings (F8.3 to
+F8.6) and the owner's QA of its deployment (F9.1 to F9.3). No version
+moves until the release candidate is cut.
+
+### Tracked writes
+
+- Behavior change: a write that sets a column to the value it already
+  held is recorded again, as in rc.4. rc.5 skipped an `update`, an
+  `updateMany` or an upsert when its interested columns held after the
+  write the values the tracker read before it, but that read is not
+  atomic with the write: in an array-form `$transaction` it runs before
+  the whole batch, so a batch that set a task open, done, then open again
+  told the open tasks' list it was removed; and a write landing between
+  the read and the write lost a real change, leaving subscribers on a
+  value the database no longer held, which a resubscribe with their
+  revision then answered "not modified". What records nothing is now
+  decided by the write alone: one that matched no row, a `data` (or an
+  upsert's `update`) with nothing to write, and an upsert with
+  `update: {}` that finds its row.
+
 ## [5.0.0-rc.5]
 
 Round 6 of the fixes the quickdraw-chat migration found: the framework
@@ -44,7 +67,8 @@ the release candidate is cut.
   such a write is not signalled, as no write's is on its own. Before, a
   game that re-ensured a chat membership on every page load
   (`upsert({ update: {} })`) re-sent the chat to every member's list and
-  made every watcher of the service's topic read again.
+  made every watcher of the service's topic read again. rc.6 withdraws the
+  equal-values case, which lost real changes (see there).
 - An upsert whose `update` sets nothing reads its row in the upsert's
   place: `findUnique` with its `where` and selection answers it when the
   row exists (one statement, as the upsert was, and fewer in SQL than

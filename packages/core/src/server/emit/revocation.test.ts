@@ -450,7 +450,7 @@ describe("races with a subscribe batch", () => {
         }
         memberReads += 1;
         flushing = true;
-        // A new list each time: writing the list it holds changes nothing, and records nothing.
+        // A new list each time: every lookup sees a real access change.
         await appRef.server.dispatcher.run(() =>
           h.db.project.update({
             where: { id: board.p2 },
