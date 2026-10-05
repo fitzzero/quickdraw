@@ -48,6 +48,11 @@
       "statements": 4,
       "bytes": 11703,
       "calls": []
+    },
+    "writes that change nothing": {
+      "statements": 6,
+      "bytes": 0,
+      "calls": []
     }
   }
 }
