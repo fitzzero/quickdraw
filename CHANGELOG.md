@@ -90,8 +90,7 @@ in code. What changes for code that compiles:
 scripts, agents) working while they move; it serves calls only, not
 subscriptions, collections or channels. quickdraw-chat, the template the
 other apps were copied from, migrated on the release candidates: its pull
-requests (fitzzero/quickdraw-chat #46 to #55) are the worked example, and
-[`docs/downstream/`](docs/downstream/README.md) has a brief for each app.
+requests (fitzzero/quickdraw-chat #46 to #55) are the worked example.
 4.x stays on the `release/4.x` branch (4.1.1).
 
 ### Contracts and services
