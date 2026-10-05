@@ -531,7 +531,9 @@ export type Card = ItemOf<typeof taskContract, "board">;
 
 `InputOf`, `ParsedInputOf`, `OutputOf`, `EntityOf`, `ProjectionOf`,
 `ItemOf`, `ScopeOf`, `IndexRowOf`, `ViewName` and the rest are exported from
-the package root.
+the package root. `FullProjectionOf<C, P>` is a projection's full row (what
+a handler builds, every tiered field present), and `ReceivedRow<C, Row>`
+makes a row's tiered fields optional, as a reader receives it.
 
 ## Services
 
@@ -901,8 +903,9 @@ export const taskService = qd.defineService(task, {
 - A projection's keys come from its schema's JSON Schema (Zod 4.2 or later),
   or from `project: { <name>: { keys } }`; a service whose projection has
   neither fails when it is defined. A handler returning a projection returns
-  rows (a `Date` is fine where the wire has a string, extra columns are
-  dropped); with `map`, it returns what `map` takes.
+  rows (a `Date` is fine where the wire has a string, a Prisma `Json` column
+  (`JsonColumnValue`) where it has an object, an array or a record, and
+  extra columns are dropped); with `map`, it returns what `map` takes.
 - Fields the contract's `fields` map puts above the caller's level on a row
   are stripped from that caller's copy, after any shared run. Only a
   projection output is stripped per caller (`"entity"`, a named projection,
@@ -1047,8 +1050,9 @@ export const taskService = qd.defineService(task, {
   whenever any row of the service does, or a row of a model it lists in
   `writes` (a game's high scores, which no service owns). A query declares
   `watch: "service"` to be invalidated by it. A query over some of those
-  models names them, `watch: { service: ["gameScore"] }` (the service's
-  `model` and models in its `writes`; `defineService` refuses others), and
+  models names them, `watch: { service: ["gameScore"] }` (type
+  `ServiceModelsWatch`; the service's `model` and models in its `writes`;
+  `defineService` refuses others), and
   is invalidated only after a flush that wrote one of them: high scores are
   not read again when a chat membership the same service writes changes.
   It is the same topic: its `qd:changed` frame names the models that
@@ -2035,7 +2039,8 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   what runs in memory (a game's simulation) there, so an edit that rolled
   back is never applied. Without either hook the kit opens no transaction.
   Each handler `admin.handlers` returns resolves with its method's output
-  type, so a wrapper reads the row and returns it with no cast.
+  type (`AdminOutputOf<C, M>`), so a wrapper reads the row and returns it
+  with no cast.
 - `adminSubscribers({ id })` counts the sockets subscribed to a row per
   access level (`{ id, count, levels, complete }`; behind a Redis adapter
   the counts are this server's and `complete` is `false`), and
@@ -2201,8 +2206,8 @@ export function TaskRoom({
   leaves the feed and gets
   `qd:revoked { kind: "stream", reason: "access", s, stream, scope? }`, and
   `useStream` shows `FORBIDDEN` until the next connect.
-- A service's `streams: { <name>: { seed, validate } }` computes a stream's
-  seed per subscriber, `seed: (scope, ctx) => items` (the current state,
+- A service's `streams: { <name>: { seed, validate } }` (type
+  `StreamImplementation`) computes a stream's seed per subscriber, `seed: (scope, ctx) => items` (the current state,
   where the items that follow are deltas; on whichever node the subscriber
   is on, under its principal, in the tick it joins the feed; a contract
   `seed: n` and a seed function cannot both be declared), and
@@ -2223,7 +2228,8 @@ export function TaskRoom({
   limiter does not count channels. `{ room: { prefix: "world:" } }` takes
   a socket in any app room whose name starts with the prefix (a game of many
   worlds), and every room form gives the handler the room it matched as
-  `ctx.room`, so the payload need not repeat it. Every requirement is the
+  `ctx.room` (typed `ChannelRoomOf<C, Name>`: `string` for a channel that
+  requires a room, else `undefined`), so the payload need not repeat it. Every requirement is the
   sending socket's own: a room another socket of the user joined does not
   count, a reconnected socket must join again, and behind a cluster the
   check runs on the node the socket is connected to, with no round trip.
@@ -2304,8 +2310,9 @@ export function hasAudience(projectId: string): boolean {
   the node that held the socket: its own `leave` (`reason: "leave"`), a
   removal (`"removed"`), or a disconnect, which leaves every app room it was
   in (`"disconnect"`; `qd:rotate` reconnects with a new socket). Each room
-  comes with `last`: true when no socket of that user is in the room any
-  more, on any node, which is what a game's `playerLeft` waits for. It runs
+  (a `RoomLeft`) comes with `last`: true when no socket of that user is in
+  the room any more, on any node, which is what a game's `playerLeft` waits
+  for. It runs
   in a unit of work of its own (never the unit of the handler that left), a
   throw is logged, and `close()` waits for it. Behind a cluster `last` is
   decided by asking every node once the socket left, so two sockets of one
@@ -2452,7 +2459,7 @@ nothing is cached:
   when `Sec-Fetch-Site` names another site). Bearer tokens need no Origin
   on either transport. An app's own `authenticate` learns where an HTTP
   call's token came from in `request.credential` (`"cookie"` or
-  `"bearer"`), applies the same rule with
+  `"bearer"`, type `HttpCredentialSource`), applies the same rule with
   `cookieOriginAllowed(request, allowedOrigins)`, and a
   `QuickdrawError("FORBIDDEN")` it throws on HTTP is answered as it is.
 - `socketAuth({ devCredentials })` signs a socket in by the user id its
@@ -2709,8 +2716,8 @@ it("sends a rename to the other members' boards", async () => {
   real socket (`{ call, socket, hello, close }`); both are keyed by service
   name. `app.frames(match?)` lists every frame the server sent, with its
   socket and user; `frames.waitFor(match)` waits for one. A query of one
-  event takes `where`, a predicate over its frames typed by the event
-  (`{ event: "qd:presence", where: ({ data }) => data.joined === id }`), and
+  event (`EventQuery`) takes `where`, a predicate over its frames typed by
+  the event (`{ event: "qd:presence", where: ({ data }) => data.joined === id }`), and
   `streamFrames(contract, stream, where?, scope?)` and
   `eventFrames(contract, event, where?)` match one stream's items or one
   event's payloads, typed by the contract, to spread beside `socketId` or
@@ -2748,8 +2755,9 @@ it("lets the owner rename, members read, and nobody else in", async () => {
 `"deny"` (the default for everyone `allow` does not name) means
 `UNAUTHENTICATED` without a principal and `FORBIDDEN` with one. Mutations run
 for real, once per allowed principal: give inputs that can run again, or
-`input` as a function of the cell (`({ name, principal }) => input`, sync or
-async), called before each cell's call, that makes a row of its own (a task
+`input` as a function of the cell (a `MatrixInputFactory` of the
+`MatrixCell` `{ name, principal }`, sync or async), called before each
+cell's call, that makes a row of its own (a task
 to delete, an unused name), so no cell depends on the order of the
 principals.
 
@@ -2955,8 +2963,9 @@ In Storybook, a decorator renders every story inside `qd.$Provider`, and a
 story's `beforeEach` sets its session (`qd.$session(...)`) beside its data.
 A docs page renders its stories side by side, where one mock session would
 show the last story's in all of them: give each its own with the
-provider's `session` prop, `<qd.$Provider session={{ userId: null }}>`,
-laid over the mock's session field by field for that subtree alone (the
+provider's `session` prop, `<qd.$Provider session={{ userId: null }}>`
+(a `MockSession`, the type `$session(...)` takes too), laid over the
+mock's session field by field for that subtree alone (the
 real `useQuickdraw()` and `usePresence`, and the mock's views and admin
 grants, read it there).
 

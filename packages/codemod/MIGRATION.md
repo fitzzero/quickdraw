@@ -86,8 +86,10 @@ faithfully. What it does:
   response was the service's DTO, `todoSchema<Response>()` otherwise. A
   mutation of one row whose 4.x response was `DTO | null` answers `"entity"`,
   marked in the contract and above its handler: 4.x's `this.update` gave
-  `null` for a missing row, a tracked write throws `NOT_FOUND` instead, and
-  only an exact `"entity"` output is optimistic by default. The
+  `null` for a missing row, a tracked write throws `NOT_FOUND` instead
+  (though under an `{ entry }` access form the missing row is refused
+  `FORBIDDEN` before the handler runs), and only an exact `"entity"`
+  output is optimistic by default. The
   entity is `todoSchema<DTO>({ keys })`, the DTO's fields. A method is a
   `query` when its name starts with get, list, search, find or count, or the
   web app reads it with `useServiceQuery`, and a `mutation` otherwise.
@@ -514,7 +516,10 @@ The CRUD trio emitted the entity frame and the collection deltas and ran
 the lifecycle hooks. In 5.0 every write through `db` is tracked: the frames
 and deltas follow from the write itself, whatever method made it. Two
 differences to keep in mind: `db.task.update` throws `NOT_FOUND` for a
-missing row where `this.update` returned `null`, and nothing runs a hook.
+missing row where `this.update` returned `null` (a method whose access is
+`{ entry }` never gets that far: its caller is refused `FORBIDDEN` for a
+row that does not exist, as for one they may not see), and nothing runs a
+hook.
 Move a hook's work into the methods that write, or into `affects` when it
 only made another service's row send again.
 
@@ -1716,7 +1721,10 @@ native client sends the token as `auth.token`.
 - **No default CORS origin.** 4.1 allowed `*`; pass `cors`.
 - **Errors that are not `QuickdrawError` reach callers as `INTERNAL`** with a
   generic message (the original is logged). A Prisma unique violation is
-  `CONFLICT` and a missing row `NOT_FOUND`.
+  `CONFLICT` and a missing row `NOT_FOUND`. A subscribe, or a method whose
+  access names the row (`{ entry }`), answers a missing row `FORBIDDEN`,
+  as it answers a row the caller may not see, so a stranger cannot tell
+  which ids exist (only a service-wide `Admin` gets `NOT_FOUND`).
 - **A mutation ignores its caller's cancel**: only its time limit (30 s by
   default) stops it.
 - **MCP custom tools default to `access: "authenticated"`.**

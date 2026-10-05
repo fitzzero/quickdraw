@@ -23,6 +23,9 @@
 //   refused first join could be retried only by toggling `enabled`). It
 //   does nothing while there is no socket to join with or `enabled` is
 //   false: the next hello joins anyway.
+// - A join answered after its hello was replaced (new credentials clear it
+//   before the old socket closes, a reconnect brings another) is dropped:
+//   its data and `onJoined` are another user's or another socket's.
 // - It never leaves a room: unmounting or disabling it stops the re-joins
 //   only. Leave with a call of its own, or let the server's `onRoomLeave`
 //   follow the socket's disconnect.
@@ -130,7 +133,11 @@ function startJoins<Input, Output>(
     attempt += 1;
     const mine = attempt;
     const socketId = connection.socket.id;
-    const current = (): boolean => !stopped && mine === attempt;
+    // New credentials clear the hello at once, before the old socket closes: a reply that
+    // arrives then is the last user's join, never this hook's data or onJoined.
+    const { hello } = connection.getState();
+    const current = (): boolean =>
+      !stopped && mine === attempt && connection.getState().hello === hello;
     setState((previous) => ({ socketId, status: "joining", data: previous?.data, error: null }));
     member.call(latest.current.input).then(
       (data) => {

@@ -190,6 +190,19 @@ export function checkWhenDefined(handler: object, check: HandlerCheck): void {
   handlerChecks.set(handler, check);
 }
 
+/** The kit handlers that write users' service-wide grants (`admin.handlers(c, { grants: true })`). */
+const grantsEditors = new WeakSet<object>();
+
+/** Marks `handler` as one that writes users' service-wide grants: `createServer` checks where they are stored. */
+export function markGrantsEditor(handler: object): void {
+  grantsEditors.add(handler);
+}
+
+/** True for a handler that writes users' service-wide grants (`markGrantsEditor`). */
+export function editsGrants(handler: object): boolean {
+  return grantsEditors.has(handler);
+}
+
 /** Why `service` cannot run `handler`, from the check `checkWhenDefined` attached. */
 export function handlerProblem(handler: object, service: AnyService): string | undefined {
   return handlerChecks.get(handler)?.(service);

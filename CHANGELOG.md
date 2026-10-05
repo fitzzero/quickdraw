@@ -138,6 +138,31 @@ proxy`, `publicUrl`, the cookie's name by `X-Forwarded-Proto`; F9.3), and
   the README's server example reads `trust proxy` from `TRUST_PROXY`
   instead of setting it unconditionally (F10.4).
 
+### Smaller fixes
+
+- `inherit` from a parent whose policy lets every row through
+  (`everyone(level)`, alone or in `anyOf`) filters a list by
+  `{ [via]: { not: null } }` instead of an `in` list of every parent id,
+  which read the whole parent table on every list, collection and scope
+  check. A policy's filter is computed once per service, principal and
+  level within one access check, so asking the parent's filter first costs
+  nothing more.
+- `createServer` warns at startup when an admin kit edits grants
+  (`admin.handlers(c, { grants: true })`) without `auth.serviceAccessSource`:
+  a user whose grant is lowered keeps it on open sockets until they
+  connect again.
+- `useJoin` drops a join answered after its hello was replaced: with new
+  credentials the hello is cleared before the old socket closes, and a
+  reply that arrived then gave `onJoined` the last user's data.
+- MIGRATION says, where it says a missing row is `NOT_FOUND`, that a
+  subscribe or a method whose access names the row (`{ entry }`) answers
+  `FORBIDDEN` (only a service-wide `Admin` gets `NOT_FOUND`).
+- The README names the public types added since rc.1 where their feature
+  is: `ReceivedRow`, `FullProjectionOf`, `ServiceModelsWatch`,
+  `ChannelRoomOf`, `AdminOutputOf`, `StreamImplementation`, `RoomLeft`,
+  `JsonColumnValue`, `HttpCredentialSource`, `EventQuery`, `MatrixCell`,
+  `MatrixInputFactory` and `MockSession`.
+
 ## [5.0.0-rc.5]
 
 Round 6 of the fixes the quickdraw-chat migration found: the framework

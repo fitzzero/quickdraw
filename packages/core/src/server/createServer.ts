@@ -13,7 +13,7 @@ import {
   type Server as HttpServer,
   type ServerResponse,
 } from "node:http";
-import { consoleLogger } from "../contract/logger";
+import { consoleLogger, type Logger } from "../contract/logger";
 import {
   createDispatcher,
   detachDispatcher,
@@ -31,7 +31,7 @@ import {
   watchSignals,
   type StallWatchdogOptions,
 } from "./lifecycle";
-import type { AnyService } from "./service";
+import { editsGrants, type AnyService } from "./service";
 import {
   createGrantsSink,
   createPrincipalResolver,
@@ -315,6 +315,34 @@ function notFound(_req: IncomingMessage, res: ServerResponse): void {
 }
 
 /**
+ * Warns, once at startup, when an admin screen edits users' service-wide
+ * grants (`admin.handlers(c, { grants: true })`) but `auth.serviceAccessSource`
+ * does not say where they are stored: a lowered grant then stays on the
+ * user's open sockets until they connect again (the final review of the
+ * release candidates).
+ */
+function warnUnsourcedGrants(
+  services: readonly AnyService[],
+  sourced: boolean,
+  logger: Logger,
+): void {
+  if (sourced) {
+    return;
+  }
+  const editors = services
+    .filter((service) =>
+      Object.values(service.methods).some((method) => editsGrants(method.handler)),
+    )
+    .map((service) => service.name);
+  if (editors.length > 0) {
+    logger.warn(
+      `createServer: ${editors.join(", ")} edit users' service-wide grants (the admin kit's grants: true), but auth.serviceAccessSource does not name where they are stored, so a user whose grant is lowered keeps it on open sockets until they connect again. Set auth.serviceAccessSource: { model, column }`,
+      { category: "quickdraw.access", services: editors },
+    );
+  }
+}
+
+/**
  * Serves `services` over Socket.IO and HTTP on the app's own Express app and
  * HTTP server: socket authentication, the `user:{id}` room, `qd:hello`, the
  * v5 transport (or the 4.x shim), the HTTP transport at `POST /qd/{service}/{method}`,
@@ -332,6 +360,7 @@ export function createServer<const S extends readonly AnyService[]>(
 ): QuickdrawServer<S> {
   checkOptions(options);
   const logger = options.logger ?? consoleLogger;
+  warnUnsourcedGrants(options.services, options.auth?.serviceAccessSource !== undefined, logger);
   const watchdog = prepareWatchdog(options, options.stallWatchdog);
   let refresh: ((userId: string) => Promise<ServiceGrants>) | undefined;
   const grants = createGrantsSink(options.auth, () => refresh, logger);
