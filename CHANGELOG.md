@@ -90,7 +90,7 @@ in code. What changes for code that compiles:
 scripts, agents) working while they move; it serves calls only, not
 subscriptions, collections or channels. quickdraw-chat, the template the
 other apps were copied from, migrated on the release candidates: its pull
-requests (fitzzero/quickdraw-chat #46 to #53) are the worked example, and
+requests (fitzzero/quickdraw-chat #46 to #55) are the worked example, and
 [`docs/downstream/`](docs/downstream/README.md) has a brief for each app.
 4.x stays on the `release/4.x` branch (4.1.1).
 
@@ -242,6 +242,8 @@ requests (fitzzero/quickdraw-chat #46 to #53) are the worked example, and
   `retry()` and `dismiss()`). A call whose outcome is unknown (the
   connection dropped after it was sent, or it timed out:
   `isUnknownOutcome`) keeps it `checking` until the scope's next load says.
+  `newId()` makes the id such a row needs (a UUID, on plain-http pages
+  too), so that load can find it and a retry cannot write it twice.
 - **Rooms after a reconnect**: `useJoin(member, input)` runs a joining call
   on every hello (first connect, reconnect, new credentials), with
   `retry()`; `connection.onHello` is the React-free form.
@@ -272,14 +274,16 @@ requests (fitzzero/quickdraw-chat #46 to #53) are the worked example, and
 - `createAuthRoutes`: Google and Discord sign-in (`.optional(...)` builds
   nothing without credentials), a development mock and guests; sessions in a
   `SessionStore` (the app's own table); `GET {basePath}/providers` for a
-  login page (`authProviders()` on `./client`); `issueSession` for a flow of
+  login page (`authProviders()` on `./client`), with a rate limit of its
+  own (`rateLimit.providers`); `issueSession` for a flow of
   the app's own; warnings when the routes can sign no one in or a loopback
   `publicUrl` meets public origins.
 - `socketAuth` authenticates sockets and HTTP calls by those sessions,
   checking a cookie's `Origin` against `allowedOrigins` (`devCredentials`
   signs in editors and load-test bots outside production); `requireSession`
   and `sessionOf` give the app's own REST routes the same session and
-  principal under the same Origin rule; `cookieOriginAllowed` is that rule
+  principal under the same Origin rule (the routes' origin list, found by
+  the session store object they share, or `allowedOrigins`); `cookieOriginAllowed` is that rule
   for a custom `authenticate`; the routes, `setSessionCookie` and the
   transports name the cookie by one rule (`sessionCookieNameFor`).
 

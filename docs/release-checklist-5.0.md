@@ -35,15 +35,16 @@ I's release preparation card on 2026-10-05, when parts 1 to 4 were done and
       version from `5.0.0-rc.2` on was published by `publish.yml` with
       provenance.
 - [x] `5.0.0-rc.1` (#51, pack H on top of `5.0.0-rc.0`, which was never
-      published) to `5.0.0-rc.6` (#67) published under `next` for all four
+      published) to `5.0.0-rc.7` (#71) published under `next` for all four
       packages, each from a version-bump pull request into `dev` and its
       four tags pushed one at a time: rc.2 (#56), rc.3 (#58), rc.4 (#62),
-      rc.5 (#64), rc.6 (#67). On 2026-10-05 `next` is `5.0.0-rc.6` for all
-      four; core's `latest` is 4.1.0, and lint's, skills' and codemod's is
+      rc.5 (#64), rc.6 (#67), rc.7 (#71). On 2026-10-05 `next` is
+      `5.0.0-rc.7` for all four; core's `latest` is 4.1.0, and lint's, skills' and codemod's is
       `5.0.0-rc.1` (their first, hand publish) until 5.0.0 replaces it.
 - [x] The benchmark rerun on the final code (`5.0.0-rc.6`), with the
       template's netcode measured on 4.x and 5.0: `bench/reports/5.0.0.md`
-      and `docs/benchmarks.md` (#68).
+      and `docs/benchmarks.md` (#68). rc.7 changed the client's overlay
+      store and the auth routes only, so its figures stand.
 
 ## 3. Prove it on quickdraw-chat (the release gate)
 
@@ -64,6 +65,12 @@ I's release preparation card on 2026-10-05, when parts 1 to 4 were done and
       candidate: F1 to F7 in rc.2 to rc.5 (#55, #57, #59, #60, #61, #63),
       F8.1 and F8.2 in the docs (#65), and the final independent review of
       rc.2 to rc.5 with F8.3 to F8.6 and the owner's QA in rc.6 (#66).
+      The template then moved to rc.6 (fitzzero/quickdraw-chat #54), where
+      nothing broke on the plain upgrade, and filed F11.1 to F11.4 (an
+      optimistic item a load ended without a re-render, the provider
+      list's rate limit, `requireSession` without an origin list,
+      `newId()`), fixed in rc.7 (#70); it runs rc.7 (its #55), with a test
+      that fails on rc.6 and passes on rc.7.
       [`downstream/quickdraw-chat.md`](downstream/quickdraw-chat.md) is the
       worked example.
 
@@ -90,16 +97,16 @@ I's release preparation card on 2026-10-05, when parts 1 to 4 were done and
       four packages `bash scripts/release-tag.sh <package> 5.0.0` ready (no
       tag made); `git merge-tree --write-tree origin/main` with `dev`
       reports no conflict (`main` is an ancestor of `dev`). The built
-      `dist` differs from `5.0.0-rc.6`'s only in the version and in
-      comments.
+      `dist` differs from `5.0.0-rc.7`'s only in the version and in
+      comments (compared again after rc.7 was merged in).
 
 ## 5. Owner steps, in order
 
-1. [ ] **The gate.** quickdraw-chat's move to `5.0.0-rc.6` merged with
-       its checks green (the card
-       `move-the-template-to-quickdraw-5-0-0-rc-6-the-kit-s-provider`; a
-       blocker among its findings means an `rc.7` first), and your QA of
-       the hosted template passes.
+1. [ ] **The gate.** quickdraw-chat runs `5.0.0-rc.7` with its checks
+       green (fitzzero/quickdraw-chat #55), and 5.0.0 is that candidate's
+       code with the version changed; what remains is your QA of the
+       hosted template (https://quickdraw-dev.techtree.gg). A blocker
+       there means fixes and an `rc.8` first.
 2. [ ] **4.1.1, if it is still wanted, before 5.0.0.** It sits on
        `release/4.x` (`daf3d48`, `package.json` 4.1.1), which has no
        Publish workflow, so it goes out by hand from a clean checkout of
@@ -146,8 +153,8 @@ I's release preparation card on 2026-10-05, when parts 1 to 4 were done and
        (two-factor publishing, tokens disallowed) is open
        ([`releasing.md`](releasing.md)).
 7. [ ] **quickdraw-chat on 5.0.0**: a card on the quickdraw-chat project
-       moves the template from its release candidate to `5.0.0` and
-       replaces its own `GET /auth/providers` route with the kit's.
+       moves the template from `5.0.0-rc.7` to `5.0.0` (versions only: it
+       already uses the kit's `GET /auth/providers` and `newId()`).
 8. [ ] **The other apps' cards**, in the order of
        [`downstream/README.md`](downstream/README.md), each drafted from its
        brief and recounting first: seneschal's re-fork, then x-tokage-siege,

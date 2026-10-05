@@ -17,7 +17,7 @@ card recounts first, with the codemod's dry run.
 
 | Order | App               | On         | Services    | Methods     | Collections, channels  | Brief                                        |
 | ----- | ----------------- | ---------- | ----------- | ----------- | ---------------------- | -------------------------------------------- |
-| done  | quickdraw-chat    | 5.0.0-rc.5 | 7           | 31          | 2, 1                   | [quickdraw-chat.md](quickdraw-chat.md)       |
+| done  | quickdraw-chat    | 5.0.0-rc.7 | 7           | 31          | 2, 1                   | [quickdraw-chat.md](quickdraw-chat.md)       |
 | 1     | seneschal         | 4.1.0      | 5           | 22          | not counted            | [seneschal.md](seneschal.md)                 |
 | 2     | x-tokage-siege    | 4.1.0      | 9           | 58          | 7, 1                   | [x-tokage-siege.md](x-tokage-siege.md)       |
 | 3     | foundation        | 4.1.0      | 18          | 136         | 13, not counted        | [foundation.md](foundation.md)               |
