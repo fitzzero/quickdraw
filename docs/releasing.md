@@ -24,7 +24,7 @@ refuse to release a package marked `private`.
 `npm publish` ships a package's `package.json` as it is, and npm does not
 know bun's `workspace:` ranges, so no published package names one: the
 codemod's devDependencies on core and lint are semver ranges
-(`^5.0.0-rc.5`), which bun links to the workspace packages all the same
+(`^5.0.0-rc.6`), which bun links to the workspace packages all the same
 while their versions match. `packages/core/test/readme/readme.test.ts`
 checks the four manifests.
 
