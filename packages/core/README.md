@@ -1436,8 +1436,10 @@ The methods most services write by hand, as one-line opt-ins (design:
 section 12). Each kit's contract half comes from the package root and makes
 ordinary contract entries; its handlers come from `./server`. Lint's
 `prefer-kit` reports a method written by hand that a kit implements (`get`,
-`list`, `create`, `getTask`, ...) in a service that uses no kit; one that
-must stay hand-written says why in a `// quickdraw: hand-written because ...`
+`list`, `create`, `getTask`, ...) in a service that uses no kit, and one
+that duplicates what a kit spread beside it serves (a `getNote` beside
+`crud.handlers(note, { access: { get } })`); one that must stay
+hand-written says why in a `// quickdraw: hand-written because ...`
 comment above it.
 
 ### Read/write kit

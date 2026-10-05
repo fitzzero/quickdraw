@@ -54,6 +54,7 @@ export const taskService = qd.defineService(taskContract, {
           }),
         ),
     },
+    // quickdraw: hand-written because the bench's writers call 4.1's updateTask on both apps, beside the kit's update
     updateTask: {
       access: { entry: "Moderate" },
       handler: ({ input: { id, ...changes }, db }) =>

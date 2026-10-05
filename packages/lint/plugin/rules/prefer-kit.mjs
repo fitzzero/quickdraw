@@ -26,12 +26,23 @@
 // are the kit's own. A comment right above the method, `// quickdraw:
 // hand-written because <reason>`, keeps it quiet: the reason is the point.
 // Test files are not checked.
+//
+// A service that spreads a kit is checked too, for what that spread
+// enables in plain sight (finding F7.7 of the quickdraw-chat review: a
+// hand-written `getNote` sat beside a crud kit that already served `get`):
+// `crud.handlers(contract, { access: { get, ... } })` enables the methods
+// its `access` literal names, `search.handlers(...)` enables `search`, and
+// `admin.handlers(...)` every admin method. A hand-written method whose kit
+// shape is one of those (`get`, or `getNote` for model `"note"`) is
+// reported as a duplicate. The kit is the spread call's object as the file
+// imports it (`crud`, `crudKit` for `{ crud as crudKit }`), or its own name.
 
 import {
   getProperty,
   isDefineService,
   isFunction,
   keyName,
+  memberName,
   resolveVariable,
   staticString,
   unwrap,
@@ -86,6 +97,17 @@ const KIT_METHODS = new Map([
   ...["adminList", "adminGet", "adminCreate", "adminUpdate", "adminDelete", "adminMeta"].map(
     (name) => [name, ADMIN],
   ),
+]);
+
+/** The admin kit's methods: `admin.handlers` enables every one of them. */
+const ADMIN_METHODS = [...KIT_METHODS].filter(([, kit]) => kit === ADMIN).map(([name]) => name);
+
+/** The kits by the name of the object whose `handlers` a service spreads. */
+const KITS_BY_OBJECT = new Map([
+  ["crud", CRUD],
+  ["search", SEARCH],
+  ["sharing", SHARING],
+  ["admin", ADMIN],
 ]);
 
 /** The sharing kit's other methods: beside one of them, `remove` removes a member. */
@@ -202,6 +224,52 @@ function isHandWritten(property) {
   return property.shorthand || isHandWrittenValue(property.value);
 }
 
+/** The name `identifier` is imported under in this file (`crud` for `{ crud as crudKit }`), or its own. */
+function importedName(context, identifier) {
+  const variable = resolveVariable(context, identifier);
+  const definition = variable?.defs.length === 1 ? variable.defs[0] : undefined;
+  const specifier = definition?.type === "ImportBinding" ? definition.node : undefined;
+  if (specifier?.type === "ImportSpecifier") {
+    return specifier.imported.name ?? specifier.imported.value;
+  }
+  return identifier.name;
+}
+
+/**
+ * What a spread kit call enables in plain sight: `{ kit, methods }` for
+ * `crud.handlers(contract, { access: { get, ... } })` (the methods its
+ * `access` literal names), `search.handlers(...)` and `admin.handlers(...)`;
+ * `undefined` for anything else, whose methods the rule cannot see.
+ */
+function enabledBy(context, node) {
+  const call = unwrap(node);
+  const callee = call.type === "CallExpression" ? unwrap(call.callee) : undefined;
+  const object = callee?.type === "MemberExpression" ? unwrap(callee.object) : undefined;
+  if (object?.type !== "Identifier" || memberName(callee) !== "handlers") {
+    return undefined;
+  }
+  const kit = KITS_BY_OBJECT.get(importedName(context, object));
+  if (kit === SEARCH) {
+    return { kit, methods: new Set(["search"]) };
+  }
+  if (kit === ADMIN) {
+    return { kit, methods: new Set(ADMIN_METHODS) };
+  }
+  const options = call.arguments[1] === undefined ? undefined : unwrap(call.arguments[1]);
+  const access =
+    kit === CRUD && options?.type === "ObjectExpression"
+      ? getProperty(options, "access")
+      : undefined;
+  const forms = access === undefined ? undefined : unwrap(access.value);
+  if (forms?.type !== "ObjectExpression") {
+    return undefined;
+  }
+  const names = forms.properties.map((property) =>
+    property.type === "Property" ? keyName(property) : undefined,
+  );
+  return { kit, methods: new Set(names.filter((name) => name !== undefined)) };
+}
+
 /** A `model` value's string: a literal, or the `const` of one it names in this file. */
 function modelName(context, node) {
   const value = unwrap(node);
@@ -243,6 +311,9 @@ export default {
         "Report a hand-written service method a kit implements (`get`, `list`, `create`, `getTask`, ...), in a service that uses no kit.",
     },
     messages: {
+      duplicatesKit:
+        "`{{ name }}` is written by hand beside `{{ optIn }}`, which already serves {{ kit }}'s `{{ method }}` here: the kit's checks access on every row it touches, pages and stays live. " +
+        "Call `{{ method }}` and remove this one, or, if it must be hand-written, say why in a `// quickdraw: hand-written because ...` comment above it.",
       preferKit:
         "`{{ name }}` is written by hand, and {{ kit }}'s `{{ method }}` implements it: `{{ optIn }}` (with `{{ contract }}` in the contract) checks access on every row it touches, pages and stays live. " +
         "Use the kit, or, if this method must be hand-written, say why in a `// quickdraw: hand-written because ...` comment above it.",
@@ -264,13 +335,15 @@ export default {
       CallExpression(node) {
         const service = isDefineService(node) ? serviceOf(context, node) : undefined;
         const { properties } = service?.methods ?? { properties: [] };
-        const spreadsKit = properties.some(
+        const spreads = properties.filter(
           (property) =>
             property.type === "SpreadElement" && isKitSpread(context, property.argument),
         );
-        if (service === undefined || spreadsKit) {
+        if (service === undefined) {
           return;
         }
+        // With a kit spread, only what it enables in plain sight is a duplicate.
+        const enabled = spreads.flatMap((spread) => enabledBy(context, spread.argument) ?? []);
         const names = properties.map((property) =>
           property.type === "Property" ? keyName(property) : undefined,
         );
@@ -280,9 +353,15 @@ export default {
           if (shape === undefined || !isHandWritten(property) || explained(context, property)) {
             continue;
           }
+          const duplicated = enabled.some(
+            ({ kit, methods }) => kit === shape.kit && methods.has(shape.method),
+          );
+          if (spreads.length > 0 && !duplicated) {
+            continue;
+          }
           context.report({
             node: property.key,
-            messageId: "preferKit",
+            messageId: duplicated ? "duplicatesKit" : "preferKit",
             data: { name, method: shape.method, ...shape.kit },
           });
         }

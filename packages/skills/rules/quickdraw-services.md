@@ -169,7 +169,9 @@ sharing or admin methods by hand, use the kit: it checks access on every row
 it touches, pages, filters by declared fields and stays live. Lint's
 `prefer-kit` warns on a hand-written method a kit implements (`get`,
 `list`, `create`, `getTask`, `listTasks`, `createTask`, `share`,
-`adminList`, ...) in a service that spreads no kit; when one must stay
+`adminList`, ...) in a service that spreads no kit, and on one that
+duplicates what a kit spread beside it serves (a `getNote` beside a crud
+kit whose `access` names `get`: call the kit's `get`); when one must stay
 hand-written, say why right above it:
 `// quickdraw: hand-written because it answers null for a missing task`.
 Contract halves come from `@fitzzero/quickdraw-core`, handlers from
