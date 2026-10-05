@@ -2,7 +2,7 @@
 // `qd:event` listener per connection routes each frame, `[service, event,
 // payload]`, to the handlers registered for that service and event
 // (`useEvent`). This replaces 4.1's `useRoomEvents`, which put a socket
-// listener per event name on the socket (`legacy-src/client/useRoomEvents.ts:46`).
+// listener per event name on the socket (4.1 `src/client/useRoomEvents.ts:46`).
 // An event nobody handles when it arrives is dropped; a handler that throws
 // neither stops the others nor the socket. A frame with elements after
 // `payload` is read as its first three: a later revision of the protocol

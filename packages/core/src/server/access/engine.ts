@@ -21,7 +21,7 @@
 // and a lookup that throws fails the call with `INTERNAL`. 4.1 let any
 // signed-in user call a `Read` method with no row id, and let a service
 // grant satisfy row checks at the same level
-// (`legacy-src/server/BaseService.ts:581-600`); neither survives.
+// (4.1 `src/server/BaseService.ts:581-600`); neither survives.
 
 import type { Logger } from "../../contract/logger";
 import type { Registry } from "../registry";

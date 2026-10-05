@@ -2,7 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
-## [5.0.0] (unreleased)
+## [5.0.0] - unreleased
+
+quickdraw 5.0 rebuilds what an app is written against. A service is
+declared once, as a contract in the app's shared package (`defineContract`);
+the server implements it with `qd.defineService(contract, { ... })`, an
+object instead of a `BaseService` class, and the web app calls it through a
+client typed from the same contract (`qd.<service>.<member>`), with no
+wrapper hooks or string names. Access is declared per method, decided by one
+row policy per service, and closed by default. Entity frames, collection
+deltas and change topics follow tracked Prisma writes, so an app sends no
+event by hand. The wire is protocol 5. Four packages are released together:
+`@fitzzero/quickdraw-core`, the framework; `@fitzzero/quickdraw-lint`, an
+oxlint plugin and the configs an app extends; `@fitzzero/quickdraw-skills`,
+agent rules and skills; and `@fitzzero/quickdraw-codemod`, which moves a 4.x
+app. The design is [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md) (section
+17 records each decision made while building it), and its rationale
+[`docs/rfcs/0003-v5-audit.md`](docs/rfcs/0003-v5-audit.md).
 
 ### Benchmark
 
@@ -28,14 +44,332 @@ from 34.6 to 19.0 ms, and SQL statements per write rose from 0.25× to
 runs against 2,397, 12 statements each; the statements besides those runs
 did not change).
 
-## [5.0.0-rc.7]
+### Upgrading from 4.x
+
+Every 4.x app migrates: `BaseService`, `ServiceRegistry`, the 4.x hooks and
+the 4.x wire are gone. [`MIGRATION.md`](MIGRATION.md) is the guide, and
+[`UPGRADE-PROMPT.md`](UPGRADE-PROMPT.md) the procedure for an agent (both
+ship in `@fitzzero/quickdraw-codemod`): upgrade the packages, run
+`bunx @fitzzero/quickdraw-codemod v5 .`, which writes the contracts, the
+services and the typed client calls and lists every decision left in a
+report, then work through the report. The guide's appendix lists every
+removed 4.x name with its replacement, and lint's `no-v4-api` finds each one
+in code. What changes for code that compiles:
+
+- **Access is closed.** Every method declares who may call it. A 4.x
+  `"Read"` method that named no row was open to every signed-in user; the
+  codemod keeps it as a marked `"authenticated"` form, each one a decision.
+- **Errors.** Anything a handler throws that is not a `QuickdrawError`
+  reaches the caller as `INTERNAL` with a generic message. A write to a
+  missing row throws `NOT_FOUND` where `this.update` returned `null`, and no
+  lifecycle hook runs; a subscribe, or a method whose access names the row,
+  answers a missing row `FORBIDDEN` (`NOT_FOUND` only for a service-wide
+  `Admin`).
+- **Outputs.** A method's output is sent as it declares it: a projection
+  stripped per caller, an output schema of the method's own reduced to what
+  its JSON Schema declares.
+- **Server defaults.** No default CORS origin; the socket rate limiter is on
+  at 600 events per minute per socket (subscription events, channels and
+  cancels are not counted); a mutation ignores its caller's cancel; the
+  service topic is closed unless the service declares `watchAccess`.
+- **Sign-in.** The auth routes kit replaces hand-built routes, and its
+  tokens name their session, so everyone signs in once more. The session
+  cookie is `__Host-session` over HTTPS by default and `SameSite=Lax`, and
+  no page outside `allowedOrigins` can use it: not on a socket, an HTTP
+  call or a `requireSession` route.
+- **Client.** A mutation of an entity (an input with `id`, an `"entity"`
+  output) is optimistic by default; invalidation never cancels a read in
+  flight; a reconnect refetches watched queries after a random delay of up
+  to 2 s (`reconnectJitterMs`); the cache is dropped when the user changes.
+- **Floors.** Node 24, Prisma 7, React 19, TanStack Query 5.20, Socket.IO
+  4.8. Zod 3.25 validates; Zod 4.2 or later is needed where 5.0 reads a
+  schema's JSON Schema (MCP tools, the admin kit, projection keys, output
+  reduction, `quickdraw-docs`).
+
+`legacyWire: true` keeps 4.x request and response callers (mobile clients,
+scripts, agents) working while they move; it serves calls only, not
+subscriptions, collections or channels. quickdraw-chat, the template the
+other apps were copied from, migrated on the release candidates: its pull
+requests (fitzzero/quickdraw-chat #46 to #55) are the worked example, and
+[`docs/downstream/`](docs/downstream/README.md) has a brief for each app.
+4.x stays on the `release/4.x` branch (4.1.1).
+
+### Contracts and services
+
+- **Contracts** are plain data plus schemas (any Standard Schema), imported
+  by the server and the browser alike: `defineContract(name, { ... })` with
+  an `entity`, `projections`, field tiers (`fields`), `methods`,
+  `collections`, `streams`, `channels` and `events`. A method is a `query`
+  or a `mutation` with an `input` and an `output` (a
+  schema, `"entity"`, a named projection, `nullable(...)`, `listOf(...)`). A
+  query may `watch` a collection's scope or its service's topic, whole or
+  narrowed to some of its models (`watch: { service: ["gameScore"] }`).
+  Types come from the contract: `InputOf`, `OutputOf`, `EntityOf`,
+  `ItemOf`, `FullProjectionOf`, `ReceivedRow` and the rest.
+- **Services** are `qd.defineService(contract, { ... })` objects: the
+  `model`, the row policy (`access`), the `methods`, and as needed `writes`,
+  `affects`, `collections`, `streams`, `watchAccess` and `onRoomLeave`. A
+  method is `{ access, handler }`; a handler receives `{ input, ctx, db }`,
+  `db` being the tracked Prisma client, and `ctx.services` calls the app's
+  other services in process as the same principal. `initQuickdraw` gives
+  `qd` the app's types and context; `qd.run(fn)` is a unit of work outside
+  a handler (before any server exists too, or `{ detached: true }` inside
+  one), and `qd.caller(principal)` calls services in process with the
+  principal's grants loaded.
+- **Every call runs one pipeline**: input validation, access, "not
+  modified" answers (`version`), shared runs (`share: "caller" | "all"`,
+  their result encoded once per group of readers), cancellation, a time
+  limit (30 s by default), per-socket concurrency caps (16 queries in
+  flight, 64 queued), then the output shaped as declared and validated
+  outside production. Errors are `QuickdrawError(code, message, data?)`,
+  each code with its HTTP status.
+- **Refused when the service is defined**: a method whose input may carry a
+  top-level `id` under an access form that checks no row, unless it says
+  `rowless: true` (kits take `rowless: [names]`); a watch naming a model the
+  service neither owns nor writes; a `"service"` watch without
+  `watchAccess`.
+
+### Access
+
+- **A form per method**: `"public"`, `"authenticated"`, `{ service: L }` (a
+  service grant), `{ entry: L }` (the row policy, on the row the input
+  names), `{ service: L, entry: L }`, and `custom`. Levels are `Public`,
+  `Read`, `Moderate` and `Admin`; a service-wide `Admin` grant passes every
+  check unless the service sets `adminBypass: false`. Grants
+  (`serviceAccess`) are loaded for every socket, HTTP call and in-process
+  caller, and refreshed when they change.
+- **One row policy per service**, for every surface (methods, entity
+  subscriptions, collections, channels, streams): `owner`, `jsonAcl`,
+  `members`, `inherit`, `everyone`, `anyOf` and `resolver`. A list reads
+  only the rows the reader may see: the policy's filter is part of the
+  query.
+- **Revocation is automatic.** When a grant, an access list or a membership
+  changes, a socket that lost access is sent `qd:revoked` and taken out of
+  the row, scope or stream.
+- **Field tiers** (the contract's `fields`) strip what a reader's level does
+  not reach from entity frames, projections and kit replies; a collection
+  refuses an index field its tier hides, and the development warning
+  `tiered-field-in-output` names a tiered key in an output schema.
+
+### Tracked writes, projections and collections
+
+- **Tracked writes** (`trackPrisma`, on `./prisma`): a write through the
+  tracked client records what it changed, and the flush after its unit of
+  work (a call, `qd.run`, an interactive transaction once it commits) sends
+  every entity frame, collection delta and topic change that follows; a
+  rolled-back transaction sends nothing. `ctx.touch` records what raw SQL or
+  a nested write changed. A write records nothing when it matched no row,
+  had nothing to write, or is an `upsert` with `update: {}` that found its
+  row (answered by a `findUnique` in the upsert's place); every other write
+  is recorded, one that sets a value the row already held included. A
+  service lists the other models it writes in `writes`, and `affects` sends
+  a related row again (a message's chat, for its last message).
+- **Projections and entity subscriptions**: a subscriber holds rows at its
+  own level and by revision, and a resubscribe with the revision it holds is
+  answered "not modified" (from `versionColumn`, or a change log of recent
+  flushes). Revisions are microseconds since the epoch, compared as numbers.
+- **Collections**, declared in the contract: a scope column, or `via` a
+  junction table (`refreshEntry: true` sends the entry again on every
+  junction change, for a member count); an `order` ending in `id`; keyset
+  paging and resume after a reconnect; an `index` (a whole scope's
+  membership and order, up to 50,000 rows, with the first page) and `views`
+  the client runs over it; change topics a query can watch. The anchor's
+  policy decides who opens a scope, and `scopeAccess: "self"` makes a
+  user's own list.
+
+### Protocol 5 and transports
+
+- **Protocol 5**: one `qd:call` envelope, a version handshake (`qd:hello`,
+  carrying the user, the grants and a `serverId` new at each start), entity
+  frames (`qd:e`), collection deltas (`qd:c`), topic changes (`qd:changed`,
+  naming the models a service-topic change came from), revocations
+  (`qd:revoked`), presence (`qd:presence`), room events, channel messages
+  and stream items as positional frames (`qd:event`, `qd:ch`, `qd:stream`),
+  and `qd:rotate`, which asks clients to reconnect (`server.rotate`). A
+  receiver ignores the object fields it does not know and the array
+  elements after the last one it reads, and a later revision of protocol 5
+  may only add. The Socket.IO parser is JSON-only (`./parser`).
+  [`docs/protocol-v5.md`](docs/protocol-v5.md), generated from the
+  protocol's sources, is the specification for clients in other languages.
+- **Transports**: Socket.IO, HTTP (`POST /qd/{service}/{method}`, which
+  `createServerCaller` on `./utils` calls from server-side rendering),
+  in-process callers (`qd.caller`, `ctx.services`) and MCP
+  (`./server/mcp`: tools generated from the contracts, custom tools, stdio
+  and HTTP servers), all through one dispatcher, plus the `legacyWire` shim
+  for 4.x callers. `qd.createServer` attaches to the Express app and HTTP
+  server the app already owns, and never listens or exits by itself.
+
+### Rooms, channels, events and streams
+
+- **Rooms** are joined by methods (`ctx.rooms.join`, `leave`, `emit`,
+  `emitToUser`), and reached outside handlers through `qd.rooms` and
+  `server.rooms` (a game loop, a job), on every node:
+  `rooms.leave(room, { userId })` takes a user out everywhere, and
+  `rooms.size` counts a room's sockets on this node. `onRoomLeave`, on
+  `createServer` and on any service, runs once per socket that leaves, with
+  each room's `last`. Presence (`usePresence`, `qd.presence`) tells who is
+  in a room and who is online.
+- **Events** are typed room events declared in the contract (`useEvent`).
+- **Channels** carry fire-and-forget input (cursors, a game's moves);
+  `requires: { room }` (a name, a function of the payload, or `{ prefix }`)
+  takes only a socket in that room, and gives its handler the room as
+  `ctx.room`.
+- **Streams** are feeds declared in the contract: a `seed` (the latest items,
+  kept per node, or computed for each subscriber from the current state),
+  `volatile`, `access` (a form, or `{ room }`: the sockets in that room,
+  revoked when they leave it) and `validate`. The server pushes with `push`
+  and `pushMany`; the client reads with `useStream`.
+
+### Client
+
+- **The typed client**: `createQuickdrawClient(contracts)` gives
+  `qd.<service>.<member>` for every method (`useQuery`, `useMutation`,
+  `call`, `key`, `prefetch`, `setData`), collection (`useCollection`),
+  stream, channel and event, and `useEntity` and `useEntities` for live
+  rows; a misspelled member is a compile error. `<QuickdrawProvider>` owns
+  the socket and the `QueryClient` and runs without DOM globals (React
+  Native); `useQuickdraw()` gives the connection, `isKnown` (the user is
+  final), `reconnecting` and the hello. `createQuickdrawConnection` and
+  `call` are the React-free forms.
+- **One invalidation coordinator** per `QueryClient`: topic changes are
+  coalesced in a 250 ms window, a read in flight is followed by one more
+  rather than cancelled, and a reconnect refetches after
+  `reconnectJitterMs`.
+- **Optimistic updates**: a mutation of an entity patches the cached row
+  and its collection items; `cache.addItem` and `cache.addEntity` show a new
+  row at once (`useCollection().pending`). A refused call removes it, or
+  keeps it with `onRefused: "keep"` (`useCollection().refused`, with
+  `retry()` and `dismiss()`). A call whose outcome is unknown (the
+  connection dropped after it was sent, or it timed out:
+  `isUnknownOutcome`) keeps it `checking` until the scope's next load says.
+  `newId()` makes the id such a row needs (a UUID, on plain-http pages
+  too), so that load can find it and a retry cannot write it twice.
+- **Rooms after a reconnect**: `useJoin(member, input)` runs a joining call
+  on every hello (first connect, reconnect, new credentials), with
+  `retry()`; `connection.onHello` is the React-free form.
+- Also: `adminOf` and `useAdminServices` for admin screens; `signInUrl`,
+  `signOut`, `signOutEverywhere` and `authProviders` for sign-in; hydration
+  from the state the server rendered.
+
+### Kits
+
+- **Read/write** (`crud`): `get`, `getMany`, `list` (filters, sorts, keyset
+  paging), `create`, `update`, `delete`, `reorder`, `bulkUpdate` and
+  `bulkDelete`, each method with its own access form.
+- **Search** (`search`): one `search` query over named fields
+  (`useSearch`).
+- **Sharing and membership** (`sharing`, mode `"acl"` or `"members"`):
+  `share`, `unshare`, `setLevel` and `listShares`, or `invite`, `remove`,
+  `setRole`, `listMembers` and `leave`, over the access list or membership
+  table the service's policy reads; nobody gives a level above their own.
+- **Admin** (`admin`): `adminList`, `adminGet`, `adminCreate`,
+  `adminUpdate`, `adminDelete` and `adminMeta` (field metadata from the
+  entity) for service administrators, grants editing with
+  `grants: true`, `onWrite` inside the write's transaction and
+  `onCommitted` after it.
+- Presence, streams and channels (above), and the auth routes (below).
+
+### Auth
+
+- `createAuthRoutes`: Google and Discord sign-in (`.optional(...)` builds
+  nothing without credentials), a development mock and guests; sessions in a
+  `SessionStore` (the app's own table); `GET {basePath}/providers` for a
+  login page (`authProviders()` on `./client`), with a rate limit of its
+  own (`rateLimit.providers`); `issueSession` for a flow of
+  the app's own; warnings when the routes can sign no one in or a loopback
+  `publicUrl` meets public origins.
+- `socketAuth` authenticates sockets and HTTP calls by those sessions,
+  checking a cookie's `Origin` against `allowedOrigins` (`devCredentials`
+  signs in editors and load-test bots outside production); `requireSession`
+  and `sessionOf` give the app's own REST routes the same session and
+  principal under the same Origin rule (the routes' origin list, found by
+  the session store object they share, or `allowedOrigins`); `cookieOriginAllowed` is that rule
+  for a custom `authenticate`; the routes, `setSessionCookie` and the
+  transports name the cookie by one rule (`sessionCookieNameFor`).
+
+### Several nodes
+
+- `createServer({ cluster })` runs several nodes behind
+  `@socket.io/redis-adapter` on Valkey: flushes share one order from a
+  counter key, access changes and reloaded grants are broadcast and
+  acknowledged, a push to a seeded stream reaches every node, and a node
+  whose Valkey subscription comes back sends its clients `qd:rotate`.
+  [`docs/deploying.md`](docs/deploying.md) has the wiring, Cloud Run
+  included, and `bun run test:cluster` runs the end-to-end and realtime
+  suites split across two nodes and a real Valkey.
+
+### Testing, budgets and warnings
+
+- `./testing`: `createTestApp` (a real server in the test process,
+  `app.as(principal)`, `app.frames` with typed queries, `strictWarnings`),
+  `describeAccessMatrix` (every method against every principal),
+  `expectBudget` (statements and bytes per call, committed as snapshots),
+  `streamFrames` and `eventFrames`. `./testing/client`:
+  `renderWithQuickdraw` and `installJsdomShims`. `./testing/mock`:
+  `createMockClient`, with a provider and session of its own (`$Provider`,
+  `$session`, `$presence`), for Storybook. `./testing/prisma`: PostgreSQL
+  and PGlite test databases (`openPgliteFromTemplate`).
+- Development warnings name a mistake as it happens (`unbounded-read`,
+  `n-plus-one`, `nested-write`, `ambient-write`, `oversized-response`,
+  `repeated-call` and `tiered-field-in-output` on the server,
+  `repeated-mutation` and `repeated-invalidation` on the client), and a
+  strict test app throws them. `createServer({ stallWatchdog: true })`
+  watches the event loop, and `otelOnCall` (`./server/otel`) reports calls
+  to OpenTelemetry.
+
+### Lint, skills, codemod and docs
+
+- `@fitzzero/quickdraw-lint`: 23 oxlint rules (untracked, foreign, nested
+  and raw SQL writes, hand-sent frames, inline auth guards, unbounded reads,
+  database calls and emits in loops, layering, bypasses of the typed client,
+  `prefer-kit`, `no-v4-api`, `no-todo-schema`, and three design-system rules
+  in the template config), `oxlint.base.jsonc` and `oxlint.template.jsonc`,
+  and `quickdraw-lint baseline` and `quickdraw-lint check`, so an app adopts
+  the rules before fixing its old code.
+- `@fitzzero/quickdraw-skills`: four rules and two skills
+  (`quickdraw-new-service`, `quickdraw-migrate-v5`), linked into an app's
+  `.claude/` by `quickdraw-skills link`.
+- `@fitzzero/quickdraw-codemod`: `quickdraw-codemod v5 <repo> [--dry-run]`
+  writes the contracts from the 4.x method maps, `defineService` objects
+  from the classes (fields, getters and constructor work kept as marked
+  module bindings and a `setUp<Service>` function) and the typed client for
+  the hooks, with a `// quickdraw-migrate: review [<kind>]` marker on every
+  decision (`[error]` on a thrown `Error` whose message 4.x sent, `[kit]` on
+  a method a kit implements, `[carve-out]` in a template carve-out, an
+  access form, `rowless`, a lifecycle hook) and
+  `quickdraw-migration-report.md` listing them. It formats with the app's
+  formatter, and a second run changes nothing.
+- `quickdraw-docs` renders API pages from the contracts (`--services` adds
+  who may call what, `--check` is for CI); [`docs/clients.md`](docs/clients.md)
+  lists the ways in, [`docs/deploying.md`](docs/deploying.md) covers several
+  nodes and proxies, and [`examples/godot`](examples/godot) is a GDScript
+  client for Godot 4 on protocol 5 that CI runs against a real server.
+
+### Packaging
+
+- ESM only: one entry per export (`.`, `./server`, `./server/auth`,
+  `./server/express`, `./server/mcp`, `./server/otel`, `./prisma`,
+  `./client`, `./utils`, `./parser`, `./testing`, `./testing/client`,
+  `./testing/mock`, `./testing/prisma`), `"use client"` opening `./client`,
+  every peer dependency optional. No published manifest names a
+  `workspace:` range, and each package is published from its tag through
+  npm trusted publishing, with provenance.
+
+## Release candidates
+
+The sections below are the release candidates' own entries, `5.0.0-rc.0` to
+`5.0.0-rc.7`, kept for the record: each says what changed since the one
+before, with the behavior changes a release-candidate app met. The 5.0.0
+entry above is all a 4.x app needs.
+
+### [5.0.0-rc.7]
 
 The template's findings on `5.0.0-rc.6` (quickdraw-chat PR #54, F11.1 to
 F11.4): an optimistic item that a load ended on the client but not on the
 screen, the provider list's rate limit, `requireSession`'s origin list,
 and the id guidance. No version moves until the release candidate is cut.
 
-### Behavior changes for rc.6 apps
+#### Behavior changes for rc.6 apps
 
 - **`GET {basePath}/providers` has a rate limit of its own.** It no longer
   counts against `/me`, `/logout` and `/logout-all`: `rateLimit.providers`,
@@ -49,7 +383,7 @@ and the id guidance. No version moves until the release candidate is cut.
   outside production its 403 names the fix instead of blaming the page
   (Auth).
 
-### Client
+#### Client
 
 - An optimistic item that a load of its scope ended stayed on screen when
   that load left the scope's state as it was (F11.1): `pending`, or
@@ -75,7 +409,7 @@ and the id guidance. No version moves until the release candidate is cut.
   `useCollection().checking` and the README name it, and the README's
   optimistic create sends one (its contract's `create` takes an `id`).
 
-### Auth
+#### Auth
 
 - `GET {basePath}/providers` is counted by its own limiter (F11.3):
   `rateLimit.providers`, by default `createPublicApiLimiter()` (60 per
@@ -96,14 +430,14 @@ and the id guidance. No version moves until the release candidate is cut.
   production. The JSDoc, README, MIGRATION and the services rule say "the
   same store object".
 
-## [5.0.0-rc.6]
+### [5.0.0-rc.6]
 
 The fixes from the final independent review of the release candidates
 (`5.0.0-rc.2` to `rc.5`), the template's last open findings (F8.3 to
 F8.6) and the owner's QA of its deployment (F9.1 to F9.3, with F10.1 to
 F10.4). No version moves until the release candidate is cut.
 
-### Behavior changes for rc.5 apps
+#### Behavior changes for rc.5 apps
 
 - **Writes that set a value a row already holds signal again.** rc.5 left
   out an update whose interested columns held the same values after it as
@@ -130,7 +464,7 @@ F10.4). No version moves until the release candidate is cut.
   `onSuccess`, `onError` and `onSettled` now run for it, and a refused item
   shows in the render that shows the mutation's error (Client).
 
-### Tracked writes
+#### Tracked writes
 
 - Behavior change: a write that sets a column to the value it already
   held is recorded again, as in rc.4. rc.5 skipped an `update`, an
@@ -146,7 +480,7 @@ F10.4). No version moves until the release candidate is cut.
   upsert's `update`) with nothing to write, and an upsert with
   `update: {}` that finds its row.
 
-### Outputs and field tiers
+#### Outputs and field tiers
 
 - Behavior change: a method whose output is a schema of its own (not
   `"entity"`, not a projection) is sent as that schema declares it, on
@@ -171,7 +505,7 @@ F10.4). No version moves until the release candidate is cut.
   own replies. For an output without JSON Schema, a reply that carries a
   tiered key raises it in development.
 
-### Wire
+#### Wire
 
 - One rule for every frame, both ways, stated in `protocol/envelope.ts`
   and `docs/protocol-v5.md` before the protocol freezes: a receiver
@@ -185,7 +519,7 @@ F10.4). No version moves until the release candidate is cut.
   `qd:stream` and `qd:event`, a field added to `qd:presence`, `qd:changed`
   and `qd:revoked`.
 
-### Client
+#### Client
 
 - Behavior change: a call whose outcome is unknown is not a refusal. When
   the connection drops after a mutation was sent (`INTERNAL` "No answer:
@@ -220,7 +554,7 @@ F10.4). No version moves until the release candidate is cut.
   that stays refused does not loop. Optimistic items added to it meanwhile
   show once it opens, until its own copies arrive.
 
-### Auth
+#### Auth
 
 - Behavior change: `requireSession` applies the `/qd` calls' Origin rule
   to the session cookie (F8.5; the final review reproduced a cross-site
@@ -259,7 +593,7 @@ proxy`, `publicUrl`, the cookie's name by `X-Forwarded-Proto`; F9.3), and
   the README's server example reads `trust proxy` from `TRUST_PROXY`
   instead of setting it unconditionally (F10.4).
 
-### Smaller fixes
+#### Smaller fixes
 
 - `inherit` from a parent whose policy lets every row through
   (`everyone(level)`, alone or in `anyOf`) filters a list by
@@ -284,14 +618,14 @@ proxy`, `publicUrl`, the cookie's name by `X-Forwarded-Proto`; F9.3), and
   `JsonColumnValue`, `HttpCredentialSource`, `EventQuery`, `MatrixCell`,
   `MatrixInputFactory` and `MockSession`.
 
-## [5.0.0-rc.5]
+### [5.0.0-rc.5]
 
 Round 6 of the fixes the quickdraw-chat migration found: the framework
 findings of the independent review of its finale (F7.1 to F7.8) and of its
 last migration card on `5.0.0-rc.4` (F6.1 to F6.8). No version moves until
 the release candidate is cut.
 
-### Security
+#### Security
 
 - Behavior change: an HTTP call (`POST /qd/...`) that authenticates with
   the session cookie gets the Origin check sockets get. `socketAuth`
@@ -310,7 +644,7 @@ the release candidate is cut.
   `QuickdrawError("FORBIDDEN")` thrown by `authenticate` as it is (other
   throws stay `UNAUTHENTICATED`).
 
-### Tracked writes
+#### Tracked writes
 
 - A write that changed nothing is no longer recorded, so it sends no
   entity frame, collection delta, topic change, `refreshEntry` or `affects`
@@ -338,7 +672,7 @@ the release candidate is cut.
   tracked client too, as Prisma does (the rewrite to `updateManyAndReturn`
   answered the number of rows matched).
 
-### Contracts and topics
+#### Contracts and topics
 
 - A query watches its service's topic narrowed to some of its models:
   `watch: { service: ["gameScore"] }` (type `ServiceModelsWatch`, in
@@ -360,7 +694,7 @@ the release candidate is cut.
   as naming all. `connection.watch({ ..., models })` is the React-free
   form. `docs/protocol-v5.md` documents the field.
 
-### Access
+#### Access
 
 - A new development warning, `tiered-field-in-output` (F7.4): field tiers
   strip only projection outputs (`"entity"`, a named projection,
@@ -380,7 +714,7 @@ the release candidate is cut.
   Behavior change for rc.4 apps: a strict test app over such a method no
   longer starts until the method answers `"entity"`.
 
-### Client
+#### Client
 
 - `useJoin(...)` returns `retry()`: it runs the joining call again at once
   on the current socket, after a refusal the user can act on; it does
@@ -398,7 +732,7 @@ the release candidate is cut.
   showing in `refused` again) (F6.4). The default stays `"drop"`.
   `OverlayView` gains `refused(collection, scope)`.
 
-### Docs, skills and tools
+#### Docs, skills and tools
 
 - The `quickdraw-new-service` skill starts with the Prisma model: add it,
   then `bun run db:migrate --name <change>` and `bun run db:generate` in
@@ -433,7 +767,7 @@ the release candidate is cut.
   (F6.6). An app that copied `examples/godot/addons/quickdraw/quickdraw_client.gd`
   copies it again.
 
-### Testing
+#### Testing
 
 - `<mock.$Provider session={...}>` gives its subtree a session of its own,
   laid over the mock's (`$session`) field by field: the real
@@ -442,7 +776,7 @@ the release candidate is cut.
   renders side by side each show theirs (F6.2). An invalid one throws
   while rendering, naming `$Provider`.
 
-### Kits, auth and lint
+#### Kits, auth and lint
 
 - The admin kit takes `onCommitted({ method, id, before?, after }, ctx)`
   beside `onWrite`: it runs once the write has committed, in a detached
@@ -462,7 +796,7 @@ the release candidate is cut.
   the code, or state the reason with
   `// quickdraw: hand-written because <reason>`.
 
-### Upgrading from rc.4
+#### Upgrading from rc.4
 
 - Regenerate a checked-in API reference (`quickdraw-docs`): the Streams
   introduction's wording changed, so `--check` fails until it is rewritten.
@@ -470,7 +804,7 @@ the release candidate is cut.
 - A strict test app refuses a hand-written output that names a tiered
   field: answer `"entity"`, use a projection, or drop the field.
 
-## [5.0.0-rc.4]
+### [5.0.0-rc.4]
 
 Rounds 3, 4 and 5 of the fixes the quickdraw-chat migration found: round 3
 on `5.0.0-rc.1` (findings F3.1 to F3.11, from its web port), round 4 on
@@ -478,7 +812,7 @@ on `5.0.0-rc.1` (findings F3.1 to F3.11, from its web port), round 4 on
 protocol v5), round 5 on `5.0.0-rc.3` (findings F5.1 to F5.7, from its
 template polish). No version moves until the release candidate is cut.
 
-### Protocol
+#### Protocol
 
 - Breaking wire change for `5.0.0-rc.3` clients: `qd:stream` is a
   positional array, `[service, stream, scope, item]` (`scope` `null` for a
@@ -492,7 +826,7 @@ scope?, item }`. A frame carries no key names: 28 bytes fewer per scoped
   together: an app that copied `examples/godot/addons/quickdraw/quickdraw_client.gd`
   must copy it again (F4.7).
 
-### Realtime
+#### Realtime
 
 - A stream's seed can be computed when a socket subscribes: `defineService(contract, { streams:
 { world: { seed: (scope, ctx) => items } } })` answers each `qd:stream:sub`
@@ -559,7 +893,7 @@ room or is taken out of it is revoked from the feed at once
   (`outputValidation`, on unless `NODE_ENV` is `"production"`); unchecked,
   an item goes out as pushed. The default stays `"always"` (F4.14).
 
-### Kits
+#### Kits
 
 - `admin.handlers(contract, { onWrite })`: `onWrite({ method, id, before?,
 after }, ctx, db)` runs after each `adminCreate`, `adminUpdate` and
@@ -580,7 +914,7 @@ after }, ctx, db)` runs after each `adminCreate`, `adminUpdate` and
   `adminMeta` answers do not change; an override may not set `kind`
   (F5.5).
 
-### Testing
+#### Testing
 
 - `app.frames` and `frames.waitFor` take an event query with `where`, a
   predicate over the event's frames with `data` typed by the event
@@ -589,7 +923,7 @@ where?, scope?)` and `eventFrames(contract, event, where?)`, which match
   one stream's items or one event's payloads typed by the contract. Realtime
   tests cast `StreamFrame` and `EventFrame` by hand before (F4.13).
 
-### GDScript reference client
+#### GDScript reference client
 
 - `is_subscribed(service, stream, scope)` (true while the client holds
   the feed, which it subscribes to again after each reconnect) and
@@ -597,7 +931,7 @@ where?, scope?)` and `eventFrames(contract, event, where?)`, which match
   `server_id` (F4.11). Re-copy `addons/quickdraw/quickdraw_client.gd`: it
   also reads the positional `qd:stream` frame (F4.7, F4.12).
 
-### Server
+#### Server
 
 - `qd.run(fn)` before the app created any dispatcher (a boot-time seed
   before `createServer`) runs `fn` in a unit of work of its own instead of
@@ -624,7 +958,7 @@ where?, scope?)` and `eventFrames(contract, event, where?)`, which match
   every user gets by default, so a method behind `{ service: L }` answered
   `FORBIDDEN` (F5.1).
 
-### Auth
+#### Auth
 
 - `requireSession(keys, { loadPrincipal? })` builds the request's principal
   as `socketAuth` builds a socket's (default `{ userId, kind: "user" }`; a
@@ -638,7 +972,7 @@ where?, scope?)` and `eventFrames(contract, event, where?)`, which match
   (`requireSession`, `sessionOf`, `qd.caller`) as a compiled example, and
   MIGRATION's example lost its cast (F5.1, F5.4).
 
-### Client
+#### Client
 
 - `useQuickdraw()` gains `isKnown` (the server's hello on the current
   credentials arrived: `userId` is final, `null` meaning anonymous; false
@@ -674,7 +1008,7 @@ returnTo? })`, `signOut()` and `signOutEverywhere()` use the kit's routes
   result for an event that carries it; a read in flight is followed by one
   more (F3.9).
 
-### Testing
+#### Testing
 
 - `createMockClient` has a provider of its own, `mock.$Provider`, in which
   the real `useQuickdraw()` and `usePresence` read the mock's session:
@@ -691,12 +1025,12 @@ serviceAccess, isConnected, isKnown })` and `mock.$presence(room, users)`.
   template, under jsdom too). The README's `renderWithQuickdraw` example now
   runs in CI, with the per-worker database pattern documented (F3.11).
 
-### Lint and codemod
+#### Lint and codemod
 
 - The policy builders listed in `no-v4-api`'s messages, the codemod's
   access markers and the upgrade procedure name `everyone`.
 
-### API docs
+#### API docs
 
 - `quickdraw-docs <contracts> --services <module>` reads the services'
   definitions (each export, or in a list or map) and adds to each page who
@@ -714,7 +1048,7 @@ serviceAccess, isConnected, isKnown })` and `mock.$presence(room, users)`.
   "more than" and "less than". A stream's `access: { room }` was written
   as `{  }` (F5.6). Regenerate committed pages (`docs:check` reports them).
 
-### Skills
+#### Skills
 
 - `quickdraw-new-service` and `quickdraw-testing.md` follow the template's
   layout: a service at `apps/api/src/services/<name>/index.ts`, registered
@@ -728,7 +1062,7 @@ serviceAccess, isConnected, isKnown })` and `mock.$presence(room, users)`.
   `onWrite`, `hello.serverId`, `signInUrl` and `signOut`, and the
   template's provider path (F5.2).
 
-### Packaging
+#### Packaging
 
 - The README the core package ships links what lies outside
   `packages/core` (the lint, skills and codemod packages, `docs/`, the
@@ -736,7 +1070,7 @@ serviceAccess, isConnected, isKnown })` and `mock.$presence(room, users)`.
   `node_modules`. A test checks that no shipped Markdown copy links out of
   its package (F5.7).
 
-### The framework's own tests
+#### The framework's own tests
 
 - The end-to-end revocation test failed now and then on a busy machine:
   both `qd:revoked` frames of one access change invalidate the service's
@@ -748,13 +1082,13 @@ serviceAccess, isConnected, isKnown })` and `mock.$presence(room, users)`.
   before any timer could fire instead of a 10 ms and a 25 ms wall-clock
   bound.
 
-## [5.0.0-rc.3]
+### [5.0.0-rc.3]
 
 Round 2 of the fixes the quickdraw-chat migration found on `5.0.0-rc.1`
 (findings F2.1 to F2.18, from its server port), and the room primitives
 its game port needs. No version moves until the release candidate is cut.
 
-### Core
+#### Core
 
 - A `via` collection's entry created or touched (`ctx.touch`, or an
   `upsert` that may have updated it) in a flush that also deletes one of its
@@ -792,7 +1126,7 @@ its game port needs. No version moves until the release candidate is cut.
 - Behind a cluster, a joining socket's presence list, read from every node,
   is dropped when the socket left the room before it arrived.
 
-### Auth
+#### Auth
 
 - `requireSession({ sessions, jwtSecret })`: an Express middleware for the
   app's own REST routes over the auth routes kit's sessions, verifying the
@@ -807,7 +1141,7 @@ its game port needs. No version moves until the release candidate is cut.
   credentials, and `createAuthRoutes` skips `undefined`, `null` and `false`
   providers (F2.14).
 
-### MCP
+#### MCP
 
 - When stdin ends, the stdio server lets the calls in flight finish and
   writes their replies before `closed` resolves; `close()` still cancels
@@ -815,7 +1149,7 @@ its game port needs. No version moves until the release candidate is cut.
 - The docs say the tool list is the same for every caller, not filtered by
   the principal (F2.17).
 
-### Testing
+#### Testing
 
 - `app.as(principal)` loads a principal's grants through
   `auth.loadServiceAccess` when it carries none, at each call, as a socket's
@@ -824,14 +1158,14 @@ its game port needs. No version moves until the release candidate is cut.
   (`{ name, principal }`), so a mutation that runs once per row gets a fresh
   row in every cell, whatever the order of the principals (F2.16).
 
-### Codemod
+#### Codemod
 
 - An `[error]` marker on each `throw new Error(...)` in a migrated handler:
   4.x sent the message to the caller, 5.0 answers it with a generic
   `INTERNAL` unless it is a `QuickdrawError` with a code (F2.5). The report
   is formatted with the app's formatter since `5.0.0-rc.2` (F2.18).
 
-### Docs
+#### Docs
 
 - `MIGRATION.md`: "Hand-built auth to the auth routes kit": the `Session`
   table and its migration from a 4.x token-keyed table, the route and
@@ -843,13 +1177,13 @@ its game port needs. No version moves until the release candidate is cut.
 - `docs/releasing.md`: push release tags one at a time; GitHub starts no
   workflow for more than three tags in one push.
 
-## [5.0.0-rc.2]
+### [5.0.0-rc.2]
 
 Round 1 of the fixes the quickdraw-chat migration found on `5.0.0-rc.1`
 (findings F1.1 to F1.15). No version moves until the release candidate is
 cut.
 
-### Core
+#### Core
 
 - A handler may return a Prisma row whose `Json` column (`JsonValue`) sits
   where the wire has an object, an array or a record: `RowFor` accepts a
@@ -863,7 +1197,7 @@ cut.
   keeps every key, and handlers, `project` and `map` use it. Index rows stay
   whole: a collection refuses an index field its tier hides (F1.5).
 
-### Lint
+#### Lint
 
 - `quickdraw-lint baseline` records every rule's violations, oxlint's own
   too (keyed by the code oxlint reports them under). New:
@@ -878,7 +1212,7 @@ cut.
 - `oxlint.template.jsonc` extends the base: a template app extends it alone
   (F1.15).
 
-### Codemod
+#### Codemod
 
 - A service class's fields are kept as marked module bindings with their
   initializers, its getters as functions its reads call, and its
@@ -910,7 +1244,7 @@ cut.
   lists under "Carve-outs", and an entity key a DTO declares inside a
   carve-out keeps the carve-out's markers in the contract's `keys` (F1.13).
 
-### Packaging and guides
+#### Packaging and guides
 
 - The codemod ships `UPGRADE-PROMPT.md` beside `MIGRATION.md`, both with
   their links pointing at the repository on GitHub; the core README says
@@ -922,7 +1256,7 @@ cut.
 - The four packages' `bin` paths drop their `./` prefix, which `npm publish`
   reported as `"bin[...]" script name ... was invalid and removed` (F1.15).
 
-## [5.0.0-rc.1]
+### [5.0.0-rc.1]
 
 The first published release candidate (`5.0.0-rc.0` below was cut on
 `dev` but never published; this one carries it plus pack H).
@@ -931,7 +1265,7 @@ The next release candidate: pack H on top of `5.0.0-rc.0`. The four
 packages move to `5.0.0-rc.1` when it is tagged
 ([`docs/release-checklist-5.0.md`](docs/release-checklist-5.0.md)).
 
-### Pack H: agent guardrails, the multi-node proof and non-JS clients
+#### Pack H: agent guardrails, the multi-node proof and non-JS clients
 
 - **Breaking for `5.0.0-rc.0` users.** On a service with an access policy,
   `defineService` refuses a method whose input may carry a top-level `id`
@@ -1000,7 +1334,7 @@ packages move to `5.0.0-rc.1` when it is tagged
   Godot 4 that CI runs against a real server, which keeps its socket
   through a `qd:rotate` window and reconnects with full jitter.
 
-## [5.0.0-rc.0] (never published)
+### [5.0.0-rc.0] (never published)
 
 The release candidate for quickdraw 5.0, published under npm's `next`
 dist-tag for all four packages: `@fitzzero/quickdraw-core`,
@@ -1014,7 +1348,7 @@ rollout. The design is [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md)
 (section 17 records each decision made while building it), the rationale
 [`docs/rfcs/0003-v5-audit.md`](docs/rfcs/0003-v5-audit.md).
 
-### Pack A: foundations
+#### Pack A: foundations
 
 - A bun workspace with turbo holding the four packages and the private
   benchmark harness, with the 4.1.0 baseline recorded. CI on every pull
@@ -1025,7 +1359,7 @@ rollout. The design is [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md)
   rate limiter, the Redis adapter helper, env and encryption utilities),
   with 4.1's packaging defects fixed.
 
-### Pack B: core runtime
+#### Pack B: core runtime
 
 - Contracts (`defineContract`, `query`, `mutation`) shared by server and
   client; protocol v5, one `qd:call` envelope with a version handshake and a
@@ -1036,7 +1370,7 @@ rollout. The design is [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md)
   HTTP (`POST /qd/{service}/{method}`), in-process callers and MCP, and the
   `legacyWire` shim for 4.x callers.
 
-### Pack C: data plane
+#### Pack C: data plane
 
 - Tracked writes (`trackPrisma`): entity frames and collection deltas
   follow from the writes themselves, so hand emits are gone.
@@ -1046,21 +1380,21 @@ rollout. The design is [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md)
   entity subscriptions by revision, and collections with keyset paging,
   resume, a whole-scope index, views and change topics.
 
-### Pack D: client
+#### Pack D: client
 
 - `createQuickdrawClient(contracts)`: typed `qd.<service>.<member>` hooks
   with no wrapper files or string names, and a provider that runs without
   DOM globals. An invalidation coordinator, optimistic entity mutations,
   live entities and collections, and `./testing/client`.
 
-### Pack E: kits
+#### Pack E: kits
 
 - Read/write, search, sharing and membership, admin, presence, streams and
   channels, and auth routes (`createAuthRoutes`, `socketAuth`: Google,
   Discord, mock and guest sign-in, sessions, `__Host-` cookies), all through
   the same pipeline, access and emits.
 
-### Pack F: enforcement
+#### Pack F: enforcement
 
 - `@fitzzero/quickdraw-lint`: 19 oxlint rules with tests and baselines;
   `no-v4-api` names every removed 4.x API and its replacement. Budgets
@@ -1070,7 +1404,7 @@ rollout. The design is [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md)
   `.claude/` by `quickdraw-skills link`; `quickdraw-docs` renders API pages
   from contracts.
 
-### Pack G: proof and release
+#### Pack G: proof and release
 
 - The benchmark against 4.1.0 (below); `@fitzzero/quickdraw-codemod` with
   the migration guide (`MIGRATION.md`, `UPGRADE-PROMPT.md`, the
@@ -1125,7 +1459,7 @@ rollout. The design is [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md)
     `oxlint.base.jsonc`); `MIGRATION.md` lists the peers' new floors; the
     benchmark report's figures are recomputed from its data.
 
-### Benchmark
+#### Benchmark
 
 5.0 against 4.1.0 on one machine in one sitting (`bench/reports/5.0.0.md`;
 board-steady: 600 writes to a board 50 viewers watch): the board query's p95
@@ -1151,8 +1485,8 @@ now holds the rerun on the final code ([5.0.0], Benchmark).
   an event whose name is not a string. Socket.IO accepts a numeric event
   name; `applyRateLimitMiddleware` called `eventName.startsWith` on it inside
   `process.nextTick`, an uncaught `TypeError` that exited the server. Such
-  events now pass the limiter uncounted. (A 4.x patch released from `main`;
-  5.0 carries the same guard.)
+  events now pass the limiter uncounted. (A 4.x patch, on the `release/4.x`
+  branch; 5.0 carries the same guard.)
 
 ## [4.1.0] - 2026-08-01
 

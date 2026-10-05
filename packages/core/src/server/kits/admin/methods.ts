@@ -1,7 +1,7 @@
 // The handler of each admin method (RFC 0003 section 12.4), and the form each
 // runs under unless `admin.handlers` is given another: a service-wide `Admin`
 // grant. 4.1 apps repeated a nine-key block of `"Admin"` levels for this
-// (`legacy-src/server/BaseService.ts:1167-1183`).
+// (4.1 `src/server/BaseService.ts:1167-1183`).
 
 import type { AdminMethodName } from "../../../contract/kits/admin";
 import type { KitHandler, KitHandlerArgs } from "../crud/runtime";

@@ -16,7 +16,7 @@
 // which columns and models a policy depends on, so tracked writes to them
 // evict the cache (`changes.ts`). It replaces 4.1's `checkAccess`,
 // `checkEntryACL` and `checkBatchSubscriptionAccess`
-// (`legacy-src/server/BaseService.ts:292-306, 513-547`).
+// (4.1 `src/server/BaseService.ts:292-306, 513-547`).
 //
 // The framework never imports generated Prisma types. A policy's type
 // carries the column names it reads, and `defineService` checks them against

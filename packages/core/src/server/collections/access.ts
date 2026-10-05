@@ -7,7 +7,7 @@
 // anchor's service do not count, as they do not flow through `inherit`. A
 // missing anchor row has no level, so it is `FORBIDDEN` unless the grant
 // passes. A `"self"` scope passes when it is the principal's own user id.
-// 4.1 asked each collection's `checkScopeAccess` (`legacy-src/server/collections.ts:45-49`).
+// 4.1 asked each collection's `checkScopeAccess` (4.1 `src/server/collections.ts:45-49`).
 //
 // A change topic (RFC 0003 section 11.3) is watched on the same terms: a
 // collection scope's topic exactly as a subscribe to that scope, and a

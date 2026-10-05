@@ -2,7 +2,7 @@
 // 12.4). A subscriber sits in the row's room for its access level
 // (`entityRoom(service, id, level)`), so `adminSubscribers` counts the
 // sockets in each of those rooms, reading nothing. 4.1 listed each socket and
-// user from a per-entity map (`legacy-src/server/BaseService.ts:1448-1464`),
+// user from a per-entity map (4.1 `src/server/BaseService.ts:1448-1464`),
 // which 5.0 does not keep. The counts are this process's: behind a cluster
 // adapter (Redis) another server's sockets are invisible here, and the reply
 // says so (`complete: false`).

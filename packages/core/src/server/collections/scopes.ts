@@ -5,7 +5,7 @@
 // derived from (its anchors). The index finds the sockets an access change
 // can concern by anchor, and the scopes of a collection that have
 // subscribers here. Rooms stay the source of truth for who receives frames.
-// 4.1 kept nothing (`legacy-src/server/collections.ts:141-187`), so it could
+// 4.1 kept nothing (4.1 `src/server/collections.ts:141-187`), so it could
 // not revoke a scope a user lost access to.
 
 import { collectionRoom } from "../../contract/names";

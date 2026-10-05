@@ -3,7 +3,7 @@
 // into the one frame the scope gets for the flush. More rows than the
 // collection's `bulkThreshold` for one scope make that frame a single
 // `reset`, read nothing, and let its clients load the scope again. 4.1 sent
-// one event per row per scope (`legacy-src/server/collections.ts:338-352`)
+// one event per row per scope (4.1 `src/server/collections.ts:338-352`)
 // and left bulk writes to a hand-written `emitReset`.
 //
 // Items come from rows the moves already read, or from one read for the

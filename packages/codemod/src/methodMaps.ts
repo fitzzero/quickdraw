@@ -108,7 +108,7 @@ export function keysOf(declaration: InterfaceDeclaration | TypeAliasDeclaration)
 
 /**
  * The row id a payload carries implicitly: 4.x read `payload.id` when it was
- * a string (`legacy-src/server/ServiceRegistry.ts:313-325`).
+ * a string (4.1 `src/server/ServiceRegistry.ts:313-325`).
  */
 export function implicitEntryId(payload: TypeNode | undefined): EntryId {
   if (payload === undefined) {

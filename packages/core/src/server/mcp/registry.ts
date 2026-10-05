@@ -1,7 +1,7 @@
 // `createMcpRegistry` (RFC 0003 section 10): the tools of an app's services,
 // generated from their contracts, plus the app's own, and one `call` every
 // MCP transport uses. It replaces 4.1's `McpRegistry`
-// (`legacy-src/server/mcp/McpRegistry.ts:13`), which validated input, checked
+// (4.1 `src/server/mcp/McpRegistry.ts:13`), which validated input, checked
 // access and ran handlers itself, as whatever user the tool's `userId`
 // argument named. Here a method's tool call goes through the dispatcher with
 // transport `"mcp"`, so validation, access checks and limits apply exactly as

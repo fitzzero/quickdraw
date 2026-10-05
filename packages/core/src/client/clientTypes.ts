@@ -3,7 +3,7 @@
 // mutation member by the method's kind, its input is `InputOf` and its data
 // `OutputOf`. A misspelled method, or a hook the method's kind does not have
 // (`useQuery` on a mutation), is a compile error. 4.1 apps wrote a typed
-// wrapper file per app for this (`legacy-src/client/useService.ts:22-34`).
+// wrapper file per app for this (4.1 `src/client/useService.ts:22-34`).
 
 import type {
   QueryClient,

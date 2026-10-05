@@ -2,7 +2,7 @@
 // the registry is built, from what the contract already holds: the input
 // schema, the kind and the `describe` text. 4.1 wrote tool metadata ahead of
 // time by parsing service source files with regular expressions
-// (`legacy-src/server/mcp/generateToolMetadata.ts:255`); nothing is generated
+// (4.1 `src/server/mcp/generateToolMetadata.ts:255`); nothing is generated
 // ahead of time here.
 //
 // A tool's `inputSchema` is the method input's Standard JSON Schema (Zod 4.2

@@ -1,10 +1,10 @@
 // The 4.x legacy shim (RFC 0003 section 8.5). A 4.x client connects without
 // `auth.qd` and calls a method by emitting `"{service}:{method}"` with its
-// payload and an acknowledgement (`legacy-src/server/ServiceRegistry.ts:277-406`).
+// payload and an acknowledgement (4.1 `src/server/ServiceRegistry.ts:277-406`).
 // With `legacyWire: true` such a socket gets one `socket.use` middleware
 // instead of the v5 listeners: it maps each call onto the dispatcher with
 // transport `"legacy"` and answers in the 4.x `ServiceResponse` shape
-// (`legacy-src/shared/types.ts:88-90`), with the error code's HTTP status as
+// (4.1 `src/shared/types.ts:88-90`), with the error code's HTTP status as
 // the numeric `code`.
 //
 // The shim is a middleware, not an `onAny` listener, because Socket.IO runs
@@ -132,7 +132,7 @@ function serve(
 /**
  * Serves a 4.x socket: one `socket.use` middleware for its calls, the
  * `auth:info` event 4.x clients read their identity from
- * (`legacy-src/server/createServer.ts:134-140`), and cancellation of its
+ * (4.1 `src/server/createServer.ts:134-140`), and cancellation of its
  * calls on disconnect. Call it from the `connection` handler, after the rate
  * limiter's middleware is in place, so the limiter sees each call first. A
  * call the shim serves goes no further; any other event passes on.

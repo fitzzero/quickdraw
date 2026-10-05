@@ -1,5 +1,5 @@
 // The logger contract and its console default, unchanged from 4.1
-// (`legacy-src/shared/types.ts:525-545`).
+// (4.1 `src/shared/types.ts:525-545`).
 
 /**
  * Logger interface compatible with Winston and other loggers

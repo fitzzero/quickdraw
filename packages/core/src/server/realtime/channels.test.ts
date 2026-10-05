@@ -1,5 +1,5 @@
 // Channels (RFC 0003 section 12.5) through a real server against PGlite,
-// ported from 4.1's `legacy-src/server/channels.test.ts`: a message reaches
+// ported from 4.1's `src/server/channels.test.ts`: a message reaches
 // its handler from an authenticated socket that holds the subscription the
 // contract's `requires` names; one over the socket's token bucket, with a
 // payload that fails its schema, from an anonymous socket or without the

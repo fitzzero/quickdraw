@@ -109,7 +109,7 @@ export interface ServerRooms {
 /**
  * `ctx.rooms` (RFC 0003 sections 3, 12.5 and 15): app-defined rooms the
  * calling socket joins and leaves, and typed room events. It replaces 4.1's
- * `emitToRoom` and `emitToUserRoom` (`legacy-src/server/BaseService.ts:378-441`).
+ * `emitToRoom` and `emitToUserRoom` (4.1 `src/server/BaseService.ts:378-441`).
  * Everything that needs no calling socket is also on `qd.rooms`
  * ({@link ServerRooms}).
  */

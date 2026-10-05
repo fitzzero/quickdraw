@@ -2,7 +2,7 @@
 // 0003 section 7.2). Membership is declared, so it is read from the values a
 // write reports for the registered membership columns (`bind.ts`): a scope
 // before the write and a scope after it. The rules, ported from 4.1's
-// `notifyOne` (`legacy-src/server/collections.ts:220-270`), which compared
+// `notifyOne` (4.1 `src/server/collections.ts:220-270`), which compared
 // `resolveScopeId` before and after on full rows it read first:
 //
 // | Write                          | Before                    | After          |

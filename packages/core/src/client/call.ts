@@ -1,7 +1,7 @@
 // One method call over a client connection (RFC 0003 sections 8.2, 9 and
 // 11.2): a `qd:call` envelope with a fresh id, answered through Socket.IO's
 // acknowledgement. 4.1 sent one event per method and resolved the
-// `{ success, data }` reply (`legacy-src/client/useServiceQuery.ts:94-121`).
+// `{ success, data }` reply (4.1 `src/client/useServiceQuery.ts:94-121`).
 //
 // - A failed call rejects with the `QuickdrawError` the reply carries.
 //   `RATE_LIMITED` also starts the connection's backoff for the call's kind,

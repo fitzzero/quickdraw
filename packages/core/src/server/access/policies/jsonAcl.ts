@@ -2,7 +2,7 @@
 // JSON access list on the row, `[{ userId, level }]`, the shape 4.x apps
 // store (`ACL` on the root export), plus `Admin` for the owner column when
 // one is named. Ported from 4.1's `checkEntryACL`
-// (`legacy-src/server/BaseService.ts:526-547`), which read one row per check.
+// (4.1 `src/server/BaseService.ts:526-547`), which read one row per check.
 
 import type { AccessLevel } from "../../../contract/access";
 import { levelsAtLeast, maxLevel } from "../levels";

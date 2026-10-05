@@ -2,7 +2,7 @@
 // handlers are made: the entity's fields as the contract half read them from
 // its JSON Schema (`contract/kits/adminFields.ts`), configured for an admin
 // screen as 4.1's `zodToAdminFields` configured them
-// (`legacy-src/server/utils/zodToAdminFields.ts:138-265`):
+// (4.1 `src/server/utils/zodToAdminFields.ts:138-265`):
 //
 // - hidden fields are left out: 4.1's `acl`, `serviceAccess` and
 //   `service_access`, and those `hiddenFields` names; `grants: true` shows
@@ -35,7 +35,7 @@ import {
 } from "../../../contract/kits/adminFields";
 import type { AdminSpec } from "../../../contract/kits/admin";
 
-/** Fields 4.1 always hid from admin screens (`legacy-src/server/utils/zodToAdminFields.ts:12`). */
+/** Fields 4.1 always hid from admin screens (4.1 `src/server/utils/zodToAdminFields.ts:12`). */
 export const ADMIN_HIDDEN_FIELDS: readonly string[] = Object.freeze([
   "acl",
   "serviceAccess",

@@ -18,7 +18,7 @@
 //   `via` entry, an `affects` hop) costs the whole collection its resume.
 //
 // 4.1 offered these as hand-written calls (`emitCollectionReset`,
-// `kickFromCollection`; `legacy-src/server/collections.ts:300-318`).
+// `kickFromCollection`; 4.1 `src/server/collections.ts:300-318`).
 
 import { collectionRoom, SERVER_EVENTS } from "../../contract/names";
 import type { CollectionDelta, CollectionFrame, Revision } from "../../protocol/envelope";

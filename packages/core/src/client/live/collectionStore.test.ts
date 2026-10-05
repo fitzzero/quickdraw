@@ -1,6 +1,6 @@
 // The collection store's merge rules (RFC 0003 sections 7.2 to 7.5). The
 // first four blocks are 4.1's collection cache tests
-// (`legacy-src/client/collectionCache.test.ts`), case for case, on the 5.0
+// (4.1 `src/client/collectionCache.test.ts`), case for case, on the 5.0
 // store: one revision per frame rather than per delta, membership from the
 // index rather than `ids`, tombstones in `removed`, and `added` placed by the
 // collection's order rather than an `insertPosition`. The blocks after them

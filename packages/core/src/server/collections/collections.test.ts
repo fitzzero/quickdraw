@@ -1,7 +1,7 @@
 // Collections (RFC 0003 section 7) through a real server against PGlite:
 // subscribing to a scope and paging it, and the deltas raw tracked writes
 // produce, asserting the exact replies and frames real socket clients
-// receive. The delta cases port 4.1's (`legacy-src/server/collections.test.ts:274-367`),
+// receive. The delta cases port 4.1's (4.1 `src/server/collections.test.ts:274-367`),
 // driven by tracked writes instead of `BaseService.create/update/delete`.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";

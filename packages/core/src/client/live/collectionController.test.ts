@@ -1,7 +1,7 @@
 // A collection scope's pipeline (RFC 0003 sections 7.2 to 7.4 and 11.5) over
 // a socket the test drives, so races happen in a chosen order. The first
 // block is 4.1's `useCollection` tests
-// (`legacy-src/client/useCollection.test.tsx`) on the 5.0 controller: a
+// (4.1 `src/client/useCollection.test.tsx`) on the 5.0 controller: a
 // reconnect now resumes from a revision rather than loading everything again,
 // a reset reloads after a random delay rather than a fixed 100 ms, and the
 // hook-only cases (a disabled hook, `compare`, `onDelta`, `onError`) moved

@@ -4,7 +4,7 @@
 // at, one hop and without duplicates: a task written with `affects: [{
 // service: task, id: "parentTaskId" }]` touches its parent task as well, which
 // is then sent whole. 4.1 left this to lifecycle hooks and hand-written emits
-// (`legacy-src/server/BaseService.ts:741-827`).
+// (4.1 `src/server/BaseService.ts:741-827`).
 
 import type { Registry } from "../registry";
 import type { AffectsLink, AnyService } from "../service";

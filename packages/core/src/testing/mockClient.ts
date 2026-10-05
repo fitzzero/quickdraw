@@ -3,7 +3,7 @@
 // tests and stories that do not care about the transport. Nothing connects:
 // there is no socket and no server, and the members' hooks need no provider
 // above them. 4.1's `createMockSocket` mocked the socket under the hooks instead
-// (`legacy-src/client/testing.tsx:24-41`), which tested a fake transport.
+// (4.1 `src/client/testing.tsx:24-41`), which tested a fake transport.
 //
 // - A query member's `useQuery` is TanStack's own `useQuery`, on the mock's
 //   `QueryClient` (retries off), fetching from the method's stub; `call`

@@ -30,15 +30,14 @@ Design record: [`docs/rfcs/0003-v5.md`](docs/rfcs/0003-v5.md).
 ## Install
 
 ```bash
-bun add @fitzzero/quickdraw-core@next zod
+bun add @fitzzero/quickdraw-core zod
 bun add express socket.io @prisma/client                   # the server
 bun add socket.io-client @tanstack/react-query react        # the web app
-bun add -d @fitzzero/quickdraw-lint@next @fitzzero/quickdraw-skills@next oxlint
+bun add -d @fitzzero/quickdraw-lint @fitzzero/quickdraw-skills oxlint
 ```
 
-Until 5.0.0 is released, 5.0 is published under the `next` dist-tag, which
-these commands name; without it they install 4.x. Node 24 or later. Every
-peer dependency is optional: install the ones the entries you import need.
+Node 24 or later. Every peer dependency is optional: install the ones the
+entries you import need.
 
 | Entry                                   | Needs                                                                   |
 | --------------------------------------- | ----------------------------------------------------------------------- |
@@ -59,7 +58,7 @@ peer dependency is optional: install the ones the entries you import need.
 A board of tasks in the quickdraw template's layout: contracts in
 `packages/shared`, the server in `apps/api`, the web app in `apps/web`. The
 examples in this README compile: they are copies of
-[`packages/core/test/readme/`](https://github.com/fitzzero/quickdraw/tree/dev/packages/core/test/readme),
+[`packages/core/test/readme/`](https://github.com/fitzzero/quickdraw/tree/main/packages/core/test/readme),
 which the package's typecheck builds. The pieces the quick start imports
 without showing (the schemas, the auth helpers, the Prisma models) are under
 [The example app](#the-example-app).
@@ -319,7 +318,7 @@ and `countOnBoard` is fetched again because it watches the board.
 
 The quick start is part of a small app in the template's layout, whose
 every file compiles with the package:
-[`packages/core/test/readme/`](https://github.com/fitzzero/quickdraw/tree/dev/packages/core/test/readme).
+[`packages/core/test/readme/`](https://github.com/fitzzero/quickdraw/tree/main/packages/core/test/readme).
 The label and project services the server registers are there, with the
 other sections' examples. These are the pieces the quick start imports
 without showing, which an app writes itself.
@@ -3144,7 +3143,7 @@ procedure for an agent. Both ship with the codemod, at
 `node_modules/@fitzzero/quickdraw-codemod/UPGRADE-PROMPT.md`.
 
 ```bash
-bunx @fitzzero/quickdraw-codemod@next v5 .
+bunx @fitzzero/quickdraw-codemod v5 .
 ```
 
 ## Package exports

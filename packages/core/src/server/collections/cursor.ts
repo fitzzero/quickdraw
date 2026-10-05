@@ -3,7 +3,7 @@
 // base64url JSON; the next page is the rows after those values in `order`.
 // Unlike an offset, it stays on its row when rows are inserted or removed
 // before it. 4.1 left paging to each collection's own `snapshot` function
-// (`legacy-src/server/collections.ts:51-55`), which in practice used offsets.
+// (4.1 `src/server/collections.ts:51-55`), which in practice used offsets.
 //
 // Nulls sort last in ascending order and first in descending order (as
 // PostgreSQL does by default); a nullable column is ordered that way

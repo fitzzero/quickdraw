@@ -7,7 +7,6 @@ import { defineConfig, type TestProjectInlineConfiguration } from "vitest/config
 // in `test/e2e/`, which renders the real client hooks against a real server
 // in the test process; jsdom needs no setting for that: the server listens on
 // a Node socket, and the client connects over jsdom's WebSocket).
-// `legacy-src/` (the 4.1 reference tree) and its tests are never run.
 //
 // The README's example app (test/readme) is typechecked as a whole; its
 // component tests (`test/readme/apps/web/**/*.test.tsx`, which hold the
@@ -97,7 +96,7 @@ export default defineConfig({
     // Kept from 4.1: @testing-library/react registers its automatic cleanup
     // only when `afterEach` is a global.
     globals: true,
-    exclude: ["**/node_modules/**", "**/dist/**", "legacy-src/**"],
+    exclude: ["**/node_modules/**", "**/dist/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "html"],

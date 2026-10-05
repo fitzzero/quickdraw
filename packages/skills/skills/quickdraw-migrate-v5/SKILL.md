@@ -34,11 +34,11 @@ guide's sections as the report sends you to them.
 
 1. **Prepare.** A clean tree on a new branch. Node 24, Prisma 7, Zod 3.25 or
    later (4.2 or later where JSON Schema is read: MCP tools, the admin kit,
-   projection keys). Upgrade `@fitzzero/quickdraw-core` to 5.0 (`@next` until
-   5.0.0 ships) in every package that imports it, add
-   `@fitzzero/quickdraw-lint`, `@fitzzero/quickdraw-skills` and `oxlint` as
-   dev dependencies, extend `oxlint.base.jsonc` (a template app:
-   `oxlint.template.jsonc`, which extends the base), set
+   projection keys). Upgrade `@fitzzero/quickdraw-core` to 5.0 in every
+   package that imports it, add `@fitzzero/quickdraw-lint`,
+   `@fitzzero/quickdraw-skills` and `oxlint` as dev dependencies, extend
+   `oxlint.base.jsonc` (a template app: `oxlint.template.jsonc`, which
+   extends the base), set
    `settings.quickdraw.baseline` to `.quickdraw-lint-baseline.json`, make the
    lint scripts run `quickdraw-lint check` instead of `oxlint`, add
    `quickdraw-skills link` to `prepare`, and add `zod` to the shared package
@@ -46,8 +46,8 @@ guide's sections as the report sends you to them.
 2. **Run the codemod** from the repository root, first with `--dry-run`:
 
    ```bash
-   bunx @fitzzero/quickdraw-codemod@next v5 . --dry-run
-   bunx @fitzzero/quickdraw-codemod@next v5 .
+   bunx @fitzzero/quickdraw-codemod v5 . --dry-run
+   bunx @fitzzero/quickdraw-codemod v5 .
    ```
 
    It expects the template's layout (`packages/shared`, `apps/api`,

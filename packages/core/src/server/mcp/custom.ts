@@ -1,6 +1,6 @@
 // Custom tools (RFC 0003 section 10): an app's own tools, served beside the
 // ones generated from contracts. 4.1's registry had no hook for them
-// (`legacy-src/server/mcp/McpRegistry.ts:13`), so apps that needed one ran a
+// (4.1 `src/server/mcp/McpRegistry.ts:13`), so apps that needed one ran a
 // bridge of their own. A custom tool fails closed like a method: unless it
 // declares `access: "public"`, an anonymous caller is refused before anything
 // runs. A custom tool that gives a Standard Schema has its arguments

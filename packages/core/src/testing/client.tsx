@@ -3,9 +3,9 @@
 // real in-process server, or against a mock client with no server at all.
 //
 // 4.1's `./client/testing` could not work as documented: `createTestWrapper`
-// filled a context of its own (`legacy-src/client/testing.tsx:185-192`)
+// filled a context of its own (4.1 `src/client/testing.tsx:185-192`)
 // while the hooks read the provider's unexported one
-// (`legacy-src/client/QuickdrawProvider.tsx:169`), and every hook test
+// (4.1 `src/client/QuickdrawProvider.tsx:169`), and every hook test
 // mocked the provider, so no test ran a hook against a server. Here:
 //
 // - `renderWithQuickdraw(ui, { app, as, client })` renders `ui` under the

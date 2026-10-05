@@ -1,6 +1,6 @@
 // Reference-counted live subscriptions (RFC 0003 sections 6, 7 and 11.5): one
 // record per key (a row, a collection scope) however many hooks hold it.
-// Ported from 4.1's registry (`legacy-src/client/QuickdrawProvider.tsx:25-68`)
+// Ported from 4.1's registry (4.1 `src/client/QuickdrawProvider.tsx:25-68`)
 // with two changes:
 //
 // - the last release closes the record a tick later, unless it is acquired
@@ -9,7 +9,7 @@
 // - nothing is cleared when the connection drops. Records outlive a
 //   disconnect, and their store subscribes them again on the next connect,
 //   from the revisions it holds; 4.1 cleared every record on a disconnect
-//   (`legacy-src/client/QuickdrawProvider.tsx:326-330`) and loaded
+//   (4.1 `src/client/QuickdrawProvider.tsx:326-330`) and loaded
 //   everything again.
 //
 // React-free.

@@ -1,4 +1,4 @@
-// Socket helpers for tests, ported from 4.1 (`legacy-src/server/testing.ts:135-180`).
+// Socket helpers for tests, ported from 4.1 (4.1 `src/server/testing.ts:135-180`).
 // 4.1's `emitWithAck` unwrapped the 4.x `{ success, data }` reply; this one
 // resolves with the acknowledgement as the server sent it, since a v5 reply
 // (`{ ok, d }`) and a 4.x one now both exist. For typed v5 calls use

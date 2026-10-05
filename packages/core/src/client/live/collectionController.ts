@@ -1,7 +1,7 @@
 // One collection scope's live pipeline (RFC 0003 sections 7.2 to 7.4 and
 // 11.5), shared by every hook that shows the scope, so they drive one load
 // and one page at a time. Ported from 4.1's per-key controller
-// (`legacy-src/client/useCollection.ts:136-269`), with these changes:
+// (4.1 `src/client/useCollection.ts:136-269`), with these changes:
 //
 // - Loading the scope again resumes it: `qd:col:sub` carries `since`, the
 //   newest revision applied, and a `resumed` answer brings the deltas missed

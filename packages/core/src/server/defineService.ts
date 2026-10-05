@@ -1,6 +1,6 @@
 // `defineService(contract, definition)` (RFC 0003 section 3): a declarative
 // object, no classes. It replaces 4.1's `defineMethod(name, level, handler,
-// { schema, resolveEntryId })` (`legacy-src/server/BaseService.ts:841-869`)
+// { schema, resolveEntryId })` (4.1 `src/server/BaseService.ts:841-869`)
 // and `verifyAllMethods`. The type of `methods` is the deliverable as much as
 // the run-time check:
 //

@@ -1,6 +1,6 @@
 // The MCP stdio server: JSON-RPC 2.0, one message per line, on stdin and
 // stdout (RFC 0003 section 10). Ported from 4.1's `createMcpStdioServer`
-// (`legacy-src/server/mcp/McpStdioServer.ts:22`), keeping its wire format:
+// (4.1 `src/server/mcp/McpStdioServer.ts:22`), keeping its wire format:
 // protocol version 2024-11-05, `initialize`, `ping`, `tools/list` and
 // `tools/call`, a tool's value as one block of JSON text, and the same
 // JSON-RPC error codes. What changed:

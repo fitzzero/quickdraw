@@ -4,7 +4,7 @@
 // {basePath}/providers`, `GET {basePath}/{provider}/start`, `POST
 // {basePath}/logout`, `POST {basePath}/logout-all`); the last three replace
 // 4.1's `getOAuthUrl`, `logout` and `logoutAllDevices`
-// (`legacy-src/client/utils/auth.ts`), which called routes the kit does not
+// (4.1 `src/client/utils/auth.ts`), which called routes the kit does not
 // serve and sent only a stored token, so with cookie sessions they signed
 // nobody out (finding F3.3). The token helpers keep a bearer token for
 // clients without cookies; they read `localStorage`, so they stay on

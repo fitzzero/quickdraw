@@ -8,8 +8,8 @@ everything that needs a decision. The guide to the rest is
 [`UPGRADE-PROMPT.md`](UPGRADE-PROMPT.md), both shipped beside it.
 
 ```bash
-bunx @fitzzero/quickdraw-codemod@next v5 . --dry-run   # what it would change
-bunx @fitzzero/quickdraw-codemod@next v5 .
+bunx @fitzzero/quickdraw-codemod v5 . --dry-run   # what it would change
+bunx @fitzzero/quickdraw-codemod v5 .
 ```
 
 Run it from the app's repository root, on a clean working tree, after

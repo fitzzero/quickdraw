@@ -3,7 +3,7 @@
 // server code. Every server and client type is derived from it: see
 // `infer.ts`. In 4.1 the same information was spread over a hand-written
 // method map, an optional Zod schema per method, seven generics on
-// `BaseService` (`legacy-src/server/BaseService.ts:68-80`) and room-name
+// `BaseService` (4.1 `src/server/BaseService.ts:68-80`) and room-name
 // helpers.
 
 import type { AccessLevel } from "./access";
