@@ -1080,7 +1080,10 @@ export const taskContract = defineContract("taskService", {
     ...crud.contract({
       entity: taskSchema,
       get: true,
-      create: { input: z.object({ projectId: z.string(), title: z.string() }) },
+      // `id`: one the client may make (`newId()`), which the create keeps
+      create: {
+        input: z.object({ id: z.string().optional(), projectId: z.string(), title: z.string() }),
+      },
     }),
     rename: mutation({
       input: z.object({ id: z.string(), title: z.string() }),
@@ -1307,7 +1310,10 @@ export const taskContract = defineContract("taskService", {
     ...crud.contract({
       entity: taskSchema,
       get: true,
-      create: { input: z.object({ projectId: z.string(), title: z.string() }) },
+      // `id`: one the client may make (`newId()`), which the create keeps
+      create: {
+        input: z.object({ id: z.string().optional(), projectId: z.string(), title: z.string() }),
+      },
     }),
     rename: mutation({
       input: z.object({ id: z.string(), title: z.string() }),
