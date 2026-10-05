@@ -9,8 +9,8 @@ import {
   type DevWarnings,
   type LoopWatch,
 } from "../devWarnings";
-import type { ChangeLogOptions } from "../emit/changeLog";
-import { createLive, type Live } from "../emit/live";
+import { createLive, type ChangeLogOptions, type Live } from "../emit/live";
+import { warnTieredOutputs } from "../emit/tieredOutputs";
 import type { Registry } from "../registry";
 import type { FlushSink } from "../uow/flushSink";
 import {
@@ -190,6 +190,7 @@ export function resolveSettings(
   const development = process.env.NODE_ENV !== "production";
   const logger = options.logger ?? consoleLogger;
   const warnings = createDevWarnings({ logger, development, strict: strictWarningsOf(options) });
+  warnTieredOutputs(registry, warnings);
   const storage = storageFor(options, db);
   const { access, policies } = resolveAccess(options.access, registry, storage, logger);
   const outputValidation = options.outputValidation ?? development;

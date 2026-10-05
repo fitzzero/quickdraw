@@ -77,6 +77,26 @@ the release candidate is cut.
   as naming all. `connection.watch({ ..., models })` is the React-free
   form. `docs/protocol-v5.md` documents the field.
 
+### Access
+
+- A new development warning, `tiered-field-in-output` (F7.4): field tiers
+  strip only projection outputs (`"entity"`, a named projection,
+  `nullable(...)`, `listOf(...)`), so a method whose own output schema
+  names a key the contract tiers sends it to every caller its access
+  admits (quickdraw-chat's `updateUser` answered a user's `Admin`-only
+  `email` to a service-wide `Moderate` grant). When a dispatcher is made
+  (`createServer`, `createTestApp`), each such method and key is warned
+  about once, naming the fix (answer `"entity"` or a projection, or leave
+  the key out); `createTestApp({ strictWarnings: true })` throws it, so
+  the test app fails to start. The keys are the top-level keys of every
+  object the output may be (union branches and a list's rows included),
+  read from its JSON Schema; a Zod 3 output is not checked. Not warned: a
+  method whose access admits no caller below the field's level
+  (`{ service: "Admin" }` while the Admin bypass is on, `{ entry: L }` with
+  `L` at the field's level or above, both halves of a two-part form).
+  Behavior change for rc.4 apps: a strict test app over such a method no
+  longer starts until the method answers `"entity"`.
+
 ## [5.0.0-rc.4]
 
 Rounds 3, 4 and 5 of the fixes the quickdraw-chat migration found: round 3

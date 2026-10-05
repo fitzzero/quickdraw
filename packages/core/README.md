@@ -894,7 +894,19 @@ export const taskService = qd.defineService(task, {
   rows (a `Date` is fine where the wire has a string, extra columns are
   dropped); with `map`, it returns what `map` takes.
 - Fields the contract's `fields` map puts above the caller's level on a row
-  are stripped from that caller's copy, after any shared run.
+  are stripped from that caller's copy, after any shared run. Only a
+  projection output is stripped (`"entity"`, a named projection, and
+  `nullable(...)` or `listOf(...)` of one): a method whose output is a
+  schema of its own sends what its handler returns to every caller its
+  access admits, so a tiered key in that schema (`email` in a hand-written
+  `{ id, name, email }`) reaches callers below its level. When a server is
+  made, each such method raises the development warning
+  `[quickdraw:tiered-field-in-output]` (thrown by
+  `createTestApp({ strictWarnings: true })`, so the test app fails to
+  start): answer `"entity"` or a projection, or leave the key out. Not
+  warned: a method whose access admits no caller below the field's level
+  (`{ service: "Admin" }` with the Admin bypass on, `{ entry: L }` with `L`
+  at the field's level or above), and an output without JSON Schema (Zod 3).
 - `affects` names rows of other services a write changes too
   (`{ service, id: column }`, or `{ service, id: (row) => ids, columns }`);
   they are sent again after the flush, one hop.
@@ -2717,16 +2729,17 @@ one format and names the method call it happened in:
 [quickdraw:n-plus-one] taskService.board: task.findUnique by id ran 10 times in one call, once per item (N+1); ...
 ```
 
-| Kind                 | Raised when                                                                                          |
-| -------------------- | ---------------------------------------------------------------------------------------------------- |
-| `n-plus-one`         | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])` |
-| `unbounded-read`     | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)           |
-| `oversized-response` | a reply was larger than `maxResponseBytes` (default 1 MiB)                                           |
-| `nested-write`       | a write's `data` wrote a related row, which is not tracked                                           |
-| `ambient-write`      | a tracked write ran outside any unit of work                                                         |
-| `batch-read`         | a write in an array-form `$transaction` read its rows outside the batch                              |
-| `batch-create-many`  | a `createMany` in an array-form `$transaction` could not report its rows                             |
-| `repeated-call`      | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                 |
+| Kind                     | Raised when                                                                                                                        |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `n-plus-one`             | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])`                               |
+| `unbounded-read`         | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)                                         |
+| `oversized-response`     | a reply was larger than `maxResponseBytes` (default 1 MiB)                                                                         |
+| `nested-write`           | a write's `data` wrote a related row, which is not tracked                                                                         |
+| `ambient-write`          | a tracked write ran outside any unit of work                                                                                       |
+| `batch-read`             | a write in an array-form `$transaction` read its rows outside the batch                                                            |
+| `batch-create-many`      | a `createMany` in an array-form `$transaction` could not report its rows                                                           |
+| `repeated-call`          | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                                               |
+| `tiered-field-in-output` | a method's own output schema names a field the contract tiers, which only projection outputs strip; raised when the server is made |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
@@ -2744,7 +2757,9 @@ fails: the call it happened in fails with `INTERNAL` and the error as its
 once the reply was recorded (over a socket or HTTP the reply was already
 sent, so that error is logged, not thrown). Strictness belongs to the app:
 warnings outside its calls (an ambient write while seeding, another app's
-calls) are logged as usual, and `app.close()` ends it.
+calls) are logged as usual, and `app.close()` ends it. The one raised when
+the app is made, `tiered-field-in-output`, is thrown from `createTestApp`
+itself, so a strict app over such a method does not start.
 
 A `repeated-call` warning names a client caught in a loop (a mutation fired
 from an effect that its own result runs again, a refetch that triggers

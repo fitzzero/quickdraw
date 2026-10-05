@@ -27,6 +27,7 @@ import { createRevocation, listenForChanges } from "./revocation";
 import { createVersionSource } from "./versions";
 
 export type { Presence, RoomLeave, RoomLeaveHandler, RoomLeaveHook, ServerRooms, StreamHandle };
+export type { ChangeLogOptions } from "./changeLog";
 
 type Sinks = ReturnType<typeof createEntitySinks>;
 

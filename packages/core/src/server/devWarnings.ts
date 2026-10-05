@@ -19,6 +19,9 @@
 // | `repeated-call`      | one connection called a method with the same input more than 10    | connection               |
 // |                      | times within a second, or was refused `RATE_LIMITED` more than 30  | (`refused <connection>`) |
 // |                      | times within a minute: a client in a loop (`createLoopWatch`)      |                          |
+// | `tiered-field-in-    | a method's own output schema names a field the contract tiers,     | the field                |
+// | output`              | which such an output never strips (`emit/tieredOutputs.ts`); raised|                          |
+// |                      | when a dispatcher is made, so a strict test app fails to start     |                          |
 //
 // `nested-write`, `ambient-write`, `batch-read` and `batch-create-many` are
 // the write tracker's (`uow/unitOfWork.ts`), raised exactly where they were
@@ -48,7 +51,8 @@ export type DevWarningKind =
   | "ambient-write"
   | "batch-read"
   | "batch-create-many"
-  | "repeated-call";
+  | "repeated-call"
+  | "tiered-field-in-output";
 
 /** One development warning. */
 export interface DevWarning {

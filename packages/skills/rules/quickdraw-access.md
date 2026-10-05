@@ -122,7 +122,12 @@ channel `requires`.
   below that level on the row, in replies and in live frames, so the row
   types a client reads (`useEntity`, collection items, `"entity"` outputs,
   `EntityOf`) make it optional: read it with a guard. A handler returns the
-  whole row.
+  whole row. Only projection outputs are stripped (`"entity"`, a named
+  projection, `nullable(...)`, `listOf(...)`): never name a tiered field
+  in a method's own output schema (`output: z.object({ id, email })`),
+  which sends it to every caller the method admits. Answer `"entity"`
+  instead. The server warns `[quickdraw:tiered-field-in-output]` when it
+  starts, and a strict test app fails to start.
 - The service's change topic (`qd:watch` on `"service"`) is closed unless
   the service declares `watchAccess` (`"public"`, `"authenticated"` or
   `{ service: L }`). A stream without `access` in its contract is closed.
