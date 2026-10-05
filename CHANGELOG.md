@@ -51,8 +51,8 @@ F10.4). No version moves until the release candidate is cut.
   declares a tiered key at any depth fails to start.
 - **`requireSession` checks the cookie's Origin.** A REST route that takes
   the session cookie from a page outside `allowedOrigins` (by default the
-  auth routes' list over the same session store) answers 403 `FORBIDDEN`
-  (Auth).
+  auth routes' list over the same session store object) answers 403
+  `FORBIDDEN` (Auth).
 - **An unknown outcome is not a refusal.** A mutation whose connection
   dropped after it was sent, or that timed out, keeps its optimistic items
   `pending` (and in `useCollection().checking`) until the scope's next load
@@ -161,8 +161,8 @@ F10.4). No version moves until the release candidate is cut.
   request without `Origin` is accepted unless `Sec-Fetch-Site` names
   another site; a bearer token is unaffected. The list is the new
   `allowedOrigins` option, by default that of the `createAuthRoutes`
-  writing to the same session store; with neither, no page may use the
-  cookie there. `cookieOriginAllowed(request, allowedOrigins)` on
+  writing to the same session store object; with neither, no page may use
+  the cookie there. `cookieOriginAllowed(request, allowedOrigins)` on
   `./server/auth` (type `CookieOriginRequest`) is the rule for a custom
   `authenticate` or route: the HTTP form, or the handshake's with
   `transport: "socket"`.

@@ -2478,17 +2478,20 @@ nothing is cached:
   session's token, for clients that keep no cookies (a game engine, a page
   in a third-party iframe), at the cost of the token being readable by the
   page's scripts.
-- `requireSession({ sessions, jwtSecret }, { loadPrincipal?, allowedOrigins? })`
+- `requireSession({ sessions, jwtSecret }, { loadPrincipal?, allowedOrigins?, logger? })`
   guards the app's own REST routes (below): the credential is read as `/me`
   reads it, the JWT verified once and the session checked in the store;
   otherwise 401 `{ error: "UNAUTHENTICATED", message }`. The session cookie
   gets the `/qd` calls' Origin rule: from an `Origin` outside
   `allowedOrigins` (by default the list of the `createAuthRoutes` writing to
-  the same `sessions`) it answers 403 `{ error: "FORBIDDEN", message }`, so
+  the same store object, `sessions`: a second store over the same table is
+  another object) it answers 403 `{ error: "FORBIDDEN", message }`, so
   another site's form cannot post to a route as the user; a request without
   `Origin` is accepted unless `Sec-Fetch-Site` names another site, and a
-  bearer token needs none. 4.1's `createRequireAuth` stays for token-keyed
-  sessions.
+  bearer token needs none. With neither list no page may use the cookie
+  there: the first refusal logs an error naming both fixes (to `logger`,
+  default the console), and a page in development is told them in the 403.
+  4.1's `createRequireAuth` stays for token-keyed sessions.
 - Rate limits: the sign-in routes share `createAuthLimiter({ max: 60 })` (60
   requests per 15 minutes per IP), the session routes
   `createAuthStatusLimiter()` (120), and `GET /providers` has

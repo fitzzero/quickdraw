@@ -97,8 +97,9 @@ service worker's renewal, an inbound webhook, the auth routes) never reach
 the database themselves: they sign the user in with `requireSession(keys)`
 from `@fitzzero/quickdraw-core/server/auth` (it answers 401 itself, and 403
 for the session cookie sent from a page outside the auth routes'
-`allowedOrigins`; pass `socketAuth`'s `loadPrincipal` too when the app
-builds its own principal) and call the method in process, so its
+`allowedOrigins`, which it finds by the same store object in `keys`, never a
+second store over the same table; pass `socketAuth`'s `loadPrincipal` too
+when the app builds its own principal) and call the method in process, so its
 validation, access check and tracked writes are a socket call's:
 
 ```ts
