@@ -73,8 +73,14 @@ export const taskContract = defineContract("taskService", {
       output: z.number(),
       watch: { collection: "board", scope: (input) => input.projectId },
     }),
+    /** `id` is one the client made, which the server keeps: a second call with it fails `CONFLICT`. */
     create: mutation({
-      input: z.object({ projectId: z.string(), title: z.string(), ordinal: z.number().optional() }),
+      input: z.object({
+        id: z.string().optional(),
+        projectId: z.string(),
+        title: z.string(),
+        ordinal: z.number().optional(),
+      }),
       output: "entity",
     }),
     /** Waits for the test's gate, as `create` does; the title "conflict" is refused with CONFLICT. */

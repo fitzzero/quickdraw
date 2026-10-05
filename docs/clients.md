@@ -56,6 +56,11 @@ A client implements, roughly in the order a game needs it:
 5. only for live rows: entity and collection subscriptions (`qd:sub`,
    `qd:col:sub`, `qd:e`, `qd:c`), applied by revision.
 
+Throughout, read only what you know: protocol 5 grows by adding fields to
+objects and appending elements to arrays, so a client that ignores the
+fields it does not know and the elements after the last one it reads
+keeps working when the server is upgraded.
+
 [`examples/godot`](../examples/godot) is such a client for Godot 4: one
 GDScript file of a few hundred lines, an autoload with signals for events,
 stream items and presence. CI runs it in Godot against a real server, and a

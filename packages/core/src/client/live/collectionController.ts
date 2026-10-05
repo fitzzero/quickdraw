@@ -28,6 +28,9 @@
 //   deltas keep them current.
 // - `qd:revoked` drops the state: access was revoked (`FORBIDDEN`) or the
 //   scope's anchor row was deleted (`NOT_FOUND`).
+// - A scope whose load was refused stays refused until a connect, or until
+//   the hub learns the user's access may have changed and refreshes it
+//   (`collections.ts`; finding F8.4 of the quickdraw-chat migration).
 // - Each new state tells the overlay store what it means for the items
 //   optimistic updates added to the scope (`settleAdditions`): one whose
 //   server id the state holds, or a delta named, or that a load sent after
@@ -98,6 +101,8 @@ export interface CollectionController {
   resume(reason: ResumeReason): void;
   /** Loads the scope again from scratch; resolves once that load settled. */
   refresh(): Promise<void>;
+  /** The scope's value: the id of the row it is anchored on, for a scope that has one. */
+  readonly scope: string;
   /** Loads the next page, if there is one. */
   loadMore(): Promise<void>;
   /** Loads the items of `ids` by id. Rejects with the server's error when it refuses. */
@@ -604,6 +609,7 @@ export function createCollectionController(
   const p = createPipeline(host, target, scope, limit);
   return Object.freeze({
     key: p.key,
+    scope,
     start: () => {
       load(p, "snapshot");
     },

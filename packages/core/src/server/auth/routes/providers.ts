@@ -38,6 +38,8 @@ export interface OAuthSignInProvider {
   readonly kind: "oauth";
   /** The provider's id: `{basePath}/{id}/start` and `{basePath}/{id}/callback`. */
   readonly id: string;
+  /** Its name on a sign-in button (`GET {basePath}/providers`). Default: its id. */
+  readonly name?: string;
   /** The provider's authorization URL for a sign-in with this `state`. */
   authorizeUrl(state: string, redirectUri: string): string;
   /** Exchanges the callback's `code` and reads the user's profile. */
@@ -141,6 +143,7 @@ export function google(options: OAuthClientOptions): OAuthSignInProvider {
   return Object.freeze({
     kind: "oauth",
     id: "google",
+    name: "Google",
     authorizeUrl: client.url,
     async profile(code: string, redirectUri: string): Promise<AuthProfile> {
       const { tokens, user } = await exchangeOAuthCode(
@@ -182,6 +185,7 @@ export function discord(options: OAuthClientOptions): OAuthSignInProvider {
   return Object.freeze({
     kind: "oauth",
     id: "discord",
+    name: "Discord",
     authorizeUrl: client.url,
     async profile(code: string, redirectUri: string): Promise<AuthProfile> {
       const { tokens, user } = await exchangeOAuthCode(

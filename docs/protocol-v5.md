@@ -255,6 +255,13 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
 - When the handshake is refused, reconnecting with the same client and
   credentials is refused again: `PROTOCOL_MISMATCH` needs a client that
   speaks the server's protocol, `UNAUTHENTICATED` other credentials.
+- Ignore what you do not know, in every frame: an object field you do not
+  read, and an array element after the last one you read (`qd:event`,
+  `qd:stream`). Protocol 5 grows only that way: a later revision may add
+  fields to objects and append elements to arrays, never remove, rename,
+  retype or reorder them, so a client that reads only what it knows keeps
+  working against a newer server. The server reads what a client sends the
+  same way. Any other change takes a new `protocol` number.
 
 ## Frame types
 
@@ -650,7 +657,7 @@ One of:
 `qd:stream`: an item pushed to a stream, as one array argument
 `[service, stream, scope, item]` (like `qd:event`), so a fast stream sends
 no key names: `scope` is `null` for a global stream. The positions are
-fixed; a later protocol may append elements after `item`, never insert
+fixed; a later revision may append elements after `item`, never insert
 them, so a client reads the four it knows and ignores the rest. Before
 `5.0.0-rc.4` it was the object `{ s, stream, scope?, item }`.
 
@@ -665,7 +672,9 @@ A JSON array:
 
 #### `ChannelFrame`
 
-`qd:ch`, sent volatile and never acknowledged: `[service, channel, payload]`.
+`qd:ch`, sent volatile and never acknowledged: `[service, channel,
+payload]`. A later revision may append elements after `payload`; the
+server reads the three it knows and ignores the rest.
 
 A JSON array:
 
@@ -677,7 +686,9 @@ A JSON array:
 
 #### `EventFrame`
 
-`qd:event`: a custom room event declared in a contract's `events`: `[service, event, payload]`.
+`qd:event`: a custom room event declared in a contract's `events`:
+`[service, event, payload]`. A later revision may append elements after
+`payload`; a client reads the three it knows and ignores the rest.
 
 A JSON array:
 

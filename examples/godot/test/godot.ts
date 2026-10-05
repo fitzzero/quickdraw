@@ -4,7 +4,10 @@
 // the PATH), sends `qd:rotate` (a window of `ROTATE_WITHIN_MS`, which the
 // script knows too) when the script asks, and passes when every
 // check of the script held and the client wrote exactly the frames of
-// `frames.ts`, the ones the Node wire test writes too.
+// `frames.ts`, the ones the Node wire test writes too. It also plays a newer
+// server, as a later revision of protocol 5 may be (docs/protocol-v5.md, "What
+// a client must do"): every `qd:hello` carries a field more, and when the
+// script asks it sends frames with elements appended and fields added.
 
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -27,6 +30,28 @@ interface Run {
   readonly result: { readonly checks?: number; readonly failures?: readonly string[] } | undefined;
 }
 
+/** Adds a field to every `qd:hello` the server sends, as a later revision of protocol 5 may. */
+function helloWithFieldMore(server: GameServer): void {
+  server.server.io.use((socket, next) => {
+    const emit = socket.emit.bind(socket) as (event: string, ...args: unknown[]) => boolean;
+    (socket as unknown as { emit: typeof emit }).emit = (event, ...args) =>
+      event === "qd:hello"
+        ? emit(event, { ...(args[0] as object), future: { added: true } }, ...args.slice(1))
+        : emit(event, ...args);
+    next();
+  });
+}
+
+/** Frames a later revision of protocol 5 may send: an element appended to arrays, a field added to objects. */
+function sendLaterRevision(server: GameServer): void {
+  const { io } = server.server;
+  io.emit("qd:stream", ["gameService", "ticks", null, { n: 101 }, "future", { y: 2 }]);
+  io.emit("qd:event", ["gameService", "moved", { userId: "bo", dx: 7, dy: 0 }, "future"]);
+  io.emit("qd:presence", { room: "world:main", users: ["ada", "bo"], future: 1 });
+  io.emit("qd:changed", { s: "gameService", topic: "service", rev: 1, future: 2 });
+  io.emit("qd:revoked", { kind: "entity", reason: "access", s: "gameService", id: "x", future: 3 });
+}
+
 /** Runs `smoke.gd` against `server`, echoing Godot's output and answering its `STEP` lines. */
 function runGodot(server: GameServer): Promise<Run> {
   const godot = process.env.GODOT ?? "godot";
@@ -42,6 +67,8 @@ function runGodot(server: GameServer): Promise<Run> {
       sent.push(line.slice(3));
     } else if (line === "STEP rotate") {
       server.server.rotate({ withinMs: ROTATE_WITHIN_MS });
+    } else if (line === "STEP later") {
+      sendLaterRevision(server);
     } else if (line.startsWith("RESULT ")) {
       result = JSON.parse(line.slice("RESULT ".length)) as Run["result"];
     }
@@ -70,6 +97,7 @@ function differences(sent: readonly string[]): string[] {
 
 async function main(): Promise<number> {
   const server = await startServer();
+  helloWithFieldMore(server);
   try {
     const run = await runGodot(server);
     const problems = [

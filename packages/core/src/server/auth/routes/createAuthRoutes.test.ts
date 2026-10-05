@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import express from "express";
 import { describe, expect, it, vi } from "vitest";
 import { INTERNAL_MESSAGE, QuickdrawError } from "../../../protocol/errors";
+import { captureLogger } from "../../__tests__/fixtures";
 import { createAuthLimiter } from "../../express/rateLimit";
 import { createJWT } from "../jwt";
 import {
@@ -777,5 +778,142 @@ describe("the options", () => {
     expect(new URL(locationOf(response)).searchParams.get("redirect_uri")).toBe(
       "https://api.test/v1/auth/mock/callback",
     );
+  });
+});
+
+describe("the providers it serves (findings F9.1, F10.1 and F10.3)", () => {
+  const sessions = createMemorySessionStore();
+  const base = {
+    sessions,
+    jwtSecret: SECRET,
+    onLogin: () => "u",
+    allowedOrigins: [APP_ORIGIN],
+    publicUrl: "https://api.test",
+    rateLimit: false as const,
+  };
+
+  /** Mounts the routes made with `providers`, and answers their list as served over HTTP. */
+  async function served(providers: Parameters<typeof createAuthRoutes>[0]["providers"]) {
+    const logger = captureLogger();
+    const routes = createAuthRoutes({ ...base, providers, logger });
+    const app = express();
+    app.use(routes);
+    const { server, url } = await listen(app);
+    harness.servers.push(server);
+    const answer = async () => {
+      const response = await get(`${url}/auth/providers`);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      return (await response.json()) as unknown;
+    };
+    return { routes, answer, logger };
+  }
+
+  it("lists every sign-in it serves, in order, with a name and a kind, the mock while it is enabled", async () => {
+    vi.stubEnv("ENABLE_MOCK_OAUTH", "true");
+    const all = [
+      { id: "google", name: "Google", kind: "oauth" },
+      { id: "discord", name: "Discord", kind: "oauth" },
+      { id: "mock", name: "Mock", kind: "mock" },
+      { id: "guest", name: "Guest", kind: "guest" },
+      { id: "acme", name: "Acme ID", kind: "oauth" },
+      { id: "plain", name: "plain", kind: "oauth" },
+    ];
+    const own = (id: string, name?: string) => ({
+      kind: "oauth" as const,
+      id,
+      ...(name === undefined ? {} : { name }),
+      authorizeUrl: () => "https://id.test/authorize",
+      profile: () => Promise.reject(new Error("unused")),
+    });
+    const { routes, answer, logger } = await served([
+      google({ clientId: "a", clientSecret: "b" }),
+      discord({ clientId: "c", clientSecret: "d" }),
+      mock({ listUsers: () => Promise.resolve([]) }),
+      guest({ createUser: () => "g" }),
+      own("acme", "Acme ID"),
+      own("plain"),
+    ]);
+    expect(await answer()).toEqual({ providers: all });
+    expect(routes.providers()).toEqual(all);
+    // The mock's routes refuse once it is off, and the list says so.
+    vi.stubEnv("ENABLE_MOCK_OAUTH", "false");
+    expect(await answer()).toEqual({ providers: all.filter((entry) => entry.id !== "mock") });
+    expect(logger.at("warn")).toEqual([]);
+  });
+
+  it("lists none where nothing can sign in, and says so when it is made; one where one can", async () => {
+    vi.stubEnv("ENABLE_MOCK_OAUTH", "false");
+    const none = await served([
+      google.optional({ clientId: undefined, clientSecret: undefined }),
+      mock({ listUsers: () => Promise.resolve([]) }),
+    ]);
+    expect(await none.answer()).toEqual({ providers: [] });
+    expect(none.logger.at("warn").map((entry) => entry.message)).toEqual([
+      expect.stringContaining("createAuthRoutes: no provider can sign anyone in"),
+    ]);
+    const one = await served([guest({ createUser: () => "g" })]);
+    expect(await one.answer()).toEqual({
+      providers: [{ id: "guest", name: "Guest", kind: "guest" }],
+    });
+  });
+});
+
+describe("a loopback publicUrl (findings F9.2 and F10.2)", () => {
+  const sessions = createMemorySessionStore();
+  const options = {
+    providers: [guest({ createUser: () => "g" })],
+    sessions,
+    jwtSecret: SECRET,
+    onLogin: () => "u",
+    publicUrl: "http://localhost:5016",
+    rateLimit: false as const,
+  };
+
+  it("warns when it is made for public pages, and logs one error when a request arrives for another host", async () => {
+    const logger = captureLogger();
+    const app = express();
+    app.use(createAuthRoutes({ ...options, allowedOrigins: ["https://chat.acme.dev"], logger }));
+    expect(logger.at("warn").map((entry) => entry.message)).toEqual([
+      "createAuthRoutes: publicUrl is http://localhost:5016, but allowedOrigins lists only public pages (https://chat.acme.dev): a sign-in started from them redirects to an address only this machine reaches. Set publicUrl to the API's public URL.",
+    ]);
+    const { server, url } = await listen(app);
+    harness.servers.push(server);
+    // Requests for this machine are fine; the first for a public host is logged, once.
+    await get(`${url}/auth/me`);
+    expect(logger.at("error")).toEqual([]);
+    for (let round = 0; round < 2; round += 1) {
+      await get(`${url}/auth/me`, undefined, { "x-forwarded-host": "chat-api.acme.dev" });
+    }
+    expect(logger.at("error")).toEqual([
+      {
+        level: "error",
+        message:
+          "createAuthRoutes: publicUrl is http://localhost:5016, but requests arrive for chat-api.acme.dev: set publicUrl to the API's public URL (sign-in redirects are built from it)",
+        meta: {
+          category: "quickdraw.auth",
+          publicUrl: "http://localhost:5016",
+          host: "chat-api.acme.dev",
+        },
+      },
+    ]);
+  });
+
+  it("says nothing for a development setup on this machine, or a public publicUrl", async () => {
+    const local = captureLogger();
+    createAuthRoutes({ ...options, allowedOrigins: ["http://localhost:3000"], logger: local });
+    const deployed = captureLogger();
+    const app = express();
+    app.use(
+      createAuthRoutes({
+        ...options,
+        publicUrl: "https://chat-api.acme.dev",
+        allowedOrigins: ["https://chat.acme.dev"],
+        logger: deployed,
+      }),
+    );
+    const { server, url } = await listen(app);
+    harness.servers.push(server);
+    await get(`${url}/auth/me`, undefined, { "x-forwarded-host": "chat-api.acme.dev" });
+    expect([local.entries, deployed.entries]).toEqual([[], []]);
   });
 });

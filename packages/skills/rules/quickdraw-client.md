@@ -44,10 +44,12 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   `hello.serverId` changes when the server restarts (or the socket lands
   on another node): compare it to tell a new server from a network blip.
 - Sign-in and out in the browser go through the auth routes kit's routes:
-  `signInUrl(provider, { returnTo })` is the provider button's link,
-  `signOut()` and `signOutEverywhere()` end the session (they reject when
-  refused). Never call `/auth/...` by hand; 4.x's `getOAuthUrl`, `logout`
-  and `logoutAllDevices` are gone.
+  `authProviders()` lists the sign-ins the API serves (render a button for
+  those only, never from build-time flags), `signInUrl(provider, {
+returnTo })` is the provider button's link, `signOut()` and
+  `signOutEverywhere()` end the session (they reject when refused). Never
+  call `/auth/...` by hand; 4.x's `getOAuthUrl`, `logout` and
+  `logoutAllDevices` are gone.
 
 ## Reading
 
@@ -100,7 +102,13 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   copy. Never render a mutation's `variables` as a fake row instead. To
   offer "retry" on a failed send, add it with `{ onRefused: "keep" }`: a
   refused item moves to `useCollection().refused` (`item`, `error`,
-  `dismiss()`, `retry()`), never kept by hand.
+  `dismiss()`, `retry()`), never kept by hand. Give such an item an id the
+  client makes and the server keeps (`crypto.randomUUID()` in the input,
+  written by the create): after a dropped connection or a timeout the
+  server may have written it (`useCollection().checking` names it until the
+  scope's next load says), and only that id lets the load find it and makes
+  `retry()` safe, since the second call fails `CONFLICT` instead of writing
+  twice.
 - Never refetch or invalidate after a mutation by hand: the frames update
   live rows and collections, and watched queries refetch themselves. For
   anything else use `qd.invalidate(qd.task.stats, input?)`, never

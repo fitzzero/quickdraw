@@ -531,7 +531,9 @@ export type Card = ItemOf<typeof taskContract, "board">;
 
 `InputOf`, `ParsedInputOf`, `OutputOf`, `EntityOf`, `ProjectionOf`,
 `ItemOf`, `ScopeOf`, `IndexRowOf`, `ViewName` and the rest are exported from
-the package root.
+the package root. `FullProjectionOf<C, P>` is a projection's full row (what
+a handler builds, every tiered field present), and `ReceivedRow<C, Row>`
+makes a row's tiered fields optional, as a reader receives it.
 
 ## Services
 
@@ -587,9 +589,21 @@ export const taskService = qd.defineService(task, {
 - Every call runs a pipeline: look up, concurrency (16 queries in flight per
   socket and 64 queued, then `RATE_LIMITED`; mutations are not queued behind
   queries), input validation, access, "not modified", sharing, the handler
-  under a time limit (30 s by default), output validation outside
-  production, the reply, the flush, and one completion record (`onCall`).
-  A mutation ignores the caller's cancel: only its time limit stops it.
+  under a time limit (30 s by default), the result shaped to its output
+  (below), output validation outside production, the reply, the flush, and
+  one completion record (`onCall`). A mutation ignores the caller's cancel:
+  only its time limit stops it.
+- A method's output is sent as it declares it, on every transport and in
+  production too, so a handler may return the whole row: a projection
+  output (`"entity"`, a named projection) sends the projection's keys,
+  stripped per caller (below), and an output schema of the method's own
+  sends what its JSON Schema declares (Zod 4.2 or later). An object keeps
+  the keys its `properties` declare, and every key only where
+  `additionalProperties` allows them (`z.looseObject`, `.catchall`) or it is
+  a record; an array keeps its items, each reduced by its item schema; a
+  union keeps what any branch declares; a value the schema allows to be
+  anything (`z.unknown()`, a `Date`) goes as it is. An output schema
+  without JSON Schema (Zod 3) is sent as the handler returns it.
 
 Errors are `QuickdrawError(code, message, data?)`. Anything else a handler
 throws reaches the caller as `INTERNAL` with a generic message, and is
@@ -753,18 +767,16 @@ tracked client as `db`; the server finds the rest on it.
   recorded with its row ids, merged per row, and handed to the flush sinks
   once the response has been sent, with one revision per flush. A handler
   may return `db.task.update(...)` without awaiting it.
-- A write that changed nothing is not recorded, so it sends no frame, no
-  collection delta, no topic change and no `refreshEntry`: an
-  `updateMany`, `updateManyAndReturn` or `deleteMany` that matched no row;
-  a `data` (or an upsert's `update`) with nothing to write, `{}`; and an
-  update that sets only columns the framework reads before writing (scope,
-  `where`, membership, owner and access columns) to the values they held.
-  An upsert with `update: {}` ("make sure this row exists") reads the row
+- A write that certainly changed nothing is not recorded, so it sends no
+  frame, no collection delta, no topic change and no `refreshEntry`: an
+  `updateMany`, `updateManyAndReturn` or `deleteMany` that matched no row,
+  and a `data` (or an upsert's `update`) with nothing to write, `{}`. An
+  upsert with `update: {}` ("make sure this row exists") reads the row
   first in its place: one statement when the row is there, and the upsert
-  after it when it is not. A write that sets any other column is recorded
-  whatever it wrote, since its old value was never read; the `@updatedAt`
-  column Prisma moves on an unchanged write is not signalled, as no write's
-  is on its own.
+  after it when it is not. Every other write is recorded, one that sets a
+  column to the value it already held too: the values the framework reads
+  before a write cannot prove it changed nothing, since another write may
+  land between that read and the write.
 - Writes inside `db.$transaction` join the unit only when it commits; a
   rollback drops them. Prefer the interactive form
   (`db.$transaction(async (tx) => ...)`): an array-form
@@ -891,22 +903,26 @@ export const taskService = qd.defineService(task, {
 - A projection's keys come from its schema's JSON Schema (Zod 4.2 or later),
   or from `project: { <name>: { keys } }`; a service whose projection has
   neither fails when it is defined. A handler returning a projection returns
-  rows (a `Date` is fine where the wire has a string, extra columns are
-  dropped); with `map`, it returns what `map` takes.
+  rows (a `Date` is fine where the wire has a string, a Prisma `Json` column
+  (`JsonColumnValue`) where it has an object, an array or a record, and
+  extra columns are dropped); with `map`, it returns what `map` takes.
 - Fields the contract's `fields` map puts above the caller's level on a row
   are stripped from that caller's copy, after any shared run. Only a
-  projection output is stripped (`"entity"`, a named projection, and
-  `nullable(...)` or `listOf(...)` of one): a method whose output is a
-  schema of its own sends what its handler returns to every caller its
-  access admits, so a tiered key in that schema (`email` in a hand-written
-  `{ id, name, email }`) reaches callers below its level. When a server is
-  made, each such method raises the development warning
-  `[quickdraw:tiered-field-in-output]` (thrown by
-  `createTestApp({ strictWarnings: true })`, so the test app fails to
-  start): answer `"entity"` or a projection, or leave the key out. Not
-  warned: a method whose access admits no caller below the field's level
-  (`{ service: "Admin" }` with the Admin bypass on, `{ entry: L }` with `L`
-  at the field's level or above), and an output without JSON Schema (Zod 3).
+  projection output is stripped per caller (`"entity"`, a named projection,
+  and `nullable(...)` or `listOf(...)` of one): a method whose output is a
+  schema of its own sends what that schema declares to every caller its
+  access admits, so a tiered key the schema declares, at any depth (`email`
+  in a hand-written `{ id, name, email }`, or in `{ user: { id, email } }`),
+  reaches callers below its level. When a server is made, each such method
+  raises the development warning `[quickdraw:tiered-field-in-output]`
+  (thrown by `createTestApp({ strictWarnings: true })`, so the test app
+  fails to start): answer `"entity"` or a projection, or drop the key from
+  the schema. Not warned: a method whose access admits no caller below the
+  field's level (`{ service: "Admin" }` with the Admin bypass on,
+  `{ entry: L }` with `L` at the field's level or above), and a kit's
+  methods, which strip their own replies. An output without JSON Schema
+  (Zod 3) cannot be reduced, so in development each tiered key its replies
+  carry raises the warning when a reply first carries it.
 - `affects` names rows of other services a write changes too
   (`{ service, id: column }`, or `{ service, id: (row) => ids, columns }`);
   they are sent again after the flush, one hop.
@@ -1034,8 +1050,9 @@ export const taskService = qd.defineService(task, {
   whenever any row of the service does, or a row of a model it lists in
   `writes` (a game's high scores, which no service owns). A query declares
   `watch: "service"` to be invalidated by it. A query over some of those
-  models names them, `watch: { service: ["gameScore"] }` (the service's
-  `model` and models in its `writes`; `defineService` refuses others), and
+  models names them, `watch: { service: ["gameScore"] }` (type
+  `ServiceModelsWatch`; the service's `model` and models in its `writes`;
+  `defineService` refuses others), and
   is invalidated only after a flush that wrote one of them: high scores are
   not read again when a chat membership the same service writes changes.
   It is the same topic: its `qd:changed` frame names the models that
@@ -1288,7 +1305,13 @@ export function TaskDetail({ id }: { readonly id: string }) {
   items loaded, and `loadMore`/`loadItems`; `view` filters the members by a
   view of the contract, for the user the server's hello names; `load: "all"`
   keeps every page loaded. A `null` scope holds nothing; `enabled: false`
-  subscribes to nothing.
+  subscribes to nothing. A scope the server refused shows its `error`
+  (`FORBIDDEN`) and is loaded once more each time the user's access may
+  have changed: on a connect, on new service grants (`qd:access`), and when
+  another scope the client holds gets an `added` delta for the scope's
+  anchor row (an invite adds the chat to the user's own list of chats, and
+  the chat's messages open). A row-level grant with neither sends nothing
+  the client could notice: remount the view, or call `refresh()`.
 - The cache follows the user: a hello naming another user removes everything
   quickdraw cached; new credentials for the same user refetch it; new grants
   (`qd:access`) refetch every query.
@@ -1308,11 +1331,23 @@ last), and `useCollection`'s `pending` names it while the call is in flight.
 A refused call removes it, unless it was added with `{ onRefused: "keep" }`
 (`cache.addItem(collection, scope, item, { onRefused: "keep" })`, or the
 same for `addEntity`): it then leaves `items` for `useCollection`'s
-`refused`, each `{ item, error, dismiss(), retry() }`, until the app
-dismisses it or sends the same call again with `retry()` (which shows it
-`pending` again, and never rejects: a second refusal shows in `refused`
-again), so a chat shows a failed message with "retry" without a copy of
-its own. The reply's `id` (the created row's) and values
+`refused`, each `{ item, error, dismiss(), retry() }`, in the render that
+shows the mutation's error, until the app dismisses it or sends the same
+call again with `retry()` (through the mutation hook that sent it, so its
+`isPending` and callbacks follow; it shows the item `pending` again, and
+never rejects: a second refusal shows in `refused` again), so a chat shows
+a failed message with "retry" without a copy of its own. A call whose outcome is unknown is not refused: when the
+connection drops after the call was sent, or it times out, the server may
+have made the write (`isUnknownOutcome(error)` on `./client` says so). Its
+items stay, `pending`, and `useCollection`'s `checking` names them until
+the scope's next load (the reconnect's resume, or a load asked for at once
+while the socket is up): a load that holds an item's id ends it, its own
+copy shown, and one sent after the failure that answers without it refuses
+it (into `refused` with `onRefused: "keep"`). Only an id the client made,
+which the server keeps, can be found that way, and only with one is
+`retry()` safe after an unknown outcome: the second call fails `CONFLICT`
+instead of writing a second row. A refused item ends too once its scope
+holds its id. The reply's `id` (the created row's) and values
 replace the item's own, and once the scope's own copy arrives (its `added`
 delta, or a load) that copy shows in its place: never both, never a gap.
 `cache.addEntity(row)` adds a row to every collection of entity rows whose
@@ -2004,7 +2039,8 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   what runs in memory (a game's simulation) there, so an edit that rolled
   back is never applied. Without either hook the kit opens no transaction.
   Each handler `admin.handlers` returns resolves with its method's output
-  type, so a wrapper reads the row and returns it with no cast.
+  type (`AdminOutputOf<C, M>`), so a wrapper reads the row and returns it
+  with no cast.
 - `adminSubscribers({ id })` counts the sockets subscribed to a row per
   access level (`{ id, count, levels, complete }`; behind a Redis adapter
   the counts are this server's and `complete` is `false`), and
@@ -2170,8 +2206,8 @@ export function TaskRoom({
   leaves the feed and gets
   `qd:revoked { kind: "stream", reason: "access", s, stream, scope? }`, and
   `useStream` shows `FORBIDDEN` until the next connect.
-- A service's `streams: { <name>: { seed, validate } }` computes a stream's
-  seed per subscriber, `seed: (scope, ctx) => items` (the current state,
+- A service's `streams: { <name>: { seed, validate } }` (type
+  `StreamImplementation`) computes a stream's seed per subscriber, `seed: (scope, ctx) => items` (the current state,
   where the items that follow are deltas; on whichever node the subscriber
   is on, under its principal, in the tick it joins the feed; a contract
   `seed: n` and a seed function cannot both be declared), and
@@ -2192,7 +2228,8 @@ export function TaskRoom({
   limiter does not count channels. `{ room: { prefix: "world:" } }` takes
   a socket in any app room whose name starts with the prefix (a game of many
   worlds), and every room form gives the handler the room it matched as
-  `ctx.room`, so the payload need not repeat it. Every requirement is the
+  `ctx.room` (typed `ChannelRoomOf<C, Name>`: `string` for a channel that
+  requires a room, else `undefined`), so the payload need not repeat it. Every requirement is the
   sending socket's own: a room another socket of the user joined does not
   count, a reconnected socket must join again, and behind a cluster the
   check runs on the node the socket is connected to, with no round trip.
@@ -2273,8 +2310,9 @@ export function hasAudience(projectId: string): boolean {
   the node that held the socket: its own `leave` (`reason: "leave"`), a
   removal (`"removed"`), or a disconnect, which leaves every app room it was
   in (`"disconnect"`; `qd:rotate` reconnects with a new socket). Each room
-  comes with `last`: true when no socket of that user is in the room any
-  more, on any node, which is what a game's `playerLeft` waits for. It runs
+  (a `RoomLeft`) comes with `last`: true when no socket of that user is in
+  the room any more, on any node, which is what a game's `playerLeft` waits
+  for. It runs
   in a unit of work of its own (never the unit of the handler that left), a
   throw is logged, and `close()` waits for it. Behind a cluster `last` is
   decided by asking every node once the socket left, so two sockets of one
@@ -2309,8 +2347,8 @@ const allowedOrigins = [env.CLIENT_URL];
 const sessions = createMemorySessionStore();
 
 export const app: Express = express();
-// behind a proxy, so the rate limits see the client's IP
-app.set("trust proxy", 1);
+// behind a proxy, so the rate limits see the client's IP; with none, a client would pick its own
+app.set("trust proxy", env.TRUST_PROXY);
 // a web app on another origin also needs CORS with credentials on these routes
 app.use(
   createAuthRoutes({
@@ -2366,6 +2404,7 @@ nothing is cached:
 | `GET /{provider}/start?returnTo=<url>` | 302 to the provider                                                                                                   |
 | `GET /{provider}/callback`             | 302 to `{origin}{successPath}` with the session cookie, or to `{origin}{errorPath}?error=state`, `denied` or `failed` |
 | `POST /guest`                          | `createUser(body)`, then `{ userId, name? }` with the session cookie (and `token` with `guest({ token: true })`)      |
+| `GET /providers`                       | `{ providers: [{ id, name, kind }] }`: the sign-ins served now (`routes.providers()` on the server)                   |
 | `GET /me`                              | `{ userId }`, or 401                                                                                                  |
 | `POST /logout`                         | 204: revokes the session, clears the cookie                                                                           |
 | `POST /logout-all`                     | 204: revokes every session of the user; 401 without a live session                                                    |
@@ -2420,8 +2459,9 @@ nothing is cached:
   when `Sec-Fetch-Site` names another site). Bearer tokens need no Origin
   on either transport. An app's own `authenticate` learns where an HTTP
   call's token came from in `request.credential` (`"cookie"` or
-  `"bearer"`), and a `QuickdrawError("FORBIDDEN")` it throws on HTTP is
-  answered as it is.
+  `"bearer"`, type `HttpCredentialSource`), applies the same rule with
+  `cookieOriginAllowed(request, allowedOrigins)`, and a
+  `QuickdrawError("FORBIDDEN")` it throws on HTTP is answered as it is.
 - `socketAuth({ devCredentials })` signs a socket in by the user id its
   handshake names (`auth: { userId }`, no token), as the function answers
   (the principal, or `null` to refuse): for a game editor or load-test bots
@@ -2438,11 +2478,17 @@ nothing is cached:
   session's token, for clients that keep no cookies (a game engine, a page
   in a third-party iframe), at the cost of the token being readable by the
   page's scripts.
-- `requireSession({ sessions, jwtSecret }, { loadPrincipal? })` guards the
-  app's own REST routes (below): the credential is read as `/me` reads it,
-  the JWT verified once and the session checked in the store; otherwise
-  401 `{ error: "UNAUTHENTICATED", message }`. 4.1's `createRequireAuth`
-  stays for token-keyed sessions.
+- `requireSession({ sessions, jwtSecret }, { loadPrincipal?, allowedOrigins? })`
+  guards the app's own REST routes (below): the credential is read as `/me`
+  reads it, the JWT verified once and the session checked in the store;
+  otherwise 401 `{ error: "UNAUTHENTICATED", message }`. The session cookie
+  gets the `/qd` calls' Origin rule: from an `Origin` outside
+  `allowedOrigins` (by default the list of the `createAuthRoutes` writing to
+  the same `sessions`) it answers 403 `{ error: "FORBIDDEN", message }`, so
+  another site's form cannot post to a route as the user; a request without
+  `Origin` is accepted unless `Sec-Fetch-Site` names another site, and a
+  bearer token needs none. 4.1's `createRequireAuth` stays for token-keyed
+  sessions.
 - Rate limits: the sign-in routes share `createAuthLimiter({ max: 60 })` (60
   requests per 15 minutes per IP) and the session routes
   `createAuthStatusLimiter()` (120); pass `rateLimit: { signIn, session }`
@@ -2456,7 +2502,14 @@ nothing is cached:
 - The mock provider is mounted only while `isMockOAuthEnabled()`
   (`ENABLE_MOCK_OAUTH=true` and `NODE_ENV` other than `production`), and
   every request checks again. Set `mock({ internalUrl })` where the API
-  cannot reach itself at `publicUrl`.
+  cannot reach itself at `publicUrl`. Routes made with nothing that can
+  sign anyone in (only a mock that is off) warn when they are made.
+- `publicUrl` is where providers send the browser back, so a deployment
+  must set it to the API's public URL. A loopback `publicUrl`
+  (`http://localhost:4000`, the usual fallback for an unset `API_URL`)
+  warns when the routes are made if every allowed origin is a page on
+  another machine, and the first request that arrives for another host
+  (`X-Forwarded-Host`, else `Host`) logs an error naming it, once.
 - One rule names the session cookie, written and read: the routes,
   `setSessionCookie`, `socketAuth` and the HTTP transport give a request
   the same name, and read first the name they would set on it. Without a
@@ -2487,10 +2540,13 @@ nothing is cached:
   session for an app's own sign-in flow (login codes, an embedded activity),
   and `liveSession` reads a token back; both work with `socketAuth`.
 
-From the browser, `./client` speaks to these routes: `signInUrl(provider,
-{ apiUrl, returnTo })` is the start route's URL (to navigate to; `returnTo`
-defaults to the current page's origin), and `signOut()` and
-`signOutEverywhere()` post to `logout` and `logout-all`. Each POST sends the
+From the browser, `./client` speaks to these routes: `authProviders({
+apiUrl })` lists the sign-ins the API serves (`GET /providers`: a provider
+`google.optional` built nothing for is not in it, nor the mock where it is
+off), so a login page shows only those, whatever the web app was built
+with; `signInUrl(provider, { apiUrl, returnTo })` is the start route's URL
+(to navigate to; `returnTo` defaults to the current page's origin), and
+`signOut()` and `signOutEverywhere()` post to `logout` and `logout-all`. Each POST sends the
 session cookie (`credentials: "include"`, so the API's CORS must allow the
 web app's origin with credentials) with `Content-Type: application/json`,
 and the token `setAuthToken` stored, if any, as a bearer token; the stored
@@ -2503,8 +2559,23 @@ signing out (with a token in `auth`, clearing it does that):
 
 ```tsx
 export function SignIn() {
-  // the kit's GET /auth/google/start: back to this page's origin with the session cookie
-  return <a href={signInUrl("google", { apiUrl: API_URL })}>Sign in with Google</a>;
+  // GET /auth/providers: only the sign-ins this API serves (no Google button without its keys)
+  const { data: providers = [] } = useQuery({
+    queryKey: ["auth", "providers"],
+    queryFn: () => authProviders({ apiUrl: API_URL }),
+  });
+  return (
+    <nav>
+      {providers
+        .filter((provider) => provider.kind !== "guest")
+        .map((provider) => (
+          // the kit's GET /auth/{id}/start: back to this page's origin with the session cookie
+          <a key={provider.id} href={signInUrl(provider.id, { apiUrl: API_URL })}>
+            {`Sign in with ${provider.name}`}
+          </a>
+        ))}
+    </nav>
+  );
 }
 
 export function SignOut() {
@@ -2645,8 +2716,8 @@ it("sends a rename to the other members' boards", async () => {
   real socket (`{ call, socket, hello, close }`); both are keyed by service
   name. `app.frames(match?)` lists every frame the server sent, with its
   socket and user; `frames.waitFor(match)` waits for one. A query of one
-  event takes `where`, a predicate over its frames typed by the event
-  (`{ event: "qd:presence", where: ({ data }) => data.joined === id }`), and
+  event (`EventQuery`) takes `where`, a predicate over its frames typed by
+  the event (`{ event: "qd:presence", where: ({ data }) => data.joined === id }`), and
   `streamFrames(contract, stream, where?, scope?)` and
   `eventFrames(contract, event, where?)` match one stream's items or one
   event's payloads, typed by the contract, to spread beside `socketId` or
@@ -2684,8 +2755,9 @@ it("lets the owner rename, members read, and nobody else in", async () => {
 `"deny"` (the default for everyone `allow` does not name) means
 `UNAUTHENTICATED` without a principal and `FORBIDDEN` with one. Mutations run
 for real, once per allowed principal: give inputs that can run again, or
-`input` as a function of the cell (`({ name, principal }) => input`, sync or
-async), called before each cell's call, that makes a row of its own (a task
+`input` as a function of the cell (a `MatrixInputFactory` of the
+`MatrixCell` `{ name, principal }`, sync or async), called before each
+cell's call, that makes a row of its own (a task
 to delete, an unused name), so no cell depends on the order of the
 principals.
 
@@ -2758,17 +2830,17 @@ one format and names the method call it happened in:
 [quickdraw:n-plus-one] taskService.board: task.findUnique by id ran 10 times in one call, once per item (N+1); ...
 ```
 
-| Kind                     | Raised when                                                                                                                        |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `n-plus-one`             | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])`                               |
-| `unbounded-read`         | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)                                         |
-| `oversized-response`     | a reply was larger than `maxResponseBytes` (default 1 MiB)                                                                         |
-| `nested-write`           | a write's `data` wrote a related row, which is not tracked                                                                         |
-| `ambient-write`          | a tracked write ran outside any unit of work                                                                                       |
-| `batch-read`             | a write in an array-form `$transaction` read its rows outside the batch                                                            |
-| `batch-create-many`      | a `createMany` in an array-form `$transaction` could not report its rows                                                           |
-| `repeated-call`          | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                                               |
-| `tiered-field-in-output` | a method's own output schema names a field the contract tiers, which only projection outputs strip; raised when the server is made |
+| Kind                     | Raised when                                                                                                                                                                                        |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `n-plus-one`             | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])`                                                                                               |
+| `unbounded-read`         | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)                                                                                                         |
+| `oversized-response`     | a reply was larger than `maxResponseBytes` (default 1 MiB)                                                                                                                                         |
+| `nested-write`           | a write's `data` wrote a related row, which is not tracked                                                                                                                                         |
+| `ambient-write`          | a tracked write ran outside any unit of work                                                                                                                                                       |
+| `batch-read`             | a write in an array-form `$transaction` read its rows outside the batch                                                                                                                            |
+| `batch-create-many`      | a `createMany` in an array-form `$transaction` could not report its rows                                                                                                                           |
+| `repeated-call`          | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                                                                                                               |
+| `tiered-field-in-output` | a method's own output schema declares a field the contract tiers, which only projection outputs strip; raised when the server is made (for an output without JSON Schema, when a reply carries it) |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
@@ -2891,8 +2963,9 @@ In Storybook, a decorator renders every story inside `qd.$Provider`, and a
 story's `beforeEach` sets its session (`qd.$session(...)`) beside its data.
 A docs page renders its stories side by side, where one mock session would
 show the last story's in all of them: give each its own with the
-provider's `session` prop, `<qd.$Provider session={{ userId: null }}>`,
-laid over the mock's session field by field for that subtree alone (the
+provider's `session` prop, `<qd.$Provider session={{ userId: null }}>`
+(a `MockSession`, the type `$session(...)` takes too), laid over the
+mock's session field by field for that subtree alone (the
 real `useQuickdraw()` and `usePresence`, and the mock's views and admin
 grants, read it there).
 

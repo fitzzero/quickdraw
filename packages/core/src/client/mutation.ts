@@ -5,9 +5,12 @@
 // `keys.ts` and calling through `call.ts`; `hooks.ts` exports it with the
 // query hook. It returns TanStack's mutation result as it is, typed with
 // `QuickdrawError`, and is optimistic by default when its input has `id` and
-// its output is `"entity"` (`optimistic.ts`). In development, one hook
-// instance issuing its mutation more than 5 times within a second is named
-// as a loop, with its component (`loopGuard.ts`).
+// its output is `"entity"` (`optimistic.ts`). A failed call's refused items
+// show in the render that shows the mutation's error, and their `retry()`
+// sends the call again through this hook's mutation, so its `isPending` and
+// callbacks follow it (finding F8.3). In development, one hook instance
+// issuing its mutation more than 5 times within a second is named as a
+// loop, with its component (`loopGuard.ts`).
 
 import {
   useMutation,
@@ -22,7 +25,7 @@ import { methodKeyPrefix } from "./keys";
 import { createMutationTrace, loopGuardOf, type MutationTrace } from "./loopGuard";
 import type { MethodTarget } from "./members";
 import type { OptimisticCache, OptimisticUpdate } from "./optimistic";
-import { mutateOptimistically } from "./optimisticCall";
+import { applyWhenMutationFails, mutateOptimistically } from "./optimisticCall";
 
 /**
  * Options of a mutation hook: TanStack's `useMutation` options, without the
@@ -67,7 +70,9 @@ export function useMethodMutation<Output, Variables, Context = unknown, Cache = 
     entityOutput: target.output === "entity",
     collections: target.collections,
   };
-  return useMutation<Output, QuickdrawError, Variables, Context>({
+  // The hook's own mutate, so a refused item's retry() goes through it (finding F8.3).
+  const resend = useRef<((input: Variables) => Promise<Output>) | undefined>(undefined);
+  const mutation = useMutation<Output, QuickdrawError, Variables, Context>({
     mutationKey: methodKeyPrefix(target.service, target.method),
     ...rest,
     mutationFn: (input: Variables) => {
@@ -89,7 +94,15 @@ export function useMethodMutation<Output, Variables, Context = unknown, Cache = 
               }
             },
           }),
+        {
+          resend: async () => await resend.current?.(input),
+          onFailed: (apply) => {
+            applyWhenMutationFails(queryClient, input, apply);
+          },
+        },
       );
     },
   });
+  resend.current = mutation.mutateAsync;
+  return mutation;
 }

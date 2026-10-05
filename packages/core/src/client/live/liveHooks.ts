@@ -74,9 +74,13 @@ export interface RefusedItem<Item> {
   /** Forgets it: it leaves `refused`. */
   dismiss(): void;
   /**
-   * Sends the same call again: it leaves `refused`, and the update adds the
-   * item anew, `pending` while the call is in flight. Resolves once the call
-   * settles, and never rejects: a refusal shows in `refused` again.
+   * Sends the same call again, through the mutation hook that sent it (its
+   * `isPending`, `onSuccess`, `onError` and `onSettled` follow the retry): it
+   * leaves `refused`, and the update adds the item anew, `pending` while the
+   * call is in flight. Resolves once the call settles, and never rejects: a
+   * refusal shows in `refused` again. Send it only when the call is
+   * idempotent (an id the client made, which the server keeps) if its error
+   * left the outcome unknown (`isUnknownOutcome`).
    */
   retry(): Promise<void>;
 }

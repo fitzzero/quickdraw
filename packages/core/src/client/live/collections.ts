@@ -2,7 +2,14 @@
 // sections 7 and 11.5): one controller per scope (`collectionController.ts`),
 // counted by the hooks that hold it (`registry.ts`), with `qd:c` and
 // `qd:revoked` frames routed to it by `service`, `collection` and `scope`.
-// While any scope is held, the visibility and idle checks run (`resume.ts`).
+// While any scope is held, the visibility and idle checks run (`resume.ts`),
+// and a mutation call whose outcome is unknown has each held scope it added
+// an item to loaded again once: that load says whether the server made it
+// (`../additions.ts`). After a lost connection, the reconnect's own resume
+// does. A scope whose load was refused is loaded once more when the user's
+// access may have changed: on new service grants (`qd:access`, from
+// `liveData.ts`), and when an `added` delta of another held scope names its
+// anchor row (finding F8.4); every connect loads it again too.
 //
 // React-free: the live data (`liveData.ts`) makes one per connection and
 // `QueryClient`.
@@ -15,7 +22,9 @@ import {
   type CollectionTarget,
   type ResumeReason,
 } from "./collectionController";
-import { isRevision, type LiveHost } from "./host";
+import { storeOf } from "../optimistic";
+import type { CollectionEntry } from "./collectionLoads";
+import { isRevision, readEntry, type LiveHost } from "./host";
 import { createRegistry } from "./registry";
 import { createResumeChecks } from "./resume";
 
@@ -58,6 +67,11 @@ export interface CollectionHub {
   revoked(service: string, collection: string, scope: string, reason: RevokeReason): void;
   /** Loads every held scope again from the revision it holds. */
   resume(reason: ResumeReason): void;
+  /**
+   * The user's access may have changed (new service grants): loads each held
+   * scope whose last load was refused once more.
+   */
+  reopen(): void;
   /** Another user acts on the connection now: drops every scope's state and loads it again. */
   forget(): void;
   /** The connection closed: stops every scope's timers and the checks, until the next connect. */
@@ -82,21 +96,89 @@ function isCollectionFrame(value: unknown): value is CollectionFrame {
   );
 }
 
+/** The refusals that drop a scope's state. */
+const REFUSALS: ReadonlySet<string> = new Set(["FORBIDDEN", "NOT_FOUND", "UNAUTHENTICATED"]);
+
+/** Loads `controllers`' scopes whose last load was refused once more: the user's access may have changed. */
+function reopen(host: LiveHost, controllers: readonly CollectionController[]): void {
+  for (const controller of controllers) {
+    const entry = readEntry<CollectionEntry>(host, controller.key);
+    if (entry?.state === null && entry.error !== null && REFUSALS.has(entry.error.code)) {
+      void controller.refresh();
+    }
+  }
+}
+
+/**
+ * The held scopes anchored on a row `frame` adds to another scope: an invite
+ * adds the chat to the user's list of chats, and the chat's messages' scope
+ * is that chat's id.
+ */
+function anchoredOn(
+  controllers: readonly CollectionController[],
+  frame: CollectionFrame,
+): CollectionController[] {
+  const added = new Set<string>();
+  for (const delta of frame.deltas as readonly unknown[]) {
+    const item = isRecord(delta) && delta.t === "added" && isRecord(delta.item) ? delta.item : null;
+    if (item !== null && typeof item.id === "string") {
+      added.add(item.id);
+    }
+  }
+  return added.size === 0 ? [] : controllers.filter((controller) => added.has(controller.scope));
+}
+
+/** Asks for a load of each scope that holds additions of unknown outcome, once each, while started. */
+function createOutcomeChecks(
+  host: LiveHost,
+  ask: (service: string, collection: string, scope: string) => void,
+): { start(): void; stop(): void } {
+  const store = storeOf(host.queryClient);
+  let unsubscribe: (() => void) | undefined;
+  let queued = false;
+  const check = (): void => {
+    queued = false;
+    for (const { service, collection, scope } of store.unchecked()) {
+      ask(service, collection, scope);
+    }
+  };
+  return {
+    start() {
+      // A change of the store is told inside the mutation's failure: ask after it.
+      unsubscribe ??= store.subscribe(() => {
+        if (!queued) {
+          queued = true;
+          queueMicrotask(check);
+        }
+      });
+    },
+    stop() {
+      unsubscribe?.();
+      unsubscribe = undefined;
+    },
+  };
+}
+
 /** Creates the live collections of `host`. */
 export function createCollectionHub(host: LiveHost): CollectionHub {
   const registry = createRegistry<CollectionController>((controller) => {
     controller.dispose();
     if (registry.held().length === 0) {
       checks.stop();
+      outcomes.stop();
     }
   });
+  const each = (act: (controller: CollectionController) => void): void => {
+    registry.held().forEach(act);
+  };
   const checks = createResumeChecks(() => {
-    for (const controller of registry.held()) {
-      controller.resume("check");
-    }
+    each((controller) => controller.resume("check"));
   });
   const held = (service: string, collection: string, scope: string) =>
     registry.get(scopeKey(service, collection, scope));
+  const outcomes = createOutcomeChecks(host, (service, collection, scope) => {
+    held(service, collection, scope)?.resume("check");
+  });
   return Object.freeze({
     subscribe(target: CollectionTarget, scope: string, options: ScopeOptions = {}): ScopeHolding {
       const holding = registry.acquire(scopeKey(target.service, target.collection, scope), () =>
@@ -108,6 +190,7 @@ export function createCollectionHub(host: LiveHost): CollectionHub {
         controller.start();
       }
       checks.start();
+      outcomes.start();
       return {
         controller,
         release: () => {
@@ -128,7 +211,11 @@ export function createCollectionHub(host: LiveHost): CollectionHub {
     receive(frame: unknown): void {
       if (isCollectionFrame(frame)) {
         held(frame.s, frame.c, frame.scope)?.receive(frame);
+        reopen(host, anchoredOn(registry.held(), frame));
       }
+    },
+    reopen: () => {
+      reopen(host, registry.held());
     },
     revoked(service: string, collection: string, scope: string, reason: RevokeReason): void {
       held(service, collection, scope)?.revoked(reason);
@@ -143,14 +230,10 @@ export function createCollectionHub(host: LiveHost): CollectionHub {
       }
     },
     forget(): void {
-      for (const controller of registry.held()) {
-        controller.forget();
-      }
+      each((controller) => controller.forget());
     },
     stop(): void {
-      for (const controller of registry.held()) {
-        controller.stop();
-      }
+      each((controller) => controller.stop());
       checks.stop();
     },
     size: () => registry.held().length,

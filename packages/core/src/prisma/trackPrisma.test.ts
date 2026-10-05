@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { storageOf } from "../server/storage";
 import { createRecordingSink } from "../testing/recordingSink";
-import { createHarness, type Harness } from "./__tests__/harness";
+import { createHarness, pauseNext, type Harness } from "./__tests__/harness";
 import { trackPrisma } from "./trackPrisma";
 
 let h: Harness;
@@ -359,7 +359,7 @@ describe("writes that change nothing (finding F7.2)", () => {
     ]);
   });
 
-  it("records nothing for an update or upsert that sets interested columns to what they held", async () => {
+  it("records an update or upsert that sets interested columns to what they held, as any write", async () => {
     const member = await addMember("Read");
     const task = await addTask("Same", { status: "open" });
     const same = await h.inUnit(async () => {
@@ -371,20 +371,11 @@ describe("writes that change nothing (finding F7.2)", () => {
       });
       await h.db.task.update({ where: { id: task.id }, data: {} });
     });
-    expect(same.writes).toEqual([]);
-    // A changed value, or a column whose old value was never read, is recorded.
-    const changed = await h.inUnit(async () => {
-      await h.db.task.update({ where: { id: task.id }, data: { status: "done" } });
-      await h.db.projectMember.update({
-        where: { id: member.id },
-        data: { role: "Read", userId: member.userId },
-      });
-    });
-    expect(changed.writes.map((write) => [write.model, write.op])).toEqual([["task", "update"]]);
-    const unread = await h.inUnit(() =>
-      h.db.task.update({ where: { id: task.id }, data: { status: "done", title: "Same" } }),
-    );
-    expect(unread.writes).toEqual([expect.objectContaining({ id: task.id, op: "update" })]);
+    // The read made before a write is not atomic with it, so equal values prove nothing.
+    expect(same.writes).toEqual([
+      expect.objectContaining({ model: "task", id: task.id, op: "update", fields: ["status"] }),
+      expect.objectContaining({ model: "projectMember", id: member.id, op: "update" }),
+    ]);
   });
 
   it("answers an update with nothing to write as Prisma does, and records nothing", async () => {
@@ -417,58 +408,72 @@ describe("writes that change nothing (finding F7.2)", () => {
       );
     });
     expect(none.writes).toEqual([]);
-    // Rows set to what they held record nothing; the others record their update.
+    // Every row it matched records its update, a row that already held the value too.
     const some = await h.inUnit(() =>
       h.db.task.updateMany({ where: { projectId }, data: { status: "done" } }),
     );
-    expect(some.writes).toEqual([
-      expect.objectContaining({ id: open.id, op: "update", before: { status: "open" } }),
-    ]);
-    expect(some.writes.map((write) => write.id)).not.toContain(done.id);
+    expect(some.writes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: open.id, op: "update", before: { status: "open" } }),
+        expect.objectContaining({ id: done.id, op: "update", before: { status: "done" } }),
+      ]),
+    );
+    expect(some.writes).toHaveLength(2);
   });
 
-  it("compares JSON whatever its key order, and dates by their time", async () => {
-    const tracked = trackPrisma(h.prisma, {
-      interest: { project: ["acl"], task: ["createdAt"] },
-      development: false,
-    });
-    const storage = storageOf(tracked);
-    if (storage === undefined) {
-      throw new Error("no storage adapter");
+  it("records the last of a batch's writes that sets a column back to what it held before the batch", async () => {
+    const task = await addTask("Batched", { status: "open" });
+    const { writes } = await h.inUnit(() =>
+      h.db.$transaction([
+        h.db.task.update({ where: { id: task.id }, data: { status: "done" } }),
+        h.db.task.update({ where: { id: task.id }, data: { status: "open" } }),
+      ]),
+    );
+    const row = await h.prisma.task.findUniqueOrThrow({ where: { id: task.id } });
+    expect(row.status).toBe("open");
+    // Both reads ran before the batch; the merged record ends where the database does.
+    expect(writes).toEqual([
+      expect.objectContaining({
+        id: task.id,
+        op: "update",
+        before: { status: "open" },
+        after: expect.objectContaining({ status: "open" }),
+      }),
+    ]);
+  });
+
+  it("records a write whose stale read saw the value it sets, after another write changed it", async () => {
+    const task = await addTask("Raced", { status: "open" });
+    const pause = pauseNext(h.database, /^\s*UPDATE\s+"public"\."Task"/iu);
+    try {
+      // The first unit reads "open", and its UPDATE waits while the second runs whole.
+      const reEnsure = h.inUnit(() =>
+        h.db.task.update({ where: { id: task.id }, data: { status: "open" } }),
+      );
+      await pause.reached;
+      const change = await h.inUnit(() =>
+        h.db.task.update({ where: { id: task.id }, data: { status: "done" } }),
+      );
+      pause.release();
+      const { writes } = await reEnsure;
+      expect(change.writes).toEqual([
+        expect.objectContaining({ id: task.id, before: { status: "open" } }),
+      ]);
+      expect((await h.prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).toBe(
+        "open",
+      );
+      // Its real change, done to open, is recorded and flushed.
+      expect(writes).toEqual([
+        expect.objectContaining({
+          id: task.id,
+          op: "update",
+          fields: ["status"],
+          after: expect.objectContaining({ status: "open" }),
+        }),
+      ]);
+    } finally {
+      pause.restore();
     }
-    const inUnit = async (fn: () => Promise<unknown>) => {
-      const sink = createRecordingSink();
-      const unit = storage.unitOfWork.begin({ requestId: "r", transport: "internal", sink });
-      await unit.run(fn);
-      await unit.flush();
-      return sink.writes();
-    };
-    const acl = [{ userId: "u1", level: "Read", note: { a: 1, b: [true, null] } }];
-    await h.prisma.project.update({ where: { id: projectId }, data: { acl } });
-    const reordered = [{ note: { b: [true, null], a: 1 }, level: "Read", userId: "u1" }];
-    expect(
-      await inUnit(() =>
-        tracked.project.update({ where: { id: projectId }, data: { acl: reordered } }),
-      ),
-    ).toEqual([]);
-    const task = await addTask("Dated");
-    const sameTime = new Date(task.createdAt.getTime());
-    expect(
-      await inUnit(() =>
-        tracked.task.update({ where: { id: task.id }, data: { createdAt: sameTime } }),
-      ),
-    ).toEqual([]);
-    const changed = await inUnit(async () => {
-      await tracked.project.update({
-        where: { id: projectId },
-        data: { acl: [{ userId: "u1", level: "Moderate" }] },
-      });
-      await tracked.task.update({
-        where: { id: task.id },
-        data: { createdAt: new Date(task.createdAt.getTime() + 1) },
-      });
-    });
-    expect(changed.map((write) => write.model)).toEqual(["project", "task"]);
   });
 
   it("records nothing for an updateMany in a batch that answers count 0", async () => {

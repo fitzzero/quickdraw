@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { admin as adminContract, defineContract } from "../../../index";
 import { createTestApp, emitWithAck, type TestApp } from "../../../testing/index";
+import { captureLogger } from "../../__tests__/fixtures";
 import { qd } from "../../emit/__tests__/live";
 import { admin, owner } from "../../index";
 import { adminApp, as } from "./__tests__/fixture";
@@ -222,5 +223,33 @@ describe("serviceAccess in the admin kit", () => {
     expect(() =>
       admin.handlers(userContract, { grants: true, hiddenFields: ["serviceAccess"] }),
     ).toThrow('"serviceAccess" holds the grants that grants: true shows');
+  });
+});
+
+describe("grants without auth.serviceAccessSource", () => {
+  it("warns when the server is made: a lowered grant would stay on open sockets until they connect again", async () => {
+    const { db } = kit.harness();
+    const logger = captureLogger();
+    const unsourced = await createTestApp({ services: [grantingUsers], db, logger });
+    kit.track(unsourced as unknown as TestApp);
+    expect(logger.at("warn").map((entry) => entry.message)).toEqual([
+      "createServer: userService edit users' service-wide grants (the admin kit's grants: true), but auth.serviceAccessSource does not name where they are stored, so a user whose grant is lowered keeps it on open sockets until they connect again. Set auth.serviceAccessSource: { model, column }",
+    ]);
+    // Not for a kit that leaves grants alone, nor with the source named.
+    const quiet = captureLogger();
+    kit.track(
+      (await createTestApp({ services: [plainUsers], db, logger: quiet })) as unknown as TestApp,
+    );
+    const sourced = await createTestApp({
+      services: [grantingUsers],
+      db,
+      logger: quiet,
+      auth: {
+        loadServiceAccess: () => ({}),
+        serviceAccessSource: { model: "user", column: "serviceAccess" },
+      },
+    });
+    kit.track(sourced as unknown as TestApp);
+    expect(quiet.at("warn")).toEqual([]);
   });
 });

@@ -8,7 +8,10 @@ import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { tick } from "../../server/__tests__/fixtures";
 import { createQuickdrawClient } from "../createClient";
+import { QuickdrawError } from "../../protocol/errors";
 import { collectionKey, entityKey } from "../keys";
+import { overlaysOf } from "../optimistic";
+import { mutateOptimistically } from "../optimisticCall";
 import { QuickdrawProvider } from "../provider";
 import { outgoing, until } from "../__tests__/fixtures";
 import { as, freshClient, liveDataHarness, taskContract } from "./__tests__/server";
@@ -219,6 +222,59 @@ describe("live collections", () => {
     expect(state?.byId.get(created.id)).toMatchObject({ title: "Twice" });
     expect(state?.byId.get(board.t1)).toMatchObject({ title: "Renamed" });
     expect(pageReads()).toBe(before);
+  });
+
+  it("asks a held scope for a load once when a call that added to it ends without an outcome", async () => {
+    const { app } = await live.start();
+    const board = live.board();
+    const ada = await client(app.url, board.ada);
+    ada.data.collections.subscribe(targetOf("board"), board.p1);
+    await until(() => hasState(ada, "board", board.p1));
+    const target = { service: "taskService", entityOutput: false } as const;
+    const add = (id: string) =>
+      mutateOptimistically(
+        ada.queryClient,
+        target,
+        (_input, cache) =>
+          cache.addItem("board", board.p1, { id, title: id }, { onRefused: "keep" }),
+        { id },
+        // The socket stays up: the call timed out, and the server may still run it.
+        () => Promise.reject(new QuickdrawError("TIMEOUT", "No answer within 50 ms")),
+      );
+    const before = framesOf(ada.sent, "qd:col:sub").length;
+    await expect(add("made-1")).rejects.toMatchObject({ code: "TIMEOUT" });
+    const view = overlaysOf(ada.queryClient).view("taskService");
+    // The resume sent for it answers without the item: refused, kept as asked.
+    await until(() => view.refused("board", board.p1).length === 1);
+    expect(view.added("board", board.p1)).toEqual([]);
+    expect(framesOf(ada.sent, "qd:col:sub").slice(before)).toEqual([
+      expect.objectContaining({
+        s: "taskService",
+        c: "board",
+        scope: board.p1,
+        since: expect.any(Number),
+      }),
+    ]);
+  });
+
+  it("loads a refused scope once more on new grants (qd:access), and leaves a loaded one alone", async () => {
+    const { app } = await live.start();
+    const board = live.board();
+    const bo = await client(app.url, board.bo);
+    bo.data.collections.subscribe(targetOf("board"), board.p2);
+    bo.data.collections.subscribe(targetOf("board"), board.p1);
+    await until(() => scopeOf(bo, "board", board.p2)?.error?.code === "FORBIDDEN");
+    await until(() => hasState(bo, "board", board.p1));
+    const subs = (scope: string): number =>
+      framesOf(bo.sent, "qd:col:sub").filter((frame) => frame.scope === scope).length;
+    expect([subs(board.p2), subs(board.p1)]).toEqual([1, 1]);
+    // Bo becomes a member of P2, then the server pushes new grants (as access.refresh does).
+    await live.prisma().projectMember.create({
+      data: { projectId: board.p2, userId: board.bo, role: "Read" },
+    });
+    app.server.io.emit("qd:access", { serviceAccess: {} });
+    await until(() => hasState(bo, "board", board.p2));
+    expect([subs(board.p2), subs(board.p1)]).toEqual([2, 1]);
   });
 
   it("updates a view over index fields as an item's index field changes", async () => {

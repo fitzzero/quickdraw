@@ -194,6 +194,54 @@ describe("useJoin", () => {
     await shown.findByText('joined {"room":"r1","n":1} ok');
   });
 
+  it("drops a join answered after the session changed: never the last user's data or onJoined", async () => {
+    const mock = createMockClient({ lobby });
+    const answers: ((value: { room: string; n: number }) => void)[] = [];
+    mock.lobby.enter.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answers.push(resolve);
+        }),
+    );
+    const joined: unknown[] = [];
+    function Watched() {
+      const join = useJoin(
+        mock.lobby.enter,
+        { room: "r1" },
+        { onJoined: (data) => joined.push(data) },
+      );
+      return <p>{`${join.status} ${join.data === undefined ? "-" : JSON.stringify(join.data)}`}</p>;
+    }
+    const view = render(<Watched />, { wrapper: mock.$Provider });
+    await waitFor(() => {
+      expect(answers).toHaveLength(1);
+    });
+    // New credentials while the first join is in flight: the hello is gone before the old
+    // socket closes, and its answer arrives then.
+    act(() => {
+      mock.$session({ userId: "bo", isKnown: false, isConnected: false });
+    });
+    act(() => {
+      answers[0]?.({ room: "r1", n: 1 });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(joined).toEqual([]);
+    // The new user's hello joins again.
+    act(() => {
+      mock.$session({ userId: "bo" });
+    });
+    await waitFor(() => {
+      expect(answers).toHaveLength(2);
+    });
+    act(() => {
+      answers[1]?.({ room: "r1", n: 2 });
+    });
+    await within(view.container).findByText('joined {"room":"r1","n":2}');
+    expect(joined).toEqual([{ room: "r1", n: 2 }]);
+  });
+
   it("runs a mock client's member under its provider, once per known session", async () => {
     const mock = createMockClient({ lobby });
     mock.lobby.enter.mockResolvedValue({ room: "r1", n: 7 });

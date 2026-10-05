@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { APP_ORIGIN, authHarness, get, signIn } from "../server/auth/routes/__tests__/harness";
 import {
+  authProviders,
   clearAuthToken,
   getAuthToken,
   setAuthToken,
@@ -149,6 +150,54 @@ describe("signInUrl", () => {
     expect(() => signInUrl("../me")).toThrow(TypeError);
     expect(() => signInUrl("google", { basePath: "auth" })).toThrow(
       'signInUrl: basePath must start with "/", as createAuthRoutes takes it',
+    );
+  });
+});
+
+describe("authProviders (finding F9.1)", () => {
+  it("answers the sign-ins the routes serve, in order, and reads only the fields it knows", async () => {
+    const { url } = await harness.boot();
+    expect(await authProviders({ apiUrl: url })).toEqual([
+      { id: "mock", name: "Mock", kind: "mock" },
+      { id: "guest", name: "Guest", kind: "guest" },
+    ]);
+    // A newer server's fields are left out, an entry it cannot read is skipped.
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            providers: [
+              { id: "google", name: "Google", kind: "oauth", icon: "g.svg" },
+              { id: "Not An Id", name: "x", kind: "oauth" },
+              { id: "sso", kind: "saml" },
+            ],
+            later: true,
+          }),
+        ),
+      ),
+    );
+    expect(await authProviders({ apiUrl: "https://api.example.com" })).toEqual([
+      { id: "google", name: "Google", kind: "oauth" },
+    ]);
+  });
+
+  it("rejects when the server refuses, answers no list, or cannot be reached", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve(new Response("Cannot GET /auth/providers", { status: 404 })),
+    );
+    await expect(authProviders({ apiUrl: "https://api.example.com" })).rejects.toMatchObject({
+      code: "INTERNAL",
+      message: "The auth route answered 404",
+    });
+    vi.stubGlobal("fetch", () => Promise.resolve(new Response("{}")));
+    await expect(authProviders({ apiUrl: "https://api.example.com" })).rejects.toThrow(
+      "authProviders: https://api.example.com/auth/providers answered no list of providers",
+    );
+    vi.stubGlobal("fetch", () => Promise.reject(new TypeError("fetch failed")));
+    await expect(
+      authProviders({ apiUrl: "https://api.example.com", basePath: "/api/auth" }),
+    ).rejects.toThrow(
+      "authProviders: https://api.example.com/api/auth/providers could not be reached",
     );
   });
 });

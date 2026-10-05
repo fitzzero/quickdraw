@@ -136,7 +136,14 @@ export const CLIENT_RULES = `## What a client must do
   clients come back spread over the window.
 - When the handshake is refused, reconnecting with the same client and
   credentials is refused again: \`PROTOCOL_MISMATCH\` needs a client that
-  speaks the server's protocol, \`UNAUTHENTICATED\` other credentials.`;
+  speaks the server's protocol, \`UNAUTHENTICATED\` other credentials.
+- Ignore what you do not know, in every frame: an object field you do not
+  read, and an array element after the last one you read (\`qd:event\`,
+  \`qd:stream\`). Protocol 5 grows only that way: a later revision may add
+  fields to objects and append elements to arrays, never remove, rename,
+  retype or reorder them, so a client that reads only what it knows keeps
+  working against a newer server. The server reads what a client sends the
+  same way. Any other change takes a new \`protocol\` number.`;
 
 /** What the type parameters of the frame types stand for. */
 export const TYPE_PARAMETERS = `Keys are short: \`s\` a service's name, \`m\` a method's, \`c\` a collection's,

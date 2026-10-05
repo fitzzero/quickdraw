@@ -100,11 +100,11 @@ export const server = qd.createServer({
 // #endregion
 
 // #region activity
-import { issueSession, setSessionCookie } from "@fitzzero/quickdraw-core/server/auth";
+import { issueSession } from "@fitzzero/quickdraw-core/server/auth";
 
 // A sign-in the kit's redirecting providers do not cover, such as a Discord Activity's embedded
 // SDK handing the page a code: the app exchanges it, then starts an ordinary session, which
-// socketAuth and requireSession accept like any other.
+// socketAuth and requireSession accept like any other. The page sends the token as auth.token.
 app.post("/auth/discord/activity", express.json(), (req, res) => {
   void (async () => {
     const { code } = req.body as { readonly code?: unknown };
@@ -122,9 +122,7 @@ app.post("/auth/discord/activity", express.json(), (req, res) => {
       userAgent: req.get("user-agent"),
       ip: req.ip,
     });
-    // best effort: a third-party iframe gets a cross-site cookie only with SameSite=None (the
-    // default is Lax), and may refuse it even then, so the page sends auth.token
-    setSessionCookie(res, token, { sameSite: "none" });
+    // no cookie: an iframe on another site rarely keeps one, and this page never reads it
     res.json({ token });
   })();
 });

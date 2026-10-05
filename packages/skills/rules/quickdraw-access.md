@@ -121,13 +121,16 @@ channel `requires`.
 - `fields: { notes: "Admin" }` in the contract strips a field from callers
   below that level on the row, in replies and in live frames, so the row
   types a client reads (`useEntity`, collection items, `"entity"` outputs,
-  `EntityOf`) make it optional: read it with a guard. A handler returns the
-  whole row. Only projection outputs are stripped (`"entity"`, a named
-  projection, `nullable(...)`, `listOf(...)`): never name a tiered field
-  in a method's own output schema (`output: z.object({ id, email })`),
-  which sends it to every caller the method admits. Answer `"entity"`
-  instead. The server warns `[quickdraw:tiered-field-in-output]` when it
-  starts, and a strict test app fails to start.
+  `EntityOf`) make it optional: read it with a guard. A handler may return
+  the whole row; only the output's keys are sent. A projection output
+  (`"entity"`, a named projection, `nullable(...)`, `listOf(...)`) is
+  stripped per caller; a method's own output schema sends the keys it
+  declares to every caller the method admits. So never declare a tiered
+  field in a method's own output schema, at any depth
+  (`output: z.object({ id, email })`, `z.object({ user: userSchema })`):
+  answer `"entity"` or a projection instead. The server warns
+  `[quickdraw:tiered-field-in-output]` when it starts, and a strict test
+  app fails to start.
 - The service's change topic (`qd:watch` on `"service"`) is closed unless
   the service declares `watchAccess` (`"public"`, `"authenticated"` or
   `{ service: L }`). A stream without `access` in its contract is closed.

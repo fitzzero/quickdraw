@@ -36,21 +36,22 @@
 // and misses what the batch's earlier statements changed: a development
 // warning says so once per model and operation.
 //
-// A write that changed nothing records nothing (finding F7.2 of the
-// quickdraw-chat review), so no frame, delta, topic change, `refreshEntry`
-// or `affects` hop follows it. It is decided from what the hook holds, and
-// where it holds too little the write is recorded as before:
+// A write that certainly changed nothing records nothing (finding F7.2 of
+// the quickdraw-chat review), so no frame, delta, topic change,
+// `refreshEntry` or `affects` hop follows it. Only the write itself tells:
 //
 // - a write that matched no row (`updateMany`, `updateManyAndReturn` or
 //   `deleteMany`; in a batch, an `updateMany` answering count 0);
 // - a `data` (or an upsert's `update`) with nothing to write, `{}` or only
-//   `undefined` values, for which Prisma writes nothing at all;
-// - an `update`, an `updateMany` and an upsert that found its row, when
-//   every column `data` sets is an interested one, read before the write,
-//   and holds the same value after it. Prisma still moves an `@updatedAt`
-//   column on such a write; like every `@updatedAt` column, it is not a
-//   field the write set, and is not signalled. A write that sets any other
-//   column is recorded: its old value was never read.
+//   `undefined` values, for which Prisma writes nothing at all.
+//
+// A write that sets a column to the value it held is recorded like any
+// other. Comparing the values the hook read before the write with the ones
+// it returned cannot tell: that read is not atomic with the write (in an
+// array-form batch it runs before the whole batch, and elsewhere another
+// write may land between the two), so a real change would be lost and its
+// subscribers left on a value the database no longer holds. rc.5 skipped
+// such writes; the final review of the release candidates showed both.
 //
 // An upsert whose `update` sets nothing changes a row only when it creates
 // one, and nothing it returns tells which it did. Its read replaces it:
@@ -185,96 +186,6 @@ function writtenKeys(data: unknown): string[] {
 /** True for a `data` Prisma writes nothing for: an object with no key whose value is set. */
 export function writesNothing(data: unknown): boolean {
   return isRecord(data) && writtenKeys(data).length === 0;
-}
-
-/** The text of a value object such as Prisma's `Decimal`, or `undefined` when it has none of its own. */
-function textOf(value: object): string | undefined {
-  const { toString } = value as { readonly toString?: unknown };
-  return typeof toString === "function" && toString !== Object.prototype.toString
-    ? String(value)
-    : undefined;
-}
-
-/**
- * Whether two values a column held are the same: primitives, `Date`s by
- * their time, bytes, JSON values whatever their key order, and value objects
- * of one class (Prisma's `Decimal`) by their text. Anything else counts as
- * different, so a write that cannot be compared is recorded.
- */
-function sameValue(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) {
-    return true;
-  }
-  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) {
-    return false;
-  }
-  if (a instanceof Date || b instanceof Date) {
-    return a instanceof Date && b instanceof Date && a.getTime() === b.getTime();
-  }
-  if (Array.isArray(a) || Array.isArray(b)) {
-    return Array.isArray(a) && Array.isArray(b) && sameItems(a, b);
-  }
-  if (ArrayBuffer.isView(a) || ArrayBuffer.isView(b)) {
-    return a instanceof Uint8Array && b instanceof Uint8Array && sameItems(a, b);
-  }
-  return sameObject(a, b);
-}
-
-function sameItems(a: ArrayLike<unknown>, b: ArrayLike<unknown>): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-  for (let index = 0; index < a.length; index += 1) {
-    if (!sameValue(a[index], b[index])) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/** Two objects: a JSON object by its keys whatever their order, a value object by its text. */
-function sameObject(a: object, b: object): boolean {
-  const prototype = Object.getPrototypeOf(a) as unknown;
-  if (prototype !== Object.getPrototypeOf(b)) {
-    return false;
-  }
-  if (prototype !== Object.prototype && prototype !== null) {
-    const text = textOf(a);
-    return text !== undefined && text === textOf(b);
-  }
-  const left = a as Values;
-  const right = b as Values;
-  const keys = Object.keys(left);
-  return (
-    keys.length === Object.keys(right).length &&
-    keys.every((key) => Object.hasOwn(right, key) && sameValue(left[key], right[key]))
-  );
-}
-
-/**
- * True when an update recorded as `write` certainly changed no column: every
- * column `data` sets is an interested one, whose value was read before the
- * write and is the same after it.
- */
-function unchanged(op: Operation, data: unknown, write: WriteRecord): boolean {
-  const { before, after } = write;
-  const keys = writtenKeys(data);
-  if (before === undefined || after === undefined || keys.length === 0) {
-    return false;
-  }
-  const interest = op.runtime.interestOf(op.model);
-  return keys.every(
-    (key) =>
-      interest.includes(key) &&
-      Object.hasOwn(before, key) &&
-      Object.hasOwn(after, key) &&
-      sameValue(before[key], after[key]),
-  );
-}
-
-/** The updates of `writes` that changed a column, or may have: see {@link unchanged}. */
-function changedOnly(op: Operation, data: unknown, writes: readonly WriteRecord[]): WriteRecord[] {
-  return writes.filter((write) => !unchanged(op, data, write));
 }
 
 /** Counts a statement the hook runs past itself (`op.query`), and hands it to the development checks. */
@@ -510,8 +421,7 @@ async function upsert(op: Operation): Promise<unknown> {
       : await readBefore(op, op.args.where, touched, { unique: true });
   const { result, rows } = await runWidened(op);
   if (before !== undefined && before.size > 0) {
-    const writes = writesOf(op, "update", rows, keysOf(op.args.update), before);
-    record(op, changedOnly(op, op.args.update, writes));
+    record(op, writesOf(op, "update", rows, keysOf(op.args.update), before));
   } else if (before === undefined) {
     // Nothing read: the row may have existed, and been updated.
     const writes = writesOf(op, "create", rows, keysOf([op.args.create, op.args.update]));
@@ -537,8 +447,7 @@ async function update(op: Operation): Promise<unknown> {
       ? undefined
       : await readBefore(op, op.args.where, touched, { unique: true });
   const { result, rows } = await runWidened(op);
-  const writes = writesOf(op, "update", rows, keysOf(op.args.data), before);
-  record(op, changedOnly(op, op.args.data, writes));
+  record(op, writesOf(op, "update", rows, keysOf(op.args.data), before));
   return result;
 }
 
@@ -565,9 +474,8 @@ async function updateManyAndReturn(op: Operation): Promise<unknown> {
       ? undefined
       : await readBefore(op, op.args.where, touched, { unique: false });
   const { result, rows } = await runWidened(op);
-  // Rows it matched none of record nothing; neither do rows it set to what they held.
-  const writes = writesOf(op, "update", rows, keysOf(op.args.data), before);
-  record(op, changedOnly(op, op.args.data, writes));
+  // Matching no row, it returns none, and records nothing.
+  record(op, writesOf(op, "update", rows, keysOf(op.args.data), before));
   return result;
 }
 

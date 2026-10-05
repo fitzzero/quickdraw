@@ -315,6 +315,7 @@ describe("an added item", () => {
       {
         item: { id: expect.stringMatching(/^qd:new:\d+$/), title: "Draft", ordinal: 3 },
         pending: true,
+        unknown: false,
       },
     ]);
     expect(added("p2")).toEqual([]);
@@ -356,12 +357,12 @@ describe("an added item", () => {
     const again = refused?.addition.refusal?.retry();
     expect(view().refused("board", "p1")).toEqual([]);
     expect(view().added("board", "p1")).toEqual([
-      { item: expect.objectContaining({ title: "Draft" }), pending: true },
+      { item: expect.objectContaining({ title: "Draft" }), pending: true, unknown: false },
     ]);
     replies[1]?.resolve({ id: "t9", title: "Draft" });
     await again;
     expect(view().added("board", "p1")).toEqual([
-      { item: { id: "t9", title: "Draft" }, pending: false },
+      { item: { id: "t9", title: "Draft" }, pending: false, unknown: false },
     ]);
     // A bad option is refused as the update runs.
     await expect(
@@ -383,7 +384,7 @@ describe("an added item", () => {
     await done;
     // Only the fields the item has take the reply's values.
     expect(scopeOf(client)()).toEqual([
-      { item: { id: "t9", title: "Draft", ordinal: 3 }, pending: false },
+      { item: { id: "t9", title: "Draft", ordinal: 3 }, pending: false, unknown: false },
     ]);
   });
 
@@ -428,10 +429,103 @@ describe("an added item", () => {
     settle({ holds: holds([]), readAt: overlaysOf(client).now() });
     // The call in flight stays whatever the scope says.
     expect(scopeOf(client)()).toEqual([
-      { item: { id: expect.stringMatching(/^qd:new:/), title: "Pending" }, pending: true },
+      {
+        item: { id: expect.stringMatching(/^qd:new:/), title: "Pending" },
+        pending: true,
+        unknown: false,
+      },
     ]);
     pending.reply.reject(new QuickdrawError("INTERNAL", "Dropped"));
     await expect(pending.done).rejects.toThrow("Dropped");
+  });
+
+  it("waits for its scope's next load when its call's outcome is unknown (the final review's item D)", async () => {
+    const client = new QueryClient();
+    const view = () => overlaysOf(client).view("taskService");
+    const settle = (evidence: Parameters<typeof settleAdditions>[4]) => {
+      settleAdditions(client, "taskService", "board", "p1", evidence);
+    };
+    const nobody = (): boolean => false;
+    /** A create whose call fails with `error`: kept or dropped on a refusal, with a client id or not. */
+    const failing = async (title: string, error: Error, keep: boolean, id?: string) => {
+      const done = mutateOptimistically(
+        client,
+        board,
+        (_input, cache) =>
+          cache.addItem(
+            "board",
+            "p1",
+            { ...(id === undefined ? {} : { id }), title },
+            {
+              onRefused: keep ? "keep" : "drop",
+            },
+          ),
+        { title },
+        () => Promise.reject(error),
+      );
+      await expect(done).rejects.toBe(error);
+    };
+    const readBefore = overlaysOf(client).now();
+    const timedOut = (): QuickdrawError => new QuickdrawError("TIMEOUT", "No answer within 50 ms");
+    await failing("Lost", timedOut(), true, "m1");
+    await failing("Late", timedOut(), false, "m2");
+    await failing("Kept", timedOut(), true);
+    // Still shown, pending and of unknown outcome: none is refused yet.
+    expect(view().added("board", "p1")).toEqual([
+      { item: { id: "m1", title: "Lost" }, pending: true, unknown: true },
+      { item: { id: "m2", title: "Late" }, pending: true, unknown: true },
+      {
+        item: { id: expect.stringMatching(/^qd:new:/), title: "Kept" },
+        pending: true,
+        unknown: true,
+      },
+    ]);
+    expect(view().refused("board", "p1")).toEqual([]);
+    // Each scope is asked for a load once.
+    expect(storeOf(client).unchecked()).toEqual([
+      { service: "taskService", collection: "board", scope: "p1" },
+    ]);
+    expect(storeOf(client).unchecked()).toEqual([]);
+    // A load sent before the failures says nothing; one that holds an id ends that one.
+    settle({ holds: nobody, readAt: readBefore });
+    expect(view().added("board", "p1")).toHaveLength(3);
+    settle({ holds: (id) => id === "m1", readAt: readBefore });
+    expect(
+      view()
+        .added("board", "p1")
+        .map(({ item }) => item.title),
+    ).toEqual(["Late", "Kept"]);
+    // A load sent after the failures that answers without them: refused, kept or dropped as asked.
+    settle({ holds: nobody, readAt: overlaysOf(client).now() });
+    expect(view().added("board", "p1")).toEqual([]);
+    expect(view().refused("board", "p1")).toEqual([
+      expect.objectContaining({
+        item: expect.objectContaining({ title: "Kept" }),
+        error: expect.objectContaining({ code: "TIMEOUT" }),
+      }),
+    ]);
+  });
+
+  it("ends a refused one once its scope holds its id: the server has that row", async () => {
+    const client = new QueryClient();
+    const view = () => overlaysOf(client).view("taskService");
+    const done = mutateOptimistically(
+      client,
+      board,
+      (_input, cache) =>
+        cache.addItem("board", "p1", { id: "m3", title: "Sent" }, { onRefused: "keep" }),
+      { title: "Sent" },
+      () => Promise.reject(new QuickdrawError("CONFLICT", "Taken")),
+    );
+    await expect(done).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(view().refused("board", "p1")).toHaveLength(1);
+    settleAdditions(client, "taskService", "board", "p1", {
+      holds: () => false,
+      named: new Set(["m9"]),
+    });
+    expect(view().refused("board", "p1")).toHaveLength(1);
+    settleAdditions(client, "taskService", "board", "p1", { holds: (id) => id === "m3" });
+    expect(view().refused("board", "p1")).toEqual([]);
   });
 
   it("is dropped 10 s after its reply when nothing ended it, and on a reset", async () => {

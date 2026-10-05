@@ -50,7 +50,7 @@
       "calls": []
     },
     "writes that change nothing": {
-      "statements": 6,
+      "statements": 4,
       "bytes": 0,
       "calls": []
     }

@@ -1,13 +1,15 @@
 // The pipeline stages that run the handler (RFC 0003 section 9, steps 6 to
 // 8): join an identical run in flight when the query shares, otherwise start
-// one inside a unit of work, then project a projection output's rows and
-// check the result against the contract. Field tiers are stripped later, per
-// caller (`tiers.ts`), because a shared run's result goes to every caller;
-// callers who see the same fields share one copy (`replies.ts`).
+// one inside a unit of work, then project a projection output's rows, or
+// reduce a schema output to what its schema declares (`schemaOutput.ts`),
+// and check the result against the contract. Field tiers are stripped later,
+// per caller (`tiers.ts`), because a shared run's result goes to every
+// caller; callers who see the same fields share one copy (`replies.ts`).
 
 import { QuickdrawError } from "../../protocol/errors";
 import { NEVER_ABORTED, withSignal, type AnyContext } from "../context";
 import { projectOutput } from "../emit/projection";
+import { warnTieredReply } from "../emit/tieredOutputs";
 import type { RegisteredMethod } from "../registry";
 import { isKitHandler } from "../service";
 import { startRun, type Outcome, type Run } from "./run";
@@ -37,10 +39,21 @@ export interface ExecuteCall {
   source: Run | undefined;
 }
 
+/** The handler's result in the shape its output sends: a projection's rows, or what a schema declares. */
+function shaped(target: RegisteredMethod, returned: unknown): unknown {
+  const { projection, schemaOutput } = target.method;
+  if (projection !== undefined) {
+    return projectOutput(projection, returned);
+  }
+  return schemaOutput === undefined ? returned : schemaOutput.pick(returned);
+}
+
 /**
  * Step 8: projects a projection output's rows (RFC 0003 section 6: the
- * projection's keys only, dates as ISO strings), checks the result against
- * the method's output, and freezes shared results.
+ * projection's keys only, dates as ISO strings) or reduces a schema output
+ * to what its schema declares (`schemaOutput.ts`), on every transport and
+ * whatever `outputValidation` is; checks the result against the method's
+ * output, and freezes shared results.
  */
 async function accept(
   settings: PipelineSettings,
@@ -48,8 +61,10 @@ async function accept(
   returned: unknown,
 ): Promise<Outcome> {
   const { service, method } = target;
-  const value =
-    method.projection === undefined ? returned : projectOutput(method.projection, returned);
+  const value = shaped(target, returned);
+  if (settings.warnings.enabled) {
+    warnTieredReply(target, value, settings.warnings);
+  }
   if (settings.outputValidation) {
     const issues = await outputIssues(method.output, value);
     if (issues !== undefined) {

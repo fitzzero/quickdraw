@@ -8,7 +8,7 @@ import { z } from "zod";
 import { defineContract, mutation, query } from "../../index";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
-import { anyOf, everyone, owner } from "../index";
+import { anyOf, everyone, inherit, owner } from "../index";
 import { as, qd, seedBoard, type Board } from "./__tests__/board";
 
 const profile = z.object({ id: z.string(), name: z.string() });
@@ -84,5 +84,64 @@ describe("everyone(level)", () => {
     expect(
       await emitWithAck(anonymous.socket, "qd:sub", { s: "profileService", ids: [board.ada] }),
     ).toMatchObject({ ok: false, e: { code: "UNAUTHENTICATED" } });
+  });
+});
+
+describe("inherit from a parent everyone reads (the final review's E1)", () => {
+  const notes = defineContract("noteService", {
+    entity: z.object({ id: z.string(), title: z.string(), projectId: z.string() }),
+    methods: { get: query({ input: z.object({ id: z.string() }), output: "entity" }) },
+  });
+  const publicProjects = defineContract("publicProjectService", {
+    entity: z.object({ id: z.string(), name: z.string() }),
+    methods: { get: query({ input: z.object({ id: z.string() }), output: "entity" }) },
+  });
+  const projectService = qd.defineService(publicProjects, {
+    model: "project",
+    access: anyOf(owner("ownerId"), everyone("Read")),
+    methods: {
+      get: {
+        access: { entry: "Read" },
+        handler: ({ input, db }) =>
+          db.project.findUniqueOrThrow({
+            where: { id: input.id },
+            select: { id: true, name: true },
+          }),
+      },
+    },
+  });
+  const noteService = qd.defineService(notes, {
+    model: "task",
+    access: inherit({ from: publicProjects, via: "projectId" }),
+    methods: {
+      get: {
+        access: { entry: "Read" },
+        handler: ({ input, db }) =>
+          db.task.findUniqueOrThrow({
+            where: { id: input.id },
+            select: { id: true, title: true, projectId: true },
+          }),
+      },
+    },
+  });
+
+  it("lists every row with a parent, without reading the parent table, and keeps the parent ids otherwise", async () => {
+    const app = await createTestApp({ services: [projectService, noteService], db: h.db });
+    apps.push(app as unknown as TestApp);
+    const { access } = app.server.dispatcher;
+    const read = await h.storage.countStatements(() =>
+      access.accessWhere(notes, as(board.cy), "Read"),
+    );
+    expect(read.value).toEqual({ projectId: { not: null } });
+    expect(read.statements).toBe(0);
+    // Above everyone's level, the parents the principal owns, by id.
+    const owned = await h.prisma.project.findMany({
+      where: { ownerId: board.ada },
+      select: { id: true },
+    });
+    expect(await access.accessWhere(notes, as(board.ada), "Admin")).toEqual({
+      projectId: { in: owned.map(({ id }) => id) },
+    });
+    expect(await access.accessWhere(notes, as(board.cy), "Admin")).toBe("none");
   });
 });

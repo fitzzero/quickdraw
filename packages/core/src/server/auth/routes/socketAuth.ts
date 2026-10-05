@@ -191,6 +191,60 @@ function httpOriginAccepted(headers: IncomingHttpHeaders, origins: OriginAllowli
   return site === undefined || site === "same-origin";
 }
 
+/** The allowlists `cookieOriginAllowed` compiled, by the list it was given. */
+const compiled = new WeakMap<readonly AllowedOrigin[], OriginAllowlist>();
+
+/** A request whose credential came from the session cookie: its headers, and the transport of a call. */
+export interface CookieOriginRequest {
+  readonly headers: IncomingHttpHeaders;
+  /** `"socket"` applies the handshake's rule; anything else (an HTTP call, a REST route) the HTTP one. */
+  readonly transport?: string;
+}
+
+/**
+ * The rule `socketAuth` applies to a request that authenticates with the
+ * session cookie, for a custom `authenticate` or route: true when the page
+ * that sent it may use the cookie. Its `Origin` must be in `allowedOrigins`
+ * (the `createAuthRoutes` list: exact origins or anchored patterns). Without
+ * one, an HTTP request (a browser sends `Origin` with every POST, so it is
+ * curl or a server forwarding the user's cookie) is accepted unless
+ * `Sec-Fetch-Site` names another site, and a socket handshake only when
+ * `Sec-Fetch-Site` is `same-origin` or with `allowMissingOrigin`. A bearer
+ * token is not ambient: check only a credential that came from the cookie
+ * (`request.credential === "cookie"` on an HTTP `authenticate` request).
+ *
+ * @example
+ * authenticate: async (request) => {
+ *   if (request.transport === "http" && request.credential === "cookie" &&
+ *       !cookieOriginAllowed(request, allowedOrigins)) {
+ *     throw new QuickdrawError("FORBIDDEN", "This page may not use the session cookie");
+ *   }
+ *   // ...
+ * }
+ */
+export function cookieOriginAllowed(
+  request: CookieOriginRequest,
+  allowedOrigins: readonly AllowedOrigin[],
+  options: { readonly allowMissingOrigin?: boolean } = {},
+): boolean {
+  let origins = compiled.get(allowedOrigins);
+  if (origins === undefined) {
+    origins = originAllowlist(allowedOrigins, "cookieOriginAllowed", true);
+    compiled.set(allowedOrigins, origins);
+  }
+  return request.transport === "socket"
+    ? originAccepted(request.headers, origins, options.allowMissingOrigin === true)
+    : httpOriginAccepted(request.headers, origins);
+}
+
+/** Whether an HTTP request that sends the session cookie may use it, against a compiled allowlist. */
+export function httpCookieOriginAllowed(
+  headers: IncomingHttpHeaders,
+  origins: OriginAllowlist,
+): boolean {
+  return httpOriginAccepted(headers, origins);
+}
+
 /** Refuses a session cookie used from a page `allowedOrigins` does not list. */
 function checkCookieOrigin(
   request: AuthenticateRequest,

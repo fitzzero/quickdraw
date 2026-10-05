@@ -27,6 +27,21 @@ export type AnyHandler = (args: {
   readonly db: unknown;
 }) => unknown;
 
+/**
+ * A method's own output schema, compiled from its JSON Schema when the
+ * service is defined (`pipeline/schemaOutput.ts`).
+ */
+export interface SchemaOutput {
+  /** The value reduced to what the schema declares; the value itself when nothing is dropped. */
+  pick(value: unknown): unknown;
+  /**
+   * Each key the schema declares, at any depth, with the first path that
+   * declares it (`email`, `user.email`, `[].email`; `{}` stands for any key
+   * of a record): what the `tiered-field-in-output` warning reads.
+   */
+  keyPaths(): ReadonlyMap<string, string>;
+}
+
 /** One method of a defined service, checked and ready to dispatch. */
 export interface ServiceMethod {
   readonly name: string;
@@ -45,6 +60,14 @@ export interface ServiceMethod {
    * its field tiers are stripped per caller.
    */
   readonly projection: ProjectedOutput | undefined;
+  /**
+   * A schema output, compiled from its JSON Schema when the service was
+   * defined (`pipeline/schemaOutput.ts`): the handler's result is reduced to
+   * what the schema declares before the output check, on every transport.
+   * `undefined` for a projection output, and for a schema without JSON
+   * Schema (Zod 3), which is sent as the handler returns it.
+   */
+  readonly schemaOutput: SchemaOutput | undefined;
   readonly access: AccessForm;
   readonly handler: AnyHandler;
   readonly share: ShareMode | undefined;
@@ -165,6 +188,19 @@ const handlerChecks = new WeakMap<object, HandlerCheck>();
  */
 export function checkWhenDefined(handler: object, check: HandlerCheck): void {
   handlerChecks.set(handler, check);
+}
+
+/** The kit handlers that write users' service-wide grants (`admin.handlers(c, { grants: true })`). */
+const grantsEditors = new WeakSet<object>();
+
+/** Marks `handler` as one that writes users' service-wide grants: `createServer` checks where they are stored. */
+export function markGrantsEditor(handler: object): void {
+  grantsEditors.add(handler);
+}
+
+/** True for a handler that writes users' service-wide grants (`markGrantsEditor`). */
+export function editsGrants(handler: object): boolean {
+  return grantsEditors.has(handler);
 }
 
 /** Why `service` cannot run `handler`, from the check `checkWhenDefined` attached. */

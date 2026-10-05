@@ -2,6 +2,194 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0-rc.6] (unreleased)
+
+The fixes from the final independent review of the release candidates
+(`5.0.0-rc.2` to `rc.5`), the template's last open findings (F8.3 to
+F8.6) and the owner's QA of its deployment (F9.1 to F9.3, with F10.1 to
+F10.4). No version moves until the release candidate is cut.
+
+### Behavior changes for rc.5 apps
+
+- **Writes that set a value a row already holds signal again.** rc.5 left
+  out an update whose interested columns held the same values after it as
+  the tracker read before it, and that lost real changes; such a write now
+  sends its frames, deltas and topic changes, as in rc.4. Re-ensure a row
+  with `upsert({ where, create, update: {} })`, which still signals nothing
+  when the row is there (Tracked writes, below).
+- **A method's own output schema is sent as it declares it.** A key the
+  handler returns beyond the schema no longer leaves the server, on any
+  transport: a client that read such a key stops getting it, so declare
+  it or answer `"entity"` (Outputs and field tiers). `tiered-field-in-output`
+  now reads nested schemas too, so a strict test app over an output that
+  declares a tiered key at any depth fails to start.
+- **`requireSession` checks the cookie's Origin.** A REST route that takes
+  the session cookie from a page outside `allowedOrigins` (by default the
+  auth routes' list over the same session store) answers 403 `FORBIDDEN`
+  (Auth).
+- **An unknown outcome is not a refusal.** A mutation whose connection
+  dropped after it was sent, or that timed out, keeps its optimistic items
+  `pending` (and in `useCollection().checking`) until the scope's next load
+  says; only then is one refused. `retry()` is safe after it only with an
+  id the client made and the server keeps (Client).
+- **A refused item's `retry()` goes through the mutation hook**, whose
+  `onSuccess`, `onError` and `onSettled` now run for it, and a refused item
+  shows in the render that shows the mutation's error (Client).
+
+### Tracked writes
+
+- Behavior change: a write that sets a column to the value it already
+  held is recorded again, as in rc.4. rc.5 skipped an `update`, an
+  `updateMany` or an upsert when its interested columns held after the
+  write the values the tracker read before it, but that read is not
+  atomic with the write: in an array-form `$transaction` it runs before
+  the whole batch, so a batch that set a task open, done, then open again
+  told the open tasks' list it was removed; and a write landing between
+  the read and the write lost a real change, leaving subscribers on a
+  value the database no longer held, which a resubscribe with their
+  revision then answered "not modified". What records nothing is now
+  decided by the write alone: one that matched no row, a `data` (or an
+  upsert's `update`) with nothing to write, and an upsert with
+  `update: {}` that finds its row.
+
+### Outputs and field tiers
+
+- Behavior change: a method whose output is a schema of its own (not
+  `"entity"`, not a projection) is sent as that schema declares it, on
+  every transport and whatever `outputValidation` is. An object keeps the
+  keys its JSON Schema's `properties` declare (every key only where
+  `additionalProperties` allows them, or for a record), an array reduces
+  each item, a union keeps what any branch declares, and a value the schema
+  allows to be anything goes as it is. rc.5 sent what the handler returned,
+  so a `rename` with the output `{ id, name }` that answered
+  `db.user.update(...)` sent `email` and `serviceAccess` to a service-wide
+  `Moderate` grant. The reduction is compiled once per method from the
+  schema's Standard JSON Schema, and a call copies only the objects that
+  lose a key: a page of 200 rows costs about what `JSON.stringify` takes to
+  write it. An output schema without JSON Schema (Zod 3) is sent as
+  returned.
+- `tiered-field-in-output` reads every depth of an output schema (`email`
+  in `{ user: { id, email } }`, the rows of a list, the values of a
+  record) and says where the key is declared (`meta.path`). Its advice is
+  now "answer `"entity"` or a projection, or drop the key from the
+  schema": rc.5's "leave the key out" silenced the warning while the key
+  still went out. A kit's methods are not checked, since a kit strips its
+  own replies. For an output without JSON Schema, a reply that carries a
+  tiered key raises it in development.
+
+### Wire
+
+- One rule for every frame, both ways, stated in `protocol/envelope.ts`
+  and `docs/protocol-v5.md` before the protocol freezes: a receiver
+  ignores the object fields it does not know and the array elements after
+  the last one it reads, and a later revision of protocol 5 may only add
+  fields to objects and append elements to arrays (anything else takes a
+  new protocol number). The JS client dropped a `qd:event` frame with more
+  than three elements; it now reads the first three, as its `qd:stream`
+  reader and the GDScript client already did. `check:godot` plays a newer
+  server: a field more in every `qd:hello`, elements appended to
+  `qd:stream` and `qd:event`, a field added to `qd:presence`, `qd:changed`
+  and `qd:revoked`.
+
+### Client
+
+- Behavior change: a call whose outcome is unknown is not a refusal. When
+  the connection drops after a mutation was sent (`INTERNAL` "No answer:
+  the connection to the server is down") or it times out (`TIMEOUT`), the
+  server may have made the write: the items its optimistic update added
+  stay shown and `pending`, named by the new `useCollection().checking`,
+  until the scope's next load (the reconnect's resume; while the socket is
+  up, a load asked for at once). A load that holds an item's id ends it,
+  its own copy shown, and one sent after the failure that answers without
+  it refuses it (kept with `onRefused: "keep"`, with the call's error).
+  rc.5 refused it at once, so after the reconnect the list showed the
+  server's row and the kept copy, and `retry()` wrote a second row. A
+  refused item now also ends once its scope holds its id.
+  `isUnknownOutcome(error)` on `./client` tells such failures apart (a call
+  that timed out in the send buffer, never sent, is a plain failure). Only
+  an id the client made, which the server keeps, can be found: with a
+  provisional one the load refuses the item even when the server made the
+  row, and `retry()` is safe only with such an id.
+- A refused optimistic item shows in `useCollection().refused` in the
+  render that shows the mutation's error: the overlay store applies a
+  failure in TanStack's notify batch of the mutation's change to error, so
+  `isPending` is never still true beside it. Its `retry()` sends the call
+  through the mutation hook that sent it, so the hook's `isPending`,
+  `onSuccess`, `onError` and `onSettled` follow the retry (F8.3; rc.5 sent
+  it past the hook).
+- A collection scope whose load was refused (`FORBIDDEN`, `NOT_FOUND`,
+  `UNAUTHENTICATED`) is loaded once more when the user's access may have
+  changed: on new service grants (`qd:access`), and when an `added` delta
+  of another held scope names the scope's anchor row (an invite adds the
+  chat to the user's own list, and its messages open without a remount);
+  every connect loads it again too (F8.4). One load per signal, so a scope
+  that stays refused does not loop. Optimistic items added to it meanwhile
+  show once it opens, until its own copies arrive.
+
+### Auth
+
+- Behavior change: `requireSession` applies the `/qd` calls' Origin rule
+  to the session cookie (F8.5; the final review reproduced a cross-site
+  form POST reaching a route as the user). From an `Origin` outside
+  `allowedOrigins` it answers 403 `{ error: "FORBIDDEN", message }`; a
+  request without `Origin` is accepted unless `Sec-Fetch-Site` names
+  another site; a bearer token is unaffected. The list is the new
+  `allowedOrigins` option, by default that of the `createAuthRoutes`
+  writing to the same session store; with neither, no page may use the
+  cookie there. `cookieOriginAllowed(request, allowedOrigins)` on
+  `./server/auth` (type `CookieOriginRequest`) is the rule for a custom
+  `authenticate` or route: the HTTP form, or the handshake's with
+  `transport: "socket"`.
+- MIGRATION's Discord Activity example sets no cookie: its page sends the
+  token as `auth.token`, and a `SameSite=None` cookie is for a page on
+  another site that calls the API with credentials (F8.6).
+- `createAuthRoutes` serves `GET {basePath}/providers`, `{ providers: [{
+id, name, kind }] }`: the sign-ins served now, in order (a provider
+  `google.optional` built nothing for is not in it, the mock only while it
+  is mounted and enabled), and the routes it returns have `providers()`
+  answering the same (F9.1, F10.1; type `AuthProviderInfo` on
+  `./server/auth`). An OAuth provider object may give a `name`;
+  `google()` and `discord()` give "Google" and "Discord". `./client` gains
+  `authProviders({ apiUrl?, basePath? })` (type `AuthProviderInfo`), so a
+  login page renders only what the API serves; the README's sign-in
+  example does.
+- A loopback `publicUrl` is reported: the routes warn when they are made
+  if every allowed origin is a page on another machine (F10.2), and the
+  first request that arrives for another host (`X-Forwarded-Host`, else
+  `Host`) logs an error naming it, once (F9.2: a hosted instance without
+  `API_URL` sent browsers to `http://localhost:<port>`). Routes with
+  nothing that can sign anyone in (only a mock that is off) warn when they
+  are made (F10.3).
+- `docs/deploying.md` has "Behind a proxy, in production or not" (`trust
+proxy`, `publicUrl`, the cookie's name by `X-Forwarded-Proto`; F9.3), and
+  the README's server example reads `trust proxy` from `TRUST_PROXY`
+  instead of setting it unconditionally (F10.4).
+
+### Smaller fixes
+
+- `inherit` from a parent whose policy lets every row through
+  (`everyone(level)`, alone or in `anyOf`) filters a list by
+  `{ [via]: { not: null } }` instead of an `in` list of every parent id,
+  which read the whole parent table on every list, collection and scope
+  check. A policy's filter is computed once per service, principal and
+  level within one access check, so asking the parent's filter first costs
+  nothing more.
+- `createServer` warns at startup when an admin kit edits grants
+  (`admin.handlers(c, { grants: true })`) without `auth.serviceAccessSource`:
+  a user whose grant is lowered keeps it on open sockets until they
+  connect again.
+- `useJoin` drops a join answered after its hello was replaced: with new
+  credentials the hello is cleared before the old socket closes, and a
+  reply that arrived then gave `onJoined` the last user's data.
+- MIGRATION says, where it says a missing row is `NOT_FOUND`, that a
+  subscribe or a method whose access names the row (`{ entry }`) answers
+  `FORBIDDEN` (only a service-wide `Admin` gets `NOT_FOUND`).
+- The README names the public types added since rc.1 where their feature
+  is: `ReceivedRow`, `FullProjectionOf`, `ServiceModelsWatch`,
+  `ChannelRoomOf`, `AdminOutputOf`, `StreamImplementation`, `RoomLeft`,
+  `JsonColumnValue`, `HttpCredentialSource`, `EventQuery`, `MatrixCell`,
+  `MatrixInputFactory` and `MockSession`.
+
 ## [5.0.0-rc.5]
 
 Round 6 of the fixes the quickdraw-chat migration found: the framework
@@ -44,7 +232,8 @@ the release candidate is cut.
   such a write is not signalled, as no write's is on its own. Before, a
   game that re-ensured a chat membership on every page load
   (`upsert({ update: {} })`) re-sent the chat to every member's list and
-  made every watcher of the service's topic read again.
+  made every watcher of the service's topic read again. rc.6 withdraws the
+  equal-values case, which lost real changes (see there).
 - An upsert whose `update` sets nothing reads its row in the upsert's
   place: `findUnique` with its `where` and selection answers it when the
   row exists (one statement, as the upsert was, and fewer in SQL than

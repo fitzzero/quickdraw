@@ -95,10 +95,11 @@ export const taskService = qd.defineService(task, {
 Data goes through service methods. The few REST routes an app keeps (a
 service worker's renewal, an inbound webhook, the auth routes) never reach
 the database themselves: they sign the user in with `requireSession(keys)`
-from `@fitzzero/quickdraw-core/server/auth` (it answers 401 itself; pass
-`socketAuth`'s `loadPrincipal` too when the app builds its own principal)
-and call the method in process, so its validation, access check and tracked
-writes are a socket call's:
+from `@fitzzero/quickdraw-core/server/auth` (it answers 401 itself, and 403
+for the session cookie sent from a page outside the auth routes'
+`allowedOrigins`; pass `socketAuth`'s `loadPrincipal` too when the app
+builds its own principal) and call the method in process, so its
+validation, access check and tracked writes are a socket call's:
 
 ```ts
 app.post("/api/push/resubscribe", express.json(), requireSession(keys), (req, res) => {
@@ -261,9 +262,10 @@ relation table on every read; a huge relation gets a counter column.
 "Make sure this row exists" is `db.x.upsert({ where, create, update: {} })`:
 it costs one read when the row is there and signals nothing, so a page load
 or a reconnect that re-ensures a membership sends no frame. A write that
-changes nothing (no row matched, `data: {}`, scope or membership columns
-set to what they held) signals nothing; do not guard writes with a read
-of your own to save frames.
+matches no row or has nothing to write (`data: {}`) signals nothing; every
+other write signals, one that sets a column to the value it already holds
+too, so re-ensure a row with that upsert rather than by writing its values
+again.
 `share: "caller"` for hot queries;
 `versionColumn: "updatedAt"` answers "not modified" cheaply. The quickdraw
 lint rules enforce most of this file (`no-untracked-write`,

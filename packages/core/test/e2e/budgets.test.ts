@@ -191,7 +191,6 @@ describe("the fixture app's budgets", () => {
     expect(
       await emitWithAck(socket, "qd:watch", { s: "taskService", topic: `board:${board.p1}` }),
     ).toMatchObject({ ok: true });
-    const task = await e2e.prisma().task.findUniqueOrThrow({ where: { id: board.t1 } });
     app.frames.clear();
     const { measured } = await expectBudget(async () => {
       await write(async (db) => {
@@ -201,8 +200,7 @@ describe("the fixture app's budgets", () => {
           update: {},
           create: { projectId: board.p1, userId: board.bo, role: "Read" },
         });
-        // A scope column set to what it holds: its old value is read first, as for any change.
-        await db.task.update({ where: { id: board.t1 }, data: { status: task.status } });
+        // A write that sets a value it already holds is recorded like any other (rc.6).
         await db.task.updateMany({ where: { id: "missing" }, data: { title: "None" } });
         await db.task.deleteMany({ where: { id: "missing" } });
       });

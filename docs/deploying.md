@@ -267,6 +267,33 @@ and subscription reads are always authorized on the node that serves them.
   for the calls still running and their flushes, and takes milliseconds when
   the other nodes answer.
 
+## Behind a proxy, in production or not
+
+A hosted development or staging instance behind a TLS tunnel or a load
+balancer is behind a proxy as much as production is (the template's QA,
+findings F9.3 and F10.4). Three settings follow the proxy, not `NODE_ENV`:
+
+- **`trust proxy`.** Express reads the client's address from
+  `X-Forwarded-For` only when told to trust the proxy, and the rate
+  limiters (the auth routes', `createCallLimiter`) count by that address.
+  Behind a proxy without it, every visitor shares one limit and
+  express-rate-limit logs `ERR_ERL_UNEXPECTED_X_FORWARDED_FOR`; with it and
+  no proxy, a client picks its own address. Set it from the deployment, as
+  the number of proxies in front: `app.set("trust proxy",
+Number(process.env.TRUST_PROXY ?? 0))`, with `TRUST_PROXY=1` behind one.
+- **`publicUrl`.** The auth routes build every provider redirect from it,
+  so it is the API's public URL (`https://api-dev.example.com`) on every
+  deployment, never a fallback of `http://localhost:<port>`. A loopback
+  `publicUrl` warns when the routes are made for pages on another machine,
+  and logs an error naming the host the first request arrives for.
+- **The cookie's name follows HTTPS.** The routes and the transports name
+  the session cookie `__Host-session` on a request over HTTPS and `session`
+  over plain HTTP, and know a request came over HTTPS from `req.secure`
+  (which Express sets from `X-Forwarded-Proto` only with `trust proxy`), an
+  `X-Forwarded-Proto: https` header, or an `https:` `Origin`. A proxy that
+  ends TLS must send `X-Forwarded-Proto`, or the API sets a cookie the
+  next request does not read.
+
 ## Gaps that remain
 
 - Frames of one row from two nodes still arrive out of revision order;

@@ -4,8 +4,8 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineContract, entityRoom, nullable, query } from "../../index";
-import { createHarness, type Harness } from "../../prisma/__tests__/harness";
+import { defineContract, entityRoom, nullable, query, type EntityFrame } from "../../index";
+import { createHarness, pauseNext, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, type TestApp } from "../../testing/index";
 import { deferred } from "../__tests__/fixtures";
 import { as, seedBoard, type Board } from "../access/__tests__/board";
@@ -465,6 +465,47 @@ describe("not modified", () => {
     expect(await sub(connection, "taskService", [board.t1], [held])).toMatchObject({
       r: [{ ok: true, d: { title: "Changed" } }],
     });
+  });
+
+  it("sends a write that sets a value back after a concurrent change, and never answers its holder nm", async () => {
+    const { app } = await start();
+    const { connection, frames } = await connect(app, as(board.cy));
+    const first = (await sub(connection, "taskService", [board.t1])) as {
+      r: [{ rev: number; d: { status: string } }];
+    };
+    expect(first.r[0].d.status).toBe("open");
+    // The re-ensuring write reads "open" first; its UPDATE waits while another unit sets "done".
+    const pause = pauseNext(h.database, /^\s*UPDATE\s+"public"\."Task"/iu);
+    try {
+      const reEnsure = app.server.dispatcher.run(() =>
+        h.db.task.update({ where: { id: board.t1 }, data: { status: "open" } }),
+      );
+      await pause.reached;
+      await app.server.dispatcher.run(() =>
+        h.db.task.update({ where: { id: board.t1 }, data: { status: "done" } }),
+      );
+      pause.release();
+      await reEnsure;
+    } finally {
+      pause.restore();
+    }
+    await frames.settle();
+    expect((await h.prisma.task.findUniqueOrThrow({ where: { id: board.t1 } })).status).toBe(
+      "open",
+    );
+    const statusOf = (frame: EntityFrame): unknown =>
+      frame.t === "r" ? undefined : (frame.d as { readonly status?: unknown }).status;
+    // The subscriber ends where the database does: "done", then "open" again.
+    expect(frames.entity.map(statusOf)).toEqual(["done", "open"]);
+    const [done, open] = frames.entity;
+    const again = await connect(app, as(board.cy));
+    expect(
+      await sub(again.connection, "taskService", [board.t1], [open?.rev ?? null]),
+    ).toMatchObject({ r: [{ ok: true, nm: true }] });
+    // A holder of the "done" frame alone is sent the row the database holds.
+    expect(
+      await sub(again.connection, "taskService", [board.t1], [done?.rev ?? null]),
+    ).toMatchObject({ r: [{ ok: true, d: { status: "open" } }] });
   });
 
   it("answers from the version column when the service declares one", async () => {

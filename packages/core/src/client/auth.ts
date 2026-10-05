@@ -1,7 +1,8 @@
 // The browser side of the auth routes kit (RFC 0003 section 12.6), and
-// token storage. `signInUrl`, `signOut` and `signOutEverywhere` use the
-// routes `createAuthRoutes` serves (`GET {basePath}/{provider}/start`,
-// `POST {basePath}/logout`, `POST {basePath}/logout-all`); they replace
+// token storage. `authProviders`, `signInUrl`, `signOut` and
+// `signOutEverywhere` use the routes `createAuthRoutes` serves (`GET
+// {basePath}/providers`, `GET {basePath}/{provider}/start`, `POST
+// {basePath}/logout`, `POST {basePath}/logout-all`); the last three replace
 // 4.1's `getOAuthUrl`, `logout` and `logoutAllDevices`
 // (`legacy-src/client/utils/auth.ts`), which called routes the kit does not
 // serve and sent only a stored token, so with cookie sessions they signed
@@ -245,6 +246,75 @@ export async function signOut(options: AuthRoutesTarget = {}): Promise<void> {
   } finally {
     clearAuthToken();
   }
+}
+
+/** A sign-in the API's auth routes serve, as `GET {basePath}/providers` lists it ({@link authProviders}). */
+export interface AuthProviderInfo {
+  /** Its id: `signInUrl(id)` starts it; a guest's is `POST {basePath}/guest`. */
+  readonly id: string;
+  /** A name for its button: `"Google"`, `"Discord"`, `"Mock"`, `"Guest"`, or an OAuth provider's own. */
+  readonly name: string;
+  /** `"oauth"` (a redirecting provider), `"mock"` (the development picker) or `"guest"`. */
+  readonly kind: "oauth" | "mock" | "guest";
+}
+
+const PROVIDER_KINDS: ReadonlySet<unknown> = new Set(["oauth", "mock", "guest"]);
+
+/** One entry of the routes' list, its known fields only (a newer server may add others). */
+function providerInfoOf(value: unknown): AuthProviderInfo | undefined {
+  if (!isRecord(value) || typeof value.id !== "string" || !PROVIDER_ID.test(value.id)) {
+    return undefined;
+  }
+  const kind = PROVIDER_KINDS.has(value.kind)
+    ? (value.kind as AuthProviderInfo["kind"])
+    : undefined;
+  return kind === undefined
+    ? undefined
+    : { id: value.id, name: typeof value.name === "string" ? value.name : value.id, kind };
+}
+
+/**
+ * The sign-ins the API serves, in the order its routes list them: `GET
+ * {basePath}/providers` (finding F9.1 of the owner's QA of the template), so
+ * a login page renders a button only for a provider that is there, whatever
+ * the web app was built with: a provider whose credentials the server lacks
+ * is not listed, nor the mock where it is off. Rejects with a
+ * `QuickdrawError` when the server cannot be reached or refuses.
+ *
+ * @example
+ * const { data: providers = [] } = useQuery({
+ *   queryKey: ["auth", "providers"],
+ *   queryFn: () => authProviders({ apiUrl: API_URL }),
+ * });
+ */
+export async function authProviders(
+  options: AuthRoutesTarget = {},
+): Promise<readonly AuthProviderInfo[]> {
+  const url = `${routesUrl("authProviders", options)}/providers`;
+  let response: Response;
+  try {
+    response = await fetch(url, { headers: { Accept: "application/json" } });
+  } catch (error) {
+    throw new QuickdrawError("INTERNAL", `authProviders: ${url} could not be reached`, {
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (!response.ok) {
+    throw await refusalOf(response);
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    body = undefined;
+  }
+  if (!isRecord(body) || !Array.isArray(body.providers)) {
+    throw new QuickdrawError("INTERNAL", `authProviders: ${url} answered no list of providers`);
+  }
+  return body.providers.flatMap((entry: unknown) => {
+    const info = providerInfoOf(entry);
+    return info === undefined ? [] : [info];
+  });
 }
 
 /**

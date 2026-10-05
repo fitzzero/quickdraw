@@ -519,6 +519,30 @@ describe("deltas after a flush", () => {
     ]);
   });
 
+  it("keeps a row an array-form batch moved out and back in, as the database holds it", async () => {
+    const { app } = await start();
+    const { connection, scopes } = await connect(app, as(board.ada));
+    await colSub(connection, "openByProject", board.p1);
+    await write(app, (db) =>
+      db.$transaction([
+        db.task.update({ where: { id: board.t1 }, data: { status: "done" } }),
+        db.task.update({ where: { id: board.t1 }, data: { status: "open" } }),
+      ]),
+    );
+    await scopes.settle();
+    expect((await h.prisma.task.findUniqueOrThrow({ where: { id: board.t1 } })).status).toBe(
+      "open",
+    );
+    // Never removed: the unit's one record ends where the database does, still in scope.
+    expect(scopes.frames.map(({ deltas }) => deltas)).toEqual([
+      [
+        inCluster()
+          ? { t: "updated", item: card(board.t1, board.p1, "T1") }
+          : { t: "patched", id: board.t1, d: { status: "open" } },
+      ],
+    ]);
+  });
+
   it("sends a deleted row as removed", async () => {
     const { app } = await start();
     const { connection, scopes } = await connect(app, as(board.ada));

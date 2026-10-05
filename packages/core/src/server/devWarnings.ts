@@ -19,9 +19,11 @@
 // | `repeated-call`      | one connection called a method with the same input more than 10    | connection               |
 // |                      | times within a second, or was refused `RATE_LIMITED` more than 30  | (`refused <connection>`) |
 // |                      | times within a minute: a client in a loop (`createLoopWatch`)      |                          |
-// | `tiered-field-in-    | a method's own output schema names a field the contract tiers,     | the field                |
-// | output`              | which such an output never strips (`emit/tieredOutputs.ts`); raised|                          |
-// |                      | when a dispatcher is made, so a strict test app fails to start     |                          |
+// | `tiered-field-in-    | a method's own output schema declares a field the contract tiers,  | the field                |
+// | output`              | at any depth, which such an output never strips                    |                          |
+// |                      | (`emit/tieredOutputs.ts`); raised when a dispatcher is made, so a  |                          |
+// |                      | strict test app fails to start; for an output without JSON Schema, |                          |
+// |                      | raised by the first reply that carries the field                    |                          |
 //
 // `nested-write`, `ambient-write`, `batch-read` and `batch-create-many` are
 // the write tracker's (`uow/unitOfWork.ts`), raised exactly where they were

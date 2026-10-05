@@ -30,6 +30,7 @@ function emptyScope(active: boolean): UseCollectionResult<unknown, IndexRow> {
   return {
     items: [],
     pending: NONE_PENDING,
+    checking: NONE_PENDING,
     // A mock's mutations add nothing, so nothing is refused either.
     refused: [],
     index: undefined,

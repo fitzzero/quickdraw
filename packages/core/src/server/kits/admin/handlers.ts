@@ -43,7 +43,7 @@ import type { AnyContract } from "../../../contract/defineContract";
 import { admin as contractHalf, adminSpecOf, type AdminSpec } from "../../../contract/kits/admin";
 import { accessFormProblem } from "../../access/forms";
 import type { AccessForm } from "../../access/types";
-import { checkWhenDefined, type AnyService } from "../../service";
+import { checkWhenDefined, markGrantsEditor, type AnyService } from "../../service";
 import { kitEntry, rowlessMethods } from "../rowless";
 import { adminFieldsOf, type AdminFields } from "./meta";
 import { ADMIN_DEFAULT_ACCESS, handlerOf } from "./methods";
@@ -205,6 +205,10 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty,
     const form = (access[name] as AccessForm | undefined) ?? ADMIN_DEFAULT_ACCESS;
     const handler = handlerOf({ spec, fields, form, ...hooks });
     checkWhenDefined(handler, (service) => serviceProblem(service, contract));
+    if (checked.grants === true) {
+      // `createServer` warns when no `auth.serviceAccessSource` says where these grants live.
+      markGrantsEditor(handler);
+    }
     entries[name] = kitEntry(name, form, handler, rowless);
   }
   return Object.freeze(entries) as AdminImplementations<C, A, Db>;

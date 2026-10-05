@@ -26,6 +26,8 @@ const env = {
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
   DISCORD_CLIENT_ID: setting("DISCORD_CLIENT_ID"),
   DISCORD_CLIENT_SECRET: setting("DISCORD_CLIENT_SECRET"),
+  // how many proxies are in front (a TLS tunnel, a load balancer): 0 when none
+  TRUST_PROXY: Number(process.env.TRUST_PROXY ?? 0),
 };
 const services = [projectService, taskService];
 
@@ -47,8 +49,8 @@ const allowedOrigins = [env.CLIENT_URL];
 const sessions = createMemorySessionStore();
 
 export const app: Express = express();
-// behind a proxy, so the rate limits see the client's IP
-app.set("trust proxy", 1);
+// behind a proxy, so the rate limits see the client's IP; with none, a client would pick its own
+app.set("trust proxy", env.TRUST_PROXY);
 // a web app on another origin also needs CORS with credentials on these routes
 app.use(
   createAuthRoutes({

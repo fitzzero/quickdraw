@@ -86,8 +86,10 @@ faithfully. What it does:
   response was the service's DTO, `todoSchema<Response>()` otherwise. A
   mutation of one row whose 4.x response was `DTO | null` answers `"entity"`,
   marked in the contract and above its handler: 4.x's `this.update` gave
-  `null` for a missing row, a tracked write throws `NOT_FOUND` instead, and
-  only an exact `"entity"` output is optimistic by default. The
+  `null` for a missing row, a tracked write throws `NOT_FOUND` instead
+  (though under an `{ entry }` access form the missing row is refused
+  `FORBIDDEN` before the handler runs), and only an exact `"entity"`
+  output is optimistic by default. The
   entity is `todoSchema<DTO>({ keys })`, the DTO's fields. A method is a
   `query` when its name starts with get, list, search, find or count, or the
   web app reads it with `useServiceQuery`, and a `mutation` otherwise.
@@ -514,7 +516,10 @@ The CRUD trio emitted the entity frame and the collection deltas and ran
 the lifecycle hooks. In 5.0 every write through `db` is tracked: the frames
 and deltas follow from the write itself, whatever method made it. Two
 differences to keep in mind: `db.task.update` throws `NOT_FOUND` for a
-missing row where `this.update` returned `null`, and nothing runs a hook.
+missing row where `this.update` returned `null` (a method whose access is
+`{ entry }` never gets that far: its caller is refused `FORBIDDEN` for a
+row that does not exist, as for one they may not see), and nothing runs a
+hook.
 Move a hook's work into the methods that write, or into `affects` when it
 only made another service's row send again.
 
@@ -633,8 +638,11 @@ data of `useEntity`, `useEntities` and `useCollection`, an `"entity"`
 output, `EntityOf`, `ItemOf`), a tiered field is optional, since a reader
 below its level receives the row without it: `task.notes` is
 `string | null | undefined` there, so read it with a guard. A handler still
-returns the whole row. A 4.x DTO type that kept protected fields optional by
-hand can become `EntityOf<typeof taskContract>`.
+returns the whole row. A method whose output is a schema of its own sends
+only the keys that schema declares, unstripped, so it must not declare a
+tiered field: answer the entity or a projection instead. A 4.x DTO type
+that kept protected fields optional by hand can become
+`EntityOf<typeof taskContract>`.
 
 A handler returns database rows for a projection output, and a Prisma `Json`
 column, typed `JsonValue`, is accepted where the projection has an object,
@@ -1585,16 +1593,21 @@ export const server = qd.createServer({
 redirect to a provider (a Discord Activity's embedded SDK, login codes)
 stays an app route, ending in `issueSession`: an ordinary session that
 `socketAuth`, `requireSession` and `/auth/me` accept like any other. Answer
-the token in the body for a client that cannot keep the cookie:
+the token in the body for a client that cannot keep the cookie, and set no
+cookie its page does not use. A cookie is for a page that calls the API
+with it: on the API's own site, `setSessionCookie(res, token)` (Lax);
+`{ sameSite: "none" }` (always Secure) only for a page on another site
+whose requests send `credentials: "include"`, with its origin in
+`allowedOrigins`:
 
 <!-- example: apps/api/src/auth/migrating.ts#activity -->
 
 ```ts
-import { issueSession, setSessionCookie } from "@fitzzero/quickdraw-core/server/auth";
+import { issueSession } from "@fitzzero/quickdraw-core/server/auth";
 
 // A sign-in the kit's redirecting providers do not cover, such as a Discord Activity's embedded
 // SDK handing the page a code: the app exchanges it, then starts an ordinary session, which
-// socketAuth and requireSession accept like any other.
+// socketAuth and requireSession accept like any other. The page sends the token as auth.token.
 app.post("/auth/discord/activity", express.json(), (req, res) => {
   void (async () => {
     const { code } = req.body as { readonly code?: unknown };
@@ -1612,9 +1625,7 @@ app.post("/auth/discord/activity", express.json(), (req, res) => {
       userAgent: req.get("user-agent"),
       ip: req.ip,
     });
-    // best effort: a third-party iframe gets a cross-site cookie only with SameSite=None (the
-    // default is Lax), and may refuse it even then, so the page sends auth.token
-    setSessionCookie(res, token, { sameSite: "none" });
+    // no cookie: an iframe on another site rarely keeps one, and this page never reads it
     res.json({ token });
   })();
 });
@@ -1699,10 +1710,21 @@ native client sends the token as `auth.token`.
   as the auth routes' own cookie is, so the cookie never rides a request
   another site's page makes. A web app on another site, or a page in a
   third-party iframe, passes `{ sameSite: "none" }` (always Secure).
+- **A method's output is sent as it declares it.** 4.x sent what a handler
+  returned. A projection output (`"entity"`, a named projection) sends the
+  projection's keys, stripped per caller, and a method whose output is a
+  schema of its own sends only what that schema's JSON Schema declares
+  (Zod 4.2 or later), on every transport: a handler may return the whole
+  row, and the keys the schema leaves out never leave the server. Up to
+  rc.5 such a schema output was sent as returned. An output schema without
+  JSON Schema (Zod 3) still is.
 - **No default CORS origin.** 4.1 allowed `*`; pass `cors`.
 - **Errors that are not `QuickdrawError` reach callers as `INTERNAL`** with a
   generic message (the original is logged). A Prisma unique violation is
-  `CONFLICT` and a missing row `NOT_FOUND`.
+  `CONFLICT` and a missing row `NOT_FOUND`. A subscribe, or a method whose
+  access names the row (`{ entry }`), answers a missing row `FORBIDDEN`,
+  as it answers a row the caller may not see, so a stranger cannot tell
+  which ids exist (only a service-wide `Admin` gets `NOT_FOUND`).
 - **A mutation ignores its caller's cancel**: only its time limit (30 s by
   default) stops it.
 - **MCP custom tools default to `access: "authenticated"`.**

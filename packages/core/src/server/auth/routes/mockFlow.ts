@@ -82,3 +82,12 @@ export function mockFlow(
     },
   });
 }
+
+/**
+ * Whether a mounted mock provider still serves sign-ins: its routes check
+ * `isMockOAuthEnabled()` on every request, so `GET {basePath}/providers`
+ * lists it only while that holds.
+ */
+export function mockServes(): boolean {
+  return isMockOAuthEnabled();
+}
