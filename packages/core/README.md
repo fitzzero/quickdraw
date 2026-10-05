@@ -2490,10 +2490,13 @@ nothing is cached:
   bearer token needs none. 4.1's `createRequireAuth` stays for token-keyed
   sessions.
 - Rate limits: the sign-in routes share `createAuthLimiter({ max: 60 })` (60
-  requests per 15 minutes per IP) and the session routes
-  `createAuthStatusLimiter()` (120); pass `rateLimit: { signIn, session }`
-  to replace them (a shared store across instances, say) or `false`. The
-  defaults need the optional peer `express-rate-limit`. The HTTP transport
+  requests per 15 minutes per IP), the session routes
+  `createAuthStatusLimiter()` (120), and `GET /providers` has
+  `createPublicApiLimiter()` (60 per minute) to itself, so the login pages
+  loaded from one address cannot use up its sign-outs; pass
+  `rateLimit: { signIn, session, providers }` to replace them (a shared
+  store across instances, say; one left out keeps its default) or `false`.
+  The defaults need the optional peer `express-rate-limit`. The HTTP transport
   (`/qd`) is not limited unless `http.rateLimit` is set;
   `createCallLimiter()` (300 calls per minute per IP) refuses in the
   transport's own `RATE_LIMITED` reply. A web server that prefetches for

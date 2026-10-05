@@ -616,12 +616,29 @@ describe("rate limits", () => {
     expect(answers.filter((status) => status === 429)).toHaveLength(1);
   });
 
+  it("limits the provider list on its own, 60 per minute by default, so login pages cannot use up sign-outs (finding F11.3)", async () => {
+    const { url } = await harness.boot({ rateLimit: undefined });
+    const answers = await Promise.all(
+      Array.from({ length: 121 }, async () => (await get(`${url}/auth/providers`)).status),
+    );
+    expect((await get(`${url}/auth/me`)).status).toBe(401);
+    expect((await post(`${url}/auth/logout`)).status).toBe(204);
+    expect(answers.filter((status) => status === 200)).toHaveLength(60);
+    expect(answers.filter((status) => status === 429)).toHaveLength(61);
+  });
+
   it("takes the app's own limiters", async () => {
     const { url } = await harness.boot({
-      rateLimit: { signIn: createAuthLimiter({ max: 1 }), session: createAuthLimiter({ max: 2 }) },
+      rateLimit: {
+        signIn: createAuthLimiter({ max: 1 }),
+        session: createAuthLimiter({ max: 2 }),
+        providers: createAuthLimiter({ max: 1 }),
+      },
     });
     expect((await get(`${url}/auth/mock/start`)).status).toBe(302);
     expect((await get(`${url}/auth/mock/start`)).status).toBe(429);
+    expect((await get(`${url}/auth/providers`)).status).toBe(200);
+    expect((await get(`${url}/auth/providers`)).status).toBe(429);
     expect((await get(`${url}/auth/me`)).status).toBe(401);
     expect((await get(`${url}/auth/me`)).status).toBe(401);
     expect((await get(`${url}/auth/me`)).status).toBe(429);
