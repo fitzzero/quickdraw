@@ -95,10 +95,11 @@ export const taskService = qd.defineService(task, {
 Data goes through service methods. The few REST routes an app keeps (a
 service worker's renewal, an inbound webhook, the auth routes) never reach
 the database themselves: they sign the user in with `requireSession(keys)`
-from `@fitzzero/quickdraw-core/server/auth` (it answers 401 itself; pass
-`socketAuth`'s `loadPrincipal` too when the app builds its own principal)
-and call the method in process, so its validation, access check and tracked
-writes are a socket call's:
+from `@fitzzero/quickdraw-core/server/auth` (it answers 401 itself, and 403
+for the session cookie sent from a page outside the auth routes'
+`allowedOrigins`; pass `socketAuth`'s `loadPrincipal` too when the app
+builds its own principal) and call the method in process, so its
+validation, access check and tracked writes are a socket call's:
 
 ```ts
 app.post("/api/push/resubscribe", express.json(), requireSession(keys), (req, res) => {

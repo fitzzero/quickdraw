@@ -12,7 +12,7 @@
 //
 // React-free.
 
-import type { QueryClient } from "@tanstack/react-query";
+import { notifyManager, type QueryClient } from "@tanstack/react-query";
 import type { CollectionDef } from "../contract/collections";
 import { QuickdrawError } from "../protocol/errors";
 import { isRecord } from "../protocol/guards";
@@ -123,6 +123,22 @@ function openLayers(
   return opened;
 }
 
+/** How a mutation hook runs its calls' optimistic updates (`mutation.ts`). */
+export interface MutationRun {
+  /**
+   * Sends the call again through the hook's own mutation, for a refused
+   * item's `retry()`, so the hook's `isPending` and its callbacks follow it.
+   * Default: the call is sent again directly.
+   */
+  readonly resend?: () => Promise<unknown>;
+  /**
+   * Runs what a failure does to the overlays (a refusal, or an unknown
+   * outcome) when the mutation's own state turns to error, so a refused
+   * item shows in the same render as the hook's error. Default: at once.
+   */
+  readonly onFailed?: (apply: () => void) => void;
+}
+
 /**
  * Runs one mutation call with its optimistic layers: opens them, sends the
  * call with `send`, then finishes them with the reply or drops them when the
@@ -139,6 +155,7 @@ export async function mutateOptimistically<T>(
   optimistic: false | OptimisticUpdate<unknown> | undefined,
   input: unknown,
   send: (replied: (data: T) => void) => Promise<T>,
+  run: MutationRun = {},
 ): Promise<T> {
   const ignore = (): void => undefined;
   if (optimistic === false) {
@@ -164,14 +181,59 @@ export async function mutateOptimistically<T>(
     // Kept additions stay, refused; `retry` sends the same call again, its update adding them anew.
     const refusal = {
       error: refusalError(error),
-      retry: () => mutateOptimistically(queryClient, target, optimistic, input, send),
+      retry:
+        run.resend ?? (() => mutateOptimistically(queryClient, target, optimistic, input, send)),
     };
-    if (isUnknownOutcome(error)) {
-      // The server may have made the write: the scopes' next loads say (`additions.ts`).
-      store.unknown(opened, refusal);
+    const apply = (): void => {
+      if (isUnknownOutcome(error)) {
+        // The server may have made the write: the scopes' next loads say (`additions.ts`).
+        store.unknown(opened, refusal);
+      } else {
+        store.refuse(opened, refusal);
+      }
+    };
+    if (run.onFailed === undefined) {
+      apply();
     } else {
-      store.refuse(opened, refusal);
+      run.onFailed(apply);
     }
     throw error;
   }
+}
+
+/** What each `QueryClient`'s mutations hold back until their state turns to error, by their variables. */
+const heldFailures = new WeakMap<QueryClient, Map<unknown, (() => void)[]>>();
+
+/**
+ * Runs `apply` when the mutation of `queryClient` called with `variables`
+ * (that very value) turns to error, inside TanStack's notify batch of that
+ * change: what the failure does to the overlays then shows in the render
+ * that shows the mutation's error and `isPending` false (finding F8.3 of the
+ * quickdraw-chat migration). The mutation function's call fails before
+ * TanStack runs its `onError` and `onSettled` and then sets the state.
+ */
+export function applyWhenMutationFails(
+  queryClient: QueryClient,
+  variables: unknown,
+  apply: () => void,
+): void {
+  let held = heldFailures.get(queryClient);
+  if (held === undefined) {
+    const byVariables = new Map<unknown, (() => void)[]>();
+    held = byVariables;
+    heldFailures.set(queryClient, byVariables);
+    queryClient.getMutationCache().subscribe((event) => {
+      if (event.type !== "updated" || event.action.type !== "error") {
+        return;
+      }
+      const { variables: failed } = event.mutation.state;
+      const waiting = byVariables.get(failed);
+      byVariables.delete(failed);
+      for (const run of waiting ?? []) {
+        // Queued in the batch the mutation's observers are told in: one render shows both.
+        notifyManager.schedule(run);
+      }
+    });
+  }
+  held.set(variables, [...(held.get(variables) ?? []), apply]);
 }

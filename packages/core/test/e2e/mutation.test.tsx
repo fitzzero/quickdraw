@@ -249,7 +249,79 @@ function KeptBoard({ projectId }: { readonly projectId: string }) {
   );
 }
 
+/** Each render's mutation state and refused items, and the hook's settled calls (finding F8.3). */
+interface StateLog {
+  readonly renders: { readonly isPending: boolean; readonly refused: number }[];
+  settled: number;
+}
+
+/** P1's board whose create's state and refused items are logged at every render. */
+function LoggedBoard({ projectId, log }: { readonly projectId: string; readonly log: StateLog }) {
+  const { refused } = qd.task.board.useCollection(projectId);
+  const create = qd.task.create.useMutation({
+    optimistic: (input, cache) =>
+      cache.addItem(
+        "board",
+        input.projectId,
+        {
+          projectId: input.projectId,
+          title: input.title,
+          status: "open",
+          ordinal: 99,
+          assigneeId: null,
+        },
+        { onRefused: "keep" },
+      ),
+    onSettled: () => {
+      log.settled += 1;
+    },
+  });
+  log.renders.push({ isPending: create.isPending, refused: refused.length });
+  return (
+    <>
+      <p>{`mutation ${create.status}`}</p>
+      {refused.map(({ item, retry }) => (
+        <button key={item.id} type="button" onClick={() => void retry()}>
+          {`retry ${item.title}`}
+        </button>
+      ))}
+      <button type="button" onClick={() => create.mutate({ projectId, title: "First" })}>
+        add First
+      </button>
+    </>
+  );
+}
+
 describe("an optimistic create with onRefused: keep (finding F6.4)", () => {
+  it("shows a refused card in the render that shows the error, and retries through the mutation (finding F8.3)", async () => {
+    const { app } = await e2e.start();
+    const board = e2e.board();
+    const log: StateLog = { renders: [], settled: 0 };
+    const view = await renderWithQuickdraw(<LoggedBoard projectId={board.p1} log={log} />, {
+      app,
+      as: as(board.di),
+      client: qd,
+    });
+    await view.findByText("mutation idle");
+    fireEvent.click(view.getByText("add First"));
+    await view.findByText("retry First");
+    await view.findByText("mutation error");
+    // Never refused while the mutation still showed as pending.
+    expect(log.renders.filter((render) => render.refused > 0 && render.isPending)).toEqual([]);
+    expect(log.settled).toBe(1);
+    // A retry is the hook's own mutation: pending again, and its callbacks run.
+    await e2e.prisma().project.update({
+      where: { id: board.p1 },
+      data: { acl: [{ userId: board.di, level: "Moderate" }] },
+    });
+    const before = log.renders.length;
+    fireEvent.click(view.getByText("retry First"));
+    await view.findByText("mutation success");
+    expect(log.renders.slice(before).some((render) => render.isPending)).toBe(true);
+    expect(log.settled).toBe(2);
+    expect(view.queryByText("retry First")).toBeNull();
+  });
+
   it("keeps the refused card out of the items with its error, until it is dismissed or sent again", async () => {
     const { app } = await e2e.start();
     const board = e2e.board();

@@ -11,7 +11,7 @@ import { defineContract, httpStatus, mutation, query, toWire } from "../../../in
 import { captureLogger, db, type AppPrincipal } from "../../__tests__/fixtures";
 import { initQuickdraw } from "../../init";
 import { verifyJWT } from "../jwt";
-import { authHarness, get, post, SECRET, signIn, userIdOf } from "./__tests__/harness";
+import { APP_ORIGIN, authHarness, get, post, SECRET, signIn, userIdOf } from "./__tests__/harness";
 import {
   requireSession,
   sessionOf,
@@ -223,6 +223,125 @@ describe("requireSession", () => {
     expect(await other.json()).toEqual({
       message: "requireSession: loadPrincipal must return the principal of the session's user",
     });
+  });
+});
+
+describe("the session cookie's Origin (finding F8.5, and the final review of the release candidates)", () => {
+  /** An app whose `POST /api/items/delete` takes a form body, behind `requireSession(keys, options)`. */
+  function formApp(
+    keys: () => tokens.SessionKeys,
+    options: Parameters<typeof requireSession>[1] = {},
+    acted: unknown[] = [],
+  ) {
+    const app = express();
+    app.post(
+      "/api/items/delete",
+      express.urlencoded({ extended: false }),
+      (req, res, next) => {
+        requireSession(keys(), options)(req as SessionRequest, res, next);
+      },
+      (req, res) => {
+        acted.push(sessionOf(req).userId);
+        res.json({ deleted: true });
+      },
+    );
+    return app;
+  }
+
+  async function bootForm(options: Parameters<typeof requireSession>[1] = {}) {
+    let keys: tokens.SessionKeys | undefined;
+    const acted: unknown[] = [];
+    const booted = await harness.boot({}, () =>
+      formApp(
+        () => keys ?? { sessions: createMemorySessionStore(), jwtSecret: SECRET },
+        options,
+        acted,
+      ),
+    );
+    keys = { sessions: booted.sessions, jwtSecret: SECRET };
+    const { session } = await signIn(booted.url, "ada@demo.local");
+    const send = (headers: Record<string, string>) =>
+      fetch(`${booted.url}/api/items/delete`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", ...headers },
+        body: "id=item-1",
+      });
+    return { booted, session, send, acted };
+  }
+
+  it("refuses a cross-site form POST with the cookie, and lets the app's own pages through", async () => {
+    const { session, send, acted } = await bootForm();
+    // The review's reproduction: another site's form, the user's cookie riding along.
+    const forged = await send({
+      cookie: session,
+      origin: "http://evil.example",
+      "sec-fetch-site": "cross-site",
+    });
+    expect(forged.status).toBe(403);
+    expect(await forged.json()).toEqual({
+      error: "FORBIDDEN",
+      message:
+        "This page's origin may not use the session cookie; send it from an allowed origin or use a bearer token",
+    });
+    expect(acted).toEqual([]);
+    // The routes' allowlist applies: the app's origin, and a pattern of it.
+    expect((await send({ cookie: session, origin: APP_ORIGIN })).status).toBe(200);
+    expect((await send({ cookie: session, origin: "http://pr.preview.test" })).status).toBe(200);
+    // No Origin: curl, or a server forwarding the cookie, unless the browser says another site sent it.
+    expect((await send({ cookie: session })).status).toBe(200);
+    expect((await send({ cookie: session, "sec-fetch-site": "same-site" })).status).toBe(403);
+    expect((await send({ cookie: session, origin: "null" })).status).toBe(403);
+    // A bearer token is not ambient: no Origin check.
+    const token = session.slice("session=".length);
+    const bearer = await send({ authorization: `Bearer ${token}`, origin: "http://evil.example" });
+    expect(bearer.status).toBe(200);
+    expect(acted).toEqual(Array.from({ length: 4 }, () => userIdOf("ada@demo.local")));
+  });
+
+  it("takes allowedOrigins of its own, and with none and no routes on its store lets no page use the cookie", async () => {
+    const own = await bootForm({ allowedOrigins: ["http://admin.test"] });
+    expect((await own.send({ cookie: own.session, origin: "http://admin.test" })).status).toBe(200);
+    expect((await own.send({ cookie: own.session, origin: APP_ORIGIN })).status).toBe(403);
+    // A store no createAuthRoutes writes to: no list to default to.
+    const sessions = createMemorySessionStore();
+    const { issueSession } = await import("./tokens");
+    const issued = await issueSession({ sessions, jwtSecret: SECRET }, "ada", { provider: "mock" });
+    const app = formApp(() => ({ sessions, jwtSecret: SECRET }));
+    const booted = await harness.boot({}, () => app);
+    const send = (headers: Record<string, string>) =>
+      fetch(`${booted.url}/api/items/delete`, {
+        method: "POST",
+        headers: {
+          cookie: `session=${issued.token}`,
+          "content-type": "application/json",
+          ...headers,
+        },
+        body: "{}",
+      });
+    expect((await send({ origin: APP_ORIGIN })).status).toBe(403);
+    expect((await send({})).status).toBe(200);
+  });
+});
+
+describe("cookieOriginAllowed", () => {
+  it("applies socketAuth's rule: an HTTP request's and a socket handshake's", async () => {
+    const { cookieOriginAllowed } = await import("./socketAuth");
+    const allowed = [APP_ORIGIN] as const;
+    const http = (headers: Record<string, string>) => cookieOriginAllowed({ headers }, allowed);
+    const socket = (headers: Record<string, string>, allowMissingOrigin = false) =>
+      cookieOriginAllowed({ headers, transport: "socket" }, allowed, { allowMissingOrigin });
+    expect(http({ origin: APP_ORIGIN })).toBe(true);
+    expect(http({ origin: "http://evil.example" })).toBe(false);
+    expect(http({})).toBe(true);
+    expect(http({ "sec-fetch-site": "same-origin" })).toBe(true);
+    expect(http({ "sec-fetch-site": "cross-site" })).toBe(false);
+    expect(socket({ origin: APP_ORIGIN })).toBe(true);
+    expect(socket({})).toBe(false);
+    expect(socket({}, true)).toBe(true);
+    expect(socket({ "sec-fetch-site": "same-origin" })).toBe(true);
+    expect(() => cookieOriginAllowed({ headers: {} }, ["not an origin"])).toThrow(
+      "cookieOriginAllowed: allowedOrigins entries are origins",
+    );
   });
 });
 

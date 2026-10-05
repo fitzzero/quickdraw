@@ -257,6 +257,26 @@ describe("live collections", () => {
     ]);
   });
 
+  it("loads a refused scope once more on new grants (qd:access), and leaves a loaded one alone", async () => {
+    const { app } = await live.start();
+    const board = live.board();
+    const bo = await client(app.url, board.bo);
+    bo.data.collections.subscribe(targetOf("board"), board.p2);
+    bo.data.collections.subscribe(targetOf("board"), board.p1);
+    await until(() => scopeOf(bo, "board", board.p2)?.error?.code === "FORBIDDEN");
+    await until(() => hasState(bo, "board", board.p1));
+    const subs = (scope: string): number =>
+      framesOf(bo.sent, "qd:col:sub").filter((frame) => frame.scope === scope).length;
+    expect([subs(board.p2), subs(board.p1)]).toEqual([1, 1]);
+    // Bo becomes a member of P2, then the server pushes new grants (as access.refresh does).
+    await live.prisma().projectMember.create({
+      data: { projectId: board.p2, userId: board.bo, role: "Read" },
+    });
+    app.server.io.emit("qd:access", { serviceAccess: {} });
+    await until(() => hasState(bo, "board", board.p2));
+    expect([subs(board.p2), subs(board.p1)]).toEqual([2, 1]);
+  });
+
   it("updates a view over index fields as an item's index field changes", async () => {
     const { app, write } = await live.start();
     const board = live.board();

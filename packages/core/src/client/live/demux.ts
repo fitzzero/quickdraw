@@ -1,6 +1,7 @@
 // The live frames of a connection, received once and routed by key (RFC 0003
 // sections 8.3 and 12.5): one listener each for `qd:e`, `qd:c`,
-// `qd:revoked`, `qd:stream`, `qd:event` and `qd:presence` on the socket,
+// `qd:revoked`, `qd:stream`, `qd:event` and `qd:presence` on the socket
+// (and `qd:access`, after which the hub loads its refused scopes again),
 // however many rows, scopes, feeds and handlers are held. The entity store
 // routes an entity frame by `service` and `id`, the collection hub a
 // collection frame by `service`, `collection` and `scope`, the stream store a
@@ -26,7 +27,7 @@ import type { StreamStore } from "./streams";
 /** Where frames go. */
 export interface FrameRoutes {
   readonly entities: Pick<EntityStore, "receive" | "revoked">;
-  readonly collections: Pick<CollectionHub, "receive" | "revoked">;
+  readonly collections: Pick<CollectionHub, "receive" | "revoked" | "reopen">;
   readonly streams: Pick<StreamStore, "receive" | "revoked">;
   readonly events: Pick<EventBus, "receive">;
   readonly presence: Pick<PresenceStore, "receive">;
@@ -70,5 +71,9 @@ export function listenToFrames(socket: QuickdrawSocket, routes: FrameRoutes): vo
   });
   socket.on(SERVER_EVENTS.presence, (frame: unknown) => {
     routes.presence.receive(frame);
+  });
+  socket.on(SERVER_EVENTS.access, () => {
+    // New grants: a scope refused before may open now (finding F8.4).
+    routes.collections.reopen();
   });
 }

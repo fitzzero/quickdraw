@@ -5,13 +5,40 @@
 
 import { waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { createQuickdrawClient } from "../../src/client/index";
+import { defineContract, via } from "../../src/index";
+import { qd as server } from "../../src/server/emit/__tests__/live";
 import { renderWithQuickdraw } from "../../src/testing/client";
 import { inCluster } from "../cluster/mode";
 import { as, e2eApp, projectContract, taskContract } from "../fixtures/app";
 
 const e2e = e2eApp();
-const qd = createQuickdrawClient({ task: taskContract, project: projectContract });
+
+/** Each user's projects, through the membership table: a chat app's list of the user's chats. */
+const myProjectsContract = defineContract("myProjectsService", {
+  entity: z.object({ id: z.string(), name: z.string() }),
+  methods: {},
+  collections: {
+    mine: {
+      scope: via({ model: "projectMember", entry: "projectId", scope: "userId" }),
+      item: "entity",
+      order: [["id", "asc"]],
+    },
+  },
+});
+
+const myProjectsService = server.defineService(myProjectsContract, {
+  model: "project",
+  collections: { mine: { scopeAccess: "self" } },
+  methods: {},
+});
+
+const qd = createQuickdrawClient({
+  task: taskContract,
+  project: projectContract,
+  myProjects: myProjectsContract,
+});
 
 function Board({ name, projectId, mine }: { name: string; projectId: string; mine?: boolean }) {
   const { items, totalCount, isLoading } = qd.task.board.useCollection(
@@ -116,5 +143,44 @@ describe("useCollection", () => {
     await ada.assign({ id: board.t1, assigneeId: board.cy });
     await waitFor(() => expect(titles("mine")).toEqual([]));
     expect(titles("all")).toEqual(["T1", "Unassigned"]);
+  });
+});
+
+function MyProjects({ userId }: { readonly userId: string }) {
+  const { items } = qd.myProjects.mine.useCollection(userId);
+  return <p>{`mine ${items.map((item) => item.name).join(",")}`}</p>;
+}
+
+function GuardedBoard({ projectId }: { readonly projectId: string }) {
+  const { items, error } = qd.task.board.useCollection(projectId);
+  return (
+    <p>
+      {error === null
+        ? `board ${items.map((item) => item.title).join(",")}`
+        : `board ${error.code}`}
+    </p>
+  );
+}
+
+describe("a scope refused before the user's access changed (finding F8.4)", () => {
+  it("opens when the user is invited, without a remount: its anchor joins the user's own list", async () => {
+    const { app, write } = await e2e.start({ services: [myProjectsService] });
+    const board = e2e.board();
+    // Bo is a member of P1 alone: P2's board is refused.
+    const view = await renderWithQuickdraw(
+      <>
+        <MyProjects userId={board.bo} />
+        <GuardedBoard projectId={board.p2} />
+      </>,
+      { app, as: as(board.bo), client: qd },
+    );
+    await view.findByText("mine P1");
+    await view.findByText("board FORBIDDEN");
+    // Invited: the membership's flush adds P2 to Bo's list, which loads P2's board once more.
+    await write((db) =>
+      db.projectMember.create({ data: { projectId: board.p2, userId: board.bo, role: "Read" } }),
+    );
+    await view.findByText("mine P1,P2");
+    await view.findByText("board T2");
   });
 });

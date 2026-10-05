@@ -12,7 +12,7 @@ import {
   type SessionCookieNaming,
   type SessionCookieRequest,
 } from "../sessionCookie";
-import { originAllowlist, type OriginAllowlist } from "./origins";
+import { originAllowlist, rememberRouteOrigins, type OriginAllowlist } from "./origins";
 import type { AuthRouteRequest } from "./respond";
 import {
   HOST_OAUTH_STATE_COOKIE,
@@ -182,6 +182,8 @@ export function routeSettings(options: AuthRoutesOptions): RouteSettings {
     redeemed: redeemedStates(),
   });
   warnOnCookieDomain(cookie, logger);
+  // `requireSession` over the same store applies this list when given none.
+  rememberRouteOrigins(settings.keys.sessions, settings.origins);
   return settings;
 }
 

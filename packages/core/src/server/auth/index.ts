@@ -53,7 +53,9 @@ export type {
   AuthRoutesOptions,
 } from "./routes/types";
 export {
+  cookieOriginAllowed,
   socketAuth,
+  type CookieOriginRequest,
   type DevCredentials,
   type PrincipalLoader,
   type SessionAuthenticate,

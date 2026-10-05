@@ -1301,7 +1301,13 @@ export function TaskDetail({ id }: { readonly id: string }) {
   items loaded, and `loadMore`/`loadItems`; `view` filters the members by a
   view of the contract, for the user the server's hello names; `load: "all"`
   keeps every page loaded. A `null` scope holds nothing; `enabled: false`
-  subscribes to nothing.
+  subscribes to nothing. A scope the server refused shows its `error`
+  (`FORBIDDEN`) and is loaded once more each time the user's access may
+  have changed: on a connect, on new service grants (`qd:access`), and when
+  another scope the client holds gets an `added` delta for the scope's
+  anchor row (an invite adds the chat to the user's own list of chats, and
+  the chat's messages open). A row-level grant with neither sends nothing
+  the client could notice: remount the view, or call `refresh()`.
 - The cache follows the user: a hello naming another user removes everything
   quickdraw cached; new credentials for the same user refetch it; new grants
   (`qd:access`) refetch every query.
@@ -1321,11 +1327,12 @@ last), and `useCollection`'s `pending` names it while the call is in flight.
 A refused call removes it, unless it was added with `{ onRefused: "keep" }`
 (`cache.addItem(collection, scope, item, { onRefused: "keep" })`, or the
 same for `addEntity`): it then leaves `items` for `useCollection`'s
-`refused`, each `{ item, error, dismiss(), retry() }`, until the app
-dismisses it or sends the same call again with `retry()` (which shows it
-`pending` again, and never rejects: a second refusal shows in `refused`
-again), so a chat shows a failed message with "retry" without a copy of
-its own. A call whose outcome is unknown is not refused: when the
+`refused`, each `{ item, error, dismiss(), retry() }`, in the render that
+shows the mutation's error, until the app dismisses it or sends the same
+call again with `retry()` (through the mutation hook that sent it, so its
+`isPending` and callbacks follow; it shows the item `pending` again, and
+never rejects: a second refusal shows in `refused` again), so a chat shows
+a failed message with "retry" without a copy of its own. A call whose outcome is unknown is not refused: when the
 connection drops after the call was sent, or it times out, the server may
 have made the write (`isUnknownOutcome(error)` on `./client` says so). Its
 items stay, `pending`, and `useCollection`'s `checking` names them until
@@ -2444,8 +2451,9 @@ nothing is cached:
   when `Sec-Fetch-Site` names another site). Bearer tokens need no Origin
   on either transport. An app's own `authenticate` learns where an HTTP
   call's token came from in `request.credential` (`"cookie"` or
-  `"bearer"`), and a `QuickdrawError("FORBIDDEN")` it throws on HTTP is
-  answered as it is.
+  `"bearer"`), applies the same rule with
+  `cookieOriginAllowed(request, allowedOrigins)`, and a
+  `QuickdrawError("FORBIDDEN")` it throws on HTTP is answered as it is.
 - `socketAuth({ devCredentials })` signs a socket in by the user id its
   handshake names (`auth: { userId }`, no token), as the function answers
   (the principal, or `null` to refuse): for a game editor or load-test bots
@@ -2462,11 +2470,17 @@ nothing is cached:
   session's token, for clients that keep no cookies (a game engine, a page
   in a third-party iframe), at the cost of the token being readable by the
   page's scripts.
-- `requireSession({ sessions, jwtSecret }, { loadPrincipal? })` guards the
-  app's own REST routes (below): the credential is read as `/me` reads it,
-  the JWT verified once and the session checked in the store; otherwise
-  401 `{ error: "UNAUTHENTICATED", message }`. 4.1's `createRequireAuth`
-  stays for token-keyed sessions.
+- `requireSession({ sessions, jwtSecret }, { loadPrincipal?, allowedOrigins? })`
+  guards the app's own REST routes (below): the credential is read as `/me`
+  reads it, the JWT verified once and the session checked in the store;
+  otherwise 401 `{ error: "UNAUTHENTICATED", message }`. The session cookie
+  gets the `/qd` calls' Origin rule: from an `Origin` outside
+  `allowedOrigins` (by default the list of the `createAuthRoutes` writing to
+  the same `sessions`) it answers 403 `{ error: "FORBIDDEN", message }`, so
+  another site's form cannot post to a route as the user; a request without
+  `Origin` is accepted unless `Sec-Fetch-Site` names another site, and a
+  bearer token needs none. 4.1's `createRequireAuth` stays for token-keyed
+  sessions.
 - Rate limits: the sign-in routes share `createAuthLimiter({ max: 60 })` (60
   requests per 15 minutes per IP) and the session routes
   `createAuthStatusLimiter()` (120); pass `rateLimit: { signIn, session }`

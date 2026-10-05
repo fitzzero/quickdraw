@@ -83,6 +83,39 @@ moves until the release candidate is cut.
   an id the client made, which the server keeps, can be found: with a
   provisional one the load refuses the item even when the server made the
   row, and `retry()` is safe only with such an id.
+- A refused optimistic item shows in `useCollection().refused` in the
+  render that shows the mutation's error: the overlay store applies a
+  failure in TanStack's notify batch of the mutation's change to error, so
+  `isPending` is never still true beside it. Its `retry()` sends the call
+  through the mutation hook that sent it, so the hook's `isPending`,
+  `onSuccess`, `onError` and `onSettled` follow the retry (F8.3; rc.5 sent
+  it past the hook).
+- A collection scope whose load was refused (`FORBIDDEN`, `NOT_FOUND`,
+  `UNAUTHENTICATED`) is loaded once more when the user's access may have
+  changed: on new service grants (`qd:access`), and when an `added` delta
+  of another held scope names the scope's anchor row (an invite adds the
+  chat to the user's own list, and its messages open without a remount);
+  every connect loads it again too (F8.4). One load per signal, so a scope
+  that stays refused does not loop. Optimistic items added to it meanwhile
+  show once it opens, until its own copies arrive.
+
+### Auth
+
+- Behavior change: `requireSession` applies the `/qd` calls' Origin rule
+  to the session cookie (F8.5; the final review reproduced a cross-site
+  form POST reaching a route as the user). From an `Origin` outside
+  `allowedOrigins` it answers 403 `{ error: "FORBIDDEN", message }`; a
+  request without `Origin` is accepted unless `Sec-Fetch-Site` names
+  another site; a bearer token is unaffected. The list is the new
+  `allowedOrigins` option, by default that of the `createAuthRoutes`
+  writing to the same session store; with neither, no page may use the
+  cookie there. `cookieOriginAllowed(request, allowedOrigins)` on
+  `./server/auth` (type `CookieOriginRequest`) is the rule for a custom
+  `authenticate` or route: the HTTP form, or the handshake's with
+  `transport: "socket"`.
+- MIGRATION's Discord Activity example sets no cookie: its page sends the
+  token as `auth.token`, and a `SameSite=None` cookie is for a page on
+  another site that calls the API with credentials (F8.6).
 
 ## [5.0.0-rc.5]
 

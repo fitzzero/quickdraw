@@ -14,12 +14,23 @@
 // `req`, whose Express type has no `userId` (finding F5.4). The route then
 // calls the services in process as that principal: `qd.caller(principal)`
 // loads its service-wide grants as a socket's handshake does (F5.1).
+//
+// The session cookie is ambient, so a request that authenticates with it
+// gets the Origin rule `/qd` calls get from `socketAuth` (finding F8.5 of the
+// quickdraw-chat migration, and the final review of the release candidates:
+// a cross-site form POST reached a route as the user): an `Origin` outside
+// `allowedOrigins` is answered 403 `FORBIDDEN`, and a request without one
+// (curl, a server forwarding the cookie) is accepted unless `Sec-Fetch-Site`
+// names another site. The list defaults to the one the `createAuthRoutes`
+// writing to the same session store was given; without either, no page may
+// use the cookie here. A bearer token needs no Origin.
 
 import type { ServerResponse } from "node:http";
-import { tokenOf, transportCookieNaming, type HttpRequest } from "../../transports/body";
+import { httpCredentialOf, transportCookieNaming, type HttpRequest } from "../../transports/body";
 import type { Principal } from "../../types";
+import { originAllowlist, routeOriginsOf, type AllowedOrigin } from "./origins";
 import { refuse } from "./respond";
-import type { PrincipalLoader } from "./socketAuth";
+import { httpCookieOriginAllowed, type PrincipalLoader } from "./socketAuth";
 import { checkSessionKeys, liveSession, type SessionKeys } from "./tokens";
 
 /** Options of {@link requireSession}. */
@@ -38,6 +49,16 @@ export interface RequireSessionOptions<P extends Principal = Principal> {
    * the session's; `null` answers 401. Default `{ userId, kind: "user" }`.
    */
   readonly loadPrincipal?: PrincipalLoader<P>;
+  /**
+   * The pages that may use the session cookie on these routes, as
+   * `createAuthRoutes` and `socketAuth` take them: a request with the cookie
+   * and an `Origin` outside the list is answered 403 `FORBIDDEN`. Default:
+   * the list of the `createAuthRoutes` that writes to the same session store
+   * (`keys.sessions`), else none, so only a request without `Origin` (curl,
+   * a server forwarding the cookie) uses the cookie. A bearer token needs no
+   * Origin.
+   */
+  readonly allowedOrigins?: readonly AllowedOrigin[];
 }
 
 /** What {@link sessionOf} answers for a request `requireSession` let through. */
@@ -73,13 +94,18 @@ export type SessionMiddleware<P extends Principal = Principal> = (
 /** The sessions `requireSession` let requests through with, by request. */
 const SESSIONS = new WeakMap<object, RequestSession>();
 
+/** No page may use the cookie: what applies without `allowedOrigins` and without the routes' list. */
+const NO_ORIGINS = originAllowlist([], "requireSession", true);
+
 /**
  * A middleware that lets a request through only with a live session of the
  * auth routes kit, keeping its user, session and principal for
  * {@link sessionOf} (and setting `req.userId`, `req.sessionId` and
  * `req.principal`); anything else answers 401
- * `{ error: "UNAUTHENTICATED", message }`, the routes' own failure shape. A
- * failing session store or `loadPrincipal` is passed to `next(error)`.
+ * `{ error: "UNAUTHENTICATED", message }`, the routes' own failure shape, and
+ * the session cookie sent from a page `allowedOrigins` does not list answers
+ * 403 `{ error: "FORBIDDEN", message }`. A failing session store or
+ * `loadPrincipal` is passed to `next(error)`.
  *
  * @example
  * app.post("/api/push/resubscribe", express.json(), requireSession(keys), (req, res) => {
@@ -105,9 +131,26 @@ export function requireSession(
   if (loadPrincipal !== undefined && typeof loadPrincipal !== "function") {
     throw new TypeError("requireSession: loadPrincipal must be a function");
   }
+  const given =
+    options.allowedOrigins === undefined
+      ? undefined
+      : originAllowlist(options.allowedOrigins, "requireSession", true);
   return (req, res, next) => {
     const check = async (): Promise<void> => {
-      const token = tokenOf(req, naming);
+      const credential = httpCredentialOf(req, naming);
+      if (credential?.from === "cookie") {
+        // Read now: the routes may be made after this middleware.
+        const origins = given ?? routeOriginsOf(keys.sessions) ?? NO_ORIGINS;
+        if (!httpCookieOriginAllowed(req.headers, origins)) {
+          refuse(
+            res,
+            "FORBIDDEN",
+            "This page's origin may not use the session cookie; send it from an allowed origin or use a bearer token",
+          );
+          return;
+        }
+      }
+      const token = credential?.token ?? null;
       const session = token === null ? null : await liveSession(keys, token);
       if (session === null) {
         refuse(res, "UNAUTHENTICATED", "Not signed in");
