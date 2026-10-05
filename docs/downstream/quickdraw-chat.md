@@ -4,8 +4,8 @@ Migrated. The template the other apps were copied from moved from 4.1 to
 5.0 on the release candidates and was the release gate: 5.0.0 shipped only
 after it ran on one, and everything awkward it found was fixed in quickdraw
 first (findings F1 to F11, round by round in RFC 0003 section 17 and the
-changelog's release-candidate sections). On 2026-10-05 its `dev` runs
-`5.0.0-rc.7`, the last candidate, deployed as the hosted dev instance.
+changelog's release-candidate sections). Since 2026-10-05 its `dev` runs
+the released `5.0.0` (`^5.0.0`), deployed as the hosted dev instance.
 
 ## The pull requests (fitzzero/quickdraw-chat)
 
@@ -21,6 +21,7 @@ changelog's release-candidate sections). On 2026-10-05 its `dev` runs
 | #53 | hosted dev sign-in: only the providers the API serves, `API_URL` off localhost, the proxy trusted                                                        |
 | #54 | `5.0.0-rc.6`: the kit's provider list, message ids the client makes (a send whose answer is lost resolves itself), the cookie Origin rule on REST routes |
 | #55 | `5.0.0-rc.7`: `newId()` from the framework, and a test of the lost-answer case rc.6 left on "Checking…"                                                  |
+| #56 | `5.0.0`: the released packages at `^5.0.0`, nothing else                                                                                                 |
 
 Its `CHANGELOG.md` ("quickdraw 5.0") lists every access change a fork
 inherits, and `DEPLOYMENT.md` ("Upgrading to quickdraw 5.0") what an
@@ -57,6 +58,5 @@ operator does once.
 
 ## What remains
 
-- `5.0.0` after the release: a card on the quickdraw-chat project that
-  moves the versions from `5.0.0-rc.7` (nothing else: it already uses the
-  kit's `GET /auth/providers` and `newId()`).
+- Its own release of `dev` to `main` (the owner's): until then its `main`
+  is the 4.1 template, so fork or copy from `dev` for a 5.0 starting point.

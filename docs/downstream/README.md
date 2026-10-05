@@ -15,16 +15,16 @@ card recounts first, with the codemod's dry run.
 
 ## Order
 
-| Order | App               | On         | Services    | Methods     | Collections, channels  | Brief                                        |
-| ----- | ----------------- | ---------- | ----------- | ----------- | ---------------------- | -------------------------------------------- |
-| done  | quickdraw-chat    | 5.0.0-rc.7 | 7           | 31          | 2, 1                   | [quickdraw-chat.md](quickdraw-chat.md)       |
-| 1     | seneschal         | 4.1.0      | 5           | 22          | not counted            | [seneschal.md](seneschal.md)                 |
-| 2     | x-tokage-siege    | 4.1.0      | 9           | 58          | 7, 1                   | [x-tokage-siege.md](x-tokage-siege.md)       |
-| 3     | foundation        | 4.1.0      | 18          | 136         | 13, not counted        | [foundation.md](foundation.md)               |
-| 4     | farseer           | 4.1.0      | 22          | 279         | none, not counted      | [farseer.md](farseer.md)                     |
-| 5     | Conveyor          | 4.1.0      | about 31    | about 658   | not counted            | [conveyor.md](conveyor.md)                   |
-| stays | makiel            | 3.7        | not counted | not counted | mostly streams and RPC | [makiel.md](makiel.md)                       |
-| stays | quickdraw-sunfall | 3.9.1      | not counted | not counted | looks dormant          | [quickdraw-sunfall.md](quickdraw-sunfall.md) |
+| Order | App               | On    | Services    | Methods     | Collections, channels  | Brief                                        |
+| ----- | ----------------- | ----- | ----------- | ----------- | ---------------------- | -------------------------------------------- |
+| done  | quickdraw-chat    | 5.0.0 | 7           | 31          | 2, 1                   | [quickdraw-chat.md](quickdraw-chat.md)       |
+| 1     | seneschal         | 4.1.0 | 5           | 22          | not counted            | [seneschal.md](seneschal.md)                 |
+| 2     | x-tokage-siege    | 4.1.0 | 9           | 58          | 7, 1                   | [x-tokage-siege.md](x-tokage-siege.md)       |
+| 3     | foundation        | 4.1.0 | 18          | 136         | 13, not counted        | [foundation.md](foundation.md)               |
+| 4     | farseer           | 4.1.0 | 22          | 279         | none, not counted      | [farseer.md](farseer.md)                     |
+| 5     | Conveyor          | 4.1.0 | about 31    | about 658   | not counted            | [conveyor.md](conveyor.md)                   |
+| stays | makiel            | 3.7   | not counted | not counted | mostly streams and RPC | [makiel.md](makiel.md)                       |
+| stays | quickdraw-sunfall | 3.9.1 | not counted | not counted | looks dormant          | [quickdraw-sunfall.md](quickdraw-sunfall.md) |
 
 quickdraw-chat went first, alone, as the release gate: it migrated on the
 release candidates, and everything awkward it found was fixed in quickdraw
@@ -43,10 +43,14 @@ briefs say what staying takes.
    kit, projection keys, output schemas, `quickdraw-docs`; quickdraw-chat
    moved its shared package and api to Zod 4 first), and a clean tree on a
    new branch. An app that stays on 4.x for a while takes 4.1.1 once it is
-   on npm (the socket rate limiter crash fix, on the `release/4.x` branch).
+   on npm (the socket rate limiter crash fix, on the `release/4.x` branch;
+   it goes out under the `latest-4` dist-tag, and a `^4.1.0` range takes
+   it with `bun update @fitzzero/quickdraw-core`).
 2. **Upgrade the packages**: `@fitzzero/quickdraw-core` in every package
    that imports it; `@fitzzero/quickdraw-lint`, `@fitzzero/quickdraw-skills`
-   and `oxlint` as dev dependencies; `zod` in the shared package.
+   and `oxlint` as dev dependencies; `zod` in the shared package. 5.0.0 is
+   npm's `latest` for all four packages since 2026-10-05, so `bun add`
+   with no version takes it; the template declares `^5.0.0`.
 3. **Run the codemod**, a dry run first, and commit its output as it is:
    `bunx @fitzzero/quickdraw-codemod v5 .` (with `--shared`, `--api`,
    `--web` or `--db-package` for another layout). It keeps class fields,
@@ -104,16 +108,21 @@ briefs say what staying takes.
 - **Cookies and origins**: `__Host-session` over HTTPS, `SameSite=Lax` by
   default (a web app and an API on two sites need one site or
   `sameSite: "none"`); a cookie from a page outside `allowedOrigins` is
-  refused on sockets, `/qd` calls and `requireSession` routes; there is no
-  default CORS origin, and the socket rate limiter is on (600 events per
-  minute per socket).
+  refused on sockets, `/qd` calls and `requireSession` routes (give
+  `requireSession` the same session store object as the auth routes, or
+  its own `allowedOrigins`: two stores over one table share no list);
+  there is no default CORS origin, and the socket rate limiter is on (600
+  events per minute per socket).
 - **Rooms are per socket**: joined by a method, lost on every reconnect.
   Re-join with `useJoin` (`connection.onHello` outside React); reach rooms
   outside handlers with `qd.rooms` (`rooms.leave(room, { userId })`), and
   clean up in `onRoomLeave`.
 - **Optimistic adds** (`cache.addItem`, `onRefused: "keep"`): a call whose
   outcome is unknown stays `checking`, and `retry()` is safe only with an
-  id the client made and the server keeps.
+  id the client made and the server keeps: `newId()` from `./client` (a
+  UUID, on plain-http pages too), accepted as an optional `id` by the
+  contract and written by the create, an existing id answered `CONFLICT`
+  (the template's `postMessage`).
 - **Revisions are microseconds** since the epoch: compare them as numbers.
   A non-JS client follows `docs/protocol-v5.md` (positional `qd:event` and
   `qd:stream`, unknown fields and trailing elements ignored).

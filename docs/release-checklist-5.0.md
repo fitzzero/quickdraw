@@ -38,9 +38,9 @@ I's release preparation card on 2026-10-05, when parts 1 to 4 were done and
       published) to `5.0.0-rc.7` (#71) published under `next` for all four
       packages, each from a version-bump pull request into `dev` and its
       four tags pushed one at a time: rc.2 (#56), rc.3 (#58), rc.4 (#62),
-      rc.5 (#64), rc.6 (#67), rc.7 (#71). On 2026-10-05 `next` is
-      `5.0.0-rc.7` for all four; core's `latest` is 4.1.0, and lint's, skills' and codemod's is
-      `5.0.0-rc.1` (their first, hand publish) until 5.0.0 replaces it.
+      rc.5 (#64), rc.6 (#67), rc.7 (#71). Until 5.0.0 took `latest` for
+      all four, core's `latest` was 4.1.0, and lint's, skills' and
+      codemod's was `5.0.0-rc.1` (their first, hand publish).
 - [x] The benchmark rerun on the final code (`5.0.0-rc.6`), with the
       template's netcode measured on 4.x and 5.0: `bench/reports/5.0.0.md`
       and `docs/benchmarks.md` (#68). rc.7 changed the client's overlay
@@ -102,37 +102,38 @@ I's release preparation card on 2026-10-05, when parts 1 to 4 were done and
 
 ## 5. Owner steps, in order
 
-1. [ ] **The gate.** quickdraw-chat runs `5.0.0-rc.7` with its checks
-       green (fitzzero/quickdraw-chat #55), and 5.0.0 is that candidate's
-       code with the version changed; what remains is your QA of the
-       hosted template (https://quickdraw-dev.techtree.gg). A blocker
-       there means fixes and an `rc.8` first.
-2. [ ] **4.1.1, if it is still wanted, before 5.0.0.** It sits on
-       `release/4.x` (`daf3d48`, `package.json` 4.1.1), which has no
-       Publish workflow, so it goes out by hand from a clean checkout of
-       that branch (a worktree leaves the 5.0 checkout's install alone):
+1. [x] **The gate.** quickdraw-chat ran `5.0.0-rc.7` with its checks
+       green (fitzzero/quickdraw-chat #55), 5.0.0 is that candidate's code
+       with the version changed, and the owner released after their QA of
+       the hosted template (https://quickdraw-dev.techtree.gg).
+2. [ ] **4.1.1, if it is still wanted** (the 4.x apps' fix for a socket
+       event with a numeric name crashing the server). It was not
+       published before 5.0.0, so it now needs a dist-tag of its own, or
+       it would take `latest` back from 5.0.0 (`docs/releasing.md`, "Which
+       dist-tag"; a dist-tag must not read as a semver range, so not
+       `v4`). It sits on `release/4.x` (`daf3d48`, `package.json` 4.1.1),
+       which has no Publish workflow, so it goes out by hand from a clean
+       checkout of that branch (a worktree leaves the 5.0 checkout's
+       install alone):
 
    ```bash
    git worktree add ../quickdraw-4.x release/4.x
    cd ../quickdraw-4.x && bun install
-   npm publish --access public   # prepublishOnly builds; latest becomes 4.1.1
+   npm publish --tag latest-4   # prepublishOnly builds; latest stays 5.0.0
    ```
 
-   Published before 5.0.0, it takes `latest` until 5.0.0 does. Published
-   after 5.0.0, it needs a tag of its own (`docs/releasing.md`, "Which
-   dist-tag"): `npm publish --access public --tag latest-4` (a dist-tag must
-   not read as a semver range, so not `v4`).
+   An app on `^4.1.0` takes it with `bun update @fitzzero/quickdraw-core`.
 
 3. [x] **Date the changelog**: `## [5.0.0] - 2026-10-05` (`CHANGELOG.md`),
        set on `dev` before the release branch was cut. If the tags go out
        on a later day, change the date on the release branch before it
        merges.
-4. [ ] **Release `dev` to `main`** through Conveyor, as `release/2026.10.0`
-       (#54) did at `5.0.0-rc.1`, with CI green on the release pull
-       request. `main` is an ancestor of `dev`, so nothing conflicts.
-5. [ ] **Tag 5.0.0 on `main`**, at the release's merge commit with a clean
-       tree, one package at a time, in this order: `core`, `lint`,
-       `skills`, `codemod`.
+4. [x] **Released `dev` to `main`** through Conveyor on 2026-10-05:
+       `release/2026.10.1` (#73), merge commit `10f8d60`.
+5. [x] **Tagged 5.0.0 on `main`** on 2026-10-05, at the release's merge
+       commit (`10f8d60`), one package at a time (`core`, `lint`, `skills`,
+       `codemod`); each Publish run published with provenance. How it was
+       done, for the next release:
 
    ```bash
    git switch main && git pull
@@ -145,17 +146,18 @@ I's release preparation card on 2026-10-05, when parts 1 to 4 were done and
    `git push` of its own: GitHub starts no workflow when more than three
    tags arrive in one push. Each Publish run publishes under `latest`.
 
-6. [ ] **Check the dist-tags** of all four packages,
-       `npm view @fitzzero/quickdraw-<package> dist-tags`: `latest` must be
-       `5.0.0` (lint's, skills' and codemod's were `5.0.0-rc.1`). Then move
-       `next` to it too, so `@next` never resolves to an older release
-       candidate: `npm dist-tag add @fitzzero/quickdraw-<package>@5.0.0 next`.
+6. [ ] **The dist-tags.** `latest` is `5.0.0` for all four packages
+       (checked on 2026-10-05). Still to do, by the owner (it needs npm's
+       two-factor step): move `next` to 5.0.0 too, so `@next` never
+       resolves to an older release candidate (it reads `5.0.0-rc.7`):
+       `npm dist-tag add @fitzzero/quickdraw-<package>@5.0.0 next` for
+       `core`, `lint`, `skills` and `codemod`.
        Once an automated publish has worked, step 3 of the one-time setup
        (two-factor publishing, tokens disallowed) is open
        ([`releasing.md`](releasing.md)).
-7. [ ] **quickdraw-chat on 5.0.0**: a card on the quickdraw-chat project
-       moves the template from `5.0.0-rc.7` to `5.0.0` (versions only: it
-       already uses the kit's `GET /auth/providers` and `newId()`).
+7. [x] **quickdraw-chat on 5.0.0** (fitzzero/quickdraw-chat #56,
+       2026-10-05): its ranges are `^5.0.0`, nothing else changed. Its own
+       release to `main` is the owner's.
 8. [ ] **The other apps' cards**, in the order of
        [`downstream/README.md`](downstream/README.md), each drafted from its
        brief and recounting first: seneschal's re-fork, then x-tokage-siege,

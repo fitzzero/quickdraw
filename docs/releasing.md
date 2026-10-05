@@ -82,9 +82,9 @@ explicit `--tag`.
 
 A 4.x release (4.1.1 is on `release/4.x`, at `daf3d48`) is published by
 hand from a clean checkout of that branch: `bun install`, then
-`npm publish --access public`, whose `prepublishOnly` builds. While 4.x
-holds `latest` that is all; once 5.x does, it needs a tag of its own,
-`--tag latest-4` (a dist-tag must not read as a semver range, so not `v4`).
+`npm publish --tag latest-4`, whose `prepublishOnly` builds. 5.x holds
+`latest` since 5.0.0 (2026-10-05), so a 4.x release needs that tag of its
+own (a dist-tag must not read as a semver range, so not `v4`).
 
 ### Re-running, and running it by hand
 
