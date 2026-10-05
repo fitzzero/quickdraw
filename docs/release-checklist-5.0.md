@@ -70,9 +70,8 @@ I's release preparation card on 2026-10-05, when parts 1 to 4 were done and
       optimistic item a load ended without a re-render, the provider
       list's rate limit, `requireSession` without an origin list,
       `newId()`), fixed in rc.7 (#70); it runs rc.7 (its #55), with a test
-      that fails on rc.6 and passes on rc.7.
-      [`downstream/quickdraw-chat.md`](downstream/quickdraw-chat.md) is the
-      worked example.
+      that fails on rc.6 and passes on rc.7. Its pull requests
+      (fitzzero/quickdraw-chat #46 to #56) are the worked example.
 
 ## 4. Prepare 5.0.0 on `dev`
 
@@ -85,13 +84,15 @@ I's release preparation card on 2026-10-05, when parts 1 to 4 were done and
       (`bun install --frozen-lockfile` passes).
 - [x] The install commands off `@next` (`README.md`, `MIGRATION.md`,
       `UPGRADE-PROMPT.md`, the lint, skills and codemod READMEs, the
-      `quickdraw-migrate-v5` skill, `docs/downstream/README.md`), and the
+      `quickdraw-migrate-v5` skill), and the
       links the shipped copies make to GitHub on `main`
       (`packages/core/test/readme/packageFiles.ts`, the README's links to
       the example app).
 - [x] One `[5.0.0]` entry at the top of `CHANGELOG.md`, the release
       candidates' entries kept below it; its date is left to step 5.3.
-- [x] The downstream briefs refreshed (`docs/downstream/`).
+- [x] The downstream briefs refreshed (`docs/downstream/`; removed after
+      the release, when each app's outline moved to a card on its own
+      Conveyor project: step 5.8).
 - [x] The final checks: the gates, the dist smoke test,
       `npm pack --dry-run`, publint and arethetypeswrong green, and for all
       four packages `bash scripts/release-tag.sh <package> 5.0.0` ready (no
@@ -158,8 +159,12 @@ I's release preparation card on 2026-10-05, when parts 1 to 4 were done and
 7. [x] **quickdraw-chat on 5.0.0** (fitzzero/quickdraw-chat #56,
        2026-10-05): its ranges are `^5.0.0`, nothing else changed. Its own
        release to `main` is the owner's.
-8. [ ] **The other apps' cards**, in the order of
-       [`downstream/README.md`](downstream/README.md), each drafted from its
-       brief and recounting first: seneschal's re-fork, then x-tokage-siege,
-       foundation, farseer and Conveyor. makiel and quickdraw-sunfall stay
-       on 3.x.
+8. [x] **The other apps' outline cards** (2026-10-05): one card on each
+       app's own Conveyor project, unidentified, with the summary of 5.0,
+       the tools, the steps every app follows and that app's hazards and
+       suggested order: seneschal (a re-fork from the 5.0 template instead
+       of a migration), x-tokage-siege, foundation, farseer and Conveyor.
+       Each project's planner turns its card into the migration pack and
+       recounts first. The briefs that were in `docs/downstream/` are
+       removed; the cards carry them. makiel and quickdraw-sunfall stay on
+       3.x and have no card.
