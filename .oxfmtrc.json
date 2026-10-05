@@ -8,6 +8,8 @@
     "bench/baselines/**",
     "bench/comparisons/**",
     "bench/reports/**",
-    "bench/results/**"
+    "bench/results/**",
+    ".devcontainer/conveyor/**",
+    ".github/workflows/conveyor-prebake.yml"
   ]
 }
