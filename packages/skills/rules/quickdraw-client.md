@@ -44,10 +44,12 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   `hello.serverId` changes when the server restarts (or the socket lands
   on another node): compare it to tell a new server from a network blip.
 - Sign-in and out in the browser go through the auth routes kit's routes:
-  `signInUrl(provider, { returnTo })` is the provider button's link,
-  `signOut()` and `signOutEverywhere()` end the session (they reject when
-  refused). Never call `/auth/...` by hand; 4.x's `getOAuthUrl`, `logout`
-  and `logoutAllDevices` are gone.
+  `authProviders()` lists the sign-ins the API serves (render a button for
+  those only, never from build-time flags), `signInUrl(provider, {
+returnTo })` is the provider button's link, `signOut()` and
+  `signOutEverywhere()` end the session (they reject when refused). Never
+  call `/auth/...` by hand; 4.x's `getOAuthUrl`, `logout` and
+  `logoutAllDevices` are gone.
 
 ## Reading
 

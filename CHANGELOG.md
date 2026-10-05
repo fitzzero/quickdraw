@@ -116,6 +116,27 @@ moves until the release candidate is cut.
 - MIGRATION's Discord Activity example sets no cookie: its page sends the
   token as `auth.token`, and a `SameSite=None` cookie is for a page on
   another site that calls the API with credentials (F8.6).
+- `createAuthRoutes` serves `GET {basePath}/providers`, `{ providers: [{
+id, name, kind }] }`: the sign-ins served now, in order (a provider
+  `google.optional` built nothing for is not in it, the mock only while it
+  is mounted and enabled), and the routes it returns have `providers()`
+  answering the same (F9.1, F10.1; type `AuthProviderInfo` on
+  `./server/auth`). An OAuth provider object may give a `name`;
+  `google()` and `discord()` give "Google" and "Discord". `./client` gains
+  `authProviders({ apiUrl?, basePath? })` (type `AuthProviderInfo`), so a
+  login page renders only what the API serves; the README's sign-in
+  example does.
+- A loopback `publicUrl` is reported: the routes warn when they are made
+  if every allowed origin is a page on another machine (F10.2), and the
+  first request that arrives for another host (`X-Forwarded-Host`, else
+  `Host`) logs an error naming it, once (F9.2: a hosted instance without
+  `API_URL` sent browsers to `http://localhost:<port>`). Routes with
+  nothing that can sign anyone in (only a mock that is off) warn when they
+  are made (F10.3).
+- `docs/deploying.md` has "Behind a proxy, in production or not" (`trust
+proxy`, `publicUrl`, the cookie's name by `X-Forwarded-Proto`; F9.3), and
+  the README's server example reads `trust proxy` from `TRUST_PROXY`
+  instead of setting it unconditionally (F10.4).
 
 ## [5.0.0-rc.5]
 

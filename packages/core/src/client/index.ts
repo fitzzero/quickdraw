@@ -24,9 +24,11 @@ export {
   clearAuthToken,
   getAuthToken,
   setAuthToken,
+  authProviders,
   signInUrl,
   signOut,
   signOutEverywhere,
+  type AuthProviderInfo,
   type AuthRoutesTarget,
   type SignInUrlOptions,
 } from "./auth";

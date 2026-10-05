@@ -1,13 +1,29 @@
 "use client";
 
-import { signInUrl, signOut, useQuickdraw } from "@fitzzero/quickdraw-core/client";
+import { authProviders, signInUrl, signOut, useQuickdraw } from "@fitzzero/quickdraw-core/client";
+import { useQuery } from "@tanstack/react-query";
 
 const API_URL = "http://localhost:4000";
 
 // #region browser
 export function SignIn() {
-  // the kit's GET /auth/google/start: back to this page's origin with the session cookie
-  return <a href={signInUrl("google", { apiUrl: API_URL })}>Sign in with Google</a>;
+  // GET /auth/providers: only the sign-ins this API serves (no Google button without its keys)
+  const { data: providers = [] } = useQuery({
+    queryKey: ["auth", "providers"],
+    queryFn: () => authProviders({ apiUrl: API_URL }),
+  });
+  return (
+    <nav>
+      {providers
+        .filter((provider) => provider.kind !== "guest")
+        .map((provider) => (
+          // the kit's GET /auth/{id}/start: back to this page's origin with the session cookie
+          <a key={provider.id} href={signInUrl(provider.id, { apiUrl: API_URL })}>
+            {`Sign in with ${provider.name}`}
+          </a>
+        ))}
+    </nav>
+  );
 }
 
 export function SignOut() {

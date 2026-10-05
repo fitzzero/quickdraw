@@ -2340,8 +2340,8 @@ const allowedOrigins = [env.CLIENT_URL];
 const sessions = createMemorySessionStore();
 
 export const app: Express = express();
-// behind a proxy, so the rate limits see the client's IP
-app.set("trust proxy", 1);
+// behind a proxy, so the rate limits see the client's IP; with none, a client would pick its own
+app.set("trust proxy", env.TRUST_PROXY);
 // a web app on another origin also needs CORS with credentials on these routes
 app.use(
   createAuthRoutes({
@@ -2397,6 +2397,7 @@ nothing is cached:
 | `GET /{provider}/start?returnTo=<url>` | 302 to the provider                                                                                                   |
 | `GET /{provider}/callback`             | 302 to `{origin}{successPath}` with the session cookie, or to `{origin}{errorPath}?error=state`, `denied` or `failed` |
 | `POST /guest`                          | `createUser(body)`, then `{ userId, name? }` with the session cookie (and `token` with `guest({ token: true })`)      |
+| `GET /providers`                       | `{ providers: [{ id, name, kind }] }`: the sign-ins served now (`routes.providers()` on the server)                   |
 | `GET /me`                              | `{ userId }`, or 401                                                                                                  |
 | `POST /logout`                         | 204: revokes the session, clears the cookie                                                                           |
 | `POST /logout-all`                     | 204: revokes every session of the user; 401 without a live session                                                    |
@@ -2494,7 +2495,14 @@ nothing is cached:
 - The mock provider is mounted only while `isMockOAuthEnabled()`
   (`ENABLE_MOCK_OAUTH=true` and `NODE_ENV` other than `production`), and
   every request checks again. Set `mock({ internalUrl })` where the API
-  cannot reach itself at `publicUrl`.
+  cannot reach itself at `publicUrl`. Routes made with nothing that can
+  sign anyone in (only a mock that is off) warn when they are made.
+- `publicUrl` is where providers send the browser back, so a deployment
+  must set it to the API's public URL. A loopback `publicUrl`
+  (`http://localhost:4000`, the usual fallback for an unset `API_URL`)
+  warns when the routes are made if every allowed origin is a page on
+  another machine, and the first request that arrives for another host
+  (`X-Forwarded-Host`, else `Host`) logs an error naming it, once.
 - One rule names the session cookie, written and read: the routes,
   `setSessionCookie`, `socketAuth` and the HTTP transport give a request
   the same name, and read first the name they would set on it. Without a
@@ -2525,10 +2533,13 @@ nothing is cached:
   session for an app's own sign-in flow (login codes, an embedded activity),
   and `liveSession` reads a token back; both work with `socketAuth`.
 
-From the browser, `./client` speaks to these routes: `signInUrl(provider,
-{ apiUrl, returnTo })` is the start route's URL (to navigate to; `returnTo`
-defaults to the current page's origin), and `signOut()` and
-`signOutEverywhere()` post to `logout` and `logout-all`. Each POST sends the
+From the browser, `./client` speaks to these routes: `authProviders({
+apiUrl })` lists the sign-ins the API serves (`GET /providers`: a provider
+`google.optional` built nothing for is not in it, nor the mock where it is
+off), so a login page shows only those, whatever the web app was built
+with; `signInUrl(provider, { apiUrl, returnTo })` is the start route's URL
+(to navigate to; `returnTo` defaults to the current page's origin), and
+`signOut()` and `signOutEverywhere()` post to `logout` and `logout-all`. Each POST sends the
 session cookie (`credentials: "include"`, so the API's CORS must allow the
 web app's origin with credentials) with `Content-Type: application/json`,
 and the token `setAuthToken` stored, if any, as a bearer token; the stored
@@ -2541,8 +2552,23 @@ signing out (with a token in `auth`, clearing it does that):
 
 ```tsx
 export function SignIn() {
-  // the kit's GET /auth/google/start: back to this page's origin with the session cookie
-  return <a href={signInUrl("google", { apiUrl: API_URL })}>Sign in with Google</a>;
+  // GET /auth/providers: only the sign-ins this API serves (no Google button without its keys)
+  const { data: providers = [] } = useQuery({
+    queryKey: ["auth", "providers"],
+    queryFn: () => authProviders({ apiUrl: API_URL }),
+  });
+  return (
+    <nav>
+      {providers
+        .filter((provider) => provider.kind !== "guest")
+        .map((provider) => (
+          // the kit's GET /auth/{id}/start: back to this page's origin with the session cookie
+          <a key={provider.id} href={signInUrl(provider.id, { apiUrl: API_URL })}>
+            {`Sign in with ${provider.name}`}
+          </a>
+        ))}
+    </nav>
+  );
 }
 
 export function SignOut() {

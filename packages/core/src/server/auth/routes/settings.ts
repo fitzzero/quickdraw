@@ -56,6 +56,12 @@ export interface RouteSettings {
   readonly onRevoke: AuthRoutesOptions["onRevoke"];
   readonly logger: Logger;
   readonly redeemed: RedeemedStates;
+  /**
+   * Looks at the host a request to the routes arrived for: the first one
+   * that is not a loopback address while `publicUrl` is logs an error, once
+   * (finding F9.2 of the owner's QA of the template).
+   */
+  watchHost(req: AuthRouteRequest): void;
 }
 
 const OWNER = "createAuthRoutes";
@@ -157,6 +163,80 @@ function warnOnCookieDomain(cookie: ResolvedCookie, logger: Logger): void {
   );
 }
 
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** True for a loopback hostname: what a public deployment's `publicUrl` must not be. */
+function isLoopback(hostname: string): boolean {
+  return LOOPBACK.has(hostname) || hostname.endsWith(".localhost");
+}
+
+/** The host a request arrived for: the first `X-Forwarded-Host`, else `Host`; `undefined` without either. */
+function requestHost(req: AuthRouteRequest): string | undefined {
+  const forwarded = req.headers["x-forwarded-host"];
+  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim();
+  const host = first !== undefined && first !== "" ? first : req.headers.host;
+  return host === undefined || host === "" ? undefined : host;
+}
+
+/** Names reserved for tests and examples (RFC 2606): no deployment's page is there. */
+const RESERVED_TLD = /\.(test|example|invalid)$/;
+
+/**
+ * Warns, once at startup, when `publicUrl` is a loopback address and every
+ * allowed origin is not (finding F10.2): the routes would send a browser on
+ * one of those pages to a sign-in URL only the server's own machine reaches.
+ * Pages under a name reserved for tests (`.test`, `.example`, `.invalid`)
+ * do not count: a test suite serves its routes on loopback.
+ */
+function warnOnLoopbackPublicUrl(
+  publicUrl: string,
+  origins: readonly string[],
+  logger: Logger,
+): void {
+  const publicHost = new URL(publicUrl).hostname;
+  const pages = origins
+    .map((origin) => new URL(origin).hostname)
+    .filter((hostname) => !RESERVED_TLD.test(hostname));
+  if (isLoopback(publicHost) && pages.length > 0 && !pages.some(isLoopback)) {
+    logger.warn(
+      `${OWNER}: publicUrl is ${publicUrl}, but allowedOrigins lists only public pages (${origins.join(", ")}): a sign-in started from them redirects to an address only this machine reaches. Set publicUrl to the API's public URL.`,
+      { category: "quickdraw.auth" },
+    );
+  }
+}
+
+/**
+ * The request-time check of a loopback `publicUrl` (finding F9.2): a
+ * deployment that fell back to `http://localhost:<port>` for want of its API
+ * URL builds every redirect to localhost. The first request that arrives for
+ * another host logs an error, once.
+ */
+function hostWatcher(publicUrl: string, logger: Logger): (req: AuthRouteRequest) => void {
+  if (!isLoopback(new URL(publicUrl).hostname)) {
+    return () => undefined;
+  }
+  let warned = false;
+  return (req) => {
+    const host = warned ? undefined : requestHost(req);
+    if (host === undefined) {
+      return;
+    }
+    let hostname: string;
+    try {
+      hostname = new URL(`http://${host}`).hostname;
+    } catch {
+      return;
+    }
+    if (!isLoopback(hostname)) {
+      warned = true;
+      logger.error(
+        `${OWNER}: publicUrl is ${publicUrl}, but requests arrive for ${host}: set publicUrl to the API's public URL (sign-in redirects are built from it)`,
+        { category: "quickdraw.auth", publicUrl, host },
+      );
+    }
+  };
+}
+
 /** Resolves and checks the options every route uses; throws a `TypeError` for a bad one. */
 export function routeSettings(options: AuthRoutesOptions): RouteSettings {
   if (typeof options.onLogin !== "function") {
@@ -168,10 +248,11 @@ export function routeSettings(options: AuthRoutesOptions): RouteSettings {
   const successPath = landingPathOf(options.successPath, "successPath", "/");
   const cookie = cookieOf(options.cookie);
   const logger = options.logger ?? consoleLogger;
+  const publicUrl = publicUrlOf(options.publicUrl);
   const settings: RouteSettings = Object.freeze({
     keys: checkSessionKeys(options, OWNER),
     origins: originAllowlist(options.allowedOrigins, OWNER),
-    publicUrl: publicUrlOf(options.publicUrl),
+    publicUrl,
     basePath: basePathOf(options.basePath),
     successPath,
     errorPath: landingPathOf(options.errorPath, "errorPath", successPath),
@@ -180,8 +261,14 @@ export function routeSettings(options: AuthRoutesOptions): RouteSettings {
     onRevoke: options.onRevoke,
     logger,
     redeemed: redeemedStates(),
+    watchHost: hostWatcher(publicUrl, logger),
   });
   warnOnCookieDomain(cookie, logger);
+  warnOnLoopbackPublicUrl(
+    publicUrl,
+    options.allowedOrigins.filter((origin): origin is string => typeof origin === "string"),
+    logger,
+  );
   // `requireSession` over the same store applies this list when given none.
   rememberRouteOrigins(settings.keys.sessions, settings.origins);
   return settings;

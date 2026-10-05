@@ -108,8 +108,25 @@ export interface AuthRoutesOptions {
  * The routes, as one Express middleware: mount it with `app.use(routes)`. A
  * request for a path it does not serve goes on to `next()`.
  */
-export type AuthRoutes = (
+export type AuthRoutes = ((
   req: AuthRouteRequest,
   res: AuthRouteResponse,
   next: (error?: unknown) => void,
-) => void;
+) => void) & {
+  /**
+   * The sign-ins the routes serve now, in the order `providers` lists them:
+   * what `GET {basePath}/providers` answers. The mock is in it only while it
+   * is mounted and `isMockOAuthEnabled()`.
+   */
+  providers(): readonly AuthProviderInfo[];
+};
+
+/** A sign-in the auth routes serve, as `GET {basePath}/providers` lists it. */
+export interface AuthProviderInfo {
+  /** Its id: `GET {basePath}/{id}/start` starts it; a guest's is `POST {basePath}/guest`. */
+  readonly id: string;
+  /** A name to show on its button: `"Google"`, `"Discord"`, `"Mock"`, `"Guest"`, or an OAuth provider's own. */
+  readonly name: string;
+  /** `"oauth"` (a redirecting provider), `"mock"` (the development picker) or `"guest"`. */
+  readonly kind: AuthProvider["kind"];
+}

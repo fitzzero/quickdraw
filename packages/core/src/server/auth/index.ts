@@ -49,6 +49,7 @@ export { createAuthRoutes } from "./routes/createAuthRoutes";
 export type {
   AuthCookieOptions,
   AuthProvider,
+  AuthProviderInfo,
   AuthRoutes,
   AuthRoutesOptions,
 } from "./routes/types";
