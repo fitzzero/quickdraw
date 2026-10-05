@@ -5,7 +5,7 @@
 // Its state holds a hello (as user `u1`) from the start, as a connected
 // connection's does, and tells its subscribers when the test changes it.
 // 4.1's `useCollection` tests drove a mock socket the same way
-// (`legacy-src/client/useCollection.test.tsx:44-81`).
+// (4.1 `src/client/useCollection.test.tsx:44-81`).
 
 import { QueryClient } from "@tanstack/react-query";
 import type { HelloFrame } from "../../../protocol/version";

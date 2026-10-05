@@ -3,7 +3,7 @@
 // with a seed of recent items; a channel is fire-and-forget client-to-server
 // input (cursors, typing) behind a per-socket token bucket; an event is a
 // typed custom frame a handler sends to a room. 4.1 declared channels on the
-// service class (`legacy-src/server/BaseService.ts:915-942`) and typed room
+// service class (4.1 `src/server/BaseService.ts:915-942`) and typed room
 // events through the augmentable `QuickdrawEventMap`; here all three live in
 // the contract, so the client is typed from it.
 //

@@ -1,6 +1,6 @@
 // The entity sinks (RFC 0003 sections 5.3 and 6): what a flush does for
 // entity subscribers. It replaces 4.1's `emitUpdate`
-// (`legacy-src/server/BaseService.ts:454-466`), which only `this.update` and
+// (4.1 `src/server/BaseService.ts:454-466`), which only `this.update` and
 // hand-written code called.
 //
 // Two sinks, on either side of the access sink on the dispatcher's list:

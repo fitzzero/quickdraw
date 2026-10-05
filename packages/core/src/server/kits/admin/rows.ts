@@ -1,7 +1,7 @@
 // The admin kit's methods on one row (RFC 0003 section 12.4): `adminGet`,
 // `adminCreate`, `adminUpdate` and `adminDelete`, through `db.<model>` on the
 // dispatcher's tracked client, as 4.1's went through `this.create` and
-// `this.update` (`legacy-src/server/BaseService.ts:1393-1417`). The tracked
+// `this.update` (4.1 `src/server/BaseService.ts:1393-1417`). The tracked
 // client records each write, so the flush sends subscribers and collections
 // the same frames as any other write of the row: an admin edit shows live.
 //

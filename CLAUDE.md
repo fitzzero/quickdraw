@@ -7,12 +7,15 @@ writes that drive live entities, collections and change topics, kits
 (read/write, search, sharing, admin, presence and streams, auth routes),
 Socket.IO, HTTP, MCP and in-process transports, and a typed React client over
 TanStack Query. The reference consumer is the `quickdraw-chat` template
-(sibling checkout at `../quickdraw-chat`), still on 4.1.
+(sibling checkout at `../quickdraw-chat`), migrated to 5.0 on the release
+candidates.
 
-## 5.0 in progress
+## Branches and design
 
-`dev` is the 5.0 integration branch; `main` stays on 4.1 until 5.0 is
-released. `docs/rfcs/0003-v5.md` is the design every 5.0 card implements, and
+`dev` is the integration branch; a release merges it into `main`. 4.x lives
+on `release/4.x` (4.1.1 is `daf3d48`): 4.x hotfixes are cut from there, and
+source comments cite 4.1's code as 4.1 `src/<path>:<line>`, a line of that
+tree. `docs/rfcs/0003-v5.md` is the 5.0 design, and
 `docs/rfcs/0003-v5-audit.md` is the audit and rationale behind it. Where a
 card's plan and the RFC disagree, follow the RFC and say so in the PR.
 
@@ -27,9 +30,8 @@ packages/
 │   ├── src/         # 5.0 sources; built by tsup → dist/ (one entry per export,
 │   │                #   plus src/cli/quickdraw-docs.ts, the `quickdraw-docs` bin;
 │   │                #   src/cli/quickdraw-protocol.ts writes docs/protocol-v5.md, not built)
-│   ├── test/        # e2e suite (test/e2e, fixture app test/fixtures/app.ts),
-│   │                #   PGlite test schema (test/prisma), README examples (test/readme)
-│   └── legacy-src/  # the 4.1 tree, kept as a porting reference (see below)
+│   └── test/        # e2e suite (test/e2e, fixture app test/fixtures/app.ts),
+│                    #   PGlite test schema (test/prisma), README examples (test/readme)
 ├── lint/        # @fitzzero/quickdraw-lint — oxlint plugin (plugin/, .mjs shipped
 │                #   verbatim), oxlint.base.jsonc + oxlint.template.jsonc, `quickdraw-lint`
 ├── skills/      # @fitzzero/quickdraw-skills — agent rules (rules/*.md), skills
@@ -56,26 +58,6 @@ MIGRATION.md     # the 4.x→5.0 guide; examples copied the same way (5.0 from
                  #   packages/codemod; packages/codemod/MIGRATION.md is a copy
 UPGRADE-PROMPT.md  # the 5.0 upgrade procedure for agents (codemod, report, order)
 tsconfig.base.json  # shared compiler flags; each package's tsconfig.json extends it
-```
-
-`packages/core/legacy-src/` keeps the exact relative paths and line numbers of
-4.1 `src/`, so cards cite it by `legacy-src/<path>:<line>`. It is not built,
-linted, typechecked, tested or published, and nothing may import it. Never
-edit, reformat or lint-fix it; it is deleted at the 5.0 release. 4.x hotfixes
-are cut from `main`.
-
-The 4.1 tree's own layout (what `legacy-src/` holds):
-
-```
-legacy-src/
-├── shared/    # Types exported from the package root (AccessLevel, ACL, ServiceResponse,
-│              #   room helpers, QuickdrawEventMap, collection wire types, …)
-├── server/    # ./server export: BaseService (+ BaseRpcService), ServiceRegistry,
-│              #   createServer, collections (CollectionManager), channels,
-│              #   auth/ (OAuth+JWT+mock provider), express/ (rate limits), mcp/, redis
-└── client/    # ./client export: QuickdrawProvider, useService, useServiceQuery,
-               #   useSubscription, useCollection (+ pure collectionCache),
-               #   useChannelSend, useRoomEvents, inputs/ (socket-synced MUI)
 ```
 
 Each package's export map lives in its own `package.json`. Core's has `.`
@@ -166,8 +148,8 @@ well as by path), exempts `**/src/testing/**` and bench's `**/src/drivers/**`
 from `no-raw-socket` (the test helpers and the load harness drive sockets by
 hand), exempts the framework's own `*.test.ts(x)` from
 `no-nested-write` and `no-foreign-write` (they make those writes on purpose),
-lets the README examples (`**/test/readme/**`) keep inline comments, and
-ignores `**/legacy-src/**`. oxlint matches `overrides` and
+and lets the README examples (`**/test/readme/**`) keep inline comments.
+oxlint matches `overrides` and
 `ignorePatterns` globs against paths as seen from where it runs, so keep them
 `**/`-prefixed: lint runs from each package directory. When adding a lint rule
 that all quickdraw apps should get, put it in `packages/lint/oxlint.base.jsonc`

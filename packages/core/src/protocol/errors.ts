@@ -1,9 +1,9 @@
 // Error codes and the error every failed call carries (RFC 0003 section 3).
 // In 4.1 a failed call answered `{ success: false, error, code? }`
-// (`legacy-src/shared/types.ts:88-90`), every thrown error became code 500
-// with its own message (`legacy-src/server/ServiceRegistry.ts:398-402`), and
+// (4.1 `src/shared/types.ts:88-90`), every thrown error became code 500
+// with its own message (4.1 `src/server/ServiceRegistry.ts:398-402`), and
 // the client rethrew it as `ServiceCallError` with that number
-// (`legacy-src/client/serviceError.ts:6`). In 5.0 a handler picks the code by
+// (4.1 `src/client/serviceError.ts:6`). In 5.0 a handler picks the code by
 // throwing `QuickdrawError`; the same code reaches the caller on every
 // transport, and the HTTP transport maps it to a status with `httpStatus`.
 

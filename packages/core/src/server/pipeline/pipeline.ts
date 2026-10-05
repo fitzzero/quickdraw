@@ -1,6 +1,6 @@
 // The method pipeline: the one path every call takes, whatever transport it
 // arrived on (RFC 0003 section 9). It replaces 4.1's per-method socket
-// listener (`legacy-src/server/ServiceRegistry.ts:271-407`):
+// listener (4.1 `src/server/ServiceRegistry.ts:271-407`):
 //
 //   1. look up the method                       NOT_FOUND
 //   2. take a query slot on the connection      RATE_LIMITED, CANCELLED

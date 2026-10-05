@@ -3,7 +3,7 @@
 // `qd.<service>.useEntity(id)` and `qd.<service>.useEntities(ids)` (RFC 0003
 // sections 6, 11 and 11.5): rows of a service, live. Replaces 4.1's
 // `useSubscription(serviceName, entryId)`
-// (`legacy-src/client/useSubscription.ts:42-246`), which put a socket
+// (4.1 `src/client/useSubscription.ts:42-246`), which put a socket
 // listener per row on the socket, merged updates in arrival order and loaded
 // everything again after a reconnect.
 //

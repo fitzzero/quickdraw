@@ -1,6 +1,6 @@
 // The argument every handler receives, `{ input, ctx, db }` (RFC 0003
 // section 3). `ctx` replaces 4.1's `ServiceMethodContext` (`userId`,
-// `socketId`, `serviceAccess`; `legacy-src/shared/types.ts:111-115`) and the
+// `socketId`, `serviceAccess`; 4.1 `src/shared/types.ts:111-115`) and the
 // habit of overriding `defineMethod` to add fields: an app adds its own
 // fields once, through `initQuickdraw({ context })`.
 

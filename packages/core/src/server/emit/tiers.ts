@@ -5,7 +5,7 @@
 // of their own level, and levels that see the same fields share one stripped
 // frame. A method's result is stripped per caller, after any shared run
 // (section 9, step 6). 4.1 had two fixed tiers, "elevated" and everyone else
-// (`legacy-src/server/BaseService.ts:630-692`), and decided which by
+// (4.1 `src/server/BaseService.ts:630-692`), and decided which by
 // overridable methods rather than by declared levels.
 
 import type { AccessLevel } from "../../contract/access";

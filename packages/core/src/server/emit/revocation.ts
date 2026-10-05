@@ -15,7 +15,7 @@
 // - a lookup that fails denies, as everywhere else.
 //
 // In 4.1 a subscriber's tier was fixed when it subscribed and an access
-// change took effect on re-subscribe (`legacy-src/server/BaseService.ts:171-175`).
+// change took effect on re-subscribe (4.1 `src/server/BaseService.ts:171-175`).
 // The access sink runs before the entity sink, so a socket a flush revokes
 // never gets that flush's frames.
 //

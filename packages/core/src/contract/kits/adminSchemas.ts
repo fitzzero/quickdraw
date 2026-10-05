@@ -1,7 +1,7 @@
 // The inputs and outputs the admin kit generates (RFC 0003 section 12.4).
 //
 // `adminList` pages by number, as 4.1's did
-// (`legacy-src/server/BaseService.ts:1367-1388`): `page` from 1, `pageSize`
+// (4.1 `src/server/BaseService.ts:1367-1388`): `page` from 1, `pageSize`
 // 20 by default and at most 100 (a larger one is clamped). Its filter and
 // sort are restricted to the fields the contract declares and checked as
 // the read/write kit's `list` checks them (`crudList.ts`): a filter is

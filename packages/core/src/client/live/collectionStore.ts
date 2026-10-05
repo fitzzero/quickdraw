@@ -1,7 +1,7 @@
 // How a collection scope's cached state changes (RFC 0003 sections 7.2 to
 // 7.4): the merge logic behind `useCollection`, free of React and sockets so
 // every rule is tested on its own. Ported from 4.1's collection cache
-// (`legacy-src/client/collectionCache.ts`), whose rules hold:
+// (4.1 `src/client/collectionCache.ts`), whose rules hold:
 //
 // - everything is keyed by id, so live deltas and pages loaded later compose;
 // - per item, the newest revision wins: a delta older than what the state

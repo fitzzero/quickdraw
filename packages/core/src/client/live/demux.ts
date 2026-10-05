@@ -9,9 +9,9 @@
 // event bus an event by
 // service and event, and the presence store a presence frame by room. 4.1
 // put one `socket.on` per subscribed entity, collection scope and room event
-// name on the socket (`legacy-src/client/useSubscription.ts:106-129`,
-// `legacy-src/client/useCollection.ts:260`,
-// `legacy-src/client/useRoomEvents.ts:79-85`).
+// name on the socket (4.1 `src/client/useSubscription.ts:106-129`,
+// 4.1 `src/client/useCollection.ts:260`,
+// 4.1 `src/client/useRoomEvents.ts:79-85`).
 //
 // React-free.
 

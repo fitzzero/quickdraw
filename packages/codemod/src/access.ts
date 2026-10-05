@@ -1,10 +1,10 @@
 // The access mapping: a 4.x `defineMethod` level, plus whether the method
 // names a row, becomes the 5.0 form that admits exactly the callers 4.x
-// admitted (`legacy-src/server/BaseService.ts:568-603`):
+// admitted (4.1 `src/server/BaseService.ts:568-603`):
 //
 // - `"Public"` admitted everyone: `"public"`.
 // - With a row id (`resolveEntryId`, or a payload with `id`, which 4.x read
-//   implicitly: `legacy-src/server/ServiceRegistry.ts:313-325`), a service
+//   implicitly: 4.1 `src/server/ServiceRegistry.ts:313-325`), a service
 //   grant at the level passed, and otherwise the row check did:
 //   `{ service: L, entry: L, id }`. Never `{ entry: L }`: that would drop the
 //   service grant 4.x honored.

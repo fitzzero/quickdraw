@@ -6,7 +6,7 @@
 // the message is dropped rather than queued, which is what input superseded
 // by the next message wants. There is no answer; the server drops a message
 // over its rate, with an invalid payload or without access, silently. Ported
-// from 4.1's `useChannelSend` (`legacy-src/client/useChannelSend.ts:36`).
+// from 4.1's `useChannelSend` (4.1 `src/client/useChannelSend.ts:36`).
 
 import { useCallback, useMemo } from "react";
 import { CLIENT_EVENTS } from "../../contract/names";

@@ -2,7 +2,7 @@
 // Socket.IO socket with the v5 handshake, its state as a snapshot to
 // subscribe to, the pushes a server sends a whole connection, and the change
 // topics it watches. Ported from 4.1's provider
-// (`legacy-src/client/QuickdrawProvider.tsx:295-403`), without React, so a
+// (4.1 `src/client/QuickdrawProvider.tsx:295-403`), without React, so a
 // React Native or Node client uses it as it is: nothing here touches
 // `window` or `document`.
 //
@@ -33,7 +33,7 @@
 //   server's `limits.subscriptions`.
 //
 // 4.1 created a socket per token and hard-coded its options
-// (`legacy-src/client/QuickdrawProvider.tsx:306-312`), and cleared every
+// (4.1 `src/client/QuickdrawProvider.tsx:306-312`), and cleared every
 // subscription on a disconnect (`:326-330`). Here one socket lives as long as
 // the connection (`socket.ts`): new credentials reconnect it, and
 // `socketOptions` pass through to `io()`. Caches are never cleared on a

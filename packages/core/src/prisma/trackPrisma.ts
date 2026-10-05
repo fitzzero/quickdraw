@@ -1,7 +1,7 @@
 // `trackPrisma` (RFC 0003 sections 5.2 and 5.4): wraps an app's Prisma
 // client so every write made through it is recorded into the unit of work it
 // runs in. In 4.1 only `BaseService.create/update/delete` were observed
-// (`legacy-src/server/BaseService.ts:769-827`); a raw `prisma.task.update`
+// (4.1 `src/server/BaseService.ts:769-827`); a raw `prisma.task.update`
 // was invisible, and every live update needed a hand-written emit.
 //
 // Two client extensions, both public Prisma API:

@@ -1,6 +1,6 @@
 // Who a socket connection or an HTTP request acts for (RFC 0003 sections 3
 // and 10). Ported from 4.1's socket middleware
-// (`legacy-src/server/createServer.ts:85-113`): `authenticate` returns a user
+// (4.1 `src/server/createServer.ts:85-113`): `authenticate` returns a user
 // id or a principal, and `loadServiceAccess(userId)` supplies the service
 // grants when the principal carries none. 4.1 asked only about sockets; here
 // the same hooks also authenticate HTTP calls, so `authenticate` receives the

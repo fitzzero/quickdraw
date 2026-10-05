@@ -8,7 +8,7 @@
 // it. While it runs, `expectBudget` measures it (`instrument.ts`), and
 // `strictWarnings` makes the development warnings of its method calls
 // throw; `close()` ends both. It replaces 4.1's
-// `createTestServer` and `connectAsUser` (`legacy-src/server/testing.ts:62-130`),
+// `createTestServer` and `connectAsUser` (4.1 `src/server/testing.ts:62-130`),
 // which took a fixed port counter and authenticated by a bare user id.
 
 import type { AddressInfo } from "node:net";

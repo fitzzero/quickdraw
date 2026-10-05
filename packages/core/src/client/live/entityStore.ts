@@ -8,7 +8,7 @@
 //   service per microtask, carrying the revision held for each id, at most
 //   the server's `maxSubscribeIds` (500) ids each, through the connection's
 //   lane. Ported from 4.1's batcher
-//   (`legacy-src/client/QuickdrawProvider.tsx:84-163`), which sent no
+//   (4.1 `src/client/QuickdrawProvider.tsx:84-163`), which sent no
 //   revisions and one event per service.
 // - Replies and frames apply by revision (`entities.ts`), and each one's
 //   revision is reported to the overlay store, which ends optimistic layers.

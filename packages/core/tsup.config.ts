@@ -1,8 +1,5 @@
 import { defineConfig } from "tsup";
 
-// Builds only the 5.0 sources in `src/`. `legacy-src/` (the 4.1 tree kept as a
-// porting reference) is never an entry and is never imported from `src/`.
-//
 // One entry per export in package.json. `splitting` puts code that several
 // entries import into shared chunks, so each export does not carry its own
 // copy. Every dependency and peer dependency in package.json stays external.

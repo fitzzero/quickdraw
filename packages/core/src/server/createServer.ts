@@ -1,7 +1,7 @@
 // `createServer` (RFC 0003 sections 3, 8 and 10): serves a dispatcher over
 // Socket.IO and HTTP, on the Express app and HTTP server the app already
 // owns. It replaces 4.1's `createQuickdrawServer`, which built its own
-// Express app and listened itself (`legacy-src/server/createServer.ts:57-67`),
+// Express app and listened itself (4.1 `src/server/createServer.ts:57-67`),
 // so every app that needed its own middleware copied the whole bootstrap
 // instead, and which called `process.exit` on shutdown (`:195-204`). This one
 // creates the HTTP server only when none is passed, never listens, never exits

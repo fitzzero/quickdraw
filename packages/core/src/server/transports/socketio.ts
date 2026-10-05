@@ -2,7 +2,7 @@
 // fixed set of listeners, whatever the number of services and methods:
 // `qd:call` and `qd:cancel` here, plus one per event from each registered
 // `SocketExtension`. 4.1 registered one listener per method, and five more per
-// service, on every socket (`legacy-src/server/ServiceRegistry.ts:118-136`).
+// service, on every socket (4.1 `src/server/ServiceRegistry.ts:118-136`).
 //
 // A call becomes one `DispatchRequest`: the connection is the socket, so its
 // queries share the socket's concurrency lane; `qd:cancel` and a disconnect

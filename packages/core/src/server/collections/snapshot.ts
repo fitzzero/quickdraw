@@ -6,7 +6,7 @@
 // (section 7.4, `index.ts`). The revision is taken by the caller before any
 // read, so the page is never older than the revision it claims. 4.1 left all
 // of it to each collection's `snapshot` function and clamped only the page
-// size (`legacy-src/server/collections.ts:160-171`).
+// size (4.1 `src/server/collections.ts:160-171`).
 //
 // A page costs two statements, the rows and the count, run together, and a
 // first page of an indexed collection a third beside them, the index; a

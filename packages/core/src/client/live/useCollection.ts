@@ -3,7 +3,7 @@
 // `qd.<service>.<collection>.useCollection(scope, options)` (RFC 0003
 // sections 7, 11 and 11.5): one scope of a collection, live. Replaces 4.1's
 // `useCollection(serviceName, collection, scopeId)`
-// (`legacy-src/client/useCollection.ts:65-369`).
+// (4.1 `src/client/useCollection.ts:65-369`).
 //
 // Every component showing a scope shares its pipeline
 // (`collectionController.ts`): one load, one page in flight, deltas applied

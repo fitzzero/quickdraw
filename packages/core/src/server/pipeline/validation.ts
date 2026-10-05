@@ -1,7 +1,7 @@
 // Input and output validation (RFC 0003 section 9, steps 3 and 8). Input
 // failures reach the caller as `VALIDATION` with `data.issues` in the wire
 // shape `{ path, message }[]`. 4.1 sent Zod's message as a code-400 string
-// (`legacy-src/server/ServiceRegistry.ts:296-305`), and only when the method
+// (4.1 `src/server/ServiceRegistry.ts:296-305`), and only when the method
 // had a schema at all.
 
 import type { AnyContract } from "../../contract/defineContract";

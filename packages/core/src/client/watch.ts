@@ -4,7 +4,7 @@
 // rev }` once per flush that changed the topic, with no data, and the query
 // is invalidated (`hooks.ts`, through the coordinator). This replaces 4.1's
 // `invalidateOn`, which listened for hand-written event names on every hook
-// (`legacy-src/client/useServiceQuery.ts:139-166`).
+// (4.1 `src/client/useServiceQuery.ts:139-166`).
 //
 // - Watches are counted per topic across everything that watches it: the
 //   first sends `qd:watch`, and the topic is left (`qd:unwatch`) a tick

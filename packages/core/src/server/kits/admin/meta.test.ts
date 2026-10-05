@@ -1,6 +1,6 @@
 // `adminMeta` (RFC 0003 section 12.4): the field configurations an admin
 // screen is built from, derived from the entity schema's JSON Schema with
-// 4.1's rules (`legacy-src/server/utils/zodToAdminFields.ts:138-265`), and
+// 4.1's rules (4.1 `src/server/utils/zodToAdminFields.ts:138-265`), and
 // what `hiddenFields`, `fieldOverrides` and `displayName` change, in what the
 // kit returns and writes as well as in the metadata.
 

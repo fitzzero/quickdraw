@@ -1,5 +1,5 @@
 // The MCP HTTP routes (RFC 0003 section 10), ported from 4.1's
-// `createMcpRoutes` (`legacy-src/server/mcp/McpHttpRoutes.ts:12`) onto the
+// `createMcpRoutes` (4.1 `src/server/mcp/McpHttpRoutes.ts:12`) onto the
 // registry, keeping its wire format:
 //
 //   GET  {path}/tools    ->  { tools }

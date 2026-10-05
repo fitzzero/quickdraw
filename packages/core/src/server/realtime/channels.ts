@@ -2,8 +2,8 @@
 // such as cursors or typing, on one `qd:ch` listener per v5 socket. A message
 // is one array argument, `[service, channel, payload]`, sent volatile and
 // never acknowledged. Ported from 4.1's `registerChannelListener`
-// (`legacy-src/server/ServiceRegistry.ts:209-266`) and `checkChannelAccess`
-// (`legacy-src/server/BaseService.ts:956-983`).
+// (4.1 `src/server/ServiceRegistry.ts:209-266`) and `checkChannelAccess`
+// (4.1 `src/server/BaseService.ts:956-983`).
 //
 // This is the hot path: no acknowledgement, no logging and no asynchronous
 // work per message. In order: a malformed frame or an unknown service or

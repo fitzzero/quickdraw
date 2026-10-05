@@ -5,7 +5,7 @@
 // - Every connect resumes what is held: rows are asked for again with the
 //   revisions held, and scopes resume from the revision they hold. State is
 //   kept across a disconnect (4.1 cleared it,
-//   `legacy-src/client/QuickdrawProvider.tsx:326-330`).
+//   4.1 `src/client/QuickdrawProvider.tsx:326-330`).
 // - Nothing is asked for before the server's hello on the connection's
 //   current credentials has named the user (`host.ts`): on new credentials
 //   the resume waits for it. When it names another user than the cache was

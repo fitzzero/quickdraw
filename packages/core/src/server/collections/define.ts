@@ -17,7 +17,7 @@
 //
 // 4.1 defined a collection with functions (`resolveScopeId`,
 // `checkScopeAccess`, `snapshot`, `toItem`;
-// `legacy-src/server/collections.ts:36-72`), so the framework could not know
+// 4.1 `src/server/collections.ts:36-72`), so the framework could not know
 // which writes move a row and read the whole row before every update.
 
 import type { AccessLevel } from "../../contract/access";

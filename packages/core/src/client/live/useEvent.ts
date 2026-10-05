@@ -5,7 +5,7 @@
 // room events the server sends this socket (`ctx.rooms.emit`), while the
 // component is mounted. The handler may change on every render without
 // re-registering. Replaces 4.1's `useRoomEvents` with its hand-written event
-// names (`legacy-src/client/useRoomEvents.ts:46`); the socket gets the
+// names (4.1 `src/client/useRoomEvents.ts:46`); the socket gets the
 // events of the rooms a method joined it to, so pair it with that method.
 
 import { useEffect, useRef } from "react";

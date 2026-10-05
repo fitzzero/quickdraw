@@ -6,18 +6,18 @@
 // coordinator (`coordinator.ts`), and binds the connection and the
 // coordinator to the client it is given, so the client's `call`, `prefetch`
 // and `invalidate` use them too. Ported from 4.1's provider
-// (`legacy-src/client/QuickdrawProvider.tsx:223-437`), which held the socket
+// (4.1 `src/client/QuickdrawProvider.tsx:223-437`), which held the socket
 // in React state and recreated it on every token change.
 //
 // React's strict mode mounts effects twice. 4.1 guarded the socket with a ref
-// (`legacy-src/client/QuickdrawProvider.tsx:297-298`); here the connection is
+// (4.1 `src/client/QuickdrawProvider.tsx:297-298`); here the connection is
 // retained by the mounted provider and closed a tick after its last release,
 // so a strict-mode remount keeps the same socket instead of reconnecting.
 // Nothing is cleared on a disconnect: cached data stays. After a reconnect
 // with the same credentials, the coordinator refetches only the queries that
 // watch a topic (they missed its changes) or are stale, each after a random
 // delay of up to 2 s by default (`reconnectJitterMs`), where 4.1 invalidated
-// every query at once (`legacy-src/client/QuickdrawProvider.tsx:320-321`).
+// every query at once (4.1 `src/client/QuickdrawProvider.tsx:320-321`).
 // The cache follows the user the server's hello names (`session.ts`):
 // another user's hello empties it, and new credentials for the same user
 // refetch it. New grants (`qd:access`) refetch every query, and a revoked row

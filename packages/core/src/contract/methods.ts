@@ -1,7 +1,7 @@
 // Method declarations for a contract (RFC 0003 section 2). Every method is a
 // `query` or a `mutation`, and both `input` and `output` are required. This
 // replaces the 4.1 hand-written `ServiceMethodsMap` plus the optional Zod
-// schema passed to `defineMethod` (`legacy-src/server/BaseService.ts:848-851`).
+// schema passed to `defineMethod` (4.1 `src/server/BaseService.ts:848-851`).
 
 import type { InferInput, StandardSchemaV1 } from "./standardSchema";
 

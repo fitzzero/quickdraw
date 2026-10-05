@@ -10,7 +10,7 @@
 // `i` input, `d` data, `e` error, `v` version, `rev` revision.
 //
 // 4.1 used one event per service method and a `{ success, data }` reply
-// (`legacy-src/shared/types.ts:88-90`). Here every call travels as one
+// (4.1 `src/shared/types.ts:88-90`). Here every call travels as one
 // `qd:call` envelope and is answered `{ ok: true, d }` or `{ ok: false, e }`.
 //
 // Runtime guards cover the frames the dispatcher reads from an untrusted
