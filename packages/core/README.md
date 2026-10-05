@@ -1243,6 +1243,19 @@ export function TaskDetail({ id }: { readonly id: string }) {
 }
 ```
 
+- A row that does not exist is refused the way a row the reader may not
+  see is: `FORBIDDEN`, for a subscribe and for a method whose access names
+  the row (`{ entry }`), since a policy that cannot find the row grants
+  nothing (fail closed), and telling the two apart would tell a stranger
+  which ids exist (a service-wide `Admin` grant, which needs no row to
+  pass, gets `NOT_FOUND`). So a page cannot tell "deleted" from "no access" by the
+  refusal: it learns of a delete while it holds the row, live: the `r`
+  frame sets `useEntity`'s `isRemoved` (as above), and a collection's
+  `removed` delta takes the item out of `items`. A page opened after the
+  delete (a link, a reload, a reconnect after the row went) gets only
+  `FORBIDDEN`; where the difference matters, say "not found or not shared
+  with you", or ask a method of the parent row (a list of the project's
+  tasks) that can answer without leaking.
 - A field the contract's `fields` map tiers (`notes` here) is optional in
   every row type a reader gets (`useEntity`, collection items, `"entity"`
   outputs, `EntityOf`, `ItemOf`), because a reader below its level receives
@@ -2981,7 +2994,14 @@ topic (`watchAccess`) and the field levels; each method's access form, in
 words, and its `rowless`; who may open a collection's scope; a channel's
 access; a stream's computed seed and when its items are checked. A
 contract the services module has no service for says so, and a service
-without a contract is an error. Pass the same flag to `--check`.
+without a contract is an error. Pass the same flag to `--check`. The
+services module is imported with everything it imports, as the server
+loads it: the workspace packages it uses (`@project/db`, `@project/shared`)
+load from their built output when their `package.json` points there, so
+build them first (`bun run build`, or `turbo run build --filter` for those
+packages) in a script that runs the docs on a fresh checkout; the error
+says so when a built file is missing. The contracts module, which imports
+only the shared package's own sources, needs no build.
 
 The module may export each contract, or a map of them as given to
 `createQuickdrawClient`. A TypeScript module loads through Node's type

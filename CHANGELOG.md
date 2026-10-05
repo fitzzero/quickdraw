@@ -115,6 +115,41 @@ the release candidate is cut.
   showing in `refused` again) (F6.4). The default stays `"drop"`.
   `OverlayView` gains `refused(collection, scope)`.
 
+### Docs, skills and tools
+
+- The `quickdraw-new-service` skill starts with the Prisma model: add it,
+  then `bun run db:migrate --name <change>` and `bun run db:generate` in
+  `packages/db` (Prisma 7's `migrate dev` no longer generates the client);
+  six steps instead of five. Its server example imports with `.js`
+  (`"../../quickdraw.js"`), as the template's NodeNext API needs (TS2835
+  without it); the README project's test checks every relative import of
+  the skill's server examples carries `.js`. A NodeNext compile of the
+  example was not feasible: core's own sources, mapped into that project,
+  are bundler-resolved (F7.6).
+- The README and the client rule say a row that does not exist is
+  `FORBIDDEN` (fail closed, as a row the reader may not see; `NOT_FOUND`
+  only for a service-wide `Admin`), so a page tells "deleted" from "no
+  access" only while it holds the row (the `r` frame, `isRemoved`; a
+  collection's `removed`), and words a later refusal "not found or not
+  shared with you" (F7.8).
+- `quickdraw-docs --services` imports the services module with everything
+  it imports, through the same `tsx` fallback as the contracts module: a
+  workspace package whose `package.json` points at its build must be built
+  first, which the README now says, and the command's error names it when
+  a built file is missing (F6.7).
+- The generated Streams intro no longer says "starting from the latest
+  few": a subscriber starts from the stream's seed; a contract-only page
+  (no `--services`) says "none in the contract; the service may compute
+  one" instead of "none (default)", and a page made with `--services` says
+  "computed by the service when a socket subscribes" when it is (F6.8).
+- The GDScript client holds no feed after its `qd:stream:sub` was refused
+  on a live connection: `is_subscribed` is false and the feed is not
+  subscribed again after a reconnect; a refusal lost with the connection
+  keeps it. A held feed refused after a reconnect is forgotten and
+  reported through `revoked` (`reason` `"refused"`, with its `error`)
+  (F6.6). An app that copied `examples/godot/addons/quickdraw/quickdraw_client.gd`
+  copies it again.
+
 ### Testing
 
 - `<mock.$Provider session={...}>` gives its subtree a session of its own,

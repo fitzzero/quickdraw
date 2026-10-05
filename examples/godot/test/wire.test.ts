@@ -274,7 +274,12 @@ describe("the GDScript client's session, frame by frame", () => {
       { n: 2 },
     ]);
     expect(wire.frames.filter((frame) => moved(8)(frame) || moved(9)(frame))).toEqual([]);
-    wire.send(SESSION[19] ?? "");
+    // A stream the service lacks is refused: the client then holds no feed (finding F6.6).
+    expect(await ask(wire, SESSION[19] ?? "")).toMatchObject({
+      ok: false,
+      e: { code: "NOT_FOUND" },
+    });
+    wire.send(SESSION[20] ?? "");
     wire.close();
     await expect.poll(async () => await server.server.presence.users(WORLD)).toEqual([]);
   });
@@ -283,7 +288,7 @@ describe("the GDScript client's session, frame by frame", () => {
     const server = await start();
     const wire = await Wire.open(server);
     await wire.next((frame) => frame.startsWith("0"));
-    wire.send(SESSION[20] ?? "");
+    wire.send(SESSION[21] ?? "");
     expect(await wire.next((frame) => frame.startsWith("44"))).toBe(
       '44{"message":"Authentication failed","data":{"code":"UNAUTHENTICATED"}}',
     );

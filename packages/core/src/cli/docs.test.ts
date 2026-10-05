@@ -6,7 +6,8 @@
 // `__docs__/access/`. Update them with
 // `bun run --filter @fitzzero/quickdraw-core test -- src/cli -u`.
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +30,7 @@ import * as accessApp from "./__tests__/accessApp";
 import { accessFormText, policyText, servicesOf } from "./access";
 import {
   contractsOf,
+  buildHint,
   failedToLoad,
   generateDocs,
   INDEX_FILE,
@@ -306,6 +308,12 @@ describe("quickdraw-docs --services (finding F5.3)", () => {
     const plain = generateDocs(contractsOf(accessApp)).get("teamService.md") ?? "";
     expect(plain).not.toContain("## Access");
     expect(plain).not.toContain("Access: ");
+    // A seed the service computes: known with --services, never "none" without it (finding F6.8).
+    expect(plain).not.toContain("computed by the service");
+    expect(plain).toContain("none in the contract; the service may compute one");
+    expect(plain).not.toContain("none (default)");
+    expect(team).not.toContain("the latest few");
+    expect(team).toContain("a subscriber starts from the stream's seed");
     // A stream's room forms (the contract's own) are written either way, a seed of one in words.
     for (const page of [team, plain]) {
       expect(page).toContain('`{ room: "lobby" }`');
@@ -333,6 +341,34 @@ describe("quickdraw-docs --services (finding F5.3)", () => {
       code: 1,
       err: "quickdraw-docs: src/version.ts exports no service\n",
     });
+  });
+
+  it("says to build the workspace when a package the services import has no build yet (finding F6.7)", () => {
+    // A workspace package whose package.json points at its build, not built yet.
+    const dir = tempDir();
+    const pkg = join(dir, "node_modules", "@project", "db");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(
+      join(pkg, "package.json"),
+      JSON.stringify({ name: "@project/db", type: "module", exports: "./dist/index.js" }),
+    );
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ type: "module" }));
+    const services = join(dir, "services.ts");
+    writeFileSync(services, 'import { db } from "@project/db";\nexport const all = [db];\n');
+    // Node's own loader, as the command runs (vitest resolves imports its own way).
+    const cli = fileURLToPath(new URL("./quickdraw-docs.ts", import.meta.url));
+    const tsx = fileURLToPath(new URL("../../node_modules/.bin/tsx", import.meta.url));
+    const contracts = fileURLToPath(new URL("./__tests__/accessApp.ts", import.meta.url));
+    const result = spawnSync(tsx, [cli, contracts, "--services", services, "--out", tempDir()], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "A workspace package it imports loads from its build, which is missing: build the workspace (bun run build) before generating the docs",
+    );
+    // Anything else that failed is reported as it was.
+    const other = new Error("DATABASE_URL is not set");
+    expect(buildHint(other, services, dir)).toBe(other);
   });
 
   it("refuses a service no contract documents, and two services of one name", () => {

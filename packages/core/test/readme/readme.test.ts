@@ -27,6 +27,26 @@ describe.each(DOCUMENTS)("the examples of %s", (document) => {
   });
 });
 
+describe("the new-service skill's server examples (finding F7.6)", () => {
+  // The template's API compiles as an ES module with NodeNext resolution, where a relative
+  // import without its `.js` is TS2835. This project compiles with bundler resolution, which
+  // takes either: core's own sources, mapped here, are not NodeNext modules, so the rule is
+  // checked on the copies instead.
+  const skill = DOCUMENTS.find((document) => document.includes("quickdraw-new-service")) ?? "";
+  const server = parseDocument(readFileSync(documentPath(skill), "utf8")).examples.filter(
+    (example) => example.file.startsWith("apps/api/"),
+  );
+
+  it("name each relative import's file with .js, as NodeNext needs", () => {
+    expect(server.length).toBeGreaterThan(0);
+    const relative = server.flatMap((example) =>
+      [...example.code.matchAll(/from "(\.{1,2}\/[^"]+)"/g)].map((match) => match[1] ?? ""),
+    );
+    expect(relative.length).toBeGreaterThan(0);
+    expect(relative.filter((specifier) => !specifier.endsWith(".js"))).toEqual([]);
+  });
+});
+
 describe("example copies", () => {
   const document = [
     "Text.",

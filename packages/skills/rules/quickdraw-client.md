@@ -71,7 +71,11 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
 - A query whose result follows writes declares `watch` in its contract; the
   client then joins that change topic and refetches when it changes.
 - Errors are `QuickdrawError` instances: switch on `error.code`
-  (`FORBIDDEN`, `NOT_FOUND`, `VALIDATION`, `RATE_LIMITED`, ...).
+  (`FORBIDDEN`, `NOT_FOUND`, `VALIDATION`, `RATE_LIMITED`, ...). A row that
+  does not exist is `FORBIDDEN`, as one the user may not see (fail closed):
+  a deleted row shows as `useEntity`'s `isRemoved` (the `r` frame) or leaves
+  a collection while the page holds it; after a reload only `FORBIDDEN`
+  is left, so word it "not found or not shared with you".
 
 ## Writing
 
