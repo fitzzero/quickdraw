@@ -54,8 +54,10 @@ is [`release-checklist-5.0.md`](release-checklist-5.0.md).
    ```
 
    GitHub runs the Publish workflow as it exists in the tagged commit, so the
-   commit must contain `.github/workflows/publish.yml`. Until 5.0 is released
-   that means a commit on `dev`; `main` is still 4.1 and has no workflow.
+   commit must contain `.github/workflows/publish.yml`: any commit of `dev`
+   or `main` does (`main` has carried 5.0 since the release that brought it
+   `5.0.0-rc.1`). The 4.x line, `release/4.x`, has no workflow; a 4.x
+   release is published by hand (below).
 
    Push release tags one at a time (one `git push origin <tag>` each), never
    several in one push: GitHub creates no push events, so runs no workflow,
@@ -77,6 +79,12 @@ resolving to the current release. Any other version is published under
 npm refuses to move `latest` back to a version lower than one already
 published, so a hotfix for an older major has to be published by hand with an
 explicit `--tag`.
+
+A 4.x release (4.1.1 is on `release/4.x`, at `daf3d48`) is published by
+hand from a clean checkout of that branch: `bun install`, then
+`npm publish --access public`, whose `prepublishOnly` builds. While 4.x
+holds `latest` that is all; once 5.x does, it needs a tag of its own,
+`--tag latest-4` (a dist-tag must not read as a semver range, so not `v4`).
 
 ### Re-running, and running it by hand
 
