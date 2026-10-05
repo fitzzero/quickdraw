@@ -5,7 +5,7 @@
 
 import type { AnyContract } from "../contract/defineContract";
 import type { DispatcherAccess } from "./access/api";
-import { createCaller, type Caller } from "./caller";
+import { callerGrantsOf, createCaller, type Caller } from "./caller";
 import type { RunContext, RunOptions } from "./context";
 import { registerLive, type Presence, type ServerRooms, type StreamHandle } from "./emit/live";
 import { createPipeline, type DispatchRequest, type DispatchResult } from "./pipeline/pipeline";
@@ -80,7 +80,10 @@ export interface Dispatcher<S extends readonly AnyService[] = readonly AnyServic
    * A typed in-process caller acting as `principal`, `null` for anonymous:
    * `dispatcher.caller(user).taskService.rename(input)`. Calls go through the
    * whole pipeline with transport `"internal"` and no connection, so they are
-   * not capped.
+   * not capped. Through a server's dispatcher, a principal that carries no
+   * `serviceAccess` gets the grants `auth.loadServiceAccess` loads, once per
+   * caller and again after the server applied new grants, as a socket's
+   * handshake does; one that carries grants keeps exactly those.
    */
   caller(principal: PrincipalOfServices<S> | null): Caller<ContractOfServices<S>>;
   /**
@@ -223,7 +226,9 @@ export function createDispatcher<const S extends readonly AnyService[]>(
   const dispatcher: Dispatcher<S> = Object.freeze({
     call,
     caller: (principal: PrincipalOfServices<S> | null) =>
-      createCaller(() => call, principal) as Caller<ContractOfServices<S>>,
+      createCaller(() => call, principal, {
+        grants: () => callerGrantsOf(dispatcher),
+      }) as Caller<ContractOfServices<S>>,
     run: <T>(fn: (ctx: RunContext) => T | PromiseLike<T>, runOptions?: RunOptions) =>
       runInUnit(settings, fn, runOptions),
     access: Object.freeze({ levelsFor, accessWhere, onAccessChanged }),

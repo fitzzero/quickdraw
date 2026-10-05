@@ -13,7 +13,7 @@ import {
   sourceOf,
   syncDocument,
 } from "./examples";
-import { fromPackageDirectory, PACKAGE_FILES, packageFileText } from "./packageFiles";
+import { forPackage, GITHUB, PACKAGE_FILES, packageFileText, RELATIVE_LINK } from "./packageFiles";
 
 describe.each(DOCUMENTS)("the examples of %s", (document) => {
   const text = readFileSync(documentPath(document), "utf8");
@@ -99,13 +99,24 @@ describe("the files the packages ship beside their code", () => {
     },
   );
 
-  it("make the README's relative links relative to the package directory", () => {
+  it("keep a link into the package relative to it, and point every other at GitHub (finding F5.7)", () => {
     expect(
-      fromPackageDirectory(
-        "[a](docs/x.md) [b](packages/lint) [c](https://x.dev/y) [d](#install) [e](/abs) [f](mailto:a@b.c)",
+      forPackage("packages/core")(
+        "[a](docs/clients.md#hooks) [b](packages/lint) [c](https://x.dev/y) [d](#install) [e](/abs) [f](mailto:a@b.c) [g](packages/core/CHANGELOG.md)",
       ),
     ).toBe(
-      "[a](../../docs/x.md) [b](../../packages/lint) [c](https://x.dev/y) [d](#install) [e](/abs) [f](mailto:a@b.c)",
+      `[a](${GITHUB}/blob/dev/docs/clients.md#hooks) [b](${GITHUB}/tree/dev/packages/lint) [c](https://x.dev/y) [d](#install) [e](/abs) [f](mailto:a@b.c) [g](CHANGELOG.md)`,
     );
   });
+
+  it.each(PACKAGE_FILES.filter((file) => file.path.endsWith(".md")).map((file) => file.path))(
+    "%s has no relative link out of its package, which is all node_modules holds",
+    (path) => {
+      const text = readFileSync(documentPath(path), "utf8");
+      const outward = [...text.matchAll(RELATIVE_LINK)]
+        .map(([, target = ""]) => target)
+        .filter((target) => target.startsWith("../") || target.startsWith("/"));
+      expect(outward).toEqual([]);
+    },
+  );
 });

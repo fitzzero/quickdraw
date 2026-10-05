@@ -7,7 +7,7 @@
 // (`test/cluster/order.test.ts`, `test/cluster/counter.test.ts`).
 
 import { describe, expect, it } from "vitest";
-import { captureLogger } from "../__tests__/fixtures";
+import { beforeAnyTimer, captureLogger } from "../__tests__/fixtures";
 import { answerOf, within } from "./acks";
 import {
   clusterClientOf,
@@ -140,10 +140,10 @@ describe("the shared counter", () => {
     const { counter, clock } = counterWith(client, { now: 0 }, 10);
     expect(await counter.next(0)).toBeUndefined();
     clock.now += RETRY_MS;
-    const started = performance.now();
-    expect(await counter.next(0)).toBeUndefined();
-    expect(await counter.next(0)).toBeUndefined();
-    expect(performance.now() - started).toBeLessThan(10);
+    // Neither call waits for the probe: each answers before any timer could fire, the probe's
+    // 10 ms timeout included (a wall-clock bound here failed on a loaded machine).
+    expect(await beforeAnyTimer(counter.next(0))).toBeUndefined();
+    expect(await beforeAnyTimer(counter.next(0))).toBeUndefined();
     // One probe went out; it does not answer within 10 ms, and nothing else is sent meanwhile.
     expect(sent.map(([command]) => command)).toEqual(["EVALSHA", "GET"]);
     await new Promise((resolve) => {

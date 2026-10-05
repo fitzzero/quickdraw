@@ -138,6 +138,27 @@ export function tick(ms = 0): Promise<void> {
   });
 }
 
+/**
+ * What `promise` resolves with, or `"waited"` when a timer of zero delay
+ * fires first. A call that waits for no timer settles in promise callbacks
+ * alone, which all run before any timer can fire, however busy the machine
+ * is: "it does not wait for its timeout" tests check that instead of a
+ * wall-clock bound, which a loaded machine overruns.
+ */
+export async function beforeAnyTimer<T>(promise: Promise<T>): Promise<T | "waited"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const waited = new Promise<"waited">((resolve) => {
+    timer = setTimeout(() => {
+      resolve("waited");
+    }, 0);
+  });
+  try {
+    return await Promise.race([promise, waited]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** A dispatcher over `services` with a recording logger and completion records. */
 export function setup(services: readonly AnyService[], options: PipelineOptions = {}) {
   const logger = captureLogger();

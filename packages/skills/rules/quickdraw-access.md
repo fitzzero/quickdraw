@@ -62,9 +62,13 @@ defined. Fix the form, not the error:
 
 `principal.serviceAccess` holds grants by service name,
 `{ taskService: "Admin" }`: returned by `authenticate`, or loaded by
-`createServer({ auth: { loadServiceAccess } })`. With
+`createServer({ auth: { loadServiceAccess } })` for a principal that
+carries none: at a socket's handshake, for each HTTP call, and for an
+in-process caller (`qd.caller(principal)`, `server.dispatcher.caller`) at
+its first call. With
 `auth.serviceAccessSource: { model: "user", column: "serviceAccess" }`, a
-tracked write to that column refreshes the user's open sockets.
+tracked write to that column refreshes the user's open sockets, and an
+in-process caller loads the grants again at its next call.
 
 - A service-wide `Admin` grant passes every check on its service
   (`adminBypass: false` on the service turns that off).

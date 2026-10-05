@@ -4,9 +4,15 @@
 // as the one given to `createQuickdrawClient`), and writes the pages; with
 // `--check` it writes nothing and exits 1 when the pages on disk differ. It
 // reads contracts, never source code, so what it documents is what clients
-// are typed from.
+// are typed from. With `--services <module>` (a module exporting the
+// services, each or in a list, as the server takes them) each page also says
+// who may call what: each method's access form and `rowless`, the service's
+// row policy, admin bypass, `watchAccess` and field levels, who may open a
+// collection's scope, a channel's access, a stream's computed seed
+// (`access.ts`); without it the pages are the contracts' alone.
 //
 //   quickdraw-docs packages/shared/src/contracts/index.ts --out docs/api
+//   quickdraw-docs packages/shared/src/contracts/index.ts --services apps/api/src/services/index.ts
 //   quickdraw-docs packages/shared/src/contracts/index.ts --out docs/api --check
 //
 // A TypeScript module is imported as Node imports it (Node 24 strips types),
@@ -18,13 +24,16 @@ import { createRequire } from "node:module";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AnyContract } from "../contract/defineContract";
+import { servicesOf, type ServiceDoc } from "./access";
 import { fileOf, GENERATED_MARKER, renderIndex, renderService } from "./render";
 
-const USAGE = `Usage: quickdraw-docs <module> [--out <dir>] [--check]
+const USAGE = `Usage: quickdraw-docs <module> [--services <module>] [--out <dir>] [--check]
 
-  <module>     a module exporting the app's contracts: each one, or a map of them
-  --out <dir>  where the pages go: one per service, plus README.md (default: docs/api)
-  --check      write nothing; exit 1 when the pages on disk differ from the contracts
+  <module>              a module exporting the app's contracts: each one, or a map of them
+  --services <module>   a module exporting the services (each, or a list of them): the pages
+                        then also say who may call each method, from the services' access
+  --out <dir>           where the pages go: one per service, plus README.md (default: docs/api)
+  --check               write nothing; exit 1 when the pages on disk differ from the contracts
 `;
 
 /** The index page's file name. */
@@ -85,15 +94,43 @@ export function contractsOf(exports: Readonly<Record<string, unknown>>): AnyCont
   return [...found.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
+/** Options of {@link generateDocs}. */
+export interface GenerateOptions {
+  /**
+   * The app's services by name (`servicesOf`): each page then says who may
+   * call what. A service no contract documents is an error.
+   */
+  readonly services?: ReadonlyMap<string, ServiceDoc>;
+}
+
 /** The pages for `contracts`: file name to content, the index included. */
-export function generateDocs(contracts: readonly AnyContract[]): ReadonlyMap<string, string> {
+export function generateDocs(
+  contracts: readonly AnyContract[],
+  options: GenerateOptions = {},
+): ReadonlyMap<string, string> {
+  const { services } = options;
+  if (services !== undefined) {
+    const documented = new Set(contracts.map((contract) => contract.name));
+    const strays = [...services.keys()].filter((name) => !documented.has(name));
+    if (strays.length > 0) {
+      throw new Error(
+        `the services module defines ${strays.join(", ")}, but the contracts module exports no contract of ${strays.length === 1 ? "that name" : "those names"}`,
+      );
+    }
+  }
   const files = new Map<string, string>();
   for (const contract of contracts) {
     const file = fileOf(contract);
     if (file === INDEX_FILE || files.has(file)) {
       throw new Error(`the page of ${contract.name} would overwrite ${file}`);
     }
-    files.set(file, renderService(contract));
+    files.set(
+      file,
+      renderService(
+        contract,
+        services === undefined ? undefined : { service: services.get(contract.name) },
+      ),
+    );
   }
   files.set(INDEX_FILE, renderIndex(contracts));
   return files;
@@ -233,6 +270,7 @@ async function importModule(file: string, cwd: string): Promise<Readonly<Record<
 
 interface Options {
   readonly module: string;
+  readonly services: string | undefined;
   readonly out: string;
   readonly check: boolean;
 }
@@ -240,18 +278,23 @@ interface Options {
 /** The options in `args`, or the usage problem. */
 function parseArgs(args: readonly string[]): Options | string {
   let target: string | undefined;
+  let services: string | undefined;
   let out = "docs/api";
   let check = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    const value = args[index + 1];
     if (arg === "--check") {
       check = true;
-    } else if (arg === "--out") {
-      const dir = args[index + 1];
-      if (dir === undefined || dir.startsWith("-")) {
-        return "--out needs a directory";
+    } else if (arg === "--out" || arg === "--services") {
+      if (value === undefined || value.startsWith("-")) {
+        return arg === "--out" ? "--out needs a directory" : "--services needs a module";
       }
-      out = dir;
+      if (arg === "--out") {
+        out = value;
+      } else {
+        services = value;
+      }
       index += 1;
     } else if (arg !== undefined && !arg.startsWith("-") && target === undefined) {
       target = arg;
@@ -261,7 +304,7 @@ function parseArgs(args: readonly string[]): Options | string {
   }
   return target === undefined
     ? "name the module that exports the contracts"
-    : { module: target, out, check };
+    : { module: target, services, out, check };
 }
 
 function report(result: DocsReport, out: string, check: boolean, io: DocsOutput): number {
@@ -309,7 +352,15 @@ export async function main(
     if (contracts.length === 0) {
       throw new Error(`${options.module} exports no contract`);
     }
-    const result = syncDocs(generateDocs(contracts), resolve(cwd, options.out), options.check);
+    const services =
+      options.services === undefined
+        ? undefined
+        : servicesOf(await importModule(resolve(cwd, options.services), cwd));
+    if (services?.size === 0) {
+      throw new Error(`${String(options.services)} exports no service`);
+    }
+    const files = generateDocs(contracts, services === undefined ? {} : { services });
+    const result = syncDocs(files, resolve(cwd, options.out), options.check);
     return report(result, options.out, options.check, io);
   } catch (error) {
     io.err(`quickdraw-docs: ${error instanceof Error ? error.message : String(error)}\n`);

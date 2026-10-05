@@ -318,7 +318,7 @@ function servicesOf(
   if (dispatch === undefined) {
     return undefined;
   }
-  return (signal) => createCaller(() => dispatch, principal, signal) as ContextServices;
+  return (signal) => createCaller(() => dispatch, principal, { signal }) as ContextServices;
 }
 
 /**

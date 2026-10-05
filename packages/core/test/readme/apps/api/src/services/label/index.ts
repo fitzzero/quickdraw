@@ -1,6 +1,6 @@
 import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 import { labelContract, projectContract } from "@project/shared";
-import { qd } from "../quickdraw";
+import { qd } from "../../quickdraw";
 
 export const labelService = qd.defineService(labelContract, {
   model: "label",

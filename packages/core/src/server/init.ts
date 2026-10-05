@@ -10,7 +10,7 @@
 import type { AnyContract } from "../contract/defineContract";
 import { QuickdrawError } from "../protocol/errors";
 import { buildService } from "./buildService";
-import { createCaller, type CallerFor } from "./caller";
+import { callerGrantsOf, createCaller, type CallerFor } from "./caller";
 import type { BaseContext, ContextExtender, RunContext, RunOptions } from "./context";
 import { createServer, type QuickdrawServer, type ServerOptions } from "./createServer";
 import type { DefineService } from "./defineService";
@@ -65,6 +65,17 @@ export interface Quickdraw<T extends QuickdrawTypes> {
    * through the dispatcher this instance created last:
    * `qd.caller(user).taskService.rename(input)`. Typed by the `contracts` of
    * the app's types; `dispatcher.caller` is typed by its own services.
+   *
+   * Through a server (`qd.createServer`, or `createTestApp`), a principal
+   * that carries no `serviceAccess` gets the grants the server's
+   * `auth.loadServiceAccess` loads, as a socket's handshake and an HTTP
+   * call do: at the caller's first call, and again at the next call after
+   * the server applied new grants to a user (`server.access.refresh`, a
+   * tracked write to `auth.serviceAccessSource`). So an app's REST route
+   * calls as the user's sockets would: `qd.caller(sessionOf(req).principal)`.
+   * A principal that carries grants (even `{}`) keeps exactly those; a load
+   * that fails rejects the call with `INTERNAL` and is tried again at the
+   * next one.
    */
   caller(principal: PrincipalOf<T> | null): CallerFor<T>;
   /**
@@ -256,7 +267,9 @@ export function initQuickdraw<T extends QuickdrawTypes = QuickdrawTypes>(
       return dispatcher;
     },
     caller: (principal) =>
-      createCaller(() => (current ?? noDispatcher("qd.caller")).call, principal) as CallerFor<T>,
+      createCaller(() => (current ?? noDispatcher("qd.caller")).call, principal, {
+        grants: () => callerGrantsOf(current),
+      }) as CallerFor<T>,
     run: async (fn, options) =>
       current === undefined
         ? await runBeforeAnyDispatcher(fn, options)

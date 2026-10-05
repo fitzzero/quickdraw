@@ -33,6 +33,7 @@ import {
   google,
   mock,
   requireSession,
+  sessionOf,
   socketAuth,
   type SessionKeys,
 } from "@fitzzero/quickdraw-core/server/auth";
@@ -73,9 +74,10 @@ app.use(
   }),
 );
 
-// the app's own REST routes: was createRequireAuth({ getSession })
+// the app's own REST routes: was createRequireAuth({ getSession }) and req.userId
 app.post("/api/push/resubscribe", express.json(), requireSession(keys), (req, res) => {
-  const { userId } = req as typeof req & { userId: string };
+  // the session's user and principal, typed; call the services as it (the README's REST example)
+  const { userId } = sessionOf(req);
   res.json({ userId });
 });
 

@@ -170,6 +170,43 @@ describe("serviceAccess in the admin kit", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
+  it("marks the grants field kind: grants, and an override keeps it out of a generic form (finding F5.5)", async () => {
+    const withEditor = qd.defineService(userContract, {
+      model: "user",
+      access: owner("id"),
+      methods: {
+        ...admin.handlers(userContract, {
+          grants: true,
+          // The app edits grants in a screen of its own.
+          fieldOverrides: { serviceAccess: { showInForm: false } },
+        }),
+      },
+    });
+    for (const [service, shown] of [
+      [grantingUsers, undefined],
+      [withEditor, false],
+    ] as const) {
+      const app = await start(service);
+      const board = kit.board();
+      const meta = await callerOf(app, usersAdmin(board.ada)).userService.adminMeta(undefined);
+      const grants = meta.fields.find((field) => field.name === "serviceAccess");
+      expect(grants).toMatchObject({ kind: "grants", type: "json", editable: true });
+      expect((grants as { readonly showInForm?: boolean }).showInForm).toBe(shown);
+      // Only the grants field says what it holds, and no field is hidden from forms unasked.
+      for (const field of meta.fields.filter((other) => other.name !== "serviceAccess")) {
+        expect(field).not.toHaveProperty("kind");
+        expect(field).not.toHaveProperty("showInForm");
+      }
+      // Kept out of a form, the field is still read and written for a grants editor.
+      expect(
+        await callerOf(app, usersAdmin(board.ada)).userService.adminUpdate({
+          id: board.cy,
+          data: { serviceAccess: { taskService: "Read" } },
+        }),
+      ).toMatchObject({ serviceAccess: { taskService: "Read" } });
+    }
+  });
+
   it("is refused for an entity without a grants field, and with anything but a boolean", () => {
     const note = z.object({ id: z.string(), text: z.string() });
     const noGrants = defineContract("noteService", {

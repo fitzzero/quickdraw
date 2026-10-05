@@ -74,6 +74,20 @@ export interface AdminFieldConfig {
   readonly enumValues?: readonly string[];
   /** For relation fields, the related service's name. */
   readonly relationService?: string;
+  /**
+   * What the field holds, when the kit knows it: `"grants"` for a user's
+   * service-wide grants (`serviceAccess`), which `admin.handlers(contract,
+   * { grants: true })` shows. An admin screen with a grants editor of its own
+   * finds that field by it, never by its name. Absent for any other field.
+   */
+  readonly kind?: "grants";
+  /**
+   * Whether a generic create or edit form shows the field. `false` from a
+   * `fieldOverrides` entry (`{ serviceAccess: { showInForm: false } }`) keeps
+   * it for an editor of the app's own; the kit still reads and writes it.
+   * Absent unless overridden: shown.
+   */
+  readonly showInForm?: boolean;
 }
 
 /** Service metadata for admin UI generation: what `adminMeta` returns. */

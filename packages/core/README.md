@@ -25,7 +25,7 @@ single hand-written event.
 - **Testing**: a real test server, access matrices, performance budgets that
   count statements and bytes, strict development warnings.
 
-Design record: [`docs/rfcs/0003-v5.md`](../../docs/rfcs/0003-v5.md).
+Design record: [`docs/rfcs/0003-v5.md`](https://github.com/fitzzero/quickdraw/blob/dev/docs/rfcs/0003-v5.md).
 
 ## Install
 
@@ -710,10 +710,12 @@ export const taskService = qd.defineService(task, {
   (`adminBypass: false` turns that off). A grant below `Admin` counts only
   where the form names `service`: a `Read` grant does not read every row.
 - Grants come from `principal.serviceAccess`, as `authenticate` returns it or
-  `createServer({ auth: { loadServiceAccess } })` loads it. With
+  `createServer({ auth: { loadServiceAccess } })` loads it for a principal
+  that carries none: at a socket's handshake, for each HTTP call, and for
+  an in-process caller (`qd.caller`) at its first call. With
   `auth.serviceAccessSource: { model: "user", column: "serviceAccess" }`, a
   tracked write to that column refreshes the user's open sockets
-  (`qd:access`).
+  (`qd:access`), and in-process callers load the grants again.
 - Policies: `owner(field)`, `jsonAcl(field, { owner? })`,
   `members({ model, entry, user, level, levels? })`, `inherit({ from, via })`,
   `anyOf(...)`, `resolver({ levelsFor, where? })` and `everyone(level)`
@@ -912,7 +914,7 @@ export const taskService = qd.defineService(task, {
   Valkey's clock in microseconds, so revisions from all nodes are one order;
   its key needs persistence or replication. A node whose Valkey connection
   comes back has its clients reconnect to catch up.
-  [docs/deploying.md](../../docs/deploying.md) has the wiring, what holds across
+  [docs/deploying.md](https://github.com/fitzzero/quickdraw/blob/dev/docs/deploying.md) has the wiring, what holds across
   nodes, what it costs, and what happens when a node or Valkey stops
   answering.
 
@@ -1048,7 +1050,13 @@ over three transports (design: sections 3, 8 and 10):
   `./server/express`), which refuses with the `RATE_LIMITED` reply.
 - **In process**: `server.dispatcher.caller(principal)` or
   `qd.caller(principal)`: `await qd.caller(user).taskService.rename(input)`,
-  typed by the `contracts` of `initQuickdraw`'s types.
+  typed by the `contracts` of `initQuickdraw`'s types. A principal that
+  carries no `serviceAccess` gets the grants `auth.loadServiceAccess`
+  loads, as a socket's handshake and an HTTP call do: at the caller's first
+  call, and again at its next call after the server applied new grants to
+  a user (`server.access.refresh`, a tracked write to
+  `auth.serviceAccessSource`). One that carries grants (even `{}`) keeps
+  exactly those. A load that fails rejects the call with `INTERNAL`.
 
 `authenticate` takes one request (`{ transport, auth, headers, socket | req }`)
 for both transports and returns a principal, a user id, or nothing for an
@@ -1378,9 +1386,9 @@ such code, and `createInvalidationCoordinator(queryClient)` invalidates as
 the hooks do.
 
 A client in another language (a Godot game, a native app) speaks the wire
-itself: [`docs/protocol-v5.md`](../../docs/protocol-v5.md) is its specification,
-generated from the protocol's source, and [`examples/godot`](../../examples/godot)
-holds a GDScript client written from it. [`docs/clients.md`](../../docs/clients.md)
+itself: [`docs/protocol-v5.md`](https://github.com/fitzzero/quickdraw/blob/dev/docs/protocol-v5.md) is its specification,
+generated from the protocol's source, and [`examples/godot`](https://github.com/fitzzero/quickdraw/tree/dev/examples/godot)
+holds a GDScript client written from it. [`docs/clients.md`](https://github.com/fitzzero/quickdraw/blob/dev/docs/clients.md)
 compares the three ways in.
 
 ## Kits
@@ -1906,7 +1914,7 @@ export function AdminTasks() {
   value is checked by the entity schema itself, and a value the database
   refuses is `VALIDATION`. A missing row is `NOT_FOUND`.
 - `adminMeta()` returns `{ serviceName, displayName, fields }`, one
-  `{ name, type, label, required, editable, showInTable, sortable, filterable, enumValues?, relationService? }`
+  `{ name, type, label, required, editable, showInTable, sortable, filterable, enumValues?, relationService?, kind?, showInForm? }`
   per field: `type` is
   `string`, `number`, `boolean`, `date` (an ISO string with a date format),
   `enum` or `json` from the field's JSON Schema, and `relation` by override;
@@ -1923,7 +1931,12 @@ export function AdminTasks() {
   rows without it and `FORBIDDEN` for a write, filter or sort naming it.
   The write is tracked, so with `auth.serviceAccessSource` naming the column
   the user's open sockets get the new grants at once, on every node. Such
-  an Admin can grant any service, themself included.
+  an Admin can grant any service, themself included. The field's
+  configuration says `kind: "grants"`, so a screen with a grants editor of
+  its own finds it without its name, and
+  `fieldOverrides: { serviceAccess: { showInForm: false } }` keeps it out
+  of a generic create or edit form (a form shows the fields whose
+  `showInForm` is not `false`); the kit still reads and writes it.
 - `admin.handlers(contract, { onWrite })` runs `onWrite({ method, id,
 before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   `adminDelete`, in one transaction with the write (`db` is the
@@ -2356,11 +2369,11 @@ nothing is cached:
   session's token, for clients that keep no cookies (a game engine, a page
   in a third-party iframe), at the cost of the token being readable by the
   page's scripts.
-- `requireSession({ sessions, jwtSecret })` guards the app's own REST
-  routes: the credential is read as `/me` reads it, the JWT verified once
-  and the session checked in the store, then `req.userId` and
-  `req.sessionId` are set; otherwise 401 `{ error: "UNAUTHENTICATED", message }`.
-  4.1's `createRequireAuth` stays for token-keyed sessions.
+- `requireSession({ sessions, jwtSecret }, { loadPrincipal? })` guards the
+  app's own REST routes (below): the credential is read as `/me` reads it,
+  the JWT verified once and the session checked in the store; otherwise
+  401 `{ error: "UNAUTHENTICATED", message }`. 4.1's `createRequireAuth`
+  stays for token-keyed sessions.
 - Rate limits: the sign-in routes share `createAuthLimiter({ max: 60 })` (60
   requests per 15 minutes per IP) and the session routes
   `createAuthStatusLimiter()` (120); pass `rateLimit: { signIn, session }`
@@ -2440,6 +2453,46 @@ export function SignOut() {
     </button>
   );
 }
+```
+
+An app's own REST route (a service worker's renewal, a webhook) signs the
+user in with `requireSession` and calls the services in process, so the
+method's validation, access check and tracked writes are a socket call's.
+`sessionOf(req)` gives the route `{ userId, sessionId, principal }`, typed,
+with no cast of `req` (`sessionOf<AppPrincipal>(req)` when `loadPrincipal`,
+like `socketAuth`'s, builds the app's own principal; by default it is
+`{ userId, kind: "user" }`); they are also set as `req.userId`,
+`req.sessionId` and `req.principal`. `qd.caller(principal)` then loads the
+user's grants as the user's sockets get them, so a method behind
+`{ service: L }` passes or answers `FORBIDDEN` as it would over a socket:
+
+<!-- example: apps/api/src/auth/routes.ts#rest -->
+
+```ts
+import { httpStatus, toWire } from "@fitzzero/quickdraw-core";
+import { requireSession, sessionOf } from "@fitzzero/quickdraw-core/server/auth";
+
+// 401 without a live session; the principal built as socketAuth builds a socket's
+const signedIn = requireSession(
+  { sessions, jwtSecret: env.JWT_SECRET },
+  { loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }) },
+);
+
+app.get("/api/projects/:projectId/task-count", signedIn, (req, res) => {
+  void (async () => {
+    const { principal } = sessionOf<AppPrincipal>(req);
+    try {
+      // the method's validation, access check (with the user's grants) and writes, as over a socket
+      const count = await qd.caller(principal).taskService.countOnBoard({
+        projectId: req.params.projectId,
+      });
+      res.json({ count });
+    } catch (error) {
+      const failure = toWire(error);
+      res.status(httpStatus(failure.code)).json(failure);
+    }
+  })();
+});
 ```
 
 `createMemorySessionStore()` keeps sessions in the process, for development
@@ -2841,16 +2894,29 @@ is also a server span named `service.method`, with an error status for
 
 ## API docs from contracts
 
-The `quickdraw-docs` command writes Markdown API docs from the contracts
-alone: one page per service (its entity and field tiers, projections,
-methods with their kind, input fields and output, collections, streams,
-channels and events, from the schemas' JSON Schema where they have one) and
-a `README.md` index. It reads contracts, never source code.
+The `quickdraw-docs` command writes Markdown API docs from the contracts:
+one page per service (its entity and field tiers, projections, methods
+with their kind, input fields and output, collections, streams, channels
+and events, from the schemas' JSON Schema where they have one) and a
+`README.md` index. It reads contracts (and, with `--services`, the
+services' definitions), never source code.
 
 ```bash
 quickdraw-docs packages/shared/src/index.ts --out docs/api           # write the pages
 quickdraw-docs packages/shared/src/index.ts --out docs/api --check   # exit 1 when they are stale
+quickdraw-docs packages/shared/src/index.ts --services apps/api/src/services/index.ts --out docs/api
 ```
+
+With `--services <module>` (a module exporting the services, each or in a
+list, as the server takes them; importing it must not start the server),
+each page also says who may call what, read from the services'
+definitions: an "Access" section with the row policy, whether a
+service-wide `Admin` grant passes every check, who may watch the change
+topic (`watchAccess`) and the field levels; each method's access form, in
+words, and its `rowless`; who may open a collection's scope; a channel's
+access; a stream's computed seed and when its items are checked. A
+contract the services module has no service for says so, and a service
+without a contract is an error. Pass the same flag to `--check`.
 
 The module may export each contract, or a map of them as given to
 `createQuickdrawClient`. A TypeScript module loads through Node's type
@@ -2863,7 +2929,7 @@ nothing. Run `--check` in CI next to the lint step.
 
 ## Lint rules and agent guidance
 
-[`@fitzzero/quickdraw-lint`](../../packages/lint) is the oxlint plugin and base
+[`@fitzzero/quickdraw-lint`](https://github.com/fitzzero/quickdraw/tree/dev/packages/lint) is the oxlint plugin and base
 config every 5.0 app extends: it reports untracked and foreign writes, nested
 and raw SQL writes, hand-sent frames, inline auth guards, unbounded reads,
 database calls and emits in loops, layering breaks, bypasses of the typed
@@ -2878,7 +2944,7 @@ takes an `id`, unless it says `rowless: true`); then lint; then a
 development warning as it happens (`repeated-call`, `repeated-mutation` and
 `repeated-invalidation` name a client loop before the rate limit does).
 
-[`@fitzzero/quickdraw-skills`](../../packages/skills) ships agent rules and skills
+[`@fitzzero/quickdraw-skills`](https://github.com/fitzzero/quickdraw/tree/dev/packages/skills) ships agent rules and skills
 for quickdraw apps and links them into `.claude/` with
 `quickdraw-skills link`, so every app's agents read the same, current
 guidance:
@@ -2894,11 +2960,11 @@ guidance:
 
 ## Migrating from 4.x
 
-[`@fitzzero/quickdraw-codemod`](../../packages/codemod) moves a 4.x app to 5.0:
+[`@fitzzero/quickdraw-codemod`](https://github.com/fitzzero/quickdraw/tree/dev/packages/codemod) moves a 4.x app to 5.0:
 contracts from the method maps, `defineService` from the service classes,
 the typed client for the hooks, and a report of everything left to decide.
-[`MIGRATION.md`](../../MIGRATION.md) explains each step, the access mapping and
-the defaults that changed; [`UPGRADE-PROMPT.md`](../../UPGRADE-PROMPT.md) is the
+[`MIGRATION.md`](https://github.com/fitzzero/quickdraw/blob/dev/MIGRATION.md) explains each step, the access mapping and
+the defaults that changed; [`UPGRADE-PROMPT.md`](https://github.com/fitzzero/quickdraw/blob/dev/UPGRADE-PROMPT.md) is the
 procedure for an agent. Both ship with the codemod, at
 `node_modules/@fitzzero/quickdraw-codemod/MIGRATION.md` and
 `node_modules/@fitzzero/quickdraw-codemod/UPGRADE-PROMPT.md`.
@@ -2913,7 +2979,7 @@ bunx @fitzzero/quickdraw-codemod@next v5 .
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `.`                | `defineContract`, `query`, `mutation`, `nullable`, `listOf`, `via`, the kits' contract halves, inference types, `QuickdrawError`, error codes, protocol types, room and topic names                                                             |
 | `./server`         | `initQuickdraw`, `createServer`, `createDispatcher`, `createHttpRouter`, policies, `custom`, the kits' handlers, `requireRow`, `nextOrdinal`, `storageOf`, dev warnings, the Redis adapter, the socket rate limiter, env and encryption helpers |
-| `./server/auth`    | `createAuthRoutes`, `socketAuth`, providers (`google`, `discord`, `mock`, `guest`), session stores, `issueSession`, `liveSession`, JWT, cookie and origin helpers                                                                               |
+| `./server/auth`    | `createAuthRoutes`, `socketAuth`, `requireSession` and `sessionOf`, providers (`google`, `discord`, `mock`, `guest`), session stores, `issueSession`, `liveSession`, JWT, cookie and origin helpers                                             |
 | `./server/express` | Express rate limits: `createAuthLimiter`, `createAuthStatusLimiter`, `createCallLimiter`, `createPublicApiLimiter`, `createWebhookLimiter`                                                                                                      |
 | `./server/mcp`     | `createMcpRegistry`, `describeTools`, `createMcpStdioServer`, `createMcpHttpRouter`, `bootstrapMcpServer`                                                                                                                                       |
 | `./server/otel`    | `otelOnCall`                                                                                                                                                                                                                                    |
@@ -2932,7 +2998,7 @@ The package also ships the `quickdraw-docs` command.
 
 A bun workspace with turbo: `packages/core` (this package), `packages/lint`,
 `packages/skills` and `packages/codemod`. See
-[CONTRIBUTING.md](../../CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/fitzzero/quickdraw/blob/dev/CONTRIBUTING.md).
 
 ```bash
 bun install

@@ -73,12 +73,21 @@ export type AdminFieldOf<C extends AnyContract> = keyof EntityOf<C> & string;
 /**
  * What `fieldOverrides` may change of one field's configuration. `sortable`
  * and `filterable` follow the contract's declared fields; `editable` may be
- * turned off, and on for any field but `id` and the timestamps.
+ * turned off, and on for any field but `id` and the timestamps;
+ * `showInForm: false` keeps a field out of a generic form (the grants
+ * field of an app with a grants editor of its own). `kind` is the kit's.
  */
 export type AdminFieldOverride = Partial<
   Pick<
     AdminFieldConfig,
-    "type" | "label" | "required" | "editable" | "showInTable" | "enumValues" | "relationService"
+    | "type"
+    | "label"
+    | "required"
+    | "editable"
+    | "showInTable"
+    | "showInForm"
+    | "enumValues"
+    | "relationService"
   >
 >;
 

@@ -90,6 +90,38 @@ export const taskService = qd.defineService(task, {
   (`initQuickdraw<{ ...; contracts }>()`). Never write another service's
   model directly to skip its access checks.
 
+## REST routes call the services
+
+Data goes through service methods. The few REST routes an app keeps (a
+service worker's renewal, an inbound webhook, the auth routes) never reach
+the database themselves: they sign the user in with `requireSession(keys)`
+from `@fitzzero/quickdraw-core/server/auth` (it answers 401 itself; pass
+`socketAuth`'s `loadPrincipal` too when the app builds its own principal)
+and call the method in process, so its validation, access check and tracked
+writes are a socket call's:
+
+```ts
+app.post("/api/push/resubscribe", express.json(), requireSession(keys), (req, res) => {
+  void (async () => {
+    const { principal } = sessionOf(req);
+    try {
+      res.json(await qd.caller(principal).pushService.subscribePush(req.body));
+    } catch (error) {
+      const failure = toWire(error); // a QuickdrawError: answer its code's status
+      res.status(httpStatus(failure.code)).json(failure);
+    }
+  })();
+});
+```
+
+`qd.caller(principal)` loads the principal's service-wide grants with the
+server's `auth.loadServiceAccess`, as a socket's handshake does (once per
+caller, again after the server refreshes that user's grants), so a method
+behind `{ service: L }` passes or fails as it would over a socket. A
+principal that carries `serviceAccess` keeps exactly those grants. Never
+read `req.userId` through a cast, and never build a principal with grants
+by hand to get past a check.
+
 ## Writes are tracked; frames are derived
 
 Entity frames, collection deltas and change topics are computed from the
@@ -98,7 +130,8 @@ writes made through `db`, after the response is sent:
 - Write through the handler's `db` (it may return `db.task.update(...)`
   unawaited). In a job, script or webhook, import the tracked client and
   wrap the work in `qd.run(async (ctx) => ...)`, which flushes before it
-  returns. Never write through the untracked client.
+  returns; a boot-time seed may run it before `createServer` too (its writes
+  then reach no subscriber). Never write through the untracked client.
 - Background work a handler starts and does not await (a push sent after
   the reply) runs in `qd.run(fn, { detached: true })`: a unit of its own,
   flushed when `fn` settles. Without `detached` it joins the handler's unit,
@@ -151,7 +184,13 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 - `admin.contract({ entity })` with `admin.handlers(task)` (`{ service: "Admin" }` by default).
   On a users service, `admin.handlers(user, { grants: true })` lets the admin
   screen edit `serviceAccess` through `adminUpdate` (service-wide Admins
-  only); never hand-write a `setServiceAccess` method for it.
+  only); never hand-write a `setServiceAccess` method for it. `adminMeta`
+  marks that field `kind: "grants"`; an app with a grants editor of its own
+  keeps it out of the generic form with
+  `fieldOverrides: { serviceAccess: { showInForm: false } }`. What an admin
+  edit must set off (a game reloading its tunables, an audit row) goes in
+  `admin.handlers(task, { onWrite })`, which runs in the edit's transaction;
+  never wrap the kit's handlers.
 
 ## Realtime
 

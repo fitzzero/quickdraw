@@ -189,7 +189,10 @@ export interface QuickdrawServer<S extends readonly AnyService[] = readonly AnyS
   readonly httpServer: HttpServer;
   /**
    * The dispatcher every transport calls; `dispatcher.caller(principal)`
-   * calls in process. `close()` waits for its calls in flight.
+   * calls in process, giving a principal that carries no grants the ones
+   * `auth.loadServiceAccess` loads, as a socket's handshake does (once per
+   * caller, and again after the server applied new grants). `close()` waits
+   * for its calls in flight.
    */
   readonly dispatcher: Dispatcher<S>;
   /**
@@ -358,6 +361,12 @@ export function createServer<const S extends readonly AnyService[]>(
     cluster: options.cluster,
   });
   refresh = (userId) => sockets.refresh(userId);
+  // In-process callers (`dispatcher.caller`, `qd.caller`) load a principal's grants as the
+  // handshake does, and again once this node applied new grants to a user.
+  const load = options.auth?.loadServiceAccess;
+  if (load !== undefined) {
+    calls.loadGrantsWith({ load, version: () => sockets.regrants() });
+  }
   const shutdown = closer(
     sockets,
     httpServer,

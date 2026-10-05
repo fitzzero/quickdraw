@@ -93,3 +93,30 @@ export const server = qd.createServer({
   http: { rateLimit: createCallLimiter() },
 });
 // #endregion
+
+// #region rest
+import { httpStatus, toWire } from "@fitzzero/quickdraw-core";
+import { requireSession, sessionOf } from "@fitzzero/quickdraw-core/server/auth";
+
+// 401 without a live session; the principal built as socketAuth builds a socket's
+const signedIn = requireSession(
+  { sessions, jwtSecret: env.JWT_SECRET },
+  { loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }) },
+);
+
+app.get("/api/projects/:projectId/task-count", signedIn, (req, res) => {
+  void (async () => {
+    const { principal } = sessionOf<AppPrincipal>(req);
+    try {
+      // the method's validation, access check (with the user's grants) and writes, as over a socket
+      const count = await qd.caller(principal).taskService.countOnBoard({
+        projectId: req.params.projectId,
+      });
+      res.json({ count });
+    } catch (error) {
+      const failure = toWire(error);
+      res.status(httpStatus(failure.code)).json(failure);
+    }
+  })();
+});
+// #endregion

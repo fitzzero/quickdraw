@@ -411,6 +411,8 @@ function fieldConfigJson(): JsonSchema {
       filterable: BOOLEAN,
       enumValues: { type: "array", items: STRING },
       relationService: STRING,
+      kind: { type: "string", enum: ["grants"] },
+      showInForm: BOOLEAN,
     },
     ["name", "type", "label", "required", "editable", "showInTable", "sortable"],
   );
