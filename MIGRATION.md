@@ -1275,10 +1275,10 @@ export const boardService = qd.defineService(boardContract, {
 ```
 
 Measured with 600 writes to a busy board, 5.0 cut the board query's p95 to
-0.28× of 4.1 (122 to 34.6 ms), SQL per write to 0.25× and server CPU per
-write to 0.55×, but bytes per write only to 0.89×: each board reply was
+0.15× of 4.1 (122 to 19.0 ms), SQL per write to 0.36× and server CPU per
+write to 0.53×, but bytes per write only to 0.89×: each board reply was
 516 KB, and viewers fetched it about 20 times per write. Without those
-replies, 5.0 sent about 19% of what 4.1 did.
+replies, 5.0 sent about a fifth of what 4.1 did.
 
 The 5.0 pattern is the collection: declare `index` (the small fields the
 board orders and filters by, sent for the whole scope with the first page)

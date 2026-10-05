@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0] (unreleased)
+
+### Benchmark
+
+5.0 measured again against 4.1.0 on the final code (5.0.0-rc.6), on the
+machine and cpus of the first measurement, in one sitting
+(`bench/reports/5.0.0.md`; board-steady: 600 writes to a board 50 viewers
+watch): the board query's p95 is 0.15× of 4.1 (122 to 19.0 ms) and
+`updateTask`'s 0.12× (120 to 13.8 ms), server CPU per write 0.53×, SQL
+statements per write 0.36×, and a reconnect storm serves no snapshots
+(11,590 in 4.1). Missed or worse: bytes per write 0.89×, against a target
+of 0.30×, because the benchmark app keeps a fat watched board query (a
+collection's index is the fix: `MIGRATION.md`, "Boards"); event-loop delay
+p99 1.21× in board-burst and 2.6× in fat-read (where the two 4.1 runs
+disagree by 25%), while board-steady's is now 0.80× of 4.1; drain after
+the last write 0.50 s against 0.26 s (the coordinator's 250 ms window);
+restoring a watched query after a reconnect storm, p50 1,056 ms against
+10 ms (the deliberate refetch jitter, `reconnectJitterMs`); peak memory in
+that storm 1.19× (not explained yet). Against the first measurement, on
+5.0.0-alpha.0: encoding a shared run's reply once per group of callers
+cut the event-loop delay p99 by half or more and the board query's p95
+from 34.6 to 19.0 ms, and SQL statements per write rose from 0.25× to
+0.36× of 4.1 because fewer refetches join a shared run in flight (3,943
+runs against 2,397, 12 statements each; the statements besides those runs
+did not change).
+
 ## [5.0.0-rc.6]
 
 The fixes from the final independent review of the release candidates
@@ -1046,7 +1072,8 @@ drain after the last write 0.51 s against 0.26 s (the coordinator's 250 ms
 window); restoring a watched query after a reconnect storm, p50 968 ms
 against 10 ms (the deliberate 0 to 2 s refetch jitter, now
 `reconnectJitterMs`); peak memory in that storm 1.17× (not explained yet).
-Measured on 5.0.0-alpha.0, before the finale round.
+Measured on 5.0.0-alpha.0, before the finale round; `bench/reports/5.0.0.md`
+now holds the rerun on the final code ([5.0.0], Benchmark).
 
 ## [4.1.1] - 2026-10-04
 

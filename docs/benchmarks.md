@@ -6,9 +6,12 @@ in a PR, a release note or an RFC, if it was measured under the rules below.
 The harness is a release tool, not a CI gate.
 
 The 4.1.0 baseline is `bench/baselines/4.1.0.json`, with the readable report
-in `bench/reports/4.1.0.md`. 5.0.0 was measured against 4.1.0 in one sitting:
-the report is `bench/reports/5.0.0.md`, the 5.0 run `bench/baselines/5.0.0.json`,
-and the two 4.1 runs around it `bench/comparisons/5.0.0/`.
+in `bench/reports/4.1.0.md`. 5.0.0 was measured against 4.1.0 in one sitting
+on the final code (5.0.0-rc.6, 2026-10-05): the report is
+`bench/reports/5.0.0.md`, the 5.0 run `bench/baselines/5.0.0.json`, and the
+two 4.1 runs around it `bench/comparisons/5.0.0/`. The first measurement, on
+5.0.0-alpha.0 (2026-10-04), is in those files' git history. The headline
+figures are below, in "5.0.0 against 4.1.0".
 
 ## Rules
 
@@ -89,6 +92,90 @@ answered, so a slow server cannot lower the load it is offered.
    why each worse metric is worse, and for each missed target a CPU profile
    of the server (`--cpu-prof` on a separate run) and a fix or a follow-up.
    Quote failed requests with the latencies, and state the load average.
+
+## 5.0.0 against 4.1.0
+
+Measured on `reaper0` on 2026-10-05 (4.1.0, then 5.0.0-rc.6, then 4.1.0
+again, three repetitions of every scenario, the server on two cores). 4.1
+is the mean of its two runs; no request failed in any run. The report
+explains every row.
+
+| Scenario        | Metric                             |    4.1 |    5.0 | 5.0 / 4.1                              |
+| --------------- | ---------------------------------- | -----: | -----: | -------------------------------------- |
+| board-steady    | board query p95 (ms)               |    122 |   19.0 | 0.15×                                  |
+| board-steady    | `updateTask` p95 (ms)              |    120 |   13.8 | 0.12×                                  |
+| board-steady    | server CPU per write (ms)          |   61.9 |   33.0 | 0.53×                                  |
+| board-steady    | SQL statements per write           |    292 |    104 | 0.36×                                  |
+| board-steady    | bytes sent per write (KB)          | 11,709 | 10,370 | 0.89× (target 0.30×: missed)           |
+| board-steady    | event-loop delay p99 (ms)          |   8.55 |   6.83 | 0.80×                                  |
+| board-burst     | board query p95 (ms)               |    156 |   73.6 | 0.47×                                  |
+| board-burst     | server CPU (s)                     |   1.70 |   0.85 | 0.50×                                  |
+| board-burst     | event-loop delay p99 (ms)          |   9.31 |   11.3 | 1.21×                                  |
+| reconnect-storm | snapshots served                   | 11,590 |      0 | resumed by revision                    |
+| reconnect-storm | live restore p50 (ms)              |   10.3 |   2.30 | 0.22×                                  |
+| reconnect-storm | watched query restore p50 (ms)     |   10.4 |  1,056 | the 0 to 2 s refetch jitter, by design |
+| reconnect-storm | peak RSS (MB)                      |    425 |    506 | 1.19× (not explained yet)              |
+| fat-read        | board query handler runs per round |     20 |      1 | shared                                 |
+| fat-read        | server CPU (s)                     |   0.94 |   0.39 | 0.41×                                  |
+| fat-read        | event-loop delay p99 (ms)          |   3.36 |   8.82 | 2.6× (the 4.1 runs disagree by 25%)    |
+
+Three of the four numeric targets are met (board query p95 at most half of
+4.1, reconnect snapshots at most a tenth, one board query run per fat-read
+round); bytes per write is missed because the benchmark app keeps a fat
+board query that every viewer reads again after each write (`MIGRATION.md`,
+"Boards", ports such a board to a collection).
+
+## The template's game, 4.1 against 5.0
+
+The quickdraw-chat template measures its game's netcode with a bench of its
+own (its `docs/netcode-bench.md`, tier 1): one Node process runs the API
+with the game loop, a seeded TCP latency proxy per bot, and bots that run
+ports of the Godot client's prediction and interpolation and record every
+frame they render. It was run on the template's 4.x tree (`main` at
+`9011744`, quickdraw-core 4.1.0) and on its 5.0 tree (`dev` at `cc2f6de`,
+5.0.0-rc.5) on `reaper0` on 2026-10-05, after the benchmark above and never
+beside it: every scenario the bench lists, three 60 s runs per tree (the
+first 5 s warm-up), one run per process, interleaved scenario by scenario.
+Medians, with the spread of the three runs (max minus min) in brackets, for
+`baseline-3p-100ms` (three players at about 100 ms round trip):
+
+| baseline-3p-100ms                          | 4.x           | 5.0           |
+| ------------------------------------------ | ------------- | ------------- |
+| render latency (ms)                        | 117 (0)       | 117 (0)       |
+| input acknowledgement round trip, p95 (ms) | 153 (0.5)     | 153 (0.8)     |
+| divergence own vs remote, p95 (px)         | 65.6 (3.8)    | 65.2 (3.5)    |
+| divergence remote vs remote, p95 (px)      | 0.07 (0.02)   | 0.08 (0.05)   |
+| jerk, RMS                                  | 727 (84)      | 746 (64)      |
+| teleports per minute                       | 0             | 0             |
+| snapshot bytes, mean                       | 383 (3)       | 381 (4)       |
+| server tick, p95 (ms)                      | 0.053 (0.007) | 0.045 (0.008) |
+| event-loop delay of the process, p99 (ms)  | 1.24 (0.49)   | 1.18 (0.34)   |
+
+The game's netcode is the same on 5.0. In all eight scenarios (among them
+`asym-2p`, a player at about 150 ms round trip against one at 75, and
+`bursty-3p`, with 250 ms stalls every 2 s), no metric a player sees (render
+latency, input round trip, either divergence, jerk, teleports, hard snaps,
+missed snapshots, trajectory error) differs by more than the spread of the
+runs or the template bench's own floor, with one exception: jerk in
+`bursty-3p` is 6% lower on 5.0 (1,132 against 1,208). The server's tick is
+shorter on 5.0 in every scenario, by 3 to 20% (p95 0.038 to 0.053 ms
+against 0.042 to 0.057), a few microseconds of a 50 ms tick and under the
+bench's 0.05 ms floor. An earlier 20 s run at rc.3 against the template's
+committed 4.x baseline showed own-vs-remote divergence 4.1% higher and
+remote-vs-remote 23% lower; with three 60 s runs a tree, both are noise
+(-0.6% and +15% here, each inside the spread and far under the floor),
+while its unchanged render latency and input round trip hold.
+
+Not measured: real browsers and the Godot WASM renderer (the bench's tier
+2), bytes on the wire per frame (the scorecard counts a snapshot's JSON, not
+its envelope), more than three players, NPCs (every scenario has none), and
+real networks (the proxy delays TCP; it cannot reorder or drop). The
+event-loop delay comes from a preload added for this comparison (a 10 ms
+`monitorEventLoopDelay` over the whole process, server and bots together),
+not from the template's scorecard. The 5.0 tree runs 5.0.0-rc.5, the version
+the template pins; rc.6's changes (method replies reduced to their schema,
+tracked writes, the JS client's outcomes and how it reads longer frames) are
+not on the path a tick takes.
 
 ## Behind a cluster adapter
 

@@ -17,8 +17,9 @@ import { taskService } from "./services/task";
  * The rate limiter's default, 600 events per minute per socket, covers this
  * workload, which 4.1 serves without any limiter: a writer sends 120 writes a
  * minute and a viewer fetches the board query at most four times a second
- * (240 a minute). The 5.0.0 report's runs allowed 1,000 because the default
- * was 100 then, which refused part of the work (`reports/5.0.0.md`).
+ * (240 a minute). The first 5.0.0 measurement, on 5.0.0-alpha.0, allowed
+ * 1,000 because the default was 100 then, which refused part of the work
+ * (`reports/5.0.0.md`, "The default rate limiter").
  */
 
 const port = Number(process.env.PORT ?? "4090");
