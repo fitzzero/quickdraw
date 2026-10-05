@@ -298,6 +298,58 @@ describe("usePresence", () => {
   });
 });
 
+describe("frames from a later revision of protocol 5", () => {
+  it("reads the fields and elements it knows, and ignores the ones appended after them", async () => {
+    const app = await start();
+    // A newer server: a field more in the hello.
+    app.server.io.use((socket, next) => {
+      const emit = socket.emit.bind(socket) as (event: string, ...args: unknown[]) => boolean;
+      (socket as unknown as { emit: typeof emit }).emit = (event, ...args) =>
+        event === "qd:hello"
+          ? emit(event, { ...(args[0] as object), future: { x: 1 } }, ...args.slice(1))
+          : emit(event, ...args);
+      next();
+    });
+    const view = await renderWithQuickdraw(
+      <>
+        <Ticker scope="lobby" />
+        <Shouts />
+        <Lobby />
+      </>,
+      { app, as: ada, client: qd },
+    );
+    await view.findByText("ticks []");
+    await act(async () => {
+      await qd.room.enter.call({ room: "lobby" });
+    });
+    await view.findByText("present [ada]");
+    act(() => {
+      const { io } = app.server;
+      io.emit("qd:stream", ["roomService", "ticker", "lobby", { n: 7 }, "future", { y: 2 }]);
+      io.emit("qd:event", ["roomService", "shouted", { text: "three" }]);
+      io.emit("qd:event", ["roomService", "shouted", { text: "four" }, "future"]);
+      io.emit("qd:presence", { room: "lobby", users: ["ada", "cy"], future: 1 });
+      io.emit("qd:changed", { s: "roomService", topic: "service", rev: 1, future: 2 });
+      io.emit("qd:revoked", {
+        kind: "entity",
+        reason: "access",
+        s: "roomService",
+        id: "x",
+        future: 3,
+      });
+    });
+    await view.findByText("ticks [7]");
+    await view.findByText("shouts [three,four]");
+    await view.findByText("present [ada,cy]");
+    // The session goes on: a push and a call after those frames.
+    app.server.stream(room, "ticker").push("lobby", { n: 8 });
+    await view.findByText("ticks [7,8]");
+    await act(async () => {
+      expect(await qd.room.exit.call({ room: "lobby" })).toBe(true);
+    });
+  });
+});
+
 describe("the realtime members of a mock client", () => {
   it("show the items and errors the test sets, record what is sent, and emit events", async () => {
     const mock = createMockClient({ room });

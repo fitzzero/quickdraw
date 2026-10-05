@@ -63,6 +63,7 @@ func _run() -> void:
 	first_server_id = client.server_id
 	await _calls(client)
 	await _world(client)
+	await _later_revision(client)
 	await _limits(client)
 	_seed_mid_window(client)
 	print("STEP rotate")
@@ -97,6 +98,33 @@ func _world(client) -> void:
 	check(await until(func() -> bool: return moved(1) and items.size() == 1), "a move in the world is heard")
 	check(events[0][0] == "gameService" and events[0][1] == "moved" and events[0][2].userId == "ada", "as a typed event")
 	check(int(items[0].n) == 1, "and a stream item")
+
+
+## Frames a later revision of protocol 5 may send: fields added to objects
+## and elements appended to arrays. The harness adds a field to every
+## qd:hello, and sends these frames on "STEP later"; the client reads what it
+## knows of each and ignores the rest.
+func _later_revision(client) -> void:
+	check(client.hello.has("future"), "a qd:hello with a field the client does not know is read")
+	var others: Array = []
+	var ended: Array = []
+	var present: Array = []
+	var on_frame := func(event: String, data: Variant) -> void: others.append([event, data])
+	var on_revoked := func(frame: Dictionary) -> void: ended.append(frame)
+	var on_presence := func(room: String, users: Array) -> void: present.append([room, users])
+	client.frame_received.connect(on_frame)
+	client.revoked.connect(on_revoked)
+	client.presence_changed.connect(on_presence)
+	print("STEP later")
+	var heard := func() -> bool:
+		return moved(7) and items.size() == 2 and others.size() == 1 and ended.size() == 1 and present.size() == 1
+	check(await until(heard), "frames with appended elements and added fields are all heard")
+	check(int(items[-1].n) == 101, "a qd:stream frame's item, elements appended after it ignored")
+	check(present[0][0] == "world:main" and present[0][1] == ["ada", "bo"], "a qd:presence frame with a field more")
+	check(others[0][0] == "qd:changed" and ended[0].id == "x", "qd:changed and qd:revoked frames with a field more")
+	client.frame_received.disconnect(on_frame)
+	client.revoked.disconnect(on_revoked)
+	client.presence_changed.disconnect(on_presence)
 
 
 func _limits(client) -> void:

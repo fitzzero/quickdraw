@@ -50,6 +50,20 @@ moves until the release candidate is cut.
   own replies. For an output without JSON Schema, a reply that carries a
   tiered key raises it in development.
 
+### Wire
+
+- One rule for every frame, both ways, stated in `protocol/envelope.ts`
+  and `docs/protocol-v5.md` before the protocol freezes: a receiver
+  ignores the object fields it does not know and the array elements after
+  the last one it reads, and a later revision of protocol 5 may only add
+  fields to objects and append elements to arrays (anything else takes a
+  new protocol number). The JS client dropped a `qd:event` frame with more
+  than three elements; it now reads the first three, as its `qd:stream`
+  reader and the GDScript client already did. `check:godot` plays a newer
+  server: a field more in every `qd:hello`, elements appended to
+  `qd:stream` and `qd:event`, a field added to `qd:presence`, `qd:changed`
+  and `qd:revoked`.
+
 ## [5.0.0-rc.5]
 
 Round 6 of the fixes the quickdraw-chat migration found: the framework

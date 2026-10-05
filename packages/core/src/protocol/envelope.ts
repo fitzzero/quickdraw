@@ -16,6 +16,15 @@
 // Runtime guards cover the frames the dispatcher reads from an untrusted
 // client (`qd:call`, `qd:cancel`). They are written by hand so the package
 // root stays free of schema libraries.
+//
+// One rule for every frame, both ways: a receiver ignores the object fields
+// it does not know and the array elements after the last one it reads, and
+// a later revision of protocol 5 may only add fields to objects and append
+// elements to arrays (`qd:event`, `qd:stream`, `qd:ch`), never remove,
+// rename, retype or reorder what is here. So a client that reads only what
+// it knows keeps working against a newer server, and a server against a
+// newer client. Anything else needs a new protocol number (`qd:hello`'s
+// `protocol`), which the handshake refuses with `PROTOCOL_MISMATCH`.
 
 import type { AccessLevel } from "../contract/access";
 import type { CLIENT_EVENTS, SERVER_EVENTS } from "../contract/names";
@@ -323,7 +332,7 @@ export type StreamSubscribeReply<Item = unknown> =
  * `qd:stream`: an item pushed to a stream, as one array argument
  * `[service, stream, scope, item]` (like `qd:event`), so a fast stream sends
  * no key names: `scope` is `null` for a global stream. The positions are
- * fixed; a later protocol may append elements after `item`, never insert
+ * fixed; a later revision may append elements after `item`, never insert
  * them, so a client reads the four it knows and ignores the rest. Before
  * `5.0.0-rc.4` it was the object `{ s, stream, scope?, item }`.
  */
@@ -334,14 +343,22 @@ export type StreamFrame<Item = unknown> = readonly [
   item: Item,
 ];
 
-/** `qd:ch`, sent volatile and never acknowledged: `[service, channel, payload]`. */
+/**
+ * `qd:ch`, sent volatile and never acknowledged: `[service, channel,
+ * payload]`. A later revision may append elements after `payload`; the
+ * server reads the three it knows and ignores the rest.
+ */
 export type ChannelFrame<Payload = unknown> = readonly [
   s: string,
   channel: string,
   payload: Payload,
 ];
 
-/** `qd:event`: a custom room event declared in a contract's `events`: `[service, event, payload]`. */
+/**
+ * `qd:event`: a custom room event declared in a contract's `events`:
+ * `[service, event, payload]`. A later revision may append elements after
+ * `payload`; a client reads the three it knows and ignores the rest.
+ */
 export type EventFrame<Payload = unknown> = readonly [s: string, event: string, payload: Payload];
 
 /**
