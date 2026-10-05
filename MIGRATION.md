@@ -1607,8 +1607,9 @@ app.post("/auth/discord/activity", express.json(), (req, res) => {
       userAgent: req.get("user-agent"),
       ip: req.ip,
     });
-    // best effort: a third-party iframe may refuse the cookie, so the page sends auth.token
-    setSessionCookie(res, token);
+    // best effort: a third-party iframe gets a cross-site cookie only with SameSite=None (the
+    // default is Lax), and may refuse it even then, so the page sends auth.token
+    setSessionCookie(res, token, { sameSite: "none" });
     res.json({ token });
   })();
 });
@@ -1689,6 +1690,10 @@ native client sends the token as `auth.token`.
   rendering that forwards the user's cookie) and a bearer token are
   unaffected. A page on another origin that calls `/qd` with the cookie
   needs its origin in `allowedOrigins`.
+- **`setSessionCookie` sets SameSite=Lax** (4.x: `None` in production),
+  as the auth routes' own cookie is, so the cookie never rides a request
+  another site's page makes. A web app on another site, or a page in a
+  third-party iframe, passes `{ sameSite: "none" }` (always Secure).
 - **No default CORS origin.** 4.1 allowed `*`; pass `cors`.
 - **Errors that are not `QuickdrawError` reach callers as `INTERNAL`** with a
   generic message (the original is logged). A Prisma unique violation is

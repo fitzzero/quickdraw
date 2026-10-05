@@ -115,6 +115,23 @@ dismiss(), retry() }`, until the app dismisses it or `retry()` sends the
   `refused` again) (F6.4). The default stays `"drop"`. `OverlayView`
   gains `refused(collection, scope)`.
 
+### Server and kits
+
+- The admin kit takes `onCommitted({ method, id, before?, after }, ctx)`
+  (type `AdminOnCommitted` on `./server`) beside `onWrite`: it runs once
+  each write has committed (after `onWrite`'s transaction), in a detached
+  unit of work of the dispatcher, so the reply does not wait for it, its
+  tracked writes flush on their own, and a throw is logged ("The admin
+  kit's onCommitted failed; the write stands"), never the caller's; a
+  write that rolled back calls nothing (F6.5). With it the kit writes in a
+  transaction that reads the row before the write, as with `onWrite`. The
+  dispatcher gives kits a `runDetached` (`KitRuntime`) for such work.
+- Behavior change: `setSessionCookie` defaults to `SameSite=Lax` in
+  production too, as the auth routes' own cookie (4.x and rc.4: `None` in
+  production) (F7.5). A web app on another site, or a page in a
+  third-party iframe, passes `{ sameSite: "none" }` (always Secure); the
+  guide's Discord Activity example does.
+
 ### Testing
 
 - `<mock.$Provider session={...}>` gives its subtree a session of its own,

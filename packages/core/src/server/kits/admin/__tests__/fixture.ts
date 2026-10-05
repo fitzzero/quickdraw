@@ -23,8 +23,9 @@ import { createHarness, type Harness } from "../../../../prisma/__tests__/harnes
 import { createTestApp, type TestApp } from "../../../../testing/index";
 import { as, seedBoard, type Board } from "../../../access/__tests__/board";
 import { projectContract, projectService, qd } from "../../../emit/__tests__/live";
-import { admin, crud, inherit, type AdminOnWrite } from "../../../index";
+import { admin, crud, inherit, type AdminOnCommitted, type AdminOnWrite } from "../../../index";
 import type { EntityOf } from "../../../../contract/infer";
+import type { Logger } from "../../../../contract/logger";
 
 export { as };
 
@@ -94,6 +95,10 @@ export interface TaskServiceOptions {
   readonly adminBypass?: boolean;
   /** The admin kit's `onWrite`. */
   readonly onWrite?: AdminOnWrite<EntityOf<typeof taskContract>, PrismaClient>;
+  /** The admin kit's `onCommitted`. */
+  readonly onCommitted?: AdminOnCommitted<EntityOf<typeof taskContract>>;
+  /** The test app's logger. */
+  readonly logger?: Logger;
 }
 
 /** The kit's task service: the admin kit under its default forms, and the read/write kit's get and update. */
@@ -111,6 +116,7 @@ export function defineTaskService(options: TaskServiceOptions = {}) {
         ...(options.hiddenFields === undefined ? {} : { hiddenFields: options.hiddenFields }),
         ...(options.displayName === undefined ? {} : { displayName: options.displayName }),
         ...(options.onWrite === undefined ? {} : { onWrite: options.onWrite }),
+        ...(options.onCommitted === undefined ? {} : { onCommitted: options.onCommitted }),
       }),
     },
   });
@@ -176,7 +182,11 @@ export function adminApp() {
     /** Starts an app serving the project service and the kit's task service. */
     async start(options: TaskServiceOptions = {}) {
       const service = defineTaskService(options);
-      const app = await createTestApp({ services: [projectService, service], db: current().db });
+      const app = await createTestApp({
+        services: [projectService, service],
+        db: current().db,
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
+      });
       apps.push(app as unknown as TestApp);
       return { app, service };
     },

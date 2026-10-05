@@ -1,5 +1,6 @@
 // `admin.handlers(contract, { access?, displayName?, hiddenFields?,
-// fieldOverrides?, rowless?, grants?, onWrite? })` (RFC 0003 section 12.4):
+// fieldOverrides?, rowless?, grants?, onWrite?, onCommitted? })` (RFC 0003
+// section 12.4):
 // the admin kit's server half.
 // It finds the methods `admin.contract` made in the contract and returns an
 // implementation of each, to spread into `defineService`'s `methods`:
@@ -32,6 +33,11 @@
 // the tracked client, so with `auth.serviceAccessSource` naming that column
 // the user's open sockets get the new grants on every node, as for any
 // grant change.
+//
+// `onWrite` runs in one transaction with each write, before it commits;
+// `onCommitted` (finding F6.5) once it has, in a detached unit of work, a
+// throw logged: what must wait until an edit is durable (a game applying an
+// edited definition) goes there (`rows.ts`).
 
 import type { AnyContract } from "../../../contract/defineContract";
 import { admin as contractHalf, adminSpecOf, type AdminSpec } from "../../../contract/kits/admin";
@@ -46,6 +52,7 @@ import type {
   AdminContract,
   AdminHandlersOptions,
   AdminImplementations,
+  AdminOnCommitted,
   AdminOnWrite,
 } from "./types";
 
@@ -61,6 +68,7 @@ const OPTION_KEYS: readonly string[] = [
   "rowless",
   "grants",
   "onWrite",
+  "onCommitted",
 ];
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -105,7 +113,7 @@ function checkOptions(options: unknown): UnknownRecord {
   }
   if (!isRecord(options)) {
     fail(
-      "options must be { access?, displayName?, hiddenFields?, fieldOverrides?, rowless?, grants?, onWrite? }",
+      "options must be { access?, displayName?, hiddenFields?, fieldOverrides?, rowless?, grants?, onWrite?, onCommitted? }",
     );
   }
   const unknownKey = Object.keys(options).find((key) => !OPTION_KEYS.includes(key));
@@ -181,14 +189,21 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty,
   const access = checkAccess(checked.access, names);
   const rowless = rowlessMethods(checked.rowless, names, fail);
   const fields = fieldsOf(contract, kit, checked);
-  const { onWrite } = checked;
+  const { onWrite, onCommitted } = checked;
   if (onWrite !== undefined && typeof onWrite !== "function") {
     fail("onWrite must be a function of (write, ctx, db)");
   }
+  if (onCommitted !== undefined && typeof onCommitted !== "function") {
+    fail("onCommitted must be a function of (write, ctx)");
+  }
+  const hooks = {
+    onWrite: onWrite as AdminOnWrite | undefined,
+    onCommitted: onCommitted as AdminOnCommitted | undefined,
+  };
   const entries: Record<string, object> = {};
   for (const [name, spec] of kit) {
     const form = (access[name] as AccessForm | undefined) ?? ADMIN_DEFAULT_ACCESS;
-    const handler = handlerOf({ spec, fields, form, onWrite: onWrite as AdminOnWrite | undefined });
+    const handler = handlerOf({ spec, fields, form, ...hooks });
     checkWhenDefined(handler, (service) => serviceProblem(service, contract));
     entries[name] = kitEntry(name, form, handler, rowless);
   }

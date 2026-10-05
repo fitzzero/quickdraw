@@ -194,6 +194,12 @@ export interface KitRuntime {
    * counter's.
    */
   readonly claimRevision?: () => number | Promise<number>;
+  /**
+   * Runs `fn` in a detached unit of work of the dispatcher, as
+   * `qd.run(fn, { detached: true })` does: a kit's work after its call (the
+   * admin kit's `onCommitted`), whose writes flush on their own.
+   */
+  readonly runDetached?: (fn: () => unknown) => Promise<unknown>;
 }
 
 /** The sockets in a room (RFC 0003 section 6), as this process sees its rooms. */

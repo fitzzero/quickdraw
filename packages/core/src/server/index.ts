@@ -250,6 +250,7 @@ export type {
   AdminFieldOverride,
   AdminHandlersOptions,
   AdminImplementations,
+  AdminOnCommitted,
   AdminOnWrite,
   AdminOutputOf,
   AdminWrite,

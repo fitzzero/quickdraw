@@ -188,9 +188,11 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   marks that field `kind: "grants"`; an app with a grants editor of its own
   keeps it out of the generic form with
   `fieldOverrides: { serviceAccess: { showInForm: false } }`. What an admin
-  edit must set off (a game reloading its tunables, an audit row) goes in
-  `admin.handlers(task, { onWrite })`, which runs in the edit's transaction;
-  never wrap the kit's handlers.
+  edit must set off goes in `admin.handlers(task, { onWrite })`, which
+  runs in the edit's transaction (an audit row that commits with it), or
+  `onCommitted`, which runs once it committed, in a unit of its own (a
+  game applying an edited definition to its running simulation, so a
+  rolled-back edit is never applied); never wrap the kit's handlers.
 
 ## Realtime
 

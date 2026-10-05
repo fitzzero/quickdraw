@@ -1982,9 +1982,14 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   transaction's tracked client; a throw undoes the write and fails the
   call): what an admin edit must set off, such as a game reloading its
   tunables, without wrapping the kit's handlers. The rows are the entity,
-  every field. Without it the kit opens no transaction. Each handler
-  `admin.handlers` returns resolves with its method's output type, so a
-  wrapper reads the row and returns it with no cast.
+  every field. `onCommitted({ method, id, before?, after }, ctx)` runs once
+  the write has committed (after `onWrite`'s transaction), in a detached
+  unit of work of its own: the reply does not wait for it, its writes flush
+  on their own, and a throw is logged, the write standing. Apply an edit to
+  what runs in memory (a game's simulation) there, so an edit that rolled
+  back is never applied. Without either hook the kit opens no transaction.
+  Each handler `admin.handlers` returns resolves with its method's output
+  type, so a wrapper reads the row and returns it with no cast.
 - `adminSubscribers({ id })` counts the sockets subscribed to a row per
   access level (`{ id, count, levels, complete }`; behind a Redis adapter
   the counts are this server's and `complete` is `false`), and
