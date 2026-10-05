@@ -6,8 +6,35 @@ All notable changes to this project will be documented in this file.
 
 The fixes from the final independent review of the release candidates
 (`5.0.0-rc.2` to `rc.5`), the template's last open findings (F8.3 to
-F8.6) and the owner's QA of its deployment (F9.1 to F9.3). No version
-moves until the release candidate is cut.
+F8.6) and the owner's QA of its deployment (F9.1 to F9.3, with F10.1 to
+F10.4). No version moves until the release candidate is cut.
+
+### Behavior changes for rc.5 apps
+
+- **Writes that set a value a row already holds signal again.** rc.5 left
+  out an update whose interested columns held the same values after it as
+  the tracker read before it, and that lost real changes; such a write now
+  sends its frames, deltas and topic changes, as in rc.4. Re-ensure a row
+  with `upsert({ where, create, update: {} })`, which still signals nothing
+  when the row is there (Tracked writes, below).
+- **A method's own output schema is sent as it declares it.** A key the
+  handler returns beyond the schema no longer leaves the server, on any
+  transport: a client that read such a key stops getting it, so declare
+  it or answer `"entity"` (Outputs and field tiers). `tiered-field-in-output`
+  now reads nested schemas too, so a strict test app over an output that
+  declares a tiered key at any depth fails to start.
+- **`requireSession` checks the cookie's Origin.** A REST route that takes
+  the session cookie from a page outside `allowedOrigins` (by default the
+  auth routes' list over the same session store) answers 403 `FORBIDDEN`
+  (Auth).
+- **An unknown outcome is not a refusal.** A mutation whose connection
+  dropped after it was sent, or that timed out, keeps its optimistic items
+  `pending` (and in `useCollection().checking`) until the scope's next load
+  says; only then is one refused. `retry()` is safe after it only with an
+  id the client made and the server keeps (Client).
+- **A refused item's `retry()` goes through the mutation hook**, whose
+  `onSuccess`, `onError` and `onSettled` now run for it, and a refused item
+  shows in the render that shows the mutation's error (Client).
 
 ### Tracked writes
 
