@@ -159,6 +159,34 @@ the release candidate is cut.
   renders side by side each show theirs (F6.2). An invalid one throws
   while rendering, naming `$Provider`.
 
+### Kits, auth and lint
+
+- The admin kit takes `onCommitted({ method, id, before?, after }, ctx)`
+  beside `onWrite`: it runs once the write has committed, in a detached
+  unit of work; the reply does not wait for it, a throw is logged, and a
+  rolled-back write calls nothing (F6.5). Use it for effects that must not
+  happen before the data is durable; `onWrite` stays inside the write's
+  transaction.
+- Behavior change: `setSessionCookie` defaults to `SameSite=Lax` in
+  production, as the auth routes kit's own sign-in does (F7.5); rc.4
+  defaulted to `None`. An app that needs the cookie inside a third-party
+  frame passes `{ sameSite: "none" }` itself.
+- Lint: `no-raw-socket` follows values made by `socket.io-client`'s `io()`,
+  `connect()`, `Manager` and `.socket()` whatever they are named, through
+  variables and `this` fields, and reports `qd:` event names on any
+  receiver; `prefer-kit` reports a hand-written method that duplicates what
+  a kit spread beside it serves (F7.7). Both report more than in rc.4: fix
+  the code, or state the reason with
+  `// quickdraw: hand-written because <reason>`.
+
+### Upgrading from rc.4
+
+- Regenerate a checked-in API reference (`quickdraw-docs`): the Streams
+  introduction's wording changed, so `--check` fails until it is rewritten.
+- Re-copy the GDScript reference client if a game uses it.
+- A strict test app refuses a hand-written output that names a tiered
+  field: answer `"entity"`, use a projection, or drop the field.
+
 ## [5.0.0-rc.4]
 
 Rounds 3, 4 and 5 of the fixes the quickdraw-chat migration found: round 3
