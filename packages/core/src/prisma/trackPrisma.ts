@@ -120,7 +120,7 @@ function createHook(runtime: Runtime) {
       count(runtime, model, operation, args);
       return query(args);
     }
-    if (!delegates(runtime, operation)) {
+    if (!delegates(runtime, operation, args)) {
       count(runtime, model, operation, args);
     }
     const op: Operation = { runtime, model: modelKey(model), operation, args: args ?? {}, query };

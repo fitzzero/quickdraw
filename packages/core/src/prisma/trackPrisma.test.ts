@@ -299,6 +299,190 @@ describe("the Many operations", () => {
   });
 });
 
+describe("writes that change nothing (finding F7.2)", () => {
+  async function addMember(role: string) {
+    const user = await h.prisma.user.create({
+      data: { email: `${crypto.randomUUID()}@example.com`, name: "Bo" },
+    });
+    return h.prisma.projectMember.create({ data: { projectId, userId: user.id, role } });
+  }
+
+  it("records nothing for an upsert with an empty update that finds its row, in one statement", async () => {
+    const member = await addMember("Read");
+    const ensure = (select?: { readonly role: true }) =>
+      h.db.projectMember.upsert({
+        where: { projectId_userId: { projectId, userId: member.userId } },
+        update: {},
+        create: { projectId, userId: member.userId, role: "Moderate" },
+        ...(select === undefined ? {} : { select }),
+      });
+    const counted = await h.storage.countStatements(() => h.inUnit(() => ensure()));
+    expect(counted.value.writes).toEqual([]);
+    expect(counted.statements).toBe(1);
+    // It answers what the upsert answers: the row as it is, through the caller's selection.
+    expect(counted.value.value).toEqual(member);
+    expect((await h.inUnit(() => ensure({ role: true }))).value).toEqual({ role: "Read" });
+    const undefinedOnly = await h.inUnit(() =>
+      h.db.projectMember.upsert({
+        where: { projectId_userId: { projectId, userId: member.userId } },
+        update: { role: undefined },
+        create: { projectId, userId: member.userId, role: "Moderate" },
+      }),
+    );
+    expect(undefinedOnly.writes).toEqual([]);
+  });
+
+  it("records a create for an upsert with an empty update that creates its row, in two statements", async () => {
+    const user = await h.prisma.user.create({ data: { email: "new@example.com", name: "Cy" } });
+    const counted = await h.storage.countStatements(() =>
+      h.inUnit(() =>
+        h.db.projectMember.upsert({
+          where: { projectId_userId: { projectId, userId: user.id } },
+          update: {},
+          create: { projectId, userId: user.id, role: "Read" },
+          select: { role: true },
+        }),
+      ),
+    );
+    expect(counted.value.value).toEqual({ role: "Read" });
+    expect(counted.statements).toBe(2);
+    const row = await h.prisma.projectMember.findFirstOrThrow({ where: { userId: user.id } });
+    expect(counted.value.writes).toEqual([
+      {
+        model: "projectMember",
+        id: row.id,
+        op: "create",
+        fields: ["projectId", "userId", "role"],
+        after: { projectId, userId: user.id, role: "Read" },
+        mayHaveExisted: true,
+      },
+    ]);
+  });
+
+  it("records nothing for an update or upsert that sets interested columns to what they held", async () => {
+    const member = await addMember("Read");
+    const task = await addTask("Same", { status: "open" });
+    const same = await h.inUnit(async () => {
+      await h.db.task.update({ where: { id: task.id }, data: { status: "open" } });
+      await h.db.projectMember.upsert({
+        where: { projectId_userId: { projectId, userId: member.userId } },
+        update: { role: "Read" },
+        create: { projectId, userId: member.userId, role: "Read" },
+      });
+      await h.db.task.update({ where: { id: task.id }, data: {} });
+    });
+    expect(same.writes).toEqual([]);
+    // A changed value, or a column whose old value was never read, is recorded.
+    const changed = await h.inUnit(async () => {
+      await h.db.task.update({ where: { id: task.id }, data: { status: "done" } });
+      await h.db.projectMember.update({
+        where: { id: member.id },
+        data: { role: "Read", userId: member.userId },
+      });
+    });
+    expect(changed.writes.map((write) => [write.model, write.op])).toEqual([["task", "update"]]);
+    const unread = await h.inUnit(() =>
+      h.db.task.update({ where: { id: task.id }, data: { status: "done", title: "Same" } }),
+    );
+    expect(unread.writes).toEqual([expect.objectContaining({ id: task.id, op: "update" })]);
+  });
+
+  it("answers an update with nothing to write as Prisma does, and records nothing", async () => {
+    const task = await addTask("Empty");
+    const { value, writes } = await h.inUnit(() =>
+      h.db.task.update({ where: { id: task.id }, data: { title: undefined } }),
+    );
+    expect(value).toEqual(task);
+    expect(writes).toEqual([]);
+    await expect(
+      h.inUnit(() => h.db.task.update({ where: { id: "missing" }, data: {} })),
+    ).rejects.toMatchObject({ code: "P2025" });
+  });
+
+  it("records nothing for the Many operations when they match no row or write nothing", async () => {
+    const open = await addTask("open", { status: "open" });
+    const done = await addTask("done", { status: "done" });
+    const none = await h.inUnit(async () => {
+      expect(
+        await h.db.task.updateMany({ where: { status: "missing" }, data: { status: "x" } }),
+      ).toEqual({ count: 0 });
+      expect(await h.db.task.deleteMany({ where: { status: "missing" } })).toEqual({ count: 0 });
+      expect(
+        await h.db.task.updateManyAndReturn({ where: { status: "missing" }, data: { title: "y" } }),
+      ).toEqual([]);
+      // Prisma writes nothing and answers 0, through the tracked client too.
+      expect(await h.db.task.updateMany({ where: { projectId }, data: {} })).toEqual({ count: 0 });
+      expect(await h.db.task.updateManyAndReturn({ where: { projectId }, data: {} })).toHaveLength(
+        2,
+      );
+    });
+    expect(none.writes).toEqual([]);
+    // Rows set to what they held record nothing; the others record their update.
+    const some = await h.inUnit(() =>
+      h.db.task.updateMany({ where: { projectId }, data: { status: "done" } }),
+    );
+    expect(some.writes).toEqual([
+      expect.objectContaining({ id: open.id, op: "update", before: { status: "open" } }),
+    ]);
+    expect(some.writes.map((write) => write.id)).not.toContain(done.id);
+  });
+
+  it("compares JSON whatever its key order, and dates by their time", async () => {
+    const tracked = trackPrisma(h.prisma, {
+      interest: { project: ["acl"], task: ["createdAt"] },
+      development: false,
+    });
+    const storage = storageOf(tracked);
+    if (storage === undefined) {
+      throw new Error("no storage adapter");
+    }
+    const inUnit = async (fn: () => Promise<unknown>) => {
+      const sink = createRecordingSink();
+      const unit = storage.unitOfWork.begin({ requestId: "r", transport: "internal", sink });
+      await unit.run(fn);
+      await unit.flush();
+      return sink.writes();
+    };
+    const acl = [{ userId: "u1", level: "Read", note: { a: 1, b: [true, null] } }];
+    await h.prisma.project.update({ where: { id: projectId }, data: { acl } });
+    const reordered = [{ note: { b: [true, null], a: 1 }, level: "Read", userId: "u1" }];
+    expect(
+      await inUnit(() =>
+        tracked.project.update({ where: { id: projectId }, data: { acl: reordered } }),
+      ),
+    ).toEqual([]);
+    const task = await addTask("Dated");
+    const sameTime = new Date(task.createdAt.getTime());
+    expect(
+      await inUnit(() =>
+        tracked.task.update({ where: { id: task.id }, data: { createdAt: sameTime } }),
+      ),
+    ).toEqual([]);
+    const changed = await inUnit(async () => {
+      await tracked.project.update({
+        where: { id: projectId },
+        data: { acl: [{ userId: "u1", level: "Moderate" }] },
+      });
+      await tracked.task.update({
+        where: { id: task.id },
+        data: { createdAt: new Date(task.createdAt.getTime() + 1) },
+      });
+    });
+    expect(changed.map((write) => write.model)).toEqual(["project", "task"]);
+  });
+
+  it("records nothing for an updateMany in a batch that answers count 0", async () => {
+    await addTask("a", { status: "open" });
+    const { writes } = await h.inUnit(() =>
+      h.db.$transaction([
+        h.db.task.updateMany({ where: { status: "missing" }, data: { status: "done" } }),
+        h.db.task.updateMany({ where: { projectId }, data: {} }),
+      ]),
+    );
+    expect(writes).toEqual([]);
+  });
+});
+
 describe("models and registrations", () => {
   it("lets writes to a model without an id column through, untracked, with one warning", async () => {
     const expires = new Date("2030-01-01T00:00:00Z");

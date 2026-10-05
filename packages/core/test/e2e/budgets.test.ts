@@ -179,6 +179,47 @@ describe("the fixture app's budgets", () => {
     ]);
   });
 
+  it("sends nothing for writes that change nothing (finding F7.2)", async () => {
+    const { app, write } = await start({ services: [myProjectsService] });
+    const board = e2e.board();
+    const { socket } = await app.connect(as(board.bo));
+    // bo holds every kind of live data these rows reach: a via list that refreshes its
+    // entries, the board's scope, the task itself and the board's topic.
+    await emitWithAck(socket, "qd:col:sub", { s: "myProjectsService", c: "mine", scope: board.bo });
+    await emitWithAck(socket, "qd:col:sub", { s: "taskService", c: "board", scope: board.p1 });
+    await emitWithAck(socket, "qd:sub", { s: "taskService", ids: [board.t1] });
+    expect(
+      await emitWithAck(socket, "qd:watch", { s: "taskService", topic: `board:${board.p1}` }),
+    ).toMatchObject({ ok: true });
+    const task = await e2e.prisma().task.findUniqueOrThrow({ where: { id: board.t1 } });
+    app.frames.clear();
+    const { measured } = await expectBudget(async () => {
+      await write(async (db) => {
+        // bo's membership is there: the read that finds it is the upsert's one statement.
+        await db.projectMember.upsert({
+          where: { projectId_userId: { projectId: board.p1, userId: board.bo } },
+          update: {},
+          create: { projectId: board.p1, userId: board.bo, role: "Read" },
+        });
+        // A scope column set to what it holds: its old value is read first, as for any change.
+        await db.task.update({ where: { id: board.t1 }, data: { status: task.status } });
+        await db.task.updateMany({ where: { id: "missing" }, data: { title: "None" } });
+        await db.task.deleteMany({ where: { id: "missing" } });
+      });
+    }, step("writes that change nothing"));
+    expect(measured.bytes).toBe(0);
+    expect(app.frames()).toEqual([]);
+    // What bo receives next is a real change's: one frame per kind of data it reaches.
+    await write((db) => db.task.update({ where: { id: board.t1 }, data: { title: "Real" } }));
+    await app.frames.waitFor({ event: "qd:changed", userId: board.bo });
+    expect(
+      app
+        .frames({ userId: board.bo })
+        .map(({ event }) => event)
+        .sort(),
+    ).toEqual(["qd:c", "qd:changed", "qd:e"]);
+  });
+
   it("lists a page of tasks with the read/write kit", async () => {
     const { app } = await start();
     const board = e2e.board();

@@ -28,6 +28,33 @@ the release candidate is cut.
   `QuickdrawError("FORBIDDEN")` thrown by `authenticate` as it is (other
   throws stay `UNAUTHENTICATED`).
 
+### Tracked writes
+
+- A write that changed nothing is no longer recorded, so it sends no
+  entity frame, collection delta, topic change, `refreshEntry` or `affects`
+  hop (F7.2): an `updateMany`, `updateManyAndReturn` or `deleteMany` that
+  matched no row (in an array-form batch, an `updateMany` answering count
+  0); a `data` or an upsert's `update` with nothing to write (`{}`, or only
+  `undefined` values), for which Prisma writes nothing; and an `update`, an
+  `updateMany` or an upsert that found its row, when every column it sets
+  is an interested one (scope, `where`, junction, membership, owner and
+  access columns, read before the write) and holds the same value after.
+  Decided from the values the tracker holds: a write that sets any other
+  column is recorded as before, and the `@updatedAt` column Prisma moves on
+  such a write is not signalled, as no write's is on its own. Before, a
+  game that re-ensured a chat membership on every page load
+  (`upsert({ update: {} })`) re-sent the chat to every member's list and
+  made every watcher of the service's topic read again.
+- An upsert whose `update` sets nothing reads its row in the upsert's
+  place: `findUnique` with its `where` and selection answers it when the
+  row exists (one statement, as the upsert was, and fewer in SQL than
+  Prisma's own emulated upsert), and the upsert runs after the read only
+  when the row is missing (one statement more, recorded as a create that
+  may have found its row). In an array-form batch it is recorded as before.
+- An `updateMany` with nothing to write answers `{ count: 0 }` through the
+  tracked client too, as Prisma does (the rewrite to `updateManyAndReturn`
+  answered the number of rows matched).
+
 ## [5.0.0-rc.4]
 
 Rounds 3, 4 and 5 of the fixes the quickdraw-chat migration found: round 3

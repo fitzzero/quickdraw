@@ -251,6 +251,12 @@ moved row inside its batch. A projection's relation count selects the
 relation's ids (`labels: { select: { id: true } }`) and counts them in
 `map`, never `_count`, which Prisma compiles to a `GROUP BY` over the whole
 relation table on every read; a huge relation gets a counter column.
+"Make sure this row exists" is `db.x.upsert({ where, create, update: {} })`:
+it costs one read when the row is there and signals nothing, so a page load
+or a reconnect that re-ensures a membership sends no frame. A write that
+changes nothing (no row matched, `data: {}`, scope or membership columns
+set to what they held) signals nothing; do not guard writes with a read
+of your own to save frames.
 `share: "caller"` for hot queries;
 `versionColumn: "updatedAt"` answers "not modified" cheaply. The quickdraw
 lint rules enforce most of this file (`no-untracked-write`,
