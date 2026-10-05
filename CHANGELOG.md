@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [5.0.0-rc.6] (unreleased)
+## [5.0.0-rc.6]
 
 The fixes from the final independent review of the release candidates
 (`5.0.0-rc.2` to `rc.5`), the template's last open findings (F8.3 to
