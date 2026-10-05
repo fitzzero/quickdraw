@@ -13,6 +13,8 @@ import {
   type ValidationIssue,
 } from "../../contract/standardSchema";
 import { QuickdrawError, type WireIssue } from "../../protocol/errors";
+import type { SchemaOutput } from "../service";
+import { compileSchemaOutput } from "./schemaOutput";
 
 type PathSegment = NonNullable<ValidationIssue["path"]>[number];
 
@@ -106,6 +108,15 @@ export function outputSchemaOf(contract: AnyContract, output: MethodOutput): Sta
   }
   const row = projectionSchema(contract, output.projection);
   return output.kind === "nullable" ? nullableOf(row) : listOfSchema(row);
+}
+
+/**
+ * A method output that is a schema of its own, compiled to reduce results to
+ * what it declares (`schemaOutput.ts`); `undefined` for a projection output
+ * or a schema without JSON Schema.
+ */
+export function schemaOutputOf(output: MethodOutput): SchemaOutput | undefined {
+  return isStandardSchema(output) ? compileSchemaOutput(output) : undefined;
 }
 
 /** The problems with a handler's result, or `undefined` when it matches the method's output. */

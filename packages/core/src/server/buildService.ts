@@ -9,7 +9,7 @@ import { rowlessProblem } from "./access/rowless";
 import { compileCollections } from "./collections/define";
 import { compileProjections, projectedOutput, type Projection } from "./emit/projection";
 import { MAX_TIMEOUT_MS } from "./pipeline/settings";
-import { outputSchemaOf } from "./pipeline/validation";
+import { outputSchemaOf, schemaOutputOf } from "./pipeline/validation";
 import { compileChannels, compileStreams } from "./realtime/define";
 import {
   handlerProblem,
@@ -149,12 +149,14 @@ function checkMethod(
     fail(`${owner}: rowless must be true, or left out`);
   }
   checkQueryOptions(owner, entry, def.kind, fail);
+  const projection = projectedOutput(def.output, projections);
   return Object.freeze({
     name,
     kind: def.kind,
     input: def.input,
     output: outputSchemaOf(contract, def.output),
-    projection: projectedOutput(def.output, projections),
+    projection,
+    schemaOutput: projection === undefined ? schemaOutputOf(def.output) : undefined,
     access: entry.access as ServiceMethod["access"],
     handler: entry.handler as AnyHandler,
     share: entry.share as ServiceMethod["share"],

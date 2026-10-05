@@ -25,6 +25,31 @@ moves until the release candidate is cut.
   upsert's `update`) with nothing to write, and an upsert with
   `update: {}` that finds its row.
 
+### Outputs and field tiers
+
+- Behavior change: a method whose output is a schema of its own (not
+  `"entity"`, not a projection) is sent as that schema declares it, on
+  every transport and whatever `outputValidation` is. An object keeps the
+  keys its JSON Schema's `properties` declare (every key only where
+  `additionalProperties` allows them, or for a record), an array reduces
+  each item, a union keeps what any branch declares, and a value the schema
+  allows to be anything goes as it is. rc.5 sent what the handler returned,
+  so a `rename` with the output `{ id, name }` that answered
+  `db.user.update(...)` sent `email` and `serviceAccess` to a service-wide
+  `Moderate` grant. The reduction is compiled once per method from the
+  schema's Standard JSON Schema, and a call copies only the objects that
+  lose a key: a page of 200 rows costs about what `JSON.stringify` takes to
+  write it. An output schema without JSON Schema (Zod 3) is sent as
+  returned.
+- `tiered-field-in-output` reads every depth of an output schema (`email`
+  in `{ user: { id, email } }`, the rows of a list, the values of a
+  record) and says where the key is declared (`meta.path`). Its advice is
+  now "answer `"entity"` or a projection, or drop the key from the
+  schema": rc.5's "leave the key out" silenced the warning while the key
+  still went out. A kit's methods are not checked, since a kit strips its
+  own replies. For an output without JSON Schema, a reply that carries a
+  tiered key raises it in development.
+
 ## [5.0.0-rc.5]
 
 Round 6 of the fixes the quickdraw-chat migration found: the framework

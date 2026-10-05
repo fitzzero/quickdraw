@@ -633,8 +633,11 @@ data of `useEntity`, `useEntities` and `useCollection`, an `"entity"`
 output, `EntityOf`, `ItemOf`), a tiered field is optional, since a reader
 below its level receives the row without it: `task.notes` is
 `string | null | undefined` there, so read it with a guard. A handler still
-returns the whole row. A 4.x DTO type that kept protected fields optional by
-hand can become `EntityOf<typeof taskContract>`.
+returns the whole row. A method whose output is a schema of its own sends
+only the keys that schema declares, unstripped, so it must not declare a
+tiered field: answer the entity or a projection instead. A 4.x DTO type
+that kept protected fields optional by hand can become
+`EntityOf<typeof taskContract>`.
 
 A handler returns database rows for a projection output, and a Prisma `Json`
 column, typed `JsonValue`, is accepted where the projection has an object,
@@ -1699,6 +1702,14 @@ native client sends the token as `auth.token`.
   as the auth routes' own cookie is, so the cookie never rides a request
   another site's page makes. A web app on another site, or a page in a
   third-party iframe, passes `{ sameSite: "none" }` (always Secure).
+- **A method's output is sent as it declares it.** 4.x sent what a handler
+  returned. A projection output (`"entity"`, a named projection) sends the
+  projection's keys, stripped per caller, and a method whose output is a
+  schema of its own sends only what that schema's JSON Schema declares
+  (Zod 4.2 or later), on every transport: a handler may return the whole
+  row, and the keys the schema leaves out never leave the server. Up to
+  rc.5 such a schema output was sent as returned. An output schema without
+  JSON Schema (Zod 3) still is.
 - **No default CORS origin.** 4.1 allowed `*`; pass `cors`.
 - **Errors that are not `QuickdrawError` reach callers as `INTERNAL`** with a
   generic message (the original is logged). A Prisma unique violation is

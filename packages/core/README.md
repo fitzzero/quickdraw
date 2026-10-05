@@ -587,9 +587,21 @@ export const taskService = qd.defineService(task, {
 - Every call runs a pipeline: look up, concurrency (16 queries in flight per
   socket and 64 queued, then `RATE_LIMITED`; mutations are not queued behind
   queries), input validation, access, "not modified", sharing, the handler
-  under a time limit (30 s by default), output validation outside
-  production, the reply, the flush, and one completion record (`onCall`).
-  A mutation ignores the caller's cancel: only its time limit stops it.
+  under a time limit (30 s by default), the result shaped to its output
+  (below), output validation outside production, the reply, the flush, and
+  one completion record (`onCall`). A mutation ignores the caller's cancel:
+  only its time limit stops it.
+- A method's output is sent as it declares it, on every transport and in
+  production too, so a handler may return the whole row: a projection
+  output (`"entity"`, a named projection) sends the projection's keys,
+  stripped per caller (below), and an output schema of the method's own
+  sends what its JSON Schema declares (Zod 4.2 or later). An object keeps
+  the keys its `properties` declare, and every key only where
+  `additionalProperties` allows them (`z.looseObject`, `.catchall`) or it is
+  a record; an array keeps its items, each reduced by its item schema; a
+  union keeps what any branch declares; a value the schema allows to be
+  anything (`z.unknown()`, a `Date`) goes as it is. An output schema
+  without JSON Schema (Zod 3) is sent as the handler returns it.
 
 Errors are `QuickdrawError(code, message, data?)`. Anything else a handler
 throws reaches the caller as `INTERNAL` with a generic message, and is
@@ -893,18 +905,21 @@ export const taskService = qd.defineService(task, {
   dropped); with `map`, it returns what `map` takes.
 - Fields the contract's `fields` map puts above the caller's level on a row
   are stripped from that caller's copy, after any shared run. Only a
-  projection output is stripped (`"entity"`, a named projection, and
-  `nullable(...)` or `listOf(...)` of one): a method whose output is a
-  schema of its own sends what its handler returns to every caller its
-  access admits, so a tiered key in that schema (`email` in a hand-written
-  `{ id, name, email }`) reaches callers below its level. When a server is
-  made, each such method raises the development warning
-  `[quickdraw:tiered-field-in-output]` (thrown by
-  `createTestApp({ strictWarnings: true })`, so the test app fails to
-  start): answer `"entity"` or a projection, or leave the key out. Not
-  warned: a method whose access admits no caller below the field's level
-  (`{ service: "Admin" }` with the Admin bypass on, `{ entry: L }` with `L`
-  at the field's level or above), and an output without JSON Schema (Zod 3).
+  projection output is stripped per caller (`"entity"`, a named projection,
+  and `nullable(...)` or `listOf(...)` of one): a method whose output is a
+  schema of its own sends what that schema declares to every caller its
+  access admits, so a tiered key the schema declares, at any depth (`email`
+  in a hand-written `{ id, name, email }`, or in `{ user: { id, email } }`),
+  reaches callers below its level. When a server is made, each such method
+  raises the development warning `[quickdraw:tiered-field-in-output]`
+  (thrown by `createTestApp({ strictWarnings: true })`, so the test app
+  fails to start): answer `"entity"` or a projection, or drop the key from
+  the schema. Not warned: a method whose access admits no caller below the
+  field's level (`{ service: "Admin" }` with the Admin bypass on,
+  `{ entry: L }` with `L` at the field's level or above), and a kit's
+  methods, which strip their own replies. An output without JSON Schema
+  (Zod 3) cannot be reduced, so in development each tiered key its replies
+  carry raises the warning when a reply first carries it.
 - `affects` names rows of other services a write changes too
   (`{ service, id: column }`, or `{ service, id: (row) => ids, columns }`);
   they are sent again after the flush, one hop.
@@ -2756,17 +2771,17 @@ one format and names the method call it happened in:
 [quickdraw:n-plus-one] taskService.board: task.findUnique by id ran 10 times in one call, once per item (N+1); ...
 ```
 
-| Kind                     | Raised when                                                                                                                        |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `n-plus-one`             | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])`                               |
-| `unbounded-read`         | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)                                         |
-| `oversized-response`     | a reply was larger than `maxResponseBytes` (default 1 MiB)                                                                         |
-| `nested-write`           | a write's `data` wrote a related row, which is not tracked                                                                         |
-| `ambient-write`          | a tracked write ran outside any unit of work                                                                                       |
-| `batch-read`             | a write in an array-form `$transaction` read its rows outside the batch                                                            |
-| `batch-create-many`      | a `createMany` in an array-form `$transaction` could not report its rows                                                           |
-| `repeated-call`          | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                                               |
-| `tiered-field-in-output` | a method's own output schema names a field the contract tiers, which only projection outputs strip; raised when the server is made |
+| Kind                     | Raised when                                                                                                                                                                                        |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `n-plus-one`             | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])`                                                                                               |
+| `unbounded-read`         | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)                                                                                                         |
+| `oversized-response`     | a reply was larger than `maxResponseBytes` (default 1 MiB)                                                                                                                                         |
+| `nested-write`           | a write's `data` wrote a related row, which is not tracked                                                                                                                                         |
+| `ambient-write`          | a tracked write ran outside any unit of work                                                                                                                                                       |
+| `batch-read`             | a write in an array-form `$transaction` read its rows outside the batch                                                                                                                            |
+| `batch-create-many`      | a `createMany` in an array-form `$transaction` could not report its rows                                                                                                                           |
+| `repeated-call`          | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                                                                                                               |
+| `tiered-field-in-output` | a method's own output schema declares a field the contract tiers, which only projection outputs strip; raised when the server is made (for an output without JSON Schema, when a reply carries it) |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
