@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [5.0.0] - unreleased
+## [5.0.0] - 2026-10-05
 
 quickdraw 5.0 rebuilds what an app is written against. A service is
 declared once, as a contract in the app's shared package (`defineContract`);
