@@ -8,7 +8,7 @@
 
 import type { AccessLevel } from "./access";
 import type { CollectionDef, OrderBy, ViaScope, ViewPredicate } from "./collections";
-import type { MethodDef, ProjectionRef } from "./methods";
+import type { MethodDef, ProjectionRef, ServiceWatch } from "./methods";
 import type { ChannelDef, EventDef, StreamDef } from "./realtime";
 import type { InferOutput, StandardSchemaV1 } from "./standardSchema";
 import { assembleContract } from "./validateContract";
@@ -256,7 +256,7 @@ interface MethodCheck<Def> {
   readonly output: StandardSchemaV1 | ProjectionRef<ProjectionNameIn<Def> & string>;
   readonly watch?:
     | { readonly collection: keyof CollectionsIn<Def> & string }
-    | "service"
+    | ServiceWatch
     | undefined;
 }
 

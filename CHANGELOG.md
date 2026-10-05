@@ -55,6 +55,28 @@ the release candidate is cut.
   tracked client too, as Prisma does (the rewrite to `updateManyAndReturn`
   answered the number of rows matched).
 
+### Contracts and topics
+
+- A query watches its service's topic narrowed to some of its models:
+  `watch: { service: ["gameScore"] }` (type `ServiceModelsWatch`, in
+  `ServiceWatch`), invalidated only after a flush that wrote one of them
+  (F7.3, F6.1). `watch: "service"` was invalidated by a write to any model
+  the service lists in `writes`, so high scores were read again on every
+  chat-membership write of the same service. The names are the service's
+  `model` and its `writes`, by the client's model name; `defineContract`
+  checks the shape (a non-empty list of distinct names) and `defineService`
+  refuses a name that is neither, and still needs `watchAccess`.
+- Wire, additive (protocol v5 unchanged): a `qd:changed` frame of the
+  `service` topic carries `models`, the models whose writes changed it in
+  that flush (`modelKey` names: the service's model for its rows, `affects`
+  hops and scopes a deleted anchor closed; the junction's for a `via` link;
+  the written model for `writes`), sorted. The topic stays one per service.
+  A client ignores the field, or reads it: the JS client's narrowed watches
+  skip a frame naming none of their models, and treat a frame without
+  `models` (an rc.4 server, or the last frame of a watch the socket lost)
+  as naming all. `connection.watch({ ..., models })` is the React-free
+  form. `docs/protocol-v5.md` documents the field.
+
 ## [5.0.0-rc.4]
 
 Rounds 3, 4 and 5 of the fixes the quickdraw-chat migration found: round 3

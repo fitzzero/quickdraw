@@ -18,17 +18,28 @@ import { rowShapeOf, showRows } from "./overlayRows";
 import { readAtOf } from "./versions";
 
 /**
+ * The models a query of `target` watches on its service's topic (`watch: {
+ * service: [models] }`), or `undefined` when it watches every change there,
+ * or another topic.
+ */
+export function watchedModelsOf(target: MethodTarget): readonly string[] | undefined {
+  const { watch } = target;
+  return typeof watch === "object" && "service" in watch ? watch.service : undefined;
+}
+
+/**
  * The change topic a query of `target` with `input` watches: the service's
- * own (`watch: "service"`), or `{collection}:{scope}`, with the scope from
- * the contract's `watch.scope(input)`. `undefined` when the method watches
- * nothing, or the scope function throws or returns no scope.
+ * own (`watch: "service"`, or `{ service: [models] }`, which narrows it), or
+ * `{collection}:{scope}`, with the scope from the contract's
+ * `watch.scope(input)`. `undefined` when the method watches nothing, or the
+ * scope function throws or returns no scope.
  */
 export function topicOf(target: MethodTarget, input: unknown): string | undefined {
   const { watch } = target;
   if (watch === undefined) {
     return undefined;
   }
-  if (watch === SERVICE_TOPIC) {
+  if (watch === SERVICE_TOPIC || "service" in watch) {
     return SERVICE_TOPIC;
   }
   let scope: unknown;
@@ -50,6 +61,8 @@ export interface QueryWatch {
   readonly queryKey: MethodQueryKey;
   /** The topic, or `undefined` to watch nothing. */
   readonly topic: string | undefined;
+  /** On the service topic, the models the query watches (`watchedModelsOf`); `undefined` for all. */
+  readonly models?: readonly string[] | undefined;
 }
 
 /** True when a read of the cached query `queryKey` was sent: it holds a result or an error, or is reading. */
@@ -128,12 +141,15 @@ export function useTopicWatch({
   service,
   queryKey,
   topic,
+  models,
 }: QueryWatch): void {
   const latest = useRef(queryKey);
   useEffect(() => {
     latest.current = queryKey;
   });
   const key = hashKey(queryKey);
+  // The contract's list, the same on every render; compared by its names all the same.
+  const modelNames = models?.join("\u0000");
   useEffect(() => {
     if (topic === undefined) {
       return undefined;
@@ -142,6 +158,7 @@ export function useTopicWatch({
       service,
       topic,
       key,
+      ...(modelNames === undefined ? {} : { models: modelNames.split("\u0000") }),
       onChanged: () => {
         coordinator.invalidate(latest.current, { exact: true });
       },
@@ -151,7 +168,7 @@ export function useTopicWatch({
         }
       },
     });
-  }, [connection, coordinator, service, topic, key]);
+  }, [connection, coordinator, service, topic, key, modelNames]);
 }
 
 const ignoreChanges = (): (() => void) => () => undefined;

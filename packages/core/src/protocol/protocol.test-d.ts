@@ -171,7 +171,8 @@ describe("live data frames", () => {
     if (items.ok) {
       expectTypeOf(items.items).toEqualTypeOf<readonly { id: string }[]>();
     }
-    expectTypeOf<keyof ChangedFrame>().toEqualTypeOf<"s" | "topic" | "rev">();
+    expectTypeOf<keyof ChangedFrame>().toEqualTypeOf<"s" | "topic" | "rev" | "models">();
+    expectTypeOf<ChangedFrame["models"]>().toEqualTypeOf<readonly string[] | undefined>();
     expectTypeOf<ChangedFrame["rev"]>().toBeNumber();
   });
 

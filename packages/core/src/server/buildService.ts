@@ -19,7 +19,7 @@ import {
   type ServiceMethod,
   type ServiceRuntime,
 } from "./service";
-import { checkServiceData, type ServiceData } from "./serviceData";
+import { checkServiceData, checkWatchedModels, type ServiceData } from "./serviceData";
 
 type Fail = (message: string) => never;
 
@@ -190,7 +190,8 @@ function checkMethods(
  * scope of one of the service's collections: the collection must be one the
  * service serves, and `scope` the function that finds the scope from the
  * input. `defineContract` checks the same; this catches a contract it never
- * saw.
+ * saw. A watch of the service's topic needs `watchAccess`, and one narrowed
+ * to models names the service's own (`checkWatchedModels`).
  */
 function checkWatches(
   contract: AnyContract,
@@ -206,11 +207,14 @@ function checkWatches(
     if (def.kind !== "query") {
       fail(`method "${name}" is a mutation; only a query can watch`);
     }
-    if (watch === "service") {
+    if (watch === "service" || (isRecord(watch) && Object.hasOwn(watch, "service"))) {
       if (data.watchAccess === undefined) {
         fail(
           `method "${name}" watches the service's topic, which is closed without watchAccess: declare who may watch it ("public", "authenticated" or { service: level })`,
         );
+      }
+      if (watch !== "service") {
+        checkWatchedModels(contract, name, watch.service, data, fail);
       }
       continue;
     }

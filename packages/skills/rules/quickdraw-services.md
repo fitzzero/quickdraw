@@ -205,8 +205,11 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   `{ prefix }`, or `(scope) => room`), never an entry policy that repeats
   the room's membership.
 - A query over a model the service only `writes` (no service owns it)
-  declares `watch: "service"`, with `watchAccess` on the service; never an
-  app event the client invalidates by hand.
+  declares `watch: { service: ["gameScore"] }`, naming the models it reads
+  (the service's `model` and its `writes`), with `watchAccess` on the
+  service; never an app event the client invalidates by hand. `watch:
+"service"` re-reads after a write to any of them (a chat membership the
+  same service writes included), so use it only for a query over all.
 - Channels: `channels: { cursor: { payload, ratePerSecond, requires } }` in
   the contract, `channels: { cursor: (payload, ctx) => ... }` on the service.
   `requires` is what the sending socket must hold: `{ entity: "taskId" }` (a

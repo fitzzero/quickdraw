@@ -48,12 +48,25 @@ export interface Watch<Collection extends string = string, Input = never> {
 }
 
 /**
+ * `watch: { service: ["gameScore"] }`: the service's change topic, narrowed
+ * to the models named (finding F7.3 of the quickdraw-chat review): the
+ * query is invalidated only after a flush that changed one of them. The
+ * names are models of the service, by the client's model name: its `model`
+ * and those it lists in `writes`; `defineService` refuses any other.
+ */
+export interface ServiceModelsWatch {
+  readonly service: readonly string[];
+}
+
+/**
  * `watch: "service"`: the query reads what the service's change topic covers
  * (its rows, its collections, and the models it lists in `writes`, such as
  * a game's high scores), so it is invalidated after every flush that
- * changes any of them. The service must open its topic with `watchAccess`.
+ * changes any of them. `watch: { service: [models] }` is invalidated only
+ * when one of the models named changed. The service must open its topic
+ * with `watchAccess`.
  */
-export type ServiceWatch = "service";
+export type ServiceWatch = "service" | ServiceModelsWatch;
 
 /** A `query` as `defineContract` stores it. */
 export interface QueryDef<
@@ -66,7 +79,8 @@ export interface QueryDef<
   readonly output: Output;
   /**
    * The topic the query watches: a collection scope (`Watched` is then the
-   * collection's name), or `"service"`, its service's own topic.
+   * collection's name), or `"service"`, its service's own topic, or
+   * `{ service: [models] }`, that topic narrowed to the models named.
    */
   readonly watch?:
     | ([Watched] extends [never] ? ServiceWatch : Watch<Watched, InferInput<Input>>)

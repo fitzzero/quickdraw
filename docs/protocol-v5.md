@@ -605,12 +605,17 @@ service-wide topic (RFC 0003 section 11.3).
 
 `qd:changed`: a watched topic changed in the flush at `rev`; invalidate the
 queries that watch it. Sent once per flush per topic, and carries no data.
+On the `service` topic, `models` names the models whose writes changed it
+(rc.5, additive: the client's model names, first letter lowercased), so a
+query that watches only some of them (`watch: { service: [models] }`)
+ignores the rest; a frame without it may have changed any of them.
 
-| Field   | Type       |
-| ------- | ---------- |
-| `s`     | `string`   |
-| `topic` | `string`   |
-| `rev`   | `Revision` |
+| Field     | Type       |
+| --------- | ---------- |
+| `s`       | `string`   |
+| `topic`   | `string`   |
+| `rev`     | `Revision` |
+| `models?` | `string[]` |
 
 #### `StreamSubscribe`
 

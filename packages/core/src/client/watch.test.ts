@@ -12,7 +12,7 @@ import { as } from "../server/access/__tests__/board";
 import type { Principal } from "../server/index";
 import { createQuickdrawConnection, type QuickdrawConnection } from "./connection";
 import { outgoing, until, whenStatus } from "./__tests__/fixtures";
-import { topicOf } from "./queryHooks";
+import { topicOf, watchedModelsOf } from "./queryHooks";
 import { framesOf, liveHarness, watchersOf } from "./__tests__/live";
 
 const live = liveHarness();
@@ -330,5 +330,14 @@ describe("the topic a query watches", () => {
       collectionTopic("board", "p1"),
     );
     expect(topicOf(query, undefined)).toBeUndefined();
+  });
+
+  it("is its service's own for a watch narrowed to models, which it passes on (finding F7.3)", () => {
+    const query = { service: "gameService", method: "highScores", kind: "query" } as const;
+    const narrowed = { ...query, watch: { service: ["gameScore"] } };
+    expect(topicOf(narrowed, undefined)).toBe("service");
+    expect(watchedModelsOf(narrowed)).toEqual(["gameScore"]);
+    expect(watchedModelsOf({ ...query, watch: "service" })).toBeUndefined();
+    expect(watchedModelsOf(query)).toBeUndefined();
   });
 });

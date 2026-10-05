@@ -1021,7 +1021,13 @@ export const taskService = qd.defineService(task, {
   authorized like a subscribe to that scope, or `service`, which changes
   whenever any row of the service does, or a row of a model it lists in
   `writes` (a game's high scores, which no service owns). A query declares
-  `watch: "service"` to be invalidated by it. The service topic is closed
+  `watch: "service"` to be invalidated by it. A query over some of those
+  models names them, `watch: { service: ["gameScore"] }` (the service's
+  `model` and models in its `writes`; `defineService` refuses others), and
+  is invalidated only after a flush that wrote one of them: high scores are
+  not read again when a chat membership the same service writes changes.
+  It is the same topic: its `qd:changed` frame names the models that
+  changed it (`models`). The service topic is closed
   (`FORBIDDEN`) unless the service declares `watchAccess` (`"public"`,
   `"authenticated"` or `{ service: level }`). A watcher that loses access
   leaves the topic after one last `qd:changed`.

@@ -46,6 +46,7 @@ import {
   hiddenResult,
   readAfterJoin,
   topicOf,
+  watchedModelsOf,
   useOverlaySelect,
   useTopicWatch,
 } from "./queryHooks";
@@ -92,7 +93,14 @@ export function useMethodQuery<Output, Data = Output, Input = unknown>(
   const { enabled, retry, structuralSharing, select, ...rest } = options;
   const queryKey = methodKey(target.service, target.method, input);
   const topic = enabled === false ? undefined : topicOf(target, input);
-  useTopicWatch({ connection, coordinator, service: target.service, queryKey, topic });
+  useTopicWatch({
+    connection,
+    coordinator,
+    service: target.service,
+    queryKey,
+    topic,
+    models: watchedModelsOf(target),
+  });
   const shown = useOverlaySelect<Output, Data>(queryClient, target, select);
   const result = useQuery<Output, QuickdrawError, Data, MethodQueryKey<Input>>({
     ...rest,

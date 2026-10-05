@@ -177,6 +177,25 @@ function checkOutput(name: string, output: unknown, scope: MethodScope, fail: Fa
   }
 }
 
+/**
+ * `watch: { service: [models] }`: a non-empty list of distinct model names
+ * and nothing else. Whether they are the service's models (its `model` and
+ * `writes`) only `defineService` knows.
+ */
+function checkServiceModels(name: string, watch: UnknownRecord, fail: Fail): void {
+  const models: unknown = watch.service;
+  const named =
+    Array.isArray(models) &&
+    models.length > 0 &&
+    models.every((model) => typeof model === "string" && model !== "") &&
+    new Set(models).size === models.length;
+  if (!named || Object.keys(watch).length !== 1) {
+    fail(
+      `method "${name}": watch { service } lists the models of the service it watches, by the client's model name: { service: ["gameScore"] }`,
+    );
+  }
+}
+
 function checkWatch(name: string, method: UnknownRecord, scope: MethodScope, fail: Fail): void {
   const { watch } = method;
   if (watch === undefined) {
@@ -188,9 +207,13 @@ function checkWatch(name: string, method: UnknownRecord, scope: MethodScope, fai
   if (watch === "service") {
     return;
   }
+  if (isRecord(watch) && Object.hasOwn(watch, "service")) {
+    checkServiceModels(name, watch, fail);
+    return;
+  }
   if (!isRecord(watch) || typeof watch.scope !== "function") {
     fail(
-      `method "${name}": watch must be "service", or { collection, scope } with a scope function`,
+      `method "${name}": watch must be "service", { service: [models] }, or { collection, scope } with a scope function`,
     );
   }
   if (typeof watch.collection !== "string" || !scope.collections.has(watch.collection)) {

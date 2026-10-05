@@ -156,6 +156,10 @@ function kindLine(method: MethodDef): string {
   if (method.watch === "service") {
     return "A query that watches its service: a cached result is fetched again after every change to the service's rows, collections or the models it writes.";
   }
+  if ("service" in method.watch) {
+    const models = method.watch.service.map(code).join(", ");
+    return `A query that watches its service's writes to ${models}: a cached result is fetched again after a change to one of them.`;
+  }
   return `A query that watches the ${code(method.watch.collection)} collection: a cached result is fetched again when the scope its input names changes.`;
 }
 
