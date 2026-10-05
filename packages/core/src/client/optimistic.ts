@@ -40,7 +40,9 @@
 //   belongs to): a provisional item shown in the scope at once, in the
 //   collection's order, flagged `pending` while the call is in flight, kept
 //   beside the layers until the scope accounts for it (`additions.ts`,
-//   `settleAdditions`).
+//   `settleAdditions`). With `{ onRefused: "keep" }` a refused call keeps
+//   it, out of the items, as a refused one with the error, until the app
+//   dismisses it or sends the call again (`OverlayView.refused`).
 //
 // The query hooks apply overlays to methods whose output is a projection
 // (one row, `nullable(...)` or `listOf(...)`, `overlayRows.ts`); the
@@ -60,12 +62,21 @@ import {
   createAdditions,
   type AddedItem,
   type AddedRow,
+  type AddItemOptions,
   type Addition,
   type Additions,
+  type Refusal,
+  type RefusedAddition,
   type ScopeEvidence,
 } from "./additions";
 
-export type { AddedItem, ScopeEvidence } from "./additions";
+export type {
+  AddedItem,
+  AddItemOptions,
+  OnRefused,
+  RefusedAddition,
+  ScopeEvidence,
+} from "./additions";
 
 /** A row as overlays find it: any object with a string `id`. */
 type Row = Readonly<Record<string, unknown>> & { readonly id: string };
@@ -102,22 +113,25 @@ export interface OptimisticCache<
    * collection's order (give it the `order` fields; without them it shows
    * last), flagged in `useCollection`'s `pending` while the call is in
    * flight: a create shown before the server answers. A refused call drops
-   * it; the reply's `id` (the created row's) replaces its own, and the
-   * scope's own copy replaces it when it arrives.
+   * it, or with `{ onRefused: "keep" }` moves it to `useCollection().refused`
+   * with the error, until the app dismisses it or sends the call again; the
+   * reply's `id` (the created row's) replaces its own, and the scope's own
+   * copy replaces it when it arrives.
    */
   addItem<K extends keyof Items & string>(
     collection: K,
     scope: Scopes[K],
     item: NewRow<Items[K]>,
+    options?: AddItemOptions,
   ): void;
   /**
    * `addItem` for every collection of the service whose items are the
    * entity (`item: "entity"`) and whose scope column, and every column of
    * its `where`, `row` holds with a matching value: the scope is
    * `row[scope]`. A collection of a projection, or scoped `via` a junction,
-   * takes `addItem`.
+   * takes `addItem`. `options` as `addItem`'s.
    */
-  addEntity(row: NewRow<Entity>): void;
+  addEntity(row: NewRow<Entity>, options?: AddItemOptions): void;
 }
 
 /**
@@ -173,6 +187,12 @@ export interface OverlayView {
   apply<T>(row: T, options?: OverlayOptions): T | undefined;
   /** The items optimistic updates added to scope `scope` of `collection`, oldest first. */
   added(collection: string, scope: string): readonly AddedItem[];
+  /**
+   * The items added to scope `scope` of `collection` with `onRefused:
+   * "keep"` whose call was refused, oldest first: shown in
+   * `useCollection().refused`, not among the items.
+   */
+  refused(collection: string, scope: string): readonly RefusedAddition[];
 }
 
 /**
@@ -182,6 +202,7 @@ export interface OverlayView {
 export const NO_OVERLAYS: OverlayView = Object.freeze({
   apply: <T>(row: T) => row,
   added: () => Object.freeze([]),
+  refused: () => Object.freeze([]),
 });
 
 /** One layer of one mutation call. */
@@ -211,9 +232,22 @@ export interface Opened {
 /** What a mutation call does with the store: open layers, then finish or drop them. */
 export interface StoreInternals extends OverlayStore {
   add(service: string, id: string, layer: Pick<Layer, "collection" | "removed" | "fields">): Layer;
-  addItem(service: string, collection: string, scope: string, item: AddedRow): Addition;
+  addItem(
+    service: string,
+    collection: string,
+    scope: string,
+    item: AddedRow,
+    keep?: boolean,
+  ): Addition;
   finish(opened: Opened, data: unknown): void;
   discard(opened: Opened): void;
+  /**
+   * The call was refused: drops its layers and the additions it opened,
+   * except those added with `onRefused: "keep"`, which stay refused.
+   */
+  refuse(opened: Opened, refusal: Refusal): void;
+  /** Drops a refused addition: the app dismissed it, or sends its call again. */
+  dismiss(addition: Addition): void;
   /** Ends the finished additions to a scope that it accounts for (`settleAdditions`). */
   settle(service: string, collection: string, scope: string, evidence: ScopeEvidence): void;
   /** Drops every layer and every revision seen: the cache was emptied for another user. */
@@ -304,6 +338,8 @@ function viewOf(layers: Layers, service: string): OverlayView {
       apply: <T>(row: T, options?: OverlayOptions) => applyOverlay(layers, service, row, options),
       added: (collection: string, scope: string) =>
         layers.additions.added(service, collection, scope),
+      refused: (collection: string, scope: string) =>
+        layers.additions.refused(service, collection, scope),
     });
     layers.views.set(service, view);
   }
@@ -583,8 +619,14 @@ function createStore(queryClient: QueryClient): StoreInternals {
     view: (service: string) => viewOf(layers, service),
     add: (service: string, id: string, made: Pick<Layer, "collection" | "removed" | "fields">) =>
       addLayer(layers, service, id, made),
-    addItem(service: string, collection: string, scope: string, item: AddedRow): Addition {
-      const addition = layers.additions.add(service, collection, scope, item);
+    addItem(
+      service: string,
+      collection: string,
+      scope: string,
+      item: AddedRow,
+      keep = false,
+    ): Addition {
+      const addition = layers.additions.add(service, collection, scope, item, keep);
       changed(layers, [service]);
       return addition;
     },
@@ -593,6 +635,18 @@ function createStore(queryClient: QueryClient): StoreInternals {
     },
     discard(opened: Opened): void {
       discard(layers, opened.layers, opened.additions);
+    },
+    refuse(opened: Opened, refusal: Refusal): void {
+      const dropped = layers.additions.refuse(opened.additions, refusal);
+      discard(layers, opened.layers, dropped);
+      // The kept ones moved from the items to `refused`: their scopes' views change too.
+      changed(
+        layers,
+        opened.additions.filter((addition) => addition.refusal !== undefined).map((a) => a.service),
+      );
+    },
+    dismiss(addition: Addition): void {
+      discard(layers, [], [addition]);
     },
     settle(service: string, collection: string, scope: string, evidence: ScopeEvidence): void {
       if (layers.additions.size > 0) {

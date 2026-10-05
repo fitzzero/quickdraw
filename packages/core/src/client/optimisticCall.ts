@@ -1,6 +1,8 @@
 // One mutation call's optimistic update (RFC 0003 section 11.4): the layers
 // and additions it opens in the overlay store (`optimistic.ts`) when it is
-// sent, finished with its reply or dropped when it fails. The default
+// sent, finished with its reply or dropped when it fails (an addition made
+// with `onRefused: "keep"` stays, refused, with a `retry` that sends the
+// same call again; finding F6.4). The default
 // update of a mutation whose input has `id` and whose output is `"entity"`
 // overlays the input's other fields on that row; a custom one writes
 // through the `OptimisticCache` it is given (`patchEntity`, `removeEntity`,
@@ -10,8 +12,9 @@
 
 import type { QueryClient } from "@tanstack/react-query";
 import type { CollectionDef } from "../contract/collections";
+import { QuickdrawError } from "../protocol/errors";
 import { isRecord } from "../protocol/guards";
-import { entityScopes, newItem, type AddedRow } from "./additions";
+import { entityScopes, newItem, type AddedRow, type AddItemOptions } from "./additions";
 import {
   storeOf,
   type OptimisticCache,
@@ -35,6 +38,22 @@ export interface OptimisticTarget {
   readonly collections?: Readonly<Record<string, CollectionDef>>;
 }
 
+/** `options.onRefused`, checked: true for `"keep"`. */
+function keepsRefused(owner: string, options: AddItemOptions | undefined): boolean {
+  const onRefused = options?.onRefused;
+  if (onRefused !== undefined && onRefused !== "keep" && onRefused !== "drop") {
+    throw new TypeError(`${owner}: onRefused is "keep" or "drop"`);
+  }
+  return onRefused === "keep";
+}
+
+/** A call's failure as the refused item shows it. */
+function refusalError(error: unknown): QuickdrawError {
+  return error instanceof QuickdrawError
+    ? error
+    : new QuickdrawError("INTERNAL", error instanceof Error ? error.message : String(error));
+}
+
 function cacheFor(
   store: StoreInternals,
   target: OptimisticTarget,
@@ -43,11 +62,11 @@ function cacheFor(
   const { service } = target;
   const fieldsOf = (fields: unknown): Readonly<Record<string, unknown>> =>
     isRecord(fields) ? { ...fields } : {};
-  const addTo = (collection: string, scope: unknown, item: AddedRow): void => {
+  const addTo = (collection: string, scope: unknown, item: AddedRow, keep: boolean): void => {
     if (typeof scope !== "string" || scope === "") {
       throw new TypeError("addItem: the scope must be the scope's value, a non-empty string");
     }
-    opened.additions.push(store.addItem(service, collection, scope, item));
+    opened.additions.push(store.addItem(service, collection, scope, item, keep));
   };
   return Object.freeze({
     patchEntity(id: string, fields: Partial<Record<string, unknown>>): void {
@@ -65,13 +84,14 @@ function cacheFor(
         store.add(service, id, { collection, removed: false, fields: fieldsOf(fields) }),
       );
     },
-    addItem(collection: string, scope: unknown, item: unknown): void {
-      addTo(collection, scope, newItem("addItem", item));
+    addItem(collection: string, scope: unknown, item: unknown, options?: AddItemOptions): void {
+      addTo(collection, scope, newItem("addItem", item), keepsRefused("addItem", options));
     },
-    addEntity(row: unknown): void {
+    addEntity(row: unknown, options?: AddItemOptions): void {
       const item = newItem("addEntity", row);
+      const keep = keepsRefused("addEntity", options);
       for (const [collection, scope] of entityScopes(target.collections ?? {}, item)) {
-        addTo(collection, scope, item);
+        addTo(collection, scope, item, keep);
       }
     },
   });
@@ -138,7 +158,11 @@ export async function mutateOptimistically<T>(
     replied(data);
     return data;
   } catch (error) {
-    store.discard(opened);
+    // Kept additions stay, refused; `retry` sends the same call again, its update adding them anew.
+    store.refuse(opened, {
+      error: refusalError(error),
+      retry: () => mutateOptimistically(queryClient, target, optimistic, input, send),
+    });
     throw error;
   }
 }

@@ -158,7 +158,10 @@ Turn it on for service suites.
 - Storybook and other browser bundles import the mock from
   `@fitzzero/quickdraw-core/testing/mock`, which names no Testing Library:
   a decorator wraps every story in `qd.$Provider`, and a story's
-  `beforeEach` sets its session beside its data.
+  `beforeEach` sets its session beside its data. Stories rendered side by
+  side (a docs page) each pass their own:
+  `<qd.$Provider session={{ userId: null }}>`, laid over the mock's for
+  that subtree alone.
 
 ## What a new service's tests cover
 

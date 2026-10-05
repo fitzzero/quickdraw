@@ -5,7 +5,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { usePresence, useQuickdraw } from "../client/index";
 import { QuickdrawError, defineContract, mutation, query, search } from "../index";
@@ -326,6 +326,70 @@ describe("the mock's session", () => {
       qd.$reset();
     });
     expect(screen.getByText("bo:")).toBeTruthy();
+  });
+
+  it("is scoped to a $Provider's subtree by its session prop, side by side (finding F6.2)", async () => {
+    const qd = createMockClient({ task }, { userId: "ada" });
+    qd.task.board.mockScope("p1", [cardOf("t1", "Ada's", "ada"), cardOf("t2", "Bo's", "bo")]);
+    function Who({ name }: { readonly name: string }) {
+      const { userId, isKnown, isConnected, serviceAccess } = useQuickdraw();
+      const room = usePresence("lobby");
+      const { items } = qd.task.board.useCollection("p1", { view: "mine" });
+      const mine = items.map((item) => item.title).join(",");
+      const grants = JSON.stringify(serviceAccess);
+      const state = `known:${String(isKnown)} connected:${String(isConnected)}`;
+      return (
+        <p>{`${name}: ${String(userId)} ${state} grants:${grants} lobby:${room.join(",")} mine:${mine}`}</p>
+      );
+    }
+    act(() => {
+      qd.$presence("lobby", ["ada"]);
+    });
+    // Two stories on one docs page, each with its own session; a third with the mock's own.
+    render(
+      <>
+        <qd.$Provider session={{ userId: "bo", serviceAccess: { taskService: "Admin" } }}>
+          <Who name="bo's story" />
+        </qd.$Provider>
+        <qd.$Provider session={{ userId: null, isKnown: false }}>
+          <Who name="signed out" />
+        </qd.$Provider>
+        <qd.$Provider>
+          <Who name="default" />
+        </qd.$Provider>
+      </>,
+    );
+    await screen.findByText(
+      `bo's story: bo known:true connected:true grants:{"taskService":"Admin"} lobby:ada mine:Bo's`,
+    );
+    expect(
+      screen.getByText("signed out: null known:false connected:true grants:null lobby: mine:"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("default: ada known:true connected:true grants:{} lobby:ada mine:Ada's"),
+    ).toBeTruthy();
+    // What a prop leaves out follows the mock's own session.
+    act(() => {
+      qd.$session({ isConnected: false });
+    });
+    expect(screen.getByText(/^bo's story: bo known:true connected:false /)).toBeTruthy();
+    expect(screen.getByText(/^default: ada known:true connected:false /)).toBeTruthy();
+  });
+
+  it("refuses a $Provider session it cannot show", () => {
+    const qd = createMockClient({ task });
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(() =>
+        render(
+          <qd.$Provider session={{ userId: "" }}>
+            <p>never</p>
+          </qd.$Provider>,
+        ),
+      ).toThrow("$Provider: userId must be a non-empty string, or null for an anonymous user");
+    } finally {
+      quiet.mockRestore();
+    }
   });
 
   it("gives its cache to TanStack's useQueryClient, and needs no provider for its members", () => {

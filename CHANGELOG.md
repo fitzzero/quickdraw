@@ -97,6 +97,33 @@ the release candidate is cut.
   Behavior change for rc.4 apps: a strict test app over such a method no
   longer starts until the method answers `"entity"`.
 
+### Client
+
+- `useJoin(...)` returns `retry()`: it runs the joining call again at once
+  on the current socket, after a refusal the user can act on; it does
+  nothing while there is no socket to join with or `enabled` is false,
+  since the next hello joins anyway (F6.3). Before, a refused first join
+  could be tried again only by toggling `enabled`.
+- An optimistic addition can outlive its refusal:
+  `cache.addItem(collection, scope, item, { onRefused: "keep" })` (and
+  `addEntity(row, { onRefused })`; types `AddItemOptions`, `OnRefused`).
+  A refused call then moves the item from `items` to the new
+  `useCollection().refused`, each a `RefusedItem` `{ item, error,
+dismiss(), retry() }`, until the app dismisses it or `retry()` sends the
+  same call again (the update adds the item anew, `pending`; it resolves
+  once the call settles and never rejects, a second refusal showing in
+  `refused` again) (F6.4). The default stays `"drop"`. `OverlayView`
+  gains `refused(collection, scope)`.
+
+### Testing
+
+- `<mock.$Provider session={...}>` gives its subtree a session of its own,
+  laid over the mock's (`$session`) field by field: the real
+  `useQuickdraw()` and `usePresence`, and the mock's collection views and
+  admin grants, read it there, so the stories a Storybook docs page
+  renders side by side each show theirs (F6.2). An invalid one throws
+  while rendering, naming `$Provider`.
+
 ## [5.0.0-rc.4]
 
 Rounds 3, 4 and 5 of the fixes the quickdraw-chat migration found: round 3

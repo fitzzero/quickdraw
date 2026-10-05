@@ -73,10 +73,13 @@ export {
 } from "./coordinator";
 export {
   overlaysOf,
+  type AddItemOptions,
+  type OnRefused,
   type OptimisticCache,
   type OptimisticUpdate,
   type OverlayStore,
   type OverlayView,
+  type RefusedAddition,
 } from "./optimistic";
 export { refetchOnAccessChanges, sessionOf, type CacheSession, type HelloChange } from "./session";
 
@@ -138,7 +141,7 @@ export type {
   QuickdrawInvalidate,
   ServiceClient,
 } from "./clientTypes";
-export type { UseCollectionOptions, UseCollectionResult } from "./live/useCollection";
+export type { RefusedItem, UseCollectionOptions, UseCollectionResult } from "./live/useCollection";
 export type { UseEntitiesResult, UseEntityOptions, UseEntityResult } from "./live/useEntity";
 // Streams, channels, typed events and presence (RFC 0003 section 12.5):
 // `qd.<service>.<stream>.useStream`, `.<channel>.useChannel`,

@@ -1292,7 +1292,14 @@ A create shows its row before the server answers with `cache.addItem(collection,
 scope, item)`: the item appears in the scope at once, in its place by the
 collection's `order` (give it the order's fields; without them it goes
 last), and `useCollection`'s `pending` names it while the call is in flight.
-A refused call removes it. The reply's `id` (the created row's) and values
+A refused call removes it, unless it was added with `{ onRefused: "keep" }`
+(`cache.addItem(collection, scope, item, { onRefused: "keep" })`, or the
+same for `addEntity`): it then leaves `items` for `useCollection`'s
+`refused`, each `{ item, error, dismiss(), retry() }`, until the app
+dismisses it or sends the same call again with `retry()` (which shows it
+`pending` again, and never rejects: a second refusal shows in `refused`
+again), so a chat shows a failed message with "retry" without a copy of
+its own. The reply's `id` (the created row's) and values
 replace the item's own, and once the scope's own copy arrives (its `added`
 delta, or a load) that copy shows in its place: never both, never a gap.
 `cache.addEntity(row)` adds a row to every collection of entity rows whose
@@ -2190,8 +2197,10 @@ input, { enabled?, onJoined? })` (from `./client`) runs the joining call
   (`enterBoard` above) on every `qd:hello` and when its input changes by
   value, never on a re-render, and shows `status` (`idle` with no socket to
   join with, `joining`, `joined`, `error`), `isJoined`, `data` and `error`;
-  a refusal stands until the next hello, `RATE_LIMITED` is tried again after
-  its backoff, and it never leaves the room itself.
+  a refusal stands until the next hello or `retry()` (which runs the call
+  again at once on the current socket, and does nothing while there is
+  none or `enabled` is false), `RATE_LIMITED` is tried again after its
+  backoff, and it never leaves the room itself.
   `connection.onHello(listener)` is the same hook without React.
 
 Code that is not a handler (a game loop, a timer, a job) reaches rooms
@@ -2860,6 +2869,12 @@ it("lets a signed-in user through the gate", () => {
 
 In Storybook, a decorator renders every story inside `qd.$Provider`, and a
 story's `beforeEach` sets its session (`qd.$session(...)`) beside its data.
+A docs page renders its stories side by side, where one mock session would
+show the last story's in all of them: give each its own with the
+provider's `session` prop, `<qd.$Provider session={{ userId: null }}>`,
+laid over the mock's session field by field for that subtree alone (the
+real `useQuickdraw()` and `usePresence`, and the mock's views and admin
+grants, read it there).
 
 ### Test databases
 

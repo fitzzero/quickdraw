@@ -3,10 +3,10 @@
 // for a new input, never on a re-render; a refusal shows until the next
 // hello; `enabled: false` joins nothing. Then the same hook on a mock client.
 
-import { act, render, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineContract, mutation, query } from "../index";
+import { QuickdrawError, defineContract, mutation, query } from "../index";
 import { initQuickdraw, type Principal } from "../server/index";
 import { createMockClient, renderWithQuickdraw } from "../testing/client";
 import { createTestApp, type TestApp } from "../testing/index";
@@ -25,12 +25,17 @@ const lobby = defineContract("lobbyService", {
 
 /** Every join the server ran, in order. */
 const entered: { readonly userId: string; readonly room: string }[] = [];
+/** Rooms `enter` refuses with CONFLICT. */
+const full = new Set<string>();
 
 const lobbyService = server.defineService(lobby, {
   methods: {
     enter: {
       access: "authenticated",
       handler: ({ input, ctx }) => {
+        if (full.has(input.room)) {
+          throw new QuickdrawError("CONFLICT", "The room is full");
+        }
         ctx.rooms.join(input.room);
         entered.push({ userId: ctx.principal.userId, room: input.room });
         return { room: input.room, n: entered.length };
@@ -53,6 +58,7 @@ const apps: TestApp[] = [];
 afterEach(async () => {
   await Promise.all(apps.splice(0).map(async (app) => await app.close()));
   entered.length = 0;
+  full.clear();
 });
 
 async function start() {
@@ -74,7 +80,14 @@ function Lobby<Output>({
 }) {
   const joined = useJoin(member, { room }, { enabled });
   const shown = joined.data === undefined ? "-" : JSON.stringify(joined.data);
-  return <p>{`${joined.status} ${shown} ${joined.error?.code ?? "ok"}`}</p>;
+  return (
+    <>
+      <p>{`${joined.status} ${shown} ${joined.error?.code ?? "ok"}`}</p>
+      <button type="button" onClick={joined.retry}>
+        retry
+      </button>
+    </>
+  );
 }
 
 describe("useJoin", () => {
@@ -129,6 +142,38 @@ describe("useJoin", () => {
     });
     await within(view.container).findByText("error - VALIDATION");
     expect(entered).toEqual([]);
+  });
+
+  it("runs the call again on retry(), after a refusal (finding F6.3)", async () => {
+    full.add("r1");
+    const app = await start();
+    const view = await renderWithQuickdraw(<Lobby member={qd.lobby.enter} room="r1" />, {
+      app,
+      as: ada,
+      client: qd,
+    });
+    const shown = within(view.container);
+    await shown.findByText("error - CONFLICT");
+    // The refusal stands: nothing joins until the user retries.
+    full.delete("r1");
+    await act(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    });
+    expect(shown.getByText("error - CONFLICT")).toBeTruthy();
+    fireEvent.click(shown.getByText("retry"));
+    await shown.findByText('joined {"room":"r1","n":1} ok');
+    expect(await app.server.presence.users("r1")).toEqual(["ada"]);
+    // While disabled or with no socket, retry() does nothing: the next hello joins anyway.
+    view.rerender(<Lobby member={qd.lobby.enter} room="r1" enabled={false} />);
+    fireEvent.click(shown.getByText("retry"));
+    await view.disconnect();
+    view.rerender(<Lobby member={qd.lobby.enter} room="r1" />);
+    fireEvent.click(shown.getByText("retry"));
+    expect(entered).toHaveLength(1);
+    await view.reconnect();
+    await shown.findByText('joined {"room":"r1","n":2} ok');
   });
 
   it("joins nothing while disabled, and at once when enabled", async () => {

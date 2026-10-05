@@ -18,6 +18,7 @@ import {
 import { methodKey } from "../client/keys";
 import type { AnyContract } from "../contract/defineContract";
 import type { MockStore } from "./mockLive";
+import { sessionIn, useSessionScope } from "./mockScope";
 
 function statesOf(results: UseQueryResult<unknown>[]): AdminMetaState[] {
   return results.map((result) => ({
@@ -46,10 +47,14 @@ export function mockAdminNamespace(
       },
       queryClient,
     );
-  const grants = () => {
-    const session = store.session();
-    return session.isKnown ? session.serviceAccess : null;
+  const useMockGrants: UseAdminGrants = () => {
+    // Under a `$Provider` with a `session` prop, that session's grants (`mockScope.ts`).
+    const scope = useSessionScope(store);
+    const grants = () => {
+      const session = sessionIn(store, scope);
+      return session.isKnown ? session.serviceAccess : null;
+    };
+    return useSyncExternalStore(store.subscribe, grants, grants);
   };
-  const useMockGrants: UseAdminGrants = () => useSyncExternalStore(store.subscribe, grants, grants);
   return adminNamespace(contract, methods, { useMeta: useMockAdminMeta, useGrants: useMockGrants });
 }

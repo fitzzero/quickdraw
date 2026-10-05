@@ -206,9 +206,16 @@ export type MockClient<Contracts extends ContractMap> = {
    * (`$session`, `$presence`), and TanStack's `useQueryClient()` the mock's
    * cache. Its members' hooks need no provider. Testing Library takes it as
    * a wrapper (`render(<UserMenu />, { wrapper: mock.$Provider })`), and a
-   * Storybook decorator renders the story inside it.
+   * Storybook decorator renders the story inside it. A `session` prop is
+   * the session of what it renders, laid over the mock's own field by
+   * field (`<mock.$Provider session={{ userId: null }}>`), for that subtree
+   * alone: stories on one docs page each show their own, which
+   * `$session`, one session for the whole mock, cannot do.
    */
-  readonly $Provider: (props: { readonly children?: ReactNode }) => ReactElement;
+  readonly $Provider: (props: {
+    readonly children?: ReactNode;
+    readonly session?: MockSession;
+  }) => ReactElement;
   /**
    * Sets who the mock acts for: each field given replaces the one the mock
    * started with, each left out keeps it (so a story's session never leaks

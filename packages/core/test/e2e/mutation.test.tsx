@@ -197,3 +197,85 @@ describe("an optimistic create", () => {
     expect(app.frames({ event: "qd:c", userId: board.bo })).toEqual([]);
   });
 });
+
+/** P1's board with a create whose card stays when refused (`onRefused: "keep"`), to retry or dismiss. */
+function KeptBoard({ projectId }: { readonly projectId: string }) {
+  const { items, pending, refused } = qd.task.board.useCollection(projectId);
+  const create = qd.task.create.useMutation({
+    optimistic: (input, cache) =>
+      cache.addItem(
+        "board",
+        input.projectId,
+        {
+          projectId: input.projectId,
+          title: input.title,
+          status: "open",
+          ordinal: input.ordinal ?? 0,
+          assigneeId: null,
+        },
+        { onRefused: "keep" },
+      ),
+  });
+  return (
+    <>
+      <ul>
+        {items.map((item) => (
+          <li key={item.id}>{`${pending.has(item.id) ? "sending" : "card"} ${item.title}`}</li>
+        ))}
+      </ul>
+      <ul>
+        {refused.map(({ item, error, retry, dismiss }) => (
+          <li key={item.id}>
+            {`failed ${item.title} ${error.code}`}
+            <button type="button" onClick={() => void retry()}>
+              {`retry ${item.title}`}
+            </button>
+            <button type="button" onClick={dismiss}>
+              {`dismiss ${item.title}`}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {["First", "Second"].map((title, index) => (
+        <button
+          key={title}
+          type="button"
+          onClick={() => create.mutate({ projectId, title, ordinal: 99 + index })}
+        >
+          {`add ${title}`}
+        </button>
+      ))}
+    </>
+  );
+}
+
+describe("an optimistic create with onRefused: keep (finding F6.4)", () => {
+  it("keeps the refused card out of the items with its error, until it is dismissed or sent again", async () => {
+    const { app } = await e2e.start();
+    const board = e2e.board();
+    // Di reads P1 through its access list, and may not create there.
+    const view = await renderWithQuickdraw(<KeptBoard projectId={board.p1} />, {
+      app,
+      as: as(board.di),
+      client: qd,
+    });
+    await view.findByText("card T1");
+    fireEvent.click(view.getByText("add First"));
+    await view.findByText("failed First FORBIDDEN");
+    fireEvent.click(view.getByText("add Second"));
+    await view.findByText("failed Second FORBIDDEN");
+    expect(view.queryByText(/^(card|sending) (First|Second)$/)).toBeNull();
+    fireEvent.click(view.getByText("dismiss Second"));
+    expect(view.queryByText(/failed Second/)).toBeNull();
+    // Di is given Moderate on P1, and sends First again: pending, then the server's card.
+    await e2e.prisma().project.update({
+      where: { id: board.p1 },
+      data: { acl: [{ userId: board.di, level: "Moderate" }] },
+    });
+    fireEvent.click(view.getByText("retry First"));
+    await view.findByText("card First");
+    expect(view.queryByText(/failed/)).toBeNull();
+    expect(await titlesOf(board.p1)).toContain("First");
+    expect(await titlesOf(board.p1)).not.toContain("Second");
+  });
+});
