@@ -88,7 +88,10 @@ export const taskContract = defineContract("taskService", {
     ...crud.contract({
       entity: taskSchema,
       get: true,
-      create: { input: z.object({ projectId: z.string(), title: z.string() }) },
+      // `id`: one the client may make (`newId()`), which the create keeps
+      create: {
+        input: z.object({ id: z.string().optional(), projectId: z.string(), title: z.string() }),
+      },
     }),
     rename: mutation({
       input: z.object({ id: z.string(), title: z.string() }),
@@ -1352,7 +1355,9 @@ delta, or a load) that copy shows in its place: never both, never a gap.
 `cache.addEntity(row)` adds a row to every collection of entity rows whose
 scope column (and `where`) it matches; a collection of a projection takes
 `addItem`. The item may give its own `id`, one the client made and the
-server keeps:
+server keeps: `newId()` from `./client` makes one, a version 4 UUID from
+`crypto.randomUUID()`, or from `crypto.getRandomValues()` on a page over
+plain http, which browsers do not give `randomUUID`:
 
 <!-- example: apps/web/src/components/AddTask.tsx#add -->
 
@@ -1363,6 +1368,8 @@ export function TaskList({ projectId }: { readonly projectId: string }) {
     // the new card shows at once, last on the board (its ordinal), until the server's arrives
     optimistic: (input, cache) =>
       cache.addItem("board", input.projectId, {
+        // the id the client made: after a lost answer the board's next load finds the card
+        id: input.id,
         projectId: input.projectId,
         title: input.title,
         status: "open",
@@ -1380,7 +1387,10 @@ export function TaskList({ projectId }: { readonly projectId: string }) {
           </li>
         ))}
       </ul>
-      <button type="button" onClick={() => create.mutate({ projectId, title: "New task" })}>
+      <button
+        type="button"
+        onClick={() => create.mutate({ id: newId(), projectId, title: "New task" })}
+      >
         Add
       </button>
       {create.error === null ? null : <p>{`Not added: ${create.error.code}`}</p>}
@@ -2477,22 +2487,28 @@ nothing is cached:
   session's token, for clients that keep no cookies (a game engine, a page
   in a third-party iframe), at the cost of the token being readable by the
   page's scripts.
-- `requireSession({ sessions, jwtSecret }, { loadPrincipal?, allowedOrigins? })`
+- `requireSession({ sessions, jwtSecret }, { loadPrincipal?, allowedOrigins?, logger? })`
   guards the app's own REST routes (below): the credential is read as `/me`
   reads it, the JWT verified once and the session checked in the store;
   otherwise 401 `{ error: "UNAUTHENTICATED", message }`. The session cookie
   gets the `/qd` calls' Origin rule: from an `Origin` outside
   `allowedOrigins` (by default the list of the `createAuthRoutes` writing to
-  the same `sessions`) it answers 403 `{ error: "FORBIDDEN", message }`, so
+  the same store object, `sessions`: a second store over the same table is
+  another object) it answers 403 `{ error: "FORBIDDEN", message }`, so
   another site's form cannot post to a route as the user; a request without
   `Origin` is accepted unless `Sec-Fetch-Site` names another site, and a
-  bearer token needs none. 4.1's `createRequireAuth` stays for token-keyed
-  sessions.
+  bearer token needs none. With neither list no page may use the cookie
+  there: the first refusal logs an error naming both fixes (to `logger`,
+  default the console), and a page in development is told them in the 403.
+  4.1's `createRequireAuth` stays for token-keyed sessions.
 - Rate limits: the sign-in routes share `createAuthLimiter({ max: 60 })` (60
-  requests per 15 minutes per IP) and the session routes
-  `createAuthStatusLimiter()` (120); pass `rateLimit: { signIn, session }`
-  to replace them (a shared store across instances, say) or `false`. The
-  defaults need the optional peer `express-rate-limit`. The HTTP transport
+  requests per 15 minutes per IP), the session routes
+  `createAuthStatusLimiter()` (120), and `GET /providers` has
+  `createPublicApiLimiter()` (60 per minute) to itself, so the login pages
+  loaded from one address cannot use up its sign-outs; pass
+  `rateLimit: { signIn, session, providers }` to replace them (a shared
+  store across instances, say; one left out keeps its default) or `false`.
+  The defaults need the optional peer `express-rate-limit`. The HTTP transport
   (`/qd`) is not limited unless `http.rateLimit` is set;
   `createCallLimiter()` (300 calls per minute per IP) refuses in the
   transport's own `RATE_LIMITED` reply. A web server that prefetches for

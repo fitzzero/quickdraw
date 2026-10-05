@@ -229,6 +229,7 @@ const expectations = {
       "isNotModified",
       "shouldRetry",
       "reloadOncePerSession",
+      "newId",
       "DEFAULT_BACKOFF_MS",
       "createInvalidationCoordinator",
       "DEFAULT_INVALIDATION_WINDOW_MS",

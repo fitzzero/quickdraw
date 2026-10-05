@@ -354,9 +354,77 @@ requests (fitzzero/quickdraw-chat #46 to #53) are the worked example, and
 ## Release candidates
 
 The sections below are the release candidates' own entries, `5.0.0-rc.0` to
-`5.0.0-rc.6`, kept for the record: each says what changed since the one
+`5.0.0-rc.7`, kept for the record: each says what changed since the one
 before, with the behavior changes a release-candidate app met. The 5.0.0
 entry above is all a 4.x app needs.
+
+### [5.0.0-rc.7]
+
+The template's findings on `5.0.0-rc.6` (quickdraw-chat PR #54, F11.1 to
+F11.4): an optimistic item that a load ended on the client but not on the
+screen, the provider list's rate limit, `requireSession`'s origin list,
+and the id guidance. No version moves until the release candidate is cut.
+
+#### Behavior changes for rc.6 apps
+
+- **`GET {basePath}/providers` has a rate limit of its own.** It no longer
+  counts against `/me`, `/logout` and `/logout-all`: `rateLimit.providers`,
+  by default `createPublicApiLimiter()`, 60 requests per minute per IP. A
+  limiter left out keeps its default, so an app that gives `signIn` and
+  `session` and has no `express-rate-limit` gives `providers` too, or its
+  auth routes answer `INTERNAL` as they do when any default lacks the peer
+  (Auth).
+- **`requireSession` says why when it has no origin list.** A session
+  cookie it refuses with no list at all is logged once, as an error, and
+  outside production its 403 names the fix instead of blaming the page
+  (Auth).
+
+#### Client
+
+- An optimistic item that a load of its scope ended stayed on screen when
+  that load left the scope's state as it was (F11.1): `pending`, or
+  `checking` after a reconnect whose resume brought no deltas (the server
+  had written the row and its frame had arrived, and only the answer was
+  lost), until something else rendered the list again; a finished item
+  that a later load answered without (not a member of its scope) stayed
+  shown, past its expiry too. The additions removed what they ended and
+  the overlay store then removed it again, found nothing, and told no
+  view. Now the additions only decide what ends and the store's one
+  removal tells the views of each service once, so every end shows: a
+  load or delta that holds or names the item, a load that answers without
+  it, a refusal, a dismissal, an expiry. Dropping the oldest of 1,000
+  additions or layers tells the views of the service it was dropped from,
+  which may be another's, and a refusal that drops some of a call's items
+  and keeps others tells the views once instead of twice.
+- `newId()` on `./client` (F11.2): an id for a row the client creates and
+  the server keeps, a version 4 UUID from `crypto.randomUUID()`, or made
+  from `crypto.getRandomValues()` where that is missing; no dependency.
+  The guidance named `crypto.randomUUID()`, which browsers give only to
+  secure pages (https, localhost), so a dev server opened at its LAN
+  address over plain http would throw on every send. The client rule,
+  `useCollection().checking` and the README name it, and the README's
+  optimistic create sends one (its contract's `create` takes an `id`).
+
+#### Auth
+
+- `GET {basePath}/providers` is counted by its own limiter (F11.3):
+  `rateLimit.providers`, by default `createPublicApiLimiter()` (60 per
+  minute per IP, what the template's own route had). It shared the
+  `session` limiter (120 per 15 minutes per IP), so 120 login-page loads
+  from one address (an office, a classroom, a proxy without
+  `trust proxy`) made sign-out answer 429. The list stays `no-store`: the
+  mock provider comes and goes with `ENABLE_MOCK_OAUTH`, without a deploy.
+- `requireSession` finds the routes' `allowedOrigins` by the session store
+  object they were given, never by its table (F11.4), so a second
+  `prismaSessions(prisma)` over the same table has no list: it refused
+  every cookie request with an `Origin`, from an allowed page too, with a
+  message that blamed the page. That stays, and now shows: with no list
+  at all (no `allowedOrigins`, no `createAuthRoutes` over that store
+  object) the first refused cookie logs an error naming both fixes (pass
+  the routes' `sessions` object, or `allowedOrigins`) to the new `logger`
+  option (default the console), and the 403 names them outside
+  production. The JSDoc, README, MIGRATION and the services rule say "the
+  same store object".
 
 ### [5.0.0-rc.6]
 
@@ -381,8 +449,8 @@ F10.4). No version moves until the release candidate is cut.
   declares a tiered key at any depth fails to start.
 - **`requireSession` checks the cookie's Origin.** A REST route that takes
   the session cookie from a page outside `allowedOrigins` (by default the
-  auth routes' list over the same session store) answers 403 `FORBIDDEN`
-  (Auth).
+  auth routes' list over the same session store object) answers 403
+  `FORBIDDEN` (Auth).
 - **An unknown outcome is not a refusal.** A mutation whose connection
   dropped after it was sent, or that timed out, keeps its optimistic items
   `pending` (and in `useCollection().checking`) until the scope's next load
@@ -491,8 +559,8 @@ F10.4). No version moves until the release candidate is cut.
   request without `Origin` is accepted unless `Sec-Fetch-Site` names
   another site; a bearer token is unaffected. The list is the new
   `allowedOrigins` option, by default that of the `createAuthRoutes`
-  writing to the same session store; with neither, no page may use the
-  cookie there. `cookieOriginAllowed(request, allowedOrigins)` on
+  writing to the same session store object; with neither, no page may use
+  the cookie there. `cookieOriginAllowed(request, allowedOrigins)` on
   `./server/auth` (type `CookieOriginRequest`) is the rule for a custom
   `authenticate` or route: the HTTP form, or the handshake's with
   `transport: "socket"`.

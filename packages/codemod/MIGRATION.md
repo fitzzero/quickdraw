@@ -1079,7 +1079,10 @@ export const taskContract = defineContract("taskService", {
     ...crud.contract({
       entity: taskSchema,
       get: true,
-      create: { input: z.object({ projectId: z.string(), title: z.string() }) },
+      // `id`: one the client may make (`newId()`), which the create keeps
+      create: {
+        input: z.object({ id: z.string().optional(), projectId: z.string(), title: z.string() }),
+      },
     }),
     rename: mutation({
       input: z.object({ id: z.string(), title: z.string() }),
@@ -1306,7 +1309,10 @@ export const taskContract = defineContract("taskService", {
     ...crud.contract({
       entity: taskSchema,
       get: true,
-      create: { input: z.object({ projectId: z.string(), title: z.string() }) },
+      // `id`: one the client may make (`newId()`), which the create keeps
+      create: {
+        input: z.object({ id: z.string().optional(), projectId: z.string(), title: z.string() }),
+      },
     }),
     rename: mutation({
       input: z.object({ id: z.string(), title: z.string() }),
@@ -1510,8 +1516,11 @@ production. `createRequireAuth({ getSession })` on REST routes becomes
 user with `sessionOf(req)` instead of `req.userId` (Express's `Request` type
 has no such member), and calls the services as `sessionOf(req).principal`
 through `qd.caller`, which loads the user's grants as a socket's handshake
-does (the README's auth routes kit section shows such a route). `onRevoke`
-ends the sockets of a revoked session:
+does (the README's auth routes kit section shows such a route). Give
+`requireSession` the `sessions` object the routes were given: it takes their
+`allowedOrigins` by that same store object, and a second
+`prismaSessions(...)` over the same table is another one. `onRevoke` ends
+the sockets of a revoked session:
 
 <!-- example: apps/api/src/auth/migrating.ts#wiring -->
 

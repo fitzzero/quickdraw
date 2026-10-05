@@ -136,11 +136,16 @@ export interface Addition {
   unknown: Unknown | undefined;
 }
 
-/** The additions of one overlay store. */
+/**
+ * The additions of one overlay store. They never drop an addition on their
+ * own: `finish`, `refuse` and `settle` return those to drop, and the store
+ * drops them (`remove`) and tells the views of their services, so no end
+ * goes unseen (finding F11.1 of the quickdraw-chat migration).
+ */
 export interface Additions {
   /** How many it holds. */
   readonly size: number;
-  /** Opens an addition of a call in flight to scope `scope` of `collection`; the oldest go past 1,000. */
+  /** Opens an addition of a call in flight to scope `scope` of `collection`. */
   add(service: string, collection: string, scope: string, item: AddedRow, keep?: boolean): Addition;
   /**
    * The call of `additions` was refused: those added with `onRefused:
@@ -162,8 +167,9 @@ export interface Additions {
   unchecked(): ScopeRef[];
   /**
    * Finishes the additions of a call that succeeded with `data`, at the
-   * store's clock `clock`, until `expiresAt`; returns those it dropped (the
-   * reply names no id, or their scope holds it already).
+   * store's clock `clock`, until `expiresAt`; returns the others, for the
+   * caller to drop (`remove`): the reply names no id, or their scope holds
+   * it already.
    */
   finish(
     additions: readonly Addition[],
@@ -174,16 +180,17 @@ export interface Additions {
   /** Drops `additions`; returns those it held. */
   remove(additions: readonly Addition[]): Addition[];
   /**
-   * Ends the additions to one scope that `evidence` accounts for, and
-   * refuses those of unknown outcome that a load it reports answered without;
-   * returns those it ended, and whether any was refused.
+   * Weighs `evidence` against the additions to one scope: refuses those of
+   * unknown outcome that a load it reports answered without, and returns
+   * those it ends, for the caller to drop (`remove`), and whether any was
+   * refused.
    */
   settle(
     service: string,
     collection: string,
     scope: string,
     evidence: ScopeEvidence,
-  ): { readonly ended: Addition[]; readonly refused: boolean };
+  ): { readonly ending: Addition[]; readonly refused: boolean };
   /** The items added to a scope and shown in it, oldest first: not those refused. */
   added(service: string, collection: string, scope: string): readonly AddedItem[];
   /** The items added to a scope whose call was refused and that were kept, oldest first. */
@@ -192,9 +199,6 @@ export interface Additions {
   all(): Addition[];
   clear(): void;
 }
-
-/** The most additions a store keeps; past it the oldest go first. */
-const MAX_ADDITIONS = 1000;
 
 const NO_ADDITIONS: readonly AddedItem[] = Object.freeze([]);
 
@@ -423,11 +427,6 @@ export function createAdditions(queryClient: QueryClient): Additions {
       const addition = newAddition(service, collection, scope, item, keep);
       byScope.set(addition.key, [...(byScope.get(addition.key) ?? []), addition]);
       size += 1;
-      // One at a time, so at most one past the limit.
-      const oldest = size > MAX_ADDITIONS ? all()[0] : undefined;
-      if (oldest !== undefined) {
-        removeOne(oldest);
-      }
       return addition;
     },
     finish(additions, data, clock, expiresAt) {
@@ -442,7 +441,7 @@ export function createAdditions(queryClient: QueryClient): Additions {
           addition.expiresAt = expiresAt;
         }
       }
-      return remove(ended);
+      return ended;
     },
     remove,
     refuse: refuseAdditions,
@@ -457,13 +456,8 @@ export function createAdditions(queryClient: QueryClient): Additions {
       toCheck = false;
       return scopes;
     },
-    settle(service, collection, scope, evidence) {
-      const { ending, refused } = weigh(
-        byScope.get(scopeKey(service, collection, scope)) ?? [],
-        evidence,
-      );
-      return { ended: remove(ending), refused };
-    },
+    settle: (service, collection, scope, evidence) =>
+      weigh(byScope.get(scopeKey(service, collection, scope)) ?? [], evidence),
     added: (service, collection, scope) =>
       shownOf(byScope.get(scopeKey(service, collection, scope))),
     refused: (service, collection, scope) =>

@@ -84,7 +84,8 @@ export interface UseCollectionResult<Item, Row> {
    * its own copy shows when the scope holds its id, and a load that answers
    * without it refuses it (into `refused` with `onRefused: "keep"`). Only an
    * id the client made, which the server keeps, can be found: give an item
-   * one when the app may send its call again. Empty when there are none.
+   * one (`newId()`) when the app may send its call again. Empty when there
+   * are none.
    */
   readonly checking: ReadonlySet<string>;
   /**
