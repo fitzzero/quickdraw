@@ -1104,7 +1104,12 @@ export const taskContract = defineContract("taskService", {
 ```
 
 `countOnBoard` above is fetched again whenever the project's board
-changes.
+changes. A 4.x event that no collection scope stands for (a game's high
+scores, which the game service writes beside its own rows) maps to the
+service's topic, narrowed to the models the query reads:
+`watch: { service: ["gameScore"] }` re-reads only after a write to those
+models (`watch: "service"` after a write to any model the service has or
+writes), and needs `watchAccess` on the service.
 
 ### `ServiceResponse` becomes `{ ok, d }` / `{ ok, e }` and `QuickdrawError`
 
