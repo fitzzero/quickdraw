@@ -1041,7 +1041,9 @@ over three transports (design: sections 3, 8 and 10):
   principal comes from the session cookie (`__Host-session` over HTTPS,
   `session` over plain HTTP or with `COOKIE_DOMAIN`, as the auth routes name
   it) or an `Authorization: Bearer` token through the same
-  `authenticate`; the reply is `{ ok: true, d }` or
+  `authenticate`, which is told which one it was (`request.credential`):
+  `socketAuth` answers a cookie sent from a page outside `allowedOrigins`
+  with `FORBIDDEN`, as it refuses such a socket; the reply is `{ ok: true, d }` or
   `{ ok: false, e: { code, message, data? } }` with the code's HTTP status.
   Works on Express 4 and 5, and on a bare Node server. Move it with
   `http: { path }`, turn it off with `http: false`, or mount
@@ -2351,8 +2353,16 @@ nothing is cached:
   any page's handshake). A handshake without `Origin` is refused unless it
   is a browser's same-origin request (`Sec-Fetch-Site: same-origin`) or
   `allowMissingOrigin: true` is set for native clients that keep cookies.
-  Bearer tokens need no Origin, and HTTP calls are guarded by their JSON
-  content type instead.
+  An HTTP call (`/qd/...`) that sends the cookie is checked the same way
+  and answered `FORBIDDEN` (403) from an `Origin` outside `allowedOrigins`,
+  besides needing its JSON content type. One without `Origin` is accepted:
+  a browser sends `Origin` with every POST, so it comes from curl or a
+  server rendering a page with the user's forwarded cookie (refused only
+  when `Sec-Fetch-Site` names another site). Bearer tokens need no Origin
+  on either transport. An app's own `authenticate` learns where an HTTP
+  call's token came from in `request.credential` (`"cookie"` or
+  `"bearer"`), and a `QuickdrawError("FORBIDDEN")` it throws on HTTP is
+  answered as it is.
 - `socketAuth({ devCredentials })` signs a socket in by the user id its
   handshake names (`auth: { userId }`, no token), as the function answers
   (the principal, or `null` to refuse): for a game editor or load-test bots

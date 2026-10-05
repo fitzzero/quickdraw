@@ -27,6 +27,8 @@ export type HttpRequest = IncomingMessage & {
  * without a body: a cross-site page can send a form or a body-less POST
  * without a CORS preflight, but not one with this content type, so a session
  * cookie alone cannot make the browser call a method on a user's behalf.
+ * Since rc.5 `socketAuth` also checks the `Origin` of a call that sends the
+ * cookie (finding F7.1), so a permissive CORS policy does not open it.
  */
 export function isJsonRequest(req: IncomingMessage): boolean {
   const header = req.headers["content-type"];
@@ -190,14 +192,40 @@ export function transportCookieNaming(cookieName: string | undefined): SessionCo
 }
 
 /**
- * The token an HTTP call authenticates with: its session cookie, under the
- * names `sessionCookieNamesFor` gives the request (by how the app named the
- * cookie and whether the request came over HTTPS), or else its bearer token.
+ * Where an HTTP call's token came from. `"cookie"`: the session cookie, which
+ * a browser sends with a request any page makes, so whoever accepts it checks
+ * the request's `Origin` (`socketAuth` does). `"bearer"`: an
+ * `Authorization: Bearer` header, which a page sends only on purpose.
  */
-export function tokenOf(req: HttpRequest, naming: SessionCookieNaming): string | null {
+export type HttpCredentialSource = "cookie" | "bearer";
+
+/** An HTTP call's token and where it came from. */
+export interface HttpCredential {
+  readonly token: string;
+  readonly from: HttpCredentialSource;
+}
+
+/**
+ * The credential an HTTP call authenticates with: its session cookie, under
+ * the names `sessionCookieNamesFor` gives the request (by how the app named
+ * the cookie and whether the request came over HTTPS), or else its bearer
+ * token; `null` with neither.
+ */
+export function httpCredentialOf(
+  req: HttpRequest,
+  naming: SessionCookieNaming,
+): HttpCredential | null {
   const cookie = cookieToken(cookiesOf(req), sessionCookieNamesFor(req, naming));
   if (cookie !== null) {
-    return cookie;
+    return { token: cookie, from: "cookie" };
   }
-  return extractBearerOrCookieToken({ headers: { authorization: req.headers.authorization } });
+  const bearer = extractBearerOrCookieToken({
+    headers: { authorization: req.headers.authorization },
+  });
+  return bearer === null || bearer === "" ? null : { token: bearer, from: "bearer" };
+}
+
+/** The token of {@link httpCredentialOf}, or `null`. */
+export function tokenOf(req: HttpRequest, naming: SessionCookieNaming): string | null {
+  return httpCredentialOf(req, naming)?.token ?? null;
 }

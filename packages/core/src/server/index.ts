@@ -324,6 +324,7 @@ export type {
   AuthenticateRequest,
   AuthenticateResult,
   HttpAuthenticateRequest,
+  HttpCredentialSource,
   ServerAuth,
   ServiceAccessSource,
   ServiceGrants,

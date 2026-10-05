@@ -27,10 +27,14 @@ import {
   type ServerAuth,
   type ServerOnlyOptions,
 } from "../index";
+import { QuickdrawError } from "../../protocol/errors";
 import { createServerCaller } from "../../utils/index";
+import { createMemorySessionStore } from "../auth/routes/sessions";
+import { socketAuth } from "../auth/routes/socketAuth";
+import { issueSession } from "../auth/routes/tokens";
 import { createCallLimiter } from "../express/rateLimit";
 import { transportHarness } from "./__tests__/harness";
-import { createProbe } from "./__tests__/probe";
+import { createProbe, probe as probeContract } from "./__tests__/probe";
 
 /** Express 5, installed as the `express5` alias; its API matches Express 4's types here. */
 const express5 = createRequire(import.meta.url)("express5") as typeof express;
@@ -305,6 +309,98 @@ describe("credentials", () => {
     expect(logger.at("error").map((entry) => entry.message)).toEqual([
       "HTTP authentication failed",
     ]);
+  });
+
+  it("tells authenticate where the token came from, and answers its FORBIDDEN as it is", async () => {
+    const seen: unknown[] = [];
+    const { url, logger } = await serve({
+      auth: {
+        authenticate: (request) => {
+          seen.push(request.transport === "http" ? request.credential : "socket");
+          if (request.transport === "http" && request.credential === "cookie") {
+            throw new QuickdrawError("FORBIDDEN", "Not from this page");
+          }
+          return typeof request.auth.token === "string" ? TOKENS[request.auth.token] : null;
+        },
+      },
+    });
+    const echo = (headers: Record<string, string>) =>
+      post(url, "/qd/probeService/echo", { body: '{"text":"hi"}', headers });
+    expect(await echo({ cookie: "session=alice-token" })).toMatchObject({
+      status: 403,
+      body: { ok: false, e: { code: "FORBIDDEN", message: "Not from this page" } },
+    });
+    expect(await echo(bearer("alice-token"))).toMatchObject({ status: 200 });
+    expect(await echo({})).toMatchObject({ status: 200, body: { d: { userId: null } } });
+    expect(seen).toEqual(["cookie", "bearer", undefined]);
+    // A refusal on purpose is the caller's doing: logged at debug.
+    expect(logger.at("error")).toEqual([]);
+  });
+});
+
+describe("a session cookie sent from another page (finding F7.1)", () => {
+  const WEB = "http://app.example";
+
+  async function serveSessions() {
+    const sessions = createMemorySessionStore();
+    const keys = { sessions, jwtSecret: "a-test-secret-of-at-least-thirty-two-characters" };
+    const served = await serve({
+      auth: {
+        authenticate: socketAuth({
+          ...keys,
+          allowedOrigins: [WEB],
+          loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
+        }),
+      },
+    });
+    const { token } = await issueSession(keys, "alice", { provider: "test" });
+    const echo = (headers: Record<string, string>) =>
+      post(served.url, "/qd/probeService/echo", { body: '{"text":"hi"}', headers });
+    return { ...served, token, echo };
+  }
+
+  it("is refused FORBIDDEN from an origin outside socketAuth's allowedOrigins, with a JSON body", async () => {
+    const { token, echo, logger } = await serveSessions();
+    const cookie = `session=${token}`;
+    for (const origin of ["http://evil.example.com", "null", "http://app.example.evil.test"]) {
+      expect(await echo({ cookie, origin }), origin).toMatchObject({
+        status: 403,
+        body: { ok: false, e: { code: "FORBIDDEN" } },
+      });
+    }
+    // From the web app, the same cookie signs the call in.
+    expect(await echo({ cookie, origin: WEB })).toMatchObject({
+      status: 200,
+      body: { ok: true, d: { userId: "alice" } },
+    });
+    expect(logger.at("error")).toEqual([]);
+  });
+
+  it("leaves a bearer token alone, and a call without Origin (curl, server-side rendering) signed in", async () => {
+    const { url, token, echo } = await serveSessions();
+    // A bearer token is sent only on purpose: any Origin.
+    expect(await echo({ ...bearer(token), origin: "http://evil.example.com" })).toMatchObject({
+      status: 200,
+      body: { d: { userId: "alice" } },
+    });
+    // A browser sends Origin with every POST, so a call without one is not a page's.
+    expect(await echo({ cookie: `session=${token}` })).toMatchObject({
+      status: 200,
+      body: { d: { userId: "alice" } },
+    });
+    expect(
+      await echo({ cookie: `session=${token}`, "sec-fetch-site": "same-origin" }),
+    ).toMatchObject({ status: 200 });
+    // ...unless the browser's fetch metadata says another site sent it.
+    expect(
+      await echo({ cookie: `session=${token}`, "sec-fetch-site": "cross-site" }),
+    ).toMatchObject({ status: 403, body: { e: { code: "FORBIDDEN" } } });
+    // The documented server-side prefetch: the incoming request's cookie, forwarded.
+    const caller = createServerCaller(
+      { probe: probeContract },
+      { url, headers: { cookie: `session=${token}` } },
+    );
+    expect(await caller.probe.echo.call({ text: "ssr" })).toMatchObject({ userId: "alice" });
   });
 });
 

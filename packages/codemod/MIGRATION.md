@@ -1681,6 +1681,14 @@ native client sends the token as `auth.token`.
   `socketAuth({ cookieName: "session" })` and
   `createServer({ http: { cookieName: "session" } })`, and the routes warn
   at startup until it is named.
+- **A session cookie on an HTTP call must come from an allowed page.**
+  `socketAuth` applies its `allowedOrigins` to `/qd/...` calls that
+  authenticate with the cookie, as it does to sockets: a call whose
+  `Origin` is not listed is answered `FORBIDDEN` (403). Up to rc.4 only
+  sockets were checked. A call without `Origin` (curl, server-side
+  rendering that forwards the user's cookie) and a bearer token are
+  unaffected. A page on another origin that calls `/qd` with the cookie
+  needs its origin in `allowedOrigins`.
 - **No default CORS origin.** 4.1 allowed `*`; pass `cors`.
 - **Errors that are not `QuickdrawError` reach callers as `INTERNAL`** with a
   generic message (the original is logged). A Prisma unique violation is

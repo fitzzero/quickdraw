@@ -2,7 +2,9 @@
 // with the input as the JSON body, through the same pipeline and the same
 // `authenticate` as sockets, for server-side prefetch, load tests and
 // webhooks. The principal comes from the session cookie or a bearer token
-// (`extractBearerOrCookieToken`); the reply is the `qd:call` acknowledgement
+// (`httpCredentialOf`), and `authenticate` is told which one it was, so the
+// ambient cookie's `Origin` can be checked (`socketAuth` does; finding F7.1
+// of the quickdraw-chat review); the reply is the `qd:call` acknowledgement
 // shape, `{ ok: true, d }` or `{ ok: false, e }`, with the error code's HTTP
 // status (`httpStatus`). The call is cancelled when the client goes away.
 //
@@ -19,11 +21,17 @@ import { describeError } from "../pipeline/metrics";
 import { toCallReply, type DispatchResult } from "../pipeline/request";
 import type { Principal } from "../types";
 import { INTERNAL_FAILURE, unreadable } from "./ack";
-import { createPrincipalResolver, isRefusal, type ResolvePrincipal, type ServerAuth } from "./auth";
 import {
+  createPrincipalResolver,
+  isForbiddenCredential,
+  isRefusal,
+  type ResolvePrincipal,
+  type ServerAuth,
+} from "./auth";
+import {
+  httpCredentialOf,
   isJsonRequest,
   readJsonInput,
-  tokenOf,
   transportCookieNaming,
   type HttpRequest,
   type SessionCookieNaming,
@@ -181,20 +189,25 @@ async function authenticate(
   settings: HttpRouterSettings,
   req: HttpRequest,
 ): Promise<Principal | null | QuickdrawError> {
-  const token = tokenOf(req, settings.cookieNaming);
+  const credential = httpCredentialOf(req, settings.cookieNaming);
   try {
     return await settings.resolvePrincipal({
       transport: "http",
-      auth: token === null ? {} : { token },
+      auth: credential === null ? {} : { token: credential.token },
+      // The session cookie is ambient: `socketAuth` checks such a call's Origin (F7.1).
+      ...(credential === null ? {} : { credential: credential.from }),
       headers: req.headers,
       req,
     });
   } catch (error) {
-    settings.logger[isRefusal(error) ? "debug" : "error"]("HTTP authentication failed", {
-      category: "quickdraw.http",
-      error: describeError(error),
-    });
-    return new QuickdrawError("UNAUTHENTICATED", "Authentication failed");
+    const forbidden = isForbiddenCredential(error);
+    settings.logger[isRefusal(error) || forbidden ? "debug" : "error"](
+      "HTTP authentication failed",
+      { category: "quickdraw.http", error: describeError(error) },
+    );
+    return forbidden
+      ? new QuickdrawError("FORBIDDEN", error.message)
+      : new QuickdrawError("UNAUTHENTICATED", "Authentication failed");
   }
 }
 

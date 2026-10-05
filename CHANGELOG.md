@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0-rc.5] (unreleased)
+
+Round 6 of the fixes the quickdraw-chat migration found: the framework
+findings of the independent review of its finale (F7.1 to F7.8) and of its
+last migration card on `5.0.0-rc.4` (F6.1 to F6.8). No version moves until
+the release candidate is cut.
+
+### Security
+
+- Behavior change: an HTTP call (`POST /qd/...`) that authenticates with
+  the session cookie gets the Origin check sockets get. `socketAuth`
+  answers it `FORBIDDEN` (403) when its `Origin` is not in
+  `allowedOrigins`; rc.4 answered such a call, relying on its required
+  JSON content type and the app's CORS policy alone, so an app whose CORS
+  reflected any origin with credentials let another site's page call
+  methods as the user (F7.1). A call without `Origin` stays signed in: a
+  browser sends `Origin` with every POST, so it comes from curl or a
+  server rendering a page with the user's forwarded cookie
+  (`createServerCaller`), and is refused only when `Sec-Fetch-Site` names
+  another site. A bearer token needs no Origin. The transport tells any
+  `authenticate` where an HTTP call's token came from
+  (`HttpAuthenticateRequest.credential`: `"cookie"` or `"bearer"`, type
+  `HttpCredentialSource` on `./server`), and answers a
+  `QuickdrawError("FORBIDDEN")` thrown by `authenticate` as it is (other
+  throws stay `UNAUTHENTICATED`).
+
 ## [5.0.0-rc.4]
 
 Rounds 3, 4 and 5 of the fixes the quickdraw-chat migration found: round 3
