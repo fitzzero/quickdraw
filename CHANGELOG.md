@@ -28,7 +28,7 @@ from 34.6 to 19.0 ms, and SQL statements per write rose from 0.25× to
 runs against 2,397, 12 statements each; the statements besides those runs
 did not change).
 
-## [5.0.0-rc.7] (unreleased)
+## [5.0.0-rc.7]
 
 The template's findings on `5.0.0-rc.6` (quickdraw-chat PR #54, F11.1 to
 F11.4): an optimistic item that a load ended on the client but not on the
