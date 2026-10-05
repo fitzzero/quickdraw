@@ -123,9 +123,10 @@ I's release preparation card on 2026-10-05, when parts 1 to 4 were done and
    dist-tag"): `npm publish --access public --tag latest-4` (a dist-tag must
    not read as a semver range, so not `v4`).
 
-3. [ ] **Date the changelog**: replace `unreleased` in
-       `## [5.0.0] - unreleased` (`CHANGELOG.md`) with the release date, on
-       `dev` or on the release branch before it merges.
+3. [x] **Date the changelog**: `## [5.0.0] - 2026-10-05` (`CHANGELOG.md`),
+       set on `dev` before the release branch was cut. If the tags go out
+       on a later day, change the date on the release branch before it
+       merges.
 4. [ ] **Release `dev` to `main`** through Conveyor, as `release/2026.10.0`
        (#54) did at `5.0.0-rc.1`, with CI green on the release pull
        request. `main` is an ancestor of `dev`, so nothing conflicts.
