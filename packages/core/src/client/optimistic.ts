@@ -68,6 +68,7 @@ import {
   type Refusal,
   type RefusedAddition,
   type ScopeEvidence,
+  type ScopeRef,
 } from "./additions";
 
 export type {
@@ -76,6 +77,7 @@ export type {
   OnRefused,
   RefusedAddition,
   ScopeEvidence,
+  ScopeRef,
 } from "./additions";
 
 /** A row as overlays find it: any object with a string `id`. */
@@ -246,6 +248,14 @@ export interface StoreInternals extends OverlayStore {
    * except those added with `onRefused: "keep"`, which stay refused.
    */
   refuse(opened: Opened, refusal: Refusal): void;
+  /**
+   * The call failed without an outcome (`isUnknownOutcome`): drops its
+   * layers, and keeps its additions shown, pending, until their scope's next
+   * load says whether the server made them (`additions.ts`).
+   */
+  unknown(opened: Opened, refusal: Refusal): void;
+  /** The scopes whose additions of unknown outcome were not asked for a load yet; marks them asked. */
+  unchecked(): ScopeRef[];
   /** Drops a refused addition: the app dismissed it, or sends its call again. */
   dismiss(addition: Addition): void;
   /** Ends the finished additions to a scope that it accounts for (`settleAdditions`). */
@@ -571,6 +581,36 @@ function finishLayers(layers: Layers, opened: Opened, data: unknown): void {
   ]);
 }
 
+/** A call failed without an outcome: its layers go, its additions wait for their scopes' next loads. */
+function unknownOutcome(layers: Layers, opened: Opened, refusal: Refusal): void {
+  // A load sent from now on is the evidence: it was sent after the call failed.
+  layers.clock += 1;
+  layers.additions.unknown(opened.additions, refusal, layers.clock);
+  discard(layers, opened.layers);
+  changed(
+    layers,
+    opened.additions.map((addition) => addition.service),
+  );
+}
+
+/** What a scope's new state does to the additions to it (`settleAdditions`). */
+function settleScope(layers: Layers, ref: ScopeRef, evidence: ScopeEvidence): void {
+  if (layers.additions.size === 0) {
+    return;
+  }
+  const { ended, refused } = layers.additions.settle(
+    ref.service,
+    ref.collection,
+    ref.scope,
+    evidence,
+  );
+  discard(layers, [], ended);
+  if (refused) {
+    // Those of unknown outcome a load answered without moved from the items to `refused`.
+    changed(layers, [ref.service]);
+  }
+}
+
 /** Drops every layer and every revision seen, and tells the views of every service shown. */
 function resetLayers(layers: Layers): void {
   const services = new Set(layers.views.keys());
@@ -645,13 +685,15 @@ function createStore(queryClient: QueryClient): StoreInternals {
         opened.additions.filter((addition) => addition.refusal !== undefined).map((a) => a.service),
       );
     },
+    unknown(opened: Opened, refusal: Refusal): void {
+      unknownOutcome(layers, opened, refusal);
+    },
+    unchecked: () => layers.additions.unchecked(),
     dismiss(addition: Addition): void {
       discard(layers, [], [addition]);
     },
     settle(service: string, collection: string, scope: string, evidence: ScopeEvidence): void {
-      if (layers.additions.size > 0) {
-        discard(layers, [], layers.additions.settle(service, collection, scope, evidence));
-      }
+      settleScope(layers, { service, collection, scope }, evidence);
     },
     reset(): void {
       resetLayers(layers);

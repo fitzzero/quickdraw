@@ -19,7 +19,8 @@
 //   chosen members, and `load: "all"` loads every page;
 // - both with the overlays of optimistic mutations laid over them, and the
 //   items they added (`cache.addItem`) in their place; `pending` names those
-//   whose call is in flight;
+//   whose call is in flight, and `checking` those among them whose call's
+//   outcome is unknown until the scope's next load says;
 // - `refused`: the items added with `onRefused: "keep"` whose call the
 //   server refused, with the error, until the app dismisses one or sends its
 //   call again (finding F6.4 of the quickdraw-chat migration).
@@ -77,10 +78,23 @@ export interface UseCollectionResult<Item, Row> {
    */
   readonly pending: ReadonlySet<string>;
   /**
+   * The ids among `pending` whose call's outcome is unknown: its connection
+   * dropped after it was sent, or it timed out, so the server may have made
+   * the write. Show them as checking. Each ends with the scope's next load:
+   * its own copy shows when the scope holds its id, and a load that answers
+   * without it refuses it (into `refused` with `onRefused: "keep"`). Only an
+   * id the client made, which the server keeps, can be found: give an item
+   * one when the app may send its call again. Empty when there are none.
+   */
+  readonly checking: ReadonlySet<string>;
+  /**
    * The items an optimistic update added with `onRefused: "keep"` whose call
    * was refused, oldest first, each with its error, `dismiss()` and
    * `retry()`: not among `items`, so show them where the app shows a failed
-   * send. Empty when there are none.
+   * send. `retry()` sends the same call again; send it only when the call is
+   * idempotent (an id the client made, which the server keeps), since a
+   * refusal after an unknown outcome may follow a write the server made.
+   * Empty when there are none.
    */
   readonly refused: readonly RefusedItem<Item>[];
   /**
@@ -121,9 +135,10 @@ const NOTHING: CollectionView<never> = Object.freeze({
 
 const NONE_PENDING: ReadonlySet<string> = new Set();
 
-/** What the hook shows, and the ids among it of additions whose call is in flight. */
+/** What the hook shows, and the ids among it of additions whose call is in flight, or of unknown outcome. */
 interface Shown extends CollectionView<{ readonly id: string }> {
   readonly pending: ReadonlySet<string>;
+  readonly checking: ReadonlySet<string>;
 }
 
 /** What the hook returns besides what it shows. */
@@ -157,6 +172,7 @@ function resultOf<Item, Row>(
   return {
     items: view.items as readonly Item[],
     pending: view.pending,
+    checking: view.checking,
     refused: refused as readonly RefusedItem<Item>[],
     index: view.index as readonly Row[] | undefined,
     byId: view.byId as ReadonlyMap<string, Item>,
@@ -207,7 +223,7 @@ export function useCollection<Item, Row = IndexRow>(
   const state = entry?.state ?? null;
   const shown = useMemo((): Shown => {
     if (state === null) {
-      return { ...NOTHING, pending: NONE_PENDING };
+      return { ...NOTHING, pending: NONE_PENDING, checking: NONE_PENDING };
     }
     const added = overlays.added(target.collection, scopeValue);
     const view = showCollection(state, {
@@ -218,10 +234,13 @@ export function useCollection<Item, Row = IndexRow>(
       shape: target.def,
     });
     const sending = added.filter((addition) => addition.pending && view.byId.has(addition.item.id));
+    const unknown = sending.filter((addition) => addition.unknown);
     return {
       ...view,
       pending:
         sending.length === 0 ? NONE_PENDING : new Set(sending.map((addition) => addition.item.id)),
+      checking:
+        unknown.length === 0 ? NONE_PENDING : new Set(unknown.map((addition) => addition.item.id)),
     };
   }, [state, predicate, userId, overlays, target.collection, target.def, scopeValue]);
   const refused = useRefusedItems(

@@ -48,6 +48,7 @@ export {
   call,
   callData,
   isNotModified,
+  isUnknownOutcome,
   shouldRetry,
   type CallRequest,
   type CallResult,

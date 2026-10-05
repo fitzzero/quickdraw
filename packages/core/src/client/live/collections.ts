@@ -2,7 +2,11 @@
 // sections 7 and 11.5): one controller per scope (`collectionController.ts`),
 // counted by the hooks that hold it (`registry.ts`), with `qd:c` and
 // `qd:revoked` frames routed to it by `service`, `collection` and `scope`.
-// While any scope is held, the visibility and idle checks run (`resume.ts`).
+// While any scope is held, the visibility and idle checks run (`resume.ts`),
+// and a mutation call whose outcome is unknown has each held scope it added
+// an item to loaded again once: that load says whether the server made it
+// (`../additions.ts`). After a lost connection, the reconnect's own resume
+// does.
 //
 // React-free: the live data (`liveData.ts`) makes one per connection and
 // `QueryClient`.
@@ -15,6 +19,7 @@ import {
   type CollectionTarget,
   type ResumeReason,
 } from "./collectionController";
+import { storeOf } from "../optimistic";
 import { isRevision, type LiveHost } from "./host";
 import { createRegistry } from "./registry";
 import { createResumeChecks } from "./resume";
@@ -82,12 +87,44 @@ function isCollectionFrame(value: unknown): value is CollectionFrame {
   );
 }
 
+/** Asks for a load of each scope that holds additions of unknown outcome, once each, while started. */
+function createOutcomeChecks(
+  host: LiveHost,
+  ask: (service: string, collection: string, scope: string) => void,
+): { start(): void; stop(): void } {
+  const store = storeOf(host.queryClient);
+  let unsubscribe: (() => void) | undefined;
+  let queued = false;
+  const check = (): void => {
+    queued = false;
+    for (const { service, collection, scope } of store.unchecked()) {
+      ask(service, collection, scope);
+    }
+  };
+  return {
+    start() {
+      // A change of the store is told inside the mutation's failure: ask after it.
+      unsubscribe ??= store.subscribe(() => {
+        if (!queued) {
+          queued = true;
+          queueMicrotask(check);
+        }
+      });
+    },
+    stop() {
+      unsubscribe?.();
+      unsubscribe = undefined;
+    },
+  };
+}
+
 /** Creates the live collections of `host`. */
 export function createCollectionHub(host: LiveHost): CollectionHub {
   const registry = createRegistry<CollectionController>((controller) => {
     controller.dispose();
     if (registry.held().length === 0) {
       checks.stop();
+      outcomes.stop();
     }
   });
   const checks = createResumeChecks(() => {
@@ -97,6 +134,9 @@ export function createCollectionHub(host: LiveHost): CollectionHub {
   });
   const held = (service: string, collection: string, scope: string) =>
     registry.get(scopeKey(service, collection, scope));
+  const outcomes = createOutcomeChecks(host, (service, collection, scope) => {
+    held(service, collection, scope)?.resume("check");
+  });
   return Object.freeze({
     subscribe(target: CollectionTarget, scope: string, options: ScopeOptions = {}): ScopeHolding {
       const holding = registry.acquire(scopeKey(target.service, target.collection, scope), () =>
@@ -108,6 +148,7 @@ export function createCollectionHub(host: LiveHost): CollectionHub {
         controller.start();
       }
       checks.start();
+      outcomes.start();
       return {
         controller,
         release: () => {

@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { ERROR_CODES, QuickdrawError } from "../index";
-import { call, callData, isNotModified, shouldRetry } from "./call";
+import { call, callData, isNotModified, isUnknownOutcome, shouldRetry } from "./call";
 import { clientHarness, outgoing, until, whenStatus } from "./__tests__/fixtures";
 
 const harness = clientHarness();
@@ -128,6 +128,8 @@ describe("call", () => {
     );
     expect(error).toMatchObject({ code: "TIMEOUT", message: "No answer within 50 ms" });
     expect(shouldRetry(0, error)).toBe(false);
+    // The server may still run it: its outcome is unknown.
+    expect(isUnknownOutcome(error)).toBe(true);
     probe.gates.get("slow")?.resolve("late");
     await until(() => records.length === 1);
     expect(records.map((record) => [record.method, record.outcome])).toEqual([["wait", "ok"]]);
@@ -164,8 +166,31 @@ describe("call", () => {
       message: "No answer: the connection to the server is down",
     });
     expect(shouldRetry(0, dropped)).toBe(true);
+    // Sent before the drop: the server may have run it. Never sent: refused like any failure.
+    expect(isUnknownOutcome(dropped)).toBe(true);
+    expect(isUnknownOutcome(notOpen)).toBe(false);
     await whenStatus(connection, "connected");
     expect(await callData(connection, { service: "counterService", method: "total" })).toBe(0);
+  });
+
+  it("knows the outcome of a call that timed out unsent, and of a refusal", async () => {
+    const { app, records } = await harness.start();
+    const connection = harness.connection(app.url);
+    connection.open();
+    // In Socket.IO's send buffer until its time runs out, then dropped from it, unsent.
+    const unsent = await failure(
+      call(connection, { service: "counterService", method: "total", timeoutMs: 1 }),
+    );
+    expect(unsent).toMatchObject({ code: "INTERNAL" });
+    expect(isUnknownOutcome(unsent)).toBe(false);
+    await whenStatus(connection, "connected");
+    const refused = await failure(
+      call(connection, { service: "probeService", method: "fail", input: { code: "CONFLICT" } }),
+    );
+    expect(isUnknownOutcome(refused)).toBe(false);
+    expect(isUnknownOutcome(new QuickdrawError("TIMEOUT", "from the server"))).toBe(true);
+    expect(isUnknownOutcome(new Error("not a QuickdrawError"))).toBe(false);
+    expect(records.map((record) => record.method)).toEqual(["fail"]);
   });
 
   it("backs off the call's kind after RATE_LIMITED, for a different time on each client", async () => {

@@ -1325,7 +1325,18 @@ same for `addEntity`): it then leaves `items` for `useCollection`'s
 dismisses it or sends the same call again with `retry()` (which shows it
 `pending` again, and never rejects: a second refusal shows in `refused`
 again), so a chat shows a failed message with "retry" without a copy of
-its own. The reply's `id` (the created row's) and values
+its own. A call whose outcome is unknown is not refused: when the
+connection drops after the call was sent, or it times out, the server may
+have made the write (`isUnknownOutcome(error)` on `./client` says so). Its
+items stay, `pending`, and `useCollection`'s `checking` names them until
+the scope's next load (the reconnect's resume, or a load asked for at once
+while the socket is up): a load that holds an item's id ends it, its own
+copy shown, and one sent after the failure that answers without it refuses
+it (into `refused` with `onRefused: "keep"`). Only an id the client made,
+which the server keeps, can be found that way, and only with one is
+`retry()` safe after an unknown outcome: the second call fails `CONFLICT`
+instead of writing a second row. A refused item ends too once its scope
+holds its id. The reply's `id` (the created row's) and values
 replace the item's own, and once the scope's own copy arrives (its `added`
 delta, or a load) that copy shows in its place: never both, never a gap.
 `cache.addEntity(row)` adds a row to every collection of entity rows whose

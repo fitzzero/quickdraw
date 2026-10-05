@@ -64,6 +64,26 @@ moves until the release candidate is cut.
   `qd:stream` and `qd:event`, a field added to `qd:presence`, `qd:changed`
   and `qd:revoked`.
 
+### Client
+
+- Behavior change: a call whose outcome is unknown is not a refusal. When
+  the connection drops after a mutation was sent (`INTERNAL` "No answer:
+  the connection to the server is down") or it times out (`TIMEOUT`), the
+  server may have made the write: the items its optimistic update added
+  stay shown and `pending`, named by the new `useCollection().checking`,
+  until the scope's next load (the reconnect's resume; while the socket is
+  up, a load asked for at once). A load that holds an item's id ends it,
+  its own copy shown, and one sent after the failure that answers without
+  it refuses it (kept with `onRefused: "keep"`, with the call's error).
+  rc.5 refused it at once, so after the reconnect the list showed the
+  server's row and the kept copy, and `retry()` wrote a second row. A
+  refused item now also ends once its scope holds its id.
+  `isUnknownOutcome(error)` on `./client` tells such failures apart (a call
+  that timed out in the send buffer, never sent, is a plain failure). Only
+  an id the client made, which the server keeps, can be found: with a
+  provisional one the load refuses the item even when the server made the
+  row, and `retry()` is safe only with such an id.
+
 ## [5.0.0-rc.5]
 
 Round 6 of the fixes the quickdraw-chat migration found: the framework

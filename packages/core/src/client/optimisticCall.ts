@@ -2,7 +2,9 @@
 // and additions it opens in the overlay store (`optimistic.ts`) when it is
 // sent, finished with its reply or dropped when it fails (an addition made
 // with `onRefused: "keep"` stays, refused, with a `retry` that sends the
-// same call again; finding F6.4). The default
+// same call again; finding F6.4). A failure that leaves the outcome unknown
+// (`isUnknownOutcome`) refuses no addition yet: each waits for its scope's
+// next load (`additions.ts`). The default
 // update of a mutation whose input has `id` and whose output is `"entity"`
 // overlays the input's other fields on that row; a custom one writes
 // through the `OptimisticCache` it is given (`patchEntity`, `removeEntity`,
@@ -15,6 +17,7 @@ import type { CollectionDef } from "../contract/collections";
 import { QuickdrawError } from "../protocol/errors";
 import { isRecord } from "../protocol/guards";
 import { entityScopes, newItem, type AddedRow, type AddItemOptions } from "./additions";
+import { isUnknownOutcome } from "./call";
 import {
   storeOf,
   type OptimisticCache,
@@ -159,10 +162,16 @@ export async function mutateOptimistically<T>(
     return data;
   } catch (error) {
     // Kept additions stay, refused; `retry` sends the same call again, its update adding them anew.
-    store.refuse(opened, {
+    const refusal = {
       error: refusalError(error),
       retry: () => mutateOptimistically(queryClient, target, optimistic, input, send),
-    });
+    };
+    if (isUnknownOutcome(error)) {
+      // The server may have made the write: the scopes' next loads say (`additions.ts`).
+      store.unknown(opened, refusal);
+    } else {
+      store.refuse(opened, refusal);
+    }
     throw error;
   }
 }
