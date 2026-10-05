@@ -3,17 +3,24 @@
 // name so every 4.x call site keeps its name: `qd.projectService.getProject`.
 
 import { healthContract } from "./health.js";
-import { labelContract } from "./label.js";
 import { projectContract } from "./project.js";
 import { taskContract } from "./task.js";
 import { userContract } from "./user.js";
+// ── quickdraw-labels:start ──
+import { labelContract } from "./label.js";
+// ── quickdraw-labels:end ──
 
-export { healthContract, labelContract, projectContract, taskContract, userContract };
+export { healthContract, projectContract, taskContract, userContract };
+// ── quickdraw-labels:start ──
+export { labelContract };
+// ── quickdraw-labels:end ──
 
 export const contracts = {
   healthService: healthContract,
-  labelService: labelContract,
   projectService: projectContract,
   taskService: taskContract,
   userService: userContract,
+  // ── quickdraw-labels:start ──
+  labelService: labelContract,
+  // ── quickdraw-labels:end ──
 };

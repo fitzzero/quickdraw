@@ -3,9 +3,11 @@
 // client that holds newer frames from the other node, writes to one row on
 // both nodes whose frames arrive out of order, a resume on the other node,
 // logout everywhere, a removal no scope could be named for reaching
-// subscribers on both nodes, and a channel's app room requirement checked on
-// the sending socket's own node. Clients connect to node A (`app.connect`), or
-// to node B through `nodesOf(app)`; writes go through node B.
+// subscribers on both nodes, a channel's app room requirement checked on
+// the sending socket's own node, and a stream's seed on a node that started
+// after the pushes (kept seeds are per node; a computed one is not). Clients
+// connect to node A (`app.connect`), or to node B through `nodesOf(app)`;
+// writes go through node B.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -36,7 +38,14 @@ import {
   sub,
   type Read,
 } from "../../src/server/emit/__tests__/live";
-import { setupRedisAdapter, type Principal, type StorageAdapter } from "../../src/server/index";
+import { z } from "zod";
+import { defineContract } from "../../src/contract/defineContract";
+import {
+  initQuickdraw,
+  setupRedisAdapter,
+  type Principal,
+  type StorageAdapter,
+} from "../../src/server/index";
 import {
   defineLiveService,
   LOBBY,
@@ -44,7 +53,12 @@ import {
   send,
   settle,
 } from "../../src/server/realtime/__tests__/fixture";
-import { createTestApp, type TestApp, type TestConnection } from "../../src/testing/index";
+import {
+  createTestApp,
+  emitWithAck,
+  type TestApp,
+  type TestConnection,
+} from "../../src/testing/index";
 import type * as Testing from "../../src/testing/createTestApp";
 import {
   createBarrier,
@@ -345,7 +359,7 @@ describe("a channel's app room across nodes", () => {
     send(onA, "shout", { n: 1 });
     send(onB, "shout", { n: 2 });
     await Promise.all([settle(onA), settle(onB)]);
-    expect(into.shout).toEqual([{ userId: board.cy, socketId: onB.socket.id, n: 2 }]);
+    expect(into.shout).toEqual([{ userId: board.cy, socketId: onB.socket.id, room: LOBBY, n: 2 }]);
     // Presence answers for the whole cluster; the channel asks the sending socket only.
     expect(await app.server.presence.users(LOBBY)).toEqual([board.cy]);
   });
@@ -407,6 +421,49 @@ describe("a via scope on the other node", () => {
     expect(scopes.frames).toEqual([
       expect.objectContaining({ c: "byLabel", scope: bug.id, deltas: [{ t: "reset" }] }),
     ]);
+  });
+});
+
+describe("a stream's seed on a node that started after the pushes", () => {
+  it("is empty where the stream keeps the latest items, and the current state where the service computes it", async () => {
+    const create = (await vi.importActual<typeof Testing>("../../src/testing/createTestApp"))
+      .createTestApp as CreateTestApp;
+    const prefix = uniquePrefix("seeds");
+    const feed = defineContract("feedService", {
+      streams: {
+        kept: { item: z.number(), seed: 3, access: "public" },
+        computed: { item: z.number(), scope: "roomId", access: "public" },
+      },
+    });
+    // The app's own state, which each computed item changes: a counter per room.
+    const counters = new Map<string, number>();
+    const service = initQuickdraw<{ principal: Principal }>().defineService(feed, {
+      methods: {},
+      streams: { computed: { seed: (roomId) => [counters.get(roomId) ?? 0] } },
+    });
+    const early = await startNode(create, { services: [service] }, { prefix });
+    running.push([early]);
+    for (const n of [1, 2, 3]) {
+      counters.set("r1", n);
+      early.app.server.stream(feed, "kept").push(n);
+      early.app.server.stream(feed, "computed").push("r1", n);
+    }
+    const late = await startNode(create, { services: [service] }, { prefix });
+    running.push([late]);
+    const onLate = await late.app.connect(null);
+    const ask = (stream: string, scope?: string) =>
+      emitWithAck(onLate.socket, "qd:stream:sub", { s: "feedService", stream, scope });
+    // The kept seed is per node: the late node saw none of the pushes.
+    expect(await ask("kept")).toEqual({ ok: true, seed: [] });
+    expect(await ask("computed", "r1")).toEqual({ ok: true, seed: [3] });
+    // And it hears what the early node pushes from now on.
+    const items: unknown[] = [];
+    onLate.socket.on("qd:stream", (frame: unknown) => items.push(frame));
+    counters.set("r1", 4);
+    early.app.server.stream(feed, "computed").push("r1", 4);
+    await vi.waitFor(() => {
+      expect(items).toHaveLength(1);
+    });
   });
 });
 

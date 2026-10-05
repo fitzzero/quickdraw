@@ -18,7 +18,7 @@
 //   `via` entry, an `affects` hop) costs the whole collection its resume.
 //
 // 4.1 offered these as hand-written calls (`emitCollectionReset`,
-// `kickFromCollection`; `legacy-src/server/collections.ts:300-318`).
+// `kickFromCollection`; 4.1 `src/server/collections.ts:300-318`).
 
 import { collectionRoom, SERVER_EVENTS } from "../../contract/names";
 import type { CollectionDelta, CollectionFrame, Revision } from "../../protocol/envelope";
@@ -100,11 +100,16 @@ export function closeAnchors(
   return closed;
 }
 
-/** The scopes a write's values name in a collection, or `undefined` when they name none. */
+/**
+ * The scopes a write's values name in a collection, or `undefined` when they
+ * name none: an entry's own write in a `via` collection, and with
+ * `refreshEntry` a junction write too, which changes its entry in every
+ * scope that holds it.
+ */
 function namedScopes(collection: BoundCollection, write: WriteRecord): string[] | undefined {
   const { scope } = collection;
   const junction = scope.kind === "via" && modelKey(write.model) === modelKey(scope.model);
-  if (scope.kind === "via" && !junction) {
+  if (scope.kind === "via" && (!junction || scope.refreshEntry)) {
     return undefined;
   }
   const column = scope.kind === "column" ? scope.column : scope.scope;

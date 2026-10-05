@@ -13,6 +13,7 @@
 // | `GET /{provider}/start?returnTo=` | sign-in | 302 to the provider |
 // | `GET /{provider}/callback` | sign-in | 302 to the return origin, with the session cookie |
 // | `POST /guest` (with `guest()`) | sign-in | `{ userId }`, with the session cookie |
+// | `GET /providers` | providers | `{ providers: [{ id, name, kind }] }`: the sign-ins served now |
 // | `GET /me` | session | `{ userId }`, or 401 |
 // | `POST /logout` | session | 204 |
 // | `POST /logout-all` | session | 204, or 401 |
@@ -21,17 +22,23 @@
 // A POST route needs `Content-Type: application/json`, like the HTTP
 // transport's calls: a cross-site form cannot send it, and a cross-site
 // script cannot without a CORS preflight the app's CORS policy refuses.
+//
+// `GET /providers` (and `routes.providers()`) says which sign-ins are
+// served, so a login page offers only those (finding F9.1 of the owner's QA
+// of the template: a Google button answered 404 where the instance had no
+// Google credentials): a provider `google.optional` built nothing for is not
+// in it, and the mock only while it is mounted and `isMockOAuthEnabled()`.
 
 import { INTERNAL_MESSAGE } from "../../../protocol/errors";
 import { isJsonRequest } from "../../transports/body";
 import { guestRoute } from "./guest";
 import { checkRateLimits, loadLimiters, type LimitKind, type Limiters } from "./limits";
-import { mockFlow } from "./mockFlow";
+import { mockFlow, mockServes } from "./mockFlow";
 import { callbackRoute, startRoute, type SignInFlow } from "./oauth";
-import { pathOf, refuse, type AuthRouteRequest, type AuthRouteResponse } from "./respond";
+import { pathOf, refuse, sendJson, type AuthRouteRequest, type AuthRouteResponse } from "./respond";
 import { logoutAllRoute, logoutRoute, meRoute } from "./session";
 import { routeSettings, type RouteSettings } from "./settings";
-import type { AuthProvider, AuthRoutes, AuthRoutesOptions } from "./types";
+import type { AuthProvider, AuthProviderInfo, AuthRoutes, AuthRoutesOptions } from "./types";
 
 /** One route: its handler, the limiter that counts it, and whether it needs a JSON body type. */
 interface Route {
@@ -66,8 +73,18 @@ function checkProvider(provider: AuthProvider, seen: Set<string>): void {
   seen.add(id);
 }
 
-/** Adds a provider's routes; the mock provider's only while it is enabled. */
-function addProvider(table: RouteTable, settings: RouteSettings, provider: AuthProvider): void {
+/** The names a sign-in button shows by default, by provider kind. */
+const DEFAULT_NAMES = Object.freeze({ mock: "Mock", guest: "Guest" });
+
+/** A served provider, as `GET /providers` lists it. */
+function infoOf(provider: AuthProvider): AuthProviderInfo {
+  const name =
+    provider.kind === "oauth" ? (provider.name ?? provider.id) : DEFAULT_NAMES[provider.kind];
+  return Object.freeze({ id: provider.id, name, kind: provider.kind });
+}
+
+/** Adds a provider's routes; the mock provider's only while it is enabled. Returns whether it was mounted. */
+function addProvider(table: RouteTable, settings: RouteSettings, provider: AuthProvider): boolean {
   const base = settings.basePath;
   if (provider.kind === "guest") {
     table.set(`POST ${base}/guest`, {
@@ -75,7 +92,7 @@ function addProvider(table: RouteTable, settings: RouteSettings, provider: AuthP
       limit: "signIn",
       json: true,
     });
-    return;
+    return true;
   }
   const flow: SignInFlow | null =
     provider.kind === "mock"
@@ -84,7 +101,7 @@ function addProvider(table: RouteTable, settings: RouteSettings, provider: AuthP
         )
       : provider;
   if (flow === null) {
-    return;
+    return false;
   }
   table.set(`GET ${base}/${flow.id}/start`, {
     handle: startRoute(settings, flow),
@@ -94,10 +111,26 @@ function addProvider(table: RouteTable, settings: RouteSettings, provider: AuthP
     handle: callbackRoute(settings, flow),
     limit: "signIn",
   });
+  return true;
 }
 
-function routeTable(settings: RouteSettings, providers: readonly AuthProvider[]): RouteTable {
-  if (!Array.isArray(providers) || providers.length === 0) {
+/** The sign-ins served now: the providers mounted, the mock only while it is enabled. */
+function servedProviders(mounted: readonly AuthProvider[]): readonly AuthProviderInfo[] {
+  return mounted.filter((provider) => provider.kind !== "mock" || mockServes()).map(infoOf);
+}
+
+function routeTable(
+  settings: RouteSettings,
+  listed: readonly (AuthProvider | null | undefined | false)[],
+): { readonly table: RouteTable; readonly mounted: readonly AuthProvider[] } {
+  // An entry left out in place (`google.optional(...)` without credentials) is skipped.
+  const providers = Array.isArray(listed)
+    ? listed.filter(
+        (provider): provider is AuthProvider =>
+          provider !== undefined && provider !== null && provider !== false,
+      )
+    : [];
+  if (providers.length === 0) {
     throw new TypeError("createAuthRoutes: providers must list at least one provider");
   }
   const seen = new Set<string>();
@@ -105,10 +138,20 @@ function routeTable(settings: RouteSettings, providers: readonly AuthProvider[])
     checkProvider(provider, seen);
   }
   const table: RouteTable = new Map();
-  for (const provider of providers) {
-    addProvider(table, settings, provider);
+  const mounted = providers.filter((provider) => addProvider(table, settings, provider));
+  if (mounted.length === 0) {
+    settings.logger.warn(
+      "createAuthRoutes: no provider can sign anyone in (the mock is mounted only while ENABLE_MOCK_OAUTH is set outside production): every sign-in route answers 404",
+      { category: "quickdraw.auth" },
+    );
   }
   const base = settings.basePath;
+  table.set(`GET ${base}/providers`, {
+    handle: (_req, res) => {
+      sendJson(res, 200, { providers: servedProviders(mounted) });
+    },
+    limit: "providers",
+  });
   table.set(`GET ${base}/me`, { handle: meRoute(settings), limit: "session" });
   table.set(`POST ${base}/logout`, { handle: logoutRoute(settings), limit: "session", json: true });
   table.set(`POST ${base}/logout-all`, {
@@ -116,7 +159,7 @@ function routeTable(settings: RouteSettings, providers: readonly AuthProvider[])
     limit: "session",
     json: true,
   });
-  return table;
+  return { table, mounted };
 }
 
 /** Runs a route once its limiter let it through. */
@@ -187,7 +230,7 @@ function dispatch(
 export function createAuthRoutes(options: AuthRoutesOptions): AuthRoutes {
   const settings = routeSettings(options);
   const rateLimit = checkRateLimits(options.rateLimit);
-  const table = routeTable(settings, options.providers);
+  const { table, mounted } = routeTable(settings, options.providers);
   const limiters = loadLimiters(rateLimit).catch((error: unknown) => {
     settings.logger.error(
       "createAuthRoutes: the default rate limiters need express-rate-limit; install it, or pass rateLimit",
@@ -195,14 +238,20 @@ export function createAuthRoutes(options: AuthRoutesOptions): AuthRoutes {
     );
     return null;
   });
-  return (req, res, next) => {
+  const routes = (
+    req: AuthRouteRequest,
+    res: AuthRouteResponse,
+    next: (error?: unknown) => void,
+  ) => {
     const route = table.get(`${req.method ?? ""} ${pathOf(req)}`);
     if (route === undefined) {
       next();
       return;
     }
+    settings.watchHost(req);
     void limiters.then((loaded) => {
       dispatch(settings, loaded, route, req, res);
     });
   };
+  return Object.assign(routes, { providers: () => servedProviders(mounted) });
 }

@@ -78,6 +78,11 @@ export function anyOf<const P extends readonly AnyAccessPolicy[]>(
         all.map((policy) => policy.accessWhere(principal, level, tools)),
       );
       const matching = filters.filter((filter): filter is StorageWhere => filter !== "none");
+      // A policy that lets every row through (`everyone`, a resolver's `{}`) makes the whole
+      // filter `{}`: Prisma reads an empty object inside `OR` as matching nothing.
+      if (matching.some((filter) => Object.keys(filter).length === 0)) {
+        return {};
+      }
       if (matching.length <= 1) {
         return matching[0] ?? ("none" satisfies AccessFilter);
       }

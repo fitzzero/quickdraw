@@ -1,7 +1,7 @@
 // One collection scope's live pipeline (RFC 0003 sections 7.2 to 7.4 and
 // 11.5), shared by every hook that shows the scope, so they drive one load
 // and one page at a time. Ported from 4.1's per-key controller
-// (`legacy-src/client/useCollection.ts:136-269`), with these changes:
+// (4.1 `src/client/useCollection.ts:136-269`), with these changes:
 //
 // - Loading the scope again resumes it: `qd:col:sub` carries `since`, the
 //   newest revision applied, and a `resumed` answer brings the deltas missed
@@ -28,6 +28,13 @@
 //   deltas keep them current.
 // - `qd:revoked` drops the state: access was revoked (`FORBIDDEN`) or the
 //   scope's anchor row was deleted (`NOT_FOUND`).
+// - A scope whose load was refused stays refused until a connect, or until
+//   the hub learns the user's access may have changed and refreshes it
+//   (`collections.ts`; finding F8.4 of the quickdraw-chat migration).
+// - Each new state tells the overlay store what it means for the items
+//   optimistic updates added to the scope (`settleAdditions`): one whose
+//   server id the state holds, or a delta named, or that a load sent after
+//   its call's reply answered without, ends.
 // - Requests go through the connection's lane. `RATE_LIMITED` waits out the
 //   subscription backoff; a request without an answer is sent again after
 //   5 s while the socket is up; with the socket down, the next connect
@@ -41,6 +48,7 @@ import { CLIENT_EVENTS } from "../../contract/names";
 import type { CollectionFrame, Revision, RevokeReason } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
 import { collectionKey, type CollectionQueryKey } from "../keys";
+import { settleAdditions, type ScopeEvidence } from "../optimistic";
 import {
   endWaits,
   isPage,
@@ -58,6 +66,7 @@ import {
   applySnapshot,
   pruneStale,
   staleIds,
+  type CollectionState,
   type DeltaBatch,
   type DeltaResult,
 } from "./collectionStore";
@@ -92,6 +101,8 @@ export interface CollectionController {
   resume(reason: ResumeReason): void;
   /** Loads the scope again from scratch; resolves once that load settled. */
   refresh(): Promise<void>;
+  /** The scope's value: the id of the row it is anchored on, for a scope that has one. */
+  readonly scope: string;
   /** Loads the next page, if there is one. */
   loadMore(): Promise<void>;
   /** Loads the items of `ids` by id. Rejects with the server's error when it refuses. */
@@ -143,8 +154,43 @@ function entryOf(p: Pipeline): CollectionEntry {
   );
 }
 
+/** The scope's state holds `id`: a loaded item, or a member of its index. */
+function holder(state: CollectionState): (id: string) => boolean {
+  return (id) => state.revById.has(id) || state.byId.has(id);
+}
+
+/** Tells the overlay store what the scope's state `state` means for the items added to it. */
+function tellAdditions(
+  p: Pipeline,
+  state: CollectionState,
+  evidence: Omit<ScopeEvidence, "holds"> = {},
+): void {
+  settleAdditions(p.host.queryClient, p.target.service, p.target.collection, p.scope, {
+    ...evidence,
+    holds: holder(state),
+  });
+}
+
 function write(p: Pipeline, change: Partial<CollectionEntry>): void {
   writeEntry(p.host, p.key, Object.freeze({ ...entryOf(p), ...change }));
+  if (change.state !== undefined && change.state !== null) {
+    tellAdditions(p, change.state);
+  }
+}
+
+/** The ids the deltas of `batches` name. */
+function namedIn(batches: readonly DeltaBatch[]): Set<string> {
+  const named = new Set<string>();
+  for (const batch of batches) {
+    for (const delta of batch.deltas as readonly unknown[]) {
+      const record = delta as { readonly id?: unknown; readonly item?: { readonly id?: unknown } };
+      const id = record.id ?? record.item?.id;
+      if (typeof id === "string") {
+        named.add(id);
+      }
+    }
+  }
+  return named;
 }
 
 /**
@@ -266,6 +312,10 @@ function applyLoad(
   }
   const after = applyFrames(applied.state, kept, p.shape, options);
   write(p, { state: after.state, error: null });
+  // A load sent after an addition's reply would hold its row if it were a member.
+  const resumed = reply.resumed === true && Array.isArray(reply.deltas);
+  const deltas = resumed ? [{ rev: 0, deltas: reply.deltas as DeltaBatch["deltas"] }] : [];
+  tellAdditions(p, after.state, { readAt, named: namedIn([...deltas, ...kept]) });
   p.joined = true;
   settle(p, null);
   const reloaded = reply.resumed !== true && base !== null;
@@ -420,6 +470,7 @@ function receive(p: Pipeline, frame: CollectionFrame): void {
   if (result.state !== base) {
     write(p, { state: result.state });
   }
+  tellAdditions(p, result.state, { named: namedIn([batch]) });
   followUp(p, result, false);
 }
 
@@ -558,6 +609,7 @@ export function createCollectionController(
   const p = createPipeline(host, target, scope, limit);
   return Object.freeze({
     key: p.key,
+    scope,
     start: () => {
       load(p, "snapshot");
     },

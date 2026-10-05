@@ -1,7 +1,7 @@
 // `bootstrapMcpServer`: loads the module that starts an MCP stdio server
 // after sending console output to stderr, so nothing but the protocol
 // reaches stdout, not even what that module's imports log while loading.
-// Ported from 4.1 (`legacy-src/server/mcp/McpBootstrap.ts:12`) with two
+// Ported from 4.1 (4.1 `src/server/mcp/McpBootstrap.ts:12`) with two
 // changes: a relative path is resolved against the working directory (4.1
 // handed it to `import()`, which resolves it against the package's own file,
 // so a relative path never found the app's module), and a module that fails

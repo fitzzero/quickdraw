@@ -6,6 +6,13 @@
 // caller passes (the input schema's input type) and `OutputOf` is what the
 // caller receives. A handler receives `ParsedInputOf`, the input after its
 // schema ran (defaults applied, transforms done).
+//
+// Rows follow the reader's side too. `EntityOf`, `ProjectionOf`, `ItemOf` and
+// the projection outputs of `OutputOf` are rows as a reader receives them: a
+// key the contract's `fields` map tiers is optional, because a reader below
+// its level receives the row without it (RFC 0003 section 6). What a handler
+// returns keeps every key (`FullProjectionOf`, through the server's
+// `HandlerOutputOf`).
 
 import type { AnyContract, IndexRow } from "./defineContract";
 import type { NullableProjection, ProjectionList } from "./methods";
@@ -17,22 +24,66 @@ export type ContractMap = { readonly [key: string]: AnyContract };
 /** The service name of a contract. */
 export type ServiceNameOf<C extends AnyContract> = C["name"];
 
-/** The full entity row of a contract, or `never` for a contract without an entity. */
-export type EntityOf<C extends AnyContract> = C["entity"] extends StandardSchemaV1
-  ? InferOutput<C["entity"]>
-  : never;
-
 /** `"entity"` (when the contract has one) plus the names of its projections. */
 export type ProjectionName<C extends AnyContract> =
   | (C["entity"] extends StandardSchemaV1 ? "entity" : never)
   | (keyof C["projections"] & string);
 
-/** The row type of a projection; `"entity"` is the full entity. */
-export type ProjectionOf<C extends AnyContract, P extends ProjectionName<C>> = P extends "entity"
-  ? EntityOf<C>
+/**
+ * The full row of a projection, every key present: its schema's output
+ * (`"entity"` is the entity's). The server builds this row and strips each
+ * reader's tiers from it; a handler returns it (`HandlerOutputOf`).
+ */
+export type FullProjectionOf<
+  C extends AnyContract,
+  P extends ProjectionName<C>,
+> = P extends "entity"
+  ? C["entity"] extends StandardSchemaV1
+    ? InferOutput<C["entity"]>
+    : never
   : P extends keyof C["projections"]
     ? InferOutput<C["projections"][P]>
     : never;
+
+/** `T` with its properties listed in one object type, for readable hovers and errors. */
+type Flatten<T> = { [K in keyof T]: T[K] };
+
+/** `Row` with the keys in `Tiered` optional; any other key, and a row with none of them, unchanged. */
+type OptionalKeys<Row, Tiered extends PropertyKey> = Row extends object
+  ? [Extract<keyof Row, Tiered>] extends [never]
+    ? Row
+    : Flatten<
+        { [K in keyof Row as K extends Tiered ? never : K]: Row[K] } & {
+          [K in keyof Row as K extends Tiered ? K : never]?: Row[K];
+        }
+      >
+  : Row;
+
+/**
+ * `Row`, a row of contract `C`, as a reader receives it: each key the
+ * contract's `fields` map tiers is optional, since a reader below its level
+ * receives the row without it.
+ */
+export type ReceivedRow<C extends AnyContract, Row> = OptionalKeys<Row, keyof C["fields"]>;
+
+/**
+ * The entity row of a contract as a reader receives it (`useEntity`,
+ * `"entity"` outputs): a field the contract's `fields` map tiers is
+ * optional. `never` for a contract without an entity.
+ */
+export type EntityOf<C extends AnyContract> = C["entity"] extends StandardSchemaV1
+  ? ReceivedRow<C, InferOutput<C["entity"]>>
+  : never;
+
+/**
+ * The row type of a projection as a reader receives it; `"entity"` is the
+ * entity. A field the contract's `fields` map tiers is optional
+ * (`FullProjectionOf` has it).
+ */
+export type ProjectionOf<C extends AnyContract, P extends ProjectionName<C>> = ReceivedRow<
+  C,
+  FullProjectionOf<C, P>
+>;
 
 /** The names of a contract's methods. */
 export type MethodName<C extends AnyContract> = keyof C["methods"] & string;
@@ -75,7 +126,10 @@ export type CollectionName<C extends AnyContract> = keyof C["collections"] & str
 /** One collection's declaration. */
 export type CollectionOf<C extends AnyContract, K extends CollectionName<C>> = C["collections"][K];
 
-/** The item type of a collection: the row of the projection it declares as `item`. */
+/**
+ * The item type of a collection: the row of the projection it declares as
+ * `item`, as a reader receives it (a tiered field is optional).
+ */
 export type ItemOf<C extends AnyContract, K extends CollectionName<C>> =
   CollectionOf<C, K>["item"] extends ProjectionName<C>
     ? ProjectionOf<C, CollectionOf<C, K>["item"]>
@@ -100,9 +154,16 @@ export type IndexFieldOf<C extends AnyContract, K extends CollectionName<C>> = C
   ? Field
   : never;
 
-/** One index row of a collection: `id` plus its index fields. What a view predicate reads. */
+/**
+ * One index row of a collection: `id` plus its index fields. What a view
+ * predicate reads. Every subscriber receives every index field (a collection
+ * refuses one its `fields` tier hides at the collection's access), so a
+ * tiered index field is not optional here.
+ */
 export type IndexRowOf<C extends AnyContract, K extends CollectionName<C>> = IndexRow<
-  ItemOf<C, K>,
+  CollectionOf<C, K>["item"] extends ProjectionName<C>
+    ? FullProjectionOf<C, CollectionOf<C, K>["item"]>
+    : never,
   IndexFieldOf<C, K>
 >;
 

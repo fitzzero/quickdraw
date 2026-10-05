@@ -1,6 +1,6 @@
 // The collection store's merge rules (RFC 0003 sections 7.2 to 7.5). The
 // first four blocks are 4.1's collection cache tests
-// (`legacy-src/client/collectionCache.test.ts`), case for case, on the 5.0
+// (4.1 `src/client/collectionCache.test.ts`), case for case, on the 5.0
 // store: one revision per frame rather than per delta, membership from the
 // index rather than `ids`, tombstones in `removed`, and `added` placed by the
 // collection's order rather than an `insertPosition`. The blocks after them
@@ -847,6 +847,64 @@ describe("views", () => {
 
     expect(view.index?.map((member) => member.id)).toEqual(["a", "b"]);
     expect(view.items).toEqual([cards[0], { ...cards[1], assigneeId: "u1" }]);
+  });
+});
+
+describe("items an optimistic update added", () => {
+  const noOverlay = <T>(value: T): T => value;
+  const by = (state: CollectionState<Row>, extra: readonly Row[], shape: CollectionShape) =>
+    showCollection(state, { who: { userId: "u1" }, overlay: noOverlay, added: extra, shape });
+
+  it("show in the index's order, items following it, and hide once the scope holds their id", () => {
+    const state = applySnapshot<Row>(
+      null,
+      snap([row("a", 1), row("c", 3)], { rev: 10, members: [row("a", 1), row("c", 3)] }),
+      indexed,
+    );
+    const view = by(state, [row("new", 2), row("last", 9)], indexed);
+    expect(view.index?.map((member) => member.id)).toEqual(["a", "new", "c", "last"]);
+    expect(view.items.map((item) => item.id)).toEqual(["a", "new", "c", "last"]);
+    expect(view.byId.get("new")).toEqual(row("new", 2));
+    // The server's own copy arrived: shown once, as the scope holds it.
+    const { state: arrived } = apply(state, added(row("new", 2), ["new", 11, 2]), 11, indexed);
+    expect(by(arrived, [row("new", 2)], indexed).items.map((item) => item.id)).toEqual([
+      "a",
+      "new",
+      "c",
+    ]);
+  });
+
+  it("show in their place by order without an index, else last", () => {
+    const ordered: CollectionShape = { order: indexed.order };
+    const state = applySnapshot<Row>(null, snap([row("a", 1), row("c", 3)], { rev: 10 }), ordered);
+    expect(by(state, [row("b", 2)], ordered).items.map((item) => item.id)).toEqual(["a", "b", "c"]);
+    // An item without the order's fields goes last.
+    const loose = { id: "z" } as unknown as Row;
+    expect(by(state, [loose, row("b", 2)], ordered).items.map((item) => item.id)).toEqual([
+      "a",
+      "b",
+      "c",
+      "z",
+    ]);
+    const unordered = applySnapshot<Row>(null, snap([row("a", 1)], { rev: 10 }), plain);
+    expect(by(unordered, [row("b", 0)], plain).items.map((item) => item.id)).toEqual(["a", "b"]);
+  });
+
+  it("go through the view and the overlays like any member", () => {
+    const state = applySnapshot<Row>(
+      null,
+      snap([row("a", 1)], { rev: 10, members: [row("a", 1)] }),
+      indexed,
+    );
+    const view = showCollection(state, {
+      view: (member) => member.v !== 5,
+      who: { userId: "u1" },
+      overlay: <T>(value: T) =>
+        (value as { readonly id: string }).id === "hidden" ? undefined : value,
+      added: [row("x", 5), row("hidden", 2), row("y", 2)],
+      shape: indexed,
+    });
+    expect(view.items.map((item) => item.id)).toEqual(["a", "y"]);
   });
 });
 

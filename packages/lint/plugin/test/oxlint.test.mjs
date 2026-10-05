@@ -1,31 +1,43 @@
 // The plugin under the oxlint CLI itself, through the shipped configs: an app
 // laid out like the quickdraw template extends `oxlint.base.jsonc` and
-// `oxlint.template.jsonc`, and every rule must report its own example there
-// (config loading, `jsPlugins`, option schemas and the rules' file scopes all
-// take part). Then the core package's fixture apps, laid out as that app's
-// service files, must pass every rule that judges service definitions, and
-// `quickdraw-lint baseline` must let an app adopt the rules.
+// `oxlint.template.jsonc` (or the template alone, which extends the base), and
+// every rule must report its own example there (config loading, `jsPlugins`,
+// option schemas and the rules' file scopes all take part), and the base's
+// path overrides must apply from the app's root and from each package
+// (check.test.mjs). Then the core package's fixture apps, laid out as that
+// app's service files, must pass every rule that judges service definitions,
+// and `quickdraw-lint baseline` must let an app adopt every rule (with
+// `quickdraw-lint check`, check.test.mjs).
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { findOxlint, runOxlint } from "../../bin/baseline.mjs";
+import { runOxlint } from "../../bin/baseline.mjs";
 import plugin from "../index.mjs";
+import {
+  BIN,
+  CORE,
+  OXLINT,
+  REPO,
+  app,
+  at,
+  baseline,
+  createApp,
+  lint,
+  read,
+  removeApps,
+  roots,
+  service,
+  writeFiles,
+} from "./app.mjs";
 
-const LINT = fileURLToPath(new URL("../..", import.meta.url));
-const CORE = path.join(LINT, "..", "core");
-const REPO = path.join(LINT, "..", "..");
 /** The documents whose 5.0 examples apps copy: copies of packages/core/test/readme. */
 const DOCUMENTS = [
   "README.md",
   "MIGRATION.md",
   "packages/skills/skills/quickdraw-new-service/SKILL.md",
 ];
-const OXLINT = findOxlint(LINT);
-const BIN = path.join(LINT, "bin", "quickdraw-lint.mjs");
 
 /** One example per rule, at a path of the template's layout. */
 const EXAMPLES = {
@@ -132,74 +144,7 @@ const SERVICE_DEFINITION_RULES = [
   "no-v4-api",
 ];
 
-function writeFiles(root, files) {
-  for (const [file, code] of files) {
-    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-    fs.writeFileSync(path.join(root, file), code);
-  }
-}
-
-/**
- * A temporary app extending the shipped configs (the base, then the template
- * unless `template` is false), with `settings` and `overrides` of its own and
- * oxlint installed (linked to this package's).
- */
-function createApp(settings, { template = true, overrides } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "quickdraw-lint-app-"));
-  fs.mkdirSync(path.join(root, "node_modules"));
-  fs.symlinkSync(
-    path.dirname(path.dirname(OXLINT)),
-    path.join(root, "node_modules", "oxlint"),
-    "dir",
-  );
-  const config = {
-    extends: [
-      path.relative(root, path.join(LINT, "oxlint.base.jsonc")),
-      ...(template ? [path.relative(root, path.join(LINT, "oxlint.template.jsonc"))] : []),
-    ],
-    plugins: ["typescript", "import", "react", "nextjs", "jsx_a11y"],
-    ignorePatterns: ["**/node_modules/**"],
-    ...(settings === undefined ? {} : { settings }),
-    ...(overrides === undefined ? {} : { overrides }),
-  };
-  fs.writeFileSync(path.join(root, ".oxlintrc.json"), JSON.stringify(config));
-  return root;
-}
-
-/**
- * The quickdraw diagnostics oxlint reports in `root`, as `{ rule, file, line, severity }`,
- * run from `root` or from `cwd` (a directory of the app) with the app's config.
- */
-function lint(root, cwd = root) {
-  const report = runOxlint({
-    cwd,
-    config: path.relative(cwd, path.join(root, ".oxlintrc.json")) || undefined,
-    paths: ["."],
-    oxlint: OXLINT,
-    ignoreBaselines: false,
-  });
-  // A rule that throws ("Error running JS plugin.") is a diagnostic without a code.
-  const failure = report.diagnostics.find((diagnostic) => typeof diagnostic.code !== "string");
-  if (failure !== undefined) {
-    throw new Error(failure.message);
-  }
-  return report.diagnostics
-    .filter((diagnostic) => diagnostic.code.startsWith("quickdraw("))
-    .map((diagnostic) => ({
-      rule: diagnostic.code.slice("quickdraw(".length, -1),
-      file: diagnostic.filename.split(path.sep).join("/"),
-      line: diagnostic.labels[0]?.span.line,
-      severity: diagnostic.severity,
-    }))
-    .toSorted((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
-}
-
-const roots = [];
-afterAll(() => {
-  for (const root of roots) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+afterAll(removeApps);
 
 describe("the oxlint CLI with the shipped configs", () => {
   let reports = [];
@@ -282,7 +227,7 @@ function documentBlocks() {
       if (file.startsWith("../")) {
         continue;
       }
-      const at =
+      const target =
         region === undefined
           ? file
           : path.posix.join(
@@ -290,7 +235,7 @@ function documentBlocks() {
               `region-${region}`,
               path.posix.basename(file),
             );
-      blocks.set(at, `${code}\n`);
+      blocks.set(target, `${code}\n`);
     }
   }
   return [...blocks];
@@ -352,27 +297,6 @@ export function useTask(id: string) {
   });
 });
 
-// The baseline tests' app: every quickdraw rule reads `.quickdraw-lint-baseline.json`.
-const BASELINE_SETTINGS = { quickdraw: { baseline: ".quickdraw-lint-baseline.json" } };
-const service = "apps/api/src/services/task.ts";
-const read = (model) => `export const read${model} = ({ db }) => db.${model}.findMany();\n`;
-const at = (rule, line, severity = "error", file = service) => ({ rule, file, line, severity });
-const baseline = (root) => {
-  const output = execFileSync(process.execPath, [BIN, "baseline"], {
-    cwd: root,
-    encoding: "utf8",
-  });
-  return {
-    output,
-    file: JSON.parse(fs.readFileSync(path.join(root, ".quickdraw-lint-baseline.json"), "utf8")),
-  };
-};
-const app = () => {
-  const root = createApp(BASELINE_SETTINGS);
-  roots.push(root);
-  return root;
-};
-
 // The review's case: one service file breaking five rules, baselined.
 const FIVE_RULES = `export const s = qd.defineService(task, {
   model: "task",
@@ -410,9 +334,10 @@ describe("quickdraw-lint baseline", () => {
     const root = app();
     const disabled = `// oxlint-disable-next-line quickdraw/no-unbounded-read\nvoid db.task.findMany();\n`;
     writeFiles(root, [[service, `${disabled}void db.task.findMany();\n${FIVE_RULES}`]]);
-    expect(baseline(root).output).toBe(
-      "Wrote 6 violation(s) in 1 file(s) to .quickdraw-lint-baseline.json\n",
-    );
+    // the five rules' six reports, and oxlint's own require-await (d is async without await)
+    const { output, file } = baseline(root);
+    expect(output).toBe("Wrote 7 violation(s) in 1 file(s) to .quickdraw-lint-baseline.json\n");
+    expect(Object.keys(file.files[service])).toContain("eslint(require-await)");
     expect(lint(root)).toEqual([]);
 
     // A second covered copy of the baselined line, now after it, changes nothing either.
@@ -462,5 +387,18 @@ describe("quickdraw-lint baseline", () => {
     expect(
       execFileSync(process.execPath, [BIN, "baseline", "--help"], { encoding: "utf8" }),
     ).toMatch(/^Usage: quickdraw-lint baseline/);
+  });
+});
+
+describe("the template config alone", () => {
+  it("extends the base: every rule reports its example", () => {
+    const root = createApp(undefined, { template: "alone" });
+    roots.push(root);
+    writeFiles(root, Object.values(EXAMPLES));
+    const found = new Set(lint(root).map(({ rule, file }) => `${rule} ${file}`));
+    const missing = Object.entries(EXAMPLES)
+      .map(([rule, [file]]) => `${rule} ${file}`)
+      .filter((example) => !found.has(example));
+    expect(missing).toEqual([]);
   });
 });

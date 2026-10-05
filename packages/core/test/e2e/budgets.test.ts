@@ -16,12 +16,57 @@
 
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import { defineContract, via } from "../../src/index";
+import { qd } from "../../src/server/emit/__tests__/live";
 import { storageOf } from "../../src/server/storage";
 import { emitWithAck, expectBudget } from "../../src/testing/index";
 import { inCluster } from "../cluster/mode";
 import { as, e2eApp } from "../fixtures/app";
 
 const e2e = e2eApp();
+
+/**
+ * Each member's projects with their member count, through the membership
+ * table: a `via` collection whose item reads the junction (`refreshEntry`),
+ * the shape of a chat list with `memberCount`.
+ */
+const myProjectsContract = defineContract("myProjectsService", {
+  entity: z.object({ id: z.string(), name: z.string() }),
+  projections: {
+    summary: z.object({ id: z.string(), name: z.string(), memberCount: z.number() }),
+  },
+  methods: {},
+  collections: {
+    mine: {
+      scope: via({
+        model: "projectMember",
+        entry: "projectId",
+        scope: "userId",
+        refreshEntry: true,
+      }),
+      item: "summary",
+      order: [["id", "asc"]],
+    },
+  },
+});
+
+const myProjectsService = qd.defineService(myProjectsContract, {
+  model: "project",
+  collections: { mine: { scopeAccess: "self" } },
+  project: {
+    summary: {
+      // the members of the projects read, counted (Prisma's _count would aggregate the whole table)
+      select: { name: true, members: { select: { id: true } } },
+      map: (row: { id: string; name: string; members: { id: string }[] }) => ({
+        id: row.id,
+        name: row.name,
+        memberCount: row.members.length,
+      }),
+    },
+  },
+  methods: {},
+});
 
 /** A step's budget options: in the cluster projects, kept in the cluster's own budget file. */
 function step(name: string): { readonly name: string; readonly file?: string } {
@@ -53,8 +98,8 @@ async function seedTasks(projectId: string, count: number): Promise<string[]> {
  * storage adapter asks once whether an order column may hold null), so a
  * budget does not depend on which test ran first.
  */
-async function start() {
-  const started = await e2e.start();
+async function start(options?: Parameters<typeof e2e.start>[0]) {
+  const started = await e2e.start(options);
   await started.write(async (db) => {
     await storageOf(db)?.nullable?.("task", "ordinal");
   });
@@ -102,6 +147,75 @@ describe("the fixture app's budgets", () => {
       await app.frames.waitFor({ event: "qd:e", userId: board.ada });
     }, step("one update with one subscriber"));
     expect(measured.calls.map((call) => call.call)).toEqual(["taskService.rename"]);
+  });
+
+  it("sends a refreshEntry via item again when its junction changes", async () => {
+    const { app, write } = await start({ services: [myProjectsService] });
+    const board = e2e.board();
+    const { socket } = await app.connect(as(board.bo));
+    const page = await emitWithAck(socket, "qd:col:sub", {
+      s: "myProjectsService",
+      c: "mine",
+      scope: board.bo,
+    });
+    expect(page).toMatchObject({ ok: true, items: [{ id: board.p1, memberCount: 2 }] });
+    app.frames.clear();
+    // A new member: their own scope gets `added` (nobody subscribes to it), and the member
+    // count goes out again to bo's: the entry's item read (the project, then its members)
+    // is what a plain via collection would not read.
+    await expectBudget(async () => {
+      await write((db) =>
+        db.projectMember.create({ data: { projectId: board.p1, userId: board.ed, role: "Read" } }),
+      );
+      await app.frames.waitFor({ event: "qd:c", userId: board.bo });
+    }, step("junction write refreshing a via item"));
+    expect(app.frames({ event: "qd:c" }).map(({ userId, data }) => ({ userId, data }))).toEqual([
+      {
+        userId: board.bo,
+        data: expect.objectContaining({
+          deltas: [{ t: "updated", item: { id: board.p1, name: "P1", memberCount: 3 } }],
+        }),
+      },
+    ]);
+  });
+
+  it("sends nothing for writes that change nothing (finding F7.2)", async () => {
+    const { app, write } = await start({ services: [myProjectsService] });
+    const board = e2e.board();
+    const { socket } = await app.connect(as(board.bo));
+    // bo holds every kind of live data these rows reach: a via list that refreshes its
+    // entries, the board's scope, the task itself and the board's topic.
+    await emitWithAck(socket, "qd:col:sub", { s: "myProjectsService", c: "mine", scope: board.bo });
+    await emitWithAck(socket, "qd:col:sub", { s: "taskService", c: "board", scope: board.p1 });
+    await emitWithAck(socket, "qd:sub", { s: "taskService", ids: [board.t1] });
+    expect(
+      await emitWithAck(socket, "qd:watch", { s: "taskService", topic: `board:${board.p1}` }),
+    ).toMatchObject({ ok: true });
+    app.frames.clear();
+    const { measured } = await expectBudget(async () => {
+      await write(async (db) => {
+        // bo's membership is there: the read that finds it is the upsert's one statement.
+        await db.projectMember.upsert({
+          where: { projectId_userId: { projectId: board.p1, userId: board.bo } },
+          update: {},
+          create: { projectId: board.p1, userId: board.bo, role: "Read" },
+        });
+        // A write that sets a value it already holds is recorded like any other (rc.6).
+        await db.task.updateMany({ where: { id: "missing" }, data: { title: "None" } });
+        await db.task.deleteMany({ where: { id: "missing" } });
+      });
+    }, step("writes that change nothing"));
+    expect(measured.bytes).toBe(0);
+    expect(app.frames()).toEqual([]);
+    // What bo receives next is a real change's: one frame per kind of data it reaches.
+    await write((db) => db.task.update({ where: { id: board.t1 }, data: { title: "Real" } }));
+    await app.frames.waitFor({ event: "qd:changed", userId: board.bo });
+    expect(
+      app
+        .frames({ userId: board.bo })
+        .map(({ event }) => event)
+        .sort(),
+    ).toEqual(["qd:c", "qd:changed", "qd:e"]);
   });
 
   it("lists a page of tasks with the read/write kit", async () => {

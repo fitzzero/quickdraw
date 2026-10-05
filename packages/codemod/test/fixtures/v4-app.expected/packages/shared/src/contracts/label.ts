@@ -2,6 +2,7 @@
 // LabelServiceMethods and the defineMethod calls of LabelService
 // (apps/api/src/services/label.ts).
 // Every marker below says what to check.
+// quickdraw-migrate: review [carve-out] this file belongs to the quickdraw-labels carve-out (it was written from code between its markers): list it wherever the carve-out's own files are (a fork script's delete list), then delete this line
 
 import { defineContract, listOf, mutation, nullable, query, todoSchema } from "@fitzzero/quickdraw-core";
 import { z } from "zod";

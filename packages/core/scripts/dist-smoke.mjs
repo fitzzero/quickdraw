@@ -52,6 +52,12 @@
 //   (while `dist/client/index.js` still opens with it), load Testing Library
 //   only lazily, import no jsdom and no server code, and the built mock
 //   client answers from its stubs with no DOM;
+// - the built mock client's own entry (`./testing/mock`, for browser bundles
+//   such as Storybook) names Testing Library nowhere, not even lazily, and
+//   imports no jsdom, no Node built-in and no server code; the mock it makes
+//   is `./testing/client`'s, and the real `useQuickdraw()` of `./client`
+//   rendered inside its `$Provider` reads its session (the two entries share
+//   one context);
 // - the built auth routes kit (`./server/auth`) imports neither express nor
 //   express-rate-limit statically, signs in through the mock provider (start,
 //   consent, callback), answers `me`, authenticates a socket by the session
@@ -223,6 +229,7 @@ const expectations = {
       "isNotModified",
       "shouldRetry",
       "reloadOncePerSession",
+      "newId",
       "DEFAULT_BACKOFF_MS",
       "createInvalidationCoordinator",
       "DEFAULT_INVALIDATION_WINDOW_MS",
@@ -240,7 +247,11 @@ const expectations = {
       "applyCollectionKept",
       "SEARCH_DEBOUNCE_MS",
       "useAdminServices",
+      "adminOf",
       "getAuthToken",
+      "signInUrl",
+      "signOut",
+      "signOutEverywhere",
       "createServerCaller",
       "methodKey",
       "entityKey",
@@ -287,8 +298,15 @@ const expectations = {
     ],
     client: false,
   },
-  "./testing/prisma": { symbols: ["createPrismaTestGlobalSetup"], client: false },
-  "./testing/client": { symbols: ["renderWithQuickdraw", "createMockClient"], client: false },
+  "./testing/prisma": {
+    symbols: ["createPrismaTestGlobalSetup", "openPgliteFromTemplate", "resetDatabase"],
+    client: false,
+  },
+  "./testing/client": {
+    symbols: ["renderWithQuickdraw", "createMockClient", "installJsdomShims"],
+    client: false,
+  },
+  "./testing/mock": { symbols: ["createMockClient"], client: false },
 };
 
 /** The type-only names the root export's declarations must provide. */
@@ -1019,7 +1037,7 @@ try {
   assert.deepEqual(waves, [["smoke", "hello"]]);
   assert.deepEqual(seen, [
     ["qd:presence", { room: "lobby", users: ["smoke"] }],
-    ["qd:stream", { s: "loungeService", stream: "lines", scope: "lobby", item: "four" }],
+    ["qd:stream", ["loungeService", "lines", "lobby", "four"]],
     ["qd:event", ["loungeService", "waved", "hello"]],
   ]);
   assert.equal(await realtimeApp.server.presence.isOnline("smoke"), true);
@@ -1257,6 +1275,48 @@ console.log(
   `ok ${pkg.name}/testing/client loads Testing Library lazily, imports no jsdom or server code, and its mock client answers from stubs`,
 );
 
+// The built mock entry (./testing/mock): what a browser bundle (Storybook)
+// takes, so Testing Library is named nowhere in its graph, not even in a
+// lazy import a bundler would try to resolve, and nothing of Node or the
+// server is either. Its `$Provider` fills the context the real hooks of
+// ./client read: rendered on the server here, the real `useQuickdraw()`
+// shows the mock's session.
+const mockGraph = staticGraph(join(packageDir, pkg.exports["./testing/mock"].import));
+const mockForbidden = [...mockGraph.externals, ...mockGraph.dynamic].filter(
+  (imported) =>
+    isBuiltin(imported) ||
+    imported.startsWith("@testing-library/") ||
+    ["jsdom", "socket.io", "express"].includes(imported),
+);
+assert.deepEqual(mockForbidden, [], "./testing/mock must not import these");
+const mockServerSources = [...mockGraph.files].flatMap((file) =>
+  JSON.parse(readFileSync(`${file}.map`, "utf8"))
+    .sources.map((source) => relative(packageDir, resolve(dirname(file), source)))
+    .filter((source) => source.startsWith("src/server/")),
+);
+assert.deepEqual(mockServerSources, [], "./testing/mock must not carry server code");
+const mockEntry = await import(`${pkg.name}/testing/mock`);
+assert.equal(mockEntry.createMockClient, testingClient.createMockClient);
+const { createElement } = await import("react");
+const { renderToString } = await import("react-dom/server");
+const sessionMock = mockEntry.createMockClient({ echo }, { session: { userId: "ada" } });
+sessionMock.$session({ serviceAccess: { echoService: "Admin" } });
+function MockStatus() {
+  const { userId, isKnown, serviceAccess } = clientEntry.useQuickdraw();
+  return createElement(
+    "p",
+    null,
+    `${String(userId)} ${String(isKnown)} ${serviceAccess.echoService}`,
+  );
+}
+assert.equal(
+  renderToString(createElement(sessionMock.$Provider, null, createElement(MockStatus))),
+  "<p>ada true Admin</p>",
+);
+console.log(
+  `ok ${pkg.name}/testing/mock names no Testing Library, Node or server code, and the real useQuickdraw() reads its session`,
+);
+
 // The built auth routes kit (./server/auth): its static import graph holds
 // neither express nor express-rate-limit (the default rate limiters are
 // imported lazily, and that import resolves from the built output when a
@@ -1289,7 +1349,7 @@ function staticGraph(entryFile) {
       dynamic.push(match[1].startsWith(".") ? resolve(dirname(file), match[1]) : match[1]);
     }
   }
-  return { externals, dynamic };
+  return { files, externals, dynamic };
 }
 const authGraph = staticGraph(join(packageDir, pkg.exports["./server/auth"].import));
 assert.deepEqual(

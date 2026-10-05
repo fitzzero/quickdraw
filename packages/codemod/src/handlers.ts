@@ -5,7 +5,12 @@
 // (`ctx.userId` is `ctx.principal.userId`), and receiver references go
 // through `receiver.ts`. The template's `requireAuth(ctx)` guard is dropped
 // where access already requires a principal: 4.x had answered such a caller
-// before the handler ran too.
+// before the handler ran too. In a file that imports the tracked `db` (its
+// helper functions use it), a handler uses that one rather than taking `db`
+// as well, which would shadow it: it is the same client. A `throw new
+// Error(message)` in a handler gets an `[error]` marker: 4.x sent its message
+// to the caller, 5.0 answers it with `INTERNAL` and a generic message unless
+// it is a `QuickdrawError` with a code.
 
 import {
   type ArrowFunction,
@@ -16,7 +21,7 @@ import {
   SyntaxKind,
 } from "ts-morph";
 import type { AccessForm } from "./access";
-import { MarkerSet, markerText } from "./markers";
+import { MarkerSet, markerAnchor, markerText } from "./markers";
 import type { MethodCall } from "./model";
 import { type Hoisted, mapReceiver, type ReceiverScope } from "./receiver";
 import { type Edit, editedText, statementOf } from "./text";
@@ -231,12 +236,27 @@ function payloadBindingOf(
     : `input: ${nameNode.getText()}`;
 }
 
+/** The error classes whose message 4.x sent to the caller and 5.0 answers with a generic `INTERNAL`. */
+const PLAIN_ERRORS: ReadonlySet<string> = new Set(["Error", "TypeError", "RangeError"]);
+
+const ERROR_MESSAGE =
+  "4.x sent this error's message to the caller; 5.0 answers an error that is not a QuickdrawError with INTERNAL and a generic message: throw new QuickdrawError(code, message) with the code that fits (NOT_FOUND, FORBIDDEN, CONFLICT, VALIDATION) if the caller should see it";
+
+/** The `throw new Error(...)` statements in a handler's body, nested callbacks included. */
+function plainErrorThrows(body: Node): Node[] {
+  return body.getDescendantsOfKind(SyntaxKind.ThrowStatement).filter((statement) => {
+    const thrown = statement.getExpression();
+    return Node.isNewExpression(thrown) && PLAIN_ERRORS.has(thrown.getExpression().getText());
+  });
+}
+
 /** The handler's new code, and what it needs. */
 function buildHandler(
   handler: Handler,
   form: AccessForm,
   scope: Omit<ReceiverScope, "ctxName">,
   entryMarkers: string[],
+  moduleDb: boolean,
 ): { text: string; imports: Hoisted[] } {
   const [payloadParam, ctxParam] = handler.getParameters();
   const body = handler.getBody();
@@ -245,15 +265,18 @@ function buildHandler(
   const edits: Edit[] = [...mapped.edits];
   const markers = new MarkerSet(handler.getSourceFile());
   const mark = (node: Node, category: Parameters<MarkerSet["add"]>[1], message: string): void => {
-    const target = statementOf(node);
+    const target = markerAnchor(statementOf(node));
     if (
-      target.getStart() >= body.getStart() &&
+      target.getStart() > body.getStart() &&
       target.getEnd() <= body.getEnd() &&
       target !== body
     ) {
       markers.addAbove(target, category, message);
     } else {
-      entryMarkers.push(markerText(category, message));
+      const line = markerText(category, message);
+      if (!entryMarkers.includes(line)) {
+        entryMarkers.push(line);
+      }
     }
   };
   for (const marker of mapped.markers) {
@@ -261,11 +284,12 @@ function buildHandler(
   }
   const payloadBinding = payloadBindingOf(payloadParam, body, edits);
   let usesCtx = mapped.usesCtx;
+  let removedRanges: (readonly [number, number])[] = [];
   if (ctxParam !== undefined && !isUnused(ctxParam)) {
     const context = mapContext(ctxParam, body, form);
     edits.push(...context.edits, ...context.removed.map((statement) => removal(statement)));
     context.markers.forEach((marker) => mark(marker.node, "context", marker.message));
-    const removedRanges = context.removed.map(
+    removedRanges = context.removed.map(
       (statement) => [statement.getStart(), statement.getEnd()] as const,
     );
     usesCtx ||= referencesTo(ctxParam, body).some(
@@ -275,21 +299,34 @@ function buildHandler(
         ),
     );
   }
+  for (const thrown of plainErrorThrows(body)) {
+    const removed = removedRanges.some(
+      ([start, end]) => thrown.getStart() >= start && thrown.getEnd() <= end,
+    );
+    if (!removed) {
+      mark(thrown, "error", ERROR_MESSAGE);
+    }
+  }
   const ctxBinding = usesCtx ? (ctxName === "ctx" ? "ctx" : `ctx: ${ctxName}`) : undefined;
   const range = paramRange(handler);
   edits.push({
     start: range.start,
     end: range.end,
-    text: paramsText(payloadBinding, ctxBinding, mapped.usesDb),
+    text: paramsText(payloadBinding, ctxBinding, mapped.usesDb && !moduleDb),
   });
   return { text: editedText(handler, [...edits, ...markers.edits]), imports: mapped.imports };
 }
 
-/** Builds the method object for `call`, with `form` as its access. */
+/**
+ * Builds the method object for `call`, with `form` as its access. With
+ * `moduleDb`, the file imports the tracked `db`, which the handler uses.
+ */
 export function buildMethod(
   call: MethodCall,
   form: AccessForm,
   scope: Omit<ReceiverScope, "ctxName">,
+  moduleDb = false,
+  notes: readonly string[] = [],
 ): MethodEntry {
   const entryMarkers: string[] = [];
   const accessMarkers = form.notes.map((note) => markerText(note.category, note.message));
@@ -304,7 +341,7 @@ export function buildMethod(
       ),
     );
   } else {
-    const built = buildHandler(call.handler, form, scope, entryMarkers);
+    const built = buildHandler(call.handler, form, scope, entryMarkers, moduleDb);
     handlerText = built.text;
     imports = built.imports;
   }
@@ -313,6 +350,7 @@ export function buildMethod(
     ...accessMarkers,
     `access: ${form.code},`,
     ...(form.rowless ? ["rowless: true,"] : []),
+    ...notes,
     ...entryMarkers,
     `handler: ${handlerText},`,
     "}",

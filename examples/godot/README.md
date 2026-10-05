@@ -33,19 +33,22 @@ func _on_event(service: String, event: String, payload: Variant) -> void:
 		print(payload.userId, " moved")
 ```
 
-| Member                                            | What it does                                                                                                                                                               |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `connect_to(url, options)`                        | Connects. `token` is sent as `auth.token`; `auth` adds keys; `path` (default `/socket.io`); `headers` for the handshake (a `Cookie` on desktop); `reconnect` (default on). |
-| `call_method(service, method, input, version)`    | Awaits the acknowledgement: `{ok: true, d}`, `{ok: true, nm: true, v}` or `{ok: false, e: {code, message, data?}}`.                                                        |
-| `start_call(...)`, `reply(id)`, `cancel_call(id)` | A call in two steps, so it can be cancelled (`qd:cancel`; the answer is `CANCELLED`). An answer `reply` has not taken yet is kept for 60 s (at most 256 of them).          |
-| `send_channel(service, channel, payload)`         | Fire and forget: never acknowledged, never awaited. Returns false when dropped here (not connected, or the connection backed up).                                          |
-| `subscribe_stream(service, stream, scope)`        | Awaits the seed; items then arrive as `stream_item`. Subscribed again after each reconnect.                                                                                |
-| `unsubscribe_stream(service, stream, scope)`      | Leaves the feed.                                                                                                                                                           |
-| `on_event(service, event, callback)`              | Calls `callback(payload)` for each `qd:event` of that service and name.                                                                                                    |
-| `presence(room)`                                  | The users in an app room the socket is in.                                                                                                                                 |
-| `request(event, payload)`                         | Any other acknowledged event of the protocol (`qd:sub`, `qd:watch`, ...), paced by the hello's subscription lane.                                                          |
-| `close()`                                         | Disconnects for good.                                                                                                                                                      |
-| `rng`                                             | The `RandomNumberGenerator` behind the client's random waits (reconnect backoff, the `qd:rotate` moment); seed it to repeat a run.                                         |
+| Member                                            | What it does                                                                                                                                                                          |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connect_to(url, options)`                        | Connects. `token` is sent as `auth.token`; `auth` adds keys; `path` (default `/socket.io`); `headers` for the handshake (a `Cookie` on desktop); `reconnect` (default on).            |
+| `call_method(service, method, input, version)`    | Awaits the acknowledgement: `{ok: true, d}`, `{ok: true, nm: true, v}` or `{ok: false, e: {code, message, data?}}`.                                                                   |
+| `start_call(...)`, `reply(id)`, `cancel_call(id)` | A call in two steps, so it can be cancelled (`qd:cancel`; the answer is `CANCELLED`). An answer `reply` has not taken yet is kept for 60 s (at most 256 of them).                     |
+| `send_channel(service, channel, payload)`         | Fire and forget: never acknowledged, never awaited. Returns false when dropped here (not connected, or the connection backed up).                                                     |
+| `subscribe_stream(service, stream, scope)`        | Awaits the seed; items then arrive as `stream_item`. Subscribed again after each reconnect. A refusal on a live connection holds no feed.                                             |
+| `unsubscribe_stream(service, stream, scope)`      | Leaves the feed.                                                                                                                                                                      |
+| `is_subscribed(service, stream, scope)`           | True while the client holds the feed (it subscribes again after each reconnect), false after a refused subscribe: ask it before `subscribe_stream` to send no second `qd:stream:sub`. |
+| `on_event(service, event, callback)`              | Calls `callback(payload)` for each `qd:event` of that service and name.                                                                                                               |
+| `off_event(service, event, callback)`             | Stops calling `callback` for that event; false when it was not registered.                                                                                                            |
+| `presence(room)`                                  | The users in an app room the socket is in.                                                                                                                                            |
+| `request(event, payload)`                         | Any other acknowledged event of the protocol (`qd:sub`, `qd:watch`, ...), paced by the hello's subscription lane.                                                                     |
+| `close()`                                         | Disconnects for good.                                                                                                                                                                 |
+| `rng`                                             | The `RandomNumberGenerator` behind the client's random waits (reconnect backoff, the `qd:rotate` moment); seed it to repeat a run.                                                    |
+| `server_id`                                       | The hello's `serverId`: new each time a server starts. Another one after a reconnect means a restarted server (or another node): a game's world and ticks start over.                 |
 
 Signals: `connected(hello)`, `disconnected(reason)`, `refused(code, message)`
 (`PROTOCOL_MISMATCH` or `UNAUTHENTICATED`; it does not reconnect),
@@ -54,7 +57,9 @@ moment within the window),
 `event_received(service, event, payload)`,
 `stream_item(service, stream, scope, item)`,
 `stream_seeded(service, stream, scope, seed)`, `presence_changed(room, users)`,
-`revoked(frame)`, `access_changed(service_access)`, and
+`revoked(frame)` (also for a held feed the server refuses after a
+reconnect: `reason` `"refused"`, with its `error`),
+`access_changed(service_access)`, and
 `frame_received(event, data)` for the frames it does not route (`qd:e`,
 `qd:c`, `qd:changed`). `trace = true` prints every frame.
 

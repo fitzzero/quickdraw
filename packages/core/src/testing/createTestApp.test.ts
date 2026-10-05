@@ -94,6 +94,31 @@ describe("createTestApp", () => {
     await expect(app.connect(alice)).rejects.toThrow("Authentication failed");
   });
 
+  it("gives an in-process caller the grants a socket of the same principal gets", async () => {
+    const stored: Record<string, Record<string, "Read" | "Moderate" | "Admin">> = {
+      alice: { probeService: "Moderate" },
+    };
+    const probe = createProbe();
+    const app = await createTestApp({
+      services: [qd.defineService(task, { methods: taskDefaults }), probe.service],
+      db,
+      auth: { loadServiceAccess: (userId) => stored[userId] ?? null },
+    });
+    apps.push(app as unknown as TestApp);
+    const viaSocket = await (await app.connect(alice)).call.probeService.echo({ text: "s" });
+    const inProcess = await app.as(alice).probeService.echo({ text: "p" });
+    expect(inProcess.grants).toEqual({ probeService: "Moderate" });
+    expect(inProcess.grants).toEqual(viaSocket.grants);
+    expect(await app.as(alice).probeService.moderate({ value: 2 })).toBe(4);
+    // Read at each call, as an HTTP call's are; grants the principal carries are kept.
+    stored.alice = {};
+    await expect(app.as(alice).probeService.moderate({ value: 2 })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    const carried = granted(alice, { probeService: "Moderate" });
+    expect(await app.as(carried).probeService.moderate({ value: 3 })).toBe(6);
+  });
+
   it("disconnects its sockets and closes the server on close()", async () => {
     const { app } = await start();
     const { socket } = await app.connect(alice);

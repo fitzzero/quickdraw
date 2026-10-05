@@ -6,6 +6,11 @@
       "bytes": 12743,
       "calls": []
     },
+    "junction write refreshing a via item": {
+      "statements": 3,
+      "bytes": 202,
+      "calls": []
+    },
     "kit list": {
       "statements": 3,
       "bytes": 2951,
@@ -42,6 +47,11 @@
     "subscribe to 60 tasks": {
       "statements": 4,
       "bytes": 11703,
+      "calls": []
+    },
+    "writes that change nothing": {
+      "statements": 4,
+      "bytes": 0,
       "calls": []
     }
   }

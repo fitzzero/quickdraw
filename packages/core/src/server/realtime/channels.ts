@@ -2,8 +2,8 @@
 // such as cursors or typing, on one `qd:ch` listener per v5 socket. A message
 // is one array argument, `[service, channel, payload]`, sent volatile and
 // never acknowledged. Ported from 4.1's `registerChannelListener`
-// (`legacy-src/server/ServiceRegistry.ts:209-266`) and `checkChannelAccess`
-// (`legacy-src/server/BaseService.ts:956-983`).
+// (4.1 `src/server/ServiceRegistry.ts:209-266`) and `checkChannelAccess`
+// (4.1 `src/server/BaseService.ts:956-983`).
 //
 // This is the hot path: no acknowledgement, no logging and no asynchronous
 // work per message. In order: a malformed frame or an unknown service or
@@ -14,8 +14,10 @@
 // access check runs in memory (the service-wide grant a `{ service }` access
 // names, then the contract's `requires`: the socket must already hold the
 // entity or collection subscription the payload names, or be in the app room
-// the requirement names, joined by a call over this very socket); then the
-// handler runs with the parsed payload. 4.1's `requireRoom` skipped its check
+// the requirement names (or in one whose name starts with its `prefix`),
+// joined by a call over this very socket); then the handler runs with the
+// parsed payload, and the room that matched as `ctx.room`. 4.1's
+// `requireRoom` skipped its check
 // when it named no room; every form here drops the message instead. A socket
 // whose dropped messages within 10 s exceed 100 times the channel's rate is
 // disconnected: sustained flooding, not a burst. The rate limiter never
@@ -57,7 +59,7 @@ interface SocketChannels {
   readonly socket: QuickdrawServerSocket;
   /** Bounded by the channels the services declare: unknown names never get one. */
   readonly buckets: Map<ServiceChannel, Bucket>;
-  /** The handlers' context, made again when the socket's principal changes (new grants). */
+  /** The handlers' context, made again when the socket's principal (new grants) or the matched room changes. */
   ctx: ChannelContext | undefined;
 }
 
@@ -147,13 +149,33 @@ function holds(
   }
 }
 
-/** The in-memory access check: the service grant `access` names, then the contract's `requires`. */
+/**
+ * The first app room the socket joined whose name starts with `prefix`
+ * (the room it joined earliest, when there are several), or `undefined`.
+ * `appRooms` has no prototype, so `for...in` sees its own rooms only.
+ */
+function roomWithPrefix(socket: QuickdrawServerSocket, prefix: string): string | undefined {
+  const joined = socket.data.appRooms;
+  for (const room in joined) {
+    if (room.startsWith(prefix)) {
+      return room;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The in-memory access check: the service grant `access` names, then the
+ * contract's `requires`. `false` when the message is dropped; else the app
+ * room a room requirement matched, which the handler gets as `ctx.room`
+ * (`undefined` for the other forms, and for a channel that requires none).
+ */
 function allowed(
   channel: ServiceChannel,
   socket: QuickdrawServerSocket,
   principal: Principal,
   value: unknown,
-): boolean {
+): string | undefined | false {
   const { access, requires } = channel;
   if (
     access !== "authenticated" &&
@@ -162,17 +184,30 @@ function allowed(
     return false;
   }
   if (requires === undefined) {
-    return true;
+    return undefined;
+  }
+  if (requires.kind === "roomPrefix") {
+    return roomWithPrefix(socket, requires.prefix) ?? false;
   }
   const key = requires.select(value);
-  return key !== undefined && holds(requires, socket, channel.service, key);
+  if (key === undefined || !holds(requires, socket, channel.service, key)) {
+    return false;
+  }
+  return requires.kind === "room" ? key : undefined;
 }
 
-function contextOf(deps: ChannelDeps, state: SocketChannels, principal: Principal): ChannelContext {
-  if (state.ctx?.principal !== principal) {
+/** The handlers' context for the socket's principal and the room a message matched: made again only when either changes. */
+function contextOf(
+  deps: ChannelDeps,
+  state: SocketChannels,
+  principal: Principal,
+  room: string | undefined,
+): ChannelContext {
+  if (state.ctx?.principal !== principal || state.ctx.room !== room) {
     state.ctx = Object.freeze({
       principal,
       socketId: state.socket.id,
+      room,
       log: deps.hub.logger,
       rooms: deps.rooms.of(state.socket),
       presence: deps.presence,
@@ -255,12 +290,12 @@ function receive(deps: ChannelDeps, state: SocketChannels, frame: unknown): void
   }
   const { principal } = state.socket.data;
   const parsed = principal === null ? undefined : parse(deps, channel, payload);
-  if (
-    principal !== null &&
-    parsed !== undefined &&
-    allowed(channel, state.socket, principal, parsed.value)
-  ) {
-    run(deps, channel, parsed.value, contextOf(deps, state, principal));
+  if (principal === null || parsed === undefined) {
+    return;
+  }
+  const room = allowed(channel, state.socket, principal, parsed.value);
+  if (room !== false) {
+    run(deps, channel, parsed.value, contextOf(deps, state, principal, room));
   }
 }
 

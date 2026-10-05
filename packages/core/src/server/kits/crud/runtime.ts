@@ -39,14 +39,17 @@ export interface KitHandlerArgs<Db = unknown> {
 }
 
 /**
- * A handler of a kit method. Typed to return `never` so it fits the method
- * of any app's service: what it returns is the row (or rows, or page) its
- * method's output names, which the framework projects as for any handler.
- * `Db` is the app's database client type, as the app's callbacks (`prepare`,
- * `resolveUser`, `onChange`) annotate their `db`, so a wrong annotation is
- * refused where the handlers are spread into `qd.defineService`.
+ * A handler of a kit method. `Out` is what it resolves with: the row (or
+ * rows, or page) its method's output names, which the framework projects as
+ * for any handler. A kit that types it (the admin kit: its methods' output
+ * types) lets an app wrap a handler and read what it returned with no cast;
+ * one that leaves it `never` fits the method of any app's service. `Db` is
+ * the app's database client type, as the app's callbacks (`prepare`,
+ * `resolveUser`, `onChange`, `onWrite`) annotate their `db`, so a wrong
+ * annotation is refused where the handlers are spread into
+ * `qd.defineService`.
  */
-export type KitHandler<Db = unknown> = (args: KitHandlerArgs<Db>) => Promise<never>;
+export type KitHandler<Db = unknown, Out = never> = (args: KitHandlerArgs<Db>) => Promise<Out>;
 
 /** One call of a kit method: the service it runs in, its model's delegate, and the caller. */
 export interface CrudCall {

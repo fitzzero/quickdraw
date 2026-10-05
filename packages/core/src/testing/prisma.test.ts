@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildPgliteTemplate,
   computeMigrationsFingerprint,
+  openPgliteFromTemplate,
   pgliteTemplatePaths,
   readMigrationSql,
   resetDatabase,
@@ -92,5 +93,16 @@ describe("PGlite template machinery", () => {
     expect(after.rows[0]?.count).toBe(0);
 
     await pglite.close();
+  }, 60_000);
+
+  it("opens a worker's database from the template, building it when missing", async () => {
+    const options = { migrationsDir, cacheDir: join(workDir, "fresh"), templateName: "worker" };
+    const first = await openPgliteFromTemplate(options);
+    await first.exec(`INSERT INTO "User" (id, email, name) VALUES ('1', 'a@b.c', 'A')`);
+    // A second worker boots its own copy: what one writes the other never sees.
+    const second = await openPgliteFromTemplate(options);
+    const rows = await second.query<{ count: number }>(`SELECT count(*)::int AS count FROM "User"`);
+    expect(rows.rows[0]?.count).toBe(0);
+    await Promise.all([first.close(), second.close()]);
   }, 60_000);
 });

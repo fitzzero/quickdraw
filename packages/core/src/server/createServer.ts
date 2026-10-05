@@ -1,7 +1,7 @@
 // `createServer` (RFC 0003 sections 3, 8 and 10): serves a dispatcher over
 // Socket.IO and HTTP, on the Express app and HTTP server the app already
 // owns. It replaces 4.1's `createQuickdrawServer`, which built its own
-// Express app and listened itself (`legacy-src/server/createServer.ts:57-67`),
+// Express app and listened itself (4.1 `src/server/createServer.ts:57-67`),
 // so every app that needed its own middleware copied the whole bootstrap
 // instead, and which called `process.exit` on shutdown (`:195-204`). This one
 // creates the HTTP server only when none is passed, never listens, never exits
@@ -13,7 +13,7 @@ import {
   type Server as HttpServer,
   type ServerResponse,
 } from "node:http";
-import { consoleLogger } from "../contract/logger";
+import { consoleLogger, type Logger } from "../contract/logger";
 import {
   createDispatcher,
   detachDispatcher,
@@ -23,7 +23,7 @@ import {
   type DispatcherOptions,
   type PrincipalOfServices,
 } from "./dispatcher";
-import { liveOf } from "./emit/live";
+import { liveOf, type RoomLeaveHandler, type RoomLeaveHook } from "./emit/live";
 import {
   closer,
   prepareWatchdog,
@@ -31,7 +31,7 @@ import {
   watchSignals,
   type StallWatchdogOptions,
 } from "./lifecycle";
-import type { AnyService } from "./service";
+import { editsGrants, type AnyService } from "./service";
 import {
   createGrantsSink,
   createPrincipalResolver,
@@ -138,6 +138,34 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
    * `docs/deploying.md`.
    */
   readonly cluster?: ClusterOptions;
+  /**
+   * Called once for every socket that leaves app rooms: its own
+   * `ctx.rooms.leave(room)` (`reason: "leave"`), `rooms.leave(room, { userId })`
+   * (`"removed"`), or a disconnect, which leaves every app room it was in
+   * (`"disconnect"`). It gets the socket's principal (`null` when
+   * anonymous), its id and the rooms it left, each with `last`: true when
+   * no socket of that user is in the room any more, on any node (a second
+   * tab keeps it false; a socket reconnecting after `qd:rotate` is a new
+   * socket, so the old one's disconnect is the user's last only if they had
+   * no other). It runs on the node that held the socket, after the room
+   * heard the socket go, in a unit of work of its own (`qd.run` with
+   * `detached`: never the unit of the handler that left), with that run's
+   * `ctx`; an error it throws is logged, and `close()` waits for it.
+   *
+   * A service that joins sockets to rooms declares its own hook instead
+   * (`defineService`'s `onRoomLeave`), so no server root can forget it:
+   * every service's hook runs beside this one, each in a unit of work of
+   * its own, and one that throws stops none of the others.
+   *
+   * @example
+   * onRoomLeave: ({ principal, rooms }) => {
+   *   if (principal !== null && rooms.some(({ room, last }) => room === WORLD_ROOM && last)) {
+   *     removePlayer(principal.userId);
+   *     qd.rooms.emit(WORLD_ROOM, gameContract, "playerLeft", { id: principal.userId });
+   *   }
+   * },
+   */
+  readonly onRoomLeave?: RoomLeaveHandler<P>;
 }
 
 /**
@@ -161,7 +189,10 @@ export interface QuickdrawServer<S extends readonly AnyService[] = readonly AnyS
   readonly httpServer: HttpServer;
   /**
    * The dispatcher every transport calls; `dispatcher.caller(principal)`
-   * calls in process. `close()` waits for its calls in flight.
+   * calls in process, giving a principal that carries no grants the ones
+   * `auth.loadServiceAccess` loads, as a socket's handshake does (once per
+   * caller, and again after the server applied new grants). `close()` waits
+   * for its calls in flight.
    */
   readonly dispatcher: Dispatcher<S>;
   /**
@@ -205,6 +236,12 @@ export interface QuickdrawServer<S extends readonly AnyService[] = readonly AnyS
   readonly presence: Dispatcher<S>["presence"];
   /** The handle of one of the services' streams: `server.stream(task, "logs").push(taskId, line)`. */
   readonly stream: Dispatcher<S>["stream"];
+  /**
+   * App rooms from code that is not a handler (RFC 0003 section 12.5): typed
+   * room events and `leave(room, { userId })`, on every node; the same as
+   * `qd.rooms` and the socket-free half of `ctx.rooms`.
+   */
+  readonly rooms: Dispatcher<S>["rooms"];
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -228,6 +265,35 @@ function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void 
   if (timeout !== undefined && !(Number.isSafeInteger(timeout) && timeout >= 0)) {
     throw new TypeError("createServer: shutdownTimeoutMs must be a whole number of milliseconds");
   }
+  if (options.onRoomLeave !== undefined && typeof options.onRoomLeave !== "function") {
+    throw new TypeError(
+      "createServer: onRoomLeave must be a function of the leave and a run context",
+    );
+  }
+}
+
+/**
+ * Runs every service's `onRoomLeave` and the server's own for every socket
+ * that leaves app rooms, each in a detached unit of work of the dispatcher
+ * of its own; what one throws is logged, and the others still run.
+ */
+function listenForLeaves<P extends Principal>(
+  dispatcher: Dispatcher,
+  handler: RoomLeaveHandler<P> | undefined,
+): void {
+  const services = [...dispatcher.registry.services.values()];
+  const hooks: RoomLeaveHook[] = services.flatMap((service) =>
+    service.onRoomLeave === undefined
+      ? []
+      : [{ owner: service.name, handler: service.onRoomLeave }],
+  );
+  if (handler !== undefined) {
+    hooks.push({ owner: "createServer", handler: handler as RoomLeaveHandler });
+  }
+  liveOf(dispatcher)?.realtime.onRoomLeave(
+    hooks,
+    async (fn) => await dispatcher.run(fn, { detached: true }),
+  );
 }
 
 /** The HTTP transport, mounted on `app` when there is one. */
@@ -249,6 +315,34 @@ function notFound(_req: IncomingMessage, res: ServerResponse): void {
 }
 
 /**
+ * Warns, once at startup, when an admin screen edits users' service-wide
+ * grants (`admin.handlers(c, { grants: true })`) but `auth.serviceAccessSource`
+ * does not say where they are stored: a lowered grant then stays on the
+ * user's open sockets until they connect again (the final review of the
+ * release candidates).
+ */
+function warnUnsourcedGrants(
+  services: readonly AnyService[],
+  sourced: boolean,
+  logger: Logger,
+): void {
+  if (sourced) {
+    return;
+  }
+  const editors = services
+    .filter((service) =>
+      Object.values(service.methods).some((method) => editsGrants(method.handler)),
+    )
+    .map((service) => service.name);
+  if (editors.length > 0) {
+    logger.warn(
+      `createServer: ${editors.join(", ")} edit users' service-wide grants (the admin kit's grants: true), but auth.serviceAccessSource does not name where they are stored, so a user whose grant is lowered keeps it on open sockets until they connect again. Set auth.serviceAccessSource: { model, column }`,
+      { category: "quickdraw.access", services: editors },
+    );
+  }
+}
+
+/**
  * Serves `services` over Socket.IO and HTTP on the app's own Express app and
  * HTTP server: socket authentication, the `user:{id}` room, `qd:hello`, the
  * v5 transport (or the 4.x shim), the HTTP transport at `POST /qd/{service}/{method}`,
@@ -266,6 +360,7 @@ export function createServer<const S extends readonly AnyService[]>(
 ): QuickdrawServer<S> {
   checkOptions(options);
   const logger = options.logger ?? consoleLogger;
+  warnUnsourcedGrants(options.services, options.auth?.serviceAccessSource !== undefined, logger);
   const watchdog = prepareWatchdog(options, options.stallWatchdog);
   let refresh: ((userId: string) => Promise<ServiceGrants>) | undefined;
   const grants = createGrantsSink(options.auth, () => refresh, logger);
@@ -275,6 +370,7 @@ export function createServer<const S extends readonly AnyService[]>(
   );
   const calls = trackCalls(created);
   const { dispatcher } = calls;
+  listenForLeaves(created as Dispatcher, options.onRoomLeave);
   const resolvePrincipal = createPrincipalResolver(options.auth);
   const router = mountRouter(options, { call: dispatcher.call, resolvePrincipal, logger });
   const httpServer = options.httpServer ?? createHttpServer(options.app ?? router ?? notFound);
@@ -294,6 +390,12 @@ export function createServer<const S extends readonly AnyService[]>(
     cluster: options.cluster,
   });
   refresh = (userId) => sockets.refresh(userId);
+  // In-process callers (`dispatcher.caller`, `qd.caller`) load a principal's grants as the
+  // handshake does, and again once this node applied new grants to a user.
+  const load = options.auth?.loadServiceAccess;
+  if (load !== undefined) {
+    calls.loadGrantsWith({ load, version: () => sockets.regrants() });
+  }
   const shutdown = closer(
     sockets,
     httpServer,
@@ -334,5 +436,6 @@ export function createServer<const S extends readonly AnyService[]>(
     }),
     presence: dispatcher.presence,
     stream: dispatcher.stream,
+    rooms: dispatcher.rooms,
   });
 }

@@ -28,6 +28,7 @@ export type {
   CollectionsRequired,
   HandlerOutputOf,
   HandlerRow,
+  JsonColumnValue,
   ProjectCheck,
   ProjectionOption,
   RowFor,
@@ -71,12 +72,13 @@ export type {
   HandlerArgs,
   HandlerContext,
   RunContext,
+  RunOptions,
   TouchOptions,
 } from "./context";
 
 // Presence, streams, channels and typed room events (RFC 0003 section 12.5):
 // `ctx.rooms`, `ctx.presence` / `server.presence`, `qd.stream(...).push`, and
-// the channel handlers of `defineService`
+// the channel handlers and stream options of `defineService`
 export type {
   AppRooms,
   ChannelAccess,
@@ -84,14 +86,26 @@ export type {
   ChannelHandler,
   ChannelImplementation,
   ChannelOptions,
+  ChannelRoomOf,
   ChannelsRequired,
   Presence,
+  RoomLeave,
+  RoomLeaveHandler,
+  RoomLeaveReason,
+  RoomLeft,
+  RoomTarget,
+  ServerRooms,
   ServiceChannel,
   ServiceStream,
   StreamHandle,
+  StreamImplementation,
+  StreamOptions,
   StreamPushArgs,
   StreamPushManyArgs,
+  StreamSeed,
+  StreamSeedContext,
   StreamSubscriptions,
+  StreamValidation,
 } from "./realtime/types";
 export { CHANNEL_ABUSE_MULTIPLIER, CHANNEL_ABUSE_WINDOW_MS } from "./realtime/channels";
 export { MAX_APP_ROOMS, PRESENCE_MAX_LAST_SEEN } from "./realtime/presence";
@@ -133,6 +147,7 @@ export { members, type MembersOptions } from "./access/policies/members";
 export { inherit, type InheritOptions } from "./access/policies/inherit";
 export { anyOf } from "./access/policies/anyOf";
 export { resolver, type ResolverOptions } from "./access/policies/resolver";
+export { everyone } from "./access/policies/everyone";
 export type {
   AccessFilter,
   AccessPolicy,
@@ -235,6 +250,10 @@ export type {
   AdminFieldOverride,
   AdminHandlersOptions,
   AdminImplementations,
+  AdminOnCommitted,
+  AdminOnWrite,
+  AdminOutputOf,
+  AdminWrite,
 } from "./kits/admin/types";
 
 // The seams later cards implement: tracked writes, "not modified" versions
@@ -306,6 +325,7 @@ export type {
   AuthenticateRequest,
   AuthenticateResult,
   HttpAuthenticateRequest,
+  HttpCredentialSource,
   ServerAuth,
   ServiceAccessSource,
   ServiceGrants,

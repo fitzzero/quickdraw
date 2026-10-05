@@ -1,9 +1,9 @@
 // `createMockClient(contracts)` (RFC 0003 section 13): a client of the same
 // type as `createQuickdrawClient`'s whose members are stubs, for component
-// tests that do not care about the transport. Nothing connects: there is no
-// provider, no socket and no server, and the hooks need no provider above
-// them. 4.1's `createMockSocket` mocked the socket under the hooks instead
-// (`legacy-src/client/testing.tsx:24-41`), which tested a fake transport.
+// tests and stories that do not care about the transport. Nothing connects:
+// there is no socket and no server, and the members' hooks need no provider
+// above them. 4.1's `createMockSocket` mocked the socket under the hooks instead
+// (4.1 `src/client/testing.tsx:24-41`), which tested a fake transport.
 //
 // - A query member's `useQuery` is TanStack's own `useQuery`, on the mock's
 //   `QueryClient` (retries off), fetching from the method's stub; `call`
@@ -22,19 +22,28 @@
 //   (`mockAdmin.ts`).
 // - `qd.invalidate` invalidates the mock's cache through an invalidation
 //   coordinator, as the real client does.
+// - `$Provider` makes the mock the provider of what it renders: the real
+//   `useQuickdraw()` and `usePresence(room)` read the mock's session
+//   (`$session`) and rooms (`$presence`), with no server (`mockSession.tsx`).
 // - Everything set is forgotten after each test, when the test runner has a
 //   global `afterEach` (as Testing Library unmounts after each test), and by
 //   `$reset()`.
 
-import { QueryClient, useMutation, useQuery, type QueryKey } from "@tanstack/react-query";
+import {
+  QueryClient,
+  useMutation,
+  useQuery,
+  type QueryKey,
+  type Updater,
+} from "@tanstack/react-query";
 import { createBinding, invalidateWith, registerQuery, type Binding } from "../client/binding";
-import { createInvalidationCoordinator } from "../client/coordinator";
 import type { MethodMutationOptions, MethodQueryOptions } from "../client/hooks";
 import { methodKey, methodKeyPrefix, type MethodQueryKey } from "../client/keys";
 import { buildCaller, type MethodTarget } from "../client/members";
 import type { ContractMap } from "../contract/infer";
 import { createMockStore, mockLiveMembers } from "./mockLive";
 import { mockSearchMember } from "./mockSearch";
+import { mockSessionControls, startingSession } from "./mockSession";
 import type { MethodStub, MockClient, MockClientOptions } from "./mockTypes";
 
 /** How a stub answers its calls. */
@@ -152,6 +161,8 @@ function mockQueryMember(
         useMockQuery(context.queryClient, stub, key(input), input, options),
       call: (input?: unknown): Promise<unknown> => stub.invoke(input),
       key,
+      setData: (input: unknown, updater: Updater<unknown, unknown>): unknown =>
+        context.queryClient.setQueryData(key(input), updater),
       prefetch: (queryClient: QueryClient, input?: unknown): Promise<void> =>
         queryClient.prefetchQuery({ queryKey: key(input), queryFn: () => stub.invoke(input) }),
     },
@@ -267,18 +278,21 @@ function resetAfterEachTest(reset: () => void): void {
 /**
  * Creates a mock client of `contracts`: the type of
  * `createQuickdrawClient(contracts)`, with every member a stub and no
- * transport behind it, for component tests. A call stays pending until the
- * test sets its answer; a row or a scope stays loading until the test sets
- * it. No provider is needed above the components. Everything set is
- * forgotten after each test (see `resetAfterEach`).
+ * transport behind it, for component tests and stories. A call stays
+ * pending until the test sets its answer; a row or a scope stays loading
+ * until the test sets it. Its members need no provider; components that read
+ * `useQuickdraw()` or `usePresence(room)` render inside `$Provider`, which
+ * shows the mock's session (`$session`). Everything set is forgotten after
+ * each test (see `resetAfterEach`).
  *
  * @example
- * const qd = createMockClient({ task });
+ * const qd = createMockClient({ task }, { session: { userId: "ada" } });
  * vi.mock("../lib/qd", () => ({ qd }));
  * qd.task.get.mockResolvedValue({ id: "t1", title: "Write the spec" });
  * qd.task.useEntity.mockRow({ id: "t1", title: "Write the spec" });
  * qd.task.byProject.mockScope("p1", [{ id: "t1", title: "Write the spec" }]);
- * render(<TaskCard id="t1" />);
+ * qd.$session({ serviceAccess: { taskService: "Admin" } });
+ * render(<TaskCard id="t1" />, { wrapper: qd.$Provider });
  * expect(qd.task.get.calls).toEqual([{ id: "t1" }]);
  */
 export function createMockClient<const Contracts extends ContractMap>(
@@ -286,9 +300,11 @@ export function createMockClient<const Contracts extends ContractMap>(
   options: MockClientOptions = {},
 ): MockClient<Contracts> {
   const queryClient = options.queryClient ?? createMockQueryClient();
+  const base = startingSession(options);
+  const store = createMockStore(base);
+  const session = mockSessionControls(store, queryClient, base);
   const binding = createBinding();
-  binding.coordinator = createInvalidationCoordinator(queryClient);
-  const store = createMockStore();
+  binding.coordinator = session.coordinator;
   const stubs: Stub[] = [];
   const context: MockContext = { queryClient, binding, stub: stubMaker(queryClient, stubs) };
   const client = buildCaller(
@@ -301,11 +317,14 @@ export function createMockClient<const Contracts extends ContractMap>(
           )
         : mockMutationMember(context, target),
     ["invalidate"],
-    mockLiveMembers(store, { userId: options.userId ?? "" }, queryClient),
+    mockLiveMembers(store, queryClient),
   );
   Object.defineProperties(client, {
     invalidate: { value: invalidateWith(binding) },
     $queryClient: { value: queryClient },
+    $Provider: { value: session.Provider },
+    $session: { value: session.setSession },
+    $presence: { value: session.setPresence },
     $reset: {
       value: (): void => {
         resetMock(queryClient, store, stubs, false);

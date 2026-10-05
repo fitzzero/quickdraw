@@ -24,7 +24,7 @@ refuse to release a package marked `private`.
 `npm publish` ships a package's `package.json` as it is, and npm does not
 know bun's `workspace:` ranges, so no published package names one: the
 codemod's devDependencies on core and lint are semver ranges
-(`^5.0.0-rc.1`), which bun links to the workspace packages all the same
+(`^5.0.0`), which bun links to the workspace packages all the same
 while their versions match. `packages/core/test/readme/readme.test.ts`
 checks the four manifests.
 
@@ -54,8 +54,17 @@ is [`release-checklist-5.0.md`](release-checklist-5.0.md).
    ```
 
    GitHub runs the Publish workflow as it exists in the tagged commit, so the
-   commit must contain `.github/workflows/publish.yml`. Until 5.0 is released
-   that means a commit on `dev`; `main` is still 4.1 and has no workflow.
+   commit must contain `.github/workflows/publish.yml`: any commit of `dev`
+   or `main` does (`main` has carried 5.0 since the release that brought it
+   `5.0.0-rc.1`). The 4.x line, `release/4.x`, has no workflow; a 4.x
+   release is published by hand (below).
+
+   Push release tags one at a time (one `git push origin <tag>` each), never
+   several in one push: GitHub creates no push events, so runs no workflow,
+   when more than three tags are pushed at once (found publishing
+   `5.0.0-rc.2`, whose four tags went up together and started nothing). If
+   that happened, run the workflow by hand for each package (below) rather
+   than deleting and pushing the tags again.
 
 4. Watch the Publish run under the repository's Actions tab. It fails before
    publishing anything if the tag's version and the package's `package.json`
@@ -71,6 +80,12 @@ npm refuses to move `latest` back to a version lower than one already
 published, so a hotfix for an older major has to be published by hand with an
 explicit `--tag`.
 
+A 4.x release (4.1.1 is on `release/4.x`, at `daf3d48`) is published by
+hand from a clean checkout of that branch: `bun install`, then
+`npm publish --access public`, whose `prepublishOnly` builds. While 4.x
+holds `latest` that is all; once 5.x does, it needs a tag of its own,
+`--tag latest-4` (a dist-tag must not read as a semver range, so not `v4`).
+
 ### Re-running, and running it by hand
 
 A version that is already on npm is skipped, so re-running a Publish run is
@@ -80,6 +95,11 @@ To publish without pushing a tag, open the Publish workflow in the Actions
 tab, choose "Run workflow", pick the ref to publish from under "Use workflow
 from" (the release tag, or the branch at the release commit), and enter the
 `package` and `version`. The version must equal that ref's `package.json`.
+From a terminal:
+
+```bash
+gh workflow run publish.yml --ref core-v5.0.0-rc.2 -f package=core -f version=5.0.0-rc.2
+```
 
 ## One-time npm setup for each package
 

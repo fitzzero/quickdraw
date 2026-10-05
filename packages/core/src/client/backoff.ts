@@ -1,7 +1,7 @@
 // Rate-limit backoff per kind of work (RFC 0003 section 11.1). A `RATE_LIMITED`
 // answer pauses that kind of work for its `retryAfterMs` plus random jitter,
 // so clients told to wait the same time do not all retry at the same instant.
-// Ported from 4.1's provider (`legacy-src/client/QuickdrawProvider.tsx:269-287`),
+// Ported from 4.1's provider (4.1 `src/client/QuickdrawProvider.tsx:269-287`),
 // which paused every read for one shared window. Here each kind has its own:
 // a full query queue says nothing about mutations, and subscription events run
 // in their own per-socket lane on the server (section 8.2).

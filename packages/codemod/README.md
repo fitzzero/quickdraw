@@ -4,16 +4,20 @@ Moves a quickdraw 4.x app to 5.0: contracts in the shared package, services
 as `qd.defineService(...)`, the web app's hooks on the typed client. It does
 the mechanical part, never changes who may call a method, and marks
 everything that needs a decision. The guide to the rest is
-[`MIGRATION.md`](MIGRATION.md), shipped beside it.
+[`MIGRATION.md`](MIGRATION.md), and the procedure for an agent
+[`UPGRADE-PROMPT.md`](UPGRADE-PROMPT.md), both shipped beside it.
 
 ```bash
-bunx @fitzzero/quickdraw-codemod@next v5 . --dry-run   # what it would change
-bunx @fitzzero/quickdraw-codemod@next v5 .
+bunx @fitzzero/quickdraw-codemod v5 . --dry-run   # what it would change
+bunx @fitzzero/quickdraw-codemod v5 .
 ```
 
 Run it from the app's repository root, on a clean working tree, after
-upgrading `@fitzzero/quickdraw-core` to 5.0. It expects the quickdraw
-template's layout; the options move each part:
+upgrading `@fitzzero/quickdraw-core` to 5.0. It formats what it writes with
+the app's formatter (oxfmt, prettier or Biome, when the root `package.json`
+has it and it is installed), so the output passes the app's format check as
+written. It expects the quickdraw template's layout; the options move each
+part:
 
 | Option                | Default                                       |
 | --------------------- | --------------------------------------------- |
@@ -38,8 +42,18 @@ template's layout; the options move each part:
   `qd.defineService(contract, { model, access, methods })` in its own file.
   Handler bodies are kept, with `({ input, ctx, db })` for
   `(payload, ctx)`, `ctx.principal.userId` for `ctx.userId` and the tracked
-  `db` for the Prisma field. Helper methods become module functions. A split
-  service's method modules export typed method objects.
+  `db` for the Prisma field. Helper methods and getters become module
+  functions (a getter's reads call it). Fields become module bindings with
+  their initializers, marked, and the constructor's other code, the values
+  it gave fields included, an exported `setUp<Service>(...)` taking the
+  constructor's parameters it uses, marked; only the Prisma client's field
+  and a field holding another service go. A call of the 4.x base class
+  (`super.x(...)`) is dropped under a marker that names it: `super` outside a
+  class does not parse. A `DTO | null` mutation of one row answers
+  `"entity"`, marked (a tracked write throws `NOT_FOUND` rather than
+  answering null, and only `"entity"` is optimistic by default). In a file
+  whose helpers use the tracked `db`, handlers use that one rather than
+  shadow it. A split service's method modules export typed method objects.
 - **Access.** Each method gets the 5.0 form that admits exactly the callers
   4.x admitted:
 
@@ -58,7 +72,11 @@ template's layout; the options move each part:
 
 - **The web app.** `useService`, `useServiceQuery`, `useSubscription` and
   `useCollection` become `qd.<service>.<member>` hooks, through the app's
-  typed wrappers too, which are deleted once nothing calls them.
+  typed wrappers too, which are deleted once nothing calls them, with a file
+  of types only they imported. A local type only a rewritten call's type
+  arguments named goes, a one-argument `UseCollectionResult<Item>` gets
+  5.0's second argument, and an import left holding only types becomes
+  `import type`.
 - **Other uses of a service class.** An import of `ChatService` becomes one
   of the service object `chatService`, `new ChatService(prisma)` becomes
   `chatService` (marked) and the class as a type `typeof chatService`. A
@@ -74,10 +92,17 @@ ChatService(prisma)`, a parameter `pushService: PushService`) imports the
   functions); the rest of the 4.x API there is marked.
 - **New files**: the tracked `db`, `initQuickdraw` (with `AppTypes`,
   `MethodOf` and `PublicMethodOf`) and the web app's typed client.
+- **Template carve-outs.** A service whose 4.x code sat between a
+  carve-out's comments (`quickdraw-game:start`, `quickdraw-game:end`, around
+  its `ServiceMethodsMap` entry) keeps them in `contracts/index.ts`, and its
+  new contract file carries a `[carve-out]` marker, so the report lists it
+  for the fork script that deletes the carve-out's files. An entity key the
+  DTO declares inside a carve-out keeps its comments in the contract.
 
 ## What it leaves
 
-Wherever a person has to decide, a marker above the code says what to do:
+Wherever a person has to decide, a marker on its own line above the code
+says what to do:
 
 ```ts
 // quickdraw-migrate: review [emit] hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
@@ -85,7 +110,7 @@ this.emitUpdate(input.id, updated);
 ```
 
 `quickdraw-migration-report.md`, at the repository root, lists every marker
-with its file and line, grouped by kind: the contracts' placeholders and
+with its file and line (in the formatted file), grouped by kind: the contracts' placeholders and
 method kinds, the access forms to decide, access overrides to turn into a
 policy, `toDto` and protected fields, collections to declare, hand emits,
 `this.create/update/delete` calls, raw SQL writes, lifecycle hooks,
@@ -99,10 +124,13 @@ events). The report is read back from the markers, so it always matches the
 code. A dry run lists the report with the files it would change: `A` when
 the run would create it.
 
-Running the codemod again changes no code: delete each marker once its
-item is done, run it again, and the report lists what remains. Lint
+Running the codemod again changes nothing at all: delete each marker once
+its item is done, run it again, and the report lists what remains. Lint
 (`@fitzzero/quickdraw-lint`'s `no-v4-api` and `no-todo-schema`) and the
-typecheck report the same work.
+typecheck report the same work; adopt lint on the output with
+`quickdraw-lint baseline` and lint with `quickdraw-lint check`, since the
+4.x code it keeps for review breaks rules (unused functions) until its
+markers are done.
 
 ## Development
 
@@ -110,9 +138,12 @@ The tests run the codemod on a 4.1 app laid out like the template
 (`test/fixtures/v4-app`, modeled on quickdraw-chat; it typechecks against
 the published 4.1.0) and check that the output matches the committed
 snapshot (`test/fixtures/v4-app.expected`; `bun run test -u` rewrites it),
-that it typechecks against the built 5.0 core and passes the 5.0 lint rules
-apart from what its markers cover, that the report lists every item of the
-fixture at its file and line, and that a second run changes nothing.
-`MIGRATION.md` is a copy of the repository's (written by `bun run
-readme:sync` in `packages/core`); its appendix of removed names comes from
-`bun run guide:sync`.
+that every file it writes parses and puts its markers on lines of their
+own, that it typechecks against the built 5.0 core and passes the 5.0 lint
+rules apart from what its markers cover, that the report lists every item
+of the fixture at its file and line, and that a second run changes nothing
+(`test/format.test.ts` runs it with the app's formatter installed, too).
+`MIGRATION.md` and `UPGRADE-PROMPT.md` are copies of the repository's, with
+their links pointing at GitHub (written by `bun run readme:sync` in
+`packages/core`); the guide's appendix of removed names comes from `bun run
+guide:sync`.

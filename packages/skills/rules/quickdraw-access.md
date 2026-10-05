@@ -62,9 +62,13 @@ defined. Fix the form, not the error:
 
 `principal.serviceAccess` holds grants by service name,
 `{ taskService: "Admin" }`: returned by `authenticate`, or loaded by
-`createServer({ auth: { loadServiceAccess } })`. With
+`createServer({ auth: { loadServiceAccess } })` for a principal that
+carries none: at a socket's handshake, for each HTTP call, and for an
+in-process caller (`qd.caller(principal)`, `server.dispatcher.caller`) at
+its first call. With
 `auth.serviceAccessSource: { model: "user", column: "serviceAccess" }`, a
-tracked write to that column refreshes the user's open sockets.
+tracked write to that column refreshes the user's open sockets, and an
+in-process caller loads the grants again at its next call.
 
 - A service-wide `Admin` grant passes every check on its service
   (`adminBypass: false` on the service turns that off).
@@ -85,12 +89,17 @@ compile time.
 | `inherit({ from: projectContract, via: "projectId" })` | the level on the parent row in another service  |
 | `anyOf(policyA, policyB)`                              | the highest level any of them gives             |
 | `resolver({ levelsFor, where? })`                      | your code, one batched read for all ids         |
+| `everyone("Read")`                                     | every signed-in user, on every row; no read     |
 
 - `entry` forms need a policy and `scope` forms a `model`; a service without
   a model may use only `"public"`, `"authenticated"`, `{ service }` and
   `custom`.
 - `inherit` uses the parent's policy only: grants on the parent's service do
   not flow down.
+- Rows everyone signed in may read (public profiles) take
+  `anyOf(owner("id"), everyone("Read"))`, never a hand-written `resolver`
+  answering `Read` for every id: `rowless: true` covers one method, not
+  subscriptions.
 - Lookups are batched per call: checking 60 ids costs what one does.
   `createServer({ access: { cacheMs } })` keeps them across calls; tracked
   writes to the columns and tables a policy reads evict them.
@@ -110,7 +119,18 @@ channel `requires`.
   (`{ scope: "Read", of: project, id: "projectId" }`) and filters by it, or
   uses the read/write kit's `list` or a collection, which filter by policy.
 - `fields: { notes: "Admin" }` in the contract strips a field from callers
-  below that level on the row, in replies and in live frames.
+  below that level on the row, in replies and in live frames, so the row
+  types a client reads (`useEntity`, collection items, `"entity"` outputs,
+  `EntityOf`) make it optional: read it with a guard. A handler may return
+  the whole row; only the output's keys are sent. A projection output
+  (`"entity"`, a named projection, `nullable(...)`, `listOf(...)`) is
+  stripped per caller; a method's own output schema sends the keys it
+  declares to every caller the method admits. So never declare a tiered
+  field in a method's own output schema, at any depth
+  (`output: z.object({ id, email })`, `z.object({ user: userSchema })`):
+  answer `"entity"` or a projection instead. The server warns
+  `[quickdraw:tiered-field-in-output]` when it starts, and a strict test
+  app fails to start.
 - The service's change topic (`qd:watch` on `"service"`) is closed unless
   the service declares `watchAccess` (`"public"`, `"authenticated"` or
   `{ service: L }`). A stream without `access` in its contract is closed.

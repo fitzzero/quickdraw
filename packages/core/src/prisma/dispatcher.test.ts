@@ -11,7 +11,14 @@ import { createDispatcher, initQuickdraw, type CallRecord, type Principal } from
 import { storageOf } from "../server/storage";
 import { createTestApp } from "../testing/createTestApp";
 import { createRecordingSink, type RecordingSink } from "../testing/recordingSink";
-import { createHarness, nextTick, type Harness } from "./__tests__/harness";
+import {
+  captureLogger,
+  createHarness,
+  INTEREST,
+  nextTick,
+  type Harness,
+} from "./__tests__/harness";
+import { trackPrisma } from "./trackPrisma";
 
 const row = z.object({ id: z.string(), title: z.string() });
 
@@ -24,6 +31,7 @@ const taskContract = defineContract("taskService", {
       output: z.number(),
     }),
     renameInJob: mutation({ input: z.object({ id: z.string() }), output: z.null() }),
+    renameLater: mutation({ input: z.object({ id: z.string() }), output: z.null() }),
     touchContract: mutation({ input: z.object({ id: z.string() }), output: z.null() }),
     count: query({ input: z.object({}), output: z.number() }),
   },
@@ -31,6 +39,10 @@ const taskContract = defineContract("taskService", {
 
 const qd = initQuickdraw<{ db: PrismaClient; principal: Principal }>();
 const alice: Principal = { userId: "alice" };
+
+/** What `renameLater` started, and the gate it waits behind. */
+let background: Promise<unknown> = Promise.resolve();
+let gate: Promise<void> = Promise.resolve();
 
 const taskService = qd.defineService(taskContract, {
   model: "task",
@@ -65,6 +77,20 @@ const taskService = qd.defineService(taskContract, {
       access: "authenticated",
       handler: async ({ input, db }) => {
         await qd.run(() => db.task.update({ where: { id: input.id }, data: { title: "job" } }));
+        return null;
+      },
+    },
+    renameLater: {
+      access: "authenticated",
+      handler: ({ input, db }) => {
+        // Background work the reply does not wait for: it writes after the call's unit flushed.
+        background = qd.run(
+          async () => {
+            await gate;
+            await db.task.update({ where: { id: input.id }, data: { title: "later" } });
+          },
+          { detached: true },
+        );
         return null;
       },
     },
@@ -249,6 +275,41 @@ describe("qd.run and writes outside methods", () => {
     expect(sink.flushes[0]?.info.method).toBe("renameInJob");
   });
 
+  it("runs a handler's detached background work in a unit of its own, flushed when it settles", async () => {
+    const records: CallRecord[] = [];
+    const dispatcher = dispatcherWith((record) => records.push(record));
+    const warned = h.logger.warnings.length;
+    let open = (): void => undefined;
+    gate = new Promise((resolve) => {
+      open = resolve;
+    });
+    await dispatcher.caller(alice).taskService.renameLater({ id: taskId });
+    // The call flushed (nothing written in it) and answered before its background work wrote.
+    expect(sink.flushes).toEqual([]);
+    expect(records.map((record) => record.sqlStatements)).toEqual([0]);
+    open();
+    await background;
+    expect(sink.flushes).toEqual([
+      {
+        writes: [expect.objectContaining({ id: taskId, op: "update" })],
+        info: { requestId: expect.any(String), transport: "internal", rev: expect.any(Number) },
+      },
+    ]);
+    // Flushed in its unit, not on the next tick as an ambient write: no warning.
+    expect(h.logger.warnings.slice(warned)).toEqual([]);
+  });
+
+  it("checks run's options", async () => {
+    dispatcherWith();
+    await expect(qd.run(() => 1, { detached: "yes" as unknown as boolean })).rejects.toThrow(
+      "detached must be true or false",
+    );
+    await expect(qd.run(() => 1, 3 as unknown as { detached?: boolean })).rejects.toThrow(
+      "options must be an object",
+    );
+    expect(await qd.run(() => 2, { detached: true })).toBe(2);
+  });
+
   it("gives a job { touch, log, principal: null }, so it records a raw SQL write", async () => {
     dispatcherWith();
     let seen: unknown;
@@ -285,9 +346,59 @@ describe("qd.run and writes outside methods", () => {
     expect(sink.writes()).toEqual([expect.objectContaining({ id: taskId, op: "update" })]);
   });
 
-  it("fails qd.run on an app that has created no dispatcher", async () => {
+  it("runs qd.run in a unit of its own before the app created any dispatcher: its writes reach no one", async () => {
+    // A tracked client no dispatcher was ever attached to, as at boot before createServer.
+    const logger = captureLogger();
+    const db = trackPrisma(h.prisma, { interest: INTEREST, logger, development: true });
     const lone = initQuickdraw();
-    await expect(lone.run(() => 1)).rejects.toThrow("qd.run has no dispatcher to flush through");
+    let seen: unknown;
+    const title = await lone.run(async (ctx) => {
+      seen = ctx;
+      ctx.touch("task", [taskId]);
+      const seeded = await db.task.update({ where: { id: taskId }, data: { title: "seeded" } });
+      return seeded.title;
+    });
+    expect(title).toBe("seeded");
+    expect(seen).toEqual({
+      touch: expect.any(Function),
+      log: expect.objectContaining({ debug: expect.any(Function) }),
+      principal: null,
+    });
+    await nextTick();
+    // Kept in the run's own unit: no ambient-write warning, and no sink to reach.
+    expect(logger.warnings).toEqual([]);
+    expect((await h.prisma.task.findUniqueOrThrow({ where: { id: taskId } })).title).toBe("seeded");
+    await expect(lone.run(() => Promise.reject(new Error("boom")))).rejects.toThrow("boom");
+    await expect(lone.run(3 as unknown as () => number)).rejects.toThrow("pass the function");
+    // The same write outside any run is ambient, and warns.
+    await db.task.update({ where: { id: taskId }, data: { title: "ambient" } });
+    await nextTick();
+    expect(logger.warnings).toEqual([expect.stringContaining("ambient-write")]);
+    // Work a run started and did not await writes after it settled: ambient too (a project
+    // here, since a warning names its model once).
+    const { projectId } = await h.prisma.task.findUniqueOrThrow({ where: { id: taskId } });
+    let late: Promise<unknown> = Promise.resolve();
+    await lone.run(() => {
+      late = (async () => {
+        await nextTick();
+        await db.project.update({ where: { id: projectId }, data: { name: "late" } });
+      })();
+    });
+    await late;
+    await nextTick();
+    expect(logger.warnings).toEqual([
+      expect.stringContaining("ambient-write"),
+      expect.stringMatching(/ambient-write[\s\S]*project/),
+    ]);
+  });
+
+  it("flushes a loose run's writes to a dispatcher attached to the client meanwhile", async () => {
+    const lone = initQuickdraw();
+    await lone.run(async () => {
+      dispatcherWith();
+      await h.db.task.update({ where: { id: taskId }, data: { title: "after attach" } });
+    });
+    expect(sink.writes()).toEqual([expect.objectContaining({ id: taskId, op: "update" })]);
   });
 });
 

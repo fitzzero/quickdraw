@@ -4,7 +4,7 @@
 // (its anchors). The index here finds the sockets an access change can
 // concern by anchor, so revocation re-resolves only theirs. Rooms stay the
 // source of truth for who receives frames: nothing here is read to emit, and
-// 4.1's per-entity `subscribers` map (`legacy-src/server/BaseService.ts:86-89`)
+// 4.1's per-entity `subscribers` map (4.1 `src/server/BaseService.ts:86-89`)
 // is not kept.
 //
 // Services and ids come from client frames, so the records are kept in

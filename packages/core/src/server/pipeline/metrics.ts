@@ -4,7 +4,7 @@
 // `maxResponseBytes`, `error` when the call failed with `INTERNAL` or
 // `TIMEOUT` (the failures that are the server's fault). An `INTERNAL`
 // entry carries the original error with its stack. This replaces 4.1's two
-// `info` entries per call (`legacy-src/server/ServiceRegistry.ts:331-373`).
+// `info` entries per call (4.1 `src/server/ServiceRegistry.ts:331-373`).
 
 import type { Logger } from "../../contract/logger";
 import type { MethodKind } from "../../contract/methods";

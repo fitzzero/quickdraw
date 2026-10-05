@@ -3,9 +3,9 @@
 // real in-process server, or against a mock client with no server at all.
 //
 // 4.1's `./client/testing` could not work as documented: `createTestWrapper`
-// filled a context of its own (`legacy-src/client/testing.tsx:185-192`)
+// filled a context of its own (4.1 `src/client/testing.tsx:185-192`)
 // while the hooks read the provider's unexported one
-// (`legacy-src/client/QuickdrawProvider.tsx:169`), and every hook test
+// (4.1 `src/client/QuickdrawProvider.tsx:169`), and every hook test
 // mocked the provider, so no test ran a hook against a server. Here:
 //
 // - `renderWithQuickdraw(ui, { app, as, client })` renders `ui` under the
@@ -15,7 +15,8 @@
 //   connection, calls, change topics, coordinator and live data.
 // - `createMockClient(contracts)` (`mockClient.ts`) is a client of the same
 //   type whose members are stubs, for component tests that do not care
-//   about the transport.
+//   about the transport. It is its own entry too, `./testing/mock`, which
+//   a browser bundle (Storybook) can import: this one names Testing Library.
 //
 // The published package does not depend on Testing Library: it is an
 // optional peer, imported only when `renderWithQuickdraw` runs, so a test
@@ -35,23 +36,8 @@ import type { PrincipalOfServices } from "../server/dispatcher";
 import type { AnyService } from "../server/service";
 import type { TestApp } from "./createTestApp";
 
-export { createMockClient } from "./mockClient";
-export type {
-  EntityMock,
-  MethodStub,
-  MockChannelMember,
-  MockClient,
-  MockClientOptions,
-  MockCollectionMember,
-  MockEntityMembers,
-  MockEventMember,
-  MockMethodMember,
-  MockRealtimeMembers,
-  MockScope,
-  MockServiceClient,
-  MockStreamMember,
-  StreamMock,
-} from "./mockTypes";
+export * from "./mock";
+export { installJsdomShims } from "./jsdom";
 
 /** Options of {@link renderWithQuickdraw}. */
 export interface RenderWithQuickdrawOptions<

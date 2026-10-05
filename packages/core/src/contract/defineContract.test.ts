@@ -160,6 +160,19 @@ describe("defineContract", () => {
       scope: "userId",
     });
   });
+
+  it("keeps a via scope's refreshEntry", () => {
+    const contract = withCollection({
+      scope: via({ model: "chatMember", entry: "chatId", scope: "userId", refreshEntry: true }),
+    })();
+    expect(contract.collections.c?.scope).toEqual({
+      kind: "via",
+      model: "chatMember",
+      entry: "chatId",
+      scope: "userId",
+      refreshEntry: true,
+    });
+  });
 });
 
 describe("the method and collection builders", () => {
@@ -261,7 +274,34 @@ describe("definition-time checks", () => {
     );
     expect(
       withMethod({ kind: "query", input: idInput, output: "entity", watch: { collection: "c" } }),
-    ).toThrow('method "m": watch must be { collection, scope } with a scope function');
+    ).toThrow(
+      'method "m": watch must be "service", { service: [models] }, or { collection, scope } with a scope function',
+    );
+    expect(withMethod({ kind: "query", input: idInput, output: "entity", watch: "all" })).toThrow(
+      'watch must be "service", { service: [models] }, or { collection, scope }',
+    );
+    expect(withMethod(query({ input: idInput, output: "entity", watch: "service" }))).not.toThrow();
+  });
+
+  it("takes a watch of the service's topic narrowed to models, a list of distinct names (finding F7.3)", () => {
+    const narrowed = (watch: unknown) =>
+      withMethod({ kind: "query", input: idInput, output: "entity", watch });
+    expect(narrowed({ service: ["gameScore", "chatMember"] })).not.toThrow();
+    for (const watch of [
+      { service: [] },
+      { service: "gameScore" },
+      { service: ["gameScore", "gameScore"] },
+      { service: [""] },
+      { service: [1] },
+      { service: ["gameScore"], collection: "c" },
+    ]) {
+      expect(narrowed(watch), JSON.stringify(watch)).toThrow(
+        'method "m": watch { service } lists the models of the service it watches',
+      );
+    }
+    expect(
+      withMethod({ kind: "mutation", input: idInput, output: "entity", watch: "service" }),
+    ).toThrow('method "m" is a mutation; only a query can watch');
   });
 
   it("rejects methods that are not query or mutation declarations", () => {
@@ -369,6 +409,11 @@ describe("definition-time checks", () => {
     expect(withCollection({ scope: { kind: "via", model: "m", entry: "e" } })).toThrow(
       "scope must be a column name or via(",
     );
+    expect(
+      withCollection({
+        scope: { kind: "via", model: "m", entry: "e", scope: "s", refreshEntry: "yes" },
+      }),
+    ).toThrow("via's refreshEntry must be true or false");
     expect(withCollection({ where: { archived: [false] } })).toThrow(
       "where must map columns to strings, numbers, booleans or null",
     );
@@ -532,7 +577,7 @@ describe("streams, channels and events (RFC 0003 section 12.5)", () => {
     );
   });
 
-  it("takes an app room's name or a function of the payload as requires.room", () => {
+  it("takes an app room's name, a function of the payload or { prefix } as requires.room", () => {
     const rooms = defineContract("roomService", {
       channels: {
         move: { payload: cursor, requires: { room: "world" } },
@@ -541,6 +586,10 @@ describe("streams, channels and events (RFC 0003 section 12.5)", () => {
     });
     expect(rooms.channels.move.requires).toEqual({ room: "world" });
     expect(typeof rooms.channels.lobby.requires?.room).toBe("function");
+    const worlds = defineContract("worldsService", {
+      channels: { steer: { payload: cursor, requires: { room: { prefix: "world:" } } } },
+    });
+    expect(worlds.channels.steer.requires).toEqual({ room: { prefix: "world:" } });
   });
 
   it("refuses a room requirement no socket could meet, or one mixed with another form", () => {
@@ -552,11 +601,23 @@ describe("streams, channels and events (RFC 0003 section 12.5)", () => {
       'requires.room "qd:e:taskService:t1@Read" is not an app room: names starting with "qd:" are the framework\'s own rooms',
     );
     expect(channel({ room: "user:ada" })).toThrow('names starting with "user:"');
-    for (const room of ["", 42, null, { name: "world" }]) {
+    for (const room of ["", 42, null]) {
       expect(channel({ room })).toThrow(
-        "requires.room must be an app room's name or a function of the payload",
+        "requires.room must be an app room's name, a function of the payload or { prefix }",
       );
     }
+    for (const room of [
+      { name: "world" },
+      { prefix: "" },
+      { prefix: "w", also: 1 },
+      { prefix: 3 },
+    ]) {
+      expect(channel({ room })).toThrow("requires.room as an object is { prefix }");
+    }
+    expect(channel({ room: { prefix: "user:" } })).toThrow(
+      'requires.room\'s prefix "user:" names no app room: names starting with "user:"',
+    );
+    expect(channel({ room: { prefix: "qd:e:" } })).toThrow('names starting with "qd:"');
     expect(channel({ room: "world", entity: "docId" }, { entity: taskSchema })).toThrow(
       "requires must be { entity }, { collection, scope } or { room }",
     );

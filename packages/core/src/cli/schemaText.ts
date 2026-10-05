@@ -233,23 +233,83 @@ export function schemaText(schema: JsonSchema): string {
   return textOf(schema, { root: schema, open: [ROOT], depth: 0 });
 }
 
-function rangeNote(low: unknown, high: unknown, unit: string): string | undefined {
-  const has = (value: unknown): value is number => typeof value === "number";
-  if (has(low) && has(high)) {
-    return low === high ? `exactly ${low}${unit}` : `${low} to ${high}${unit}`;
+function isNumber(value: unknown): value is number {
+  return typeof value === "number";
+}
+
+/** `count` and its unit, singular for 1: "1 character", "20 items". */
+function counted(count: number, unit: string): string {
+  return `${count} ${count === 1 ? unit : `${unit}s`}`;
+}
+
+/** A length or size range: "1 to 200 characters", "at least 1 character", "exactly 3 items". */
+function sizeNote(low: unknown, high: unknown, unit: string): string | undefined {
+  if (isNumber(low) && isNumber(high)) {
+    return low === high ? `exactly ${counted(high, unit)}` : `${low} to ${counted(high, unit)}`;
   }
-  if (has(low)) {
-    return `at least ${low}${unit}`;
+  if (isNumber(low)) {
+    return `at least ${counted(low, unit)}`;
   }
-  return has(high) ? `at most ${high}${unit}` : undefined;
+  return isNumber(high) ? `at most ${counted(high, unit)}` : undefined;
+}
+
+/**
+ * A bound of a number, or `undefined` for none: Zod writes the safe-integer
+ * range as the bounds of every integer (`z.number().int()`), which says no
+ * more than the type does.
+ */
+function numberBound(value: unknown): number | undefined {
+  return isNumber(value) && Math.abs(value) !== Number.MAX_SAFE_INTEGER ? value : undefined;
+}
+
+/** A number's lower bound in words: "positive", "more than 5", "non-negative", "at least 1". */
+function lowerNote(
+  inclusive: number | undefined,
+  exclusive: number | undefined,
+): string | undefined {
+  if (exclusive !== undefined) {
+    return exclusive === 0 ? "positive" : `more than ${exclusive}`;
+  }
+  if (inclusive === undefined) {
+    return undefined;
+  }
+  return inclusive === 0 ? "non-negative" : `at least ${inclusive}`;
+}
+
+/** A number's upper bound in words: "negative", "less than 5", "non-positive", "at most 10". */
+function upperNote(
+  inclusive: number | undefined,
+  exclusive: number | undefined,
+): string | undefined {
+  if (exclusive !== undefined) {
+    return exclusive === 0 ? "negative" : `less than ${exclusive}`;
+  }
+  if (inclusive === undefined) {
+    return undefined;
+  }
+  return inclusive === 0 ? "non-positive" : `at most ${inclusive}`;
+}
+
+/** A number's range: "1 to 200", "non-negative", "positive", "at most 10", "more than 5". */
+function numberNote(schema: JsonSchema): string | undefined {
+  const low = numberBound(schema.minimum);
+  const high = numberBound(schema.maximum);
+  if (low !== undefined && high !== undefined) {
+    return low === high ? `exactly ${low}` : `${low} to ${high}`;
+  }
+  const parts = [
+    lowerNote(low, numberBound(schema.exclusiveMinimum)),
+    upperNote(high, numberBound(schema.exclusiveMaximum)),
+  ].filter((part) => part !== undefined);
+  return parts.length === 0 ? undefined : parts.join(", ");
 }
 
 /** The constraints of `schema` a type does not show: ranges, a format, a default, its description. */
 export function schemaNotes(schema: JsonSchema): string {
   const notes = [
-    rangeNote(schema.minLength, schema.maxLength, " characters"),
-    rangeNote(schema.minimum, schema.maximum, ""),
-    rangeNote(schema.minItems, schema.maxItems, " items"),
+    sizeNote(schema.minLength, schema.maxLength, "character"),
+    numberNote(schema),
+    sizeNote(schema.minItems, schema.maxItems, "item"),
     typeof schema.format === "string" ? `format ${schema.format}` : undefined,
     "default" in schema ? `default ${literal(schema.default)}` : undefined,
     typeof schema.description === "string" ? schema.description : undefined,

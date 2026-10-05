@@ -35,6 +35,8 @@ export {
   type ProjectionList,
   type ProjectionRef,
   type QueryDef,
+  type ServiceModelsWatch,
+  type ServiceWatch,
   type Watch,
 } from "./contract/methods";
 export {
@@ -68,9 +70,11 @@ export {
   type ChannelRequires,
   type EventDef,
   type PayloadSelector,
+  type RoomPrefix,
   type RoomSelector,
   type StreamAccess,
   type StreamDef,
+  type StreamRoom,
 } from "./contract/realtime";
 // The read/write kit's contract half (RFC 0003 section 12.1); its handlers
 // are `crud.handlers` on ./server.
@@ -234,6 +238,7 @@ export type {
   EntityOf,
   EventName,
   EventPayloadOf,
+  FullProjectionOf,
   IndexFieldOf,
   IndexRowOf,
   InputOf,
@@ -246,6 +251,7 @@ export type {
   ParsedInputOf,
   ProjectionName,
   ProjectionOf,
+  ReceivedRow,
   ScopeOf,
   ServiceNameOf,
   StreamItemOf,

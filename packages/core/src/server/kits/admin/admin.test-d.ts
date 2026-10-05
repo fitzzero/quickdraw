@@ -5,7 +5,14 @@
 
 import { describe, expectTypeOf, test } from "vitest";
 import { z } from "zod";
-import { createQuickdrawClient, useAdminServices } from "../../../client/index";
+import {
+  adminOf,
+  createQuickdrawClient,
+  useAdminServices,
+  type AdminKeysOf,
+  type AdminRow,
+  type AdminScreen,
+} from "../../../client/index";
 import {
   admin as adminContract,
   defineContract,
@@ -125,6 +132,11 @@ describe("AdminFieldConfig", () => {
     expectTypeOf(legacy).toExtend<AdminFieldConfig>();
     expectTypeOf<AdminFieldConfig["filterable"]>().toEqualTypeOf<boolean | undefined>();
   });
+
+  test("says what the grants field holds, and whether a form shows a field (finding F5.5)", () => {
+    expectTypeOf<AdminFieldConfig["kind"]>().toEqualTypeOf<"grants" | undefined>();
+    expectTypeOf<AdminFieldConfig["showInForm"]>().toEqualTypeOf<boolean | undefined>();
+  });
 });
 
 describe("admin.handlers", () => {
@@ -160,6 +172,43 @@ describe("admin.handlers", () => {
       methods: { ...adminContract.contract({ entity: taskRow, expose: ["adminGet"] }) },
     });
     qd.defineService(unguarded, { model: "task", methods: { ...admin.handlers(unguarded) } });
+  });
+
+  test("a handler resolves with its method's output, so a wrapper reads it with no cast", () => {
+    const made = admin.handlers(task);
+    expectTypeOf(made.adminUpdate.handler).returns.resolves.toEqualTypeOf<
+      OutputOf<typeof task, "adminUpdate">
+    >();
+    qd.defineService(task, {
+      model: "task",
+      access: inherit({ from: project, via: "projectId" }),
+      methods: {
+        ...made,
+        adminUpdate: {
+          ...made.adminUpdate,
+          handler: async (args) => {
+            const row = await made.adminUpdate.handler(args);
+            expectTypeOf(row.id).toBeString();
+            return row;
+          },
+        },
+        get: {
+          access: { entry: "Read" },
+          handler: ({ input, db }) => db.task.findUnique({ where: { id: input.id } }),
+        },
+      },
+    });
+  });
+
+  test("onWrite hears the method, the id and the entity's rows", () => {
+    admin.handlers(task, {
+      onWrite: (write, ctx) => {
+        expectTypeOf(write.method).toEqualTypeOf<"adminCreate" | "adminUpdate" | "adminDelete">();
+        expectTypeOf(write.after).toEqualTypeOf<TaskRow | null>();
+        expectTypeOf(write.before).toEqualTypeOf<TaskRow | undefined>();
+        expectTypeOf(ctx.principal).toEqualTypeOf<Principal>();
+      },
+    });
   });
 
   test("access replaces a method's form, typed by that method's input", () => {
@@ -198,6 +247,28 @@ describe("admin.handlers", () => {
     // @ts-expect-error plainService has no method admin.contract made
     admin.handlers(plain);
   });
+
+  test("grants is for an entity that holds serviceAccess", () => {
+    const userRow = z.object({
+      id: z.string(),
+      name: z.string(),
+      serviceAccess: z.record(z.string(), z.string()).nullable(),
+    });
+    const users = defineContract("userService", {
+      entity: userRow,
+      methods: { ...adminContract.contract({ entity: userRow }) },
+    });
+    admin.handlers(users, { grants: true });
+    // @ts-expect-error the task entity holds no grants
+    admin.handlers(task, { grants: true });
+    // A grants editor of the app's own keeps the field out of a generic form.
+    admin.handlers(users, {
+      grants: true,
+      fieldOverrides: { serviceAccess: { showInForm: false } },
+    });
+    // @ts-expect-error what a field holds is the kit's to say
+    admin.handlers(users, { grants: true, fieldOverrides: { serviceAccess: { kind: "grants" } } });
+  });
 });
 
 describe("the client", () => {
@@ -228,6 +299,43 @@ describe("the client", () => {
     expectTypeOf(services[0]?.key).toEqualTypeOf<"taskService" | undefined>();
     expectTypeOf(services[0]?.displayName).toEqualTypeOf<string | undefined>();
     expectTypeOf(isLoading).toBeBoolean();
+  });
+
+  test("useAdminServices takes the grant a service's adminMeta needs, or null for none", () => {
+    void useAdminServices(client, { requires: "Moderate" });
+    void useAdminServices(client, { requires: null });
+    // @ts-expect-error a requirement is an access level
+    void useAdminServices(client, { requires: "Owner" });
+  });
+
+  test("adminOf gives every service's admin members one shape, by field name", () => {
+    const other = defineContract("noteService", {
+      entity: z.object({ id: z.string(), body: z.string() }),
+      methods: {
+        ...adminContract.contract({
+          entity: z.object({ id: z.string(), body: z.string() }),
+          sort: ["body"],
+          expose: ["adminList", "adminMeta"],
+        }),
+      },
+    });
+    const both = createQuickdrawClient({ taskService: task, notes: other, plain });
+    const pick = (key: AdminKeysOf<typeof both>) => adminOf(both, key);
+    expectTypeOf(pick).returns.toEqualTypeOf<AdminScreen>();
+    const screen = pick("notes");
+    // A field named at run time, from adminMeta, for either service.
+    const field: string = "body";
+    expectTypeOf(screen.adminList.useQuery({ page: 1, sort: { field } }).data).toEqualTypeOf<
+      AdminPage<AdminRow> | undefined
+    >();
+    expectTypeOf(screen.adminMeta.useQuery(undefined).data).toEqualTypeOf<
+      AdminServiceMeta | undefined
+    >();
+    // A method the contract may not expose is optional.
+    expectTypeOf(screen.adminUpdate).toEqualTypeOf<AdminScreen["adminUpdate"]>();
+    screen.adminUpdate?.useMutation().mutate({ id: "n1", data: { body: "x" } });
+    // @ts-expect-error a key without the admin kit
+    adminOf(both, "plain");
   });
 
   test("a mock client has the same admin member, with stubs", () => {

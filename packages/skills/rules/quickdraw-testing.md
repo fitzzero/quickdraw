@@ -9,13 +9,28 @@ paths:
 # quickdraw 5.0: testing
 
 > From `@fitzzero/quickdraw-skills` (`quickdraw-skills link`). `paths` follow
-> the quickdraw template: tests beside the code in `apps/api` and `apps/web`.
-> Another layout replaces this link with a copy and edits them.
+> the quickdraw template: integration tests in `apps/*/src/__tests__/`, unit
+> tests beside the code. Another layout replaces this link with a copy and
+> edits them; when the app's own rules name other paths, theirs win.
 
 Test through the real server: the same dispatcher, access engine, tracked
 writes and frames production runs. Helpers come from
 `@fitzzero/quickdraw-core/testing`, `@fitzzero/quickdraw-core/testing/client`
 and `@fitzzero/quickdraw-core/testing/prisma`.
+
+## Where a test goes
+
+The template runs two lanes, and a file's name picks its lane:
+
+| Test                                                                            | File (template)                                      | Lane                                                  |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------- |
+| a service: `createTestApp`, `describeAccessMatrix`, `expectBudget`, live frames | `apps/api/src/__tests__/services/<name>.int.test.ts` | integration (`vitest.int.config.ts`): a test database |
+| a component against the real server (`renderWithQuickdraw`)                     | `apps/web/src/__tests__/<name>.int.test.tsx`         | the web app's integration lane, under jsdom           |
+| pure logic: a helper, a reducer, a game's simulation step                       | beside it, `<file>.test.ts`                          | unit (`vitest.config.ts`): no database                |
+
+A test that boots the app but is named `<name>.test.ts` runs in the unit
+lane and fails at its first query. Budgets go to `__budgets__/` beside the
+test file that measures them.
 
 ## The test app
 
@@ -38,17 +53,26 @@ await app.close();
 - `app.frames(match?)` lists every frame the server sent, each with its
   `event`, `data`, `socketId`, `userId` and `at`;
   `frames.waitFor(match, timeoutMs?)` waits for one, `frames.clear()`
-  forgets them. Assert on frames, not internals.
+  forgets them. Assert on frames, not internals. For realtime frames use
+  the typed matchers, never a cast of `data`:
+  `waitFor({ ...streamFrames(game, "world", (snap) => snap.tick === tick), socketId })`,
+  `eventFrames(game, "death", (death) => death.id === id)`, or an event
+  query's `where` (`{ event: "qd:presence", where: ({ data }) => ... }`).
 - The app's dispatcher becomes current for the services' `qd`, so
   `qd.run`, `qd.stream(...).push` and `qd.presence` reach it.
 - `db` is the tracked client over a test database, made exactly as in
   production (`trackPrisma(new PrismaClient({ adapter }))`). The
   `./testing/prisma` helpers give each worker a database:
   `createPrismaTestGlobalSetup`, `workerDatabaseUrl` and `resetDatabase`
-  (PostgreSQL, or PGlite when no `TEST_DATABASE_URL` is set).
-- Seed rows with the untracked client (`prisma`), or inside `qd.run` once an
-  app runs: a tracked write outside any unit of work flushes on its own with
-  an `ambient-write` warning.
+  (PostgreSQL, or PGlite when no `TEST_DATABASE_URL` is set; each worker
+  boots its PGlite with `openPgliteFromTemplate`, which works under jsdom).
+- Seed rows with the untracked client (`prisma`), or inside `qd.run` (before
+  the app starts too, when its writes reach no one): a tracked write outside
+  any unit of work flushes on its own with an `ambient-write` warning.
+- An app's own REST route is tested over HTTP against the app's Express app,
+  signed in as the auth routes sign in: its call runs with the grants a
+  socket of the same user gets (`qd.caller` loads them), so a method behind
+  a service grant passes or answers 403 as it does over a socket.
 
 ## Every service gets an access matrix
 
@@ -67,7 +91,9 @@ await describeAccessMatrix(app, {
   `UNAUTHENTICATED` without a principal, `FORBIDDEN` with one). It rejects
   listing every cell that differs; `via: "socket"` runs it over sockets.
 - Mutations run for real, once per allowed principal: give inputs that can
-  run again, or a fresh row per case.
+  run again, or `input` as a function of the cell
+  (`input: async () => ({ id: await newTask() })`), which makes a fresh row
+  for every cell; never order the principals so the allowed one goes last.
 
 ## Hot methods get a budget
 
@@ -95,7 +121,11 @@ development warning raised in that app's method calls (`n-plus-one`,
 test that caused it (an oversized reply fails an in-process `app.as(...)`
 call; over a socket or HTTP the reply was already sent, so it is logged, not
 thrown). Warnings outside its calls (an `ambient-write` while seeding) are
-logged, and `app.close()` ends it. Turn it on for service suites.
+logged, and `app.close()` ends it. `tiered-field-in-output` (a method's own
+output schema declares a tiered field, at any depth) is thrown by
+`createTestApp` itself: answer `"entity"` from that method rather than
+turning strictness off.
+Turn it on for service suites.
 `createRecordingSink()` passed as `flushSink` records what each flush wrote.
 
 ## Components
@@ -104,7 +134,11 @@ logged, and `app.close()` ends it. Turn it on for service suites.
   `const view = await renderWithQuickdraw(<Board projectId={id} />, { app, as: ada, client: qd })`
   from `./testing/client` returns Testing Library's result plus
   `connection`, `queryClient`, `disconnect()` and `reconnect()`. Change
-  data with `app.as(...)` and wait for the screen (`findByText`).
+  data with `app.as(...)` and wait for the screen (`findByText`). Run these
+  in a jsdom project of their own, with the API's global setup (its test
+  database template) and a setup file calling `installJsdomShims()` from
+  `./testing/client` (element scrolling, `Blob.arrayBuffer`); they import
+  the API's services across apps.
 - Without a server: `createMockClient({ task, project })` has the typed
   client's shape with stubs: `qd.task.get.mockResolvedValue(row)`,
   `mockRejectedValue(error)`, `mockImplementation(fn)`, `calls`;
@@ -114,6 +148,21 @@ logged, and `app.close()` ends it. Turn it on for service suites.
   after each test only when the runner has a global `afterEach` (vitest
   with `globals: true`, or jest); otherwise add
   `afterEach(() => mock.$reset())`. It shows no optimistic updates.
+- A component that reads the connection (`useQuickdraw()`,
+  `usePresence(room)`) renders inside the mock's provider:
+  `render(<UserMenu />, { wrapper: mock.$Provider })`, with
+  `mock.$session({ userId, serviceAccess, isConnected, isKnown })` (fields
+  left out keep the starting session, `createMockClient(contracts, { session })`)
+  and `mock.$presence(room, userIds)`. Never re-export `useQuickdraw` from
+  the module you mock to fake it. `useAdminServices(mock)` asks only the
+  services the session's `serviceAccess` allows.
+- Storybook and other browser bundles import the mock from
+  `@fitzzero/quickdraw-core/testing/mock`, which names no Testing Library:
+  a decorator wraps every story in `qd.$Provider`, and a story's
+  `beforeEach` sets its session beside its data. Stories rendered side by
+  side (a docs page) each pass their own:
+  `<qd.$Provider session={{ userId: null }}>`, laid over the mock's for
+  that subtree alone.
 
 ## What a new service's tests cover
 

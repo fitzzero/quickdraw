@@ -1,10 +1,10 @@
 // The shapes the MCP bridge works in (RFC 0003 section 10): tools as
 // `tools/list` lists them, the session or request a call arrives on, custom
 // tools, and how a call ends. The wire format stays as 4.1 implements it
-// (protocol version 2024-11-05, `legacy-src/server/mcp/McpStdioServer.ts:22`).
+// (protocol version 2024-11-05, 4.1 `src/server/mcp/McpStdioServer.ts:22`).
 // What changed is where tools come from: one per contract method, generated
 // at run time, instead of one per service whose arguments were
-// `{ method, payload, userId }` (`legacy-src/server/mcp/McpRegistry.ts:297-328`).
+// `{ method, payload, userId }` (4.1 `src/server/mcp/McpRegistry.ts:297-328`).
 
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import type { MethodName } from "../../contract/infer";

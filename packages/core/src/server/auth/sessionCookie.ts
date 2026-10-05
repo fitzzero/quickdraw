@@ -163,8 +163,11 @@ export interface SessionCookieOptions {
   /** Cookie domain. Defaults to process.env.COOKIE_DOMAIN. */
   domain?: string;
   /**
-   * SameSite. Default: "none" in production, "lax" otherwise. A "none"
-   * cookie is always Secure, because browsers drop one that is not.
+   * SameSite. Default: "lax", as the auth routes set it (before rc.5,
+   * "none" in production; finding F7.5 of the quickdraw-chat review):
+   * the cookie rides top-level navigations and same-site requests, never a
+   * request another site's page makes. "none" serves a web app on another
+   * site, and is always Secure, because browsers drop one that is not.
    */
   sameSite?: "lax" | "none";
   /** Secure. Default: true in production or over HTTPS; a `__Host-` cookie always is. */
@@ -194,11 +197,9 @@ function sessionCookie(
   const req = requestOf(res);
   const name = sessionCookieNameFor(req, { cookieName: options.cookieName, domain });
   const hostOnly = name.startsWith("__Host-");
-  // SameSite=None (with Secure) lets the session cookie ride cross-site
-  // fetches, so a secondary web origin can hit the primary API host. The
-  // CORS allowlist (validateRedirectOrigin) is the actual origin gate. Dev
-  // keeps Lax — localhost is http-only and SameSite=None requires Secure.
-  const sameSite = options.sameSite ?? (isProd ? "none" : "lax");
+  // Lax, as the auth routes' own cookie: SameSite=None (always Secure) is the
+  // app's choice for a web app on another site, never a default (F7.5).
+  const sameSite = options.sameSite ?? "lax";
   return {
     name,
     settings: {

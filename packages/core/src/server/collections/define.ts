@@ -17,7 +17,7 @@
 //
 // 4.1 defined a collection with functions (`resolveScopeId`,
 // `checkScopeAccess`, `snapshot`, `toItem`;
-// `legacy-src/server/collections.ts:36-72`), so the framework could not know
+// 4.1 `src/server/collections.ts:36-72`), so the framework could not know
 // which writes move a row and read the whole row before every update.
 
 import type { AccessLevel } from "../../contract/access";
@@ -50,6 +50,8 @@ export type CollectionScope =
       readonly entry: string;
       /** The junction column holding the scope value. */
       readonly scope: string;
+      /** A junction write sends its entry again to every scope that still holds it (`via`'s `refreshEntry`). */
+      readonly refreshEntry: boolean;
     };
 
 /** One collection of a service: its contract declaration and the service's option, checked. */
@@ -246,7 +248,13 @@ function scopeOf(def: CollectionDef): CollectionScope {
   if (typeof scope === "string") {
     return Object.freeze({ kind: "column", column: scope });
   }
-  return Object.freeze({ kind: "via", model: scope.model, entry: scope.entry, scope: scope.scope });
+  return Object.freeze({
+    kind: "via",
+    model: scope.model,
+    entry: scope.entry,
+    scope: scope.scope,
+    refreshEntry: scope.refreshEntry === true,
+  });
 }
 
 function compileOne(

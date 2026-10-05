@@ -1,6 +1,6 @@
 {
   "name": "@fitzzero/quickdraw-core",
-  "version": "5.0.0-rc.1",
+  "version": "5.0.0",
   "description": "Fast fullstack patterns for real-time applications with Socket.io and TanStack Query",
   "keywords": [
     "fullstack",
@@ -17,7 +17,7 @@
     "directory": "packages/core"
   },
   "bin": {
-    "quickdraw-docs": "./dist/cli/quickdraw-docs.js"
+    "quickdraw-docs": "dist/cli/quickdraw-docs.js"
   },
   "files": [
     "dist"
@@ -76,6 +76,10 @@
     "./testing/client": {
       "types": "./dist/testing/client.d.ts",
       "import": "./dist/testing/client.js"
+    },
+    "./testing/mock": {
+      "types": "./dist/testing/mock.d.ts",
+      "import": "./dist/testing/mock.js"
     },
     "./package.json": "./package.json"
   },

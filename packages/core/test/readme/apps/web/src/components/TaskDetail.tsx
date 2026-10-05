@@ -16,6 +16,7 @@ export function TaskDetail({ id }: { readonly id: string }) {
   if (isRemoved) {
     return <p>This task was deleted.</p>;
   }
+  // notes reach Admins only (the contract's fields), so its type is optional: guard it
   return (
     <div>
       <h1>{task?.title}</h1>

@@ -143,14 +143,15 @@ The limits a server announces in `qd:hello`, so a client can stay inside them.
 connection, after the socket's listeners are in place. It says who the
 socket acts for, so a client knows its user without another call.
 
-| Field           | Type                          | Meaning                                                                                                                                                                                                       |
-| --------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `protocol`      | `5`                           | The protocol the server speaks.                                                                                                                                                                               |
-| `server`        | `string`                      | The server package's version.                                                                                                                                                                                 |
-| `limits`        | `HelloLimits`                 | What a client must stay within.                                                                                                                                                                               |
-| `features`      | `string[]`                    | Names of optional server features that are on. Informational only.                                                                                                                                            |
-| `userId`        | `string \| null`              | The user the socket acts for, or `null` when it is anonymous.                                                                                                                                                 |
-| `serviceAccess` | `Record<string, AccessLevel>` | The principal's service-wide grants when the socket connected, by service name: `{ taskService: "Admin" }`. Empty for an anonymous socket or a principal without grants. Later changes arrive as `qd:access`. |
+| Field           | Type                          | Meaning                                                                                                                                                                                                                                                              |
+| --------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `protocol`      | `5`                           | The protocol the server speaks.                                                                                                                                                                                                                                      |
+| `server`        | `string`                      | The server package's version.                                                                                                                                                                                                                                        |
+| `serverId`      | `string`                      | This server's id: random, new each time a server starts. A client that reconnects to the same id came back after a blip, to another id to a restarted server (a game's world and clock start over) or, behind a cluster, to another node, each of which has its own. |
+| `limits`        | `HelloLimits`                 | What a client must stay within.                                                                                                                                                                                                                                      |
+| `features`      | `string[]`                    | Names of optional server features that are on. Informational only.                                                                                                                                                                                                   |
+| `userId`        | `string \| null`              | The user the socket acts for, or `null` when it is anonymous.                                                                                                                                                                                                        |
+| `serviceAccess` | `Record<string, AccessLevel>` | The principal's service-wide grants when the socket connected, by service name: `{ taskService: "Admin" }`. Empty for an anonymous socket or a principal without grants. Later changes arrive as `qd:access`.                                                        |
 
 ## Example session
 
@@ -162,7 +163,7 @@ a channel that requires the lobby, and hears an event and a presence frame.
 < 0{"sid":"a1","upgrades":[],"pingInterval":25000,"pingTimeout":20000,"maxPayload":1000000}
 > 40{"qd":{"client":"my-game/1.0","protocol":5},"token":"…"}
 < 40{"sid":"b2"}
-< 42["qd:hello",{"protocol":5,"server":"5.0.0","limits":{…},"features":[],"userId":"ada","serviceAccess":{}}]
+< 42["qd:hello",{"protocol":5,"server":"5.0.0","serverId":"c3f1…","limits":{…},"features":[],"userId":"ada","serviceAccess":{}}]
 > 421["qd:call",{"id":0,"s":"lobbyService","m":"join","i":{"lobby":"main"}}]
 < 42["qd:presence",{"room":"lobby:main","users":["ada"]}]
 < 431[{"ok":true,"d":{"lobby":"main","players":["ada"]}}]
@@ -215,7 +216,10 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
 ## What a client must do
 
 - Wait for `qd:hello` before the first call: it says who the socket acts for
-  (`userId`, `serviceAccess`) and the limits to stay within.
+  (`userId`, `serviceAccess`) and the limits to stay within. Each hello is a
+  new socket in no app room: make the joining calls again after every one. A
+  `serverId` other than the last hello's means the server restarted (or,
+  behind a cluster, another node answered): its state starts over.
 - Give each `qd:call` an `id` no call in flight on the socket has; `qd:cancel`
   names it, and the call's acknowledgement still arrives. Send it with an ack
   id: the server ignores a `qd:call` sent without one, with no reply and no
@@ -251,6 +255,13 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
 - When the handshake is refused, reconnecting with the same client and
   credentials is refused again: `PROTOCOL_MISMATCH` needs a client that
   speaks the server's protocol, `UNAUTHENTICATED` other credentials.
+- Ignore what you do not know, in every frame: an object field you do not
+  read, and an array element after the last one you read (`qd:event`,
+  `qd:stream`). Protocol 5 grows only that way: a later revision may add
+  fields to objects and append elements to arrays, never remove, rename,
+  retype or reorder them, so a client that reads only what it knows keeps
+  working against a newer server. The server reads what a client sends the
+  same way. Any other change takes a new `protocol` number.
 
 ## Frame types
 
@@ -601,12 +612,17 @@ service-wide topic (RFC 0003 section 11.3).
 
 `qd:changed`: a watched topic changed in the flush at `rev`; invalidate the
 queries that watch it. Sent once per flush per topic, and carries no data.
+On the `service` topic, `models` names the models whose writes changed it
+(rc.5, additive: the client's model names, first letter lowercased), so a
+query that watches only some of them (`watch: { service: [models] }`)
+ignores the rest; a frame without it may have changed any of them.
 
-| Field   | Type       |
-| ------- | ---------- |
-| `s`     | `string`   |
-| `topic` | `string`   |
-| `rev`   | `Revision` |
+| Field     | Type       |
+| --------- | ---------- |
+| `s`       | `string`   |
+| `topic`   | `string`   |
+| `rev`     | `Revision` |
+| `models?` | `string[]` |
 
 #### `StreamSubscribe`
 
@@ -623,7 +639,11 @@ scoped stream one scope of it (absent for a global stream).
 
 The acknowledgement of `qd:stream:sub`: the stream's seed, oldest first,
 read as the socket joined the stream's room, so items pushed after it
-arrive as `qd:stream` frames (possibly before this acknowledgement).
+arrive as `qd:stream` frames (possibly before this acknowledgement). The
+seed is the latest items the server kept, or what the service computed
+for this subscriber (the current state the items change); a computed one
+the server had to wait for may also reflect items that arrived as frames
+meanwhile. A client replaces what it held with it.
 
 One of:
 
@@ -634,18 +654,27 @@ One of:
 
 #### `StreamFrame`
 
-`qd:stream`: an item pushed to a stream.
+`qd:stream`: an item pushed to a stream, as one array argument
+`[service, stream, scope, item]` (like `qd:event`), so a fast stream sends
+no key names: `scope` is `null` for a global stream. The positions are
+fixed; a later revision may append elements after `item`, never insert
+them, so a client reads the four it knows and ignores the rest. Before
+`5.0.0-rc.4` it was the object `{ s, stream, scope?, item }`.
 
-| Field    | Type     |
-| -------- | -------- |
-| `s`      | `string` |
-| `stream` | `string` |
-| `scope?` | `string` |
-| `item`   | `Item`   |
+A JSON array:
+
+| Position | Name     | Type             |
+| -------- | -------- | ---------------- |
+| 0        | `s`      | `string`         |
+| 1        | `stream` | `string`         |
+| 2        | `scope`  | `string \| null` |
+| 3        | `item`   | `Item`           |
 
 #### `ChannelFrame`
 
-`qd:ch`, sent volatile and never acknowledged: `[service, channel, payload]`.
+`qd:ch`, sent volatile and never acknowledged: `[service, channel,
+payload]`. A later revision may append elements after `payload`; the
+server reads the three it knows and ignores the rest.
 
 A JSON array:
 
@@ -657,7 +686,9 @@ A JSON array:
 
 #### `EventFrame`
 
-`qd:event`: a custom room event declared in a contract's `events`: `[service, event, payload]`.
+`qd:event`: a custom room event declared in a contract's `events`:
+`[service, event, payload]`. A later revision may append elements after
+`payload`; a client reads the three it knows and ignores the rest.
 
 A JSON array:
 
@@ -674,9 +705,11 @@ A JSON array:
 Sent to a socket as it joins with `users`, the whole list (its own user
 included); to the room's other sockets with `joined` when a user's first
 socket joins, and with `left` when a user's last socket leaves; and to a
-socket that leaves with `users: []`, since it no longer sees the room.
-Exactly one of `users`, `joined` and `left` is present. Anonymous sockets
-are in no list.
+socket that leaves with `users: []`, since it no longer sees the room. A
+socket the server took out of the room (`rooms.leave(room, { userId })`)
+gets that `users: []` unasked: it is out, and its channels requiring the
+room are dropped until a joining call lets it back. Exactly one of
+`users`, `joined` and `left` is present. Anonymous sockets are in no list.
 
 | Field     | Type       | Meaning                                                                 |
 | --------- | ---------- | ----------------------------------------------------------------------- |

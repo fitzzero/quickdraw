@@ -1,5 +1,5 @@
 // Access level ordering, ported from 4.1's `isLevelSufficient`
-// (`legacy-src/server/BaseService.ts:554-562`): Public < Read < Moderate < Admin.
+// (4.1 `src/server/BaseService.ts:554-562`): Public < Read < Moderate < Admin.
 
 import { ACCESS_LEVELS, isAccessLevel, type AccessLevel } from "../../contract/access";
 import type { Principal } from "../types";

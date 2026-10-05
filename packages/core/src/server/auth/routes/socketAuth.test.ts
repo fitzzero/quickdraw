@@ -366,6 +366,67 @@ describe("a socket without the cookie", () => {
   });
 });
 
+describe("devCredentials", () => {
+  const known = new Set(["dev-1"]);
+  const withDev: Authenticate = (sessions) => ({
+    authenticate: socketAuth({
+      sessions,
+      jwtSecret: SECRET,
+      allowedOrigins: [APP_ORIGIN],
+      loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
+      devCredentials: (userId): AppPrincipal | null =>
+        known.has(userId) ? { userId, kind: "agent" } : null,
+    }),
+  });
+
+  it("signs a socket in by the user id its handshake names, and refuses an unknown one", async () => {
+    const { url } = await boot(withDev);
+    expect(await connect(url, {}, { ...v5Auth(null), userId: "dev-1" })).toEqual({
+      whoami: { ok: true, d: { userId: "dev-1", kind: "agent" } },
+    });
+    expect(await connect(url, {}, { ...v5Auth(null), userId: "nobody" })).toEqual(REFUSED);
+  });
+
+  it("leaves a token or the cookie in charge, and HTTP calls alone", async () => {
+    const { url } = await boot(withDev);
+    const { session } = await signIn(url, "bob@demo.local");
+    const token = session.slice("session=".length);
+    // A token wins over a named user.
+    expect(await connect(url, {}, { ...v5Auth(null), token, userId: "dev-1" })).toEqual(
+      signedIn(userIdOf("bob@demo.local")),
+    );
+    // Without either, the socket is anonymous as before.
+    expect(await connect(url, {}, v5Auth(null))).toMatchObject({
+      whoami: { ok: false, e: { code: "UNAUTHENTICATED" } },
+    });
+  });
+
+  it("cannot be used in production: refused when made, and at a handshake", async () => {
+    const sessions = createMemorySessionStore();
+    const dev = (userId: string): AppPrincipal => ({ userId, kind: "user" });
+    vi.stubEnv("NODE_ENV", "production");
+    expect(() =>
+      socketAuth({ sessions, jwtSecret: SECRET, allowedOrigins: [], devCredentials: dev }),
+    ).toThrow("devCredentials signs sockets in by a user id alone");
+    vi.unstubAllEnvs();
+    const authenticate = socketAuth({
+      sessions,
+      jwtSecret: SECRET,
+      allowedOrigins: [],
+      devCredentials: dev,
+    });
+    vi.stubEnv("NODE_ENV", "production");
+    await expect(
+      authenticate({
+        transport: "socket",
+        auth: { userId: "dev-1" },
+        headers: {},
+        socket: {} as never,
+      }),
+    ).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+  });
+});
+
 describe("loadPrincipal", () => {
   it("builds the principal, and refuses when it returns none or another user's", async () => {
     const loadPrincipal = vi.fn((userId: string): AppPrincipal | null => {
@@ -448,7 +509,7 @@ describe("an HTTP call", () => {
         method: "POST",
         headers: { "content-type": "application/json", ...headers },
       });
-    // No Origin check on HTTP: its JSON content type needs a CORS preflight instead.
+    // Without Origin the call is not a page's (a browser sends Origin with every POST).
     const byCookie = await whoami({ cookie: session });
     expect(await byCookie.json()).toEqual({
       ok: true,
@@ -456,6 +517,30 @@ describe("an HTTP call", () => {
     });
     const bearer = { authorization: `Bearer ${session.slice("session=".length)}` };
     expect(await (await whoami(bearer)).json()).toMatchObject({ ok: true });
+    // The cookie from a page: its Origin must be allowed, as on a socket (finding F7.1).
+    expect(await (await whoami({ cookie: session, origin: APP_ORIGIN })).json()).toMatchObject({
+      ok: true,
+    });
+    expect(
+      await (await whoami({ cookie: session, origin: "http://pr.preview.test" })).json(),
+    ).toMatchObject({
+      ok: true,
+    });
+    // An https: page's call reads only __Host-session, so it carries that one there.
+    const hostOnly = `__Host-session=${session.slice("session=".length)}`;
+    for (const [origin, cookie] of [
+      ["http://evil.test", session],
+      ["https://evil.test", hostOnly],
+      ["null", session],
+    ] as const) {
+      const elsewhere = await whoami({ cookie, origin });
+      expect(elsewhere.status, origin).toBe(403);
+      expect(await elsewhere.json()).toMatchObject({ ok: false, e: { code: "FORBIDDEN" } });
+    }
+    expect(
+      (await whoami({ ...bearer, origin: "https://evil.test" })).status,
+      "a bearer token needs no Origin",
+    ).toBe(200);
 
     await post(`${url}/auth/logout`, { cookie: session });
     for (const headers of [{ cookie: session }, bearer]) {
@@ -488,6 +573,9 @@ describe("the options", () => {
     );
     expect(() => socketAuth({ ...base, loadPrincipal: 1 as never })).toThrow(
       "socketAuth: loadPrincipal must be a function",
+    );
+    expect(() => socketAuth({ ...base, devCredentials: "u1" as never })).toThrow(
+      "socketAuth: devCredentials must be a function of the user id",
     );
     // An empty list is allowed: no page may then use the cookie on a socket.
     expect(socketAuth({ ...base, allowedOrigins: [] })).toBeTypeOf("function");

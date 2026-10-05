@@ -8,8 +8,14 @@
 //
 // - the service topic of every service the flush changed: one of its rows
 //   (written, touched, or reached by an `affects` hop), a junction link of
-//   one of its `via` collections, or a scope it lost when the row it was
-//   anchored on was deleted;
+//   one of its `via` collections, a row of a model it lists in `writes` (a
+//   game's high scores: a query over them watches the service), or a scope
+//   it lost when the row it was anchored on was deleted. Its frame names
+//   those models (`models`, finding F7.3 of the quickdraw-chat review), so
+//   a query that watches only some (`watch: { service: [models] }`) ignores
+//   a flush that wrote none of them: the service's model for its own rows
+//   and lost scopes, the junction's for a link, the written one for
+//   `writes`;
 // - the topic of every collection scope a touched row was in before or after
 //   the flush, from the same moves the collection sink finds (`moves.ts`,
 //   shared, so a flush reads their rows once); a row that left scopes nobody
@@ -40,10 +46,14 @@ type Io = NonNullable<CollectionHub["io"]>;
 /** The `qd:changed` frames of one flush, by topic room: one per topic. */
 type Frames = Map<string, ChangedFrame>;
 
+/** Per model (`modelKey`), the services that list it in their `writes`. */
+type Writers = ReadonlyMap<string, readonly BoundCollection["service"][]>;
+
 /** What finding a flush's topics needs. */
 interface Flush {
   readonly hub: CollectionHub;
   readonly index: TopicIndex;
+  readonly writers: Writers;
   readonly writes: readonly WriteRecord[];
   readonly touched: TouchedRows;
   readonly rev: Revision;
@@ -56,6 +66,12 @@ function mark(flush: Flush, s: string, topic: string): void {
   flush.frames.set(topicRoom(s, topic), { s, topic, rev: flush.rev });
 }
 
+/** Marks a service's topic with the models whose writes changed it, sorted (finding F7.3). */
+function markService(flush: Flush, s: string, models: ReadonlySet<string>): void {
+  const topic = SERVICE_TOPIC;
+  flush.frames.set(topicRoom(s, topic), { s, topic, rev: flush.rev, models: [...models].sort() });
+}
+
 /** Marks one collection scope's topic when it may be watched: here, or anywhere behind a cluster adapter. */
 function markScope(flush: Flush, collection: BoundCollection, scope: string): void {
   const s = collection.service.name;
@@ -64,26 +80,67 @@ function markScope(flush: Flush, collection: BoundCollection, scope: string): vo
   }
 }
 
-/** The services whose rows or collection scopes the flush changed. */
-function changedServices(flush: Flush): Set<BoundCollection["service"]> {
-  const services = new Set(flush.touched.keys());
+/** The services that list each model in their `writes`, by `modelKey`. */
+function writersOf(hub: CollectionHub): Writers {
+  const writers = new Map<string, BoundCollection["service"][]>();
+  for (const service of hub.registry.services.values()) {
+    for (const model of service.writes) {
+      const key = modelKey(model);
+      writers.set(key, [...(writers.get(key) ?? []), service]);
+    }
+  }
+  return writers;
+}
+
+type Service = BoundCollection["service"];
+
+/** Adds `model` to the models that changed `service`'s topic. */
+function changedBy(changed: Map<Service, Set<string>>, service: Service, model: string): void {
+  const models = changed.get(service) ?? new Set<string>();
+  models.add(modelKey(model));
+  changed.set(service, models);
+}
+
+/**
+ * The services whose rows or collection scopes the flush changed, and those
+ * that list a written model in their `writes` (a query over such a model
+ * watches the writing service's topic), each with the models that changed
+ * it: the service's own model for its rows (written, touched, reached by
+ * an `affects` hop) and for scopes a deleted anchor closed, which took its
+ * rows with them; the junction model for a `via` link; the written model
+ * for one in `writes`.
+ */
+function changedServices(flush: Flush): Map<Service, Set<string>> {
+  const changed = new Map<Service, Set<string>>();
+  for (const service of flush.touched.keys()) {
+    if (service.model !== undefined) {
+      changedBy(changed, service, service.model);
+    }
+  }
   const { routes } = flush.hub.collections;
   for (const write of flush.writes) {
-    for (const collection of routes.byJunction.get(modelKey(write.model)) ?? []) {
-      services.add(collection.service);
+    const key = modelKey(write.model);
+    for (const collection of routes.byJunction.get(key) ?? []) {
+      changedBy(changed, collection.service, key);
+    }
+    for (const writer of flush.writers.get(key) ?? []) {
+      changedBy(changed, writer, key);
     }
   }
   for (const [collection] of anchoredScopes(routes, flush.writes)) {
-    services.add(collection.service);
+    const { service } = collection;
+    if (service.model !== undefined) {
+      changedBy(changed, service, service.model);
+    }
   }
-  return services;
+  return changed;
 }
 
 /** Marks the service topics and the scopes closed by a deleted anchor row: neither needs a read. */
 function markUnread(flush: Flush): void {
-  for (const service of changedServices(flush)) {
+  for (const [service, models] of changedServices(flush)) {
     if (!flush.local || flush.index.watchesService(service.name)) {
-      mark(flush, service.name, SERVICE_TOPIC);
+      markService(flush, service.name, models);
     }
   }
   for (const [collection, scope] of anchoredScopes(flush.hub.collections.routes, flush.writes)) {
@@ -151,6 +208,7 @@ function send(io: Io, frames: Frames): void {
 
 /** The topic sink of a dispatcher: after the collection sink on the dispatcher's list. */
 export function createTopicSink(hub: CollectionHub, index: TopicIndex): FlushSink {
+  const writers = writersOf(hub);
   return Object.freeze({
     async flush(writes: readonly WriteRecord[], info: FlushInfo): Promise<void> {
       const { io, storage } = hub;
@@ -160,6 +218,7 @@ export function createTopicSink(hub: CollectionHub, index: TopicIndex): FlushSin
       const flush: Flush = {
         hub,
         index,
+        writers,
         writes,
         touched: touchedRows(writes, hub.routes),
         rev: info.rev,

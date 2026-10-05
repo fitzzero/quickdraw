@@ -7,8 +7,9 @@ import { REPORT_FILE } from "./report";
 const USAGE = `Usage: quickdraw-codemod v5 <repo> [options]
 
 Moves a quickdraw 4.x app to 5.0: contracts in the shared package, services
-as qd.defineService, the web app's hooks on the typed client. Writes
-${REPORT_FILE} at <repo> with every item left to decide.
+as qd.defineService, the web app's hooks on the typed client. Formats what it
+writes with the app's formatter (oxfmt, prettier or Biome, when installed),
+then writes ${REPORT_FILE} at <repo> with every item left to decide.
 Run it on a clean working tree.
 
 Options:
@@ -76,6 +77,13 @@ function run(argv: readonly string[], output: Output): void {
     `  ${dryRun ? "would change" : "changed"} ${String(result.changed.length)} files, ${dryRun ? "create" : "created"} ${String(result.created.length)}, ${dryRun ? "delete" : "deleted"} ${String(result.deleted.length)}`,
     `  ${String(result.items)} items to review${dryRun ? "" : `: see ${REPORT_FILE}`}`,
   ];
+  if (result.formatter !== undefined) {
+    lines.push(
+      result.formatter.ok
+        ? `  formatted with ${result.formatter.name}`
+        : `  ${result.formatter.name} failed on the files written: format them, then run the codemod again (it rewrites only the report)`,
+    );
+  }
   if (dryRun) {
     lines.push(
       ...result.changed.map((file) => `  M ${file}`),

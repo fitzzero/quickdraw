@@ -1,7 +1,7 @@
 // `createMcpRegistry` (RFC 0003 section 10): the tools of an app's services,
 // generated from their contracts, plus the app's own, and one `call` every
 // MCP transport uses. It replaces 4.1's `McpRegistry`
-// (`legacy-src/server/mcp/McpRegistry.ts:13`), which validated input, checked
+// (4.1 `src/server/mcp/McpRegistry.ts:13`), which validated input, checked
 // access and ran handlers itself, as whatever user the tool's `userId`
 // argument named. Here a method's tool call goes through the dispatcher with
 // transport `"mcp"`, so validation, access checks and limits apply exactly as
@@ -76,7 +76,13 @@ export interface McpRegistryOptions<
 
 /** The tools an MCP transport serves, and the one way to call them. */
 export interface McpRegistry {
-  /** Every tool, generated ones first, as `tools/list` returns them. */
+  /**
+   * Every tool, generated ones first, as `tools/list` and `GET /mcp/tools`
+   * return them: the same list for every caller, never filtered by the
+   * principal, so an agent may see tools whose calls are refused. A
+   * registry's `include`/`exclude` decide the list; serve agents of
+   * different reach from separate registries.
+   */
   readonly tools: readonly McpTool[];
   /** True when a tool has this name. */
   has(name: string): boolean;

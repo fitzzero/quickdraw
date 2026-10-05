@@ -1,5 +1,5 @@
 // Channels (RFC 0003 section 12.5) through a real server against PGlite,
-// ported from 4.1's `legacy-src/server/channels.test.ts`: a message reaches
+// ported from 4.1's `src/server/channels.test.ts`: a message reaches
 // its handler from an authenticated socket that holds the subscription the
 // contract's `requires` names; one over the socket's token bucket, with a
 // payload that fails its schema, from an anonymous socket or without the
@@ -238,7 +238,7 @@ describe("qd:ch, ported from 4.1", () => {
     const ada = await app.connect(as(board.ada));
     const socket = app.server.io.sockets.sockets.get(ada.socket.id ?? "");
     expect(socket?.listeners("qd:ch")).toHaveLength(1);
-    expect(app.server.dispatcher.registry.services.get("taskService")?.channels.size).toBe(7);
+    expect(app.server.dispatcher.registry.services.get("taskService")?.channels.size).toBe(8);
   });
 });
 
@@ -257,7 +257,8 @@ describe("requires: { room }", () => {
     expect(await cy.call.taskService.exit({ room: LOBBY })).toBe(true);
     send(cy, "shout", { n: 4 });
     await settle(cy);
-    expect(into.shout).toEqual([{ userId: board.cy, socketId: cy.socket.id, n: 2 }]);
+    // ctx.room: the room the requirement matched.
+    expect(into.shout).toEqual([{ userId: board.cy, socketId: cy.socket.id, room: LOBBY, n: 2 }]);
   });
 
   it("counts the rooms the sending socket joined, not the ones its user's other sockets joined", async () => {
@@ -302,7 +303,47 @@ describe("requires: { room }", () => {
     send(ada, "move", { room: own[1], n: 4 });
     send(ada, "move", { room: "", n: 5 });
     await settle(ada);
-    expect(into.move).toEqual([{ room: "table:7", n: 1 }]);
+    expect(into.move).toEqual([{ room: "table:7", matched: "table:7", n: 1 }]);
+  });
+
+  it("takes any room with a prefix, and gives the handler the one the sending socket is in", async () => {
+    const { app, into } = await start();
+    const cy = await app.connect(as(board.cy));
+    const bo = await app.connect(as(board.bo));
+    const di = await app.connect(as(board.di));
+    // Before joining any world: dropped.
+    send(cy, "steer", { n: 0 });
+    await cy.call.taskService.enter({ room: "world:1" });
+    await bo.call.taskService.enter({ room: "world:2" });
+    // A room that only resembles the prefix: not a world.
+    await di.call.taskService.enter({ room: "worlds:3" });
+    send(cy, "steer", { n: 1 });
+    send(bo, "steer", { n: 2 });
+    send(di, "steer", { n: 3 });
+    await Promise.all([settle(cy), settle(bo), settle(di)]);
+    expect(into.steer).toEqual([
+      { room: "world:1", n: 1 },
+      { room: "world:2", n: 2 },
+    ]);
+    // A socket in two worlds: the one it joined first. After leaving it, the other.
+    await cy.call.taskService.enter({ room: "world:9" });
+    send(cy, "steer", { n: 4 });
+    await settle(cy);
+    await cy.call.taskService.exit({ room: "world:1" });
+    send(cy, "steer", { n: 5 });
+    await settle(cy);
+    expect(into.steer.slice(2)).toEqual([
+      { room: "world:1", n: 4 },
+      { room: "world:9", n: 5 },
+    ]);
+  });
+
+  it("gives the handler no room for a channel that requires none", async () => {
+    const { app, into } = await start();
+    const ada = await onT1(app, as(board.ada));
+    send(ada, "input", { taskId: board.t1, seq: 1, dx: 0, dy: 0 });
+    await settle(ada);
+    expect(into.roomless).toEqual([undefined]);
   });
 
   it("drops messages from an anonymous socket, even in the room", async () => {

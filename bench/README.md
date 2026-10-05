@@ -173,8 +173,10 @@ rows.
   default, the socket rate limiter included: its 600 events per minute per
   socket cover this workload (a writer sends 120 writes a minute, a viewer
   reads the board at most 240 times), which 4.1 serves without any limiter.
-  The 5.0.0 report's runs raised it to 1,000, because the default was 100
-  then and refused part of the work (`reports/5.0.0.md`).
+  The first 5.0.0 measurement, on 5.0.0-alpha.0, raised it to 1,000,
+  because the default was 100 then and refused part of the work
+  (`reports/5.0.0.md`, "The default rate limiter"); the report's current
+  runs are at the default.
 - `src/instrument.ts` reports the same fields as `apps/v4`, from the
   completion record each call produces (`onCall`), the Prisma client's query
   events, and a Socket.IO middleware that watches every frame; `src/harness.ts`

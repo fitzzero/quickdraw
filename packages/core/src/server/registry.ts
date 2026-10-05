@@ -1,6 +1,6 @@
 // The services a dispatcher serves, by name. 4.1's `ServiceRegistry` also
 // wired one Socket.IO listener per method per socket
-// (`legacy-src/server/ServiceRegistry.ts:118-136`); in 5.0 the registry only
+// (4.1 `src/server/ServiceRegistry.ts:118-136`); in 5.0 the registry only
 // resolves names, and the transports keep a fixed listener set.
 
 import { runtimeOf, type AnyService, type ServiceMethod } from "./service";

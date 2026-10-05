@@ -99,3 +99,20 @@ export function originAllowlist(
     fallback: exact[0],
   });
 }
+
+/**
+ * The allowlist each `createAuthRoutes` was given, by the session store it
+ * writes to: `requireSession` over the same store applies it when it is given
+ * no `allowedOrigins` of its own.
+ */
+const ROUTE_ORIGINS = new WeakMap<object, OriginAllowlist>();
+
+/** Remembers the allowlist of the auth routes that write sessions to `sessions`. */
+export function rememberRouteOrigins(sessions: object, origins: OriginAllowlist): void {
+  ROUTE_ORIGINS.set(sessions, origins);
+}
+
+/** The allowlist of the auth routes that write sessions to `sessions`, if any were made. */
+export function routeOriginsOf(sessions: object): OriginAllowlist | undefined {
+  return ROUTE_ORIGINS.get(sessions);
+}

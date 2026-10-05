@@ -49,15 +49,27 @@ export { createAuthRoutes } from "./routes/createAuthRoutes";
 export type {
   AuthCookieOptions,
   AuthProvider,
+  AuthProviderInfo,
   AuthRoutes,
   AuthRoutesOptions,
 } from "./routes/types";
 export {
+  cookieOriginAllowed,
   socketAuth,
+  type CookieOriginRequest,
+  type DevCredentials,
   type PrincipalLoader,
   type SessionAuthenticate,
   type SocketAuthOptions,
 } from "./routes/socketAuth";
+export {
+  requireSession,
+  sessionOf,
+  type RequestSession,
+  type RequireSessionOptions,
+  type SessionMiddleware,
+  type SessionRequest,
+} from "./routes/requireSession";
 export {
   createMemorySessionStore,
   type AuthSession,
@@ -74,8 +86,15 @@ export {
   type MockSignInProvider,
   type OAuthClientOptions,
   type OAuthSignInProvider,
+  type OptionalClientOptions,
 } from "./routes/providers";
-export { guest, GUEST_MAX_BODY_BYTES, type GuestOptions, type GuestProvider } from "./routes/guest";
+export {
+  guest,
+  GUEST_MAX_BODY_BYTES,
+  type GuestOptions,
+  type GuestProvider,
+  type GuestUser,
+} from "./routes/guest";
 export {
   DEFAULT_SESSION_TTL_MS,
   issueSession,

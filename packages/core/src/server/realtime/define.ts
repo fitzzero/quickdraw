@@ -1,8 +1,9 @@
 // The run-time half of `defineService`'s channels and streams (RFC 0003
 // section 12.5): one handler per channel of the contract, no more and no
-// fewer, with its access; and each stream's access form as the access engine
-// decides it. The types make the same checks; these catch JavaScript callers
-// and casts when the service is defined.
+// fewer, with its access; each stream's access form as the access engine
+// decides it; and the service's own stream options (a seed computed when a
+// socket subscribes). The types make the same checks; these catch
+// JavaScript callers and casts when the service is defined.
 
 import { isAccessLevel } from "../../contract/access";
 import type { AnyContract } from "../../contract/defineContract";
@@ -12,6 +13,7 @@ import {
   isScopedStream,
   type ChannelDef,
   type PayloadSelector,
+  type RoomPrefix,
   type RoomSelector,
   type StreamAccess,
   type StreamDef,
@@ -19,10 +21,12 @@ import {
 import type { AccessForm } from "../access/types";
 import type {
   AnyChannelHandler,
+  AnyStreamSeed,
   ChannelAccess,
   CompiledSelector,
   ServiceChannel,
   ServiceStream,
+  StreamRoomAccess,
 } from "./types";
 
 type Fail = (message: string) => never;
@@ -56,7 +60,7 @@ function compileSelector(selector: PayloadSelector): CompiledSelector {
  * room when it is not a string, is empty or is reserved (`qd:`, `user:`),
  * since a socket is never in such a room as an app room.
  */
-function compileRoom(room: RoomSelector): CompiledSelector {
+function compileRoom(room: Exclude<RoomSelector, RoomPrefix>): CompiledSelector {
   if (typeof room === "string") {
     return () => room;
   }
@@ -72,8 +76,12 @@ function compileRequires(def: ChannelDef): ServiceChannel["requires"] {
   if (requires === undefined) {
     return undefined;
   }
-  if (requires.room !== undefined) {
-    return { kind: "room", select: compileRoom(requires.room) };
+  const { room } = requires;
+  if (typeof room === "object") {
+    return { kind: "roomPrefix", prefix: room.prefix };
+  }
+  if (room !== undefined) {
+    return { kind: "room", select: compileRoom(room) };
   }
   if (requires.collection === undefined) {
     return { kind: "entity", select: compileSelector(requires.entity) };
@@ -164,6 +172,10 @@ function engineForm(access: StreamAccess | undefined): AccessForm | undefined {
   if (access === undefined || typeof access === "string") {
     return access;
   }
+  if (access.room !== undefined) {
+    // The app room the subscriber's socket is in decides, not the engine.
+    return undefined;
+  }
   if (access.scope !== undefined) {
     return Object.freeze({ scope: access.scope, of: access.of, id: "scope" });
   }
@@ -174,13 +186,76 @@ function engineForm(access: StreamAccess | undefined): AccessForm | undefined {
   return Object.freeze({ service: access.service });
 }
 
+/** A stream's `access: { room }`, compiled; `undefined` for any other form. */
+function roomAccess(access: StreamAccess | undefined): StreamRoomAccess | undefined {
+  if (typeof access !== "object" || access.room === undefined) {
+    return undefined;
+  }
+  const { room } = access;
+  if (typeof room === "string") {
+    return Object.freeze({ kind: "name", room });
+  }
+  if (typeof room === "object") {
+    return Object.freeze({ kind: "prefix", prefix: room.prefix });
+  }
+  const computed = compileRoom(room as (payload: never) => string | null | undefined);
+  return Object.freeze({
+    kind: "computed",
+    select: (scope: string | undefined) => computed(scope),
+  });
+}
+
 /** What a service declares that its streams' row-level access forms need. */
 export interface StreamNeeds {
   readonly model: string | undefined;
   readonly hasPolicy: boolean;
 }
 
-function checkStream(name: string, def: StreamDef, needs: StreamNeeds, fail: Fail): ServiceStream {
+const STREAM_OPTION_KEYS = ["seed", "validate"];
+
+/** One stream's entry in `defineService`'s `streams`, checked: its seed function and when it validates. */
+function checkStreamOptions(
+  name: string,
+  def: StreamDef,
+  entry: unknown,
+  fail: Fail,
+): Pick<ServiceStream, "computeSeed" | "validate"> {
+  const owner = `streams.${name}`;
+  if (entry === undefined) {
+    return { computeSeed: undefined, validate: "always" };
+  }
+  if (!isRecord(entry)) {
+    fail(`${owner} must be an object: { seed?, validate? }`);
+  }
+  const unknownKey = Object.keys(entry).find((key) => !STREAM_OPTION_KEYS.includes(key));
+  if (unknownKey !== undefined) {
+    fail(
+      `${owner} has an unknown option "${unknownKey}"; the options are ${STREAM_OPTION_KEYS.join(", ")}`,
+    );
+  }
+  const { seed } = entry;
+  if (seed !== undefined && typeof seed !== "function") {
+    fail(`${owner}.seed must be a function of (scope, ctx) returning the seed's items`);
+  }
+  if (seed !== undefined && (def.seed ?? 0) > 0) {
+    fail(
+      `${owner}.seed computes the seed, but the contract's stream keeps the latest ${String(def.seed)} items as its seed; declare one of the two`,
+    );
+  }
+  const { validate = "always" } = entry;
+  if (validate !== "always" && validate !== "development") {
+    fail(`${owner}.validate must be "always" or "development"`);
+  }
+  return { computeSeed: seed as AnyStreamSeed | undefined, validate };
+}
+
+function checkStream(
+  name: string,
+  def: StreamDef,
+  needs: StreamNeeds,
+  options: unknown,
+  fail: Fail,
+): ServiceStream {
   const access = engineForm(def.access);
   if (typeof access === "object" && "entry" in access && !needs.hasPolicy) {
     fail(
@@ -197,20 +272,38 @@ function checkStream(name: string, def: StreamDef, needs: StreamNeeds, fail: Fai
     item: def.item,
     scoped: isScopedStream(def),
     seed: def.seed ?? 0,
+    ...checkStreamOptions(name, def, options, fail),
     volatile: def.volatile === true,
     access,
+    room: roomAccess(def.access),
   });
 }
 
-/** The streams of a service, from its contract, with the access forms checked against what it declares. */
+/**
+ * The streams of a service, from its contract, with the access forms checked
+ * against what it declares, and `defineService`'s `streams` option (a seed
+ * function per stream) checked against the contract's streams.
+ */
 export function compileStreams(
   contract: AnyContract,
   needs: StreamNeeds,
+  value: unknown,
   fail: Fail,
 ): ReadonlyMap<string, ServiceStream> {
+  if (value !== undefined && !isRecord(value)) {
+    fail(
+      "streams must be an object of options per contract stream: { <stream>: { seed?, validate? } }",
+    );
+  }
+  const options = value ?? {};
+  const unknownStream = Object.keys(options).find((name) => !Object.hasOwn(contract.streams, name));
+  if (unknownStream !== undefined) {
+    fail(`streams: "${unknownStream}" is not a stream of the contract`);
+  }
   const streams = new Map<string, ServiceStream>();
   for (const [name, def] of Object.entries(contract.streams)) {
-    streams.set(name, checkStream(name, def, needs, fail));
+    const entry = Object.hasOwn(options, name) ? options[name] : undefined;
+    streams.set(name, checkStream(name, def, needs, entry, fail));
   }
   return streams;
 }

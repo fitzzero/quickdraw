@@ -1,5 +1,5 @@
 // One `qd:sub` batch (RFC 0003 sections 4.3 and 6). It replaces 4.1's
-// `subscribe` and `batchSubscribe` (`legacy-src/server/BaseService.ts:176-283`),
+// `subscribe` and `batchSubscribe` (4.1 `src/server/BaseService.ts:176-283`),
 // which joined a row's rooms before reading the row (`:204-213`, `:252-264`),
 // so a socket could sit in the room of a row that did not exist. Here a batch
 // goes, in this order:

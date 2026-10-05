@@ -1,7 +1,7 @@
 // One method call over a client connection (RFC 0003 sections 8.2, 9 and
 // 11.2): a `qd:call` envelope with a fresh id, answered through Socket.IO's
 // acknowledgement. 4.1 sent one event per method and resolved the
-// `{ success, data }` reply (`legacy-src/client/useServiceQuery.ts:94-121`).
+// `{ success, data }` reply (4.1 `src/client/useServiceQuery.ts:94-121`).
 //
 // - A failed call rejects with the `QuickdrawError` the reply carries.
 //   `RATE_LIMITED` also starts the connection's backoff for the call's kind,
@@ -16,6 +16,11 @@
 //   rejects with `INTERNAL`. A call made while the socket reconnects waits in
 //   Socket.IO's send buffer, within its time limit; new credentials meanwhile
 //   fail it with `CANCELLED` instead of sending it as them (`connection.ts`).
+// - A `TIMEOUT`, and the `INTERNAL` of a call whose connection dropped after
+//   it was sent, leave its outcome unknown: the server may have run it, and
+//   may still be running it. `isUnknownOutcome` tells them from refusals, so
+//   an optimistic addition waits for its scope's next load instead of being
+//   refused (`optimisticCall.ts`).
 // - A reply `{ ok: true, nm: true, v }` resolves as it is: the version the
 //   caller sent is current, and the caller keeps its copy.
 //
@@ -35,6 +40,14 @@ import { isRecord } from "../protocol/guards";
 import { retryAfterOf } from "./backoff";
 import { isTimeLimit, type QuickdrawConnection, type QuickdrawSocket } from "./connection";
 import { notifyEach } from "./watch";
+
+/**
+ * What Socket.IO's client fails an acknowledgement with when its time limit
+ * passes; with the socket down, the packet was still in its send buffer,
+ * which drops it. Any other failure while the socket is down (it says "socket
+ * has been disconnected") came after the packet was sent.
+ */
+const UNSENT_TIMEOUT = "operation has timed out";
 
 /** One call, as {@link call} takes it. */
 export interface CallRequest {
@@ -76,6 +89,32 @@ function cancelledError(): QuickdrawError {
 
 function internalError(message: string): QuickdrawError {
   return new QuickdrawError("INTERNAL", message);
+}
+
+/** The errors of calls whose connection dropped after they were sent: their outcome is unknown. */
+const lostInFlight = new WeakSet<QuickdrawError>();
+
+/**
+ * True when `error` leaves a call's outcome unknown: a `TIMEOUT` (the
+ * server may still be running it, or ran it and the answer was lost), or the
+ * `INTERNAL` of a call whose connection dropped after it was sent. The write
+ * may have been made: before sending it again, make sure the call is
+ * idempotent (a create that carries an id the client made, which the server
+ * keeps, fails `CONFLICT` the second time instead of writing a second row).
+ * False for a refusal, and for a call that was never sent.
+ *
+ * @example
+ * onError: (error) => setStatus(isUnknownOutcome(error) ? "checking" : "failed")
+ */
+export function isUnknownOutcome(error: unknown): boolean {
+  return error instanceof QuickdrawError && (error.code === "TIMEOUT" || lostInFlight.has(error));
+}
+
+/** The error of a call whose connection dropped after it was sent. */
+function lostError(): QuickdrawError {
+  const error = internalError("No answer: the connection to the server is down");
+  lostInFlight.add(error);
+  return error;
 }
 
 /** Why a call fails before it is sent, if it does. */
@@ -213,8 +252,12 @@ export function call<Output = unknown>(
           settle(error);
         } else if (socket.connected) {
           settle(new QuickdrawError("TIMEOUT", `No answer within ${timeoutMs} ms`));
-        } else {
+        } else if (error.message === UNSENT_TIMEOUT) {
+          // Still in the send buffer when its time ran out: Socket.IO drops it unsent.
           settle(internalError("No answer: the connection to the server is down"));
+        } else {
+          // Sent, then the connection dropped: Socket.IO fails the acknowledgements it waits for.
+          settle(lostError());
         }
       });
     signal?.addEventListener("abort", onAbort, { once: true });

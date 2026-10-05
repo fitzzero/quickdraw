@@ -29,7 +29,10 @@ function isContract(value: unknown): value is AnyContract {
  * reads `via` of every row asked about, then one batched lookup asks the
  * parent's policy about the parents found. A row that does not exist, or has
  * no parent, has no level; its id is never taken for a parent id. Service
- * grants on the parent service do not count here, only its policy.
+ * grants on the parent service do not count here, only its policy. A list's
+ * filter names the parents the principal reaches (`{ via: { in: ids } }`),
+ * or, when the parent's policy lets every row through, any row with a parent
+ * (`{ via: { not: null } }`), without reading the parent table.
  *
  * @example
  * qd.defineService(task, { model: "task", access: inherit({ from: project, via: "projectId" }), methods });
@@ -69,6 +72,12 @@ export function inherit<const Via extends string>(
       });
     },
     async accessWhere(principal, level, tools) {
+      // A parent whose every row passes (`everyone(level)`, alone or in `anyOf`): any row
+      // that has a parent, without listing every parent id (the final review's E1).
+      const parentFilter = await tools.whereOf(from, principal, level);
+      if (parentFilter !== "none" && Object.keys(parentFilter).length === 0) {
+        return { [via]: { not: null } };
+      }
       const parents = await tools.idsWhere(from, principal, level);
       return parents.length === 0 ? "none" : { [via]: { in: parents } };
     },

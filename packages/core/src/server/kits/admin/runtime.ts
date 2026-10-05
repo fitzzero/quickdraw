@@ -12,7 +12,9 @@
 // `Admin`, which reaches every tier; a service that gives a method a lower
 // form shows that method's callers less, and refuses them a filter, a sort
 // or a write that names a field they cannot see (it would tell what the
-// field holds).
+// field holds). The grant fields `grants: true` shows (`serviceAccess`) are
+// seen only by callers whose service-wide grant is `Admin`, whatever form
+// the method runs under: editing grants never comes with a lowered form.
 
 import { QuickdrawError } from "../../../protocol/errors";
 import { serviceGrant } from "../../access/levels";
@@ -39,8 +41,8 @@ export interface AdminCall {
   readonly omitted: ReadonlySet<string>;
 }
 
-/** The delegate of `model` on the dispatcher's database client. */
-function tableOf(db: unknown, model: string): ModelDelegate {
+/** The delegate of `model` on the dispatcher's database client (or a transaction's client). */
+export function tableOf(db: unknown, model: string): ModelDelegate {
   const name = modelKey(model);
   const isClient = (typeof db === "object" || typeof db === "function") && db !== null;
   const delegate: unknown = isClient ? Reflect.get(db, name) : undefined;
@@ -70,7 +72,8 @@ export function adminCall(ctx: KitHandlerArgs["ctx"], db: unknown, fields: Admin
   }
   const { principal } = ctx;
   const level = principal === null ? null : (serviceGrant(principal, runtime.service.name) ?? null);
-  const unseen = projection.tiers.hidden(level);
+  const tiered = projection.tiers.hidden(level);
+  const unseen = level === "Admin" ? tiered : new Set([...tiered, ...fields.grants]);
   return {
     runtime,
     model: modelKey(model),
@@ -85,6 +88,13 @@ export function adminCall(ctx: KitHandlerArgs["ctx"], db: unknown, fields: Admin
 /** A row as the call returns it: projected, without the fields it omits. */
 export function rowOut(call: AdminCall, row: object): unknown {
   return pageItem(call.projection, row, call.omitted);
+}
+
+const NOTHING_OMITTED: ReadonlySet<string> = Object.freeze(new Set<string>());
+
+/** A row as `onWrite` hears it: projected, every field (the hook is the server's own). */
+export function rowWhole(call: AdminCall, row: object): unknown {
+  return pageItem(call.projection, row, NOTHING_OMITTED);
 }
 
 /** `FORBIDDEN` when the call names a field above the caller's level. */

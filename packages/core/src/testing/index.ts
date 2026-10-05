@@ -9,7 +9,16 @@ export {
   type TestAppOptions,
   type TestConnection,
 } from "./createTestApp";
-export type { FrameMatch, FrameQuery, FrameRecorder, RecordedFrame, ServerFrameOf } from "./frames";
+export {
+  eventFrames,
+  streamFrames,
+  type EventQuery,
+  type FrameMatch,
+  type FrameQuery,
+  type FrameRecorder,
+  type RecordedFrame,
+  type ServerFrameOf,
+} from "./frames";
 export { emitWithAck, waitForEvent } from "./socket";
 export { createRecordingSink, type RecordedFlush, type RecordingSink } from "./recordingSink";
 export {
@@ -30,5 +39,7 @@ export {
   type AccessMatrixCell,
   type AccessMatrixOptions,
   type AccessMatrixReport,
+  type MatrixCell,
+  type MatrixInputFactory,
   type MatrixOutcome,
 } from "./accessMatrix";

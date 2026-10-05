@@ -19,7 +19,7 @@ const byProjectCollection = {
 };
 
 // Task access is the caller's membership role on the task's project
-// quickdraw-migrate: review [access-override] 4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, anyOf or resolver), then delete this function
+// quickdraw-migrate: review [access-override] 4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver), then delete this function
 async function checkEntryACL(userId: string, taskId: string, requiredLevel: AccessLevel): Promise<boolean> {
   const task = await db.task.findUnique({
     where: { id: taskId },

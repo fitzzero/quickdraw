@@ -18,14 +18,19 @@
 // Isomorphic helpers, the HTTP server caller and the cache keys (also on ./utils).
 export * from "../utils";
 
-// Token storage and logout helpers, which read localStorage (browser only).
+// The auth routes kit's browser side (sign in, sign out) and bearer-token
+// storage, which reads localStorage where there is one.
 export {
   clearAuthToken,
   getAuthToken,
-  getOAuthUrl,
-  logout,
-  logoutAllDevices,
   setAuthToken,
+  authProviders,
+  signInUrl,
+  signOut,
+  signOutEverywhere,
+  type AuthProviderInfo,
+  type AuthRoutesTarget,
+  type SignInUrlOptions,
 } from "./auth";
 
 // The connection and calls, without React.
@@ -45,11 +50,13 @@ export {
   call,
   callData,
   isNotModified,
+  isUnknownOutcome,
   shouldRetry,
   type CallRequest,
   type CallResult,
 } from "./call";
 export { reloadOncePerSession } from "./reload";
+export { newId } from "./newId";
 export type { JoinWait, TopicWatch } from "./watch";
 export {
   DEFAULT_SUBSCRIPTION_LANE,
@@ -70,10 +77,13 @@ export {
 } from "./coordinator";
 export {
   overlaysOf,
+  type AddItemOptions,
+  type OnRefused,
   type OptimisticCache,
   type OptimisticUpdate,
   type OverlayStore,
   type OverlayView,
+  type RefusedAddition,
 } from "./optimistic";
 export { refetchOnAccessChanges, sessionOf, type CacheSession, type HelloChange } from "./session";
 
@@ -135,7 +145,7 @@ export type {
   QuickdrawInvalidate,
   ServiceClient,
 } from "./clientTypes";
-export type { UseCollectionOptions, UseCollectionResult } from "./live/useCollection";
+export type { RefusedItem, UseCollectionOptions, UseCollectionResult } from "./live/useCollection";
 export type { UseEntitiesResult, UseEntityOptions, UseEntityResult } from "./live/useEntity";
 // Streams, channels, typed events and presence (RFC 0003 section 12.5):
 // `qd.<service>.<stream>.useStream`, `.<channel>.useChannel`,
@@ -152,6 +162,14 @@ export type { UseChannelResult } from "./live/useChannel";
 export type { UseEventOptions } from "./live/useEvent";
 export type { UseStreamOptions, UseStreamResult } from "./live/useStream";
 export { usePresence } from "./live/usePresence";
+// Joining an app room again on every connection: `useJoin(qd.game.watchWorld, input)`.
+export {
+  useJoin,
+  type JoinMember,
+  type JoinStatus,
+  type UseJoinOptions,
+  type UseJoinResult,
+} from "./join";
 export { SEARCH_DEBOUNCE_MS } from "./live/useSearch";
 export type {
   SearchMember,
@@ -160,7 +178,8 @@ export type {
   UseSearchResult,
 } from "./live/searchTypes";
 // The admin kit's client half (RFC 0003 section 12.4): `qd.<service>.admin`
-// on the typed client, and the services an admin screen can show.
+// on the typed client, the services an admin screen can show, and one
+// shape of every service's admin members for a screen driven by `adminMeta`.
 export {
   useAdminServices,
   type AdminKeysOf,
@@ -168,6 +187,15 @@ export {
   type UseAdminServicesOptions,
   type UseAdminServicesResult,
 } from "./admin";
+export {
+  adminOf,
+  type AdminListRequest,
+  type AdminMutationMember,
+  type AdminQueryMember,
+  type AdminRow,
+  type AdminScreen,
+  type AdminWriteData,
+} from "./adminScreen";
 export type { MethodMutationOptions, MethodQueryOptions } from "./hooks";
 export {
   QuickdrawProvider,

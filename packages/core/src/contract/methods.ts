@@ -1,7 +1,7 @@
 // Method declarations for a contract (RFC 0003 section 2). Every method is a
 // `query` or a `mutation`, and both `input` and `output` are required. This
 // replaces the 4.1 hand-written `ServiceMethodsMap` plus the optional Zod
-// schema passed to `defineMethod` (`legacy-src/server/BaseService.ts:848-851`).
+// schema passed to `defineMethod` (4.1 `src/server/BaseService.ts:848-851`).
 
 import type { InferInput, StandardSchemaV1 } from "./standardSchema";
 
@@ -47,6 +47,27 @@ export interface Watch<Collection extends string = string, Input = never> {
   readonly scope: (input: Input) => string;
 }
 
+/**
+ * `watch: { service: ["gameScore"] }`: the service's change topic, narrowed
+ * to the models named (finding F7.3 of the quickdraw-chat review): the
+ * query is invalidated only after a flush that changed one of them. The
+ * names are models of the service, by the client's model name: its `model`
+ * and those it lists in `writes`; `defineService` refuses any other.
+ */
+export interface ServiceModelsWatch {
+  readonly service: readonly string[];
+}
+
+/**
+ * `watch: "service"`: the query reads what the service's change topic covers
+ * (its rows, its collections, and the models it lists in `writes`, such as
+ * a game's high scores), so it is invalidated after every flush that
+ * changes any of them. `watch: { service: [models] }` is invalidated only
+ * when one of the models named changed. The service must open its topic
+ * with `watchAccess`.
+ */
+export type ServiceWatch = "service" | ServiceModelsWatch;
+
 /** A `query` as `defineContract` stores it. */
 export interface QueryDef<
   Input extends StandardSchemaV1 = StandardSchemaV1,
@@ -56,7 +77,14 @@ export interface QueryDef<
   readonly kind: "query";
   readonly input: Input;
   readonly output: Output;
-  readonly watch?: Watch<Watched, InferInput<Input>> | undefined;
+  /**
+   * The topic the query watches: a collection scope (`Watched` is then the
+   * collection's name), or `"service"`, its service's own topic, or
+   * `{ service: [models] }`, that topic narrowed to the models named.
+   */
+  readonly watch?:
+    | ([Watched] extends [never] ? ServiceWatch : Watch<Watched, InferInput<Input>>)
+    | undefined;
   /** What the method does, in a sentence or two. The MCP bridge uses it as the tool's description. */
   readonly describe?: string | undefined;
 }
@@ -79,7 +107,7 @@ export interface MethodDef {
   readonly kind: MethodKind;
   readonly input: StandardSchemaV1;
   readonly output: MethodOutput;
-  readonly watch?: Watch<string> | undefined;
+  readonly watch?: Watch<string> | ServiceWatch | undefined;
   readonly describe?: string | undefined;
 }
 
@@ -99,20 +127,21 @@ export function query<
 >(def: {
   readonly input: Input;
   readonly output: Output;
-  readonly watch?: Watch<Watched, InferInput<Input>>;
+  readonly watch?: Watch<Watched, InferInput<Input>> | ServiceWatch;
   readonly describe?: string;
 }): QueryDef<Input, Output, NoInfer<Watched>> {
   // `NoInfer` in the return type: inside `defineContract`, TypeScript would
   // otherwise infer `Watched` from the surrounding contract as `string` for a
   // query that does not watch, and the watch check would then reject it.
   // Absent options stay absent rather than becoming `undefined` members.
-  const method: QueryDef<Input, Output, Watched> = {
+  // A collection watch names `Watched`; `"service"` leaves it `never`, as the type says.
+  const method = {
     kind: "query",
     input: def.input,
     output: def.output,
     ...(def.watch === undefined ? {} : { watch: def.watch }),
     ...(def.describe === undefined ? {} : { describe: def.describe }),
-  };
+  } as QueryDef<Input, Output, Watched>;
   return Object.freeze(method);
 }
 

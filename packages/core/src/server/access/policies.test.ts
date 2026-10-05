@@ -10,6 +10,7 @@ import { defineContract, type AccessLevel } from "../../index";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import {
   anyOf,
+  everyone,
   inherit,
   jsonAcl,
   meetsLevel,
@@ -81,6 +82,12 @@ const listless = qd.defineService(plain("listless"), {
   methods: {},
 });
 
+const publicProjects = qd.defineService(plain("publicProjects"), {
+  model: "project",
+  access: anyOf(owner("ownerId"), everyone("Read")),
+  methods: {},
+});
+
 const services = [
   projectService,
   ownerProjects,
@@ -92,6 +99,7 @@ const services = [
   inheritedTasks,
   resolved,
   listless,
+  publicProjects,
 ] as const;
 
 let h: Harness;
@@ -125,6 +133,32 @@ async function levels(service: string, ids: readonly string[]) {
 function users() {
   return { ada: board.ada, bo: board.bo, cy: board.cy, di: board.di, ed: board.ed };
 }
+
+describe("everyone(level)", () => {
+  it("gives every signed-in user the level on every row, and the owner more through anyOf", async () => {
+    expect(await levels("publicProjects", [board.p1, board.p2, "missing"])).toEqual({
+      ada: ["Admin", "Read", "Read"],
+      bo: ["Read", "Read", "Read"],
+      cy: ["Read", "Read", "Read"],
+      di: ["Read", "Read", "Read"],
+      ed: ["Read", "Admin", "Read"],
+    });
+  });
+
+  it("filters lists to every row at its level, and to the other policies' rows above it", async () => {
+    const all = [board.p1, board.p2].sort();
+    expect(await visible("publicProjects", "project", as(board.cy), "Read")).toEqual(all);
+    expect(await visible("publicProjects", "project", as(board.cy), "Moderate")).toEqual([]);
+    expect(await visible("publicProjects", "project", as(board.ada), "Admin")).toEqual([board.p1]);
+  });
+
+  it("takes a level that grants something", () => {
+    expect(() => everyone("Public")).toThrow(
+      'everyone(level): level is "Read", "Moderate" or "Admin"',
+    );
+    expect(() => everyone("Owner" as AccessLevel)).toThrow("everyone(level)");
+  });
+});
 
 describe("each policy's levels", () => {
   it("owner: Admin for the user named in the column, nothing for anyone else", async () => {
@@ -280,6 +314,7 @@ describe("accessWhere", () => {
     ["eitherProjects", "project"],
     ["projectService", "project"],
     ["inheritedTasks", "task"],
+    ["publicProjects", "project"],
   ] as const;
 
   it("matches exactly the rows levelsFor lets through, for every policy, user and level", async () => {

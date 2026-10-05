@@ -90,6 +90,40 @@ export const taskService = qd.defineService(task, {
   (`initQuickdraw<{ ...; contracts }>()`). Never write another service's
   model directly to skip its access checks.
 
+## REST routes call the services
+
+Data goes through service methods. The few REST routes an app keeps (a
+service worker's renewal, an inbound webhook, the auth routes) never reach
+the database themselves: they sign the user in with `requireSession(keys)`
+from `@fitzzero/quickdraw-core/server/auth` (it answers 401 itself, and 403
+for the session cookie sent from a page outside the auth routes'
+`allowedOrigins`, which it finds by the same store object in `keys`, never a
+second store over the same table; pass `socketAuth`'s `loadPrincipal` too
+when the app builds its own principal) and call the method in process, so its
+validation, access check and tracked writes are a socket call's:
+
+```ts
+app.post("/api/push/resubscribe", express.json(), requireSession(keys), (req, res) => {
+  void (async () => {
+    const { principal } = sessionOf(req);
+    try {
+      res.json(await qd.caller(principal).pushService.subscribePush(req.body));
+    } catch (error) {
+      const failure = toWire(error); // a QuickdrawError: answer its code's status
+      res.status(httpStatus(failure.code)).json(failure);
+    }
+  })();
+});
+```
+
+`qd.caller(principal)` loads the principal's service-wide grants with the
+server's `auth.loadServiceAccess`, as a socket's handshake does (once per
+caller, again after the server refreshes that user's grants), so a method
+behind `{ service: L }` passes or fails as it would over a socket. A
+principal that carries `serviceAccess` keeps exactly those grants. Never
+read `req.userId` through a cast, and never build a principal with grants
+by hand to get past a check.
+
 ## Writes are tracked; frames are derived
 
 Entity frames, collection deltas and change topics are computed from the
@@ -98,7 +132,13 @@ writes made through `db`, after the response is sent:
 - Write through the handler's `db` (it may return `db.task.update(...)`
   unawaited). In a job, script or webhook, import the tracked client and
   wrap the work in `qd.run(async (ctx) => ...)`, which flushes before it
-  returns. Never write through the untracked client.
+  returns; a boot-time seed may run it before `createServer` too (its writes
+  then reach no subscriber). Never write through the untracked client.
+- Background work a handler starts and does not await (a push sent after
+  the reply) runs in `qd.run(fn, { detached: true })`: a unit of its own,
+  flushed when `fn` settles. Without `detached` it joins the handler's unit,
+  which may have flushed already, and its writes flush as ambient. Catch
+  what the promise rejects with.
 - Never emit by hand: no `io.emit`, `socket.emit` or `qd:` event names.
 - List the other models a service writes: `writes: ["taskLabel"]`.
 - Nested writes (`data: { labels: { create: [...] } }`) are not tracked:
@@ -119,7 +159,10 @@ sent for the whole scope), `views` (`(row, who) => boolean` over index rows)
 and `access`. The service says who may open a scope: `{ anchor: project }`
 (the level on the row the scope value names) or `{ scopeAccess: "self" }`
 (the subscriber's own user id). Everyone in a scope sees every item, so
-derive the item service's access from the anchor (`inherit`).
+derive the item service's access from the anchor (`inherit`). An item that
+reads its `via` junction (a member count) declares
+`via({ model, entry, scope, refreshEntry: true })`, or the count goes stale
+in every scope but the one a membership write links.
 
 ## Kits instead of hand-written CRUD
 
@@ -128,7 +171,9 @@ sharing or admin methods by hand, use the kit: it checks access on every row
 it touches, pages, filters by declared fields and stays live. Lint's
 `prefer-kit` warns on a hand-written method a kit implements (`get`,
 `list`, `create`, `getTask`, `listTasks`, `createTask`, `share`,
-`adminList`, ...) in a service that spreads no kit; when one must stay
+`adminList`, ...) in a service that spreads no kit, and on one that
+duplicates what a kit spread beside it serves (a `getNote` beside a crud
+kit whose `access` names `get`: call the kit's `get`); when one must stay
 hand-written, say why right above it:
 `// quickdraw: hand-written because it answers null for a missing task`.
 Contract halves come from `@fitzzero/quickdraw-core`, handlers from
@@ -141,22 +186,67 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 - `sharing.contract({ mode: "acl" | "members" })` with `sharing.handlers(project)`,
   on a service whose policy has a `jsonAcl` or `members`.
 - `admin.contract({ entity })` with `admin.handlers(task)` (`{ service: "Admin" }` by default).
+  On a users service, `admin.handlers(user, { grants: true })` lets the admin
+  screen edit `serviceAccess` through `adminUpdate` (service-wide Admins
+  only); never hand-write a `setServiceAccess` method for it. `adminMeta`
+  marks that field `kind: "grants"`; an app with a grants editor of its own
+  keeps it out of the generic form with
+  `fieldOverrides: { serviceAccess: { showInForm: false } }`. What an admin
+  edit must set off goes in `admin.handlers(task, { onWrite })`, which
+  runs in the edit's transaction (an audit row that commits with it), or
+  `onCommitted`, which runs once it committed, in a unit of its own (a
+  game applying an edited definition to its running simulation, so a
+  rolled-back edit is never applied); never wrap the kit's handlers.
 
 ## Realtime
 
 - Streams: `streams: { logs: { item, scope: "taskId", seed: 50, access } }`;
   push with `qd.stream(task, "logs").push(taskId, item)`, and several items
-  at once with `pushMany(taskId, items)`, never `push` in a loop.
+  at once with `pushMany(taskId, items)`, never `push` in a loop. When the
+  items are deltas (a game's ticks), give the service a computed seed,
+  `streams: { world: { seed: (worldId, ctx) => [snapshotOf(worldId)] } }`,
+  never a bootstrap call beside the stream; `validate: "development"` there
+  skips the per-item schema check in production for a hot stream. A feed
+  only a room's sockets may read takes `access: { room }` (a name,
+  `{ prefix }`, or `(scope) => room`), never an entry policy that repeats
+  the room's membership.
+- A query over a model the service only `writes` (no service owns it)
+  declares `watch: { service: ["gameScore"] }`, naming the models it reads
+  (the service's `model` and its `writes`), with `watchAccess` on the
+  service; never an app event the client invalidates by hand. `watch:
+"service"` re-reads after a write to any of them (a chat membership the
+  same service writes included), so use it only for a query over all.
 - Channels: `channels: { cursor: { payload, ratePerSecond, requires } }` in
   the contract, `channels: { cursor: (payload, ctx) => ... }` on the service.
   `requires` is what the sending socket must hold: `{ entity: "taskId" }` (a
   subscription to the row the payload's key names), `{ collection, scope }`,
   or an app room a method joined that socket to: `{ room: "world" }` names
   the room itself (not a payload key), ``{ room: (p) => `lobby:${p.lobbyId}` }``
-  computes it. 4.x's `requireRoom` becomes `{ room }`.
+  computes it, `{ room: { prefix: "world:" } }` takes any room with that
+  prefix. The handler reads the matched room as `ctx.room`; never repeat a
+  world's id in every input frame. 4.x's `requireRoom` becomes `{ room }`.
+- A game loop asks `qd.rooms.size(room)` (this node's sockets, spectators
+  included, synchronous) at its tick rate, never Socket.IO's adapter;
+  `ctx.socketId` names the calling socket in a method.
 - Events: `events: { moved: { payload } }`, sent with
   `ctx.rooms.emit(room, task, "moved", payload)` to an app room
   (`ctx.rooms.join(room)` in a method puts the caller's socket in one).
+  Code that is not a handler (a game loop, a timer, a job) sends with
+  `qd.rooms.emit(room, task, "moved", payload)`; never keep the `io` server
+  to emit by hand.
+- When a user loses the right to a room (removed from a chat, kicked from a
+  game), `await ctx.rooms.leave(room, { userId })` (or `qd.rooms.leave`)
+  takes all their sockets out on every node, before anything they must not
+  hear is sent. 4.x's "emit to the user instead of the room" workaround is
+  not needed.
+- React to a socket leaving with the service's own `onRoomLeave`
+  (`defineService(game, { onRoomLeave })`, beside `methods`), never with
+  `socket.on("disconnect")` or a hook each server root must remember:
+  every server the service runs in (tests and benchmarks too) runs it once
+  per socket in a unit of work of its own, and each room carries `last`
+  (the user's last socket there, on any node), which is when a 4.x
+  `playerLeft` fires. `createServer({ onRoomLeave })` is for a hook of the
+  whole app.
 
 ## Performance
 
@@ -166,7 +256,18 @@ they all get the same data (`updateMany`, `createMany`). When each row's
 data differs, loop over the rows inside an interactive
 `db.$transaction(async (tx) => ...)` and await one `tx.task.update(...)` by
 id per row, not an array-form `$transaction([...])`, which cannot read a
-moved row inside its batch. `share: "caller"` for hot queries;
+moved row inside its batch. A projection's relation count selects the
+relation's ids (`labels: { select: { id: true } }`) and counts them in
+`map`, never `_count`, which Prisma compiles to a `GROUP BY` over the whole
+relation table on every read; a huge relation gets a counter column.
+"Make sure this row exists" is `db.x.upsert({ where, create, update: {} })`:
+it costs one read when the row is there and signals nothing, so a page load
+or a reconnect that re-ensures a membership sends no frame. A write that
+matches no row or has nothing to write (`data: {}`) signals nothing; every
+other write signals, one that sets a column to the value it already holds
+too, so re-ensure a row with that upsert rather than by writing its values
+again.
+`share: "caller"` for hot queries;
 `versionColumn: "updatedAt"` answers "not modified" cheaply. The quickdraw
 lint rules enforce most of this file (`no-untracked-write`,
 `no-foreign-write`, `no-nested-write`, `no-raw-sql-write`, `no-manual-emit`,

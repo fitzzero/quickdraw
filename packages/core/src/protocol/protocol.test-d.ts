@@ -128,7 +128,7 @@ describe("call frames", () => {
     expectTypeOf<HelloLimits["subscriptions"]>().toEqualTypeOf<HelloSubscriptionLimits>();
     expectTypeOf<keyof HelloSubscriptionLimits>().toEqualTypeOf<"maxInFlight" | "maxQueued">();
     expectTypeOf<keyof HelloFrame>().toEqualTypeOf<
-      "protocol" | "server" | "limits" | "features" | "userId" | "serviceAccess"
+      "protocol" | "server" | "serverId" | "limits" | "features" | "userId" | "serviceAccess"
     >();
   });
 });
@@ -171,7 +171,8 @@ describe("live data frames", () => {
     if (items.ok) {
       expectTypeOf(items.items).toEqualTypeOf<readonly { id: string }[]>();
     }
-    expectTypeOf<keyof ChangedFrame>().toEqualTypeOf<"s" | "topic" | "rev">();
+    expectTypeOf<keyof ChangedFrame>().toEqualTypeOf<"s" | "topic" | "rev" | "models">();
+    expectTypeOf<ChangedFrame["models"]>().toEqualTypeOf<readonly string[] | undefined>();
     expectTypeOf<ChangedFrame["rev"]>().toBeNumber();
   });
 

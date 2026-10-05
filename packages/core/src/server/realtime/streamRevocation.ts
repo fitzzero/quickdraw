@@ -15,6 +15,10 @@
 // - still allowed: the subscription keeps its room, with its anchors read
 //   again;
 // - a lookup that fails denies, as everywhere else.
+//
+// A feed open to an app room's sockets (`access: { room }`) is checked again
+// when its socket leaves an app room, by its own leave or a removal: one it
+// no longer meets is revoked the same way, at once.
 
 import { SERVER_EVENTS } from "../../contract/names";
 import type { RevokedFrame } from "../../protocol/envelope";
@@ -24,7 +28,7 @@ import type { RevocationHook } from "../emit/revocation";
 import { describeError } from "../pipeline/metrics";
 import type { QuickdrawServerSocket } from "../transports/types";
 import { streamRoomOf, subscriptionOf, type StreamIndex } from "./streamIndex";
-import { authorizeStream, streamAnchors, streamTarget } from "./streamTargets";
+import { authorizeStream, inStreamRoom, streamAnchors, streamTarget } from "./streamTargets";
 import type { StreamSubscription } from "./types";
 
 type Found = Iterable<readonly [QuickdrawServerSocket, readonly StreamSubscription[]]>;
@@ -73,13 +77,41 @@ async function reauthorize(
     index.set(socket, subscriptionOf(target, anchors));
     return;
   }
-  index.delete(socket, room);
+  revoke(index, socket, subscription);
+}
+
+/** Takes the socket out of a feed it may no longer read, and tells it: `qd:revoked`. */
+function revoke(
+  index: StreamIndex,
+  socket: QuickdrawServerSocket,
+  subscription: StreamSubscription,
+): void {
+  index.delete(socket, streamRoomOf(subscription));
   const { s, stream, scope } = subscription;
   const frame: RevokedFrame =
     scope === undefined
       ? { kind: "stream", reason: "access", s, stream }
       : { kind: "stream", reason: "access", s, stream, scope };
   socket.emit(SERVER_EVENTS.revoked, frame);
+}
+
+/**
+ * The socket left an app room (its own leave, or taken out): each feed it
+ * holds whose `access: { room }` it no longer meets is revoked at once, so
+ * nothing pushed after the leave reaches it.
+ */
+export function revokeOutsideRooms(
+  hub: Hub,
+  index: StreamIndex,
+  socket: QuickdrawServerSocket,
+): void {
+  for (const subscription of index.entries(socket)) {
+    const service = hub.registry.services.get(subscription.s);
+    const room = service?.streams.get(subscription.stream)?.room;
+    if (room !== undefined && !inStreamRoom(socket, room, subscription.scope)) {
+      revoke(index, socket, subscription);
+    }
+  }
 }
 
 /** Authorizes the given subscriptions again, all at once. */

@@ -39,6 +39,30 @@ describe("describeAccessMatrix", () => {
     ).resolves.toEqualTypeOf<AccessMatrixReport>();
   });
 
+  test("takes a per-cell input factory, typed by the method's input and the principals", () => {
+    void describeAccessMatrix(app, {
+      service,
+      principals: { alice },
+      cases: [
+        {
+          method: "write",
+          input: async ({ name, principal }) => {
+            expectTypeOf(name).toEqualTypeOf<"alice" | "anonymous">();
+            expectTypeOf(principal).toEqualTypeOf<Principal | null>();
+            return await Promise.resolve({ id: name, text: "x" });
+          },
+          allow: ["alice"],
+        },
+      ],
+    });
+    void describeAccessMatrix(app, {
+      service,
+      principals: { alice },
+      // @ts-expect-error -- the factory must make write's input, which needs text
+      cases: [{ method: "write", input: () => ({ id: "n1" }) }],
+    });
+  });
+
   test("refuses a name, a method or an input the matrix does not have", () => {
     void describeAccessMatrix(app, {
       service,

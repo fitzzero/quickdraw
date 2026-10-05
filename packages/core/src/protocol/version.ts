@@ -114,6 +114,13 @@ export interface HelloFrame {
   readonly protocol: typeof PROTOCOL_VERSION;
   /** The server package's version. */
   readonly server: string;
+  /**
+   * This server's id: random, new each time a server starts. A client that
+   * reconnects to the same id came back after a blip, to another id to a
+   * restarted server (a game's world and clock start over) or, behind a
+   * cluster, to another node, each of which has its own.
+   */
+  readonly serverId: string;
   /** What a client must stay within. */
   readonly limits: HelloLimits;
   /** Names of optional server features that are on. Informational only. */

@@ -43,7 +43,9 @@ the sources beside it, so it always describes the server you run.
 A client implements, roughly in the order a game needs it:
 
 1. the framing and the handshake (`auth.qd`, `qd:hello`), and answering
-   pings;
+   pings; the hello's `serverId` is new each time a server starts, so a
+   reconnect that brings another one reached a restarted server (a game's
+   world and clock start over) rather than surviving a blip;
 2. `qd:call` with an ack id, reading `{ ok: true, d }` or
    `{ ok: false, e: { code, message, data? } }`, and backing off on
    `RATE_LIMITED` for `retryAfterMs`;
@@ -53,6 +55,11 @@ A client implements, roughly in the order a game needs it:
    reconnect;
 5. only for live rows: entity and collection subscriptions (`qd:sub`,
    `qd:col:sub`, `qd:e`, `qd:c`), applied by revision.
+
+Throughout, read only what you know: protocol 5 grows by adding fields to
+objects and appending elements to arrays, so a client that ignores the
+fields it does not know and the elements after the last one it reads
+keeps working when the server is upgraded.
 
 [`examples/godot`](../examples/godot) is such a client for Godot 4: one
 GDScript file of a few hundred lines, an autoload with signals for events,
@@ -79,8 +86,14 @@ channels: {
   move: { payload: moveSchema, requires: { room: "world" } },
   // many lobbies: the room computed from the payload
   chat: { payload: chatSchema, requires: { room: (message) => `lobby:${message.lobbyId}` } },
+  // many worlds: any room the socket is in whose name starts with "world:"
+  steer: { payload: steerSchema, requires: { room: { prefix: "world:" } } },
 },
 ```
+
+The handler gets the room that matched as `ctx.room` (for the prefix form,
+the sending socket's world), so a 20 Hz input frame need not carry its
+world's id.
 
 The requirement is the sending socket's own, checked in memory on the node
 the socket is connected to, so it holds behind a cluster with no round trip:
@@ -88,11 +101,37 @@ the socket is connected to, so it holds behind a cluster with no round trip:
 - A room another socket of the same user joined does not count. A player
   whose page and game client are two sockets makes the joining call from
   the client that sends.
-- A reconnected socket is in no room: the client calls the joining method
-  again when it reconnects (the GDScript client's `connected` signal fires
-  then).
-- Leaving the room (`ctx.rooms.leave`) or disconnecting ends it for the next
+- A room joined by a call belongs to that socket, and a reconnect (a lost
+  network, `qd:rotate`, new credentials) is a new socket in no room: the
+  client makes the joining call again on every `qd:hello`, or it hears
+  nothing of the room while its cached answers still look fine. In React,
+  `useJoin(qd.game.watchWorld, { worldId })` does it (on every hello and
+  when its input changes, never on a re-render; `status` says where it
+  stands); without React, `connection.onHello(listener)`; in the GDScript
+  client, the `connected` signal, which fires after every reconnect.
+- Leaving the room (`ctx.rooms.leave`), being taken out of it
+  (`rooms.leave(room, { userId })`) or disconnecting ends it for the next
   message.
 - A string is the room's name, never a payload key (unlike `{ entity }`); a
   name starting with `qd:` or `user:` is refused when the contract is
   defined, and a computed one drops the message.
+
+The server side of a game needs no handler to reach the room:
+
+- The loop sends with `qd.rooms.emit(room, contract, event, payload)` (and
+  `emitToUser`), from a timer or a tick, to every node's sockets in the
+  room; a stream (`qd.stream(...).push`, `volatile`) carries what may be
+  dropped under load, such as snapshots.
+- `qd.rooms.leave(room, { userId })` (or `ctx.rooms.leave` in a handler)
+  takes every socket of a player out, on every node. Each of them receives
+  `qd:presence { room, users: [] }` unasked, which a client reads as "out
+  of the room": it stops sending on the room's channels until a joining
+  call lets it back.
+- The game service's own `onRoomLeave` (`defineService(game, { onRoomLeave
+})`, run by every server the service runs in) hears every socket that
+  leaves (its own leave, a removal, a disconnect) once, with each room and
+  `last`: true when
+  the player has no socket left in the room on any node, the moment to
+  send `playerLeft`. A socket that reconnects after `qd:rotate` is a new
+  socket; the old one's disconnect is the player's last only when they had
+  no other.

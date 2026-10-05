@@ -3,7 +3,7 @@
 // `qd.<service>.<collection>.useCollection(scope, options)` (RFC 0003
 // sections 7, 11 and 11.5): one scope of a collection, live. Replaces 4.1's
 // `useCollection(serviceName, collection, scopeId)`
-// (`legacy-src/client/useCollection.ts:65-369`).
+// (4.1 `src/client/useCollection.ts:65-369`).
 //
 // Every component showing a scope shares its pipeline
 // (`collectionController.ts`): one load, one page in flight, deltas applied
@@ -17,7 +17,13 @@
 // - `items`: the items loaded among those members, in order. The first page
 //   loads with the scope, `loadMore` loads the next, `loadItems(ids)` loads
 //   chosen members, and `load: "all"` loads every page;
-// - both with the overlays of optimistic mutations laid over them.
+// - both with the overlays of optimistic mutations laid over them, and the
+//   items they added (`cache.addItem`) in their place; `pending` names those
+//   whose call is in flight, and `checking` those among them whose call's
+//   outcome is unknown until the scope's next load says;
+// - `refused`: the items added with `onRefused: "keep"` whose call the
+//   server refused, with the error, until the app dismisses one or sends its
+//   call again (finding F6.4 of the quickdraw-chat migration).
 
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
@@ -27,8 +33,16 @@ import type { CollectionController } from "./collectionController";
 import type { IndexRow } from "./collectionIndex";
 import type { CollectionEntry, CollectionTarget } from "./collectionLoads";
 import { entryQuery } from "./host";
-import { useLiveData, useOverlayView, useUserId } from "./liveHooks";
+import {
+  useLiveData,
+  useOverlayView,
+  useRefusedItems,
+  useUserId,
+  type RefusedItem,
+} from "./liveHooks";
 import { showCollection, viewPredicate, type CollectionView } from "./views";
+
+export type { RefusedItem };
 
 /** Options of `useCollection`. */
 export interface UseCollectionOptions<View extends string = string> {
@@ -52,8 +66,38 @@ export interface UseCollectionOptions<View extends string = string> {
 
 /** What `useCollection` returns. */
 export interface UseCollectionResult<Item, Row> {
-  /** The items loaded among the members shown, in order. */
+  /**
+   * The items loaded among the members shown, in order, with the items
+   * optimistic updates added (`cache.addItem`) in their place until the
+   * scope's own copies arrive.
+   */
   readonly items: readonly Item[];
+  /**
+   * The ids of the items shown that an optimistic update added and whose
+   * call is in flight: style them as sending. Empty when there are none.
+   */
+  readonly pending: ReadonlySet<string>;
+  /**
+   * The ids among `pending` whose call's outcome is unknown: its connection
+   * dropped after it was sent, or it timed out, so the server may have made
+   * the write. Show them as checking. Each ends with the scope's next load:
+   * its own copy shows when the scope holds its id, and a load that answers
+   * without it refuses it (into `refused` with `onRefused: "keep"`). Only an
+   * id the client made, which the server keeps, can be found: give an item
+   * one (`newId()`) when the app may send its call again. Empty when there
+   * are none.
+   */
+  readonly checking: ReadonlySet<string>;
+  /**
+   * The items an optimistic update added with `onRefused: "keep"` whose call
+   * was refused, oldest first, each with its error, `dismiss()` and
+   * `retry()`: not among `items`, so show them where the app shows a failed
+   * send. `retry()` sends the same call again; send it only when the call is
+   * idempotent (an id the client made, which the server keeps), since a
+   * refusal after an unknown outcome may follow a write the server made.
+   * Empty when there are none.
+   */
+  readonly refused: readonly RefusedItem<Item>[];
   /**
    * The members shown, in order: one row each, `id` and the index fields.
    * `undefined` for a collection without an index, and for a scope too large
@@ -90,6 +134,14 @@ const NOTHING: CollectionView<never> = Object.freeze({
   byId: new Map<string, never>(),
 });
 
+const NONE_PENDING: ReadonlySet<string> = new Set();
+
+/** What the hook shows, and the ids among it of additions whose call is in flight, or of unknown outcome. */
+interface Shown extends CollectionView<{ readonly id: string }> {
+  readonly pending: ReadonlySet<string>;
+  readonly checking: ReadonlySet<string>;
+}
+
 /** What the hook returns besides what it shows. */
 type Actions = Pick<UseCollectionResult<unknown, unknown>, "loadMore" | "loadItems" | "refresh">;
 
@@ -111,7 +163,8 @@ function actionsOf(held: { readonly current: CollectionController | null }): Act
 /** What the hook returns, from the entry, what it shows of it and the actions. */
 function resultOf<Item, Row>(
   entry: CollectionEntry | null | undefined,
-  view: CollectionView<{ readonly id: string }>,
+  view: Shown,
+  refused: readonly RefusedItem<unknown>[],
   active: boolean,
   actions: Actions,
 ): UseCollectionResult<Item, Row> {
@@ -119,6 +172,9 @@ function resultOf<Item, Row>(
   const error = entry?.error ?? null;
   return {
     items: view.items as readonly Item[],
+    pending: view.pending,
+    checking: view.checking,
+    refused: refused as readonly RefusedItem<Item>[],
     index: view.index as readonly Row[] | undefined,
     byId: view.byId as ReadonlyMap<string, Item>,
     totalCount: state?.totalCount ?? null,
@@ -166,20 +222,37 @@ export function useCollection<Item, Row = IndexRow>(
   const entry = active && !awaiting ? cached : undefined;
   const predicate = viewPredicate(target.def, options.view);
   const state = entry?.state ?? null;
-  const shown = useMemo(
-    () =>
-      state === null
-        ? NOTHING
-        : showCollection(state, {
-            view: predicate,
-            who: { userId: userId ?? "" },
-            overlay: (row) => overlays.apply(row, { collection: target.collection }),
-          }),
-    [state, predicate, userId, overlays, target.collection],
+  const shown = useMemo((): Shown => {
+    if (state === null) {
+      return { ...NOTHING, pending: NONE_PENDING, checking: NONE_PENDING };
+    }
+    const added = overlays.added(target.collection, scopeValue);
+    const view = showCollection(state, {
+      view: predicate,
+      who: { userId: userId ?? "" },
+      overlay: (row) => overlays.apply(row, { collection: target.collection }),
+      added: added.map((addition) => addition.item),
+      shape: target.def,
+    });
+    const sending = added.filter((addition) => addition.pending && view.byId.has(addition.item.id));
+    const unknown = sending.filter((addition) => addition.unknown);
+    return {
+      ...view,
+      pending:
+        sending.length === 0 ? NONE_PENDING : new Set(sending.map((addition) => addition.item.id)),
+      checking:
+        unknown.length === 0 ? NONE_PENDING : new Set(unknown.map((addition) => addition.item.id)),
+    };
+  }, [state, predicate, userId, overlays, target.collection, target.def, scopeValue]);
+  const refused = useRefusedItems(
+    queryClient,
+    overlays,
+    target.collection,
+    active && !awaiting ? scopeValue : "",
   );
   const actions = useMemo(() => actionsOf(held), []);
   return useMemo(
-    () => resultOf<Item, Row>(entry, shown, active, actions),
-    [entry, shown, active, actions],
+    () => resultOf<Item, Row>(entry, shown, refused, active, actions),
+    [entry, shown, refused, active, actions],
   );
 }

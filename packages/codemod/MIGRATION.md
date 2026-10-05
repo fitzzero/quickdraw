@@ -7,7 +7,7 @@ package, access is declared per method and decided by one row policy, frames
 and deltas follow tracked writes instead of hand emits, and the web app calls
 a typed client instead of string-named hooks. The concepts carry over: a
 service, its methods, levels, rooms, collections, channels. The design record
-is [`docs/rfcs/0003-v5.md`](../../docs/rfcs/0003-v5.md); section 15 lists every
+is [`docs/rfcs/0003-v5.md`](https://github.com/fitzzero/quickdraw/blob/main/docs/rfcs/0003-v5.md); section 15 lists every
 4.x API and what replaces it, and this guide takes them one at a time.
 
 Most of the move is mechanical, and `@fitzzero/quickdraw-codemod` does it:
@@ -20,6 +20,7 @@ keep 4.x clients working while you ship.
 - [Work through the report](#work-through-the-report)
 - [4.x to 5.0, one API at a time](#4x-to-50-one-api-at-a-time)
 - [Boards: from a watched query to a collection](#boards-from-a-watched-query-to-a-collection)
+- [Hand-built auth to the auth routes kit](#hand-built-auth-to-the-auth-routes-kit)
 - [Defaults that changed](#defaults-that-changed)
 - [Running 4.x and 5.0 clients together](#running-4x-and-50-clients-together)
 - [Lint, skills and agents](#lint-skills-and-agents)
@@ -49,12 +50,11 @@ keep 4.x clients working while you ship.
 - **A clean working tree.** The codemod rewrites files in place; review its
   changes as a diff.
 
-Then upgrade the packages (5.0 prereleases are published under the `next`
-dist-tag):
+Then upgrade the packages:
 
 ```bash
-bun add @fitzzero/quickdraw-core@next            # in every package that imports it
-bun add -d @fitzzero/quickdraw-lint@next @fitzzero/quickdraw-skills@next oxlint
+bun add @fitzzero/quickdraw-core            # in every package that imports it
+bun add -d @fitzzero/quickdraw-lint @fitzzero/quickdraw-skills oxlint
 ```
 
 The shared package now holds the contracts, so it needs `zod` among its
@@ -65,8 +65,8 @@ dependencies when it did not have it.
 From the app's repository root:
 
 ```bash
-bunx @fitzzero/quickdraw-codemod@next v5 . --dry-run   # what it would change
-bunx @fitzzero/quickdraw-codemod@next v5 .
+bunx @fitzzero/quickdraw-codemod v5 . --dry-run   # what it would change
+bunx @fitzzero/quickdraw-codemod v5 .
 ```
 
 It expects the template's layout (`packages/shared`, `apps/api`, `apps/web`,
@@ -82,7 +82,13 @@ faithfully. What it does:
   into the shared package with the helpers it uses (`cuidSchema`, say, into
   `contracts/helpers.ts`); without one, `todoSchema<Payload>()`. An output is
   `"entity"` (or `nullable("entity")`, `listOf("entity")`) when the 4.x
-  response was the service's DTO, `todoSchema<Response>()` otherwise. The
+  response was the service's DTO, `todoSchema<Response>()` otherwise. A
+  mutation of one row whose 4.x response was `DTO | null` answers `"entity"`,
+  marked in the contract and above its handler: 4.x's `this.update` gave
+  `null` for a missing row, a tracked write throws `NOT_FOUND` instead
+  (though under an `{ entry }` access form the missing row is refused
+  `FORBIDDEN` before the handler runs), and only an exact `"entity"`
+  output is optimistic by default. The
   entity is `todoSchema<DTO>({ keys })`, the DTO's fields. A method is a
   `query` when its name starts with get, list, search, find or count, or the
   web app reads it with `useServiceQuery`, and a `mutation` otherwise.
@@ -96,16 +102,31 @@ faithfully. What it does:
   `input`, `ctx.userId` becomes `ctx.principal.userId`, `this.prisma`
   becomes the tracked `db`, and the template's `requireAuth(ctx)` guard goes
   where access already requires a principal. The access mapping is below.
-  Helper methods become module functions; overridden 4.x hooks,
+  Helper methods and getters become module functions (a getter's reads call
+  it: `this.enabled` is `enabled()`); overridden 4.x hooks,
   `defineCollection` options and `installAdminMethods` options stay in the
-  file, marked. A split service's method modules keep their files, with
-  typed method objects (see [Splitting large services](#splitting-large-services)).
+  file, marked. Each field becomes a marked module binding with its
+  initializer (`const playingUsers = new Set<string>()`), and `this.x`
+  reads it; the constructor's other code, the values it gave fields
+  included, goes into an exported `setUp<Service>(...)` function that takes
+  the constructor's parameters it uses, marked: call it once where the
+  server starts, or move each part. Only the Prisma client's field goes (it
+  is `db`), and a field holding another 4.x service, whose uses are marked
+  (`ctx.services` replaces it). A call of the 4.x base class
+  (`super.unsubscribe(...)`) is dropped under a marker naming it, since
+  `super` outside a class does not parse. A split service's method modules
+  keep their files, with typed method objects (see
+  [Splitting large services](#splitting-large-services)).
 - **The web app.** `useService`, `useServiceQuery`, `useSubscription` and
   `useCollection` calls become `qd.<service>.<method>.useMutation()`,
   `.useQuery(input)`, `qd.<service>.useEntity(id)` and
   `qd.<service>.<collection>.useCollection(scope)`, whether the call reaches
   quickdraw directly or through the template's typed wrappers
-  (`hooks/useService.ts`), which it deletes once nothing uses them.
+  (`hooks/useService.ts`), which it deletes once nothing uses them, with a
+  file of types only they imported (`hooks/service-types.ts`). A local type
+  that only a rewritten hook's type arguments named goes, a one-argument
+  `UseCollectionResult<Item>` gets 5.0's second argument, and an import left
+  holding only types becomes `import type`.
 - **Other uses of a service class.** Its import becomes one of the service
   object, `new ChatService(prisma)` becomes `chatService` (marked: the
   server takes services in `qd.createServer({ services })`) and the class
@@ -122,16 +143,31 @@ faithfully. What it does:
 - **New files**: `apps/api/src/db.ts` (`trackPrisma(prisma)`),
   `apps/api/src/quickdraw.ts` (`initQuickdraw<AppTypes>()`) and
   `apps/web/src/lib/quickdraw.ts` (`createQuickdrawClient(contracts)`).
+- **Template carve-outs.** A service whose 4.x code sat between a template
+  carve-out's comments (`quickdraw-game:start` and `quickdraw-game:end`,
+  around its `ServiceMethodsMap` entry) keeps them: its lines in
+  `contracts/index.ts` sit between the same comments, and its new contract
+  file carries a `[carve-out]` marker, so a fork that strips the carve-out
+  can delete it too. An entity key the 4.x DTO declares inside a carve-out
+  (a game-only `isGuest` on `UserDTO`) keeps the carve-out's comments
+  around it in the contract's `keys`.
+- **Formatting.** It formats every file it writes, the report too, with the
+  app's formatter (oxfmt, prettier or Biome, when the root `package.json`
+  has it and it is installed), so the output passes the app's format check
+  as it is written.
 - **The report.** Wherever a person has to decide, it leaves a
-  `// quickdraw-migrate: review [kind] ...` marker above the code in
-  question (a hook's `error` read as the 4.x message string among them: it
-  is a `QuickdrawError` now), and writes `quickdraw-migration-report.md` at
-  the root: every marker, with its file and line, grouped by kind. A dry run
-  lists it as `A` (created) on the first run.
+  `// quickdraw-migrate: review [kind] ...` marker on its own line above the
+  code in question (a hook's `error` read as the 4.x message string among
+  them: it is a `QuickdrawError` now), and writes
+  `quickdraw-migration-report.md` at the root: every marker, with its file
+  and line in the formatted file, grouped by kind. A dry run lists it as `A`
+  (created) on the first run.
 
-Running it again changes nothing, apart from rewriting the report from the
-markers that remain, so delete each marker once its item is done and run it
-again to see what is left.
+Running it again changes nothing at all, so delete each marker once its
+item is done and run it again: the report is rewritten from the markers
+that remain. Commit the output as it is, then adopt lint with a baseline
+([Lint, skills and agents](#lint-skills-and-agents)): the output breaks
+rules (unused 4.x hooks kept for review, say) until its markers are done.
 
 ### The access mapping
 
@@ -464,7 +500,9 @@ private initMethods(): void {
 
 The 5.0 methods are the `methods` object of the service above. Errors are
 thrown as `QuickdrawError(code, message)`: anything else reaches the caller
-as `INTERNAL` with a generic message, where 4.x sent the thrown message.
+as `INTERNAL` with a generic message, where 4.x sent the thrown message. The
+codemod marks each `throw new Error(...)` in a handler `[error]`: give it the
+code that fits wherever the caller should still see the message.
 
 ### `verifyAllMethods` is compile-time
 
@@ -477,7 +515,10 @@ The CRUD trio emitted the entity frame and the collection deltas and ran
 the lifecycle hooks. In 5.0 every write through `db` is tracked: the frames
 and deltas follow from the write itself, whatever method made it. Two
 differences to keep in mind: `db.task.update` throws `NOT_FOUND` for a
-missing row where `this.update` returned `null`, and nothing runs a hook.
+missing row where `this.update` returned `null` (a method whose access is
+`{ entry }` never gets that far: its caller is refused `FORBIDDEN` for a
+row that does not exist, as for one they may not see), and nothing runs a
+hook.
 Move a hook's work into the methods that write, or into `affects` when it
 only made another service's row send again.
 
@@ -561,14 +602,16 @@ export const taskService = qd.defineService(task, {
   // a write to a subtask sends its parent again
   affects: [{ service: task, id: "parentTaskId" }],
   project: {
-    // a relation count: read with select, built by a pure, synchronous map
+    // a relation count: read with select, built by a pure, synchronous map. Read the relation's
+    // ids, which Prisma fetches for the rows read only; its _count aggregates the whole TaskLabel
+    // table (a GROUP BY over every row) on every snapshot and flush
     card: {
-      select: { title: true, status: true, _count: { select: { labels: true } } },
-      map: (row: { id: string; title: string; status: string; _count: { labels: number } }) => ({
+      select: { title: true, status: true, labels: { select: { id: true } } },
+      map: (row: { id: string; title: string; status: string; labels: { id: string }[] }) => ({
         id: row.id,
         title: row.title,
         status: row.status,
-        labelCount: row._count.labels,
+        labelCount: row.labels.length,
       }),
     },
   },
@@ -581,7 +624,7 @@ export const taskService = qd.defineService(task, {
       handler: ({ input, db }) =>
         db.task.findUniqueOrThrow({
           where: { id: input.id },
-          select: { id: true, title: true, status: true, _count: { select: { labels: true } } },
+          select: { id: true, title: true, status: true, labels: { select: { id: true } } },
         }),
     },
   },
@@ -589,7 +632,21 @@ export const taskService = qd.defineService(task, {
 ```
 
 The 5.0 contract above declares `fields: { notes: "Moderate" }` where the
-4.x service listed `notes` as protected.
+4.x service listed `notes` as protected. In the types a reader gets (the
+data of `useEntity`, `useEntities` and `useCollection`, an `"entity"`
+output, `EntityOf`, `ItemOf`), a tiered field is optional, since a reader
+below its level receives the row without it: `task.notes` is
+`string | null | undefined` there, so read it with a guard. A handler still
+returns the whole row. A method whose output is a schema of its own sends
+only the keys that schema declares, unstripped, so it must not declare a
+tiered field: answer the entity or a projection instead. A 4.x DTO type
+that kept protected fields optional by hand can become
+`EntityOf<typeof taskContract>`.
+
+A handler returns database rows for a projection output, and a Prisma `Json`
+column, typed `JsonValue`, is accepted where the projection has an object,
+an array or a record (`acl: [{ userId, level }]`); the output schema checks
+its shape outside production.
 
 ### `checkAccess`, `checkEntryACL`, `checkBatchSubscriptionAccess` and `hasEntryACL` become policies
 
@@ -753,10 +810,16 @@ user) and received with `qd.<service>.<event>.useEvent(handler)`. Channels
 (`defineChannel`) are declared the same way and handled in
 `defineService`'s `channels`. A channel's `requireRoom` becomes
 `requires: { room }` in the contract: `{ room: "world" }` for a fixed room,
-`{ room: (payload) => ... }` for one the payload names. The sending socket
-must have joined that app room through `ctx.rooms.join` in a method it
-called; a message that names no room is dropped, where 4.x skipped the
-check.
+`{ room: (payload) => ... }` for one the payload names, `{ room: { prefix:
+"world:" } }` for any room with that prefix (the handler reads the matched
+room as `ctx.room`). The sending socket must have joined that app room
+through `ctx.rooms.join` in a method it called; a message that names no
+room is dropped, where 4.x skipped the check. A room joined by a call
+belongs to its socket, so a client joins again after every reconnect:
+`useJoin(qd.game.watchWorld, input)` in React, where 4.x apps re-called
+from an `isConnected` effect. 4.x's `unsubscribeSocket` and `unsubscribe`
+overrides become the service's own `onRoomLeave(leave, ctx)` beside
+`methods`, which every server the service runs in calls.
 
 <!-- example: ../../../codemod/test/guide-v4/packages/shared/src/index.ts#events -->
 
@@ -1016,7 +1079,10 @@ export const taskContract = defineContract("taskService", {
     ...crud.contract({
       entity: taskSchema,
       get: true,
-      create: { input: z.object({ projectId: z.string(), title: z.string() }) },
+      // `id`: one the client may make (`newId()`), which the create keeps
+      create: {
+        input: z.object({ id: z.string().optional(), projectId: z.string(), title: z.string() }),
+      },
     }),
     rename: mutation({
       input: z.object({ id: z.string(), title: z.string() }),
@@ -1048,7 +1114,12 @@ export const taskContract = defineContract("taskService", {
 ```
 
 `countOnBoard` above is fetched again whenever the project's board
-changes.
+changes. A 4.x event that no collection scope stands for (a game's high
+scores, which the game service writes beside its own rows) maps to the
+service's topic, narrowed to the models the query reads:
+`watch: { service: ["gameScore"] }` re-reads only after a write to those
+models (`watch: "service"` after a write to any model the service has or
+writes), and needs `watchAccess` on the service.
 
 ### `ServiceResponse` becomes `{ ok, d }` / `{ ok, e }` and `QuickdrawError`
 
@@ -1139,10 +1210,15 @@ export function TitleField({ task }: { task: TaskDTO }) {
 
 The auth helpers, the Express rate limits, the socket rate limiter (apart
 from its default, under "Defaults that changed"), the Redis adapter helper,
-the env and encryption utilities, and the client's auth and formatting
+the env and encryption utilities, the client's token storage
+(`getAuthToken`, `setAuthToken`, `clearAuthToken`) and its formatting
 utilities. Some auth helpers moved to
 `@fitzzero/quickdraw-core/server/auth` (and the MCP bridge to
-`./server/mcp`); lint's `no-v4-api` names the new entry point of each.
+`./server/mcp`); lint's `no-v4-api` names the new entry point of each. The
+client's `getOAuthUrl`, `logout` and `logoutAllDevices` called routes the
+auth routes kit does not serve, so they are replaced by `signInUrl`,
+`signOut` and `signOutEverywhere` (below, "Hand-built auth to the auth
+routes kit").
 
 ## Boards: from a watched query to a collection
 
@@ -1201,10 +1277,10 @@ export const boardService = qd.defineService(boardContract, {
 ```
 
 Measured with 600 writes to a busy board, 5.0 cut the board query's p95 to
-0.28× of 4.1 (122 to 34.6 ms), SQL per write to 0.25× and server CPU per
-write to 0.55×, but bytes per write only to 0.89×: each board reply was
+0.15× of 4.1 (122 to 19.0 ms), SQL per write to 0.36× and server CPU per
+write to 0.53×, but bytes per write only to 0.89×: each board reply was
 516 KB, and viewers fetched it about 20 times per write. Without those
-replies, 5.0 sent about 19% of what 4.1 did.
+replies, 5.0 sent about a fifth of what 4.1 did.
 
 The 5.0 pattern is the collection: declare `index` (the small fields the
 board orders and filters by, sent for the whole scope with the first page)
@@ -1233,7 +1309,10 @@ export const taskContract = defineContract("taskService", {
     ...crud.contract({
       entity: taskSchema,
       get: true,
-      create: { input: z.object({ projectId: z.string(), title: z.string() }) },
+      // `id`: one the client may make (`newId()`), which the create keeps
+      create: {
+        input: z.object({ id: z.string().optional(), projectId: z.string(), title: z.string() }),
+      },
     }),
     rename: mutation({
       input: z.object({ id: z.string(), title: z.string() }),
@@ -1299,6 +1378,279 @@ export function TaskBoard({ projectId }: { readonly projectId: string }) {
 }
 ```
 
+## Hand-built auth to the auth routes kit
+
+A 4.x app built its own sign-in: a route pair per OAuth provider, a callback
+that found or created the user, a `Session` row holding each JWT, a guest
+route, `DELETE` routes to log out, and an `authenticate` that verified the
+token and looked its row up. The codemod leaves this code alone. 5.0's auth
+routes kit (`createAuthRoutes` on `./server/auth`, the README's "Auth routes
+kit") serves the same flows as one Express middleware over a session store
+the app owns, and `socketAuth` authenticates sockets and HTTP calls by those
+sessions. Moving onto it takes a database migration, a new set of URLs for
+the web app, and these steps.
+
+**1. The `Session` table.** The kit's `SessionStore` creates, reads and
+revokes sessions by id. A session's JWT names its row in its `sid` claim,
+so the row no longer stores the token: drop the `token` column, and add how
+the user signed in (`provider`) and, for a list of where a user is signed
+in, the request's user agent and IP. 4.x tokens carry no `sid`, so every
+existing session ends and everyone signs in once more; the migration
+deletes the old rows:
+
+```sql
+-- A 4.x Session table ("sessions": id, user_id, token, expires_at, created_at)
+DELETE FROM "sessions";
+DROP INDEX "sessions_token_key";
+ALTER TABLE "sessions"
+  DROP COLUMN "token",
+  ADD COLUMN "provider" TEXT NOT NULL,
+  ADD COLUMN "user_agent" TEXT,
+  ADD COLUMN "ip" TEXT;
+CREATE INDEX "sessions_user_id_idx" ON "sessions"("user_id");
+CREATE INDEX "sessions_expires_at_idx" ON "sessions"("expires_at");
+```
+
+```prisma
+model Session {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  // "google", "discord", "mock", "guest", or an app's own flow
+  provider  String
+  userAgent String?  @map("user_agent")
+  ip        String?
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+```
+
+The store over it is four calls. Sessions are not live data, so write them
+through the untracked client (or inside `qd.run`), and delete expired rows
+now and then:
+
+<!-- example: apps/api/src/auth/sessions.ts#store -->
+
+```ts
+import type { SessionStore } from "@fitzzero/quickdraw-core/server/auth";
+
+/** The methods of Prisma's `db.session` delegate the store calls. */
+interface SessionTable {
+  create(args: { data: SessionMeta & { userId: string } }): Promise<AuthSession>;
+  findUnique(args: { where: { id: string } }): Promise<AuthSession | null>;
+  deleteMany(args: { where: { id: string } | { userId: string } }): Promise<unknown>;
+}
+
+export function prismaSessions(sessions: SessionTable): SessionStore {
+  return {
+    create: (userId, meta) => sessions.create({ data: { userId, ...meta } }),
+    get: (id) => sessions.findUnique({ where: { id } }),
+    revoke: (id) => sessions.deleteMany({ where: { id } }),
+    revokeAll: (userId) => sessions.deleteMany({ where: { userId } }),
+  };
+}
+```
+
+**2. The routes.** Under `basePath` (default `/auth`), with the web app's
+links and calls changed to match. Every POST needs
+`Content-Type: application/json`; a failure answers
+`{ error: <code>, message }` with the code's HTTP status:
+
+| 4.x (hand-built)                                  | 5.0 (the kit)                                                                                       |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `GET /auth/google`, `/auth/discord`, `/auth/mock` | `GET /auth/{provider}/start?returnTo=<page>`                                                        |
+| `GET /auth/{provider}/callback`                   | the same path; register `{publicUrl}/auth/{provider}/callback` with the provider                    |
+| `POST /auth/guest`                                | the same, with a JSON body; answers `{ userId, name? }` (and `token` with `guest({ token: true })`) |
+| `DELETE /auth/logout`                             | `POST /auth/logout`: 204, revokes the session and clears the cookie                                 |
+| `DELETE /auth/sessions` (every device)            | `POST /auth/logout-all`: 204, or 401 without a live session                                         |
+| (none)                                            | `GET /auth/me`: `{ userId }`, or 401                                                                |
+
+`returnTo` is only a page's origin, and only one `allowedOrigins` lists: the
+sign-in lands on `{origin}{successPath}` with the session cookie set. A
+failed one lands on `{origin}{errorPath}?error=<code>`, with new codes for
+the login page to read:
+
+| 4.x `?error=`   | 5.0 `?error=` | When                                                                             |
+| --------------- | ------------- | -------------------------------------------------------------------------------- |
+| `invalid_state` | `state`       | the OAuth state is missing, forged, expired, used twice, or for another provider |
+| `no_code`       | `denied`      | the provider sent no code or an error (the user declined)                        |
+| (none)          | `denied`      | `onLogin` returned `null`: the app refused the sign-in                           |
+| `oauth_failed`  | `failed`      | the code exchange, `onLogin` (it threw) or creating the session failed           |
+
+In the web app, `./client`'s helpers call these routes. 4.x's `getOAuthUrl`,
+`logout` and `logoutAllDevices` called the hand-built ones (and sent only a
+stored token, so with cookie sessions they signed nobody out); 5.0 replaces
+them, and lint's `no-v4-api` reports the old names:
+
+| 4.x (`./client`)                 | 5.0 (`./client`)                                                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `getOAuthUrl(provider, apiUrl?)` | `signInUrl(provider, { apiUrl?, basePath?, returnTo? })`: the start route, back to the current page's origin       |
+| `logout(apiUrl?)`                | `signOut({ apiUrl?, basePath? })`: `POST /auth/logout` with the cookie (and a stored token); rejects when refused  |
+| `logoutAllDevices(apiUrl?)`      | `signOutEverywhere({ apiUrl?, basePath? })`: `POST /auth/logout-all`; resolves with nothing (4.x returned a count) |
+
+Each POST sends the session cookie (`credentials: "include"`: allow the web
+app's origin with credentials in the API's CORS) and forgets the stored
+token. A socket keeps the user it signed in as until it connects again:
+after `signOut()`, reconnect the provider's connection
+(`useQuickdraw().connection.close()`, then `open()`), or load the next page.
+
+**3. The callback becomes `onLogin`.** What 4.x's callback did after the code
+exchange (find the user by the provider account, link one by a verified
+email, create one, store the provider's tokens) moves into
+`onLogin(profile, provider)`, which returns the user's id, or `null` to
+refuse. `profile` carries `providerAccountId`, `email`, `emailVerified`,
+`name`, `image`, the provider's `tokens` and its `raw` answer. Link an
+existing user by email only when `emailVerified` is true.
+
+**4. Wire it.** One `{ sessions, jwtSecret }` serves the routes, `socketAuth`
+and the app's own REST routes. A provider without credentials in an
+environment (development without a Google app) is left out in place with
+`google.optional(...)`. 4.x's development sign-in by a user id in the
+handshake becomes `socketAuth({ devCredentials })`, which cannot run in
+production. `createRequireAuth({ getSession })` on REST routes becomes
+`requireSession(keys)`, which verifies the JWT once; the route reads the
+user with `sessionOf(req)` instead of `req.userId` (Express's `Request` type
+has no such member), and calls the services as `sessionOf(req).principal`
+through `qd.caller`, which loads the user's grants as a socket's handshake
+does (the README's auth routes kit section shows such a route). Give
+`requireSession` the `sessions` object the routes were given: it takes their
+`allowedOrigins` by that same store object, and a second
+`prismaSessions(...)` over the same table is another one. `onRevoke` ends
+the sockets of a revoked session:
+
+<!-- example: apps/api/src/auth/migrating.ts#wiring -->
+
+```ts
+import {
+  createAuthRoutes,
+  discord,
+  google,
+  mock,
+  requireSession,
+  sessionOf,
+  socketAuth,
+  type SessionKeys,
+} from "@fitzzero/quickdraw-core/server/auth";
+
+// `sessions`: a SessionStore over the Session table, `prismaSessions(db.session)`
+const keys: SessionKeys = { sessions, jwtSecret: env.JWT_SECRET };
+const allowedOrigins = [env.CLIENT_URL];
+
+/** A development handshake's user (`auth: { userId }`): the Godot editor, load-test bots. */
+async function devUser(userId: string): Promise<AppPrincipal | null> {
+  const user = await db.user.findUnique({ where: { id: userId }, select: { id: true } });
+  return user === null ? null : { userId: user.id, kind: "user" };
+}
+
+export const app: Express = express();
+app.set("trust proxy", 1);
+app.use(
+  createAuthRoutes({
+    ...keys,
+    providers: [
+      // each is left out where its credentials are not set
+      google.optional({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }),
+      discord.optional({
+        clientId: env.DISCORD_CLIENT_ID,
+        clientSecret: env.DISCORD_CLIENT_SECRET,
+      }),
+      mock({ listUsers: listSeededUsers }),
+    ],
+    // 4.x's callback tail: find or create the user (and its account row); null refuses
+    onLogin: (profile) => upsertUser(profile),
+    allowedOrigins,
+    publicUrl: env.API_URL,
+    // the web app's pages: /auth/callback signed in, /auth/login?error=state|denied|failed
+    successPath: "/auth/callback",
+    errorPath: "/auth/login",
+    onRevoke: (userId, sessionId) =>
+      server.access.disconnectUser(userId, sessionId === null ? {} : { sessionId }),
+  }),
+);
+
+// the app's own REST routes: was createRequireAuth({ getSession }) and req.userId
+app.post("/api/push/resubscribe", express.json(), requireSession(keys), (req, res) => {
+  // the session's user and principal, typed; call the services as it (the README's REST example)
+  const { userId } = sessionOf(req);
+  res.json({ userId });
+});
+
+export const server = qd.createServer({
+  app,
+  services: [projectService, taskService],
+  db,
+  auth: {
+    authenticate: socketAuth({
+      ...keys,
+      allowedOrigins,
+      loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
+      // never in production: socketAuth refuses it there
+      devCredentials: env.ENABLE_DEV_CREDENTIALS === "true" ? devUser : undefined,
+    }),
+    loadServiceAccess: (userId) => loadGrants(userId),
+    serviceAccessSource: { model: "user", column: "serviceAccess" },
+  },
+});
+```
+
+**5. Flows the kit does not redirect for.** A sign-in that is not a
+redirect to a provider (a Discord Activity's embedded SDK, login codes)
+stays an app route, ending in `issueSession`: an ordinary session that
+`socketAuth`, `requireSession` and `/auth/me` accept like any other. Answer
+the token in the body for a client that cannot keep the cookie, and set no
+cookie its page does not use. A cookie is for a page that calls the API
+with it: on the API's own site, `setSessionCookie(res, token)` (Lax);
+`{ sameSite: "none" }` (always Secure) only for a page on another site
+whose requests send `credentials: "include"`, with its origin in
+`allowedOrigins`:
+
+<!-- example: apps/api/src/auth/migrating.ts#activity -->
+
+```ts
+import { issueSession } from "@fitzzero/quickdraw-core/server/auth";
+
+// A sign-in the kit's redirecting providers do not cover, such as a Discord Activity's embedded
+// SDK handing the page a code: the app exchanges it, then starts an ordinary session, which
+// socketAuth and requireSession accept like any other. The page sends the token as auth.token.
+app.post("/auth/discord/activity", express.json(), (req, res) => {
+  void (async () => {
+    const { code } = req.body as { readonly code?: unknown };
+    if (typeof code !== "string" || code === "") {
+      res.status(422).json({ error: "VALIDATION", message: "Send the Activity's code" });
+      return;
+    }
+    const userId = await upsertUser(await activityProfile(code));
+    if (userId === null) {
+      res.status(401).json({ error: "UNAUTHENTICATED", message: "Sign-in refused" });
+      return;
+    }
+    const { token } = await issueSession(keys, userId, {
+      provider: "discord-activity",
+      userAgent: req.get("user-agent"),
+      ip: req.ip,
+    });
+    // no cookie: an iframe on another site rarely keeps one, and this page never reads it
+    res.json({ token });
+  })();
+});
+```
+
+**6. The cookie's name.** 4.x's `setSessionCookie` always wrote `session`.
+5.0 writes `__Host-session` on a request over HTTPS (with no domain) and
+reads only that name there, so an old `session` cookie no longer signs
+anyone in over HTTPS; with the `sid` change above, nobody keeps a 4.x
+session anyway. `COOKIE_DOMAIN` keeps the name `session` everywhere, and a
+name of the app's own goes in all three places
+(`createAuthRoutes({ cookie: { name } })`, `socketAuth({ cookieName })`,
+`createServer({ http: { cookieName } })`); "Defaults that changed" has the
+whole rule. A web app on another origin calls `/auth/*` with
+`credentials: "include"` (the client's socket sends cookies already), and a
+native client sends the token as `auth.token`.
+
 ## Defaults that changed
 
 - **Access is closed.** A method without `access` does not compile. A
@@ -1354,10 +1706,31 @@ export function TaskBoard({ projectId }: { readonly projectId: string }) {
   `socketAuth({ cookieName: "session" })` and
   `createServer({ http: { cookieName: "session" } })`, and the routes warn
   at startup until it is named.
+- **A session cookie on an HTTP call must come from an allowed page.**
+  `socketAuth` applies its `allowedOrigins` to `/qd/...` calls that
+  authenticate with the cookie, as it does to sockets: a call whose
+  `Origin` is not listed is answered `FORBIDDEN` (403). A call without
+  `Origin` (curl, server-side rendering that forwards the user's cookie)
+  and a bearer token are unaffected. A page on another origin that calls
+  `/qd` with the cookie needs its origin in `allowedOrigins`.
+- **`setSessionCookie` sets SameSite=Lax** (4.x: `None` in production),
+  as the auth routes' own cookie is, so the cookie never rides a request
+  another site's page makes. A web app on another site, or a page in a
+  third-party iframe, passes `{ sameSite: "none" }` (always Secure).
+- **A method's output is sent as it declares it.** 4.x sent what a handler
+  returned. A projection output (`"entity"`, a named projection) sends the
+  projection's keys, stripped per caller, and a method whose output is a
+  schema of its own sends only what that schema's JSON Schema declares
+  (Zod 4.2 or later), on every transport: a handler may return the whole
+  row, and the keys the schema leaves out never leave the server. An
+  output schema without JSON Schema (Zod 3) is sent as returned.
 - **No default CORS origin.** 4.1 allowed `*`; pass `cors`.
 - **Errors that are not `QuickdrawError` reach callers as `INTERNAL`** with a
   generic message (the original is logged). A Prisma unique violation is
-  `CONFLICT` and a missing row `NOT_FOUND`.
+  `CONFLICT` and a missing row `NOT_FOUND`. A subscribe, or a method whose
+  access names the row (`{ entry }`), answers a missing row `FORBIDDEN`,
+  as it answers a row the caller may not see, so a stranger cannot tell
+  which ids exist (only a service-wide `Admin` gets `NOT_FOUND`).
 - **A mutation ignores its caller's cancel**: only its time limit (30 s by
   default) stops it.
 - **MCP custom tools default to `access: "authenticated"`.**
@@ -1383,18 +1756,17 @@ so ship the clients soon after the server.
 ## Lint, skills and agents
 
 **`@fitzzero/quickdraw-lint`** is the oxlint plugin and base config every
-5.0 app extends:
+5.0 app extends (an app built from the quickdraw template extends
+`oxlint.template.jsonc` instead: it extends the base and adds the
+design-system rules):
 
 ```jsonc
 // .oxlintrc.json
 {
-  "extends": [
-    "./node_modules/@fitzzero/quickdraw-lint/oxlint.base.jsonc",
-    // apps built from the quickdraw template: the design-system rules
-    "./node_modules/@fitzzero/quickdraw-lint/oxlint.template.jsonc",
-  ],
+  "extends": ["./node_modules/@fitzzero/quickdraw-lint/oxlint.base.jsonc"],
   "plugins": ["typescript", "import", "react", "nextjs", "jsx_a11y"],
   "ignorePatterns": ["**/dist/**", "**/node_modules/**"],
+  "settings": { "quickdraw": { "baseline": ".quickdraw-lint-baseline.json" } },
 }
 ```
 
@@ -1403,9 +1775,19 @@ so ship the clients soon after the server.
 every migrated method a kit implements (`getProject`, `listTasks`, ...;
 the report lists them under "Methods a kit implements"): move it to the
 kit, or keep it with a `// quickdraw: hand-written because <reason>`
-comment above it. `quickdraw-lint baseline` writes
-a baseline file, so the rules can be adopted before every old violation is
-fixed. The 4.x rules were removed (oxlint refuses a config that names them):
+comment above it.
+
+Adopt it on the codemod's output with a baseline:
+`quickdraw-lint baseline -c .oxlintrc.json` records every violation lint
+reports now, the quickdraw rules' and oxlint's own (the 4.x hooks the
+codemod keeps for review are unused functions until you delete them), and
+`quickdraw-lint check`, the app's lint command in place of `oxlint` (per
+package: `quickdraw-lint check -c ../../.oxlintrc.json src`), reports only
+what is new. The quickdraw rules read the baseline themselves, so an editor
+running oxlint leaves their recorded violations out too. A fixed violation
+leaves an allowance unused, which `no-unused-baseline` reports: run the
+baseline command again, so the file only shrinks. The 4.x rules were
+removed (oxlint refuses a config that names them):
 
 | 4.x rule                      | In 5.0                                                                                       |
 | ----------------------------- | -------------------------------------------------------------------------------------------- |
@@ -1434,7 +1816,7 @@ which walks an agent through this guide). Link them into `.claude/` from
 ```
 
 An agent doing the migration can start from
-[`UPGRADE-PROMPT.md`](../../UPGRADE-PROMPT.md).
+[`UPGRADE-PROMPT.md`](https://github.com/fitzzero/quickdraw/blob/main/UPGRADE-PROMPT.md).
 
 ## Splitting large services
 
@@ -1496,13 +1878,14 @@ export const taskService = qd.defineService(taskContract, {
 Within one app: contracts, access, emits, client, as in
 [Work through the report](#work-through-the-report).
 
-Across the apps on 4.x: quickdraw-chat first (the template, and the release
-gate for 5.0.0), then seneschal, x-tokage-siege, foundation, farseer and
-Conveyor. makiel (on 3.7) and quickdraw-sunfall (on 3.9.1) need their own
-path: the codemod reads 4.x code.
+Across the apps on 4.x: quickdraw-chat went first (the template, and the
+release gate for 5.0.0), and its pull requests are the worked example;
+seneschal re-forks from it instead of migrating; then x-tokage-siege,
+foundation, farseer and Conveyor. makiel (on 3.7) and quickdraw-sunfall
+(on 3.9.1) stay on 3.x: the codemod reads 4.x code.
 
 Each of these apps has an upgrade brief in
-[`docs/downstream/`](../../docs/downstream/README.md): its size, its top hazards
+[`docs/downstream/`](https://github.com/fitzzero/quickdraw/blob/main/docs/downstream/README.md): its size, its top hazards
 and a suggested order of work, which its migration card starts from.
 
 ## Every removed 4.x name
@@ -1607,6 +1990,9 @@ Generated from `@fitzzero/quickdraw-lint`'s `no-v4-api` rule, which reports each
 | `UseChannelSendResult`         | Send on a channel with `qd.<service>.<channel>.useChannel()`.                                                                                                                                                                   |
 | `useQuickdrawSocket`           | Read the connection with `useQuickdraw()` (`connection`, `status`, `userId`, `serviceAccess`), and talk to the server through the typed client rather than the socket.                                                          |
 | `QuickdrawSocketContextValue`  | Read the connection with `useQuickdraw()` (`connection`, `status`, `userId`, `serviceAccess`), and talk to the server through the typed client rather than the socket.                                                          |
+| `getOAuthUrl`                  | Link to `signInUrl(provider, { returnTo })` from `./client`: the auth routes kit starts a sign-in at `GET /auth/{provider}/start`.                                                                                              |
+| `logout`                       | Call `signOut()` from `./client`: `POST /auth/logout` with the session cookie (and a stored token) revokes the session; it rejects when refused.                                                                                |
+| `logoutAllDevices`             | Call `signOutEverywhere()` from `./client`: `POST /auth/logout-all` revokes every session of the user; it resolves with nothing.                                                                                                |
 | `ServiceCallError`             | Failed calls throw `QuickdrawError`: branch on `error.code` (`FORBIDDEN`, `NOT_FOUND`, `VALIDATION`, `CONFLICT`, ...).                                                                                                          |
 | `ClientServiceMethodMap`       | The typed client infers every type from the contracts passed to `createQuickdrawClient(contracts)`.                                                                                                                             |
 | `SubscriptionDataMap`          | The typed client infers every type from the contracts passed to `createQuickdrawClient(contracts)`.                                                                                                                             |
@@ -1707,9 +2093,9 @@ Generated from `@fitzzero/quickdraw-lint`'s `no-v4-api` rule, which reports each
 | `defineChannel()`                | Declare channels in the contract (`channels: { name: { payload } }`), handle them in `qd.defineService(contract, { channels })`, and send with `qd.<service>.<channel>.useChannel()`.                             |
 | `installAdminMethods()`          | Use the admin kit: `...admin.contract({ entity })` in the contract and `...admin.handlers(contract, options)` in `methods`.                                                                                       |
 | `setDelegate()`                  | Name the service's model in `qd.defineService(contract, { model: "chat" })`; handlers write through `db.<model>`.                                                                                                 |
-| `checkEntryACL()`                | Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `anyOf`, `resolver`) and each method's `access` form.                                       |
-| `checkBatchSubscriptionAccess()` | Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `anyOf`, `resolver`) and each method's `access` form.                                       |
-| `ensureAccessForMethod()`        | Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `anyOf`, `resolver`) and each method's `access` form.                                       |
+| `checkEntryACL()`                | Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `everyone`, `anyOf`, `resolver`) and each method's `access` form.                           |
+| `checkBatchSubscriptionAccess()` | Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `everyone`, `anyOf`, `resolver`) and each method's `access` form.                           |
+| `ensureAccessForMethod()`        | Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `everyone`, `anyOf`, `resolver`) and each method's `access` form.                           |
 | `getProtectedFields()`           | Field tiers are declared in the contract's `fields` (`fields: { notes: "Admin" }`) and stripped per caller.                                                                                                       |
 | `hasElevatedAccess()`            | Field tiers are declared in the contract's `fields` (`fields: { notes: "Admin" }`) and stripped per caller.                                                                                                       |
 

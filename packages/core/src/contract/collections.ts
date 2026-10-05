@@ -28,23 +28,58 @@ export interface ViaScope<
   readonly model: Model;
   readonly entry: Entry;
   readonly scope: Scope;
+  /**
+   * The item is computed from the junction (a member count): every junction
+   * write sends its entry again, whole, to each scope that still holds it.
+   * Without it a junction write only adds or removes the entry in the scope
+   * it links, so a count over the junction goes stale everywhere else.
+   */
+  readonly refreshEntry?: boolean;
 }
 
-/** Declares a collection scope that comes from a junction table. */
+/** What `via(...)` takes: the junction model, its entry and scope columns, and `refreshEntry`. */
+export interface ViaOptions<
+  Model extends string = string,
+  Entry extends string = string,
+  Scope extends string = string,
+> {
+  /** The junction model, as the database client names it: `"chatMember"`. */
+  readonly model: Model;
+  /** The junction column holding the entry's id: `"chatId"`. */
+  readonly entry: Entry;
+  /** The junction column holding the scope value: `"userId"`. */
+  readonly scope: Scope;
+  /**
+   * Set when the item reads the junction, as a `memberCount` mapped from a
+   * relation count does: a junction create, update or delete then sends the
+   * entry again, as `updated`, to every scope that still holds it (one read
+   * of the entry's item per flush). Default `false`: a junction write adds
+   * or removes the entry for the scope it links, and nothing else.
+   */
+  readonly refreshEntry?: boolean;
+}
+
+/**
+ * Declares a collection scope that comes from a junction table.
+ *
+ * @example
+ * myChats: {
+ *   scope: via({ model: "chatMember", entry: "chatId", scope: "userId", refreshEntry: true }),
+ *   item: "listItem",
+ *   order: [["id", "asc"]],
+ * }
+ */
 export function via<
   const Model extends string,
   const Entry extends string,
   const Scope extends string,
->(junction: {
-  readonly model: Model;
-  readonly entry: Entry;
-  readonly scope: Scope;
-}): ViaScope<Model, Entry, Scope> {
+>(junction: ViaOptions<Model, Entry, Scope>): ViaScope<Model, Entry, Scope> {
   return Object.freeze({
     kind: "via",
     model: junction.model,
     entry: junction.entry,
     scope: junction.scope,
+    ...(junction.refreshEntry === undefined ? {} : { refreshEntry: junction.refreshEntry }),
   });
 }
 

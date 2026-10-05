@@ -228,6 +228,26 @@ async function anchorsOf(
   return anchors;
 }
 
+/** `where`, computing each service's filter for a principal and a level once. */
+function memoized(where: PolicyCall["where"]): PolicyCall["where"] {
+  const made = new Map<string, Promise<AccessFilter>>();
+  const principals = new Map<Principal, number>();
+  return (binding, principal, level) => {
+    let index = principals.get(principal);
+    if (index === undefined) {
+      index = principals.size;
+      principals.set(principal, index);
+    }
+    const key = `${binding.service.name}\u0000${String(index)}\u0000${level}`;
+    let filter = made.get(key);
+    if (filter === undefined) {
+      filter = where(binding, principal, level);
+      made.set(key, filter);
+    }
+    return filter;
+  };
+}
+
 /** Starts one engine call over `state`: its lookups share one memo. */
 export function startCall(state: EngineState): PolicyCall {
   const memo = createRequestMemo();
@@ -248,8 +268,10 @@ export function startCall(state: EngineState): PolicyCall {
         lookup(memoOnly, binding.levels, principal.userId, ids, (missing) =>
           binding.policy.levelsFor(principal, missing, toolsFor(scope, binding)),
         ),
-      where: (binding, principal, level) =>
+      // Once per service, principal and level: `inherit` asks its parent's filter, then its ids.
+      where: memoized((binding, principal, level) =>
         binding.policy.accessWhere(principal, level, toolsFor(scope, binding)),
+      ),
       anchors: (binding, ids) => anchorsOf(scope, binding, ids),
     },
   };

@@ -61,6 +61,42 @@ describe("the access matrix", () => {
     );
   });
 
+  it("makes each cell's input afresh with a factory, so the order of principals does not matter", async () => {
+    const { app, service } = await kit.start();
+    const board = kit.board();
+    const made: string[] = [];
+    const report = await describeAccessMatrix(app, {
+      service,
+      // The allowed principals come first: each cell deletes a row of its own.
+      principals: principals(),
+      cases: [
+        {
+          method: "delete",
+          input: async ({ name, principal }) => {
+            const [id = ""] = await addTasks(kit.harness().prisma, board.p1, [made.length]);
+            made.push(`${name}:${principal?.userId ?? "none"}`);
+            return { id };
+          },
+          allow: ["owner", "member"],
+        },
+      ],
+    });
+    expect(report.cells.map((cell) => [cell.principal, cell.actual])).toEqual([
+      ["owner", "allow"],
+      ["member", "allow"],
+      ["reader", "FORBIDDEN"],
+      ["stranger", "FORBIDDEN"],
+      ["anonymous", "UNAUTHENTICATED"],
+    ]);
+    expect(made).toEqual([
+      `owner:${board.ada}`,
+      `member:${board.bo}`,
+      `reader:${board.cy}`,
+      `stranger:${board.ed}`,
+      "anonymous:none",
+    ]);
+  });
+
   it("deletes for the owner and a member only, one row each", async () => {
     const { app, service } = await kit.start();
     const board = kit.board();

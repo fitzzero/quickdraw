@@ -74,7 +74,7 @@ describe("session cookie", () => {
     expect(firstCall(calls).options.maxAge).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
-  it("sets a none+secure cookie in production with COOKIE_DOMAIN", () => {
+  it("sets a lax, secure cookie in production with COOKIE_DOMAIN, as the auth routes do (finding F7.5)", () => {
     process.env.NODE_ENV = "production";
     process.env.COOKIE_DOMAIN = ".example.com";
     const { res, calls } = createFakeResponse();
@@ -82,9 +82,13 @@ describe("session cookie", () => {
 
     expect(firstCall(calls).options).toMatchObject({
       secure: true,
-      sameSite: "none",
+      sameSite: "lax",
       domain: ".example.com",
     });
+    // SameSite=None is the app's choice, for a web app on another site: always Secure.
+    const crossSite = createFakeResponse();
+    setSessionCookie(crossSite.res, "jwt-value", { sameSite: "none" });
+    expect(firstCall(crossSite.calls).options).toMatchObject({ secure: true, sameSite: "none" });
   });
 
   it("supports custom cookie name and max age", () => {

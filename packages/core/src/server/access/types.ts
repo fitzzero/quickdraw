@@ -2,7 +2,7 @@
 // decides them. Every method declares one form; a method without one does not
 // compile, and `defineService` rejects it at run time too. 4.1 took a bare
 // access level per method and treated a non-entry `Read` method as open to any
-// signed-in user (`legacy-src/server/BaseService.ts:567-603`).
+// signed-in user (4.1 `src/server/BaseService.ts:567-603`).
 //
 // The basic engine (`basicEngine.ts`) decides `"public"`, `"authenticated"`,
 // `{ service }` and `custom(fn)`, and hands `entry` and `scope` to a

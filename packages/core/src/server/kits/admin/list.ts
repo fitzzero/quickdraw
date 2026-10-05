@@ -1,6 +1,6 @@
 // The admin kit's `adminList` (RFC 0003 section 12.4): one page of every row
 // of the service, by page number, with the total. The page arithmetic is
-// 4.1's (`legacy-src/server/BaseService.ts:1367-1388`): `skip` is
+// 4.1's (4.1 `src/server/BaseService.ts:1367-1388`): `skip` is
 // `(page - 1) * pageSize`, and `totalPages` is `ceil(total / pageSize)`; a
 // page past the last is empty. The rest is the read/write kit's list
 // machinery (`../crud/listQuery.ts`, `../crud/page.ts`): the filter is

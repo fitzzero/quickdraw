@@ -2,9 +2,11 @@
 // sign-in routes (each provider's start and callback, and the guest route)
 // share `createAuthLimiter({ max: SIGN_IN_LIMIT })` (60 requests per 15
 // minutes per IP: a start and a callback per sign-in, and a shared office or
-// school address, use 4.1's 20 up quickly) and the session routes (`me`,
-// `logout`, `logout-all`) share `createAuthStatusLimiter` (120). Both
-// presets live in `./server/express`,
+// school address, use 4.1's 20 up quickly), the session routes (`me`,
+// `logout`, `logout-all`) share `createAuthStatusLimiter` (120), and
+// `providers` has `createPublicApiLimiter` (60 per minute) to itself, so the
+// login pages of one address cannot use up its sign-outs (finding F11.3 of
+// the quickdraw-chat migration). The presets live in `./server/express`,
 // which needs the optional peer `express-rate-limit`; the routes import them
 // only when a default is used, so importing `./server/auth` for its JWT
 // helpers alone does not need the peer.
@@ -24,6 +26,12 @@ export interface AuthRateLimits {
   readonly signIn?: AuthMiddleware;
   /** `me`, `logout` and `logout-all`. Default: `createAuthStatusLimiter()`. */
   readonly session?: AuthMiddleware;
+  /**
+   * `providers`, the sign-ins a login page offers. Default:
+   * `createPublicApiLimiter()`, 60 requests per minute per IP, apart from
+   * `session`'s, so loading login pages cannot use up sign-outs.
+   */
+  readonly providers?: AuthMiddleware;
 }
 
 /** Which limiter a route is counted by. */
@@ -41,7 +49,9 @@ export function checkRateLimits(option: unknown): AuthRateLimits | false {
     return {};
   }
   if (typeof option !== "object" || option === null) {
-    throw new TypeError("createAuthRoutes: rateLimit must be { signIn?, session? } or false");
+    throw new TypeError(
+      "createAuthRoutes: rateLimit must be { signIn?, session?, providers? } or false",
+    );
   }
   for (const [name, limiter] of Object.entries(option)) {
     if (limiter !== undefined && typeof limiter !== "function") {
@@ -60,12 +70,17 @@ export async function loadLimiters(option: AuthRateLimits | false): Promise<Limi
   if (option === false) {
     return {};
   }
-  if (option.signIn !== undefined && option.session !== undefined) {
+  if (
+    option.signIn !== undefined &&
+    option.session !== undefined &&
+    option.providers !== undefined
+  ) {
     return option;
   }
   const presets = await import("../../express/rateLimit");
   return {
     signIn: option.signIn ?? presets.createAuthLimiter({ max: SIGN_IN_LIMIT }),
     session: option.session ?? presets.createAuthStatusLimiter(),
+    providers: option.providers ?? presets.createPublicApiLimiter(),
   };
 }

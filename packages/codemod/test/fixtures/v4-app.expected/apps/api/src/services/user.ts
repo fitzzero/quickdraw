@@ -17,7 +17,7 @@ function toDto(user: User): UserDTO {
 }
 
 // Any signed-in user may read a profile; only its owner may change it
-// quickdraw-migrate: review [access-override] 4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, anyOf or resolver), then delete this function
+// quickdraw-migrate: review [access-override] 4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver), then delete this function
 function checkAccess(userId: string, entryId: string, requiredLevel: AccessLevel, _socket: QuickdrawSocket): boolean {
   if (requiredLevel === "Read") {
     return true;
@@ -33,7 +33,7 @@ function getProtectedFields(): (keyof UserDTO)[] {
 
 export const userService = qd.defineService(userContract, {
   model: "user",
-  // quickdraw-migrate: review [access-override] 4.x decided row access in checkAccess (now functions in this file): port them to a policy (owner, jsonAcl, members, inherit, anyOf or resolver). Until then this policy grants no row, so only service grants pass
+  // quickdraw-migrate: review [access-override] 4.x decided row access in checkAccess (now functions in this file): port them to a policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver). Until then this policy grants no row, so only service grants pass
   access: resolver({ levelsFor: () => ({}) }),
   methods: {
     getMe: {
@@ -51,6 +51,7 @@ export const userService = qd.defineService(userContract, {
       handler: async ({ input, ctx, db }) => {
         // Users can only update themselves unless they have service-level access
         if (input.id !== ctx.principal.userId && !(ctx.principal.serviceAccess ?? {}).userService) {
+          // quickdraw-migrate: review [error] 4.x sent this error's message to the caller; 5.0 answers an error that is not a QuickdrawError with INTERNAL and a generic message: throw new QuickdrawError(code, message) with the code that fits (NOT_FOUND, FORBIDDEN, CONFLICT, VALIDATION) if the caller should see it
           throw new Error("Cannot update other users");
         }
         try {

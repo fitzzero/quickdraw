@@ -6,8 +6,8 @@
 // 4.1 debounced each hook instance for 100 ms and then called
 // `invalidateQueries`, whose default cancels the read in flight and starts
 // another while the server keeps computing the abandoned one
-// (`legacy-src/client/useServiceQuery.ts:141-166`); a reconnect invalidated
-// every query at once (`legacy-src/client/QuickdrawProvider.tsx:320-321`).
+// (4.1 `src/client/useServiceQuery.ts:141-166`); a reconnect invalidated
+// every query at once (4.1 `src/client/QuickdrawProvider.tsx:320-321`).
 // Passing `cancelRefetch: false` alone is not enough: the read in flight is
 // kept, but the invalidation is lost, because a successful fetch clears
 // TanStack's `isInvalidated` flag. Here, per cached query:

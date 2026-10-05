@@ -9,8 +9,8 @@ import {
   type DevWarnings,
   type LoopWatch,
 } from "../devWarnings";
-import type { ChangeLogOptions } from "../emit/changeLog";
-import { createLive, type Live } from "../emit/live";
+import { createLive, type ChangeLogOptions, type Live } from "../emit/live";
+import { warnTieredOutputs } from "../emit/tieredOutputs";
 import type { Registry } from "../registry";
 import type { FlushSink } from "../uow/flushSink";
 import {
@@ -107,7 +107,8 @@ export interface PipelineOptions extends TrackingOptions {
   /**
    * Check every handler result against its method's contract output; a
    * mismatch fails the call with `INTERNAL`. Default: on unless `NODE_ENV`
-   * is `"production"`, so always on in tests.
+   * is `"production"`, so always on in tests. A stream that declares
+   * `validate: "development"` checks its items only while this is on.
    */
   readonly outputValidation?: boolean;
   /** Deep-freeze the results of sharing queries. Default: on unless `NODE_ENV` is `"production"`. */
@@ -189,8 +190,10 @@ export function resolveSettings(
   const development = process.env.NODE_ENV !== "production";
   const logger = options.logger ?? consoleLogger;
   const warnings = createDevWarnings({ logger, development, strict: strictWarningsOf(options) });
+  warnTieredOutputs(registry, warnings);
   const storage = storageFor(options, db);
   const { access, policies } = resolveAccess(options.access, registry, storage, logger);
+  const outputValidation = options.outputValidation ?? development;
   const live = createLive({
     registry,
     storage,
@@ -198,6 +201,7 @@ export function resolveSettings(
     access,
     logger,
     changeLog: options.changeLog,
+    outputValidation,
   });
   return Object.freeze({
     registry,
@@ -216,7 +220,7 @@ export function resolveSettings(
     versions: options.versions ?? live.versions,
     live,
     limits: resolveLimits(options.limits),
-    outputValidation: options.outputValidation ?? development,
+    outputValidation,
     freezeSharedResults: options.freezeSharedResults ?? development,
     warnings,
     loops: createLoopWatch(warnings, logger),

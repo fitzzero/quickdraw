@@ -8,6 +8,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { z } from "zod";
 import type { PrismaClient } from "../../test/prisma/setup";
 import { defineContract, query, topicRoom, type AnyContract } from "../index";
+import { until, whenStatus } from "../client/__tests__/fixtures";
+import { createQuickdrawConnection } from "../client/connection";
 import { createHarness, type Harness } from "../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../testing/index";
 import { as, seedBoard, type Board } from "./access/__tests__/board";
@@ -54,6 +56,28 @@ const pingService = qd.defineService(pingContract, {
   methods: { ping: { access: "public", handler: () => "pong" as const } },
 });
 
+/**
+ * A service with no model that writes labels (a game's high scores, which
+ * no service owns): its topic changes with every label written, so a query
+ * over them can watch it.
+ */
+const scoresContract = defineContract("scoresService", {
+  methods: {
+    best: query({ input: z.undefined(), output: z.number(), watch: "service" }),
+    /** Reads labels alone: told of label writes only, not of the task labels it also writes. */
+    labels: query({ input: z.undefined(), output: z.number(), watch: { service: ["label"] } }),
+  },
+});
+
+const scoresService = qd.defineService(scoresContract, {
+  writes: ["label", "taskLabel"],
+  watchAccess: "authenticated",
+  methods: {
+    best: { access: "authenticated", handler: async ({ db }) => await db.label.count() },
+    labels: { access: "authenticated", handler: async ({ db }) => await db.label.count() },
+  },
+});
+
 interface StartOptions extends TaskServiceOptions {
   readonly after?: (read: Read) => Promise<void> | undefined;
   readonly rateLimit?: { readonly maxRequests: number };
@@ -63,7 +87,13 @@ interface StartOptions extends TaskServiceOptions {
 async function start(options: StartOptions = {}) {
   const recorded = recordingStorage(h.storage, options.after);
   const app = await createTestApp({
-    services: [projectService, labelService, defineTaskService(options), pingService],
+    services: [
+      projectService,
+      labelService,
+      defineTaskService(options),
+      pingService,
+      scoresService,
+    ],
     db: h.db,
     storage: recorded.storage,
     ...(options.rateLimit === undefined ? {} : { rateLimit: options.rateLimit }),
@@ -87,7 +117,11 @@ function write<T>(app: App, fn: (db: PrismaClient) => Promise<T>): Promise<T> {
 }
 
 function inTopic(app: App, topic: string): number {
-  return app.server.io.sockets.adapter.rooms.get(topicRoom("taskService", topic))?.size ?? 0;
+  return inTopicOf(app, "taskService", topic);
+}
+
+function inTopicOf(app: App, service: string, topic: string): number {
+  return app.server.io.sockets.adapter.rooms.get(topicRoom(service, topic))?.size ?? 0;
 }
 
 const ok = { ok: true };
@@ -105,7 +139,8 @@ describe("qd:changed", () => {
     await app.as(as(board.ada)).taskService.renameTenTimes({ id: board.t1 });
     await scopes.settle();
     expect(scopes.changed).toEqual([
-      { s: "taskService", topic: "service", rev: expect.any(Number) },
+      // The service topic names the models that changed it (finding F7.3).
+      { s: "taskService", topic: "service", rev: expect.any(Number), models: ["task"] },
       { s: "taskService", topic: `board:${board.p1}`, rev: expect.any(Number) },
     ]);
     const [service, scope] = scopes.changed;
@@ -179,6 +214,97 @@ describe("qd:changed", () => {
     expect(await emitWithAck(connection.socket, "qd:unwatch", { s: "taskService" })).toMatchObject(
       refused("VALIDATION"),
     );
+  });
+});
+
+describe("a model a service writes", () => {
+  it('changes the writing service\'s topic, which a query over it watches with watch: "service"', async () => {
+    const { app } = await start();
+    const { connection, scopes } = await connect(app, as(board.ada));
+    expect(await watch(connection, "service", "scoresService")).toEqual(ok);
+    await write(app, (db) =>
+      db.task.update({ where: { id: board.t1 }, data: { title: "Not a label" } }),
+    );
+    await scopes.settle();
+    expect(scopes.changed).toEqual([]);
+    await write(app, (db) => db.label.create({ data: { projectId: board.p1, name: "Bug" } }));
+    await scopes.settle();
+    expect(scopes.changed).toEqual([
+      { s: "scoresService", topic: "service", rev: expect.any(Number), models: ["label"] },
+    ]);
+    expect(scoresContract.methods.best.watch).toBe("service");
+    expect(await app.as(as(board.ada)).scoresService.best()).toBe(1);
+  });
+});
+
+describe("a watch of the service's topic narrowed to models (finding F7.3)", () => {
+  it("names on each frame the models whose writes changed the topic", async () => {
+    const { app } = await start();
+    const { connection, scopes } = await connect(app, as(board.ada));
+    expect(await watch(connection, "service", "scoresService")).toEqual(ok);
+    const label = await write(app, (db) =>
+      db.label.create({ data: { projectId: board.p1, name: "Bug" } }),
+    );
+    await write(app, (db) =>
+      db.taskLabel.create({ data: { taskId: board.t1, labelId: label.id } }),
+    );
+    await write(app, async (db) => {
+      await db.label.update({ where: { id: label.id }, data: { name: "Defect" } });
+      await db.taskLabel.deleteMany({ where: { labelId: label.id } });
+    });
+    await scopes.settle();
+    expect(scopes.changed.map((frame) => frame.models)).toEqual([
+      ["label"],
+      ["taskLabel"],
+      ["label", "taskLabel"],
+    ]);
+    // One topic per service on the wire: the narrowed query watches the same one.
+    expect(scoresContract.methods.labels.watch).toEqual({ service: ["label"] });
+  });
+
+  it("tells a narrowed watch only of the models it names, and a frame naming none always", async () => {
+    const { app } = await start();
+    const connection = createQuickdrawConnection({
+      url: app.url,
+      auth: { principal: as(board.ada) },
+      transports: ["websocket"],
+    });
+    try {
+      connection.open();
+      await whenStatus(connection, "connected");
+      const told: string[] = [];
+      const watchAs = (name: string, models?: readonly string[]) =>
+        connection.watch({
+          service: "scoresService",
+          topic: "service",
+          ...(models === undefined ? {} : { models }),
+          onChanged: () => {
+            told.push(name);
+          },
+        });
+      const stops = [watchAs("every"), watchAs("labels", ["Label"])];
+      await until(() => inTopicOf(app, "scoresService", "service") === 1);
+      const label = await write(app, (db) =>
+        db.label.create({ data: { projectId: board.p1, name: "Bug" } }),
+      );
+      await until(() => told.length === 2);
+      expect(told.sort()).toEqual(["every", "labels"]);
+      told.length = 0;
+      // A high score that is not a label: the label query is not read again.
+      await write(app, (db) =>
+        db.taskLabel.create({ data: { taskId: board.t1, labelId: label.id } }),
+      );
+      await until(() => told.length === 1);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(told).toEqual(["every"]);
+      for (const stop of stops) {
+        stop();
+      }
+    } finally {
+      connection.close();
+    }
   });
 });
 
@@ -293,7 +419,7 @@ describe("qd:watch", () => {
     );
     await anonymous.scopes.settle();
     expect(anonymous.scopes.changed).toEqual([
-      { s: "taskService", topic: "service", rev: expect.any(Number) },
+      { s: "taskService", topic: "service", rev: expect.any(Number), models: ["task"] },
     ]);
   });
 
@@ -462,6 +588,37 @@ describe("definition", () => {
       'method "countOnBoard" is a mutation; only a query can watch',
     );
     expect(() => defineLoosely(taskContract, definition)).not.toThrow();
+  });
+
+  it("refuses a narrowed watch naming a model that is not the service's own or among its writes", () => {
+    const definition = (writes: readonly string[], watchAccess?: string) => ({
+      writes,
+      ...(watchAccess === undefined ? {} : { watchAccess }),
+      methods: {
+        best: { access: "authenticated", handler: () => 0 },
+        labels: { access: "authenticated", handler: () => 0 },
+      },
+    });
+    expect(() => defineLoosely(scoresContract, definition(["taskLabel"], "authenticated"))).toThrow(
+      'defineService("scoresService"): method "labels" watches the model "label", which scoresService neither declares as its model nor lists in writes (its models: "taskLabel")',
+    );
+    expect(() => defineLoosely(scoresContract, definition(["label"]))).toThrow(
+      'method "best" watches the service\'s topic, which is closed without watchAccess',
+    );
+    expect(() =>
+      defineLoosely(scoresContract, definition(["Label"], "authenticated")),
+    ).not.toThrow();
+  });
+
+  it("refuses a query that watches its service's topic when the service keeps it closed", () => {
+    expect(() =>
+      defineLoosely(scoresContract, {
+        writes: ["label"],
+        methods: { best: { access: "authenticated", handler: () => 0 } },
+      }),
+    ).toThrow(
+      'defineService("scoresService"): method "best" watches the service\'s topic, which is closed without watchAccess',
+    );
   });
 
   it("takes watchAccess as public, authenticated or a service grant, and none by default", () => {

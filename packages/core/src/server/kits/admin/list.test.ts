@@ -2,7 +2,7 @@
 // by number over every row of the service, with 4.1's arithmetic, and a
 // filter and a sort restricted to the fields the contract declares. 4.1
 // handed the caller's `where` and `orderBy` to the database as they came
-// (`legacy-src/server/BaseService.ts:1367-1379`); every way a caller could
+// (4.1 `src/server/BaseService.ts:1367-1379`); every way a caller could
 // try that now is `VALIDATION`, before the handler runs.
 
 import { describe, expect, it } from "vitest";

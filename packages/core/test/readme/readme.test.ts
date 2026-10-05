@@ -13,7 +13,7 @@ import {
   sourceOf,
   syncDocument,
 } from "./examples";
-import { fromPackageDirectory, PACKAGE_FILES, packageFileText } from "./packageFiles";
+import { forPackage, GITHUB, PACKAGE_FILES, packageFileText, RELATIVE_LINK } from "./packageFiles";
 
 describe.each(DOCUMENTS)("the examples of %s", (document) => {
   const text = readFileSync(documentPath(document), "utf8");
@@ -24,6 +24,26 @@ describe.each(DOCUMENTS)("the examples of %s", (document) => {
 
   it("are there", () => {
     expect(parseDocument(text).examples.length).toBeGreaterThan(0);
+  });
+});
+
+describe("the new-service skill's server examples (finding F7.6)", () => {
+  // The template's API compiles as an ES module with NodeNext resolution, where a relative
+  // import without its `.js` is TS2835. This project compiles with bundler resolution, which
+  // takes either: core's own sources, mapped here, are not NodeNext modules, so the rule is
+  // checked on the copies instead.
+  const skill = DOCUMENTS.find((document) => document.includes("quickdraw-new-service")) ?? "";
+  const server = parseDocument(readFileSync(documentPath(skill), "utf8")).examples.filter(
+    (example) => example.file.startsWith("apps/api/"),
+  );
+
+  it("name each relative import's file with .js, as NodeNext needs", () => {
+    expect(server.length).toBeGreaterThan(0);
+    const relative = server.flatMap((example) =>
+      [...example.code.matchAll(/from "(\.{1,2}\/[^"]+)"/g)].map((match) => match[1] ?? ""),
+    );
+    expect(relative.length).toBeGreaterThan(0);
+    expect(relative.filter((specifier) => !specifier.endsWith(".js"))).toEqual([]);
   });
 });
 
@@ -99,13 +119,24 @@ describe("the files the packages ship beside their code", () => {
     },
   );
 
-  it("make the README's relative links relative to the package directory", () => {
+  it("keep a link into the package relative to it, and point every other at GitHub (finding F5.7)", () => {
     expect(
-      fromPackageDirectory(
-        "[a](docs/x.md) [b](packages/lint) [c](https://x.dev/y) [d](#install) [e](/abs) [f](mailto:a@b.c)",
+      forPackage("packages/core")(
+        "[a](docs/clients.md#hooks) [b](packages/lint) [c](https://x.dev/y) [d](#install) [e](/abs) [f](mailto:a@b.c) [g](packages/core/CHANGELOG.md)",
       ),
     ).toBe(
-      "[a](../../docs/x.md) [b](../../packages/lint) [c](https://x.dev/y) [d](#install) [e](/abs) [f](mailto:a@b.c)",
+      `[a](${GITHUB}/blob/main/docs/clients.md#hooks) [b](${GITHUB}/tree/main/packages/lint) [c](https://x.dev/y) [d](#install) [e](/abs) [f](mailto:a@b.c) [g](CHANGELOG.md)`,
     );
   });
+
+  it.each(PACKAGE_FILES.filter((file) => file.path.endsWith(".md")).map((file) => file.path))(
+    "%s has no relative link out of its package, which is all node_modules holds",
+    (path) => {
+      const text = readFileSync(documentPath(path), "utf8");
+      const outward = [...text.matchAll(RELATIVE_LINK)]
+        .map(([, target = ""]) => target)
+        .filter((target) => target.startsWith("../") || target.startsWith("/"));
+      expect(outward).toEqual([]);
+    },
+  );
 });

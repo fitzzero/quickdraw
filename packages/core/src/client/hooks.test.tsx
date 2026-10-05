@@ -14,6 +14,7 @@ import { QuickdrawContext } from "./context";
 import { createInvalidationCoordinator, type InvalidationCoordinator } from "./coordinator";
 import { createQuickdrawClient } from "./createClient";
 import { QuickdrawProvider, useQuickdraw, type QuickdrawStatus } from "./provider";
+import { renderWithQuickdraw } from "../testing/client";
 import {
   alice,
   bob,
@@ -75,6 +76,61 @@ function Echo() {
   const { data } = qd.probe.echo.useQuery({ text: "hi" });
   return <p>{data === undefined ? "loading" : `user ${String(data.userId)}`}</p>;
 }
+
+describe("setData", () => {
+  function Read() {
+    const { data } = qd.counter.read.useQuery({ name: "a" });
+    return <p>{data === undefined ? "loading" : `value ${String(data.value)}`}</p>;
+  }
+
+  it("writes a query's cached result, shown at once, with no call", async () => {
+    const { app, records } = await harness.start();
+    render(
+      <Provider url={app.url}>
+        <Read />
+      </Provider>,
+    );
+    await screen.findByText("value 0");
+    act(() => {
+      // what an event that carries the new value does
+      qd.counter.read.setData({ name: "a" }, (cached) =>
+        cached === undefined ? undefined : { ...cached, value: 7 },
+      );
+    });
+    await screen.findByText("value 7");
+    expect(records.filter((record) => record.method === "read")).toHaveLength(1);
+  });
+
+  it("follows a read in flight, which may predate the data written, with one more", async () => {
+    const { app, records, counter: counterService } = await harness.start();
+    render(
+      <Provider url={app.url}>
+        <Read />
+      </Provider>,
+    );
+    await screen.findByText("value 0");
+    const reads = () => records.filter((record) => record.method === "read").length;
+    const release = counterService.hold();
+    counterService.values.set("a", 5);
+    act(() => {
+      qd.invalidate(qd.counter.read, { name: "a" });
+    });
+    act(() => {
+      qd.counter.read.setData({ name: "a" }, { name: "a", value: 9 });
+    });
+    await screen.findByText("value 9");
+    release();
+    await screen.findByText("value 5");
+    await until(() => reads() === 3);
+    expect(reads()).toBe(3);
+  });
+
+  it("needs a mounted provider", () => {
+    expect(() => qd.counter.read.setData({ name: "a" }, { name: "a", value: 1 })).toThrow(
+      "counterService.read.setData needs a mounted <QuickdrawProvider> for this client",
+    );
+  });
+});
 
 describe("useQuery", () => {
   it("renders a query's data from a real server, once connected", async () => {
@@ -303,6 +359,34 @@ describe("QuickdrawProvider", () => {
     view.unmount();
     await until(() => view.result.current.connection.getState().status === "idle");
     await expect(qd.counter.total.call()).rejects.toMatchObject({ code: "INTERNAL" });
+  });
+
+  it("says when the user is known and while it reconnects, and forgets the user on new credentials until their hello", async () => {
+    const { app } = await harness.start();
+    const seen: { isKnown: boolean; userId: string | null }[] = [];
+    function Gate() {
+      const { isKnown, isConnected, reconnecting, userId } = useQuickdraw();
+      seen.push({ isKnown, userId });
+      if (!isKnown) {
+        return <p>unknown</p>;
+      }
+      const state = reconnecting ? "reconnecting" : isConnected ? "connected" : "offline";
+      return <p>{`${userId ?? "anonymous"} ${state}`}</p>;
+    }
+    const view = await renderWithQuickdraw(<Gate />, { app, as: alice, client: qd });
+    // Before the hello the user is not known: never shown as signed out.
+    expect(seen[0]).toEqual({ isKnown: false, userId: null });
+    await view.findByText("alice connected");
+    await view.disconnect();
+    await view.findByText("alice reconnecting");
+    await view.reconnect();
+    await view.findByText("alice connected");
+    act(() => {
+      view.connection.setAuth({ principal: bob });
+    });
+    expect(view.getByText("unknown")).toBeTruthy();
+    await view.findByText("bob connected");
+    expect(seen.some((entry) => !entry.isKnown && entry.userId !== null)).toBe(false);
   });
 
   it("throws a clear error for a hook rendered outside a provider", () => {

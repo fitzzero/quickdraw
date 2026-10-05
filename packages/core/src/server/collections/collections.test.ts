@@ -1,7 +1,7 @@
 // Collections (RFC 0003 section 7) through a real server against PGlite:
 // subscribing to a scope and paging it, and the deltas raw tracked writes
 // produce, asserting the exact replies and frames real socket clients
-// receive. The delta cases port 4.1's (`legacy-src/server/collections.test.ts:274-367`),
+// receive. The delta cases port 4.1's (4.1 `src/server/collections.test.ts:274-367`),
 // driven by tracked writes instead of `BaseService.create/update/delete`.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -519,6 +519,30 @@ describe("deltas after a flush", () => {
     ]);
   });
 
+  it("keeps a row an array-form batch moved out and back in, as the database holds it", async () => {
+    const { app } = await start();
+    const { connection, scopes } = await connect(app, as(board.ada));
+    await colSub(connection, "openByProject", board.p1);
+    await write(app, (db) =>
+      db.$transaction([
+        db.task.update({ where: { id: board.t1 }, data: { status: "done" } }),
+        db.task.update({ where: { id: board.t1 }, data: { status: "open" } }),
+      ]),
+    );
+    await scopes.settle();
+    expect((await h.prisma.task.findUniqueOrThrow({ where: { id: board.t1 } })).status).toBe(
+      "open",
+    );
+    // Never removed: the unit's one record ends where the database does, still in scope.
+    expect(scopes.frames.map(({ deltas }) => deltas)).toEqual([
+      [
+        inCluster()
+          ? { t: "updated", item: card(board.t1, board.p1, "T1") }
+          : { t: "patched", id: board.t1, d: { status: "open" } },
+      ],
+    ]);
+  });
+
   it("sends a deleted row as removed", async () => {
     const { app } = await start();
     const { connection, scopes } = await connect(app, as(board.ada));
@@ -561,6 +585,108 @@ describe("deltas after a flush", () => {
     expect(scopes.frames).toEqual([
       expect.objectContaining({ scope: bug.id, deltas: [{ t: "removed", id: board.t1 }] }),
     ]);
+  });
+
+  it("removes a touched via entry from the scope a junction delete of the same flush took it out of", async () => {
+    const { app } = await start();
+    const bug = await h.prisma.label.create({ data: { projectId: board.p1, name: "Bug" } });
+    const idea = await h.prisma.label.create({ data: { projectId: board.p1, name: "Idea" } });
+    const link = await h.prisma.taskLabel.create({ data: { taskId: board.t1, labelId: bug.id } });
+    await h.prisma.taskLabel.create({ data: { taskId: board.t1, labelId: idea.id } });
+    const { connection, scopes } = await connect(app, as(board.ada));
+    await colSub(connection, "byLabel", bug.id);
+    await colSub(connection, "byLabel", idea.id);
+    const touch = h.storage.unitOfWork.touch;
+    await write(app, async (db) => {
+      await db.taskLabel.delete({ where: { id: link.id } });
+      touch?.("task", [board.t1]);
+    });
+    await scopes.settle();
+    expect(scopes.frames.map(({ scope, deltas }) => ({ scope, deltas }))).toEqual(
+      expect.arrayContaining([
+        { scope: bug.id, deltas: [{ t: "removed", id: board.t1 }] },
+        { scope: idea.id, deltas: [{ t: "added", item: card(board.t1, board.p1, "T1") }] },
+      ]),
+    );
+    expect(scopes.frames).toHaveLength(2);
+    const fresh = await colSub(connection, "byLabel", bug.id);
+    expect(fresh.items).toEqual([]);
+  });
+
+  it("removes a via entry an upsert wrote in the flush that deleted one of its links", async () => {
+    const { app } = await start();
+    const bug = await h.prisma.label.create({ data: { projectId: board.p1, name: "Bug" } });
+    const link = await h.prisma.taskLabel.create({ data: { taskId: board.t1, labelId: bug.id } });
+    const { connection, scopes } = await connect(app, as(board.ada));
+    await colSub(connection, "byLabel", bug.id);
+    await write(app, async (db) => {
+      await db.taskLabel.delete({ where: { id: link.id } });
+      // An upsert whose update sets no column a collection reads: recorded as a create that may have been an update.
+      await db.task.upsert({
+        where: { id: board.t1 },
+        update: { title: "Upserted" },
+        create: { projectId: board.p1, title: "Upserted" },
+      });
+    });
+    await scopes.settle();
+    expect(scopes.frames.map(({ scope, deltas }) => ({ scope, deltas }))).toEqual([
+      { scope: bug.id, deltas: [{ t: "removed", id: board.t1 }] },
+    ]);
+  });
+
+  it("sends a refreshEntry via entry again to every scope that still holds it when a junction row comes or goes", async () => {
+    const { app } = await start();
+    const bug = await h.prisma.label.create({ data: { projectId: board.p1, name: "Bug" } });
+    const idea = await h.prisma.label.create({ data: { projectId: board.p1, name: "Idea" } });
+    await h.prisma.taskLabel.create({ data: { taskId: board.t1, labelId: bug.id } });
+    const reader = await connect(app, as(board.ada));
+    const first = await colSub(reader.connection, "taggedByLabel", bug.id);
+    expect(first.items).toEqual([{ id: board.t1, title: "T1", labelCount: 1 }]);
+    await colSub(reader.connection, "taggedByLabel", idea.id);
+    const link = await write(app, (db) =>
+      db.taskLabel.create({ data: { taskId: board.t1, labelId: idea.id } }),
+    );
+    await reader.scopes.settle();
+    const byScope = (frames: typeof reader.scopes.frames) =>
+      frames.map(({ scope, deltas }) => ({ scope, deltas }));
+    expect(byScope(reader.scopes.frames)).toEqual(
+      expect.arrayContaining([
+        {
+          scope: bug.id,
+          deltas: [{ t: "updated", item: { id: board.t1, title: "T1", labelCount: 2 } }],
+        },
+        {
+          scope: idea.id,
+          deltas: [{ t: "added", item: { id: board.t1, title: "T1", labelCount: 2 } }],
+        },
+      ]),
+    );
+    expect(reader.scopes.frames).toHaveLength(2);
+    reader.scopes.clear();
+    await write(app, (db) => db.taskLabel.delete({ where: { id: link.id } }));
+    await reader.scopes.settle();
+    expect(byScope(reader.scopes.frames)).toEqual(
+      expect.arrayContaining([
+        {
+          scope: bug.id,
+          deltas: [{ t: "updated", item: { id: board.t1, title: "T1", labelCount: 1 } }],
+        },
+        { scope: idea.id, deltas: [{ t: "removed", id: board.t1 }] },
+      ]),
+    );
+    expect(reader.scopes.frames).toHaveLength(2);
+  });
+
+  it("leaves the scopes a plain via collection's junction write does not link alone", async () => {
+    const { app } = await start();
+    const bug = await h.prisma.label.create({ data: { projectId: board.p1, name: "Bug" } });
+    const idea = await h.prisma.label.create({ data: { projectId: board.p1, name: "Idea" } });
+    await h.prisma.taskLabel.create({ data: { taskId: board.t1, labelId: bug.id } });
+    const { connection, scopes } = await connect(app, as(board.ada));
+    await colSub(connection, "byLabel", bug.id);
+    await write(app, (db) => db.taskLabel.create({ data: { taskId: board.t1, labelId: idea.id } }));
+    await scopes.settle();
+    expect(scopes.frames).toEqual([]);
   });
 
   it("adds a touched row to its scope, and removes a row touched as removed from every subscribed scope", async () => {

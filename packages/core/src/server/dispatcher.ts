@@ -5,9 +5,9 @@
 
 import type { AnyContract } from "../contract/defineContract";
 import type { DispatcherAccess } from "./access/api";
-import { createCaller, type Caller } from "./caller";
-import type { RunContext } from "./context";
-import { registerLive, type Presence, type StreamHandle } from "./emit/live";
+import { callerGrantsOf, createCaller, type Caller } from "./caller";
+import type { RunContext, RunOptions } from "./context";
+import { registerLive, type Presence, type ServerRooms, type StreamHandle } from "./emit/live";
 import { createPipeline, type DispatchRequest, type DispatchResult } from "./pipeline/pipeline";
 import {
   resolveSettings,
@@ -16,10 +16,10 @@ import {
   type PipelineSettings,
 } from "./pipeline/settings";
 import { createRegistry, type Registry } from "./registry";
-import type { AnyService } from "./service";
+import type { AnyService, Service } from "./service";
 import type { DbOf, Principal, PrincipalOf } from "./types";
 
-export type { Presence, StreamHandle };
+export type { Presence, ServerRooms, Service, StreamHandle };
 
 type TypesOf<S extends readonly AnyService[]> = NonNullable<S[number]["~types"]>;
 
@@ -80,7 +80,10 @@ export interface Dispatcher<S extends readonly AnyService[] = readonly AnyServic
    * A typed in-process caller acting as `principal`, `null` for anonymous:
    * `dispatcher.caller(user).taskService.rename(input)`. Calls go through the
    * whole pipeline with transport `"internal"` and no connection, so they are
-   * not capped.
+   * not capped. Through a server's dispatcher, a principal that carries no
+   * `serviceAccess` gets the grants `auth.loadServiceAccess` loads, once per
+   * caller and again after the server applied new grants, as a socket's
+   * handshake does; one that carries grants keeps exactly those.
    */
   caller(principal: PrincipalOfServices<S> | null): Caller<ContractOfServices<S>>;
   /**
@@ -88,11 +91,12 @@ export interface Dispatcher<S extends readonly AnyService[] = readonly AnyServic
    * section 5.1): the tracked writes it makes flush to the dispatcher's
    * sinks once it settles, whether it resolved or threw, and before `run`
    * returns. Inside an open unit of work or transaction, `fn` joins it
-   * instead. For jobs, scripts and webhooks that write outside a method.
-   * `fn` gets a {@link RunContext}: `ctx.touch` records the rows a raw SQL
-   * write changed.
+   * instead, unless `detached` (see {@link RunOptions}) gives it a unit of
+   * its own. For jobs, scripts and webhooks that write outside a method, and
+   * a handler's background work. `fn` gets a {@link RunContext}: `ctx.touch`
+   * records the rows a raw SQL write changed.
    */
-  run<T>(fn: (ctx: RunContext) => T | PromiseLike<T>): Promise<T>;
+  run<T>(fn: (ctx: RunContext) => T | PromiseLike<T>, options?: RunOptions): Promise<T>;
   /**
    * The services' access policies (RFC 0003 section 4): a principal's levels
    * on rows, list filters, and access-change events.
@@ -106,6 +110,12 @@ export interface Dispatcher<S extends readonly AnyService[] = readonly AnyServic
    * without a server nobody is online.
    */
   readonly presence: Presence;
+  /**
+   * App rooms from code that is not a handler (RFC 0003 section 12.5): typed
+   * room events (`emit`, `emitToUser`) and `leave(room, { userId })`, on
+   * every node of the attached server; without a server nothing is sent.
+   */
+  readonly rooms: ServerRooms;
   /**
    * The handle of one of the services' streams (RFC 0003 section 12.5), whose
    * `push` appends an item: `dispatcher.stream(task, "logs").push(taskId,
@@ -137,19 +147,37 @@ export function withAccessSinks<O extends object>(
   return copy;
 }
 
+/** `run`'s `detached` option, checked. */
+function detachedOf(options: RunOptions | undefined): boolean {
+  if (options === undefined) {
+    return false;
+  }
+  if (typeof options !== "object" || options === null) {
+    throw new TypeError("run: options must be an object, { detached?: boolean }");
+  }
+  const { detached } = options;
+  if (detached !== undefined && typeof detached !== "boolean") {
+    throw new TypeError("run: detached must be true or false");
+  }
+  return detached === true;
+}
+
 /** `dispatcher.run`: a unit of work around `fn`, flushed once `fn` settles. */
-async function runInUnit<T>(
+export async function runInUnit<T>(
   settings: PipelineSettings,
   fn: (ctx: RunContext) => T | PromiseLike<T>,
+  options?: RunOptions,
 ): Promise<T> {
   if (typeof fn !== "function") {
     throw new TypeError("run: pass the function to run inside a unit of work");
   }
+  const detached = detachedOf(options);
   const requestId = crypto.randomUUID();
   const unit = settings.unitOfWork.begin({
     requestId,
     transport: "internal",
     sink: settings.flushSink,
+    ...(detached ? { detached } : {}),
   });
   const ctx: RunContext = Object.freeze({
     touch: settings.touch,
@@ -198,8 +226,11 @@ export function createDispatcher<const S extends readonly AnyService[]>(
   const dispatcher: Dispatcher<S> = Object.freeze({
     call,
     caller: (principal: PrincipalOfServices<S> | null) =>
-      createCaller(() => call, principal) as Caller<ContractOfServices<S>>,
-    run: <T>(fn: (ctx: RunContext) => T | PromiseLike<T>) => runInUnit(settings, fn),
+      createCaller(() => call, principal, {
+        grants: () => callerGrantsOf(dispatcher),
+      }) as Caller<ContractOfServices<S>>,
+    run: <T>(fn: (ctx: RunContext) => T | PromiseLike<T>, runOptions?: RunOptions) =>
+      runInUnit(settings, fn, runOptions),
     access: Object.freeze({ levelsFor, accessWhere, onAccessChanged }),
     collections: Object.freeze({
       reset: (contract: AnyContract, collection: string, scope: string) => {
@@ -207,6 +238,7 @@ export function createDispatcher<const S extends readonly AnyService[]>(
       },
     }),
     presence: settings.live.realtime.presence,
+    rooms: settings.live.realtime.rooms,
     stream: <C extends AnyContract, K extends keyof C["streams"] & string>(contract: C, name: K) =>
       settings.live.realtime.stream(contract, name) as unknown as StreamHandle<C, K>,
     registry,

@@ -121,6 +121,9 @@ export function contextFor(
     log,
     requestId,
     transport: request.transport,
+    ...(request.transport === "socket" && request.connectionId !== undefined
+      ? { socketId: request.connectionId }
+      : {}),
     ...(request.mcp === undefined ? {} : { mcp: request.mcp }),
     touch: settings.touch,
     rooms: realtime.roomsFor(request.transport, request.connectionId, target.method.share),
@@ -134,6 +137,7 @@ export function contextFor(
       storage: settings.storage,
       occupancy: settings.live.occupancy,
       claimRevision: settings.live.revisions.claim,
+      runDetached: settings.runDetached,
     },
   };
   return createContext(fields, runtimeOf(target.service)?.extendContext);

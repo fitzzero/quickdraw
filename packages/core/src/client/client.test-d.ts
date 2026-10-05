@@ -12,7 +12,10 @@ import { describe, expectTypeOf, test } from "vitest";
 import { z } from "zod";
 import {
   defineContract,
+  listOf,
   mutation,
+  nullable,
+  query,
   type EntityOf,
   type ItemOf,
   type QuickdrawError,
@@ -24,12 +27,14 @@ import {
   createQuickdrawClient,
   createServerCaller,
   overlaysOf,
+  useJoin,
   useQuickdraw,
   type InvalidationCoordinator,
   type MethodQueryKey,
   type OverlayStore,
   type QuickdrawProviderProps,
   type UseEntityResult,
+  type UseJoinResult,
 } from "./index";
 import { counter } from "./__tests__/fixtures";
 import { taskContract as board } from "./__tests__/live";
@@ -71,8 +76,10 @@ describe("the typed client", () => {
     // @ts-expect-error a query has no useMutation
     void qd.taskService.get.useMutation;
     expectTypeOf<keyof typeof qd.taskService.get>().toEqualTypeOf<
-      "useQuery" | "call" | "key" | "prefetch"
+      "useQuery" | "call" | "key" | "prefetch" | "setData"
     >();
+    // @ts-expect-error a mutation has no cached result to set
+    void qd.taskService.rename.setData;
     expectTypeOf<keyof typeof qd.taskService.rename>().toEqualTypeOf<"useMutation" | "call">();
   });
 
@@ -153,6 +160,24 @@ describe("the typed client", () => {
   test("useQuickdraw names the user the hello said", () => {
     expectTypeOf<ReturnType<typeof useQuickdraw>["userId"]>().toEqualTypeOf<string | null>();
   });
+
+  test("useJoin takes a query or mutation member with its input, and returns its output", () => {
+    const useRenameJoin = () => useJoin(qd.taskService.rename, { id: "t1", title: "x" });
+    expectTypeOf<ReturnType<typeof useRenameJoin>>().toEqualTypeOf<UseJoinResult<TaskRow>>();
+    const useGetJoin = () => useJoin(qd.taskService.get, { id: "t1" }, { enabled: false });
+    expectTypeOf<ReturnType<typeof useGetJoin>["data"]>().toEqualTypeOf<TaskRow | undefined>();
+    expectTypeOf<ReturnType<typeof useGetJoin>["status"]>().toEqualTypeOf<
+      "idle" | "joining" | "joined" | "error"
+    >();
+    // @ts-expect-error -- get takes { id }
+    const useWrong = () => useJoin(qd.taskService.get, { title: "x" });
+    expectTypeOf(useWrong).toBeFunction();
+    useJoin(qd.misc.reset, undefined, {
+      onJoined: (data) => {
+        expectTypeOf(data).toEqualTypeOf<null>();
+      },
+    });
+  });
 });
 
 describe("qd.invalidate", () => {
@@ -181,6 +206,21 @@ describe("qd.invalidate", () => {
   });
 });
 
+describe("setData", () => {
+  test("takes the query's input and its output, or a function of the cached output", () => {
+    expectTypeOf(qd.counter.read.setData).parameter(0).toEqualTypeOf<{ name: string }>();
+    expectTypeOf(qd.counter.read.setData({ name: "a" }, { name: "a", value: 1 })).toEqualTypeOf<
+      { name: string; value: number } | undefined
+    >();
+    qd.counter.read.setData({ name: "a" }, (cached) =>
+      cached === undefined ? undefined : { ...cached, value: cached.value + 1 },
+    );
+    qd.counter.total.setData(undefined, 3);
+    // @ts-expect-error the output is the method's
+    qd.counter.read.setData({ name: "a" }, { name: "a" });
+  });
+});
+
 describe("optimistic mutations", () => {
   test("take false or a function typed by the contract's entity and collections", () => {
     const useQuiet = () => qd.taskService.rename.useMutation({ optimistic: false });
@@ -203,6 +243,29 @@ describe("optimistic mutations", () => {
     void useCustom;
     // @ts-expect-error true is the default; only false or a function may be given
     void (() => qd.taskService.rename.useMutation({ optimistic: true }));
+  });
+
+  test("add items typed by each collection's item and scope, and entity rows typed by the entity", () => {
+    const useCreate = () =>
+      qd.board.rename.useMutation({
+        optimistic: (input, cache) => {
+          // A card of the board: every field but id, which may be given or left to the server.
+          cache.addItem("board", "p1", { title: input.title });
+          cache.addItem("board", "p1", { id: "client-made", title: input.title });
+          cache.addEntity({ projectId: "p1", title: input.title, status: "open", ordinal: 1 });
+          // @ts-expect-error a card has a title
+          cache.addItem("board", "p1", {});
+          // @ts-expect-error a card has no status
+          cache.addItem("board", "p1", { title: "x", status: "open" });
+          // @ts-expect-error a scope is the scope column's value
+          cache.addItem("board", 1, { title: "x" });
+          // @ts-expect-error an entity row has every field of the entity
+          cache.addEntity({ title: "x" });
+        },
+      });
+    void useCreate;
+    const useBoard = () => qd.board.board.useCollection("p1");
+    expectTypeOf<ReturnType<typeof useBoard>["pending"]>().toEqualTypeOf<ReadonlySet<string>>();
   });
 
   test("mutate returns nothing and mutateAsync the output's promise", () => {
@@ -252,6 +315,37 @@ describe("live members", () => {
   test("a contract without an entity has no entity members", () => {
     // @ts-expect-error the counter has no entity
     void qd.counter.useEntity;
+  });
+
+  test("a field the contract's fields tier is optional wherever a reader receives the row", () => {
+    // Only callers with Admin on a user receive its email (and its grants).
+    const userSchema = z.object({ id: z.string(), name: z.string(), email: z.string() });
+    const users = defineContract("userService", {
+      entity: userSchema,
+      projections: { profile: userSchema },
+      fields: { email: "Admin" },
+      methods: {
+        getMe: query({ input: z.object({}), output: nullable("entity") }),
+        rename: mutation({
+          input: z.object({ id: z.string(), name: z.string() }),
+          output: "entity",
+        }),
+        listProfiles: query({ input: z.object({}), output: listOf("profile") }),
+      },
+      collections: { all: { scope: "name", item: "profile", order: [["id", "asc"]] } },
+    });
+    type Received = { id: string; name: string; email?: string };
+    const client = createQuickdrawClient({ users });
+    const useMe = () => client.users.useEntity("u1");
+    expectTypeOf<ReturnType<typeof useMe>["data"]>().toEqualTypeOf<Received | undefined>();
+    const useAll = () => client.users.all.useCollection("n");
+    expectTypeOf<ReturnType<typeof useAll>["items"]>().toEqualTypeOf<readonly Received[]>();
+    expectTypeOf(client.users.getMe.call).returns.resolves.toEqualTypeOf<Received | null>();
+    expectTypeOf(client.users.rename.call).returns.resolves.toEqualTypeOf<Received>();
+    expectTypeOf(client.users.listProfiles.call).returns.resolves.toEqualTypeOf<Received[]>();
+    // the email is read with a guard
+    const useEmail = () => client.users.useEntity("u1").data?.email ?? "hidden";
+    expectTypeOf<ReturnType<typeof useEmail>>().toEqualTypeOf<string>();
   });
 });
 

@@ -2,7 +2,7 @@
 // fields, read from the entity schema's Standard JSON Schema (Zod 4.2 or
 // later), since Standard Schema exposes validation only, and how a write of
 // them is checked. 4.1 read Zod's type names instead
-// (`legacy-src/server/utils/zodToAdminFields.ts:33-103`); the same field
+// (4.1 `src/server/utils/zodToAdminFields.ts:33-103`); the same field
 // types come from each property's JSON Schema here:
 //
 // | JSON Schema of the property                     | Admin field type      |
@@ -22,7 +22,7 @@
 // default, as 4.1 counted optional, nullable and defaulted fields as not
 // required. `relation` is never derived; `fieldOverrides` sets it.
 //
-// The types here are 4.1's (`legacy-src/shared/types.ts:283-338`).
+// The types here are 4.1's (4.1 `src/shared/types.ts:283-338`).
 
 import { hasJsonSchema, type StandardSchemaV1 } from "../standardSchema";
 import { isRecord, nested } from "./schemas";
@@ -74,6 +74,20 @@ export interface AdminFieldConfig {
   readonly enumValues?: readonly string[];
   /** For relation fields, the related service's name. */
   readonly relationService?: string;
+  /**
+   * What the field holds, when the kit knows it: `"grants"` for a user's
+   * service-wide grants (`serviceAccess`), which `admin.handlers(contract,
+   * { grants: true })` shows. An admin screen with a grants editor of its own
+   * finds that field by it, never by its name. Absent for any other field.
+   */
+  readonly kind?: "grants";
+  /**
+   * Whether a generic create or edit form shows the field. `false` from a
+   * `fieldOverrides` entry (`{ serviceAccess: { showInForm: false } }`) keeps
+   * it for an editor of the app's own; the kit still reads and writes it.
+   * Absent unless overridden: shown.
+   */
+  readonly showInForm?: boolean;
 }
 
 /** Service metadata for admin UI generation: what `adminMeta` returns. */
@@ -104,7 +118,7 @@ export interface AdminEntityField {
 /**
  * Fields no admin call writes, whatever the service configures: the row's key
  * and its timestamps, which the database sets (4.1's non-editable fields,
- * `legacy-src/server/utils/zodToAdminFields.ts:7`).
+ * 4.1 `src/server/utils/zodToAdminFields.ts:7`).
  */
 export const ADMIN_NEVER_WRITABLE: readonly string[] = Object.freeze([
   "id",

@@ -17,6 +17,7 @@ import type {
 import type { Logger } from "../../contract/logger";
 import type { StandardSchemaV1 } from "../../contract/standardSchema";
 import type { AccessForm } from "../access/types";
+import type { RunContext } from "../context";
 import type { Principal, PrincipalOf, QuickdrawTypes } from "../types";
 
 /**
@@ -41,12 +42,78 @@ export interface Presence {
   users(room: string): Promise<string[]>;
 }
 
+/** Whose sockets `rooms.leave(room, target)` takes out of a room: every socket of one user. */
+export interface RoomTarget {
+  readonly userId: string;
+}
+
+/**
+ * App rooms from code that is not a handler (a game loop, a job, a webhook):
+ * `qd.rooms`, `server.rooms` and `dispatcher.rooms`, the half of `ctx.rooms`
+ * that needs no calling socket. Behind a cluster adapter each reaches every
+ * node.
+ *
+ * @example
+ * // a game loop's tick, outside any handler
+ * qd.rooms.emit(WORLD_ROOM, gameContract, "death", { id: playerId });
+ * // a moderator removed a member: their sockets stop hearing the room
+ * await qd.rooms.leave(chatRoom(chatId), { userId });
+ */
+export interface ServerRooms {
+  /**
+   * Sends the contract's event to every socket in `room` as `qd:event`, on
+   * every node. The payload is checked against the event's schema first: a
+   * payload that fails it throws `INTERNAL` and nothing is sent. Without a
+   * server it does nothing more.
+   */
+  emit<C extends AnyContract, E extends EventName<C>>(
+    room: string,
+    contract: C,
+    event: E,
+    payload: EventPayloadOf<C, E>,
+  ): void;
+  /** `emit` to every socket of one user (their `user:{userId}` room), on every node. */
+  emitToUser<C extends AnyContract, E extends EventName<C>>(
+    userId: string,
+    contract: C,
+    event: E,
+    payload: EventPayloadOf<C, E>,
+  ): void;
+  /**
+   * Takes every socket of `target.userId` out of the app room `room`, on
+   * every node: they stop receiving the room's events and `qd:presence`
+   * frames, and a channel that `requires: { room }` drops their messages.
+   * Each socket taken out gets `qd:presence { room, users: [] }`, as after
+   * its own leave, and `onRoomLeave` hears of it with reason `"removed"`.
+   * Behind a cluster adapter the request is broadcast and answered: it
+   * resolves once every node took the user's sockets out (at most
+   * `cluster.timeoutMs`), so await it before emitting what the user must not
+   * receive. Room names are checked as `join` checks them (`VALIDATION`). A
+   * user with no socket in the room is nothing to do; joining again is the
+   * app's to refuse.
+   */
+  leave(room: string, target: RoomTarget): Promise<void>;
+  /**
+   * How many sockets are in the app room `room` on this node: every socket a
+   * method joined to it, anonymous ones (a spectator) included, counted at
+   * once, with no promise and no round trip, so a game loop can ask it at
+   * its tick rate ("is anyone watching this world?"). Local: behind a
+   * cluster adapter it never counts another node's sockets; ask
+   * `presence.count(room)` for the users in the room on every node. Room
+   * names are checked as `join` checks them (`VALIDATION`); without a server
+   * it is 0.
+   */
+  size(room: string): number;
+}
+
 /**
  * `ctx.rooms` (RFC 0003 sections 3, 12.5 and 15): app-defined rooms the
  * calling socket joins and leaves, and typed room events. It replaces 4.1's
- * `emitToRoom` and `emitToUserRoom` (`legacy-src/server/BaseService.ts:378-441`).
+ * `emitToRoom` and `emitToUserRoom` (4.1 `src/server/BaseService.ts:378-441`).
+ * Everything that needs no calling socket is also on `qd.rooms`
+ * ({@link ServerRooms}).
  */
-export interface ContextRooms {
+export interface ContextRooms extends ServerRooms {
   /**
    * Puts the calling socket in an app-defined room (a lobby), so it receives
    * the room's events and `qd:presence` frames. Returns `false`, doing
@@ -59,26 +126,56 @@ export interface ContextRooms {
   join(room: string): boolean;
   /** Takes the calling socket out of an app room; `false` when it was not in it, or the call has no socket. */
   leave(room: string): boolean;
-  /**
-   * Sends the contract's event to every socket in `room` as `qd:event`. The
-   * payload is checked against the event's schema first: a payload that
-   * fails it throws `INTERNAL` and nothing is sent. Without a server it does
-   * nothing more.
-   */
-  emit<C extends AnyContract, E extends EventName<C>>(
-    room: string,
-    contract: C,
-    event: E,
-    payload: EventPayloadOf<C, E>,
-  ): void;
-  /** `emit` to every socket of one user (their `user:{userId}` room). */
-  emitToUser<C extends AnyContract, E extends EventName<C>>(
-    userId: string,
-    contract: C,
-    event: E,
-    payload: EventPayloadOf<C, E>,
-  ): void;
+  /** See {@link ServerRooms.leave}: every socket of the user, on every node, from any call. */
+  leave(room: string, target: RoomTarget): Promise<void>;
 }
+
+/** Why a socket left app rooms, as `onRoomLeave` hears it. */
+export type RoomLeaveReason =
+  /** The socket's own `ctx.rooms.leave(room)`. */
+  | "leave"
+  /** `rooms.leave(room, { userId })` took its user out. */
+  | "removed"
+  /** The socket disconnected (a closed tab, a lost network, `qd:rotate`, the server closing): every app room it was in. */
+  | "disconnect";
+
+/** One app room a socket left. */
+export interface RoomLeft {
+  readonly room: string;
+  /**
+   * True when no socket of the user is in the room any more, on any node:
+   * the user is gone from it, not just one of their sockets (another tab
+   * keeps it false). Always true for an anonymous socket. Behind a cluster
+   * adapter it is decided by asking every node once this socket left, as
+   * the room's `left` presence frame is; when they cannot be asked it is
+   * true. For a removal every node reports its own last socket of the user
+   * as last, so it is never missed and may come from more than one node.
+   */
+  readonly last: boolean;
+}
+
+/** What `onRoomLeave` receives: one socket leaving one or more app rooms. */
+export interface RoomLeave<P = Principal> {
+  /** The socket's principal; `null` for an anonymous socket (a spectator). */
+  readonly principal: P | null;
+  /** The socket that left. */
+  readonly socketId: string;
+  readonly reason: RoomLeaveReason;
+  /** The app rooms it left: one for a leave or a removal, every one it was in for a disconnect. */
+  readonly rooms: readonly RoomLeft[];
+}
+
+/**
+ * `createServer`'s `onRoomLeave`: called once per socket that leaves app
+ * rooms, on the node that holds the socket, in a unit of work of its own
+ * (detached: never the unit of the handler whose `ctx.rooms.leave` caused
+ * it), after the room heard the socket go. `ctx` is a `qd.run` context. An
+ * error it throws is logged; a server's `close()` waits for it.
+ */
+export type RoomLeaveHandler<P = Principal> = (
+  leave: RoomLeave<P>,
+  ctx: RunContext,
+) => void | PromiseLike<void>;
 
 /** The arguments of a stream's `push`: `(scope, item)` for a scoped stream, `(item)` for a global one. */
 export type StreamPushArgs<C extends AnyContract, K extends StreamName<C>> =
@@ -110,17 +207,106 @@ export interface StreamHandle<C extends AnyContract, K extends StreamName<C>> {
   pushMany(...args: StreamPushManyArgs<C, K>): void;
 }
 
+/**
+ * What a stream's `seed` function receives besides the scope: who is
+ * subscribing, already authorized by the stream's `access`.
+ */
+export interface StreamSeedContext<P = Principal> {
+  /** The subscriber's principal; `null` for an anonymous subscriber of a `"public"` stream. */
+  readonly principal: P | null;
+  /** The subscribing socket. */
+  readonly socketId: string;
+  /** The dispatcher's logger. */
+  readonly log: Logger;
+}
+
+/**
+ * A stream's seed computed when a socket subscribes (`defineService`'s
+ * `streams: { <name>: { seed } }`), instead of the latest items pushed: the
+ * current state the items that follow change (a game world whose items are
+ * deltas). It gets the feed's scope (`undefined` for a global stream) and
+ * the subscriber, and returns the items the subscriber starts from, oldest
+ * first, or a promise of them.
+ */
+export type StreamSeed<T extends QuickdrawTypes, C extends AnyContract, K extends StreamName<C>> = (
+  scope: IsScopedStream<C, K> extends true ? string : undefined,
+  ctx: StreamSeedContext<PrincipalOf<T>>,
+) => readonly StreamItemOf<C, K>[] | PromiseLike<readonly StreamItemOf<C, K>[]>;
+
+/** One stream's options in `defineService`'s `streams`. */
+export interface StreamImplementation<
+  T extends QuickdrawTypes,
+  C extends AnyContract,
+  K extends StreamName<C>,
+> {
+  /**
+   * Computes each subscriber's seed when it subscribes, on the node it is
+   * connected to, under its principal once the stream's `access` admitted
+   * it: the current state rather than the last items pushed. It runs for
+   * every `qd:stream:sub`, so keep it cheap (read state the app holds, or
+   * cache it). The socket joins the feed in the same tick as the function
+   * is called, so a function that returns at once gives the exact
+   * guarantee of a kept seed: every item pushed after it reaches the
+   * subscriber, none pushed before it does. One that returns a promise may
+   * also see items pushed while it runs, which then arrive both ways; never
+   * neither. A throw answers the subscribe with that error (a
+   * `QuickdrawError`'s code, else `INTERNAL`) and leaves the feed. Each item
+   * is checked against the stream's schema, as `push` checks. A stream whose
+   * contract keeps a seed (`seed: n`) cannot also compute one.
+   *
+   * @example
+   * streams: { world: { seed: (worldId) => [worlds.get(worldId).snapshot()] } }
+   */
+  readonly seed?: StreamSeed<T, C, K>;
+  /**
+   * When pushed items (and computed seeds) are checked against the item
+   * schema: `"always"`, the default, or `"development"`, only while the
+   * dispatcher checks its methods' outputs (`outputValidation`: on unless
+   * `NODE_ENV` is `"production"`, so always in tests). For a hot stream
+   * whose items the app builds itself (a game's snapshots at its tick
+   * rate): unchecked, an item goes out as pushed, so the schema neither
+   * refuses it nor strips keys it does not name.
+   */
+  readonly validate?: StreamValidation;
+}
+
+/** When a stream checks its items: always, or only where outputs are checked (development and tests). */
+export type StreamValidation = "always" | "development";
+
+/**
+ * `defineService`'s `streams`: options per stream of the contract (any
+ * subset): a seed computed at subscribe time, and when items are checked.
+ */
+export type StreamOptions<T extends QuickdrawTypes, C extends AnyContract> = {
+  readonly [K in StreamName<C>]?: StreamImplementation<T, C, K>;
+};
+
+/** A stream's `seed` function as the subscribe path calls it, whatever its declared types. */
+export type AnyStreamSeed = (scope: string | undefined, ctx: StreamSeedContext) => unknown;
+
 /** Who may send on a channel besides its `requires`: any principal, or a service-wide grant. */
 export type ChannelAccess = "authenticated" | { readonly service: AccessLevel };
 
 /**
  * What a channel handler receives beside the payload. Channels need a
- * principal, so `principal` is never `null`.
+ * principal, so `principal` is never `null`. `Room` is `string` for a
+ * channel that `requires: { room }`, `undefined` for any other.
  */
-export interface ChannelContext<P = Principal> {
+export interface ChannelContext<
+  P = Principal,
+  Room extends string | undefined = string | undefined,
+> {
   readonly principal: P;
   /** The socket the message arrived on. */
   readonly socketId: string;
+  /**
+   * The app room the channel's `requires: { room }` matched: its name, the
+   * one the payload computed, or for `{ prefix }` the sending socket's room
+   * with that prefix (the one it joined first, if several), so a game of
+   * many worlds knows the sender's world without the payload repeating it.
+   * `undefined` for a channel that requires no room.
+   */
+  readonly room: Room;
   /** The dispatcher's logger. Messages are not logged one by one. */
   readonly log: Logger;
   /** Joins and leaves apply to the sending socket. */
@@ -129,23 +315,42 @@ export interface ChannelContext<P = Principal> {
 }
 
 /** A channel's handler. It runs synchronously per message; a promise it returns is not awaited. */
-export type ChannelHandler<T extends QuickdrawTypes, Payload> = (
-  payload: Payload,
-  ctx: ChannelContext<PrincipalOf<T>>,
-) => void | PromiseLike<void>;
+export type ChannelHandler<
+  T extends QuickdrawTypes,
+  Payload,
+  Room extends string | undefined = string | undefined,
+> = (payload: Payload, ctx: ChannelContext<PrincipalOf<T>, Room>) => void | PromiseLike<void>;
 
 /** One channel's implementation in `defineService`: its handler, or `{ access, handler }`. */
-export type ChannelImplementation<T extends QuickdrawTypes, Payload> =
-  | ChannelHandler<T, Payload>
+export type ChannelImplementation<
+  T extends QuickdrawTypes,
+  Payload,
+  Room extends string | undefined = string | undefined,
+> =
+  | ChannelHandler<T, Payload, Room>
   | {
       /** Default `"authenticated"`. */
       readonly access?: ChannelAccess;
-      readonly handler: ChannelHandler<T, Payload>;
+      readonly handler: ChannelHandler<T, Payload, Room>;
     };
+
+/** What a channel's handler gets as `ctx.room`: `string` when it requires a room, else `undefined`. */
+export type ChannelRoomOf<
+  C extends AnyContract,
+  K extends ChannelName<C>,
+> = C["channels"][K] extends {
+  readonly requires: { readonly room: string | object };
+}
+  ? string
+  : undefined;
 
 /** `defineService`'s `channels`: one implementation per channel of the contract. */
 export type ChannelOptions<T extends QuickdrawTypes, C extends AnyContract> = {
-  readonly [K in ChannelName<C>]: ChannelImplementation<T, ChannelPayloadOf<C, K>>;
+  readonly [K in ChannelName<C>]: ChannelImplementation<
+    T,
+    ChannelPayloadOf<C, K>,
+    ChannelRoomOf<C, K>
+  >;
 };
 
 /** `{ channels }` is required when the contract declares channels: every message needs a handler. */
@@ -203,6 +408,7 @@ export interface ServiceChannel {
         readonly select: CompiledSelector;
       }
     | { readonly kind: "room"; readonly select: CompiledSelector }
+    | { readonly kind: "roomPrefix"; readonly prefix: string }
     | undefined;
   readonly access: ChannelAccess;
   readonly handler: AnyChannelHandler;
@@ -214,12 +420,29 @@ export interface ServiceStream {
   readonly item: StandardSchemaV1;
   /** True for a stream with one feed per scope value. */
   readonly scoped: boolean;
+  /** How many of the latest items each scope keeps as its seed (the contract's `seed`). */
   readonly seed: number;
+  /** The service's `seed` function, computing each subscriber's seed instead; `undefined` when it has none. */
+  readonly computeSeed: AnyStreamSeed | undefined;
+  /** When items are checked against `item`: always, or only while the dispatcher checks outputs. */
+  readonly validate: StreamValidation;
   readonly volatile: boolean;
   /**
    * The contract's access form as the access engine decides it, with the
    * scope as the `id` of an `entry` or `scope` form (the engine's input is
-   * `{ scope }`); `undefined` for a closed stream.
+   * `{ scope }`); `undefined` for a closed stream, or one whose `room`
+   * decides instead.
    */
   readonly access: AccessForm | undefined;
+  /** The contract's `access: { room }`: the app room a subscriber's socket must be in. */
+  readonly room: StreamRoomAccess | undefined;
 }
+
+/** A stream's `access: { room }`, compiled: the app room a subscriber's socket must be in. */
+export type StreamRoomAccess =
+  | { readonly kind: "name"; readonly room: string }
+  | { readonly kind: "prefix"; readonly prefix: string }
+  | {
+      readonly kind: "computed";
+      readonly select: (scope: string | undefined) => string | undefined;
+    };

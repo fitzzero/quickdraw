@@ -55,7 +55,7 @@ const COLLECTION_STATE =
 const TRACKED_DELTAS =
   "Collection deltas follow tracked writes: write through `db.<model>`, or record a write the client cannot see with `ctx.touch(model, ids)`.";
 const POLICIES =
-  "Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `anyOf`, `resolver`) and each method's `access` form.";
+  "Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `everyone`, `anyOf`, `resolver`) and each method's `access` form.";
 const FIELD_TIERS =
   'Field tiers are declared in the contract\'s `fields` (`fields: { notes: "Admin" }`) and stripped per caller.';
 
@@ -186,6 +186,12 @@ export const REMOVED_NAMES = Object.freeze({
   ...each(["useRoomEvents", "UseRoomEventsOptions", "QuickdrawRoomEventHandlers"], ROOM_EVENTS),
   ...each(["useChannelSend", "UseChannelSendResult"], CHANNEL_SEND),
   ...each(["useQuickdrawSocket", "QuickdrawSocketContextValue"], SOCKET_CONTEXT),
+  getOAuthUrl:
+    "Link to `signInUrl(provider, { returnTo })` from `./client`: the auth routes kit starts a sign-in at `GET /auth/{provider}/start`.",
+  logout:
+    "Call `signOut()` from `./client`: `POST /auth/logout` with the session cookie (and a stored token) revokes the session; it rejects when refused.",
+  logoutAllDevices:
+    "Call `signOutEverywhere()` from `./client`: `POST /auth/logout-all` revokes every session of the user; it resolves with nothing.",
   ServiceCallError:
     "Failed calls throw `QuickdrawError`: branch on `error.code` (`FORBIDDEN`, `NOT_FOUND`, `VALIDATION`, `CONFLICT`, ...).",
   ...each(["ClientServiceMethodMap", "SubscriptionDataMap"], INFERRED),

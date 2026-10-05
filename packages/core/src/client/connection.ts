@@ -2,7 +2,7 @@
 // Socket.IO socket with the v5 handshake, its state as a snapshot to
 // subscribe to, the pushes a server sends a whole connection, and the change
 // topics it watches. Ported from 4.1's provider
-// (`legacy-src/client/QuickdrawProvider.tsx:295-403`), without React, so a
+// (4.1 `src/client/QuickdrawProvider.tsx:295-403`), without React, so a
 // React Native or Node client uses it as it is: nothing here touches
 // `window` or `document`.
 //
@@ -21,6 +21,10 @@
 //   rotates) is `reconnecting` meanwhile, joins its watched topics again
 //   (`watch.ts`) and tells `onReconnect` listeners, which refetch what may
 //   have changed (the provider, through the coordinator).
+// - Every `qd:hello` stands for a new socket, which is in no app room until
+//   a call joins it: `onHello` listeners hear each one (and the current one
+//   when they start listening), to run their joining calls again
+//   (`useJoin`).
 // - New credentials (`setAuth`) fail the calls waiting in Socket.IO's send
 //   buffer with `CANCELLED` before reconnecting: Socket.IO would send them
 //   on the next connect, as the new user.
@@ -29,7 +33,7 @@
 //   server's `limits.subscriptions`.
 //
 // 4.1 created a socket per token and hard-coded its options
-// (`legacy-src/client/QuickdrawProvider.tsx:306-312`), and cleared every
+// (4.1 `src/client/QuickdrawProvider.tsx:306-312`), and cleared every
 // subscription on a disconnect (`:326-330`). Here one socket lives as long as
 // the connection (`socket.ts`): new credentials reconnect it, and
 // `socketOptions` pass through to `io()`. Caches are never cleared on a
@@ -198,6 +202,22 @@ export interface QuickdrawConnection {
    */
   onReconnect(listener: () => void): () => void;
   /**
+   * Calls `listener` with every `qd:hello` the server sends: on the first
+   * connect, after every reconnect (a dropped socket, a `qd:rotate`, `open`
+   * after the server ended it) and after new credentials. Each hello is a
+   * new socket, which is in no app room until a call joins it, so this is
+   * where a client joins its rooms again (`useJoin` does it for React).
+   * When the connection is connected and already has its hello, `listener`
+   * is also called with it, in a microtask. Returns the unsubscribe
+   * function.
+   *
+   * @example
+   * const stop = connection.onHello(() => {
+   *   void call(connection, { service: "gameService", method: "watchWorld", input: { worldId } });
+   * });
+   */
+  onHello(listener: (hello: HelloFrame) => void): () => void;
+  /**
    * Watches a change topic (RFC 0003 section 11.3): the first watch of a
    * topic sends `qd:watch` (again on every connect), the last one to end
    * sends `qd:unwatch`, and `onChanged` receives the topic's `qd:changed`
@@ -228,7 +248,8 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 /** How much longer than the server's time limit a call waits, so the server's `TIMEOUT` arrives first. */
 const HELLO_TIMEOUT_MARGIN_MS = 2_000;
 
-const INITIAL_STATE: ConnectionState = Object.freeze({
+/** The state every connection starts in, and the one a server renders (no socket opens there). */
+export const INITIAL_CONNECTION_STATE: ConnectionState = Object.freeze({
   status: "idle",
   reconnecting: false,
   hello: null,
@@ -244,7 +265,7 @@ interface StateStore {
 }
 
 function createStore(): StateStore {
-  let state = INITIAL_STATE;
+  let state = INITIAL_CONNECTION_STATE;
   const listeners = new Set<() => void>();
   return {
     get: () => state,
@@ -465,14 +486,62 @@ function createLifecycle(
   return { open, close, retain, reconnect, rotateWithin, stoppedStatus };
 }
 
-/** What the socket's own events update: the state, the session (and its topics) and the reconnect listeners. */
+/** One `onHello` listener, and the last hello it was given, so no hello reaches it twice. */
+interface HelloListener {
+  readonly listener: (hello: HelloFrame) => void;
+  last: HelloFrame | undefined;
+}
+
+/** What the socket's own events update: the state, the session (and its topics) and the listeners. */
 interface Wiring {
   readonly socket: QuickdrawSocket;
   readonly store: StateStore;
   readonly lifecycle: Lifecycle;
   readonly session: Session;
   readonly reconnected: Set<() => void>;
+  readonly hellos: Set<HelloListener>;
   readonly onProtocolMismatch: (mismatch: ProtocolMismatch) => void;
+}
+
+/** Gives `entry` the hello, unless it was given that one already or stopped listening. */
+function sayHello(
+  hellos: ReadonlySet<HelloListener>,
+  entry: HelloListener,
+  hello: HelloFrame,
+): void {
+  if (hellos.has(entry) && entry.last !== hello) {
+    entry.last = hello;
+    entry.listener(hello);
+  }
+}
+
+/** Adds `listener` to `set`; returns the function that takes it out again. */
+function addListener<T>(set: Set<T>, listener: T): () => void {
+  set.add(listener);
+  return () => {
+    set.delete(listener);
+  };
+}
+
+/** `connection.onHello`: every hello from now on, and the current one in a microtask. */
+function listenForHellos(
+  wiring: Pick<Wiring, "hellos" | "store">,
+  listener: (hello: HelloFrame) => void,
+): () => void {
+  const { hellos, store } = wiring;
+  const entry: HelloListener = { listener, last: undefined };
+  hellos.add(entry);
+  const { status, hello } = store.get();
+  if (status === "connected" && hello !== null) {
+    queueMicrotask(() => {
+      notifyEach([entry], (current) => {
+        sayHello(hellos, current, hello);
+      });
+    });
+  }
+  return () => {
+    hellos.delete(entry);
+  };
 }
 
 /** The socket's connects, disconnects and refusals. */
@@ -512,6 +581,9 @@ function listenToPushes(wiring: Wiring): void {
   socket.on(SERVER_EVENTS.hello, (frame) => {
     const grants = isRecord(frame) && isRecord(frame.serviceAccess) ? frame.serviceAccess : null;
     store.set({ hello: frame, serviceAccess: grants as HelloFrame["serviceAccess"] | null });
+    notifyEach(wiring.hellos, (entry) => {
+      sayHello(wiring.hellos, entry, frame);
+    });
   });
   socket.on(SERVER_EVENTS.access, (frame) => {
     if (isRecord(frame) && isRecord(frame.serviceAccess)) {
@@ -570,6 +642,7 @@ export function createQuickdrawConnection(
     lifecycle,
     session,
     reconnected,
+    hellos: new Set(),
     onProtocolMismatch: options.onProtocolMismatch ?? reloadOncePerSession,
   };
   listenToSocket(wiring);
@@ -608,12 +681,8 @@ export function createQuickdrawConnection(
     },
     reportRateLimited: backoff.report,
     backoffRemaining: backoff.remaining,
-    onReconnect(listener: () => void): () => void {
-      reconnected.add(listener);
-      return () => {
-        reconnected.delete(listener);
-      };
-    },
+    onReconnect: (listener: () => void) => addListener(reconnected, listener),
+    onHello: (listener: (hello: HelloFrame) => void) => listenForHellos(wiring, listener),
     watch: topics.watch,
     waitForJoin: topics.waitForJoin,
   });

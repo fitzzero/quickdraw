@@ -1,6 +1,6 @@
 // One `qd:col:sub` (RFC 0003 sections 4.3 and 7.3), in the order entity
 // subscriptions go (`emit/subscribe.ts`). 4.1 joined the scope's room before
-// reading (`legacy-src/server/collections.ts:155-158`) and answered an
+// reading (4.1 `src/server/collections.ts:155-158`) and answered an
 // unknown collection and a denied scope alike. Here:
 //
 // 1. authorize the scope (`access.ts`): a denied scope is `FORBIDDEN`, and

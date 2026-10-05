@@ -22,6 +22,7 @@ import {
   listenForDisconnects,
   listenForGrants,
   refreshGrants,
+  regrantsOf,
   rotate,
   serveBroadcasts,
   type ClusterOptions,
@@ -66,6 +67,12 @@ export interface SocketServer {
   rotate(withinMs: number): void;
   /** Reloads `userId`'s service grants into their sockets' principals and sends them `qd:access`. */
   refresh(userId: string): Promise<ServiceGrants>;
+  /**
+   * How many times this process applied new grants to a user (`refresh`,
+   * another node's broadcast): the server's in-process callers load the
+   * grants they hold again once it rises.
+   */
+  regrants(): number;
   /** Disconnects `userId`'s sockets (of one session) on every node; returns how many this node ended. */
   disconnectUser(userId: string, options?: DisconnectUserOptions): number;
   /** Stops what runs in the background (a degraded node's probes): the server closes. */
@@ -78,6 +85,8 @@ function helloFrame(settings: SocketServerSettings): ServerHello {
   return Object.freeze({
     protocol: PROTOCOL_VERSION,
     server: QUICKDRAW_VERSION,
+    // New each time a server starts: a client tells a restart from a blip by it.
+    serverId: crypto.randomUUID(),
     limits: Object.freeze({
       maxInFlightQueries: limits.maxInFlightQueries,
       maxQueuedQueries: limits.maxQueuedQueries,
@@ -146,6 +155,7 @@ export function createSocketServer(
         },
         userId,
       ),
+    regrants: () => regrantsOf(io),
     disconnectUser: (userId, options) =>
       disconnectUser(io, probe, settings.logger, userId, options),
     stop: () => {

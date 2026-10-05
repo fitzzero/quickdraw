@@ -1,7 +1,7 @@
 // Projections (RFC 0003 sections 2 and 6): the wire shape of a row. A
 // projection's keys decide what a read selects, so a row is never loaded
 // wider than what is sent, and `Date` values go out as ISO strings. This
-// replaces 4.1's `toDto` (`legacy-src/server/BaseService.ts:615-617`), an
+// replaces 4.1's `toDto` (4.1 `src/server/BaseService.ts:615-617`), an
 // identity mapping that sent every column a handler happened to read.
 //
 // The keys come from the schema's Standard JSON Schema (Zod 4.2 or later):

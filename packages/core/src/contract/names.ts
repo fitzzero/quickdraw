@@ -1,5 +1,5 @@
 // Room and event names for protocol v5 (RFC 0003 sections 6, 7 and 8). Ported
-// from the 4.1 room helpers (`legacy-src/shared/types.ts:364-405`), which were
+// from the 4.1 room helpers (4.1 `src/shared/types.ts:364-405`), which were
 // plain template strings so shared code could name a room without holding a
 // service instance. The 5.0 rooms live under a `qd:` prefix so they never
 // collide with an app's own rooms; the per-user room keeps its 4.1 name.

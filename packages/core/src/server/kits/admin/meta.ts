@@ -2,10 +2,15 @@
 // handlers are made: the entity's fields as the contract half read them from
 // its JSON Schema (`contract/kits/adminFields.ts`), configured for an admin
 // screen as 4.1's `zodToAdminFields` configured them
-// (`legacy-src/server/utils/zodToAdminFields.ts:138-265`):
+// (4.1 `src/server/utils/zodToAdminFields.ts:138-265`):
 //
 // - hidden fields are left out: 4.1's `acl`, `serviceAccess` and
-//   `service_access`, and those `hiddenFields` names;
+//   `service_access`, and those `hiddenFields` names; `grants: true` shows
+//   and writes the entity's `serviceAccess` (or `service_access`) instead,
+//   for callers with a service-wide `Admin` grant only (`runtime.ts`),
+//   marked `kind: "grants"` so a screen with a grants editor of its own
+//   finds it without its name (finding F5.5 of the quickdraw-chat
+//   migration);
 // - `id`, `createdAt` and `updatedAt` come first with 4.1's fixed
 //   configurations ("ID", "Created At", "Updated At"; `updatedAt` stays out
 //   of the table), then the other fields in the schema's order;
@@ -16,7 +21,7 @@
 //   `adminList`. 4.1 marked every field but JSON ones sortable, and sorted by
 //   whatever a caller sent;
 // - `fieldOverrides` changes the rest, but cannot make `id` or a timestamp
-//   editable.
+//   editable; `showInForm: false` keeps a field out of a generic form.
 //
 // It also says which fields the kit's writes refuse: the hidden ones and
 // those that are not editable.
@@ -30,9 +35,19 @@ import {
 } from "../../../contract/kits/adminFields";
 import type { AdminSpec } from "../../../contract/kits/admin";
 
-/** Fields 4.1 always hid from admin screens (`legacy-src/server/utils/zodToAdminFields.ts:12`). */
+/** Fields 4.1 always hid from admin screens (4.1 `src/server/utils/zodToAdminFields.ts:12`). */
 export const ADMIN_HIDDEN_FIELDS: readonly string[] = Object.freeze([
   "acl",
+  "serviceAccess",
+  "service_access",
+]);
+
+/**
+ * The fields a user's service-wide grants live in. Hidden unless
+ * `admin.handlers(contract, { grants: true })`; then shown and written, but
+ * only to callers whose own service-wide grant on the service is `Admin`.
+ */
+export const ADMIN_GRANT_FIELDS: readonly string[] = Object.freeze([
   "serviceAccess",
   "service_access",
 ]);
@@ -44,6 +59,7 @@ const OVERRIDE_KEYS: readonly string[] = Object.freeze([
   "required",
   "editable",
   "showInTable",
+  "showInForm",
   "enumValues",
   "relationService",
 ]);
@@ -87,6 +103,7 @@ export interface MetaOptions {
   readonly displayName: unknown;
   readonly hiddenFields: unknown;
   readonly fieldOverrides: unknown;
+  readonly grants?: unknown;
 }
 
 /** `adminMeta`'s answer, and the fields the kit's reads and writes leave alone. */
@@ -96,6 +113,12 @@ export interface AdminFields {
   readonly hidden: ReadonlySet<string>;
   /** The fields shown but not written: `id`, the timestamps, and those an override made read-only. */
   readonly readOnly: ReadonlySet<string>;
+  /**
+   * With `grants: true`, the grant fields the kit shows and writes: only for
+   * callers whose service-wide grant on the service is `Admin`. Empty
+   * otherwise (they are hidden).
+   */
+  readonly grants: ReadonlySet<string>;
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -129,14 +152,40 @@ function checkDisplayName(displayName: unknown, serviceName: string, fail: MetaF
   return displayName;
 }
 
-/** The fields hidden: 4.1's defaults and `hiddenFields`, which must name fields of the entity but `id`. */
-function checkHidden(
-  hiddenFields: unknown,
+/** The grant fields `grants: true` shows: those of the entity's fields that hold grants, at least one. */
+function checkGrants(
+  grants: unknown,
   names: readonly string[],
   fail: MetaFailure,
 ): ReadonlySet<string> {
+  if (grants === undefined || grants === false) {
+    return new Set();
+  }
+  if (grants !== true) {
+    fail("grants must be true or false");
+  }
+  const fields = ADMIN_GRANT_FIELDS.filter((name) => names.includes(name));
+  if (fields.length === 0) {
+    fail(
+      `grants: the entity has no ${ADMIN_GRANT_FIELDS.join(" or ")} field for the kit to show and write`,
+    );
+  }
+  return new Set(fields);
+}
+
+/**
+ * The fields hidden: 4.1's defaults but the grant fields `grants: true`
+ * shows, and `hiddenFields`, which must name fields of the entity but `id`.
+ */
+function checkHidden(
+  hiddenFields: unknown,
+  names: readonly string[],
+  grants: ReadonlySet<string>,
+  fail: MetaFailure,
+): ReadonlySet<string> {
+  const defaults = ADMIN_HIDDEN_FIELDS.filter((name) => !grants.has(name));
   if (hiddenFields === undefined) {
-    return new Set(ADMIN_HIDDEN_FIELDS);
+    return new Set(defaults);
   }
   const valid =
     Array.isArray(hiddenFields) &&
@@ -149,8 +198,13 @@ function checkHidden(
     if (name === "id" || !names.includes(name)) {
       fail(`hiddenFields: "${name}" is not a field of the entity that can be hidden`);
     }
+    if (grants.has(name)) {
+      fail(
+        `hiddenFields: "${name}" holds the grants that grants: true shows; leave one of them out`,
+      );
+    }
   }
-  return new Set([...ADMIN_HIDDEN_FIELDS, ...(hiddenFields as string[])]);
+  return new Set([...defaults, ...(hiddenFields as string[])]);
 }
 
 function overrideProblem(override: UnknownRecord): string | undefined {
@@ -159,7 +213,7 @@ function overrideProblem(override: UnknownRecord): string | undefined {
     return `has an unknown key "${unknownKey}"; the keys are ${OVERRIDE_KEYS.join(", ")}`;
   }
   const { type, label, enumValues, relationService } = override;
-  const flags = ["required", "editable", "showInTable"].filter(
+  const flags = ["required", "editable", "showInTable", "showInForm"].filter(
     (key) => override[key] !== undefined && typeof override[key] !== "boolean",
   );
   if (flags.length > 0) {
@@ -204,8 +258,11 @@ function checkOverrides(
   return fieldOverrides as Readonly<Record<string, UnknownRecord>>;
 }
 
-/** One field's configuration, before overrides. */
-function derived(field: AdminEntityField): Omit<AdminFieldConfig, "sortable" | "filterable"> {
+/** One field's configuration, before overrides; a grant field `grants: true` shows is marked. */
+function derived(
+  field: AdminEntityField,
+  grants: ReadonlySet<string>,
+): Omit<AdminFieldConfig, "sortable" | "filterable"> {
   const fixed = Object.hasOwn(DEFAULT_FIELDS, field.name) ? DEFAULT_FIELDS[field.name] : undefined;
   if (fixed !== undefined) {
     return fixed;
@@ -218,6 +275,7 @@ function derived(field: AdminEntityField): Omit<AdminFieldConfig, "sortable" | "
     editable: !ADMIN_NEVER_WRITABLE.includes(field.name),
     showInTable: field.type !== "json",
     ...(field.enumValues === undefined ? {} : { enumValues: field.enumValues }),
+    ...(grants.has(field.name) ? { kind: "grants" as const } : {}),
   };
 }
 
@@ -250,7 +308,8 @@ export function adminFieldsOf(
   fail: MetaFailure,
 ): AdminFields {
   const names = spec.fields.map((field) => field.name);
-  const hidden = checkHidden(options.hiddenFields, names, fail);
+  const grants = checkGrants(options.grants, names, fail);
+  const hidden = checkHidden(options.hiddenFields, names, grants, fail);
   const listed = [...spec.filter, ...spec.sort].find((name) => hidden.has(name));
   if (listed !== undefined) {
     fail(`"${listed}" is hidden, so adminList may not filter or sort on it`);
@@ -260,7 +319,7 @@ export function adminFieldsOf(
     .filter((field) => !hidden.has(field.name))
     .map((field) =>
       frozenConfig({
-        ...derived(field),
+        ...derived(field, grants),
         ...overrides[field.name],
         sortable: spec.sort.includes(field.name),
         filterable: spec.filter.includes(field.name),
@@ -272,5 +331,5 @@ export function adminFieldsOf(
     fields: Object.freeze(fields),
   });
   const readOnly = new Set(fields.filter((field) => !field.editable).map((field) => field.name));
-  return Object.freeze({ meta, hidden, readOnly });
+  return Object.freeze({ meta, hidden, readOnly, grants });
 }

@@ -2,7 +2,8 @@
 // section 12.5), on the server and the client: `push` takes `(scope, item)`
 // for a scoped stream and `(item)` for a global one; a channel handler gets
 // the parsed payload and an authenticated `ctx`; `defineService` needs one
-// handler per channel; `ctx.rooms` and `ctx.presence` are typed; the client's
+// handler per channel; `ctx.rooms`, `qd.rooms`, `onRoomLeave` and `ctx.presence`
+// are typed; the client's
 // members follow the contract, and so do a mock client's. `bun run
 // typecheck` checks this file, and each `@ts-expect-error` sits on the line
 // the compiler reports.
@@ -24,7 +25,12 @@ import {
   type ContextRooms,
   type Presence,
   type Principal,
+  type RoomLeave,
+  type RoomLeft,
+  type RunContext,
+  type ServerRooms,
   type StreamHandle,
+  type StreamSeedContext,
 } from "../index";
 
 interface AppPrincipal extends Principal {
@@ -72,7 +78,9 @@ describe("the server", () => {
       channels: {
         cursor: (payload, ctx) => {
           expectTypeOf(payload).toEqualTypeOf<{ x: number; y: number }>();
-          expectTypeOf(ctx).toEqualTypeOf<ChannelContext<AppPrincipal>>();
+          // cursor requires no room: ctx.room is undefined
+          expectTypeOf(ctx).toEqualTypeOf<ChannelContext<AppPrincipal, undefined>>();
+          expectTypeOf(ctx.room).toEqualTypeOf<undefined>();
           expectTypeOf(ctx.principal.team).toBeString();
         },
       },
@@ -97,6 +105,7 @@ describe("the server", () => {
       channels: {
         move: { payload: cursor, requires: { room: "world" } },
         wave: { payload: z.object({ lobby: z.string() }), requires: { room: (p) => p.lobby } },
+        steer: { payload: cursor, requires: { room: { prefix: "world:" } } },
       },
     });
     expectTypeOf(world.channels.move.requires).toExtend<ChannelRequires>();
@@ -108,12 +117,18 @@ describe("the server", () => {
         move: (payload, ctx) => {
           expectTypeOf(payload).toEqualTypeOf<{ x: number; y: number }>();
           expectTypeOf(ctx.principal.team).toBeString();
+          // the room the requirement matched
+          expectTypeOf(ctx.room).toEqualTypeOf<string>();
         },
         wave: {
           access: { service: "Read" },
-          handler: (payload) => {
+          handler: (payload, ctx) => {
             expectTypeOf(payload).toEqualTypeOf<{ lobby: string }>();
+            expectTypeOf(ctx.room).toEqualTypeOf<string>();
           },
+        },
+        steer: (_payload, ctx) => {
+          expectTypeOf(ctx).toEqualTypeOf<ChannelContext<AppPrincipal, string>>();
         },
       },
     });
@@ -161,6 +176,135 @@ describe("the server", () => {
     // @ts-expect-error -- lobbyService has no stream "nope"
     qd.stream(lobby, "nope");
     expectTypeOf(dispatcher.presence).toEqualTypeOf<Presence>();
+  });
+
+  test("a stream's seed function gets its scope and the subscriber, and returns its items", () => {
+    const world = defineContract("worldService", {
+      streams: {
+        snaps: { item: cursor, scope: "worldId", access: "public" },
+        news: { item: z.string(), access: "authenticated" },
+      },
+    });
+    qd.defineService(world, {
+      methods: {},
+      streams: {
+        snaps: {
+          seed: (worldId, ctx) => {
+            expectTypeOf(worldId).toEqualTypeOf<string>();
+            expectTypeOf(ctx).toEqualTypeOf<StreamSeedContext<AppPrincipal>>();
+            expectTypeOf(ctx.principal).toEqualTypeOf<AppPrincipal | null>();
+            return [{ x: 1, y: 2 }];
+          },
+        },
+        news: {
+          seed: async (scope) => {
+            expectTypeOf(scope).toEqualTypeOf<undefined>();
+            return await Promise.resolve(["hello"]);
+          },
+        },
+      },
+    });
+    qd.defineService(world, {
+      methods: {},
+      // @ts-expect-error -- a snapshot's y is a number
+      streams: { snaps: { seed: () => [{ x: 1 }] } },
+    });
+    qd.defineService(world, {
+      methods: {},
+      // @ts-expect-error -- worldService has no stream "nope"
+      streams: { nope: { seed: () => [] } },
+    });
+    qd.defineService(world, {
+      methods: {},
+      streams: { snaps: { validate: "development" } },
+    });
+    qd.defineService(world, {
+      methods: {},
+      // @ts-expect-error -- validate is "always" or "development"
+      streams: { snaps: { validate: "never" } },
+    });
+  });
+
+  test("a stream's access may be an app room: its name, a prefix, or computed from the scope", () => {
+    defineContract("roomStreamService", {
+      streams: {
+        lobby: { item: z.number(), access: { room: "lobby" } },
+        anyWorld: { item: z.number(), access: { room: { prefix: "world:" } } },
+        world: { item: z.number(), scope: "worldId", access: { room: (id) => `world:${id}` } },
+      },
+    });
+    defineContract("mixedRoomStreamService", {
+      streams: {
+        // @ts-expect-error -- a room form is { room } and nothing else
+        lobby: { item: z.number(), access: { room: "lobby", service: "Read" } },
+      },
+    });
+  });
+
+  test("rooms outside a handler: typed events, and a user taken out of a room", () => {
+    expectTypeOf(qd.rooms).toEqualTypeOf<ServerRooms>();
+    qd.rooms.emit("world", lobby, "moved", { x: 1, y: 2 });
+    qd.rooms.emitToUser("user-1", lobby, "moved", { x: 1, y: 2 });
+    // @ts-expect-error -- lobbyService declares no event "jumped"
+    qd.rooms.emit("world", lobby, "jumped", { x: 1, y: 2 });
+    // @ts-expect-error -- moved's y is a number after its schema ran
+    qd.rooms.emit("world", lobby, "moved", { x: 1 });
+    expectTypeOf(qd.rooms.leave("world", { userId: "user-1" })).toEqualTypeOf<Promise<void>>();
+    // @ts-expect-error -- outside a handler there is no calling socket to take out
+    void qd.rooms.leave("world");
+    qd.defineService(lobby, {
+      methods: {
+        enter: {
+          access: "authenticated",
+          handler: async ({ ctx, input }) => {
+            expectTypeOf(ctx.rooms.leave(input.room)).toEqualTypeOf<boolean>();
+            expectTypeOf(ctx.rooms.leave(input.room, { userId: "user-1" })).toEqualTypeOf<
+              Promise<void>
+            >();
+            await ctx.rooms.leave(input.room, { userId: ctx.principal.userId });
+            return true;
+          },
+        },
+      },
+      channels: { cursor: () => undefined },
+    });
+  });
+
+  test("onRoomLeave hears the app's principal, the rooms left and a run context", () => {
+    const service = qd.defineService(lobby, {
+      methods: { enter: { access: "authenticated", handler: () => true } },
+      channels: { cursor: () => undefined },
+    });
+    qd.createServer({
+      services: [service],
+      http: false,
+      onRoomLeave: (leave, ctx) => {
+        expectTypeOf(leave).toEqualTypeOf<RoomLeave<AppPrincipal>>();
+        expectTypeOf(leave.principal).toEqualTypeOf<AppPrincipal | null>();
+        expectTypeOf(leave.reason).toEqualTypeOf<"leave" | "removed" | "disconnect">();
+        expectTypeOf(leave.rooms).toEqualTypeOf<readonly RoomLeft[]>();
+        expectTypeOf(ctx).toEqualTypeOf<RunContext>();
+      },
+    });
+  });
+
+  test("a service declares its own onRoomLeave, typed alike", () => {
+    qd.defineService(lobby, {
+      methods: { enter: { access: "authenticated", handler: () => true } },
+      channels: { cursor: () => undefined },
+      onRoomLeave: async (leave, ctx) => {
+        expectTypeOf(leave).toEqualTypeOf<RoomLeave<AppPrincipal>>();
+        expectTypeOf(leave.principal?.team).toEqualTypeOf<string | undefined>();
+        expectTypeOf(ctx).toEqualTypeOf<RunContext>();
+        await Promise.resolve();
+      },
+    });
+    qd.defineService(lobby, {
+      methods: { enter: { access: "authenticated", handler: () => true } },
+      channels: { cursor: () => undefined },
+      // @ts-expect-error -- a hook is a function of the leave and a run context
+      onRoomLeave: { onLeave: () => undefined },
+    });
   });
 });
 

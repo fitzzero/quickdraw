@@ -9,21 +9,17 @@
 // changes what it shows.
 
 import { useSyncExternalStore } from "react";
-import { indexRowFromItem, type IndexRow } from "../client/live/collectionIndex";
 import type {
-  UseCollectionOptions,
-  UseCollectionResult,
   UseEntitiesResult,
   UseEntityOptions,
   UseEntityResult,
 } from "../client/live/memberTypes";
-import { viewPredicate } from "../client/live/views";
-import type { CollectionDef, Viewer } from "../contract/collections";
 import type { AnyContract } from "../contract/defineContract";
 import type { QuickdrawError } from "../protocol/errors";
 import { mockAdminNamespace } from "./mockAdmin";
+import { mockCollectionMember } from "./mockCollections";
 import { mockRealtimeMembers } from "./mockRealtime";
-import type { EntityMock, MockScope } from "./mockTypes";
+import type { EntityMock, MockScope, SessionState } from "./mockTypes";
 
 /** What one mocked row shows: the row, its removal, or an error. */
 type RowState =
@@ -32,11 +28,11 @@ type RowState =
   | { readonly error: QuickdrawError };
 
 /** What one mocked scope shows: its items, or an error. */
-type ScopeState =
+export type ScopeState =
   | (MockScope & { readonly items: readonly { readonly id: string }[] })
   | { readonly error: QuickdrawError };
 
-/** The rows and scopes of one mock client, and the hooks' views of them. */
+/** The rows, scopes and session of one mock client, and the hooks' views of them. */
 export interface MockStore {
   readonly subscribe: (listener: () => void) => () => void;
   /** The value `build` makes for `key`, the same object until the store changes. */
@@ -45,10 +41,20 @@ export interface MockStore {
   setRow(service: string, id: string, state: RowState): void;
   scope(service: string, collection: string, scope: string): ScopeState | undefined;
   setScope(service: string, collection: string, scope: string, state: ScopeState): void;
-  /** A realtime member's mocked value (`mockRealtime.ts`): a feed's items, a channel's sent messages. */
+  /**
+   * A mocked value by key: a feed's items, a channel's sent messages
+   * (`mockRealtime.ts`), a room's users (`mockSession.tsx`).
+   */
   value(key: string): unknown;
   setValue(key: string, value: unknown): void;
-  /** Forgets every row, scope and value; `quiet` tells no hook that shows them (they are about to unmount). */
+  /** Who the mock acts for (`mockSession.tsx`): the same object until it is set again. */
+  session(): SessionState;
+  setSession(session: SessionState): void;
+  /**
+   * Forgets every row, scope and value, and puts back the session the mock
+   * started with; `quiet` tells no hook that shows them (they are about to
+   * unmount).
+   */
   clear(quiet?: boolean): void;
 }
 
@@ -56,8 +62,9 @@ function keyOf(...parts: readonly string[]): string {
   return parts.join("\u0000");
 }
 
-/** Creates the store of one mock client. */
-export function createMockStore(): MockStore {
+/** Creates the store of one mock client, whose session starts as `base`. */
+export function createMockStore(base: SessionState): MockStore {
+  let session = base;
   const rows = new Map<string, RowState>();
   const scopes = new Map<string, ScopeState>();
   const values = new Map<string, unknown>();
@@ -97,10 +104,16 @@ export function createMockStore(): MockStore {
       values.set(key, value);
       changed();
     },
+    session: () => session,
+    setSession(next) {
+      session = next;
+      changed();
+    },
     clear(quiet = false) {
       rows.clear();
       scopes.clear();
       values.clear();
+      session = base;
       if (quiet) {
         views.clear();
       } else {
@@ -150,62 +163,6 @@ function rowsResult(
   return { data, byId, isLoading, error: errors.values().next().value ?? null, errors };
 }
 
-const idle = (): Promise<void> => Promise.resolve();
-
-/** A mocked scope with nothing in it yet. */
-function emptyScope(active: boolean): UseCollectionResult<unknown, IndexRow> {
-  return {
-    items: [],
-    index: undefined,
-    byId: new Map(),
-    totalCount: null,
-    hasMore: false,
-    clamped: false,
-    indexTruncated: false,
-    isLoading: active,
-    isLoadingMore: false,
-    error: null,
-    loadMore: idle,
-    loadItems: idle,
-    refresh: idle,
-  };
-}
-
-/** What `useCollection` shows of a mocked scope, through `view` for `who`. */
-function scopeResult(
-  def: CollectionDef,
-  state: ScopeState | undefined,
-  options: { readonly view: string | undefined; readonly who: Viewer; readonly active: boolean },
-): UseCollectionResult<unknown, IndexRow> {
-  const empty = emptyScope(options.active);
-  if (state === undefined) {
-    return empty;
-  }
-  if ("error" in state) {
-    return { ...empty, isLoading: false, error: state.error };
-  }
-  const selects = viewPredicate(def, options.view);
-  const keep = (row: Readonly<Record<string, unknown>>): boolean =>
-    selects === undefined || selects(row, options.who);
-  const index =
-    def.index === undefined
-      ? undefined
-      : state.items.map((item) => indexRowFromItem(def, item)).filter(keep);
-  const members = new Set(index?.map((row) => row.id));
-  const items = state.items.filter((item) =>
-    index === undefined ? keep(item as Readonly<Record<string, unknown>>) : members.has(item.id),
-  );
-  return {
-    ...empty,
-    items,
-    index,
-    byId: new Map(items.map((item) => [item.id, item])),
-    totalCount: state.totalCount ?? state.items.length,
-    hasMore: state.hasMore ?? false,
-    isLoading: false,
-  };
-}
-
 function useMockRow(
   store: MockStore,
   service: string,
@@ -236,35 +193,6 @@ function useMockRows(
   return useSyncExternalStore(store.subscribe, read, read);
 }
 
-/** One collection of a contract, as its mock member shows it. */
-interface MockCollectionTarget {
-  readonly service: string;
-  readonly collection: string;
-  readonly def: CollectionDef;
-}
-
-function useMockScope(
-  store: MockStore,
-  target: MockCollectionTarget,
-  who: Viewer,
-  scope: string | null | undefined,
-  options: UseCollectionOptions = {},
-): UseCollectionResult<unknown, IndexRow> {
-  const value = typeof scope === "string" ? scope : "";
-  const active = options.enabled !== false && value !== "";
-  const { service, collection, def } = target;
-  const key = keyOf("scope", service, collection, value, options.view ?? "", String(active));
-  const read = (): UseCollectionResult<unknown, IndexRow> =>
-    store.read(key, () =>
-      scopeResult(def, active ? store.scope(service, collection, value) : undefined, {
-        view: options.view,
-        who,
-        active,
-      }),
-    );
-  return useSyncExternalStore(store.subscribe, read, read);
-}
-
 /** The id of a row the test passed to `mockRow`. */
 function idOf(row: unknown): string {
   const id: unknown = typeof row === "object" && row !== null ? (row as { id?: unknown }).id : "";
@@ -289,20 +217,6 @@ function rowControls(store: MockStore, service: string): EntityMock<unknown> {
   });
 }
 
-/** `qd.<service>.<collection>` of a mock client. */
-function mockCollectionMember(store: MockStore, target: MockCollectionTarget, who: Viewer): object {
-  return Object.freeze({
-    useCollection: (scope: string | null | undefined, options?: UseCollectionOptions) =>
-      useMockScope(store, target, who, scope, options),
-    mockScope(scope: string, items: readonly { readonly id: string }[], extra: MockScope = {}) {
-      store.setScope(target.service, target.collection, scope, { ...extra, items: [...items] });
-    },
-    mockError(scope: string, error: QuickdrawError) {
-      store.setScope(target.service, target.collection, scope, { error });
-    },
-  });
-}
-
 /**
  * The live members of each contract's service on a mock client, as
  * `buildCaller` takes them: the entity hooks for a contract with an entity,
@@ -312,7 +226,6 @@ function mockCollectionMember(store: MockStore, target: MockCollectionTarget, wh
  */
 export function mockLiveMembers(
   store: MockStore,
-  who: Viewer,
   queryClient: Parameters<typeof mockAdminNamespace>[2],
 ): (
   contract: AnyContract,
@@ -331,10 +244,10 @@ export function mockLiveMembers(
       members.push(["useEntities", Object.freeze(Object.assign(useEntities, controls))]);
     }
     for (const [collection, def] of Object.entries(contract.collections)) {
-      members.push([collection, mockCollectionMember(store, { service, collection, def }, who)]);
+      members.push([collection, mockCollectionMember(store, { service, collection, def })]);
     }
     members.push(...mockRealtimeMembers(store, contract));
-    members.push(...Object.entries(mockAdminNamespace(contract, methods, queryClient)));
+    members.push(...Object.entries(mockAdminNamespace(contract, methods, queryClient, store)));
     return Object.freeze(Object.fromEntries(members));
   };
 }

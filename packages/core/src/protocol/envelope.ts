@@ -10,12 +10,21 @@
 // `i` input, `d` data, `e` error, `v` version, `rev` revision.
 //
 // 4.1 used one event per service method and a `{ success, data }` reply
-// (`legacy-src/shared/types.ts:88-90`). Here every call travels as one
+// (4.1 `src/shared/types.ts:88-90`). Here every call travels as one
 // `qd:call` envelope and is answered `{ ok: true, d }` or `{ ok: false, e }`.
 //
 // Runtime guards cover the frames the dispatcher reads from an untrusted
 // client (`qd:call`, `qd:cancel`). They are written by hand so the package
 // root stays free of schema libraries.
+//
+// One rule for every frame, both ways: a receiver ignores the object fields
+// it does not know and the array elements after the last one it reads, and
+// a later revision of protocol 5 may only add fields to objects and append
+// elements to arrays (`qd:event`, `qd:stream`, `qd:ch`), never remove,
+// rename, retype or reorder what is here. So a client that reads only what
+// it knows keeps working against a newer server, and a server against a
+// newer client. Anything else needs a new protocol number (`qd:hello`'s
+// `protocol`), which the handshake refuses with `PROTOCOL_MISMATCH`.
 
 import type { AccessLevel } from "../contract/access";
 import type { CLIENT_EVENTS, SERVER_EVENTS } from "../contract/names";
@@ -284,11 +293,16 @@ export interface WatchFrame {
 /**
  * `qd:changed`: a watched topic changed in the flush at `rev`; invalidate the
  * queries that watch it. Sent once per flush per topic, and carries no data.
+ * On the `service` topic, `models` names the models whose writes changed it
+ * (rc.5, additive: the client's model names, first letter lowercased), so a
+ * query that watches only some of them (`watch: { service: [models] }`)
+ * ignores the rest; a frame without it may have changed any of them.
  */
 export interface ChangedFrame {
   readonly s: string;
   readonly topic: string;
   readonly rev: Revision;
+  readonly models?: readonly string[];
 }
 
 /**
@@ -304,28 +318,47 @@ export interface StreamSubscribe {
 /**
  * The acknowledgement of `qd:stream:sub`: the stream's seed, oldest first,
  * read as the socket joined the stream's room, so items pushed after it
- * arrive as `qd:stream` frames (possibly before this acknowledgement).
+ * arrive as `qd:stream` frames (possibly before this acknowledgement). The
+ * seed is the latest items the server kept, or what the service computed
+ * for this subscriber (the current state the items change); a computed one
+ * the server had to wait for may also reflect items that arrived as frames
+ * meanwhile. A client replaces what it held with it.
  */
 export type StreamSubscribeReply<Item = unknown> =
   | { readonly ok: true; readonly seed: readonly Item[] }
   | Failure;
 
-/** `qd:stream`: an item pushed to a stream. */
-export interface StreamFrame<Item = unknown> {
-  readonly s: string;
-  readonly stream: string;
-  readonly scope?: string;
-  readonly item: Item;
-}
+/**
+ * `qd:stream`: an item pushed to a stream, as one array argument
+ * `[service, stream, scope, item]` (like `qd:event`), so a fast stream sends
+ * no key names: `scope` is `null` for a global stream. The positions are
+ * fixed; a later revision may append elements after `item`, never insert
+ * them, so a client reads the four it knows and ignores the rest. Before
+ * `5.0.0-rc.4` it was the object `{ s, stream, scope?, item }`.
+ */
+export type StreamFrame<Item = unknown> = readonly [
+  s: string,
+  stream: string,
+  scope: string | null,
+  item: Item,
+];
 
-/** `qd:ch`, sent volatile and never acknowledged: `[service, channel, payload]`. */
+/**
+ * `qd:ch`, sent volatile and never acknowledged: `[service, channel,
+ * payload]`. A later revision may append elements after `payload`; the
+ * server reads the three it knows and ignores the rest.
+ */
 export type ChannelFrame<Payload = unknown> = readonly [
   s: string,
   channel: string,
   payload: Payload,
 ];
 
-/** `qd:event`: a custom room event declared in a contract's `events`: `[service, event, payload]`. */
+/**
+ * `qd:event`: a custom room event declared in a contract's `events`:
+ * `[service, event, payload]`. A later revision may append elements after
+ * `payload`; a client reads the three it knows and ignores the rest.
+ */
 export type EventFrame<Payload = unknown> = readonly [s: string, event: string, payload: Payload];
 
 /**
@@ -334,9 +367,11 @@ export type EventFrame<Payload = unknown> = readonly [s: string, event: string, 
  * Sent to a socket as it joins with `users`, the whole list (its own user
  * included); to the room's other sockets with `joined` when a user's first
  * socket joins, and with `left` when a user's last socket leaves; and to a
- * socket that leaves with `users: []`, since it no longer sees the room.
- * Exactly one of `users`, `joined` and `left` is present. Anonymous sockets
- * are in no list.
+ * socket that leaves with `users: []`, since it no longer sees the room. A
+ * socket the server took out of the room (`rooms.leave(room, { userId })`)
+ * gets that `users: []` unasked: it is out, and its channels requiring the
+ * room are dropped until a joining call lets it back. Exactly one of
+ * `users`, `joined` and `left` is present. Anonymous sockets are in no list.
  */
 export interface PresenceFrame {
   readonly room: string;

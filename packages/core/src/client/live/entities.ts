@@ -1,7 +1,7 @@
 // How a live entity's cached entry changes (RFC 0003 section 6): by revision
 // per row, never by arrival order. 4.1 merged every update into the cached
 // row as it arrived and carried no revision at all
-// (`legacy-src/client/useSubscription.ts:106-126`).
+// (4.1 `src/client/useSubscription.ts:106-126`).
 //
 // - `u` (the whole row) replaces the entry unless the entry is newer.
 // - `p` (changed fields) merges into the row unless the entry is newer;

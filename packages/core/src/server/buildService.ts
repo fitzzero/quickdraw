@@ -9,7 +9,7 @@ import { rowlessProblem } from "./access/rowless";
 import { compileCollections } from "./collections/define";
 import { compileProjections, projectedOutput, type Projection } from "./emit/projection";
 import { MAX_TIMEOUT_MS } from "./pipeline/settings";
-import { outputSchemaOf } from "./pipeline/validation";
+import { outputSchemaOf, schemaOutputOf } from "./pipeline/validation";
 import { compileChannels, compileStreams } from "./realtime/define";
 import {
   handlerProblem,
@@ -19,7 +19,7 @@ import {
   type ServiceMethod,
   type ServiceRuntime,
 } from "./service";
-import { checkServiceData, type ServiceData } from "./serviceData";
+import { checkServiceData, checkWatchedModels, type ServiceData } from "./serviceData";
 
 type Fail = (message: string) => never;
 
@@ -36,6 +36,8 @@ const DEFINITION_KEYS = new Set([
   "watchAccess",
   "methods",
   "channels",
+  "streams",
+  "onRoomLeave",
   "adminBypass",
 ]);
 
@@ -147,12 +149,14 @@ function checkMethod(
     fail(`${owner}: rowless must be true, or left out`);
   }
   checkQueryOptions(owner, entry, def.kind, fail);
+  const projection = projectedOutput(def.output, projections);
   return Object.freeze({
     name,
     kind: def.kind,
     input: def.input,
     output: outputSchemaOf(contract, def.output),
-    projection: projectedOutput(def.output, projections),
+    projection,
+    schemaOutput: projection === undefined ? schemaOutputOf(def.output) : undefined,
     access: entry.access as ServiceMethod["access"],
     handler: entry.handler as AnyHandler,
     share: entry.share as ServiceMethod["share"],
@@ -188,11 +192,13 @@ function checkMethods(
  * scope of one of the service's collections: the collection must be one the
  * service serves, and `scope` the function that finds the scope from the
  * input. `defineContract` checks the same; this catches a contract it never
- * saw.
+ * saw. A watch of the service's topic needs `watchAccess`, and one narrowed
+ * to models names the service's own (`checkWatchedModels`).
  */
 function checkWatches(
   contract: AnyContract,
   collections: ReadonlyMap<string, unknown>,
+  data: ServiceData,
   fail: Fail,
 ): void {
   for (const [name, def] of Object.entries(contract.methods)) {
@@ -202,6 +208,17 @@ function checkWatches(
     }
     if (def.kind !== "query") {
       fail(`method "${name}" is a mutation; only a query can watch`);
+    }
+    if (watch === "service" || (isRecord(watch) && Object.hasOwn(watch, "service"))) {
+      if (data.watchAccess === undefined) {
+        fail(
+          `method "${name}" watches the service's topic, which is closed without watchAccess: declare who may watch it ("public", "authenticated" or { service: level })`,
+        );
+      }
+      if (watch !== "service") {
+        checkWatchedModels(contract, name, watch.service, data, fail);
+      }
+      continue;
     }
     if (!isRecord(watch) || typeof watch.scope !== "function") {
       fail(`method "${name}": watch needs a scope function, which finds the scope from the input`);
@@ -289,9 +306,12 @@ export function buildService(
     fail("the definition must be an object");
   }
   checkKeys(definition, DEFINITION_KEYS, "the definition", fail);
-  const { adminBypass = true } = definition;
+  const { adminBypass = true, onRoomLeave } = definition;
   if (typeof adminBypass !== "boolean") {
     fail("adminBypass must be a boolean");
+  }
+  if (onRoomLeave !== undefined && typeof onRoomLeave !== "function") {
+    fail("onRoomLeave must be a function of the leave and a run context");
   }
   const data = checkServiceData(definition, fail);
   const projections = compileProjections(checked, definition.project, fail);
@@ -302,7 +322,7 @@ export function buildService(
     definition.collections,
     fail,
   );
-  checkWatches(checked, collections, fail);
+  checkWatches(checked, collections, data, fail);
   const methods = checkMethods(checked, projections, definition.methods, fail);
   checkRowForms(methods, data, fail);
   checkRowless(methods, data, fail);
@@ -318,8 +338,10 @@ export function buildService(
     streams: compileStreams(
       checked,
       { model: data.model, hasPolicy: data.access !== undefined },
+      definition.streams,
       fail,
     ),
+    onRoomLeave: onRoomLeave as AnyService["onRoomLeave"],
   });
   checkHandlers(service, fail);
   registerRuntime(service, runtime);

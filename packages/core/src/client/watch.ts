@@ -4,7 +4,7 @@
 // rev }` once per flush that changed the topic, with no data, and the query
 // is invalidated (`hooks.ts`, through the coordinator). This replaces 4.1's
 // `invalidateOn`, which listened for hand-written event names on every hook
-// (`legacy-src/client/useServiceQuery.ts:139-166`).
+// (4.1 `src/client/useServiceQuery.ts:139-166`).
 //
 // - Watches are counted per topic across everything that watches it: the
 //   first sends `qd:watch`, and the topic is left (`qd:unwatch`) a tick
@@ -59,6 +59,13 @@ export interface TopicWatch {
   readonly topic: string;
   /** Called with each `qd:changed` frame of the topic while the watch lasts. */
   readonly onChanged: (frame: ChangedFrame) => void;
+  /**
+   * On the `"service"` topic, the models this watch is about (`watch: {
+   * service: [models] }`): a frame whose `models` names none of them is not
+   * passed to `onChanged`. A frame without `models` (an older server, or
+   * the last frame of a watch the socket lost) is always passed.
+   */
+  readonly models?: readonly string[];
   /**
    * Called when the server first acknowledges `qd:watch` for the topic after
    * this watch started, and again when a later join (after a reconnect) is
@@ -188,9 +195,25 @@ function oncePerKey(records: Iterable<WatchRecord>): WatchRecord[] {
   });
 }
 
-/** Tells each watch of `topic` of `frame`, once per key. */
+/** The first letter lowercased, as the server names models (`modelKey`). */
+function modelName(model: string): string {
+  return `${model.charAt(0).toLowerCase()}${model.slice(1)}`;
+}
+
+/** Whether `frame` is about a model `watch` watches: always, unless both name models and share none. */
+function concerns(watch: TopicWatch, frame: ChangedFrame): boolean {
+  const { models } = watch;
+  if (models === undefined || !Array.isArray(frame.models)) {
+    return true;
+  }
+  const changed = new Set(frame.models.map((model) => modelName(String(model))));
+  return models.some((model) => changed.has(modelName(model)));
+}
+
+/** Tells each watch of `topic` that `frame` concerns, once per key. */
 function tell(topic: Topic, frame: ChangedFrame): void {
-  notifyEach(oncePerKey(topic.watches), ({ watch }) => {
+  const concerned = [...topic.watches].filter(({ watch }) => concerns(watch, frame));
+  notifyEach(oncePerKey(concerned), ({ watch }) => {
     watch.onChanged(frame);
   });
 }

@@ -6,7 +6,7 @@
 // hashes a key with sorted object keys, so two inputs with the same fields
 // share one cache entry whatever their key order. 4.1 put
 // `JSON.stringify(payload)` in the key
-// (`legacy-src/client/useServiceQuery.ts:88-91`), which made the cache depend
+// (4.1 `src/client/useServiceQuery.ts:88-91`), which made the cache depend
 // on key order and hid the input from `queryKey` filters.
 //
 // React-free: the hooks, the server-side caller and non-React code build the

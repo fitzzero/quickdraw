@@ -13,6 +13,7 @@ const ROTATE_LATEST_MS := 700
 
 var failures: Array[String] = []
 var checks := 0
+var first_server_id := ""
 var events: Array = []
 var items: Array = []
 var seeds: Array = []
@@ -58,8 +59,11 @@ func _run() -> void:
 	var hello: Dictionary = await client.connected
 	check(int(hello.protocol) == 5 and client.user_id == "ada", "qd:hello names protocol 5 and the user")
 	check((hello.limits as Dictionary).has("callTimeoutMs"), "qd:hello carries the limits")
+	check(client.server_id != "" and client.server_id == hello.serverId, "qd:hello names the server")
+	first_server_id = client.server_id
 	await _calls(client)
 	await _world(client)
+	await _later_revision(client)
 	await _limits(client)
 	_seed_mid_window(client)
 	print("STEP rotate")
@@ -80,8 +84,13 @@ func _calls(client) -> void:
 
 func _world(client) -> void:
 	check(client.send_channel("gameService", "move", {"dx": 9, "dy": 0}), "a move is written before joining")
+	check(not client.is_subscribed("gameService", "ticks"), "no feed held before subscribing")
 	var sub: Dictionary = await client.subscribe_stream("gameService", "ticks")
 	check(sub.ok and (sub.seed as Array).is_empty(), "the stream's seed is empty: that move was dropped")
+	check(client.is_subscribed("gameService", "ticks") and not client.is_subscribed("gameService", "ticks", "elsewhere"), "is_subscribed knows the feed held")
+	var unheard := func(payload: Variant) -> void: events.append(["unheard", payload])
+	client.on_event("gameService", "moved", unheard)
+	check(client.off_event("gameService", "moved", unheard) and not client.off_event("gameService", "moved", unheard), "off_event removes a handler, once")
 	var joined: Dictionary = await client.call_method("gameService", "join", {"name": "ada"})
 	check(joined.ok and joined.d.players == ["ada"], "joining the world answers its players")
 	check(client.presence("world:main") == ["ada"], "qd:presence lists the player")
@@ -89,6 +98,33 @@ func _world(client) -> void:
 	check(await until(func() -> bool: return moved(1) and items.size() == 1), "a move in the world is heard")
 	check(events[0][0] == "gameService" and events[0][1] == "moved" and events[0][2].userId == "ada", "as a typed event")
 	check(int(items[0].n) == 1, "and a stream item")
+
+
+## Frames a later revision of protocol 5 may send: fields added to objects
+## and elements appended to arrays. The harness adds a field to every
+## qd:hello, and sends these frames on "STEP later"; the client reads what it
+## knows of each and ignores the rest.
+func _later_revision(client) -> void:
+	check(client.hello.has("future"), "a qd:hello with a field the client does not know is read")
+	var others: Array = []
+	var ended: Array = []
+	var present: Array = []
+	var on_frame := func(event: String, data: Variant) -> void: others.append([event, data])
+	var on_revoked := func(frame: Dictionary) -> void: ended.append(frame)
+	var on_presence := func(room: String, users: Array) -> void: present.append([room, users])
+	client.frame_received.connect(on_frame)
+	client.revoked.connect(on_revoked)
+	client.presence_changed.connect(on_presence)
+	print("STEP later")
+	var heard := func() -> bool:
+		return moved(7) and items.size() == 2 and others.size() == 1 and ended.size() == 1 and present.size() == 1
+	check(await until(heard), "frames with appended elements and added fields are all heard")
+	check(int(items[-1].n) == 101, "a qd:stream frame's item, elements appended after it ignored")
+	check(present[0][0] == "world:main" and present[0][1] == ["ada", "bo"], "a qd:presence frame with a field more")
+	check(others[0][0] == "qd:changed" and ended[0].id == "x", "qd:changed and qd:revoked frames with a field more")
+	client.frame_received.disconnect(on_frame)
+	client.revoked.disconnect(on_revoked)
+	client.presence_changed.disconnect(on_presence)
 
 
 func _limits(client) -> void:
@@ -136,6 +172,7 @@ func _rotating(client) -> void:
 func _reconnected(client) -> void:
 	var hello: Dictionary = client.hello
 	check(hello.userId == "ada", "after qd:rotate the client reconnects with a new handshake")
+	check(client.server_id == first_server_id, "the same server, so the same server id")
 	check(client.presence("world:main").is_empty(), "the new socket is in no room")
 	client.send_channel("gameService", "move", {"dx": 8, "dy": 0})
 	var joined: Dictionary = await client.call_method("gameService", "join", {"name": "ada"})
@@ -144,6 +181,9 @@ func _reconnected(client) -> void:
 	check(await until(func() -> bool: return moved(3) and seeds.size() == 2), "a move after joining again is heard")
 	check(not moved(9) and not moved(8), "the moves from outside the world were dropped")
 	check(seeds[1].size() == 1 and int(seeds[1][0].n) == 1, "the stream was subscribed again, its seed the tick before")
+	var refused: Dictionary = await client.subscribe_stream("gameService", "nowhere")
+	check(not refused.ok and refused.e.code == "NOT_FOUND", "a stream the service lacks is refused")
+	check(not client.is_subscribed("gameService", "nowhere") and client.is_subscribed("gameService", "ticks"), "a refused subscribe holds no feed")
 	client.close()
 
 

@@ -1,6 +1,6 @@
 // The argument every handler receives, `{ input, ctx, db }` (RFC 0003
 // section 3). `ctx` replaces 4.1's `ServiceMethodContext` (`userId`,
-// `socketId`, `serviceAccess`; `legacy-src/shared/types.ts:111-115`) and the
+// `socketId`, `serviceAccess`; 4.1 `src/shared/types.ts:111-115`) and the
 // habit of overriding `defineMethod` to add fields: an app adds its own
 // fields once, through `initQuickdraw({ context })`.
 
@@ -64,6 +64,14 @@ export interface BaseContext<P = Principal, M = McpContext> {
   readonly requestId: string;
   /** How the call arrived. */
   readonly transport: Transport;
+  /**
+   * The socket the call arrived on: its id, as the client socket's `id`,
+   * `onRoomLeave`'s `socketId` and a channel handler's `ctx.socketId` name
+   * it (a game keys a player's input by it). `undefined` for a call that
+   * did not arrive over a socket: HTTP, MCP, in process, `ctx.services`. In
+   * a method that shares its runs (`share`), the first caller's.
+   */
+  readonly socketId?: string;
   /**
    * The fields the MCP bridge's `context` option produced for this call, such
    * as the scopes of the agent's token; typed by `QuickdrawTypes["mcp"]`.
@@ -142,6 +150,27 @@ export interface RunContext {
   readonly principal: null;
 }
 
+/** Options of `qd.run(fn, options)` and `dispatcher.run(fn, options)`. */
+export interface RunOptions {
+  /**
+   * Run `fn` in a unit of work of its own even inside a method call or a
+   * transaction: for background work a handler starts and does not await
+   * (a push sent after the reply, pruning what it reports dead). Its writes
+   * flush once `fn` settles, on their own, instead of joining the handler's
+   * unit, which may have flushed long before (they would then flush as
+   * ambient writes, with a development warning). A failed flush is logged.
+   * Default `false`: inside an open unit of work or transaction, `fn` joins
+   * it.
+   *
+   * @example
+   * // in a handler, not awaited: the reply does not wait for the push
+   * void qd.run(() => sendPushes(db, message), { detached: true }).catch((error) => {
+   *   ctx.log.error("Pushing the message failed", { error: String(error) });
+   * });
+   */
+  readonly detached?: boolean;
+}
+
 /** Builds the app's fields of `ctx` from the framework's: the `context` option of `initQuickdraw`. */
 export type ContextExtender = (base: AnyContext) => object;
 
@@ -165,6 +194,12 @@ export interface KitRuntime {
    * counter's.
    */
   readonly claimRevision?: () => number | Promise<number>;
+  /**
+   * Runs `fn` in a detached unit of work of the dispatcher, as
+   * `qd.run(fn, { detached: true })` does: a kit's work after its call (the
+   * admin kit's `onCommitted`), whose writes flush on their own.
+   */
+  readonly runDetached?: (fn: () => unknown) => Promise<unknown>;
 }
 
 /** The sockets in a room (RFC 0003 section 6), as this process sees its rooms. */
@@ -188,7 +223,7 @@ export interface RoomOccupancy {
  */
 export type ContextFields = Pick<
   AnyContext,
-  "principal" | "signal" | "log" | "requestId" | "transport" | "mcp"
+  "principal" | "signal" | "log" | "requestId" | "transport" | "socketId" | "mcp"
 > &
   Partial<Pick<AnyContext, "touch" | "rooms" | "presence">> & {
     readonly kit?: KitRuntime;
@@ -263,9 +298,11 @@ const SERVICES: ContextServices = unavailable("ctx.services");
 /** The `ctx.rooms` of a context no dispatcher built: no socket to join with, no server to send through. */
 const NO_ROOMS: ContextRooms = Object.freeze({
   join: () => false,
-  leave: () => false,
+  leave: ((_room: string, target?: unknown) =>
+    target === undefined ? false : Promise.resolve()) as ContextRooms["leave"],
   emit: untracked,
   emitToUser: untracked,
+  size: () => 0,
 });
 
 /** The `ctx.presence` of a context no dispatcher built: no server, so nobody is online. */
@@ -287,7 +324,7 @@ function servicesOf(
   if (dispatch === undefined) {
     return undefined;
   }
-  return (signal) => createCaller(() => dispatch, principal, signal) as ContextServices;
+  return (signal) => createCaller(() => dispatch, principal, { signal }) as ContextServices;
 }
 
 /**

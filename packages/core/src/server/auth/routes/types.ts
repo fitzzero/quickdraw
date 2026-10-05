@@ -52,8 +52,14 @@ export interface AuthCookieOptions {
 
 /** Options of `createAuthRoutes`. */
 export interface AuthRoutesOptions {
-  /** The ways to sign in. Provider ids are unique. */
-  readonly providers: readonly AuthProvider[];
+  /**
+   * The ways to sign in. Provider ids are unique. `undefined`, `null` and
+   * `false` entries are skipped, so a provider whose credentials an
+   * environment lacks can be left out in place (`google.optional(...)`, or
+   * `env.GOOGLE_CLIENT_ID !== undefined && google(...)`); at least one must
+   * remain.
+   */
+  readonly providers: readonly (AuthProvider | null | undefined | false)[];
   /** Where sessions are stored; `createMemorySessionStore()` in development and tests. */
   readonly sessions: SessionStore;
   /** Signs the session JWTs; at least 32 characters. `socketAuth` needs the same secret. */
@@ -102,8 +108,25 @@ export interface AuthRoutesOptions {
  * The routes, as one Express middleware: mount it with `app.use(routes)`. A
  * request for a path it does not serve goes on to `next()`.
  */
-export type AuthRoutes = (
+export type AuthRoutes = ((
   req: AuthRouteRequest,
   res: AuthRouteResponse,
   next: (error?: unknown) => void,
-) => void;
+) => void) & {
+  /**
+   * The sign-ins the routes serve now, in the order `providers` lists them:
+   * what `GET {basePath}/providers` answers. The mock is in it only while it
+   * is mounted and `isMockOAuthEnabled()`.
+   */
+  providers(): readonly AuthProviderInfo[];
+};
+
+/** A sign-in the auth routes serve, as `GET {basePath}/providers` lists it. */
+export interface AuthProviderInfo {
+  /** Its id: `GET {basePath}/{id}/start` starts it; a guest's is `POST {basePath}/guest`. */
+  readonly id: string;
+  /** A name to show on its button: `"Google"`, `"Discord"`, `"Mock"`, `"Guest"`, or an OAuth provider's own. */
+  readonly name: string;
+  /** `"oauth"` (a redirecting provider), `"mock"` (the development picker) or `"guest"`. */
+  readonly kind: AuthProvider["kind"];
+}

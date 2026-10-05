@@ -1,7 +1,8 @@
 // Typed custom room events (RFC 0003 sections 8.3 and 15): `ctx.rooms.emit(room,
-// contract, event, payload)` and `emitToUser`, which replace 4.1's
+// contract, event, payload)` and `emitToUser` (also `qd.rooms.emit`, from
+// code that is not a handler), which replace 4.1's
 // `emitToRoom` and `emitToUserRoom` and the augmentable `QuickdrawEventMap`
-// (`legacy-src/server/BaseService.ts:378-441`). The event must be one the
+// (4.1 `src/server/BaseService.ts:378-441`). The event must be one the
 // contract declares, and its payload is checked against the event's schema
 // before anything is sent: a payload that fails it throws `INTERNAL` (the
 // app's bug, logged by the pipeline when a handler emits it) and no socket

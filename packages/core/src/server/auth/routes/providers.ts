@@ -38,6 +38,8 @@ export interface OAuthSignInProvider {
   readonly kind: "oauth";
   /** The provider's id: `{basePath}/{id}/start` and `{basePath}/{id}/callback`. */
   readonly id: string;
+  /** Its name on a sign-in button (`GET {basePath}/providers`). Default: its id. */
+  readonly name?: string;
   /** The provider's authorization URL for a sign-in with this `state`. */
   authorizeUrl(state: string, redirectUri: string): string;
   /** Exchanges the callback's `code` and reads the user's profile. */
@@ -53,6 +55,12 @@ export interface OAuthClientOptions {
   /** Extra authorization parameters, such as `{ access_type: "offline", prompt: "consent" }`. */
   readonly params?: Readonly<Record<string, string>>;
 }
+
+/** `google.optional` and `discord.optional`'s options: credentials that may be unset, as read from the environment. */
+export type OptionalClientOptions = Omit<OAuthClientOptions, "clientId" | "clientSecret"> & {
+  readonly clientId: string | undefined;
+  readonly clientSecret: string | undefined;
+};
 
 /** The development mock provider's options. */
 export interface MockSignInOptions {
@@ -111,6 +119,23 @@ function hosted<TUser>(
   };
 }
 
+/**
+ * The provider `make` builds when both credentials are set; `undefined`,
+ * which `createAuthRoutes` skips, when neither is. Only one of the two is a
+ * misconfiguration, refused as `make` refuses it.
+ */
+function optionalOf(
+  make: (options: OAuthClientOptions) => OAuthSignInProvider,
+): (options: OptionalClientOptions) => OAuthSignInProvider | undefined {
+  return (options) => {
+    const set = (value: unknown): boolean => typeof value === "string" && value !== "";
+    if (!set(options.clientId) && !set(options.clientSecret)) {
+      return undefined;
+    }
+    return make(options as OAuthClientOptions);
+  };
+}
+
 /** Google sign-in. Register `{publicUrl}{basePath}/google/callback` as a redirect URI. */
 export function google(options: OAuthClientOptions): OAuthSignInProvider {
   checkCredentials(options, "google()");
@@ -118,6 +143,7 @@ export function google(options: OAuthClientOptions): OAuthSignInProvider {
   return Object.freeze({
     kind: "oauth",
     id: "google",
+    name: "Google",
     authorizeUrl: client.url,
     async profile(code: string, redirectUri: string): Promise<AuthProfile> {
       const { tokens, user } = await exchangeOAuthCode(
@@ -138,6 +164,20 @@ export function google(options: OAuthClientOptions): OAuthSignInProvider {
   });
 }
 
+/**
+ * Google sign-in when both credentials are set, else nothing (`undefined`,
+ * which `createAuthRoutes` skips): the provider of an environment that may
+ * not configure it, such as development without a Google app.
+ *
+ * @example
+ * providers: [
+ *   google.optional({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }),
+ *   discord.optional({ clientId: env.DISCORD_CLIENT_ID, clientSecret: env.DISCORD_CLIENT_SECRET }),
+ *   mock({ listUsers }),
+ * ],
+ */
+google.optional = optionalOf(google);
+
 /** Discord sign-in. Register `{publicUrl}{basePath}/discord/callback` as a redirect URI. */
 export function discord(options: OAuthClientOptions): OAuthSignInProvider {
   checkCredentials(options, "discord()");
@@ -145,6 +185,7 @@ export function discord(options: OAuthClientOptions): OAuthSignInProvider {
   return Object.freeze({
     kind: "oauth",
     id: "discord",
+    name: "Discord",
     authorizeUrl: client.url,
     async profile(code: string, redirectUri: string): Promise<AuthProfile> {
       const { tokens, user } = await exchangeOAuthCode(
@@ -164,6 +205,9 @@ export function discord(options: OAuthClientOptions): OAuthSignInProvider {
     },
   });
 }
+
+/** Discord sign-in when both credentials are set, else nothing: see `google.optional`. */
+discord.optional = optionalOf(discord);
 
 /**
  * The development sign-in: a picker of the app's demo users, served by the

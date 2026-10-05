@@ -1,5 +1,5 @@
 // Display formatting, carried over unchanged from 4.1
-// (`legacy-src/client/utils/formatting.ts`) except that the `value == null`
+// (4.1 `src/client/utils/formatting.ts`) except that the `value == null`
 // checks are spelled out. Pure and DOM-free: the `./utils` entry exports them
 // for React server components as well as the browser.
 

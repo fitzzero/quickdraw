@@ -5,7 +5,7 @@
 // TanStack Query's own hooks, keyed by `keys.ts` and fetching through
 // `call.ts`. 4.1's `useServiceQuery` and `useService` wrapped them by service
 // and method name strings and returned a reshaped result
-// (`legacy-src/client/useServiceQuery.ts:54-229`, `useService.ts:39-112`).
+// (4.1 `src/client/useServiceQuery.ts:54-229`, `useService.ts:39-112`).
 //
 // A query:
 // - runs only while the connection is connected (or reconnecting with the
@@ -26,7 +26,7 @@
 //   waits for the server's answer, so the first mount reads once;
 // - shows the overlays of optimistic mutations over the rows it returns.
 // There are no effect-based `onSuccess`/`onError` callbacks (4.1 had them at
-// `legacy-src/client/useServiceQuery.ts:185-198`).
+// 4.1 `src/client/useServiceQuery.ts:185-198`).
 //
 // The mutation hook is `mutation.ts`'s, exported from here too.
 
@@ -46,6 +46,7 @@ import {
   hiddenResult,
   readAfterJoin,
   topicOf,
+  watchedModelsOf,
   useOverlaySelect,
   useTopicWatch,
 } from "./queryHooks";
@@ -92,7 +93,14 @@ export function useMethodQuery<Output, Data = Output, Input = unknown>(
   const { enabled, retry, structuralSharing, select, ...rest } = options;
   const queryKey = methodKey(target.service, target.method, input);
   const topic = enabled === false ? undefined : topicOf(target, input);
-  useTopicWatch({ connection, coordinator, service: target.service, queryKey, topic });
+  useTopicWatch({
+    connection,
+    coordinator,
+    service: target.service,
+    queryKey,
+    topic,
+    models: watchedModelsOf(target),
+  });
   const shown = useOverlaySelect<Output, Data>(queryClient, target, select);
   const result = useQuery<Output, QuickdrawError, Data, MethodQueryKey<Input>>({
     ...rest,

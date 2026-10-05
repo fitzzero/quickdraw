@@ -3,36 +3,61 @@
 //
 // A handler whose method returns a projection returns the database row, and
 // the framework projects it: it keeps the projection's keys and sends `Date`
-// values as ISO strings. So the handler's return type is the projection's row
-// with a `Date` allowed wherever the wire has a string, and extra columns
-// allowed (`RowFor`). A projection with a `map` in the service's `project`
-// option is built from the row its `select` reads instead: its handlers
-// return what `map` takes.
+// values as ISO strings. So the handler's return type is the projection's
+// full row (every key, tiered ones too) with a `Date` allowed wherever the
+// wire has a string, a JSON column's value wherever it has an object or an
+// array, and extra columns allowed (`RowFor`). A projection with a `map` in
+// the service's `project` option is built from the row its `select` reads
+// instead: its handlers return what `map` takes.
 
 import type { AnyContract } from "../contract/defineContract";
 import type {
   CollectionName,
+  FullProjectionOf,
   MethodName,
   MethodOf,
   ProjectionName,
-  ProjectionOf,
 } from "../contract/infer";
 import type { NullableProjection, ProjectionList } from "../contract/methods";
 import type { InferOutput, StandardSchemaV1 } from "../contract/standardSchema";
 
 /**
+ * A JSON column's value as a database client types it: structurally
+ * Prisma's `JsonValue` (and its `InputJsonValue` objects and arrays). A row
+ * may hold one wherever the wire has an object or an array (`RowFor`); the
+ * method's output schema checks its shape outside production.
+ */
+export type JsonColumnValue =
+  | string
+  | number
+  | boolean
+  | null
+  | { readonly [key: string]: JsonColumnValue | undefined }
+  | readonly JsonColumnValue[];
+
+/**
  * A row of a projection as a handler may return it: the database row. Where
  * the projection has a string, a `Date` is accepted too, at any depth (the
- * framework sends its ISO string); and the row may carry more columns than
- * the projection names (the framework sends only the projection's keys).
+ * framework sends its ISO string); where it has an object or an array, a
+ * JSON column's value (`JsonColumnValue`: a Prisma `Json` column is typed
+ * `JsonValue` whatever it holds); and the row may carry more columns than the
+ * projection names (the framework sends only the projection's keys). A
+ * string, number or boolean column is checked as the wire types it.
  */
 export type RowFor<Wire> = Wire extends string
   ? Wire | Date
   : Wire extends readonly (infer Item)[]
     ? readonly RowFor<Item>[]
     : Wire extends object
-      ? { readonly [Key in keyof Wire]: RowFor<Wire[Key]> }
+      ? { readonly [Key in keyof Wire]: ColumnFor<Wire[Key]> }
       : Wire;
+
+/** One column of a row (`RowFor`): an object or an array may also be a JSON column's value. */
+type ColumnFor<Wire> = Wire extends string
+  ? Wire | Date
+  : Wire extends object
+    ? RowFor<Wire> | JsonColumnValue
+    : Wire;
 
 /**
  * One projection's entry in `defineService`'s `project` option (RFC 0003
@@ -63,7 +88,7 @@ export interface ProjectionOption<Wire = unknown> {
 /** The `project` option checked against the contract: a name that is not a projection becomes an error message. */
 export type ProjectCheck<C extends AnyContract, Proj> = {
   readonly [Name in keyof Proj]: Name extends ProjectionName<C>
-    ? ProjectionOption<ProjectionOf<C, Name>>
+    ? ProjectionOption<FullProjectionOf<C, Name>>
     : `defineService: "${Name & string}" is not a projection of ${C["name"]}`;
 };
 
@@ -74,9 +99,13 @@ type MappedRow<Proj, Name> = Name extends keyof Proj
     : []
   : [];
 
-/** What a handler returns for one row of projection `Name`: what its `map` takes, or the database row. */
+/**
+ * What a handler returns for one row of projection `Name`: what its `map`
+ * takes, or the database row of the full projection (tiered fields too: the
+ * framework strips them per reader).
+ */
 export type HandlerRow<C extends AnyContract, Name extends ProjectionName<C>, Proj> =
-  MappedRow<Proj, Name> extends [infer Row] ? Row : RowFor<ProjectionOf<C, Name>>;
+  MappedRow<Proj, Name> extends [infer Row] ? Row : RowFor<FullProjectionOf<C, Name>>;
 
 type HandlerResult<C extends AnyContract, Output, Proj> = Output extends StandardSchemaV1
   ? InferOutput<Output>

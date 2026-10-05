@@ -3,9 +3,11 @@
 // hooks show the rows and scopes the test sets, and a component re-renders
 // when the test changes them.
 
+import { useQueryClient } from "@tanstack/react-query";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { usePresence, useQuickdraw } from "../client/index";
 import { QuickdrawError, defineContract, mutation, query, search } from "../index";
 import { createMockClient } from "./client";
 
@@ -195,6 +197,23 @@ describe("createMockClient", () => {
     expect(await screen.findAllByText("refused FORBIDDEN")).toHaveLength(2);
   });
 
+  it("writes a query's cached result with setData, shown at once", async () => {
+    const qd = createMockClient({ task });
+    qd.task.get.mockResolvedValue(cardOf("t1", "First"));
+    function Title() {
+      const { data } = qd.task.get.useQuery({ id: "t1" });
+      return <p>{data === undefined ? "loading" : data.title}</p>;
+    }
+    render(<Title />);
+    await screen.findByText("First");
+    const asked = qd.task.get.calls.length;
+    act(() => {
+      qd.task.get.setData({ id: "t1" }, cardOf("t1", "From an event"));
+    });
+    await screen.findByText("From an event");
+    expect(qd.task.get.calls).toHaveLength(asked);
+  });
+
   it("invalidates through the mock's cache, and forgets everything on $reset", async () => {
     const qd = createMockClient({ task });
     let reads = 0;
@@ -225,6 +244,185 @@ describe("createMockClient", () => {
   });
 });
 
+describe("the mock's session", () => {
+  /** What the real useQuickdraw() and usePresence say, as one line. */
+  function Status() {
+    const { status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello } =
+      useQuickdraw();
+    const room = usePresence("lobby");
+    const grants = JSON.stringify(serviceAccess);
+    const connected = isConnected ? "connected" : status;
+    return (
+      <p>{`${connected} known:${String(isKnown)} again:${String(reconnecting)} user:${String(userId)} grants:${grants} hello:${String(hello?.userId)} lobby:${room.join(",")}`}</p>
+    );
+  }
+
+  it("is what the real useQuickdraw() and usePresence read under $Provider", () => {
+    const qd = createMockClient({ task }, { userId: "ada" });
+    render(<Status />, { wrapper: qd.$Provider });
+    expect(
+      screen.getByText("connected known:true again:false user:ada grants:{} hello:ada lobby:"),
+    ).toBeTruthy();
+    act(() => {
+      qd.$session({ serviceAccess: { taskService: "Admin" } });
+      qd.$presence("lobby", ["ada", "bo", "ada"]);
+    });
+    expect(
+      screen.getByText(
+        'connected known:true again:false user:ada grants:{"taskService":"Admin"} hello:ada lobby:ada,bo',
+      ),
+    ).toBeTruthy();
+    // Each $session replaces the last over the starting session: grants left out are gone.
+    act(() => {
+      qd.$session({ userId: null });
+    });
+    expect(
+      screen.getByText(
+        "connected known:true again:false user:null grants:{} hello:null lobby:ada,bo",
+      ),
+    ).toBeTruthy();
+    act(() => {
+      qd.$session({ isKnown: false });
+    });
+    // Before the hello: no user, no grants, and a socket in no room.
+    expect(
+      screen.getByText(
+        "connected known:false again:false user:null grants:null hello:undefined lobby:",
+      ),
+    ).toBeTruthy();
+    act(() => {
+      qd.$session({ isConnected: false });
+    });
+    expect(
+      screen.getByText(
+        "connecting known:true again:true user:ada grants:{} hello:ada lobby:ada,bo",
+      ),
+    ).toBeTruthy();
+    act(() => {
+      qd.$session({ isConnected: false, isKnown: false });
+    });
+    expect(
+      screen.getByText(
+        "connecting known:false again:false user:null grants:null hello:undefined lobby:",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("starts from its session option, and selects view members for the session's user", async () => {
+    const qd = createMockClient({ task }, { session: { userId: "bo" } });
+    function Mine() {
+      const { userId } = useQuickdraw();
+      const { items } = qd.task.board.useCollection("p1", { view: "mine" });
+      return <p>{`${String(userId)}: ${items.map((item) => item.title).join(",")}`}</p>;
+    }
+    qd.task.board.mockScope("p1", [cardOf("t1", "Ada's", "ada"), cardOf("t2", "Bo's", "bo")]);
+    render(<Mine />, { wrapper: qd.$Provider });
+    await screen.findByText("bo: Bo's");
+    act(() => {
+      qd.$session({ userId: "ada" });
+    });
+    expect(screen.getByText("ada: Ada's")).toBeTruthy();
+    act(() => {
+      qd.$reset();
+    });
+    expect(screen.getByText("bo:")).toBeTruthy();
+  });
+
+  it("is scoped to a $Provider's subtree by its session prop, side by side (finding F6.2)", async () => {
+    const qd = createMockClient({ task }, { userId: "ada" });
+    qd.task.board.mockScope("p1", [cardOf("t1", "Ada's", "ada"), cardOf("t2", "Bo's", "bo")]);
+    function Who({ name }: { readonly name: string }) {
+      const { userId, isKnown, isConnected, serviceAccess } = useQuickdraw();
+      const room = usePresence("lobby");
+      const { items } = qd.task.board.useCollection("p1", { view: "mine" });
+      const mine = items.map((item) => item.title).join(",");
+      const grants = JSON.stringify(serviceAccess);
+      const state = `known:${String(isKnown)} connected:${String(isConnected)}`;
+      return (
+        <p>{`${name}: ${String(userId)} ${state} grants:${grants} lobby:${room.join(",")} mine:${mine}`}</p>
+      );
+    }
+    act(() => {
+      qd.$presence("lobby", ["ada"]);
+    });
+    // Two stories on one docs page, each with its own session; a third with the mock's own.
+    render(
+      <>
+        <qd.$Provider session={{ userId: "bo", serviceAccess: { taskService: "Admin" } }}>
+          <Who name="bo's story" />
+        </qd.$Provider>
+        <qd.$Provider session={{ userId: null, isKnown: false }}>
+          <Who name="signed out" />
+        </qd.$Provider>
+        <qd.$Provider>
+          <Who name="default" />
+        </qd.$Provider>
+      </>,
+    );
+    await screen.findByText(
+      `bo's story: bo known:true connected:true grants:{"taskService":"Admin"} lobby:ada mine:Bo's`,
+    );
+    expect(
+      screen.getByText("signed out: null known:false connected:true grants:null lobby: mine:"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("default: ada known:true connected:true grants:{} lobby:ada mine:Ada's"),
+    ).toBeTruthy();
+    // What a prop leaves out follows the mock's own session.
+    act(() => {
+      qd.$session({ isConnected: false });
+    });
+    expect(screen.getByText(/^bo's story: bo known:true connected:false /)).toBeTruthy();
+    expect(screen.getByText(/^default: ada known:true connected:false /)).toBeTruthy();
+  });
+
+  it("refuses a $Provider session it cannot show", () => {
+    const qd = createMockClient({ task });
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(() =>
+        render(
+          <qd.$Provider session={{ userId: "" }}>
+            <p>never</p>
+          </qd.$Provider>,
+        ),
+      ).toThrow("$Provider: userId must be a non-empty string, or null for an anonymous user");
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it("gives its cache to TanStack's useQueryClient, and needs no provider for its members", () => {
+    const qd = createMockClient({ task });
+    let seen: unknown;
+    function Probe() {
+      seen = useQueryClient();
+      return null;
+    }
+    render(<Probe />, { wrapper: qd.$Provider });
+    expect(seen).toBe(qd.$queryClient);
+    function Row() {
+      return <p>{qd.task.useEntity("t1").isLoading ? "row loading" : "row"}</p>;
+    }
+    render(<Row />);
+    expect(screen.getByText("row loading")).toBeTruthy();
+  });
+
+  it("refuses a session or a room it cannot show", () => {
+    const qd = createMockClient({ task });
+    expect(() => qd.$session({ userId: "" })).toThrow(
+      "$session: userId must be a non-empty string, or null for an anonymous user",
+    );
+    expect(() => qd.$session({ isKnown: "yes" as unknown as boolean })).toThrow(
+      "$session: isKnown must be true or false",
+    );
+    expect(() => createMockClient({ task }, { session: null as unknown as object })).toThrow(
+      "createMockClient: the session is { userId?, serviceAccess?, isConnected?, isKnown? }",
+    );
+    expect(() => qd.$presence("", [])).toThrow("$presence: room must be a room's name");
+  });
+});
+
 describe("after each test", () => {
   // Made while the file is collected, as an app's test module makes its mock.
   const qd = createMockClient({ task });
@@ -235,7 +433,14 @@ describe("after each test", () => {
     return <p>{row.isLoading ? "row loading" : `row ${row.data?.title ?? "-"}`}</p>;
   }
 
-  it("sets answers, calls, rows, scopes and results, and leaves Row mounted", async () => {
+  function Who() {
+    const { userId } = useQuickdraw();
+    return <p>{`who ${String(userId)} lobby ${usePresence("lobby").join(",")}`}</p>;
+  }
+
+  it("sets answers, calls, rows, scopes, rooms, the session and results, and leaves Row mounted", async () => {
+    qd.$session({ userId: "ada" });
+    qd.$presence("lobby", ["ada"]);
     qd.task.get.mockResolvedValue(cardOf("t1", "First"));
     qd.task.useEntity.mockRow(cardOf("t1", "First"));
     qd.task.board.mockScope("p1", [cardOf("t1", "First")]);
@@ -252,6 +457,8 @@ describe("after each test", () => {
     expect(qd.$queryClient.getQueryCache().getAll()).toEqual([]);
     render(<Row />);
     expect(screen.getByText("row loading")).toBeTruthy();
+    render(<Who />, { wrapper: qd.$Provider });
+    expect(screen.getByText("who null lobby")).toBeTruthy();
     let settled = false;
     void qd.task.get.call({ id: "t1" }).then(() => {
       settled = true;

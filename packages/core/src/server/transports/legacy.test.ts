@@ -30,12 +30,12 @@ import { createProbe } from "./__tests__/probe";
 
 const harness = transportHarness();
 
-/** 4.x's reply type, as `legacy-src/shared/types.ts:88-90` declares it. */
+/** 4.x's reply type, as 4.1 `src/shared/types.ts:88-90` declares it. */
 type ServiceResponse<T = unknown> =
   | { success: true; data: T }
   | { success: false; error: string; code?: number };
 
-/** The error 4.x's query hooks reject with (`legacy-src/client/serviceError.ts`). */
+/** The error 4.x's query hooks reject with (4.1 `src/client/serviceError.ts`). */
 class ServiceCallError extends Error {
   constructor(
     message: string,
@@ -47,7 +47,7 @@ class ServiceCallError extends Error {
 
 /**
  * A 4.x call exactly as 4.x's client hooks make one
- * (`legacy-src/client/useService.ts:60-75`): emit `"{service}:{method}"` with
+ * (4.1 `src/client/useService.ts:60-75`): emit `"{service}:{method}"` with
  * the payload and an ack, resolve `data`, reject with the error and its code.
  */
 function legacyCall(socket: ClientSocket, event: string, payload?: unknown): Promise<unknown> {

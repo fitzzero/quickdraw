@@ -450,8 +450,12 @@ describe("races with a subscribe batch", () => {
         }
         memberReads += 1;
         flushing = true;
+        // A new list each time: every lookup sees a real access change.
         await appRef.server.dispatcher.run(() =>
-          h.db.project.update({ where: { id: board.p2 }, data: { acl: [] } }),
+          h.db.project.update({
+            where: { id: board.p2 },
+            data: { acl: [{ userId: `guest-${memberReads}`, level: "Read" }] },
+          }),
         );
         flushing = false;
       },

@@ -1,9 +1,9 @@
 // The collection sink (RFC 0003 sections 5.3 and 7.2): what a flush does for
 // collection subscribers. It goes after the access and entity sinks on the
 // dispatcher's list, so a socket a flush revoked never gets its deltas. It
-// replaces 4.1's `notify` (`legacy-src/server/collections.ts:205-270`), which
+// replaces 4.1's `notify` (4.1 `src/server/collections.ts:205-270`), which
 // only `this.create/update/delete` called, after reading the whole row first
-// (`legacy-src/server/BaseService.ts:741-751`).
+// (4.1 `src/server/BaseService.ts:741-751`).
 //
 // Per flush:
 //

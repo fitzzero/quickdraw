@@ -1,14 +1,18 @@
 // `quickdraw-lint baseline`: runs oxlint with the app's own config and
-// records the fingerprint of every quickdraw violation it reports (the rule,
-// the file and a hash of the violating line's trimmed text), in
-// `.quickdraw-lint-baseline.json` (format in `../plugin/baseline.mjs`). Rules
-// given that file through their `baseline` option, or all of them through
-// `settings.quickdraw.baseline`, then report only violations it does not
-// record. Run it again when `no-unused-baseline` warns, so the file shrinks.
+// records the fingerprint of every violation it reports (the rule, the file
+// and a hash of the violating line's trimmed text), the quickdraw rules' and
+// oxlint's own alike, in `.quickdraw-lint-baseline.json` (format in
+// `../plugin/baseline.mjs`). The quickdraw rules, given that file through
+// their `baseline` option or `settings.quickdraw.baseline`, then report only
+// violations it does not record; `quickdraw-lint check` (./check.mjs) does
+// the same for every other rule. Run it again when `no-unused-baseline`
+// warns, so the file shrinks.
 //
 // oxlint runs with QUICKDRAW_LINT_BASELINE=ignore, so the baseline being
 // replaced hides nothing from the new one. oxlint has already dropped the
-// reports disable directives cover, and the rules skip them the same way.
+// reports disable directives cover, and the rules skip them the same way. A
+// file oxlint cannot parse is never recorded: no baseline holds a syntax
+// error.
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -19,7 +23,7 @@ import {
   BASELINE_ENV,
   BASELINE_FILE,
   BASELINE_VERSION,
-  UNUSED_RULE,
+  baselineKey,
   fingerprint,
   sourceLines,
 } from "../plugin/baseline.mjs";
@@ -27,9 +31,11 @@ import {
 export const USAGE = `Usage: quickdraw-lint baseline [options] [paths...]
 
 Runs oxlint over the paths (default: the current directory) and records a
-fingerprint for each quickdraw violation (rule, file, and a hash of the
-line's text). Rules given the file (the "baseline" option, or
-settings.quickdraw.baseline) then report only violations it does not record.
+fingerprint for each violation of every rule, oxlint's own included (rule,
+file, and a hash of the line's text). The quickdraw rules given the file
+(the "baseline" option, or settings.quickdraw.baseline) then report only
+violations it does not record, and so does every rule under
+quickdraw-lint check.
 
 Options:
   -c, --config <file>   oxlint config to use (default: oxlint's own lookup)
@@ -56,12 +62,14 @@ export function findOxlint(cwd) {
 
 /**
  * Runs oxlint over `paths` and returns its JSON report; every baseline is
- * ignored unless `ignoreBaselines` is false.
+ * ignored unless `ignoreBaselines` is false. `args` are more of oxlint's
+ * arguments, passed before the paths.
  */
 export function runOxlint({
   cwd,
   config,
-  paths,
+  paths = [],
+  args: extra = [],
   oxlint = findOxlint(cwd),
   ignoreBaselines = true,
 }) {
@@ -70,6 +78,7 @@ export function runOxlint({
     "--format",
     "json",
     ...(config === undefined ? [] : ["--config", config]),
+    ...extra,
     ...paths,
   ];
   const env = { ...process.env };
@@ -110,22 +119,20 @@ function entry(map, key, create) {
 }
 
 /**
- * The fingerprints of the `plugin` rules' diagnostics in an oxlint JSON
- * report, per file (relative to `directory`, with forward slashes) and rule,
- * each with how many times it occurs. A diagnostic's line comes from the
- * report; the rules number lines the same way (see `sourceLines`).
+ * The fingerprints of the diagnostics in an oxlint JSON report, per file
+ * (relative to `directory`, with forward slashes) and rule (`baselineKey`:
+ * a rule of the quickdraw plugin, loaded as `plugin`, by its name; any other
+ * by its code), each with how many times it occurs. A diagnostic's line
+ * comes from the report; the rules number lines the same way (see
+ * `sourceLines`).
  */
 export function collectFingerprints(report, { cwd, directory, plugin = "quickdraw" }) {
-  const prefix = `${plugin}(`;
   const files = new Map();
   const sources = new Map();
   for (const diagnostic of report.diagnostics ?? []) {
     const { code, filename } = diagnostic;
-    if (typeof code !== "string" || !code.startsWith(prefix) || !code.endsWith(")")) {
-      continue;
-    }
-    const rule = code.slice(prefix.length, -1);
-    if (rule === UNUSED_RULE) {
+    const rule = baselineKey(code, plugin);
+    if (rule === null) {
       continue;
     }
     const absolute = path.resolve(cwd, filename);

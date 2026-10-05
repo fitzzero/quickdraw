@@ -1,5 +1,5 @@
 // A tool call's result in the shape of MCP's `tools/call` result, as 4.1
-// wrote it (`legacy-src/server/mcp/McpStdioServer.ts:85-96`): one text block
+// wrote it (4.1 `src/server/mcp/McpStdioServer.ts:85-96`): one text block
 // holding the value as indented JSON. A failure is a tool error (`isError`)
 // whose text is the error's wire form, `{ code, message, data? }`, so the
 // agent sees the code; 4.1 answered a failed call with a JSON-RPC error

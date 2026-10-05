@@ -9,7 +9,7 @@
 // always matches the files, and a second run finds the same markers and
 // writes the same report.
 
-import type { Node, SourceFile } from "ts-morph";
+import { Node, type SourceFile } from "ts-morph";
 import { type Edit, indentAt, statementOf } from "./text";
 
 /** The text every marker starts with. */
@@ -31,9 +31,11 @@ export const CATEGORIES = [
   "channel",
   "this",
   "context",
+  "error",
   "client",
   "server",
   "v4-api",
+  "carve-out",
 ] as const;
 
 export type Category = (typeof CATEGORIES)[number];
@@ -72,6 +74,32 @@ export function findMarkers(text: string, file: string): FoundMarker[] {
   return found;
 }
 
+/** Whether `node` is the first thing on its line (only whitespace before it). */
+function startsLine(node: Node): boolean {
+  const text = node.getSourceFile().getFullText();
+  const start = node.getStart();
+  const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+  return text.slice(lineStart, start).trim() === "";
+}
+
+/**
+ * The node a marker about `target` goes above: `target` itself when it
+ * starts its line, else the nearest enclosing node that does. A marker
+ * written above a property of a one-line literal (`{ w: a, h: b }`) would
+ * land after the text before it on that line, as a trailing comment.
+ */
+export function markerAnchor(target: Node): Node {
+  let node = target;
+  while (!startsLine(node)) {
+    const parent = node.getParent();
+    if (parent === undefined || Node.isSourceFile(parent)) {
+      break;
+    }
+    node = parent;
+  }
+  return node;
+}
+
 /** Whether the comments right above `node` already hold this marker. */
 export function hasMarker(node: Node, category: Category, message: string): boolean {
   const text = markerText(category, message);
@@ -80,9 +108,10 @@ export function hasMarker(node: Node, category: Category, message: string): bool
 
 /**
  * Collects marker insertions for one file. Each marker goes above the
- * statement (or member, or property) holding the node it is about, once per
- * statement, and never twice: a statement that already carries the same
- * marker (from an earlier run) gets none.
+ * statement (or member, or property) holding the node it is about, or above
+ * the nearest enclosing one that starts its own line (`markerAnchor`), once
+ * per statement, and never twice: a statement that already carries the
+ * same marker (from an earlier run) gets none.
  */
 export class MarkerSet {
   private readonly seen = new Set<string>();
@@ -95,14 +124,15 @@ export class MarkerSet {
     this.addAbove(statementOf(node), category, message);
   }
 
-  /** Marks `target` itself. */
+  /** Marks `target` itself (or, inside a line, the node starting that line). */
   addAbove(target: Node, category: Category, message: string): void {
-    const key = `${String(target.getStart())}:${category}:${message}`;
-    if (this.seen.has(key) || hasMarker(target, category, message)) {
+    const anchor = markerAnchor(target);
+    const key = `${String(anchor.getStart())}:${category}:${message}`;
+    if (this.seen.has(key) || hasMarker(anchor, category, message)) {
       return;
     }
     this.seen.add(key);
-    const start = target.getStart();
+    const start = anchor.getStart();
     const indent = indentAt(this.file.getFullText(), start);
     this.edits.push({ start, end: start, text: `${markerText(category, message)}\n${indent}` });
   }

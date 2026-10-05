@@ -1,7 +1,7 @@
 // The admin kit's contract half (RFC 0003 section 12.4). `admin.contract`
 // returns ordinary `query` and `mutation` entries to spread into a
 // contract's `methods`: the back-office methods 4.1's `installAdminMethods`
-// registered outside the type map (`legacy-src/server/BaseService.ts:1185-1333`),
+// registered outside the type map (4.1 `src/server/BaseService.ts:1185-1333`),
 // so every app called them through untyped hooks:
 //
 //   export const task = defineContract("taskService", {

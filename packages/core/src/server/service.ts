@@ -10,7 +10,7 @@ import type { AccessForm, AnyAccessPolicy, WatchAccess } from "./access/types";
 import type { ServiceCollection } from "./collections/define";
 import type { AnyContext, ContextExtender } from "./context";
 import type { ProjectedOutput, Projection } from "./emit/projection";
-import type { ServiceChannel, ServiceStream } from "./realtime/types";
+import type { RoomLeaveHandler, ServiceChannel, ServiceStream } from "./realtime/types";
 import type { MaybePromise, QuickdrawTypes } from "./types";
 
 /**
@@ -26,6 +26,21 @@ export type AnyHandler = (args: {
   readonly ctx: AnyContext;
   readonly db: unknown;
 }) => unknown;
+
+/**
+ * A method's own output schema, compiled from its JSON Schema when the
+ * service is defined (`pipeline/schemaOutput.ts`).
+ */
+export interface SchemaOutput {
+  /** The value reduced to what the schema declares; the value itself when nothing is dropped. */
+  pick(value: unknown): unknown;
+  /**
+   * Each key the schema declares, at any depth, with the first path that
+   * declares it (`email`, `user.email`, `[].email`; `{}` stands for any key
+   * of a record): what the `tiered-field-in-output` warning reads.
+   */
+  keyPaths(): ReadonlyMap<string, string>;
+}
 
 /** One method of a defined service, checked and ready to dispatch. */
 export interface ServiceMethod {
@@ -45,6 +60,14 @@ export interface ServiceMethod {
    * its field tiers are stripped per caller.
    */
   readonly projection: ProjectedOutput | undefined;
+  /**
+   * A schema output, compiled from its JSON Schema when the service was
+   * defined (`pipeline/schemaOutput.ts`): the handler's result is reduced to
+   * what the schema declares before the output check, on every transport.
+   * `undefined` for a projection output, and for a schema without JSON
+   * Schema (Zod 3), which is sent as the handler returns it.
+   */
+  readonly schemaOutput: SchemaOutput | undefined;
   readonly access: AccessForm;
   readonly handler: AnyHandler;
   readonly share: ShareMode | undefined;
@@ -115,6 +138,12 @@ export interface Service<
   readonly channels: ReadonlyMap<string, ServiceChannel>;
   /** The contract's streams, with their access forms as the access engine decides them. */
   readonly streams: ReadonlyMap<string, ServiceStream>;
+  /**
+   * The service's own `onRoomLeave`: `createServer` runs it, beside every
+   * other service's and its own option's, for each socket that leaves app
+   * rooms. `undefined` when the service declares none.
+   */
+  readonly onRoomLeave: RoomLeaveHandler | undefined;
   /** Type-only: the app types the service was defined with. Never set. */
   readonly "~types"?: T;
 }
@@ -159,6 +188,19 @@ const handlerChecks = new WeakMap<object, HandlerCheck>();
  */
 export function checkWhenDefined(handler: object, check: HandlerCheck): void {
   handlerChecks.set(handler, check);
+}
+
+/** The kit handlers that write users' service-wide grants (`admin.handlers(c, { grants: true })`). */
+const grantsEditors = new WeakSet<object>();
+
+/** Marks `handler` as one that writes users' service-wide grants: `createServer` checks where they are stored. */
+export function markGrantsEditor(handler: object): void {
+  grantsEditors.add(handler);
+}
+
+/** True for a handler that writes users' service-wide grants (`markGrantsEditor`). */
+export function editsGrants(handler: object): boolean {
+  return grantsEditors.has(handler);
 }
 
 /** Why `service` cannot run `handler`, from the check `checkWhenDefined` attached. */

@@ -10,7 +10,10 @@ export interface ProjectDTO {
   name: string;
   ownerId: string;
   acl: ACL | null;
+  // A fork made without archiving strips the flag (the template's carve-outs)
+  // ── quickdraw-archive:start ──
   archived: boolean;
+  // ── quickdraw-archive:end ──
 }
 
 /** Item of the `mine` collection: one row per project the scope user owns. */

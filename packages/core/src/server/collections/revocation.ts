@@ -14,7 +14,7 @@
 //
 // A changed `serviceAccess` re-authorizes every scope of the user's sockets.
 // 4.1 left this to a hand-written `kickFromCollection`
-// (`legacy-src/server/collections.ts:305-318`).
+// (4.1 `src/server/collections.ts:305-318`).
 
 import { SERVER_EVENTS } from "../../contract/names";
 import type { RevocationHook } from "../emit/revocation";

@@ -1,7 +1,10 @@
 // `quickdraw-migration-report.md`: every review marker in the code, with its
 // file and line, grouped by what it asks for. It is read back from the
 // markers, so it matches the files whenever it is written, and running the
-// codemod again after some items are done lists only what remains.
+// codemod again after some items are done lists only what remains. It is
+// written in the form Markdown formatters (oxfmt, prettier) keep, its table
+// padded, so formatting it changes nothing and a later run that finds the
+// same markers writes the same bytes.
 
 import type { RunContext } from "./context";
 import { repoPath } from "./layout";
@@ -88,6 +91,12 @@ const SECTIONS: readonly Section[] = [
       "A service is an object now: no constructor, no fields, no `this`; handlers read `ctx.principal`.",
   },
   {
+    title: "Errors the caller no longer sees",
+    categories: ["error"],
+    intro:
+      "4.x sent a thrown error's message to the caller; 5.0 answers any error that is not a `QuickdrawError` with `INTERNAL` and a generic message (the original is logged). Throw `new QuickdrawError(code, message)` with the code that fits (`NOT_FOUND`, `FORBIDDEN`, `CONFLICT`, `VALIDATION`, ...) wherever the caller should see the message.",
+  },
+  {
     title: "Client",
     categories: ["client"],
     intro:
@@ -98,6 +107,12 @@ const SECTIONS: readonly Section[] = [
     categories: ["server", "v4-api"],
     intro:
       "What lint's `no-v4-api` also reports, each with its replacement: the server set-up, room helpers, removed types.",
+  },
+  {
+    title: "Carve-outs",
+    categories: ["carve-out"],
+    intro:
+      "New files written from code inside a template carve-out (the lines between its `<name>:start` and `<name>:end` comments): a fork that strips the carve-out must delete them too, so list each wherever the carve-out's own files are listed. The lines they add to shared files sit between the carve-out's comments.",
   },
 ];
 
@@ -117,6 +132,31 @@ function sectionText(section: Section, items: readonly FoundMarker[]): string[] 
     ...items.map((item) => `- [ ] \`${item.file}:${String(item.line)}\` ${item.message}`),
     "",
   ];
+}
+
+/**
+ * A Markdown table as oxfmt and prettier format one: every cell padded to
+ * its column's width, a right-aligned column (`align` "right") padded on
+ * the left.
+ */
+export function markdownTable(
+  rows: readonly (readonly string[])[],
+  align: readonly ("left" | "right")[],
+): string[] {
+  const widths = align.map((_, column) =>
+    Math.max(3, ...rows.map((row) => (row[column] ?? "").length)),
+  );
+  const cell = (text: string, column: number): string =>
+    align[column] === "right"
+      ? text.padStart(widths[column] ?? 0)
+      : text.padEnd(widths[column] ?? 0);
+  const line = (cells: readonly string[]): string =>
+    `| ${cells.map((text, column) => cell(text, column)).join(" | ")} |`;
+  const [header = [], ...body] = rows;
+  const rule = widths.map((width, column) =>
+    align[column] === "right" ? `${"-".repeat(width - 1)}:` : "-".repeat(width),
+  );
+  return [line(header), line(rule), ...body.map((row) => line(row))];
 }
 
 /** The report's Markdown, and how many items it lists. */
@@ -139,11 +179,15 @@ export function buildReport(ctx: RunContext): { text: string; count: number } {
   lines.push(
     `${String(markers.length)} items in ${String(files)} files.`,
     "",
-    "| Section | Items |",
-    "| --- | ---: |",
-    ...grouped
-      .filter(({ items }) => items.length > 0)
-      .map(({ section, items }) => `| ${section.title} | ${String(items.length)} |`),
+    ...markdownTable(
+      [
+        ["Section", "Items"],
+        ...grouped
+          .filter(({ items }) => items.length > 0)
+          .map(({ section, items }) => [section.title, String(items.length)]),
+      ],
+      ["left", "right"],
+    ),
     "",
     ...grouped
       .filter(({ items }) => items.length > 0)
