@@ -85,11 +85,13 @@ I's release preparation card on 2026-10-05, when parts 1 to 4 were done and
 - [x] One `[5.0.0]` entry at the top of `CHANGELOG.md`, the release
       candidates' entries kept below it; its date is left to step 5.3.
 - [x] The downstream briefs refreshed (`docs/downstream/`).
-- [ ] The final checks: the gates, the dist smoke test,
+- [x] The final checks: the gates, the dist smoke test,
       `npm pack --dry-run`, publint and arethetypeswrong green, and for all
       four packages `bash scripts/release-tag.sh <package> 5.0.0` ready (no
       tag made); `git merge-tree --write-tree origin/main` with `dev`
-      reports no conflict.
+      reports no conflict (`main` is an ancestor of `dev`). The built
+      `dist` differs from `5.0.0-rc.6`'s only in the version and in
+      comments.
 
 ## 5. Owner steps, in order
 
