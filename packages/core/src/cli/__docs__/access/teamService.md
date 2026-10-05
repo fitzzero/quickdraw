@@ -121,7 +121,7 @@ Output: `{ id: string; teamId: string; userId: string }[]`.
 
 ## Streams
 
-Feeds of items the server appends, each subscriber starting from the latest few.
+Feeds of items the server appends; a subscriber starts from the stream's seed.
 
 ### `world`
 

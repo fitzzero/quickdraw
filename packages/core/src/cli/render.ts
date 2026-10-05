@@ -156,6 +156,10 @@ function kindLine(method: MethodDef): string {
   if (method.watch === "service") {
     return "A query that watches its service: a cached result is fetched again after every change to the service's rows, collections or the models it writes.";
   }
+  if ("service" in method.watch) {
+    const models = method.watch.service.map(code).join(", ");
+    return `A query that watches its service's writes to ${models}: a cached result is fetched again after a change to one of them.`;
+  }
   return `A query that watches the ${code(method.watch.collection)} collection: a cached result is fetched again when the scope its input names changes.`;
 }
 
@@ -293,12 +297,20 @@ function accessText(access: StreamAccess | undefined): string {
   return code(`{ ${parts.join(", ")} }`);
 }
 
-function seedText(seed: number | undefined, computed: boolean): string {
+/**
+ * What a subscriber starts from (finding F6.8 of the quickdraw-chat
+ * migration): the contract's `seed`, or a seed the service computes, which
+ * only a page made with `--services` (`known`) can tell from none.
+ */
+function seedText(seed: number | undefined, computed: boolean, known: boolean): string {
   if (computed) {
     return "computed by the service when a socket subscribes";
   }
-  if (seed === undefined || seed === 0) {
-    return seed === undefined ? "none (default)" : "none";
+  if (seed === undefined) {
+    return known ? "none (default)" : "none in the contract; the service may compute one";
+  }
+  if (seed === 0) {
+    return "none";
   }
   return seed === 1 ? "the latest item" : `the latest ${seed} items`;
 }
@@ -310,7 +322,7 @@ function streamSection(name: string, stream: StreamDef, access: AccessInfo | und
     optionTable([
       ["Item", code(typeOf(stream.item, "output"))],
       ["Scope", scoped ? `one feed per ${code(stream.scope ?? "")}` : "one global feed"],
-      ["Seed", seedText(stream.seed, served?.computedSeed === true)],
+      ["Seed", seedText(stream.seed, served?.computedSeed === true, served !== undefined)],
       ["Volatile", stream.volatile === true ? "yes" : "no"],
       ["Access", accessText(stream.access)],
       [
@@ -436,7 +448,7 @@ export function renderService(contract: AnyContract, access?: AccessInfo): strin
     ...collectionsSection(contract, access),
     ...membersSection(
       "## Streams",
-      "Feeds of items the server appends, each subscriber starting from the latest few.",
+      "Feeds of items the server appends; a subscriber starts from the stream's seed.",
       contract.streams,
       (name, stream: StreamDef) => streamSection(name, stream, access),
     ),

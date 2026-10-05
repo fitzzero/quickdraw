@@ -74,7 +74,10 @@ describe("createMockClient", () => {
       Readonly<Record<string, AccessLevel>>
     >();
     expectTypeOf(mock.$presence).parameters.toEqualTypeOf<[string, readonly string[]]>();
-    expectTypeOf(mock.$Provider).parameter(0).toEqualTypeOf<{ readonly children?: ReactNode }>();
+    expectTypeOf(mock.$Provider).parameter(0).toEqualTypeOf<{
+      readonly children?: ReactNode;
+      readonly session?: MockSession;
+    }>();
     expectTypeOf(mock.$Provider).returns.toEqualTypeOf<ReactElement>();
     // @ts-expect-error a grant is an access level
     mock.$session({ serviceAccess: { taskService: "Owner" } });

@@ -38,6 +38,18 @@ run("no-raw-socket", {
       filename: "apps/web/src/components/__tests__/Board.test.tsx",
       code: `socket.emit("qd:sub", { s: "taskService", ids: [id] });`,
     },
+    {
+      name: "an io() of another module, and values that only share a name with socket.io-client's",
+      filename: "apps/web/src/lib/feed.ts",
+      code: `
+        import { io } from "./my-io";
+        import { connect } from "./db";
+        const feed = io("/feed");
+        feed.on("tick", onTick);
+        const pool = connect();
+        pool.on("error", onError);
+      `,
+    },
   ],
   invalid: [
     {
@@ -72,6 +84,59 @@ run("no-raw-socket", {
       filename: "apps/web/src/hooks/useLegacy.ts",
       code: `export const call = (event, payload) => socket.timeout(5000).emitWithAck(event, payload);`,
       errors: [{ messageId: "rawSocket", data: { method: "emitWithAck" } }],
+    },
+    {
+      name: "what socket.io-client's io() made, whatever its name (finding F7.7)",
+      filename: "apps/web/src/lib/raw.ts",
+      code: `
+        import { io } from "socket.io-client";
+        const raw = io("http://localhost:4000", { auth: { token } });
+        raw.emit("qd:call", { id: 1, s: "noteService", m: "getNote", i: { id } });
+        raw.on("connect", onConnect);
+        raw.timeout(5000).emitWithAck("hello");
+      `,
+      errors: [
+        { messageId: "rawSocket", data: { method: "emit" } },
+        { messageId: "rawSocket", data: { method: "on" } },
+        { messageId: "rawSocket", data: { method: "emitWithAck" } },
+      ],
+    },
+    {
+      name: "a default or namespace import, a Manager and its sockets, assigned later or kept in a field",
+      filename: "apps/web/src/lib/client.ts",
+      code: `
+        import connectTo, { Manager } from "socket.io-client";
+        import * as sio from "socket.io-client";
+        let late;
+        function send() { late.emit("ping"); }
+        late = connectTo(url);
+        const manager = new Manager(url);
+        const admin = manager.socket("/admin");
+        admin.on("stats", show);
+        sio.io(url).emit("hello");
+        class Feed {
+          start() { this.link = new sio.Manager(url).socket("/"); }
+          stop() { this.link.off("tick"); }
+        }
+      `,
+      errors: [
+        { messageId: "rawSocket", data: { method: "emit" } },
+        { messageId: "rawSocket", data: { method: "on" } },
+        { messageId: "rawSocket", data: { method: "emit" } },
+        { messageId: "rawSocket", data: { method: "off" } },
+      ],
+    },
+    {
+      name: "the framework's own qd: events on any receiver",
+      filename: COMPONENT,
+      code: `
+        transport.emit("qd:call", frame);
+        bus.on(\`qd:\${kind}\`, onFrame);
+      `,
+      errors: [
+        { messageId: "rawSocket", data: { method: "emit" } },
+        { messageId: "rawSocket", data: { method: "on" } },
+      ],
     },
   ],
 });

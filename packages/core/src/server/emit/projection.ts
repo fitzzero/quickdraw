@@ -163,6 +163,39 @@ export function inputKeys(schema: StandardSchemaV1): readonly string[] | undefin
   return [...keys];
 }
 
+/**
+ * The keys a method's output may have at its top level, for the
+ * `tiered-field-in-output` warning (`tieredOutputs.ts`): those of every
+ * object the output may be, through `anyOf`, `oneOf`, `allOf` and `$ref`s,
+ * and those of the rows of an output that is a list. `undefined` when the
+ * schema has no JSON Schema or cannot write one.
+ */
+export function outputKeys(schema: StandardSchemaV1): readonly string[] | undefined {
+  if (!hasJsonSchema(schema)) {
+    return undefined;
+  }
+  let json: unknown;
+  try {
+    json = schema["~standard"].jsonSchema.output({
+      target: "draft-07",
+      libraryOptions: UNREPRESENTABLE_AS_ANY,
+    });
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(json)) {
+    return undefined;
+  }
+  const keys = new Set<string>();
+  addBranchKeys(json, json, keys, new Set());
+  // A list of rows: the rows' keys, as a hand-written list of users would name `email`.
+  const described = referenced(json, json);
+  if (described !== undefined && isRecord(described.items)) {
+    addBranchKeys(described.items, json, keys, new Set());
+  }
+  return [...keys];
+}
+
 const OPTION_KEYS = new Set(["keys", "select", "map"]);
 
 function checkKeyList(owner: string, keys: unknown, fail: Fail): readonly string[] {

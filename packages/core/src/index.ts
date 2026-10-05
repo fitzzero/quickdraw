@@ -35,6 +35,7 @@ export {
   type ProjectionList,
   type ProjectionRef,
   type QueryDef,
+  type ServiceModelsWatch,
   type ServiceWatch,
   type Watch,
 } from "./contract/methods";

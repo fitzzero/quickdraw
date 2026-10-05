@@ -275,12 +275,30 @@ describe("definition-time checks", () => {
     expect(
       withMethod({ kind: "query", input: idInput, output: "entity", watch: { collection: "c" } }),
     ).toThrow(
-      'method "m": watch must be "service", or { collection, scope } with a scope function',
+      'method "m": watch must be "service", { service: [models] }, or { collection, scope } with a scope function',
     );
     expect(withMethod({ kind: "query", input: idInput, output: "entity", watch: "all" })).toThrow(
-      'watch must be "service", or { collection, scope }',
+      'watch must be "service", { service: [models] }, or { collection, scope }',
     );
     expect(withMethod(query({ input: idInput, output: "entity", watch: "service" }))).not.toThrow();
+  });
+
+  it("takes a watch of the service's topic narrowed to models, a list of distinct names (finding F7.3)", () => {
+    const narrowed = (watch: unknown) =>
+      withMethod({ kind: "query", input: idInput, output: "entity", watch });
+    expect(narrowed({ service: ["gameScore", "chatMember"] })).not.toThrow();
+    for (const watch of [
+      { service: [] },
+      { service: "gameScore" },
+      { service: ["gameScore", "gameScore"] },
+      { service: [""] },
+      { service: [1] },
+      { service: ["gameScore"], collection: "c" },
+    ]) {
+      expect(narrowed(watch), JSON.stringify(watch)).toThrow(
+        'method "m": watch { service } lists the models of the service it watches',
+      );
+    }
     expect(
       withMethod({ kind: "mutation", input: idInput, output: "entity", watch: "service" }),
     ).toThrow('method "m" is a mutation; only a query can watch');

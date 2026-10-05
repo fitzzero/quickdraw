@@ -15,6 +15,7 @@ import type { IdInput } from "../../../contract/kits/crudSchemas";
 import type { AdminCreateQuery, AdminUpdateQuery } from "../../../contract/kits/adminSchemas";
 import { requireRow } from "../guards";
 import type { KitHandler, KitHandlerArgs, ModelDelegate } from "../crud/runtime";
+import { kitRuntimeOf } from "../../context";
 import { inKitTransaction } from "../transactions";
 import { adminCall, rowOut, rowWhole, tableOf, type AdminCall } from "./runtime";
 import type { AdminContext, AdminWrite } from "./types";
@@ -37,10 +38,39 @@ type Perform = (
 }>;
 
 /**
- * Runs one write of `method`: alone without an `onWrite`, else in a
- * transaction with the hook after it, which hears the row before (read in
- * the transaction) and after, every field; a throw undoes the write. The
- * database's refusal of the values is `VALIDATION` either way.
+ * Hands a committed write to `onCommitted`, in a detached unit of work of
+ * the dispatcher the call runs in: the reply does not wait for it, and a
+ * throw (or a rejection) is logged with the call's logger, never the
+ * caller's.
+ */
+function committed(context: AdminContext, args: KitHandlerArgs, write: AdminWrite): void {
+  const { onCommitted } = context;
+  if (onCommitted === undefined) {
+    return;
+  }
+  const ctx = args.ctx as Parameters<typeof onCommitted>[1];
+  const run = kitRuntimeOf(args.ctx)?.runDetached ?? ((fn: () => unknown) => Promise.resolve(fn()));
+  const failed = (error: unknown): void => {
+    ctx.log.error("The admin kit's onCommitted failed; the write stands", {
+      category: "quickdraw.admin",
+      method: write.method,
+      id: write.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  };
+  try {
+    run(() => onCommitted(write, ctx)).catch(failed);
+  } catch (error) {
+    failed(error);
+  }
+}
+
+/**
+ * Runs one write of `method`: alone without a hook, else in a transaction
+ * with `onWrite` after it, which hears the row before (read in the
+ * transaction) and after, every field; a throw undoes the write. Once it
+ * committed, `onCommitted` hears the same (`committed`). The database's
+ * refusal of the values is `VALIDATION` either way.
  */
 async function written(
   context: AdminContext,
@@ -49,7 +79,7 @@ async function written(
   method: AdminWrite["method"],
   perform: Perform,
 ): Promise<unknown> {
-  const { onWrite } = context;
+  const { onWrite, onCommitted } = context;
   const attempt = async (table: ModelDelegate, before: boolean) => {
     try {
       return await perform(table, before);
@@ -57,25 +87,30 @@ async function written(
       throw writeRefusal(error);
     }
   };
-  if (onWrite === undefined) {
+  if (onWrite === undefined && onCommitted === undefined) {
     return (await attempt(call.table, false)).reply;
   }
-  return await inKitTransaction(
+  let write: AdminWrite | undefined;
+  const reply = await inKitTransaction(
     args.db,
     async (tx) => {
       const done = await attempt(tableOf(tx, call.model), method !== "adminCreate");
       const whole = (row: object | null | undefined) => (row ? rowWhole(call, row) : null);
-      const write: AdminWrite = {
+      write = {
         method,
         id: done.id,
         ...(method === "adminCreate" ? {} : { before: whole(done.before) }),
         after: whole(done.after),
       };
-      await onWrite(write, args.ctx as Parameters<typeof onWrite>[1], tx);
+      await onWrite?.(write, args.ctx as Parameters<typeof onWrite>[1], tx);
       return done.reply;
     },
-    { owner: "The admin kit's writes with onWrite" },
+    { owner: "The admin kit's writes with onWrite or onCommitted" },
   );
+  if (write !== undefined) {
+    committed(context, args, write);
+  }
+  return reply;
 }
 
 /** The `adminGet` handler. */

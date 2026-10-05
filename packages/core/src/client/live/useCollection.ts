@@ -19,7 +19,10 @@
 //   chosen members, and `load: "all"` loads every page;
 // - both with the overlays of optimistic mutations laid over them, and the
 //   items they added (`cache.addItem`) in their place; `pending` names those
-//   whose call is in flight.
+//   whose call is in flight;
+// - `refused`: the items added with `onRefused: "keep"` whose call the
+//   server refused, with the error, until the app dismisses one or sends its
+//   call again (finding F6.4 of the quickdraw-chat migration).
 
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
@@ -29,8 +32,16 @@ import type { CollectionController } from "./collectionController";
 import type { IndexRow } from "./collectionIndex";
 import type { CollectionEntry, CollectionTarget } from "./collectionLoads";
 import { entryQuery } from "./host";
-import { useLiveData, useOverlayView, useUserId } from "./liveHooks";
+import {
+  useLiveData,
+  useOverlayView,
+  useRefusedItems,
+  useUserId,
+  type RefusedItem,
+} from "./liveHooks";
 import { showCollection, viewPredicate, type CollectionView } from "./views";
+
+export type { RefusedItem };
 
 /** Options of `useCollection`. */
 export interface UseCollectionOptions<View extends string = string> {
@@ -65,6 +76,13 @@ export interface UseCollectionResult<Item, Row> {
    * call is in flight: style them as sending. Empty when there are none.
    */
   readonly pending: ReadonlySet<string>;
+  /**
+   * The items an optimistic update added with `onRefused: "keep"` whose call
+   * was refused, oldest first, each with its error, `dismiss()` and
+   * `retry()`: not among `items`, so show them where the app shows a failed
+   * send. Empty when there are none.
+   */
+  readonly refused: readonly RefusedItem<Item>[];
   /**
    * The members shown, in order: one row each, `id` and the index fields.
    * `undefined` for a collection without an index, and for a scope too large
@@ -130,6 +148,7 @@ function actionsOf(held: { readonly current: CollectionController | null }): Act
 function resultOf<Item, Row>(
   entry: CollectionEntry | null | undefined,
   view: Shown,
+  refused: readonly RefusedItem<unknown>[],
   active: boolean,
   actions: Actions,
 ): UseCollectionResult<Item, Row> {
@@ -138,6 +157,7 @@ function resultOf<Item, Row>(
   return {
     items: view.items as readonly Item[],
     pending: view.pending,
+    refused: refused as readonly RefusedItem<Item>[],
     index: view.index as readonly Row[] | undefined,
     byId: view.byId as ReadonlyMap<string, Item>,
     totalCount: state?.totalCount ?? null,
@@ -204,9 +224,15 @@ export function useCollection<Item, Row = IndexRow>(
         sending.length === 0 ? NONE_PENDING : new Set(sending.map((addition) => addition.item.id)),
     };
   }, [state, predicate, userId, overlays, target.collection, target.def, scopeValue]);
+  const refused = useRefusedItems(
+    queryClient,
+    overlays,
+    target.collection,
+    active && !awaiting ? scopeValue : "",
+  );
   const actions = useMemo(() => actionsOf(held), []);
   return useMemo(
-    () => resultOf<Item, Row>(entry, shown, active, actions),
-    [entry, shown, active, actions],
+    () => resultOf<Item, Row>(entry, shown, refused, active, actions),
+    [entry, shown, refused, active, actions],
   );
 }

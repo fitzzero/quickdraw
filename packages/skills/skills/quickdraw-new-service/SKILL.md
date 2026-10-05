@@ -1,13 +1,13 @@
 ---
 name: quickdraw-new-service
-description: Add a service to a quickdraw 5.0 app end to end - its contract in the shared package, the service on the server, registration in createServer, the typed client's hooks in the web app, and its tests (access matrix, live behavior, budgets). Use when asked to "add a service", "add a model to the API", "expose X to the client", or to add methods, collections or a kit to an existing service.
+description: Add a service to a quickdraw 5.0 app end to end - its Prisma model and migration, its contract in the shared package, the service on the server, registration in createServer, the typed client's hooks in the web app, and its tests (access matrix, live behavior, budgets). Use when asked to "add a service", "add a model to the API", "expose X to the client", or to add methods, collections or a kit to an existing service.
 ---
 
 # Add a quickdraw service
 
-Five steps, in this order, because each one is typed by the one before it.
-Paths follow the quickdraw template (`packages/shared`, `apps/api`,
-`apps/web`). When the app's own rules (`.claude/rules/`, `CLAUDE.md`) name
+Six steps, in this order, because each one is typed by the one before it.
+Paths follow the quickdraw template (`packages/db`, `packages/shared`,
+`apps/api`, `apps/web`). When the app's own rules (`.claude/rules/`, `CLAUDE.md`) name
 other paths, theirs win: read one existing service, its registration and
 its tests first, and put the new ones beside them. The rules
 `quickdraw-services.md`, `quickdraw-access.md`, `quickdraw-client.md` and
@@ -23,7 +23,35 @@ and the Prisma model the rows live in. Decide:
 - **What a client lists**: which scopes (a project's tasks, a user's chats).
   Each is a collection, not a list method.
 
-## 1. The contract (`packages/shared/src/contracts/<name>.ts`)
+## 1. The model (`packages/db/prisma/schema.prisma`)
+
+A service whose rows are new needs their Prisma model first: the service's
+`model`, its `db.<model>` calls and its row policy's columns are checked
+against the generated client. Add the model beside the others, with a
+string `id` (every tracked row is keyed by it) and the columns the row
+policy and the collections read (here `projectId`):
+
+```prisma
+model Label {
+  id        String  @id @default(cuid())
+  projectId String
+  name      String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+```
+
+Then, in `packages/db`, create the migration and generate the client, in
+that order: `bun run db:migrate --name add_labels` (`prisma migrate dev`,
+which writes `prisma/migrations/<time>_add_labels/migration.sql` and applies
+it to the development database), then `bun run db:generate`. Prisma 7's
+`migrate dev` no longer generates the client, so until `db:generate` runs
+`db.label` does not exist and step 3 fails to typecheck. Commit the
+migration with the schema. A service of rows that exist already skips this
+step; an RPC-only service has no model.
+
+## 2. The contract (`packages/shared/src/contracts/<name>.ts`)
 
 <!-- example: packages/shared/src/contracts/label.ts -->
 
@@ -64,17 +92,20 @@ export const labelContract = defineContract("labelService", {
   the others, and add it to the `contracts` map there: that map types the
   web client and `qd.caller`.
 
-## 2. The service (`apps/api/src/services/<name>/index.ts`)
+## 3. The service (`apps/api/src/services/<name>/index.ts`)
 
 One directory per service: its helpers and its own unit-tested logic sit
-beside `index.ts`.
+beside `index.ts`. The API compiles as an ES module with NodeNext
+resolution, so a relative import names the file with `.js`
+(`"../../quickdraw.js"`; TS2835 without it).
 
 <!-- example: apps/api/src/services/label/index.ts -->
 
 ```ts
 import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 import { labelContract, projectContract } from "@project/shared";
-import { qd } from "../../quickdraw";
+// `.js`: the template's API compiles with NodeNext, which wants the extension on a relative import
+import { qd } from "../../quickdraw.js";
 
 export const labelService = qd.defineService(labelContract, {
   model: "label",
@@ -109,7 +140,7 @@ export const labelService = qd.defineService(labelContract, {
   `prefer-kit` warns on a hand-written `get`, `list`, `create` or
   `getLabel`-style method in a service that uses no kit.
 
-## 3. Register it (`apps/api/src/services/index.ts`)
+## 4. Register it (`apps/api/src/services/index.ts`)
 
 Add the service to the `services` list there. The server
 (`apps/api/src/index.ts`, `qd.createServer({ services })`), the MCP server,
@@ -118,11 +149,11 @@ new one reaches every root at once; never add it to one root by hand. If
 the MCP registry must not offer some of its methods to agents, exclude them
 there.
 
-## 4. Use it from the web app
+## 5. Use it from the web app
 
 The web client is made from the shared `contracts` map
 (`apps/web/src/lib/quickdraw.ts`, `createQuickdrawClient(contracts)`), so the
-contract added in step 1 is already there: its key becomes `qd.<key>` (the
+contract added in step 2 is already there: its key becomes `qd.<key>` (the
 template keys the map by service name, `qd.labelService`; this example's
 map uses `label`). Then use the hooks:
 
@@ -153,7 +184,7 @@ export function Labels({ projectId }: { readonly projectId: string }) {
 Read with `useEntity` and `useCollection` before `useQuery`; never refetch
 or invalidate after a mutation by hand.
 
-## 5. Test it (`apps/api/src/__tests__/services/<name>.int.test.ts`)
+## 6. Test it (`apps/api/src/__tests__/services/<name>.int.test.ts`)
 
 A test that boots the app (`createTestApp`, `describeAccessMatrix`,
 `expectBudget`) needs the test database, so it is an integration test:

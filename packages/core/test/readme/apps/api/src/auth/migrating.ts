@@ -122,8 +122,9 @@ app.post("/auth/discord/activity", express.json(), (req, res) => {
       userAgent: req.get("user-agent"),
       ip: req.ip,
     });
-    // best effort: a third-party iframe may refuse the cookie, so the page sends auth.token
-    setSessionCookie(res, token);
+    // best effort: a third-party iframe gets a cross-site cookie only with SameSite=None (the
+    // default is Lax), and may refuse it even then, so the page sends auth.token
+    setSessionCookie(res, token, { sameSite: "none" });
     res.json({ token });
   })();
 });

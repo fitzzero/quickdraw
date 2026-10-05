@@ -21,8 +21,14 @@
 // same-origin`, which a browser sends on its own page's long-polling requests
 // and which no other page can forge), or with `allowMissingOrigin` for native
 // clients that keep cookies. A bearer token is not ambient and needs no
-// Origin; HTTP calls are guarded by their required JSON content type instead
-// (RFC 0003 section 10).
+// Origin.
+//
+// An HTTP call that sends the cookie gets the same check (finding F7.1 of the
+// quickdraw-chat review; before rc.5 it relied on its required JSON content
+// type and the app's CORS alone): an `Origin` outside `allowedOrigins` is
+// answered `FORBIDDEN`. A call without `Origin` is accepted, since a browser
+// sends one with every POST: it comes from curl or a server rendering a page
+// with the user's cookie, unless `Sec-Fetch-Site` says another site sent it.
 //
 // The cookie is read under the names the auth routes' rule gives the
 // handshake (`sessionCookieNamesFor`): a configured `cookieName`; else
@@ -68,12 +74,18 @@ export interface SocketAuthOptions<P extends Principal = Principal> {
   readonly sessions: SessionStore;
   /** The secret the auth routes sign session JWTs with. */
   readonly jwtSecret: string;
-  /** The web app's origins, the same list as `createAuthRoutes`' `allowedOrigins`. */
+  /**
+   * The web app's origins, the same list as `createAuthRoutes`' `allowedOrigins`:
+   * the pages that may use the session cookie, on a socket and (since rc.5)
+   * on an HTTP call, which is answered `FORBIDDEN` from any other `Origin`.
+   */
   readonly allowedOrigins: readonly AllowedOrigin[];
   /**
    * Accept a cookie-authenticated handshake that has no `Origin` header, for
    * native clients that keep cookies. Default `false`. A handshake whose
-   * `Origin` is not allowed is refused either way.
+   * `Origin` is not allowed is refused either way. HTTP calls do not need
+   * it: one without `Origin` is accepted (a browser sends `Origin` with every
+   * POST, so it is not a page's), unless `Sec-Fetch-Site` names another site.
    */
   readonly allowMissingOrigin?: boolean;
   /**
@@ -119,7 +131,7 @@ export type SessionAuthenticate<P extends Principal> = (
 
 interface Credential {
   readonly token: string;
-  /** True for a socket authenticated by the ambient session cookie. */
+  /** True for the ambient session cookie: a socket's, or an HTTP call's (finding F7.1). */
   readonly checkOrigin: boolean;
 }
 
@@ -137,7 +149,8 @@ function credentialOf(
 ): Credential | null {
   const { token } = request.auth;
   if (typeof token === "string" && token !== "") {
-    return { token, checkOrigin: false };
+    // The HTTP transport found it, and says whether it was the session cookie.
+    return { token, checkOrigin: request.transport === "http" && request.credential === "cookie" };
   }
   if (request.transport === "http") {
     return null;
@@ -157,6 +170,46 @@ function originAccepted(
     return origins.allowed(origin) !== null;
   }
   return allowMissing || headers["sec-fetch-site"] === "same-origin";
+}
+
+/**
+ * The same rule for an HTTP call that sends the session cookie. An `Origin`
+ * must be allowed, as on a socket. Without one it differs: the transport
+ * serves only POST, and a browser sends `Origin` with every POST (the Fetch
+ * standard; a socket's long-polling handshake is a GET, which a same-origin
+ * page or an `<img>` sends without one), so a call without it is not a
+ * page's: curl, or a server rendering a page with the user's forwarded
+ * cookie (`createServerCaller`). It is accepted, unless the browser's fetch
+ * metadata says another site sent it.
+ */
+function httpOriginAccepted(headers: IncomingHttpHeaders, origins: OriginAllowlist): boolean {
+  const { origin } = headers;
+  if (origin !== undefined) {
+    return origins.allowed(origin) !== null;
+  }
+  const site = headers["sec-fetch-site"];
+  return site === undefined || site === "same-origin";
+}
+
+/** Refuses a session cookie used from a page `allowedOrigins` does not list. */
+function checkCookieOrigin(
+  request: AuthenticateRequest,
+  origins: OriginAllowlist,
+  allowMissing: boolean,
+): void {
+  if (request.transport === "http") {
+    if (!httpOriginAccepted(request.headers, origins)) {
+      // FORBIDDEN, which the HTTP transport answers as it is: the session is fine, the page is not.
+      throw new QuickdrawError(
+        "FORBIDDEN",
+        "This page's origin may not use the session cookie; send it from an allowed origin or use a bearer token",
+      );
+    }
+    return;
+  }
+  if (!originAccepted(request.headers, origins, allowMissing)) {
+    throw refused("This page's origin may not use the session cookie on a socket");
+  }
 }
 
 function refused(message: string): QuickdrawError {
@@ -239,8 +292,8 @@ export function socketAuth(options: SocketAuthOptions): SessionAuthenticate<Prin
     if (credential === null) {
       return null;
     }
-    if (credential.checkOrigin && !originAccepted(request.headers, origins, allowMissing)) {
-      throw refused("This page's origin may not use the session cookie on a socket");
+    if (credential.checkOrigin) {
+      checkCookieOrigin(request, origins, allowMissing);
     }
     const session = await liveSession(keys, credential.token);
     if (session === null) {

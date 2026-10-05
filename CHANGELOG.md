@@ -2,6 +2,163 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0-rc.5] (unreleased)
+
+Round 6 of the fixes the quickdraw-chat migration found: the framework
+findings of the independent review of its finale (F7.1 to F7.8) and of its
+last migration card on `5.0.0-rc.4` (F6.1 to F6.8). No version moves until
+the release candidate is cut.
+
+### Security
+
+- Behavior change: an HTTP call (`POST /qd/...`) that authenticates with
+  the session cookie gets the Origin check sockets get. `socketAuth`
+  answers it `FORBIDDEN` (403) when its `Origin` is not in
+  `allowedOrigins`; rc.4 answered such a call, relying on its required
+  JSON content type and the app's CORS policy alone, so an app whose CORS
+  reflected any origin with credentials let another site's page call
+  methods as the user (F7.1). A call without `Origin` stays signed in: a
+  browser sends `Origin` with every POST, so it comes from curl or a
+  server rendering a page with the user's forwarded cookie
+  (`createServerCaller`), and is refused only when `Sec-Fetch-Site` names
+  another site. A bearer token needs no Origin. The transport tells any
+  `authenticate` where an HTTP call's token came from
+  (`HttpAuthenticateRequest.credential`: `"cookie"` or `"bearer"`, type
+  `HttpCredentialSource` on `./server`), and answers a
+  `QuickdrawError("FORBIDDEN")` thrown by `authenticate` as it is (other
+  throws stay `UNAUTHENTICATED`).
+
+### Tracked writes
+
+- A write that changed nothing is no longer recorded, so it sends no
+  entity frame, collection delta, topic change, `refreshEntry` or `affects`
+  hop (F7.2): an `updateMany`, `updateManyAndReturn` or `deleteMany` that
+  matched no row (in an array-form batch, an `updateMany` answering count
+  0); a `data` or an upsert's `update` with nothing to write (`{}`, or only
+  `undefined` values), for which Prisma writes nothing; and an `update`, an
+  `updateMany` or an upsert that found its row, when every column it sets
+  is an interested one (scope, `where`, junction, membership, owner and
+  access columns, read before the write) and holds the same value after.
+  Decided from the values the tracker holds: a write that sets any other
+  column is recorded as before, and the `@updatedAt` column Prisma moves on
+  such a write is not signalled, as no write's is on its own. Before, a
+  game that re-ensured a chat membership on every page load
+  (`upsert({ update: {} })`) re-sent the chat to every member's list and
+  made every watcher of the service's topic read again.
+- An upsert whose `update` sets nothing reads its row in the upsert's
+  place: `findUnique` with its `where` and selection answers it when the
+  row exists (one statement, as the upsert was, and fewer in SQL than
+  Prisma's own emulated upsert), and the upsert runs after the read only
+  when the row is missing (one statement more, recorded as a create that
+  may have found its row). In an array-form batch it is recorded as before.
+- An `updateMany` with nothing to write answers `{ count: 0 }` through the
+  tracked client too, as Prisma does (the rewrite to `updateManyAndReturn`
+  answered the number of rows matched).
+
+### Contracts and topics
+
+- A query watches its service's topic narrowed to some of its models:
+  `watch: { service: ["gameScore"] }` (type `ServiceModelsWatch`, in
+  `ServiceWatch`), invalidated only after a flush that wrote one of them
+  (F7.3, F6.1). `watch: "service"` was invalidated by a write to any model
+  the service lists in `writes`, so high scores were read again on every
+  chat-membership write of the same service. The names are the service's
+  `model` and its `writes`, by the client's model name; `defineContract`
+  checks the shape (a non-empty list of distinct names) and `defineService`
+  refuses a name that is neither, and still needs `watchAccess`.
+- Wire, additive (protocol v5 unchanged): a `qd:changed` frame of the
+  `service` topic carries `models`, the models whose writes changed it in
+  that flush (`modelKey` names: the service's model for its rows, `affects`
+  hops and scopes a deleted anchor closed; the junction's for a `via` link;
+  the written model for `writes`), sorted. The topic stays one per service.
+  A client ignores the field, or reads it: the JS client's narrowed watches
+  skip a frame naming none of their models, and treat a frame without
+  `models` (an rc.4 server, or the last frame of a watch the socket lost)
+  as naming all. `connection.watch({ ..., models })` is the React-free
+  form. `docs/protocol-v5.md` documents the field.
+
+### Access
+
+- A new development warning, `tiered-field-in-output` (F7.4): field tiers
+  strip only projection outputs (`"entity"`, a named projection,
+  `nullable(...)`, `listOf(...)`), so a method whose own output schema
+  names a key the contract tiers sends it to every caller its access
+  admits (quickdraw-chat's `updateUser` answered a user's `Admin`-only
+  `email` to a service-wide `Moderate` grant). When a dispatcher is made
+  (`createServer`, `createTestApp`), each such method and key is warned
+  about once, naming the fix (answer `"entity"` or a projection, or leave
+  the key out); `createTestApp({ strictWarnings: true })` throws it, so
+  the test app fails to start. The keys are the top-level keys of every
+  object the output may be (union branches and a list's rows included),
+  read from its JSON Schema; a Zod 3 output is not checked. Not warned: a
+  method whose access admits no caller below the field's level
+  (`{ service: "Admin" }` while the Admin bypass is on, `{ entry: L }` with
+  `L` at the field's level or above, both halves of a two-part form).
+  Behavior change for rc.4 apps: a strict test app over such a method no
+  longer starts until the method answers `"entity"`.
+
+### Client
+
+- `useJoin(...)` returns `retry()`: it runs the joining call again at once
+  on the current socket, after a refusal the user can act on; it does
+  nothing while there is no socket to join with or `enabled` is false,
+  since the next hello joins anyway (F6.3). Before, a refused first join
+  could be tried again only by toggling `enabled`.
+- An optimistic addition can outlive its refusal:
+  `cache.addItem(collection, scope, item, { onRefused: "keep" })` (and
+  `addEntity(row, { onRefused })`; types `AddItemOptions`, `OnRefused`).
+  A refused call then moves the item from `items` to the new
+  `useCollection().refused`: each a `RefusedItem` with `item`, `error`,
+  `dismiss()` and `retry()`, until the app dismisses it or `retry()` sends
+  the same call again (the update adds the item anew, `pending`; it
+  resolves once the call settles and never rejects, a second refusal
+  showing in `refused` again) (F6.4). The default stays `"drop"`.
+  `OverlayView` gains `refused(collection, scope)`.
+
+### Docs, skills and tools
+
+- The `quickdraw-new-service` skill starts with the Prisma model: add it,
+  then `bun run db:migrate --name <change>` and `bun run db:generate` in
+  `packages/db` (Prisma 7's `migrate dev` no longer generates the client);
+  six steps instead of five. Its server example imports with `.js`
+  (`"../../quickdraw.js"`), as the template's NodeNext API needs (TS2835
+  without it); the README project's test checks every relative import of
+  the skill's server examples carries `.js`. A NodeNext compile of the
+  example was not feasible: core's own sources, mapped into that project,
+  are bundler-resolved (F7.6).
+- The README and the client rule say a row that does not exist is
+  `FORBIDDEN` (fail closed, as a row the reader may not see; `NOT_FOUND`
+  only for a service-wide `Admin`), so a page tells "deleted" from "no
+  access" only while it holds the row (the `r` frame, `isRemoved`; a
+  collection's `removed`), and words a later refusal "not found or not
+  shared with you" (F7.8).
+- `quickdraw-docs --services` imports the services module with everything
+  it imports, through the same `tsx` fallback as the contracts module: a
+  workspace package whose `package.json` points at its build must be built
+  first, which the README now says, and the command's error names it when
+  a built file is missing (F6.7).
+- The generated Streams intro no longer says "starting from the latest
+  few": a subscriber starts from the stream's seed; a contract-only page
+  (no `--services`) says "none in the contract; the service may compute
+  one" instead of "none (default)", and a page made with `--services` says
+  "computed by the service when a socket subscribes" when it is (F6.8).
+- The GDScript client holds no feed after its `qd:stream:sub` was refused
+  on a live connection: `is_subscribed` is false and the feed is not
+  subscribed again after a reconnect; a refusal lost with the connection
+  keeps it. A held feed refused after a reconnect is forgotten and
+  reported through `revoked` (`reason` `"refused"`, with its `error`)
+  (F6.6). An app that copied `examples/godot/addons/quickdraw/quickdraw_client.gd`
+  copies it again.
+
+### Testing
+
+- `<mock.$Provider session={...}>` gives its subtree a session of its own,
+  laid over the mock's (`$session`) field by field: the real
+  `useQuickdraw()` and `usePresence`, and the mock's collection views and
+  admin grants, read it there, so the stories a Storybook docs page
+  renders side by side each show theirs (F6.2). An invalid one throws
+  while rendering, naming `$Provider`.
+
 ## [5.0.0-rc.4]
 
 Rounds 3, 4 and 5 of the fixes the quickdraw-chat migration found: round 3

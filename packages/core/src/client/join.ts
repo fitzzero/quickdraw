@@ -18,6 +18,11 @@
 //   with (before the first hello, while reconnecting) or `enabled` is false,
 //   `"joining"` while the call runs, then `"joined"` or `"error"`. `data` is
 //   what the last successful call returned, kept through a reconnect.
+// - `retry()` runs the call again at once on the current socket, for a
+//   join that was refused (finding F6.3 of the quickdraw-chat migration: a
+//   refused first join could be retried only by toggling `enabled`). It
+//   does nothing while there is no socket to join with or `enabled` is
+//   false: the next hello joins anyway.
 // - It never leaves a room: unmounting or disabling it stops the re-joins
 //   only. Leave with a call of its own, or let the server's `onRoomLeave`
 //   follow the socket's disconnect.
@@ -26,9 +31,18 @@
 // too, whose provider gives a hello per session.
 
 import { hashKey } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { QuickdrawError } from "../protocol/errors";
 import { DEFAULT_BACKOFF_MS, retryAfterOf } from "./backoff";
+import type { QuickdrawConnection } from "./connection";
 import { useConnectionState, useQuickdrawContext } from "./context";
 
 /**
@@ -68,6 +82,13 @@ export interface UseJoinResult<Output> {
   readonly data: Output | undefined;
   /** Why the call failed on the current socket; `null` otherwise. */
   readonly error: QuickdrawError | null;
+  /**
+   * Runs the call again now on the current socket: after a refusal the user
+   * can act on (the room was full, a grant was missing). Does nothing while
+   * there is no socket to join with (before the first hello, while
+   * reconnecting) or `enabled` is false, since the next hello joins anyway.
+   */
+  readonly retry: () => void;
 }
 
 /** The last join: the socket it ran on, and how it went. */
@@ -82,6 +103,76 @@ function failureOf(error: unknown): QuickdrawError {
   return error instanceof QuickdrawError
     ? error
     : new QuickdrawError("INTERNAL", error instanceof Error ? error.message : String(error));
+}
+
+/** What one run of `useJoin`'s effect reads of its latest render. */
+interface Latest<Input, Output> {
+  readonly input: Input;
+  readonly onJoined: ((data: Output) => void) | undefined;
+}
+
+/**
+ * Joins on every hello of `connection` from now on, with `RATE_LIMITED`
+ * tried again after its backoff on the socket it was refused on; `join`
+ * joins at once (`retry`), and `stop` ends it all.
+ */
+function startJoins<Input, Output>(
+  connection: QuickdrawConnection,
+  member: JoinMember<Input, Output>,
+  latest: { readonly current: Latest<Input, Output> },
+  setState: Dispatch<SetStateAction<JoinState<Output> | undefined>>,
+): { readonly join: () => void; readonly stop: () => void } {
+  let attempt = 0;
+  let stopped = false;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  const join = (): void => {
+    clearTimeout(retry);
+    attempt += 1;
+    const mine = attempt;
+    const socketId = connection.socket.id;
+    const current = (): boolean => !stopped && mine === attempt;
+    setState((previous) => ({ socketId, status: "joining", data: previous?.data, error: null }));
+    member.call(latest.current.input).then(
+      (data) => {
+        if (current()) {
+          setState({ socketId, status: "joined", data, error: null });
+          latest.current.onJoined?.(data);
+        }
+      },
+      (error: unknown) => {
+        if (!current()) {
+          return;
+        }
+        const failure = failureOf(error);
+        setState((previous) => ({
+          socketId,
+          status: "error",
+          data: previous?.data,
+          error: failure,
+        }));
+        if (failure.code === "RATE_LIMITED") {
+          retry = setTimeout(
+            () => {
+              // Only on the socket it was refused on: a new one's hello joins anyway.
+              if (current() && connection.socket.id === socketId) {
+                join();
+              }
+            },
+            retryAfterOf(failure) ?? DEFAULT_BACKOFF_MS,
+          );
+        }
+      },
+    );
+  };
+  const stopHellos = connection.onHello(join);
+  return {
+    join,
+    stop: () => {
+      stopped = true;
+      clearTimeout(retry);
+      stopHellos();
+    },
+  };
 }
 
 /**
@@ -104,64 +195,32 @@ export function useJoin<Input, Output>(
   const connected = useConnectionState(connection).status === "connected";
   const enabled = options.enabled !== false;
   const key = hashKey([input]);
-  const latest = useRef({ input, onJoined: options.onJoined });
+  const latest = useRef<Latest<Input, Output>>({ input, onJoined: options.onJoined });
   useEffect(() => {
     latest.current = { input, onJoined: options.onJoined };
   });
   const [state, setState] = useState<JoinState<Output> | undefined>(undefined);
+  // The join of the effect running now, for `retry`; none while disabled.
+  const running = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {
     if (!enabled) {
       return undefined;
     }
-    let attempt = 0;
-    let stopped = false;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    const join = (): void => {
-      clearTimeout(retry);
-      attempt += 1;
-      const mine = attempt;
-      const socketId = connection.socket.id;
-      const current = (): boolean => !stopped && mine === attempt;
-      setState((previous) => ({ socketId, status: "joining", data: previous?.data, error: null }));
-      member.call(latest.current.input).then(
-        (data) => {
-          if (current()) {
-            setState({ socketId, status: "joined", data, error: null });
-            latest.current.onJoined?.(data);
-          }
-        },
-        (error: unknown) => {
-          if (!current()) {
-            return;
-          }
-          const failure = failureOf(error);
-          setState((previous) => ({
-            socketId,
-            status: "error",
-            data: previous?.data,
-            error: failure,
-          }));
-          if (failure.code === "RATE_LIMITED") {
-            retry = setTimeout(
-              () => {
-                // Only on the socket it was refused on: a new one's hello joins anyway.
-                if (current() && connection.socket.id === socketId) {
-                  join();
-                }
-              },
-              retryAfterOf(failure) ?? DEFAULT_BACKOFF_MS,
-            );
-          }
-        },
-      );
-    };
-    const stop = connection.onHello(join);
+    const joins = startJoins(connection, member, latest, setState);
+    running.current = joins.join;
     return () => {
-      stopped = true;
-      clearTimeout(retry);
-      stop();
+      joins.stop();
+      if (running.current === joins.join) {
+        running.current = undefined;
+      }
     };
   }, [connection, member, enabled, key]);
+  const retry = useCallback((): void => {
+    const { status: socket, hello } = connection.getState();
+    if (socket === "connected" && hello !== null) {
+      running.current?.();
+    }
+  }, [connection]);
   const shown =
     enabled && connected && state !== undefined && state.socketId === connection.socket.id
       ? state
@@ -170,7 +229,7 @@ export function useJoin<Input, Output>(
   const error = shown?.error ?? null;
   const data = state?.data;
   return useMemo(
-    () => ({ status, isJoined: status === "joined", data, error }),
-    [status, data, error],
+    () => ({ status, isJoined: status === "joined", data, error, retry }),
+    [status, data, error, retry],
   );
 }

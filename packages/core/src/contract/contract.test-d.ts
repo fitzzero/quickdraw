@@ -35,6 +35,7 @@ import {
   type ProjectionOf,
   type RowSchema,
   type ScopeOf,
+  type ServiceWatch,
   type StandardSchemaV1,
   type StreamItemOf,
   type StreamName,
@@ -885,12 +886,31 @@ describe("streams, channels and events", () => {
         best: query({ input: z.undefined(), output: z.number(), watch: "service" }),
       },
     });
-    expectTypeOf(scores.methods.best.watch).toEqualTypeOf<"service" | undefined>();
+    expectTypeOf(scores.methods.best.watch).toEqualTypeOf<ServiceWatch | undefined>();
     query({
       input: z.undefined(),
       output: z.number(),
-      // @ts-expect-error -- a watch is "service" or { collection, scope }
+      // @ts-expect-error -- a watch is "service", { service: [models] } or { collection, scope }
       watch: "all",
+    });
+  });
+
+  test("a query watches its service's topic narrowed to some of its models (finding F7.3)", () => {
+    const game = defineContract("gameService", {
+      methods: {
+        highScores: query({
+          input: z.undefined(),
+          output: z.number(),
+          watch: { service: ["gameScore"] },
+        }),
+      },
+    });
+    expectTypeOf(game.methods.highScores.watch).toEqualTypeOf<ServiceWatch | undefined>();
+    query({
+      input: z.undefined(),
+      output: z.number(),
+      // @ts-expect-error -- the models are a list
+      watch: { service: "gameScore" },
     });
   });
 

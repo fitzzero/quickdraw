@@ -6,7 +6,10 @@
 // - An addition is a provisional item of one collection scope: the fields
 //   the update gave, with its own id, or a provisional `qd:new:<n>` one.
 //   It shows at once, flagged `pending` while its call is in flight; a
-//   refused call drops it.
+//   refused call drops it, unless it was added with `onRefused: "keep"`
+//   (finding F6.4 of the quickdraw-chat migration): then it leaves the
+//   items and stays as a refused one, with the call's error, until the app
+//   dismisses it or sends the call again (`refused`, `dismiss`).
 // - The reply names the server's id (`data.id`): the item takes it, and the
 //   reply's values for the fields it has. A reply that names no id drops
 //   it, as does one naming an id the scope already holds.
@@ -20,6 +23,7 @@
 
 import type { QueryClient } from "@tanstack/react-query";
 import type { CollectionDef } from "../contract/collections";
+import type { QuickdrawError } from "../protocol/errors";
 import { isRecord } from "../protocol/guards";
 import { collectionKey } from "./keys";
 
@@ -36,6 +40,36 @@ export interface AddedItem {
   readonly item: AddedRow;
   /** True while the call is in flight. */
   readonly pending: boolean;
+}
+
+/** What a refused call does with an item its update added (`cache.addItem(..., { onRefused })`). */
+export type OnRefused = "drop" | "keep";
+
+/** Options of `cache.addItem` and `cache.addEntity`. */
+export interface AddItemOptions {
+  /**
+   * `"keep"`: when the server refuses the call, the item leaves the scope's
+   * items and stays in `useCollection().refused` with the error, until the
+   * app dismisses it or sends the call again (a chat's failed message, with
+   * "retry"). Default `"drop"`: it goes with the refusal.
+   */
+  readonly onRefused?: OnRefused;
+}
+
+/** An added item whose call was refused, kept by `onRefused: "keep"` (`Additions.refused`). */
+export interface RefusedAddition {
+  readonly item: AddedRow;
+  /** Why the call was refused. */
+  readonly error: QuickdrawError;
+  /** The addition itself, for `dismiss` and to send the call again. */
+  readonly addition: Addition;
+}
+
+/** What a refused call left on a kept addition: its error, and how to send the call again. */
+export interface Refusal {
+  readonly error: QuickdrawError;
+  /** Sends the same call again (the update runs again and adds its items anew). */
+  readonly retry: () => Promise<unknown>;
 }
 
 /** What a scope's new state says about the finished additions to it (`settleAdditions`). */
@@ -61,6 +95,10 @@ export interface Addition {
   finished: number | undefined;
   /** When a finished addition is dropped if nothing ended it before (`Date.now()` time). */
   expiresAt: number | undefined;
+  /** Added with `onRefused: "keep"`: a refused call keeps it, as refused. */
+  readonly keep: boolean;
+  /** Set when its call was refused and it was kept: shown in `refused`, never in the items. */
+  refusal: Refusal | undefined;
 }
 
 /** The additions of one overlay store. */
@@ -68,7 +106,13 @@ export interface Additions {
   /** How many it holds. */
   readonly size: number;
   /** Opens an addition of a call in flight to scope `scope` of `collection`; the oldest go past 1,000. */
-  add(service: string, collection: string, scope: string, item: AddedRow): Addition;
+  add(service: string, collection: string, scope: string, item: AddedRow, keep?: boolean): Addition;
+  /**
+   * The call of `additions` was refused: those added with `onRefused:
+   * "keep"` stay, refused with `refusal`; returns the others, for the
+   * caller to drop (`remove`).
+   */
+  refuse(additions: readonly Addition[], refusal: Refusal): Addition[];
   /**
    * Finishes the additions of a call that succeeded with `data`, at the
    * store's clock `clock`, until `expiresAt`; returns those it dropped (the
@@ -84,8 +128,10 @@ export interface Additions {
   remove(additions: readonly Addition[]): Addition[];
   /** Drops the finished additions to one scope that `evidence` accounts for; returns them. */
   settle(service: string, collection: string, scope: string, evidence: ScopeEvidence): Addition[];
-  /** The items added to a scope, oldest first. */
+  /** The items added to a scope and shown in it, oldest first: not those refused. */
   added(service: string, collection: string, scope: string): readonly AddedItem[];
+  /** The items added to a scope whose call was refused and that were kept, oldest first. */
+  refused(service: string, collection: string, scope: string): readonly RefusedAddition[];
   /** Every addition, oldest scope first. */
   all(): Addition[];
   clear(): void;
@@ -95,6 +141,8 @@ export interface Additions {
 const MAX_ADDITIONS = 1000;
 
 const NO_ADDITIONS: readonly AddedItem[] = Object.freeze([]);
+
+const NO_REFUSALS: readonly RefusedAddition[] = Object.freeze([]);
 
 function scopeKey(service: string, collection: string, scope: string): string {
   return `${service}\u0000${collection}\u0000${scope}`;
@@ -180,6 +228,37 @@ function accounted(addition: Addition, evidence: ScopeEvidence): boolean {
   );
 }
 
+/** Keeps the additions made with `onRefused: "keep"` as refused with `refusal`; returns the others. */
+function refuseAdditions(additions: readonly Addition[], refusal: Refusal): Addition[] {
+  const dropped: Addition[] = [];
+  for (const addition of additions) {
+    if (addition.keep) {
+      addition.refusal = refusal;
+    } else {
+      dropped.push(addition);
+    }
+  }
+  return dropped;
+}
+
+/** The items a scope's additions show: those not refused, flagged pending while their call is in flight. */
+function shownOf(held: readonly Addition[] | undefined): readonly AddedItem[] {
+  const shown = held?.filter((addition) => addition.refusal === undefined) ?? [];
+  return shown.length === 0
+    ? NO_ADDITIONS
+    : shown.map((addition) => ({ item: addition.item, pending: addition.finished === undefined }));
+}
+
+/** A scope's refused additions, with their errors. */
+function refusedOf(held: readonly Addition[] | undefined): readonly RefusedAddition[] {
+  const refused = (held ?? []).flatMap((addition): RefusedAddition[] =>
+    addition.refusal === undefined
+      ? []
+      : [{ item: addition.item, error: addition.refusal.error, addition }],
+  );
+  return refused.length === 0 ? NO_REFUSALS : refused;
+}
+
 /** Creates the additions of the overlay store of `queryClient`, whose collection states it reads. */
 export function createAdditions(queryClient: QueryClient): Additions {
   const byScope = new Map<string, Addition[]>();
@@ -203,7 +282,7 @@ export function createAdditions(queryClient: QueryClient): Additions {
     get size() {
       return size;
     },
-    add(service, collection, scope, item) {
+    add(service, collection, scope, item, keep = false) {
       const key = scopeKey(service, collection, scope);
       const addition: Addition = {
         key,
@@ -213,6 +292,8 @@ export function createAdditions(queryClient: QueryClient): Additions {
         item,
         finished: undefined,
         expiresAt: undefined,
+        keep,
+        refusal: undefined,
       };
       byScope.set(key, [...(byScope.get(key) ?? []), addition]);
       size += 1;
@@ -238,21 +319,17 @@ export function createAdditions(queryClient: QueryClient): Additions {
       return remove(ended);
     },
     remove,
+    refuse: refuseAdditions,
     settle(service, collection, scope, evidence) {
       const held = byScope.get(scopeKey(service, collection, scope));
       return held === undefined
         ? []
         : remove(held.filter((addition) => accounted(addition, evidence)));
     },
-    added(service, collection, scope) {
-      const held = byScope.get(scopeKey(service, collection, scope));
-      return held === undefined
-        ? NO_ADDITIONS
-        : held.map((addition) => ({
-            item: addition.item,
-            pending: addition.finished === undefined,
-          }));
-    },
+    added: (service, collection, scope) =>
+      shownOf(byScope.get(scopeKey(service, collection, scope))),
+    refused: (service, collection, scope) =>
+      refusedOf(byScope.get(scopeKey(service, collection, scope))),
     all,
     clear() {
       byScope.clear();

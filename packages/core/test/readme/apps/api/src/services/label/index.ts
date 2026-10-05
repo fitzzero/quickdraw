@@ -1,6 +1,7 @@
 import { crud, inherit } from "@fitzzero/quickdraw-core/server";
 import { labelContract, projectContract } from "@project/shared";
-import { qd } from "../../quickdraw";
+// `.js`: the template's API compiles with NodeNext, which wants the extension on a relative import
+import { qd } from "../../quickdraw.js";
 
 export const labelService = qd.defineService(labelContract, {
   model: "label",

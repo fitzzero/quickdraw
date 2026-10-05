@@ -153,6 +153,9 @@ func _reconnected(client) -> void:
 	check(await until(func() -> bool: return moved(3) and seeds.size() == 2), "a move after joining again is heard")
 	check(not moved(9) and not moved(8), "the moves from outside the world were dropped")
 	check(seeds[1].size() == 1 and int(seeds[1][0].n) == 1, "the stream was subscribed again, its seed the tick before")
+	var refused: Dictionary = await client.subscribe_stream("gameService", "nowhere")
+	check(not refused.ok and refused.e.code == "NOT_FOUND", "a stream the service lacks is refused")
+	check(not client.is_subscribed("gameService", "nowhere") and client.is_subscribed("gameService", "ticks"), "a refused subscribe holds no feed")
 	client.close()
 
 

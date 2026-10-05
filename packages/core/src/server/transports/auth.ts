@@ -15,6 +15,9 @@ import { modelKey } from "../storage";
 import type { MaybePromise, Principal } from "../types";
 import type { FlushSink } from "../uow/flushSink";
 import { ANY_FIELD } from "../uow/types";
+import type { HttpCredentialSource } from "./body";
+
+export type { HttpCredentialSource };
 
 /** A principal's service-wide grants by service name: `{ taskService: "Admin" }`. */
 export type ServiceGrants = Readonly<Record<string, AccessLevel>>;
@@ -40,6 +43,14 @@ export interface SocketAuthenticateRequest extends AuthenticateRequestBase {
 export interface HttpAuthenticateRequest extends AuthenticateRequestBase {
   readonly transport: "http";
   readonly req: IncomingMessage;
+  /**
+   * Where `auth.token` came from (finding F7.1): `"cookie"`, the session
+   * cookie, which a browser sends with a request any page makes, so an
+   * `authenticate` that accepts it checks the request's `Origin` as
+   * `socketAuth` does; `"bearer"`, an `Authorization: Bearer` header, which
+   * a page sends only on purpose. Absent without a token.
+   */
+  readonly credential?: HttpCredentialSource;
 }
 
 /** What `authenticate` is asked about: a socket connecting, or an HTTP call. */
@@ -65,6 +76,10 @@ export interface ServerAuth<P extends Principal = Principal> {
    * caller in anonymously, so only `"public"` methods pass. Throw a
    * `QuickdrawError("UNAUTHENTICATED", ...)` for a refusal that is the
    * caller's doing (it logs at debug; anything else thrown logs at error).
+   * On an HTTP call a thrown `QuickdrawError("FORBIDDEN", ...)` is answered
+   * as it is, with 403 (logged at debug): a credential the request may not
+   * use from where it came, as `socketAuth` answers a session cookie sent
+   * from a page outside `allowedOrigins`.
    */
   readonly authenticate?: (request: AuthenticateRequest) => MaybePromise<AuthenticateResult<P>>;
   /**
@@ -120,6 +135,15 @@ export function socketSessionOf(socket: object): string | undefined {
  */
 export function isRefusal(error: unknown): boolean {
   return error instanceof QuickdrawError && error.code === "UNAUTHENTICATED";
+}
+
+/**
+ * True for an HTTP call's refusal that `authenticate` made on purpose and
+ * the transport answers as it is: a `QuickdrawError` with code `FORBIDDEN`
+ * (a session cookie sent from a page `socketAuth` does not allow).
+ */
+export function isForbiddenCredential(error: unknown): error is QuickdrawError {
+  return error instanceof QuickdrawError && error.code === "FORBIDDEN";
 }
 
 /** True when `value` has a principal's shape: an object with a non-empty string `userId`. */

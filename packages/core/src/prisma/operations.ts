@@ -35,6 +35,30 @@
 // ids, an `update`'s old values) runs on the root client, outside the batch,
 // and misses what the batch's earlier statements changed: a development
 // warning says so once per model and operation.
+//
+// A write that changed nothing records nothing (finding F7.2 of the
+// quickdraw-chat review), so no frame, delta, topic change, `refreshEntry`
+// or `affects` hop follows it. It is decided from what the hook holds, and
+// where it holds too little the write is recorded as before:
+//
+// - a write that matched no row (`updateMany`, `updateManyAndReturn` or
+//   `deleteMany`; in a batch, an `updateMany` answering count 0);
+// - a `data` (or an upsert's `update`) with nothing to write, `{}` or only
+//   `undefined` values, for which Prisma writes nothing at all;
+// - an `update`, an `updateMany` and an upsert that found its row, when
+//   every column `data` sets is an interested one, read before the write,
+//   and holds the same value after it. Prisma still moves an `@updatedAt`
+//   column on such a write; like every `@updatedAt` column, it is not a
+//   field the write set, and is not signalled. A write that sets any other
+//   column is recorded: its old value was never read.
+//
+// An upsert whose `update` sets nothing changes a row only when it creates
+// one, and nothing it returns tells which it did. Its read replaces it:
+// `findUnique` with its `where` and selection answers for a row that exists
+// (one statement, as the upsert was), and only a missing row runs the upsert
+// after it, recorded as a create (one statement more). In a batch, where no
+// operation can be replaced, it is still recorded as a create that may have
+// found its row.
 
 import { quietly } from "../server/devWarnings";
 import type { WriteRecord } from "../server/uow/types";
@@ -147,6 +171,116 @@ function rowsOf(result: unknown): Row[] {
     return result.filter(isRecord);
   }
   return isRecord(result) ? [result] : [];
+}
+
+/** The keys of `data` Prisma writes: those whose value is not `undefined`. */
+function writtenKeys(data: unknown): string[] {
+  return isRecord(data)
+    ? Object.entries(data)
+        .filter(([, value]) => value !== undefined)
+        .map(([key]) => key)
+    : [];
+}
+
+/** True for a `data` Prisma writes nothing for: an object with no key whose value is set. */
+export function writesNothing(data: unknown): boolean {
+  return isRecord(data) && writtenKeys(data).length === 0;
+}
+
+/** The text of a value object such as Prisma's `Decimal`, or `undefined` when it has none of its own. */
+function textOf(value: object): string | undefined {
+  const { toString } = value as { readonly toString?: unknown };
+  return typeof toString === "function" && toString !== Object.prototype.toString
+    ? String(value)
+    : undefined;
+}
+
+/**
+ * Whether two values a column held are the same: primitives, `Date`s by
+ * their time, bytes, JSON values whatever their key order, and value objects
+ * of one class (Prisma's `Decimal`) by their text. Anything else counts as
+ * different, so a write that cannot be compared is recorded.
+ */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) {
+    return true;
+  }
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) {
+    return false;
+  }
+  if (a instanceof Date || b instanceof Date) {
+    return a instanceof Date && b instanceof Date && a.getTime() === b.getTime();
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && sameItems(a, b);
+  }
+  if (ArrayBuffer.isView(a) || ArrayBuffer.isView(b)) {
+    return a instanceof Uint8Array && b instanceof Uint8Array && sameItems(a, b);
+  }
+  return sameObject(a, b);
+}
+
+function sameItems(a: ArrayLike<unknown>, b: ArrayLike<unknown>): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    if (!sameValue(a[index], b[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Two objects: a JSON object by its keys whatever their order, a value object by its text. */
+function sameObject(a: object, b: object): boolean {
+  const prototype = Object.getPrototypeOf(a) as unknown;
+  if (prototype !== Object.getPrototypeOf(b)) {
+    return false;
+  }
+  if (prototype !== Object.prototype && prototype !== null) {
+    const text = textOf(a);
+    return text !== undefined && text === textOf(b);
+  }
+  const left = a as Values;
+  const right = b as Values;
+  const keys = Object.keys(left);
+  return (
+    keys.length === Object.keys(right).length &&
+    keys.every((key) => Object.hasOwn(right, key) && sameValue(left[key], right[key]))
+  );
+}
+
+/**
+ * True when an update recorded as `write` certainly changed no column: every
+ * column `data` sets is an interested one, whose value was read before the
+ * write and is the same after it.
+ */
+function unchanged(op: Operation, data: unknown, write: WriteRecord): boolean {
+  const { before, after } = write;
+  const keys = writtenKeys(data);
+  if (before === undefined || after === undefined || keys.length === 0) {
+    return false;
+  }
+  const interest = op.runtime.interestOf(op.model);
+  return keys.every(
+    (key) =>
+      interest.includes(key) &&
+      Object.hasOwn(before, key) &&
+      Object.hasOwn(after, key) &&
+      sameValue(before[key], after[key]),
+  );
+}
+
+/** The updates of `writes` that changed a column, or may have: see {@link unchanged}. */
+function changedOnly(op: Operation, data: unknown, writes: readonly WriteRecord[]): WriteRecord[] {
+  return writes.filter((write) => !unchanged(op, data, write));
+}
+
+/** Counts a statement the hook runs past itself (`op.query`), and hands it to the development checks. */
+function countOwn(op: Operation, operation: string, args: Args): void {
+  op.runtime.tracker.countStatement();
+  op.runtime.tracker.observe({ model: op.model, operation, args });
 }
 
 function warnNested(op: Operation, data: unknown): void {
@@ -317,7 +451,55 @@ async function create(op: Operation): Promise<unknown> {
   return result;
 }
 
+/** The selection of a read that returns what `args` (an upsert's) would: its `select`, `include` and `omit`. */
+function selectionOf(args: Args): Args {
+  return Object.fromEntries(
+    ["select", "include", "omit"]
+      .filter((key) => args[key] !== undefined)
+      .map((key) => [key, args[key]]),
+  );
+}
+
+/**
+ * An upsert whose `update` sets nothing (see the top of this file): the
+ * read that tells whether its row exists takes its place, and answers it
+ * when the row is there; only a missing row runs the upsert.
+ */
+async function upsertWithoutUpdate(op: Operation): Promise<unknown> {
+  warnNested(op, op.args.create);
+  const { args, added } = widen(op.args, ["id", ...op.runtime.interestOf(op.model)]);
+  let found: Row | null;
+  try {
+    // Through the hook, which counts it as this call's one statement.
+    found = await op.runtime
+      .delegate(op.model)
+      .findUnique({ where: op.args.where, ...selectionOf(args) });
+  } catch (error) {
+    if (!isValidationError(error)) {
+      throw error;
+    }
+    // The hook counted the read that failed; the upsert runs in its place.
+    return runUntracked(op, "reading its id failed");
+  }
+  if (found !== null) {
+    // Prisma writes nothing to a row that exists when `update` sets nothing: no change.
+    return strip(found, added);
+  }
+  countOwn(op, op.operation, op.args);
+  const { result, rows } = await runWidened(op);
+  // Created, unless another transaction created the row in between: then it may have existed.
+  const writes = writesOf(op, "create", rows, keysOf(op.args.create));
+  record(
+    op,
+    writes.map((write) => ({ ...write, mayHaveExisted: true as const })),
+  );
+  return result;
+}
+
 async function upsert(op: Operation): Promise<unknown> {
+  if (writesNothing(op.args.update) && !op.runtime.tracker.inBatch()) {
+    return upsertWithoutUpdate(op);
+  }
   warnNested(op, op.args.create);
   warnNested(op, op.args.update);
   const touched = touchedInterest(op, op.args.update);
@@ -328,7 +510,8 @@ async function upsert(op: Operation): Promise<unknown> {
       : await readBefore(op, op.args.where, touched, { unique: true });
   const { result, rows } = await runWidened(op);
   if (before !== undefined && before.size > 0) {
-    record(op, writesOf(op, "update", rows, keysOf(op.args.update), before));
+    const writes = writesOf(op, "update", rows, keysOf(op.args.update), before);
+    record(op, changedOnly(op, op.args.update, writes));
   } else if (before === undefined) {
     // Nothing read: the row may have existed, and been updated.
     const writes = writesOf(op, "create", rows, keysOf([op.args.create, op.args.update]));
@@ -343,6 +526,10 @@ async function upsert(op: Operation): Promise<unknown> {
 }
 
 async function update(op: Operation): Promise<unknown> {
+  if (writesNothing(op.args.data)) {
+    // Prisma only reads the row (and answers NOT_FOUND without one): nothing to record.
+    return op.query(op.args);
+  }
   warnNested(op, op.args.data);
   const touched = touchedInterest(op, op.args.data);
   const before =
@@ -350,7 +537,8 @@ async function update(op: Operation): Promise<unknown> {
       ? undefined
       : await readBefore(op, op.args.where, touched, { unique: true });
   const { result, rows } = await runWidened(op);
-  record(op, writesOf(op, "update", rows, keysOf(op.args.data), before));
+  const writes = writesOf(op, "update", rows, keysOf(op.args.data), before);
+  record(op, changedOnly(op, op.args.data, writes));
   return result;
 }
 
@@ -367,13 +555,19 @@ async function createManyAndReturn(op: Operation): Promise<unknown> {
 }
 
 async function updateManyAndReturn(op: Operation): Promise<unknown> {
+  if (writesNothing(op.args.data)) {
+    // Prisma only reads the rows `where` matches: nothing to record.
+    return op.query(op.args);
+  }
   const touched = touchedInterest(op, op.args.data);
   const before =
     touched.length === 0
       ? undefined
       : await readBefore(op, op.args.where, touched, { unique: false });
   const { result, rows } = await runWidened(op);
-  record(op, writesOf(op, "update", rows, keysOf(op.args.data), before));
+  // Rows it matched none of record nothing; neither do rows it set to what they held.
+  const writes = writesOf(op, "update", rows, keysOf(op.args.data), before);
+  record(op, changedOnly(op, op.args.data, writes));
   return result;
 }
 
@@ -401,10 +595,17 @@ async function createManyInBatch(op: Operation): Promise<unknown> {
  * recorded, which may be more rows than were updated.
  */
 async function updateManyInBatch(op: Operation): Promise<unknown> {
+  if (writesNothing(op.args.data)) {
+    return op.query(op.args);
+  }
   const before = await readBefore(op, op.args.where, touchedInterest(op, op.args.data), {
     unique: false,
   });
   const result = await op.query(op.args);
+  // Only a count comes back: 0 means it updated nothing, whatever the read found.
+  if (isRecord(result) && result.count === 0) {
+    return result;
+  }
   const rows = [...before.keys()].map((id) => ({ id }));
   record(op, writesOf(op, "update", rows, keysOf(op.args.data), before));
   return result;
@@ -443,6 +644,10 @@ function updateMany(op: Operation): Promise<unknown> {
   if (op.runtime.tracker.inBatch()) {
     return updateManyInBatch(op);
   }
+  if (writesNothing(op.args.data)) {
+    // As it is: Prisma writes nothing and answers count 0, which the rewrite would not.
+    return op.query(op.args);
+  }
   return rewrite(op, (delegate, args) => delegate.updateManyAndReturn(args));
 }
 
@@ -479,13 +684,24 @@ export const WRITE_OPERATIONS: Readonly<Record<string, (op: Operation) => Promis
     deleteMany,
   });
 
-const DELEGATING_OPERATIONS: ReadonlySet<string> = new Set(["createMany", "updateMany"]);
-
 /**
- * Whether a tracked operation hands its work to another one (`createMany`
- * and `updateMany` outside a batch), which then counts the statement: the
- * hook counts every other operation itself.
+ * Whether a tracked operation hands its work to another one, which then
+ * counts the statement (`createMany` and `updateMany` outside a batch, an
+ * `upsert` whose `update` sets nothing outside a batch: its read): the hook
+ * counts every other operation itself.
  */
-export function delegates(runtime: Runtime, operation: string): boolean {
-  return DELEGATING_OPERATIONS.has(operation) && !runtime.tracker.inBatch();
+export function delegates(runtime: Runtime, operation: string, args: Args | undefined): boolean {
+  if (runtime.tracker.inBatch()) {
+    return false;
+  }
+  switch (operation) {
+    case "createMany":
+      return true;
+    case "updateMany":
+      return !writesNothing(args?.data);
+    case "upsert":
+      return writesNothing(args?.update);
+    default:
+      return false;
+  }
 }

@@ -8,9 +8,9 @@ import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { QuickdrawError, listOf, nullable } from "../index";
-import { deferred } from "../server/__tests__/fixtures";
+import { deferred, type Deferred } from "../server/__tests__/fixtures";
 import { collectionKey } from "./keys";
-import { overlaysOf, resetOverlays, settleAdditions } from "./optimistic";
+import { overlaysOf, resetOverlays, settleAdditions, storeOf } from "./optimistic";
 import { mutateOptimistically, type OptimisticTarget } from "./optimisticCall";
 import { rowShapeOf, showRows } from "./overlayRows";
 
@@ -327,6 +327,53 @@ describe("an added item", () => {
     reply.reject(new QuickdrawError("VALIDATION", "No title"));
     await expect(done).rejects.toMatchObject({ code: "VALIDATION" });
     expect(scopeOf(client)()).toEqual([]);
+  });
+
+  it('with onRefused: "keep", stays refused with its error until dismissed or sent again (finding F6.4)', async () => {
+    const client = new QueryClient();
+    const view = () => overlaysOf(client).view("taskService");
+    const replies: Deferred<unknown>[] = [];
+    const sendNext = () => {
+      const reply = deferred<unknown>();
+      replies.push(reply);
+      return reply.promise;
+    };
+    const done = mutateOptimistically(
+      client,
+      board,
+      (_input, cache) => cache.addItem("board", "p1", { title: "Draft" }, { onRefused: "keep" }),
+      { title: "Draft" },
+      sendNext,
+    );
+    replies[0]?.reject(new QuickdrawError("RATE_LIMITED", "Slow down"));
+    await expect(done).rejects.toMatchObject({ code: "RATE_LIMITED" });
+    // Out of the items, and kept as refused with the call's error.
+    expect(view().added("board", "p1")).toEqual([]);
+    const [refused] = view().refused("board", "p1");
+    expect(refused).toMatchObject({ item: { title: "Draft" }, error: { code: "RATE_LIMITED" } });
+    // Sent again: the update adds it anew, pending, and the reply settles it.
+    storeOf(client).dismiss(refused?.addition as never);
+    const again = refused?.addition.refusal?.retry();
+    expect(view().refused("board", "p1")).toEqual([]);
+    expect(view().added("board", "p1")).toEqual([
+      { item: expect.objectContaining({ title: "Draft" }), pending: true },
+    ]);
+    replies[1]?.resolve({ id: "t9", title: "Draft" });
+    await again;
+    expect(view().added("board", "p1")).toEqual([
+      { item: { id: "t9", title: "Draft" }, pending: false },
+    ]);
+    // A bad option is refused as the update runs.
+    await expect(
+      mutateOptimistically(
+        client,
+        board,
+        (_input, cache) =>
+          cache.addItem("board", "p1", { title: "x" }, { onRefused: "maybe" as "keep" }),
+        {},
+        sendNext,
+      ),
+    ).rejects.toThrow('addItem: onRefused is "keep" or "drop"');
   });
 
   it("takes the id and the values the reply names, and is no longer pending", async () => {

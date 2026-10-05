@@ -10,6 +10,7 @@ import type { AnyContract } from "../contract/defineContract";
 import { isAccessPolicy, type AnyAccessPolicy } from "./access/policy";
 import type { WatchAccess } from "./access/types";
 import type { AffectsLink } from "./service";
+import { modelKey } from "./storage";
 
 type Fail = (message: string) => never;
 
@@ -135,4 +136,37 @@ export function checkServiceData(definition: UnknownRecord, fail: Fail): Service
     versionColumn,
     watchAccess: checkWatchAccess(definition.watchAccess, fail),
   };
+}
+
+/**
+ * `watch: { service: [models] }` names models whose writes change the
+ * service's topic: its `model` and those in its `writes` (finding F7.3).
+ * Any other name could never match, so the query would never be told.
+ */
+export function checkWatchedModels(
+  contract: AnyContract,
+  name: string,
+  models: unknown,
+  data: ServiceData,
+  fail: Fail,
+): void {
+  const own = [data.model, ...data.writes].filter((model) => model !== undefined).map(modelKey);
+  const listed = Array.isArray(models) ? models : [];
+  const valid =
+    listed.length > 0 &&
+    listed.every((model) => typeof model === "string" && model !== "") &&
+    new Set(listed.map((model) => modelKey(String(model)))).size === listed.length;
+  if (!valid) {
+    fail(
+      `method "${name}": watch { service } lists the models of the service it watches: { service: ["gameScore"] }`,
+    );
+  }
+  for (const model of listed as string[]) {
+    if (!own.includes(modelKey(model))) {
+      const known = own.length === 0 ? "none" : own.map((key) => `"${key}"`).join(", ");
+      fail(
+        `method "${name}" watches the model "${model}", which ${contract.name} neither declares as its model nor lists in writes (its models: ${known})`,
+      );
+    }
+  }
 }

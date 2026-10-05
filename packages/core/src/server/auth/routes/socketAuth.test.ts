@@ -509,7 +509,7 @@ describe("an HTTP call", () => {
         method: "POST",
         headers: { "content-type": "application/json", ...headers },
       });
-    // No Origin check on HTTP: its JSON content type needs a CORS preflight instead.
+    // Without Origin the call is not a page's (a browser sends Origin with every POST).
     const byCookie = await whoami({ cookie: session });
     expect(await byCookie.json()).toEqual({
       ok: true,
@@ -517,6 +517,30 @@ describe("an HTTP call", () => {
     });
     const bearer = { authorization: `Bearer ${session.slice("session=".length)}` };
     expect(await (await whoami(bearer)).json()).toMatchObject({ ok: true });
+    // The cookie from a page: its Origin must be allowed, as on a socket (finding F7.1).
+    expect(await (await whoami({ cookie: session, origin: APP_ORIGIN })).json()).toMatchObject({
+      ok: true,
+    });
+    expect(
+      await (await whoami({ cookie: session, origin: "http://pr.preview.test" })).json(),
+    ).toMatchObject({
+      ok: true,
+    });
+    // An https: page's call reads only __Host-session, so it carries that one there.
+    const hostOnly = `__Host-session=${session.slice("session=".length)}`;
+    for (const [origin, cookie] of [
+      ["http://evil.test", session],
+      ["https://evil.test", hostOnly],
+      ["null", session],
+    ] as const) {
+      const elsewhere = await whoami({ cookie, origin });
+      expect(elsewhere.status, origin).toBe(403);
+      expect(await elsewhere.json()).toMatchObject({ ok: false, e: { code: "FORBIDDEN" } });
+    }
+    expect(
+      (await whoami({ ...bearer, origin: "https://evil.test" })).status,
+      "a bearer token needs no Origin",
+    ).toBe(200);
 
     await post(`${url}/auth/logout`, { cookie: session });
     for (const headers of [{ cookie: session }, bearer]) {

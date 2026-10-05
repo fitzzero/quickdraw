@@ -138,9 +138,11 @@ run("prefer-kit", {
     },
     // the search kit
     {
-      name: "a search beside the search kit's handlers",
+      name: "a kit's spread enables only what its access literal names: other methods stay the app's",
       filename: SERVICE,
-      code: service(`...search.handlers(contract, { access: "authenticated" }), search: ${LIST}`),
+      code: service(
+        `...crud.handlers(contract, { access: { get: { entry: "Read" } } }), listTasks: ${LIST}, createTask: ${CREATE}`,
+      ),
     },
     {
       name: "a search method named for what it finds",
@@ -178,9 +180,13 @@ run("prefer-kit", {
     },
     // the admin kit
     {
-      name: "admin methods beside the admin kit's handlers",
+      name: "a hand-written method beside a duplicate's kit, with a reason",
       filename: SERVICE,
-      code: service(`...admin.handlers(contract), adminList: ${LIST}`),
+      code: service(`
+        ...admin.handlers(contract),
+        // quickdraw: hand-written because it lists archived tasks too
+        adminList: ${LIST},
+      `),
     },
     {
       name: "an admin method with a reason",
@@ -197,6 +203,44 @@ run("prefer-kit", {
     },
   ],
   invalid: [
+    // a duplicate of what a spread kit enables (finding F7.7)
+    {
+      name: "a hand-written getNote beside a crud kit whose access serves get",
+      filename: SERVICE,
+      code: service(
+        `...crud.handlers(noteContract, { access: { get: { entry: "Read" }, create: "authenticated", delete: { entry: "Admin" } } }), getNote: ${GET}, clone: ${GET}`,
+        "note",
+      ),
+      errors: [
+        {
+          message:
+            "`getNote` is written by hand beside `...crud.handlers(contract, { access })`, which already serves the read/write kit's `get` here: the kit's checks access on every row it touches, pages and stays live. Call `get` and remove this one, or, if it must be hand-written, say why in a `// quickdraw: hand-written because ...` comment above it.",
+        },
+      ],
+    },
+    {
+      name: "a method overriding the one a spread kit serves, under the kit's import alias",
+      filename: SERVICE,
+      code: `
+        import { crud as crudKit, search, admin } from "@fitzzero/quickdraw-core/server";
+        export const s = qd.defineService(contract, {
+          model: "task",
+          methods: {
+            ...crudKit.handlers(contract, { access: { get: { entry: "Read" } } }),
+            get: ${GET},
+            ...search.handlers(contract, { access: "authenticated" }),
+            search: ${LIST},
+            ...admin.handlers(contract),
+            adminList: ${LIST},
+          },
+        });
+      `,
+      errors: [
+        { messageId: "duplicatesKit", line: 7 },
+        { messageId: "duplicatesKit", line: 9 },
+        { messageId: "duplicatesKit", line: 11 },
+      ],
+    },
     // the read/write kit's names
     {
       name: "a hand-written get, in a service that uses no kit",

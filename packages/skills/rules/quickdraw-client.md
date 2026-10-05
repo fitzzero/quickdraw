@@ -71,7 +71,11 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
 - A query whose result follows writes declares `watch` in its contract; the
   client then joins that change topic and refetches when it changes.
 - Errors are `QuickdrawError` instances: switch on `error.code`
-  (`FORBIDDEN`, `NOT_FOUND`, `VALIDATION`, `RATE_LIMITED`, ...).
+  (`FORBIDDEN`, `NOT_FOUND`, `VALIDATION`, `RATE_LIMITED`, ...). A row that
+  does not exist is `FORBIDDEN`, as one the user may not see (fail closed):
+  a deleted row shows as `useEntity`'s `isRemoved` (the `r` frame) or leaves
+  a collection while the page holds it; after a reload only `FORBIDDEN`
+  is left, so word it "not found or not shared with you".
 
 ## Writing
 
@@ -93,7 +97,10 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   collections of entity rows): it shows in its place, `useCollection`'s
   `pending.has(item.id)` is true while the call is in flight, a refusal
   removes it, and the server's own item replaces it without a gap or a
-  copy. Never render a mutation's `variables` as a fake row instead.
+  copy. Never render a mutation's `variables` as a fake row instead. To
+  offer "retry" on a failed send, add it with `{ onRefused: "keep" }`: a
+  refused item moves to `useCollection().refused` (`item`, `error`,
+  `dismiss()`, `retry()`), never kept by hand.
 - Never refetch or invalidate after a mutation by hand: the frames update
   live rows and collections, and watched queries refetch themselves. For
   anything else use `qd.invalidate(qd.task.stats, input?)`, never
@@ -130,7 +137,8 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
 - Joining a room: `useJoin(qd.task.enterBoard, { projectId })` runs the
   joining call on every connection (a reconnect is a new socket in no room)
   and when the input changes, never on a re-render, with `status`,
-  `isJoined`, `data` and `error`. Never join from a plain `useQuery` or a
+  `isJoined`, `data`, `error` and `retry()` (a refused join, tried again on
+  the user's say). Never join from a plain `useQuery` or a
   mount effect: a reconnect leaves the socket out of the room while the
   cached answer still looks fine. Without React, `connection.onHello`.
 - Admin screens: `qd.task.admin.adminList.useQuery(input)` and the other

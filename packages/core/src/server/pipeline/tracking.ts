@@ -44,6 +44,13 @@ export interface Tracking {
   readonly flushSink: FlushSink;
   /** Every call's `ctx.touch`. */
   readonly touch: BaseContext["touch"];
+  /**
+   * Runs `fn` in a detached unit of work of the dispatcher, flushed once
+   * `fn` settles, whatever unit or transaction is open where it starts:
+   * `dispatcher.run(fn, { detached: true })` for a kit's work after a call
+   * (the admin kit's `onCommitted`). Rejects with what `fn` throws.
+   */
+  readonly runDetached: (fn: () => unknown) => Promise<unknown>;
 }
 
 function sinksOf(option: TrackingOptions["flushSink"]): readonly FlushSink[] {
@@ -119,13 +126,23 @@ export function resolveTracking(
     unitOfWork.touch?.(model, rows, touchOptions);
   };
   const own = framework.filter((sink): sink is FlushSink => sink !== undefined);
-  return {
-    storage,
-    unitOfWork,
-    flushSink: inRevisionOrder(
-      combineSinks([...own, ...sinksOf(options.flushSink)], logger),
-      revisions,
-    ),
-    touch,
+  const flushSink = inRevisionOrder(
+    combineSinks([...own, ...sinksOf(options.flushSink)], logger),
+    revisions,
+  );
+  const runDetached = async (fn: () => unknown): Promise<unknown> => {
+    const unit = unitOfWork.begin({
+      requestId: crypto.randomUUID(),
+      transport: "internal",
+      sink: flushSink,
+      detached: true,
+    });
+    try {
+      return await unit.run(fn);
+    } finally {
+      // A flush never rejects: its failures are logged where it runs.
+      await unit.flush();
+    }
   };
+  return { storage, unitOfWork, flushSink, touch, runDetached };
 }

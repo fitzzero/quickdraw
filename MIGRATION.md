@@ -1104,7 +1104,12 @@ export const taskContract = defineContract("taskService", {
 ```
 
 `countOnBoard` above is fetched again whenever the project's board
-changes.
+changes. A 4.x event that no collection scope stands for (a game's high
+scores, which the game service writes beside its own rows) maps to the
+service's topic, narrowed to the models the query reads:
+`watch: { service: ["gameScore"] }` re-reads only after a write to those
+models (`watch: "service"` after a write to any model the service has or
+writes), and needs `watchAccess` on the service.
 
 ### `ServiceResponse` becomes `{ ok, d }` / `{ ok, e }` and `QuickdrawError`
 
@@ -1607,8 +1612,9 @@ app.post("/auth/discord/activity", express.json(), (req, res) => {
       userAgent: req.get("user-agent"),
       ip: req.ip,
     });
-    // best effort: a third-party iframe may refuse the cookie, so the page sends auth.token
-    setSessionCookie(res, token);
+    // best effort: a third-party iframe gets a cross-site cookie only with SameSite=None (the
+    // default is Lax), and may refuse it even then, so the page sends auth.token
+    setSessionCookie(res, token, { sameSite: "none" });
     res.json({ token });
   })();
 });
@@ -1681,6 +1687,18 @@ native client sends the token as `auth.token`.
   `socketAuth({ cookieName: "session" })` and
   `createServer({ http: { cookieName: "session" } })`, and the routes warn
   at startup until it is named.
+- **A session cookie on an HTTP call must come from an allowed page.**
+  `socketAuth` applies its `allowedOrigins` to `/qd/...` calls that
+  authenticate with the cookie, as it does to sockets: a call whose
+  `Origin` is not listed is answered `FORBIDDEN` (403). Up to rc.4 only
+  sockets were checked. A call without `Origin` (curl, server-side
+  rendering that forwards the user's cookie) and a bearer token are
+  unaffected. A page on another origin that calls `/qd` with the cookie
+  needs its origin in `allowedOrigins`.
+- **`setSessionCookie` sets SameSite=Lax** (4.x: `None` in production),
+  as the auth routes' own cookie is, so the cookie never rides a request
+  another site's page makes. A web app on another site, or a page in a
+  third-party iframe, passes `{ sameSite: "none" }` (always Secure).
 - **No default CORS origin.** 4.1 allowed `*`; pass `cors`.
 - **Errors that are not `QuickdrawError` reach callers as `INTERNAL`** with a
   generic message (the original is logged). A Prisma unique violation is

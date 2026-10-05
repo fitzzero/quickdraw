@@ -5,12 +5,13 @@
 // fields are never written; `adminSubscribers` counts the sockets in a row's
 // tier rooms and `adminReemit` sends the row to them again.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { QuickdrawError } from "../../../protocol/errors";
 import type { RecordedFrame } from "../../../testing/index";
 import { colSub } from "../../collections/__tests__/fixture";
 import { sub } from "../../emit/__tests__/live";
-import { admin as adminKit, type AdminOnWrite } from "../../index";
+import { captureLogger, deferred } from "../../__tests__/fixtures";
+import { admin as adminKit, type AdminOnCommitted, type AdminOnWrite } from "../../index";
 import { adminApp, as, ENTITY_KEYS, serviceAdmin, taskContract } from "./__tests__/fixture";
 
 const kit = adminApp();
@@ -332,5 +333,111 @@ describe("onWrite", () => {
     expect(() =>
       adminKit.handlers(taskContract, { onWrite: "later" as unknown as AdminOnWrite }),
     ).toThrow("admin.handlers: onWrite must be a function of (write, ctx, db)");
+  });
+});
+
+describe("onCommitted (finding F6.5)", () => {
+  it("hears each write once it committed, in a unit of its own, without holding the reply", async () => {
+    const heard: { method: string; id: string; before?: unknown; after: unknown }[] = [];
+    const gate = deferred<void>();
+    const { app } = await kit.start({
+      onCommitted: async (write, ctx) => {
+        // The edit is durable when it runs: another client reads it.
+        const stored = await kit.harness().prisma.task.findUnique({ where: { id: write.id } });
+        heard.push({ ...write, after: write.after === null ? null : stored?.title });
+        expect(ctx.principal?.userId).toBe(kit.board().ed);
+        if (write.method === "adminUpdate") {
+          await gate.promise;
+          // Its tracked writes flush on their own, as a detached qd.run's do.
+          await kit.harness().db.task.update({ where: { id: write.id }, data: { pinned: true } });
+        }
+      },
+    });
+    const board = kit.board();
+    const edits = app.as(serviceAdmin(board.ed));
+    const created = await edits.taskService.adminCreate({
+      data: { projectId: board.p1, title: "New", status: "open", ordinal: 5, pinned: false },
+    });
+    await vi.waitFor(() => {
+      expect(heard).toHaveLength(1);
+    });
+    const connection = await watcher(app, board.cy);
+    await sub(connection, "taskService", [created.id]);
+    app.frames.clear();
+    // The reply does not wait for the hook, which is still held at the gate.
+    expect(
+      await edits.taskService.adminUpdate({ id: created.id, data: { title: "Renamed" } }),
+    ).toMatchObject({ title: "Renamed" });
+    await vi.waitFor(() => {
+      expect(heard).toHaveLength(2);
+    });
+    gate.resolve();
+    await app.frames.waitFor(
+      (frame) =>
+        frame.event === "qd:e" &&
+        frame.userId === board.cy &&
+        JSON.stringify(frame.data).includes('"pinned":true'),
+    );
+    await edits.taskService.adminDelete({ id: created.id });
+    await vi.waitFor(() => {
+      expect(heard).toHaveLength(3);
+    });
+    expect(heard).toEqual([
+      { method: "adminCreate", id: created.id, after: "New" },
+      {
+        method: "adminUpdate",
+        id: created.id,
+        before: expect.objectContaining({ title: "New" }),
+        after: "Renamed",
+      },
+      {
+        method: "adminDelete",
+        id: created.id,
+        before: expect.objectContaining({ title: "Renamed" }),
+        after: null,
+      },
+    ]);
+  });
+
+  it("is logged when it throws, the write standing, and runs for no write that rolled back", async () => {
+    const logger = captureLogger();
+    let committed = 0;
+    const { app } = await kit.start({
+      logger,
+      onWrite: (write) => {
+        if (write.after !== null && (write.after as { title?: string }).title === "Refused") {
+          throw new QuickdrawError("CONFLICT", "Not this one");
+        }
+      },
+      onCommitted: () => {
+        committed += 1;
+        throw new Error("the game is not running");
+      },
+    });
+    const board = kit.board();
+    const edits = app.as(serviceAdmin(board.ed)).taskService;
+    expect(await edits.adminUpdate({ id: board.t1, data: { title: "Kept" } })).toMatchObject({
+      title: "Kept",
+    });
+    await vi.waitFor(() => {
+      expect(logger.at("error").map((entry) => entry.message)).toContain(
+        "The admin kit's onCommitted failed; the write stands",
+      );
+    });
+    await expect(
+      edits.adminUpdate({ id: board.t1, data: { title: "Refused" } }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(committed).toBe(1);
+    const row = await kit.harness().prisma.task.findUniqueOrThrow({ where: { id: board.t1 } });
+    expect(row.title).toBe("Kept");
+  });
+
+  it("is refused when it is not a function", () => {
+    expect(() =>
+      adminKit.handlers(taskContract, { onCommitted: 1 as unknown as AdminOnCommitted }),
+    ).toThrow("admin.handlers: onCommitted must be a function of (write, ctx)");
   });
 });

@@ -753,6 +753,18 @@ tracked client as `db`; the server finds the rest on it.
   recorded with its row ids, merged per row, and handed to the flush sinks
   once the response has been sent, with one revision per flush. A handler
   may return `db.task.update(...)` without awaiting it.
+- A write that changed nothing is not recorded, so it sends no frame, no
+  collection delta, no topic change and no `refreshEntry`: an
+  `updateMany`, `updateManyAndReturn` or `deleteMany` that matched no row;
+  a `data` (or an upsert's `update`) with nothing to write, `{}`; and an
+  update that sets only columns the framework reads before writing (scope,
+  `where`, membership, owner and access columns) to the values they held.
+  An upsert with `update: {}` ("make sure this row exists") reads the row
+  first in its place: one statement when the row is there, and the upsert
+  after it when it is not. A write that sets any other column is recorded
+  whatever it wrote, since its old value was never read; the `@updatedAt`
+  column Prisma moves on an unchanged write is not signalled, as no write's
+  is on its own.
 - Writes inside `db.$transaction` join the unit only when it commits; a
   rollback drops them. Prefer the interactive form
   (`db.$transaction(async (tx) => ...)`): an array-form
@@ -882,7 +894,19 @@ export const taskService = qd.defineService(task, {
   rows (a `Date` is fine where the wire has a string, extra columns are
   dropped); with `map`, it returns what `map` takes.
 - Fields the contract's `fields` map puts above the caller's level on a row
-  are stripped from that caller's copy, after any shared run.
+  are stripped from that caller's copy, after any shared run. Only a
+  projection output is stripped (`"entity"`, a named projection, and
+  `nullable(...)` or `listOf(...)` of one): a method whose output is a
+  schema of its own sends what its handler returns to every caller its
+  access admits, so a tiered key in that schema (`email` in a hand-written
+  `{ id, name, email }`) reaches callers below its level. When a server is
+  made, each such method raises the development warning
+  `[quickdraw:tiered-field-in-output]` (thrown by
+  `createTestApp({ strictWarnings: true })`, so the test app fails to
+  start): answer `"entity"` or a projection, or leave the key out. Not
+  warned: a method whose access admits no caller below the field's level
+  (`{ service: "Admin" }` with the Admin bypass on, `{ entry: L }` with `L`
+  at the field's level or above), and an output without JSON Schema (Zod 3).
 - `affects` names rows of other services a write changes too
   (`{ service, id: column }`, or `{ service, id: (row) => ids, columns }`);
   they are sent again after the flush, one hop.
@@ -1009,7 +1033,13 @@ export const taskService = qd.defineService(task, {
   authorized like a subscribe to that scope, or `service`, which changes
   whenever any row of the service does, or a row of a model it lists in
   `writes` (a game's high scores, which no service owns). A query declares
-  `watch: "service"` to be invalidated by it. The service topic is closed
+  `watch: "service"` to be invalidated by it. A query over some of those
+  models names them, `watch: { service: ["gameScore"] }` (the service's
+  `model` and models in its `writes`; `defineService` refuses others), and
+  is invalidated only after a flush that wrote one of them: high scores are
+  not read again when a chat membership the same service writes changes.
+  It is the same topic: its `qd:changed` frame names the models that
+  changed it (`models`). The service topic is closed
   (`FORBIDDEN`) unless the service declares `watchAccess` (`"public"`,
   `"authenticated"` or `{ service: level }`). A watcher that loses access
   leaves the topic after one last `qd:changed`.
@@ -1041,7 +1071,9 @@ over three transports (design: sections 3, 8 and 10):
   principal comes from the session cookie (`__Host-session` over HTTPS,
   `session` over plain HTTP or with `COOKIE_DOMAIN`, as the auth routes name
   it) or an `Authorization: Bearer` token through the same
-  `authenticate`; the reply is `{ ok: true, d }` or
+  `authenticate`, which is told which one it was (`request.credential`):
+  `socketAuth` answers a cookie sent from a page outside `allowedOrigins`
+  with `FORBIDDEN`, as it refuses such a socket; the reply is `{ ok: true, d }` or
   `{ ok: false, e: { code, message, data? } }` with the code's HTTP status.
   Works on Express 4 and 5, and on a bare Node server. Move it with
   `http: { path }`, turn it off with `http: false`, or mount
@@ -1211,6 +1243,19 @@ export function TaskDetail({ id }: { readonly id: string }) {
 }
 ```
 
+- A row that does not exist is refused the way a row the reader may not
+  see is: `FORBIDDEN`, for a subscribe and for a method whose access names
+  the row (`{ entry }`), since a policy that cannot find the row grants
+  nothing (fail closed), and telling the two apart would tell a stranger
+  which ids exist (a service-wide `Admin` grant, which needs no row to
+  pass, gets `NOT_FOUND`). So a page cannot tell "deleted" from "no access" by the
+  refusal: it learns of a delete while it holds the row, live: the `r`
+  frame sets `useEntity`'s `isRemoved` (as above), and a collection's
+  `removed` delta takes the item out of `items`. A page opened after the
+  delete (a link, a reload, a reconnect after the row went) gets only
+  `FORBIDDEN`; where the difference matters, say "not found or not shared
+  with you", or ask a method of the parent row (a list of the project's
+  tasks) that can answer without leaking.
 - A field the contract's `fields` map tiers (`notes` here) is optional in
   every row type a reader gets (`useEntity`, collection items, `"entity"`
   outputs, `EntityOf`, `ItemOf`), because a reader below its level receives
@@ -1260,7 +1305,14 @@ A create shows its row before the server answers with `cache.addItem(collection,
 scope, item)`: the item appears in the scope at once, in its place by the
 collection's `order` (give it the order's fields; without them it goes
 last), and `useCollection`'s `pending` names it while the call is in flight.
-A refused call removes it. The reply's `id` (the created row's) and values
+A refused call removes it, unless it was added with `{ onRefused: "keep" }`
+(`cache.addItem(collection, scope, item, { onRefused: "keep" })`, or the
+same for `addEntity`): it then leaves `items` for `useCollection`'s
+`refused`, each `{ item, error, dismiss(), retry() }`, until the app
+dismisses it or sends the same call again with `retry()` (which shows it
+`pending` again, and never rejects: a second refusal shows in `refused`
+again), so a chat shows a failed message with "retry" without a copy of
+its own. The reply's `id` (the created row's) and values
 replace the item's own, and once the scope's own copy arrives (its `added`
 delta, or a load) that copy shows in its place: never both, never a gap.
 `cache.addEntity(row)` adds a row to every collection of entity rows whose
@@ -1397,8 +1449,10 @@ The methods most services write by hand, as one-line opt-ins (design:
 section 12). Each kit's contract half comes from the package root and makes
 ordinary contract entries; its handlers come from `./server`. Lint's
 `prefer-kit` reports a method written by hand that a kit implements (`get`,
-`list`, `create`, `getTask`, ...) in a service that uses no kit; one that
-must stay hand-written says why in a `// quickdraw: hand-written because ...`
+`list`, `create`, `getTask`, ...) in a service that uses no kit, and one
+that duplicates what a kit spread beside it serves (a `getNote` beside
+`crud.handlers(note, { access: { get } })`); one that must stay
+hand-written says why in a `// quickdraw: hand-written because ...`
 comment above it.
 
 ### Read/write kit
@@ -1943,9 +1997,14 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   transaction's tracked client; a throw undoes the write and fails the
   call): what an admin edit must set off, such as a game reloading its
   tunables, without wrapping the kit's handlers. The rows are the entity,
-  every field. Without it the kit opens no transaction. Each handler
-  `admin.handlers` returns resolves with its method's output type, so a
-  wrapper reads the row and returns it with no cast.
+  every field. `onCommitted({ method, id, before?, after }, ctx)` runs once
+  the write has committed (after `onWrite`'s transaction), in a detached
+  unit of work of its own: the reply does not wait for it, its writes flush
+  on their own, and a throw is logged, the write standing. Apply an edit to
+  what runs in memory (a game's simulation) there, so an edit that rolled
+  back is never applied. Without either hook the kit opens no transaction.
+  Each handler `admin.handlers` returns resolves with its method's output
+  type, so a wrapper reads the row and returns it with no cast.
 - `adminSubscribers({ id })` counts the sockets subscribed to a row per
   access level (`{ id, count, levels, complete }`; behind a Redis adapter
   the counts are this server's and `complete` is `false`), and
@@ -2158,8 +2217,10 @@ input, { enabled?, onJoined? })` (from `./client`) runs the joining call
   (`enterBoard` above) on every `qd:hello` and when its input changes by
   value, never on a re-render, and shows `status` (`idle` with no socket to
   join with, `joining`, `joined`, `error`), `isJoined`, `data` and `error`;
-  a refusal stands until the next hello, `RATE_LIMITED` is tried again after
-  its backoff, and it never leaves the room itself.
+  a refusal stands until the next hello or `retry()` (which runs the call
+  again at once on the current socket, and does nothing while there is
+  none or `enabled` is false), `RATE_LIMITED` is tried again after its
+  backoff, and it never leaves the room itself.
   `connection.onHello(listener)` is the same hook without React.
 
 Code that is not a handler (a game loop, a timer, a job) reaches rooms
@@ -2351,8 +2412,16 @@ nothing is cached:
   any page's handshake). A handshake without `Origin` is refused unless it
   is a browser's same-origin request (`Sec-Fetch-Site: same-origin`) or
   `allowMissingOrigin: true` is set for native clients that keep cookies.
-  Bearer tokens need no Origin, and HTTP calls are guarded by their JSON
-  content type instead.
+  An HTTP call (`/qd/...`) that sends the cookie is checked the same way
+  and answered `FORBIDDEN` (403) from an `Origin` outside `allowedOrigins`,
+  besides needing its JSON content type. One without `Origin` is accepted:
+  a browser sends `Origin` with every POST, so it comes from curl or a
+  server rendering a page with the user's forwarded cookie (refused only
+  when `Sec-Fetch-Site` names another site). Bearer tokens need no Origin
+  on either transport. An app's own `authenticate` learns where an HTTP
+  call's token came from in `request.credential` (`"cookie"` or
+  `"bearer"`), and a `QuickdrawError("FORBIDDEN")` it throws on HTTP is
+  answered as it is.
 - `socketAuth({ devCredentials })` signs a socket in by the user id its
   handshake names (`auth: { userId }`, no token), as the function answers
   (the principal, or `null` to refuse): for a game editor or load-test bots
@@ -2689,16 +2758,17 @@ one format and names the method call it happened in:
 [quickdraw:n-plus-one] taskService.board: task.findUnique by id ran 10 times in one call, once per item (N+1); ...
 ```
 
-| Kind                 | Raised when                                                                                          |
-| -------------------- | ---------------------------------------------------------------------------------------------------- |
-| `n-plus-one`         | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])` |
-| `unbounded-read`     | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)           |
-| `oversized-response` | a reply was larger than `maxResponseBytes` (default 1 MiB)                                           |
-| `nested-write`       | a write's `data` wrote a related row, which is not tracked                                           |
-| `ambient-write`      | a tracked write ran outside any unit of work                                                         |
-| `batch-read`         | a write in an array-form `$transaction` read its rows outside the batch                              |
-| `batch-create-many`  | a `createMany` in an array-form `$transaction` could not report its rows                             |
-| `repeated-call`      | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                 |
+| Kind                     | Raised when                                                                                                                        |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `n-plus-one`             | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])`                               |
+| `unbounded-read`         | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)                                         |
+| `oversized-response`     | a reply was larger than `maxResponseBytes` (default 1 MiB)                                                                         |
+| `nested-write`           | a write's `data` wrote a related row, which is not tracked                                                                         |
+| `ambient-write`          | a tracked write ran outside any unit of work                                                                                       |
+| `batch-read`             | a write in an array-form `$transaction` read its rows outside the batch                                                            |
+| `batch-create-many`      | a `createMany` in an array-form `$transaction` could not report its rows                                                           |
+| `repeated-call`          | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                                               |
+| `tiered-field-in-output` | a method's own output schema names a field the contract tiers, which only projection outputs strip; raised when the server is made |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
@@ -2716,7 +2786,9 @@ fails: the call it happened in fails with `INTERNAL` and the error as its
 once the reply was recorded (over a socket or HTTP the reply was already
 sent, so that error is logged, not thrown). Strictness belongs to the app:
 warnings outside its calls (an ambient write while seeding, another app's
-calls) are logged as usual, and `app.close()` ends it.
+calls) are logged as usual, and `app.close()` ends it. The one raised when
+the app is made, `tiered-field-in-output`, is thrown from `createTestApp`
+itself, so a strict app over such a method does not start.
 
 A `repeated-call` warning names a client caught in a loop (a mutation fired
 from an effect that its own result runs again, a refetch that triggers
@@ -2817,6 +2889,12 @@ it("lets a signed-in user through the gate", () => {
 
 In Storybook, a decorator renders every story inside `qd.$Provider`, and a
 story's `beforeEach` sets its session (`qd.$session(...)`) beside its data.
+A docs page renders its stories side by side, where one mock session would
+show the last story's in all of them: give each its own with the
+provider's `session` prop, `<qd.$Provider session={{ userId: null }}>`,
+laid over the mock's session field by field for that subtree alone (the
+real `useQuickdraw()` and `usePresence`, and the mock's views and admin
+grants, read it there).
 
 ### Test databases
 
@@ -2916,7 +2994,14 @@ topic (`watchAccess`) and the field levels; each method's access form, in
 words, and its `rowless`; who may open a collection's scope; a channel's
 access; a stream's computed seed and when its items are checked. A
 contract the services module has no service for says so, and a service
-without a contract is an error. Pass the same flag to `--check`.
+without a contract is an error. Pass the same flag to `--check`. The
+services module is imported with everything it imports, as the server
+loads it: the workspace packages it uses (`@project/db`, `@project/shared`)
+load from their built output when their `package.json` points there, so
+build them first (`bun run build`, or `turbo run build --filter` for those
+packages) in a script that runs the docs on a fresh checkout; the error
+says so when a built file is missing. The contracts module, which imports
+only the shared package's own sources, needs no build.
 
 The module may export each contract, or a map of them as given to
 `createQuickdrawClient`. A TypeScript module loads through Node's type

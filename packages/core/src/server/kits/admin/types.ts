@@ -41,6 +41,22 @@ export type AdminOnWrite<Row = unknown, Db = unknown> = (
   db: Db,
 ) => void | PromiseLike<void>;
 
+/**
+ * `admin.handlers`' `onCommitted` (finding F6.5 of the quickdraw-chat
+ * migration): runs once each write the kit makes has committed (after
+ * `onWrite`'s transaction, when there is one), with `{ method, id,
+ * before?, after }` and the call's `ctx`, in a detached unit of work of its
+ * own (as `qd.run(fn, { detached: true })`): its tracked writes flush on
+ * their own, the call's reply does not wait for it, and a throw is logged
+ * (`ctx.log`), never the caller's. For what may happen only once the edit
+ * is durable: applying an edited definition to a running game, telling
+ * another system. A write that failed or rolled back calls nothing.
+ */
+export type AdminOnCommitted<Row = unknown> = (
+  write: AdminWrite<Row>,
+  ctx: KitContext,
+) => void | PromiseLike<void>;
+
 /** What one admin method's handler is made from. */
 export interface AdminContext {
   /** What the contract half made the method for: its filter and sort fields. */
@@ -51,6 +67,8 @@ export interface AdminContext {
   readonly form: AccessForm;
   /** The app's hook after each write, if it gave one. */
   readonly onWrite: AdminOnWrite | undefined;
+  /** The app's hook once each write committed, if it gave one. */
+  readonly onCommitted: AdminOnCommitted | undefined;
 }
 
 /**
@@ -158,6 +176,23 @@ export interface AdminHandlersOptions<C extends AnyContract, A, Db = unknown> {
    * },
    */
   readonly onWrite?: AdminOnWrite<EntityOf<C>, Db>;
+  /**
+   * Runs once each write `adminCreate`, `adminUpdate` or `adminDelete`
+   * makes has committed (after `onWrite`'s transaction, when given): `{
+   * method, id, before?, after }` and the call's `ctx`, in a detached unit
+   * of work of its own. The reply does not wait for it, and a throw is
+   * logged, never the caller's. Where `onWrite` runs before the commit
+   * (its writes are part of the edit), this runs after it: apply an edit
+   * to what runs in memory here, so a rolled-back edit is never applied.
+   * With it, as with `onWrite`, the kit writes in a transaction that reads
+   * the row before the write.
+   *
+   * @example
+   * onCommitted: ({ method, after }) => {
+   *   if (method !== "adminDelete" && after !== null) game.applyDefinition(after);
+   * },
+   */
+  readonly onCommitted?: AdminOnCommitted<EntityOf<C>>;
 }
 
 type FormOf<A, M> = M extends keyof A

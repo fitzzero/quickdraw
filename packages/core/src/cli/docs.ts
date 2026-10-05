@@ -17,7 +17,11 @@
 //
 // A TypeScript module is imported as Node imports it (Node 24 strips types),
 // and through `tsx` when that fails and the project has `tsx` installed, so
-// extensionless imports and `tsconfig` paths work too.
+// extensionless imports and `tsconfig` paths work too. The services module
+// loads every module the server does, so a workspace package whose
+// `package.json` points at its build must be built first (finding F6.7 of
+// the quickdraw-chat migration): a missing built file is reported with that
+// hint (`buildHint`).
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -246,6 +250,25 @@ export function failedToLoad(error: unknown): boolean {
   return typeof code === "string" && LOADER_ERRORS.has(code);
 }
 
+/** A built file a package's `package.json` points at: under a `dist/` or `build/` directory. */
+const BUILT_FILE = /[\\/](?:dist|build)[\\/]/;
+
+/**
+ * `error` with a hint when it names a missing built file: a workspace
+ * package the module imports was not built (`bun run build` first); else
+ * `error` itself.
+ */
+export function buildHint(error: unknown, file: string, cwd: string): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  if (Reflect.get(Object(error), "code") !== "ERR_MODULE_NOT_FOUND" || !BUILT_FILE.test(message)) {
+    return error;
+  }
+  return new Error(
+    `could not import ${relative(cwd, file)}: ${message}. A workspace package it imports loads from its build, which is missing: build the workspace (bun run build) before generating the docs`,
+    { cause: error },
+  );
+}
+
 /** Imports the module at `file`: natively, then through `tsx` for TypeScript Node cannot load alone. */
 async function importModule(file: string, cwd: string): Promise<Readonly<Record<string, unknown>>> {
   const url = pathToFileURL(file).href;
@@ -253,7 +276,7 @@ async function importModule(file: string, cwd: string): Promise<Readonly<Record<
     return (await import(url)) as Readonly<Record<string, unknown>>;
   } catch (error) {
     if (!/\.[cm]?tsx?$/.test(file) || !failedToLoad(error)) {
-      throw error;
+      throw buildHint(error, file, cwd);
     }
     const tsImport = await tsxImport(cwd);
     if (tsImport === undefined) {
@@ -262,9 +285,13 @@ async function importModule(file: string, cwd: string): Promise<Readonly<Record<
         { cause: error },
       );
     }
-    return (await tsImport(url, pathToFileURL(join(cwd, "package.json")).href)) as Readonly<
-      Record<string, unknown>
-    >;
+    try {
+      return (await tsImport(url, pathToFileURL(join(cwd, "package.json")).href)) as Readonly<
+        Record<string, unknown>
+      >;
+    } catch (again) {
+      throw buildHint(again, file, cwd);
+    }
   }
 }
 

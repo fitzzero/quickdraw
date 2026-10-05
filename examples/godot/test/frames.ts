@@ -37,6 +37,11 @@ export function ticksFrame(id: number): string {
   return `42${String(id)}${godotJson(["qd:stream:sub", { s: "gameService", stream: "ticks" }])}`;
 }
 
+/** `qd:stream:sub` of a stream the service lacks, sent with ack id `id`: refused, `NOT_FOUND`. */
+export function nowhereFrame(id: number): string {
+  return `42${String(id)}${godotJson(["qd:stream:sub", { s: "gameService", stream: "nowhere" }])}`;
+}
+
 /**
  * The session, in order: handshake; a call; a call to a method the service
  * lacks; a move before joining the world (dropped by the server); the ticks
@@ -46,8 +51,8 @@ export function ticksFrame(id: number): string {
  * `qd:rotate` window, on the socket the client keeps until its moment;
  * Socket.IO DISCONNECT at that moment, then the new socket's handshake, its
  * stream resubscription, a move before joining again (dropped), the join and
- * a move; DISCONNECT on `close()`; and a client with a token the server
- * refuses.
+ * a move, a subscribe to a stream the service lacks (refused, so not held);
+ * DISCONNECT on `close()`; and a client with a token the server refuses.
  */
 export const SESSION: readonly string[] = [
   connectFrame("ada"),
@@ -69,6 +74,7 @@ export const SESSION: readonly string[] = [
   moveFrame(8, 0),
   callFrame(11, "join", { name: "ada" }),
   moveFrame(3, 0),
+  nowhereFrame(12),
   "41",
   connectFrame("nobody"),
 ];
