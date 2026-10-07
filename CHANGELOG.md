@@ -14,6 +14,12 @@ Fixes from the independent review of 5.0.0 after the farseer migration
   for each service whose policy is, or combines in `anyOf`, a `resolver`
   that declares no `reads`, and a test app made with `strictWarnings`
   fails to start. Declare what the levels depend on, or `reads: "none"`.
+- **A GitHub Codespaces origin is refused** wherever `validateRedirectOrigin`
+  decides: an app's own CORS, cookie or MCP origin check that calls it, and
+  the mock provider's redirect URIs. `allowCodespaces` is accepted and
+  ignored, so code that passes it still compiles; an app that wants a
+  Codespace lists a pattern in `allowedPatterns`. The auth routes kit
+  already refused them.
 
 ### Security
 
@@ -33,6 +39,12 @@ Fixes from the independent review of 5.0.0 after the farseer migration
   declared columns and tables against the Prisma client at compile time.
   `reads: "none"` says nothing a tracked write changes can change a level
   (the principal's grants alone, say).
+- **`validateRedirectOrigin` never allows a GitHub Codespaces origin
+  (R1.2).** It allowed any `https://*-*-<port>.app.github.dev` unless
+  `allowCodespaces: false` was passed, with no `NODE_ENV` check, so in
+  production any Codespace page (anyone can open one) passed an app's CORS,
+  cookie or redirect check that used the helper. The allowance is gone, and
+  `allowCodespaces` is a deprecated option that does nothing.
 
 ## [5.0.0] - 2026-10-05
 
