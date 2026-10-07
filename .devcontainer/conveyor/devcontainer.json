@@ -1,11 +1,5 @@
 {
   "name": "Conveyor Agent",
-  "dockerComposeFile": "docker-compose.yml",
-  "service": "agent",
-  "workspaceFolder": "/workspaces/quickdraw",
-  "remoteUser": "conveyor",
-  "overrideCommand": false,
-  "shutdownAction": "stopCompose",
   "forwardPorts": [
     7090,
     3050
@@ -22,5 +16,5 @@
       "visibility": "public"
     }
   },
-  "postStartCommand": "{ if ! command -v claude >/dev/null 2>&1; then echo \"[conveyor] Installing Claude Code CLI\"; npm install -g @anthropic-ai/claude-code@latest; fi; INSTALLED=$(conveyor-agent --version 2>/dev/null || echo \"0.0.0\"); LATEST=$(npm view @rallycry/conveyor-agent version 2>/dev/null || echo \"$INSTALLED\"); if [ \"$INSTALLED\" != \"$LATEST\" ]; then echo \"[conveyor] Updating agent $INSTALLED -> $LATEST\"; npm install -g @rallycry/conveyor-agent@latest; else echo \"[conveyor] Agent runner v$INSTALLED is current\"; fi ; } || echo \"[conveyor] postStart hook failed (continuing)\"; until conveyor-agent; do echo '[conveyor] agent exited, retrying in 10s...'; sleep 10; done"
+  "postStartCommand": "{ if ! command -v claude >/dev/null 2>&1; then echo \"[conveyor] Installing Claude Code CLI\"; npm install -g @anthropic-ai/claude-code@latest; fi; INSTALLED=$(conveyor-agent --version 2>/dev/null || echo \"0.0.0\"); LATEST=$(npm view @rallycry/conveyor-agent version 2>/dev/null || echo \"$INSTALLED\"); if [ \"$INSTALLED\" != \"$LATEST\" ]; then echo \"[conveyor] Updating agent $INSTALLED -> $LATEST\"; npm install -g @rallycry/conveyor-agent@latest; else echo \"[conveyor] Agent runner v$INSTALLED is current\"; fi ; } || echo \"[conveyor] postStart hook failed (continuing)\""
 }
