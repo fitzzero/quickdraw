@@ -51,9 +51,8 @@ Fixes from the independent review of 5.0.0 after the farseer migration
 ### Admin kit
 
 - **`editable`, the fields the admin kit may write (R1.4).** The kit wrote
-  every field of the entity but `id` and the timestamps, owner and
-  foreign-key columns included, unless a `fieldOverrides` entry made one
-  read-only. `admin.handlers(contract, { editable: ["title", "status"] })`
+  every field it shows but `id` and the timestamps, owner and foreign-key
+  columns included, unless a `fieldOverrides` entry made one read-only. `admin.handlers(contract, { editable: ["title", "status"] })`
   names the only fields `adminCreate` and `adminUpdate` write: `adminMeta`
   reports every other field `editable: false`, so a generic form leaves it
   read-only, and a write naming one is `VALIDATION` ("is not editable").

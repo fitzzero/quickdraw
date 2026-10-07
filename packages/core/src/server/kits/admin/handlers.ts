@@ -9,7 +9,7 @@
 //     model: "task",
 //     access: inherit({ from: project, via: "projectId" }),
 //     methods: {
-//       ...admin.handlers(task, { displayName: "Tasks", hiddenFields: ["internalNotes"], editable: ["title"] }),
+//       ...admin.handlers(task, { displayName: "Tasks", hiddenFields: ["internalNotes"] }),
 //       rename: { access: { entry: "Moderate" }, handler: ... },
 //     },
 //   });

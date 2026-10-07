@@ -746,12 +746,11 @@ export const taskService = qd.defineService(task, {
   grants alone, say). A resolver with neither is never re-checked, and the
   server warns `[quickdraw:resolver-without-reads]` when it starts. Their
   column and table names are checked against the Prisma client's models at
-  compile time. A lookup is one
-  batched query per table, memoized for the call, so checking 60 ids costs
-  what checking one does. `entry` access needs a policy; a service without
-  `model` may only use `"public"`, `"authenticated"`, `{ service }` and
-  `custom`. `inherit` uses the parent's policy only: grants on the parent's
-  service do not flow down.
+  compile time. A lookup is one batched query per table, memoized for the
+  call, so checking 60 ids costs what checking one does. `entry` access
+  needs a policy; a service without `model` may only use `"public"`,
+  `"authenticated"`, `{ service }` and `custom`. `inherit` uses the
+  parent's policy only: grants on the parent's service do not flow down.
 - One policy decides every surface: method calls, entity subscriptions,
   collection scopes, the kits' lists and searches, streams and channels.
 - When a tracked write lowers or removes someone's access, their sockets
@@ -2016,11 +2015,12 @@ export function AdminTasks() {
   client, so subscribers and collections get the same frames as for any
   other write; `adminDelete({ id })` returns `null`. `id`, `createdAt` and
   `updatedAt` are never writable, nor are hidden fields, those an override
-  made read-only or those `editable` leaves out (`VALIDATION`); without a service-wide `Admin` grant, nor
-  are the columns the policy reads, and a row moves to another parent only
-  with the row level on it (`FORBIDDEN`, as for the read/write kit); each
-  value is checked by the entity schema itself, and a value the database
-  refuses is `VALIDATION`. A missing row is `NOT_FOUND`.
+  made read-only or those `editable` leaves out (`VALIDATION`); without a
+  service-wide `Admin` grant, nor are the columns the policy reads, and a
+  row moves to another parent only with the row level on it (`FORBIDDEN`,
+  as for the read/write kit); each value is checked by the entity schema
+  itself, and a value the database refuses is `VALIDATION`. A missing row
+  is `NOT_FOUND`.
 - `editable: ["title", "status"]` names the only fields `adminCreate` and
   `adminUpdate` write: `adminMeta` reports every other field
   `editable: false`, so a generic form leaves it read-only, and a write
@@ -2029,8 +2029,9 @@ export function AdminTasks() {
   not say otherwise. `admin.contract({ entity, editable })` takes the same
   list, so the writes' input checks, types and JSON Schema (and the MCP
   tools made from it) name only those fields; given to both halves, the
-  two lists must name the same fields. Without it, every field but `id`
-  and the timestamps is written, as in 5.0.0.
+  two lists must name the same fields. Without either list the kit writes
+  what it wrote in 5.0.0: every field it shows but `id` and the timestamps,
+  less those an override made read-only.
 - `adminMeta()` returns `{ serviceName, displayName, fields }`, one
   `{ name, type, label, required, editable, showInTable, sortable, filterable, enumValues?, relationService?, kind?, showInForm? }`
   per field: `type` is
