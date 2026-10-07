@@ -655,8 +655,11 @@ subscriptions. 5.0 asks one policy for every surface: method calls, entity
 subscriptions, collection scopes, the kits' lists, searches, streams and
 channels. The builders are `owner(field)`, `jsonAcl(field, { owner })`,
 `members({ model, entry, user, level })`, `inherit({ from, via })`,
-`anyOf(...)` and `resolver({ levelsFor, where })` for anything else; each
-answers a batch of rows in one query.
+`anyOf(...)` and `resolver({ levelsFor, where, reads })` for anything else;
+each answers a batch of rows in one query. A resolver declares what it reads
+(`reads: { columns, memberships }`, or `"none"`), or its live rows are never
+revoked when access changes, and the server warns
+`[quickdraw:resolver-without-reads]`.
 
 <!-- example: ../../../codemod/test/guide-v4/apps/api/src/services/task.ts#access -->
 

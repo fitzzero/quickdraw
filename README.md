@@ -734,11 +734,19 @@ export const taskService = qd.defineService(task, {
   (`qd:access`), and in-process callers load the grants again.
 - Policies: `owner(field)`, `jsonAcl(field, { owner? })`,
   `members({ model, entry, user, level, levels? })`, `inherit({ from, via })`,
-  `anyOf(...)`, `resolver({ levelsFor, where? })` and `everyone(level)`
+  `anyOf(...)`, `resolver({ levelsFor, where?, reads })` and `everyone(level)`
   (every signed-in user has `level` on every row, reading nothing: public
   profiles are `anyOf(owner("id"), everyone("Read"))`; unlike `rowless: true`
-  on a method, it covers subscriptions and lists too). Their column names are
-  checked against the Prisma client's models at compile time. A lookup is one
+  on a method, it covers subscriptions and lists too). A `resolver` is app
+  code, so it says what its levels depend on: `reads: { columns, memberships }`
+  names columns of the service's model and membership tables as `members`
+  takes them (`entry` holding this service's row id), and tracked writes to
+  them re-check what it decided, as for the other policies; `reads: "none"`
+  says nothing a tracked write changes can change a level (the principal's
+  grants alone, say). A resolver with neither is never re-checked, and the
+  server warns `[quickdraw:resolver-without-reads]` when it starts. Their
+  column and table names are checked against the Prisma client's models at
+  compile time. A lookup is one
   batched query per table, memoized for the call, so checking 60 ids costs
   what checking one does. `entry` access needs a policy; a service without
   `model` may only use `"public"`, `"authenticated"`, `{ service }` and
@@ -2856,6 +2864,7 @@ one format and names the method call it happened in:
 | `batch-create-many`      | a `createMany` in an array-form `$transaction` could not report its rows                                                                                                                           |
 | `repeated-call`          | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                                                                                                               |
 | `tiered-field-in-output` | a method's own output schema declares a field the contract tiers, which only projection outputs strip; raised when the server is made (for an output without JSON Schema, when a reply carries it) |
+| `resolver-without-reads` | a service's policy is, or combines in `anyOf`, a `resolver` without `reads`, so no tracked write re-checks it; raised when the server is made                                                      |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
@@ -2873,9 +2882,10 @@ fails: the call it happened in fails with `INTERNAL` and the error as its
 once the reply was recorded (over a socket or HTTP the reply was already
 sent, so that error is logged, not thrown). Strictness belongs to the app:
 warnings outside its calls (an ambient write while seeding, another app's
-calls) are logged as usual, and `app.close()` ends it. The one raised when
-the app is made, `tiered-field-in-output`, is thrown from `createTestApp`
-itself, so a strict app over such a method does not start.
+calls) are logged as usual, and `app.close()` ends it. The ones raised when
+the app is made, `tiered-field-in-output` and `resolver-without-reads`, are
+thrown from `createTestApp` itself, so a strict app over such a method or
+policy does not start.
 
 A `repeated-call` warning names a client caught in a loop (a mutation fired
 from an effect that its own result runs again, a refetch that triggers

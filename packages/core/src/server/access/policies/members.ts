@@ -44,7 +44,10 @@ export interface MembersOptions<
   readonly levels?: Readonly<Record<string, AccessLevel>>;
 }
 
-function checkLevels(levels: unknown): Readonly<Record<string, AccessLevel>> | undefined {
+function checkLevels(
+  owner: string,
+  levels: unknown,
+): Readonly<Record<string, AccessLevel>> | undefined {
   if (levels === undefined) {
     return undefined;
   }
@@ -55,10 +58,27 @@ function checkLevels(levels: unknown): Readonly<Record<string, AccessLevel>> | u
     Object.values(levels).every(isAccessLevel);
   if (!valid) {
     throw new TypeError(
-      'members({ levels }): levels must map stored roles to access levels, as in { editor: "Moderate" }',
+      `${owner}: levels must map stored roles to access levels, as in { editor: "Moderate" }`,
     );
   }
   return Object.freeze({ ...(levels as Record<string, AccessLevel>) });
+}
+
+/**
+ * A membership table's options, `{ model, entry, user, level, levels? }`,
+ * checked and frozen. A `TypeError` names `owner(option)` for an option of
+ * the wrong kind. `members` takes one table, and a resolver's `reads` a list
+ * of them.
+ */
+export function membershipRead(options: object, owner: (option: string) => string): MembershipRead {
+  const { model, entry, user, level, levels } = options as Readonly<Record<string, unknown>>;
+  return Object.freeze({
+    model: checkName(owner("model"), "model", model),
+    entry: checkName(owner("entry"), "entry", entry),
+    user: checkName(owner("user"), "user", user),
+    level: checkName(owner("level"), "level", level),
+    levels: checkLevels(owner("levels"), levels),
+  });
 }
 
 /** The stored roles that give at least `level`. */
@@ -91,13 +111,7 @@ export function members<
   if (typeof options !== "object" || options === null) {
     throw new TypeError("members(options): options must be { model, entry, user, level }");
   }
-  const read: MembershipRead = Object.freeze({
-    model: checkName("members({ model })", "model", options.model),
-    entry: checkName("members({ entry })", "entry", options.entry),
-    user: checkName("members({ user })", "user", options.user),
-    level: checkName("members({ level })", "level", options.level),
-    levels: checkLevels(options.levels),
-  });
+  const read = membershipRead(options, (option) => `members({ ${option} })`);
   return definePolicy({
     kind: "members",
     membership: read,

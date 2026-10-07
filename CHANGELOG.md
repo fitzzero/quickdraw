@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.1] (unreleased)
+
+Fixes from the independent review of 5.0.0 after the farseer migration
+(findings R1.1, R1.2 and R1.4).
+
+### Behavior changes for 5.0.0 apps
+
+- **A `resolver` policy without `reads` warns.** While `NODE_ENV` is not
+  `"production"` the server logs `[quickdraw:resolver-without-reads]` once
+  for each service whose policy is, or combines in `anyOf`, a `resolver`
+  that declares no `reads`, and a test app made with `strictWarnings`
+  fails to start. Declare what the levels depend on, or `reads: "none"`.
+
+### Security
+
+- **A `resolver` policy is re-checked when access is revoked (R1.1).** A
+  hand-written policy declared no reads, so no tracked write re-checked it:
+  a member removed from a table a resolver read kept the live rows,
+  collection scopes and change topics it had let them subscribe to, and
+  kept receiving their updates. `resolver({ levelsFor, where?, reads })`
+  now declares what the levels depend on, in the terms the other policies
+  use: `reads: { columns, memberships }` names columns of the service's
+  model and membership tables as `members` takes them (`entry` holding this
+  service's row id). Tracked writes to them evict cached lookups and
+  re-check what the policy decided, as for `owner`, `jsonAcl` and
+  `members`; `tools.rows(ids)` reads the declared columns, and
+  `tools.memberships(table, ...)` with a copy of a declared table is kept
+  with `cacheMs` and evicted like `members`'. `defineService` checks the
+  declared columns and tables against the Prisma client at compile time.
+  `reads: "none"` says nothing a tracked write changes can change a level
+  (the principal's grants alone, say).
+
 ## [5.0.0] - 2026-10-05
 
 quickdraw 5.0 rebuilds what an app is written against. A service is

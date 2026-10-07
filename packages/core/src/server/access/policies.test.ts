@@ -71,6 +71,7 @@ const resolved = qd.defineService(plain("resolved"), {
     levelsFor: (principal, ids) =>
       new Map(ids.map((id) => [id, principal.userId === "root" ? "Admin" : "Owner"])),
     where: (principal) => (principal.userId === "root" ? {} : "none"),
+    reads: "none",
   }),
   methods: {},
 });
@@ -78,6 +79,27 @@ const listless = qd.defineService(plain("listless"), {
   model: "project",
   access: resolver({
     levelsFor: (_principal, ids) => Object.fromEntries(ids.map((id) => [id, "Read"])),
+    reads: "none",
+  }),
+  methods: {},
+});
+/** A resolver over the columns it declares: Admin for the owner, Read for a project named "Open". */
+const columnResolved = qd.defineService(plain("columnResolved"), {
+  model: "project",
+  access: resolver({
+    levelsFor: async (principal, ids, tools) => {
+      const rows = await tools.rows(ids);
+      return new Map(
+        ids.map((id) => {
+          const row = rows.get(id);
+          return [
+            id,
+            row?.ownerId === principal.userId ? "Admin" : row?.name === "Open" ? "Read" : null,
+          ];
+        }),
+      );
+    },
+    reads: { columns: ["ownerId", "name"] },
   }),
   methods: {},
 });
@@ -99,6 +121,7 @@ const services = [
   inheritedTasks,
   resolved,
   listless,
+  columnResolved,
   publicProjects,
 ] as const;
 
@@ -282,6 +305,110 @@ describe("each policy's levels", () => {
     expect((await dispatcher.access.levelsFor("listless", as(board.ada), ["a"])).get("a")).toBe(
       "Read",
     );
+  });
+
+  it("resolver: tools.rows reads the columns it declares, in one statement", async () => {
+    await h.prisma.project.update({ where: { id: board.p2 }, data: { name: "Open" } });
+    expect(await levels("columnResolved", [board.p1, board.p2, "missing"])).toEqual({
+      ada: ["Admin", "Read", null],
+      bo: [null, "Read", null],
+      cy: [null, "Read", null],
+      di: [null, "Read", null],
+      ed: [null, "Admin", null],
+    });
+    const counted = await h.storage.countStatements(() =>
+      dispatcher.access.levelsFor("columnResolved", as(board.ada), [board.p1, board.p2]),
+    );
+    expect(counted.statements).toBe(1);
+  });
+});
+
+describe("resolver({ reads })", () => {
+  const levelsFor = () => ({});
+  const membership = {
+    model: "projectMember",
+    entry: "projectId",
+    user: "userId",
+    level: "role",
+  } as const;
+
+  it("declares the columns and membership tables its levels depend on, or none", () => {
+    expect(
+      resolver({
+        levelsFor,
+        reads: { columns: ["ownerId", "acl", "ownerId"], memberships: [membership] },
+      }).reads,
+    ).toEqual({
+      columns: ["ownerId", "acl"],
+      memberships: [{ ...membership, levels: undefined }],
+      inherits: [],
+      storage: true,
+    });
+    const roles = { ...membership, levels: { lead: "Admin" } } as const;
+    expect(resolver({ levelsFor, reads: { memberships: [roles] } }).reads.memberships).toEqual([
+      roles,
+    ]);
+    const none = { columns: [], memberships: [], inherits: [], storage: false };
+    expect(resolver({ levelsFor, reads: "none" }).reads).toEqual(none);
+    expect(resolver({ levelsFor }).reads).toEqual(none);
+  });
+
+  it("refuses reads it could not register", () => {
+    const refused: readonly (readonly [unknown, string])[] = [
+      ["all", 'reads must be { columns?, memberships? } or "none"'],
+      [["ownerId"], 'reads must be { columns?, memberships? } or "none"'],
+      [
+        { column: ["ownerId"] },
+        'reads has an unknown key "column"; the keys are columns and memberships',
+      ],
+      [{ columns: "ownerId" }, "columns must be a list of column names"],
+      [{ columns: ["ownerId", ""] }, "columns must be a list of column names"],
+      [
+        { memberships: membership },
+        "memberships must be a list of { model, entry, user, level, levels? }",
+      ],
+      [
+        { memberships: [null] },
+        "memberships must be a list of { model, entry, user, level, levels? }",
+      ],
+      [
+        { memberships: [{ ...membership, entry: "" }] },
+        "resolver({ reads: { memberships } }): entry must be a column name",
+      ],
+      [
+        { memberships: [{ ...membership, model: 3 }] },
+        "resolver({ reads: { memberships } }): model must be a model name",
+      ],
+      [
+        { memberships: [{ ...membership, levels: { lead: "Owner" } }] },
+        "resolver({ reads: { memberships } }): levels must map stored roles to access levels",
+      ],
+      [{}, 'name a column or a membership table, or pass "none"'],
+      [{ columns: [], memberships: [] }, 'name a column or a membership table, or pass "none"'],
+    ];
+    for (const [reads, message] of refused) {
+      expect(() => resolver({ levelsFor, reads: reads as never }), JSON.stringify(reads)).toThrow(
+        message,
+      );
+    }
+    expect(() => resolver({ levelsFor: "levels" as never })).toThrow(
+      "resolver({ levelsFor, where?, reads? }): levelsFor and where must be functions",
+    );
+  });
+
+  it("adds what it declares to anyOf's reads", () => {
+    const combined = anyOf(
+      owner("ownerId"),
+      resolver({ levelsFor, reads: { columns: ["acl"], memberships: [membership] } }),
+      resolver({ levelsFor, reads: "none" }),
+    );
+    expect(combined.reads).toEqual({
+      columns: ["ownerId", "acl"],
+      memberships: [{ ...membership, levels: undefined }],
+      inherits: [],
+      parents: [],
+      storage: true,
+    });
   });
 });
 
