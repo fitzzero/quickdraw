@@ -117,6 +117,65 @@ describe("admin.handlers", () => {
       'fieldOverrides for "title" has an unknown key "kind"',
     );
   });
+
+  it("refuses an editable list that names no writable field, or that an override or the contract contradicts", () => {
+    expect(refuse({ editable: ["nope"] })).toThrow(
+      'admin.handlers: editable: "nope" is not a field of the entity the kit shows',
+    );
+    expect(refuse({ editable: ["notes"], hiddenFields: ["notes"] })).toThrow(
+      'editable: "notes" is not a field of the entity the kit shows',
+    );
+    expect(refuse({ editable: ["createdAt"] })).toThrow(
+      'editable: "createdAt" is never editable; the database sets it',
+    );
+    expect(refuse({ editable: ["title", "title"] })).toThrow(
+      "editable must be a list of distinct field names",
+    );
+    expect(refuse({ editable: ["title"], fieldOverrides: { status: { editable: true } } })).toThrow(
+      'fieldOverrides: "status" is editable: true, which editable leaves out; name it in editable instead',
+    );
+    expect(refuse({ editable: ["title"], fieldOverrides: { title: { editable: false } } })).toThrow(
+      'fieldOverrides: "title" is editable: false, which editable names; leave it out of editable instead',
+    );
+    // Overrides that agree with the list are fine.
+    expect(
+      Object.keys(
+        admin.handlers(notes, {
+          editable: ["title"],
+          fieldOverrides: { title: { editable: true }, status: { editable: false } },
+        }),
+      ),
+    ).toHaveLength(4);
+    const listed = defineContract("listedService", {
+      entity: taskEntity,
+      methods: {
+        ...contractAdmin.contract({ entity: taskEntity, editable: ["title", "status"] }),
+      },
+    });
+    expect(refuse({ editable: ["title"] }, listed)).toThrow(
+      'admin.handlers: editable names "title", but admin.contract was given "title", "status": give both halves the same fields',
+    );
+    expect(() => admin.handlers(listed, { editable: ["status", "title"] })).not.toThrow();
+    expect(() => admin.handlers(listed)).not.toThrow();
+    const twice = defineContract("twiceService", {
+      entity: taskEntity,
+      methods: {
+        ...contractAdmin.contract({
+          entity: taskEntity,
+          editable: ["title"],
+          expose: ["adminCreate"],
+        }),
+        ...contractAdmin.contract({
+          entity: taskEntity,
+          editable: ["status"],
+          expose: ["adminUpdate"],
+        }),
+      },
+    });
+    expect(refuse(undefined, twice)).toThrow(
+      "admin.handlers: admin.contract was given two editable lists for twiceService",
+    );
+  });
 });
 
 describe("defineService with the admin kit", () => {
@@ -214,5 +273,28 @@ describe("the kit's MCP tools", () => {
     expect(update.definitions).toBeDefined();
     expect(schemaOf("taskService_adminMeta")).toMatchObject({ type: "object", properties: {} });
     expect(Object.keys(taskContract.methods)).toHaveLength(10);
+  });
+
+  it("name only the editable fields when the contract lists them", () => {
+    const listed = defineContract("listedService", {
+      entity: taskEntity,
+      methods: {
+        ...contractAdmin.contract({
+          entity: taskEntity,
+          editable: ["title"],
+          expose: ["adminUpdate"],
+        }),
+      },
+    });
+    const service = qd.defineService(listed, {
+      model: "task",
+      methods: { ...admin.handlers(listed) },
+    });
+    const tools = describeTools([service]);
+    expect(tools.map((tool) => tool.name)).toEqual(["listedService_adminUpdate"]);
+    const schema = tools[0]?.inputSchema as unknown as
+      | { readonly properties: { readonly data: { readonly properties: object } } }
+      | undefined;
+    expect(Object.keys(schema?.properties.data.properties ?? {})).toEqual(["title"]);
   });
 });

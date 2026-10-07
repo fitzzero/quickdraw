@@ -11,8 +11,9 @@ import { admin as adminContract, defineContract } from "../../../index";
 import { createTestApp, type TestApp } from "../../../testing/index";
 import { projectContract, projectService, qd } from "../../emit/__tests__/live";
 import { admin, inherit } from "../../index";
-import { adminApp, as, serviceAdmin, taskContract } from "./__tests__/fixture";
-import { displayNameOf, labelOf } from "./meta";
+import { adminSpecOf } from "../../../contract/kits/admin";
+import { adminApp, as, serviceAdmin, taskContract, taskEntity } from "./__tests__/fixture";
+import { adminFieldsOf, displayNameOf, labelOf } from "./meta";
 
 const kit = adminApp();
 
@@ -224,6 +225,36 @@ describe("adminMeta", () => {
       code: "VALIDATION",
       data: { issues: [{ path: ["data", "title"], message: '"title" is not editable' }] },
     });
+  });
+});
+
+describe("editable (finding R1.4)", () => {
+  const fail = (message: string): never => {
+    throw new TypeError(message);
+  };
+  const options = { displayName: undefined, hiddenFields: undefined, fieldOverrides: undefined };
+
+  it("takes the list admin.contract was given when the handlers give none", () => {
+    const listed = adminContract.contract({ entity: taskEntity, editable: ["title", "status"] });
+    const spec = adminSpecOf(listed.adminMeta);
+    if (spec === undefined) {
+      throw new Error("admin.contract made adminMeta");
+    }
+    const fields = adminFieldsOf("taskService", spec, options, fail);
+    const editable = fields.meta.fields
+      .filter((field) => field.editable)
+      .map((field) => field.name);
+    expect(editable).toEqual(["title", "status"]);
+    expect([...fields.readOnly]).toEqual(
+      expect.arrayContaining(["id", "createdAt", "projectId", "ordinal", "notes"]),
+    );
+    expect(fields.readOnly.has("title")).toBe(false);
+    // Without a list in either half, every field but id and the timestamps is editable.
+    const open = adminFieldsOf("taskService", { ...spec, editable: undefined }, options, fail);
+    expect([...open.readOnly]).toEqual(["id", "createdAt", "updatedAt"]);
+    expect(() =>
+      adminFieldsOf("taskService", spec, { ...options, hiddenFields: ["status"] }, fail),
+    ).toThrow(`admin.contract's editable: "status" is not a field of the entity the kit shows`);
   });
 });
 

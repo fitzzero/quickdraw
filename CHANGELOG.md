@@ -20,6 +20,8 @@ Fixes from the independent review of 5.0.0 after the farseer migration
   ignored, so code that passes it still compiles; an app that wants a
   Codespace lists a pattern in `allowedPatterns`. The auth routes kit
   already refused them.
+- The admin kit's `editable` is opt-in: without it, the kit writes what it
+  wrote in 5.0.0.
 
 ### Security
 
@@ -45,6 +47,25 @@ Fixes from the independent review of 5.0.0 after the farseer migration
   production any Codespace page (anyone can open one) passed an app's CORS,
   cookie or redirect check that used the helper. The allowance is gone, and
   `allowCodespaces` is a deprecated option that does nothing.
+
+### Admin kit
+
+- **`editable`, the fields the admin kit may write (R1.4).** The kit wrote
+  every field of the entity but `id` and the timestamps, owner and
+  foreign-key columns included, unless a `fieldOverrides` entry made one
+  read-only. `admin.handlers(contract, { editable: ["title", "status"] })`
+  names the only fields `adminCreate` and `adminUpdate` write: `adminMeta`
+  reports every other field `editable: false`, so a generic form leaves it
+  read-only, and a write naming one is `VALIDATION` ("is not editable").
+  Each name must be a field the kit shows, never `id` or a timestamp, and
+  a `fieldOverrides` entry that says otherwise about a field fails when the
+  handlers are made. `admin.contract({ entity, editable })` takes the same
+  list: the writes' input checks, their types and their JSON Schema (and so
+  the MCP tools made from it) name only those fields. Given to both halves,
+  the two lists must name the same fields; given to the contract alone, it
+  applies to the handlers too. `AdminData`, `AdminCreateInput` and
+  `AdminUpdateInput` take the written fields as an optional second type
+  argument, and `AdminWritable<Row>` names the default.
 
 ## [5.0.0] - 2026-10-05
 

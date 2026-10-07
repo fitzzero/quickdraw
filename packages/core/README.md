@@ -1956,6 +1956,8 @@ export const taskService = qd.defineService(task, {
       displayName: "Tasks",
       // never shown, returned or written
       hiddenFields: ["notes"],
+      // the only fields adminCreate and adminUpdate write; the rest are read-only
+      editable: ["title", "status"],
       fieldOverrides: { assigneeId: { type: "relation", relationService: "userService" } },
     }),
   },
@@ -2013,12 +2015,22 @@ export function AdminTasks() {
   `adminUpdate({ id, data })` write the entity's fields through the tracked
   client, so subscribers and collections get the same frames as for any
   other write; `adminDelete({ id })` returns `null`. `id`, `createdAt` and
-  `updatedAt` are never writable, nor are hidden fields or those an override
-  made read-only (`VALIDATION`); without a service-wide `Admin` grant, nor
+  `updatedAt` are never writable, nor are hidden fields, those an override
+  made read-only or those `editable` leaves out (`VALIDATION`); without a service-wide `Admin` grant, nor
   are the columns the policy reads, and a row moves to another parent only
   with the row level on it (`FORBIDDEN`, as for the read/write kit); each
   value is checked by the entity schema itself, and a value the database
   refuses is `VALIDATION`. A missing row is `NOT_FOUND`.
+- `editable: ["title", "status"]` names the only fields `adminCreate` and
+  `adminUpdate` write: `adminMeta` reports every other field
+  `editable: false`, so a generic form leaves it read-only, and a write
+  naming one is `VALIDATION` ("is not editable"). Each must be a field the
+  kit shows, never `id` or a timestamp, and a `fieldOverrides` entry may
+  not say otherwise. `admin.contract({ entity, editable })` takes the same
+  list, so the writes' input checks, types and JSON Schema (and the MCP
+  tools made from it) name only those fields; given to both halves, the
+  two lists must name the same fields. Without it, every field but `id`
+  and the timestamps is written, as in 5.0.0.
 - `adminMeta()` returns `{ serviceName, displayName, fields }`, one
   `{ name, type, label, required, editable, showInTable, sortable, filterable, enumValues?, relationService?, kind?, showInForm? }`
   per field: `type` is

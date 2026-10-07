@@ -1,8 +1,8 @@
 // The types of `admin.handlers` (RFC 0003 section 12.4). The contract half
 // tags each method it made (`AdminTag`), so the server half finds the kit's
 // methods in any contract by type: `access` may give a form for each of them
-// and nothing else, `hiddenFields` and `fieldOverrides` name the entity's
-// fields, and what `admin.handlers` returns spreads into `defineService`'s
+// and nothing else, `hiddenFields`, `editable` and `fieldOverrides` name the
+// entity's fields, and what `admin.handlers` returns spreads into `defineService`'s
 // `methods`, one entry per admin method, with the form each runs under: a
 // service-wide `Admin` grant unless `access` gives another.
 
@@ -10,6 +10,7 @@ import type { AnyContract } from "../../../contract/defineContract";
 import type { EntityOf, MethodName, OutputOf, ParsedInputOf } from "../../../contract/infer";
 import type { AdminMethodsOf, AdminSpec } from "../../../contract/kits/admin";
 import type { AdminFieldConfig } from "../../../contract/kits/adminFields";
+import type { AdminNeverWritable } from "../../../contract/kits/adminSchemas";
 import type { AccessFor, AccessForm } from "../../access/types";
 import type { KitHandler } from "../crud/runtime";
 import type { KitContext } from "../crud/types";
@@ -150,6 +151,18 @@ export interface AdminHandlersOptions<C extends AnyContract, A, Db = unknown> {
   readonly grants?: [Extract<AdminFieldOf<C>, "serviceAccess" | "service_access">] extends [never]
     ? never
     : boolean;
+  /**
+   * The only fields `adminCreate` and `adminUpdate` write (finding R1.4 of
+   * the 5.0.0 review): `adminMeta` reports every other field `editable:
+   * false`, so a generic form leaves it read-only, and a write naming one is
+   * refused with `VALIDATION` ("is not editable"). Each must be a field the
+   * kit shows, never `id` or a timestamp, and a `fieldOverrides` entry may
+   * not say otherwise about it. When `admin.contract` was given a list, this
+   * one must name the same fields, and without this one the contract's
+   * applies. Without either, the kit writes every field but `id`, the
+   * timestamps, the hidden ones and those an override made read-only.
+   */
+  readonly editable?: readonly Exclude<AdminFieldOf<C>, AdminNeverWritable>[];
   /** Changes to the configuration `adminMeta` derives, per field. */
   readonly fieldOverrides?: { readonly [Field in AdminFieldOf<C>]?: AdminFieldOverride };
   /**

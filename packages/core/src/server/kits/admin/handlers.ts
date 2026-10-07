@@ -1,6 +1,6 @@
 // `admin.handlers(contract, { access?, displayName?, hiddenFields?,
-// fieldOverrides?, rowless?, grants?, onWrite?, onCommitted? })` (RFC 0003
-// section 12.4):
+// editable?, fieldOverrides?, rowless?, grants?, onWrite?, onCommitted? })`
+// (RFC 0003 section 12.4):
 // the admin kit's server half.
 // It finds the methods `admin.contract` made in the contract and returns an
 // implementation of each, to spread into `defineService`'s `methods`:
@@ -9,7 +9,7 @@
 //     model: "task",
 //     access: inherit({ from: project, via: "projectId" }),
 //     methods: {
-//       ...admin.handlers(task, { displayName: "Tasks", hiddenFields: ["internalNotes"] }),
+//       ...admin.handlers(task, { displayName: "Tasks", hiddenFields: ["internalNotes"], editable: ["title"] }),
 //       rename: { access: { entry: "Moderate" }, handler: ... },
 //     },
 //   });
@@ -64,6 +64,7 @@ const OPTION_KEYS: readonly string[] = [
   "access",
   "displayName",
   "hiddenFields",
+  "editable",
   "fieldOverrides",
   "rowless",
   "grants",
@@ -113,7 +114,7 @@ function checkOptions(options: unknown): UnknownRecord {
   }
   if (!isRecord(options)) {
     fail(
-      "options must be { access?, displayName?, hiddenFields?, fieldOverrides?, rowless?, grants?, onWrite?, onCommitted? }",
+      "options must be { access?, displayName?, hiddenFields?, editable?, fieldOverrides?, rowless?, grants?, onWrite?, onCommitted? }",
     );
   }
   const unknownKey = Object.keys(options).find((key) => !OPTION_KEYS.includes(key));
@@ -143,6 +144,25 @@ function checkAccess(access: unknown, names: readonly string[]): UnknownRecord {
   return access;
 }
 
+/** The `editable` list `admin.contract` was given for the kit's methods: at most one. */
+function contractEditable(
+  contract: AnyContract,
+  specs: readonly AdminSpec[],
+): readonly string[] | undefined {
+  const lists = new Map<string, readonly string[]>();
+  for (const { editable } of specs) {
+    if (editable !== undefined) {
+      lists.set([...editable].sort().join("\u0000"), editable);
+    }
+  }
+  if (lists.size > 1) {
+    fail(
+      `admin.contract was given two editable lists for ${contract.name}: give its write methods one`,
+    );
+  }
+  return [...lists.values()][0];
+}
+
 /** The kit's fields across its methods: every method's declared filter and sort fields. */
 function fieldsOf(
   contract: AnyContract,
@@ -155,6 +175,7 @@ function fieldsOf(
     fields: first?.fields ?? [],
     filter: [...new Set(specs.flatMap((one) => one.filter))],
     sort: [...new Set(specs.flatMap((one) => one.sort))],
+    editable: contractEditable(contract, specs),
   };
   return adminFieldsOf(
     contract.name,
@@ -162,6 +183,7 @@ function fieldsOf(
     {
       displayName: options.displayName,
       hiddenFields: options.hiddenFields,
+      editable: options.editable,
       fieldOverrides: options.fieldOverrides,
       grants: options.grants,
     },
@@ -216,7 +238,7 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty,
 
 /**
  * The admin kit: `admin.handlers(contract, { access?, displayName?,
- * hiddenFields?, fieldOverrides?, rowless?, grants? })` implements the
+ * hiddenFields?, editable?, fieldOverrides?, rowless?, grants? })` implements the
  * methods `admin.contract` made in `contract`, each open to a service-wide
  * `Admin` grant unless `access` gives another form. `admin.contract` is here
  * too, for server code; a shared package imports it from the root export.

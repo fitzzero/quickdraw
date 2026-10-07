@@ -87,20 +87,27 @@ export interface AdminPage<Item> {
 /** The fields no admin write sets: the row's key and its timestamps. */
 export type AdminNeverWritable = "id" | "createdAt" | "updatedAt" | "created_at" | "updated_at";
 
-/** The field values an admin write may set: any of the entity's fields but `id` and the timestamps. */
-export type AdminData<Row> = {
-  readonly [Field in Exclude<keyof Row, AdminNeverWritable>]?: Row[Field];
+/** The fields an admin write sets without `editable`: any of the entity's fields but `id` and the timestamps. */
+export type AdminWritable<Row> = Exclude<keyof Row, AdminNeverWritable>;
+
+/**
+ * The field values an admin write may set: those of `Field`, the fields
+ * `admin.contract({ editable })` names, else any of the entity's fields but
+ * `id` and the timestamps.
+ */
+export type AdminData<Row, Field extends PropertyKey = AdminWritable<Row>> = {
+  readonly [Name in Field & keyof Row]?: Row[Name];
 };
 
 /** `adminCreate`: the new row's field values. */
-export interface AdminCreateInput<Row> {
-  readonly data: AdminData<Row>;
+export interface AdminCreateInput<Row, Field extends PropertyKey = AdminWritable<Row>> {
+  readonly data: AdminData<Row, Field>;
 }
 
 /** `adminUpdate`: the row, and the field values to change. */
-export interface AdminUpdateInput<Row> {
+export interface AdminUpdateInput<Row, Field extends PropertyKey = AdminWritable<Row>> {
   readonly id: string;
-  readonly data: AdminData<Row>;
+  readonly data: AdminData<Row, Field>;
 }
 
 /** `adminCreate`'s input as its handler receives it: `data` without `undefined` values. */
@@ -291,18 +298,18 @@ function writeInput<Input, Parsed>(
 }
 
 /** `adminCreate`'s input: `{ data }`, the new row's values of `writable` fields. */
-export function adminCreateInput<Row>(
+export function adminCreateInput<Row, Field extends PropertyKey = AdminWritable<Row>>(
   entity: StandardSchemaV1,
   writable: readonly string[],
-): KitSchema<AdminCreateInput<Row>, AdminCreateQuery> {
+): KitSchema<AdminCreateInput<Row, Field>, AdminCreateQuery> {
   return writeInput(entity, writable, false);
 }
 
 /** `adminUpdate`'s input: `{ id, data }`, the values of `writable` fields to change. */
-export function adminUpdateInput<Row>(
+export function adminUpdateInput<Row, Field extends PropertyKey = AdminWritable<Row>>(
   entity: StandardSchemaV1,
   writable: readonly string[],
-): KitSchema<AdminUpdateInput<Row>, AdminUpdateQuery> {
+): KitSchema<AdminUpdateInput<Row, Field>, AdminUpdateQuery> {
   return writeInput(entity, writable, true);
 }
 
