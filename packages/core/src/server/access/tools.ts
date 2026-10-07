@@ -138,13 +138,33 @@ function bindingOf(state: EngineState, contract: AnyContract): Binding {
   return binding;
 }
 
-/** Memo and cache for a membership table the policy declared; memo only for one it did not (a resolver's). */
+/** True when two membership reads name the same table and columns, and map roles alike. */
+function sameRead(a: MembershipRead, b: MembershipRead): boolean {
+  const columns = (["model", "entry", "user", "level"] as const).every((key) => a[key] === b[key]);
+  if (!columns || a.levels === undefined || b.levels === undefined) {
+    return columns && a.levels === b.levels;
+  }
+  const mapped = b.levels;
+  const roles = Object.entries(a.levels);
+  return (
+    roles.length === Object.keys(mapped).length &&
+    roles.every(([role, level]) => Object.hasOwn(mapped, role) && mapped[role] === level)
+  );
+}
+
+/**
+ * Memo and cache for a membership table the policy declared, which a
+ * resolver names with a copy of what its `reads` declared; memo only for one
+ * it did not declare (a tracked write to it evicts nothing).
+ */
 function membershipScope(
   scope: CallScope,
   binding: Binding,
   read: MembershipRead,
 ): [LookupScope, Namespace] {
-  const declared = binding.memberships.get(read);
+  const declared =
+    binding.memberships.get(read) ??
+    [...binding.memberships].find(([known]) => sameRead(known, read))?.[1];
   if (declared !== undefined) {
     return [scope.cached, declared];
   }

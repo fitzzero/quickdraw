@@ -14,6 +14,8 @@ export const taskService = qd.defineService(task, {
       displayName: "Tasks",
       // never shown, returned or written
       hiddenFields: ["notes"],
+      // the only fields adminCreate and adminUpdate write; the rest are read-only
+      editable: ["title", "status"],
       fieldOverrides: { assigneeId: { type: "relation", relationService: "userService" } },
     }),
   },

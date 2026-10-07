@@ -62,11 +62,15 @@ export async function startNode<const S extends readonly AnyService[]>(
   const sub = pub.duplicate();
   sub.on("error", () => undefined);
   await Promise.all([pub.connect(), sub.connect()]);
+  // A test app that fails to start (a strict app's startup warning) leaves no connection open.
   const app = await create({
     ...options,
     socket: { ...options.socket, adapter: createAdapter(pub, sub, { key: settings.prefix }) },
     cluster: { keyPrefix: settings.prefix, ...options.cluster },
-  } as TestAppOptions<S>);
+  } as TestAppOptions<S>).catch(async (error: unknown) => {
+    await Promise.all([pub, sub].map(closeClient));
+    throw error;
+  });
   return { app: app as unknown as TestApp, clients: [pub, sub] };
 }
 

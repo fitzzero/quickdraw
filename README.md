@@ -734,16 +734,23 @@ export const taskService = qd.defineService(task, {
   (`qd:access`), and in-process callers load the grants again.
 - Policies: `owner(field)`, `jsonAcl(field, { owner? })`,
   `members({ model, entry, user, level, levels? })`, `inherit({ from, via })`,
-  `anyOf(...)`, `resolver({ levelsFor, where? })` and `everyone(level)`
+  `anyOf(...)`, `resolver({ levelsFor, where?, reads })` and `everyone(level)`
   (every signed-in user has `level` on every row, reading nothing: public
   profiles are `anyOf(owner("id"), everyone("Read"))`; unlike `rowless: true`
-  on a method, it covers subscriptions and lists too). Their column names are
-  checked against the Prisma client's models at compile time. A lookup is one
-  batched query per table, memoized for the call, so checking 60 ids costs
-  what checking one does. `entry` access needs a policy; a service without
-  `model` may only use `"public"`, `"authenticated"`, `{ service }` and
-  `custom`. `inherit` uses the parent's policy only: grants on the parent's
-  service do not flow down.
+  on a method, it covers subscriptions and lists too). A `resolver` is app
+  code, so it says what its levels depend on: `reads: { columns, memberships }`
+  names columns of the service's model and membership tables as `members`
+  takes them (`entry` holding this service's row id), and tracked writes to
+  them re-check what it decided, as for the other policies; `reads: "none"`
+  says nothing a tracked write changes can change a level (the principal's
+  grants alone, say). A resolver with neither is never re-checked, and the
+  server warns `[quickdraw:resolver-without-reads]` when it starts. Their
+  column and table names are checked against the Prisma client's models at
+  compile time. A lookup is one batched query per table, memoized for the
+  call, so checking 60 ids costs what checking one does. `entry` access
+  needs a policy; a service without `model` may only use `"public"`,
+  `"authenticated"`, `{ service }` and `custom`. `inherit` uses the
+  parent's policy only: grants on the parent's service do not flow down.
 - One policy decides every surface: method calls, entity subscriptions,
   collection scopes, the kits' lists and searches, streams and channels.
 - When a tracked write lowers or removes someone's access, their sockets
@@ -1948,6 +1955,8 @@ export const taskService = qd.defineService(task, {
       displayName: "Tasks",
       // never shown, returned or written
       hiddenFields: ["notes"],
+      // the only fields adminCreate and adminUpdate write; the rest are read-only
+      editable: ["title", "status"],
       fieldOverrides: { assigneeId: { type: "relation", relationService: "userService" } },
     }),
   },
@@ -2005,12 +2014,24 @@ export function AdminTasks() {
   `adminUpdate({ id, data })` write the entity's fields through the tracked
   client, so subscribers and collections get the same frames as for any
   other write; `adminDelete({ id })` returns `null`. `id`, `createdAt` and
-  `updatedAt` are never writable, nor are hidden fields or those an override
-  made read-only (`VALIDATION`); without a service-wide `Admin` grant, nor
-  are the columns the policy reads, and a row moves to another parent only
-  with the row level on it (`FORBIDDEN`, as for the read/write kit); each
-  value is checked by the entity schema itself, and a value the database
-  refuses is `VALIDATION`. A missing row is `NOT_FOUND`.
+  `updatedAt` are never writable, nor are hidden fields, those an override
+  made read-only or those `editable` leaves out (`VALIDATION`); without a
+  service-wide `Admin` grant, nor are the columns the policy reads, and a
+  row moves to another parent only with the row level on it (`FORBIDDEN`,
+  as for the read/write kit); each value is checked by the entity schema
+  itself, and a value the database refuses is `VALIDATION`. A missing row
+  is `NOT_FOUND`.
+- `editable: ["title", "status"]` names the only fields `adminCreate` and
+  `adminUpdate` write: `adminMeta` reports every other field
+  `editable: false`, so a generic form leaves it read-only, and a write
+  naming one is `VALIDATION` ("is not editable"). Each must be a field the
+  kit shows, never `id` or a timestamp, and a `fieldOverrides` entry may
+  not say otherwise. `admin.contract({ entity, editable })` takes the same
+  list, so the writes' input checks, types and JSON Schema (and the MCP
+  tools made from it) name only those fields; given to both halves, the
+  two lists must name the same fields. Without either list the kit writes
+  what it wrote in 5.0.0: every field it shows but `id` and the timestamps,
+  less those an override made read-only.
 - `adminMeta()` returns `{ serviceName, displayName, fields }`, one
   `{ name, type, label, required, editable, showInTable, sortable, filterable, enumValues?, relationService?, kind?, showInForm? }`
   per field: `type` is
@@ -2856,6 +2877,7 @@ one format and names the method call it happened in:
 | `batch-create-many`      | a `createMany` in an array-form `$transaction` could not report its rows                                                                                                                           |
 | `repeated-call`          | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                                                                                                               |
 | `tiered-field-in-output` | a method's own output schema declares a field the contract tiers, which only projection outputs strip; raised when the server is made (for an output without JSON Schema, when a reply carries it) |
+| `resolver-without-reads` | a service's policy is, or combines in `anyOf`, a `resolver` without `reads`, so no tracked write re-checks it; raised when the server is made                                                      |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
@@ -2873,9 +2895,10 @@ fails: the call it happened in fails with `INTERNAL` and the error as its
 once the reply was recorded (over a socket or HTTP the reply was already
 sent, so that error is logged, not thrown). Strictness belongs to the app:
 warnings outside its calls (an ambient write while seeding, another app's
-calls) are logged as usual, and `app.close()` ends it. The one raised when
-the app is made, `tiered-field-in-output`, is thrown from `createTestApp`
-itself, so a strict app over such a method does not start.
+calls) are logged as usual, and `app.close()` ends it. The ones raised when
+the app is made, `tiered-field-in-output` and `resolver-without-reads`, are
+thrown from `createTestApp` itself, so a strict app over such a method or
+policy does not start.
 
 A `repeated-call` warning names a client caught in a loop (a mutation fired
 from an effect that its own result runs again, a refetch that triggers

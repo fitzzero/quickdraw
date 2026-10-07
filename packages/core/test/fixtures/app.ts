@@ -26,7 +26,15 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach } from "vitest";
 import { z } from "zod";
-import { QuickdrawError, crud, defineContract, mutation, query, search } from "../../src/index";
+import {
+  QuickdrawError,
+  crud,
+  defineContract,
+  mutation,
+  query,
+  search,
+  type Logger,
+} from "../../src/index";
 import { createHarness, type Harness } from "../../src/prisma/__tests__/harness";
 import { findTask, seedBoard, type Board } from "../../src/server/access/__tests__/board";
 import {
@@ -230,12 +238,15 @@ export function tick(ms = 0): Promise<void> {
 
 /**
  * What a test adds to the app: services of its own (callable through
- * `app.as(...)` untyped, since the app's type covers the fixture's), and a
- * sink that sees every flush.
+ * `app.as(...)` untyped, since the app's type covers the fixture's), a
+ * sink that sees every flush, a logger that sees its warnings, and
+ * `strictWarnings`.
  */
 export interface StartOptions {
   readonly services?: readonly AnyService[];
   readonly flushSink?: FlushSink;
+  readonly logger?: Logger;
+  readonly strictWarnings?: boolean;
 }
 
 /** Boots the app on `harness`'s database; `records` are its completed calls, `reads` its storage reads. */
@@ -250,6 +261,8 @@ async function startApp(harness: Harness, options: StartOptions = {}) {
     storage,
     onCall: (record) => records.push(record),
     ...(options.flushSink === undefined ? {} : { flushSink: options.flushSink }),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    ...(options.strictWarnings === undefined ? {} : { strictWarnings: options.strictWarnings }),
   });
   /** Runs `fn` on the tracked client in a unit of work, as a job does: its writes send frames. */
   const write = <T>(fn: (db: PrismaClient) => Promise<T>): Promise<T> =>

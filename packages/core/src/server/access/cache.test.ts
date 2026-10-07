@@ -9,7 +9,14 @@ import { z } from "zod";
 import { defineContract, mutation } from "../../index";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { captureLogger, deferred } from "../__tests__/fixtures";
-import type { AccessChange, AccessOptions, Dispatcher } from "../index";
+import {
+  resolver,
+  type AccessChange,
+  type AccessOptions,
+  type Dispatcher,
+  type PolicyTools,
+  type Principal,
+} from "../index";
 import { createRegistry } from "../registry";
 import { as, projectService, qd, seedBoard, taskService, type Board } from "./__tests__/board";
 import { createAccessCache, createRequestMemo, lookup, namespace } from "./cache";
@@ -411,6 +418,105 @@ describe("eviction by tracked writes", () => {
     await dispatcher.run(() => h.db.project.delete({ where: { id: board.p2 } }));
     expect(changes).toEqual([{ service: "projectService", id: board.p2 }]);
   });
+});
+
+describe("a resolver's declared reads", () => {
+  const membership = {
+    model: "projectMember",
+    entry: "projectId",
+    user: "userId",
+    level: "role",
+  } as const;
+  /** Admin for the owner, else the member's role: what `anyOf(owner, members)` gives, in app code. */
+  const levelsFor = async (principal: Principal, ids: readonly string[], tools: PolicyTools) => {
+    const [rows, roles] = await Promise.all([
+      tools.rows(ids),
+      tools.memberships({ ...membership, levels: undefined }, principal.userId, ids),
+    ]);
+    return new Map(
+      ids.map((id) => [id, rows.get(id)?.ownerId === principal.userId ? "Admin" : roles.get(id)]),
+    );
+  };
+
+  const declared = { columns: ["ownerId"], memberships: [membership] } as const;
+
+  function resolverDispatcher(reads?: typeof declared | "none") {
+    const service = qd.defineService(defineContract("resolvedProjects", { methods: {} }), {
+      model: "project",
+      access: reads === undefined ? resolver({ levelsFor }) : resolver({ levelsFor, reads }),
+      methods: {},
+    });
+    const changes: AccessChange[] = [];
+    const dispatcher = qd.createDispatcher({
+      services: [service],
+      db: h.db,
+      access: { cacheMs: 60_000 },
+      logger: captureLogger(),
+    });
+    dispatcher.access.onAccessChanged((change) => {
+      changes.push(change);
+    });
+    /** The statements one lookup issued, and the level it found. */
+    const lookupNow = async (userId: string): Promise<[number, string | null]> => {
+      const counted = await h.storage.countStatements(() =>
+        dispatcher.access.levelsFor("resolvedProjects", as(userId), [board.p1]),
+      );
+      return [counted.statements, counted.value.get(board.p1) ?? null];
+    };
+    return { dispatcher, changes, lookupNow };
+  }
+
+  it("keeps what tools reads of them across requests, a copy of a declared table included", async () => {
+    const { lookupNow } = resolverDispatcher(declared);
+    expect(await lookupNow(board.bo)).toEqual([2, "Moderate"]);
+    expect(await lookupNow(board.bo)).toEqual([0, "Moderate"]);
+    expect(await lookupNow(board.cy)).toEqual([1, "Read"]);
+  });
+
+  it("re-checks a member on a row when a declared membership row is written", async () => {
+    const { dispatcher, changes, lookupNow } = resolverDispatcher(declared);
+    expect(await lookupNow(board.bo)).toEqual([2, "Moderate"]);
+    await dispatcher.run(() =>
+      h.db.projectMember.delete({
+        where: { projectId_userId: { projectId: board.p1, userId: board.bo } },
+      }),
+    );
+    expect(changes).toEqual([{ service: "resolvedProjects", id: board.p1, userId: board.bo }]);
+    // Only the membership is read again: the project's owner is still kept.
+    expect(await lookupNow(board.bo)).toEqual([1, null]);
+  });
+
+  it("re-checks a row for everyone when a declared column is written", async () => {
+    const { dispatcher, changes, lookupNow } = resolverDispatcher(declared);
+    expect(await lookupNow(board.ada)).toEqual([2, "Admin"]);
+    await dispatcher.run(() =>
+      h.db.project.update({ where: { id: board.p1 }, data: { ownerId: board.ed } }),
+    );
+    expect(changes).toEqual([{ service: "resolvedProjects", id: board.p1 }]);
+    expect(await lookupNow(board.ada)).toEqual([1, null]);
+    // A write that sets no declared column re-checks nothing.
+    await dispatcher.run(() =>
+      h.db.project.update({ where: { id: board.p1 }, data: { name: "Renamed" } }),
+    );
+    expect(changes).toHaveLength(1);
+  });
+
+  it.each([undefined, "none" as const])(
+    "re-checks nothing, and keeps no table it reads, with reads %s",
+    async (reads) => {
+      const { dispatcher, changes, lookupNow } = resolverDispatcher(reads);
+      expect(await lookupNow(board.bo)).toEqual([2, "Moderate"]);
+      // The membership table is not declared, so it is read afresh every time.
+      expect(await lookupNow(board.bo)).toEqual([1, "Moderate"]);
+      await dispatcher.run(() =>
+        h.db.projectMember.update({
+          where: { projectId_userId: { projectId: board.p1, userId: board.bo } },
+          data: { role: "Read" },
+        }),
+      );
+      expect(changes).toEqual([]);
+    },
+  );
 });
 
 describe("forgetting what another process changed", () => {

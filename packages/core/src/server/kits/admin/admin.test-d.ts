@@ -115,6 +115,35 @@ describe("admin.contract", () => {
     // @ts-expect-error createdAt is not writable
     update({ id: "t1", data: { createdAt: "2026-01-01T00:00:00.000Z" } });
   });
+
+  test("with editable, the writes take only the fields it names (finding R1.4)", () => {
+    const listed = defineContract("listedService", {
+      entity: taskRow,
+      methods: { ...adminContract.contract({ entity: taskRow, editable: ["title", "status"] }) },
+    });
+    const update = (input: InputOf<typeof listed, "adminUpdate">) => input;
+    const create = (input: InputOf<typeof listed, "adminCreate">) => input;
+    update({ id: "t1", data: { title: "New", status: "done" } });
+    create({ data: { title: "New" } });
+    // @ts-expect-error ordinal is not editable
+    update({ id: "t1", data: { ordinal: 2 } });
+    // @ts-expect-error projectId is not editable
+    create({ data: { title: "New", projectId: "p1" } });
+    expectTypeOf<InputOf<typeof listed, "adminUpdate">["data"]>().toEqualTypeOf<{
+      readonly title?: string;
+      readonly status?: "open" | "done";
+    }>();
+    adminContract.contract({
+      entity: taskRow,
+      // @ts-expect-error nope is not a field of the entity
+      editable: ["nope"],
+    });
+    adminContract.contract({
+      entity: taskRow,
+      // @ts-expect-error the database sets createdAt
+      editable: ["createdAt"],
+    });
+  });
 });
 
 describe("AdminFieldConfig", () => {
@@ -241,6 +270,16 @@ describe("admin.handlers", () => {
     admin.handlers(task, { hiddenFields: ["id"] });
     // @ts-expect-error sortable follows the contract's declared fields
     admin.handlers(task, { fieldOverrides: { title: { sortable: true } } });
+  });
+
+  test("editable names the entity's fields but id and the timestamps", () => {
+    admin.handlers(task, { editable: ["title", "status", "details"] });
+    // @ts-expect-error nope is not a field of the entity
+    admin.handlers(task, { editable: ["nope"] });
+    // @ts-expect-error the database sets updatedAt
+    admin.handlers(task, { editable: ["updatedAt"] });
+    // @ts-expect-error id is never editable
+    admin.handlers(task, { editable: ["id"] });
   });
 
   test("a contract without the kit's methods does not compile", () => {

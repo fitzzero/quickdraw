@@ -2,6 +2,70 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.1] (unreleased)
+
+Fixes from the independent review of 5.0.0 after the farseer migration
+(findings R1.1, R1.2 and R1.4).
+
+### Behavior changes for 5.0.0 apps
+
+- **A `resolver` policy without `reads` warns.** While `NODE_ENV` is not
+  `"production"` the server logs `[quickdraw:resolver-without-reads]` once
+  for each service whose policy is, or combines in `anyOf`, a `resolver`
+  that declares no `reads`, and a test app made with `strictWarnings`
+  fails to start. Declare what the levels depend on, or `reads: "none"`.
+- **A GitHub Codespaces origin is refused** wherever `validateRedirectOrigin`
+  decides: an app's own CORS, cookie or MCP origin check that calls it, and
+  the mock provider's redirect URIs. `allowCodespaces` is accepted and
+  ignored, so code that passes it still compiles; an app that wants a
+  Codespace lists a pattern in `allowedPatterns`. The auth routes kit
+  already refused them.
+- The admin kit's `editable` is opt-in: without it, the kit writes what it
+  wrote in 5.0.0.
+
+### Security
+
+- **A `resolver` policy is re-checked when access is revoked (R1.1).** A
+  hand-written policy declared no reads, so no tracked write re-checked it:
+  a member removed from a table a resolver read kept the live rows,
+  collection scopes and change topics it had let them subscribe to, and
+  kept receiving their updates. `resolver({ levelsFor, where?, reads })`
+  now declares what the levels depend on, in the terms the other policies
+  use: `reads: { columns, memberships }` names columns of the service's
+  model and membership tables as `members` takes them (`entry` holding this
+  service's row id). Tracked writes to them evict cached lookups and
+  re-check what the policy decided, as for `owner`, `jsonAcl` and
+  `members`; `tools.rows(ids)` reads the declared columns, and
+  `tools.memberships(table, ...)` with a copy of a declared table is kept
+  with `cacheMs` and evicted like `members`'. `defineService` checks the
+  declared columns and tables against the Prisma client at compile time.
+  `reads: "none"` says nothing a tracked write changes can change a level
+  (the principal's grants alone, say).
+- **`validateRedirectOrigin` never allows a GitHub Codespaces origin
+  (R1.2).** It allowed any `https://*-*-<port>.app.github.dev` unless
+  `allowCodespaces: false` was passed, with no `NODE_ENV` check, so in
+  production any Codespace page (anyone can open one) passed an app's CORS,
+  cookie or redirect check that used the helper. The allowance is gone, and
+  `allowCodespaces` is a deprecated option that does nothing.
+
+### Admin kit
+
+- **`editable`, the fields the admin kit may write (R1.4).** The kit wrote
+  every field it shows but `id` and the timestamps, owner and foreign-key
+  columns included, unless a `fieldOverrides` entry made one read-only. `admin.handlers(contract, { editable: ["title", "status"] })`
+  names the only fields `adminCreate` and `adminUpdate` write: `adminMeta`
+  reports every other field `editable: false`, so a generic form leaves it
+  read-only, and a write naming one is `VALIDATION` ("is not editable").
+  Each name must be a field the kit shows, never `id` or a timestamp, and
+  a `fieldOverrides` entry that says otherwise about a field fails when the
+  handlers are made. `admin.contract({ entity, editable })` takes the same
+  list: the writes' input checks, their types and their JSON Schema (and so
+  the MCP tools made from it) name only those fields. Given to both halves,
+  the two lists must name the same fields; given to the contract alone, it
+  applies to the handlers too. `AdminData`, `AdminCreateInput` and
+  `AdminUpdateInput` take the written fields as an optional second type
+  argument, and `AdminWritable<Row>` names the default.
+
 ## [5.0.0] - 2026-10-05
 
 quickdraw 5.0 rebuilds what an app is written against. A service is

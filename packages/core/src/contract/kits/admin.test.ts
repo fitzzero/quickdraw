@@ -210,6 +210,46 @@ describe("the writes' input", () => {
     });
     expect(await check(update, { data: {} })).toEqual({ paths: [["id"]] });
   });
+
+  it("takes only the fields editable names (finding R1.4), in its checks and its JSON Schema", async () => {
+    const kit = admin.contract({ entity: task, editable: ["title", "status"] });
+    const inputs = [
+      [kit.adminCreate.input, {}],
+      [kit.adminUpdate.input, { id: "t1" }],
+    ] as const;
+    for (const [input, key] of inputs) {
+      expect(await check(input, { ...key, data: { title: "New", status: "done" } })).toEqual({
+        value: { ...key, data: { title: "New", status: "done" } },
+      });
+      const refused = await validate(input, { ...key, data: { title: "New", ordinal: 2 } });
+      expect(refused.issues).toEqual([
+        {
+          message: '"ordinal" is not a writable field; the writable fields are "title", "status"',
+          path: ["data", "ordinal"],
+        },
+      ]);
+      const json = (
+        input as unknown as { "~standard": { jsonSchema: { input: (o: object) => unknown } } }
+      )["~standard"].jsonSchema.input({ target: "draft-07" }) as {
+        readonly properties: { readonly data: { readonly properties: object } };
+      };
+      expect(Object.keys(json.properties.data.properties)).toEqual(["title", "status"]);
+    }
+    expect(adminSpecOf(kit.adminUpdate)?.editable).toEqual(["title", "status"]);
+    expect(adminSpecOf(all.adminUpdate)?.editable).toBeUndefined();
+  });
+
+  it("refuses an editable list that names no writable field of the entity", () => {
+    const bad = (editable: unknown) => () =>
+      admin.contract({ entity: task, editable: editable as never });
+    expect(bad(["nope"])).toThrow('admin.contract: editable: "nope" is not a field of the entity');
+    expect(bad(["createdAt"])).toThrow(
+      'admin.contract: editable: "createdAt" is never editable; the database sets it',
+    );
+    expect(bad(["id"])).toThrow('editable: "id" is never editable');
+    expect(bad(["title", "title"])).toThrow("editable must be a list of distinct field names");
+    expect(bad("title")).toThrow("editable must be a list of distinct field names");
+  });
 });
 
 describe("the outputs", () => {

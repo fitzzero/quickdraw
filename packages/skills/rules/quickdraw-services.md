@@ -186,6 +186,11 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 - `sharing.contract({ mode: "acl" | "members" })` with `sharing.handlers(project)`,
   on a service whose policy has a `jsonAcl` or `members`.
 - `admin.contract({ entity })` with `admin.handlers(task)` (`{ service: "Admin" }` by default).
+  Name what an admin may change with `editable: ["title", "status"]` (on
+  `admin.contract` too, so the input schemas and MCP tools name only those):
+  every other field is read-only, and a write naming one is `VALIDATION`.
+  Without it the kit writes every field it shows but `id` and the
+  timestamps, owner and foreign-key columns included.
   On a users service, `admin.handlers(user, { grants: true })` lets the admin
   screen edit `serviceAccess` through `adminUpdate` (service-wide Admins
   only); never hand-write a `setServiceAccess` method for it. `adminMeta`

@@ -16,9 +16,13 @@
 // `adminUpdate` and `adminDelete` read and write one row; `adminMeta`
 // describes the entity's fields for an admin screen; `adminSubscribers`
 // counts the sockets subscribed to a row and `adminReemit` sends it to them
-// again. `expose` picks the methods to add; all eight without it. The entity
-// schema must describe itself as JSON Schema (Zod 4.2 or later): the fields
-// come from it, so `admin.contract` refuses a schema that cannot.
+// again. `expose` picks the methods to add; all eight without it. `editable`
+// (finding R1.4 of the 5.0.0 review) names the only fields `adminCreate` and
+// `adminUpdate` take, in their checks, their JSON Schema (and so the MCP
+// tools made from it) and their types; without it they take every field but
+// `id` and the timestamps. The entity schema must describe itself as JSON
+// Schema (Zod 4.2 or later): the fields come from it, so `admin.contract`
+// refuses a schema that cannot.
 //
 // The server half (`admin.handlers` on `./server`) finds the kit's entries in
 // the contract by what they were made for (`adminSpecOf`), its types by their
@@ -53,6 +57,7 @@ import {
   type AdminSubscribers,
   type AdminUpdateInput,
   type AdminUpdateQuery,
+  type AdminWritable,
 } from "./adminSchemas";
 import type { ScalarFieldOf } from "./crud";
 import { idInput, nullOutput, type IdInput } from "./crudSchemas";
@@ -99,6 +104,13 @@ export interface AdminContractOptions {
   readonly filter?: readonly string[];
   /** The fields `adminList` may sort by; the first is the default order (else `id`). */
   readonly sort?: readonly string[];
+  /**
+   * The only fields `adminCreate` and `adminUpdate` take (never `id` or a
+   * timestamp): their input checks, JSON Schema and types name just these,
+   * and the server half writes just these. Without it, every field but `id`
+   * and the timestamps. `admin.handlers` given a list too must give the same.
+   */
+  readonly editable?: readonly string[];
   /** The methods to add; all eight when absent. */
   readonly expose?: readonly AdminMethodName[];
   /** Descriptions for people and agents, per method; the kit's own for the rest. */
@@ -109,7 +121,7 @@ type RowOf<Entity> = Entity extends StandardSchemaV1 ? InferOutput<Entity> : nev
 
 type Quoted<Names> = `"${Names & string}"`;
 
-type FieldsIn<O, Key extends "filter" | "sort"> = O extends {
+type FieldsIn<O, Key extends "filter" | "sort" | "editable"> = O extends {
   readonly [K in Key]: readonly (infer Field extends string)[];
 }
   ? Field
@@ -122,10 +134,18 @@ type Problem<Option extends "filter" | "sort", Wrong> = [Wrong] extends [never]
       readonly [K in Option]: `admin.contract: ${Option}: ${Quoted<Wrong>} is not a field of the entity holding strings, numbers or booleans`;
     };
 
-/** The check of `filter` and `sort` against the entity that the option types alone cannot state. */
+/** `editable` naming a field the kit never writes, as a message. */
+type EditableProblem<Wrong> = [Wrong] extends [never]
+  ? unknown
+  : {
+      readonly editable: `admin.contract: editable: ${Quoted<Wrong>} is not a field of the entity the kit may write`;
+    };
+
+/** The check of `filter`, `sort` and `editable` against the entity that the option types alone cannot state. */
 type AdminChecks<O> = O extends { readonly entity: infer Entity }
   ? Problem<"filter", Exclude<FieldsIn<O, "filter">, ScalarFieldOf<RowOf<Entity>>>> &
-      Problem<"sort", Exclude<FieldsIn<O, "sort">, ScalarFieldOf<RowOf<Entity>>>>
+      Problem<"sort", Exclude<FieldsIn<O, "sort">, ScalarFieldOf<RowOf<Entity>>>> &
+      EditableProblem<Exclude<FieldsIn<O, "editable">, AdminWritable<RowOf<Entity>>>>
   : unknown;
 
 export type AdminListDef<Row, Filter extends string, Sort extends string> = QueryDef<
@@ -134,13 +154,13 @@ export type AdminListDef<Row, Filter extends string, Sort extends string> = Quer
 > &
   AdminTag<"adminList">;
 export type AdminGetDef<Row> = QueryDef<KitSchema<IdInput>, KitSchema<Row>> & AdminTag<"adminGet">;
-export type AdminCreateDef<Row> = MutationDef<
-  KitSchema<AdminCreateInput<Row>, AdminCreateQuery>,
+export type AdminCreateDef<Row, Field extends PropertyKey = AdminWritable<Row>> = MutationDef<
+  KitSchema<AdminCreateInput<Row, Field>, AdminCreateQuery>,
   KitSchema<Row>
 > &
   AdminTag<"adminCreate">;
-export type AdminUpdateDef<Row> = MutationDef<
-  KitSchema<AdminUpdateInput<Row>, AdminUpdateQuery>,
+export type AdminUpdateDef<Row, Field extends PropertyKey = AdminWritable<Row>> = MutationDef<
+  KitSchema<AdminUpdateInput<Row, Field>, AdminUpdateQuery>,
   KitSchema<Row>
 > &
   AdminTag<"adminUpdate">;
@@ -158,11 +178,16 @@ export type AdminReemitDef = MutationDef<KitSchema<IdInput>, KitSchema<AdminSubs
 
 type EntityRowIn<O> = O extends { readonly entity: infer Entity } ? RowOf<Entity> : never;
 
+/** The fields the writes take: those `editable` names, else every field but `id` and the timestamps. */
+type EditableIn<O> = O extends { readonly editable: readonly (infer Field extends string)[] }
+  ? Field
+  : AdminWritable<EntityRowIn<O>>;
+
 type AdminDefOf<O, Name extends AdminMethodName> = {
   adminList: AdminListDef<EntityRowIn<O>, FieldsIn<O, "filter">, FieldsIn<O, "sort">>;
   adminGet: AdminGetDef<EntityRowIn<O>>;
-  adminCreate: AdminCreateDef<EntityRowIn<O>>;
-  adminUpdate: AdminUpdateDef<EntityRowIn<O>>;
+  adminCreate: AdminCreateDef<EntityRowIn<O>, EditableIn<O>>;
+  adminUpdate: AdminUpdateDef<EntityRowIn<O>, EditableIn<O>>;
   adminDelete: AdminDeleteDef;
   adminMeta: AdminMetaDef;
   adminSubscribers: AdminSubscribersDef;
@@ -187,6 +212,8 @@ export interface AdminSpec {
   readonly sort: readonly string[];
   /** The entity's fields, from its JSON Schema, in its order. */
   readonly fields: readonly AdminEntityField[];
+  /** The only fields the writes take, as `editable` named them; `undefined` without it. */
+  readonly editable: readonly string[] | undefined;
 }
 
 const SPECS = new WeakMap<object, AdminSpec>();
@@ -212,7 +239,7 @@ const DESCRIBE: Readonly<Record<AdminMethodName, string>> = Object.freeze({
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
-const OPTIONS = ["entity", "filter", "sort", "expose", "describe"];
+const OPTIONS = ["entity", "filter", "sort", "editable", "expose", "describe"];
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -228,7 +255,7 @@ function quoted(names: readonly string[]): string {
 
 function checkOptions(options: unknown): UnknownRecord & { readonly entity: RowSchema } {
   if (!isRecord(options)) {
-    fail("options must be { entity, filter?, sort?, expose?, describe? }");
+    fail("options must be { entity, filter?, sort?, editable?, expose?, describe? }");
   }
   const unknownKey = Object.keys(options).find((key) => !OPTIONS.includes(key));
   if (unknownKey !== undefined) {
@@ -260,6 +287,32 @@ function checkFields(
     const field = fields.find((candidate) => candidate.name === name);
     if (field === undefined || field.type === "json") {
       fail(`${owner}: "${name}" is not a field of the entity holding strings, numbers or booleans`);
+    }
+  }
+  return Object.freeze([...(names as string[])]);
+}
+
+/** `editable`: distinct fields of the entity the kit may write, or `undefined` without it. */
+function checkEditable(
+  names: unknown,
+  fields: readonly AdminEntityField[],
+): readonly string[] | undefined {
+  if (names === undefined) {
+    return undefined;
+  }
+  const valid =
+    Array.isArray(names) &&
+    names.every((name) => typeof name === "string") &&
+    new Set(names).size === names.length;
+  if (!valid) {
+    fail("editable must be a list of distinct field names");
+  }
+  for (const name of names as string[]) {
+    if (ADMIN_NEVER_WRITABLE.includes(name)) {
+      fail(`editable: "${name}" is never editable; the database sets it`);
+    }
+    if (!fields.some((field) => field.name === name)) {
+      fail(`editable: "${name}" is not a field of the entity`);
     }
   }
   return Object.freeze([...(names as string[])]);
@@ -349,17 +402,19 @@ function contract<const O extends AdminContractOptions>(
   const checked = checkOptions(options);
   const { entity } = checked;
   const fields = entityFieldsOf(entity, fail);
+  const editable = checkEditable(checked.editable, fields);
   const base: SpecBase = Object.freeze({
     entity,
     filter: checkFields("filter", checked.filter, fields),
     sort: checkFields("sort", checked.sort, fields),
     fields,
+    editable,
   });
   const names = exposedOf(checked.expose);
   const described = describedOf(names, checked.describe);
-  const writable = fields
-    .map((field) => field.name)
-    .filter((field) => !ADMIN_NEVER_WRITABLE.includes(field));
+  const writable =
+    editable ??
+    fields.map((field) => field.name).filter((field) => !ADMIN_NEVER_WRITABLE.includes(field));
   const methods: Record<string, MethodDef> = {};
   for (const name of names) {
     const own = described[name];
@@ -372,7 +427,7 @@ function contract<const O extends AdminContractOptions>(
 
 /**
  * The admin kit's contract half: `admin.contract({ entity, filter?, sort?,
- * expose?, describe? })` makes the admin methods, which the server half
+ * editable?, expose?, describe? })` makes the admin methods, which the server half
  * (`admin.handlers` on `./server`) implements, each open to a service-wide
  * `Admin` grant unless the service says otherwise.
  */

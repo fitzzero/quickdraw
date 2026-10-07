@@ -222,6 +222,51 @@ describe("adminCreate and adminDelete", () => {
   });
 });
 
+describe("editable (finding R1.4)", () => {
+  it("writes only the fields it names; adminMeta and both writes say the rest are not editable", async () => {
+    const { app } = await kit.start({ editable: ["title", "status"] });
+    const board = kit.board();
+    const administrator = app.as(serviceAdmin(board.ed)).taskService;
+    const editable = Object.fromEntries(
+      (await administrator.adminMeta()).fields.map((field) => [field.name, field.editable]),
+    );
+    expect(editable).toEqual({
+      id: false,
+      createdAt: false,
+      updatedAt: false,
+      projectId: false,
+      title: true,
+      status: true,
+      ordinal: false,
+      pinned: false,
+      details: false,
+      assigneeId: false,
+      notes: false,
+    });
+    await expect(
+      administrator.adminUpdate({ id: board.t1, data: { title: "Kept", ordinal: 5 } }),
+    ).rejects.toMatchObject({
+      code: "VALIDATION",
+      data: { issues: [{ path: ["data", "ordinal"], message: '"ordinal" is not editable' }] },
+    });
+    await expect(
+      administrator.adminCreate({ data: { projectId: board.p1, title: "New" } }),
+    ).rejects.toMatchObject({
+      code: "VALIDATION",
+      data: { issues: [{ path: ["data", "projectId"], message: '"projectId" is not editable' }] },
+    });
+    await expect(
+      loose(app).adminUpdate({ id: board.t1, data: { updatedAt: new Date().toISOString() } }),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(
+      await administrator.adminUpdate({ id: board.t1, data: { title: "Renamed", status: "done" } }),
+    ).toMatchObject({ id: board.t1, title: "Renamed", status: "done", ordinal: 0 });
+    expect(
+      await kit.harness().prisma.task.findUniqueOrThrow({ where: { id: board.t1 } }),
+    ).toMatchObject({ title: "Renamed", status: "done", ordinal: 0 });
+  });
+});
+
 describe("adminSubscribers and adminReemit", () => {
   it("count the sockets in each of the row's tier rooms", async () => {
     const { app } = await kit.start();

@@ -1,5 +1,13 @@
 /**
  * Origin validation utility for OAuth redirect and CORS security.
+ *
+ * An origin is allowed when it is the client URL, one of the extra origins
+ * or matches an app's pattern, or, outside production, is localhost. GitHub
+ * Codespaces origins (`*.app.github.dev`) are never allowed by default since
+ * 5.0.1 (finding R1.2 of the 5.0.0 review): anyone can open a Codespace, so
+ * the allowance let any such page open a socket or finish a sign-in as a
+ * signed-in user in production, wherever an app used this helper for CORS or
+ * a cookie check. An app that wants one lists a pattern in `allowedPatterns`.
  */
 
 export const OAUTH_RETURN_ORIGIN_COOKIE = "oauth_return_origin";
@@ -20,8 +28,9 @@ export interface ValidateOriginOptions {
    */
   allowedPatterns?: RegExp[];
   /**
-   * Allow GitHub Codespace forwarded-port origins
-   * (https://{workspace}-{username}-{port}.app.github.dev). Default: true.
+   * Ignored: kept so 5.0.0 code that passes it still compiles.
+   *
+   * @deprecated Codespaces origins are never allowed since 5.0.1; list a pattern in allowedPatterns if one is wanted.
    */
   allowCodespaces?: boolean;
   /**
@@ -30,7 +39,6 @@ export interface ValidateOriginOptions {
   allowLocalhostInDev?: boolean;
 }
 
-const CODESPACE_REGEX = /^https:\/\/[a-z0-9-]+-[a-z0-9-]+-\d+\.app\.github\.dev$/;
 const LOCALHOST_REGEX = /^http:\/\/localhost:\d+$/;
 
 function envExtraOrigins(): string[] {
@@ -79,10 +87,6 @@ export function validateRedirectOrigin(
   }
 
   if (options.allowedPatterns?.some((pattern) => pattern.test(cleanOrigin))) {
-    return cleanOrigin;
-  }
-
-  if ((options.allowCodespaces ?? true) && CODESPACE_REGEX.test(cleanOrigin)) {
     return cleanOrigin;
   }
 

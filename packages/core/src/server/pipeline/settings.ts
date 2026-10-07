@@ -192,7 +192,10 @@ export function resolveSettings(
   const warnings = createDevWarnings({ logger, development, strict: strictWarningsOf(options) });
   warnTieredOutputs(registry, warnings);
   const storage = storageFor(options, db);
-  const { access, policies } = resolveAccess(options.access, registry, storage, logger);
+  const { access, policies } = resolveAccess(options.access, registry, storage, {
+    logger,
+    warnings,
+  });
   const outputValidation = options.outputValidation ?? development;
   const live = createLive({
     registry,
