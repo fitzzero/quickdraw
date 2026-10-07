@@ -21,6 +21,7 @@ import {
   type Principal,
 } from "../../src/server/index";
 import { DevWarningError } from "../../src/testing/index";
+import { inCluster } from "../cluster/mode";
 import type { PrismaClient } from "../prisma/setup";
 import { as, e2eApp } from "../fixtures/app";
 
@@ -102,10 +103,13 @@ describe("a resolver policy that declares its reads", () => {
       expect.objectContaining({ s: "undeclaredProjects", id: board.p1, d: renamed }),
     ]);
 
+    // Each server logs it once when it is made: behind the test cluster the app is two.
     const warned = logger.warnings.filter((message) => message.includes("resolver-without-reads"));
-    expect(warned).toEqual([
-      expect.stringContaining("[quickdraw:resolver-without-reads] undeclaredProjects"),
-    ]);
+    expect(warned).toEqual(
+      Array.from({ length: inCluster() ? 2 : 1 }, () =>
+        expect.stringContaining("[quickdraw:resolver-without-reads] undeclaredProjects"),
+      ),
+    );
   });
 
   it("fails to start a test app made with strictWarnings while a resolver declares nothing", async () => {
