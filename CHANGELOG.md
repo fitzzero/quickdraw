@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [5.0.1] (unreleased)
+## [5.0.1] - 2026-10-08
 
 Fixes from the independent review of 5.0.0 after the farseer migration
 (findings R1.1, R1.2 and R1.4).
