@@ -64,6 +64,39 @@ describe("the app's models", () => {
       AccessPolicy<"projectId", never>
     >();
   });
+
+  test("a resolver names what its reads declare", () => {
+    const levelsFor = () => new Map();
+    expectTypeOf(resolver({ levelsFor })).toEqualTypeOf<AccessPolicy<never, never>>();
+    expectTypeOf(resolver({ levelsFor, reads: "none" })).toEqualTypeOf<
+      AccessPolicy<never, never>
+    >();
+    expectTypeOf(
+      resolver({ levelsFor, reads: { columns: ["ownerId", "acl"], memberships: [membership] } }),
+    ).toEqualTypeOf<
+      AccessPolicy<
+        "ownerId" | "acl",
+        { readonly model: "projectMember"; readonly columns: "projectId" | "userId" | "role" }
+      >
+    >();
+    // A typed principal, from levelsFor's parameter, keeps the reads inferred.
+    expectTypeOf(
+      resolver({
+        levelsFor: (principal: { readonly userId: string; readonly team: string }) =>
+          new Map([[principal.team, "Read"]]),
+        reads: {
+          memberships: [
+            { model: "projectMember", entry: "projectId", user: "userId", level: "role" },
+          ],
+        },
+      }),
+    ).toEqualTypeOf<
+      AccessPolicy<
+        never,
+        { readonly model: "projectMember"; readonly columns: "projectId" | "userId" | "role" }
+      >
+    >();
+  });
 });
 
 describe("defineService checks a policy against the service's model", () => {
@@ -105,6 +138,35 @@ describe("defineService checks a policy against the service's model", () => {
       access: inherit({ from: project, via: "project" }),
       methods: {},
     });
+  });
+
+  test("a resolver's declared columns and tables are checked too", () => {
+    const levelsFor = () => new Map();
+    qd.defineService(project, {
+      model: "project",
+      access: resolver({ levelsFor, reads: { columns: ["ownerId"], memberships: [membership] } }),
+      methods: {},
+    });
+    qd.defineService(project, {
+      model: "project",
+      // @ts-expect-error -- Project has no column "owner"
+      access: resolver({ levelsFor, reads: { columns: ["owner"] } }),
+      methods: {},
+    });
+    qd.defineService(project, {
+      model: "project",
+      // @ts-expect-error -- ProjectMember has no column "level"
+      access: resolver({ levelsFor, reads: { memberships: [{ ...membership, level: "level" }] } }),
+      methods: {},
+    });
+    qd.defineService(task, {
+      model: "task",
+      // @ts-expect-error -- "ownerId" is a column of Project, not of Task
+      access: anyOf(owner("assigneeId"), resolver({ levelsFor, reads: { columns: ["ownerId"] } })),
+      methods: {},
+    });
+    // @ts-expect-error -- reads names columns and membership tables, or is "none"
+    resolver({ levelsFor, reads: "all" });
   });
 
   test("a membership table and its columns are checked too", () => {

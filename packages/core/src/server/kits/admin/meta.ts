@@ -21,7 +21,12 @@
 //   `adminList`. 4.1 marked every field but JSON ones sortable, and sorted by
 //   whatever a caller sent;
 // - `fieldOverrides` changes the rest, but cannot make `id` or a timestamp
-//   editable; `showInForm: false` keeps a field out of a generic form.
+//   editable; `showInForm: false` keeps a field out of a generic form;
+// - `editable` (finding R1.4 of the 5.0.0 review), or the list
+//   `admin.contract` was given, names the only fields that are editable:
+//   every other field is not, before the kit's writes are told which fields
+//   they refuse, so `adminMeta`, a generic form and the writes agree. An
+//   override may not say otherwise about a field it names or leaves out.
 //
 // It also says which fields the kit's writes refuse: the hidden ones and
 // those that are not editable.
@@ -102,6 +107,7 @@ export type MetaFailure = (message: string) => never;
 export interface MetaOptions {
   readonly displayName: unknown;
   readonly hiddenFields: unknown;
+  readonly editable?: unknown;
   readonly fieldOverrides: unknown;
   readonly grants?: unknown;
 }
@@ -111,7 +117,10 @@ export interface AdminFields {
   readonly meta: AdminServiceMeta;
   /** The fields the kit leaves out of every row and refuses to write. */
   readonly hidden: ReadonlySet<string>;
-  /** The fields shown but not written: `id`, the timestamps, and those an override made read-only. */
+  /**
+   * The fields shown but not written: `id`, the timestamps, those an
+   * override made read-only, and those `editable` leaves out.
+   */
   readonly readOnly: ReadonlySet<string>;
   /**
    * With `grants: true`, the grant fields the kit shows and writes: only for
@@ -258,6 +267,78 @@ function checkOverrides(
   return fieldOverrides as Readonly<Record<string, UnknownRecord>>;
 }
 
+function quoted(names: readonly string[]): string {
+  return names.map((name) => `"${name}"`).join(", ");
+}
+
+/**
+ * The fields `editable` names, or the list `admin.contract` was given
+ * (`declared`) when it names none: each a field the kit shows, never `id` or
+ * a timestamp. Given in both halves, the two must name the same fields.
+ * `undefined` when neither half gives a list.
+ */
+function checkEditable(
+  editable: unknown,
+  declared: readonly string[] | undefined,
+  shown: (name: string) => boolean,
+  fail: MetaFailure,
+): ReadonlySet<string> | undefined {
+  const named = (label: string, list: readonly string[]): ReadonlySet<string> => {
+    for (const name of list) {
+      if (ADMIN_NEVER_WRITABLE.includes(name)) {
+        fail(`${label}: "${name}" is never editable; the database sets it`);
+      }
+      if (!shown(name)) {
+        fail(`${label}: "${name}" is not a field of the entity the kit shows`);
+      }
+    }
+    return new Set(list);
+  };
+  if (editable === undefined) {
+    return declared === undefined ? undefined : named("admin.contract's editable", declared);
+  }
+  const valid =
+    Array.isArray(editable) &&
+    editable.every((name) => typeof name === "string") &&
+    new Set(editable).size === editable.length;
+  if (!valid) {
+    fail("editable must be a list of distinct field names");
+  }
+  const list = named("editable", editable as string[]);
+  if (
+    declared !== undefined &&
+    (declared.length !== list.size || !declared.every((name) => list.has(name)))
+  ) {
+    fail(
+      `editable names ${quoted(editable as string[])}, but admin.contract was given ${quoted(declared)}: give both halves the same fields`,
+    );
+  }
+  return list;
+}
+
+/** Refuses an override whose `editable` says otherwise than the `editable` list: two sources of truth. */
+function checkAgreement(
+  overrides: Readonly<Record<string, UnknownRecord>>,
+  editable: ReadonlySet<string> | undefined,
+  fail: MetaFailure,
+): void {
+  if (editable === undefined) {
+    return;
+  }
+  for (const [name, override] of Object.entries(overrides)) {
+    if (override.editable === true && !editable.has(name)) {
+      fail(
+        `fieldOverrides: "${name}" is editable: true, which editable leaves out; name it in editable instead`,
+      );
+    }
+    if (override.editable === false && editable.has(name)) {
+      fail(
+        `fieldOverrides: "${name}" is editable: false, which editable names; leave it out of editable instead`,
+      );
+    }
+  }
+}
+
 /** One field's configuration, before overrides; a grant field `grants: true` shows is marked. */
 function derived(
   field: AdminEntityField,
@@ -298,12 +379,13 @@ function frozenConfig(config: AdminFieldConfig): AdminFieldConfig {
  * `adminMeta`'s answer for a service, and the fields its reads and writes
  * leave alone, from what the contract half read of the entity (`spec`) and
  * the handlers' options. Fails through `fail` for options that name no field
- * of the entity, would make `id` or a timestamp editable, or hide a field
- * `adminList` filters or sorts on (a filter on it would tell what it holds).
+ * of the entity, would make `id` or a timestamp editable, hide a field
+ * `adminList` filters or sorts on (a filter on it would tell what it holds),
+ * or give two answers to whether a field is editable.
  */
 export function adminFieldsOf(
   serviceName: string,
-  spec: Pick<AdminSpec, "fields" | "filter" | "sort">,
+  spec: Pick<AdminSpec, "fields" | "filter" | "sort"> & Partial<Pick<AdminSpec, "editable">>,
   options: MetaOptions,
   fail: MetaFailure,
 ): AdminFields {
@@ -315,12 +397,20 @@ export function adminFieldsOf(
     fail(`"${listed}" is hidden, so adminList may not filter or sort on it`);
   }
   const overrides = checkOverrides(options.fieldOverrides, names, hidden, fail);
+  const editable = checkEditable(
+    options.editable,
+    spec.editable,
+    (name) => names.includes(name) && !hidden.has(name),
+    fail,
+  );
+  checkAgreement(overrides, editable, fail);
   const fields = ordered(spec.fields)
     .filter((field) => !hidden.has(field.name))
     .map((field) =>
       frozenConfig({
         ...derived(field, grants),
         ...overrides[field.name],
+        ...(editable === undefined ? {} : { editable: editable.has(field.name) }),
         sortable: spec.sort.includes(field.name),
         filterable: spec.filter.includes(field.name),
       }),

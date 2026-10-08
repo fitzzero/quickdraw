@@ -655,8 +655,11 @@ subscriptions. 5.0 asks one policy for every surface: method calls, entity
 subscriptions, collection scopes, the kits' lists, searches, streams and
 channels. The builders are `owner(field)`, `jsonAcl(field, { owner })`,
 `members({ model, entry, user, level })`, `inherit({ from, via })`,
-`anyOf(...)` and `resolver({ levelsFor, where })` for anything else; each
-answers a batch of rows in one query.
+`anyOf(...)` and `resolver({ levelsFor, where, reads })` for anything else;
+each answers a batch of rows in one query. A resolver declares what it reads
+(`reads: { columns, memberships }`, or `"none"`), or its live rows are never
+revoked when access changes, and the server warns
+`[quickdraw:resolver-without-reads]`.
 
 <!-- example: ../../../codemod/test/guide-v4/apps/api/src/services/task.ts#access -->
 
@@ -894,6 +897,8 @@ export const taskService = qd.defineService(task, {
       displayName: "Tasks",
       // never shown, returned or written
       hiddenFields: ["notes"],
+      // the only fields adminCreate and adminUpdate write; the rest are read-only
+      editable: ["title", "status"],
       fieldOverrides: { assigneeId: { type: "relation", relationService: "userService" } },
     }),
   },
@@ -1725,6 +1730,11 @@ native client sends the token as `auth.token`.
   row, and the keys the schema leaves out never leave the server. An
   output schema without JSON Schema (Zod 3) is sent as returned.
 - **No default CORS origin.** 4.1 allowed `*`; pass `cors`.
+- **`validateRedirectOrigin` never allows a GitHub Codespaces origin**
+  (since 5.0.1). 4.x allowed any `https://*-*-<port>.app.github.dev` unless
+  `allowCodespaces: false`, in production too, so any Codespace page passed
+  an app's CORS or cookie check that used it. `allowCodespaces` is now
+  ignored; an app that wants one lists a pattern in `allowedPatterns`.
 - **Errors that are not `QuickdrawError` reach callers as `INTERNAL`** with a
   generic message (the original is logged). A Prisma unique violation is
   `CONFLICT` and a missing row `NOT_FOUND`. A subscribe, or a method whose

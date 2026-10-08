@@ -2,8 +2,8 @@
 // sign-in may return to, and which pages may open a socket with the session
 // cookie. One list serves both. `validateRedirectOrigin` decides, with each
 // of its defaults turned off: no CLIENT_URL or EXTRA_ALLOWED_ORIGINS from the
-// environment, no GitHub Codespaces origins, no implicit localhost. The
-// list the app passes is the whole allowlist.
+// environment, no implicit localhost (it allows no GitHub Codespaces origin
+// at all). The list the app passes is the whole allowlist.
 
 import { validateRedirectOrigin, type ValidateOriginOptions } from "../validateOrigin";
 
@@ -90,7 +90,6 @@ export function originAllowlist(
     clientUrl: "",
     extraAllowedOrigins: exact,
     allowedPatterns: patterns,
-    allowCodespaces: false,
     allowLocalhostInDev: false,
   };
   return Object.freeze({

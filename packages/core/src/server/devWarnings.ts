@@ -24,6 +24,10 @@
 // |                      | (`emit/tieredOutputs.ts`); raised when a dispatcher is made, so a  |                          |
 // |                      | strict test app fails to start; for an output without JSON Schema, |                          |
 // |                      | raised by the first reply that carries the field                    |                          |
+// | `resolver-without-   | a service with a model has a `resolver` policy (alone or in        | none (once per service)  |
+// | reads`               | `anyOf`) that declares no `reads`, so no tracked write re-checks   |                          |
+// |                      | it (`access/resolverReads.ts`); raised when a dispatcher is made,  |                          |
+// |                      | so a strict test app fails to start                                 |                          |
 //
 // `nested-write`, `ambient-write`, `batch-read` and `batch-create-many` are
 // the write tracker's (`uow/unitOfWork.ts`), raised exactly where they were
@@ -54,7 +58,8 @@ export type DevWarningKind =
   | "batch-read"
   | "batch-create-many"
   | "repeated-call"
-  | "tiered-field-in-output";
+  | "tiered-field-in-output"
+  | "resolver-without-reads";
 
 /** One development warning. */
 export interface DevWarning {

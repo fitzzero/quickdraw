@@ -88,7 +88,7 @@ compile time.
 | `members({ model, entry, user, level, levels? })`      | a membership table row                          |
 | `inherit({ from: projectContract, via: "projectId" })` | the level on the parent row in another service  |
 | `anyOf(policyA, policyB)`                              | the highest level any of them gives             |
-| `resolver({ levelsFor, where? })`                      | your code, one batched read for all ids         |
+| `resolver({ levelsFor, where?, reads })`               | your code, one batched read for all ids         |
 | `everyone("Read")`                                     | every signed-in user, on every row; no read     |
 
 - `entry` forms need a policy and `scope` forms a `model`; a service without
@@ -100,6 +100,17 @@ compile time.
   `anyOf(owner("id"), everyone("Read"))`, never a hand-written `resolver`
   answering `Read` for every id: `rowless: true` covers one method, not
   subscriptions.
+- A `resolver` declares what its levels depend on, or nothing re-checks it
+  and a removed member keeps their live rows:
+  `reads: { columns: ["visibility"], memberships: [{ model: "teamMember", entry: "projectId", user: "userId", level: "role" }] }`
+  (columns of the service's model; membership tables as `members` takes
+  them, `entry` holding this service's row id). Tracked writes to them then
+  revoke and re-check as for the other policies, and `tools.rows(ids)` reads
+  the declared columns. `reads: "none"` only when nothing a tracked write
+  changes can change a level (the principal's grants alone). Without either
+  the server warns `[quickdraw:resolver-without-reads]` and a strict test
+  app fails to start. A level from another service's row is `inherit`'s
+  job, alone or in `anyOf`.
 - Lookups are batched per call: checking 60 ids costs what one does.
   `createServer({ access: { cacheMs } })` keeps them across calls; tracked
   writes to the columns and tables a policy reads evict them.

@@ -91,6 +91,8 @@ export interface TaskServiceOptions {
   readonly hiddenFields?: readonly ("notes" | "details" | "assigneeId" | "pinned")[];
   /** The admin kit's `displayName`. */
   readonly displayName?: string;
+  /** The admin kit's `editable`: the only fields it writes. */
+  readonly editable?: readonly ("title" | "status" | "notes" | "assigneeId")[];
   /** The service's `adminBypass`; default `true`. */
   readonly adminBypass?: boolean;
   /** The admin kit's `onWrite`. */
@@ -115,6 +117,7 @@ export function defineTaskService(options: TaskServiceOptions = {}) {
       ...admin.handlers(taskContract, {
         ...(options.hiddenFields === undefined ? {} : { hiddenFields: options.hiddenFields }),
         ...(options.displayName === undefined ? {} : { displayName: options.displayName }),
+        ...(options.editable === undefined ? {} : { editable: options.editable }),
         ...(options.onWrite === undefined ? {} : { onWrite: options.onWrite }),
         ...(options.onCommitted === undefined ? {} : { onCommitted: options.onCommitted }),
       }),

@@ -225,6 +225,7 @@ export {
   type AdminSubscribers,
   type AdminUpdateInput,
   type AdminUpdateQuery,
+  type AdminWritable,
   type SubscriberLevel,
 } from "./contract/kits/adminSchemas";
 export type { KitSchema } from "./contract/kits/schemas";

@@ -65,10 +65,25 @@ describe("validateRedirectOrigin", () => {
     expect(validateRedirectOrigin("https://evil.com", { allowedPatterns })).toBeNull();
   });
 
-  it("allows GitHub Codespace origins unless disabled", () => {
-    const origin = "https://my-workspace-octocat-3000.app.github.dev";
-    expect(validateRedirectOrigin(origin)).toBe(origin);
-    expect(validateRedirectOrigin(origin, { allowCodespaces: false })).toBeNull();
+  it("never allows a GitHub Codespaces origin unless a pattern lists it", () => {
+    for (const NODE_ENV of ["development", "production"]) {
+      process.env.NODE_ENV = NODE_ENV;
+      for (const origin of [
+        "https://my-workspace-octocat-3000.app.github.dev",
+        "https://x-y-3000.app.github.dev",
+      ]) {
+        expect(validateRedirectOrigin(origin), `${origin} ${NODE_ENV}`).toBeNull();
+        for (const allowCodespaces of [true, false, undefined]) {
+          expect(validateRedirectOrigin(origin, { allowCodespaces }), origin).toBeNull();
+        }
+      }
+    }
+    const origin = "https://x-y-3000.app.github.dev";
+    expect(
+      validateRedirectOrigin(origin, {
+        allowedPatterns: [/^https:\/\/[a-z0-9-]+\.app\.github\.dev$/],
+      }),
+    ).toBe(origin);
   });
 
   it("allows localhost in dev but not production", () => {
