@@ -227,5 +227,6 @@ Components rendered against the server go in
 Run the app's lint (the quickdraw rules catch untracked writes, foreign
 writes, unbounded reads and raw socket use), typecheck and the unit and
 integration tests. If the app generates API docs with `quickdraw-docs`
-(with `--services`, its pages also say who may call each method),
+(with `--services`, its pages also say who may call each method and which
+services each depends on),
 regenerate them and commit the result.

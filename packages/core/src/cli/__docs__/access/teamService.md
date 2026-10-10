@@ -14,6 +14,10 @@
 
 Each method below says who may call it.
 
+## Depends on
+
+No other service: its declarations name none.
+
 ## Entity
 
 | Field     | Type     | Level |

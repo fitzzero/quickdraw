@@ -13,6 +13,17 @@
 
 Each method below says who may call it.
 
+## Depends on
+
+The other services its declarations name: its row policy, `writes`, `affects`, `{ scope, of }` access forms and collection anchors. A handler's undeclared reads are not listed.
+
+| Service        | Declared by                                                                                                                  |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `scoreService` | `writes`: its `score` model                                                                                                  |
+| `teamService`  | row policy: `inherit` through the `teamId` column; method `join`: `{ scope, of }`; collection `byTeam`: anchored on its rows |
+
+It also `writes` models no service's rows live in: `teamMember`.
+
 ## Entity
 
 | Field    | Type     |
