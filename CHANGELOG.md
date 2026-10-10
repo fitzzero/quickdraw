@@ -37,6 +37,25 @@ All notable changes to this project will be documented in this file.
   about 24,000 characters of relative paths, then lists what is still
   unformatted (`--list-different`) and formats those once more. A failure
   prints the exit code, the formatter's own output and the files it left.
+- **The codemod needs less memory on a large app, and sizes its own heap.**
+  It ran out of memory at Node's default heap on a 4,270-file app, and
+  finished only with a 16 GB heap. It now asks the type checker about a
+  4.x instance's members only in the files that import a service class's
+  file, directly or through others (every file when a `declare global` or
+  `declare module` among them could carry the class's type), so a web app
+  that imports nothing from the api is no longer typechecked. It reads
+  carve-out regions once, from the files that have a region marker, instead
+  of walking every file once per service. It walks a web file's identifiers
+  only when the file names a 4.x hook. On an app of more than 1,500 source
+  files, the command starts itself again with a larger heap: three quarters
+  of the memory it may use (the container's limit, else the machine's), at
+  most 16384 MiB. It prints the size, and `--heap <MiB>` chooses another. A
+  `--max-old-space-size` you pass to Node is kept, and Bun is left alone. A
+  run the system kills (SIGKILL) is explained as running out of memory.
+  `scripts/scale.mjs` (in `packages/codemod`, not run by CI) measures it on
+  a generated app of 35 services and 3,100 files, where the smallest heap
+  that completes falls from 3,584 MiB to 1,792 MiB, the peak memory from
+  4,219 MiB to 2,307 MiB, and the run from 239 s to 76 s.
 
 ### Releasing
 
