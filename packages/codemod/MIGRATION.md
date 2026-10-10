@@ -1825,9 +1825,17 @@ which it leaves when it disconnects. A contract's events
 protocol 5 the app delivers to 4.x listeners with its own raw emit to the
 room (`server.io.to(room).emit(...)`), an item for the lint baseline.
 
+If the migration renames a service, the 4.x clients still call it by its old
+name. Map each old name onto the new service with
+`legacyWire: { aliases: { taskService: "cardService" } }`: a 4.x call to
+`taskService:get` then runs `cardService.get`, with that method's validation
+and access, and the log names the old name once per method and kind of
+caller. 5.0 clients use the new name only, and `createServer` throws on an
+alias that names no registered service.
+
 To ship without a flag day: deploy the 5.0 server with `legacyWire: true`,
 ship the 5.0 web and mobile clients, watch the log until no 4.x caller is
-left, then remove `legacyWire`. Screens that depend on 4.x live data
+left (and none on an alias), then remove `legacyWire`. Screens that depend on 4.x live data
 (subscriptions, collections) stop updating on old clients in the meantime,
 so ship the clients soon after the server.
 
