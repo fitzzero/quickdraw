@@ -9,22 +9,24 @@
 // `{ scope }` would be: the scope is the row an `entry` or `scope` form
 // checks. `access: { room }` asks no engine: the subscribing socket must be
 // in that app room (a method joined it), signed in or not. A stream whose
-// contract declares no access is closed: `FORBIDDEN` for everyone.
+// contract declares no access is closed: `FORBIDDEN` for everyone. Before
+// any of it, a principal of a kind the service does not admit is `FORBIDDEN`
+// (`../access/kinds.ts`), whatever the form.
 
 import { streamRoom } from "../../contract/names";
 import { QuickdrawError } from "../../protocol/errors";
 import { MAX_SCOPE_LENGTH } from "../../protocol/version";
+import { checkKind } from "../access/kinds";
 import { anchorKey } from "../access/tools";
 import { createContext, NEVER_ABORTED } from "../context";
-import type { Hub } from "../emit/hub";
-import type { AnyService } from "../service";
+import type { Hub, RegisteredService } from "../emit/hub";
 import { unreadable } from "../transports/ack";
 import type { QuickdrawServerSocket } from "../transports/types";
 import type { ServiceStream, StreamRoomAccess } from "./types";
 
 /** One feed of a served stream: one scope of a scoped stream, or a global stream. */
 export interface StreamTarget {
-  readonly service: AnyService;
+  readonly service: RegisteredService;
   readonly stream: ServiceStream;
   /** The scope of a scoped stream; `undefined` for a global stream. */
   readonly scope: string | undefined;
@@ -103,16 +105,18 @@ export function inStreamRoom(
 }
 
 /**
- * Authorizes a subscriber of `target`: rejects with `FORBIDDEN` for a closed
- * stream, or for a socket outside the app room `access: { room }` names, and
- * otherwise as the access engine decides the stream's form
- * (`UNAUTHENTICATED` for an anonymous socket unless the form is `"public"`).
+ * Authorizes a subscriber of `target`: rejects with `FORBIDDEN` for a
+ * principal of a kind the service does not admit, for a closed stream, or
+ * for a socket outside the app room `access: { room }` names, and otherwise
+ * as the access engine decides the stream's form (`UNAUTHENTICATED` for an
+ * anonymous socket unless the form is `"public"`).
  */
 export async function authorizeStream(
   hub: Hub,
   socket: QuickdrawServerSocket,
   target: StreamTarget,
 ): Promise<void> {
+  checkKind(target.service.kinds, socket.data.principal, target.service.name);
   const { room } = target.stream;
   if (room !== undefined) {
     if (!inStreamRoom(socket, room, target.scope)) {

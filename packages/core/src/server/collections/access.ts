@@ -18,6 +18,7 @@
 import type { AccessLevel } from "../../contract/access";
 import { QuickdrawError } from "../../protocol/errors";
 import type { PolicyEngine } from "../access/api";
+import { checkKind } from "../access/kinds";
 import { meetsLevel, serviceGrant } from "../access/levels";
 import { anchorKey } from "../access/tools";
 import type { AnyService } from "../service";
@@ -112,16 +113,20 @@ function mayWatchService(service: BoundCollection["service"], principal: Princip
 
 /**
  * Authorizes a watch of `target` by `principal` (`null` when anonymous): a
- * collection scope's topic as a subscribe to that scope, and a service's
- * topic by its `watchAccess`. Resolves with the rows a scope's access is
- * derived from (its anchors; none for the service topic). Throws
- * `UNAUTHENTICATED` or `FORBIDDEN`; a lookup that fails rejects.
+ * principal of a kind the service does not admit is refused first
+ * (`../access/kinds.ts`), then a collection scope's topic is authorized as a
+ * subscribe to that scope, and a service's topic by its `watchAccess`.
+ * Resolves with the rows a scope's access is derived from (its anchors;
+ * none for the service topic). Throws `UNAUTHENTICATED` or `FORBIDDEN`; a
+ * lookup that fails rejects.
  */
 export async function authorizeWatch(
   hub: CollectionHub,
   principal: Principal | null,
   target: WatchTarget,
 ): Promise<readonly string[]> {
+  const service = target.kind === "service" ? target.service : target.collection.service;
+  checkKind(service.kinds, principal, service.name);
   if (target.kind === "service" && target.service.watchAccess === undefined) {
     throw new QuickdrawError(
       "FORBIDDEN",

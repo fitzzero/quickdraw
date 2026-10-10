@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Principal kinds
+
+- **`kinds` beside `access`** says which kinds of principal
+  (`principal.kind`: a user, an agent's token, a runner) may call:
+  `initQuickdraw({ kinds })` for every service the app defines,
+  `defineService(contract, { kinds })` for one service, and a method's own
+  `kinds`. Each level only narrows the one above it; a wider list, an empty
+  one, or a method's own `kinds` on a `"public"` method is refused when the
+  service is defined, and the types take only kinds of the app's principal
+  (`PrincipalKindOf`). Nothing changes for an app that declares none.
+- **Fail closed.** A principal of another kind, or without a `kind`, gets
+  `FORBIDDEN` before the access form is asked, on every transport, outside
+  the access engine: no grant passes it, a service-wide `Admin` grant
+  included. An anonymous caller is left to the form, as before. A service's
+  list also holds for `qd:sub`, `qd:col:sub`, `qd:watch` and
+  `qd:stream:sub`, and its channels drop other kinds' messages.
+- **Where kinds show.** `describeAccessMatrix` cells carry the principal's
+  `kind`. `quickdraw-docs --services` prints "Callable by" in a method's
+  facts and a "Principal kinds" row for the service, where a list is
+  declared.
+- **Lint's `no-inline-auth-guard`** also reports a check of
+  `ctx.principal.kind` that throws in a handler (not one beside another
+  condition with `&&`, nor one in a `"public"` method): declare `kinds`
+  instead. A `custom` form that checks a claim, such as a token's `scope`,
+  stays as it is.
+
 ### Describes and API docs
 
 - **Every contract member takes a `describe`**: the contract itself, and each

@@ -60,6 +60,7 @@ export type {
   McpContext,
   McpContextOf,
   Principal,
+  PrincipalKindOf,
   PrincipalOf,
   QuickdrawTypes,
   Transport,

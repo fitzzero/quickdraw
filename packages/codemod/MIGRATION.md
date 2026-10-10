@@ -757,9 +757,19 @@ export const taskService = qd.defineService(task, {
       handler: async ({ db }) => (await db.task.updateMany({ data: { status: "archived" } })).count,
     },
     claim: {
-      access: custom((ctx, input) => input.id.length > 0 && ctx.principal.kind === "user"),
+      access: { entry: "Moderate" },
+      // users only: an agent acting for one is refused, whatever its grants
+      kinds: ["user"],
       handler: ({ input, ctx, db }) =>
         db.task.update({ where: { id: input.id }, data: { assigneeId: ctx.principal.userId } }),
+    },
+    triage: {
+      // a check on a token's claims stays a custom form
+      access: custom(
+        (ctx, input) => ctx.principal.claims?.scope === "triage" && input.status !== "archived",
+      ),
+      handler: ({ input, db }) =>
+        db.task.update({ where: { id: input.id }, data: { status: input.status } }),
     },
   },
 });
@@ -768,6 +778,19 @@ export const taskService = qd.defineService(task, {
 The 5.0 task service above replaces its `checkEntryACL` with
 `inherit({ from: projectContract, via: "projectId" })`: the level on the
 task's project, whose policy reads the membership table.
+
+A check of the caller's kind, written in a handler
+(`if (ctx.principal.kind !== "user") throw ...`) or as a `custom` form
+(`custom((ctx) => ctx.principal.kind === "user")`), becomes `kinds` beside
+`access`. `claim` above keeps its `entry` form and adds `kinds: ["user"]`;
+a `custom` form could only do both by checking the row by hand. No grant
+passes the check, a service-wide `Admin` grant included.
+`initQuickdraw({ kinds })` sets the kinds every service admits,
+`defineService(contract, { kinds })` narrows them for one service, and a
+method's `kinds` narrows them again. A service's list also holds for its
+subscriptions and channels. A check on a claim, such as a token's `scope`,
+stays a `custom` form (`triage` above). The `no-inline-auth-guard` lint rule
+reports a kind check that throws in a handler.
 
 ### `defineCollection` becomes contract `collections`
 

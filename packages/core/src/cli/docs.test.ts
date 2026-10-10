@@ -321,6 +321,17 @@ describe("quickdraw-docs --services (finding F5.3)", () => {
     );
     expect(team).toContain('| Change topic       | `"authenticated"`: any signed-in caller');
     expect(team).toContain("| Field levels       | `notes`: Admin");
+    // Principal kinds: the service's list, and each method's, narrowed or not.
+    expect(team).toContain(
+      "| Principal kinds    | `user`, `agent`: its methods, subscriptions and channels refuse every other kind",
+    );
+    expect(team).toContain(
+      "- MCP tool (default name): `teamService_rename`\n- Callable by: `user`\n",
+    );
+    expect(team).toContain(
+      "- MCP read-only hint: yes, as on every query's tool\n- Callable by: `user`, `agent`\n",
+    );
+    expect(team).toContain("- Callable by: `user`, `agent`, or anonymously\n");
     expect(team).toContain(
       'Access: `{ entry: "Read" }`: Read or more on the row `input.id` names.',
     );
@@ -352,6 +363,8 @@ describe("quickdraw-docs --services (finding F5.3)", () => {
     expect(players).toContain("Read or more on the `teamService` row the scope names");
     expect(players).toContain('the subscriber\'s own user id (`scopeAccess: "self"`)');
     expect(players).toContain("closed: the service declares no `watchAccess`");
+    expect(players).not.toContain("Principal kinds");
+    expect(players).not.toContain("Callable by");
     expect(files.get("noteService.md")).toContain(
       "The services module defines no `noteService`: who may call its methods is not documented.",
     );
@@ -359,6 +372,7 @@ describe("quickdraw-docs --services (finding F5.3)", () => {
     const plain = generateDocs(contractsOf(accessApp)).get("teamService.md") ?? "";
     expect(plain).not.toContain("## Access");
     expect(plain).not.toContain("Access: ");
+    expect(plain).not.toContain("Callable by");
     // A seed the service computes: known with --services, never "none" without it (finding F6.8).
     expect(plain).not.toContain("computed by the service");
     expect(plain).toContain("none in the contract; the service may compute one");
