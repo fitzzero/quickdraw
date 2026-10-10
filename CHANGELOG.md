@@ -76,6 +76,16 @@ All notable changes to this project will be documented in this file.
   it read on stderr. The report lists `[service]` items first, under
   "Services".
 
+### Fixed
+
+- **A call through the 4.x legacy shim (`legacyWire`) sees the socket it
+  arrived on.** Its handler gets `ctx.socketId`, and `ctx.rooms.join(room)`
+  joins the 4.x client's socket instead of answering `false`, so an app can
+  put an old client in a room and reach it with its own raw emits. The socket
+  leaves its app rooms when it disconnects, and `onRoomLeave` and presence
+  hear it. The shim still serves request/response calls only, and a
+  contract's events still reach only protocol-5 sockets.
+
 ### MCP bridge
 
 - **`bind` fills tool arguments from the caller's principal.**
