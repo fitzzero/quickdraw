@@ -61,18 +61,22 @@ correct code; each rule's file says what it leaves alone.
 | `no-v4-api`                                                                    | every 4.x API 5.0 removed or moved; each message names the replacement                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | everywhere             |
 | `prefer-kit`                                                                   | a method written by hand that a kit implements (`get`, `list`, `create`, `search`, `share`, `adminList`, or `getTask`, `listTasks`, `createTask`, `updateTask`, `deleteTask` for model `"task"`; `remove` only on a membership model or beside another sharing method) in a `defineService` whose `model` is a string (or a `const` of one) and whose `methods` spread no kit (a spread variable or call counts as one), or that duplicates what a kit spread beside it serves (`crud.handlers`' `access` literal names, `search` for `search.handlers`, every admin method for `admin.handlers`); a `// quickdraw: hand-written because <reason>` comment above it keeps it quiet | everywhere but tests   |
 | `no-todo-schema`                                                               | `todoSchema()`, the placeholder schema the 4.x migration (`@fitzzero/quickdraw-codemod`) leaves where a method had none: it validates nothing; as a `query()` or `mutation()` input without `keys`, it also hides the input's keys from `defineService`'s id-reach (rowless) check, and the message says so                                                                                                                                                                                                                                                                                                                                                                        | everywhere             |
+| `require-describe`                                                             | a contract member without a `describe`: the contract (`defineContract`), each `query` and `mutation`, collection, stream, channel and event, written as an object literal (a spread or a definition built elsewhere is left alone), and a static `describe` under `minWords` words (default 3); the MCP bridge describes a method's tool with it and `quickdraw-docs` leads each section with it                                                                                                                                                                                                                                                                                   | everywhere but tests   |
 | `no-unused-baseline`                                                           | an allowance in the baseline file that no violation uses any more (below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | baselined files        |
 | `no-raw-button-strings`, `no-raw-tooltip-strings`, `no-raw-typography-strings` | raw strings in MUI `Button`, `Typography` and `Tooltip` titles (`oxlint.template.jsonc`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `*.tsx`, `*.jsx`       |
 
 The base config turns on all but the last three, at `error`, except
-`no-unused-baseline`, `no-todo-schema` and `prefer-kit`, which warn.
+`no-unused-baseline`, `no-todo-schema`, `prefer-kit` and `require-describe`,
+which warn. A warning never fails an upgrade's lint; once an app has no
+reports left from one, it can set the rule to `"error"` in its own config
+(`"quickdraw/require-describe": "error"`, say) so new code cannot add any.
 `oxlint.template.jsonc` extends the base and adds the last three.
 
 ### Which files a rule checks
 
 A rule about one layer checks only that layer's files. The defaults follow the
-template's layout. The rules scoped to services, jobs and routes, and
-`no-raw-socket`, skip tests (`__tests__/`, `test/`, `tests/`, `*.test.*`,
+template's layout. The rules scoped to services, jobs and routes,
+`no-raw-socket`, `prefer-kit` and `require-describe` skip tests (`__tests__/`, `test/`, `tests/`, `*.test.*`,
 `*.spec.*`), which seed, inspect and probe on purpose; the other rules check
 tests too.
 
@@ -105,7 +109,8 @@ that look at database calls; `modules` (specifiers of the untracked client's
 modules) on `no-untracked-write`; `emitters` on `no-manual-emit`; `sockets`,
 `allowedEvents` and `allowedPrefixes` on `no-raw-socket`; `clients` (the typed
 client's names, `["qd"]`) on `no-untyped-client` and `no-manual-refetch`;
-`shared` and `allow` (`{ "<service>": ["<service>/<file>"] }`) on
+`minWords` (the fewest words a static describe may have, default 3) on
+`require-describe`; `shared` and `allow` (`{ "<service>": ["<service>/<file>"] }`) on
 `no-cross-service-internal-imports`. Each rule's options are in its schema,
 so a misspelled option fails oxlint at startup.
 

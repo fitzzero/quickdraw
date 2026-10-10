@@ -29,6 +29,7 @@ import noUntypedClient from "./rules/no-untyped-client.mjs";
 import noUnusedBaseline from "./rules/no-unused-baseline.mjs";
 import noV4Api from "./rules/no-v4-api.mjs";
 import preferKit from "./rules/prefer-kit.mjs";
+import requireDescribe from "./rules/require-describe.mjs";
 
 const rules = {
   // Tracked writes
@@ -54,6 +55,8 @@ const rules = {
   "no-raw-socket": noRawSocket,
   // The kits
   "prefer-kit": preferKit,
+  // Documentation
+  "require-describe": requireDescribe,
   // Migration from 4.x
   "no-v4-api": noV4Api,
   "no-todo-schema": noTodoSchema,

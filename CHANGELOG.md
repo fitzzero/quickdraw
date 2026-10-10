@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Describes and API docs
+
+- **Every contract member takes a `describe`**: the contract itself, and each
+  collection, stream, channel and event, beside each method's. It is a
+  non-empty string, optional in the types, and refused when empty.
+- **Lint's `quickdraw/require-describe`** (a warning in `oxlint.base.jsonc`)
+  reports each contract member without a `describe`, and a static one under
+  3 words (`minWords`). A migrated app gets one warning per member: the
+  codemod writes none. Set it to `"error"` once the list is empty.
+- **`quickdraw-docs` prints more.** A service page leads with the contract's
+  describe, the index lists it, each member's section leads with its own,
+  and each method shows its default MCP tool name (`{service}_{method}`)
+  and, for a query, the MCP read-only hint. Regenerate your docs
+  (`quickdraw-docs ... --out docs/api`): `--check` reports every page as
+  out of date until you do.
+- **The `quickdraw-api-docs` skill** in `@fitzzero/quickdraw-skills` ships
+  `docs-api.yml`, a workflow that regenerates the API docs on every push to
+  the base branch and commits them, for repositories where a committed
+  generated file conflicts in every pull request. Copy it into
+  `.github/workflows`; run `quickdraw-skills link` to link the skill.
+
+### Codemod
+
+- **The format step no longer fails when the app's formatter ignores the
+  report.** An app whose `.oxfmtrc.json` ignores `**/*.md` made the codemod's
+  second oxfmt call (the report alone) exit 2, and the run ended with "oxfmt
+  failed on the files written" and nothing else. oxfmt now gets
+  `--no-error-on-unmatched-pattern` (Biome `--no-errors-on-unmatched`;
+  prettier already had `--ignore-unknown`), so files the config ignores are
+  left as written. The formatter runs in batches of at most 100 files and
+  about 24,000 characters of relative paths, then lists what is still
+  unformatted (`--list-different`) and formats those once more. A failure
+  prints the exit code, the formatter's own output and the files it left.
+
 ### Releasing
 
 - **A release is a merge to `main`.** `.github/workflows/publish.yml` runs on
