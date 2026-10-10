@@ -117,6 +117,17 @@ faithfully. What it does:
   `super` outside a class does not parse. A split service's method modules
   keep their files, with typed method objects (see
   [Splitting large services](#splitting-large-services)).
+- **Which class a service comes from.** A service is read from one class of
+  the api package that nothing extends, outside test code (files under
+  `__tests__` or `testing`, and `*.test.ts(x)` and `*.spec.ts(x)` files).
+  When several classes carry one service name, it is the class
+  `registerService("<name>", ...)` instantiates, else the one named after the
+  service (`TaskService` for `taskService`); each other one is marked
+  `[service]`. A test's subclass of a service is never a service and hides
+  nothing: it is marked `[service]`, and test code's uses of the services
+  are rewritten like any other file's. A service whose method map names
+  methods the class read implements none of gets a `[service]` marker in its
+  contract and a line on stderr.
 - **The web app.** `useService`, `useServiceQuery`, `useSubscription` and
   `useCollection` calls become `qd.<service>.<method>.useMutation()`,
   `.useQuery(input)`, `qd.<service>.useEntity(id)` and
@@ -218,7 +229,12 @@ once per service, so check the stored lists for duplicate entries.
 
 ## Work through the report
 
-In this order, because each step leans on the one before:
+First the "Services" section (`[service]`), when the report has one: a
+4.x service class in test code, a second class of one service name, or a
+contract written from a class that implements none of its method map. A
+contract read from the wrong class is wrong in every step after it, so
+settle these first. Then, in this order, because each step leans on the one
+before:
 
 1. **Contracts.** Replace each `todoSchema` with a real schema (lint's
    `no-todo-schema` lists them), give the entity a schema, and check each
@@ -1796,6 +1812,13 @@ only, not subscriptions, collections or channels, and it logs each
 service, method and kind of caller once, so the remaining 4.x clients can
 be found.
 
+A call through the shim sees the socket it arrived on: `ctx.socketId` is
+its id, and `ctx.rooms.join(room)` puts the 4.x client in an app room,
+which it leaves when it disconnects. A contract's events
+(`ctx.rooms.emit`) reach only 5.0 sockets, so until those clients speak
+protocol 5 the app delivers to 4.x listeners with its own raw emit to the
+room (`server.io.to(room).emit(...)`), an item for the lint baseline.
+
 To ship without a flag day: deploy the 5.0 server with `legacyWire: true`,
 ship the 5.0 web and mobile clients, watch the log until no 4.x caller is
 left, then remove `legacyWire`. Screens that depend on 4.x live data
@@ -1925,7 +1948,7 @@ export const taskService = qd.defineService(taskContract, {
 
 ## Order of the migrations
 
-Within one app: contracts, access, emits, client, as in
+Within one app: services, contracts, access, emits, client, as in
 [Work through the report](#work-through-the-report).
 
 Across the apps on 4.x: quickdraw-chat went first (the template, and the

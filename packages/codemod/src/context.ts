@@ -26,6 +26,8 @@ export interface RunContext {
   /** Absolute paths of the files the run created, and of those it deleted. */
   readonly created: Set<string>;
   readonly deleted: Set<string>;
+  /** Problems the command prints to stderr, one line each. */
+  readonly warnings: string[];
 }
 
 export function createContext(project: Project, layout: Layout): RunContext {
@@ -48,5 +50,6 @@ export function createContext(project: Project, layout: Layout): RunContext {
     },
     created: new Set(),
     deleted: new Set(),
+    warnings: [],
   };
 }

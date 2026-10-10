@@ -12,6 +12,10 @@
 // is registered first, would count a call only after the shim had started it,
 // and its 429 would then take the call's acknowledgement.
 //
+// A call runs with the `ctx.socketId` and `ctx.rooms` of the socket it
+// arrived on, and the socket gets the live data's legacy extension, which
+// leaves its app rooms on disconnect (`socketio.ts`).
+//
 // The shim serves request/response calls only. 4.x subscriptions,
 // collections and channels are not served: their events match no method, so
 // the shim passes them on to whatever else listens. The stock decoder reads

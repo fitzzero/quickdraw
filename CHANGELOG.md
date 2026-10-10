@@ -56,6 +56,36 @@ All notable changes to this project will be documented in this file.
   test holds them to it; a change's entry goes under `## [Unreleased]`, and the
   release that ships it writes the version and the date here.
 
+### Codemod
+
+- **Test code no longer decides which class a service is read from.** The
+  codemod read every class under the api's sources, so a test's subclass of
+  a service (`class TestTaskService extends TaskServiceCore` in a
+  `__tests__` file) hid the real class and became a service of the same
+  name, and file order picked which one the contract was written from: on
+  one app, a directory rename gave a service's contract none of its 81
+  methods. Files under `__tests__` or `testing`, and `*.test.ts(x)` and
+  `*.spec.ts(x)` files, are no longer read for services or method modules;
+  their 4.x service classes are marked `[service]` and their uses of the
+  services are still rewritten. A test-only service gets no contract.
+- **One class per service name, chosen the same way every run:** the class
+  `registerService("<name>", ...)` instantiates, else the one named after the
+  service, else the first by file. Each other class is marked `[service]`.
+- **A contract whose class implements none of its method map is not silent:**
+  it is marked `[service]`, and the command names the service and the class
+  it read on stderr. The report lists `[service]` items first, under
+  "Services".
+
+### Fixed
+
+- **A call through the 4.x legacy shim (`legacyWire`) sees the socket it
+  arrived on.** Its handler gets `ctx.socketId`, and `ctx.rooms.join(room)`
+  joins the 4.x client's socket instead of answering `false`, so an app can
+  put an old client in a room and reach it with its own raw emits. The socket
+  leaves its app rooms when it disconnects, and `onRoomLeave` and presence
+  hear it. The shim still serves request/response calls only, and a
+  contract's events still reach only protocol-5 sockets.
+
 ### Lint
 
 - **`no-todo-schema` says when a placeholder input hides its keys from the
