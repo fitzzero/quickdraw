@@ -77,6 +77,8 @@ import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
 export const taskContract = defineContract("taskService", {
+  // what the service is for: MCP tools and the generated docs show it
+  describe: "Tasks on a project's board.",
   // the full row; it must contain `id: string`
   entity: taskSchema,
   // lean shapes of the row
@@ -103,11 +105,13 @@ export const taskContract = defineContract("taskService", {
       output: z.number(),
       // fetched again whenever the project's board changes
       watch: { collection: "board", scope: (input) => input.projectId },
+      describe: "Counts the tasks on a project's board.",
     }),
   },
   collections: {
     // every task of a project, live, in board order
     board: {
+      describe: "A project's tasks, in board order.",
       scope: "projectId",
       item: "card",
       order: [
@@ -482,25 +486,49 @@ any server code (design: `docs/rfcs/0003-v5.md`, section 2).
 
 ```ts
 export const labelContract = defineContract("labelService", {
+  describe: "Labels a project puts on its tasks.",
   entity: labelSchema,
   projections: { chip: z.object({ id: z.string(), name: z.string() }) },
   methods: {
-    find: query({ input: z.object({ name: z.string() }), output: nullable("entity") }),
-    chips: query({ input: z.object({ projectId: z.string() }), output: listOf("chip") }),
-    usage: query({ input: z.undefined(), output: z.record(z.string(), z.number()) }),
+    find: query({
+      input: z.object({ name: z.string() }),
+      output: nullable("entity"),
+      describe: "Finds a label by its name, or null.",
+    }),
+    chips: query({
+      input: z.object({ projectId: z.string() }),
+      output: listOf("chip"),
+      describe: "Lists a project's labels as chips.",
+    }),
+    usage: query({
+      input: z.undefined(),
+      output: z.record(z.string(), z.number()),
+      describe: "Counts the tasks of each label.",
+    }),
   },
 });
 
 // No entity: an RPC-only service, with no projections, field tiers or collections.
 export const healthContract = defineContract("healthService", {
-  methods: { ping: query({ input: z.undefined(), output: z.literal("pong") }) },
+  describe: "Tells a caller the server is up.",
+  methods: {
+    ping: query({
+      input: z.undefined(),
+      output: z.literal("pong"),
+      describe: "Answers pong while the server runs.",
+    }),
+  },
 });
 ```
 
 - Every method is a `query` or a `mutation`, with an `input` and an
   `output`. The kind decides request sharing, cancellation, the concurrency
-  cap, the MCP read-only hint and which client hook exists. `describe` is the
-  method's description for people and agents (the MCP tool's description).
+  cap, the MCP read-only hint and which client hook exists.
+- Every member takes a `describe`, a sentence or two for people and agents:
+  the contract itself (what the service is for), each method (its MCP tool's
+  description), collection, stream, channel and event. `quickdraw-docs`
+  leads each section of the API docs with it. It is optional in the types;
+  lint's `require-describe` (a warning) lists each member without one.
 - `output` is a schema, or a projection: `"entity"`, a named projection,
   `nullable("entity")` or `listOf("card")`. A handler returns database rows
   for a projection output, and the framework projects them.
@@ -977,11 +1005,13 @@ authorizes a scope:
 
 ```ts
 export const task = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity: taskSchema,
   projections: { card: cardSchema },
   methods: { ...crud.contract({ entity: taskSchema, get: true }) },
   collections: {
     byProject: {
+      describe: "A project's open tasks, in board order.",
       // a column holding the scope value
       scope: "projectId",
       // the projection each item is sent as
@@ -998,7 +1028,12 @@ export const task = defineContract("taskService", {
       views: { mine: (row, who) => row.assigneeId === who.userId },
     },
     // each user's own
-    assigned: { scope: "assigneeId", item: "card", order: [["id", "asc"]] },
+    assigned: {
+      describe: "The tasks assigned to a user.",
+      scope: "assigneeId",
+      item: "card",
+      order: [["id", "asc"]],
+    },
   },
 });
 ```
@@ -1156,9 +1191,11 @@ be found.
 
 `@fitzzero/quickdraw-core/server/mcp` serves the services to AI agents as MCP
 tools generated from their contracts at startup: one tool per method, named
-`{service}_{method}`, described by the method's `describe` text, with the
+`{service}_{method}`, described by the method's `describe` text (without
+one, by `service.method (kind)`, which tells an agent nothing), with the
 input schema's JSON Schema as its arguments and `readOnlyHint` on every
-query. Every tool call goes through the dispatcher with transport `"mcp"`,
+query. The API docs print each method's default tool name and its read-only
+hint. Every tool call goes through the dispatcher with transport `"mcp"`,
 so input validation, access checks and limits apply exactly as on a socket.
 A method whose input cannot describe itself as JSON Schema stops the
 registry at startup, naming the method, unless it is excluded.
@@ -1530,6 +1567,7 @@ const newTaskSchema = z.object({ projectId: z.string(), title: z.string() });
 const taskPatch = z.object({ title: z.string(), status: z.string() }).partial();
 
 export const task = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity: taskSchema,
   projections: { card: cardSchema },
   methods: {
@@ -1547,7 +1585,11 @@ export const task = defineContract("taskService", {
       bulkUpdate: { input: taskPatch },
       bulkDelete: true,
     }),
-    archive: mutation({ input: z.object({ id: z.string() }), output: "entity" }),
+    archive: mutation({
+      input: z.object({ id: z.string() }),
+      output: "entity",
+      describe: "Archives a task, which leaves its board.",
+    }),
   },
 });
 ```
@@ -1692,6 +1734,7 @@ import { defineContract, search } from "@fitzzero/quickdraw-core";
 import { cardSchema, taskSchema } from "../schemas";
 
 export const task = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity: taskSchema,
   projections: { card: cardSchema },
   methods: {
@@ -1706,6 +1749,7 @@ export const task = defineContract("taskService", {
   },
   collections: {
     byProject: {
+      describe: "A project's tasks, in board order.",
       scope: "projectId",
       item: "card",
       order: [
@@ -1831,6 +1875,7 @@ import { z } from "zod";
 const projectSchema = z.object({ id: z.string(), name: z.string() });
 
 export const project = defineContract("projectService", {
+  describe: "Projects and the people they are shared with.",
   entity: projectSchema,
   methods: {
     // the JSON access list jsonAcl reads: share, unshare, setLevel, listShares
@@ -1844,6 +1889,7 @@ export const project = defineContract("projectService", {
   collections: {
     // each user's projects: an invite adds the project, a remove or a leave takes it out
     mine: {
+      describe: "The projects a user is a member of.",
       scope: via({ model: "projectMember", entry: "projectId", scope: "userId" }),
       item: "entity",
       order: [["id", "asc"]],
@@ -1937,6 +1983,7 @@ import { admin, defineContract } from "@fitzzero/quickdraw-core";
 import { taskSchema } from "../schemas";
 
 export const task = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   // Zod 4.2 or later: the fields come from its JSON Schema
   entity: taskSchema,
   methods: {
@@ -2120,28 +2167,48 @@ const cursorSchema = z.object({ projectId: z.string(), taskId: z.string(), x: z.
 const logLineSchema = z.object({ line: z.string() });
 
 export const task = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity: taskSchema,
   methods: {
-    enterBoard: mutation({ input: z.object({ projectId: z.string() }), output: z.boolean() }),
+    enterBoard: mutation({
+      input: z.object({ projectId: z.string() }),
+      output: z.boolean(),
+      describe: "Joins the caller's socket to a project's board room.",
+    }),
   },
   streams: {
     // one feed per task; a subscriber needs Read on the task, and first gets the latest 50 lines
-    logs: { item: logLineSchema, scope: "taskId", seed: 50, access: { entry: "Read" } },
+    logs: {
+      item: logLineSchema,
+      scope: "taskId",
+      seed: 50,
+      access: { entry: "Read" },
+      describe: "A task's log lines, as its job writes them.",
+    },
     // one feed for everyone
-    load: { item: z.number(), volatile: true, access: "authenticated" },
+    load: {
+      item: z.number(),
+      volatile: true,
+      access: "authenticated",
+      describe: "The server's load, sampled every second.",
+    },
   },
   channels: {
     // 20 a second per socket; only from a socket in the board's room, which enterBoard joined
     cursor: {
+      describe: "Where a user's cursor is on a task card.",
       payload: cursorSchema,
       ratePerSecond: 20,
       requires: { room: (cursor) => `board:${cursor.projectId}` },
     },
   },
   events: {
-    cursorMoved: { payload: cursorSchema },
+    cursorMoved: { payload: cursorSchema, describe: "Another user's cursor moved." },
     // a user's last socket left a board: `onRoomLeave` sends it
-    leftBoard: { payload: z.object({ projectId: z.string(), userId: z.string() }) },
+    leftBoard: {
+      payload: z.object({ projectId: z.string(), userId: z.string() }),
+      describe: "A user left a project's board.",
+    },
   },
 });
 ```
@@ -3090,10 +3157,13 @@ is also a server span named `service.method`, with an error status for
 ## API docs from contracts
 
 The `quickdraw-docs` command writes Markdown API docs from the contracts:
-one page per service (its entity and field tiers, projections, methods
-with their kind, input fields and output, collections, streams, channels
-and events, from the schemas' JSON Schema where they have one) and a
-`README.md` index. It reads contracts (and, with `--services`, the
+one page per service (its `describe`, its entity and field tiers,
+projections, methods with their `describe`, kind, default MCP tool name
+(`{service}_{method}`: a registry's `name`, `include` and `exclude` options
+are not visible to the command), the MCP read-only hint on a query, input
+fields and output, collections, streams, channels and events with their
+`describe`, from the schemas' JSON Schema where they have one) and a
+`README.md` index that lists each service's `describe`. It reads contracts (and, with `--services`, the
 services' definitions), never source code.
 
 ```bash
@@ -3127,7 +3197,19 @@ extensionless imports and `tsconfig` paths, which Node's loader refuses); a
 module whose own code throws runs once and its error is reported as is. Pages are only ever replaced
 or removed when they start with the generator's marker, and they are laid
 out as oxfmt and Prettier format Markdown, so formatting them changes
-nothing. Run `--check` in CI next to the lint step.
+nothing.
+
+Where the pages live depends on how busy the repository is:
+
+- **Few pull requests at a time:** commit the pages and run `--check` in
+  CI next to the lint step.
+- **Many at a time** (several agents, each changing methods): a committed
+  generated file is a merge conflict in every pair of pull requests that
+  touch contracts. Regenerate the pages on each push to the base branch
+  instead, with the workflow the `quickdraw-api-docs` skill of
+  [`@fitzzero/quickdraw-skills`](https://github.com/fitzzero/quickdraw/tree/main/packages/skills) ships (a job with a
+  read-only token generates them, a second job commits them), and never
+  commit them by hand.
 
 ## Lint rules and agent guidance
 
@@ -3135,7 +3217,8 @@ nothing. Run `--check` in CI next to the lint step.
 config every 5.0 app extends: it reports untracked and foreign writes, nested
 and raw SQL writes, hand-sent frames, inline auth guards, unbounded reads,
 database calls and emits in loops, layering breaks, bypasses of the typed
-client, hand-written copies of kit methods (`prefer-kit`, a warning), and
+client, hand-written copies of kit methods (`prefer-kit`, a warning),
+contract members without a `describe` (`require-describe`, a warning), and
 every removed 4.x API with its replacement. Each rule supports a baseline,
 so an app can adopt it before fixing old code.
 

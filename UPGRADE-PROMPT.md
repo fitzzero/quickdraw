@@ -89,7 +89,9 @@ file and line, grouped by kind. Each marker sits above the code it is about
 and says what to do. Work through it in this order, one commit per step:
 
 1. **Contracts** (`[contract]`): give the entity and every `todoSchema` a real
-   schema, and check each method's kind (a query only reads).
+   schema, and check each method's kind (a query only reads). Write a
+   `describe` for the contract and each of its members: the codemod writes
+   none, and lint's `require-describe` lists them.
 2. **Access** (`[access]`, `[access-override]`): decide each `"authenticated"`
    form (4.x let every signed-in user call a `"Read"` method that named no
    row) and each `rowless: true` (a `"Public"` method that named a row: keep
@@ -128,7 +130,8 @@ warns, so the baseline only shrinks.
 
 - `quickdraw-lint check`: `no-v4-api` names every 4.x API that is left, with
   its replacement; `no-todo-schema` every placeholder; `prefer-kit` every
-  hand-written method a kit implements that does not say why. Once the
+  hand-written method a kit implements that does not say why;
+  `require-describe` every contract member without a `describe`. Once the
   report is empty, the baseline should be too.
 - The typecheck: the codemod's output typechecks against 5.0 apart from what
   its markers cover, so what fails is the work that is left.

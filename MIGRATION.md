@@ -220,7 +220,10 @@ In this order, because each step leans on the one before:
 1. **Contracts.** Replace each `todoSchema` with a real schema (lint's
    `no-todo-schema` lists them), give the entity a schema, and check each
    method's kind: a query can be shared, cached and refetched; a mutation
-   cannot.
+   cannot. The codemod writes no `describe`, since 4.x had no per-method
+   prose: write one for the contract and each method, collection, stream,
+   channel and event (lint's `require-describe` lists them). MCP tools are
+   described by them, and `quickdraw-docs` prints them.
 2. **Access.** Decide the `"authenticated"` forms and the `rowless`
    flags, and port each access override into the service's policy.
 3. **Emits.** Delete the hand emits once the writes go through `db` and the
@@ -335,24 +338,33 @@ const taskEntity = z.object({
 });
 
 export const taskContract = defineContract("taskService", {
+  // new in 5.0: the codemod writes no describe; lint's require-describe lists each one missing
+  describe: "Tasks on a project's board.",
   // was TaskDTO; a schema now, so it validates and lists its keys
   entity: taskEntity,
   // was getProtectedFields(): notes reach Moderate and up
   fields: { notes: "Moderate" },
   methods: {
-    getTask: query({ input: z.object({ id: z.string() }), output: nullable("entity") }),
+    getTask: query({
+      input: z.object({ id: z.string() }),
+      output: nullable("entity"),
+      describe: "Reads one task, or null.",
+    }),
     renameTask: mutation({
       input: z.object({ id: z.string(), title: z.string().min(1) }),
       output: nullable("entity"),
+      describe: "Renames a task, or answers null.",
     }),
     archiveAll: mutation({
       input: z.object({ projectId: z.string() }),
       output: z.object({ count: z.number() }),
+      describe: "Archives every task of a project.",
     }),
   },
   collections: {
     // was defineCollection("byProject", ...): declared, so its deltas follow tracked writes
     byProject: {
+      describe: "A project's tasks, by ordinal.",
       scope: "projectId",
       item: "entity",
       order: [
@@ -363,11 +375,14 @@ export const taskContract = defineContract("taskService", {
   },
   // was QuickdrawEventMap and emitToRoom
   events: {
-    archived: { payload: z.object({ projectId: z.string() }) },
-    cursorMoved: { payload: cursorSchema },
+    archived: {
+      payload: z.object({ projectId: z.string() }),
+      describe: "A project's tasks were archived.",
+    },
+    cursorMoved: { payload: cursorSchema, describe: "Another user's cursor moved." },
   },
   // was defineChannel
-  channels: { cursor: { payload: cursorSchema } },
+  channels: { cursor: { payload: cursorSchema, describe: "Where a user's cursor is." } },
 });
 ```
 
@@ -395,7 +410,14 @@ export class HealthService extends BaseRpcService<HealthServiceMethods> {
 ```ts
 // No entity: an RPC-only contract, the 5.0 form of a BaseRpcService
 export const healthContract = defineContract("healthService", {
-  methods: { ping: query({ input: z.undefined(), output: z.object({ at: z.string() }) }) },
+  describe: "Tells a caller the server is up.",
+  methods: {
+    ping: query({
+      input: z.undefined(),
+      output: z.object({ at: z.string() }),
+      describe: "Answers with the server's time.",
+    }),
+  },
 });
 ```
 
@@ -875,6 +897,7 @@ import { admin, defineContract } from "@fitzzero/quickdraw-core";
 import { taskSchema } from "../schemas";
 
 export const task = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   // Zod 4.2 or later: the fields come from its JSON Schema
   entity: taskSchema,
   methods: {
@@ -1075,6 +1098,8 @@ import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
 export const taskContract = defineContract("taskService", {
+  // what the service is for: MCP tools and the generated docs show it
+  describe: "Tasks on a project's board.",
   // the full row; it must contain `id: string`
   entity: taskSchema,
   // lean shapes of the row
@@ -1101,11 +1126,13 @@ export const taskContract = defineContract("taskService", {
       output: z.number(),
       // fetched again whenever the project's board changes
       watch: { collection: "board", scope: (input) => input.projectId },
+      describe: "Counts the tasks on a project's board.",
     }),
   },
   collections: {
     // every task of a project, live, in board order
     board: {
+      describe: "A project's tasks, in board order.",
       scope: "projectId",
       item: "card",
       order: [
@@ -1238,6 +1265,7 @@ it again after every write.
 
 ```ts
 export const boardContract = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity: card.extend({ projectId: z.string() }),
   methods: {
     // every task of the project, grouped by status, fetched again after every write
@@ -1245,10 +1273,12 @@ export const boardContract = defineContract("taskService", {
       input: z.object({ projectId: z.string() }),
       output: z.record(z.string(), z.array(card)),
       watch: { collection: "board", scope: (input) => input.projectId },
+      describe: "Lists a project's tasks, grouped by status.",
     }),
   },
   collections: {
     board: {
+      describe: "A project's tasks, by ordinal.",
       scope: "projectId",
       item: "entity",
       order: [
@@ -1305,6 +1335,8 @@ import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
 export const taskContract = defineContract("taskService", {
+  // what the service is for: MCP tools and the generated docs show it
+  describe: "Tasks on a project's board.",
   // the full row; it must contain `id: string`
   entity: taskSchema,
   // lean shapes of the row
@@ -1331,11 +1363,13 @@ export const taskContract = defineContract("taskService", {
       output: z.number(),
       // fetched again whenever the project's board changes
       watch: { collection: "board", scope: (input) => input.projectId },
+      describe: "Counts the tasks on a project's board.",
     }),
   },
   collections: {
     // every task of a project, live, in board order
     board: {
+      describe: "A project's tasks, in board order.",
       scope: "projectId",
       item: "card",
       order: [
@@ -1790,11 +1824,12 @@ design-system rules):
 ```
 
 `no-v4-api` reports every 4.x API that is left, with its replacement,
-`no-todo-schema` every placeholder schema, and `prefer-kit` (a warning)
+`no-todo-schema` every placeholder schema, `prefer-kit` (a warning)
 every migrated method a kit implements (`getProject`, `listTasks`, ...;
 the report lists them under "Methods a kit implements"): move it to the
 kit, or keep it with a `// quickdraw: hand-written because <reason>`
-comment above it.
+comment above it. `require-describe` (a warning) reports every contract
+member without a `describe`, which is all of them after the codemod.
 
 Adopt it on the codemod's output with a baseline:
 `quickdraw-lint baseline -c .oxlintrc.json` records every violation lint
