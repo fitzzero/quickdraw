@@ -55,7 +55,7 @@ import {
 import type { TestApp, TestConnection } from "./createTestApp";
 import { emitWithAck } from "./socket";
 
-export type { AccessRows };
+export type { AccessPrincipals, AccessRows };
 
 /** The cell an `inputs` function makes the input of. */
 export interface AccessSnapshotRef {

@@ -34,6 +34,7 @@ export { BUDGET_BYTES_TOLERANCE } from "./budgetCompare";
 export { DevWarningError, type DevWarning, type DevWarningKind } from "../server/devWarnings";
 export {
   snapshotAccessMatrix,
+  type AccessPrincipals,
   type AccessRows,
   type AccessSnapshotOptions,
   type AccessSnapshotRef,
