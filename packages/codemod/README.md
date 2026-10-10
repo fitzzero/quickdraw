@@ -62,7 +62,15 @@ part:
   or of `BaseService<...>` over its method map, through type aliases,
   interfaces, type parameters and intersections. The port type is marked. A
   `defineMethod` call tied to no service is named at its file and line in
-  the contract's marker for the method map's unimplemented methods.
+  the contract's marker for the method map's unimplemented methods. A
+  function that only calls the modules' register functions, or other such
+  functions (an aggregator, such as
+  `defineQueryMethods(service) { defineGetTarget(service); ... }`), is
+  removed with its calls, and so is a file it leaves empty that nothing
+  imports; the summary counts the removed aggregators. One that does more
+  (a condition, logging, another call) stays under a `[this]` marker that
+  names the calls the codemod removed from it, and a register function
+  loses its calls of the others the same way.
 - **Which class.** A service is read from one class nothing extends, outside
   test code (`__tests__`, `testing`, `*.test.ts(x)`, `*.spec.ts(x)`): of
   several with one service name, the class `registerService` instantiates,

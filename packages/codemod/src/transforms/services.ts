@@ -2,7 +2,8 @@
 // access, methods })` in the class's file. Methods registered inside the
 // class become entries of `methods`; methods registered by a method module
 // (`registerX(service)`) stay in that module as exported, typed method
-// objects the service lists. The rest of the class is hoisted (`hoist.ts`).
+// objects the service lists, and the functions that only called the modules
+// go (`aggregators.ts`). The rest of the class is hoisted (`hoist.ts`).
 
 import type { ClassDeclaration, SourceFile } from "ts-morph";
 import type { Work } from "../apply";
@@ -12,7 +13,7 @@ import { MarkerSet } from "../markers";
 import type { ServicePlan } from "../plan";
 import type { Hoisted } from "../receiver";
 import { infraPaths } from "./infra";
-import { addHoistedImports, buildMethods, convertModules } from "./methods";
+import { addHoistedImports, buildMethods, type ConvertedCalls, convertModules } from "./methods";
 import {
   defineServiceText,
   leadingCommentText,
@@ -35,7 +36,12 @@ function replaceClass(cls: ClassDeclaration, texts: readonly string[], work: Wor
 }
 
 /** Migrates one service: its classes, its method modules, and the imports they need. */
-function migrateService(ctx: RunContext, plan: ServicePlan, work: Work): void {
+function migrateService(
+  ctx: RunContext,
+  plan: ServicePlan,
+  work: Work,
+  converted: ConvertedCalls,
+): void {
   const { service } = plan;
   const [leaf, ...ancestors] = service.chain;
   if (leaf === undefined) {
@@ -88,7 +94,7 @@ function migrateService(ctx: RunContext, plan: ServicePlan, work: Work): void {
   for (const exported of build.moduleExports) {
     leafWork.imports.push({ name: exported.name, from: exported.file.getFilePath() });
   }
-  convertModules(ctx, plan, build, work);
+  convertModules(ctx, plan, build, work, converted);
   dropMovedSchemas(plan, work);
   ctx.stats.services += 1;
 }
@@ -168,10 +174,15 @@ export function markTestClasses(
   }
 }
 
-/** Migrates every planned service. */
-export function migrateServices(ctx: RunContext, plans: readonly ServicePlan[], work: Work): void {
+/** Migrates every planned service; `converted` holds the calls of the functions the run converts. */
+export function migrateServices(
+  ctx: RunContext,
+  plans: readonly ServicePlan[],
+  work: Work,
+  converted: ConvertedCalls,
+): void {
   for (const plan of plans) {
-    migrateService(ctx, plan, work);
+    migrateService(ctx, plan, work, converted);
     markShadowed(plan, work);
   }
 }

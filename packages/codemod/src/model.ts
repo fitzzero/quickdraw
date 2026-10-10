@@ -428,7 +428,7 @@ function modelFor(
 }
 
 /** The api package's source files outside test code. */
-function apiFiles(project: Project, layout: Layout): SourceFile[] {
+export function apiFiles(project: Project, layout: Layout): SourceFile[] {
   return project
     .getSourceFiles()
     .filter(

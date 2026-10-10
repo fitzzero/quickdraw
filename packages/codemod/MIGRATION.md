@@ -122,7 +122,14 @@ faithfully. What it does:
   extending `Pick<ChatService, ...>`, read from the source); the port type
   is marked. A `defineMethod` call the codemod cannot tie to a service
   keeps its file, and the contract's marker for the method map's
-  unimplemented methods names it at its file and line.
+  unimplemented methods names it at its file and line. A function that only
+  calls the modules' register functions, or other such functions (an
+  aggregator, such as
+  `defineQueryMethods(service) { defineGetTarget(service); ... }`), is
+  removed with its calls, and a file it leaves empty that nothing imports is
+  deleted. One that does more stays, marked `[this]`, without the calls the
+  codemod removed, which the marker names: move what it still does, then
+  delete it.
 - **Which class a service comes from.** A service is read from one class of
   the api package that nothing extends, outside test code (files under
   `__tests__` or `testing`, and `*.test.ts(x)` and `*.spec.ts(x)` files).
@@ -1933,7 +1940,8 @@ An agent doing the migration can start from
 4.1's README split a large service into an abstract `*ServiceCore`, method
 modules calling `service.defineMethod(...)`, and a concrete subclass wiring
 them. In 5.0 the method modules export typed method objects and the service
-lists them; the core's helpers become module functions. This is what the
+lists them; the core's helpers become module functions, and the functions
+that only called the modules' register functions go. This is what the
 codemod writes, with `MethodOf` added to `apps/api/src/quickdraw.ts`:
 
 <!-- example: apps/api/src/services/migration/split.ts#split -->

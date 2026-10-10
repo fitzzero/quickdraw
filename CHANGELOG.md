@@ -111,6 +111,21 @@ All notable changes to this project will be documented in this file.
   a `[this]` marker. A `defineMethod` call still tied to no service is named
   at its file and line in the contract's marker for the unimplemented
   methods, and the api files are scanned once for every service.
+- **Aggregators go with the method modules they called.** A split service
+  registers each method in a function of its own and calls those from an
+  aggregator (`defineQueryMethods(service) { defineGetTarget(service); ... }`).
+  The codemod turned the register functions into method objects but left
+  each aggregator calling functions that no longer exist, unmarked: on one
+  app, 320 calls in 68 files, each a typecheck error the report did not
+  explain. An aggregator that only calls register functions, or other
+  aggregators, is now removed with its calls (the service class's call
+  already went with its constructor), and a file it leaves empty that
+  nothing imports is deleted. One that does more (a condition, logging, a
+  call of a function the run did not convert) stays under the
+  register-leftover `[this]` marker, which names the calls the codemod
+  removed from it, and a register function loses its calls of the others
+  the same way. The summary counts the removed aggregators
+  (`25 methods (2 aggregator functions removed)`).
 - **Test code no longer decides which class a service is read from.** The
   codemod read every class under the api's sources, so a test's subclass of
   a service (`class TestTaskService extends TaskServiceCore` in a
