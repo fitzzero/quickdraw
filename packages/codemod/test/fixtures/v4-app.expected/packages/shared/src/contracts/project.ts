@@ -41,7 +41,7 @@ export const projectContract = defineContract("projectService", {
     // quickdraw-migrate: review [contract] query, chosen from its name
     listMyProjects: query({ input: paginationSchema, output: listOf("entity") }),
     // quickdraw-migrate: review [contract] mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
-    archiveProject: mutation({ input: todoSchema<{ id: string }>(), output: todoSchema<{ id: string; archived: true }>() }),
+    archiveProject: mutation({ input: todoSchema<{ id: string }>({ keys: ["id"] }), output: todoSchema<{ id: string; archived: true }>() }),
     // quickdraw-migrate: review [contract] mutation, chosen from its name; output: todoSchema of the 4.x response type
     deleteProject: mutation({ input: byIdSchema, output: todoSchema<{ id: string; deleted: true }>() }),
     // quickdraw-migrate: review [contract] query, chosen from its name; output: todoSchema of the 4.x response type

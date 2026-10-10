@@ -2,13 +2,13 @@
 
 Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review` markers in the code; running the codemod again rewrites it from the markers that remain. Work through the sections in order (services, contracts, access, emits, client), delete each marker once its item is done, and see the migration guide (`MIGRATION.md`, shipped in `@fitzzero/quickdraw-codemod`) for each kind of item. Then run lint (`no-v4-api` names every 4.x API left, `no-todo-schema` every placeholder) and the typecheck.
 
-142 items in 33 files.
+144 items in 33 files.
 
 | Section                                                        | Items |
 | -------------------------------------------------------------- | ----: |
 | Services                                                       |     4 |
-| Contracts                                                      |    31 |
-| Access                                                         |    11 |
+| Contracts                                                      |    32 |
+| Access                                                         |    12 |
 | Access overrides to turn into a policy                         |     4 |
 | toDto and protected fields to turn into projections and fields |     5 |
 | Collections to declare in contracts                            |     2 |
@@ -43,9 +43,10 @@ Each method's kind was chosen from its name (get, list, search, find and count r
 - [ ] `packages/shared/src/contracts/health.ts:12` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
 - [ ] `packages/shared/src/contracts/label.ts:12` the entity is the 4.x DTO LabelDTO: give it a real schema. Its keys are the fields subscribers receive, read from model "label": drop any that is not a column, or give it a projection select and map
 - [ ] `packages/shared/src/contracts/label.ts:15` query, chosen from its name; input: todoSchema, as 4.x had no schema
-- [ ] `packages/shared/src/contracts/label.ts:17` mutation, chosen from its name; input: todoSchema, as 4.x had no schema
-- [ ] `packages/shared/src/contracts/label.ts:19` query, chosen from its name
-- [ ] `packages/shared/src/contracts/label.ts:21` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/label.ts:17` query, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/label.ts:19` mutation, chosen from its name; input: todoSchema, as 4.x had no schema
+- [ ] `packages/shared/src/contracts/label.ts:21` query, chosen from its name
+- [ ] `packages/shared/src/contracts/label.ts:23` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
 - [ ] `packages/shared/src/contracts/project.ts:22` the entity is the 4.x DTO ProjectDTO: give it a real schema. Its keys are the fields subscribers receive, read from model "project": drop any that is not a column, or give it a projection select and map
 - [ ] `packages/shared/src/contracts/project.ts:35` mutation, chosen from its name; output: todoSchema of the 4.x response type
 - [ ] `packages/shared/src/contracts/project.ts:37` query, chosen from its name
@@ -74,8 +75,9 @@ Each method's kind was chosen from its name (get, list, search, find and count r
 The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 4.x's `hasEntryACL` did, but for a user listed twice in a row's list (marked). "Read" without a row id was open to every signed-in user; decide whether that was meant. A method whose input has `id` under a form that checks no row ("public", say) carries `rowless: true` (marked): 5.0 refuses to define that shape on a service with an access policy without it, and it keeps the 4.x callers.
 
 - [ ] `apps/api/src/services/label.ts:66` 4.x had no row-level access here (no hasEntryACL, no checkAccess): only service grants opened rows, which this empty policy keeps. Give it a real policy if rows belong to someone
-- [ ] `apps/api/src/services/label.ts:77` 4.x's resolveEntryId was a function, kept here: where it returns nothing, the "" makes the row check fail, so only the service grant passes (4.x then applied the plain level)
-- [ ] `apps/api/src/services/label.ts:88` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
+- [ ] `apps/api/src/services/label.ts:77` this method takes an id but its access "public" checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant
+- [ ] `apps/api/src/services/label.ts:88` 4.x's resolveEntryId was a function, kept here: where it returns nothing, the "" makes the row check fail, so only the service grant passes (4.x then applied the plain level)
+- [ ] `apps/api/src/services/label.ts:99` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/project-methods/limits.ts:10` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/project.ts:95` 4.x's hasEntryACL read the row's `acl` column ([{ userId, level }]), and so does jsonAcl("acl"), with one difference: a user with several entries in a row's list gets the highest of their levels, where 4.x took the first. Check the stored lists for duplicate entries
 - [ ] `apps/api/src/services/project.ts:100` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
@@ -158,7 +160,7 @@ Hooks ran only inside the CRUD helpers; move their work into the methods that wr
 Methods of a kit method's shape (`get`, `list`, `create`, `getTask`, ...): the kit checks access on every row it touches, pages and stays live (lint: `prefer-kit`). Replace each with its kit, or keep it with a `// quickdraw: hand-written because <reason>` comment above it.
 
 - [ ] `apps/api/src/services/label.ts:69` getLabel has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
-- [ ] `apps/api/src/services/label.ts:86` listLabels has the shape of the read/write kit's list, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/label.ts:97` listLabels has the shape of the read/write kit's list, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/project.ts:98` createProject has the shape of the read/write kit's create, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/project.ts:112` getProject has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/project.ts:156` deleteProject has the shape of the read/write kit's delete, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)

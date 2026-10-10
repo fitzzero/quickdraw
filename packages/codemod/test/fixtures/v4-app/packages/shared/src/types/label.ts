@@ -13,6 +13,10 @@ export interface LabelServiceMethods {
     payload: { id: string };
     response: LabelDTO | null;
   };
+  getLabelName: {
+    payload: { id: string };
+    response: { name: string } | null;
+  };
   renameLabel: {
     payload: { labelId?: string; name: string };
     response: LabelDTO;
