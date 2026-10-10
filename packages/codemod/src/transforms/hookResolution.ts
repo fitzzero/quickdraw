@@ -25,6 +25,17 @@ export const WRAPPED = new Set([
   "useChannelSend",
 ]);
 
+/** The 4.x hooks the client transform marks rather than converts, with what replaces them. */
+export const OTHER_HOOKS: Readonly<Record<string, string>> = {
+  useRoomEvents:
+    "room events: declare them in the contract's events and listen with qd.<service>.<event>.useEvent(handler)",
+  useChannelSend:
+    "channels: declare them in the contract's channels and send with qd.<service>.<channel>.useChannel()",
+};
+
+/** Text naming one of `WRAPPED`: a file without it holds no call of a 4.x hook. */
+export const HOOK_NAME = new RegExp(`\\b(?:${[...WRAPPED].join("|")})\\b`, "u");
+
 /** A resolved hook: quickdraw's name for it, and the app wrapper it went through (`file#name`). */
 export interface ResolvedHook {
   readonly hook: string;

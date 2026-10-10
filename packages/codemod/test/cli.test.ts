@@ -4,7 +4,7 @@
 
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { main } from "../src/cli";
+import { main, relaunchHeap } from "../src/cli";
 import { MOVED_NAMES, PROVIDER_PROPS, REMOVED_ENTRIES, REMOVED_NAMES } from "../src/v4names";
 import { copyFixture, readTree, removeCopies, REPO } from "./helpers";
 
@@ -73,6 +73,23 @@ describe("quickdraw-codemod", () => {
     expect(out).toContain("  A quickdraw-migration-report.md");
     expect(out).not.toContain("  M quickdraw-migration-report.md");
     expect(readTree(root)).toEqual(before);
+  });
+
+  it("refuses a --heap that is not a whole number of MiB", () => {
+    const { code, err } = run("v5", ".", "--heap", "1.5");
+    expect(code).toBe(2);
+    expect(err).toMatch(/^quickdraw-codemod: --heap takes a whole number of MiB, 256 or more\n/u);
+    expect(run("v5", ".", "--heap", "64").code).toBe(2);
+  });
+
+  it("runs a small app in this process, and starts again for --heap", () => {
+    const root = copyFixture("cli-heap");
+    expect(relaunchHeap(["v5", root, "--dry-run"])).toBeUndefined();
+    expect(relaunchHeap(["v5", root, "--heap", "4096"])).toEqual({ heap: 4096, files: 40 });
+    // main reports these
+    expect(relaunchHeap(["--help"])).toBeUndefined();
+    expect(relaunchHeap(["v5", "/nowhere", "--heap", "4096"])).toBeUndefined();
+    expect(relaunchHeap(["v5", root, "--heap", "x"])).toBeUndefined();
   });
 });
 

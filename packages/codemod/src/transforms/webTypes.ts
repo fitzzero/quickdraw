@@ -25,6 +25,9 @@ export function localTypesOf(call: CallExpression): string[] {
 
 /** 4.x's one-argument `UseCollectionResult<Item>` (quickdraw's client type) gets 5.0's index row. */
 export function completeCollectionResults(file: SourceFile, work: Work): void {
+  if (!file.getFullText().includes("UseCollectionResult")) {
+    return;
+  }
   for (const reference of file.getDescendantsOfKind(SyntaxKind.TypeReference)) {
     const name = reference.getTypeName();
     const [item, ...rest] = reference.getTypeArguments();

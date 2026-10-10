@@ -6,7 +6,7 @@
 // its file and line, a service class's fields, getters, constructor and
 // overrides survive as marked module code, and a second run changes nothing.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Node, Project, SyntaxKind } from "ts-morph";
@@ -417,5 +417,39 @@ describe("the kit shapes", () => {
     expect(kitShapeOf("remove", "task", ["invite"])?.method).toBe("remove");
     expect(kitShapeOf("remove", "projectMember")?.method).toBe("remove");
     expect(kitShapeOf("deleteTask", "task")?.method).toBe("delete");
+  });
+});
+
+describe("a 4.x instance's members outside the services", () => {
+  it("are found in every file when a declare global gives a file without imports the class's type", () => {
+    // Only files that import a class's file, directly or through others, are
+    // asked for types; a global declared in one of them reaches every file.
+    const copy = copyFixture("globals");
+    writeFileSync(
+      join(copy, "apps/api/src/globals.ts"),
+      [
+        `import type { LabelService } from "./services/label.js";`,
+        ``,
+        `declare global {`,
+        `  var labels: LabelService;`,
+        `}`,
+        ``,
+        `export {};`,
+        ``,
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(copy, "apps/web/src/components/GlobalLabels.tsx"),
+      [
+        `export function GlobalLabels({ projectId }: { projectId: string }) {`,
+        `  return <p>{labels.getRoomName(projectId)}</p>;`,
+        `}`,
+        ``,
+      ].join("\n"),
+    );
+    runCodemod({ root: copy });
+    expect(readFileSync(join(copy, "apps/web/src/components/GlobalLabels.tsx"), "utf8")).toContain(
+      `${MARKER} [client] labels is a 4.x LabelService instance, whose members (getRoomName here)`,
+    );
   });
 });

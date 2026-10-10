@@ -1,7 +1,21 @@
 // `quickdraw-codemod v5 <repo> [options]`: moves a quickdraw 4.x app to 5.0.
 
+import { spawnSync } from "node:child_process";
+import { constants, totalmem } from "node:os";
+import { getHeapStatistics } from "node:v8";
 import { parseArgs } from "node:util";
+import {
+  exitCode,
+  exitNote,
+  heapToUse,
+  LARGE_APP,
+  MAX_HEAP,
+  namesHeap,
+  RELAUNCHED_ENV,
+} from "./heap";
 import { runCodemod, type RunResult } from "./index";
+import { findLayout, type LayoutOptions } from "./layout";
+import { countSourceFiles } from "./project";
 import { REPORT_FILE } from "./report";
 
 const USAGE = `Usage: quickdraw-codemod v5 <repo> [options]
@@ -18,6 +32,8 @@ Options:
   --api <dir>           the api app (default apps/api)
   --web <dir>           the web app (default apps/web)
   --db-package <name>   the package prisma is imported from (default: packages/db's name)
+  --heap <MiB>          the heap to run with (default: on an app of more than
+                        ${LARGE_APP.toLocaleString("en")} files, 75% of the memory, at most ${String(MAX_HEAP)} MiB)
   -h, --help            show this help
 `;
 
@@ -53,7 +69,18 @@ function formatterLines({ formatter }: RunResult): string[] {
   ];
 }
 
-function run(argv: readonly string[], output: Output): void {
+/** The command's arguments: `help`, or the app's root, its layout options and the run's options. */
+type Command =
+  | { readonly help: true }
+  | {
+      readonly help: false;
+      readonly root: string;
+      readonly layout: LayoutOptions;
+      readonly dryRun: boolean;
+      readonly heap: number | undefined;
+    };
+
+function parse(argv: readonly string[]): Command {
   let parsed;
   try {
     parsed = parseArgs({
@@ -65,6 +92,7 @@ function run(argv: readonly string[], output: Output): void {
         api: { type: "string" },
         web: { type: "string" },
         "db-package": { type: "string" },
+        heap: { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -73,22 +101,38 @@ function run(argv: readonly string[], output: Output): void {
   }
   const { values, positionals } = parsed;
   if (values.help === true) {
-    output.out(USAGE);
-    return;
+    return { help: true };
   }
   const [transform, root] = positionals;
   if (transform !== "v5" || root === undefined || positionals.length > 2) {
     fail(transform === "v5" ? "name the app's repository root" : "the only transform is v5");
   }
-  const dryRun = values["dry-run"] === true;
-  const result = runCodemod({
+  const heap = values.heap === undefined ? undefined : Number(values.heap);
+  if (heap !== undefined && (!Number.isInteger(heap) || heap < 256)) {
+    fail("--heap takes a whole number of MiB, 256 or more");
+  }
+  return {
+    help: false,
     root,
-    dryRun,
-    ...(values.shared === undefined ? {} : { shared: values.shared }),
-    ...(values.api === undefined ? {} : { api: values.api }),
-    ...(values.web === undefined ? {} : { web: values.web }),
-    ...(values["db-package"] === undefined ? {} : { dbPackage: values["db-package"] }),
-  });
+    layout: {
+      ...(values.shared === undefined ? {} : { shared: values.shared }),
+      ...(values.api === undefined ? {} : { api: values.api }),
+      ...(values.web === undefined ? {} : { web: values.web }),
+      ...(values["db-package"] === undefined ? {} : { dbPackage: values["db-package"] }),
+    },
+    dryRun: values["dry-run"] === true,
+    heap,
+  };
+}
+
+function run(argv: readonly string[], output: Output): void {
+  const command = parse(argv);
+  if (command.help) {
+    output.out(USAGE);
+    return;
+  }
+  const { dryRun } = command;
+  const result = runCodemod({ root: command.root, dryRun, ...command.layout });
   const { stats } = result;
   const lines = [
     `quickdraw-codemod v5${dryRun ? " (dry run: nothing written)" : ""}`,
@@ -127,4 +171,65 @@ export function main(
     output.err(`${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
+}
+
+/** The heap (MiB) to start the command again with, and the app's source files; `undefined` runs it here. */
+export function relaunchHeap(argv: readonly string[]): { heap: number; files: number } | undefined {
+  let command: Command;
+  let files: number;
+  try {
+    command = parse(argv);
+    if (command.help) {
+      return undefined;
+    }
+    files = countSourceFiles(findLayout(command.root, command.layout));
+  } catch {
+    // main reports the usage error, or the layout it cannot find
+    return undefined;
+  }
+  const heap = heapToUse({
+    files,
+    limit: Math.floor(getHeapStatistics().heap_size_limit / (1024 * 1024)),
+    constrained: process.constrainedMemory(),
+    total: totalmem(),
+    requested: command.heap,
+    explicit: namesHeap([...process.execArgv, ...(process.env.NODE_OPTIONS ?? "").split(/\s+/u)]),
+    bun: process.versions.bun !== undefined,
+    relaunched: process.env[RELAUNCHED_ENV] !== undefined,
+  });
+  return heap === undefined ? undefined : { heap, files };
+}
+
+/**
+ * Runs the command from `bin`: here, or, on a large app or with `--heap`, in
+ * a Node started again with that heap (see heap.ts). Returns its exit code.
+ */
+export function start(argv: readonly string[], bin: string): number {
+  const relaunch = relaunchHeap(argv);
+  if (relaunch === undefined) {
+    return main(argv);
+  }
+  const { heap, files } = relaunch;
+  process.stderr.write(
+    `quickdraw-codemod: ${String(files)} source files: running with a ${String(heap)} MiB heap (--heap to change)\n`,
+  );
+  const child = spawnSync(
+    process.execPath,
+    [...process.execArgv, `--max-old-space-size=${String(heap)}`, bin, ...argv],
+    { stdio: "inherit", env: { ...process.env, [RELAUNCHED_ENV]: "1" } },
+  );
+  if (child.error !== undefined) {
+    process.stderr.write(
+      `quickdraw-codemod: could not start node again (${child.error.message}): running with this heap\n`,
+    );
+    return main(argv);
+  }
+  const note = exitNote(heap, child.status, child.signal);
+  if (note !== undefined) {
+    process.stderr.write(`${note}\n`);
+  }
+  return exitCode(
+    child.status,
+    child.signal === null ? undefined : constants.signals[child.signal],
+  );
 }
