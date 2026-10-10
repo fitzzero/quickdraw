@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Node, Project, SyntaxKind } from "ts-morph";
 // @ts-expect-error -- the lint plugin is plain JavaScript without types
 import { kitShape as preferKit } from "../../lint/plugin/rules/prefer-kit.mjs";
+import { moduleName } from "../src/hoist";
 import { runCodemod, type RunResult } from "../src/index";
 import { kitShapeOf } from "../src/kits";
 import { findMarkers, MARKER } from "../src/markers";
@@ -118,6 +119,18 @@ describe("a 4.x service class's members (label.ts)", () => {
     expect(label()).toMatch(
       /\[this\] super\.adminCreate\(data\) called the 4\.x base class[^\n]*\n {2}const created = await undefined;/u,
     );
+  });
+
+  it("hoists a member named after a reserved word (delete) as <name>Of<Class>, and its calls follow", () => {
+    expect(label()).not.toMatch(/function delete\b/u);
+    expect(label()).toMatch(
+      /overrode the 4\.x BaseService method delete[^\n]*; hoisted as deleteOfLabelService: delete is a reserved word\nasync function deleteOfLabelService\(id: string\)/u,
+    );
+    expect(label()).toContain("return await deleteOfLabelService(id);");
+    // and the file parses
+    const project = new Project({ useInMemoryFileSystem: true });
+    const file = project.createSourceFile("label.ts", label());
+    expect(project.getProgram().getSyntacticDiagnostics(file)).toEqual([]);
   });
 
   it("marks this.constructor as instance state, not as a key of Object.prototype", () => {
@@ -321,7 +334,11 @@ describe("the report", () => {
 
   it("lists every this.create, this.update and this.delete", () => {
     const listed = section("this.create, this.update and this.delete to write through db");
-    expect(listed).toHaveLength(countInFixture(/this\.(?:create|update|delete)\(/gu));
+    // label.ts's removeLabel calls the class's own delete override, not 4.x's helper
+    const overrideCalls = countInFixture(/return await this\.delete\(id\);/gu);
+    expect(listed).toHaveLength(
+      countInFixture(/this\.(?:create|update|delete)\(/gu) - overrideCalls,
+    );
     for (const line of listed) {
       expect(codeAt(line)).toMatch(/this\.(?:create|update|delete)\(/u);
     }
@@ -417,5 +434,18 @@ describe("the kit shapes", () => {
     expect(kitShapeOf("remove", "task", ["invite"])?.method).toBe("remove");
     expect(kitShapeOf("remove", "projectMember")?.method).toBe("remove");
     expect(kitShapeOf("deleteTask", "task")?.method).toBe("delete");
+  });
+});
+
+describe("the module-level name of a hoisted member", () => {
+  it("is the member's own name, unless it is taken, a reserved word or no identifier", () => {
+    const taken = new Set(["db", "room"]);
+    expect(moduleName("roomStats", "LabelService", taken)).toBe("roomStats");
+    expect(moduleName("room", "LabelService", taken)).toBe("roomOfLabelService");
+    expect(moduleName("delete", "TaskService", taken)).toBe("deleteOfTaskService");
+    expect(moduleName("new", "TaskService", taken)).toBe("newOfTaskService");
+    expect(moduleName("class", "TaskService", taken)).toBe("classOfTaskService");
+    expect(moduleName('"by-name"', "TaskService", taken)).toBe("byNameOfTaskService");
+    expect(moduleName('"2fa"', "TaskService", taken)).toBe("member2faOfTaskService");
   });
 });

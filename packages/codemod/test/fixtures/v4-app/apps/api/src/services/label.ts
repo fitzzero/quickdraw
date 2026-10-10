@@ -96,4 +96,16 @@ export class LabelService extends BaseService<
     this.onChange?.(created.id);
     return created;
   }
+
+  // Deletes tell the listener too: 4.x's delete, whose name is a reserved word
+  protected override async delete(id: string): Promise<boolean> {
+    await this.prisma.label.delete({ where: { id } });
+    this.onChange?.(id);
+    return true;
+  }
+
+  /** Deletes a label for the admin page, through the override. */
+  public async removeLabel(id: string): Promise<boolean> {
+    return await this.delete(id);
+  }
 }

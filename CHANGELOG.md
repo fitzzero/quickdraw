@@ -22,6 +22,15 @@ All notable changes to this project will be documented in this file.
   test holds them to it; a change's entry goes under `## [Unreleased]`, and the
   release that ships it writes the version and the date here.
 
+### Codemod
+
+- **A member named after a reserved word gets a name that parses.** The
+  codemod hoisted a 4.x `override delete` into `async function delete ()`,
+  which TypeScript and oxfmt refuse. A member whose name is a JavaScript
+  reserved word, or no identifier at all, is now hoisted as
+  `<name>Of<Class>` (`deleteOfTaskService`), its `this.delete(...)` calls
+  follow, and its marker says it was renamed.
+
 ## [5.0.1] - 2026-10-08
 
 Fixes from the independent review of 5.0.0 after the farseer migration
