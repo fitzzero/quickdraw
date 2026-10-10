@@ -1,10 +1,11 @@
 // The 4.x legacy shim over real connections (RFC 0003 section 8.5): a client
 // without `auth.qd` calls `"{service}:{method}"` with an ack and gets the 4.x
-// `ServiceResponse` shape back.
+// `ServiceResponse` shape back. Its calls run with the `ctx.socketId` and
+// `ctx.rooms` of the socket they arrived on.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { defineContract, mutation } from "../../index";
+import { defineContract, mutation, query, type EventFrame } from "../../index";
 import {
   alice,
   captureLogger,
@@ -17,7 +18,7 @@ import {
   tick,
   type AppPrincipal,
 } from "../__tests__/fixtures";
-import type { CallRecord, PipelineOptions, ServerOnlyOptions } from "../index";
+import type { CallRecord, PipelineOptions, RoomLeave, ServerOnlyOptions } from "../index";
 import {
   call,
   next,
@@ -276,5 +277,128 @@ describe("the legacy shim", () => {
     await expect.poll(() => probe.signals.has("legacy")).toBe(true);
     socket.disconnect();
     await expect.poll(() => probe.signals.get("legacy")?.aborted).toBe(true);
+  });
+});
+
+const roomInput = z.object({ room: z.string() });
+
+/** A service whose handlers use the calling socket: its id, joining and leaving rooms, room events. */
+const roomContract = defineContract("roomService", {
+  methods: {
+    whoAmI: query({ input: z.object({}), output: z.string().nullable() }),
+    join: mutation({ input: roomInput, output: z.boolean() }),
+    leave: mutation({ input: roomInput, output: z.boolean() }),
+    celebrate: mutation({ input: roomInput, output: z.null() }),
+  },
+  events: { celebrated: { payload: z.object({ room: z.string() }) } },
+});
+
+const roomService = qd.defineService(roomContract, {
+  methods: {
+    whoAmI: { access: "public", handler: ({ ctx }) => ctx.socketId ?? null },
+    join: { access: "public", handler: ({ input, ctx }) => ctx.rooms.join(input.room) },
+    leave: { access: "public", handler: ({ input, ctx }) => ctx.rooms.leave(input.room) },
+    celebrate: {
+      access: "public",
+      handler: ({ input, ctx }) => {
+        ctx.rooms.emit(input.room, roomContract, "celebrated", { room: input.room });
+        return null;
+      },
+    },
+  },
+});
+
+describe("the legacy shim's calls and the socket they arrived on", () => {
+  async function serveRooms() {
+    const heard: RoomLeave[] = [];
+    const { server, url } = await harness.start({
+      services: [roomService],
+      db,
+      logger: captureLogger(),
+      auth: trustingAuth,
+      legacyWire: true,
+      onRoomLeave: (leave) => {
+        heard.push(leave);
+      },
+    });
+    return { server, url, heard };
+  }
+
+  it("gives a 4.x call ctx.socketId, the id of the client's socket", async () => {
+    const { url } = await serveRooms();
+    const { socket } = await connectLegacy(url);
+    expect(await legacyCall(socket, "roomService:whoAmI", {})).toBe(socket.id);
+    const anonymous = await connectLegacy(url, null);
+    expect(await legacyCall(anonymous.socket, "roomService:whoAmI", {})).toBe(anonymous.socket.id);
+  });
+
+  it("joins a 4.x socket to an app room, where the app's raw emits and room events reach it", async () => {
+    const { server, url } = await serveRooms();
+    const { socket } = await connectLegacy(url);
+    expect(await legacyCall(socket, "roomService:join", { room: "session:s1" })).toBe(true);
+    expect(server.rooms.size("session:s1")).toBe(1);
+    expect(await server.presence.users("session:s1")).toEqual(["alice"]);
+
+    // The app's own 4.x delivery: a raw emit to the room.
+    const message = next(socket, "session:message");
+    server.io.to("session:s1").emit("session:message" as never, { text: "hi" } as never);
+    expect(await message).toEqual({ text: "hi" });
+
+    // A v5 socket in the same room gets the contract's event as a typed frame.
+    const v5 = harness.open(url, v5Auth(granted(alice, {})));
+    await v5.hello;
+    const joined = await call(v5.socket, {
+      id: 1,
+      s: "roomService",
+      m: "join",
+      i: { room: "session:s1" },
+    });
+    expect(joined).toEqual({ ok: true, d: true });
+    const event = next<EventFrame>(v5.socket, "qd:event");
+    await legacyCall(socket, "roomService:celebrate", { room: "session:s1" });
+    expect(await event).toEqual(["roomService", "celebrated", { room: "session:s1" }]);
+
+    expect(await legacyCall(socket, "roomService:leave", { room: "session:s1" })).toBe(true);
+    expect(server.rooms.size("session:s1")).toBe(1);
+  });
+
+  it("keeps the room rules: reserved names are refused", async () => {
+    const { url } = await serveRooms();
+    const { socket } = await connectLegacy(url);
+    for (const room of ["qd:x", "user:bob"]) {
+      expect(await rawLegacyCall(socket, "roomService:join", { room })).toMatchObject({
+        success: false,
+        code: 422,
+      });
+    }
+  });
+
+  it("leaves a 4.x socket's app rooms when it disconnects: onRoomLeave hears it and presence forgets it", async () => {
+    const { server, url, heard } = await serveRooms();
+    const { socket } = await connectLegacy(url);
+    const socketId = socket.id;
+    await legacyCall(socket, "roomService:join", { room: "session:s1" });
+    socket.disconnect();
+    await vi.waitFor(() => {
+      expect(heard).toHaveLength(1);
+    });
+    expect(heard).toEqual([
+      {
+        principal: expect.objectContaining({ userId: "alice" }),
+        socketId,
+        reason: "disconnect",
+        rooms: [{ room: "session:s1", last: true }],
+      },
+    ]);
+    expect(server.rooms.size("session:s1")).toBe(0);
+    expect(await server.presence.users("session:s1")).toEqual([]);
+  });
+
+  it("still serves no 4.x subscriptions", async () => {
+    const { url } = await serveRooms();
+    const { socket } = await connectLegacy(url);
+    await expect(
+      rawLegacyCall(socket, "roomService:subscribe", { room: "r" }, 150),
+    ).rejects.toThrow("operation has timed out");
   });
 });

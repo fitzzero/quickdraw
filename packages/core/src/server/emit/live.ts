@@ -51,6 +51,11 @@ export interface Live {
    * `qd:stream:unsub` and `qd:ch` on every v5 socket.
    */
   readonly extension: ReturnType<typeof entitySubscriptions>;
+  /**
+   * What a 4.x socket gets instead: it leaves the app rooms its calls through
+   * the legacy shim joined when it disconnects. None of the v5 events are served.
+   */
+  readonly legacyExtension: Realtime["legacyExtension"];
   /** Presence, streams, channels and typed room events: `ctx.rooms`, `ctx.presence`, `qd.stream`. */
   readonly realtime: Realtime;
   /** The revisions flushes take and reads claim: the process's clock, or a cluster's shared counter. */
@@ -110,6 +115,7 @@ export function createLive(options: HubOptions): Live {
       topics.extension(...args);
       realtime.extension(...args);
     },
+    legacyExtension: realtime.legacyExtension,
     realtime,
     revisions: hub.revisions,
     attach(

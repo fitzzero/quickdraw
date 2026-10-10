@@ -771,7 +771,8 @@ export const taskService = qd.defineService(task, {
   `rowless: ["get"]` in the kit's options. The input's keys come from its
   JSON Schema: an `id` in any branch of a union counts, and so does one
   beside a value JSON Schema cannot write (a `Date`, a `Set`). Not checked:
-  an input without JSON Schema (Zod 3), one that is no object (a bare string
+  an input without JSON Schema (Zod 3) or whose JSON Schema names no keys (a
+  `todoSchema` without `keys`), one that is no object (a bare string
   that is the id itself) and a row named by another key (`ids`, `taskId`, a
   nested `where.id`).
 - A service-wide `Admin` grant passes every check on its service
@@ -1200,10 +1201,16 @@ as a 4.x client instead of being refused with `PROTOCOL_MISMATCH`. The shim
 serves request/response calls only: `socket.emit("taskService:get", payload, ack)`
 runs through the 5.0 pipeline and is answered in the 4.x `ServiceResponse`
 shape, `{ success: true, data }` or `{ success: false, error, code }`, with
-the HTTP status of the error code as `code`. 4.x subscriptions, collections
-and channels are not served. Each service, method and principal kind that
-calls through the shim is logged once at `warn`, so the remaining 4.x
-clients can be found.
+the HTTP status of the error code as `code`. A call through the shim runs
+with the `ctx.socketId` and `ctx.rooms` of the socket it arrived on, so a
+handler can put a 4.x client in an app room; it leaves its rooms when it
+disconnects, and `onRoomLeave` and presence hear it as they hear a 5.0
+socket. 4.x subscriptions, collections and channels are not served, and a
+contract's events reach only 5.0 sockets: delivering events to 4.x
+listeners stays the app's own raw emit to the room until those clients
+speak protocol 5. Each service, method and principal kind that calls
+through the shim is logged once at `warn`, so the remaining 4.x clients can
+be found.
 
 ### MCP bridge
 
@@ -1277,6 +1284,68 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   tools it may not call (and its call is refused). Keep a tool out of the
   list with `exclude` or `include`, per registry, and serve agents of
   different reach from separate registries.
+
+`bind` fills chosen arguments from who is calling instead of from the agent,
+so an agent bound to one project cannot name another in its calls. Here an
+agent's token names its project as a verified claim (`principal.claims`):
+
+<!-- example: apps/api/src/mcp.ts#bind -->
+
+```ts
+// agents bound to one project: an agent's token names it as a verified claim
+const projectAgents = createMcpRegistry({
+  services: [taskService],
+  dispatcher: server.dispatcher,
+  // agent tokens only: anyone else is anonymous, and every tool here refuses them
+  principal: (request) =>
+    verifyAgentToken(request.transport === "http" ? request.token : process.env.AGENT_TOKEN),
+  // filled from the claim on every call, and left out of every tool's arguments
+  bind: { projectId: ({ principal }) => principal.claims?.projectId },
+  include: ["taskService.create", "taskService.countOnBoard"],
+  // the tools' public names: create_task and count_tasks
+  name: (_service, method) => (method === "create" ? "create_task" : "count_tasks"),
+});
+
+// beside the first registry, at a path of its own: GET /agents/tools, POST /agents/invoke
+app.use(createMcpHttpRouter({ registry: projectAgents, path: "/agents" }));
+```
+
+- Each bound argument is left out of the `inputSchema` of every method's tool
+  whose object input has it: `create_task` lists `id` and `title`, and
+  `count_tasks` takes no arguments. Every call of such a tool gets the
+  binder's value before its input is validated, through `tools/call` and both
+  shapes of `POST /mcp/invoke` alike.
+- A call fails closed, before the method runs: `UNAUTHENTICATED` for an
+  anonymous caller, and `FORBIDDEN` when the binder returns `undefined` or
+  `null`, or when the agent sent the argument with another value. A binder
+  that throws fails the call with `INTERNAL`, or with the code of the
+  `QuickdrawError` it threw.
+- `createMcpRegistry` throws at startup when a bound argument is in no
+  selected method's object input (a misspelled name would leave the real
+  argument to the agent), and when it is a property of an input that is not
+  an object, which it names: leave that method out, or make its input an
+  object.
+- Custom tools are never bound, and neither are the calls their `caller`
+  makes: a custom tool reads `principal` itself. `describeTools` and the API
+  docs list the inputs as the contracts declare them, with nothing bound.
+- Binding is not access control. The same principal reaches the method over a
+  socket or HTTP with nothing bound, so the method's access must still
+  confine it to its project.
+
+Two more needs are met by the options above, with nothing added:
+
+- **A tool set per kind of caller.** Make one registry per kind, each with its
+  own `include`, `bind` and `principal`, and serve each at its own `path` or
+  from its own stdio entry, as above. A registry's `principal` hook refuses
+  the other kinds: throwing fails their calls with `UNAUTHENTICATED`.
+- **Frozen public tools.** `name` gives a method's tool any public name, as
+  `create_task` above. When agents depend on tool names and argument shapes
+  that must never change, give that surface a contract of its own: its
+  methods' inputs and `describe` texts are the frozen shapes, its handlers
+  call the app's services through `ctx.services`, and a registry with
+  `name: (_service, method) => method` serves it. The bridge never reshapes a
+  tool's arguments on the way in: such a tool would be invisible to the API
+  docs and to lint, which read the contracts.
 
 ## The client
 
@@ -2890,6 +2959,80 @@ principals. Each cell of the report records its principal's `kind`, and a
 cell that differs is listed with it: on a service or method with `kinds`,
 give the matrix a principal of each kind it refuses.
 
+### Access snapshots
+
+`snapshotAccessMatrix(app, { principals, reset, rows })` records the whole
+matrix instead of chosen cases: every method of the app's services (or of
+`services`), each entity subscribe (`qd:sub`) and each collection scope
+(`qd:col:sub`), as every principal and anonymously. The first run writes the
+outcomes to `__access__/<test file>.json` beside the test, and every later
+run compares its matrix with that file, so each changed cell is a decision
+someone made. Commit the file. Use it to pin a service's table, and before
+a migration, a policy refactor or a new kind of principal:
+
+<!-- example: apps/api/src/services/task.test.ts#snapshot -->
+
+```ts
+it("pins who may call what, for every method, subscribe and scope", async () => {
+  const app = await createTestApp({ services: [projectService, taskService], db });
+  const report = await snapshotAccessMatrix(app, {
+    principals: { owner: ada, member: bo, stranger: ed },
+    reset: async () => {
+      await resetDatabase(prisma); // at the start, and after each write access let through
+      return await seed();
+    },
+    rows: (board) => ({ projectService: board.projectId, taskService: board.taskId }),
+  });
+  expect(report.inconclusive).toEqual([]); // every cell ran, with an input its schema accepts
+  await app.close();
+});
+```
+
+- `reset()` empties the database and seeds it (`resetDatabase` from
+  `./testing/prisma`, then the app's seed, with the untracked client), and
+  resolves with what the seed made: the fixture. It runs first, and again
+  after every mutation the pipeline did not refuse, so no cell sees the
+  writes of another. `principals` may be a function of the fixture, for a
+  seed that makes new ids; its names stay the same.
+- `rows(fixture)` names the row each service's cells are about: a row id,
+  or named variants (`{ own: p1, other: p2 }`), each a row of the matrix of
+  its own. It names every service an access form, an entity subscribe or a
+  collection anchor of the matrix reads; a missing one is a `TypeError`
+  before any cell runs. A `"self"` scope is subscribed with the caller's own
+  user id.
+- Inputs are made from each method's input schema (Zod 4.2 or later
+  describes itself as JSON Schema): the row goes where the access form reads
+  it (`id`, the key an `entry` or `scope` form names, or where a function
+  `id` finds it; for any other form, the input's `id`), and every other
+  required value is as small as the schema allows. `inputs(ref, fixture)`
+  gives a method's input instead (`ref` names the service, method, kind,
+  variant, row and principal of the cell); `undefined` keeps the made one.
+  A cell whose input fails the schema, or names no row where an `entry` or
+  `scope` form reads it, is never called: it is `VALIDATION`, and the
+  report lists it in `inconclusive`.
+- Each cell is the exact outcome: `"ok"`, or the error code
+  (`UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, ...). Each principal's
+  `kind` is recorded beside the cells.
+- A cell whose outcome changed fails, naming the cell, both outcomes and
+  whether the change opens or closes access (a changed `kind` fails too):
+
+  ```text
+  snapshotAccessMatrix: 1 cell differs from the access snapshot (src/services/__access__/task.test.ts.json):
+    taskService.rename as member: FORBIDDEN → ok (opens access)
+  ```
+
+  When each change is meant, run the tests with
+  `QD_UPDATE_ACCESS_SNAPSHOT=1` and commit the file.
+
+- Cells added or removed (a new method, principal or exclusion) rewrite the
+  file in a local run. Under CI (`CI=1` or `CI=true`) they fail, and so do a
+  missing file and `QD_UPDATE_ACCESS_SNAPSHOT`: a snapshot that writes
+  itself pins nothing.
+- Leave out a method whose outcome differs from run to run with
+  `exclude: ["taskService.roll"]`; the file lists it. Take one snapshot per
+  test file (one test file per service keeps merges small), or pass
+  `{ file }`.
+
 ### Performance budgets
 
 `expectBudget(run, { name })` makes performance something a test can fail
@@ -3292,7 +3435,7 @@ bunx @fitzzero/quickdraw-codemod v5 .
 | `./client`         | `createQuickdrawClient`, `QuickdrawProvider`, `useQuickdraw`, `usePresence`, `useAdminServices`, `createQuickdrawConnection`, `call`, `callData`, `liveDataOf`, the coordinator; everything in `./utils`                                        |
 | `./utils`          | `createServerCaller`, cache keys (`methodKey`, `entityKey`, `collectionKey`), formatting, navigation, `parseJWTPayload`                                                                                                                         |
 | `./parser`         | the JSON-only Socket.IO parser                                                                                                                                                                                                                  |
-| `./testing`        | `createTestApp`, `describeAccessMatrix`, `expectBudget`, `createRecordingSink`, `DevWarningError`                                                                                                                                               |
+| `./testing`        | `createTestApp`, `describeAccessMatrix`, `snapshotAccessMatrix`, `expectBudget`, `createRecordingSink`, `DevWarningError`                                                                                                                       |
 | `./testing/client` | `renderWithQuickdraw`, and everything in `./testing/mock`                                                                                                                                                                                       |
 | `./testing/mock`   | `createMockClient` alone, without Testing Library: for browser bundles such as Storybook                                                                                                                                                        |
 | `./testing/prisma` | test databases on PostgreSQL or PGlite                                                                                                                                                                                                          |

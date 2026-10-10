@@ -209,7 +209,10 @@ Components rendered against the server go in
 
 - `describeAccessMatrix` over every method, as an owner, a member, a
   stranger and anonymously, plus a principal of each kind the service or a
-  method refuses.
+  method refuses; or `snapshotAccessMatrix`, which records every method,
+  entity subscribe and collection scope of the service in
+  `__access__/<test file>.json` (commit it, and keep its report's
+  `inconclusive` empty).
 - One live test: a write by one user reaches another user's collection or
   entity (`app.frames.waitFor`, or a component through
   `renderWithQuickdraw`).

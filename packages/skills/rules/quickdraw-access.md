@@ -93,7 +93,8 @@ defined. Fix the form, not the error:
   row themselves and need neither.
 - The check reads the input's keys from its JSON Schema: an `id` in any
   branch of a union counts, as does one beside a `Date` or a `Set`. An input
-  without JSON Schema (a Zod 3 schema), a bare string that is the id itself
+  without JSON Schema (a Zod 3 schema) or one that names no keys (a
+  `todoSchema` without `keys`), a bare string that is the id itself
   and a row named by another key (`taskId`, `ids`) are not checked, so the
   form is all yours there (`{ entry: L, id: "taskId" }` names another key).
 
@@ -205,4 +206,9 @@ Pin every service's matrix with `describeAccessMatrix` from
 `@fitzzero/quickdraw-core/testing` (see quickdraw-testing.md): each method
 as owner, member, stranger and anonymous, through the real dispatcher, and
 on a service with `kinds`, as a principal of each kind it refuses (each
-cell records its principal's `kind`).
+cell records its principal's `kind`). Before changing a form, a policy or
+the kinds of principal, record the whole table with `snapshotAccessMatrix`
+(every method, entity subscribe and collection scope, in
+`__access__/<test file>.json`): each cell the change moves then fails,
+saying whether it opens or closes access, until
+`QD_UPDATE_ACCESS_SNAPSHOT=1` accepts it.

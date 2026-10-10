@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineContract, query } from "../index";
+import { defineContract, query, todoSchema } from "../index";
 import { z as z3 } from "zod3";
 import {
   project,
@@ -358,6 +358,39 @@ describe("the rowless check", () => {
     expect(() =>
       defineLoosely(zod3, { model: "task", access: policy, methods: { get } }),
     ).not.toThrow();
+  });
+
+  it("reads a todoSchema's keys, so a keyed placeholder is refused like Zod 4 and a keyless one is not", () => {
+    /** Defines a task service whose `get` takes `input` under `"authenticated"`. */
+    const defineWith = (input: Parameters<typeof query>[0]["input"]) => () =>
+      defineLoosely(
+        defineContract("taskService", {
+          entity: taskSchema,
+          methods: { get: query({ input, output: "entity" }) },
+        }),
+        {
+          model: "task",
+          access: policy,
+          methods: { get: { access: "authenticated", handler: () => taskRow() } },
+        },
+      );
+    /** The message `define` throws, or undefined when it defines the service. */
+    const refusalOf = (define: () => unknown): string | undefined => {
+      try {
+        define();
+      } catch (error) {
+        return (error as Error).message;
+      }
+      return undefined;
+    };
+    const zod4 = refusalOf(defineWith(z.object({ id: z.string() })));
+    expect(zod4).toContain(`method "get" ${refusal}`);
+    expect(refusalOf(defineWith(todoSchema<{ id: string }>({ keys: ["id"] })))).toBe(zod4);
+    expect(
+      refusalOf(defineWith(todoSchema<{ id: string; name: string }>({ keys: ["id", "name"] }))),
+    ).toBe(zod4);
+    expect(refusalOf(defineWith(todoSchema<{ id: string }>()))).toBeUndefined();
+    expect(refusalOf(defineWith(todoSchema<{ id: string }>({ keys: [] })))).toBeUndefined();
   });
 
   it("stores rowless on the method, and takes only a boolean", () => {

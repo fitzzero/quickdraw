@@ -106,6 +106,13 @@ function run(argv: readonly string[], output: Output): void {
     );
   }
   output.out(`${lines.join("\n")}\n`);
+  warn(output, result.warnings);
+}
+
+function warn(output: Output, warnings: readonly string[]): void {
+  for (const warning of warnings) {
+    output.err(`quickdraw-codemod: ${warning}\n`);
+  }
 }
 
 /** Runs the command; returns its exit code (0, 1 on failure, 2 on a usage error). */
