@@ -6,7 +6,7 @@
 // its file and line, a service class's fields, getters, constructor and
 // overrides survive as marked module code, and a second run changes nothing.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Node, Project, SyntaxKind } from "ts-morph";
@@ -48,10 +48,10 @@ describe("the output on the 4.1 fixture app", () => {
   it("converts every service, method and hook call, and deletes the wrapper hooks", () => {
     expect(result.stats).toEqual({
       services: 5,
-      methods: 22,
+      methods: 25,
       contracts: 5,
-      schemasMoved: 14,
-      todoSchemas: 21,
+      schemasMoved: 16,
+      todoSchemas: 23,
       clientCalls: 8,
       wrappersDeleted: 3,
     });
@@ -74,6 +74,52 @@ describe("the output on the 4.1 fixture app", () => {
     });
     expect(readTree(root)).toEqual(output);
     expect(again.report).toBe(result.report);
+  });
+});
+
+describe("method modules that take a port of the service", () => {
+  const archive = "apps/api/src/services/task/methods/archive.ts";
+
+  it("give each method a contract entry and a typed method object, whatever the port's shape", () => {
+    // Pick<BaseService<..., TaskServiceMethods, ...>, ...> & { ... } (task/service-ports.ts)
+    const archived = output.get(archive) ?? "";
+    expect(archived).toContain('satisfies MethodOf<typeof taskContract, "archiveTask">');
+    expect(archived).toContain('satisfies MethodOf<typeof taskContract, "listArchivedTasks">');
+    expect(output.get("packages/shared/src/contracts/task.ts")).toMatch(
+      /^ {4}archiveTask: mutation/mu,
+    );
+    // an interface extending Pick<ProjectService, ...>, through a type parameter's constraint
+    expect(output.get("apps/api/src/services/project-methods/limits.ts")).toContain(
+      'satisfies MethodOf<typeof projectContract, "getProjectLimits">',
+    );
+    expect(output.get("apps/api/src/services/project.ts")).toMatch(/^ {4}getProjectLimits,$/mu);
+    expect(output.get(REPORT_FILE)).not.toContain("no defineMethod call implements");
+  });
+
+  it("mark the port itself, which typed the instance the service no longer is", () => {
+    const ports = findMarkers(output.get("apps/api/src/services/task/service-ports.ts") ?? "", "")
+      .concat(findMarkers(output.get("apps/api/src/services/project-methods/limits.ts") ?? "", ""))
+      .filter((marker) => marker.message.includes("was a port of the 4.x"))
+      .map((marker) => marker.message.split(" ")[0]);
+    expect(ports).toEqual(["TaskServicePort", "ProjectLimitsPort"]);
+  });
+
+  it("name where a defineMethod call tied to no service sits, in the contract's unimplemented marker", () => {
+    const untied = copyFixture("untied");
+    const file = join(untied, archive);
+    const text = readFileSync(file, "utf8");
+    writeFileSync(
+      file,
+      text.replace(
+        "registerArchive(service: TaskServicePort)",
+        'registerArchive(service: { defineMethod: TaskServicePort["defineMethod"] })',
+      ),
+    );
+    runCodemod({ root: untied });
+    const contract = readFileSync(join(untied, "packages/shared/src/contracts/task.ts"), "utf8");
+    expect(contract).toContain(
+      `names archiveTask, listArchivedTasks, which no defineMethod call implements: add them here and in the service, or drop them. A defineMethod call on a receiver the codemod could not tie to a service (its parameter's type) probably holds the handler: archiveTask at ${archive}:12, listArchivedTasks at ${archive}:28`,
+    );
   });
 });
 
