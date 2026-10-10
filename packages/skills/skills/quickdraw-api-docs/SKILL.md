@@ -8,8 +8,9 @@ description: Keep a quickdraw 5.0 app's API docs (the quickdraw-docs pages, whic
 `quickdraw-docs` writes one Markdown page per service from its contract, and
 an index. A page leads with the contract's `describe`; each method shows its
 `describe`, its kind, its default MCP tool name (`{service}_{method}`; an
-app's registry can rename tools, which the docs cannot see) and, for a
-query, the MCP read-only hint; with `--services`, also who may call it. The
+app's registry can rename tools, and `bind` can take arguments out of a
+tool's schema, which the docs cannot see) and, for a query, the MCP
+read-only hint; with `--services`, also who may call it. The
 command and its options are in the README's "API docs from contracts"
 section (`node_modules/@fitzzero/quickdraw-core/README.md`).
 
