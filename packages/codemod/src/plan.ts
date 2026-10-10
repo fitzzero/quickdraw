@@ -301,7 +301,6 @@ export function planService(
     ),
   );
   const base = baseName(service.serviceName);
-  const unimplemented = [...(map?.entries.keys() ?? [])].filter((name) => !byName.has(name));
   return {
     service,
     base,
@@ -309,7 +308,7 @@ export function planService(
     contractFile: join(ctx.layout.shared.src, "contracts", `${base}.ts`),
     entity,
     methods,
-    unimplemented,
+    unimplemented: [...(map?.entries.keys() ?? [])].filter((name) => !byName.has(name)),
     carveOut,
   };
 }
