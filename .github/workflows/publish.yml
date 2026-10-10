@@ -172,6 +172,11 @@ jobs:
     permissions:
       contents: read
       id-token: write # npm trusted publishing (OIDC) and provenance
+    outputs:
+      # What npm has at this version once this job is done: what was already
+      # there, plus what it published. The tag job takes it from here rather
+      # than asking the registry, which cannot answer yet (see that job).
+      present: ${{ steps.missing.outputs.present }} ${{ steps.push.outputs.published }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -216,6 +221,7 @@ jobs:
             *) dist_tag=latest ;;
           esac
           targets=""
+          present=""
           for pkg in $PACKAGES; do
             name="$(jq -r .name "packages/$pkg/package.json")"
             at="$(jq -r .version "packages/$pkg/package.json")"
@@ -229,6 +235,7 @@ jobs:
             fi
             if [ "$(npm view "$name@$VERSION" version 2> /dev/null)" = "$VERSION" ]; then
               echo "- \`$name@$VERSION\` was already on npm" >> "$GITHUB_STEP_SUMMARY"
+              present="$present $pkg"
               continue
             fi
             targets="$targets $pkg"
@@ -236,6 +243,7 @@ jobs:
           targets="${targets# }"
           {
             echo "targets=$targets"
+            echo "present=${present# }"
             echo "dist-tag=$dist_tag"
           } >> "$GITHUB_OUTPUT"
           if [ -z "$targets" ]; then
@@ -253,6 +261,7 @@ jobs:
         run: bun run build
 
       - name: Publish to npm
+        id: push
         if: steps.missing.outputs.targets != ''
         env:
           TARGETS: ${{ steps.missing.outputs.targets }}
@@ -270,11 +279,13 @@ jobs:
           if [ "$DIST_TAG" = next ]; then
             args+=(--tag next)
           fi
+          published=""
           failed=""
           for pkg in $TARGETS; do
             name="$(jq -r .name "packages/$pkg/package.json")"
             echo "::group::npm publish $name@$VERSION"
             if (cd "packages/$pkg" && npm publish "${args[@]}"); then
+              published="$published $pkg"
               echo "- published \`$name@$VERSION\` under \`$DIST_TAG\`" >> "$GITHUB_STEP_SUMMARY"
             else
               failed="$failed $pkg"
@@ -282,17 +293,24 @@ jobs:
             fi
             echo "::endgroup::"
           done
+          # Written before the failure below, so a release that publishes three
+          # of four still tells the tag job which three to anchor.
+          echo "published=${published# }" >> "$GITHUB_OUTPUT"
           if [ -n "$failed" ]; then
             echo "::error::npm publish failed for$failed. A package that has never been published, or whose trusted publisher is not set up on npmjs.com yet, fails here: see docs/releasing.md"
             exit 1
           fi
 
   # The release's record in the repository, and the anchor the next push to
-  # `main` diffs against to see whether anything shipped since. Tagged only for
-  # what npm actually has: a tag with nothing published behind it would tell the
-  # next run that this release went out. Runs when a publish failed too, so the
-  # packages that did go out get their anchor: without core's, the next push
-  # would find nothing to diff against and leave its shipped changes unreleased.
+  # `main` diffs against to see whether anything shipped since. It tags what
+  # the publish job reports is on npm — what was already there, plus what it
+  # published — and never asks the registry itself: npm answers "your package
+  # is being processed and may take a few minutes to become available", so a
+  # `npm view` here raced the publish and tagged nothing at all for 5.0.1,
+  # leaving the next push with no anchor to diff against. Runs when a publish
+  # failed too, so the packages that did go out get their anchor: without
+  # core's, the next push would find nothing to diff against and leave its
+  # shipped changes unreleased.
   tag:
     needs: [prepare, publish]
     if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.version != '' }}
@@ -307,14 +325,9 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          package-manager-cache: false
-
       - name: Tag what npm has
         env:
-          PACKAGES: ${{ needs.prepare.outputs.packages }}
+          PACKAGES: ${{ needs.publish.outputs.present }}
           VERSION: ${{ needs.prepare.outputs.version }}
           SHA: ${{ needs.prepare.outputs.sha }}
         run: |
@@ -326,10 +339,6 @@ jobs:
             tag="$pkg-v$VERSION"
             if git rev-parse --verify --quiet "refs/tags/$tag" > /dev/null 2>&1; then
               echo "$tag is there already."
-              continue
-            fi
-            if [ "$(npm view "$name@$VERSION" version 2> /dev/null)" != "$VERSION" ]; then
-              echo "$name@$VERSION is not on npm; not tagging it."
               continue
             fi
             # One push per tag: a tag that cannot go up should not take the
