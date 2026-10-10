@@ -177,7 +177,8 @@ export interface McpBindCall<S extends readonly AnyService[] = readonly AnyServi
 /**
  * Fills one argument of the registry's `bind` from who is calling, for
  * example a claim of the principal's token. Returning `undefined` or `null`
- * refuses the call with `FORBIDDEN`.
+ * refuses the call with `FORBIDDEN`; throwing fails it with `INTERNAL`, or
+ * with the code of a `QuickdrawError`.
  */
 export type McpBinder<S extends readonly AnyService[] = readonly AnyService[]> = (
   call: McpBindCall<S>,

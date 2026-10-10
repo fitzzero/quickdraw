@@ -209,8 +209,9 @@ function branchProperties(schema: unknown, found = new Set<string>()): Set<strin
 
 /**
  * The arguments of `bind` that are properties of the object input of
- * `label`. Fails when one of them is in a non-object input, its own
- * properties or the branches of a union, where it cannot be filled.
+ * `label`. Fails when one of them is a property of an input that is not an
+ * object, or of one of its `anyOf`, `oneOf` or `allOf` branches, where it
+ * cannot be filled. An input without arguments has none.
  */
 function boundArguments(
   label: string,

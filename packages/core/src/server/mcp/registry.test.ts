@@ -268,7 +268,12 @@ describe("bound arguments", () => {
       $schema: DIALECT,
       type: "object",
       properties: {
-        limit: { type: "integer", exclusiveMinimum: 0, default: 20, maximum: expect.any(Number) },
+        limit: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: Number.MAX_SAFE_INTEGER,
+          default: 20,
+        },
       },
     });
     expect(inputSchemaOf(registry, "taskService_get")).toEqual({
@@ -462,12 +467,13 @@ describe("bound arguments", () => {
     });
     expect(respond).toHaveBeenCalledExactlyOnceWith(refused);
     respond.mockClear();
-    const other = await registry.callMethod(
+    const other = await bindSetup().registry.callMethod(
       "messageService",
       "post",
       { taskId: "t2", message: "hi" },
       { request: stdio(), respond },
     );
+    expect(errorOf(other).code).toBe("FORBIDDEN");
     expect(respond).toHaveBeenCalledExactlyOnceWith(other);
   });
 
@@ -525,17 +531,15 @@ describe("bound arguments", () => {
 
   it("are checked when the registry is built", () => {
     const { served, dispatcher } = bindSetup();
+    type Excluded = "noteService.archive" | "messageService";
     const build =
-      (
-        bind: unknown,
-        more: { readonly exclude?: readonly ("noteService.archive" | "messageService")[] } = {},
-      ) =>
+      (bind: unknown, exclude: readonly Excluded[] = []) =>
       () =>
         createMcpRegistry({
           services: served,
           dispatcher,
           bind: bind as Record<string, () => string>,
-          ...more,
+          exclude,
         });
     expect(build("taskId")).toThrow(
       "createMcpRegistry: bind must be an object of functions, one per argument it fills",
@@ -548,7 +552,7 @@ describe("bound arguments", () => {
     expect(build({ tsakId: () => "t1" })).toThrow(
       'createMcpRegistry: bind.tsakId fills nothing: no method served as a tool has "tsakId" in its object input',
     );
-    expect(build({ taskId: () => "t1" }, { exclude: ["messageService"] })).toThrow(
+    expect(build({ taskId: () => "t1" }, ["messageService"])).toThrow(
       'bind.taskId fills nothing: no method served as a tool has "taskId" in its object input',
     );
     // noteService.archive's input is a union: { by: "id", id } or { by: "tag", tag }
@@ -558,7 +562,7 @@ describe("bound arguments", () => {
     expect(build({ id: () => "t1" })).toThrow(
       "bind.id names a property of the input of noteService.archive, which is not an object",
     );
-    const registry = build({ id: () => "t1" }, { exclude: ["noteService.archive"] })();
+    const registry = build({ id: () => "t1" }, ["noteService.archive"])();
     expect(inputSchemaOf(registry, "taskService_rename")).toMatchObject({
       properties: { title: { type: "string" } },
       required: ["title"],
