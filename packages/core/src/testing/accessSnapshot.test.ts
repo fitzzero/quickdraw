@@ -263,6 +263,9 @@ async function failure(run: Promise<unknown>): Promise<string> {
   return (error as Error).message;
 }
 
+// Each test runs the whole matrix up to four times, with a database reset
+// after every mutation access lets through: seconds, past vitest's 5 s
+// default on a busy CI runner. The timeout is the describe's last argument.
 describe("snapshotAccessMatrix", () => {
   it("records every method, subscribe and scope as every principal on the first run", async () => {
     const app = await start([projectService, defineTasks(), memberService]);
@@ -556,7 +559,7 @@ describe("snapshotAccessMatrix", () => {
       "is not an access snapshot",
     );
   });
-});
+}, 30_000);
 
 describe("one snapshot per test file", () => {
   const shared = (): string => join(dir, "shared.test.ts");
