@@ -56,10 +56,11 @@ guide's sections as the report sends you to them.
    formatter. On an app of more than 1,500 source files it starts itself
    again with a larger heap (75% of the memory, at most 16384 MiB) and says
    so; pass `--heap <MiB>` when other work shares the memory, smaller after
-   a SIGKILL, larger after running out of heap. Commit its output untouched, then run
-   `quickdraw-lint baseline -c .oxlintrc.json` and commit the baseline, so
-   lint passes and reports only new violations. Add each file the report
-   lists under "Carve-outs" to the template's carve-out script
+   a SIGKILL, larger after running out of heap. Commit its output
+   untouched, then run `quickdraw-lint baseline -c .oxlintrc.json` and
+   commit the baseline, so lint passes and reports only new violations. Add
+   each file the report lists under "Carve-outs" to the template's carve-out
+   script
    (`scripts/strip-game.mjs`'s delete list).
 
 3. **Read `quickdraw-migration-report.md`.** Every item is a

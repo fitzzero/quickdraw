@@ -93,8 +93,9 @@ All notable changes to this project will be documented in this file.
   run the system kills (SIGKILL) is explained as running out of memory.
   `scripts/scale.mjs` (in `packages/codemod`, not run by CI) measures it on
   a generated app of 35 services and 3,100 files, where the smallest heap
-  that completes falls from 3,584 MiB to 1,792 MiB, the peak memory from
-  4,219 MiB to 2,307 MiB, and the run from 239 s to 76 s.
+  that completes falls from 3,584 MiB to 2,048 MiB, the peak memory (at an
+  8,192 MiB heap) from 4,237 MiB to 2,360 MiB, and the run from 234 s to
+  69 s, with byte-identical output.
 
 ### Releasing
 

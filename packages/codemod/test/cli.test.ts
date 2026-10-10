@@ -5,6 +5,8 @@
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { main, relaunchHeap } from "../src/cli";
+import { findLayout } from "../src/layout";
+import { countSourceFiles } from "../src/project";
 import { MOVED_NAMES, PROVIDER_PROPS, REMOVED_ENTRIES, REMOVED_NAMES } from "../src/v4names";
 import { copyFixture, readTree, removeCopies, REPO } from "./helpers";
 
@@ -86,7 +88,8 @@ describe("quickdraw-codemod", () => {
   it("runs a small app in this process, and starts again for --heap", () => {
     const root = copyFixture("cli-heap");
     expect(relaunchHeap(["v5", root, "--dry-run"])).toBeUndefined();
-    expect(relaunchHeap(["v5", root, "--heap", "4096"])).toEqual({ heap: 4096, files: 40 });
+    const files = countSourceFiles(findLayout(root));
+    expect(relaunchHeap(["v5", root, "--heap", "4096"])).toEqual({ heap: 4096, files });
     // main reports these
     expect(relaunchHeap(["--help"])).toBeUndefined();
     expect(relaunchHeap(["v5", "/nowhere", "--heap", "4096"])).toBeUndefined();
