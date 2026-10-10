@@ -2,6 +2,7 @@
 // follows relative imports; where it asks the type checker (a DTO's keys, a
 // payload's `id`), the shared package resolves by name to its sources.
 
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   IndentationText,
@@ -16,6 +17,25 @@ import {
 import type { Layout } from "./layout";
 
 const SKIPPED = ["node_modules", "dist", ".next", "generated", "build", "coverage"];
+
+/** The directories the project's sources come from. */
+function sourceDirs(layout: Layout): string[] {
+  return [layout.shared.src, layout.api.src, layout.web?.src, ...layout.others].filter(
+    (dir): dir is string => dir !== undefined,
+  );
+}
+
+/** How many source files `loadProject` loads, counted on disk without parsing them. */
+export function countSourceFiles(layout: Layout): number {
+  const count = (dir: string): number =>
+    readdirSync(dir, { withFileTypes: true }).reduce((total, entry) => {
+      if (entry.isDirectory()) {
+        return SKIPPED.includes(entry.name) ? total : total + count(join(dir, entry.name));
+      }
+      return /\.tsx?$/u.test(entry.name) && !entry.name.endsWith(".d.ts") ? total + 1 : total;
+    }, 0);
+  return [...new Set(sourceDirs(layout))].reduce((total, dir) => total + count(dir), 0);
+}
 
 /** A project holding the shared, api and web sources of `layout`, and its other packages that use quickdraw. */
 export function loadProject(layout: Layout): Project {
@@ -38,10 +58,7 @@ export function loadProject(layout: Layout): Project {
       useTrailingCommas: true,
     },
   });
-  const sources = [layout.shared.src, layout.api.src, layout.web?.src, ...layout.others].filter(
-    (dir): dir is string => dir !== undefined,
-  );
-  const globs = sources.flatMap((dir) => [join(dir, "**/*.ts"), join(dir, "**/*.tsx")]);
+  const globs = sourceDirs(layout).flatMap((dir) => [join(dir, "**/*.ts"), join(dir, "**/*.tsx")]);
   const exclusions = SKIPPED.map((name) => `!**/${name}/**`);
   project.addSourceFilesAtPaths([...globs, ...exclusions, "!**/*.d.ts"]);
   return project;

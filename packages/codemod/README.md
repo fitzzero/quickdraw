@@ -19,8 +19,23 @@ has it and it is installed), so the output passes the app's format check as
 written. Files the formatter's config ignores (an app that ignores Markdown
 ignores the report) are left as written. When the formatter fails, the
 codemod prints its exit code, the formatter's own error and the files it
-left unformatted. It expects the quickdraw template's layout; the options move each
-part:
+left unformatted.
+
+It holds the whole app in one TypeScript program, which needs more than
+Node's default heap on a large app. With more than 1,500 source files (the
+`.ts` and `.tsx` files it reads, outside `node_modules`, `dist`, `generated`
+and other build output), it starts itself again in a Node with a larger heap:
+three quarters of the memory it may use (the container's limit, else the
+machine's), at most 16384 MiB. It says so first:
+`quickdraw-codemod: 4270 source files: running with a 10752 MiB heap (--heap to change)`.
+Pass `--heap <MiB>` to choose the heap on any app, for example on a machine
+shared with other work. A heap you give Node yourself
+(`NODE_OPTIONS=--max-old-space-size=...`) is kept, and under `bun --bun`,
+which ignores V8's heap flags, nothing changes. When the system stops the
+run (SIGKILL), the machine most likely ran out of memory: pass a smaller
+`--heap`. When it runs out of heap, pass a larger one.
+
+It expects the quickdraw template's layout; the options move each part:
 
 | Option                | Default                                       |
 | --------------------- | --------------------------------------------- |
@@ -29,6 +44,7 @@ part:
 | `--web <dir>`         | `apps/web`                                    |
 | `--db-package <name>` | `packages/db`'s name                          |
 | `--dry-run`           | write nothing; list the files it would change |
+| `--heap <MiB>`        | over 1,500 files: 75% of memory, ≤ 16384 MiB  |
 
 ## What it does
 

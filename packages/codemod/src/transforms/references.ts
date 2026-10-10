@@ -10,12 +10,22 @@
 // itself. Every use of a 4.x instance's member, found by type in any file
 // but the services' own (`pushService.resubscribe(...)`, `gameService.sim`),
 // is marked, since the service object has none of the instance's members.
+// Only the files that reach a class's file through imports can hold one, so
+// only they are asked for types: asking for every file's would typecheck the
+// whole app, the web app included, in one checker.
 // So is a dynamic `import()` of the class, with the `new` that follows it,
 // which the codemod leaves for a person.
 
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { type Identifier, Node, type SourceFile, SyntaxKind } from "ts-morph";
+import {
+  type Identifier,
+  type ModuleDeclaration,
+  Node,
+  type SourceFile,
+  SyntaxKind,
+  ts,
+} from "ts-morph";
 import type { Work } from "../apply";
 import type { RunContext } from "../context";
 import { type Category, MarkerSet } from "../markers";
@@ -89,6 +99,9 @@ function resolvedModule(file: SourceFile, specifier: string): SourceFile | undef
 function dynamicImports(scope: FileScope, leafFile: SourceFile): Identifier[] {
   const { className } = scope.plan.service;
   const locals: Identifier[] = [];
+  if (!scope.file.getFullText().includes("import(")) {
+    return locals;
+  }
   for (const call of scope.file.getDescendantsOfKind(SyntaxKind.CallExpression)) {
     const [argument] = call.getArguments();
     if (
@@ -242,6 +255,77 @@ function serviceSources(plans: readonly ServicePlan[]): Set<SourceFile> {
   );
 }
 
+/** `declare global { ... }` and `declare module "name" { ... }` blocks of `file`. */
+function augmentations(file: SourceFile): ModuleDeclaration[] {
+  return file
+    .getDescendantsOfKind(SyntaxKind.ModuleDeclaration)
+    .filter(
+      (declaration) =>
+        declaration.hasDeclareKeyword() &&
+        (Node.isStringLiteral(declaration.getNameNode()) ||
+          declaration.getNameNode().getText() === "global"),
+    );
+}
+
+/**
+ * Whether an ambient declaration of a reached file may give a service class's
+ * type to files that do not import it: a file that is a script (its
+ * declarations are global), or a `declare global` or `declare module` naming
+ * a service class or anything else a reached file declares.
+ */
+function leaksTypes(
+  file: SourceFile,
+  reached: ReadonlySet<SourceFile>,
+  classes: ReadonlySet<string>,
+): boolean {
+  if (!ts.isExternalModule(file.compilerNode)) {
+    return true;
+  }
+  return augmentations(file).some((block) =>
+    block.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => {
+      if (classes.has(identifier.getText())) {
+        return true;
+      }
+      const symbol = identifier.getSymbol();
+      const target = symbol?.isAlias() === true ? symbol.getAliasedSymbol() : symbol;
+      return (target?.getDeclarations() ?? []).some(
+        (declaration) =>
+          reached.has(declaration.getSourceFile()) &&
+          !(
+            declaration.getSourceFile() === file &&
+            declaration.getPos() >= block.getPos() &&
+            declaration.getEnd() <= block.getEnd()
+          ),
+      );
+    }),
+  );
+}
+
+/**
+ * The files whose expressions can have a service class's type: the classes'
+ * files and every file that imports or re-exports one of them, directly or
+ * through others. Every file, when an ambient declaration among them could
+ * carry the type further (see `leaksTypes`).
+ */
+function filesReachingClasses(ctx: RunContext, plans: readonly ServicePlan[]): SourceFile[] {
+  const leaves = plans.flatMap(({ service }) => service.chain[0] ?? []);
+  const reached = new Set(leaves.map((cls) => cls.getSourceFile()));
+  const queue = [...reached];
+  for (let file = queue.pop(); file !== undefined; file = queue.pop()) {
+    for (const other of file.getReferencingSourceFiles()) {
+      if (!reached.has(other)) {
+        reached.add(other);
+        queue.push(other);
+      }
+    }
+  }
+  const classes = new Set(leaves.map((cls) => cls.getName() ?? ""));
+  const files = ctx.project.getSourceFiles();
+  return [...reached].some((file) => leaksTypes(file, reached, classes))
+    ? files
+    : files.filter((file) => reached.has(file));
+}
+
 /**
  * Marks every use of a 4.x instance's member outside the services' own
  * files, found by type: `pushService.resubscribe(...)` on a parameter,
@@ -258,7 +342,7 @@ function markInstanceMembers(ctx: RunContext, plans: readonly ServicePlan[], wor
   }
   const skipped = serviceSources(plans);
   const web = ctx.layout.web;
-  for (const file of ctx.project.getSourceFiles()) {
+  for (const file of filesReachingClasses(ctx, plans)) {
     if (skipped.has(file)) {
       continue;
     }

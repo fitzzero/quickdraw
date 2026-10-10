@@ -65,10 +65,14 @@ bunx @fitzzero/quickdraw-codemod v5 .
 
 It formats what it writes with the app's formatter (oxfmt, prettier or Biome,
 when the root `package.json` has it), so its output passes the app's format
-check as written. Commit its output as it is, before changing anything by
-hand, so the review can tell the codemod's changes from yours. Then record
-what lint reports on it, so lint passes from here on and reports only new
-violations:
+check as written. On an app of more than 1,500 source files it starts
+itself again with a larger heap (three quarters of the memory it may use, at
+most 16384 MiB) and prints the size it chose. Where other work shares the
+machine's memory, pass `--heap <MiB>` with what is free. A run the system
+stops (SIGKILL) needs a smaller `--heap`, and a run out of heap a larger
+one. Commit its output as it is, before changing anything by hand, so the
+review can tell the codemod's changes from yours. Then record what lint
+reports on it, so lint passes from here on and reports only new violations:
 
 ```bash
 bunx quickdraw-lint baseline -c .oxlintrc.json   # commit .quickdraw-lint-baseline.json with the output
