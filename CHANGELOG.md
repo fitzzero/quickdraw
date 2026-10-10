@@ -153,6 +153,12 @@ All notable changes to this project will be documented in this file.
   it is marked `[service]`, and the command names the service and the class
   it read on stderr. The report lists `[service]` items first, under
   "Services".
+- **A member named after a reserved word gets a name that parses.** The
+  codemod hoisted a 4.x `override delete` into `async function delete ()`,
+  which TypeScript and oxfmt refuse. A member whose name is a JavaScript
+  reserved word, or no identifier at all, is now hoisted as
+  `<name>Of<Class>` (`deleteOfTaskService`), its `this.delete(...)` calls
+  follow, and its marker says it was renamed.
 
 ### Testing
 
