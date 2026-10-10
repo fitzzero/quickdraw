@@ -54,7 +54,8 @@ defined. Fix the form, not the error:
   row themselves and need neither.
 - The check reads the input's keys from its JSON Schema: an `id` in any
   branch of a union counts, as does one beside a `Date` or a `Set`. An input
-  without JSON Schema (a Zod 3 schema), a bare string that is the id itself
+  without JSON Schema (a Zod 3 schema) or one that names no keys (a
+  `todoSchema` without `keys`), a bare string that is the id itself
   and a row named by another key (`taskId`, `ids`) are not checked, so the
   form is all yours there (`{ entry: L, id: "taskId" }` names another key).
 

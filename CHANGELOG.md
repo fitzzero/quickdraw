@@ -22,6 +22,19 @@ All notable changes to this project will be documented in this file.
   test holds them to it; a change's entry goes under `## [Unreleased]`, and the
   release that ships it writes the version and the date here.
 
+### Lint
+
+- **`no-todo-schema` says when a placeholder input hides its keys from the
+  id-reach check.** `defineService` refuses an input with `id` under an access
+  form that checks no row (`"public"`, `"authenticated"`, `{ service: L }`
+  below `Admin`), and reads the input's keys from its JSON Schema. A
+  `todoSchema()` without `keys` names none, so the check cannot see an `id` in
+  it. As the `input` of `query()` or `mutation()`, such a placeholder now gets
+  a second message that says so and asks for `keys`; a
+  `todoSchema<T>({ keys: ["id"] })` is checked like a Zod 4 schema. MIGRATION.md,
+  the README and the access rule no longer say that every placeholder is
+  unchecked.
+
 ## [5.0.1] - 2026-10-08
 
 Fixes from the independent review of 5.0.0 after the farseer migration

@@ -719,7 +719,8 @@ export const taskService = qd.defineService(task, {
   `rowless: ["get"]` in the kit's options. The input's keys come from its
   JSON Schema: an `id` in any branch of a union counts, and so does one
   beside a value JSON Schema cannot write (a `Date`, a `Set`). Not checked:
-  an input without JSON Schema (Zod 3), one that is no object (a bare string
+  an input without JSON Schema (Zod 3) or whose JSON Schema names no keys (a
+  `todoSchema` without `keys`), one that is no object (a bare string
   that is the id itself) and a row named by another key (`ids`, `taskId`, a
   nested `where.id`).
 - A service-wide `Admin` grant passes every check on its service
