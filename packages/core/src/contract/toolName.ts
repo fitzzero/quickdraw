@@ -1,5 +1,6 @@
-// A method tool's default name, on its own so `quickdraw-docs` can print it
-// without loading the bridge.
+// A method tool's default name. It lives with the contracts, not in the MCP
+// bridge, so `quickdraw-docs` prints it without the bridge's entry: the
+// bridge's own files ship in `./server/mcp` alone (scripts/dist-smoke.mjs).
 
 /**
  * The name the MCP bridge gives a method's tool when the registry has no

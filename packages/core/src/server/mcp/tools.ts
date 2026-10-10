@@ -15,7 +15,7 @@
 // - any other input (a string, a union) is the `input` argument.
 
 import type { MethodKind } from "../../contract/methods";
-import { defaultToolName } from "./toolName";
+import { defaultToolName } from "../../contract/toolName";
 import {
   hasJsonSchema,
   type StandardSchemaV1,

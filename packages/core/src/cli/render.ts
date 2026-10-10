@@ -11,7 +11,7 @@ import {
 } from "../contract/collections";
 import type { AnyContract } from "../contract/defineContract";
 import type { MethodDef, MethodOutput } from "../contract/methods";
-import { defaultToolName } from "../server/mcp/toolName";
+import { defaultToolName } from "../contract/toolName";
 import {
   CHANNEL_DEFAULT_RATE,
   isScopedStream,
