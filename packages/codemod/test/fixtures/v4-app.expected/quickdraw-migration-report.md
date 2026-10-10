@@ -2,7 +2,7 @@
 
 Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review` markers in the code; running the codemod again rewrites it from the markers that remain. Work through the sections in order (services, contracts, access, emits, client), delete each marker once its item is done, and see the migration guide (`MIGRATION.md`, shipped in `@fitzzero/quickdraw-codemod`) for each kind of item. Then run lint (`no-v4-api` names every 4.x API left, `no-todo-schema` every placeholder) and the typecheck.
 
-141 items in 33 files.
+142 items in 33 files.
 
 | Section                                                        | Items |
 | -------------------------------------------------------------- | ----: |
@@ -18,7 +18,7 @@ Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review`
 | Lifecycle hooks                                                |     1 |
 | installAdminMethods to replace with the admin kit              |     1 |
 | Methods a kit implements                                       |     9 |
-| Service instance state and the 4.x context                     |    15 |
+| Service instance state and the 4.x context                     |    16 |
 | Errors the caller no longer sees                               |     6 |
 | Client                                                         |    11 |
 | Server wiring and other 4.x APIs                               |    25 |
@@ -38,7 +38,7 @@ Each service is read from one class of the api package outside test code: the on
 Each method's kind was chosen from its name (get, list, search, find and count read). Inputs and outputs without a 4.x schema are `todoSchema` placeholders, which validate nothing; lint's `no-todo-schema` reports each one.
 
 - [ ] `apps/api/src/services/project.ts:123` the contract's output is "entity" (4.x answered ProjectDTO | null): return the row, and let a missing one fail with NOT_FOUND (db.<model>.update throws it)
-- [ ] `apps/api/src/services/task/methods/update-task.ts:7` the contract's output is "entity" (4.x answered TaskDTO | null): return the row, and let a missing one fail with NOT_FOUND (db.<model>.update throws it)
+- [ ] `apps/api/src/services/task/methods/update-task.ts:8` the contract's output is "entity" (4.x answered TaskDTO | null): return the row, and let a missing one fail with NOT_FOUND (db.<model>.update throws it)
 - [ ] `packages/shared/src/contracts/health.ts:10` query, since the web app reads it with useServiceQuery (its name reads as a mutation); input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
 - [ ] `packages/shared/src/contracts/health.ts:12` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
 - [ ] `packages/shared/src/contracts/label.ts:12` the entity is the 4.x DTO LabelDTO: give it a real schema. Its keys are the fields subscribers receive, read from model "label": drop any that is not a column, or give it a projection select and map
@@ -120,10 +120,10 @@ A 4.x `defineCollection` becomes a contract collection (`scope`, `item`, `order`
 - [ ] `apps/api/src/services/project.ts:165` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
 - [ ] `apps/api/src/services/task/methods/archive.ts:22` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
 - [ ] `apps/api/src/services/task/methods/create-task.ts:19` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
-- [ ] `apps/api/src/services/task/methods/queries.ts:29` hand emit: send a reset with qd.collections.reset(contract, collection, scope), if one is still needed
-- [ ] `apps/api/src/services/task/methods/update-task.ts:13` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
-- [ ] `apps/api/src/services/task/methods/update-task.ts:26` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
-- [ ] `apps/api/src/services/task/methods/update-task.ts:28` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
+- [ ] `apps/api/src/services/task/methods/queries.ts:31` hand emit: send a reset with qd.collections.reset(contract, collection, scope), if one is still needed
+- [ ] `apps/api/src/services/task/methods/update-task.ts:14` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
+- [ ] `apps/api/src/services/task/methods/update-task.ts:27` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
+- [ ] `apps/api/src/services/task/methods/update-task.ts:29` hand emit: 5.0 sends collection deltas from tracked writes; write through db and let the tracked write emit, then delete this hand emit once the collection is declared in the contract
 - [ ] `apps/api/src/services/user.ts:63` hand emit: 5.0 sends entity frames from tracked writes; delete this once the write goes through db
 
 ## this.create, this.update and this.delete to write through db
@@ -139,7 +139,7 @@ The 4.x CRUD helpers also emitted and ran lifecycle hooks; `db.<model>` writes a
 
 Tracked writes cannot see raw SQL; `ctx.touch(model, ids)` records the rows it changed (lint: `no-raw-sql-write`).
 
-- [ ] `apps/api/src/services/task/methods/queries.ts:26` raw SQL write: tracked writes cannot see it, so subscribers would miss it; record the rows with ctx.touch(model, ids), or reset a scope with qd.collections.reset (lint: no-raw-sql-write)
+- [ ] `apps/api/src/services/task/methods/queries.ts:28` raw SQL write: tracked writes cannot see it, so subscribers would miss it; record the rows with ctx.touch(model, ids), or reset a scope with qd.collections.reset (lint: no-raw-sql-write)
 
 ## Lifecycle hooks
 
@@ -185,6 +185,7 @@ A service is an object now: no constructor, no fields, no `this`; handlers read 
 - [ ] `apps/api/src/services/project-methods/limits.ts:6` ProjectLimitsPort was a port of the 4.x ProjectService instance, the type its method modules took: those modules export method objects now, and the service object projectService has none of the instance's members. Delete it, or keep only what the helpers that still take it use
 - [ ] `apps/api/src/services/task/methods/archive.ts:14` uses the 4.x service instance itself, which no longer exists: pass what this code needs instead
 - [ ] `apps/api/src/services/task/methods/queries.ts:9` inline auth guard: the access form already requires a principal, so the !ctx.principal.userId part never holds; drop it (lint: no-inline-auth-guard)
+- [ ] `apps/api/src/services/task/methods/update-task.ts:36` defineEditMethods also did more than register methods (the codemod removed its call of registerUpdateTasks, whose methods the service lists now): a service object is not passed around any more; move what still matters, then delete it
 - [ ] `apps/api/src/services/task/service-ports.ts:18` TaskServicePort was a port of the 4.x TaskService instance, the type its method modules took: those modules export method objects now, and the service object taskService has none of the instance's members. Delete it, or keep only what the helpers that still take it use
 
 ## Errors the caller no longer sees

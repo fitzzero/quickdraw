@@ -9,6 +9,8 @@ import type { Layout } from "./layout";
 export interface Stats {
   services: number;
   methods: number;
+  /** Functions that only called method modules' register functions (and each other), removed. */
+  aggregatorsRemoved: number;
   contracts: number;
   schemasMoved: number;
   todoSchemas: number;
@@ -42,6 +44,7 @@ export function createContext(project: Project, layout: Layout): RunContext {
     stats: {
       services: 0,
       methods: 0,
+      aggregatorsRemoved: 0,
       contracts: 0,
       schemasMoved: 0,
       todoSchemas: 0,

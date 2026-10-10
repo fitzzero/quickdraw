@@ -49,14 +49,16 @@ describe("the output on the 4.1 fixture app", () => {
     expect(result.stats).toEqual({
       services: 5,
       methods: 25,
+      aggregatorsRemoved: 2,
       contracts: 5,
       schemasMoved: 16,
       todoSchemas: 23,
       clientCalls: 8,
       wrappersDeleted: 3,
     });
-    // the wrappers, and the file of types only they imported
+    // the file an aggregator left empty, the wrappers, and the file of types only they imported
     expect(result.deleted.toSorted()).toEqual([
+      "apps/api/src/services/task/methods/index.ts",
       "apps/web/src/hooks/service-types.ts",
       "apps/web/src/hooks/useService.ts",
       "apps/web/src/hooks/useServiceQuery.ts",
@@ -120,6 +122,108 @@ describe("method modules that take a port of the service", () => {
     expect(contract).toContain(
       `names archiveTask, listArchivedTasks, which no defineMethod call implements: add them here and in the service, or drop them. A defineMethod call on a receiver the codemod could not tie to a service (its parameter's type) probably holds the handler: archiveTask at ${archive}:12, listArchivedTasks at ${archive}:28`,
     );
+  });
+});
+
+describe("aggregators, the functions that call method modules' register functions", () => {
+  const task = "apps/api/src/services/task";
+  /** The register and aggregator functions the fixture declares. */
+  const declared = [...readTree(FIXTURE)].flatMap(([file, text]) =>
+    file.startsWith("apps/api/")
+      ? [...text.matchAll(/^export function ((?:register|define)\w+)/gmu)].map(
+          (match) => match[1] ?? "",
+        )
+      : [],
+  );
+
+  it("go when they do nothing else, with their calls and a file one leaves empty", () => {
+    // task/methods/index.ts held only defineTaskMethods, which the constructor called; it
+    // called a module typed by the class, one typed by a port, and two more aggregators
+    expect(output.has(`${task}/methods/index.ts`)).toBe(false);
+    // defineTaskQueries sat beside the modules it called, which became method objects
+    expect(output.get(`${task}/methods/queries.ts`)).not.toContain("defineTaskQueries");
+    expect(output.get(`${task}/methods/queries.ts`)).toMatch(
+      /^export const listTasks = [^]*^export const reindexProject = /mu,
+    );
+    // no code left calls a function the run removed, nor the aggregator it kept
+    expect(declared).toHaveLength(9);
+    const call = new RegExp(`\\b(?:${declared.join("|")})\\(`, "u");
+    const calls = [...output].flatMap(([file, text]) =>
+      text
+        .split("\n")
+        .filter((line) => !line.trimStart().startsWith("//") && call.test(line))
+        .map((line) => `${file}: ${line.trim()}`),
+    );
+    expect(calls).toEqual([
+      `${task}/methods/update-task.ts: export function defineEditMethods(service: typeof taskService): void {`,
+    ]);
+  });
+
+  it("stay under the register-leftover marker when they do more, without the calls it names", () => {
+    expect(output.get(`${task}/methods/update-task.ts`)).toContain(
+      [
+        "// Registers the edit methods, and says so: more than registering",
+        `// ${MARKER} [this] defineEditMethods also did more than register methods (the codemod removed its call of registerUpdateTasks, whose methods the service lists now): a service object is not passed around any more; move what still matters, then delete it`,
+        "export function defineEditMethods(service: typeof taskService): void {",
+        '  console.info("task edit methods registered");',
+        "}",
+      ].join("\n"),
+    );
+    // a review item with its file and line
+    expect(output.get(REPORT_FILE)).toMatch(
+      /^- \[ \] `apps\/api\/src\/services\/task\/methods\/update-task\.ts:\d+` defineEditMethods also did more than register methods/mu,
+    );
+  });
+
+  it("are found through import aliases, keep a file they empty while it is imported, and register functions lose their calls of others", () => {
+    const variant = copyFixture("aggregators");
+    const edit = (file: string, from: string, to: string): void => {
+      const path = join(variant, file);
+      const text = readFileSync(path, "utf8");
+      expect(text, file).toContain(from);
+      writeFileSync(path, text.replace(from, to));
+    };
+    // the aggregator names a module by another name
+    edit(
+      `${task}/methods/index.ts`,
+      'import { registerArchive } from "./archive.js";',
+      'import { registerArchive as archiveMethods } from "./archive.js";',
+    );
+    edit(`${task}/methods/index.ts`, "registerArchive(service);", "archiveMethods(service);");
+    // test code still imports the aggregator's file
+    writeFileSync(
+      join(variant, `${task}/__tests__/wiring.test.ts`),
+      'import { defineTaskMethods } from "../methods/index.js";\n\nexport const wiring = defineTaskMethods;\n',
+    );
+    // a register function whose only other statement calls another one
+    edit(
+      `${task}/methods/queries.ts`,
+      "    { schema: z.object({ projectId: z.string() }) },\n  );\n}",
+      "    { schema: z.object({ projectId: z.string() }) },\n  );\n  registerReindexProject(service);\n}",
+    );
+    // and one that does more, calling another one under a condition
+    edit(
+      `${task}/methods/create-task.ts`,
+      'import type { TaskService } from "../index.js";',
+      'import type { TaskService } from "../index.js";\nimport { registerArchive } from "./archive.js";',
+    );
+    edit(
+      `${task}/methods/create-task.ts`,
+      "    { schema: createTaskSchema },\n  );\n}",
+      '    { schema: createTaskSchema },\n  );\n  if (process.env.NODE_ENV !== "production") registerArchive(service);\n  console.info("createTask registered");\n}',
+    );
+    const run = runCodemod({ root: variant });
+    const read = (file: string): string => readFileSync(join(variant, file), "utf8");
+    expect(run.stats.aggregatorsRemoved).toBe(2);
+    expect(run.deleted).not.toContain(`${task}/methods/index.ts`);
+    expect(read(`${task}/methods/index.ts`).trim()).toBe("");
+    expect(read(`${task}/methods/queries.ts`)).not.toMatch(/register(?:ListTasks|ReindexProject)/u);
+    const create = read(`${task}/methods/create-task.ts`);
+    expect(create).toContain(
+      `// ${MARKER} [this] registerCreateTask also did more than register methods (the codemod removed its call of registerArchive, whose methods the service lists now): a service object is not passed around any more; move what still matters, then delete it\nexport function registerCreateTask(`,
+    );
+    expect(create).toMatch(/^ {2}if \(process\.env\.NODE_ENV !== "production"\) \{ ?\}\n/mu);
+    expect(create).not.toContain("registerArchive(");
   });
 });
 

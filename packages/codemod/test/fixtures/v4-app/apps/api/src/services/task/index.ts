@@ -1,8 +1,5 @@
 import type { PrismaClient } from "@project/db";
-import { registerArchive } from "./methods/archive.js";
-import { registerCreateTask } from "./methods/create-task.js";
-import { registerTaskQueries } from "./methods/queries.js";
-import { registerUpdateTasks } from "./methods/update-task.js";
+import { defineTaskMethods } from "./methods/index.js";
 import { TaskServiceCore } from "./service-core.js";
 import type { TaskServicePort } from "./service-ports.js";
 
@@ -10,10 +7,7 @@ import type { TaskServicePort } from "./service-ports.js";
 export class TaskService extends TaskServiceCore implements TaskServicePort {
   constructor(prisma: PrismaClient) {
     super(prisma);
-    registerCreateTask(this);
-    registerUpdateTasks(this);
-    registerTaskQueries(this);
-    registerArchive(this);
+    defineTaskMethods(this);
     this.verifyAllMethods([
       "createTask",
       "updateTask",

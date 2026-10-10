@@ -7,7 +7,7 @@
 import { type CallExpression, Node, type SourceFile, SyntaxKind } from "ts-morph";
 import type { Work } from "../apply";
 import type { RunContext } from "../context";
-import { importOf } from "../imports";
+import { importOf, isImported } from "../imports";
 
 /** The file's own, unexported interfaces and type aliases a call's type arguments name. */
 export function localTypesOf(call: CallExpression): string[] {
@@ -45,17 +45,6 @@ export function completeCollectionResults(file: SourceFile, work: Work): void {
   }
 }
 
-/** Whether any file of the project imports or re-exports `file`. */
-function isImported(ctx: RunContext, file: SourceFile): boolean {
-  return ctx.project
-    .getSourceFiles()
-    .some((other) =>
-      [...other.getImportDeclarations(), ...other.getExportDeclarations()].some(
-        (declaration) => declaration.getModuleSpecifierSourceFile() === file,
-      ),
-    );
-}
-
 /** Whether a file only declares types (and imports what they need): nothing of it runs. */
 function typesOnly(file: SourceFile): boolean {
   return file
@@ -76,7 +65,7 @@ function typesOnly(file: SourceFile): boolean {
  */
 export function deleteOrphanTypes(ctx: RunContext, imported: ReadonlySet<SourceFile>): void {
   for (const file of imported) {
-    if (file.wasForgotten() || !typesOnly(file) || isImported(ctx, file)) {
+    if (file.wasForgotten() || !typesOnly(file) || isImported(ctx.project, file)) {
       continue;
     }
     ctx.deleted.add(file.getFilePath());
