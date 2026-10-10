@@ -123,6 +123,17 @@ faithfully. What it does:
   is marked. A `defineMethod` call the codemod cannot tie to a service
   keeps its file, and the contract's marker for the method map's
   unimplemented methods names it at its file and line.
+- **Which class a service comes from.** A service is read from one class of
+  the api package that nothing extends, outside test code (files under
+  `__tests__` or `testing`, and `*.test.ts(x)` and `*.spec.ts(x)` files).
+  When several classes carry one service name, it is the class
+  `registerService("<name>", ...)` instantiates, else the one named after the
+  service (`TaskService` for `taskService`); each other one is marked
+  `[service]`. A test's subclass of a service is never a service and hides
+  nothing: it is marked `[service]`, and test code's uses of the services
+  are rewritten like any other file's. A service whose method map names
+  methods the class read implements none of gets a `[service]` marker in its
+  contract and a line on stderr.
 - **The web app.** `useService`, `useServiceQuery`, `useSubscription` and
   `useCollection` calls become `qd.<service>.<method>.useMutation()`,
   `.useQuery(input)`, `qd.<service>.useEntity(id)` and
@@ -160,7 +171,9 @@ faithfully. What it does:
 - **Formatting.** It formats every file it writes, the report too, with the
   app's formatter (oxfmt, prettier or Biome, when the root `package.json`
   has it and it is installed), so the output passes the app's format check
-  as it is written.
+  as it is written. Files the formatter's config ignores are left as
+  written. A failure prints the formatter's exit code, its own error and the
+  files it left unformatted.
 - **The report.** Wherever a person has to decide, it leaves a
   `// quickdraw-migrate: review [kind] ...` marker on its own line above the
   code in question (a hook's `error` read as the 4.x message string among
@@ -206,9 +219,12 @@ that shape, and 4.x did let everyone call it, so the codemod writes
 exactly the 4.x callers, and the marker asks whether a lookup open to
 anyone was meant. Keep `rowless: true` when it was (a public profile, a
 lookup by an id that tells nothing); otherwise drop the flag and give the
-method an `entry` form. An input that has no JSON Schema yet (a Zod 3 schema,
-a `todoSchema`) is not checked, so the refusal can first appear when the
-schema moves to Zod 4: it names the method and both ways out.
+method an `entry` form. An input whose JSON Schema names no keys (a Zod 3
+schema, which has none, or a `todoSchema` without `keys`) is not checked, so
+the refusal can first appear when the schema moves to Zod 4: it names the
+method and both ways out. A `todoSchema<T>({ keys })` names its keys, so one
+with `"id"` among them is checked now; lint's `no-todo-schema` says which
+placeholder inputs have no keys.
 
 `jsonAcl` keeps 4.x's semantics but one: a user with several entries in a
 row's list gets the highest of their levels, where 4.x's `checkEntryACL`
@@ -219,12 +235,20 @@ once per service, so check the stored lists for duplicate entries.
 
 ## Work through the report
 
-In this order, because each step leans on the one before:
+First the "Services" section (`[service]`), when the report has one: a
+4.x service class in test code, a second class of one service name, or a
+contract written from a class that implements none of its method map. A
+contract read from the wrong class is wrong in every step after it, so
+settle these first. Then, in this order, because each step leans on the one
+before:
 
 1. **Contracts.** Replace each `todoSchema` with a real schema (lint's
    `no-todo-schema` lists them), give the entity a schema, and check each
    method's kind: a query can be shared, cached and refetched; a mutation
-   cannot.
+   cannot. The codemod writes no `describe`, since 4.x had no per-method
+   prose: write one for the contract and each method, collection, stream,
+   channel and event (lint's `require-describe` lists them). MCP tools are
+   described by them, and `quickdraw-docs` prints them.
 2. **Access.** Decide the `"authenticated"` forms and the `rowless`
    flags, and port each access override into the service's policy.
 3. **Emits.** Delete the hand emits once the writes go through `db` and the
@@ -339,24 +363,33 @@ const taskEntity = z.object({
 });
 
 export const taskContract = defineContract("taskService", {
+  // new in 5.0: the codemod writes no describe; lint's require-describe lists each one missing
+  describe: "Tasks on a project's board.",
   // was TaskDTO; a schema now, so it validates and lists its keys
   entity: taskEntity,
   // was getProtectedFields(): notes reach Moderate and up
   fields: { notes: "Moderate" },
   methods: {
-    getTask: query({ input: z.object({ id: z.string() }), output: nullable("entity") }),
+    getTask: query({
+      input: z.object({ id: z.string() }),
+      output: nullable("entity"),
+      describe: "Reads one task, or null.",
+    }),
     renameTask: mutation({
       input: z.object({ id: z.string(), title: z.string().min(1) }),
       output: nullable("entity"),
+      describe: "Renames a task, or answers null.",
     }),
     archiveAll: mutation({
       input: z.object({ projectId: z.string() }),
       output: z.object({ count: z.number() }),
+      describe: "Archives every task of a project.",
     }),
   },
   collections: {
     // was defineCollection("byProject", ...): declared, so its deltas follow tracked writes
     byProject: {
+      describe: "A project's tasks, by ordinal.",
       scope: "projectId",
       item: "entity",
       order: [
@@ -367,11 +400,14 @@ export const taskContract = defineContract("taskService", {
   },
   // was QuickdrawEventMap and emitToRoom
   events: {
-    archived: { payload: z.object({ projectId: z.string() }) },
-    cursorMoved: { payload: cursorSchema },
+    archived: {
+      payload: z.object({ projectId: z.string() }),
+      describe: "A project's tasks were archived.",
+    },
+    cursorMoved: { payload: cursorSchema, describe: "Another user's cursor moved." },
   },
   // was defineChannel
-  channels: { cursor: { payload: cursorSchema } },
+  channels: { cursor: { payload: cursorSchema, describe: "Where a user's cursor is." } },
 });
 ```
 
@@ -399,7 +435,14 @@ export class HealthService extends BaseRpcService<HealthServiceMethods> {
 ```ts
 // No entity: an RPC-only contract, the 5.0 form of a BaseRpcService
 export const healthContract = defineContract("healthService", {
-  methods: { ping: query({ input: z.undefined(), output: z.object({ at: z.string() }) }) },
+  describe: "Tells a caller the server is up.",
+  methods: {
+    ping: query({
+      input: z.undefined(),
+      output: z.object({ at: z.string() }),
+      describe: "Answers with the server's time.",
+    }),
+  },
 });
 ```
 
@@ -879,6 +922,7 @@ import { admin, defineContract } from "@fitzzero/quickdraw-core";
 import { taskSchema } from "../schemas";
 
 export const task = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   // Zod 4.2 or later: the fields come from its JSON Schema
   entity: taskSchema,
   methods: {
@@ -1079,6 +1123,8 @@ import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
 export const taskContract = defineContract("taskService", {
+  // what the service is for: MCP tools and the generated docs show it
+  describe: "Tasks on a project's board.",
   // the full row; it must contain `id: string`
   entity: taskSchema,
   // lean shapes of the row
@@ -1105,11 +1151,13 @@ export const taskContract = defineContract("taskService", {
       output: z.number(),
       // fetched again whenever the project's board changes
       watch: { collection: "board", scope: (input) => input.projectId },
+      describe: "Counts the tasks on a project's board.",
     }),
   },
   collections: {
     // every task of a project, live, in board order
     board: {
+      describe: "A project's tasks, in board order.",
       scope: "projectId",
       item: "card",
       order: [
@@ -1242,6 +1290,7 @@ it again after every write.
 
 ```ts
 export const boardContract = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity: card.extend({ projectId: z.string() }),
   methods: {
     // every task of the project, grouped by status, fetched again after every write
@@ -1249,10 +1298,12 @@ export const boardContract = defineContract("taskService", {
       input: z.object({ projectId: z.string() }),
       output: z.record(z.string(), z.array(card)),
       watch: { collection: "board", scope: (input) => input.projectId },
+      describe: "Lists a project's tasks, grouped by status.",
     }),
   },
   collections: {
     board: {
+      describe: "A project's tasks, by ordinal.",
       scope: "projectId",
       item: "entity",
       order: [
@@ -1309,6 +1360,8 @@ import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
 export const taskContract = defineContract("taskService", {
+  // what the service is for: MCP tools and the generated docs show it
+  describe: "Tasks on a project's board.",
   // the full row; it must contain `id: string`
   entity: taskSchema,
   // lean shapes of the row
@@ -1335,11 +1388,13 @@ export const taskContract = defineContract("taskService", {
       output: z.number(),
       // fetched again whenever the project's board changes
       watch: { collection: "board", scope: (input) => input.projectId },
+      describe: "Counts the tasks on a project's board.",
     }),
   },
   collections: {
     // every task of a project, live, in board order
     board: {
+      describe: "A project's tasks, in board order.",
       scope: "projectId",
       item: "card",
       order: [
@@ -1763,6 +1818,13 @@ only, not subscriptions, collections or channels, and it logs each
 service, method and kind of caller once, so the remaining 4.x clients can
 be found.
 
+A call through the shim sees the socket it arrived on: `ctx.socketId` is
+its id, and `ctx.rooms.join(room)` puts the 4.x client in an app room,
+which it leaves when it disconnects. A contract's events
+(`ctx.rooms.emit`) reach only 5.0 sockets, so until those clients speak
+protocol 5 the app delivers to 4.x listeners with its own raw emit to the
+room (`server.io.to(room).emit(...)`), an item for the lint baseline.
+
 To ship without a flag day: deploy the 5.0 server with `legacyWire: true`,
 ship the 5.0 web and mobile clients, watch the log until no 4.x caller is
 left, then remove `legacyWire`. Screens that depend on 4.x live data
@@ -1787,11 +1849,12 @@ design-system rules):
 ```
 
 `no-v4-api` reports every 4.x API that is left, with its replacement,
-`no-todo-schema` every placeholder schema, and `prefer-kit` (a warning)
+`no-todo-schema` every placeholder schema, `prefer-kit` (a warning)
 every migrated method a kit implements (`getProject`, `listTasks`, ...;
 the report lists them under "Methods a kit implements"): move it to the
 kit, or keep it with a `// quickdraw: hand-written because <reason>`
-comment above it.
+comment above it. `require-describe` (a warning) reports every contract
+member without a `describe`, which is all of them after the codemod.
 
 Adopt it on the codemod's output with a baseline:
 `quickdraw-lint baseline -c .oxlintrc.json` records every violation lint
@@ -1891,7 +1954,7 @@ export const taskService = qd.defineService(taskContract, {
 
 ## Order of the migrations
 
-Within one app: contracts, access, emits, client, as in
+Within one app: services, contracts, access, emits, client, as in
 [Work through the report](#work-through-the-report).
 
 Across the apps on 4.x: quickdraw-chat went first (the template, and the

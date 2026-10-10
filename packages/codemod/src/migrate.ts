@@ -6,12 +6,13 @@
 import type { SourceFile } from "ts-morph";
 import { Work } from "./apply";
 import type { RunContext } from "./context";
-import { findServices } from "./model";
+import { findServices, findTestServiceClasses } from "./model";
 import { planService } from "./plan";
 import { isUnder } from "./project";
 import {
   deleteWrappers,
   markLeftovers,
+  markTestClasses,
   migrateClient,
   migrateServices,
   queriedMethods,
@@ -33,6 +34,7 @@ function jsFor(ctx: RunContext): (file: SourceFile) => boolean {
 /** Runs every transform on the project of `ctx`, in memory. */
 export function migrate(ctx: RunContext): void {
   const services = findServices(ctx.project, ctx.layout);
+  const testClasses = findTestServiceClasses(ctx.project, ctx.layout);
   const queried = queriedMethods(ctx);
   const plans = writeContracts(
     ctx,
@@ -44,6 +46,7 @@ export function migrate(ctx: RunContext): void {
   const work = new Work();
   migrateServices(ctx, plans, work);
   rewriteReferences(ctx, plans, work);
+  markTestClasses(plans, testClasses, work);
   const wrappers = migrateClient(ctx, plans, work);
   if (ctx.stats.clientCalls > 0) {
     writeClientInfra(ctx);

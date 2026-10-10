@@ -67,7 +67,8 @@ export interface BaseContext<P = Principal, M = McpContext> {
   /**
    * The socket the call arrived on: its id, as the client socket's `id`,
    * `onRoomLeave`'s `socketId` and a channel handler's `ctx.socketId` name
-   * it (a game keys a player's input by it). `undefined` for a call that
+   * it (a game keys a player's input by it). A call through the 4.x legacy
+   * shim has it too: it arrived on a socket. `undefined` for a call that
    * did not arrive over a socket: HTTP, MCP, in process, `ctx.services`. In
    * a method that shares its runs (`share`), the first caller's.
    */

@@ -11,9 +11,12 @@ import { custom, initQuickdraw, type BaseContext, type Principal } from "../inde
 import {
   createMcpRegistry,
   describeTools,
+  type McpBindCall,
+  type McpBinder,
   type McpCallResult,
   type McpCustomTool,
   type McpRegistry,
+  type McpRegistryOptions,
   type McpRequest,
   type McpTool,
   type McpToolAccess,
@@ -148,6 +151,41 @@ describe("createMcpRegistry", () => {
       // @ts-expect-error -- taskService is not served
       include: ["taskService"],
     });
+  });
+
+  test("bind's functions get the principal, never null, the ctx.mcp fields and the method, and return any value", () => {
+    createMcpRegistry({
+      services: [noteService],
+      dispatcher,
+      bind: {
+        id: ({ principal, mcp, request, service, method }) => {
+          expectTypeOf(principal).toEqualTypeOf<AppPrincipal>();
+          expectTypeOf(mcp).toEqualTypeOf<Scopes | undefined>();
+          expectTypeOf(request).toEqualTypeOf<McpRequest>();
+          expectTypeOf(service).toEqualTypeOf<string>();
+          expectTypeOf(method).toEqualTypeOf<string>();
+          return principal.claims?.noteId;
+        },
+      },
+    });
+    createMcpRegistry({
+      services: [noteService],
+      dispatcher,
+      bind: { id: async ({ principal }) => Promise.resolve(`${principal.userId}-note`) },
+    });
+    createMcpRegistry({
+      services: [noteService],
+      dispatcher,
+      bind: {
+        // @ts-expect-error -- a bound argument's value comes from a function of the call
+        id: "n1",
+      },
+    });
+    expectTypeOf<
+      NonNullable<McpRegistryOptions<readonly [typeof noteService]>["bind"]>["id"]
+    >().toEqualTypeOf<McpBinder<readonly [typeof noteService]>>();
+    expectTypeOf<McpBinder>().parameter(0).toEqualTypeOf<McpBindCall>();
+    expectTypeOf<McpBindCall["principal"]>().toEqualTypeOf<Principal>();
   });
 
   test("a custom tool's handler gets the typed principal, ctx.mcp fields and caller", () => {

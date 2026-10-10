@@ -6,6 +6,9 @@
 // (`registerX(service)`, the 4.1 README's "Splitting Large Services"), whose
 // parameter may be typed as a port of the service
 // (`Pick<BaseService<...>, "defineMethod"> & { ... }`, read from its text).
+// Test code is not read for services (`isTestFile`), and when several
+// classes carry one service name, one is chosen: the class `registerService`
+// instantiates, else the one named after the service, else the first by file.
 
 import {
   type ArrowFunction,
@@ -15,6 +18,7 @@ import {
   type FunctionDeclaration,
   type FunctionExpression,
   type InterfaceDeclaration,
+  type NewExpression,
   Node,
   type Project,
   type SourceFile,
@@ -22,9 +26,9 @@ import {
   type TypeAliasDeclaration,
 } from "ts-morph";
 import { importOf } from "./imports";
-import type { Layout } from "./layout";
-import { isUnder } from "./project";
-import { lowerFirst } from "./text";
+import { type Layout, repoPath } from "./layout";
+import { isTestFile, isUnder } from "./project";
+import { lowerFirst, upperFirst } from "./text";
 
 const CORE_SERVER = "@fitzzero/quickdraw-core/server";
 const BASES = new Set(["BaseService", "BaseRpcService"]);
@@ -77,6 +81,8 @@ export interface ServiceModel {
   readonly ports: readonly (TypeAliasDeclaration | InterfaceDeclaration)[];
   /** The fields that hold the Prisma client (`this.prisma`). */
   readonly prismaFields: ReadonlySet<string>;
+  /** Other instantiable classes with the same service name, whose defineMethod calls were not read. */
+  readonly shadowed: readonly ClassDeclaration[];
 }
 
 /** The class a class extends, when it is one of the project's. */
@@ -452,13 +458,12 @@ export interface UntiedCall {
 
 /**
  * The `defineMethod` calls on a parameter whose type stands for a service
- * (`servicesOfType`), in api files other than that service's own, by the
- * service's leaf class; and the calls on a receiver tied to no service. One
- * scan of the api files for every service.
+ * (`servicesOfType`), in api files (`files`, test code left out) other than
+ * that service's own, by the service's leaf class; and the calls on a
+ * receiver tied to no service. One scan of the api files for every service.
  */
 function moduleCalls(
-  project: Project,
-  layout: Layout,
+  files: readonly SourceFile[],
   chains: ReadonlyMap<ClassDeclaration, readonly ClassDeclaration[]>,
 ): {
   byLeaf: Map<ClassDeclaration, MethodCall[]>;
@@ -472,10 +477,8 @@ function moduleCalls(
   const byLeaf = new Map<ClassDeclaration, MethodCall[]>();
   const untied: UntiedCall[] = [];
   const ports = new Map<ClassDeclaration, Set<TypeAliasDeclaration | InterfaceDeclaration>>();
-  for (const file of project.getSourceFiles()) {
-    if (!isUnder(file, layout.api.src)) {
-      continue;
-    }
+  const scanned = new Set(files);
+  for (const file of files) {
     for (const call of file.getDescendantsOfKind(SyntaxKind.CallExpression)) {
       const callee = call.getExpression();
       if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "defineMethod") {
@@ -502,7 +505,7 @@ function moduleCalls(
       for (const leaf of leaves) {
         if (!(ownFiles.get(leaf)?.has(file) ?? false)) {
           byLeaf.set(leaf, [...(byLeaf.get(leaf) ?? []), method]);
-          if (port !== undefined && isUnder(port.getSourceFile(), layout.api.src)) {
+          if (port !== undefined && scanned.has(port.getSourceFile())) {
             ports.set(leaf, (ports.get(leaf) ?? new Set()).add(port));
           }
         }
@@ -546,16 +549,122 @@ function modelFor(
     untied,
     ports: [...ports],
     prismaFields: prismaFieldsOf(chain),
+    shadowed: [],
   };
 }
 
-/** Every 4.x service of the api package: one per class that is instantiated (not abstract, not extended). */
-export function findServices(project: Project, layout: Layout): ServiceModel[] {
-  const chains = new Map<ClassDeclaration, ClassDeclaration[]>();
-  for (const file of project.getSourceFiles()) {
-    if (!isUnder(file, layout.api.src)) {
-      continue;
+/** The api package's source files outside test code. */
+function apiFiles(project: Project, layout: Layout): SourceFile[] {
+  return project
+    .getSourceFiles()
+    .filter(
+      (file) => isUnder(file, layout.api.src) && !isTestFile(repoPath(layout, file.getFilePath())),
+    );
+}
+
+/** The 4.x service classes of the api package's test code, each with its chain: the codemod reads no service from them. */
+export function findTestServiceClasses(
+  project: Project,
+  layout: Layout,
+): (readonly ClassDeclaration[])[] {
+  return project
+    .getSourceFiles()
+    .filter(
+      (file) => isUnder(file, layout.api.src) && isTestFile(repoPath(layout, file.getFilePath())),
+    )
+    .flatMap((file) => file.getClasses())
+    .flatMap((cls) => {
+      const chain = chainOf(cls);
+      return chain === undefined ? [] : [chain];
+    });
+}
+
+/** The `new X(...)` that `node` is, or that the variable `node` names was initialized with. */
+function newExpressionOf(node: Node | undefined): NewExpression | undefined {
+  if (node === undefined || Node.isNewExpression(node)) {
+    return node;
+  }
+  if (!Node.isIdentifier(node)) {
+    return undefined;
+  }
+  const declaration = node.getSymbol()?.getDeclarations()[0];
+  const initializer =
+    declaration !== undefined && Node.isVariableDeclaration(declaration)
+      ? declaration.getInitializer()
+      : undefined;
+  return initializer !== undefined && Node.isNewExpression(initializer) ? initializer : undefined;
+}
+
+/** The class a `new` expression instantiates, when it is one of the project's. */
+function instantiated(created: NewExpression): ClassDeclaration | undefined {
+  const symbol = created.getExpression().getSymbol();
+  const target = symbol?.isAlias() === true ? symbol.getAliasedSymbol() : symbol;
+  const declaration = target?.getDeclarations()[0];
+  return declaration !== undefined && Node.isClassDeclaration(declaration)
+    ? declaration
+    : undefined;
+}
+
+/** The class each `registerService("<name>", instance)` call registers, by service name. */
+function registeredClasses(files: readonly SourceFile[]): Map<string, ClassDeclaration> {
+  const registered = new Map<string, ClassDeclaration>();
+  for (const file of files) {
+    for (const call of file.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+      const callee = call.getExpression();
+      if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "registerService") {
+        continue;
+      }
+      const [name, instance] = call.getArguments();
+      const serviceName = literal(name);
+      const created = newExpressionOf(instance);
+      const cls = created === undefined ? undefined : instantiated(created);
+      if (serviceName !== undefined && cls !== undefined && !registered.has(serviceName)) {
+        registered.set(serviceName, cls);
+      }
     }
+  }
+  return registered;
+}
+
+/**
+ * The one model of a service name several classes carry: the class
+ * `registerService` instantiates, else the one named after the service
+ * (`TaskService` for `taskService`), else the first by file and name. The
+ * others are `shadowed`.
+ */
+function choose(
+  models: readonly ServiceModel[],
+  registered: ReadonlyMap<string, ClassDeclaration>,
+): ServiceModel {
+  const rank = (model: ServiceModel): [number, number, string] => {
+    const [leaf] = model.chain;
+    return [
+      registered.get(model.serviceName) === leaf ? 0 : 1,
+      model.className === upperFirst(model.serviceName) ? 0 : 1,
+      `${leaf?.getSourceFile().getFilePath() ?? ""}:${model.className}`,
+    ];
+  };
+  const [chosen, ...others] = models.toSorted((a, b) => {
+    const [ra, rb] = [rank(a), rank(b)];
+    return ra[0] - rb[0] || ra[1] - rb[1] || ra[2].localeCompare(rb[2]);
+  });
+  if (chosen === undefined) {
+    throw new Error("quickdraw-codemod: no class for a service");
+  }
+  return {
+    ...chosen,
+    shadowed: others.flatMap((model) => model.chain.slice(0, 1)),
+  };
+}
+
+/**
+ * Every 4.x service of the api package: one per service name, read from a
+ * class that is instantiated (not abstract, not extended) outside test code.
+ */
+export function findServices(project: Project, layout: Layout): ServiceModel[] {
+  const files = apiFiles(project, layout);
+  const chains = new Map<ClassDeclaration, ClassDeclaration[]>();
+  for (const file of files) {
     for (const cls of file.getClasses()) {
       const chain = chainOf(cls);
       if (chain !== undefined) {
@@ -565,9 +674,15 @@ export function findServices(project: Project, layout: Layout): ServiceModel[] {
   }
   const extended = new Set([...chains.values()].flatMap((chain) => chain.slice(1)));
   const leaves = new Map([...chains].filter(([cls]) => !extended.has(cls) && !cls.isAbstract()));
-  const { byLeaf, untied, ports } = moduleCalls(project, layout, leaves);
-  return [...leaves]
-    .map(([leaf, chain]) => modelFor(chain, byLeaf.get(leaf) ?? [], untied, ports.get(leaf)))
+  const { byLeaf, untied, ports } = moduleCalls(files, leaves);
+  const byName = new Map<string, ServiceModel[]>();
+  for (const [leaf, chain] of leaves) {
+    const model = modelFor(chain, byLeaf.get(leaf) ?? [], untied, ports.get(leaf));
+    byName.set(model.serviceName, [...(byName.get(model.serviceName) ?? []), model]);
+  }
+  const registered = registeredClasses(files);
+  return [...byName.values()]
+    .map((models) => choose(models, registered))
     .toSorted((a, b) => a.serviceName.localeCompare(b.serviceName));
 }
 

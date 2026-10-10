@@ -1,11 +1,12 @@
 # quickdraw 5.0 migration report
 
-Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review` markers in the code; running the codemod again rewrites it from the markers that remain. Work through the sections in order (contracts, access, emits, client), delete each marker once its item is done, and see the migration guide (`MIGRATION.md`, shipped in `@fitzzero/quickdraw-codemod`) for each kind of item. Then run lint (`no-v4-api` names every 4.x API left, `no-todo-schema` every placeholder) and the typecheck.
+Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review` markers in the code; running the codemod again rewrites it from the markers that remain. Work through the sections in order (services, contracts, access, emits, client), delete each marker once its item is done, and see the migration guide (`MIGRATION.md`, shipped in `@fitzzero/quickdraw-codemod`) for each kind of item. Then run lint (`no-v4-api` names every 4.x API left, `no-todo-schema` every placeholder) and the typecheck.
 
-135 items in 30 files.
+141 items in 33 files.
 
 | Section                                                        | Items |
 | -------------------------------------------------------------- | ----: |
+| Services                                                       |     4 |
 | Contracts                                                      |    31 |
 | Access                                                         |    11 |
 | Access overrides to turn into a policy                         |     4 |
@@ -20,8 +21,17 @@ Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review`
 | Service instance state and the 4.x context                     |    15 |
 | Errors the caller no longer sees                               |     6 |
 | Client                                                         |    11 |
-| Server wiring and other 4.x APIs                               |    23 |
+| Server wiring and other 4.x APIs                               |    25 |
 | Carve-outs                                                     |     1 |
+
+## Services
+
+Each service is read from one class of the api package outside test code: the one `registerService` instantiates, else the one named after the service. Other classes of the same service name, and 4.x service classes in test code (`__tests__`, `testing`, `*.test.ts`, `*.spec.ts`), are not read, and are marked. A contract whose 4.x method map names methods the class read implements none of was written from the wrong class: check it before anything else.
+
+- [ ] `apps/api/src/__tests__/utils/probe-service.ts:12` ProbeService is a 4.x service class in test code, which the codemod reads no service from: test the 5.0 service through createTestApp (@fitzzero/quickdraw-core/testing), or port what this class adds
+- [ ] `apps/api/src/services/audit/__tests__/quiet-task.test.ts:4` QuietTaskService is a 4.x service class in test code, which the codemod reads no service from (it extends taskService's classes, a service object now): test the 5.0 service through createTestApp (@fitzzero/quickdraw-core/testing), or port what this class adds
+- [ ] `apps/api/src/services/task/__tests__/task-delta.test.ts:2` TaskServiceCore was a 4.x service class of taskService; the migration turns its members into module code
+- [ ] `apps/api/src/services/task/__tests__/task-delta.test.ts:7` TestTaskService is a 4.x service class in test code, which the codemod reads no service from (it extends taskService's classes, a service object now): test the 5.0 service through createTestApp (@fitzzero/quickdraw-core/testing), or port what this class adds
 
 ## Contracts
 
@@ -208,12 +218,14 @@ Hook calls now go through the typed client (`qd.<service>.<member>`); these need
 
 What lint's `no-v4-api` also reports, each with its replacement: the server set-up, room helpers, removed types.
 
+- [ ] `apps/api/src/__tests__/utils/probe-service.ts:1` 4.x API BaseRpcService (removed): lint's no-v4-api names each replacement
 - [ ] `apps/api/src/index.ts:4` 4.x API ServiceRegistry (removed): lint's no-v4-api names each replacement
 - [ ] `apps/api/src/index.ts:17` the 4.x service was constructed here (new ProjectService(...)): it is the object projectService now; pass it in qd.createServer({ services: [...] })
 - [ ] `apps/api/src/index.ts:19` the 4.x service was constructed here (new TaskService(...)): it is the object taskService now; pass it in qd.createServer({ services: [...] })
 - [ ] `apps/api/src/index.ts:21` the 4.x service was constructed here (new UserService(...)): it is the object userService now; pass it in qd.createServer({ services: [...] })
 - [ ] `apps/api/src/index.ts:23` the 4.x service was constructed here (new LabelService(...)): it is the object labelService now; pass it in qd.createServer({ services: [...] })
 - [ ] `apps/api/src/index.ts:25` the 4.x service was constructed here (new HealthService(...)): it is the object healthService now; pass it in qd.createServer({ services: [...] })
+- [ ] `apps/api/src/services/audit/__tests__/quiet-task.test.ts:5` TaskService was the 4.x service class; the service is the object taskService now
 - [ ] `apps/api/src/services/build-services.ts:6` the 4.x service was constructed here (new ProjectService(...)): it is the object projectServiceDef now; pass it in qd.createServer({ services: [...] })
 - [ ] `apps/api/src/services/build-services.ts:10` the 4.x service was constructed here (new LabelService(...)): it is the object labelService now; pass it in qd.createServer({ services: [...] })
 - [ ] `apps/api/src/services/build-services.ts:17` projectService is a 4.x ProjectService instance, whose members (getRoomName here) the service object projectService does not have: call a contract method through qd.caller(principal).projectService.<method>(input), and move other logic into a module of its own

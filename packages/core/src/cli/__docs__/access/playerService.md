@@ -27,6 +27,9 @@ Each method below says who may call it.
 
 A query.
 
+- MCP tool (default name): `playerService_get`
+- MCP read-only hint: yes, as on every query's tool
+
 Access: `{ entry: "Read" }`: Read or more on the row `input.id` names.
 
 Input:
@@ -40,6 +43,8 @@ Output: one row as the `entity` projection.
 ### `join`
 
 A mutation.
+
+- MCP tool (default name): `playerService_join`
 
 Access: `{ scope: "Moderate", of: teamService, id: "teamId" }`: Moderate or more on the `teamService` row `input.teamId` names.
 

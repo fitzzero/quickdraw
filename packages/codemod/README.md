@@ -16,7 +16,10 @@ Run it from the app's repository root, on a clean working tree, after
 upgrading `@fitzzero/quickdraw-core` to 5.0. It formats what it writes with
 the app's formatter (oxfmt, prettier or Biome, when the root `package.json`
 has it and it is installed), so the output passes the app's format check as
-written. It expects the quickdraw template's layout; the options move each
+written. Files the formatter's config ignores (an app that ignores Markdown
+ignores the report) are left as written. When the formatter fails, the
+codemod prints its exit code, the formatter's own error and the files it
+left unformatted. It expects the quickdraw template's layout; the options move each
 part:
 
 | Option                | Default                                       |
@@ -60,6 +63,13 @@ part:
   interfaces, type parameters and intersections. The port type is marked. A
   `defineMethod` call tied to no service is named at its file and line in
   the contract's marker for the method map's unimplemented methods.
+- **Which class.** A service is read from one class nothing extends, outside
+  test code (`__tests__`, `testing`, `*.test.ts(x)`, `*.spec.ts(x)`): of
+  several with one service name, the class `registerService` instantiates,
+  else the one named after the service; the others are marked `[service]`.
+  Test code's 4.x service classes are marked `[service]` and hide nothing;
+  its uses of the services are rewritten. A contract whose class implements
+  none of its method map is marked `[service]` and named on stderr.
 - **Access.** Each method gets the 5.0 form that admits exactly the callers
   4.x admitted:
 

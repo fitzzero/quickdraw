@@ -1,0 +1,104 @@
+# API docs on push: regenerates the quickdraw-docs pages from the contracts on
+# every push to the base branch, and commits them when they changed. Copied
+# into an app by the quickdraw-api-docs skill
+# (node_modules/@fitzzero/quickdraw-skills/skills/quickdraw-api-docs/SKILL.md):
+# set the branch, the paths, the env block and the build step to the app's own.
+#
+# Two jobs, so the job that can write to the repository runs no dependency
+# code: `generate` installs, builds and runs quickdraw-docs with a read-only
+# token and no secrets, and hands the pages over as an artifact; `commit`
+# only downloads them and runs git.
+
+name: API docs
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - "packages/shared/src/**"
+      - "apps/api/src/services/**"
+      - ".github/workflows/docs-api.yml"
+  workflow_dispatch:
+
+# The latest push wins: an older run would commit pages a newer one replaces.
+concurrency:
+  group: docs-api-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # The module exporting the contracts, and the one exporting the services
+  # (importing it must not start the server, and must not need a secret).
+  CONTRACTS: packages/shared/src/index.ts
+  SERVICES: apps/api/src/services/index.ts
+  OUT: docs/api
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile
+
+      # What the services module imports loads from its built output: the db
+      # package (with its Prisma client) and the shared package.
+      - name: Build what the services module imports
+        run: bunx turbo run build --filter=@project/db --filter=@project/shared
+
+      - name: Generate the API docs
+        run: bunx quickdraw-docs "$CONTRACTS" --services "$SERVICES" --out "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docs-api
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 1
+
+  commit:
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      # GITHUB_TOKEN on purpose: a push made with it starts no workflow run, so
+      # the docs commit never starts this workflow or CI again.
+      - uses: actions/checkout@v7
+
+      # The whole folder as generate left it: a page of a removed service goes.
+      - name: Replace the pages with the generated ones
+        run: rm -rf "$OUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: docs-api
+          path: ${{ env.OUT }}
+
+      - name: Commit the pages when they changed
+        run: |
+          git add --all -- "$OUT"
+          if git diff --cached --quiet; then
+            echo "The API docs are current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs(api): regenerate from the contracts"
+          git push origin "HEAD:$GITHUB_REF_NAME"

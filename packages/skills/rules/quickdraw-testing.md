@@ -4,6 +4,7 @@ paths:
   - "apps/**/*.test.tsx"
   - "apps/**/__tests__/**"
   - "apps/**/__budgets__/**"
+  - "apps/**/__access__/**"
 ---
 
 # quickdraw 5.0: testing
@@ -30,7 +31,7 @@ The template runs two lanes, and a file's name picks its lane:
 
 A test that boots the app but is named `<name>.test.ts` runs in the unit
 lane and fails at its first query. Budgets go to `__budgets__/` beside the
-test file that measures them.
+test file that measures them, and access snapshots to `__access__/`.
 
 ## The test app
 
@@ -94,6 +95,45 @@ await describeAccessMatrix(app, {
   run again, or `input` as a function of the cell
   (`input: async () => ({ id: await newTask() })`), which makes a fresh row
   for every cell; never order the principals so the allowed one goes last.
+
+## Pin the whole matrix with a snapshot
+
+Before a migration, a policy refactor or a new kind of principal, record
+every cell once and let each change fail until someone accepts it:
+
+```ts
+const report = await snapshotAccessMatrix(app, {
+  principals: (seeded) => ({ owner: seeded.ada, member: seeded.bo, stranger: seeded.ed }),
+  reset: async () => {
+    await resetDatabase(prisma); // from @fitzzero/quickdraw-core/testing/prisma
+    return await seed(); // the app's seed: users, a project, a task in it and one outside it
+  },
+  rows: (seeded) => ({
+    projectService: seeded.projectId,
+    taskService: { own: seeded.taskId, other: seeded.otherTaskId },
+  }),
+});
+expect(report.inconclusive).toEqual([]);
+```
+
+- It runs every method of the app's services (or `services`), each entity
+  subscribe and each collection scope, as every principal and anonymously,
+  and writes `__access__/<test file>.json` beside the test on the first run:
+  commit it. Each cell is the exact outcome (`"ok"` or the error code).
+- `reset` runs first and after every mutation access let through, so no cell
+  sees another's writes. `principals` may be a function of what `reset`
+  returned, for ids the seed makes. `rows` names every service a form,
+  subscribe or anchor reads (a row id, or variants such as `{ own, other }`).
+- Inputs are made from each input's JSON Schema with the row where the form
+  reads it; give the ones that cannot be made with
+  `inputs: (ref, board) => ...` (`ref.service`, `ref.method`, `ref.row`).
+  Cells never called are `VALIDATION` and listed in `report.inconclusive`:
+  keep it empty.
+- A changed cell fails, saying whether it opens or closes access. When the
+  change is meant, rerun with `QD_UPDATE_ACCESS_SNAPSHOT=1` and commit the
+  file; never set it in CI, which also fails a missing file and added or
+  removed cells. Leave out methods whose outcome varies with
+  `exclude: ["<service>.<method>"]`. One snapshot per test file.
 
 ## Hot methods get a budget
 
@@ -167,7 +207,8 @@ Turn it on for service suites.
 
 ## What a new service's tests cover
 
-1. The access matrix of every method.
+1. The access matrix of every method (`describeAccessMatrix`), or its
+   snapshot (`snapshotAccessMatrix`).
 2. Live behavior: a write by one user reaches another's entity or
    collection (`frames.waitFor`, or a rendered component).
 3. A budget for each method a page calls on load, or in a loop.

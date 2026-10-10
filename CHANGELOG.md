@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Describes and API docs
+
+- **Every contract member takes a `describe`**: the contract itself, and each
+  collection, stream, channel and event, beside each method's. It is a
+  non-empty string, optional in the types, and refused when empty.
+- **Lint's `quickdraw/require-describe`** (a warning in `oxlint.base.jsonc`)
+  reports each contract member without a `describe`, and a static one under
+  3 words (`minWords`). A migrated app gets one warning per member: the
+  codemod writes none. Set it to `"error"` once the list is empty.
+- **`quickdraw-docs` prints more.** A service page leads with the contract's
+  describe, the index lists it, each member's section leads with its own,
+  and each method shows its default MCP tool name (`{service}_{method}`)
+  and, for a query, the MCP read-only hint. Regenerate your docs
+  (`quickdraw-docs ... --out docs/api`): `--check` reports every page as
+  out of date until you do.
+- **The `quickdraw-api-docs` skill** in `@fitzzero/quickdraw-skills` ships
+  `docs-api.yml`, a workflow that regenerates the API docs on every push to
+  the base branch and commits them, for repositories where a committed
+  generated file conflicts in every pull request. Copy it into
+  `.github/workflows`; run `quickdraw-skills link` to link the skill.
+
+### Codemod
+
+- **The format step no longer fails when the app's formatter ignores the
+  report.** An app whose `.oxfmtrc.json` ignores `**/*.md` made the codemod's
+  second oxfmt call (the report alone) exit 2, and the run ended with "oxfmt
+  failed on the files written" and nothing else. oxfmt now gets
+  `--no-error-on-unmatched-pattern` (Biome `--no-errors-on-unmatched`;
+  prettier already had `--ignore-unknown`), so files the config ignores are
+  left as written. The formatter runs in batches of at most 100 files and
+  about 24,000 characters of relative paths, then lists what is still
+  unformatted (`--list-different`) and formats those once more. A failure
+  prints the exit code, the formatter's own output and the files it left.
+
 ### Releasing
 
 - **A release is a merge to `main`.** `.github/workflows/publish.yml` runs on
@@ -38,6 +72,86 @@ All notable changes to this project will be documented in this file.
   a `[this]` marker. A `defineMethod` call still tied to no service is named
   at its file and line in the contract's marker for the unimplemented
   methods, and the api files are scanned once for every service.
+- **Test code no longer decides which class a service is read from.** The
+  codemod read every class under the api's sources, so a test's subclass of
+  a service (`class TestTaskService extends TaskServiceCore` in a
+  `__tests__` file) hid the real class and became a service of the same
+  name, and file order picked which one the contract was written from: on
+  one app, a directory rename gave a service's contract none of its 81
+  methods. Files under `__tests__` or `testing`, and `*.test.ts(x)` and
+  `*.spec.ts(x)` files, are no longer read for services or method modules;
+  their 4.x service classes are marked `[service]` and their uses of the
+  services are still rewritten. A test-only service gets no contract.
+- **One class per service name, chosen the same way every run:** the class
+  `registerService("<name>", ...)` instantiates, else the one named after the
+  service, else the first by file. Each other class is marked `[service]`.
+- **A contract whose class implements none of its method map is not silent:**
+  it is marked `[service]`, and the command names the service and the class
+  it read on stderr. The report lists `[service]` items first, under
+  "Services".
+
+### Testing
+
+- **Access snapshots.** `snapshotAccessMatrix(app, { principals, reset, rows })`
+  on `./testing` records who may call what: every method of the app's
+  services (or of `services`), each entity subscribe (`qd:sub`) and each
+  collection scope (`qd:col:sub`), as every principal and anonymously.
+  The first run writes the outcomes to `__access__/<test file>.json` beside
+  the test, and every later run compares its matrix with that file: a cell
+  whose outcome changed fails, naming the method, its row variant, the
+  principal and both outcomes, and whether the change opens or closes
+  access, until `QD_UPDATE_ACCESS_SNAPSHOT=1` rewrites the file. Under CI a
+  missing file and added or removed cells fail too, because a snapshot that
+  writes itself pins nothing. `reset` (the app's `resetDatabase` and seed)
+  runs again after every mutation access let through, so no cell sees the
+  writes of another. Inputs are made from each method's input schema with
+  the row where its access form reads it (`inputs(ref, fixture)` gives the
+  others), and a cell without a valid input is recorded as `VALIDATION`,
+  never called, and listed in the report's `inconclusive`. Each principal's
+  `kind` is recorded beside the cells. `describeAccessMatrix` is unchanged.
+
+### Fixed
+
+- **A call through the 4.x legacy shim (`legacyWire`) sees the socket it
+  arrived on.** Its handler gets `ctx.socketId`, and `ctx.rooms.join(room)`
+  joins the 4.x client's socket instead of answering `false`, so an app can
+  put an old client in a room and reach it with its own raw emits. The socket
+  leaves its app rooms when it disconnects, and `onRoomLeave` and presence
+  hear it. The shim still serves request/response calls only, and a
+  contract's events still reach only protocol-5 sockets.
+
+### Lint
+
+- **`no-todo-schema` says when a placeholder input hides its keys from the
+  id-reach check.** `defineService` refuses an input with `id` under an access
+  form that checks no row (`"public"`, `"authenticated"`, `{ service: L }`
+  below `Admin`), and reads the input's keys from its JSON Schema. A
+  `todoSchema()` without `keys` names none, so the check cannot see an `id` in
+  it. As the `input` of `query()` or `mutation()`, such a placeholder now gets
+  a second message that says so and asks for `keys`; a
+  `todoSchema<T>({ keys: ["id"] })` is checked like a Zod 4 schema. MIGRATION.md,
+  the README and the access rule no longer say that every placeholder is
+  unchecked.
+
+### MCP bridge
+
+- **`bind` fills tool arguments from the caller's principal.**
+  `createMcpRegistry({ bind: { taskId: ({ principal }) => principal.claims?.taskId } })`
+  leaves each bound argument out of the `inputSchema` of every method's tool
+  whose object input has it, and fills it on every call (`tools/call` and
+  both shapes of `POST /mcp/invoke`) before the input is validated, so an
+  agent bound to one task cannot name another. A call fails closed before
+  the method runs: `UNAUTHENTICATED` for an anonymous caller, `FORBIDDEN`
+  when the binder returns `undefined` or `null` or when the agent sent
+  another value, and `INTERNAL` (or the code of a `QuickdrawError` it threw)
+  when the binder throws. `createMcpRegistry` throws at startup when a
+  binder is not a function, when a bound argument is in no selected method's
+  object input (a misspelled name), and when it is a property of an input
+  that is not an object. Custom tools are never bound. Binding is not access
+  control: the method's access must still confine the principal, who reaches
+  it over a socket or HTTP with nothing bound. The README's MCP section also
+  shows a tool set per kind of caller and frozen public tool names, built
+  from the existing options.
 
 ## [5.0.1] - 2026-10-08
 
