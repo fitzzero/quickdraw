@@ -32,6 +32,7 @@ const RESERVED_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 const DEFINITION_KEYS: ReadonlySet<string> = new Set([
+  "describe",
   "entity",
   "projections",
   "fields",
@@ -45,6 +46,7 @@ const DEFINITION_KEYS: ReadonlySet<string> = new Set([
 const METHOD_KEYS: ReadonlySet<string> = new Set(["kind", "input", "output", "watch", "describe"]);
 
 const COLLECTION_KEYS: ReadonlySet<string> = new Set([
+  "describe",
   "scope",
   "item",
   "order",
@@ -372,6 +374,9 @@ function checkCollection(
   if (value.access !== undefined && !isAccessLevel(value.access)) {
     fail(`${owner}: access must be one of ${quote(ACCESS_LEVELS)}`);
   }
+  if (value.describe !== undefined && !isName(value.describe)) {
+    fail(`${owner}: describe must be a non-empty string`);
+  }
   return Object.freeze({ ...value }) as unknown as CollectionDef;
 }
 
@@ -414,6 +419,9 @@ export function assembleContract(name: unknown, def: unknown): AnyContract {
     fail("the definition must be an object");
   }
   checkKeys(def, DEFINITION_KEYS, "the contract", fail);
+  if (def.describe !== undefined && !isName(def.describe)) {
+    fail("describe must be a non-empty string");
+  }
   const entity = checkEntity(def.entity, fail);
   const hasEntity = entity !== undefined;
   const projections = checkProjections(def.projections, hasEntity, fail);
@@ -444,6 +452,7 @@ export function assembleContract(name: unknown, def: unknown): AnyContract {
   );
   return Object.freeze({
     name,
+    ...(def.describe === undefined ? {} : { describe: def.describe as string }),
     entity,
     projections: Object.freeze(projections),
     fields: Object.freeze(checkFields(def.fields, hasEntity, fail)),

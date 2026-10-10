@@ -63,7 +63,11 @@ guide's sections as the report sends you to them.
    `// quickdraw-migrate: review [kind] ...` marker above the code it is
    about. Work through it in this order, one commit per step:
    1. **Contracts** (`[contract]`): real schemas for the entity and each
-      `todoSchema`; check each method's kind (chosen from its name).
+      `todoSchema`; check each method's kind (chosen from its name). The
+      codemod writes no `describe` (4.x had no per-method prose): write one
+      for the contract and each method, collection, stream, channel and
+      event, which lint's `require-describe` lists. MCP tools and the API
+      docs read them.
    2. **Access** (`[access]`, `[access-override]`): decide the
       `"authenticated"` forms and the `rowless: true` flags (keep one only
       for a lookup open to anyone; else an `entry` form); port
@@ -95,7 +99,8 @@ guide's sections as the report sends you to them.
    left. Run `quickdraw-lint baseline` again when `no-unused-baseline` warns.
 5. **Check**: `quickdraw-lint check` (`no-v4-api` lists every 4.x API left,
    with its replacement; `no-todo-schema` every placeholder; `prefer-kit`
-   every hand-written method a kit implements), the typecheck, the tests,
+   every hand-written method a kit implements; `require-describe` every
+   member without a `describe`), the typecheck, the tests,
    and the running app (a change from a second session arrives live).
 
 Done when the report says nothing is left to review, lint is clean without

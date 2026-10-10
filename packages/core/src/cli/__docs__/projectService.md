@@ -15,6 +15,8 @@
 
 A mutation.
 
+- MCP tool (default name): `projectService_rename`
+
 Input:
 
 | Field  | Type     |
@@ -27,6 +29,8 @@ Output: one row as the `entity` projection.
 ### `setRole`
 
 A mutation.
+
+- MCP tool (default name): `projectService_setRole`
 
 Input:
 
@@ -42,6 +46,8 @@ Output: `number`.
 
 A mutation.
 
+- MCP tool (default name): `projectService_removeMember`
+
 Input:
 
 | Field       | Type     |
@@ -54,6 +60,8 @@ Output: `number`.
 ### `setGrants`
 
 A mutation.
+
+- MCP tool (default name): `projectService_setGrants`
 
 Input:
 

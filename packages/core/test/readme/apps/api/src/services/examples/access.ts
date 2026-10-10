@@ -6,26 +6,41 @@ import { z } from "zod";
 import { qd } from "../../quickdraw";
 
 const project = defineContract("projectService", {
+  describe: "Projects and who may see them.",
   entity: projectSchema,
   methods: {
     ...crud.contract({ entity: projectSchema, get: true }),
     title: query({
       input: z.object({ id: z.string() }),
       output: z.object({ name: z.string() }),
+      describe: "Reads a project's name alone.",
     }),
   },
 });
 
 const task = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity: taskSchema,
   methods: {
-    rename: mutation({ input: z.object({ id: z.string(), title: z.string() }), output: "entity" }),
+    rename: mutation({
+      input: z.object({ id: z.string(), title: z.string() }),
+      output: "entity",
+      describe: "Renames a task.",
+    }),
     ...crud.contract({
       entity: taskSchema,
       create: { input: z.object({ projectId: z.string(), title: z.string() }) },
     }),
-    archiveAll: mutation({ input: z.undefined(), output: z.number() }),
-    claim: mutation({ input: z.object({ id: z.string() }), output: "entity" }),
+    archiveAll: mutation({
+      input: z.undefined(),
+      output: z.number(),
+      describe: "Archives every task, and counts them.",
+    }),
+    claim: mutation({
+      input: z.object({ id: z.string() }),
+      output: "entity",
+      describe: "Assigns a task to the caller.",
+    }),
   },
 });
 

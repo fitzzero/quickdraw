@@ -19,6 +19,7 @@
 // not appear in any other input.
 
 import type { MethodKind } from "../../contract/methods";
+import { defaultToolName } from "../../contract/toolName";
 import {
   hasJsonSchema,
   type StandardSchemaV1,
@@ -173,7 +174,8 @@ function toolNamer(
     fail("name must be a function of (service, method)");
   }
   return (service, method) => {
-    const named: unknown = name === undefined ? `${service}_${method}` : name(service, method);
+    const named: unknown =
+      name === undefined ? defaultToolName(service, method) : name(service, method);
     if (typeof named !== "string" || named === "") {
       const shown = typeof named === "string" ? `""` : String(named);
       fail(`name returned ${shown} for ${service}.${method}; a tool name is a non-empty string`);
