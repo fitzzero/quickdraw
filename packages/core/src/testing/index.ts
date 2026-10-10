@@ -33,6 +33,24 @@ export {
 export { BUDGET_BYTES_TOLERANCE } from "./budgetCompare";
 export { DevWarningError, type DevWarning, type DevWarningKind } from "../server/devWarnings";
 export {
+  snapshotAccessMatrix,
+  type AccessRows,
+  type AccessSnapshotOptions,
+  type AccessSnapshotRef,
+  type AccessSnapshotReport,
+} from "./accessSnapshot";
+export type {
+  AccessOutcome,
+  AccessSnapshot,
+  AccessSnapshotPrincipal,
+  AccessSnapshotRow,
+} from "./accessSnapshotCompare";
+export {
+  ACCESS_SNAPSHOT_ENV,
+  accessSnapshotFileOf,
+  type AccessSnapshotChange,
+} from "./accessSnapshotFile";
+export {
   ANONYMOUS,
   describeAccessMatrix,
   type AccessMatrixCase,
