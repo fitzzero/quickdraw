@@ -213,9 +213,12 @@ that shape, and 4.x did let everyone call it, so the codemod writes
 exactly the 4.x callers, and the marker asks whether a lookup open to
 anyone was meant. Keep `rowless: true` when it was (a public profile, a
 lookup by an id that tells nothing); otherwise drop the flag and give the
-method an `entry` form. An input that has no JSON Schema yet (a Zod 3 schema,
-a `todoSchema`) is not checked, so the refusal can first appear when the
-schema moves to Zod 4: it names the method and both ways out.
+method an `entry` form. An input whose JSON Schema names no keys (a Zod 3
+schema, which has none, or a `todoSchema` without `keys`) is not checked, so
+the refusal can first appear when the schema moves to Zod 4: it names the
+method and both ways out. A `todoSchema<T>({ keys })` names its keys, so one
+with `"id"` among them is checked now; lint's `no-todo-schema` says which
+placeholder inputs have no keys.
 
 `jsonAcl` keeps 4.x's semantics but one: a user with several entries in a
 row's list gets the highest of their levels, where 4.x's `checkEntryACL`
