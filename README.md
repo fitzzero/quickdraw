@@ -721,9 +721,19 @@ export const taskService = qd.defineService(task, {
       handler: async ({ db }) => (await db.task.updateMany({ data: { status: "archived" } })).count,
     },
     claim: {
-      access: custom((ctx, input) => input.id.length > 0 && ctx.principal.kind === "user"),
+      access: { entry: "Moderate" },
+      // users only: an agent acting for one is refused, whatever its grants
+      kinds: ["user"],
       handler: ({ input, ctx, db }) =>
         db.task.update({ where: { id: input.id }, data: { assigneeId: ctx.principal.userId } }),
+    },
+    triage: {
+      // a check on a token's claims stays a custom form
+      access: custom(
+        (ctx, input) => ctx.principal.claims?.scope === "triage" && input.status !== "archived",
+      ),
+      handler: ({ input, db }) =>
+        db.task.update({ where: { id: input.id }, data: { status: input.status } }),
     },
   },
 });
@@ -736,6 +746,20 @@ export const taskService = qd.defineService(task, {
   `custom(fn)`. Without a principal every form but `"public"` answers
   `UNAUTHENTICATED`; a principal that fails gets `FORBIDDEN`. The levels,
   lowest first, are `Public`, `Read`, `Moderate` and `Admin`.
+- `kinds`, beside `access`, says which kinds of principal
+  (`principal.kind`) may call: `initQuickdraw({ kinds: ["user", "agent"] })`
+  for every service the app defines, `defineService(contract, { kinds })`
+  for one service, and a method's own `kinds` (`claim` above). Each level
+  only narrows the one above it: a wider or empty list is refused when the
+  service is defined. A principal of another kind, or without a `kind`,
+  gets `FORBIDDEN` before the form is asked, and no grant passes the check,
+  a service-wide `Admin` grant included, since a token acting with someone's
+  grants is what it stops. An anonymous caller is left to the form, so a
+  `"public"` method takes no `kinds` of its own: a refused caller would call
+  it signed out. A service's list also holds for its entity, collection,
+  topic and stream subscriptions, and its channels drop the messages of
+  other kinds. A check on a claim, such as a token's `scope`, stays a
+  `custom` form (`triage` above).
 - On a service with a policy, a method whose input has `id` under a form
   that checks no row (`"public"`, `"authenticated"`, `{ service: L }` below
   `Admin`) would let anyone that form admits reach any row by its id, so
@@ -2941,7 +2965,9 @@ for real, once per allowed principal: give inputs that can run again, or
 `MatrixCell` `{ name, principal }`, sync or async), called before each
 cell's call, that makes a row of its own (a task
 to delete, an unused name), so no cell depends on the order of the
-principals.
+principals. Each cell of the report records its principal's `kind`, and a
+cell that differs is listed with it: on a service or method with `kinds`,
+give the matrix a principal of each kind it refuses.
 
 ### Access snapshots
 

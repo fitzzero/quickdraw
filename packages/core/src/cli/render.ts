@@ -170,14 +170,35 @@ function described(text: string | undefined): string[] {
 }
 
 /**
+ * Who may call a method by the kind of principal, with `--services`, when its
+ * service or the app limits it: the kinds, and for a `"public"` method the
+ * anonymous callers its form admits besides. Nothing when every kind may.
+ */
+function callableBy(name: string, access: AccessInfo | undefined): string[] {
+  const method = access?.service?.methods.get(name);
+  if (method?.kinds === undefined) {
+    return [];
+  }
+  const anonymous = method.access === "public" ? ", or anonymously" : "";
+  return [`- Callable by: ${list(method.kinds)}${anonymous}`];
+}
+
+/**
  * Facts about a method, as a list: the name the MCP bridge gives its tool
  * when the registry has no `name` option (the docs cannot see the app's
- * registry), and for a query the read-only hint that tool carries.
+ * registry), for a query the read-only hint that tool carries, and with
+ * `--services` the kinds of principal that may call it.
  */
-function methodFacts(service: string, name: string, method: MethodDef): string[] {
+function methodFacts(
+  service: string,
+  name: string,
+  method: MethodDef,
+  access: AccessInfo | undefined,
+): string[] {
   return [
     `- MCP tool (default name): ${code(defaultToolName(service, name))}`,
     ...(method.kind === "query" ? ["- MCP read-only hint: yes, as on every query's tool"] : []),
+    ...callableBy(name, access),
   ];
 }
 
@@ -204,7 +225,7 @@ function methodSection(
   return section(`### ${code(name)}`, [
     ...described(method.describe),
     kindLine(method),
-    methodFacts(service, name, method),
+    methodFacts(service, name, method, access),
     ...methodAccess(name, access),
     ...inputBlocks(method),
     `Output: ${outputText(method.output)}.`,
@@ -430,7 +451,7 @@ function fieldLevelsText(contract: AnyContract): string {
     : tiers.map(([field, level]) => `${code(field)}: ${String(level)}`).join(", ");
 }
 
-/** The page's "Access" section, with `--services`: the service's policy, bypass, topic and field levels. */
+/** The page's "Access" section, with `--services`: the service's policy, bypass, kinds, topic and field levels. */
 function accessSection(contract: AnyContract, access: AccessInfo | undefined): string[] {
   if (access === undefined) {
     return [];
@@ -449,6 +470,12 @@ function accessSection(contract: AnyContract, access: AccessInfo | undefined): s
         service.adminBypass
           ? "passes every check of the service"
           : `passes only the forms that name ${code("service")} (${code("adminBypass: false")})`,
+      ],
+      [
+        "Principal kinds",
+        service.kinds === undefined
+          ? undefined
+          : `${list(service.kinds)}: its methods, subscriptions and channels refuse every other kind`,
       ],
       ["Change topic", watchAccessText(service.watchAccess)],
       ["Field levels", fieldLevelsText(contract)],

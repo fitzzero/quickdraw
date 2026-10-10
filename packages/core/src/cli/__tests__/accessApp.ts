@@ -1,7 +1,7 @@
 // A small app for `quickdraw-docs --services` (docs.test.ts): contracts, and
 // the services that implement them, between them the access forms, row
-// policies, collection scopes, streams and channels the access pages
-// describe. `noteService` has a contract and no service, as an app's
+// policies, principal kinds, collection scopes, streams and channels the
+// access pages describe. `noteService` has a contract and no service, as an app's
 // services module can miss one. Nothing here runs: the docs read the
 // definitions only.
 
@@ -70,10 +70,11 @@ export const teamService = qd.defineService(teamContract, {
     members({ model: "teamMember", entry: "teamId", user: "userId", level: "role" }),
   ),
   watchAccess: "authenticated",
+  kinds: ["user", "agent"],
   methods: {
     get: { access: { entry: "Read" }, handler: nothing },
     profile: { access: "public", rowless: true, handler: nothing },
-    rename: { access: { service: "Admin", entry: "Moderate" }, handler: nothing },
+    rename: { access: { service: "Admin", entry: "Moderate" }, kinds: ["user"], handler: nothing },
     stats: { access: { service: "Moderate" }, handler: nothing },
     audit: { access: custom(() => true), handler: nothing },
     ping: { access: "authenticated", handler: nothing },
