@@ -343,13 +343,18 @@ function rowKeys(
   return [form.id ?? "id"];
 }
 
-/** The inputs a cell tries, in order: the row put at each key it may go at, or the skeleton alone. */
+/**
+ * The inputs a cell tries, in order: the row put at each key it may go at
+ * (for a form that reads no row, at the input's `id`), or the skeleton alone
+ * for a cell about no row.
+ */
 function candidates(method: ServiceMethod, row: string | undefined): readonly unknown[] {
   const shape = shapeOf(method);
-  if (row === undefined) {
+  const form = rowForm(method.access);
+  const hasId = form !== undefined || inputKeys(method.input)?.includes("id") === true;
+  if (row === undefined || !hasId) {
     return [shape.skeleton];
   }
-  const form = rowForm(method.access);
   const base = isRecord(shape.skeleton) ? shape.skeleton : {};
   const placed = rowKeys(form, shape).flatMap((key) =>
     idValues(shape, key, row).map((value) => ({ ...base, [key]: value })),
