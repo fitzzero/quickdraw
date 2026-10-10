@@ -193,6 +193,9 @@ jobs:
       - name: Test scripts/release-tag.sh
         run: bash scripts/release-tag.test.sh
 
+      - name: Test scripts/auto-release.sh
+        run: bash scripts/auto-release.test.sh
+
   # Whether the godot job has anything to prove: on pushes and manual runs
   # always, on a pull request only when it touches the GDScript client, the
   # wire (the protocol sources, the realtime and transport code, the protocol

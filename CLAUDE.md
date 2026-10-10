@@ -178,13 +178,22 @@ because Conveyor does not run the formatter. A pod has the bake image's Node
 and bun, which are newer than `.nvmrc` and `packageManager`, and no Docker,
 Valkey or Godot: `test:cluster` and `check:godot` run in CI only.
 
-## Publishing (done by the owner)
+## Publishing
 
-Publishing is owner-triggered; agents never bump for release, push tags or
-publish. The owner pushes a `<package>-v<version>` tag (printed by
-`scripts/release-tag.sh`) and `.github/workflows/publish.yml` publishes that
-package with npm trusted publishing. The steps, the dist-tag rule and the
-one-time npm setup are in `docs/releasing.md`.
+A release is a merge to `main`. `.github/workflows/publish.yml` runs on every
+push to `main`: it publishes every package npm does not have at the
+repository's version (npm trusted publishing, `latest`, or `next` for a
+prerelease) and tags each `<package>-v<version>`. When that version is already
+on npm and a package's shipped source changed since its tag,
+`scripts/auto-release.sh` takes the next patch and writes it into
+`packages/*/package.json`, `packages/core/src/version.ts` and `bun.lock` for
+the workflow to commit on `main`, so a release never waits on a bump nobody
+made. The four packages share one version (a test holds them to it), a minor
+or a major is bumped by hand on `dev`, and a change's CHANGELOG entry goes
+under `## [Unreleased]`, which the release that ships it dates. Agents never
+publish or push tags, and never bump a version except when the owner asks for
+that minor or major. The rule, the by-hand run and the one-time npm setup are
+in `docs/releasing.md`.
 
 ## Domain-Specific Context
 

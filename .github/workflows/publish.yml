@@ -1,32 +1,46 @@
 name: Publish
 
-# Owner-triggered: nothing here runs on merge. The owner pushes a release tag
-# printed by scripts/release-tag.sh (`<package>-v<version>`), or runs this
-# workflow by hand, and it publishes that one package at that version to npm
-# with trusted publishing (OIDC) and provenance. No npm token is stored
-# anywhere. docs/releasing.md has the steps and the one-time npm setup.
+# A release is a merge to `main`, and this workflow is the release: nothing to
+# bump by hand, no tag to push, nothing to remember.
+#
+#   push to main  →  scripts/auto-release.sh decides what the merge releases
+#                      · the repository's version is not on npm → publish it
+#                      · it is, and shipped source changed since its tag →
+#                        take the next patch, commit it on main, publish that
+#                      · neither → nothing to publish
+#                 →  publish every package npm does not have at that version,
+#                    under `latest` (`next` for a prerelease), with provenance
+#                 →  tag the release `<package>-v<version>`
+#
+# "Run workflow" (or `gh workflow run publish.yml --ref <ref>`) publishes one
+# package, or all four, from any ref exactly as that ref has them: no bump and
+# no commit. docs/releasing.md has that path, a 4.x hotfix, and the one-time
+# npm setup.
+#
+# EVERY PUBLISH COMES FROM THIS FILE. Each package's trusted publisher on
+# npmjs.com names `publish.yml`, and npm checks that claim in the OIDC token
+# of the job that publishes — so renaming this file, or moving `npm publish`
+# into a reusable workflow (whose own path is what the claim would then carry),
+# stops all four packages publishing until the owner reconfigures them there.
 on:
   push:
-    tags:
-      - core-v*
-      - lint-v*
-      - skills-v*
-      - codemod-v*
+    branches: [main]
   workflow_dispatch:
     inputs:
       package:
-        description: Package to publish (its directory under packages/)
+        description: Package to publish (its directory under packages/), or all four
         required: true
+        default: all
         type: choice
-        options: [core, lint, skills, codemod]
+        options: [all, core, lint, skills, codemod]
       version:
-        description: Version to publish; must equal that package's package.json version on the chosen ref
-        required: true
+        description: Optional guard — refuse to publish unless the chosen ref is at this version
+        required: false
         type: string
 
-# One run per package version at a time, and a publish is never cancelled midway.
+# One release at a time, and a publish is never cancelled midway.
 concurrency:
-  group: publish-${{ github.event_name == 'workflow_dispatch' && format('{0}-v{1}', inputs.package, inputs.version) || github.ref_name }}
+  group: publish-${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}', github.ref_name, inputs.package) || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -37,7 +51,122 @@ defaults:
     shell: bash
 
 jobs:
+  # What this push releases, and the version bump it needs. The only job that
+  # can write to the repository, and it builds nothing and runs no dependency
+  # code: the job that publishes keeps `contents: read`.
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      action: ${{ steps.plan.outputs.action }}
+      version: ${{ steps.plan.outputs.version }}
+      packages: ${{ steps.plan.outputs.packages }}
+      sha: ${{ steps.head.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The shipped-source diff reaches back to the last release tag, and a
+          # bump is committed from here, so this is the one checkout that keeps
+          # its credentials. GITHUB_TOKEN is deliberate: a commit it pushes
+          # starts no workflow run, so a bump cannot start a second release.
+          # One that did start would publish nothing anyway — by then the
+          # version it would plan is on npm, with its tag.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Decide what to release
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_PACKAGE: ${{ inputs.package }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          export LC_ALL=C
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            # By hand: publish the chosen ref exactly as it is.
+            if [ "$INPUT_PACKAGE" = all ]; then
+              packages="core lint skills codemod"
+            else
+              packages="$INPUT_PACKAGE"
+            fi
+            version=""
+            for pkg in $packages; do
+              at="$(jq -r .version "packages/$pkg/package.json")"
+              if [ -n "$INPUT_VERSION" ] && [ "$at" != "$INPUT_VERSION" ]; then
+                echo "::error::packages/$pkg/package.json on $REF_NAME is at $at, not the $INPUT_VERSION asked for"
+                exit 1
+              fi
+              if [ -n "$version" ] && [ "$at" != "$version" ]; then
+                echo "::error::the packages asked for are at different versions ($version and $at); publish them one at a time"
+                exit 1
+              fi
+              version="$at"
+            done
+            {
+              echo "action=publish"
+              echo "version=$version"
+              echo "packages=$packages"
+            } >> "$GITHUB_OUTPUT"
+            echo "Publishing $packages at $version from $REF_NAME, as that ref has them."
+            exit 0
+          fi
+
+          # A push to main: the script decides, and writes the bump if nobody
+          # did. Its `key=value` lines are this step's outputs.
+          at="$(jq -r .version packages/core/package.json)"
+          flags=(--write)
+          if [ "$(npm view "@fitzzero/quickdraw-core@$at" version 2> /dev/null)" = "$at" ]; then
+            flags=(--published --write)
+          fi
+          bash scripts/auto-release.sh "${flags[@]}" | tee -a "$GITHUB_OUTPUT"
+          echo "packages=core lint skills codemod" >> "$GITHUB_OUTPUT"
+
+      - name: Commit the bump
+        if: steps.plan.outputs.action == 'bump'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          PREVIOUS: ${{ steps.plan.outputs.previous }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # --no-verify: husky's hooks are not installed here (no `bun install`
+          # ran), and this commit only moves version strings.
+          git commit --quiet --no-verify --all \
+            -m "chore(release): $VERSION" \
+            -m "No version bump landed with the change, so this release takes the next patch after $PREVIOUS (scripts/auto-release.sh, run by .github/workflows/publish.yml)."
+          git push origin HEAD:main
+          echo "Committed $VERSION on main as $(git rev-parse HEAD)."
+
+      - name: Carry the bump to dev when it fast-forwards
+        if: steps.plan.outputs.action == 'bump'
+        run: |
+          # Right after a release merge the two branches agree, so this
+          # usually lands and saves the sync. When dev has moved on it is not a
+          # fast-forward, git refuses, and the sync stays a merge as before.
+          if git push origin HEAD:dev 2> "$RUNNER_TEMP/dev-push"; then
+            echo "dev has the release commit too."
+          else
+            cat "$RUNNER_TEMP/dev-push"
+            echo "::notice::dev did not fast-forward to the release commit; merge main into dev as usual."
+          fi
+
+      - name: The commit to publish
+        id: head
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  # Publishes every chosen package npm does not have at that version, so a
+  # re-run, or a release whose publish half failed, picks up what is missing
+  # and nothing else. Writes nothing back to the repository.
   publish:
+    needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -46,6 +175,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@v7
@@ -59,77 +189,6 @@ jobs:
         with:
           bun-version-file: package.json
 
-      - name: Resolve and validate the release
-        id: release
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
-          INPUT_PACKAGE: ${{ inputs.package }}
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          export LC_ALL=C
-          if [ "$EVENT_NAME" = workflow_dispatch ]; then
-            pkg="$INPUT_PACKAGE"
-            version="$INPUT_VERSION"
-          else
-            # The tag prefix names the package: core-v5.0.0-alpha.1 is core.
-            case "$REF_NAME" in
-              core-v*) pkg=core ;;
-              lint-v*) pkg=lint ;;
-              skills-v*) pkg=skills ;;
-              codemod-v*) pkg=codemod ;;
-              *)
-                echo "::error::Tag '$REF_NAME' does not start with core-v, lint-v, skills-v or codemod-v"
-                exit 1
-                ;;
-            esac
-            version="${REF_NAME#"$pkg"-v}"
-          fi
-          case "$pkg" in
-            core | lint | skills | codemod) dir="packages/$pkg" ;;
-            *)
-              echo "::error::Unknown package '$pkg'"
-              exit 1
-              ;;
-          esac
-
-          # Semantic Versioning 2.0.0, prerelease allowed (5.0.0-alpha.1,
-          # 5.0.0-rc.0). Build metadata (+...) is refused: npm drops it, so the
-          # published version would not match the tag. scripts/release-tag.sh
-          # uses the same pattern.
-          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
-          if ! [[ "$version" =~ $semver ]]; then
-            echo "::error::'$version' is not a semantic version (MAJOR.MINOR.PATCH with an optional -prerelease)"
-            exit 1
-          fi
-
-          name="$(jq -r .name "$dir/package.json")"
-          manifest_version="$(jq -r .version "$dir/package.json")"
-          if [ "$manifest_version" != "$version" ]; then
-            echo "::error::$dir/package.json is at version $manifest_version, not $version"
-            exit 1
-          fi
-          if [ "$(jq -r '.private // false' "$dir/package.json")" = true ]; then
-            echo "::error::$name is private and cannot be published"
-            exit 1
-          fi
-
-          # The dist-tag rule: a version with a prerelease part publishes under
-          # `next`, anything else under `latest`. MAJOR.MINOR.PATCH are digits
-          # and build metadata was refused above, so any '-' starts a prerelease.
-          case "$version" in
-            *-*) dist_tag=next ;;
-            *) dist_tag=latest ;;
-          esac
-
-          {
-            echo "dir=$dir"
-            echo "name=$name"
-            echo "version=$version"
-            echo "dist-tag=$dist_tag"
-          } >> "$GITHUB_OUTPUT"
-          echo "Releasing $name@$version from $dir under the '$dist_tag' dist-tag"
-
       - name: Require npm 11.5.1 or newer (trusted publishing)
         run: |
           current="$(npm --version)"
@@ -140,44 +199,144 @@ jobs:
           fi
           echo "npm $current"
 
-      - name: Skip a version that is already on npm
-        id: registry
+      - name: What npm is missing
+        id: missing
         env:
-          NAME: ${{ steps.release.outputs.name }}
-          VERSION: ${{ steps.release.outputs.version }}
+          PACKAGES: ${{ needs.prepare.outputs.packages }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          ACTION: ${{ needs.prepare.outputs.action }}
         run: |
-          if [ "$(npm view "$NAME@$VERSION" version 2> /dev/null)" = "$VERSION" ]; then
-            echo "$NAME@$VERSION is already on npm; nothing to publish"
-            echo "published=true" >> "$GITHUB_OUTPUT"
+          export LC_ALL=C
+          echo "## Release $VERSION ($ACTION)" >> "$GITHUB_STEP_SUMMARY"
+          # The dist-tag rule: a version with a prerelease part publishes under
+          # `next`, anything else under `latest`. MAJOR.MINOR.PATCH are digits
+          # and build metadata is refused upstream, so any '-' is a prerelease.
+          case "$VERSION" in
+            *-*) dist_tag=next ;;
+            *) dist_tag=latest ;;
+          esac
+          targets=""
+          for pkg in $PACKAGES; do
+            name="$(jq -r .name "packages/$pkg/package.json")"
+            at="$(jq -r .version "packages/$pkg/package.json")"
+            if [ "$at" != "$VERSION" ]; then
+              echo "::error::packages/$pkg/package.json is at $at, not the $VERSION being released"
+              exit 1
+            fi
+            if [ "$(jq -r '.private // false' "packages/$pkg/package.json")" = true ]; then
+              echo "- \`$name\` is private; not published" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            if [ "$(npm view "$name@$VERSION" version 2> /dev/null)" = "$VERSION" ]; then
+              echo "- \`$name@$VERSION\` was already on npm" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            targets="$targets $pkg"
+          done
+          targets="${targets# }"
+          {
+            echo "targets=$targets"
+            echo "dist-tag=$dist_tag"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$targets" ]; then
+            echo "Nothing to publish: npm has every chosen package at $VERSION."
           else
-            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "Publishing [$targets] at $VERSION under the '$dist_tag' dist-tag."
           fi
 
       - name: Install
-        if: steps.registry.outputs.published == 'false'
+        if: steps.missing.outputs.targets != ''
         run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Build
-        if: steps.registry.outputs.published == 'false'
+        if: steps.missing.outputs.targets != ''
         run: bun run build
 
       - name: Publish to npm
-        if: steps.registry.outputs.published == 'false'
-        working-directory: ${{ steps.release.outputs.dir }}
+        if: steps.missing.outputs.targets != ''
         env:
-          DIST_TAG: ${{ steps.release.outputs.dist-tag }}
+          TARGETS: ${{ steps.missing.outputs.targets }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          DIST_TAG: ${{ steps.missing.outputs.dist-tag }}
         run: |
+          export LC_ALL=C
           # npm exchanges this job's OIDC token for a short-lived publish token
-          # (trusted publishing), so no NPM_TOKEN secret is involved.
+          # (trusted publishing), so no NPM_TOKEN secret is involved. A
+          # prerelease must never become `latest`, so it gets `--tag next`; a
+          # release gets no --tag, and while `latest` is implicit npm refuses
+          # to move it back to a version lower than one already published
+          # (publish an old-major hotfix by hand instead).
           args=(--access public --provenance)
-          # A prerelease must never become `latest`, so it gets `--tag next`. A
-          # release gets no --tag: `latest` is npm's default, and while it is
-          # implicit npm refuses to move `latest` back to a version lower than
-          # one already published (publish an old-major hotfix by hand instead).
           if [ "$DIST_TAG" = next ]; then
             args+=(--tag next)
           fi
-          if ! npm publish "${args[@]}"; then
-            echo "::error::npm publish failed. A package that has never been published, or whose trusted publisher is not set up on npmjs.com yet, fails here: see docs/releasing.md"
+          failed=""
+          for pkg in $TARGETS; do
+            name="$(jq -r .name "packages/$pkg/package.json")"
+            echo "::group::npm publish $name@$VERSION"
+            if (cd "packages/$pkg" && npm publish "${args[@]}"); then
+              echo "- published \`$name@$VERSION\` under \`$DIST_TAG\`" >> "$GITHUB_STEP_SUMMARY"
+            else
+              failed="$failed $pkg"
+              echo "- **failed to publish** \`$name@$VERSION\`" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::npm publish failed for$failed. A package that has never been published, or whose trusted publisher is not set up on npmjs.com yet, fails here: see docs/releasing.md"
             exit 1
           fi
+
+  # The release's record in the repository, and the anchor the next push to
+  # `main` diffs against to see whether anything shipped since. Tagged only for
+  # what npm actually has: a tag with nothing published behind it would tell the
+  # next run that this release went out.
+  tag:
+    needs: [prepare, publish]
+    if: needs.prepare.outputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Tag what npm has
+        env:
+          PACKAGES: ${{ needs.prepare.outputs.packages }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          export LC_ALL=C
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for pkg in $PACKAGES; do
+            name="$(jq -r .name "packages/$pkg/package.json")"
+            tag="$pkg-v$VERSION"
+            if git rev-parse --verify --quiet "refs/tags/$tag" > /dev/null 2>&1; then
+              echo "$tag is there already."
+              continue
+            fi
+            if [ "$(npm view "$name@$VERSION" version 2> /dev/null)" != "$VERSION" ]; then
+              echo "$name@$VERSION is not on npm; not tagging it."
+              continue
+            fi
+            # One push per tag: a tag that cannot go up should not take the
+            # others with it. (GitHub also creates no push event when more than
+            # three tags arrive at once, which nothing depends on any more.)
+            if git tag -a "$tag" -m "$name $VERSION" "$SHA" && git push origin "refs/tags/$tag"; then
+              echo "- \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning::could not push $tag; a later run tries again"
+              git tag -d "$tag" > /dev/null 2>&1 || true
+            fi
+          done

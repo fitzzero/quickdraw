@@ -119,6 +119,17 @@ describe("the files the packages ship beside their code", () => {
     },
   );
 
+  it("the four packages share one version, the framework's", () => {
+    const versionOf = (name: string): unknown =>
+      JSON.parse(readFileSync(documentPath(`packages/${name}/package.json`), "utf8")).version;
+    const core = versionOf("core");
+    expect({
+      lint: versionOf("lint"),
+      skills: versionOf("skills"),
+      codemod: versionOf("codemod"),
+    }).toEqual({ lint: core, skills: core, codemod: core });
+  });
+
   it("keep a link into the package relative to it, and point every other at GitHub (finding F5.7)", () => {
     expect(
       forPackage("packages/core")(

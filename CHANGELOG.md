@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Releasing
+
+- **A release is a merge to `main`.** `.github/workflows/publish.yml` runs on
+  every push to `main`: it publishes every package npm does not have at the
+  repository's version, under `latest` (`next` for a prerelease) and with
+  provenance, and tags each `<package>-v<version>`. Pushing those tags by hand
+  was the release before, which is how 5.0.1 came to sit on `main` unpublished.
+  `scripts/auto-release.sh` decides what a push releases, and when the version
+  is already on npm and a package's shipped source changed since its tag, it
+  takes the next patch and writes it into `packages/*/package.json`,
+  `packages/core/src/version.ts` and `bun.lock` for the workflow to commit, so
+  a release no longer waits on a bump nobody made. A minor or a major is still
+  bumped by hand, a prerelease is never bumped by machine, and a docs- or
+  test-only change cuts no release. Every step asks the registry, so a re-run
+  publishes only what is missing. The four packages share one version and a
+  test holds them to it; a change's entry goes under `## [Unreleased]`, and the
+  release that ships it writes the version and the date here.
+
 ## [5.0.1] - 2026-10-08
 
 Fixes from the independent review of 5.0.0 after the farseer migration
