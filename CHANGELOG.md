@@ -30,6 +30,19 @@ All notable changes to this project will be documented in this file.
   instead. A `custom` form that checks a claim, such as a token's `scope`,
   stays as it is.
 
+### API docs: dependencies
+
+- **`quickdraw-docs --services` says which services depend on which.**
+  Each service page gets a "Depends on" section: the other services its
+  declarations name, and how. The declarations are its row policy's
+  `inherit` (inside `anyOf` too), `writes` (each model resolved to the
+  service whose `model` it is), `affects`, `{ scope, of }` access forms on
+  its methods, channels and streams, and its collections' anchors. The
+  index adds a Mermaid `graph LR` of those edges. Nothing reads source: a
+  handler's undeclared reads of another service's rows do not show.
+  Regenerate your docs: `--check` with `--services` reports every page as
+  out of date until you do.
+
 ### Describes and API docs
 
 - **Every contract member takes a `describe`**: the contract itself, and each

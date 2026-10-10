@@ -3352,9 +3352,18 @@ definitions: an "Access" section with the row policy, whether a
 service-wide `Admin` grant passes every check, who may watch the change
 topic (`watchAccess`) and the field levels; each method's access form, in
 words, and its `rowless`; who may open a collection's scope; a channel's
-access; a stream's computed seed and when its items are checked. A
-contract the services module has no service for says so, and a service
-without a contract is an error. Pass the same flag to `--check`. The
+access; a stream's computed seed and when its items are checked. Each
+page also gets a "Depends on" section: the other services its
+declarations name, and which declaration names each one. A service depends
+on another when its row policy `inherit`s from it, it `writes` the model
+that service's rows live in, it `affects` that service's rows, one of its
+methods, channels or streams takes a `{ scope, of }` form of it, or one of
+its collections is anchored on that service's rows. A `writes` model that no
+service's rows live in is listed as a model. The index adds a Mermaid
+`graph LR` of the same edges, each labelled with how. Only declarations are
+read: a handler that reads another service's rows without declaring it adds
+nothing. A contract the services module has no service for says so, and a
+service without a contract is an error. Pass the same flag to `--check`. The
 services module is imported with everything it imports, as the server
 loads it: the workspace packages it uses (`@project/db`, `@project/shared`)
 load from their built output when their `package.json` points there, so

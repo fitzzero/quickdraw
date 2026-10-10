@@ -3,8 +3,9 @@
 // level, while 5.0's read contracts alone, which do not say). The services
 // module's `defineService` results are read as data: each method's access
 // form, `rowless` and principal kinds, the service's row policy, admin
-// bypass, kinds and `watchAccess`, who may open each collection, each
-// channel's access, and each stream's computed seed and validation. Functions (a `custom` check,
+// bypass, kinds and `watchAccess`, its `model`, `writes` and `affects`
+// (`dependencies.ts`), who may open each collection, each channel's access,
+// and each stream's computed seed and validation. Functions (a `custom` check,
 // an `id` selector, a `resolver`) are named, never printed. A service is
 // recognized by its shape, not by identity, so a services module that loaded
 // its own copy of the framework is read as well.
@@ -46,6 +47,12 @@ export interface StreamServiceDoc {
 /** What the docs read of one defined service. */
 export interface ServiceDoc {
   readonly name: string;
+  /** The database model its rows live in, or `undefined` without one. */
+  readonly model: string | undefined;
+  /** The other models its handlers write (`writes`). */
+  readonly writes: readonly string[];
+  /** The services whose rows a write to one of its own changes too (`affects`), by name. */
+  readonly affects: readonly string[];
   /** Its row policy, or `undefined` without one. */
   readonly policy: unknown;
   /** Whether a service-wide `Admin` grant passes every check. */
@@ -79,6 +86,11 @@ function kindsOf(value: unknown): readonly string[] | undefined {
   return Array.isArray(value) && value.every((kind) => typeof kind === "string")
     ? (value as readonly string[])
     : undefined;
+}
+
+/** A list of names as a service holds it (`writes`), or none for anything else. */
+function namesOf(value: unknown): readonly string[] {
+  return Array.isArray(value) ? value.filter((name) => typeof name === "string") : [];
 }
 
 /** Each named member of `records`, read by `read`. */
@@ -116,6 +128,13 @@ export function serviceDocOf(value: unknown): ServiceDoc | undefined {
   }
   return Object.freeze({
     name: value.name,
+    model: typeof value.model === "string" ? value.model : undefined,
+    writes: namesOf(value.writes),
+    affects: Array.isArray(value.affects)
+      ? value.affects
+          .map((link: unknown) => contractName(isRecord(link) ? link.service : undefined))
+          .filter((name) => name !== undefined)
+      : [],
     policy: value.access,
     adminBypass: value.adminBypass !== false,
     kinds: kindsOf(value.kinds),
@@ -172,11 +191,14 @@ export function servicesOf(exports: UnknownRecord): ReadonlyMap<string, ServiceD
   );
 }
 
+/** The service name of `contract`, or `undefined` when it is not a contract. */
+export function contractName(contract: unknown): string | undefined {
+  return isRecord(contract) && typeof contract.name === "string" ? contract.name : undefined;
+}
+
 /** A contract's service name, for a form or policy that names one. */
 function serviceName(contract: unknown): string {
-  return isRecord(contract) && typeof contract.name === "string"
-    ? contract.name
-    : "another service";
+  return contractName(contract) ?? "another service";
 }
 
 /** Which row an `entry` or `scope` form is about, as declared and in words. */

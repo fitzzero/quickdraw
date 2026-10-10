@@ -2,7 +2,8 @@
 // read from the contracts, laid out as oxfmt lays out Markdown
 // (`markdown.ts`), so `--check` does not report formatting as drift. With
 // `--services`, each page also says who may call what, read from the
-// services' definitions (`access.ts`).
+// services' definitions (`access.ts`), and which other services it depends
+// on, with a graph of those on the index (`dependencies.ts`).
 
 import {
   DEFAULT_COLLECTION_LIMIT,
@@ -28,6 +29,7 @@ import {
   watchAccessText,
   type ServiceDoc,
 } from "./access";
+import { dependencyGraph, dependsOnSection, type ServiceDependencies } from "./dependencies";
 import { code, list, paragraph, section, table } from "./markdown";
 import {
   jsonSchemaOf,
@@ -47,6 +49,8 @@ export const GENERATED_MARKER =
  */
 export interface AccessInfo {
   readonly service: ServiceDoc | undefined;
+  /** The services the service's declarations name (`dependenciesOf`); `undefined` without a service. */
+  readonly dependencies?: ServiceDependencies | undefined;
 }
 
 /** True when the schema accepts `undefined`: a method that takes no input. */
@@ -487,7 +491,7 @@ function accessSection(contract: AnyContract, access: AccessInfo | undefined): s
 /**
  * One service's page: its `describe`, entity, projections, methods,
  * collections, streams, channels and events, and with `access`
- * (`--services`) who may call what.
+ * (`--services`) who may call what and which services it depends on.
  */
 export function renderService(contract: AnyContract, access?: AccessInfo): string {
   const lines = [
@@ -497,6 +501,7 @@ export function renderService(contract: AnyContract, access?: AccessInfo): strin
     "",
     ...described(contract.describe).flatMap((text) => [text, ""]),
     ...accessSection(contract, access),
+    ...(access?.dependencies === undefined ? [] : dependsOnSection(access.dependencies)),
     ...entitySection(contract),
     ...projectionsSection(contract),
     ...methodsSection(contract, access),
@@ -530,9 +535,13 @@ export function fileOf(contract: AnyContract): string {
 
 /**
  * The index page: every service with a link to its page, its members
- * counted, and its `describe` when any service has one.
+ * counted, and its `describe` when any service has one; with `dependencies`
+ * (`--services`), a graph of which services depend on which.
  */
-export function renderIndex(contracts: readonly AnyContract[]): string {
+export function renderIndex(
+  contracts: readonly AnyContract[],
+  dependencies?: ReadonlyMap<string, ServiceDependencies>,
+): string {
   const count = (members: object): string => String(Object.keys(members).length);
   const hasDescribe = contracts.some((contract) => contract.describe !== undefined);
   const rows = contracts.map((contract) => [
@@ -563,6 +572,7 @@ export function renderIndex(contracts: readonly AnyContract[]): string {
       ],
       rows,
     ),
+    ...(dependencies === undefined ? [] : ["", ...dependencyGraph(dependencies)]),
   ];
-  return `${lines.join("\n")}\n`;
+  return `${lines.join("\n").trimEnd()}\n`;
 }
