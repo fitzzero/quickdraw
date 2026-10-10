@@ -76,6 +76,26 @@ All notable changes to this project will be documented in this file.
   it read on stderr. The report lists `[service]` items first, under
   "Services".
 
+### Testing
+
+- **Access snapshots.** `snapshotAccessMatrix(app, { principals, reset, rows })`
+  on `./testing` records who may call what: every method of the app's
+  services (or of `services`), each entity subscribe (`qd:sub`) and each
+  collection scope (`qd:col:sub`), as every principal and anonymously.
+  The first run writes the outcomes to `__access__/<test file>.json` beside
+  the test, and every later run compares its matrix with that file: a cell
+  whose outcome changed fails, naming the method, its row variant, the
+  principal and both outcomes, and whether the change opens or closes
+  access, until `QD_UPDATE_ACCESS_SNAPSHOT=1` rewrites the file. Under CI a
+  missing file and added or removed cells fail too, because a snapshot that
+  writes itself pins nothing. `reset` (the app's `resetDatabase` and seed)
+  runs again after every mutation access let through, so no cell sees the
+  writes of another. Inputs are made from each method's input schema with
+  the row where its access form reads it (`inputs(ref, fixture)` gives the
+  others), and a cell without a valid input is recorded as `VALIDATION`,
+  never called, and listed in the report's `inconclusive`. Each principal's
+  `kind` is recorded beside the cells. `describeAccessMatrix` is unchanged.
+
 ### Fixed
 
 - **A call through the 4.x legacy shim (`legacyWire`) sees the socket it
@@ -85,6 +105,19 @@ All notable changes to this project will be documented in this file.
   leaves its app rooms when it disconnects, and `onRoomLeave` and presence
   hear it. The shim still serves request/response calls only, and a
   contract's events still reach only protocol-5 sockets.
+
+### Lint
+
+- **`no-todo-schema` says when a placeholder input hides its keys from the
+  id-reach check.** `defineService` refuses an input with `id` under an access
+  form that checks no row (`"public"`, `"authenticated"`, `{ service: L }`
+  below `Admin`), and reads the input's keys from its JSON Schema. A
+  `todoSchema()` without `keys` names none, so the check cannot see an `id` in
+  it. As the `input` of `query()` or `mutation()`, such a placeholder now gets
+  a second message that says so and asks for `keys`; a
+  `todoSchema<T>({ keys: ["id"] })` is checked like a Zod 4 schema. MIGRATION.md,
+  the README and the access rule no longer say that every placeholder is
+  unchecked.
 
 ### MCP bridge
 
