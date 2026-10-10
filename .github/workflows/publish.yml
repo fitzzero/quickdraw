@@ -290,10 +290,12 @@ jobs:
   # The release's record in the repository, and the anchor the next push to
   # `main` diffs against to see whether anything shipped since. Tagged only for
   # what npm actually has: a tag with nothing published behind it would tell the
-  # next run that this release went out.
+  # next run that this release went out. Runs when a publish failed too, so the
+  # packages that did go out get their anchor: without core's, the next push
+  # would find nothing to diff against and leave its shipped changes unreleased.
   tag:
     needs: [prepare, publish]
-    if: needs.prepare.outputs.version != ''
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.version != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
