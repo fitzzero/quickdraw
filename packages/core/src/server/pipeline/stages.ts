@@ -121,7 +121,8 @@ export function contextFor(
     log,
     requestId,
     transport: request.transport,
-    ...(request.transport === "socket" && request.connectionId !== undefined
+    ...((request.transport === "socket" || request.transport === "legacy") &&
+    request.connectionId !== undefined
       ? { socketId: request.connectionId }
       : {}),
     ...(request.mcp === undefined ? {} : { mcp: request.mcp }),

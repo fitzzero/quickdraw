@@ -1,7 +1,7 @@
 // `quickdraw-codemod v5 <repo> [options]`: moves a quickdraw 4.x app to 5.0.
 
 import { parseArgs } from "node:util";
-import { runCodemod } from "./index";
+import { runCodemod, type RunResult } from "./index";
 import { REPORT_FILE } from "./report";
 
 const USAGE = `Usage: quickdraw-codemod v5 <repo> [options]
@@ -31,6 +31,26 @@ class UsageError extends Error {}
 
 function fail(message: string): never {
   throw new UsageError(message);
+}
+
+/** What the run's formatting did, as lines of the summary. */
+function formatterLines({ formatter }: RunResult): string[] {
+  if (formatter === undefined) {
+    return [];
+  }
+  if (formatter.ok) {
+    return [`  formatted with ${formatter.name}`];
+  }
+  const files = formatter.unformatted ?? [];
+  const said = (formatter.output ?? "").split("\n").filter((line) => line.trim() !== "");
+  return [
+    `  ${formatter.name} failed on the files written (exit code ${String(formatter.status ?? 1)}): format them with the app's format script, then run the codemod again (it refreshes the report's lines)`,
+    ...said.slice(0, 20).map((line) => `    ${line}`),
+    ...(said.length > 20 ? [`    ... ${String(said.length - 20)} more lines`] : []),
+    `  ${String(files.length)} files left unformatted:`,
+    ...files.slice(0, 20).map((file) => `    ${file}`),
+    ...(files.length > 20 ? [`    ... ${String(files.length - 20)} more`] : []),
+  ];
 }
 
 function run(argv: readonly string[], output: Output): void {
@@ -77,13 +97,7 @@ function run(argv: readonly string[], output: Output): void {
     `  ${dryRun ? "would change" : "changed"} ${String(result.changed.length)} files, ${dryRun ? "create" : "created"} ${String(result.created.length)}, ${dryRun ? "delete" : "deleted"} ${String(result.deleted.length)}`,
     `  ${String(result.items)} items to review${dryRun ? "" : `: see ${REPORT_FILE}`}`,
   ];
-  if (result.formatter !== undefined) {
-    lines.push(
-      result.formatter.ok
-        ? `  formatted with ${result.formatter.name}`
-        : `  ${result.formatter.name} failed on the files written: format them, then run the codemod again (it rewrites only the report)`,
-    );
-  }
+  lines.push(...formatterLines(result));
   if (dryRun) {
     lines.push(
       ...result.changed.map((file) => `  M ${file}`),
@@ -92,6 +106,13 @@ function run(argv: readonly string[], output: Output): void {
     );
   }
   output.out(`${lines.join("\n")}\n`);
+  warn(output, result.warnings);
+}
+
+function warn(output: Output, warnings: readonly string[]): void {
+  for (const warning of warnings) {
+    output.err(`quickdraw-codemod: ${warning}\n`);
+  }
 }
 
 /** Runs the command; returns its exit code (0, 1 on failure, 2 on a usage error). */

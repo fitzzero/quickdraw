@@ -62,6 +62,7 @@ import { z } from "zod";
 const label = z.object({ id: z.string(), projectId: z.string(), name: z.string() });
 
 export const labelContract = defineContract("labelService", {
+  describe: "Labels a project puts on its tasks.",
   entity: label,
   methods: {
     ...crud.contract({ entity: label, get: true, create: { input: label.omit({ id: true }) } }),
@@ -73,6 +74,7 @@ export const labelContract = defineContract("labelService", {
   },
   collections: {
     byProject: {
+      describe: "A project's labels, by name.",
       scope: "projectId",
       item: "entity",
       order: [
@@ -86,8 +88,10 @@ export const labelContract = defineContract("labelService", {
 
 - Service names end in `Service` and never change once deployed: they are
   stored in users' grants and sent on the wire.
-- Use Zod 4.2 or later for every schema; give each method a `describe`
-  sentence when agents or MCP clients will call it.
+- Use Zod 4.2 or later for every schema. Give the contract and each of its
+  methods, collections, streams, channels and events a `describe` sentence:
+  MCP clients and the generated API docs read it, and lint's
+  `require-describe` warns on each one missing.
 - Export the contract from `packages/shared/src/contracts/index.ts`, next to
   the others, and add it to the `contracts` map there: that map types the
   web client and `qd.caller`.
