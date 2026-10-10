@@ -21,6 +21,12 @@ interface Section {
 
 const SECTIONS: readonly Section[] = [
   {
+    title: "Services",
+    categories: ["service"],
+    intro:
+      "Each service is read from one class of the api package outside test code: the one `registerService` instantiates, else the one named after the service. Other classes of the same service name, and 4.x service classes in test code (`__tests__`, `testing`, `*.test.ts`, `*.spec.ts`), are not read, and are marked. A contract whose 4.x method map names methods the class read implements none of was written from the wrong class: check it before anything else.",
+  },
+  {
     title: "Contracts",
     categories: ["contract"],
     intro:
@@ -170,7 +176,7 @@ export function buildReport(ctx: RunContext): { text: string; count: number } {
   const lines = [
     "# quickdraw 5.0 migration report",
     "",
-    `Written by \`@fitzzero/quickdraw-codemod\` from the \`// ${MARKER}\` markers in the code; running the codemod again rewrites it from the markers that remain. Work through the sections in order (contracts, access, emits, client), delete each marker once its item is done, and see the migration guide (\`MIGRATION.md\`, shipped in \`@fitzzero/quickdraw-codemod\`) for each kind of item. Then run lint (\`no-v4-api\` names every 4.x API left, \`no-todo-schema\` every placeholder) and the typecheck.`,
+    `Written by \`@fitzzero/quickdraw-codemod\` from the \`// ${MARKER}\` markers in the code; running the codemod again rewrites it from the markers that remain. Work through the sections in order (services, contracts, access, emits, client), delete each marker once its item is done, and see the migration guide (\`MIGRATION.md\`, shipped in \`@fitzzero/quickdraw-codemod\`) for each kind of item. Then run lint (\`no-v4-api\` names every 4.x API left, \`no-todo-schema\` every placeholder) and the typecheck.`,
     "",
   ];
   if (markers.length === 0) {
