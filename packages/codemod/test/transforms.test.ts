@@ -2,16 +2,22 @@
 // the report match the committed snapshot (test/fixtures/v4-app.expected;
 // `vitest run -u` rewrites it, and a file the codemod stops writing must be
 // deleted from it by hand), the access mapping writes the four forms the 4.x
-// semantics call for, the report lists every manual item of the fixture at
-// its file and line, a service class's fields, getters, constructor and
-// overrides survive as marked module code, and a second run changes nothing.
+// semantics call for, a placeholder input lists its payload's keys (so
+// `defineService`'s rowless check sees an id among them), the report lists
+// every manual item of the fixture at its file and line, a service class's
+// fields, getters, constructor and overrides survive as marked module code,
+// and a second run changes nothing.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Node, Project, SyntaxKind } from "ts-morph";
+import { z } from "zod";
+import { defineContract, query, type StandardSchemaV1, todoSchema } from "@fitzzero/quickdraw-core";
+import { initQuickdraw, resolver } from "@fitzzero/quickdraw-core/server";
 // @ts-expect-error -- the lint plugin is plain JavaScript without types
 import { kitShape as preferKit } from "../../lint/plugin/rules/prefer-kit.mjs";
+import { moduleName } from "../src/hoist";
 import { runCodemod, type RunResult } from "../src/index";
 import { kitShapeOf } from "../src/kits";
 import { findMarkers, MARKER } from "../src/markers";
@@ -48,11 +54,11 @@ describe("the output on the 4.1 fixture app", () => {
   it("converts every service, method and hook call, and deletes the wrapper hooks", () => {
     expect(result.stats).toEqual({
       services: 5,
-      methods: 25,
+      methods: 26,
       aggregatorsRemoved: 2,
       contracts: 5,
       schemasMoved: 16,
-      todoSchemas: 23,
+      todoSchemas: 25,
       clientCalls: 8,
       wrappersDeleted: 3,
     });
@@ -270,6 +276,18 @@ describe("a 4.x service class's members (label.ts)", () => {
     );
   });
 
+  it("hoists a member named after a reserved word (delete) as <name>Of<Class>, and its calls follow", () => {
+    expect(label()).not.toMatch(/function delete\b/u);
+    expect(label()).toMatch(
+      /overrode the 4\.x BaseService method delete[^\n]*; hoisted as deleteOfLabelService: delete is a reserved word\nasync function deleteOfLabelService\(id: string\)/u,
+    );
+    expect(label()).toContain("return await deleteOfLabelService(id);");
+    // and the file parses
+    const project = new Project({ useInMemoryFileSystem: true });
+    const file = project.createSourceFile("label.ts", label());
+    expect(project.getProgram().getSyntacticDiagnostics(file)).toEqual([]);
+  });
+
   it("marks this.constructor as instance state, not as a key of Object.prototype", () => {
     expect(label()).toMatch(
       /\[this\] this\.constructor was 4\.x service-instance state[^\n]*\n {2}return this\.constructor\.name;/u,
@@ -388,9 +406,14 @@ describe("the access mapping", () => {
     expect(output.get("apps/api/src/services/user.ts")).toContain(
       'access: "public",\n      rowless: true,\n',
     );
+    // and for one whose input is a placeholder, which lists the id among its keys
+    expect(accessOf("getLabelName").form).toBe('"public"');
+    expect(output.get("apps/api/src/services/label.ts")).toContain(
+      'access: "public",\n      rowless: true,\n',
+    );
     // a method without an id, or with a form that checks its row, needs no rowless
     const code = [...output].filter(([file]) => file.startsWith("apps/api/"));
-    expect(code.flatMap(([, text]) => text.match(/^\s*rowless: true,$/gmu) ?? [])).toHaveLength(1);
+    expect(code.flatMap(([, text]) => text.match(/^\s*rowless: true,$/gmu) ?? [])).toHaveLength(2);
   });
 
   it('writes { service: L } for "Moderate" or "Admin" without a row id', () => {
@@ -408,6 +431,93 @@ describe("the access mapping", () => {
       'defineContract("taskService"',
       'defineContract("userService"',
     ]);
+  });
+});
+
+/** The contract input of `method`, as code. */
+function inputOf(method: string): string {
+  const project = new Project({ useInMemoryFileSystem: true });
+  for (const [file, text] of output) {
+    if (!file.startsWith("packages/shared/src/contracts/")) {
+      continue;
+    }
+    const source = project.createSourceFile(file, text);
+    for (const property of source.getDescendantsOfKind(SyntaxKind.PropertyAssignment)) {
+      const call = property.getInitializer();
+      if (property.getName() !== method || !Node.isCallExpression(call)) {
+        continue;
+      }
+      const [options] = call.getArguments();
+      const input = Node.isObjectLiteralExpression(options)
+        ? options.getProperty("input")
+        : undefined;
+      if (input !== undefined && Node.isPropertyAssignment(input)) {
+        return input.getInitializerOrThrow().getText();
+      }
+    }
+  }
+  throw new Error(`no method ${method} in the contracts`);
+}
+
+/** Calls defineService the way untyped JavaScript would. */
+const defineLoosely = initQuickdraw().defineService as unknown as (
+  contract: unknown,
+  definition: unknown,
+) => unknown;
+
+describe("a placeholder input", () => {
+  it("lists the 4.x payload type's keys, an id among them", () => {
+    expect(inputOf("getLabel")).toBe('todoSchema<{ id: string }>({ keys: ["id"] })');
+    expect(inputOf("getLabelName")).toBe('todoSchema<{ id: string }>({ keys: ["id"] })');
+    expect(inputOf("archiveProject")).toBe('todoSchema<{ id: string }>({ keys: ["id"] })');
+    expect(inputOf("renameLabel")).toBe(
+      'todoSchema<{ labelId?: string; name: string }>({ keys: ["labelId", "name"] })',
+    );
+    // a payload type without keys keeps a placeholder without them
+    expect(inputOf("ping")).toBe("todoSchema<Record<string, never>>()");
+    // and every placeholder input of a payload with an id lists it
+    const contracts = [...output]
+      .filter(([file]) => file.startsWith("packages/shared/src/contracts/"))
+      .map(([, text]) => text)
+      .join("\n");
+    const inputs = contracts.match(/input: todoSchema<\{ id: [^}]*\}>\([^)]*\)/gu) ?? [];
+    expect(inputs).toHaveLength(3);
+    for (const input of inputs) {
+      expect(input).toContain('keys: ["id"');
+    }
+  });
+
+  it("makes defineService refuse an id under an open form without rowless, as a real schema does", () => {
+    /* oxlint-disable quickdraw/no-todo-schema -- the placeholder is what this tests */
+    const keys = JSON.parse(/keys: (\[[^\]]*\])/u.exec(inputOf("getLabelName"))?.[1] ?? "[]");
+    expect(keys).toEqual(["id"]);
+    const define = (input: StandardSchemaV1, rowless: boolean) => () =>
+      defineLoosely(
+        defineContract("labelService", {
+          entity: todoSchema({ keys: ["id", "projectId", "name"] }),
+          methods: { getLabelName: query({ input, output: todoSchema() }) },
+        }),
+        {
+          model: "label",
+          access: resolver({ levelsFor: () => ({}) }),
+          methods: {
+            getLabelName: {
+              access: "public",
+              ...(rowless ? { rowless } : {}),
+              handler: () => null,
+            },
+          },
+        },
+      );
+    const refusal =
+      'method "getLabelName" takes a row id (its input has id), but its access "public"';
+    for (const input of [todoSchema({ keys }), z.object({ id: z.string() })]) {
+      expect(define(input, false)).toThrow(refusal);
+      expect(define(input, true)).not.toThrow();
+    }
+    // the placeholder without keys hid the id: the check let it through
+    expect(define(todoSchema(), false)).not.toThrow();
+    /* oxlint-enable quickdraw/no-todo-schema */
   });
 });
 
@@ -471,7 +581,11 @@ describe("the report", () => {
 
   it("lists every this.create, this.update and this.delete", () => {
     const listed = section("this.create, this.update and this.delete to write through db");
-    expect(listed).toHaveLength(countInFixture(/this\.(?:create|update|delete)\(/gu));
+    // label.ts's removeLabel calls the class's own delete override, not 4.x's helper
+    const overrideCalls = countInFixture(/return await this\.delete\(id\);/gu);
+    expect(listed).toHaveLength(
+      countInFixture(/this\.(?:create|update|delete)\(/gu) - overrideCalls,
+    );
     for (const line of listed) {
       expect(codeAt(line)).toMatch(/this\.(?:create|update|delete)\(/u);
     }
@@ -567,6 +681,19 @@ describe("the kit shapes", () => {
     expect(kitShapeOf("remove", "task", ["invite"])?.method).toBe("remove");
     expect(kitShapeOf("remove", "projectMember")?.method).toBe("remove");
     expect(kitShapeOf("deleteTask", "task")?.method).toBe("delete");
+  });
+});
+
+describe("the module-level name of a hoisted member", () => {
+  it("is the member's own name, unless it is taken, a reserved word or no identifier", () => {
+    const taken = new Set(["db", "room"]);
+    expect(moduleName("roomStats", "LabelService", taken)).toBe("roomStats");
+    expect(moduleName("room", "LabelService", taken)).toBe("roomOfLabelService");
+    expect(moduleName("delete", "TaskService", taken)).toBe("deleteOfTaskService");
+    expect(moduleName("new", "TaskService", taken)).toBe("newOfTaskService");
+    expect(moduleName("class", "TaskService", taken)).toBe("classOfTaskService");
+    expect(moduleName('"by-name"', "TaskService", taken)).toBe("byNameOfTaskService");
+    expect(moduleName('"2fa"', "TaskService", taken)).toBe("member2faOfTaskService");
   });
 });
 

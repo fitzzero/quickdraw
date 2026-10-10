@@ -2,13 +2,13 @@
 
 Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review` markers in the code; running the codemod again rewrites it from the markers that remain. Work through the sections in order (services, contracts, access, emits, client), delete each marker once its item is done, and see the migration guide (`MIGRATION.md`, shipped in `@fitzzero/quickdraw-codemod`) for each kind of item. Then run lint (`no-v4-api` names every 4.x API left, `no-todo-schema` every placeholder) and the typecheck.
 
-142 items in 33 files.
+145 items in 33 files.
 
 | Section                                                        | Items |
 | -------------------------------------------------------------- | ----: |
 | Services                                                       |     4 |
-| Contracts                                                      |    31 |
-| Access                                                         |    11 |
+| Contracts                                                      |    32 |
+| Access                                                         |    12 |
 | Access overrides to turn into a policy                         |     4 |
 | toDto and protected fields to turn into projections and fields |     5 |
 | Collections to declare in contracts                            |     2 |
@@ -18,7 +18,7 @@ Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review`
 | Lifecycle hooks                                                |     1 |
 | installAdminMethods to replace with the admin kit              |     1 |
 | Methods a kit implements                                       |     9 |
-| Service instance state and the 4.x context                     |    16 |
+| Service instance state and the 4.x context                     |    17 |
 | Errors the caller no longer sees                               |     6 |
 | Client                                                         |    11 |
 | Server wiring and other 4.x APIs                               |    25 |
@@ -43,9 +43,10 @@ Each method's kind was chosen from its name (get, list, search, find and count r
 - [ ] `packages/shared/src/contracts/health.ts:12` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
 - [ ] `packages/shared/src/contracts/label.ts:12` the entity is the 4.x DTO LabelDTO: give it a real schema. Its keys are the fields subscribers receive, read from model "label": drop any that is not a column, or give it a projection select and map
 - [ ] `packages/shared/src/contracts/label.ts:15` query, chosen from its name; input: todoSchema, as 4.x had no schema
-- [ ] `packages/shared/src/contracts/label.ts:17` mutation, chosen from its name; input: todoSchema, as 4.x had no schema
-- [ ] `packages/shared/src/contracts/label.ts:19` query, chosen from its name
-- [ ] `packages/shared/src/contracts/label.ts:21` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/label.ts:17` query, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/label.ts:19` mutation, chosen from its name; input: todoSchema, as 4.x had no schema
+- [ ] `packages/shared/src/contracts/label.ts:21` query, chosen from its name
+- [ ] `packages/shared/src/contracts/label.ts:23` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
 - [ ] `packages/shared/src/contracts/project.ts:22` the entity is the 4.x DTO ProjectDTO: give it a real schema. Its keys are the fields subscribers receive, read from model "project": drop any that is not a column, or give it a projection select and map
 - [ ] `packages/shared/src/contracts/project.ts:35` mutation, chosen from its name; output: todoSchema of the 4.x response type
 - [ ] `packages/shared/src/contracts/project.ts:37` query, chosen from its name
@@ -73,9 +74,10 @@ Each method's kind was chosen from its name (get, list, search, find and count r
 
 The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 4.x's `hasEntryACL` did, but for a user listed twice in a row's list (marked). "Read" without a row id was open to every signed-in user; decide whether that was meant. A method whose input has `id` under a form that checks no row ("public", say) carries `rowless: true` (marked): 5.0 refuses to define that shape on a service with an access policy without it, and it keeps the 4.x callers.
 
-- [ ] `apps/api/src/services/label.ts:66` 4.x had no row-level access here (no hasEntryACL, no checkAccess): only service grants opened rows, which this empty policy keeps. Give it a real policy if rows belong to someone
-- [ ] `apps/api/src/services/label.ts:77` 4.x's resolveEntryId was a function, kept here: where it returns nothing, the "" makes the row check fail, so only the service grant passes (4.x then applied the plain level)
-- [ ] `apps/api/src/services/label.ts:88` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
+- [ ] `apps/api/src/services/label.ts:80` 4.x had no row-level access here (no hasEntryACL, no checkAccess): only service grants opened rows, which this empty policy keeps. Give it a real policy if rows belong to someone
+- [ ] `apps/api/src/services/label.ts:91` this method takes an id but its access "public" checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant
+- [ ] `apps/api/src/services/label.ts:102` 4.x's resolveEntryId was a function, kept here: where it returns nothing, the "" makes the row check fail, so only the service grant passes (4.x then applied the plain level)
+- [ ] `apps/api/src/services/label.ts:113` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/project-methods/limits.ts:10` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/project.ts:95` 4.x's hasEntryACL read the row's `acl` column ([{ userId, level }]), and so does jsonAcl("acl"), with one difference: a user with several entries in a row's list gets the highest of their levels, where 4.x took the first. Check the stored lists for duplicate entries
 - [ ] `apps/api/src/services/project.ts:100` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
@@ -157,8 +159,8 @@ Hooks ran only inside the CRUD helpers; move their work into the methods that wr
 
 Methods of a kit method's shape (`get`, `list`, `create`, `getTask`, ...): the kit checks access on every row it touches, pages and stays live (lint: `prefer-kit`). Replace each with its kit, or keep it with a `// quickdraw: hand-written because <reason>` comment above it.
 
-- [ ] `apps/api/src/services/label.ts:69` getLabel has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
-- [ ] `apps/api/src/services/label.ts:86` listLabels has the shape of the read/write kit's list, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/label.ts:83` getLabel has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/label.ts:111` listLabels has the shape of the read/write kit's list, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/project.ts:98` createProject has the shape of the read/write kit's create, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/project.ts:112` getProject has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/project.ts:156` deleteProject has the shape of the read/write kit's delete, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
@@ -171,17 +173,18 @@ Methods of a kit method's shape (`get`, `list`, `create`, `getTask`, ...): the k
 
 A service is an object now: no constructor, no fields, no `this`; handlers read `ctx.principal`.
 
-- [ ] `apps/api/src/services/label.ts:11` 4.x instance field renamed of LabelService: now module state, one value for the whole process (a service object has no instance); keep it if that is right, else move it where it belongs
-- [ ] `apps/api/src/services/label.ts:15` 4.x instance field onChange of LabelService, set by its constructor: now a module binding setUpLabelService(...) sets, one value for the whole process (a service object has no instance); keep it if that is right, else move it where it belongs
-- [ ] `apps/api/src/services/label.ts:19` 4.x instance field room of LabelService, set by its constructor: now a module binding setUpLabelService(...) sets, one value for the whole process (a service object has no instance); keep it if that is right, else move it where it belongs
-- [ ] `apps/api/src/services/label.ts:22` 4.x constructor code of LabelService, its fields' values included: a service object has no constructor; call setUpLabelService(...) once where the server starts (or move each part to module scope or a job), then delete this function
-- [ ] `apps/api/src/services/label.ts:25` this.getRoomName was 4.x service-instance state: a service object has none. Import what it held, pass it in, or call another service with ctx.services
-- [ ] `apps/api/src/services/label.ts:36` this.constructor was 4.x service-instance state: a service object has none. Import what it held, pass it in, or call another service with ctx.services
-- [ ] `apps/api/src/services/label.ts:43` this.subscribers was 4.x service-instance state: a service object has none. Import what it held, pass it in, or call another service with ctx.services
-- [ ] `apps/api/src/services/label.ts:48` overrode the 4.x BaseService method unsubscribeSocket, which 5.0 does not have: keep what it still needs elsewhere, then delete it
-- [ ] `apps/api/src/services/label.ts:50` dropped super.unsubscribeSocket(socket), a call of the 4.x base class, which 5.0 does not have: do here what this code still needs of it
-- [ ] `apps/api/src/services/label.ts:55` overrode the 4.x BaseService method adminCreate, which 5.0 does not have: keep what it still needs elsewhere, then delete it
-- [ ] `apps/api/src/services/label.ts:57` super.adminCreate(data) called the 4.x base class, which 5.0 does not have: it is undefined here; do what this code still needs of it
+- [ ] `apps/api/src/services/label.ts:12` 4.x instance field renamed of LabelService: now module state, one value for the whole process (a service object has no instance); keep it if that is right, else move it where it belongs
+- [ ] `apps/api/src/services/label.ts:16` 4.x instance field onChange of LabelService, set by its constructor: now a module binding setUpLabelService(...) sets, one value for the whole process (a service object has no instance); keep it if that is right, else move it where it belongs
+- [ ] `apps/api/src/services/label.ts:20` 4.x instance field room of LabelService, set by its constructor: now a module binding setUpLabelService(...) sets, one value for the whole process (a service object has no instance); keep it if that is right, else move it where it belongs
+- [ ] `apps/api/src/services/label.ts:23` 4.x constructor code of LabelService, its fields' values included: a service object has no constructor; call setUpLabelService(...) once where the server starts (or move each part to module scope or a job), then delete this function
+- [ ] `apps/api/src/services/label.ts:26` this.getRoomName was 4.x service-instance state: a service object has none. Import what it held, pass it in, or call another service with ctx.services
+- [ ] `apps/api/src/services/label.ts:37` this.constructor was 4.x service-instance state: a service object has none. Import what it held, pass it in, or call another service with ctx.services
+- [ ] `apps/api/src/services/label.ts:44` this.subscribers was 4.x service-instance state: a service object has none. Import what it held, pass it in, or call another service with ctx.services
+- [ ] `apps/api/src/services/label.ts:49` overrode the 4.x BaseService method unsubscribeSocket, which 5.0 does not have: keep what it still needs elsewhere, then delete it
+- [ ] `apps/api/src/services/label.ts:51` dropped super.unsubscribeSocket(socket), a call of the 4.x base class, which 5.0 does not have: do here what this code still needs of it
+- [ ] `apps/api/src/services/label.ts:56` overrode the 4.x BaseService method adminCreate, which 5.0 does not have: keep what it still needs elsewhere, then delete it
+- [ ] `apps/api/src/services/label.ts:58` super.adminCreate(data) called the 4.x base class, which 5.0 does not have: it is undefined here; do what this code still needs of it
+- [ ] `apps/api/src/services/label.ts:65` overrode the 4.x BaseService method delete, which 5.0 does not have: keep what it still needs elsewhere, then delete it; hoisted as deleteOfLabelService: delete is a reserved word
 - [ ] `apps/api/src/services/project-methods/limits.ts:6` ProjectLimitsPort was a port of the 4.x ProjectService instance, the type its method modules took: those modules export method objects now, and the service object projectService has none of the instance's members. Delete it, or keep only what the helpers that still take it use
 - [ ] `apps/api/src/services/task/methods/archive.ts:14` uses the 4.x service instance itself, which no longer exists: pass what this code needs instead
 - [ ] `apps/api/src/services/task/methods/queries.ts:9` inline auth guard: the access form already requires a principal, so the !ctx.principal.userId part never holds; drop it (lint: no-inline-auth-guard)

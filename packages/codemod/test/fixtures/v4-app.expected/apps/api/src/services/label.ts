@@ -3,6 +3,7 @@ import type { Label, Prisma } from "@project/db";
 import { type QuickdrawSocket, resolver } from "@fitzzero/quickdraw-core/server";
 import { qd } from "../quickdraw.js";
 import { labelContract } from "@project/shared";
+import { db } from "../db.js";
 
 /** Called with a label's id whenever one is renamed or created. */
 export type LabelListener = (labelId: string) => void;
@@ -60,6 +61,19 @@ async function adminCreate(data: Prisma.LabelUncheckedCreateInput): Promise<Labe
   return created;
 }
 
+// Deletes tell the listener too: 4.x's delete, whose name is a reserved word
+// quickdraw-migrate: review [this] overrode the 4.x BaseService method delete, which 5.0 does not have: keep what it still needs elsewhere, then delete it; hoisted as deleteOfLabelService: delete is a reserved word
+async function deleteOfLabelService(id: string): Promise<boolean> {
+  await db.label.delete({ where: { id } });
+  onChange?.(id);
+  return true;
+}
+
+/** Deletes a label for the admin page, through the override. */
+export async function removeLabel(id: string): Promise<boolean> {
+  return await deleteOfLabelService(id);
+}
+
 /** Labels have no row-level access: only service grants open them. */
 export const labelService = qd.defineService(labelContract, {
   model: "label",
@@ -69,14 +83,25 @@ export const labelService = qd.defineService(labelContract, {
     // quickdraw-migrate: review [kit] getLabel has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
     getLabel: {
       access: { service: "Read", entry: "Read", id: "id" },
-      handler: async ({ input, db }) => {
+      handler: async ({ input }) => {
         return await db.label.findUnique({ where: { id: input.id } });
+      },
+    },
+    getLabelName: {
+      // quickdraw-migrate: review [access] this method takes an id but its access "public" checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant
+      access: "public",
+      rowless: true,
+      handler: async ({ input }) => {
+        return await db.label.findUnique({
+          where: { id: input.id },
+          select: { name: true },
+        });
       },
     },
     renameLabel: {
       // quickdraw-migrate: review [access] 4.x's resolveEntryId was a function, kept here: where it returns nothing, the "" makes the row check fail, so only the service grant passes (4.x then applied the plain level)
       access: { service: "Moderate", entry: "Moderate", id: (input) => ((p) => p.labelId ?? null)(input) ?? "" },
-      handler: async ({ input: { labelId, name }, db }) => {
+      handler: async ({ input: { labelId, name } }) => {
         const label = await db.label.update({ where: { id: labelId }, data: { name } });
         renamed.add(label.id);
         onChange?.(label.id);
@@ -87,7 +112,7 @@ export const labelService = qd.defineService(labelContract, {
     listLabels: {
       // quickdraw-migrate: review [access] "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
       access: "authenticated",
-      handler: async ({ input, db }) =>
+      handler: async ({ input }) =>
         await db.label.findMany({
           where: { projectId: input.projectId },
           orderBy: { name: "asc" },
@@ -96,7 +121,7 @@ export const labelService = qd.defineService(labelContract, {
     },
     deleteAllLabels: {
       access: { service: "Admin" },
-      handler: async ({ input, ctx, db }) => {
+      handler: async ({ input, ctx }) => {
         const { count } = await db.label.deleteMany({
           where: { projectId: input.projectId },
         });
