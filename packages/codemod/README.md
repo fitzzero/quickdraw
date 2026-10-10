@@ -36,7 +36,9 @@ part:
   service in `packages/shared/src/contracts/`, from the service's method map
   and `defineMethod` calls. Each method's `input` is the schema its
   `defineMethod` validated with, moved into the shared package with the
-  helpers it needs (or `todoSchema<Payload>()` when it had none); its output
+  helpers it needs (or `todoSchema<Payload>({ keys })` when it had none,
+  with the payload type's top-level keys, so `defineService`'s rowless check
+  sees an `id` among them); its output
   is `"entity"` when the 4.x response was the service's DTO (or
   `todoSchema<Response>()`); its kind is `query` when its name starts with
   get, list, search, find or count, or the web app reads it with

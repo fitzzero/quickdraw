@@ -80,7 +80,9 @@ faithfully. What it does:
   exactly (stored grants in `User.serviceAccess` name it). A method's
   `input` is the Zod schema its `defineMethod` passed as `schema:`, moved
   into the shared package with the helpers it uses (`cuidSchema`, say, into
-  `contracts/helpers.ts`); without one, `todoSchema<Payload>()`. An output is
+  `contracts/helpers.ts`); without one, `todoSchema<Payload>({ keys })`,
+  with the payload type's top-level keys (no `keys` for a payload type that
+  has none, such as `Record<string, never>`). An output is
   `"entity"` (or `nullable("entity")`, `listOf("entity")`) when the 4.x
   response was the service's DTO, `todoSchema<Response>()` otherwise. A
   mutation of one row whose 4.x response was `DTO | null` answers `"entity"`,
@@ -230,8 +232,13 @@ method an `entry` form. An input whose JSON Schema names no keys (a Zod 3
 schema, which has none, or a `todoSchema` without `keys`) is not checked, so
 the refusal can first appear when the schema moves to Zod 4: it names the
 method and both ways out. A `todoSchema<T>({ keys })` names its keys, so one
-with `"id"` among them is checked now; lint's `no-todo-schema` says which
-placeholder inputs have no keys.
+with `"id"` among them is checked now, exactly like a real schema. The
+codemod writes the 4.x payload type's keys into each placeholder input for
+that reason: a 4.x `"Public"` method whose payload has `id` gets
+`todoSchema<{ id: string }>({ keys: ["id"] })` and `rowless: true`, so it
+boots, and dropping `rowless: true` before the schema is real gets the
+refusal at once instead of after the move to Zod 4. Lint's
+`no-todo-schema` says which placeholder inputs still have no keys.
 
 `jsonAcl` keeps 4.x's semantics but one: a user with several entries in a
 row's list gets the highest of their levels, where 4.x's `checkEntryACL`

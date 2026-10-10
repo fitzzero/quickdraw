@@ -136,6 +136,16 @@ All notable changes to this project will be documented in this file.
   `*.spec.ts(x)` files, are no longer read for services or method modules;
   their 4.x service classes are marked `[service]` and their uses of the
   services are still rewritten. A test-only service gets no contract.
+- **Placeholder inputs list their keys.** For an input whose 4.x schema it
+  cannot move, the codemod wrote `todoSchema<Payload>()` without keys, whose
+  JSON Schema names none, so `defineService`'s rowless check could not see an
+  `id` in it. It now writes `todoSchema<Payload>({ keys: [...] })` with the
+  payload type's top-level keys (`{ keys: ["id"] }` for a payload with only
+  `id`), and the check covers those methods as it covers a real schema. A
+  payload type without keys (`Record<string, never>`, a primitive) keeps a
+  placeholder without them. Output placeholders are unchanged. A `"Public"`
+  method whose payload has `id` still gets `rowless: true`, marked, so the
+  output boots.
 - **One class per service name, chosen the same way every run:** the class
   `registerService("<name>", ...)` instantiates, else the one named after the
   service, else the first by file. Each other class is marked `[service]`.
