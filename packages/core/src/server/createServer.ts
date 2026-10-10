@@ -48,6 +48,8 @@ import {
   createSocketServer,
   type ClusterOptions,
   type DisconnectUserOptions,
+  resolveLegacyWire,
+  type LegacyWireOptions,
   type QuickdrawIo,
   type SocketCors,
   type SocketOptions,
@@ -93,9 +95,11 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
   /**
    * Serve 4.x clients, which connect without `auth.qd`, through the legacy
    * shim: request/response calls only. Default `false`: they are refused with
-   * `PROTOCOL_MISMATCH`.
+   * `PROTOCOL_MISMATCH`. `{ aliases: { taskService: "cardService" } }` also
+   * serves a renamed service under its old name, to 4.x clients only, and
+   * logs each caller of an old name once.
    */
-  readonly legacyWire?: boolean;
+  readonly legacyWire?: boolean | LegacyWireOptions;
   /**
    * The socket rate limiter (`createRateLimiter`'s options), or `false` for
    * none. Default: 600 events per minute per socket. `qd:ch` (channels keep
@@ -359,6 +363,7 @@ export function createServer<const S extends readonly AnyService[]>(
   options: ServerOptions<S>,
 ): QuickdrawServer<S> {
   checkOptions(options);
+  const legacyWire = resolveLegacyWire(options.legacyWire, options.services);
   const logger = options.logger ?? consoleLogger;
   warnUnsourcedGrants(options.services, options.auth?.serviceAccessSource !== undefined, logger);
   const watchdog = prepareWatchdog(options, options.stallWatchdog);
@@ -380,7 +385,7 @@ export function createServer<const S extends readonly AnyService[]>(
     resolvePrincipal,
     loadServiceAccess: options.auth?.loadServiceAccess,
     binary: options.binary === true,
-    legacyWire: options.legacyWire === true,
+    legacyWire,
     cors: options.cors,
     socket: options.socket,
     rateLimit: options.rateLimit ?? {},

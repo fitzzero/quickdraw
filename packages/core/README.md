@@ -1212,6 +1212,16 @@ speak protocol 5. Each service, method and principal kind that calls
 through the shim is logged once at `warn`, so the remaining 4.x clients can
 be found.
 
+A service renamed during the migration keeps its old name for 4.x clients
+through aliases: with `legacyWire: { aliases: { taskService: "cardService" } }`,
+`socket.emit("taskService:get", payload, ack)` runs `cardService.get`, with
+that method's validation, access and `onCall` (grants are read under
+`cardService`, never under the old name). Its log line names the alias, once
+per old name, method and principal kind, so the app can see when the old name
+is no longer called. Each alias must name a registered service and must not be
+one itself, or `createServer` throws. Only 4.x events are aliased: a protocol-5,
+HTTP or MCP call to `taskService` finds no service.
+
 ### MCP bridge
 
 `@fitzzero/quickdraw-core/server/mcp` serves the services to AI agents as MCP

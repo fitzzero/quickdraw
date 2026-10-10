@@ -137,6 +137,16 @@ function header(ctx: RunContext, plan: ServicePlan): string {
   ].join("\n");
 }
 
+/** Where a defineMethod call tied to no service registers one of `names`, as `name at file:line`. */
+function untiedAt(ctx: RunContext, plan: ServicePlan, names: readonly string[]): string[] {
+  return plan.service.untied
+    .filter((untied) => names.includes(untied.name))
+    .map(
+      ({ name, call }) =>
+        `${name} at ${repoPath(ctx.layout, call.getSourceFile().getFilePath())}:${String(call.getStartLineNumber())}`,
+    );
+}
+
 /** Whether the 4.x method map names methods and the class the service was read from implements none of them. */
 function noneImplemented(plan: ServicePlan): boolean {
   return plan.methods.length === 0 && plan.unimplemented.length > 0;
@@ -149,7 +159,7 @@ function noneImplementedWarning(ctx: RunContext, plan: ServicePlan): string {
   return `${service.serviceName}: read from ${service.className} (${file}), which implements none of the ${String(plan.unimplemented.length)} methods of ${service.methodMapName ?? "its method map"}: its contract has no methods`;
 }
 
-function contractBody(plan: ServicePlan): string[] {
+function contractBody(ctx: RunContext, plan: ServicePlan): string[] {
   const lines = [
     `export const ${plan.contractVar} = defineContract(${quote(plan.service.serviceName)}, {`,
   ];
@@ -163,8 +173,13 @@ function contractBody(plan: ServicePlan): string[] {
   }
   if (plan.unimplemented.length > 0) {
     const names = plan.unimplemented.join(", ");
+    const at = untiedAt(ctx, plan, plan.unimplemented);
+    const where =
+      at.length === 0
+        ? ""
+        : `. A defineMethod call on a receiver the codemod could not tie to a service (its parameter's type) probably holds the handler: ${at.join(", ")}`;
     lines.push(
-      `  ${markerText("contract", `the 4.x method map also names ${names}, which no defineMethod call implements: add them here and in the service, or drop them`)}`,
+      `  ${markerText("contract", `the 4.x method map also names ${names}, which no defineMethod call implements: add them here and in the service, or drop them${where}`)}`,
     );
   }
   lines.push("  methods: {", ...plan.methods.map((method) => methodLine(method)), "  },", "});");
@@ -212,7 +227,7 @@ function contractText(ctx: RunContext, plan: ServicePlan, helpers: ReadonlySet<s
     ...imports,
     "",
     ...(body.length > 0 ? [body.join("\n\n"), ""] : []),
-    ...contractBody(plan),
+    ...contractBody(ctx, plan),
     "",
   ].join("\n");
 }

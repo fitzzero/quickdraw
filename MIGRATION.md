@@ -116,7 +116,13 @@ faithfully. What it does:
   (`super.unsubscribe(...)`) is dropped under a marker naming it, since
   `super` outside a class does not parse. A split service's method modules
   keep their files, with typed method objects (see
-  [Splitting large services](#splitting-large-services)).
+  [Splitting large services](#splitting-large-services)), whether a
+  module's parameter is the service class or a port of it
+  (`Pick<BaseService<...>, "defineMethod" | ...> & { ... }`, an interface
+  extending `Pick<ChatService, ...>`, read from the source); the port type
+  is marked. A `defineMethod` call the codemod cannot tie to a service
+  keeps its file, and the contract's marker for the method map's
+  unimplemented methods names it at its file and line.
 - **Which class a service comes from.** A service is read from one class of
   the api package that nothing extends, outside test code (files under
   `__tests__` or `testing`, and `*.test.ts(x)` and `*.spec.ts(x)` files).
@@ -1842,9 +1848,17 @@ which it leaves when it disconnects. A contract's events
 protocol 5 the app delivers to 4.x listeners with its own raw emit to the
 room (`server.io.to(room).emit(...)`), an item for the lint baseline.
 
+If the migration renames a service, the 4.x clients still call it by its old
+name. Map each old name onto the new service with
+`legacyWire: { aliases: { taskService: "cardService" } }`: a 4.x call to
+`taskService:get` then runs `cardService.get`, with that method's validation
+and access, and the log names the old name once per method and kind of
+caller. 5.0 clients use the new name only, and `createServer` throws on an
+alias that names no registered service.
+
 To ship without a flag day: deploy the 5.0 server with `legacyWire: true`,
 ship the 5.0 web and mobile clients, watch the log until no 4.x caller is
-left, then remove `legacyWire`. Screens that depend on 4.x live data
+left (and none on an alias), then remove `legacyWire`. Screens that depend on 4.x live data
 (subscriptions, collections) stop updating on old clients in the meantime,
 so ship the clients soon after the server.
 

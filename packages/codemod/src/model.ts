@@ -3,7 +3,9 @@
 // `*ServiceCore`), what its constructor declares (service name, model,
 // `hasEntryACL`), the hooks it overrides, and every `defineMethod` call that
 // registers on it, whether inside the class or in a method module
-// (`registerX(service)`, the 4.1 README's "Splitting Large Services").
+// (`registerX(service)`, the 4.1 README's "Splitting Large Services"), whose
+// parameter may be typed as a port of the service
+// (`Pick<BaseService<...>, "defineMethod"> & { ... }`, read from its text).
 // Test code is not read for services (`isTestFile`), and when several
 // classes carry one service name, one is chosen: the class `registerService`
 // instantiates, else the one named after the service, else the first by file.
@@ -15,19 +17,19 @@ import {
   type Expression,
   type FunctionDeclaration,
   type FunctionExpression,
+  type InterfaceDeclaration,
   type NewExpression,
   Node,
   type Project,
   type SourceFile,
   SyntaxKind,
+  type TypeAliasDeclaration,
 } from "ts-morph";
 import { importOf } from "./imports";
+import { BASES, CORE_SERVER, portOf, type ServiceIndex, servicesOfType } from "./serviceTypes";
 import { type Layout, repoPath } from "./layout";
 import { isTestFile, isUnder } from "./project";
 import { lowerFirst, upperFirst } from "./text";
-
-const CORE_SERVER = "@fitzzero/quickdraw-core/server";
-const BASES = new Set(["BaseService", "BaseRpcService"]);
 
 /** A 4.x access level. */
 export type Level = "Public" | "Read" | "Moderate" | "Admin";
@@ -71,6 +73,10 @@ export interface ServiceModel {
   /** The collections type of `BaseService<...>` (`ChatCollections`), when it names one. */
   readonly collectionsName: string | undefined;
   readonly methods: readonly MethodCall[];
+  /** The api package's `defineMethod` calls tied to no service (the same list on every service). */
+  readonly untied: readonly UntiedCall[];
+  /** The port types (`ChatServicePort`) the method modules' parameters were typed with. */
+  readonly ports: readonly (TypeAliasDeclaration | InterfaceDeclaration)[];
   /** The fields that hold the Prisma client (`this.prisma`). */
   readonly prismaFields: ReadonlySet<string>;
   /** Other instantiable classes with the same service name, whose defineMethod calls were not read. */
@@ -293,46 +299,102 @@ function methodCallFrom(call: CallExpression, receiver: string): MethodCall | un
   };
 }
 
-/** `defineMethod` calls on a parameter typed as one of the chain's classes, in other api files. */
-function moduleCalls(
-  project: Project,
-  layout: Layout,
-  chain: readonly ClassDeclaration[],
-): MethodCall[] {
-  const names = new Set(chain.map((cls) => cls.getName() ?? ""));
-  const own = new Set(chain.map((cls) => cls.getSourceFile()));
-  const calls: MethodCall[] = [];
-  for (const file of project.getSourceFiles()) {
-    if (
-      !isUnder(file, layout.api.src) ||
-      own.has(file) ||
-      isTestFile(repoPath(layout, file.getFilePath()))
-    ) {
-      continue;
+function addTo<K>(map: Map<K, ClassDeclaration[]>, key: K, leaf: ClassDeclaration): void {
+  const list = map.get(key) ?? [];
+  if (!list.includes(leaf)) {
+    list.push(leaf);
+  }
+  map.set(key, list);
+}
+
+function indexOf(chains: ReadonlyMap<ClassDeclaration, readonly ClassDeclaration[]>): ServiceIndex {
+  const byClass = new Map<ClassDeclaration, ClassDeclaration[]>();
+  const byName = new Map<string, ClassDeclaration[]>();
+  const byMethodMap = new Map<string, ClassDeclaration[]>();
+  for (const [leaf, chain] of chains) {
+    for (const cls of chain) {
+      addTo(byClass, cls, leaf);
+      addTo(byName, cls.getName() ?? "", leaf);
     }
+    const root = chain.at(-1);
+    const methodMap = root === undefined ? undefined : typeArgumentsOf(root).methodMap;
+    if (methodMap !== undefined) {
+      addTo(byMethodMap, methodMap, leaf);
+    }
+  }
+  return { byClass, byName, byMethodMap };
+}
+
+/** A `defineMethod` call of the api package whose receiver the codemod could not tie to a service. */
+export interface UntiedCall {
+  readonly name: string;
+  readonly call: CallExpression;
+}
+
+/**
+ * The `defineMethod` calls on a parameter whose type stands for a service
+ * (`servicesOfType`), in api files (`files`, test code left out) other than
+ * that service's own, by the service's leaf class; and the calls on a
+ * receiver tied to no service. One scan of the api files for every service.
+ */
+function moduleCalls(
+  files: readonly SourceFile[],
+  chains: ReadonlyMap<ClassDeclaration, readonly ClassDeclaration[]>,
+): {
+  byLeaf: Map<ClassDeclaration, MethodCall[]>;
+  untied: UntiedCall[];
+  ports: Map<ClassDeclaration, Set<TypeAliasDeclaration | InterfaceDeclaration>>;
+} {
+  const index = indexOf(chains);
+  const ownFiles = new Map(
+    [...chains].map(([leaf, chain]) => [leaf, new Set(chain.map((cls) => cls.getSourceFile()))]),
+  );
+  const byLeaf = new Map<ClassDeclaration, MethodCall[]>();
+  const untied: UntiedCall[] = [];
+  const ports = new Map<ClassDeclaration, Set<TypeAliasDeclaration | InterfaceDeclaration>>();
+  const scanned = new Set(files);
+  for (const file of files) {
     for (const call of file.getDescendantsOfKind(SyntaxKind.CallExpression)) {
       const callee = call.getExpression();
       if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "defineMethod") {
         continue;
       }
       const receiver = callee.getExpression();
+      if (receiver.getKind() === SyntaxKind.ThisKeyword) {
+        continue;
+      }
       const declaration = receiver.getSymbol()?.getDeclarations()[0];
-      if (
-        declaration !== undefined &&
-        Node.isParameterDeclaration(declaration) &&
-        names.has(declaration.getTypeNode()?.getText() ?? "")
-      ) {
-        const method = methodCallFrom(call, receiver.getText());
-        if (method !== undefined) {
-          calls.push(method);
+      const typeNode =
+        declaration !== undefined && Node.isParameterDeclaration(declaration)
+          ? declaration.getTypeNode()
+          : undefined;
+      const leaves = [...new Set(servicesOfType(typeNode, index))];
+      const port = portOf(typeNode);
+      const method = methodCallFrom(call, receiver.getText());
+      if (method === undefined) {
+        continue;
+      }
+      if (leaves.length === 0) {
+        untied.push({ name: method.name, call });
+      }
+      const keepsPort = port !== undefined && scanned.has(port.getSourceFile());
+      for (const leaf of leaves.filter((tied) => !(ownFiles.get(tied)?.has(file) ?? false))) {
+        byLeaf.set(leaf, [...(byLeaf.get(leaf) ?? []), method]);
+        if (keepsPort) {
+          ports.set(leaf, (ports.get(leaf) ?? new Set()).add(port));
         }
       }
     }
   }
-  return calls;
+  return { byLeaf, untied, ports };
 }
 
-function modelFor(project: Project, layout: Layout, chain: ClassDeclaration[]): ServiceModel {
+function modelFor(
+  chain: readonly ClassDeclaration[],
+  modules: readonly MethodCall[],
+  untied: readonly UntiedCall[],
+  ports: ReadonlySet<TypeAliasDeclaration | InterfaceDeclaration> = new Set(),
+): ServiceModel {
   const [leaf] = chain;
   const root = chain.at(-1) ?? leaf;
   if (leaf === undefined || root === undefined) {
@@ -357,7 +419,9 @@ function modelFor(project: Project, layout: Layout, chain: ClassDeclaration[]): 
     dtoName: dto,
     collectionsName:
       collections !== undefined && /^\w+$/u.test(collections) ? collections : undefined,
-    methods: [...own, ...moduleCalls(project, layout, chain)],
+    methods: [...own, ...modules],
+    untied,
+    ports: [...ports],
     prismaFields: prismaFieldsOf(chain),
     shadowed: [],
   };
@@ -483,12 +547,11 @@ export function findServices(project: Project, layout: Layout): ServiceModel[] {
     }
   }
   const extended = new Set([...chains.values()].flatMap((chain) => chain.slice(1)));
+  const leaves = new Map([...chains].filter(([cls]) => !extended.has(cls) && !cls.isAbstract()));
+  const { byLeaf, untied, ports } = moduleCalls(files, leaves);
   const byName = new Map<string, ServiceModel[]>();
-  for (const [cls, chain] of chains) {
-    if (extended.has(cls) || cls.isAbstract()) {
-      continue;
-    }
-    const model = modelFor(project, layout, chain);
+  for (const [leaf, chain] of leaves) {
+    const model = modelFor(chain, byLeaf.get(leaf) ?? [], untied, ports.get(leaf));
     byName.set(model.serviceName, [...(byName.get(model.serviceName) ?? []), model]);
   }
   const registered = registeredClasses(files);

@@ -92,7 +92,8 @@ guide's sections as the report sends you to them.
    in handlers (5.0 answers it with a generic `INTERNAL`: throw
    `QuickdrawError(code, message)` where the caller should see the message),
    channels, the server set-up (`qd.createServer`, with `legacyWire: true`
-   while 4.x clients remain).
+   while 4.x clients remain, or `legacyWire: { aliases: { old: "new" } }`
+   when you renamed a service they still call).
    A hand-built sign-in (unmarked: the codemod leaves it) moves onto the
    auth routes kit last, with its `Session` table migration (MIGRATION.md,
    "Hand-built auth to the auth routes kit").
