@@ -8,10 +8,15 @@
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Row policy         | `anyOf`: the highest level of (`owner`: Admin for the user the `ownerId` column names), (`members`: the role in the user's `teamMember` row (`teamId` names the row, `userId` the user, `role` the role)) |
 | Service-wide Admin | passes every check of the service                                                                                                                                                                         |
+| Principal kinds    | `user`, `agent`: its methods, subscriptions and channels refuse every other kind                                                                                                                          |
 | Change topic       | `"authenticated"`: any signed-in caller                                                                                                                                                                   |
 | Field levels       | `notes`: Admin                                                                                                                                                                                            |
 
 Each method below says who may call it.
+
+## Depends on
+
+No other service: its declarations name none.
 
 ## Entity
 
@@ -30,6 +35,10 @@ A caller receives a field only with at least its level on the row.
 
 A query.
 
+- MCP tool (default name): `teamService_get`
+- MCP read-only hint: yes, as on every query's tool
+- Callable by: `user`, `agent`
+
 Access: `{ entry: "Read" }`: Read or more on the row `input.id` names.
 
 Input:
@@ -43,6 +52,10 @@ Output: one row as the `entity` projection.
 ### `profile`
 
 A query.
+
+- MCP tool (default name): `teamService_profile`
+- MCP read-only hint: yes, as on every query's tool
+- Callable by: `user`, `agent`, or anonymously
 
 Access: `"public"`: anyone, signed in or not.
 
@@ -60,6 +73,9 @@ Output: one row as the `entity` projection.
 
 A mutation.
 
+- MCP tool (default name): `teamService_rename`
+- Callable by: `user`
+
 Access: `{ service: "Admin", entry: "Moderate" }`: a service-wide grant of Admin or more, or Moderate or more on the row `input.id` names.
 
 Input:
@@ -75,6 +91,10 @@ Output: one row as the `entity` projection.
 
 A query.
 
+- MCP tool (default name): `teamService_stats`
+- MCP read-only hint: yes, as on every query's tool
+- Callable by: `user`, `agent`
+
 Access: `{ service: "Moderate" }`: a service-wide grant of Moderate or more.
 
 Input: none.
@@ -84,6 +104,10 @@ Output: `integer`.
 ### `audit`
 
 A query.
+
+- MCP tool (default name): `teamService_audit`
+- MCP read-only hint: yes, as on every query's tool
+- Callable by: `user`, `agent`
 
 Access: `custom(check)`: a signed-in caller the service's own check lets through.
 
@@ -99,6 +123,10 @@ Output: `null`.
 
 A query.
 
+- MCP tool (default name): `teamService_ping`
+- MCP read-only hint: yes, as on every query's tool
+- Callable by: `user`, `agent`
+
 Access: `"authenticated"`: any signed-in caller.
 
 Input: none.
@@ -108,6 +136,10 @@ Output: `null`.
 ### `roster`
 
 A query.
+
+- MCP tool (default name): `teamService_roster`
+- MCP read-only hint: yes, as on every query's tool
+- Callable by: `user`, `agent`
 
 Access: `{ entry: "Read", id: "teamId" }`: Read or more on the row `input.teamId` names.
 

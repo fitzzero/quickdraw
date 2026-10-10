@@ -4,6 +4,79 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Principal kinds
+
+- **`kinds` beside `access`** says which kinds of principal
+  (`principal.kind`: a user, an agent's token, a runner) may call:
+  `initQuickdraw({ kinds })` for every service the app defines,
+  `defineService(contract, { kinds })` for one service, and a method's own
+  `kinds`. Each level only narrows the one above it; a wider list, an empty
+  one, or a method's own `kinds` on a `"public"` method is refused when the
+  service is defined, and the types take only kinds of the app's principal
+  (`PrincipalKindOf`). Nothing changes for an app that declares none.
+- **Fail closed.** A principal of another kind, or without a `kind`, gets
+  `FORBIDDEN` before the access form is asked, on every transport, outside
+  the access engine: no grant passes it, a service-wide `Admin` grant
+  included. An anonymous caller is left to the form, as before. A service's
+  list also holds for `qd:sub`, `qd:col:sub`, `qd:watch` and
+  `qd:stream:sub`, and its channels drop other kinds' messages.
+- **Where kinds show.** `describeAccessMatrix` cells carry the principal's
+  `kind`. `quickdraw-docs --services` prints "Callable by" in a method's
+  facts and a "Principal kinds" row for the service, where a list is
+  declared.
+- **Lint's `no-inline-auth-guard`** also reports a check of
+  `ctx.principal.kind` that throws in a handler (not one beside another
+  condition with `&&`, nor one in a `"public"` method): declare `kinds`
+  instead. A `custom` form that checks a claim, such as a token's `scope`,
+  stays as it is.
+
+### API docs: dependencies
+
+- **`quickdraw-docs --services` says which services depend on which.**
+  Each service page gets a "Depends on" section: the other services its
+  declarations name, and how. The declarations are its row policy's
+  `inherit` (inside `anyOf` too), `writes` (each model resolved to the
+  service whose `model` it is), `affects`, `{ scope, of }` access forms on
+  its methods, channels and streams, and its collections' anchors. The
+  index adds a Mermaid `graph LR` of those edges. Nothing reads source: a
+  handler's undeclared reads of another service's rows do not show.
+  Regenerate your docs: `--check` with `--services` reports every page as
+  out of date until you do.
+
+### Describes and API docs
+
+- **Every contract member takes a `describe`**: the contract itself, and each
+  collection, stream, channel and event, beside each method's. It is a
+  non-empty string, optional in the types, and refused when empty.
+- **Lint's `quickdraw/require-describe`** (a warning in `oxlint.base.jsonc`)
+  reports each contract member without a `describe`, and a static one under
+  3 words (`minWords`). A migrated app gets one warning per member: the
+  codemod writes none. Set it to `"error"` once the list is empty.
+- **`quickdraw-docs` prints more.** A service page leads with the contract's
+  describe, the index lists it, each member's section leads with its own,
+  and each method shows its default MCP tool name (`{service}_{method}`)
+  and, for a query, the MCP read-only hint. Regenerate your docs
+  (`quickdraw-docs ... --out docs/api`): `--check` reports every page as
+  out of date until you do.
+- **The `quickdraw-api-docs` skill** in `@fitzzero/quickdraw-skills` ships
+  `docs-api.yml`, a workflow that regenerates the API docs on every push to
+  the base branch and commits them, for repositories where a committed
+  generated file conflicts in every pull request. Copy it into
+  `.github/workflows`; run `quickdraw-skills link` to link the skill.
+
+### Codemod
+
+- **The format step no longer fails when the app's formatter ignores the
+  report.** An app whose `.oxfmtrc.json` ignores `**/*.md` made the codemod's
+  second oxfmt call (the report alone) exit 2, and the run ended with "oxfmt
+  failed on the files written" and nothing else. oxfmt now gets
+  `--no-error-on-unmatched-pattern` (Biome `--no-errors-on-unmatched`;
+  prettier already had `--ignore-unknown`), so files the config ignores are
+  left as written. The formatter runs in batches of at most 100 files and
+  about 24,000 characters of relative paths, then lists what is still
+  unformatted (`--list-different`) and formats those once more. A failure
+  prints the exit code, the formatter's own output and the files it left.
+
 ### Releasing
 
 - **A release is a merge to `main`.** `.github/workflows/publish.yml` runs on
@@ -24,6 +97,135 @@ All notable changes to this project will be documented in this file.
 
 ### Codemod
 
+- **Method modules that take a port of the service.** A method module whose
+  parameter is typed as a port rather than the service class
+  (`Pick<BaseService<..., ChatServiceMethods, ...>, "defineMethod" | ...> & { ... }`,
+  an interface extending `Pick<ChatService, ...>`, a type parameter
+  constrained to either) now gets its contract entries and typed method
+  objects. The codemod reads the port from the source, since 5.0 has no
+  `BaseService` for the type checker to resolve: the utility types `Pick`,
+  `Omit`, `Partial`, `Readonly` and `Required`, `BaseService` and
+  `BaseRpcService` by their method map, type aliases, interfaces, type
+  parameters and intersections. Before, those methods were left out and
+  listed as methods "no defineMethod call implements". The port type gets
+  a `[this]` marker. A `defineMethod` call still tied to no service is named
+  at its file and line in the contract's marker for the unimplemented
+  methods, and the api files are scanned once for every service.
+- **Aggregators go with the method modules they called.** A split service
+  registers each method in a function of its own and calls those from an
+  aggregator (`defineQueryMethods(service) { defineGetTarget(service); ... }`).
+  The codemod turned the register functions into method objects but left
+  each aggregator calling functions that no longer exist, unmarked: on one
+  app, 320 calls in 68 files, each a typecheck error the report did not
+  explain. An aggregator that only calls register functions, or other
+  aggregators, is now removed with its calls (the service class's call
+  already went with its constructor), and a file it leaves empty that
+  nothing imports is deleted. One that does more (a condition, logging, a
+  call of a function the run did not convert) stays under the
+  register-leftover `[this]` marker, which names the calls the codemod
+  removed from it, and a register function loses its calls of the others
+  the same way. The summary counts the removed aggregators
+  (`25 methods (2 aggregator functions removed)`).
+- **Test code no longer decides which class a service is read from.** The
+  codemod read every class under the api's sources, so a test's subclass of
+  a service (`class TestTaskService extends TaskServiceCore` in a
+  `__tests__` file) hid the real class and became a service of the same
+  name, and file order picked which one the contract was written from: on
+  one app, a directory rename gave a service's contract none of its 81
+  methods. Files under `__tests__` or `testing`, and `*.test.ts(x)` and
+  `*.spec.ts(x)` files, are no longer read for services or method modules;
+  their 4.x service classes are marked `[service]` and their uses of the
+  services are still rewritten. A test-only service gets no contract.
+- **Placeholder inputs list their keys.** For an input whose 4.x schema it
+  cannot move, the codemod wrote `todoSchema<Payload>()` without keys, whose
+  JSON Schema names none, so `defineService`'s rowless check could not see an
+  `id` in it. It now writes `todoSchema<Payload>({ keys: [...] })` with the
+  payload type's top-level keys (`{ keys: ["id"] }` for a payload with only
+  `id`), and the check covers those methods as it covers a real schema. A
+  payload type without keys (`Record<string, never>`, a primitive) keeps a
+  placeholder without them. Output placeholders are unchanged. A `"Public"`
+  method whose payload has `id` still gets `rowless: true`, marked, so the
+  output boots.
+- **One class per service name, chosen the same way every run:** the class
+  `registerService("<name>", ...)` instantiates, else the one named after the
+  service, else the first by file. Each other class is marked `[service]`.
+- **A contract whose class implements none of its method map is not silent:**
+  it is marked `[service]`, and the command names the service and the class
+  it read on stderr. The report lists `[service]` items first, under
+  "Services".
+
+### Testing
+
+- **Access snapshots.** `snapshotAccessMatrix(app, { principals, reset, rows })`
+  on `./testing` records who may call what: every method of the app's
+  services (or of `services`), each entity subscribe (`qd:sub`) and each
+  collection scope (`qd:col:sub`), as every principal and anonymously.
+  The first run writes the outcomes to `__access__/<test file>.json` beside
+  the test, and every later run compares its matrix with that file: a cell
+  whose outcome changed fails, naming the method, its row variant, the
+  principal and both outcomes, and whether the change opens or closes
+  access, until `QD_UPDATE_ACCESS_SNAPSHOT=1` rewrites the file. Under CI a
+  missing file and added or removed cells fail too, because a snapshot that
+  writes itself pins nothing. `reset` (the app's `resetDatabase` and seed)
+  runs again after every mutation access let through, so no cell sees the
+  writes of another. Inputs are made from each method's input schema with
+  the row where its access form reads it (`inputs(ref, fixture)` gives the
+  others), and a cell without a valid input is recorded as `VALIDATION`,
+  never called, and listed in the report's `inconclusive`. Each principal's
+  `kind` is recorded beside the cells. `describeAccessMatrix` is unchanged.
+
+### Legacy shim
+
+- **Service-name aliases for 4.x clients.** `legacyWire` also takes
+  `{ aliases: { taskService: "cardService" } }`: a 4.x client that still calls
+  a renamed service by its old name (`taskService:get`) runs the new service's
+  method, with its validation, access and `onCall`, instead of getting no
+  reply. The legacy log names the alias once per old name, method and
+  principal kind. Protocol-5, HTTP and MCP calls are never aliased, and
+  `createServer` throws on an alias that names no service or shadows one.
+
+### Fixed
+
+- **A call through the 4.x legacy shim (`legacyWire`) sees the socket it
+  arrived on.** Its handler gets `ctx.socketId`, and `ctx.rooms.join(room)`
+  joins the 4.x client's socket instead of answering `false`, so an app can
+  put an old client in a room and reach it with its own raw emits. The socket
+  leaves its app rooms when it disconnects, and `onRoomLeave` and presence
+  hear it. The shim still serves request/response calls only, and a
+  contract's events still reach only protocol-5 sockets.
+
+### Lint
+
+- **`no-todo-schema` says when a placeholder input hides its keys from the
+  id-reach check.** `defineService` refuses an input with `id` under an access
+  form that checks no row (`"public"`, `"authenticated"`, `{ service: L }`
+  below `Admin`), and reads the input's keys from its JSON Schema. A
+  `todoSchema()` without `keys` names none, so the check cannot see an `id` in
+  it. As the `input` of `query()` or `mutation()`, such a placeholder now gets
+  a second message that says so and asks for `keys`; a
+  `todoSchema<T>({ keys: ["id"] })` is checked like a Zod 4 schema. MIGRATION.md,
+  the README and the access rule no longer say that every placeholder is
+  unchecked.
+
+### MCP bridge
+
+- **`bind` fills tool arguments from the caller's principal.**
+  `createMcpRegistry({ bind: { taskId: ({ principal }) => principal.claims?.taskId } })`
+  leaves each bound argument out of the `inputSchema` of every method's tool
+  whose object input has it, and fills it on every call (`tools/call` and
+  both shapes of `POST /mcp/invoke`) before the input is validated, so an
+  agent bound to one task cannot name another. A call fails closed before
+  the method runs: `UNAUTHENTICATED` for an anonymous caller, `FORBIDDEN`
+  when the binder returns `undefined` or `null` or when the agent sent
+  another value, and `INTERNAL` (or the code of a `QuickdrawError` it threw)
+  when the binder throws. `createMcpRegistry` throws at startup when a
+  binder is not a function, when a bound argument is in no selected method's
+  object input (a misspelled name), and when it is a property of an input
+  that is not an object. Custom tools are never bound. Binding is not access
+  control: the method's access must still confine the principal, who reaches
+  it over a socket or HTTP with nothing bound. The README's MCP section also
+  shows a tool set per kind of caller and frozen public tool names, built
+  from the existing options.
 - **A member named after a reserved word gets a name that parses.** The
   codemod hoisted a 4.x `override delete` into `async function delete ()`,
   which TypeScript and oxfmt refuse. A member whose name is a JavaScript

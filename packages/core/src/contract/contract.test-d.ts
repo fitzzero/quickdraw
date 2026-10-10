@@ -859,6 +859,33 @@ describe("streams, channels and events", () => {
     });
   });
 
+  test("every member takes a describe, also beside a requires function", () => {
+    const described = defineContract("describedService", {
+      describe: "Documents and their cursors.",
+      entity: taskSchema,
+      collections: {
+        byProject: {
+          describe: "A project's tasks.",
+          scope: "projectId",
+          item: "entity",
+          order: [["id", "asc"]],
+        },
+      },
+      streams: { logs: { item: z.string(), describe: "A task's log lines." } },
+      channels: {
+        cursor: {
+          payload: cursorSchema,
+          describe: "Where a user's cursor is.",
+          requires: { room: (payload) => `doc:${payload.docId}` },
+        },
+      },
+      events: { celebrated: { payload: cursorSchema, describe: "A document was finished." } },
+    });
+    expectTypeOf(described.describe).toEqualTypeOf<string | undefined>();
+    const anyContract: AnyContract = described;
+    expectTypeOf(anyContract.collections.byProject?.describe).toEqualTypeOf<string | undefined>();
+  });
+
   test("a requires function leaves a collection's plain options known", () => {
     // Before the room card, a function here made `access` an unknown collection option.
     defineContract("functionAndOptions", {

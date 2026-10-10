@@ -1,6 +1,7 @@
 // Plans each service's contract before anything is written: per method, its
 // kind (from its name), the row id 4.x would have checked, its input (the
-// moved schema, or a `todoSchema` of the 4.x payload type) and its output
+// moved schema, or a `todoSchema` of the 4.x payload type with its keys, so
+// `defineService`'s rowless check sees an `id` among them) and its output
 // (`"entity"` when the 4.x response was the service's DTO, else a
 // `todoSchema` of the response type). A mutation of one row whose 4.x
 // response was `DTO | null` answers `"entity"`: 4.x's `this.update` gave null
@@ -11,6 +12,7 @@ import { join } from "node:path";
 import {
   type InterfaceDeclaration,
   Node,
+  type Type,
   type TypeAliasDeclaration,
   type TypeNode,
 } from "ts-morph";
@@ -143,6 +145,53 @@ function schemaHasId(schema: Node | undefined): boolean {
   );
 }
 
+/** Whether `type` is an object type whose keys are its properties: no primitive, array, tuple or function. */
+function isPlainObject(type: Type): boolean {
+  if (type.isUnion()) {
+    return type.getUnionTypes().every(isPlainObject);
+  }
+  if (type.isIntersection()) {
+    return type.getIntersectionTypes().every(isPlainObject);
+  }
+  return (
+    type.isObject() && !type.isArray() && !type.isTuple() && type.getCallSignatures().length === 0
+  );
+}
+
+/**
+ * The top-level keys of a 4.x payload type, as `keyof` lists them (a union's
+ * shared keys), when it is an object type. `undefined` for any other type,
+ * and for one without string keys (`Record<string, never>`).
+ */
+function payloadKeys(payload: TypeNode): string[] | undefined {
+  const type = payload.getType();
+  if (!isPlainObject(type)) {
+    return undefined;
+  }
+  const keys = type
+    .getProperties()
+    .map((property) => property.getName())
+    .filter((key) => !key.startsWith("__@") && !/^\d+$/u.test(key));
+  return keys.length === 0 ? undefined : keys;
+}
+
+/**
+ * The `todoSchema` input for a method whose schema stays behind: the 4.x
+ * payload type with its keys, which its JSON Schema lists, so the rowless
+ * check of `defineService` sees an `id` among them as it would in a real
+ * schema. Without a payload type, `{ id: unknown }` when the 4.x schema has
+ * an `id`; without keys either way, a placeholder the check cannot read.
+ */
+function placeholderInput(payload: TypeNode | undefined, inputHasId: boolean): string {
+  if (payload === undefined) {
+    return inputHasId ? 'todoSchema<{ id: unknown }>({ keys: ["id"] })' : "todoSchema<unknown>()";
+  }
+  const keys = payloadKeys(payload);
+  return keys === undefined
+    ? `todoSchema<${payload.getText()}>()`
+    : `todoSchema<${payload.getText()}>({ keys: [${keys.map((key) => quote(key)).join(", ")}] })`;
+}
+
 function entryIdOf(call: MethodCall, entry: MethodMapEntry | undefined): EntryId {
   if (call.resolveEntryId !== undefined) {
     const key = entryKeyOf(call.resolveEntryId);
@@ -173,8 +222,8 @@ function planMethod(
   ];
   let moved: MovedSchema | undefined;
   const payload = entry?.payload;
-  const fallbackInput =
-    payload === undefined ? "todoSchema<unknown>()" : `todoSchema<${payload.getText()}>()`;
+  const inputHasId = payload?.getType().getProperty("id") !== undefined || schemaHasId(call.schema);
+  const fallbackInput = placeholderInput(payload, inputHasId);
   let input = fallbackInput;
   const move =
     call.schema === undefined ? undefined : moveSchema(call.schema, call.call.getSourceFile());
@@ -190,7 +239,6 @@ function planMethod(
     );
     ctx.stats.todoSchemas += 1;
   }
-  const inputHasId = payload?.getType().getProperty("id") !== undefined || schemaHasId(call.schema);
   const output = outputFor(entry?.response, dto, hasEntity, kind === "mutation" && inputHasId);
   if (output.todo) {
     notes.push("output: todoSchema of the 4.x response type");

@@ -87,6 +87,17 @@ export const labelService = qd.defineService(labelContract, {
         return await db.label.findUnique({ where: { id: input.id } });
       },
     },
+    getLabelName: {
+      // quickdraw-migrate: review [access] this method takes an id but its access "public" checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant
+      access: "public",
+      rowless: true,
+      handler: async ({ input }) => {
+        return await db.label.findUnique({
+          where: { id: input.id },
+          select: { name: true },
+        });
+      },
+    },
     renameLabel: {
       // quickdraw-migrate: review [access] 4.x's resolveEntryId was a function, kept here: where it returns nothing, the "" makes the row check fail, so only the service grant passes (4.x then applied the plain level)
       access: { service: "Moderate", entry: "Moderate", id: (input) => ((p) => p.labelId ?? null)(input) ?? "" },

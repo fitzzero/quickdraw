@@ -35,6 +35,14 @@ export class LabelService extends BaseService<
       return await this.prisma.label.findUnique({ where: { id: payload.id } });
     });
 
+    // Anyone may read a label's name by its id: "Public" with an id and no schema
+    this.defineMethod("getLabelName", "Public", async (payload) => {
+      return await this.prisma.label.findUnique({
+        where: { id: payload.id },
+        select: { name: true },
+      });
+    });
+
     this.defineMethod(
       "renameLabel",
       "Moderate",

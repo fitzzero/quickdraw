@@ -139,7 +139,8 @@ export function usableChangeLog(hub: Hub): ChangeLog | undefined {
 }
 
 /** A service the registry holds. */
-type RegisteredService = Registry["services"] extends ReadonlyMap<string, infer S> ? S : never;
+export type RegisteredService =
+  Registry["services"] extends ReadonlyMap<string, infer S> ? S : never;
 
 /** A service whose rows can be subscribed to and sent: it has an entity and a model. */
 export interface LiveService {

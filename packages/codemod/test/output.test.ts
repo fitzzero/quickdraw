@@ -124,7 +124,14 @@ describe("the output", () => {
       ignorePatterns: ["**/node_modules/**"],
     };
     writeFileSync(join(root, ".oxlintrc.json"), JSON.stringify(config));
-    const quickdraw = lint(root).filter((diagnostic) => diagnostic.rule.startsWith("quickdraw("));
+    const reports = lint(root).filter((diagnostic) => diagnostic.rule.startsWith("quickdraw("));
+    // The codemod writes no describe (4.x had no per-method prose): lint lists each
+    // member without one, as no-todo-schema lists the placeholders.
+    const describes = reports.filter(
+      (diagnostic) => diagnostic.rule === "quickdraw(require-describe)",
+    );
+    expect(describes.length).toBeGreaterThan(0);
+    const quickdraw = reports.filter((diagnostic) => !describes.includes(diagnostic));
     expect(quickdraw.length).toBeGreaterThan(0);
     expect(uncovered(quickdraw, readTree(root))).toEqual([]);
   });
