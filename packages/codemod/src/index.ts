@@ -29,6 +29,8 @@ export interface RunResult {
   readonly deleted: readonly string[];
   readonly report: string;
   readonly items: number;
+  /** Problems the command prints to stderr, one line each. */
+  readonly warnings: readonly string[];
   /** The app's formatter the run formatted its files with, and whether that worked. */
   readonly formatter?: { readonly name: string; readonly ok: boolean };
 }
@@ -78,6 +80,7 @@ export function runCodemod(options: RunOptions): RunResult {
     deleted: [...ctx.deleted].map(relative),
     report: text,
     items: report.count,
+    warnings: ctx.warnings,
     ...(formatter === undefined ? {} : { formatter: { name: formatter.name, ok: formatted } }),
   };
 }

@@ -117,6 +117,17 @@ faithfully. What it does:
   `super` outside a class does not parse. A split service's method modules
   keep their files, with typed method objects (see
   [Splitting large services](#splitting-large-services)).
+- **Which class a service comes from.** A service is read from one class of
+  the api package that nothing extends, outside test code (files under
+  `__tests__` or `testing`, and `*.test.ts(x)` and `*.spec.ts(x)` files).
+  When several classes carry one service name, it is the class
+  `registerService("<name>", ...)` instantiates, else the one named after the
+  service (`TaskService` for `taskService`); each other one is marked
+  `[service]`. A test's subclass of a service is never a service and hides
+  nothing: it is marked `[service]`, and test code's uses of the services
+  are rewritten like any other file's. A service whose method map names
+  methods the class read implements none of gets a `[service]` marker in its
+  contract and a line on stderr.
 - **The web app.** `useService`, `useServiceQuery`, `useSubscription` and
   `useCollection` calls become `qd.<service>.<method>.useMutation()`,
   `.useQuery(input)`, `qd.<service>.useEntity(id)` and

@@ -54,6 +54,13 @@ part:
   answering null, and only `"entity"` is optimistic by default). In a file
   whose helpers use the tracked `db`, handlers use that one rather than
   shadow it. A split service's method modules export typed method objects.
+- **Which class.** A service is read from one class nothing extends, outside
+  test code (`__tests__`, `testing`, `*.test.ts(x)`, `*.spec.ts(x)`): of
+  several with one service name, the class `registerService` instantiates,
+  else the one named after the service; the others are marked `[service]`.
+  Test code's 4.x service classes are marked `[service]` and hide nothing;
+  its uses of the services are rewritten. A contract whose class implements
+  none of its method map is marked `[service]` and named on stderr.
 - **Access.** Each method gets the 5.0 form that admits exactly the callers
   4.x admitted:
 
