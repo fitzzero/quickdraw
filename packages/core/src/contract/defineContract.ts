@@ -31,6 +31,11 @@ export interface ChannelDefinition extends Omit<ChannelDef, "requires"> {
 /** The second argument of {@link defineContract}. */
 export interface ContractDefinition {
   /**
+   * What the service is for, in a sentence or two. The generated API docs
+   * lead the service's page with it and list it in their index.
+   */
+  readonly describe?: string;
+  /**
    * The full row; its output must contain `id: string`. Omit it for a service
    * without a model, which then has no projections, fields or collections.
    *
@@ -67,6 +72,8 @@ export interface Contract<
 > {
   /** The service name, unchanged on the wire and in stored grants. */
   readonly name: Name;
+  /** What the service is for; absent when the definition has none. */
+  readonly describe?: string;
   readonly entity: MemberOf<Def, "entity", undefined>;
   readonly projections: MemberOf<Def, "projections", Empty>;
   readonly fields: MemberOf<Def, "fields", Empty>;
@@ -80,6 +87,7 @@ export interface Contract<
 /** Any contract. Every contract `defineContract` returns is assignable to it. */
 export interface AnyContract {
   readonly name: string;
+  readonly describe?: string;
   readonly entity: RowSchema | undefined;
   readonly projections: { readonly [name: string]: RowSchema };
   readonly fields: { readonly [field: string]: AccessLevel };
@@ -130,6 +138,7 @@ type ScopeColumnOf<Row> = [Row] extends [never] ? string : StringColumn<Row> & s
 // excess properties against this context alone, so an option missing here
 // (`access`, say) was reported as unknown.
 interface CollectionContext<Row, Entity, Projections, Item, Index> {
+  readonly describe?: string | undefined;
   readonly scope: NoInfer<ViaScope | ScopeColumnOf<Row>>;
   readonly item: Item;
   readonly order: NoInfer<OrderBy<ColumnOf<Row>>>;

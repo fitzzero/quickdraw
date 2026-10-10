@@ -2,6 +2,7 @@ import { defineContract, search } from "@fitzzero/quickdraw-core";
 import { cardSchema, taskSchema } from "../schemas";
 
 export const task = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity: taskSchema,
   projections: { card: cardSchema },
   methods: {
@@ -16,6 +17,7 @@ export const task = defineContract("taskService", {
   },
   collections: {
     byProject: {
+      describe: "A project's tasks, in board order.",
       scope: "projectId",
       item: "card",
       order: [
