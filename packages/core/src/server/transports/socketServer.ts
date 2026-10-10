@@ -138,6 +138,7 @@ export function createSocketServer(
         settings.live === undefined
           ? settings.extensions
           : [...settings.extensions, settings.live.extension],
+      legacyExtensions: settings.live === undefined ? [] : [settings.live.legacyExtension],
       legacyCallers: new Set(),
     }),
   );

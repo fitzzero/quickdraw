@@ -1757,6 +1757,13 @@ only, not subscriptions, collections or channels, and it logs each
 service, method and kind of caller once, so the remaining 4.x clients can
 be found.
 
+A call through the shim sees the socket it arrived on: `ctx.socketId` is
+its id, and `ctx.rooms.join(room)` puts the 4.x client in an app room,
+which it leaves when it disconnects. A contract's events
+(`ctx.rooms.emit`) reach only 5.0 sockets, so until those clients speak
+protocol 5 the app delivers to 4.x listeners with its own raw emit to the
+room (`server.io.to(room).emit(...)`), an item for the lint baseline.
+
 To ship without a flag day: deploy the 5.0 server with `legacyWire: true`,
 ship the 5.0 web and mobile clients, watch the log until no 4.x caller is
 left, then remove `legacyWire`. Screens that depend on 4.x live data

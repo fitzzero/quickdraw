@@ -22,6 +22,16 @@ All notable changes to this project will be documented in this file.
   test holds them to it; a change's entry goes under `## [Unreleased]`, and the
   release that ships it writes the version and the date here.
 
+### Fixed
+
+- **A call through the 4.x legacy shim (`legacyWire`) sees the socket it
+  arrived on.** Its handler gets `ctx.socketId`, and `ctx.rooms.join(room)`
+  joins the 4.x client's socket instead of answering `false`, so an app can
+  put an old client in a room and reach it with its own raw emits. The socket
+  leaves its app rooms when it disconnects, and `onRoomLeave` and presence
+  hear it. The shim still serves request/response calls only, and a
+  contract's events still reach only protocol-5 sockets.
+
 ## [5.0.1] - 2026-10-08
 
 Fixes from the independent review of 5.0.0 after the farseer migration
