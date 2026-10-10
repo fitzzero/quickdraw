@@ -74,6 +74,18 @@ function namedCalls(fn: FunctionDeclaration): NamedCall[] {
   });
 }
 
+const IDENTIFIER = /[$A-Z_a-z][\w$]*/gu;
+
+/** Whether `text` holds one of `names` as a word. */
+function mentions(text: string, names: ReadonlySet<string>): boolean {
+  for (const [word] of text.matchAll(IDENTIFIER)) {
+    if (names.has(word)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** The function declarations a name refers to, through its import. */
 function functionsNamed(name: Node): FunctionDeclaration[] {
   const symbol = name.getSymbol();
@@ -135,6 +147,7 @@ export function findAggregators(ctx: RunContext, plans: readonly ServicePlan[]):
     plans.flatMap((plan) => plan.methods.flatMap((method) => method.call.register ?? [])),
   );
   const resolved = new Map<Node, FunctionDeclaration[]>();
+  const named = new Map<FunctionDeclaration, NamedCall[]>();
   let names = new Set<string>();
   const isConverted = ({ name }: NamedCall): boolean => {
     if (!names.has(name.getText())) {
@@ -144,16 +157,21 @@ export function findAggregators(ctx: RunContext, plans: readonly ServicePlan[]):
     resolved.set(name, functions);
     return functions.some((fn) => converted.has(fn));
   };
-  const calls = (fn: FunctionDeclaration): ConvertedCall[] =>
-    namedCalls(fn)
-      .filter(isConverted)
-      .map(({ statement, callee }) => ({ statement, callee }));
+  // Only a function whose text names a converted function is walked.
+  const calls = (fn: FunctionDeclaration): ConvertedCall[] => {
+    if (!mentions(fn.getText(), names)) {
+      return [];
+    }
+    const list = named.get(fn) ?? namedCalls(fn);
+    named.set(fn, list);
+    return list.filter(isConverted).map(({ statement, callee }) => ({ statement, callee }));
+  };
   const of: ConvertedCalls["of"] = (fn) => {
-    const found = calls(fn);
+    const removedCalls = calls(fn);
     return {
-      statements: new Set<Node>(found.map((call) => call.statement)),
-      callees: calleesOf(found),
-      text: editedText(fn, found.map(callRemoval)),
+      statements: new Set<Node>(removedCalls.map((call) => call.statement)),
+      callees: calleesOf(removedCalls),
+      text: editedText(fn, removedCalls.map(callRemoval)),
     };
   };
   if (converted.size === 0) {
@@ -161,12 +179,9 @@ export function findAggregators(ctx: RunContext, plans: readonly ServicePlan[]):
   }
   const files = apiFiles(ctx.project, ctx.layout);
   const aliases = aliasesIn(files);
-  const candidates = new Map(
-    files
-      .flatMap((file) => file.getFunctions())
-      .filter((fn) => fn.hasBody() && !converted.has(fn))
-      .map((fn) => [fn, namedCalls(fn)] as const),
-  );
+  const candidates = files
+    .flatMap((file) => file.getFunctions())
+    .filter((fn) => fn.hasBody() && !converted.has(fn));
   const found: FunctionDeclaration[] = [];
   let grew = true;
   while (grew) {
@@ -177,8 +192,8 @@ export function findAggregators(ctx: RunContext, plans: readonly ServicePlan[]):
         return name === undefined ? [] : [name, ...(aliases.get(name) ?? [])];
       }),
     );
-    for (const [fn, named] of candidates) {
-      if (!converted.has(fn) && named.some(isConverted)) {
+    for (const fn of candidates) {
+      if (!converted.has(fn) && calls(fn).length > 0) {
         found.push(fn);
         converted.add(fn);
         grew = true;
