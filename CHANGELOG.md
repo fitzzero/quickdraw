@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Codemod
+
+- **The format step no longer fails when the app's formatter ignores the
+  report.** An app whose `.oxfmtrc.json` ignores `**/*.md` made the codemod's
+  second oxfmt call (the report alone) exit 2, and the run ended with "oxfmt
+  failed on the files written" and nothing else. oxfmt now gets
+  `--no-error-on-unmatched-pattern` (Biome `--no-errors-on-unmatched`;
+  prettier already had `--ignore-unknown`), so files the config ignores are
+  left as written. The formatter runs in batches of at most 100 files and
+  about 24,000 characters of relative paths, then lists what is still
+  unformatted (`--list-different`) and formats those once more. A failure
+  prints the exit code, the formatter's own output and the files it left.
+
 ### Releasing
 
 - **A release is a merge to `main`.** `.github/workflows/publish.yml` runs on
