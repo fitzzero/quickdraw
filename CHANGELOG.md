@@ -96,6 +96,16 @@ All notable changes to this project will be documented in this file.
   never called, and listed in the report's `inconclusive`. Each principal's
   `kind` is recorded beside the cells. `describeAccessMatrix` is unchanged.
 
+### Legacy shim
+
+- **Service-name aliases for 4.x clients.** `legacyWire` also takes
+  `{ aliases: { taskService: "cardService" } }`: a 4.x client that still calls
+  a renamed service by its old name (`taskService:get`) runs the new service's
+  method, with its validation, access and `onCall`, instead of getting no
+  reply. The legacy log names the alias once per old name, method and
+  principal kind. Protocol-5, HTTP and MCP calls are never aliased, and
+  `createServer` throws on an alias that names no service or shadows one.
+
 ### Fixed
 
 - **A call through the 4.x legacy shim (`legacyWire`) sees the socket it
