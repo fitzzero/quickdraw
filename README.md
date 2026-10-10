@@ -1176,10 +1176,16 @@ as a 4.x client instead of being refused with `PROTOCOL_MISMATCH`. The shim
 serves request/response calls only: `socket.emit("taskService:get", payload, ack)`
 runs through the 5.0 pipeline and is answered in the 4.x `ServiceResponse`
 shape, `{ success: true, data }` or `{ success: false, error, code }`, with
-the HTTP status of the error code as `code`. 4.x subscriptions, collections
-and channels are not served. Each service, method and principal kind that
-calls through the shim is logged once at `warn`, so the remaining 4.x
-clients can be found.
+the HTTP status of the error code as `code`. A call through the shim runs
+with the `ctx.socketId` and `ctx.rooms` of the socket it arrived on, so a
+handler can put a 4.x client in an app room; it leaves its rooms when it
+disconnects, and `onRoomLeave` and presence hear it as they hear a 5.0
+socket. 4.x subscriptions, collections and channels are not served, and a
+contract's events reach only 5.0 sockets: delivering events to 4.x
+listeners stays the app's own raw emit to the room until those clients
+speak protocol 5. Each service, method and principal kind that calls
+through the shim is logged once at `warn`, so the remaining 4.x clients can
+be found.
 
 ### MCP bridge
 

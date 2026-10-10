@@ -1,7 +1,8 @@
 // Presence, streams, channels and typed room events for one dispatcher (RFC
 // 0003 section 12.5), made with its live data (`emit/live.ts`): the socket
-// listeners they add to every v5 socket, `ctx.rooms` and `ctx.presence` for
-// each call, and the stream handles `qd.stream(contract, name)` returns.
+// listeners they add to every v5 socket, the room bookkeeping of every 4.x
+// socket, `ctx.rooms` and `ctx.presence` for each call, and the stream
+// handles `qd.stream(contract, name)` returns.
 
 import type { AnyContract } from "../../contract/defineContract";
 import type { RoomOccupancy } from "../context";
@@ -35,6 +36,12 @@ export type {
 export interface Realtime {
   /** Serves `qd:ch`, `qd:stream:sub` and `qd:stream:unsub`, and leaves app rooms on disconnect. */
   extension(socket: QuickdrawServerSocket, context: SocketContext): void;
+  /**
+   * Leaves a 4.x socket's app rooms on disconnect, as `extension` does for a
+   * v5 one: its calls through the legacy shim can join rooms (`roomsFor`),
+   * but it gets none of the v5 listeners.
+   */
+  legacyExtension(socket: QuickdrawServerSocket, context: SocketContext): void;
   /** `ctx.presence`, `dispatcher.presence` and `server.presence`. */
   readonly presence: Presence;
   /** `qd.rooms`, `dispatcher.rooms` and `server.rooms`: app rooms from code that is not a handler. */
@@ -46,8 +53,8 @@ export interface Realtime {
    */
   onRoomLeave(hooks: readonly RoomLeaveHook[], run: DetachedRun): void;
   /**
-   * The `ctx.rooms` of a call: its socket's for a call over a v5 socket, else
-   * one that joins nothing. For a method that shares its runs (`share`),
+   * The `ctx.rooms` of a call: its socket's for a call over a socket (v5 or
+   * the 4.x legacy shim), else one that joins nothing. For a method that shares its runs (`share`),
    * `join` and `leave` throw `INTERNAL`: a shared run serves several callers,
    * and would join or leave only the first one's socket.
    */
@@ -80,6 +87,11 @@ export function createRealtime(hub: Hub): Realtime {
         rooms.disconnected(socket);
       });
     },
+    legacyExtension(socket: QuickdrawServerSocket, context: SocketContext): void {
+      onDisconnect(socket, context, () => {
+        rooms.disconnected(socket);
+      });
+    },
     presence,
     rooms: rooms.server,
     onRoomLeave: (hooks: readonly RoomLeaveHook[], run: DetachedRun) => {
@@ -87,7 +99,7 @@ export function createRealtime(hub: Hub): Realtime {
     },
     roomsFor(transport: string, connectionId: string | undefined, share?: string): ContextRooms {
       const socket =
-        transport === "socket" && connectionId !== undefined
+        (transport === "socket" || transport === "legacy") && connectionId !== undefined
           ? hub.io?.sockets.sockets.get(connectionId)
           : undefined;
       const own = socket === undefined ? rooms.detached : rooms.of(socket);
