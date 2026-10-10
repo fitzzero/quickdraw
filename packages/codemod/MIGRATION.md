@@ -116,7 +116,13 @@ faithfully. What it does:
   (`super.unsubscribe(...)`) is dropped under a marker naming it, since
   `super` outside a class does not parse. A split service's method modules
   keep their files, with typed method objects (see
-  [Splitting large services](#splitting-large-services)).
+  [Splitting large services](#splitting-large-services)), whether a
+  module's parameter is the service class or a port of it
+  (`Pick<BaseService<...>, "defineMethod" | ...> & { ... }`, an interface
+  extending `Pick<ChatService, ...>`, read from the source); the port type
+  is marked. A `defineMethod` call the codemod cannot tie to a service
+  keeps its file, and the contract's marker for the method map's
+  unimplemented methods names it at its file and line.
 - **Which class a service comes from.** A service is read from one class of
   the api package that nothing extends, outside test code (files under
   `__tests__` or `testing`, and `*.test.ts(x)` and `*.spec.ts(x)` files).
