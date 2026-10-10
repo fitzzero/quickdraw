@@ -2797,6 +2797,80 @@ cell's call, that makes a row of its own (a task
 to delete, an unused name), so no cell depends on the order of the
 principals.
 
+### Access snapshots
+
+`snapshotAccessMatrix(app, { principals, reset, rows })` records the whole
+matrix instead of chosen cases: every method of the app's services (or of
+`services`), each entity subscribe (`qd:sub`) and each collection scope
+(`qd:col:sub`), as every principal and anonymously. The first run writes the
+outcomes to `__access__/<test file>.json` beside the test, and every later
+run compares its matrix with that file, so each changed cell is a decision
+someone made. Commit the file. Use it to pin a service's table, and before
+a migration, a policy refactor or a new kind of principal:
+
+<!-- example: apps/api/src/services/task.test.ts#snapshot -->
+
+```ts
+it("pins who may call what, for every method, subscribe and scope", async () => {
+  const app = await createTestApp({ services: [projectService, taskService], db });
+  const report = await snapshotAccessMatrix(app, {
+    principals: { owner: ada, member: bo, stranger: ed },
+    reset: async () => {
+      await resetDatabase(prisma); // at the start, and after each write access let through
+      return await seed();
+    },
+    rows: (board) => ({ projectService: board.projectId, taskService: board.taskId }),
+  });
+  expect(report.inconclusive).toEqual([]); // every cell ran, with an input its schema accepts
+  await app.close();
+});
+```
+
+- `reset()` empties the database and seeds it (`resetDatabase` from
+  `./testing/prisma`, then the app's seed, with the untracked client), and
+  resolves with what the seed made: the fixture. It runs first, and again
+  after every mutation the pipeline did not refuse, so no cell sees the
+  writes of another. `principals` may be a function of the fixture, for a
+  seed that makes new ids; its names stay the same.
+- `rows(fixture)` names the row each service's cells are about: a row id,
+  or named variants (`{ own: p1, other: p2 }`), each a row of the matrix of
+  its own. It names every service an access form, an entity subscribe or a
+  collection anchor of the matrix reads; a missing one is a `TypeError`
+  before any cell runs. A `"self"` scope is subscribed with the caller's own
+  user id.
+- Inputs are made from each method's input schema (Zod 4.2 or later
+  describes itself as JSON Schema): the row goes where the access form reads
+  it (`id`, the key an `entry` or `scope` form names, or where a function
+  `id` finds it; for any other form, the input's `id`), and every other
+  required value is as small as the schema allows. `inputs(ref, fixture)`
+  gives a method's input instead (`ref` names the service, method, kind,
+  variant, row and principal of the cell); `undefined` keeps the made one.
+  A cell whose input fails the schema, or names no row where an `entry` or
+  `scope` form reads it, is never called: it is `VALIDATION`, and the
+  report lists it in `inconclusive`.
+- Each cell is the exact outcome: `"ok"`, or the error code
+  (`UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, ...). Each principal's
+  `kind` is recorded beside the cells.
+- A cell whose outcome changed fails, naming the cell, both outcomes and
+  whether the change opens or closes access (a changed `kind` fails too):
+
+  ```text
+  snapshotAccessMatrix: 1 cell differs from the access snapshot (src/services/__access__/task.test.ts.json):
+    taskService.rename as member: FORBIDDEN → ok (opens access)
+  ```
+
+  When each change is meant, run the tests with
+  `QD_UPDATE_ACCESS_SNAPSHOT=1` and commit the file.
+
+- Cells added or removed (a new method, principal or exclusion) rewrite the
+  file in a local run. Under CI (`CI=1` or `CI=true`) they fail, and so do a
+  missing file and `QD_UPDATE_ACCESS_SNAPSHOT`: a snapshot that writes
+  itself pins nothing.
+- Leave out a method whose outcome differs from run to run with
+  `exclude: ["taskService.roll"]`; the file lists it. Take one snapshot per
+  test file (one test file per service keeps merges small), or pass
+  `{ file }`.
+
 ### Performance budgets
 
 `expectBudget(run, { name })` makes performance something a test can fail
@@ -3183,7 +3257,7 @@ bunx @fitzzero/quickdraw-codemod v5 .
 | `./client`         | `createQuickdrawClient`, `QuickdrawProvider`, `useQuickdraw`, `usePresence`, `useAdminServices`, `createQuickdrawConnection`, `call`, `callData`, `liveDataOf`, the coordinator; everything in `./utils`                                        |
 | `./utils`          | `createServerCaller`, cache keys (`methodKey`, `entityKey`, `collectionKey`), formatting, navigation, `parseJWTPayload`                                                                                                                         |
 | `./parser`         | the JSON-only Socket.IO parser                                                                                                                                                                                                                  |
-| `./testing`        | `createTestApp`, `describeAccessMatrix`, `expectBudget`, `createRecordingSink`, `DevWarningError`                                                                                                                                               |
+| `./testing`        | `createTestApp`, `describeAccessMatrix`, `snapshotAccessMatrix`, `expectBudget`, `createRecordingSink`, `DevWarningError`                                                                                                                       |
 | `./testing/client` | `renderWithQuickdraw`, and everything in `./testing/mock`                                                                                                                                                                                       |
 | `./testing/mock`   | `createMockClient` alone, without Testing Library: for browser bundles such as Storybook                                                                                                                                                        |
 | `./testing/prisma` | test databases on PostgreSQL or PGlite                                                                                                                                                                                                          |
