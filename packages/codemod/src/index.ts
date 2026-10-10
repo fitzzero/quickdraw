@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createContext, type Stats } from "./context";
-import { findFormatter, FORMATTED } from "./format";
+import { findFormatter, FORMATTED, type FormatResult } from "./format";
 import { findLayout, type LayoutOptions, repoPath } from "./layout";
 import { migrate } from "./migrate";
 import { loadProject } from "./project";
@@ -18,6 +18,8 @@ export interface RunOptions extends LayoutOptions {
   readonly root: string;
   /** Change nothing on disk; report what would change. */
   readonly dryRun?: boolean;
+  /** @internal Files per formatter call (tests). */
+  readonly formatBatch?: number;
 }
 
 /** What a run did (or, in a dry run, would do). */
@@ -32,7 +34,14 @@ export interface RunResult {
   /** Problems the command prints to stderr, one line each. */
   readonly warnings: readonly string[];
   /** The app's formatter the run formatted its files with, and whether that worked. */
-  readonly formatter?: { readonly name: string; readonly ok: boolean };
+  readonly formatter?: {
+    readonly name: string;
+    readonly ok: boolean;
+    /** When it failed: the files it left unformatted, its exit code and its own output. */
+    readonly unformatted?: readonly string[];
+    readonly status?: number;
+    readonly output?: string;
+  };
 }
 
 /** Runs the codemod on the app at `options.root`. */
@@ -49,13 +58,29 @@ export function runCodemod(options: RunOptions): RunResult {
   const changed = written.filter((path) => !ctx.created.has(path)).map(relative);
   const reportPath = join(layout.root, REPORT_FILE);
   const before = existsSync(reportPath) ? readFileSync(reportPath, "utf8") : undefined;
-  const formatter = options.dryRun === true ? undefined : findFormatter(layout.root);
-  let formatted = true;
+  const formatter =
+    options.dryRun === true
+      ? undefined
+      : findFormatter(
+          layout.root,
+          options.formatBatch === undefined ? {} : { batch: options.formatBatch },
+        );
+  const formatted = { ok: true, unformatted: [] as string[], status: 0, output: [] as string[] };
+  const record = (result: FormatResult): void => {
+    if (!result.ok) {
+      formatted.ok = false;
+      formatted.unformatted.push(...result.unformatted);
+      formatted.status ||= result.status;
+      if (result.output !== "") {
+        formatted.output.push(result.output);
+      }
+    }
+  };
   if (options.dryRun !== true) {
     project.saveSync();
     if (formatter !== undefined) {
       const files = written.filter((path) => FORMATTED.test(path));
-      formatted = formatter.format(files);
+      record(formatter.format(files));
       for (const path of files) {
         project.getSourceFile(path)?.refreshFromFileSystemSync();
       }
@@ -66,7 +91,7 @@ export function runCodemod(options: RunOptions): RunResult {
   if (options.dryRun !== true && before !== text) {
     writeFileSync(reportPath, text);
     if (formatter?.markdown === true) {
-      formatted = formatter.format([reportPath]) && formatted;
+      record(formatter.format([reportPath]));
       text = readFileSync(reportPath, "utf8");
     }
   }
@@ -81,6 +106,18 @@ export function runCodemod(options: RunOptions): RunResult {
     report: text,
     items: report.count,
     warnings: ctx.warnings,
-    ...(formatter === undefined ? {} : { formatter: { name: formatter.name, ok: formatted } }),
+    ...(formatter === undefined
+      ? {}
+      : {
+          formatter: formatted.ok
+            ? { name: formatter.name, ok: true }
+            : {
+                name: formatter.name,
+                ok: false,
+                unformatted: formatted.unformatted,
+                status: formatted.status,
+                output: formatted.output.join("\n"),
+              },
+        }),
   };
 }

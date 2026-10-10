@@ -6,11 +6,13 @@ import { z } from "zod";
 import { qd } from "../../quickdraw";
 
 const task = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity: taskSchema,
   methods: {
     assign: mutation({
       input: z.object({ id: z.string(), assigneeId: z.string().nullable() }),
       output: "entity",
+      describe: "Assigns a task to a user, or to nobody.",
     }),
   },
 });

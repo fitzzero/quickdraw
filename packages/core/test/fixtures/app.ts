@@ -70,11 +70,12 @@ const card = z.object({
 const entity = card.extend({ notes: z.string().nullable() });
 
 export const taskContract = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity,
   projections: { card },
   fields: { notes: "Admin" },
   methods: {
-    get: query({ input: id, output: "entity" }),
+    get: query({ input: id, output: "entity", describe: "Reads one task by its id." }),
     /** How many tasks a project has: watches the project's board. */
     countOnBoard: query({
       input: z.object({ projectId: z.string() }),
@@ -119,6 +120,7 @@ export const taskContract = defineContract("taskService", {
   },
   collections: {
     board: {
+      describe: "A project's tasks, in board order.",
       scope: "projectId",
       item: "card",
       order: [

@@ -16,7 +16,10 @@ Run it from the app's repository root, on a clean working tree, after
 upgrading `@fitzzero/quickdraw-core` to 5.0. It formats what it writes with
 the app's formatter (oxfmt, prettier or Biome, when the root `package.json`
 has it and it is installed), so the output passes the app's format check as
-written. It expects the quickdraw template's layout; the options move each
+written. Files the formatter's config ignores (an app that ignores Markdown
+ignores the report) are left as written. When the formatter fails, the
+codemod prints its exit code, the formatter's own error and the files it
+left unformatted. It expects the quickdraw template's layout; the options move each
 part:
 
 | Option                | Default                                       |
