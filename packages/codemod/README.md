@@ -72,7 +72,28 @@ It expects the quickdraw template's layout; the options move each part:
   `"entity"`, marked (a tracked write throws `NOT_FOUND` rather than
   answering null, and only `"entity"` is optimistic by default). In a file
   whose helpers use the tracked `db`, handlers use that one rather than
-  shadow it. A split service's method modules export typed method objects.
+  shadow it. A split service's method modules export typed method objects,
+  whether their parameter is the class or a port of it, read from the
+  source: `Pick`, `Omit`, `Partial`, `Readonly` or `Required` of the class
+  or of `BaseService<...>` over its method map, through type aliases,
+  interfaces, type parameters and intersections. The port type is marked. A
+  `defineMethod` call tied to no service is named at its file and line in
+  the contract's marker for the method map's unimplemented methods. A
+  function that only calls the modules' register functions, or other such
+  functions (an aggregator, such as
+  `defineQueryMethods(service) { defineGetTarget(service); ... }`), is
+  removed with its calls, and so is a file it leaves empty that nothing
+  imports; the summary counts the removed aggregators. One that does more
+  (a condition, logging, another call) stays under a `[this]` marker that
+  names the calls the codemod removed from it, and a register function
+  loses its calls of the others the same way.
+- **Which class.** A service is read from one class nothing extends, outside
+  test code (`__tests__`, `testing`, `*.test.ts(x)`, `*.spec.ts(x)`): of
+  several with one service name, the class `registerService` instantiates,
+  else the one named after the service; the others are marked `[service]`.
+  Test code's 4.x service classes are marked `[service]` and hide nothing;
+  its uses of the services are rewritten. A contract whose class implements
+  none of its method map is marked `[service]` and named on stderr.
 - **Access.** Each method gets the 5.0 form that admits exactly the callers
   4.x admitted:
 

@@ -29,12 +29,18 @@ import {
   type DisconnectUserOptions,
   type LiveData,
 } from "./pushes";
-import { onConnection, type ServerHello, type SocketExtension } from "./socketio";
+import {
+  onConnection,
+  type ConnectionSettings,
+  type ServerHello,
+  type SocketExtension,
+} from "./socketio";
 import type { QuickdrawIo, SocketContext } from "./types";
 
 export type { SocketRateLimitOptions } from "./middleware";
 export type { ClusterOptions, DisconnectUserOptions } from "./pushes";
 export type { QuickdrawIo } from "./types";
+export { resolveLegacyWire, type LegacyWireOptions } from "./legacy";
 
 /** Socket.IO server options `createServer` passes through; it sets `parser` and `cors` itself. */
 export type SocketOptions = Partial<Omit<ServerOptions, "parser" | "cors">>;
@@ -47,7 +53,8 @@ export interface SocketServerSettings extends Omit<SocketContext, "meter"> {
   readonly resolvePrincipal: ResolvePrincipal;
   readonly loadServiceAccess: ServerAuth["loadServiceAccess"];
   readonly binary: boolean;
-  readonly legacyWire: boolean;
+  /** The legacy shim's settings, or `undefined` when 4.x clients are refused. */
+  readonly legacyWire: ConnectionSettings["legacyWire"] | undefined;
   readonly cors: SocketCors;
   readonly socket: SocketOptions | undefined;
   readonly rateLimit: SocketRateLimitOptions | false;
@@ -122,7 +129,7 @@ export function createSocketServer(
   settings.live?.attach(io, probe, settings.cluster, broadcasts);
   listenForGrants(io, settings.live, settings.logger);
   listenForDisconnects(io);
-  io.use(protocolMiddleware(settings.legacyWire, context));
+  io.use(protocolMiddleware(settings.legacyWire !== undefined, context));
   io.use(authMiddleware(settings.resolvePrincipal, context));
   // Before the connection handler: the limiter's `socket.use` middleware must
   // come before the legacy shim's, so it counts each 4.x call before it runs.
@@ -138,7 +145,10 @@ export function createSocketServer(
         settings.live === undefined
           ? settings.extensions
           : [...settings.extensions, settings.live.extension],
+      legacyExtensions: settings.live === undefined ? [] : [settings.live.legacyExtension],
       legacyCallers: new Set(),
+      // A server that refuses 4.x clients has no 4.x socket to read it.
+      legacyWire: settings.legacyWire ?? { aliases: new Map() },
     }),
   );
   return {

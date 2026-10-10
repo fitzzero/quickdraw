@@ -69,3 +69,16 @@ export function isUnder(file: SourceFile | string, dir: string): boolean {
   const path = typeof file === "string" ? file : file.getFilePath();
   return path.startsWith(`${dir}/`);
 }
+
+const TEST_CODE = /(?:^|\/)(?:__tests__|testing)\/|\.(?:test|spec)\.tsx?$/u;
+
+/**
+ * Whether `path` (relative to the repository root, forward slashes) is test
+ * code: a file under a `__tests__` or `testing` directory, or a `*.test.ts(x)`
+ * or `*.spec.ts(x)` file. The codemod reads no service from test code, so a
+ * test's subclass of a service neither becomes a service nor hides the real
+ * one; it still rewrites test code's uses of the services.
+ */
+export function isTestFile(path: string): boolean {
+  return TEST_CODE.test(path);
+}

@@ -60,6 +60,7 @@ export type {
   McpContext,
   McpContextOf,
   Principal,
+  PrincipalKindOf,
   PrincipalOf,
   QuickdrawTypes,
   Transport,
@@ -344,7 +345,7 @@ export type {
   SocketOptions,
   SocketRateLimitOptions,
 } from "./transports/socketServer";
-export type { LegacyReply } from "./transports/legacy";
+export type { LegacyReply, LegacyWireOptions } from "./transports/legacy";
 
 // Redis adapter for horizontal scaling, and the cluster's shared state
 // behind it (the revision counter, last-seen times): docs/deploying.md

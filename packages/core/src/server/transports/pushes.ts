@@ -44,6 +44,8 @@ export interface DisconnectUserOptions {
 /** What the socket server needs of its dispatcher's live data (`emit/live.ts`). */
 export interface LiveData {
   readonly extension: SocketExtension;
+  /** What a 4.x socket of the legacy shim gets instead of `extension`. */
+  readonly legacyExtension: SocketExtension;
   attach(
     io: QuickdrawIo,
     probe: AdapterProbe,

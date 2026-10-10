@@ -369,6 +369,26 @@ function markInstanceMembers(ctx: RunContext, plans: readonly ServicePlan[], wor
   }
 }
 
+/** Marks the port types (`ChatServicePort`) that typed the method modules' service parameter. */
+function markPorts(plans: readonly ServicePlan[], work: Work): void {
+  const sets = new Map<SourceFile, MarkerSet>();
+  for (const plan of plans) {
+    for (const port of plan.service.ports) {
+      const file = port.getSourceFile();
+      const markers = sets.get(file) ?? new MarkerSet(file);
+      sets.set(file, markers);
+      markers.addAbove(
+        port,
+        "this",
+        `${port.getName()} was a port of the 4.x ${plan.service.className} instance, the type its method modules took: those modules export method objects now, and the service object ${serviceVar(plan.service)} has none of the instance's members. Delete it, or keep only what the helpers that still take it use`,
+      );
+    }
+  }
+  for (const [file, markers] of sets) {
+    work.for(file).edits.push(...markers.edits);
+  }
+}
+
 /** Rewrites every other file's use of the migrated classes. */
 export function rewriteReferences(
   ctx: RunContext,
@@ -376,6 +396,7 @@ export function rewriteReferences(
   work: Work,
 ): void {
   markInstanceMembers(ctx, plans, work);
+  markPorts(plans, work);
   for (const file of ctx.project.getSourceFiles()) {
     for (const plan of plans) {
       rewriteFile(ctx, file, plan, work);

@@ -10,12 +10,15 @@
 //
 // A request fails with `VALIDATION` for a malformed frame, `NOT_FOUND` for an
 // unknown service or collection, `UNAUTHENTICATED` for an anonymous socket,
-// `FORBIDDEN` for a scope the principal may not subscribe to (4.1 answered an
-// unknown collection and a denied scope alike) or, for `qd:col:items`, one
-// the socket has not subscribed to; and `INTERNAL`, logged, for a lookup or
-// read that failed. No listener throws (`emit/answer.ts`).
+// `FORBIDDEN` for a principal of a kind the service does not admit
+// (`../access/kinds.ts`), for a scope the principal may not subscribe to (4.1
+// answered an unknown collection and a denied scope alike) or, for
+// `qd:col:items`, one the socket has not subscribed to, which a refused kind
+// never has; and `INTERNAL`, logged, for a lookup or read that failed. No
+// listener throws (`emit/answer.ts`).
 
 import { CLIENT_EVENTS } from "../../contract/names";
+import { checkKind } from "../access/kinds";
 import { answerEvent, answerNow, onDisconnect } from "../emit/answer";
 import type { QuickdrawServerSocket, SocketContext } from "../transports/types";
 import type { CollectionHub } from "./bind";
@@ -39,6 +42,7 @@ export function collectionSubscriptions(
     answerEvent(socket, context, CLIENT_EVENTS.collectionSub, async (frame) => {
       const request = readSubscribe(frame);
       const { collection } = servedCollection(hub, socket, request);
+      checkKind(collection.service.kinds, socket.data.principal, collection.service.name);
       return await subscribeScope(hub, socket, collection, request);
     });
     answerEvent(socket, context, CLIENT_EVENTS.collectionItems, async (frame) => {

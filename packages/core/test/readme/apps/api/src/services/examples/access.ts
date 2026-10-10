@@ -41,6 +41,11 @@ const task = defineContract("taskService", {
       output: "entity",
       describe: "Assigns a task to the caller.",
     }),
+    triage: mutation({
+      input: z.object({ id: z.string(), status: z.string() }),
+      output: "entity",
+      describe: "Sets a task's status, for a token that may triage.",
+    }),
   },
 });
 
@@ -87,9 +92,19 @@ export const taskService = qd.defineService(task, {
       handler: async ({ db }) => (await db.task.updateMany({ data: { status: "archived" } })).count,
     },
     claim: {
-      access: custom((ctx, input) => input.id.length > 0 && ctx.principal.kind === "user"),
+      access: { entry: "Moderate" },
+      // users only: an agent acting for one is refused, whatever its grants
+      kinds: ["user"],
       handler: ({ input, ctx, db }) =>
         db.task.update({ where: { id: input.id }, data: { assigneeId: ctx.principal.userId } }),
+    },
+    triage: {
+      // a check on a token's claims stays a custom form
+      access: custom(
+        (ctx, input) => ctx.principal.claims?.scope === "triage" && input.status !== "archived",
+      ),
+      handler: ({ input, db }) =>
+        db.task.update({ where: { id: input.id }, data: { status: input.status } }),
     },
   },
 });

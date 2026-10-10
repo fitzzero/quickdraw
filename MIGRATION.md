@@ -116,7 +116,31 @@ faithfully. What it does:
   (`super.unsubscribe(...)`) is dropped under a marker naming it, since
   `super` outside a class does not parse. A split service's method modules
   keep their files, with typed method objects (see
-  [Splitting large services](#splitting-large-services)).
+  [Splitting large services](#splitting-large-services)), whether a
+  module's parameter is the service class or a port of it
+  (`Pick<BaseService<...>, "defineMethod" | ...> & { ... }`, an interface
+  extending `Pick<ChatService, ...>`, read from the source); the port type
+  is marked. A `defineMethod` call the codemod cannot tie to a service
+  keeps its file, and the contract's marker for the method map's
+  unimplemented methods names it at its file and line. A function that only
+  calls the modules' register functions, or other such functions (an
+  aggregator, such as
+  `defineQueryMethods(service) { defineGetTarget(service); ... }`), is
+  removed with its calls, and a file it leaves empty that nothing imports is
+  deleted. One that does more stays, marked `[this]`, without the calls the
+  codemod removed, which the marker names: move what it still does, then
+  delete it.
+- **Which class a service comes from.** A service is read from one class of
+  the api package that nothing extends, outside test code (files under
+  `__tests__` or `testing`, and `*.test.ts(x)` and `*.spec.ts(x)` files).
+  When several classes carry one service name, it is the class
+  `registerService("<name>", ...)` instantiates, else the one named after the
+  service (`TaskService` for `taskService`); each other one is marked
+  `[service]`. A test's subclass of a service is never a service and hides
+  nothing: it is marked `[service]`, and test code's uses of the services
+  are rewritten like any other file's. A service whose method map names
+  methods the class read implements none of gets a `[service]` marker in its
+  contract and a line on stderr.
 - **The web app.** `useService`, `useServiceQuery`, `useSubscription` and
   `useCollection` calls become `qd.<service>.<method>.useMutation()`,
   `.useQuery(input)`, `qd.<service>.useEntity(id)` and
@@ -202,9 +226,12 @@ that shape, and 4.x did let everyone call it, so the codemod writes
 exactly the 4.x callers, and the marker asks whether a lookup open to
 anyone was meant. Keep `rowless: true` when it was (a public profile, a
 lookup by an id that tells nothing); otherwise drop the flag and give the
-method an `entry` form. An input that has no JSON Schema yet (a Zod 3 schema,
-a `todoSchema`) is not checked, so the refusal can first appear when the
-schema moves to Zod 4: it names the method and both ways out.
+method an `entry` form. An input whose JSON Schema names no keys (a Zod 3
+schema, which has none, or a `todoSchema` without `keys`) is not checked, so
+the refusal can first appear when the schema moves to Zod 4: it names the
+method and both ways out. A `todoSchema<T>({ keys })` names its keys, so one
+with `"id"` among them is checked now; lint's `no-todo-schema` says which
+placeholder inputs have no keys.
 
 `jsonAcl` keeps 4.x's semantics but one: a user with several entries in a
 row's list gets the highest of their levels, where 4.x's `checkEntryACL`
@@ -215,7 +242,12 @@ once per service, so check the stored lists for duplicate entries.
 
 ## Work through the report
 
-In this order, because each step leans on the one before:
+First the "Services" section (`[service]`), when the report has one: a
+4.x service class in test code, a second class of one service name, or a
+contract written from a class that implements none of its method map. A
+contract read from the wrong class is wrong in every step after it, so
+settle these first. Then, in this order, because each step leans on the one
+before:
 
 1. **Contracts.** Replace each `todoSchema` with a real schema (lint's
    `no-todo-schema` lists them), give the entity a schema, and check each
@@ -757,9 +789,19 @@ export const taskService = qd.defineService(task, {
       handler: async ({ db }) => (await db.task.updateMany({ data: { status: "archived" } })).count,
     },
     claim: {
-      access: custom((ctx, input) => input.id.length > 0 && ctx.principal.kind === "user"),
+      access: { entry: "Moderate" },
+      // users only: an agent acting for one is refused, whatever its grants
+      kinds: ["user"],
       handler: ({ input, ctx, db }) =>
         db.task.update({ where: { id: input.id }, data: { assigneeId: ctx.principal.userId } }),
+    },
+    triage: {
+      // a check on a token's claims stays a custom form
+      access: custom(
+        (ctx, input) => ctx.principal.claims?.scope === "triage" && input.status !== "archived",
+      ),
+      handler: ({ input, db }) =>
+        db.task.update({ where: { id: input.id }, data: { status: input.status } }),
     },
   },
 });
@@ -768,6 +810,19 @@ export const taskService = qd.defineService(task, {
 The 5.0 task service above replaces its `checkEntryACL` with
 `inherit({ from: projectContract, via: "projectId" })`: the level on the
 task's project, whose policy reads the membership table.
+
+A check of the caller's kind, written in a handler
+(`if (ctx.principal.kind !== "user") throw ...`) or as a `custom` form
+(`custom((ctx) => ctx.principal.kind === "user")`), becomes `kinds` beside
+`access`. `claim` above keeps its `entry` form and adds `kinds: ["user"]`;
+a `custom` form could only do both by checking the row by hand. No grant
+passes the check, a service-wide `Admin` grant included.
+`initQuickdraw({ kinds })` sets the kinds every service admits,
+`defineService(contract, { kinds })` narrows them for one service, and a
+method's `kinds` narrows them again. A service's list also holds for its
+subscriptions and channels. A check on a claim, such as a token's `scope`,
+stays a `custom` form (`triage` above). The `no-inline-auth-guard` lint rule
+reports a kind check that throws in a handler.
 
 ### `defineCollection` becomes contract `collections`
 
@@ -1793,9 +1848,24 @@ only, not subscriptions, collections or channels, and it logs each
 service, method and kind of caller once, so the remaining 4.x clients can
 be found.
 
+A call through the shim sees the socket it arrived on: `ctx.socketId` is
+its id, and `ctx.rooms.join(room)` puts the 4.x client in an app room,
+which it leaves when it disconnects. A contract's events
+(`ctx.rooms.emit`) reach only 5.0 sockets, so until those clients speak
+protocol 5 the app delivers to 4.x listeners with its own raw emit to the
+room (`server.io.to(room).emit(...)`), an item for the lint baseline.
+
+If the migration renames a service, the 4.x clients still call it by its old
+name. Map each old name onto the new service with
+`legacyWire: { aliases: { taskService: "cardService" } }`: a 4.x call to
+`taskService:get` then runs `cardService.get`, with that method's validation
+and access, and the log names the old name once per method and kind of
+caller. 5.0 clients use the new name only, and `createServer` throws on an
+alias that names no registered service.
+
 To ship without a flag day: deploy the 5.0 server with `legacyWire: true`,
 ship the 5.0 web and mobile clients, watch the log until no 4.x caller is
-left, then remove `legacyWire`. Screens that depend on 4.x live data
+left (and none on an alias), then remove `legacyWire`. Screens that depend on 4.x live data
 (subscriptions, collections) stop updating on old clients in the meantime,
 so ship the clients soon after the server.
 
@@ -1870,7 +1940,8 @@ An agent doing the migration can start from
 4.1's README split a large service into an abstract `*ServiceCore`, method
 modules calling `service.defineMethod(...)`, and a concrete subclass wiring
 them. In 5.0 the method modules export typed method objects and the service
-lists them; the core's helpers become module functions. This is what the
+lists them; the core's helpers become module functions, and the functions
+that only called the modules' register functions go. This is what the
 codemod writes, with `MethodOf` added to `apps/api/src/quickdraw.ts`:
 
 <!-- example: apps/api/src/services/migration/split.ts#split -->
@@ -1922,7 +1993,7 @@ export const taskService = qd.defineService(taskContract, {
 
 ## Order of the migrations
 
-Within one app: contracts, access, emits, client, as in
+Within one app: services, contracts, access, emits, client, as in
 [Work through the report](#work-through-the-report).
 
 Across the apps on 4.x: quickdraw-chat went first (the template, and the

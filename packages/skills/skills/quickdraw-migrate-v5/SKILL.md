@@ -64,7 +64,10 @@ guide's sections as the report sends you to them.
 
 3. **Read `quickdraw-migration-report.md`.** Every item is a
    `// quickdraw-migrate: review [kind] ...` marker above the code it is
-   about. Work through it in this order, one commit per step:
+   about. First the "Services" section (`[service]`), when it has one: a
+   contract whose class implements none of its method map was read from
+   the wrong class, so settle these before anything else. Then work
+   through it in this order, one commit per step:
    1. **Contracts** (`[contract]`): real schemas for the entity and each
       `todoSchema`; check each method's kind (chosen from its name). The
       codemod writes no `describe` (4.x had no per-method prose): write one
@@ -92,7 +95,8 @@ guide's sections as the report sends you to them.
    in handlers (5.0 answers it with a generic `INTERNAL`: throw
    `QuickdrawError(code, message)` where the caller should see the message),
    channels, the server set-up (`qd.createServer`, with `legacyWire: true`
-   while 4.x clients remain).
+   while 4.x clients remain, or `legacyWire: { aliases: { old: "new" } }`
+   when you renamed a service they still call).
    A hand-built sign-in (unmarked: the codemod leaves it) moves onto the
    auth routes kit last, with its `Session` table migration (MIGRATION.md,
    "Hand-built auth to the auth routes kit").

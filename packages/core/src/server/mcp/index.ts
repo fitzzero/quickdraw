@@ -17,6 +17,8 @@ export { bootstrapMcpServer } from "./bootstrap";
 export { createMcpHttpRouter, type McpHttpReply, type McpHttpRouterOptions } from "./http";
 export type {
   DescribeToolsOptions,
+  McpBindCall,
+  McpBinder,
   McpCallOptions,
   McpCallResult,
   McpContextOfServices,

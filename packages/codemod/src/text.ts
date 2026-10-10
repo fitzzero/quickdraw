@@ -51,6 +51,57 @@ export function editedText(node: Node, edits: readonly Edit[]): string {
   return applyEdits(node.getText(), node.getStart(), inside);
 }
 
+/** Whether the line starting at file offset `position` holds only whitespace. */
+function blankLineAt(text: string, position: number): boolean {
+  const end = text.indexOf("\n", position);
+  return end !== -1 && text.slice(position, end).trim() === "";
+}
+
+/**
+ * An edit removing `node`. A node on lines of its own goes with them, with
+ * the comments right above it (no blank line between) and a trailing line
+ * comment, and leaves no doubled blank line, nor one at the start or end of
+ * its block or file. A node sharing a line with other code goes alone, with
+ * the spaces that set it apart.
+ */
+export function removalEdit(node: Node): Edit {
+  const text = node.getSourceFile().getFullText();
+  const lineEnd = text.indexOf("\n", node.getEnd());
+  const before = text.slice(text.lastIndexOf("\n", node.getStart() - 1) + 1, node.getStart());
+  const rest = text.slice(node.getEnd(), lineEnd === -1 ? text.length : lineEnd);
+  const firstOnLine = before.trim() === "";
+  if (!firstOnLine || !/^[ \t]*(?:\/\/.*)?\r?$/u.test(rest)) {
+    const spacesBefore = firstOnLine ? 0 : before.length - before.trimEnd().length;
+    const spacesAfter = firstOnLine ? rest.length - rest.trimStart().length : 0;
+    return {
+      start: node.getStart() - spacesBefore,
+      end: node.getEnd() + spacesAfter,
+      text: "",
+    };
+  }
+  let first = node.getStart();
+  for (const range of node.getLeadingCommentRanges().toReversed()) {
+    if (/\n[ \t]*\r?\n/u.test(text.slice(range.getEnd(), first))) {
+      break;
+    }
+    first = range.getPos();
+  }
+  let start = text.lastIndexOf("\n", first - 1) + 1;
+  let end = lineEnd === -1 ? text.length : lineEnd + 1;
+  const previousLine = start < 2 ? 0 : text.lastIndexOf("\n", start - 2) + 1;
+  const previous = text.slice(previousLine, start).trim();
+  const blankBefore = start > 0 && previous === "";
+  const opensBlock = start === 0 || previous.endsWith("{");
+  const after = text.slice(end).trimStart();
+  const closesBlock = after === "" || after.startsWith("}");
+  if (blankLineAt(text, end) && (blankBefore || opensBlock)) {
+    end = text.indexOf("\n", end) + 1;
+  } else if (blankBefore && closesBlock) {
+    start = previousLine;
+  }
+  return { start, end, text: "" };
+}
+
 /** The whitespace that starts the line holding file offset `position`. */
 export function indentAt(fileText: string, position: number): string {
   const lineStart = fileText.lastIndexOf("\n", position - 1) + 1;
@@ -91,6 +142,13 @@ export function lowerFirst(name: string): string {
 /** `name` with its first letter in upper case. */
 export function upperFirst(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+export function listText(items: readonly string[]): string {
+  return items.length < 2
+    ? (items[0] ?? "")
+    : `${items.slice(0, -1).join(", ")} and ${items.at(-1) ?? ""}`;
 }
 
 /** A JavaScript string literal of `value`, in double quotes. */

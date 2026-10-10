@@ -9,7 +9,9 @@
 // who may call what: each method's access form and `rowless`, the service's
 // row policy, admin bypass, `watchAccess` and field levels, who may open a
 // collection's scope, a channel's access, a stream's computed seed
-// (`access.ts`); without it the pages are the contracts' alone.
+// (`access.ts`), and which other services it depends on, with a graph of
+// those on the index (`dependencies.ts`); without it the pages are the
+// contracts' alone.
 //
 //   quickdraw-docs packages/shared/src/contracts/index.ts --out docs/api
 //   quickdraw-docs packages/shared/src/contracts/index.ts --services apps/api/src/services/index.ts
@@ -29,13 +31,15 @@ import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AnyContract } from "../contract/defineContract";
 import { servicesOf, type ServiceDoc } from "./access";
+import { dependenciesOf } from "./dependencies";
 import { fileOf, GENERATED_MARKER, renderIndex, renderService } from "./render";
 
 const USAGE = `Usage: quickdraw-docs <module> [--services <module>] [--out <dir>] [--check]
 
   <module>              a module exporting the app's contracts: each one, or a map of them
   --services <module>   a module exporting the services (each, or a list of them): the pages
-                        then also say who may call each method, from the services' access
+                        then also say who may call each method, from the services' access,
+                        and which services each depends on, with a graph on the index
   --out <dir>           where the pages go: one per service, plus README.md (default: docs/api)
   --check               write nothing; exit 1 when the pages on disk differ from the contracts
 `;
@@ -122,6 +126,7 @@ export function generateDocs(
       );
     }
   }
+  const dependencies = services === undefined ? undefined : dependenciesOf(contracts, services);
   const files = new Map<string, string>();
   for (const contract of contracts) {
     const file = fileOf(contract);
@@ -132,11 +137,16 @@ export function generateDocs(
       file,
       renderService(
         contract,
-        services === undefined ? undefined : { service: services.get(contract.name) },
+        services === undefined
+          ? undefined
+          : {
+              service: services.get(contract.name),
+              dependencies: dependencies?.get(contract.name),
+            },
       ),
     );
   }
-  files.set(INDEX_FILE, renderIndex(contracts));
+  files.set(INDEX_FILE, renderIndex(contracts, dependencies));
   return files;
 }
 
