@@ -2,7 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [5.1.0] - 2026-10-10
+
+Additions for migrating a large 4.x app, filed while planning Conveyor's
+migration: declared principal kinds, access snapshots, argument binding for
+MCP tools, a `describe` on every contract member with the docs and lint that
+use it, 4.x clients that keep working across a service rename, and codemod
+fixes for big apps (port-typed method modules, aggregator functions, test
+subclasses, placeholder keys, reserved-word members, the formatter step and
+the heap). A 4.x call through the legacy shim now sees the socket it arrived on.
 
 ### Principal kinds
 
@@ -30,18 +38,45 @@ All notable changes to this project will be documented in this file.
   instead. A `custom` form that checks a claim, such as a token's `scope`,
   stays as it is.
 
-### API docs: dependencies
+### Testing
 
-- **`quickdraw-docs --services` says which services depend on which.**
-  Each service page gets a "Depends on" section: the other services its
-  declarations name, and how. The declarations are its row policy's
-  `inherit` (inside `anyOf` too), `writes` (each model resolved to the
-  service whose `model` it is), `affects`, `{ scope, of }` access forms on
-  its methods, channels and streams, and its collections' anchors. The
-  index adds a Mermaid `graph LR` of those edges. Nothing reads source: a
-  handler's undeclared reads of another service's rows do not show.
-  Regenerate your docs: `--check` with `--services` reports every page as
-  out of date until you do.
+- **Access snapshots.** `snapshotAccessMatrix(app, { principals, reset, rows })`
+  on `./testing` records who may call what: every method of the app's
+  services (or of `services`), each entity subscribe (`qd:sub`) and each
+  collection scope (`qd:col:sub`), as every principal and anonymously.
+  The first run writes the outcomes to `__access__/<test file>.json` beside
+  the test, and every later run compares its matrix with that file: a cell
+  whose outcome changed fails, naming the method, its row variant, the
+  principal and both outcomes, and whether the change opens or closes
+  access, until `QD_UPDATE_ACCESS_SNAPSHOT=1` rewrites the file. Under CI a
+  missing file and added or removed cells fail too, because a snapshot that
+  writes itself pins nothing. `reset` (the app's `resetDatabase` and seed)
+  runs again after every mutation access let through, so no cell sees the
+  writes of another. Inputs are made from each method's input schema with
+  the row where its access form reads it (`inputs(ref, fixture)` gives the
+  others), and a cell without a valid input is recorded as `VALIDATION`,
+  never called, and listed in the report's `inconclusive`. Each principal's
+  `kind` is recorded beside the cells. `describeAccessMatrix` is unchanged.
+
+### MCP bridge
+
+- **`bind` fills tool arguments from the caller's principal.**
+  `createMcpRegistry({ bind: { taskId: ({ principal }) => principal.claims?.taskId } })`
+  leaves each bound argument out of the `inputSchema` of every method's tool
+  whose object input has it, and fills it on every call (`tools/call` and
+  both shapes of `POST /mcp/invoke`) before the input is validated, so an
+  agent bound to one task cannot name another. A call fails closed before
+  the method runs: `UNAUTHENTICATED` for an anonymous caller, `FORBIDDEN`
+  when the binder returns `undefined` or `null` or when the agent sent
+  another value, and `INTERNAL` (or the code of a `QuickdrawError` it threw)
+  when the binder throws. `createMcpRegistry` throws at startup when a
+  binder is not a function, when a bound argument is in no selected method's
+  object input (a misspelled name), and when it is a property of an input
+  that is not an object. Custom tools are never bound. Binding is not access
+  control: the method's access must still confine the principal, who reaches
+  it over a socket or HTTP with nothing bound. The README's MCP section also
+  shows a tool set per kind of caller and frozen public tool names, built
+  from the existing options.
 
 ### Describes and API docs
 
@@ -63,6 +98,52 @@ All notable changes to this project will be documented in this file.
   the base branch and commits them, for repositories where a committed
   generated file conflicts in every pull request. Copy it into
   `.github/workflows`; run `quickdraw-skills link` to link the skill.
+
+### API docs: dependencies
+
+- **`quickdraw-docs --services` says which services depend on which.**
+  Each service page gets a "Depends on" section: the other services its
+  declarations name, and how. The declarations are its row policy's
+  `inherit` (inside `anyOf` too), `writes` (each model resolved to the
+  service whose `model` it is), `affects`, `{ scope, of }` access forms on
+  its methods, channels and streams, and its collections' anchors. The
+  index adds a Mermaid `graph LR` of those edges. Nothing reads source: a
+  handler's undeclared reads of another service's rows do not show.
+  Regenerate your docs: `--check` with `--services` reports every page as
+  out of date until you do.
+
+### Legacy shim
+
+- **Service-name aliases for 4.x clients.** `legacyWire` also takes
+  `{ aliases: { taskService: "cardService" } }`: a 4.x client that still calls
+  a renamed service by its old name (`taskService:get`) runs the new service's
+  method, with its validation, access and `onCall`, instead of getting no
+  reply. The legacy log names the alias once per old name, method and
+  principal kind. Protocol-5, HTTP and MCP calls are never aliased, and
+  `createServer` throws on an alias that names no service or shadows one.
+
+### Fixed
+
+- **A call through the 4.x legacy shim (`legacyWire`) sees the socket it
+  arrived on.** Its handler gets `ctx.socketId`, and `ctx.rooms.join(room)`
+  joins the 4.x client's socket instead of answering `false`, so an app can
+  put an old client in a room and reach it with its own raw emits. The socket
+  leaves its app rooms when it disconnects, and `onRoomLeave` and presence
+  hear it. The shim still serves request/response calls only, and a
+  contract's events still reach only protocol-5 sockets.
+
+### Lint
+
+- **`no-todo-schema` says when a placeholder input hides its keys from the
+  id-reach check.** `defineService` refuses an input with `id` under an access
+  form that checks no row (`"public"`, `"authenticated"`, `{ service: L }`
+  below `Admin`), and reads the input's keys from its JSON Schema. A
+  `todoSchema()` without `keys` names none, so the check cannot see an `id` in
+  it. As the `input` of `query()` or `mutation()`, such a placeholder now gets
+  a second message that says so and asks for `keys`; a
+  `todoSchema<T>({ keys: ["id"] })` is checked like a Zod 4 schema. MIGRATION.md,
+  the README and the access rule no longer say that every placeholder is
+  unchecked.
 
 ### Codemod
 
@@ -96,26 +177,6 @@ All notable changes to this project will be documented in this file.
   that completes falls from 3,584 MiB to 2,048 MiB, the peak memory (at an
   8,192 MiB heap) from 4,237 MiB to 2,360 MiB, and the run from 234 s to
   69 s, with byte-identical output.
-
-### Releasing
-
-- **A release is a merge to `main`.** `.github/workflows/publish.yml` runs on
-  every push to `main`: it publishes every package npm does not have at the
-  repository's version, under `latest` (`next` for a prerelease) and with
-  provenance, and tags each `<package>-v<version>`. Pushing those tags by hand
-  was the release before, which is how 5.0.1 came to sit on `main` unpublished.
-  `scripts/auto-release.sh` decides what a push releases, and when the version
-  is already on npm and a package's shipped source changed since its tag, it
-  takes the next patch and writes it into `packages/*/package.json`,
-  `packages/core/src/version.ts` and `bun.lock` for the workflow to commit, so
-  a release no longer waits on a bump nobody made. A minor or a major is still
-  bumped by hand, a prerelease is never bumped by machine, and a docs- or
-  test-only change cuts no release. Every step asks the registry, so a re-run
-  publishes only what is missing. The four packages share one version and a
-  test holds them to it; a change's entry goes under `## [Unreleased]`, and the
-  release that ships it writes the version and the date here.
-
-### Codemod
 
 - **Method modules that take a port of the service.** A method module whose
   parameter is typed as a port rather than the service class
@@ -180,78 +241,23 @@ All notable changes to this project will be documented in this file.
   `<name>Of<Class>` (`deleteOfTaskService`), its `this.delete(...)` calls
   follow, and its marker says it was renamed.
 
-### Testing
+### Releasing
 
-- **Access snapshots.** `snapshotAccessMatrix(app, { principals, reset, rows })`
-  on `./testing` records who may call what: every method of the app's
-  services (or of `services`), each entity subscribe (`qd:sub`) and each
-  collection scope (`qd:col:sub`), as every principal and anonymously.
-  The first run writes the outcomes to `__access__/<test file>.json` beside
-  the test, and every later run compares its matrix with that file: a cell
-  whose outcome changed fails, naming the method, its row variant, the
-  principal and both outcomes, and whether the change opens or closes
-  access, until `QD_UPDATE_ACCESS_SNAPSHOT=1` rewrites the file. Under CI a
-  missing file and added or removed cells fail too, because a snapshot that
-  writes itself pins nothing. `reset` (the app's `resetDatabase` and seed)
-  runs again after every mutation access let through, so no cell sees the
-  writes of another. Inputs are made from each method's input schema with
-  the row where its access form reads it (`inputs(ref, fixture)` gives the
-  others), and a cell without a valid input is recorded as `VALIDATION`,
-  never called, and listed in the report's `inconclusive`. Each principal's
-  `kind` is recorded beside the cells. `describeAccessMatrix` is unchanged.
-
-### Legacy shim
-
-- **Service-name aliases for 4.x clients.** `legacyWire` also takes
-  `{ aliases: { taskService: "cardService" } }`: a 4.x client that still calls
-  a renamed service by its old name (`taskService:get`) runs the new service's
-  method, with its validation, access and `onCall`, instead of getting no
-  reply. The legacy log names the alias once per old name, method and
-  principal kind. Protocol-5, HTTP and MCP calls are never aliased, and
-  `createServer` throws on an alias that names no service or shadows one.
-
-### Fixed
-
-- **A call through the 4.x legacy shim (`legacyWire`) sees the socket it
-  arrived on.** Its handler gets `ctx.socketId`, and `ctx.rooms.join(room)`
-  joins the 4.x client's socket instead of answering `false`, so an app can
-  put an old client in a room and reach it with its own raw emits. The socket
-  leaves its app rooms when it disconnects, and `onRoomLeave` and presence
-  hear it. The shim still serves request/response calls only, and a
-  contract's events still reach only protocol-5 sockets.
-
-### Lint
-
-- **`no-todo-schema` says when a placeholder input hides its keys from the
-  id-reach check.** `defineService` refuses an input with `id` under an access
-  form that checks no row (`"public"`, `"authenticated"`, `{ service: L }`
-  below `Admin`), and reads the input's keys from its JSON Schema. A
-  `todoSchema()` without `keys` names none, so the check cannot see an `id` in
-  it. As the `input` of `query()` or `mutation()`, such a placeholder now gets
-  a second message that says so and asks for `keys`; a
-  `todoSchema<T>({ keys: ["id"] })` is checked like a Zod 4 schema. MIGRATION.md,
-  the README and the access rule no longer say that every placeholder is
-  unchecked.
-
-### MCP bridge
-
-- **`bind` fills tool arguments from the caller's principal.**
-  `createMcpRegistry({ bind: { taskId: ({ principal }) => principal.claims?.taskId } })`
-  leaves each bound argument out of the `inputSchema` of every method's tool
-  whose object input has it, and fills it on every call (`tools/call` and
-  both shapes of `POST /mcp/invoke`) before the input is validated, so an
-  agent bound to one task cannot name another. A call fails closed before
-  the method runs: `UNAUTHENTICATED` for an anonymous caller, `FORBIDDEN`
-  when the binder returns `undefined` or `null` or when the agent sent
-  another value, and `INTERNAL` (or the code of a `QuickdrawError` it threw)
-  when the binder throws. `createMcpRegistry` throws at startup when a
-  binder is not a function, when a bound argument is in no selected method's
-  object input (a misspelled name), and when it is a property of an input
-  that is not an object. Custom tools are never bound. Binding is not access
-  control: the method's access must still confine the principal, who reaches
-  it over a socket or HTTP with nothing bound. The README's MCP section also
-  shows a tool set per kind of caller and frozen public tool names, built
-  from the existing options.
+- **A release is a merge to `main`.** `.github/workflows/publish.yml` runs on
+  every push to `main`: it publishes every package npm does not have at the
+  repository's version, under `latest` (`next` for a prerelease) and with
+  provenance, and tags each `<package>-v<version>`. Pushing those tags by hand
+  was the release before, which is how 5.0.1 came to sit on `main` unpublished.
+  `scripts/auto-release.sh` decides what a push releases, and when the version
+  is already on npm and a package's shipped source changed since its tag, it
+  takes the next patch and writes it into `packages/*/package.json`,
+  `packages/core/src/version.ts` and `bun.lock` for the workflow to commit, so
+  a release no longer waits on a bump nobody made. A minor or a major is still
+  bumped by hand, a prerelease is never bumped by machine, and a docs- or
+  test-only change cuts no release. Every step asks the registry, so a re-run
+  publishes only what is missing. The four packages share one version and a
+  test holds them to it; a change's entry goes under `## [Unreleased]`, and the
+  release that ships it writes the version and the date here.
 
 ## [5.0.1] - 2026-10-08
 

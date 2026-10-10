@@ -1,6 +1,6 @@
 {
   "name": "@fitzzero/quickdraw-codemod",
-  "version": "5.0.1",
+  "version": "5.1.0",
   "description": "Moves a quickdraw 4.x app to 5.0 (contracts, defineService, the typed client) and reports what is left to decide",
   "keywords": [
     "codemod",
