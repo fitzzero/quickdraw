@@ -86,7 +86,10 @@ carve-out's own files are listed (the template's `scripts/strip-game.mjs`).
 `quickdraw-migration-report.md` at the repository root lists every
 `// quickdraw-migrate: review [kind] ...` marker the codemod left, with its
 file and line, grouped by kind. Each marker sits above the code it is about
-and says what to do. Work through it in this order, one commit per step:
+and says what to do. First the "Services" section (`[service]`), when the
+report has one: a contract written from a class that implements none of its
+method map was read from the wrong class, so settle these before anything
+else. Then work through it in this order, one commit per step:
 
 1. **Contracts** (`[contract]`): give the entity and every `todoSchema` a real
    schema, and check each method's kind (a query only reads).

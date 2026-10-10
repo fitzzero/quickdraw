@@ -224,7 +224,12 @@ once per service, so check the stored lists for duplicate entries.
 
 ## Work through the report
 
-In this order, because each step leans on the one before:
+First the "Services" section (`[service]`), when the report has one: a
+4.x service class in test code, a second class of one service name, or a
+contract written from a class that implements none of its method map. A
+contract read from the wrong class is wrong in every step after it, so
+settle these first. Then, in this order, because each step leans on the one
+before:
 
 1. **Contracts.** Replace each `todoSchema` with a real schema (lint's
    `no-todo-schema` lists them), give the entity a schema, and check each
@@ -1896,7 +1901,7 @@ export const taskService = qd.defineService(taskContract, {
 
 ## Order of the migrations
 
-Within one app: contracts, access, emits, client, as in
+Within one app: services, contracts, access, emits, client, as in
 [Work through the report](#work-through-the-report).
 
 Across the apps on 4.x: quickdraw-chat went first (the template, and the

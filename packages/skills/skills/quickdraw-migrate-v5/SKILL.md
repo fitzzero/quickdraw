@@ -61,7 +61,10 @@ guide's sections as the report sends you to them.
 
 3. **Read `quickdraw-migration-report.md`.** Every item is a
    `// quickdraw-migrate: review [kind] ...` marker above the code it is
-   about. Work through it in this order, one commit per step:
+   about. First the "Services" section (`[service]`), when it has one: a
+   contract whose class implements none of its method map was read from
+   the wrong class, so settle these before anything else. Then work
+   through it in this order, one commit per step:
    1. **Contracts** (`[contract]`): real schemas for the entity and each
       `todoSchema`; check each method's kind (chosen from its name).
    2. **Access** (`[access]`, `[access-override]`): decide the
