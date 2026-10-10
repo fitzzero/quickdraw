@@ -1,7 +1,8 @@
-// The README's MCP bridge example.
+// The README's MCP bridge examples.
 
 import { z } from "zod";
 import { verifySession } from "./auth";
+import { verifyAgentToken } from "./auth/agents";
 import { app, server } from "./index";
 import { projectService } from "./services/project";
 import { taskService } from "./services/task";
@@ -42,4 +43,23 @@ const registry = createMcpRegistry({
 app.use(createMcpHttpRouter({ registry }));
 // in an MCP client's process
 createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
+// #endregion
+
+// #region bind
+// agents bound to one project: an agent's token names it as a verified claim
+const projectAgents = createMcpRegistry({
+  services: [taskService],
+  dispatcher: server.dispatcher,
+  // agent tokens only: anyone else is anonymous, and every tool here refuses them
+  principal: (request) =>
+    verifyAgentToken(request.transport === "http" ? request.token : process.env.AGENT_TOKEN),
+  // filled from the claim on every call, and left out of every tool's arguments
+  bind: { projectId: ({ principal }) => principal.claims?.projectId },
+  include: ["taskService.create", "taskService.countOnBoard"],
+  // the tools' public names: create_task and count_tasks
+  name: (_service, method) => (method === "create" ? "create_task" : "count_tasks"),
+});
+
+// beside the first registry, at a path of its own: GET /agents/tools, POST /agents/invoke
+app.use(createMcpHttpRouter({ registry: projectAgents, path: "/agents" }));
 // #endregion

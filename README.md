@@ -1217,6 +1217,68 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   list with `exclude` or `include`, per registry, and serve agents of
   different reach from separate registries.
 
+`bind` fills chosen arguments from who is calling instead of from the agent,
+so an agent bound to one project cannot name another in its calls. Here an
+agent's token names its project as a verified claim (`principal.claims`):
+
+<!-- example: apps/api/src/mcp.ts#bind -->
+
+```ts
+// agents bound to one project: an agent's token names it as a verified claim
+const projectAgents = createMcpRegistry({
+  services: [taskService],
+  dispatcher: server.dispatcher,
+  // agent tokens only: anyone else is anonymous, and every tool here refuses them
+  principal: (request) =>
+    verifyAgentToken(request.transport === "http" ? request.token : process.env.AGENT_TOKEN),
+  // filled from the claim on every call, and left out of every tool's arguments
+  bind: { projectId: ({ principal }) => principal.claims?.projectId },
+  include: ["taskService.create", "taskService.countOnBoard"],
+  // the tools' public names: create_task and count_tasks
+  name: (_service, method) => (method === "create" ? "create_task" : "count_tasks"),
+});
+
+// beside the first registry, at a path of its own: GET /agents/tools, POST /agents/invoke
+app.use(createMcpHttpRouter({ registry: projectAgents, path: "/agents" }));
+```
+
+- Each bound argument is left out of the `inputSchema` of every method's tool
+  whose object input has it: `create_task` lists `id` and `title`, and
+  `count_tasks` takes no arguments. Every call of such a tool gets the
+  binder's value before its input is validated, through `tools/call` and both
+  shapes of `POST /mcp/invoke` alike.
+- A call fails closed, before the method runs: `UNAUTHENTICATED` for an
+  anonymous caller, and `FORBIDDEN` when the binder returns `undefined` or
+  `null`, or when the agent sent the argument with another value. A binder
+  that throws fails the call with `INTERNAL`, or with the code of the
+  `QuickdrawError` it threw.
+- `createMcpRegistry` throws at startup when a bound argument is in no
+  selected method's object input (a misspelled name would leave the real
+  argument to the agent), and when it is a property of an input that is not
+  an object, which it names: leave that method out, or make its input an
+  object.
+- Custom tools are never bound, and neither are the calls their `caller`
+  makes: a custom tool reads `principal` itself. `describeTools` lists the
+  inputs as the contracts declare them, with nothing bound.
+- Binding is not access control. The same principal reaches the method over a
+  socket or HTTP with nothing bound, so the method's access must still
+  confine it to its project.
+
+Two more needs are met by the options above, with nothing added:
+
+- **A tool set per kind of caller.** Make one registry per kind, each with its
+  own `include`, `bind` and `principal`, and serve each at its own `path` or
+  from its own stdio entry, as above. A registry's `principal` hook refuses
+  the other kinds: throwing fails their calls with `UNAUTHENTICATED`.
+- **Frozen public tools.** `name` gives a method's tool any public name, as
+  `create_task` above. When agents depend on tool names and argument shapes
+  that must never change, give that surface a contract of its own: its
+  methods' inputs and `describe` texts are the frozen shapes, its handlers
+  call the app's services through `ctx.services`, and a registry with
+  `name: (_service, method) => method` serves it. The bridge never reshapes a
+  tool's arguments on the way in: such a tool would be invisible to the API
+  docs and to lint, which read the contracts.
+
 ## The client
 
 `createQuickdrawClient(contracts)` builds one typed client from the

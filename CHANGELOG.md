@@ -22,6 +22,26 @@ All notable changes to this project will be documented in this file.
   test holds them to it; a change's entry goes under `## [Unreleased]`, and the
   release that ships it writes the version and the date here.
 
+### MCP bridge
+
+- **`bind` fills tool arguments from the caller's principal.**
+  `createMcpRegistry({ bind: { taskId: ({ principal }) => principal.claims?.taskId } })`
+  leaves each bound argument out of the `inputSchema` of every method's tool
+  whose object input has it, and fills it on every call (`tools/call` and
+  both shapes of `POST /mcp/invoke`) before the input is validated, so an
+  agent bound to one task cannot name another. A call fails closed before
+  the method runs: `UNAUTHENTICATED` for an anonymous caller, `FORBIDDEN`
+  when the binder returns `undefined` or `null` or when the agent sent
+  another value, and `INTERNAL` (or the code of a `QuickdrawError` it threw)
+  when the binder throws. `createMcpRegistry` throws at startup when a
+  binder is not a function, when a bound argument is in no selected method's
+  object input (a misspelled name), and when it is a property of an input
+  that is not an object. Custom tools are never bound. Binding is not access
+  control: the method's access must still confine the principal, who reaches
+  it over a socket or HTTP with nothing bound. The README's MCP section also
+  shows a tool set per kind of caller and frozen public tool names, built
+  from the existing options.
+
 ## [5.0.1] - 2026-10-08
 
 Fixes from the independent review of 5.0.0 after the farseer migration
