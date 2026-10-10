@@ -154,7 +154,9 @@ faithfully. What it does:
 - **Formatting.** It formats every file it writes, the report too, with the
   app's formatter (oxfmt, prettier or Biome, when the root `package.json`
   has it and it is installed), so the output passes the app's format check
-  as it is written.
+  as it is written. Files the formatter's config ignores are left as
+  written. A failure prints the formatter's exit code, its own error and the
+  files it left unformatted.
 - **The report.** Wherever a person has to decide, it leaves a
   `// quickdraw-migrate: review [kind] ...` marker on its own line above the
   code in question (a hook's `error` read as the 4.x message string among
