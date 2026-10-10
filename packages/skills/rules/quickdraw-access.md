@@ -166,3 +166,8 @@ channel `requires`.
 Pin every service's matrix with `describeAccessMatrix` from
 `@fitzzero/quickdraw-core/testing` (see quickdraw-testing.md): each method
 as owner, member, stranger and anonymous, through the real dispatcher.
+Before changing a form, a policy or the kinds of principal, record the
+whole table with `snapshotAccessMatrix` (every method, entity subscribe and
+collection scope, in `__access__/<test file>.json`): each cell the change
+moves then fails, saying whether it opens or closes access, until
+`QD_UPDATE_ACCESS_SNAPSHOT=1` accepts it.
