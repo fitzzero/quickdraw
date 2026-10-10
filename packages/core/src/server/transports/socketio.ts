@@ -23,7 +23,7 @@ import {
   unreadable,
   type Acknowledge,
 } from "./ack";
-import { attachLegacyShim, type LegacyCallers } from "./legacy";
+import { attachLegacyShim, type LegacyCallers, type LegacyWire } from "./legacy";
 import type { QuickdrawServerSocket, SocketContext } from "./types";
 
 /**
@@ -52,6 +52,8 @@ export interface ConnectionSettings extends SocketContext {
   readonly legacyExtensions: readonly SocketExtension[];
   /** The 4.x callers already logged, shared by every socket of the server. */
   readonly legacyCallers: LegacyCallers;
+  /** The legacy shim's settings (its aliases); only 4.x sockets read them. */
+  readonly legacyWire: LegacyWire;
 }
 
 type Calls = Map<CallId, AbortController>;
@@ -165,7 +167,7 @@ export function onConnection(
       void socket.join(userRoom(principal.userId));
     }
     if (socket.data.protocol === "legacy") {
-      attachLegacyShim(socket, settings, settings.legacyCallers);
+      attachLegacyShim(socket, settings, settings.legacyCallers, settings.legacyWire);
       for (const extension of settings.legacyExtensions) {
         extension(socket, settings);
       }

@@ -69,6 +69,14 @@ export interface ServiceMethod {
    */
   readonly schemaOutput: SchemaOutput | undefined;
   readonly access: AccessForm;
+  /**
+   * The kinds of principal that may call the method (RFC 0003 section 4.1):
+   * its own `kinds`, else its service's, else the app's (`initQuickdraw`);
+   * `undefined` admits every kind. A principal of another kind, or without
+   * one, gets `FORBIDDEN` before the access form is asked; an anonymous
+   * caller is left to the form.
+   */
+  readonly kinds: readonly string[] | undefined;
   readonly handler: AnyHandler;
   readonly share: ShareMode | undefined;
   /** How long a shared result is reused after its run, in milliseconds. */
@@ -132,6 +140,13 @@ export interface Service<
   readonly watchAccess: WatchAccess | undefined;
   /** Whether a service-wide `Admin` grant passes every access check of this service. */
   readonly adminBypass: boolean;
+  /**
+   * The kinds of principal the service admits (RFC 0003 section 4.1): its
+   * own `kinds`, else the app's (`initQuickdraw`); `undefined` admits every
+   * kind. Its methods narrow it, and its subscriptions (`qd:sub`,
+   * `qd:col:sub`, `qd:watch`, `qd:stream:sub`) and channels check it.
+   */
+  readonly kinds: readonly string[] | undefined;
   /** The checked method records, by method name. */
   readonly methods: Readonly<Record<string, ServiceMethod>>;
   /** The contract's channels with the handlers `defineService` gave them (RFC 0003 section 12.5). */
@@ -155,6 +170,8 @@ export type AnyService = Service<QuickdrawTypes, AnyContract>;
 export interface ServiceRuntime {
   /** The app's `context` option, or `undefined`. */
   readonly extendContext: ContextExtender | undefined;
+  /** The app's `kinds` option, checked: what every service it defines admits by default. */
+  readonly kinds: readonly string[] | undefined;
   /**
    * Makes `dispatcher` the one the instance's `qd.caller`, `qd.run`,
    * `qd.stream` and `qd.presence` go through, as its own `createServer`

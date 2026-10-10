@@ -789,9 +789,19 @@ export const taskService = qd.defineService(task, {
       handler: async ({ db }) => (await db.task.updateMany({ data: { status: "archived" } })).count,
     },
     claim: {
-      access: custom((ctx, input) => input.id.length > 0 && ctx.principal.kind === "user"),
+      access: { entry: "Moderate" },
+      // users only: an agent acting for one is refused, whatever its grants
+      kinds: ["user"],
       handler: ({ input, ctx, db }) =>
         db.task.update({ where: { id: input.id }, data: { assigneeId: ctx.principal.userId } }),
+    },
+    triage: {
+      // a check on a token's claims stays a custom form
+      access: custom(
+        (ctx, input) => ctx.principal.claims?.scope === "triage" && input.status !== "archived",
+      ),
+      handler: ({ input, db }) =>
+        db.task.update({ where: { id: input.id }, data: { status: input.status } }),
     },
   },
 });
@@ -800,6 +810,19 @@ export const taskService = qd.defineService(task, {
 The 5.0 task service above replaces its `checkEntryACL` with
 `inherit({ from: projectContract, via: "projectId" })`: the level on the
 task's project, whose policy reads the membership table.
+
+A check of the caller's kind, written in a handler
+(`if (ctx.principal.kind !== "user") throw ...`) or as a `custom` form
+(`custom((ctx) => ctx.principal.kind === "user")`), becomes `kinds` beside
+`access`. `claim` above keeps its `entry` form and adds `kinds: ["user"]`;
+a `custom` form could only do both by checking the row by hand. No grant
+passes the check, a service-wide `Admin` grant included.
+`initQuickdraw({ kinds })` sets the kinds every service admits,
+`defineService(contract, { kinds })` narrows them for one service, and a
+method's `kinds` narrows them again. A service's list also holds for its
+subscriptions and channels. A check on a claim, such as a token's `scope`,
+stays a `custom` form (`triage` above). The `no-inline-auth-guard` lint rule
+reports a kind check that throws in a handler.
 
 ### `defineCollection` becomes contract `collections`
 
@@ -1832,9 +1855,17 @@ which it leaves when it disconnects. A contract's events
 protocol 5 the app delivers to 4.x listeners with its own raw emit to the
 room (`server.io.to(room).emit(...)`), an item for the lint baseline.
 
+If the migration renames a service, the 4.x clients still call it by its old
+name. Map each old name onto the new service with
+`legacyWire: { aliases: { taskService: "cardService" } }`: a 4.x call to
+`taskService:get` then runs `cardService.get`, with that method's validation
+and access, and the log names the old name once per method and kind of
+caller. 5.0 clients use the new name only, and `createServer` throws on an
+alias that names no registered service.
+
 To ship without a flag day: deploy the 5.0 server with `legacyWire: true`,
 ship the 5.0 web and mobile clients, watch the log until no 4.x caller is
-left, then remove `legacyWire`. Screens that depend on 4.x live data
+left (and none on an alias), then remove `legacyWire`. Screens that depend on 4.x live data
 (subscriptions, collections) stop updating on old clients in the meantime,
 so ship the clients soon after the server.
 

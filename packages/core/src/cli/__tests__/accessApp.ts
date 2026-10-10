@@ -1,9 +1,11 @@
 // A small app for `quickdraw-docs --services` (docs.test.ts): contracts, and
 // the services that implement them, between them the access forms, row
-// policies, collection scopes, streams and channels the access pages
-// describe. `noteService` has a contract and no service, as an app's
-// services module can miss one. Nothing here runs: the docs read the
-// definitions only.
+// policies, principal kinds, collection scopes, streams and channels the
+// access pages describe, and the declarations their "Depends on" sections
+// read: `playerService` inherits from `teamService` and writes
+// `scoreService`'s model, and `scoreService` affects `teamService`'s rows.
+// `noteService` has a contract and no service, as an app's services module
+// can miss one. Nothing here runs: the docs read the definitions only.
 
 import { z } from "zod";
 import { defineContract, mutation, query, via } from "../../index";
@@ -13,6 +15,7 @@ const qd = initQuickdraw();
 
 const team = z.object({ id: z.string(), name: z.string(), ownerId: z.string(), notes: z.string() });
 const player = z.object({ id: z.string(), teamId: z.string(), userId: z.string() });
+const score = z.object({ id: z.string(), teamId: z.string(), points: z.number() });
 const byId = z.object({ id: z.string() });
 
 export const teamContract = defineContract("teamService", {
@@ -55,6 +58,14 @@ export const playerContract = defineContract("playerService", {
   },
 });
 
+export const scoreContract = defineContract("scoreService", {
+  entity: score,
+  methods: { get: query({ input: byId, output: "entity" }) },
+  streams: {
+    board: { item: z.number(), scope: "teamId", access: { scope: "Read", of: teamContract } },
+  },
+});
+
 export const noteContract = defineContract("noteService", {
   methods: { read: query({ input: z.undefined(), output: z.string() }) },
 });
@@ -70,10 +81,11 @@ export const teamService = qd.defineService(teamContract, {
     members({ model: "teamMember", entry: "teamId", user: "userId", level: "role" }),
   ),
   watchAccess: "authenticated",
+  kinds: ["user", "agent"],
   methods: {
     get: { access: { entry: "Read" }, handler: nothing },
     profile: { access: "public", rowless: true, handler: nothing },
-    rename: { access: { service: "Admin", entry: "Moderate" }, handler: nothing },
+    rename: { access: { service: "Admin", entry: "Moderate" }, kinds: ["user"], handler: nothing },
     stats: { access: { service: "Moderate" }, handler: nothing },
     audit: { access: custom(() => true), handler: nothing },
     ping: { access: "authenticated", handler: nothing },
@@ -87,6 +99,7 @@ export const playerService = qd.defineService(playerContract, {
   model: "player",
   access: inherit({ from: teamContract, via: "teamId" }),
   adminBypass: false,
+  writes: ["score", "teamMember"],
   collections: { byTeam: { anchor: teamContract }, mine: { scopeAccess: "self" } },
   methods: {
     get: { access: { entry: "Read" }, handler: nothing },
@@ -94,5 +107,12 @@ export const playerService = qd.defineService(playerContract, {
   },
 });
 
+export const scoreService = qd.defineService(scoreContract, {
+  model: "score",
+  access: inherit({ from: teamContract, via: "teamId" }),
+  affects: [{ service: teamContract, id: "teamId" }],
+  methods: { get: { access: { entry: "Read" }, handler: nothing } },
+});
+
 /** The services, as an app's services module exports them: one list. */
-export const services = [teamService, playerService] as const;
+export const services = [teamService, playerService, scoreService] as const;

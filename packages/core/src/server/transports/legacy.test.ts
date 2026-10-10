@@ -1,13 +1,15 @@
 // The 4.x legacy shim over real connections (RFC 0003 section 8.5): a client
 // without `auth.qd` calls `"{service}:{method}"` with an ack and gets the 4.x
 // `ServiceResponse` shape back. Its calls run with the `ctx.socketId` and
-// `ctx.rooms` of the socket they arrived on.
+// `ctx.rooms` of the socket they arrived on, and a renamed service answers
+// to its old name through `legacyWire.aliases`.
 
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineContract, mutation, query, type EventFrame } from "../../index";
 import {
   alice,
+  bob,
   captureLogger,
   db,
   granted,
@@ -18,7 +20,13 @@ import {
   tick,
   type AppPrincipal,
 } from "../__tests__/fixtures";
-import type { CallRecord, PipelineOptions, RoomLeave, ServerOnlyOptions } from "../index";
+import {
+  createServer,
+  type CallRecord,
+  type PipelineOptions,
+  type RoomLeave,
+  type ServerOnlyOptions,
+} from "../index";
 import {
   call,
   next,
@@ -400,5 +408,168 @@ describe("the legacy shim's calls and the socket they arrived on", () => {
     await expect(
       rawLegacyCall(socket, "roomService:subscribe", { room: "r" }, 150),
     ).rejects.toThrow("operation has timed out");
+  });
+});
+
+/** The fixture's `taskService` after a migration renamed it: Read grants on `cardService` only. */
+const cardContract = defineContract("cardService", {
+  methods: {
+    get: query({
+      input: z.object({ id: z.string() }),
+      output: z.object({ id: z.string(), service: z.string() }),
+    }),
+  },
+});
+
+const cardService = qd.defineService(cardContract, {
+  methods: {
+    get: {
+      access: { service: "Read" },
+      handler: ({ input }) => ({ id: input.id, service: "cardService" }),
+    },
+  },
+});
+
+describe("the legacy shim's service-name aliases", () => {
+  async function serveAliases() {
+    const logger = captureLogger();
+    const records: CallRecord[] = [];
+    const { url } = await harness.start({
+      services: [cardService],
+      db,
+      logger,
+      auth: trustingAuth,
+      legacyWire: { aliases: { taskService: "cardService" } },
+      onCall: (record) => records.push(record),
+    });
+    return { url, logger, records };
+  }
+
+  const reader = granted(alice, { cardService: "Read" });
+
+  it("runs a call to the old name as the service it now names, access-checked as that service", async () => {
+    const { url, records } = await serveAliases();
+    const { socket, authInfo } = await connectLegacy(url, reader);
+    // Grants are listed by the services' own names, never copied under an alias.
+    expect(authInfo).toMatchObject({ serviceAccess: { cardService: "Read" } });
+    expect(await legacyCall(socket, "taskService:get", { id: "c1" })).toEqual({
+      id: "c1",
+      service: "cardService",
+    });
+    expect(await legacyCall(socket, "cardService:get", { id: "c2" })).toEqual({
+      id: "c2",
+      service: "cardService",
+    });
+
+    // A grant under the old name is not a grant on the service.
+    const stranger = await connectLegacy(url, granted(bob, { taskService: "Admin" }));
+    expect(await rawLegacyCall(stranger.socket, "taskService:get", { id: "c1" })).toEqual({
+      success: false,
+      error: "Insufficient permissions",
+      code: 403,
+    } satisfies ServiceResponse);
+    // Validation is the service's too.
+    expect(await rawLegacyCall(socket, "taskService:get", { id: 1 })).toMatchObject({
+      success: false,
+      code: 422,
+    });
+    expect(
+      records.map((record) => [record.service, record.method, record.transport, record.outcome]),
+    ).toEqual([
+      ["cardService", "get", "legacy", "ok"],
+      ["cardService", "get", "legacy", "ok"],
+      ["cardService", "get", "legacy", "FORBIDDEN"],
+      ["cardService", "get", "legacy", "VALIDATION"],
+    ]);
+  });
+
+  it("logs each caller once per name called, method and principal kind, naming the alias", async () => {
+    const { url, logger } = await serveAliases();
+    const user = await connectLegacy(url, reader);
+    const agent = await connectLegacy(url, { ...reader, kind: "agent" });
+    for (const socket of [user.socket, user.socket, agent.socket]) {
+      await legacyCall(socket, "taskService:get", { id: "c1" });
+    }
+    await legacyCall(user.socket, "cardService:get", { id: "c1" });
+    await legacyCall(user.socket, "cardService:get", { id: "c1" });
+    expect(logger.at("warn").map((entry) => [entry.message, entry.meta])).toEqual([
+      [
+        "A 4.x client called cardService.get as taskService.get through the legacy shim",
+        {
+          category: "quickdraw.legacy",
+          service: "cardService",
+          method: "get",
+          alias: "taskService",
+          principalKind: "user",
+        },
+      ],
+      [
+        "A 4.x client called cardService.get as taskService.get through the legacy shim",
+        {
+          category: "quickdraw.legacy",
+          service: "cardService",
+          method: "get",
+          alias: "taskService",
+          principalKind: "agent",
+        },
+      ],
+      [
+        "A 4.x client called cardService.get through the legacy shim",
+        {
+          category: "quickdraw.legacy",
+          service: "cardService",
+          method: "get",
+          principalKind: "user",
+        },
+      ],
+    ]);
+  });
+
+  it("aliases 4.x events only: a v5 call to the old name is NOT_FOUND", async () => {
+    const { url } = await serveAliases();
+    const v5 = harness.open(url, v5Auth(reader));
+    await v5.hello;
+    expect(await call(v5.socket, { id: 1, s: "taskService", m: "get", i: { id: "c1" } })).toEqual({
+      ok: false,
+      e: expect.objectContaining({ code: "NOT_FOUND" }),
+    });
+    expect(await call(v5.socket, { id: 2, s: "cardService", m: "get", i: { id: "c1" } })).toEqual({
+      ok: true,
+      d: { id: "c1", service: "cardService" },
+    });
+  });
+
+  it("finds nothing under a name that is not an alias, such as __proto__", async () => {
+    const { url, records } = await serveAliases();
+    const { socket } = await connectLegacy(url, reader);
+    for (const event of ["__proto__:get", "constructor:get", "taskService:remove"]) {
+      await expect(rawLegacyCall(socket, event, { id: "c1" }, 150)).rejects.toThrow(
+        "operation has timed out",
+      );
+    }
+    expect(records).toEqual([]);
+  });
+
+  it("refuses aliases that name no service, shadow a service or cannot be an event prefix", () => {
+    const refused: [unknown, string][] = [
+      [{ aliases: { taskService: "missingService" } }, "is not a registered service"],
+      [{ aliases: { cardService: "cardService" } }, "is a registered service's own name"],
+      [{ aliases: { "task:Service": "cardService" } }, 'without ":"'],
+      [{ aliases: { "": "cardService" } }, 'without ":"'],
+      [{ aliases: { taskService: 1 } }, "is not a registered service"],
+      [{ alias: { taskService: "cardService" } }, 'unknown option "alias"'],
+      ["yes", "must be a boolean or { aliases }"],
+    ];
+    for (const [legacyWire, message] of refused) {
+      expect(() =>
+        createServer({
+          services: [cardService],
+          db,
+          logger: captureLogger(),
+          http: false,
+          legacyWire: legacyWire as ServerOnlyOptions["legacyWire"],
+        }),
+      ).toThrow(message);
+    }
   });
 });

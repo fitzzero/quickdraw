@@ -10,7 +10,8 @@ an index. A page leads with the contract's `describe`; each method shows its
 `describe`, its kind, its default MCP tool name (`{service}_{method}`; an
 app's registry can rename tools, and `bind` can take arguments out of a
 tool's schema, which the docs cannot see) and, for a query, the MCP
-read-only hint; with `--services`, also who may call it. The
+read-only hint; with `--services`, also who may call it, and each page
+says which other services it depends on (with a graph on the index). The
 command and its options are in the README's "API docs from contracts"
 section (`node_modules/@fitzzero/quickdraw-core/README.md`).
 

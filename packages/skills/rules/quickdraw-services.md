@@ -74,12 +74,14 @@ export const taskService = qd.defineService(task, {
 
 - `qd` comes from one `initQuickdraw<{ db: typeof db; principal: AppPrincipal }>()`
   for the whole app (`context: (base) => ({...})` adds app fields to every
-  `ctx`). `db` is `trackPrisma(new PrismaClient({ adapter }))` from
+  `ctx`; `kinds: ["user", "agent"]` the kinds of principal every service
+  admits). `db` is `trackPrisma(new PrismaClient({ adapter }))` from
   `@fitzzero/quickdraw-core/prisma`, applied as the last extension.
 - `methods` implements exactly the contract's methods; each is
-  `{ access, handler }`, plus `timeoutMs`, `rowless` (see
-  quickdraw-access.md), and for queries `share` (`"caller"` or `"all"`),
-  `ttlMs` and `version`.
+  `{ access, handler }`, plus `kinds` and `rowless` (see
+  quickdraw-access.md), `timeoutMs`, and for queries `share` (`"caller"` or
+  `"all"`), `ttlMs` and `version`. A service takes `kinds` too: the kinds of
+  principal its methods and subscriptions admit.
 - A handler receives `{ input, ctx, db }`: the parsed input, the context
   (`principal`, `signal`, `log`, `requestId`, `transport`, `touch`, `rooms`,
   `presence`, `mcp`, `services`) and the tracked client.

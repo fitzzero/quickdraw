@@ -2,7 +2,8 @@
 // read from the contracts, laid out as oxfmt lays out Markdown
 // (`markdown.ts`), so `--check` does not report formatting as drift. With
 // `--services`, each page also says who may call what, read from the
-// services' definitions (`access.ts`).
+// services' definitions (`access.ts`), and which other services it depends
+// on, with a graph of those on the index (`dependencies.ts`).
 
 import {
   DEFAULT_COLLECTION_LIMIT,
@@ -28,6 +29,7 @@ import {
   watchAccessText,
   type ServiceDoc,
 } from "./access";
+import { dependencyGraph, dependsOnSection, type ServiceDependencies } from "./dependencies";
 import { code, list, paragraph, section, table } from "./markdown";
 import {
   jsonSchemaOf,
@@ -47,6 +49,8 @@ export const GENERATED_MARKER =
  */
 export interface AccessInfo {
   readonly service: ServiceDoc | undefined;
+  /** The services the service's declarations name (`dependenciesOf`); `undefined` without a service. */
+  readonly dependencies?: ServiceDependencies | undefined;
 }
 
 /** True when the schema accepts `undefined`: a method that takes no input. */
@@ -170,14 +174,35 @@ function described(text: string | undefined): string[] {
 }
 
 /**
+ * Who may call a method by the kind of principal, with `--services`, when its
+ * service or the app limits it: the kinds, and for a `"public"` method the
+ * anonymous callers its form admits besides. Nothing when every kind may.
+ */
+function callableBy(name: string, access: AccessInfo | undefined): string[] {
+  const method = access?.service?.methods.get(name);
+  if (method?.kinds === undefined) {
+    return [];
+  }
+  const anonymous = method.access === "public" ? ", or anonymously" : "";
+  return [`- Callable by: ${list(method.kinds)}${anonymous}`];
+}
+
+/**
  * Facts about a method, as a list: the name the MCP bridge gives its tool
  * when the registry has no `name` option (the docs cannot see the app's
- * registry), and for a query the read-only hint that tool carries.
+ * registry), for a query the read-only hint that tool carries, and with
+ * `--services` the kinds of principal that may call it.
  */
-function methodFacts(service: string, name: string, method: MethodDef): string[] {
+function methodFacts(
+  service: string,
+  name: string,
+  method: MethodDef,
+  access: AccessInfo | undefined,
+): string[] {
   return [
     `- MCP tool (default name): ${code(defaultToolName(service, name))}`,
     ...(method.kind === "query" ? ["- MCP read-only hint: yes, as on every query's tool"] : []),
+    ...callableBy(name, access),
   ];
 }
 
@@ -204,7 +229,7 @@ function methodSection(
   return section(`### ${code(name)}`, [
     ...described(method.describe),
     kindLine(method),
-    methodFacts(service, name, method),
+    methodFacts(service, name, method, access),
     ...methodAccess(name, access),
     ...inputBlocks(method),
     `Output: ${outputText(method.output)}.`,
@@ -430,7 +455,7 @@ function fieldLevelsText(contract: AnyContract): string {
     : tiers.map(([field, level]) => `${code(field)}: ${String(level)}`).join(", ");
 }
 
-/** The page's "Access" section, with `--services`: the service's policy, bypass, topic and field levels. */
+/** The page's "Access" section, with `--services`: the service's policy, bypass, kinds, topic and field levels. */
 function accessSection(contract: AnyContract, access: AccessInfo | undefined): string[] {
   if (access === undefined) {
     return [];
@@ -450,6 +475,12 @@ function accessSection(contract: AnyContract, access: AccessInfo | undefined): s
           ? "passes every check of the service"
           : `passes only the forms that name ${code("service")} (${code("adminBypass: false")})`,
       ],
+      [
+        "Principal kinds",
+        service.kinds === undefined
+          ? undefined
+          : `${list(service.kinds)}: its methods, subscriptions and channels refuse every other kind`,
+      ],
       ["Change topic", watchAccessText(service.watchAccess)],
       ["Field levels", fieldLevelsText(contract)],
     ]),
@@ -460,7 +491,7 @@ function accessSection(contract: AnyContract, access: AccessInfo | undefined): s
 /**
  * One service's page: its `describe`, entity, projections, methods,
  * collections, streams, channels and events, and with `access`
- * (`--services`) who may call what.
+ * (`--services`) who may call what and which services it depends on.
  */
 export function renderService(contract: AnyContract, access?: AccessInfo): string {
   const lines = [
@@ -470,6 +501,7 @@ export function renderService(contract: AnyContract, access?: AccessInfo): strin
     "",
     ...described(contract.describe).flatMap((text) => [text, ""]),
     ...accessSection(contract, access),
+    ...(access?.dependencies === undefined ? [] : dependsOnSection(access.dependencies)),
     ...entitySection(contract),
     ...projectionsSection(contract),
     ...methodsSection(contract, access),
@@ -503,9 +535,13 @@ export function fileOf(contract: AnyContract): string {
 
 /**
  * The index page: every service with a link to its page, its members
- * counted, and its `describe` when any service has one.
+ * counted, and its `describe` when any service has one; with `dependencies`
+ * (`--services`), a graph of which services depend on which.
  */
-export function renderIndex(contracts: readonly AnyContract[]): string {
+export function renderIndex(
+  contracts: readonly AnyContract[],
+  dependencies?: ReadonlyMap<string, ServiceDependencies>,
+): string {
   const count = (members: object): string => String(Object.keys(members).length);
   const hasDescribe = contracts.some((contract) => contract.describe !== undefined);
   const rows = contracts.map((contract) => [
@@ -536,6 +572,7 @@ export function renderIndex(contracts: readonly AnyContract[]): string {
       ],
       rows,
     ),
+    ...(dependencies === undefined ? [] : ["", ...dependencyGraph(dependencies)]),
   ];
-  return `${lines.join("\n")}\n`;
+  return `${lines.join("\n").trimEnd()}\n`;
 }

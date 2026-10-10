@@ -36,6 +36,45 @@ Every method's `{ access, handler }` names one form:
 - Never guard inline (`if (!ctx.principal) throw ...`): declare the form. The
   `no-inline-auth-guard` lint rule reports it.
 
+## Which kinds of principal may call
+
+An app whose principals come in kinds (`principal.kind`: a user, an agent's
+token, a runner) declares which kinds may call with `kinds`, beside `access`,
+never inside a form:
+
+```ts
+export const qd = initQuickdraw<{ db: typeof db; principal: AppPrincipal }>({
+  kinds: ["user", "agent"], // every service, unless it narrows them
+});
+
+export const tokenService = qd.defineService(token, {
+  kinds: ["user", "agent"], // its methods, subscriptions and channels
+  methods: {
+    mint: { access: "authenticated", kinds: ["user"], handler: mint }, // this method alone
+    heartbeat: { access: "authenticated", handler: beat }, // the service's kinds
+  },
+});
+```
+
+- Each level only narrows the one above it: a method's list within its
+  service's, a service's within the app's. The types refuse a name that is
+  no kind of the app's principal, and `defineService` refuses a wider or
+  empty list when the service is defined.
+- A principal of another kind, or without a `kind`, gets `FORBIDDEN` before
+  the form is asked. No grant passes the check, a service-wide `Admin` grant
+  included: a token acting with its user's grants is what it stops.
+- An anonymous caller is left to the form (`UNAUTHENTICATED` wherever it
+  needs a principal). So a `"public"` method takes no `kinds` of its own: a
+  caller of a refused kind would call it signed out. It keeps its service's
+  list, which holds for signed-in callers.
+- A service's list also refuses other kinds on `qd:sub`, `qd:col:sub`,
+  `qd:watch` and `qd:stream:sub`, and its channels drop their messages.
+- Never check the kind in a handler (`if (ctx.principal.kind !== "user")
+throw ...`; `no-inline-auth-guard` reports it) or in a `custom` form:
+  `kinds` combines with any form (`{ entry: "Moderate" }` and
+  `kinds: ["user"]`), where `custom` would have to check the row by hand.
+  A check on a claim, such as a token's `scope`, stays `custom`.
+
 ## A method that takes a row id
 
 On a service with a policy, a method whose input has `id` reads or writes
@@ -165,9 +204,11 @@ channel `requires`.
 
 Pin every service's matrix with `describeAccessMatrix` from
 `@fitzzero/quickdraw-core/testing` (see quickdraw-testing.md): each method
-as owner, member, stranger and anonymous, through the real dispatcher.
-Before changing a form, a policy or the kinds of principal, record the
-whole table with `snapshotAccessMatrix` (every method, entity subscribe and
-collection scope, in `__access__/<test file>.json`): each cell the change
-moves then fails, saying whether it opens or closes access, until
+as owner, member, stranger and anonymous, through the real dispatcher, and
+on a service with `kinds`, as a principal of each kind it refuses (each
+cell records its principal's `kind`). Before changing a form, a policy or
+the kinds of principal, record the whole table with `snapshotAccessMatrix`
+(every method, entity subscribe and collection scope, in
+`__access__/<test file>.json`): each cell the change moves then fails,
+saying whether it opens or closes access, until
 `QD_UPDATE_ACCESS_SNAPSHOT=1` accepts it.

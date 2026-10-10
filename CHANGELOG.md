@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Principal kinds
+
+- **`kinds` beside `access`** says which kinds of principal
+  (`principal.kind`: a user, an agent's token, a runner) may call:
+  `initQuickdraw({ kinds })` for every service the app defines,
+  `defineService(contract, { kinds })` for one service, and a method's own
+  `kinds`. Each level only narrows the one above it; a wider list, an empty
+  one, or a method's own `kinds` on a `"public"` method is refused when the
+  service is defined, and the types take only kinds of the app's principal
+  (`PrincipalKindOf`). Nothing changes for an app that declares none.
+- **Fail closed.** A principal of another kind, or without a `kind`, gets
+  `FORBIDDEN` before the access form is asked, on every transport, outside
+  the access engine: no grant passes it, a service-wide `Admin` grant
+  included. An anonymous caller is left to the form, as before. A service's
+  list also holds for `qd:sub`, `qd:col:sub`, `qd:watch` and
+  `qd:stream:sub`, and its channels drop other kinds' messages.
+- **Where kinds show.** `describeAccessMatrix` cells carry the principal's
+  `kind`. `quickdraw-docs --services` prints "Callable by" in a method's
+  facts and a "Principal kinds" row for the service, where a list is
+  declared.
+- **Lint's `no-inline-auth-guard`** also reports a check of
+  `ctx.principal.kind` that throws in a handler (not one beside another
+  condition with `&&`, nor one in a `"public"` method): declare `kinds`
+  instead. A `custom` form that checks a claim, such as a token's `scope`,
+  stays as it is.
+
+### API docs: dependencies
+
+- **`quickdraw-docs --services` says which services depend on which.**
+  Each service page gets a "Depends on" section: the other services its
+  declarations name, and how. The declarations are its row policy's
+  `inherit` (inside `anyOf` too), `writes` (each model resolved to the
+  service whose `model` it is), `affects`, `{ scope, of }` access forms on
+  its methods, channels and streams, and its collections' anchors. The
+  index adds a Mermaid `graph LR` of those edges. Nothing reads source: a
+  handler's undeclared reads of another service's rows do not show.
+  Regenerate your docs: `--check` with `--services` reports every page as
+  out of date until you do.
+
 ### Describes and API docs
 
 - **Every contract member takes a `describe`**: the contract itself, and each
@@ -124,6 +163,16 @@ All notable changes to this project will be documented in this file.
   others), and a cell without a valid input is recorded as `VALIDATION`,
   never called, and listed in the report's `inconclusive`. Each principal's
   `kind` is recorded beside the cells. `describeAccessMatrix` is unchanged.
+
+### Legacy shim
+
+- **Service-name aliases for 4.x clients.** `legacyWire` also takes
+  `{ aliases: { taskService: "cardService" } }`: a 4.x client that still calls
+  a renamed service by its old name (`taskService:get`) runs the new service's
+  method, with its validation, access and `onCall`, instead of getting no
+  reply. The legacy log names the alias once per old name, method and
+  principal kind. Protocol-5, HTTP and MCP calls are never aliased, and
+  `createServer` throws on an alias that names no service or shadows one.
 
 ### Fixed
 
