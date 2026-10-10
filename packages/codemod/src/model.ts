@@ -3,7 +3,9 @@
 // `*ServiceCore`), what its constructor declares (service name, model,
 // `hasEntryACL`), the hooks it overrides, and every `defineMethod` call that
 // registers on it, whether inside the class or in a method module
-// (`registerX(service)`, the 4.1 README's "Splitting Large Services").
+// (`registerX(service)`, the 4.1 README's "Splitting Large Services"), whose
+// parameter may be typed as a port of the service
+// (`Pick<BaseService<...>, "defineMethod"> & { ... }`, read from its text).
 
 import {
   type ArrowFunction,
@@ -12,10 +14,12 @@ import {
   type Expression,
   type FunctionDeclaration,
   type FunctionExpression,
+  type InterfaceDeclaration,
   Node,
   type Project,
   type SourceFile,
   SyntaxKind,
+  type TypeAliasDeclaration,
 } from "ts-morph";
 import { importOf } from "./imports";
 import type { Layout } from "./layout";
@@ -67,6 +71,10 @@ export interface ServiceModel {
   /** The collections type of `BaseService<...>` (`ChatCollections`), when it names one. */
   readonly collectionsName: string | undefined;
   readonly methods: readonly MethodCall[];
+  /** The api package's `defineMethod` calls tied to no service (the same list on every service). */
+  readonly untied: readonly UntiedCall[];
+  /** The port types (`ChatServicePort`) the method modules' parameters were typed with. */
+  readonly ports: readonly (TypeAliasDeclaration | InterfaceDeclaration)[];
   /** The fields that hold the Prisma client (`this.prisma`). */
   readonly prismaFields: ReadonlySet<string>;
 }
@@ -287,17 +295,185 @@ function methodCallFrom(call: CallExpression, receiver: string): MethodCall | un
   };
 }
 
-/** `defineMethod` calls on a parameter typed as one of the chain's classes, in other api files. */
+/** The services, by leaf class, that each class of a chain belongs to, by declaration and by name. */
+interface ServiceIndex {
+  readonly byClass: ReadonlyMap<ClassDeclaration, readonly ClassDeclaration[]>;
+  readonly byName: ReadonlyMap<string, readonly ClassDeclaration[]>;
+  /** The services by the method map of their `BaseService<...>`. */
+  readonly byMethodMap: ReadonlyMap<string, readonly ClassDeclaration[]>;
+}
+
+function addTo<K>(map: Map<K, ClassDeclaration[]>, key: K, leaf: ClassDeclaration): void {
+  const list = map.get(key) ?? [];
+  if (!list.includes(leaf)) {
+    list.push(leaf);
+  }
+  map.set(key, list);
+}
+
+function indexOf(chains: ReadonlyMap<ClassDeclaration, readonly ClassDeclaration[]>): ServiceIndex {
+  const byClass = new Map<ClassDeclaration, ClassDeclaration[]>();
+  const byName = new Map<string, ClassDeclaration[]>();
+  const byMethodMap = new Map<string, ClassDeclaration[]>();
+  for (const [leaf, chain] of chains) {
+    for (const cls of chain) {
+      addTo(byClass, cls, leaf);
+      addTo(byName, cls.getName() ?? "", leaf);
+    }
+    const root = chain.at(-1);
+    const methodMap = root === undefined ? undefined : typeArgumentsOf(root).methodMap;
+    if (methodMap !== undefined) {
+      addTo(byMethodMap, methodMap, leaf);
+    }
+  }
+  return { byClass, byName, byMethodMap };
+}
+
+/** TypeScript's own utility types, whose first type argument is the type they narrow. */
+const UTILITIES = new Set(["Pick", "Omit", "Partial", "Readonly", "Required"]);
+const LIB_FILE = /\/typescript\/lib\/lib\.[\w.]*d\.ts$/u;
+const MAX_DEPTH = 12;
+
+/** The declarations a name refers to, through its import. */
+function declarationsOf(name: Node): Node[] {
+  const symbol = name.getSymbol();
+  const target = symbol?.isAlias() === true ? (symbol.getAliasedSymbol() ?? symbol) : symbol;
+  return target?.getDeclarations() ?? [];
+}
+
+/**
+ * The services a type stands for, read from its text: a service class (or a
+ * class of its chain), `Pick`, `Omit`, `Partial`, `Readonly` or `Required` of
+ * one, quickdraw's `BaseService<...>` over its method map, and the type
+ * aliases, interfaces (their `extends`), type parameters (their constraint),
+ * intersections and parentheses that lead to one. Not the type checker: the
+ * codemod runs on 5.0, which has no `BaseService`.
+ */
+function servicesOfType(
+  node: Node | undefined,
+  index: ServiceIndex,
+  seen: Set<Node> = new Set(),
+  depth = 0,
+): ClassDeclaration[] {
+  if (node === undefined || seen.has(node) || depth > MAX_DEPTH) {
+    return [];
+  }
+  seen.add(node);
+  const next = (child: Node | undefined): ClassDeclaration[] =>
+    servicesOfType(child, index, seen, depth + 1);
+  if (Node.isParenthesizedTypeNode(node)) {
+    return next(node.getTypeNode());
+  }
+  if (Node.isIntersectionTypeNode(node)) {
+    return node.getTypeNodes().flatMap(next);
+  }
+  if (Node.isTypeReference(node)) {
+    return referenceServices(node.getTypeName(), node.getTypeArguments(), index, next);
+  }
+  if (Node.isExpressionWithTypeArguments(node)) {
+    return referenceServices(node.getExpression(), node.getTypeArguments(), index, next);
+  }
+  if (Node.isTypeAliasDeclaration(node)) {
+    return next(node.getTypeNode());
+  }
+  if (Node.isInterfaceDeclaration(node)) {
+    return node.getExtends().flatMap(next);
+  }
+  if (Node.isTypeParameterDeclaration(node)) {
+    return next(node.getConstraint());
+  }
+  if (Node.isClassDeclaration(node)) {
+    return [...(index.byClass.get(node) ?? [])];
+  }
+  return [];
+}
+
+/** The services `name<args>` stands for. */
+function referenceServices(
+  name: Node,
+  args: readonly Node[],
+  index: ServiceIndex,
+  next: (child: Node | undefined) => ClassDeclaration[],
+): ClassDeclaration[] {
+  const declarations = declarationsOf(name);
+  if (!Node.isIdentifier(name)) {
+    return declarations.flatMap(next);
+  }
+  const text = name.getText();
+  const file = name.getSourceFile();
+  const imported = importOf(file, text);
+  if (imported?.module === CORE_SERVER && BASES.has(imported.imported)) {
+    const map = args[imported.imported === "BaseRpcService" ? 0 : 3];
+    const mapName =
+      map !== undefined && Node.isTypeReference(map) && Node.isIdentifier(map.getTypeName())
+        ? (importOf(file, map.getTypeName().getText())?.imported ?? map.getTypeName().getText())
+        : map?.getText();
+    return [...(index.byMethodMap.get(mapName ?? "") ?? [])];
+  }
+  if (
+    UTILITIES.has(text) &&
+    imported === undefined &&
+    declarations.every((declaration) => LIB_FILE.test(declaration.getSourceFile().getFilePath()))
+  ) {
+    return next(args[0]);
+  }
+  if (declarations.length === 0) {
+    return [...(index.byName.get(text) ?? [])];
+  }
+  return declarations.flatMap(next);
+}
+
+/** The type alias or interface a parameter's type names (through a type parameter's constraint), if any. */
+function portOf(
+  node: Node | undefined,
+  depth = 0,
+): TypeAliasDeclaration | InterfaceDeclaration | undefined {
+  if (node === undefined || depth > MAX_DEPTH) {
+    return undefined;
+  }
+  if (Node.isTypeAliasDeclaration(node) || Node.isInterfaceDeclaration(node)) {
+    return node;
+  }
+  if (Node.isTypeParameterDeclaration(node)) {
+    return portOf(node.getConstraint(), depth + 1);
+  }
+  if (Node.isTypeReference(node)) {
+    const [declaration] = declarationsOf(node.getTypeName());
+    return portOf(declaration, depth + 1);
+  }
+  return undefined;
+}
+
+/** A `defineMethod` call of the api package whose receiver the codemod could not tie to a service. */
+export interface UntiedCall {
+  readonly name: string;
+  readonly call: CallExpression;
+}
+
+/**
+ * The `defineMethod` calls on a parameter whose type stands for a service
+ * (`servicesOfType`), in api files other than that service's own, by the
+ * service's leaf class; and the calls on a receiver tied to no service. One
+ * scan of the api files for every service.
+ */
 function moduleCalls(
   project: Project,
   layout: Layout,
-  chain: readonly ClassDeclaration[],
-): MethodCall[] {
-  const names = new Set(chain.map((cls) => cls.getName() ?? ""));
-  const own = new Set(chain.map((cls) => cls.getSourceFile()));
-  const calls: MethodCall[] = [];
+  chains: ReadonlyMap<ClassDeclaration, readonly ClassDeclaration[]>,
+): {
+  byLeaf: Map<ClassDeclaration, MethodCall[]>;
+  untied: UntiedCall[];
+  ports: Map<ClassDeclaration, Set<TypeAliasDeclaration | InterfaceDeclaration>>;
+} {
+  const index = indexOf(chains);
+  const ownFiles = new Map(
+    [...chains].map(([leaf, chain]) => [leaf, new Set(chain.map((cls) => cls.getSourceFile()))]),
+  );
+  const byLeaf = new Map<ClassDeclaration, MethodCall[]>();
+  const untied: UntiedCall[] = [];
+  const ports = new Map<ClassDeclaration, Set<TypeAliasDeclaration | InterfaceDeclaration>>();
   for (const file of project.getSourceFiles()) {
-    if (!isUnder(file, layout.api.src) || own.has(file)) {
+    if (!isUnder(file, layout.api.src)) {
       continue;
     }
     for (const call of file.getDescendantsOfKind(SyntaxKind.CallExpression)) {
@@ -306,23 +482,42 @@ function moduleCalls(
         continue;
       }
       const receiver = callee.getExpression();
+      if (receiver.getKind() === SyntaxKind.ThisKeyword) {
+        continue;
+      }
       const declaration = receiver.getSymbol()?.getDeclarations()[0];
-      if (
-        declaration !== undefined &&
-        Node.isParameterDeclaration(declaration) &&
-        names.has(declaration.getTypeNode()?.getText() ?? "")
-      ) {
-        const method = methodCallFrom(call, receiver.getText());
-        if (method !== undefined) {
-          calls.push(method);
+      const typeNode =
+        declaration !== undefined && Node.isParameterDeclaration(declaration)
+          ? declaration.getTypeNode()
+          : undefined;
+      const leaves = [...new Set(servicesOfType(typeNode, index))];
+      const port = portOf(typeNode);
+      const method = methodCallFrom(call, receiver.getText());
+      if (method === undefined) {
+        continue;
+      }
+      if (leaves.length === 0) {
+        untied.push({ name: method.name, call });
+      }
+      for (const leaf of leaves) {
+        if (!(ownFiles.get(leaf)?.has(file) ?? false)) {
+          byLeaf.set(leaf, [...(byLeaf.get(leaf) ?? []), method]);
+          if (port !== undefined && isUnder(port.getSourceFile(), layout.api.src)) {
+            ports.set(leaf, (ports.get(leaf) ?? new Set()).add(port));
+          }
         }
       }
     }
   }
-  return calls;
+  return { byLeaf, untied, ports };
 }
 
-function modelFor(project: Project, layout: Layout, chain: ClassDeclaration[]): ServiceModel {
+function modelFor(
+  chain: readonly ClassDeclaration[],
+  modules: readonly MethodCall[],
+  untied: readonly UntiedCall[],
+  ports: ReadonlySet<TypeAliasDeclaration | InterfaceDeclaration> = new Set(),
+): ServiceModel {
   const [leaf] = chain;
   const root = chain.at(-1) ?? leaf;
   if (leaf === undefined || root === undefined) {
@@ -347,7 +542,9 @@ function modelFor(project: Project, layout: Layout, chain: ClassDeclaration[]): 
     dtoName: dto,
     collectionsName:
       collections !== undefined && /^\w+$/u.test(collections) ? collections : undefined,
-    methods: [...own, ...moduleCalls(project, layout, chain)],
+    methods: [...own, ...modules],
+    untied,
+    ports: [...ports],
     prismaFields: prismaFieldsOf(chain),
   };
 }
@@ -367,9 +564,10 @@ export function findServices(project: Project, layout: Layout): ServiceModel[] {
     }
   }
   const extended = new Set([...chains.values()].flatMap((chain) => chain.slice(1)));
-  return [...chains.entries()]
-    .filter(([cls]) => !extended.has(cls) && !cls.isAbstract())
-    .map(([, chain]) => modelFor(project, layout, chain))
+  const leaves = new Map([...chains].filter(([cls]) => !extended.has(cls) && !cls.isAbstract()));
+  const { byLeaf, untied, ports } = moduleCalls(project, layout, leaves);
+  return [...leaves]
+    .map(([leaf, chain]) => modelFor(chain, byLeaf.get(leaf) ?? [], untied, ports.get(leaf)))
     .toSorted((a, b) => a.serviceName.localeCompare(b.serviceName));
 }
 

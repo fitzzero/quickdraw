@@ -1,6 +1,6 @@
 // The contract of projectService, written by @fitzzero/quickdraw-codemod from
 // ProjectServiceMethods and the defineMethod calls of ProjectService
-// (apps/api/src/services/project.ts).
+// (apps/api/src/services/project.ts, apps/api/src/services/project-methods/limits.ts).
 // Every marker below says what to check.
 
 import { defineContract, listOf, mutation, nullable, query, todoSchema } from "@fitzzero/quickdraw-core";
@@ -48,5 +48,7 @@ export const projectContract = defineContract("projectService", {
     getMembers: query({ input: z.object({ projectId: cuidSchema("project ID") }), output: todoSchema<ProjectMemberDTO[]>() }),
     // quickdraw-migrate: review [contract] mutation, chosen from its name; output: todoSchema of the 4.x response type
     shareProject: mutation({ input: shareProjectSchema, output: todoSchema<{ id: string }>() }),
+    // quickdraw-migrate: review [contract] query, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+    getProjectLimits: query({ input: todoSchema<Record<string, never>>(), output: todoSchema<{ maxProjects: number; maxMembers: number }>() }),
   },
 });

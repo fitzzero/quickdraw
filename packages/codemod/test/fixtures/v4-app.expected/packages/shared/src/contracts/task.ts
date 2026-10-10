@@ -1,12 +1,14 @@
 // The contract of taskService, written by @fitzzero/quickdraw-codemod from
 // TaskServiceMethods and the defineMethod calls of TaskService
-// (apps/api/src/services/task/methods/create-task.ts, apps/api/src/services/task/methods/queries.ts, apps/api/src/services/task/methods/update-task.ts).
+// (apps/api/src/services/task/methods/archive.ts, apps/api/src/services/task/methods/create-task.ts, apps/api/src/services/task/methods/queries.ts, apps/api/src/services/task/methods/update-task.ts).
 // Every marker below says what to check.
 
-import { defineContract, mutation, query, todoSchema } from "@fitzzero/quickdraw-core";
+import { defineContract, listOf, mutation, query, todoSchema } from "@fitzzero/quickdraw-core";
 import { z } from "zod";
 import type { TaskCard, TaskDTO } from "../types/task.js";
 import { cuidSchema } from "./helpers.js";
+
+const byTaskIdSchema = z.object({ id: z.string().min(1) });
 
 const createTaskSchema = z.object({
   projectId: z.string().min(1),
@@ -23,6 +25,10 @@ export const taskContract = defineContract("taskService", {
   // quickdraw-migrate: review [contract] the entity is the 4.x DTO TaskDTO: give it a real schema. Its keys are the fields subscribers receive, read from model "task": drop any that is not a column, or give it a projection select and map
   entity: todoSchema<TaskDTO>({ keys: ["id", "projectId", "title", "status", "ordinal", "assigneeId", "notes", "createdAt", "updatedAt"] }),
   methods: {
+    // quickdraw-migrate: review [contract] mutation, chosen from its name
+    archiveTask: mutation({ input: byTaskIdSchema, output: "entity" }),
+    // quickdraw-migrate: review [contract] query, chosen from its name
+    listArchivedTasks: query({ input: z.object({ projectId: z.string() }), output: listOf("entity") }),
     // quickdraw-migrate: review [contract] mutation, chosen from its name
     createTask: mutation({ input: createTaskSchema, output: "entity" }),
     // quickdraw-migrate: review [contract] query, chosen from its name; output: todoSchema of the 4.x response type

@@ -53,7 +53,13 @@ part:
   `"entity"`, marked (a tracked write throws `NOT_FOUND` rather than
   answering null, and only `"entity"` is optimistic by default). In a file
   whose helpers use the tracked `db`, handlers use that one rather than
-  shadow it. A split service's method modules export typed method objects.
+  shadow it. A split service's method modules export typed method objects,
+  whether their parameter is the class or a port of it, read from the
+  source: `Pick`, `Omit`, `Partial`, `Readonly` or `Required` of the class
+  or of `BaseService<...>` over its method map, through type aliases,
+  interfaces, type parameters and intersections. The port type is marked. A
+  `defineMethod` call tied to no service is named at its file and line in
+  the contract's marker for the method map's unimplemented methods.
 - **Access.** Each method gets the 5.0 form that admits exactly the callers
   4.x admitted:
 

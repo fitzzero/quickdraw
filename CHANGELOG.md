@@ -22,6 +22,23 @@ All notable changes to this project will be documented in this file.
   test holds them to it; a change's entry goes under `## [Unreleased]`, and the
   release that ships it writes the version and the date here.
 
+### Codemod
+
+- **Method modules that take a port of the service.** A method module whose
+  parameter is typed as a port rather than the service class
+  (`Pick<BaseService<..., ChatServiceMethods, ...>, "defineMethod" | ...> & { ... }`,
+  an interface extending `Pick<ChatService, ...>`, a type parameter
+  constrained to either) now gets its contract entries and typed method
+  objects. The codemod reads the port from the source, since 5.0 has no
+  `BaseService` for the type checker to resolve: the utility types `Pick`,
+  `Omit`, `Partial`, `Readonly` and `Required`, `BaseService` and
+  `BaseRpcService` by their method map, type aliases, interfaces, type
+  parameters and intersections. Before, those methods were left out and
+  listed as methods "no defineMethod call implements". The port type gets
+  a `[this]` marker. A `defineMethod` call still tied to no service is named
+  at its file and line in the contract's marker for the unimplemented
+  methods, and the api files are scanned once for every service.
+
 ## [5.0.1] - 2026-10-08
 
 Fixes from the independent review of 5.0.0 after the farseer migration
