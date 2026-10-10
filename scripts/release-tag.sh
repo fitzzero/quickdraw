@@ -3,8 +3,10 @@
 # release is ready: the working tree is clean, <version> is a semantic version,
 # and it equals the version in packages/<package>/package.json.
 #
-# It never creates or pushes the tag. The owner does that, and the tag push
-# runs .github/workflows/publish.yml (see docs/releasing.md).
+# It never creates or pushes the tag, and a tag pushed by hand publishes
+# nothing: a release is a merge to main, which .github/workflows/publish.yml
+# publishes and tags. This is the pre-flight check for one, and the name of the
+# tag it will leave behind (see docs/releasing.md).
 #
 # Usage: scripts/release-tag.sh <package> <version>
 #   <package>  core | lint | skills | codemod (its directory under packages/)
@@ -64,7 +66,7 @@ fi
 tag="$pkg-v$version"
 echo "$tag"
 cat >&2 << EOF
-release-tag: $name $version is ready. Tag this commit and push the tag:
-  git tag -a $tag -m "$name $version"
-  git push origin $tag
+release-tag: $name $version is ready to publish, and will be tagged $tag.
+A push of this commit to main publishes it. To publish it from another ref:
+  gh workflow run publish.yml --ref <ref> -f package=$pkg -f version=$version
 EOF
