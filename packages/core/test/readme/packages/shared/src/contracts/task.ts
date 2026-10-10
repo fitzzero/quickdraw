@@ -3,6 +3,8 @@ import { z } from "zod";
 import { cardSchema, taskSchema } from "../schemas";
 
 export const taskContract = defineContract("taskService", {
+  // what the service is for: MCP tools and the generated docs show it
+  describe: "Tasks on a project's board.",
   // the full row; it must contain `id: string`
   entity: taskSchema,
   // lean shapes of the row
@@ -29,11 +31,13 @@ export const taskContract = defineContract("taskService", {
       output: z.number(),
       // fetched again whenever the project's board changes
       watch: { collection: "board", scope: (input) => input.projectId },
+      describe: "Counts the tasks on a project's board.",
     }),
   },
   collections: {
     // every task of a project, live, in board order
     board: {
+      describe: "A project's tasks, in board order.",
       scope: "projectId",
       item: "card",
       order: [

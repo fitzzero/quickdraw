@@ -24,14 +24,15 @@ whatever the version.
 
 ## What it links
 
-| Link                                   | What it holds                                                                            |
-| -------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `.claude/rules/quickdraw-services.md`  | contracts, `defineService`, tracked writes, derived frames, `affects`, `ctx.touch`, kits |
-| `.claude/rules/quickdraw-access.md`    | access forms, row policies, service grants, failing closed, one policy on every surface  |
-| `.claude/rules/quickdraw-client.md`    | the typed client, live entities and collections, views, optimistic mutations, `watch`    |
-| `.claude/rules/quickdraw-testing.md`   | `createTestApp`, access matrices, budgets, strict warnings, component tests              |
-| `.claude/skills/quickdraw-new-service` | adding a service end to end: contract, service, registration, client, tests              |
-| `.claude/skills/quickdraw-migrate-v5`  | moving a 4.x app to 5.0 with `@fitzzero/quickdraw-codemod` and the migration guide       |
+| Link                                   | What it holds                                                                                                                                                                                                      |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `.claude/rules/quickdraw-services.md`  | contracts, `defineService`, tracked writes, derived frames, `affects`, `ctx.touch`, kits                                                                                                                           |
+| `.claude/rules/quickdraw-access.md`    | access forms, row policies, service grants, failing closed, one policy on every surface                                                                                                                            |
+| `.claude/rules/quickdraw-client.md`    | the typed client, live entities and collections, views, optimistic mutations, `watch`                                                                                                                              |
+| `.claude/rules/quickdraw-testing.md`   | `createTestApp`, access matrices, budgets, strict warnings, component tests                                                                                                                                        |
+| `.claude/skills/quickdraw-new-service` | adding a service end to end: contract, service, registration, client, tests                                                                                                                                        |
+| `.claude/skills/quickdraw-migrate-v5`  | moving a 4.x app to 5.0 with `@fitzzero/quickdraw-codemod` and the migration guide                                                                                                                                 |
+| `.claude/skills/quickdraw-api-docs`    | describes on every contract member, and the API docs kept current: committed and checked, or regenerated on each push by the workflow file it ships (`docs-api.yml`, which an app copies into `.github/workflows`) |
 
 Each rule's `paths` frontmatter follows the quickdraw template's layout
 (`apps/api`, `apps/web`, `packages/shared`), so Claude Code loads it while

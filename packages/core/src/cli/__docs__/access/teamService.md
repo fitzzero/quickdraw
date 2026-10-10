@@ -30,6 +30,9 @@ A caller receives a field only with at least its level on the row.
 
 A query.
 
+- MCP tool (default name): `teamService_get`
+- MCP read-only hint: yes, as on every query's tool
+
 Access: `{ entry: "Read" }`: Read or more on the row `input.id` names.
 
 Input:
@@ -43,6 +46,9 @@ Output: one row as the `entity` projection.
 ### `profile`
 
 A query.
+
+- MCP tool (default name): `teamService_profile`
+- MCP read-only hint: yes, as on every query's tool
 
 Access: `"public"`: anyone, signed in or not.
 
@@ -60,6 +66,8 @@ Output: one row as the `entity` projection.
 
 A mutation.
 
+- MCP tool (default name): `teamService_rename`
+
 Access: `{ service: "Admin", entry: "Moderate" }`: a service-wide grant of Admin or more, or Moderate or more on the row `input.id` names.
 
 Input:
@@ -75,6 +83,9 @@ Output: one row as the `entity` projection.
 
 A query.
 
+- MCP tool (default name): `teamService_stats`
+- MCP read-only hint: yes, as on every query's tool
+
 Access: `{ service: "Moderate" }`: a service-wide grant of Moderate or more.
 
 Input: none.
@@ -84,6 +95,9 @@ Output: `integer`.
 ### `audit`
 
 A query.
+
+- MCP tool (default name): `teamService_audit`
+- MCP read-only hint: yes, as on every query's tool
 
 Access: `custom(check)`: a signed-in caller the service's own check lets through.
 
@@ -99,6 +113,9 @@ Output: `null`.
 
 A query.
 
+- MCP tool (default name): `teamService_ping`
+- MCP read-only hint: yes, as on every query's tool
+
 Access: `"authenticated"`: any signed-in caller.
 
 Input: none.
@@ -108,6 +125,9 @@ Output: `null`.
 ### `roster`
 
 A query.
+
+- MCP tool (default name): `teamService_roster`
+- MCP read-only hint: yes, as on every query's tool
 
 Access: `{ entry: "Read", id: "teamId" }`: Read or more on the row `input.teamId` names.
 

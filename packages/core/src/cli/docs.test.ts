@@ -250,6 +250,57 @@ describe("quickdraw-docs", () => {
     expect(page).toContain("Shown in lists");
     expect(page.startsWith(`${GENERATED_MARKER}\n\n# chatService\n`)).toBe(true);
   });
+
+  it("leads with each describe, and names every method's default MCP tool", () => {
+    const payload = z.object({ chatId: z.string() });
+    const chat = defineContract("chatService", {
+      describe: "Chats and the people in them.",
+      entity: z.object({ id: z.string(), ownerId: z.string() }),
+      methods: {
+        find: query({ input: payload, output: "entity", describe: "Reads one chat." }),
+        leave: mutation({ input: payload, output: z.null() }),
+      },
+      collections: {
+        owned: {
+          describe: "The chats a user owns.",
+          scope: "ownerId",
+          item: "entity",
+          order: [["id", "asc"]],
+        },
+      },
+      streams: { log: { item: z.string(), describe: "Lines of the chat's log." } },
+      channels: { typing: { payload, describe: "Who is typing." } },
+      events: { joined: { payload, describe: "Someone joined the chat." } },
+    });
+    const plain = defineContract("plainService", {});
+    const files = generateDocs([chat, plain]);
+    const page = files.get("chatService.md") ?? "";
+    expect(
+      page.startsWith(
+        `${GENERATED_MARKER}\n\n# chatService\n\nChats and the people in them.\n\n## Entity`,
+      ),
+    ).toBe(true);
+    expect(page).toContain(
+      "### `find`\n\nReads one chat.\n\nA query.\n\n- MCP tool (default name): `chatService_find`\n- MCP read-only hint: yes, as on every query's tool\n",
+    );
+    expect(page).toContain(
+      "A mutation.\n\n- MCP tool (default name): `chatService_leave`\n\nInput:",
+    );
+    for (const text of [
+      "The chats a user owns.",
+      "Lines of the chat's log.",
+      "Who is typing.",
+      "Someone joined the chat.",
+    ]) {
+      expect(page).toContain(`\n\n${text}\n\n| Option`);
+    }
+    const index = files.get(INDEX_FILE) ?? "";
+    expect(index).toMatch(
+      /\| \[chatService\]\(chatService\.md\) +\| Chats and the people in them\. +\| 2 /,
+    );
+    expect(index).toMatch(/\| \[plainService\]\(plainService\.md\) +\| +\| 0 /);
+    expect(generateDocs([plain]).get(INDEX_FILE)).not.toContain("Description");
+  });
 });
 
 describe("quickdraw-docs --services (finding F5.3)", () => {
