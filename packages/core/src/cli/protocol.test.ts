@@ -12,7 +12,14 @@ import { DEFAULT_BACKOFF_MS } from "../client/backoff";
 import { CLIENT_EVENTS, SERVER_EVENTS } from "../contract/names";
 import { CHANNEL_DEFAULT_RATE } from "../contract/realtime";
 import { ERROR_CODES, httpStatus } from "../protocol/errors";
-import { MAX_SCOPE_LENGTH, MAX_SUBSCRIBE_IDS, PROTOCOL_VERSION } from "../protocol/version";
+import {
+  MAX_ENTITY_IDS_PER_SOCKET,
+  MAX_SCOPE_LENGTH,
+  MAX_SCOPES_PER_SOCKET,
+  MAX_SUBSCRIBE_IDS,
+  MAX_TOPICS_PER_SOCKET,
+  PROTOCOL_VERSION,
+} from "../protocol/version";
 import { MAX_ITEM_IDS } from "../server/collections/items";
 import { createRateLimiter } from "../server/rateLimit";
 import { CHANNEL_ABUSE_MULTIPLIER, CHANNEL_ABUSE_WINDOW_MS } from "../server/realtime/channels";
@@ -116,6 +123,9 @@ describe("quickdraw-protocol", () => {
       MAX_SUBSCRIBE_IDS,
       MAX_ITEM_IDS,
       MAX_SCOPE_LENGTH,
+      MAX_ENTITY_IDS_PER_SOCKET,
+      MAX_SCOPES_PER_SOCKET,
+      MAX_TOPICS_PER_SOCKET,
       MAX_STREAMS_PER_SOCKET,
       CHANNEL_ABUSE_WINDOW_MS,
       CHANNEL_ABUSE_MULTIPLIER,

@@ -13,6 +13,8 @@
 
 import type { AccessLevel } from "../../contract/access";
 import { entityRoom } from "../../contract/names";
+import { QuickdrawError } from "../../protocol/errors";
+import { MAX_ENTITY_IDS_PER_SOCKET } from "../../protocol/version";
 import type { AccessChange } from "../access/changes";
 import { anchorKey } from "../access/tools";
 import type { QuickdrawServerSocket } from "../transports/types";
@@ -85,11 +87,16 @@ export function count(
 }
 
 /** This process's entity subscriptions, indexed by anchor. */
+/** Why a socket at `MAX_ENTITY_IDS_PER_SOCKET` rows is refused one more (`CONFLICT`). */
+export const TOO_MANY_ROWS = `A socket may subscribe to at most ${MAX_ENTITY_IDS_PER_SOCKET} rows; unsubscribe from some first`;
+
 export class SubscriptionIndex {
   /** Moves on every access change this process handles; a subscribe that saw it move checks again. */
   accessChanges = 0;
   readonly #byAnchor = new Map<string, Counts>();
   readonly #byService = new Map<string, Counts>();
+  /** Per socket, how many rows it holds subscriptions to. */
+  readonly #held = new WeakMap<QuickdrawServerSocket, number>();
   /** The rows each socket has a `qd:sub` batch in flight for, by `anchorKey`. */
   readonly pending = new PendingKeys();
 
@@ -114,6 +121,30 @@ export class SubscriptionIndex {
     }
   }
 
+  /** How many rows the socket holds subscriptions to. */
+  held(socket: QuickdrawServerSocket): number {
+    return this.#held.get(socket) ?? 0;
+  }
+
+  /**
+   * `CONFLICT` when holding the rows of `ids` the socket does not hold yet
+   * would take it past `MAX_ENTITY_IDS_PER_SOCKET` (the 5.1 audit's
+   * COLL-4): a row held already never counts again.
+   */
+  checkRoom(socket: QuickdrawServerSocket, service: string, ids: readonly string[]): void {
+    const fresh = new Set(ids.filter((id) => this.get(socket, service, id) === undefined));
+    if (this.held(socket) + fresh.size > MAX_ENTITY_IDS_PER_SOCKET) {
+      throw new QuickdrawError("CONFLICT", TOO_MANY_ROWS);
+    }
+  }
+
+  /** True when the socket may hold the row: it holds it already, or fewer rows than the cap. */
+  hasRoom(socket: QuickdrawServerSocket, service: string, id: string): boolean {
+    return (
+      this.get(socket, service, id) !== undefined || this.held(socket) < MAX_ENTITY_IDS_PER_SOCKET
+    );
+  }
+
   /** Records a subscription and puts the socket in the row's room for its level, replacing any earlier one. */
   set(
     socket: QuickdrawServerSocket,
@@ -122,7 +153,9 @@ export class SubscriptionIndex {
     subscription: EntitySubscription,
   ): void {
     const previous = this.get(socket, service, id);
-    if (previous !== undefined) {
+    if (previous === undefined) {
+      this.#held.set(socket, this.held(socket) + 1);
+    } else {
       this.#index(socket, previous.anchors, -1);
       if (previous.level !== subscription.level) {
         void socket.leave(entityRoom(service, id, previous.level));
@@ -146,6 +179,7 @@ export class SubscriptionIndex {
     if (previous === undefined) {
       return undefined;
     }
+    this.#held.set(socket, this.held(socket) - 1);
     this.#index(socket, previous.anchors, -1);
     void socket.leave(entityRoom(service, id, previous.level));
     const rows = ownRecord(socket.data.entities, service);
@@ -193,6 +227,7 @@ export class SubscriptionIndex {
       this.#index(socket, subscription.anchors, -1);
     }
     socket.data.entities = emptyRecords();
+    this.#held.delete(socket);
   }
 
   /**

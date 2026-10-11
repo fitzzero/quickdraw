@@ -20,7 +20,10 @@
 //
 // A malformed frame is `VALIDATION`, an unknown service or collection (or a
 // service without a model that writes nothing, whose topic never changes)
-// `NOT_FOUND`. A service's topic also changes with every write to a model it
+// `NOT_FOUND`. A socket watches at most `MAX_TOPICS_PER_SOCKET` topics (the
+// 5.1 audit's COLL-4): one more is `CONFLICT`, checked before the watch is
+// authorized and again where it is recorded (`joinWatch`); a topic watched
+// already never counts again. A service's topic also changes with every write to a model it
 // lists in `writes`, so a query over such a model declares `watch:
 // "service"`.
 // `qd:unwatch { s, topic }` is checked the same way, leaves the room,

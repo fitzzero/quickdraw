@@ -14,6 +14,8 @@ import { anchorKey } from "../access/tools";
 import { PendingKeys } from "../emit/pending";
 import { emptyRecords, ownRecord } from "../emit/subscriptions";
 import type { Revision } from "../../protocol/envelope";
+import { QuickdrawError } from "../../protocol/errors";
+import { MAX_SCOPES_PER_SOCKET } from "../../protocol/version";
 import type { QuickdrawServerSocket } from "../transports/types";
 import type { PageRequest } from "./snapshot";
 
@@ -124,6 +126,25 @@ export class ScopeIndex {
   /** Every collection subscription of the socket. */
   entries(socket: QuickdrawServerSocket): ScopeSubscription[] {
     return Object.values(socket.data.collections ?? {});
+  }
+
+  /** How many scopes the socket holds. */
+  size(socket: QuickdrawServerSocket): number {
+    return Object.keys(socket.data.collections ?? {}).length;
+  }
+
+  /**
+   * `CONFLICT` when the socket holds `MAX_SCOPES_PER_SOCKET` scopes and
+   * `room` is not one of them (the 5.1 audit's COLL-4): a scope held
+   * already never counts again.
+   */
+  checkRoom(socket: QuickdrawServerSocket, room: string): void {
+    if (this.get(socket, room) === undefined && this.size(socket) >= MAX_SCOPES_PER_SOCKET) {
+      throw new QuickdrawError(
+        "CONFLICT",
+        `A socket may subscribe to at most ${MAX_SCOPES_PER_SOCKET} collection scopes; unsubscribe from one first`,
+      );
+    }
   }
 
   /** Records a subscription and puts the socket in the scope's room, replacing any earlier one. */

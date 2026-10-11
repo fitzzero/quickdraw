@@ -12,7 +12,7 @@ import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
 import { as, seedBoard, type Board } from "../access/__tests__/board";
 import { projectService, recordingStorage, type Read } from "../emit/__tests__/live";
-import type { Principal, ServiceGrants } from "../index";
+import { MAX_SCOPES_PER_SOCKET, type Principal, type ServiceGrants } from "../index";
 import { peeredCluster } from "../transports/__tests__/harness";
 import {
   colSub,
@@ -484,4 +484,37 @@ describe("the socket rate limiter", () => {
     expect(await call(2)).toMatchObject({ ok: true });
     expect(await call(3)).toMatchObject({ ok: false, e: { code: "RATE_LIMITED" } });
   });
+});
+
+describe("the per-socket cap (COLL-4)", () => {
+  it(`holds at most ${MAX_SCOPES_PER_SOCKET} collection scopes per socket`, async () => {
+    const { app } = await start();
+    // A service-wide Admin opens any scope without a read.
+    const { connection } = await connect(app, as(board.ed, { taskService: "Admin" }));
+    const first = await colSub(connection, "byProject", board.p1);
+    const since = first.rev as number;
+    await colUnsub(connection, "byProject", board.p1);
+    // In runs that fit the socket's lane (8 running, 64 waiting), which refuses more at once.
+    const answers: Record<string, unknown>[] = [];
+    for (let run = 0; run < MAX_SCOPES_PER_SOCKET; run += 50) {
+      const batch = Array.from({ length: 50 }, (_, n) =>
+        colSub(connection, "byProject", `cap-${run + n}`, { since }),
+      );
+      answers.push(...(await Promise.all(batch)));
+    }
+    expect(answers.every((answer) => answer.ok === true)).toBe(true);
+    expect(await colSub(connection, "byProject", "one-more", { since })).toMatchObject({
+      ok: false,
+      e: { code: "CONFLICT" },
+    });
+    expect(inRoom(app, "byProject", "one-more")).toBe(0);
+    const socket = app.server.io.sockets.sockets.get(connection.socket.id ?? "");
+    expect(Object.keys(socket?.data.collections ?? {})).toHaveLength(MAX_SCOPES_PER_SOCKET);
+    // One held already is no more; one unsubscribed makes room.
+    expect(await colSub(connection, "byProject", "cap-0", { since })).toMatchObject({ ok: true });
+    await colUnsub(connection, "byProject", "cap-0");
+    expect(await colSub(connection, "byProject", "one-more", { since })).toMatchObject({
+      ok: true,
+    });
+  }, 60_000);
 });

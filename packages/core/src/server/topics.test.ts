@@ -24,7 +24,12 @@ import {
   type TaskServiceOptions,
 } from "./collections/__tests__/fixture";
 import { projectService, qd, recordingStorage, type Read } from "./emit/__tests__/live";
-import type { AnyService, Principal, ServiceGrants } from "./index";
+import {
+  MAX_TOPICS_PER_SOCKET,
+  type AnyService,
+  type Principal,
+  type ServiceGrants,
+} from "./index";
 
 let h: Harness;
 let board: Board;
@@ -557,6 +562,29 @@ describe("qd:watch", () => {
     expect(await call(2)).toMatchObject({ ok: true });
     expect(await call(3)).toMatchObject(refused("RATE_LIMITED"));
   });
+});
+
+describe("the per-socket cap (COLL-4)", () => {
+  it(`watches at most ${MAX_TOPICS_PER_SOCKET} topics per socket`, async () => {
+    const { app } = await start();
+    // A service-wide Admin watches any scope's topic without a read.
+    const { connection } = await connect(app, as(board.ed, { taskService: "Admin" }));
+    // In runs that fit the socket's lane (8 running, 64 waiting), which refuses more at once.
+    const answers: unknown[] = [];
+    for (let run = 0; run < MAX_TOPICS_PER_SOCKET; run += 50) {
+      const batch = Array.from({ length: 50 }, (_, n) =>
+        watch(connection, `byProject:cap-${run + n}`),
+      );
+      answers.push(...(await Promise.all(batch)));
+    }
+    expect(answers.every((answer) => (answer as { ok: boolean }).ok)).toBe(true);
+    expect(await watch(connection, "byProject:one-more")).toEqual(refused("CONFLICT"));
+    expect(inTopic(app, "byProject:one-more")).toBe(0);
+    // One watched already is no more; one unwatched makes room.
+    expect(await watch(connection, "byProject:cap-0")).toEqual(ok);
+    await unwatch(connection, "byProject:cap-0");
+    expect(await watch(connection, "byProject:one-more")).toEqual(ok);
+  }, 60_000);
 });
 
 describe("what topics read", () => {

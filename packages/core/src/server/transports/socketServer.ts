@@ -5,7 +5,13 @@
 
 import type { Server as HttpServer } from "node:http";
 import { Server, type ServerOptions } from "socket.io";
-import { MAX_SUBSCRIBE_IDS, PROTOCOL_VERSION } from "../../protocol/version";
+import {
+  MAX_ENTITY_IDS_PER_SOCKET,
+  MAX_SCOPES_PER_SOCKET,
+  MAX_SUBSCRIBE_IDS,
+  MAX_TOPICS_PER_SOCKET,
+  PROTOCOL_VERSION,
+} from "../../protocol/version";
 import { QUICKDRAW_VERSION } from "../../version";
 import { createReplyMeter } from "./ack";
 import type { ResolvePrincipal, ServerAuth, ServiceGrants } from "./auth";
@@ -109,6 +115,9 @@ function helloFrame(settings: SocketServerSettings): ServerHello {
       subscriptions: Object.freeze({
         maxInFlight: limits.subscriptions.maxInFlight,
         maxQueued: limits.subscriptions.maxQueued,
+        maxEntityIds: MAX_ENTITY_IDS_PER_SOCKET,
+        maxScopes: MAX_SCOPES_PER_SOCKET,
+        maxTopics: MAX_TOPICS_PER_SOCKET,
       }),
     }),
     features: Object.freeze(settings.binary ? ["binary"] : []),

@@ -219,6 +219,11 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
 - **The sharing kit's method descriptions changed.** They say the caps and
   the one-user lookup; MCP tool descriptions and generated API docs show
   them, so apps that commit docs pages regenerate them.
+- **One socket holds at most 10,000 rows, 1,000 collection scopes and
+  1,000 topic watches.** One more is `CONFLICT` (the hook's error; the
+  client retries only `RATE_LIMITED`), as a 501st stream feed already was;
+  a `qd:sub` whose new ids would pass the cap is refused whole. `qd:hello`
+  announces the caps in three more `limits.subscriptions` fields.
 
 ### Security
 
@@ -388,6 +393,10 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   resolver returns. Roles that map to one level are peers (SHARE-3): an
   `admin` role may demote an `owner` role, so protect an owner with an
   owner column.
+- **One client can no longer exhaust the server's memory with
+  subscriptions (COLL-4).** Nothing counted the collection scopes, topic
+  watches and rows one socket held, so a client subscribing to an endless
+  run of made-up scopes grew the server's memory without end.
 - **A sharing change's re-check no longer reads a stale cache (SHARE-4).**
   With `cacheMs`, the re-check of the caller inside the change's
   transaction read the access cache, so a caller demoted by a write the

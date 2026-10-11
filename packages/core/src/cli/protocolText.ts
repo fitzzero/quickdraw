@@ -197,8 +197,13 @@ the client's own, for an answer that names no wait:`;
 
 /** After the tables: what a client meets past a limit. */
 export const LIMITS_OUTCOMES = `A \`qd:sub\` naming more than \`MAX_SUBSCRIBE_IDS\` ids, or a
-\`qd:col:items\` more than \`MAX_ITEM_IDS\`, fails whole with \`VALIDATION\`; a
-\`qd:stream:sub\` past \`MAX_STREAMS_PER_SOCKET\` feeds fails with \`CONFLICT\`.
+\`qd:col:items\` more than \`MAX_ITEM_IDS\`, fails whole with \`VALIDATION\`. A
+socket that holds \`MAX_ENTITY_IDS_PER_SOCKET\` rows, \`MAX_SCOPES_PER_SOCKET\`
+collection scopes, \`MAX_TOPICS_PER_SOCKET\` change topics or
+\`MAX_STREAMS_PER_SOCKET\` feeds is answered \`CONFLICT\` for one more: a
+\`qd:sub\` whose new ids would pass the cap fails whole, and so does a
+\`qd:col:sub\`, \`qd:watch\` or \`qd:stream:sub\`; one already held never
+counts again, and an unsubscribe makes room.
 A socket whose \`qd:ch\` messages dropped for one channel's rate within
 \`CHANNEL_ABUSE_WINDOW_MS\` exceed \`CHANNEL_ABUSE_MULTIPLIER\` times that rate
 is disconnected (Socket.IO DISCONNECT, \`41\`, then the WebSocket closes): that

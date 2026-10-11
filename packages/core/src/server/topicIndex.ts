@@ -10,7 +10,8 @@
 // settling its races is recorded but out of the room (`hold`, then `join`).
 
 import { SERVICE_TOPIC, topicRoom } from "../contract/names";
-import { MAX_SCOPE_LENGTH } from "../protocol/version";
+import { QuickdrawError } from "../protocol/errors";
+import { MAX_SCOPE_LENGTH, MAX_TOPICS_PER_SOCKET } from "../protocol/version";
 import type { AccessChange } from "./access/changes";
 import { anchorKey } from "./access/tools";
 import { PendingKeys } from "./emit/pending";
@@ -184,6 +185,25 @@ export class TopicIndex {
   /** Every topic the socket watches. */
   entries(socket: QuickdrawServerSocket): TopicWatch[] {
     return Object.values(socket.data.topics ?? {});
+  }
+
+  /** How many topics the socket watches, a watch still settling included. */
+  size(socket: QuickdrawServerSocket): number {
+    return Object.keys(socket.data.topics ?? {}).length;
+  }
+
+  /**
+   * `CONFLICT` when the socket watches `MAX_TOPICS_PER_SOCKET` topics and
+   * `room` is not one of them (the 5.1 audit's COLL-4): a topic watched
+   * already never counts again.
+   */
+  checkRoom(socket: QuickdrawServerSocket, room: string): void {
+    if (this.get(socket, room) === undefined && this.size(socket) >= MAX_TOPICS_PER_SOCKET) {
+      throw new QuickdrawError(
+        "CONFLICT",
+        `A socket may watch at most ${MAX_TOPICS_PER_SOCKET} change topics; unwatch one first`,
+      );
+    }
   }
 
   /** Ends a watch the socket may no longer hold: it leaves the topic's room. */

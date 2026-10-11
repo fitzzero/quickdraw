@@ -140,6 +140,8 @@ export async function joinWatch(
   [watch, target]: readonly [TopicWatch, WatchTarget],
 ): Promise<void> {
   const room = topicRoom(watch.s, watch.topic);
+  // At most MAX_TOPICS_PER_SOCKET topics a socket: refused before any read.
+  index.checkRoom(socket, room);
   const unwatches = index.begin(socket, room);
   const withdrawn = (): boolean => !socket.connected || index.unwatches(socket, room) !== unwatches;
   // What the watch settles against, noted before it is authorized.
@@ -149,6 +151,8 @@ export async function joinWatch(
     if (withdrawn()) {
       return;
     }
+    // Again where the watch is recorded, so watches running at once cannot overshoot.
+    index.checkRoom(socket, room);
     const own = { ...watch, anchors };
     index.hold(socket, own);
     const settled = raceMoved(hub, socket, start)

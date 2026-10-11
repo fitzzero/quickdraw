@@ -30,6 +30,12 @@
 //
 // Every page of a self scope on a service with a policy, cursor pages too,
 // is filtered by that policy for the subscriber (`selfAccess.ts`).
+//
+// A socket holds at most `MAX_SCOPES_PER_SOCKET` scopes (the 5.1 audit's
+// COLL-4): one more is `CONFLICT`, checked before step 1 (no read) and again
+// at the join, so subscribes running at once in the socket's lane cannot
+// overshoot. A scope held already never counts again, and a cursor page,
+// which joins nothing, is not checked.
 
 import type {
   CollectionSnapshot,
@@ -98,6 +104,8 @@ function join(attempt: Attempt, anchors: readonly string[]): void {
   ) {
     return;
   }
+  // Again at the join, so subscribes running at once cannot overshoot.
+  hub.collections.scopes.checkRoom(socket, room);
   const record: ScopeSubscription = { s: request.s, c: request.c, scope: request.scope, anchors };
   hub.collections.scopes.set(socket, record);
   attempt.record = record;
@@ -313,6 +321,10 @@ export async function subscribeScope(
     throw new TypeError("subscribeScope: the socket has no principal, or the hub no storage");
   }
   const room = roomOf(request);
+  if (request.cursor === undefined) {
+    // At most MAX_SCOPES_PER_SOCKET scopes a socket (paging joins none): refused before any read.
+    hub.collections.scopes.checkRoom(socket, room);
+  }
   const attempt: Attempt = {
     hub,
     storage,

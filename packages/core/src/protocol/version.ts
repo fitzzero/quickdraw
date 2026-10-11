@@ -72,18 +72,34 @@ export function isAuthenticationRefused(value: unknown): value is Authentication
 /** The most ids one `qd:sub` may name (RFC 0003 section 6), as `qd:hello` announces it. */
 export const MAX_SUBSCRIBE_IDS = 500;
 
+/** The most rows one socket may hold entity subscriptions to at once, as `qd:hello` announces it. */
+export const MAX_ENTITY_IDS_PER_SOCKET = 10_000;
+
+/** The most collection scopes one socket may hold at once, as `qd:hello` announces it. */
+export const MAX_SCOPES_PER_SOCKET = 1_000;
+
+/** The most change topics one socket may watch at once, as `qd:hello` announces it. */
+export const MAX_TOPICS_PER_SOCKET = 1_000;
+
 /** The longest collection scope value or change topic a frame may name, in characters. */
 export const MAX_SCOPE_LENGTH = 256;
 
 /**
  * Each socket's lane of subscription events (`qd:sub`, `qd:col:sub`,
- * `qd:col:items`, `qd:watch`; RFC 0003 section 8.2), as `qd:hello` announces it.
+ * `qd:col:items`, `qd:watch`; RFC 0003 section 8.2), and how much one
+ * socket may hold at once, as `qd:hello` announces them.
  */
 export interface HelloSubscriptionLimits {
   /** Subscription events one socket may have running at once. */
   readonly maxInFlight: number;
   /** Subscription events one socket may have waiting; past that one fails with `RATE_LIMITED`. */
   readonly maxQueued: number;
+  /** Rows one socket may hold entity subscriptions to at once; one more is `CONFLICT`. Absent from servers before 5.1. */
+  readonly maxEntityIds?: number;
+  /** Collection scopes one socket may hold at once; one more is `CONFLICT`. Absent from servers before 5.1. */
+  readonly maxScopes?: number;
+  /** Change topics one socket may watch at once; one more is `CONFLICT`. Absent from servers before 5.1. */
+  readonly maxTopics?: number;
 }
 
 /** The limits a server announces in `qd:hello`, so a client can stay inside them. */

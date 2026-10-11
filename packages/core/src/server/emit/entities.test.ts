@@ -9,7 +9,7 @@ import { createHarness, pauseNext, type Harness } from "../../prisma/__tests__/h
 import { createTestApp, type TestApp } from "../../testing/index";
 import { deferred } from "../__tests__/fixtures";
 import { as, seedBoard, type Board } from "../access/__tests__/board";
-import { inherit, type Principal, type StorageAdapter } from "../index";
+import { inherit, MAX_ENTITY_IDS_PER_SOCKET, type Principal, type StorageAdapter } from "../index";
 import { versionTime } from "../rev";
 import {
   cardService,
@@ -131,6 +131,52 @@ describe("projections in method results", () => {
       label: "open: T1",
     });
   });
+});
+
+describe("the per-socket cap (COLL-4)", () => {
+  it(`holds at most ${MAX_ENTITY_IDS_PER_SOCKET} rows per socket`, async () => {
+    await h.prisma.task.createMany({
+      data: Array.from({ length: MAX_ENTITY_IDS_PER_SOCKET + 1 }, (_, n) => ({
+        projectId: board.p2,
+        title: `Cap ${n}`,
+      })),
+    });
+    const tasks = await h.prisma.task.findMany({
+      where: { title: { startsWith: "Cap " } },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    });
+    const ids = tasks.map((task) => task.id);
+    const [last, ...rest] = [ids.pop() ?? "", ...ids];
+    const { app } = await start();
+    // A service-wide Admin reads every row without a policy read.
+    const { connection } = await connect(app, as(board.ed, { taskService: "Admin" }));
+    // In runs that fit the socket's lane (8 running, 64 waiting).
+    for (let first = 0; first < rest.length; first += 4_000) {
+      const batches = [];
+      for (let at = first; at < Math.min(first + 4_000, rest.length); at += 500) {
+        batches.push(sub(connection, "taskService", rest.slice(at, at + 500)));
+      }
+      for (const reply of await Promise.all(batches)) {
+        expect(reply).toMatchObject({ ok: true });
+        expect((reply as { r: { ok: boolean }[] }).r.every((result) => result.ok)).toBe(true);
+      }
+    }
+    expect(await sub(connection, "taskService", [last])).toMatchObject({
+      ok: false,
+      e: { code: "CONFLICT" },
+    });
+    // A row held already is no more; one unsubscribed makes room.
+    expect(await sub(connection, "taskService", [rest[0] ?? ""])).toMatchObject({
+      ok: true,
+      r: [{ ok: true }],
+    });
+    await connection.socket.emitWithAck("qd:unsub", { s: "taskService", ids: [rest[0]] });
+    expect(await sub(connection, "taskService", [last])).toMatchObject({
+      ok: true,
+      r: [{ ok: true }],
+    });
+  }, 120_000);
 });
 
 describe("qd:sub", () => {
