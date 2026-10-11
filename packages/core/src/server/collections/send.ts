@@ -2,7 +2,11 @@
 // flush closes or resets rather than updates:
 //
 // - every frame goes to the scope's room as `qd:c { s, c, scope, rev,
-//   deltas }`, and into the scope's resume buffer;
+//   deltas }`, and into the scope's resume buffer, except one that removes a
+//   row nobody could place (a touch with `removed`, a `via` entry deleted
+//   without its links read), which every subscribed scope gets: that one
+//   raises the scope's resume floor instead, so a client resuming across it
+//   reads a page rather than learn the row's id;
 // - deleting the row a scope is anchored on (a chat, for its messages) sends
 //   `qd:revoked { kind: "collection", reason: "anchor-deleted" }` to every
 //   scope room keyed by that row's id and empties those rooms: the rows a
@@ -34,7 +38,8 @@ type Io = NonNullable<CollectionHub["io"]>;
  * Sends one scope's frame for a flush and keeps it for resumes; a `reset`
  * frame resets the buffer. `local` sends it to this process's sockets only:
  * a self scope's re-check, which every node makes for its own sockets
- * (`selfAccess.ts`).
+ * (`selfAccess.ts`). `unnamed`, a frame that removes a row nobody could
+ * place, is not kept: it raises the scope's resume floor instead.
  */
 export function sendFrame(
   hub: CollectionHub,
@@ -43,7 +48,7 @@ export function sendFrame(
   scope: string,
   rev: Revision,
   deltas: readonly CollectionDelta[],
-  options: { readonly local?: boolean } = {},
+  options: { readonly local?: boolean; readonly unnamed?: boolean } = {},
 ): void {
   if (deltas.length === 0) {
     return;
@@ -55,6 +60,8 @@ export function sendFrame(
   target?.emit(SERVER_EVENTS.collection, frame);
   if (deltas.some((delta) => delta.t === "reset")) {
     hub.collections.buffer.reset(room, rev);
+  } else if (options.unnamed === true) {
+    hub.collections.buffer.skip(room, rev);
   } else {
     hub.collections.buffer.record(room, rev, deltas);
   }
@@ -107,22 +114,29 @@ export function closeAnchors(
   return closed;
 }
 
+/** A scope value a junction row holds, or `undefined`. */
+function scopeValue(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
 /**
  * The scopes a write's values name in a collection, or `undefined` when they
- * name none: an entry's own write in a `via` collection, and with
- * `refreshEntry` a junction write too, which changes its entry in every
- * scope that holds it.
+ * name none: an entry's own write in a `via` collection (but a delete that
+ * read its links names the scopes they held), and with `refreshEntry` a
+ * junction write too, which changes its entry in every scope that holds it.
  */
 function namedScopes(collection: BoundCollection, write: WriteRecord): string[] | undefined {
   const { scope } = collection;
   const junction = scope.kind === "via" && modelKey(write.model) === modelKey(scope.model);
-  if (scope.kind === "via" && (!junction || scope.refreshEntry)) {
+  if (scope.kind === "via" && !junction) {
+    const links = write.op === "delete" ? write.links?.[modelKey(scope.model)] : undefined;
+    return links?.map((row) => row[scope.scope]).filter(scopeValue);
+  }
+  if (scope.kind === "via" && scope.refreshEntry) {
     return undefined;
   }
   const column = scope.kind === "column" ? scope.column : scope.scope;
-  const named = [write.before?.[column], write.after?.[column]].filter(
-    (value): value is string => typeof value === "string" && value.length > 0,
-  );
+  const named = [write.before?.[column], write.after?.[column]].filter(scopeValue);
   return named.length === 0 ? undefined : named;
 }
 

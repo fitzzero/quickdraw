@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { z } from "zod";
 import { inCluster } from "../../../test/cluster/mode";
 import type { PrismaClient } from "../../../test/prisma/setup";
-import { collectionRoom, defineContract } from "../../index";
+import { collectionRoom, defineContract, via } from "../../index";
 import type { Logger } from "../../contract/logger";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
@@ -20,7 +20,8 @@ import {
   recordingStorage,
   type Read,
 } from "../emit/__tests__/live";
-import { inherit, type FlushSink, type Principal } from "../index";
+import { projectMembers } from "../access/__tests__/board";
+import { anyOf, inherit, jsonAcl, type FlushSink, type Principal } from "../index";
 import {
   addTasks,
   CARD_KEYS,
@@ -30,6 +31,7 @@ import {
   labelService,
   receiveScopes,
   taskContract,
+  watch,
 } from "./__tests__/fixture";
 
 let h: Harness;
@@ -600,17 +602,88 @@ describe("deltas after a flush", () => {
     ]);
   });
 
-  it("removes a via entry whose links a cascade deleted from the scopes subscribed here", async () => {
+  it("removes a via entry whose links a cascade deleted from the scopes it was linked to only", async () => {
     const { app } = await start();
     const bug = await h.prisma.label.create({ data: { projectId: board.p1, name: "Bug" } });
+    const idea = await h.prisma.label.create({ data: { projectId: board.p1, name: "Idea" } });
     await h.prisma.taskLabel.create({ data: { taskId: board.t1, labelId: bug.id } });
     const { connection, scopes } = await connect(app, as(board.ada));
     await colSub(connection, "byLabel", bug.id);
+    await colSub(connection, "byLabel", idea.id);
     await write(app, (db) => db.task.delete({ where: { id: board.t1 } }));
     await scopes.settle();
     expect(scopes.frames).toEqual([
       expect.objectContaining({ scope: bug.id, deltas: [{ t: "removed", id: board.t1 }] }),
     ]);
+  });
+
+  it("tells only the scopes a deleted via entry was linked to, frames and topics alike (COLL-3)", async () => {
+    const { app } = await start();
+    const bug = await h.prisma.label.create({ data: { projectId: board.p1, name: "Bug" } });
+    await h.prisma.taskLabel.create({ data: { taskId: board.t1, labelId: bug.id } });
+    const own = await h.prisma.label.create({ data: { projectId: board.p2, name: "Ed's" } });
+    await h.prisma.taskLabel.create({ data: { taskId: board.t2, labelId: own.id } });
+    const ada = await connect(app, as(board.ada));
+    await colSub(ada.connection, "byLabel", bug.id);
+    const ed = await connect(app, as(board.ed));
+    await colSub(ed.connection, "byLabel", own.id);
+    expect(await watch(ed.connection, `byLabel:${own.id}`)).toEqual({ ok: true });
+    await write(app, (db) => db.task.delete({ where: { id: board.t1 } }));
+    await Promise.all([ada.scopes.settle(), ed.scopes.settle()]);
+    expect(ada.scopes.frames.map(({ scope, deltas }) => ({ scope, deltas }))).toEqual([
+      { scope: bug.id, deltas: [{ t: "removed", id: board.t1 }] },
+    ]);
+    // ed's scope never held T1: he is not told its id, nor that his topic changed.
+    expect(ed.scopes.frames).toEqual([]);
+    expect(ed.scopes.changed).toEqual([]);
+  });
+
+  it("tells a deleted project's members alone in their own lists, the memberships gone by cascade (COLL-3)", async () => {
+    const projectRow = z.object({ id: z.string(), name: z.string() });
+    const mineContract = defineContract("myProjectsService", {
+      entity: projectRow,
+      methods: {},
+      collections: {
+        mine: {
+          scope: via({ model: "projectMember", entry: "projectId", scope: "userId" }),
+          item: "entity",
+          order: [["id", "asc"]],
+        },
+      },
+    });
+    const myProjectsService = qd.defineService(mineContract, {
+      model: "project",
+      access: anyOf(jsonAcl("acl", { owner: "ownerId" }), projectMembers),
+      collections: { mine: { scopeAccess: "self" } },
+      methods: {},
+    });
+    const app = await createTestApp({ services: [projectService, myProjectsService], db: h.db });
+    apps.push(app as unknown as TestApp);
+    const subscriber = async (userId: string) => {
+      const connection = await app.connect(as(userId));
+      const scopes = receiveScopes(connection);
+      const answer = await emitWithAck(connection.socket, "qd:col:sub", {
+        s: "myProjectsService",
+        c: "mine",
+        scope: userId,
+      });
+      expect(answer).toMatchObject({ ok: true });
+      return scopes;
+    };
+    const members = await Promise.all([board.bo, board.cy].map(subscriber));
+    const strangers = await Promise.all(
+      [board.ed, ...Array.from({ length: 50 }, (_, index) => `stranger-${index}`)].map(subscriber),
+    );
+    await app.server.dispatcher.run(() => h.db.project.delete({ where: { id: board.p1 } }));
+    await Promise.all([...members, ...strangers].map(async (scopes) => await scopes.settle()));
+    for (const scopes of members) {
+      expect(scopes.frames.flatMap(({ deltas }) => deltas)).toEqual([
+        { t: "removed", id: board.p1 },
+      ]);
+    }
+    for (const scopes of strangers) {
+      expect(JSON.stringify(scopes.frames)).not.toContain(board.p1);
+    }
   });
 
   it("removes a touched via entry from the scope a junction delete of the same flush took it out of", async () => {
@@ -731,6 +804,29 @@ describe("deltas after a flush", () => {
     ]);
   });
 
+  it.skipIf(inCluster())(
+    "keeps a removal nobody can name out of resume buffers: a resume across it reads a page",
+    async () => {
+      const { app } = await start();
+      const live = await connect(app, as(board.ada));
+      await colSub(live.connection, "byProject", board.p1);
+      const away = await connect(app, as(board.ada));
+      const first = await colSub(away.connection, "byProject", board.p1);
+      await colUnsub(away.connection, "byProject", board.p1);
+      const touch = h.storage.unitOfWork.touch;
+      await write(app, () => Promise.resolve(touch?.("task", [board.t2], { removed: true })));
+      await live.scopes.settle();
+      expect(live.scopes.frames.map(({ deltas }) => deltas)).toEqual([
+        [{ t: "removed", id: board.t2 }],
+      ]);
+      const back = await colSub(away.connection, "byProject", board.p1, {
+        since: first.rev as number,
+      });
+      expect(back).toMatchObject({ ok: true, items: expect.any(Array) });
+      expect(back).not.toHaveProperty("resumed");
+    },
+  );
+
   it("moves a row a tracked write moved even when a touch of it merged in, leaving no ghost", async () => {
     const { app } = await start();
     const left = await connect(app, as(board.ada));
@@ -849,10 +945,14 @@ describe("batches, bulk writes and statements", () => {
       return;
     }
     expect(alone).toEqual([]);
+    // The scope's columns come along: the delta is decided by the row as read (COLL-2).
     expect(reads).toEqual([
       {
         model: "task",
-        args: { where: { id: { in: [board.t1] } }, select: { id: true, title: true } },
+        args: {
+          where: { id: { in: [board.t1] } },
+          select: { id: true, title: true, projectId: true },
+        },
       },
     ]);
   });

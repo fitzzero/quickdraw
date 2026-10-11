@@ -191,6 +191,19 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   `/logout-all` answer 403 to a session cookie sent from a page
   `allowedOrigins` does not list, and `/guest` to such a page whatever it
   sends.
+- **A late collection change goes out as the row is now.** On one server
+  too, a collection delta that is not a removal is decided by its row as
+  read for the frame: a change whose flush ran after a later write moved
+  its row goes out `removed` to the scope the row left. The read takes the
+  scope's columns too.
+- **A deleted via entry reaches only its lists.** A tracked `delete` or
+  `deleteMany` of a model a `via` collection lists reads that entry's
+  junction links first (one read per junction, and one more for a `delete`
+  whose `where` has no `id`), and records them in `WriteRecord.links`, a
+  new optional field app flush sinks see. Its removal goes only to the
+  scopes it was linked to. A removal nobody can place (a `ctx.touch` with
+  `removed`) still reaches every subscribed scope, and a client resuming
+  across one reloads the scope instead of replaying it.
 
 ### Security
 
@@ -334,6 +347,15 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   `/logout-all` and `/guest` skipped the session cookie's Origin rule, so a
   cross-site page with CORS help could read the user id, sign the user out
   everywhere, or sign the browser in as a new guest.
+- **A late flush no longer sends a moved row to the scope it left
+  (COLL-2).** One server took a delta's scope from the write's own values,
+  so a unit whose flush ran behind a slow handler tail or a busy queue sent
+  a row's new values (a title, an item) to the list it had already left,
+  whose readers may not see where it went.
+- **A deleted via entry no longer tells every subscriber its id (COLL-3).**
+  Every subscribed scope of a `via` collection, and every watched topic of
+  it, got the removal of every deleted entry, and every resume buffer kept
+  it.
 
 ### Codemod
 

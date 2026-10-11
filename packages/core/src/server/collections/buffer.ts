@@ -10,6 +10,9 @@
 // - a frame dropped for age or size: the floor rises to its revision;
 // - a flush that changed the scope without building its deltas (nobody here
 //   subscribed to it): to that revision;
+// - a frame that removes a row nobody could place (a touch with `removed`,
+//   a `via` entry deleted without its links read), which every subscribed
+//   scope gets and none keeps: to its revision (`send.ts`, `unnamed.ts`);
 // - a `reset`: past its revision, since a client must load the scope again;
 // - a frame recorded after a newer one (flushes can finish out of order):
 //   past the newest, since a client holding the newer revision may not have

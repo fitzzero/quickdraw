@@ -25,10 +25,12 @@
 //    (`selfAccess.ts`). Then read the items the remaining deltas need, in
 //    one query per collection, and send one `qd:c` frame per scope, which
 //    the resume buffer keeps. An indexed collection's `added` deltas carry
-//    index rows built from those items (`index.ts`). Behind a cluster
-//    adapter the same read also takes the rows of removals, and each delta
-//    is decided by its row as read then (`deltas.ts`): a write that
-//    committed first can flush last.
+//    index rows built from those items (`index.ts`). Each delta of a column
+//    scope that is not a removal is decided by its row as read then
+//    (`deltas.ts`): a write that committed first can flush last, after
+//    later units moved its rows. Behind a cluster adapter the same read
+//    also takes the rows of removals, and every delta is decided so. A
+//    frame that removes a row nobody could place is not kept for resumes.
 //
 // A collection with no subscriber on this process (and rooms visible here)
 // skips steps 2 to 5 and reads nothing (`skipTouched`).
@@ -139,7 +141,9 @@ async function emitCollection(
   broadcastUnnamed(hub, unnamedOf(collection, moves, rev, cluster ? rows : undefined));
   for (const plan of sending) {
     const deltas = buildDeltas(collection, plan, rows, rev, cluster);
-    sendFrame(hub, io, collection, plan.scope, rev, deltas);
+    // A removal nobody could place reaches every subscribed scope; no resume buffer keeps it.
+    const unplaced = plan.deltas.some((delta) => delta.t === "removed" && delta.unnamed === true);
+    sendFrame(hub, io, collection, plan.scope, rev, deltas, { unnamed: unplaced });
   }
 }
 

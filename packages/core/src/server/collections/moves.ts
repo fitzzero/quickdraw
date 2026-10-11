@@ -22,6 +22,8 @@
 // |                                | ones it removed           |                |
 // | `via` entry created or touched | the same (its links       | its links now  |
 // |                                | before this flush)        | (read)         |
+// | `via` entry deleted, its links | the links its delete read | none           |
+// | read first (`links`)           | (those that counted)      |                |
 // | `via` junction row created     | the deleted row's link,   | its link, if   |
 // | over one the unit deleted      | if it counted             | it counts      |
 // | `via` junction role update     | the old link, if its role | the new link,  |
@@ -48,10 +50,14 @@
 // scope is `updated`, whole. A touched row's old scope is unknown, so it is
 // `added` to its scope now and its old scope is not told (a touch carries no
 // `before`), unless a tracked write merged with it says where it was: then
-// it moves, or stays `updated`, whole. A deleted row whose old scope the
-// write does not carry (a touch with `removed`, or a `via` entry whose links
-// a cascade removed) left scopes nobody can name: every scope of the
-// collection subscribed on this process gets `removed`.
+// it moves, or stays `updated`, whole. A deleted `via` entry left the
+// scopes its delete read its links in (the tracked client reads them before
+// a delete of a via entry model: `registerLinks`), so only those are told
+// (the 5.1 audit's COLL-3: every subscribed scope learned the id of every
+// row deleted). A deleted row whose old scope the write does not carry (a
+// touch with `removed`, a `via` entry deleted without its links read) left
+// scopes nobody can name: every scope of the collection subscribed on this
+// process gets `removed`, which no resume buffer keeps (`send.ts`).
 //
 // A `via` entry's scopes before the flush are known whatever wrote the
 // entry: its links now, without the ones this flush's junction writes made,
@@ -419,11 +425,33 @@ function filtered(collection: BoundCollection): boolean {
 }
 
 /**
+ * The scopes a deleted entry was linked to just before its delete, as the
+ * tracked client read them (`WriteRecord.links`): its junction rows the role
+ * rules count (or whose role was not read). `undefined` when the delete did
+ * not read them.
+ */
+function linkedBeforeDelete(via: Via, write: WriteRecord): ReadonlySet<string> | undefined {
+  const rows = write.links?.[modelKey(via.model)];
+  if (rows === undefined) {
+    return undefined;
+  }
+  const scopes = new Set<string>();
+  for (const row of rows) {
+    const link = linkOf(via, row);
+    if (link !== undefined && link[0] === write.id && linkQualifies(via, row) !== false) {
+      scopes.add(link[1]);
+    }
+  }
+  return scopes;
+}
+
+/**
  * A `via` entry's move: its links before the flush against its links now,
- * both filtered by `where`. A deleted entry left scopes nobody can name;
- * with `current` (behind a cluster adapter), the scopes it is linked to at
- * the read keep it. An entry created or touched is `added` to every scope it
- * is in now and `removed` from the ones it left.
+ * both filtered by `where`. A deleted entry left the scopes its delete read
+ * its links in (`linkedBeforeDelete`), or, when it read none, scopes nobody
+ * can name; with `current` (behind a cluster adapter), the scopes it is
+ * linked to at the read keep it. An entry created or touched is `added` to
+ * every scope it is in now and `removed` from the ones it left.
  */
 function viaMove(
   collection: BoundCollection,
@@ -437,9 +465,12 @@ function viaMove(
     !filtered(collection) || (values !== undefined && matchesWhere(collection, values));
   const after = matches(row) ? links : NONE;
   if (write?.op === "delete") {
+    const linked = linkedBeforeDelete(collection.scope as Via, write);
+    const left = linked === undefined ? unlinked : new Set([...unlinked, ...linked]);
+    const unknown = linked === undefined;
     return current
-      ? movedTo(id, unlinked, NONE, after, true)
-      : moveOf(id, unlinked, NONE, undefined, true);
+      ? movedTo(id, left, NONE, after, unknown)
+      : moveOf(id, left, NONE, undefined, unknown);
   }
   const linked = events.linked.get(id) ?? NONE;
   const linksBefore = new Set([...[...links].filter((scope) => !linked.has(scope)), ...unlinked]);

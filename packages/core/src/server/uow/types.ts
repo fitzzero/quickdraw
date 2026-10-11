@@ -50,6 +50,13 @@ export interface WriteRecord {
   /** The interested columns' values after the write, when the write returned them. */
   readonly after?: Readonly<Record<string, unknown>>;
   /**
+   * On a delete of a model whose junction links are registered
+   * (`StorageAdapter.registerLinks`): per junction model, the junction rows
+   * that linked the row just before the delete (possibly none), with the
+   * registered columns. Absent when the links were not read.
+   */
+  readonly links?: Readonly<Record<string, readonly Readonly<Record<string, unknown>>[]>>;
+  /**
    * Set on a `create` an `upsert` recorded without reading whether its row
    * existed (its `update` set no interested column and held no nested
    * write, or the model has no interested columns): the row may have been

@@ -98,9 +98,11 @@ the row's next change.
   its row as read at flush time, after the revision was taken: a move out of a
   scope that flushes after a later move back in sends the row `updated` to the
   scope it is in again, and a delete that flushes after a later create of the
-  same id sends the row (`u`), not its removal. One server keeps its cheaper
-  rule, so there the newer write's frame can still lose to the older one's
-  until the row's next write.
+  same id sends the row (`u`), not its removal. One server decides every
+  collection change that is not a removal by its row as read too, so a late
+  flush never sends a moved row to the scope it left; it keeps its cheaper
+  rule for removals and entity frames, so there the newer write's frame can
+  still lose to the older one's until the row's next write.
 - **Reads no older than what a client holds.** A read that claims a revision
   (a subscription's rows, a collection page, `qd:col:items`, a search page, a
   row sent again after a level change) claims the counter's last revision, so
@@ -156,9 +158,12 @@ the row's next change.
   pushed around the moment of subscribing may then arrive both in the seed
   and as a frame: make such items idempotent (a tick, an id).
 - **Collections.** A removal a write cannot address to a scope (a
-  `ctx.touch(..., { removed: true })`, junction rows a cascade removed) is
-  broadcast, so every node's subscribed scopes get it, except the scope the
-  row is in again when the flushing node reads it.
+  `ctx.touch(..., { removed: true })`, junction rows a cascade removed
+  without their entry's tracked delete) is broadcast, so every node's
+  subscribed scopes get it, except the scope the row is in again when the
+  flushing node reads it; no resume buffer keeps it. A tracked delete of a
+  `via` entry reads its links first, so it reaches only the scopes it was
+  linked to.
 
 ## What it costs
 

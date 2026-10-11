@@ -11,13 +11,24 @@
 // | update              | update      | the result; old values from a read | one read, only when `data`   |
 // |                     |             |                                    | sets an interested column or |
 // |                     |             |                                    | holds a nested write         |
-// | delete              | delete      | the result (the deleted row)       | none                         |
+// | delete              | delete      | the result (the deleted row)       | none; for a via entry model, |
+// |                     |             |                                    | one read per junction, and   |
+// |                     |             |                                    | one for the id when `where`  |
+// |                     |             |                                    | names no `id`                |
 // | createMany          | create      | rewritten to createManyAndReturn   | none                         |
 // | updateMany          | update      | rewritten to updateManyAndReturn   | as updateManyAndReturn       |
 // | createManyAndReturn | create      | the result                         | none                         |
 // | updateManyAndReturn | update      | the result; old values from a read | one read, only when `data`   |
 // |                     |             |                                    | sets an interested column    |
-// | deleteMany          | delete      | a read with the same `where`       | one read                     |
+// | deleteMany          | delete      | a read with the same `where`       | one read; for a via entry    |
+// |                     |             |                                    | model, one per junction more |
+// |                     |             |                                    | when the read found rows     |
+//
+// A `delete` or `deleteMany` of a via entry model (one whose junction a
+// `via` collection registered: `registerLinks`) reads the junction rows that
+// link the rows it deletes first, through the open transaction, and records
+// them in each write's `links` (possibly none), so its flush tells only the
+// scopes the row was linked to (the 5.1 audit's COLL-3; `links.ts`).
 //
 // `fields` are the keys of `data` (for upsert, of `update` when the row
 // existed, of `create` when it did not, and of both when no read told; such
@@ -69,8 +80,10 @@
 // found its row.
 
 import { quietly } from "../server/devWarnings";
+import type { LinkInterest } from "../server/storage";
 import type { WriteRecord } from "../server/uow/types";
 import type { WriteTracker } from "../server/uow/unitOfWork";
+import { readLinks, withLinks, type Links } from "./links";
 import { findNestedWrites } from "./nested";
 
 /** A Prisma operation's arguments. */
@@ -96,6 +109,8 @@ export interface Runtime {
   /** The model's delegate on the open interactive transaction's client, or else the root client's. */
   delegate(model: string): Delegate;
   interestOf(model: string): readonly string[];
+  /** The junctions whose links a delete of `model` reads first (`registerLinks`). */
+  linksOf(model: string): readonly LinkInterest[];
   /** Models whose writes run untracked: no usable `id` column. */
   readonly untracked: Set<string>;
 }
@@ -477,9 +492,24 @@ async function update(op: Operation): Promise<unknown> {
   return result;
 }
 
+/** The links of the row a `delete` names (`readLinks`): by its `where.id`, or a read of its id first. */
+async function linksOfDelete(op: Operation): Promise<Links | undefined> {
+  if (op.runtime.linksOf(op.model).length === 0) {
+    return undefined;
+  }
+  warnBatchRead(op);
+  const { where } = op.args;
+  const ids =
+    isRecord(where) && typeof where.id === "string"
+      ? [where.id]
+      : [...(await readBefore(op, where, [], { unique: true })).keys()];
+  return await readLinks(op.runtime, op.model, ids);
+}
+
 async function remove(op: Operation): Promise<unknown> {
+  const links = await linksOfDelete(op);
   const { result, rows } = await runWidened(op);
-  record(op, writesOf(op, "delete", rows, []));
+  record(op, withLinks(writesOf(op, "delete", rows, []), links));
   return result;
 }
 
@@ -590,6 +620,7 @@ async function deleteMany(op: Operation): Promise<unknown> {
   const interest = op.runtime.interestOf(op.model);
   const before = await readBefore(op, where, interest, { unique: false, take: limit });
   const ids = [...before.keys()];
+  const links = await readLinks(op.runtime, op.model, ids);
   // With a limit, which rows go is up to the database: delete the rows read.
   const args =
     limit === undefined
@@ -597,7 +628,7 @@ async function deleteMany(op: Operation): Promise<unknown> {
       : { ...op.args, where: { AND: [where ?? {}, { id: { in: ids } }] } };
   const result = await op.query(args);
   const rows = ids.map((id) => ({ id, ...before.get(id) }));
-  record(op, writesOf(op, "delete", rows, []));
+  record(op, withLinks(writesOf(op, "delete", rows, []), links));
   return result;
 }
 

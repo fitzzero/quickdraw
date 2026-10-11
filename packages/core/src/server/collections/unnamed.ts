@@ -12,7 +12,10 @@
 // nothing on the client). A row that exists again when the flushing node
 // reads it (its id created again by a write whose flush went first) is not
 // removed from the scopes it is in at that read (`kept`): that node sends
-// it there itself.
+// it there itself. No resume buffer keeps such a removal, here or on the
+// flushing node: the scope's floor rises instead, so a client resuming
+// across it reads a page. A `via` entry whose delete read its links is
+// placed, and never comes here (the 5.1 audit's COLL-3).
 
 import { collectionRoom, SERVER_EVENTS } from "../../contract/names";
 import type { CollectionDelta, CollectionFrame, Revision } from "../../protocol/envelope";
@@ -153,7 +156,7 @@ function sendHere(hub: CollectionHub, unnamed: UnnamedDeltas): void {
     if (unnamed.reset) {
       hub.collections.buffer.reset(room, unnamed.rev);
     } else {
-      hub.collections.buffer.record(room, unnamed.rev, deltas);
+      hub.collections.buffer.skip(room, unnamed.rev);
     }
   }
 }

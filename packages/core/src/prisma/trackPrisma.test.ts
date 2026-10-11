@@ -548,6 +548,88 @@ describe("writes that change nothing (finding F7.2)", () => {
   });
 });
 
+describe("the links of a via entry's delete (COLL-3)", () => {
+  // Labels are the entries of a via list over taskLabel; no other test here deletes one.
+  beforeAll(() => {
+    h.storage.registerLinks?.("label", {
+      model: "taskLabel",
+      entry: "labelId",
+      columns: ["taskId"],
+    });
+  });
+
+  const labelOf = (name: string) => h.prisma.label.create({ data: { projectId, name } });
+
+  it("reads a deleted row's links first, in one more statement, and records them, none included", async () => {
+    const task = await addTask("Linked");
+    const bug = await labelOf("Bug");
+    await h.prisma.taskLabel.create({ data: { taskId: task.id, labelId: bug.id } });
+    const counted = await h.storage.countStatements(() =>
+      h.inUnit(() => h.db.label.delete({ where: { id: bug.id } })),
+    );
+    expect(counted.statements).toBe(2);
+    expect(counted.value.writes).toEqual([
+      expect.objectContaining({
+        model: "label",
+        id: bug.id,
+        op: "delete",
+        links: { taskLabel: [{ labelId: bug.id, taskId: task.id }] },
+      }),
+    ]);
+    const idea = await labelOf("Idea");
+    const { writes } = await h.inUnit(() => h.db.label.delete({ where: { id: idea.id } }));
+    expect(writes).toEqual([expect.objectContaining({ id: idea.id, links: { taskLabel: [] } })]);
+  });
+
+  it("reads each row's links once after deleteMany's ids, and none when nothing matches", async () => {
+    const task = await addTask("Linked");
+    const bug = await labelOf("Bug");
+    const idea = await labelOf("Idea");
+    await h.prisma.taskLabel.create({ data: { taskId: task.id, labelId: bug.id } });
+    const where = { name: { in: ["Bug", "Idea"] } };
+    const counted = await h.storage.countStatements(() =>
+      h.inUnit(() => h.db.label.deleteMany({ where })),
+    );
+    expect(counted.statements).toBe(3);
+    expect(counted.value.writes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: bug.id,
+          links: { taskLabel: [{ labelId: bug.id, taskId: task.id }] },
+        }),
+        expect.objectContaining({ id: idea.id, links: { taskLabel: [] } }),
+      ]),
+    );
+    const none = await h.storage.countStatements(() =>
+      h.inUnit(() => h.db.label.deleteMany({ where })),
+    );
+    expect(none.statements).toBe(2);
+  });
+
+  it("reads the id first for a delete by another unique key", async () => {
+    h.storage.registerLinks?.("user", {
+      model: "projectMember",
+      entry: "userId",
+      columns: ["projectId"],
+    });
+    const member = await h.prisma.user.create({
+      data: { email: "member@example.com", name: "Member" },
+    });
+    await h.prisma.projectMember.create({ data: { projectId, userId: member.id, role: "Read" } });
+    const counted = await h.storage.countStatements(() =>
+      h.inUnit(() => h.db.user.delete({ where: { email: "member@example.com" } })),
+    );
+    expect(counted.statements).toBe(3);
+    expect(counted.value.writes).toEqual([
+      expect.objectContaining({
+        model: "user",
+        id: member.id,
+        links: { projectMember: [{ userId: member.id, projectId }] },
+      }),
+    ]);
+  });
+});
+
 describe("models and registrations", () => {
   it("lets writes to a model without an id column through, untracked, with one warning", async () => {
     const expires = new Date("2030-01-01T00:00:00Z");

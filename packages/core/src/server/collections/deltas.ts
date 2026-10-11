@@ -20,22 +20,28 @@
 // client out of revision order, and a patch it dropped as older would lose
 // its fields. One that would be dropped as empty is still dropped.
 //
-// Behind a cluster adapter each delta is also decided by its row as read
-// for the frame, not by the write's own values alone. A flush takes its
-// revision when it flushes, after its handler settled and (behind a
-// cluster) once the counter answered, so a write that committed first can
-// flush last: a move out of a scope, or a delete, then carries a higher
-// revision than a later move back in, or a later create of its id, and a
-// client would apply it over them. The read is made after the flush took
-// its revision, so it sees every write whose flush took a lower one: a row
-// in the scope at the read goes out (`removed` becomes `updated`, or
-// `added` for a row that left scopes nobody could name), and one that is
-// not there is `removed`. Every frame a scope gets about a row is then right
-// as of a read made after its revision, and the newest one wins on the
-// client. The rows of `removed` deltas are read for it, with the membership
-// columns. One server keeps its cheaper rule (no read for a removal): a
-// write that commits first and flushes last can still leave a client
-// without a member there until the row's next write.
+// A delta is also decided by its row as read for the frame, not by the
+// write's own values alone. A flush takes its revision when it flushes,
+// after its handler settled and (behind a cluster) once the counter
+// answered, so a write that committed first can flush last: its rows may
+// have moved since. Behind a cluster adapter every delta is decided so: a
+// move out of a scope, or a delete, then carries a higher revision than a
+// later move back in, or a later create of its id, and a client would apply
+// it over them. The read is made after the flush took its revision, so it
+// sees every write whose flush took a lower one: a row in the scope at the
+// read goes out (`removed` becomes `updated`, or `added` for a row that left
+// scopes nobody could name), and one that is not there is `removed`. Every
+// frame a scope gets about a row is then right as of a read made after its
+// revision, and the newest one wins on the client. The rows of `removed`
+// deltas are read for it, with the membership columns.
+//
+// One server decides every delta of a column scope that is not a removal
+// the same way, by its row as read with the membership columns (the 5.1
+// audit's COLL-2: a flush that ran behind a slow handler tail, or waited in
+// a busy queue, sent a moved row's new values to the scope it left). It
+// keeps its cheaper rule for removals (no read): a write that commits first
+// and flushes last can still leave a client without a member there until
+// the row's next write.
 //
 // A self scope that follows its service's policy has its deltas checked
 // for its user before anything is read (`selfAccess.ts`): a row the user may
@@ -138,10 +144,10 @@ function readsNothing(
 
 /**
  * The rows the plans' deltas take items from: those the moves read, and one
- * read for the others. Behind a cluster adapter (`cluster`) every change
- * reads its whole item, and the rows of `removed` deltas and of `also` are
- * read too, with the membership columns, so the deltas are decided at the
- * read (`buildDeltas`).
+ * read for the others, with the membership columns of a column scope so its
+ * deltas are decided at the read (`buildDeltas`). Behind a cluster adapter
+ * (`cluster`) every change reads its whole item, and the rows of `removed`
+ * deltas and of `also` are read too, with the membership columns.
  */
 export async function readItems(
   storage: StorageAdapter,
@@ -171,10 +177,14 @@ export async function readItems(
   }
   const select = selectFor(collection.item, [...kinds.values()]);
   const whole = [...kinds.values()].some((kind) => kind.t === "u");
-  const columns = [...indexColumns(collection), ...(cluster ? membershipColumns(collection) : [])];
+  const decides = cluster || collection.scope.kind === "column";
+  const columns = [
+    ...(whole ? indexColumns(collection) : []),
+    ...(decides ? membershipColumns(collection) : []),
+  ];
   const rows = await storage.findMany(collection.model, {
     where: { id: { in: [...kinds.keys()] } },
-    select: whole ? selectWith(select, columns) : select,
+    select: selectWith(select, columns),
   });
   const all = new Map(read);
   for (const row of rows) {
@@ -194,8 +204,8 @@ function added(collection: BoundCollection, row: StorageRow, rev: Revision): Col
 }
 
 /**
- * Behind a cluster adapter, a pending delta of `scope` as the row read for
- * the frame decides it (`row` absent: the row is gone). In a column-scoped
+ * A pending delta of `scope` as the row read for the frame decides it
+ * (`row` absent: the row is gone; `decidedByRow` says when it applies). In a column-scoped
  * collection a row not in the scope at the read is `removed`, and one in it
  * is not: a removal becomes `updated` (`added` for a row that left scopes
  * nobody could name, which this scope may never have held). A `via` scope's
@@ -227,10 +237,27 @@ function decided(
 }
 
 /**
+ * True when a pending delta is decided by its row as read (`decided`):
+ * behind a cluster adapter every one; on one server one of a column scope
+ * that is not a removal and whose row was read (a row read as missing keeps
+ * its rule: it is dropped, and its own flush removes it).
+ */
+function decidedByRow(
+  collection: BoundCollection,
+  pending: Pending,
+  row: StorageRow | undefined,
+  cluster: boolean,
+): boolean {
+  return (
+    cluster || (row !== undefined && pending.t !== "removed" && collection.scope.kind === "column")
+  );
+}
+
+/**
  * The deltas of one scope's frame for the flush at `rev`, from its plan and
- * the rows read. Behind a cluster adapter (`cluster`) each delta is decided
- * by its row as read (`decided`), and goes out `updated`, whole, where a
- * patch would go.
+ * the rows read. A delta is decided by its row as read where
+ * `decidedByRow` says so; behind a cluster adapter (`cluster`) one goes out
+ * `updated`, whole, where a patch would go.
  */
 export function buildDeltas(
   collection: BoundCollection,
@@ -245,7 +272,9 @@ export function buildDeltas(
   const deltas: CollectionDelta[] = [];
   for (const pending of plan.deltas) {
     const row = rows.get(pending.id);
-    const delta = cluster ? decided(collection, plan.scope, pending, row) : pending;
+    const delta = decidedByRow(collection, pending, row, cluster)
+      ? decided(collection, plan.scope, pending, row)
+      : pending;
     if (delta.t === "removed") {
       deltas.push({ t: "removed", id: delta.id });
       continue;

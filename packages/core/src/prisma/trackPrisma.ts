@@ -21,6 +21,7 @@ import { consoleLogger, type Logger } from "../contract/logger";
 import { quietly } from "../server/devWarnings";
 import {
   createInterestRegistry,
+  createLinkRegistry,
   modelKey,
   STORAGE_KEY,
   storageOf,
@@ -234,7 +235,10 @@ function createTrackability(
  */
 function createStorage(
   tracker: WriteTracker,
-  interest: ReturnType<typeof createInterestRegistry>,
+  [interest, links]: readonly [
+    ReturnType<typeof createInterestRegistry>,
+    ReturnType<typeof createLinkRegistry>,
+  ],
   delegate: (model: string) => Delegate,
 ): StorageAdapter {
   return Object.freeze({
@@ -246,6 +250,8 @@ function createStorage(
     countStatements: tracker.countStatements,
     registerInterest: interest.register,
     interestOf: interest.of,
+    registerLinks: links.register,
+    linksOf: links.of,
     inTransaction: () => tracker.transactionClient() !== undefined || tracker.inBatch(),
     nullable: createNullability(delegate),
     trackable: createTrackability(delegate),
@@ -292,7 +298,14 @@ export function trackPrisma<C extends PrismaClientLike>(
   let root: ExtendedClient | undefined;
   const delegate = (model: string): Delegate =>
     delegateOf(tracker.transactionClient() ?? root, model);
-  const runtime: Runtime = { tracker, delegate, interestOf: interest.of, untracked: new Set() };
+  const links = createLinkRegistry();
+  const runtime: Runtime = {
+    tracker,
+    delegate,
+    interestOf: interest.of,
+    linksOf: links.of,
+    untracked: new Set(),
+  };
   const hooked = client.$extends({
     name: "quickdraw-tracking",
     query: { $allOperations: createHook(runtime) },
@@ -303,7 +316,7 @@ export function trackPrisma<C extends PrismaClientLike>(
     client: {
       $transaction: (arg: unknown, txOptions?: unknown) =>
         transaction(tracker, hooked, arg, txOptions),
-      [STORAGE_KEY]: createStorage(tracker, interest, delegate),
+      [STORAGE_KEY]: createStorage(tracker, [interest, links], delegate),
     },
   });
   return tracked as unknown as C;

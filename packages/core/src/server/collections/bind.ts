@@ -88,7 +88,12 @@ function add(
   index.set(model, [...(index.get(model) ?? []), collection]);
 }
 
-/** Registers the columns that decide membership: the scope column or junction, and the `where` columns. */
+/**
+ * Registers the columns that decide membership: the scope column or
+ * junction, and the `where` columns; and a `via` collection's junction as
+ * its entries' links, which a delete of an entry reads first
+ * (`registerLinks`).
+ */
 function registerInterest(storage: StorageAdapter | undefined, bound: BoundCollection): void {
   const { scope } = bound;
   const where = Object.keys(bound.where);
@@ -98,6 +103,11 @@ function registerInterest(storage: StorageAdapter | undefined, bound: BoundColle
   }
   const roles = (scope.levels ?? []).map((rule) => rule.column);
   storage?.registerInterest(modelKey(scope.model), [scope.entry, scope.scope, ...roles]);
+  storage?.registerLinks?.(bound.model, {
+    model: modelKey(scope.model),
+    entry: scope.entry,
+    columns: [scope.scope, ...roles],
+  });
   if (where.length > 0) {
     storage?.registerInterest(bound.model, where);
   }
