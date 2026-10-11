@@ -3,6 +3,7 @@
 // invalidates the nodes another edit still refers to.
 
 import { Node } from "ts-morph";
+import { rebasedSpecifier } from "./imports";
 
 /** Replaces the text between `start` and `end` (file offsets) with `text`. */
 export interface Edit {
@@ -49,6 +50,29 @@ function withoutContained(edits: readonly Edit[]): Edit[] {
 export function editedText(node: Node, edits: readonly Edit[]): string {
   const inside = edits.filter((edit) => edit.start >= node.getStart() && edit.end <= node.getEnd());
   return applyEdits(node.getText(), node.getStart(), inside);
+}
+
+/**
+ * The text of the type `node`, written into the file at `to`: the relative
+ * specifier of every `import("...")` type in it names its module from there.
+ */
+export function typeText(node: Node, to: string, withJs: boolean): string {
+  const edits: Edit[] = [];
+  for (const importType of [node, ...node.getDescendants()].filter((child) =>
+    Node.isImportTypeNode(child),
+  )) {
+    const argument = importType.getArgument();
+    const literal = Node.isLiteralTypeNode(argument) ? argument.getLiteral() : undefined;
+    if (literal === undefined || !Node.isStringLiteral(literal)) {
+      continue;
+    }
+    const specifier = rebasedSpecifier(literal, to, withJs);
+    if (specifier !== literal.getLiteralValue()) {
+      // Inside the quotes, so the literal keeps its quote style
+      edits.push({ start: literal.getStart() + 1, end: literal.getEnd() - 1, text: specifier });
+    }
+  }
+  return editedText(node, edits);
 }
 
 /** Whether the line starting at file offset `position` holds only whitespace. */

@@ -67,7 +67,7 @@ export interface ProjectServiceMethods {
     response: { id: string; deleted: true };
   };
   getProjectLimits: {
-    payload: Record<string, never>;
-    response: { maxProjects: number; maxMembers: number };
+    payload: { scope?: import("./limits.js").LimitsScope };
+    response: import("./limits.js").ProjectLimits;
   };
 }

@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { Node, SyntaxKind, type SourceFile, type TypeNode } from "ts-morph";
 import { regionMarkers } from "../carveOuts";
 import type { RunContext } from "../context";
-import { relativeSpecifier } from "../imports";
+import { rebasedSpecifier, relativeSpecifier } from "../imports";
 import { repoPath } from "../layout";
 import { markerText } from "../markers";
 import type { MovedDeclaration } from "../schemas";
@@ -52,16 +52,9 @@ function typeImports(ctx: RunContext, nodes: readonly Node[], file: string): str
       }
       if (Node.isImportSpecifier(declaration)) {
         const statement = declaration.getImportDeclaration();
-        const target = statement.getModuleSpecifierSourceFile();
-        const source = statement.getModuleSpecifierValue();
         const imported =
           declaration.getAliasNode() === undefined ? name : `${declaration.getName()} as ${name}`;
-        add(
-          source.startsWith(".") && target !== undefined
-            ? relativeSpecifier(file, target.getFilePath(), ctx.js.shared)
-            : source,
-          imported,
-        );
+        add(rebasedSpecifier(statement.getModuleSpecifier(), file, ctx.js.shared), imported);
       } else if (
         Node.isInterfaceDeclaration(declaration) ||
         Node.isTypeAliasDeclaration(declaration) ||

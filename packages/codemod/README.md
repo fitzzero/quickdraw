@@ -58,7 +58,9 @@ It expects the quickdraw template's layout; the options move each part:
   is `"entity"` when the 4.x response was the service's DTO (or
   `todoSchema<Response>()`); its kind is `query` when its name starts with
   get, list, search, find or count, or the web app reads it with
-  `useServiceQuery`. Service names are kept exactly.
+  `useServiceQuery`. A type the method map wrote inline, as
+  `import("./x.js").T`, keeps that form, its path written from the contract
+  file. Service names are kept exactly.
 - **Services.** Each `BaseService` (or `BaseRpcService`) class becomes
   `qd.defineService(contract, { model, access, methods })` in its own file.
   Handler bodies are kept, with `({ input, ctx, db })` for

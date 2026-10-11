@@ -6,7 +6,8 @@
 // `defineService`'s rowless check sees an id among them), the report lists
 // every manual item of the fixture at its file and line, a service class's
 // fields, getters, constructor and overrides survive as marked module code,
-// and a second run changes nothing.
+// an inline import() type names its module from the contract file, and a
+// second run changes nothing.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -518,6 +519,21 @@ describe("a placeholder input", () => {
     // the placeholder without keys hid the id: the check let it through
     expect(define(todoSchema(), false)).not.toThrow();
     /* oxlint-enable quickdraw/no-todo-schema */
+  });
+});
+
+describe("an inline import() type of a 4.x method map", () => {
+  it("names its module from the contract file, in the input and in the output", () => {
+    // types/project.ts writes import("./limits.js"), a path from types/
+    const line =
+      (output.get("packages/shared/src/contracts/project.ts") ?? "")
+        .split("\n")
+        .find((text) => text.includes("getProjectLimits:")) ?? "";
+    expect(line).toContain(
+      'input: todoSchema<{ scope?: import("../types/limits.js").LimitsScope }>({ keys: ["scope"] })',
+    );
+    expect(line).toContain('output: todoSchema<import("../types/limits.js").ProjectLimits>()');
+    expect(line).not.toContain('import("./limits.js")');
   });
 });
 
