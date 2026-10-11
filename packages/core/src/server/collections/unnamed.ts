@@ -13,17 +13,18 @@
 // reads it (its id created again by a write whose flush went first) is not
 // removed from the scopes it is in at that read (`kept`): that node sends
 // it there itself. No resume buffer keeps such a removal, here or on the
-// flushing node: the scope's floor rises instead, so a client resuming
+// flushing node: the floor of every scope of the collection rises instead,
+// subscribed here or not (`skipAll`), so a client resuming any of them
 // across it reads a page. A `via` entry whose delete read its links is
 // placed, and never comes here (the 5.1 audit's COLL-3).
 
 import { collectionRoom, SERVER_EVENTS } from "../../contract/names";
 import type { CollectionDelta, CollectionFrame, Revision } from "../../protocol/envelope";
 import type { StorageRow } from "../storage";
-import type { CollectionHub } from "./bind";
-import type { BoundCollection } from "./bind";
+import type { BoundCollection, CollectionHub } from "./bind";
 import { scopeIn } from "./items";
 import type { Move, Moves } from "./moves";
+import { groupOf } from "./scopes";
 
 /** The server-to-server event unaddressed deltas are broadcast on behind a cluster adapter. */
 export const UNNAMED_EVENT = "quickdraw:collection-unnamed";
@@ -89,9 +90,17 @@ export function unnamedOf(
   };
 }
 
-/** Behind a cluster adapter, tells the other nodes what the flush could not address. */
+/**
+ * What the flush could not address: no scope of the collection resumes
+ * across it here, subscribed or not, and behind a cluster adapter the other
+ * nodes are told it.
+ */
 export function broadcastUnnamed(hub: CollectionHub, unnamed: UnnamedDeltas | undefined): void {
-  if (unnamed !== undefined && hub.io !== undefined && !hub.probe.local()) {
+  if (unnamed === undefined) {
+    return;
+  }
+  hub.collections.buffer.skipAll(groupOf(unnamed.s, unnamed.c));
+  if (hub.io !== undefined && !hub.probe.local()) {
     hub.io.serverSideEmit(UNNAMED_EVENT, unnamed);
   }
 }
@@ -144,6 +153,8 @@ function sendHere(hub: CollectionHub, unnamed: UnnamedDeltas): void {
   if (io === undefined || collection === undefined) {
     return;
   }
+  // No scope of the collection resumes across it here, subscribed or not.
+  hub.collections.buffer.skipAll(groupOf(unnamed.s, unnamed.c));
   const kept = new Set((unnamed.kept ?? []).map(([id, scope]) => `${id}\u0000${scope}`));
   for (const scope of hub.collections.scopes.scopes(unnamed.s, unnamed.c)) {
     const deltas = deltasFor(unnamed, kept, scope);

@@ -606,6 +606,38 @@ describe("the links of a via entry's delete (COLL-3)", () => {
     expect(none.statements).toBe(2);
   });
 
+  it.each([
+    [
+      "a column the junction does not have",
+      { model: "taskLabel", entry: "nope", columns: ["taskId"] },
+    ],
+    [
+      "a junction model the client does not have",
+      { model: "noSuchJunction", entry: "labelId", columns: [] },
+    ],
+  ])(
+    "records deletes without links when their read fails on %s, warns once, and keeps tracking",
+    async (_case, link) => {
+      const db = trackPrisma(h.prisma, { logger: h.logger, development: false });
+      const storage = storageOf(db);
+      storage?.registerLinks?.("label", link);
+      const writes: Record<string, unknown>[] = [];
+      storage?.onWrite((write) => writes.push(write as unknown as Record<string, unknown>));
+      const one = await labelOf("One");
+      const two = await labelOf("Two");
+      await db.label.delete({ where: { id: one.id } });
+      await db.label.deleteMany({ where: { id: two.id } });
+      expect(writes.map(({ id, op }) => [id, op])).toEqual([
+        [one.id, "delete"],
+        [two.id, "delete"],
+      ]);
+      expect(writes.every((write) => !("links" in write))).toBe(true);
+      expect(h.logger.warnings).toEqual([
+        expect.stringContaining("so its deletes tell every subscribed scope of its via lists"),
+      ]);
+    },
+  );
+
   it("reads the id first for a delete by another unique key", async () => {
     h.storage.registerLinks?.("user", {
       model: "projectMember",

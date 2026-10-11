@@ -281,6 +281,7 @@ export {
   storageOf,
   type CountArgs,
   type FindManyArgs,
+  type LinkInterest,
   type StorageAdapter,
   type StorageRow,
   type StorageWhere,

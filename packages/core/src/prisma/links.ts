@@ -4,14 +4,21 @@
 // or `deleteMany` of an entry then reads the junction rows that link the
 // rows it deletes, through the open transaction, and records them in each
 // write's `links`, possibly none, so its flush tells only the scopes a
-// deleted entry was linked to. A read that fails validation (a junction or
-// a column the client does not have) leaves the links unknown, and warns
-// once: such a delete's collections are told as for a row nobody can place,
-// and the model stays tracked.
+// deleted entry was linked to. A junction the client does not have, or a
+// read that fails validation (a column it does not have), leaves the links
+// unknown, and warns once: such a delete's collections are told as for a
+// row nobody can place, and the model stays tracked.
+//
+// The links are read in a statement of their own just before the delete,
+// as `deleteMany` reads its ids: under the database's default isolation
+// (read committed), and always outside an interactive transaction, a link
+// another unit commits in between is removed by the delete's cascade
+// without being read, so the scope it put the entry in keeps the entry
+// until that scope is read again.
 
 import { quietly } from "../server/devWarnings";
 import type { WriteRecord } from "../server/uow/types";
-import type { Row, Runtime } from "./operations";
+import type { Delegate, Row, Runtime } from "./operations";
 
 /** Per entry id, per junction model: the junction rows linking it. */
 export type Links = ReadonlyMap<string, Record<string, Row[]>>;
@@ -55,12 +62,18 @@ export async function readLinks(
     const select = Object.fromEntries(
       [link.entry, ...link.columns].map((column) => [column, true]),
     );
+    let delegate: Delegate;
+    try {
+      delegate = runtime.delegate(link.model);
+    } catch {
+      // A junction model the client does not have.
+      warnUnread(runtime, model, link.model);
+      return undefined;
+    }
     let rows: Row[];
     try {
       rows = await quietly(() =>
-        runtime
-          .delegate(link.model)
-          .findMany({ where: { [link.entry]: { in: [...ids] } }, select }),
+        delegate.findMany({ where: { [link.entry]: { in: [...ids] } }, select }),
       );
     } catch (error) {
       if (error instanceof Error && error.name === "PrismaClientValidationError") {

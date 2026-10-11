@@ -425,6 +425,21 @@ function filtered(collection: BoundCollection): boolean {
 }
 
 /**
+ * False only when a deleted entry's last values (`before`, which carries the
+ * `where` columns a filtered list registers) fail the list's `where`: no
+ * scope of the list held it. True without them, to stay safe.
+ */
+function listedBefore(collection: BoundCollection, before: Values | undefined): boolean {
+  if (!filtered(collection) || before === undefined) {
+    return true;
+  }
+  const columns = Object.keys(collection.where);
+  return (
+    columns.some((column) => !Object.hasOwn(before, column)) || matchesWhere(collection, before)
+  );
+}
+
+/**
  * The scopes a deleted entry was linked to just before its delete, as the
  * tracked client read them (`WriteRecord.links`): its junction rows the role
  * rules count (or whose role was not read). `undefined` when the delete did
@@ -446,12 +461,38 @@ function linkedBeforeDelete(via: Via, write: WriteRecord): ReadonlySet<string> |
 }
 
 /**
+ * The move of a deleted `via` entry (`viaMove`): out of the scopes its
+ * delete read its links in, and the ones the flush's junction events
+ * unlinked; out of scopes nobody can name when its links were not read;
+ * out of none when its last values fail a filtered list's `where`. With
+ * `current`, the scopes it is linked to at the read (`after`) keep it.
+ */
+function deletedMove(
+  collection: BoundCollection,
+  write: WriteRecord,
+  [unlinked, after]: readonly [ReadonlySet<string>, ReadonlySet<string>],
+  current: boolean,
+): Move {
+  const { id } = write;
+  if (!listedBefore(collection, write.before)) {
+    return current ? movedTo(id, NONE, NONE, after, false) : moveOf(id, NONE, NONE, undefined);
+  }
+  const linked = linkedBeforeDelete(collection.scope as Via, write);
+  const left = linked === undefined ? unlinked : new Set([...unlinked, ...linked]);
+  const unknown = linked === undefined;
+  return current
+    ? movedTo(id, left, NONE, after, unknown)
+    : moveOf(id, left, NONE, undefined, unknown);
+}
+
+/**
  * A `via` entry's move: its links before the flush against its links now,
  * both filtered by `where`. A deleted entry left the scopes its delete read
  * its links in (`linkedBeforeDelete`), or, when it read none, scopes nobody
- * can name; with `current` (behind a cluster adapter), the scopes it is
- * linked to at the read keep it. An entry created or touched is `added` to
- * every scope it is in now and `removed` from the ones it left.
+ * can name; none when its last values fail a filtered list's `where`
+ * (`listedBefore`); with `current` (behind a cluster adapter), the scopes it
+ * is linked to at the read keep it. An entry created or touched is `added`
+ * to every scope it is in now and `removed` from the ones it left.
  */
 function viaMove(
   collection: BoundCollection,
@@ -465,12 +506,7 @@ function viaMove(
     !filtered(collection) || (values !== undefined && matchesWhere(collection, values));
   const after = matches(row) ? links : NONE;
   if (write?.op === "delete") {
-    const linked = linkedBeforeDelete(collection.scope as Via, write);
-    const left = linked === undefined ? unlinked : new Set([...unlinked, ...linked]);
-    const unknown = linked === undefined;
-    return current
-      ? movedTo(id, left, NONE, after, unknown)
-      : moveOf(id, left, NONE, undefined, unknown);
+    return deletedMove(collection, write, [unlinked, after], current);
   }
   const linked = events.linked.get(id) ?? NONE;
   const linksBefore = new Set([...[...links].filter((scope) => !linked.has(scope)), ...unlinked]);

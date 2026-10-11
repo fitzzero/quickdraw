@@ -203,9 +203,11 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   junction links first (one read per junction, and one more for a `delete`
   whose `where` has no `id`), and records them in `WriteRecord.links`, a
   new optional field app flush sinks see. Its removal goes only to the
-  scopes it was linked to. A removal nobody can place (a `ctx.touch` with
-  `removed`) still reaches every subscribed scope, and a client resuming
-  across one reloads the scope instead of replaying it.
+  scopes it was linked to, and to none of a filtered list when it was
+  outside the list's `where`. A removal nobody can place (a `ctx.touch`
+  with `removed`) still reaches every subscribed scope, and a client
+  resuming any scope of that collection across one, subscribed on the
+  server or not, reloads the scope instead of replaying it.
 
 ### Security
 

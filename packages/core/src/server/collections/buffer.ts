@@ -12,7 +12,9 @@
 //   subscribed to it): to that revision;
 // - a frame that removes a row nobody could place (a touch with `removed`,
 //   a `via` entry deleted without its links read), which every subscribed
-//   scope gets and none keeps: to its revision (`send.ts`, `unnamed.ts`);
+//   scope gets and none keeps: to its revision (`send.ts`), and past every
+//   revision taken so far for every scope of the collection, subscribed
+//   or not, on every node (`skipAll`, `unnamed.ts`);
 // - a `reset`: past its revision, since a client must load the scope again;
 // - a frame recorded after a newer one (flushes can finish out of order):
 //   past the newest, since a client holding the newer revision may not have

@@ -60,11 +60,13 @@ export interface StorageAdapter {
   /**
    * Declares that rows of `model` are the entries of a `via` collection over
    * the junction `link` names: a `delete` or `deleteMany` of `model` reads
-   * the junction rows linking the rows it deletes first, in the same
-   * transaction, and reports them in each write's `links`, so a flush tells
-   * only the scopes a deleted entry was linked to (the 5.1 audit's COLL-3).
-   * Optional: without it a deleted entry left scopes nobody can name, and
-   * every subscribed scope of its collection is told it was removed.
+   * the junction rows linking the rows it deletes just before, through the
+   * open transaction when there is one, and reports them in each write's
+   * `links`, so a flush tells only the scopes a deleted entry was linked to
+   * (the 5.1 audit's COLL-3). A link committed between that read and the
+   * delete is not read (`prisma/links.ts`). Optional: without it a deleted
+   * entry left scopes nobody can name, and every subscribed scope of its
+   * collection is told it was removed.
    */
   registerLinks?(model: string, link: LinkInterest): void;
   /** The junctions registered for `model` (`registerLinks`). */

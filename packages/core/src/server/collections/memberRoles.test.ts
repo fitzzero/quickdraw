@@ -167,6 +167,26 @@ describe("a via list over the item service's members table", () => {
     expect(ada.deltas()).toEqual([[{ t: "added", item: { id: board.p1, name: "P1" } }]]);
   });
 
+  it("tells a deleted project only to the lists its counted links put it in (COLL-3)", async () => {
+    const app = await start();
+    await h.prisma.projectMember.updateMany({
+      where: { projectId: board.p1, userId: board.cy },
+      data: { role: "Public" },
+    });
+    const connection = await app.connect(as(board.ada));
+    const scopes = receiveScopes(connection);
+    const subscribe = (scope: string) =>
+      emitWithAck(connection.socket, "qd:col:sub", { s: "projectsOfService", c: "of", scope });
+    // cy's Public link never counted, so her list never held P1; bo's Moderate one did.
+    expect(await subscribe(board.cy)).toMatchObject({ ok: true, items: [] });
+    expect(await subscribe(board.bo)).toMatchObject({ ok: true, items: [{ id: board.p1 }] });
+    await write(app, (db) => db.project.delete({ where: { id: board.p1 } }));
+    await scopes.settle();
+    expect(scopes.frames.map((frame: CollectionFrame) => [frame.scope, frame.deltas])).toEqual([
+      [board.bo, [{ t: "removed", id: board.p1 }]],
+    ]);
+  });
+
   it("does not add a link created below the list's access", async () => {
     const app = await start();
     const ada = await watcher(app);

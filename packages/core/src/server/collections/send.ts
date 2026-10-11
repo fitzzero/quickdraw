@@ -5,8 +5,9 @@
 //   deltas }`, and into the scope's resume buffer, except one that removes a
 //   row nobody could place (a touch with `removed`, a `via` entry deleted
 //   without its links read), which every subscribed scope gets: that one
-//   raises the scope's resume floor instead, so a client resuming across it
-//   reads a page rather than learn the row's id;
+//   raises the scope's resume floor instead, as `unnamed.ts` raises every
+//   scope's of the collection, so a client resuming across it reads a page
+//   rather than learn the row's id;
 // - deleting the row a scope is anchored on (a chat, for its messages) sends
 //   `qd:revoked { kind: "collection", reason: "anchor-deleted" }` to every
 //   scope room keyed by that row's id and empties those rooms: the rows a
