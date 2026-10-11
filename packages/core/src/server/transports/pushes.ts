@@ -11,11 +11,13 @@
 //   sockets (of one session) are disconnected, on every node.
 //
 // The adapter probe tells the live data whether rooms are local: true while
-// the server runs the in-memory adapter it was created with.
+// the server runs the in-memory adapter it was created with. Every event to
+// the other nodes carries this server's deployment, and a node applies only
+// its own deployment's (`../cluster/deployment.ts`).
 
 import type { Logger } from "../../contract/logger";
 import { SERVER_EVENTS, userRoom } from "../../contract/names";
-import { answerOf } from "../cluster/acks";
+import { emitToNodes, onNodeEvent } from "../cluster/deployment";
 import type { ClusterBroadcasts } from "../cluster/broadcasts";
 import type { ClusterOptions } from "../cluster/revisions";
 import type { AdapterProbe } from "../emit/hub";
@@ -31,6 +33,7 @@ import type { QuickdrawIo, QuickdrawServerSocket } from "./types";
 
 export type { ClusterOptions } from "../cluster/revisions";
 export { serveBroadcasts } from "../cluster/broadcasts";
+export { registerClusterDeployment } from "../cluster/deployment";
 
 /** The server-to-server event reloaded grants are broadcast on behind a cluster adapter. */
 export const GRANTS_EVENT = "quickdraw:grants";
@@ -196,7 +199,8 @@ export function disconnectUser(
   }
   const { sessionId, reason } = options;
   if (!probe.local()) {
-    io.serverSideEmit(
+    emitToNodes(
+      io,
       DISCONNECT_USER_EVENT,
       sessionId === undefined ? { userId } : { userId, sessionId },
     );
@@ -212,9 +216,9 @@ export function disconnectUser(
   return ended;
 }
 
-/** Listens for `disconnectUser` broadcasts from other nodes, and ends this node's sockets they name. */
-export function listenForDisconnects(io: QuickdrawIo): void {
-  io.on(DISCONNECT_USER_EVENT, (broadcast: unknown) => {
+/** Listens for `disconnectUser` broadcasts from other nodes of its deployment, and ends this node's sockets they name. */
+export function listenForDisconnects(io: QuickdrawIo, logger: Logger): void {
+  onNodeEvent(io, logger, DISCONNECT_USER_EVENT, (broadcast) => {
     const request = readDisconnect(broadcast);
     if (request !== undefined) {
       disconnectHere(io, request.userId, request.sessionId);
@@ -223,13 +227,13 @@ export function listenForDisconnects(io: QuickdrawIo): void {
 }
 
 /**
- * Listens for grants other nodes reloaded, and applies them to this node's
- * sockets; the node that reloaded them waits for the answer, sent once this
- * node's subscriptions of the user are resolved again.
+ * Listens for grants other nodes of its deployment reloaded, and applies
+ * them to this node's sockets; the node that reloaded them waits for the
+ * answer, sent once this node's subscriptions of the user are resolved
+ * again. Another deployment's grants are answered and never applied.
  */
 export function listenForGrants(io: QuickdrawIo, live: LiveData | undefined, logger: Logger): void {
-  io.on(GRANTS_EVENT, (broadcast: unknown, ...rest: unknown[]) => {
-    const answer = answerOf(rest);
+  onNodeEvent(io, logger, GRANTS_EVENT, (broadcast, answer) => {
     const { userId, serviceAccess } = (broadcast ?? {}) as {
       readonly userId?: unknown;
       readonly serviceAccess?: unknown;

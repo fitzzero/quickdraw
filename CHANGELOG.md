@@ -283,6 +283,17 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   their own.
 - **A `principal` hook's `QuickdrawError` refusal logs at debug**, not as an
   error.
+- **`setupRedisAdapter` without `keyPrefix` keys the adapter by
+  `cluster.keyPrefix`** (`"quickdraw"` by default) instead of `"socket.io"`.
+  The deploy that upgrades a cluster splits old and new nodes unless it
+  passes `keyPrefix: "socket.io"` for that deploy (docs/deploying.md,
+  "Deployments sharing a Valkey").
+- **Nodes log events from other deployments and older nodes.** An event of
+  another `cluster.keyPrefix` is answered and ignored, with one error; an
+  event without a deployment (a node of an earlier version, during a rolling
+  deploy) is applied, with one warning.
+- **`cluster.keyPrefix` must be a non-empty string**, or `createServer`
+  throws.
 
 ### Security
 
@@ -500,6 +511,12 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   custom tool of a users-only app.
 - **A refused MCP token is no error log (MCP-7).** A hook's refusal was
   logged as an error, with whatever its message held.
+- **Deployments sharing a Valkey stay apart (RT-2).** Pub/sub is shared
+  across a Valkey's databases, and nodes applied every server-to-server
+  event they heard: staging's reloaded grants made a production user Admin
+  until they reconnected, and its disconnects, stream items, room removals
+  and access changes acted on production too. Every event now carries its
+  deployment, and a node applies only its own's.
 
 ### Codemod
 

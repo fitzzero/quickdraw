@@ -18,11 +18,11 @@ helper on `./server`, after creating the server:
 ```ts
 import { setupRedisAdapter } from "@fitzzero/quickdraw-core/server";
 
-const server = qd.createServer({ app, services, db, auth });
+const server = qd.createServer({ app, services, db, auth, cluster: { keyPrefix: "myapp" } });
+// the adapter's key defaults to cluster.keyPrefix: its channels are this deployment's
 const redis = await setupRedisAdapter(server.io, {
   host: env.VALKEY_HOST,
   port: env.VALKEY_PORT,
-  keyPrefix: "myapp",
 });
 
 process.on("SIGTERM", async () => {
@@ -31,8 +31,9 @@ process.on("SIGTERM", async () => {
 });
 ```
 
-or pass `createAdapter(pub, sub)` from `@socket.io/redis-adapter` as
-`socket.adapter` to `createServer` (an adapter an app sets later with
+or pass `createAdapter(pub, sub, { key: "myapp" })` from
+`@socket.io/redis-adapter` as `socket.adapter` to `createServer` (its own
+default key is `"socket.io"`, so name it; an adapter an app sets later with
 `io.adapter(...)` itself misses the watch on its connections described in
 "When Valkey stops answering"). Either way the server finds the adapter's
 publishing client and keeps two kinds of keys there:
@@ -42,14 +43,15 @@ publishing client and keeps two kinds of keys there:
 | `{keyPrefix}:rev`           | The shared revision counter every node's flushes take their revision from |
 | `{keyPrefix}:seen:{userId}` | When a user's last socket on any node disconnected, kept for 30 days      |
 
-`createServer`'s `cluster` option configures them (the adapter's own
-`keyPrefix` names its pub/sub channels, not these keys):
+`createServer`'s `cluster` option configures them (the adapter's own key
+names its pub/sub channels, not these keys; `setupRedisAdapter` takes it from
+`cluster.keyPrefix` unless its own `keyPrefix` names another):
 
-| Option      | Default                               | Meaning                                                                                      |
-| ----------- | ------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `client`    | the Redis adapter's publishing client | A node-redis (4 to 6) or ioredis client for the counter and last-seen times                  |
-| `keyPrefix` | `"quickdraw"`                         | The prefix of the keys above                                                                 |
-| `timeoutMs` | 1,000                                 | How long a node waits on Valkey or on the other nodes before it goes on without them (below) |
+| Option      | Default                               | Meaning                                                                                                                                            |
+| ----------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `client`    | the Redis adapter's publishing client | A node-redis (4 to 6) or ioredis client for the counter and last-seen times                                                                        |
+| `keyPrefix` | `"quickdraw"`                         | The prefix of the keys above; also the deployment every server-to-server event carries, and `setupRedisAdapter`'s default key (a non-empty string) |
+| `timeoutMs` | 1,000                                 | How long a node waits on Valkey or on the other nodes before it goes on without them (below)                                                       |
 
 Behind another adapter (one whose client the server cannot reach, and no
 `cluster.client`), revisions stay per process and the guarantees below about
@@ -72,6 +74,40 @@ counter key was lost; configure persistence or replication for it", and a
 read made before the next flush claims its own clock. A subscribe running
 while the key is lost may miss the frames of a flush made in between until
 the row's next change.
+
+### Deployments sharing a Valkey
+
+Give each deployment (production, staging, a preview) its own Valkey, or its
+own `cluster.keyPrefix` and adapter key. Valkey's pub/sub is shared across
+its databases, so `db` separates nothing: two deployments on one Valkey whose
+adapters share channels hear each other's server-to-server events.
+Before 5.1 every node applied them, whoever sent them: another deployment's
+reloaded grants reached this deployment's sockets (a user made `Admin` on
+staging was `Admin` in production until their socket reconnected), and its
+disconnects, stream items, room removals and access changes acted here too.
+
+Since 5.1 every such event carries its deployment, the sender's
+`cluster.keyPrefix`, and a node applies only its own deployment's. An event
+of another deployment is answered, so that deployment never waits it out or
+goes degraded, and ignored, with one error logged. The tags have limits:
+
+- the adapter itself still carries room broadcasts (frames, events) and
+  `qd:rotate` to every node on its key, so two deployments that share an
+  adapter key still reach each other's sockets: give each its own key;
+- two deployments that both keep the default prefix are one deployment to
+  quickdraw;
+- a node of an earlier version sends events without a deployment and
+  applies every event it hears.
+
+A rolling deploy from an earlier 5.x: an event without a deployment (from a
+node not replaced yet) is applied, with one warning per node. An app that
+called `setupRedisAdapter` without `keyPrefix` used the `"socket.io"`
+channels, and now uses its `cluster.keyPrefix`'s: old and new nodes do not
+hear each other during that deploy (frames, access changes, logout
+everywhere, presence). Pass `keyPrefix: "socket.io"` to `setupRedisAdapter`
+for that deploy, and move to the new key in a deploy that replaces every
+node at once. The counter key `{keyPrefix}:rev` does not change, so
+revisions stay one order across the deploy.
 
 ## What holds across nodes
 
@@ -325,6 +361,10 @@ Number(process.env.TRUST_PROXY ?? 0))`, with `TRUST_PROXY=1` behind one.
   clients, even after a short drop that lost nothing.
 - A room's presence list read from the other nodes can race a `joined` or
   `left` another node sends meanwhile (this node's own joins are counted).
+- Two deployments that both keep the default `cluster.keyPrefix` on one
+  Valkey are one deployment to quickdraw, and a shared adapter key carries
+  room broadcasts between deployments whatever their prefixes ("Deployments
+  sharing a Valkey").
 - A subscribe that sees the counter move reads every row it joined again, not
   only the ones that changed: the cluster has no shared change log.
 - Access is fail-open across nodes while a node does not answer in time

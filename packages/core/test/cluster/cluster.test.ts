@@ -17,7 +17,7 @@ import {
 } from "../../src/client/live/entities";
 import type { EntityFrame, EntityResult, PresenceFrame } from "../../src/index";
 import { createHarness, type Harness } from "../../src/prisma/__tests__/harness";
-import { deferred } from "../../src/server/__tests__/fixtures";
+import { captureLogger, deferred } from "../../src/server/__tests__/fixtures";
 import {
   as,
   projectService as boardProjects,
@@ -507,5 +507,78 @@ describe("setupRedisAdapter", () => {
       await Promise.all([a.app.close(), b.app.close()]);
       await Promise.all([a.redis.cleanup(), b.redis.cleanup()]);
     }
+  });
+
+  it("keys the adapter by cluster.keyPrefix when keyPrefix is left out (RT-2)", async () => {
+    const create = (await vi.importActual<typeof Testing>("../../src/testing/createTestApp"))
+      .createTestApp as CreateTestApp;
+    const prefix = uniquePrefix("deployment");
+    const { hostname, port } = new URL(VALKEY_URL);
+    const boot = async () => {
+      const app = await create({
+        services: [projectService, defineTaskService()],
+        db: h.db,
+        cluster: { keyPrefix: prefix },
+      });
+      const redis = await setupRedisAdapter(app.server.io, { host: hostname, port: Number(port) });
+      expect(redis.success).toBe(true);
+      return { app: app as unknown as TestApp, redis };
+    };
+    const a = await boot();
+    const b = await boot();
+    try {
+      const reader = await a.app.connect(as(board.cy));
+      const frames = receive(reader);
+      await sub(reader, "taskService", [board.t1]);
+      await tasks(b.app, as(board.ada)).rename({ id: board.t1, title: "Under its own key" });
+      await createBarrier(b.app.server.io, a.app.server.io)();
+      await frames.settle();
+      expect(frames.entity[0]).toMatchObject({ t: "u", d: { title: "Under its own key" } });
+      const client = valkeyClient();
+      await client.connect();
+      const channel = `${prefix}-request#/#`;
+      const subscribers = await client.sendCommand(["PUBSUB", "NUMSUB", channel]);
+      await closeClient(client);
+      expect(subscribers).toEqual([channel, 2]);
+    } finally {
+      await Promise.all([a.app.close(), b.app.close()]);
+      await Promise.all([a.redis.cleanup(), b.redis.cleanup()]);
+    }
+  });
+
+  it("keeps two deployments that share an adapter key apart (RT-2)", async () => {
+    const create = (await vi.importActual<typeof Testing>("../../src/testing/createTestApp"))
+      .createTestApp as CreateTestApp;
+    const shared = uniquePrefix("shared");
+    const boot = async (keyPrefix: string, grants: Record<string, "Admin">) => {
+      const logger = captureLogger();
+      const node = await startNode(
+        create,
+        {
+          services: [projectService, defineTaskService()],
+          db: h.db,
+          cluster: { keyPrefix },
+          auth: { loadServiceAccess: () => grants },
+          logger,
+        },
+        { prefix: shared },
+      );
+      return { node, logger };
+    };
+    const prod = await boot(`${shared}:prod`, {});
+    const staging = await boot(`${shared}:staging`, { taskService: "Admin" });
+    running.push([prod.node, staging.node]);
+    await prod.node.app.connect(as(board.cy));
+    await staging.node.app.server.access.refresh(board.cy);
+    await createBarrier(staging.node.app.server.io, prod.node.app.server.io)();
+    const grants = [...prod.node.app.server.io.sockets.sockets.values()]
+      .filter((socket) => socket.data.principal?.userId === board.cy)
+      .map((socket) => socket.data.principal?.serviceAccess);
+    expect(grants).toEqual([{}]);
+    const stagingErrors = staging.logger.at("error").map((entry) => entry.message);
+    expect(stagingErrors.join("\n")).not.toContain("did not answer a broadcast");
+    expect(prod.logger.at("error").map((entry) => entry.message)).toEqual([
+      expect.stringContaining(`cluster.keyPrefix "${shared}:staging"`),
+    ]);
   });
 });

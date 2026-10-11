@@ -55,7 +55,13 @@ export interface ClusterOptions {
    * another adapter, revisions stay per process.
    */
   readonly client?: ClusterClient | IoRedisLike;
-  /** The prefix of the cluster's keys (`{keyPrefix}:rev`, `{keyPrefix}:seen:{userId}`). Default `"quickdraw"`. */
+  /**
+   * The prefix of the cluster's keys (`{keyPrefix}:rev`,
+   * `{keyPrefix}:seen:{userId}`), and the deployment: every server-to-server
+   * event carries it, and a node ignores another deployment's events. It is
+   * `setupRedisAdapter`'s default key too. Each deployment that shares a
+   * Valkey needs its own. Default `"quickdraw"`; a non-empty string.
+   */
   readonly keyPrefix?: string;
   /**
    * How long a counter command may take before the node takes its revision

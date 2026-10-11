@@ -29,6 +29,7 @@ import {
   listenForGrants,
   refreshGrants,
   regrantsOf,
+  registerClusterDeployment,
   rotate,
   serveBroadcasts,
   type ClusterOptions,
@@ -135,6 +136,8 @@ export function createSocketServer(
     ...(settings.cors === undefined ? {} : { cors: settings.cors }),
     ...(meter.parser === undefined ? {} : { parser: meter.parser }),
   });
+  // Before anything sends to or hears from the other nodes: every event carries the deployment.
+  registerClusterDeployment(io, settings.cluster);
   const context: SocketContext = {
     dispatcher: settings.dispatcher,
     logger: settings.logger,
@@ -144,7 +147,7 @@ export function createSocketServer(
   const broadcasts = serveBroadcasts(io, settings.logger, settings.cluster?.timeoutMs);
   settings.live?.attach(io, probe, settings.cluster, broadcasts);
   listenForGrants(io, settings.live, settings.logger);
-  listenForDisconnects(io);
+  listenForDisconnects(io, settings.logger);
   io.use(protocolMiddleware(settings.legacyWire !== undefined, context));
   io.use(authMiddleware(settings.resolvePrincipal, context));
   // Before the connection handler: the limiter's `socket.use` middleware must

@@ -1078,7 +1078,10 @@ export const taskService = qd.defineService(task, {
   Flushes take their revisions from a counter in the cluster's Valkey, on
   Valkey's clock in microseconds, so revisions from all nodes are one order;
   its key needs persistence or replication. A node whose Valkey connection
-  comes back has its clients reconnect to catch up.
+  comes back has its clients reconnect to catch up. Give each deployment its
+  own Valkey, or its own `cluster.keyPrefix` (which `setupRedisAdapter` takes
+  as its key): a node applies only its own deployment's events, and a
+  Valkey's `db` does not separate pub/sub.
   [docs/deploying.md](https://github.com/fitzzero/quickdraw/blob/main/docs/deploying.md) has the wiring, what holds across
   nodes, what it costs, and what happens when a node or Valkey stops
   answering.

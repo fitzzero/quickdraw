@@ -19,6 +19,7 @@
 // placed, and never comes here (the 5.1 audit's COLL-3).
 
 import { collectionRoom, SERVER_EVENTS } from "../../contract/names";
+import { emitToNodes, onNodeEvent } from "../cluster/deployment";
 import type { CollectionDelta, CollectionFrame, Revision } from "../../protocol/envelope";
 import type { StorageRow } from "../storage";
 import type { BoundCollection, CollectionHub } from "./bind";
@@ -101,7 +102,7 @@ export function broadcastUnnamed(hub: CollectionHub, unnamed: UnnamedDeltas | un
   }
   hub.collections.buffer.skipAll(groupOf(unnamed.s, unnamed.c));
   if (hub.io !== undefined && !hub.probe.local()) {
-    hub.io.serverSideEmit(UNNAMED_EVENT, unnamed);
+    emitToNodes(hub.io, UNNAMED_EVENT, unnamed);
   }
 }
 
@@ -172,9 +173,12 @@ function sendHere(hub: CollectionHub, unnamed: UnnamedDeltas): void {
   }
 }
 
-/** Listens for the deltas other nodes could not address, on the server the live data was given. */
+/** Listens for the deltas other nodes of its deployment could not address, on the server the live data was given. */
 export function listenForUnnamed(hub: CollectionHub): void {
-  hub.io?.on(UNNAMED_EVENT, (broadcast: unknown) => {
+  if (hub.io === undefined) {
+    return;
+  }
+  onNodeEvent(hub.io, hub.logger, UNNAMED_EVENT, (broadcast) => {
     const unnamed = readUnnamed(broadcast);
     if (unnamed !== undefined && (unnamed.reset || unnamed.removed.length > 0)) {
       sendHere(hub, unnamed);

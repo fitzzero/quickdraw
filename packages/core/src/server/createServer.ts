@@ -148,8 +148,11 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
    * Behind a cluster adapter: where the cluster's shared state lives (the
    * revision counter every node's flushes take their revision from, and
    * users' last-seen times). By default the Socket.IO Redis adapter's own
-   * Valkey or Redis client, under keys prefixed `quickdraw:`; see
-   * `docs/deploying.md`.
+   * Valkey or Redis client, under keys prefixed `quickdraw:`. Its
+   * `keyPrefix` also names the deployment every server-to-server event
+   * carries (a node ignores another deployment's) and is
+   * `setupRedisAdapter`'s default key: each deployment sharing a Valkey
+   * needs its own. See `docs/deploying.md`.
    */
   readonly cluster?: ClusterOptions;
   /**

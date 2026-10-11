@@ -33,7 +33,7 @@
 
 import { SERVER_EVENTS, userRoom } from "../../contract/names";
 import type { AccessChange } from "../access/changes";
-import { answerOf } from "../cluster/acks";
+import { onNodeEvent } from "../cluster/deployment";
 import { describeError } from "../pipeline/metrics";
 import type { QuickdrawServerSocket } from "../transports/types";
 import type { Hub } from "./hub";
@@ -359,8 +359,11 @@ export function listenForChanges(
   revocation: Revocation,
   forget: (change: AccessChange) => void,
 ): void {
-  hub.io?.on(ACCESS_CHANGED_EVENT, (broadcast: unknown, ...rest: unknown[]) => {
-    const answer = answerOf(rest);
+  if (hub.io === undefined) {
+    return;
+  }
+  // Another deployment's change is answered and never applied (`../cluster/deployment.ts`).
+  onNodeEvent(hub.io, hub.logger, ACCESS_CHANGED_EVENT, (broadcast, answer) => {
     const change = readChange(broadcast);
     if (change === undefined) {
       answer(false);

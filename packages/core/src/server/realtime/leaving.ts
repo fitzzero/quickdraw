@@ -23,7 +23,7 @@
 // waits for them.
 
 import { userRoom } from "../../contract/names";
-import { answerOf } from "../cluster/acks";
+import { onNodeEvent } from "../cluster/deployment";
 import { track, type Hub } from "../emit/hub";
 import { emptyRecords, ownRecord } from "../emit/subscriptions";
 import { describeError } from "../pipeline/metrics";
@@ -195,10 +195,17 @@ export async function removeUser(
   await others;
 }
 
-/** Takes this node's sockets out of the rooms other nodes' `leave(room, { userId })` name, and answers. */
+/**
+ * Takes this node's sockets out of the rooms other nodes of its deployment's
+ * `leave(room, { userId })` name, and answers (another deployment's too,
+ * without taking anyone out).
+ */
 export function listenForRemovals(state: LeavingState): void {
-  state.hub.io?.on(ROOM_LEAVE_EVENT, (broadcast: unknown, ...rest: unknown[]) => {
-    const answer = answerOf(rest);
+  const { io } = state.hub;
+  if (io === undefined) {
+    return;
+  }
+  onNodeEvent(io, state.hub.logger, ROOM_LEAVE_EVENT, (broadcast, answer) => {
     const { room, userId } = (broadcast ?? {}) as Readonly<Record<string, unknown>>;
     try {
       checkRoom(room);
