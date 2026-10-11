@@ -16,11 +16,13 @@
 //   authentication (`UNAUTHENTICATED`). Socket.IO does not retry either.
 // - A session the server ends is signed out (the 5.1 audit's CLIENT-1): the
 //   server's disconnect (`io server disconnect`: signed out everywhere,
-//   revoked, expired, or a flooded channel) and a reconnect refused with
-//   `UNAUTHENTICATED` or `FORBIDDEN` forget the hello and the grants, and a
-//   refused reconnect fails the calls waiting in the send buffer with
-//   `CANCELLED`; the cache session empties every cache (`session.ts`). A
-//   dropped transport or a `qd:rotate` keeps everything.
+//   revoked, expired, or a flooded channel) and a connect or reconnect
+//   refused with `UNAUTHENTICATED` or `FORBIDDEN` (its `authenticate`
+//   failed for any reason, or the handshake was forbidden) forget the hello
+//   and the grants, and such a refusal fails the calls waiting in the send
+//   buffer with `CANCELLED`; the cache session empties every cache, data a
+//   server render prefetched included (`session.ts`). A dropped transport,
+//   a `qd:rotate` or another protocol keeps everything.
 // - `qd:rotate` reconnects at a random moment within its window; `qd:access`
 //   updates the grants in the state.
 // - `RATE_LIMITED` answers start a backoff window per kind (`backoff.ts`).
@@ -138,7 +140,7 @@ export interface ConnectionState {
   /**
    * The server's `qd:hello` on the current credentials, or `null` before it
    * arrives, and again once the server ended the session (its disconnect, or
-   * a reconnect refused with `UNAUTHENTICATED` or `FORBIDDEN`).
+   * a connect or reconnect refused with `UNAUTHENTICATED` or `FORBIDDEN`).
    */
   readonly hello: HelloFrame | null;
   /**

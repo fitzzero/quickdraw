@@ -37,14 +37,15 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   user empties everything quickdraw cached.
 - `useQuickdraw()` gives
   `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, refusal, isRateLimited }`.
-  Gate on `status` first: `"disconnected"` or `"refused"` means signed out
-  (the server ended or refused the session: signed out elsewhere, revoked,
-  expired), and quickdraw's cache is already empty. Then gate on `isKnown`
-  (the server's hello named the user; `userId` is then final, `null`
-  meaning signed out), never on `isConnected` or `userId` alone: `userId`
-  is `null` before the hello too, `isConnected` turns true before it and
-  false while reconnecting, and `reconnecting` keeps the user. Never keep
-  showing data the app holds itself once `isKnown` turns false.
+  Gate on `isKnown` (the server's hello named the user; `userId` is then
+  final, `null` meaning signed out), never on `isConnected` or `userId`
+  alone: `userId` is `null` before the hello too, `isConnected` turns true
+  before it and false while reconnecting, and `reconnecting` keeps the user.
+  While `isKnown` is false, `status` `"disconnected"` or `"refused"` means
+  signed out: the server ended the session (signed out elsewhere, revoked,
+  expired) or refused a connect for it, the hello is gone and quickdraw's
+  cache is empty; any other status is still connecting. Never keep showing
+  data the app holds itself once `isKnown` turns false.
   `hello.serverId` changes when the server restarts (or the socket lands
   on another node): compare it to tell a new server from a network blip.
 - Sign-in and out in the browser go through the auth routes kit's routes:

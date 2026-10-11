@@ -62,14 +62,52 @@ describe("the session of a connection and a QueryClient", () => {
         );
       },
     ]) {
-      const { fake, changes, fill, cached } = setup();
+      const { fake, queryClient, changes, fill, cached } = setup();
       fake.setState({ hello: fakeHello("ada") });
       fill();
+      const overlays = overlaysOf(queryClient);
+      void mutateOptimistically(
+        queryClient,
+        { service: "taskService", entityOutput: true },
+        undefined,
+        { id: "t1", title: "Pending" },
+        () => deferred<unknown>().promise,
+      );
       fake.setState({ hello: null, status: "disconnected" });
       end(fake);
       expect(cached()).toEqual([undefined, undefined, undefined]);
+      expect(overlays.applyOverlay("taskService", { id: "t1", title: "T1" })).toEqual({
+        id: "t1",
+        title: "T1",
+      });
       expect(changes.at(-1)).toEqual({ switched: true, first: false });
     }
+  });
+
+  it("keeps the cache through a refusal that is not the session's, and a failed attempt while reconnecting", () => {
+    const { fake, changes, fill, cached } = setup();
+    fake.setState({ hello: fakeHello("ada") });
+    fill();
+    const before = changes.length;
+    // Another protocol: the provider reloads the page instead.
+    fake.deliver(
+      "connect_error",
+      Object.assign(new Error("Protocol mismatch"), {
+        data: { code: "PROTOCOL_MISMATCH", expected: 6 },
+      }),
+    );
+    // A refusal Socket.IO retries: the socket is still active.
+    Object.assign(fake.connection.socket, { active: true });
+    fake.deliver(
+      "connect_error",
+      Object.assign(new Error("Authentication failed"), { data: { code: "UNAUTHENTICATED" } }),
+    );
+    expect(cached()).toEqual([
+      { id: "t1", notes: "SECRET" },
+      { id: "t1", notes: "SECRET" },
+      { id: "t1", notes: "SECRET" },
+    ]);
+    expect(changes).toHaveLength(before);
   });
 
   it("keeps the cache through a dropped transport and the client's own disconnect", () => {

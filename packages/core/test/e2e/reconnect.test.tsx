@@ -100,11 +100,16 @@ describe("a session the server ends", () => {
     const ada = await renderAs(board.ada);
     app.server.access.disconnectUser(board.ada);
     await ada.shown.findByText("row -");
+    await ada.shown.findByText("board");
     expect(ada.view.connection.getState()).toMatchObject({ status: "disconnected", hello: null });
     const cached = ada.view.queryClient
       .getQueryCache()
       .getAll()
       .map((query) => query.state.data);
-    expect(JSON.stringify(cached)).not.toContain("T1");
+    // A collection's entry holds its items in Maps, which JSON leaves empty unless written out.
+    const written = JSON.stringify(cached, (_key, value: unknown) =>
+      value instanceof Map || value instanceof Set ? [...value] : value,
+    );
+    expect(written).not.toContain("T1");
   });
 });

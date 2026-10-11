@@ -91,11 +91,14 @@ export interface QuickdrawStatus {
    * True once the server's hello on the current credentials has arrived:
    * `userId` is then final, `null` meaning anonymous. False before it, again
    * from new credentials (`auth` changed) until their hello, and again once
-   * the server ended the session (`status` `"disconnected"`, or `"refused"`
-   * with `UNAUTHENTICATED` or `FORBIDDEN`): the hello, the grants and
-   * everything quickdraw cached are gone. It stays true while the connection
-   * reconnects with the same credentials. Gate on `status` and then on it,
-   * not on `isConnected`, to tell "signed out" from "not known yet".
+   * the server ended the session or refused a connect for it (`status`
+   * `"disconnected"`, or `"refused"` after the handshake's error code
+   * `UNAUTHENTICATED` or `FORBIDDEN`): the hello, the grants and everything
+   * quickdraw cached are gone. Another protocol (`refusal.code`
+   * `"PROTOCOL_MISMATCH"`) keeps them. It stays true while the connection
+   * reconnects with the same credentials. Gate on it, not on `isConnected`;
+   * while it is false, a stopped `status` tells "signed out" from "not
+   * known yet".
    */
   readonly isKnown: boolean;
   /**
@@ -115,7 +118,8 @@ export interface QuickdrawStatus {
   readonly userId: string | null;
   /**
    * The user's service grants: from the server's hello, then from each
-   * `qd:access` push; `null` before the hello on the current credentials.
+   * `qd:access` push; `null` before the hello on the current credentials,
+   * and once the server ended the session.
    */
   readonly serviceAccess: Readonly<Record<string, AccessLevel>> | null;
   /** Why the server refused the connection, while `status` is `refused`. */
@@ -238,9 +242,8 @@ export function QuickdrawProvider<Contracts extends ContractMap>(
  *
  * @example
  * const { status, isKnown, userId } = useQuickdraw();
- * // the server ended the session (signed out elsewhere, revoked, expired) or refused it
- * if (status === "disconnected" || status === "refused") return <SignIn />;
- * if (!isKnown) return <Spinner />;
+ * // stopped with nobody known: the server ended or refused the session
+ * if (!isKnown) return status === "disconnected" || status === "refused" ? <SignIn /> : <Spinner />;
  * return userId === null ? <SignIn /> : <App />;
  */
 export function useQuickdraw(): QuickdrawStatus {

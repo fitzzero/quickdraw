@@ -1710,9 +1710,13 @@ for an anonymous socket and before the server's hello, so a gate waits for
 new credentials until theirs). `isConnected` turns true before the hello and
 false while the connection reconnects; `reconnecting` says the user and the
 page stay meanwhile. When the server ends the session (signed out on
-another device, revoked, expired) or refuses a reconnect, `status` is
-`"disconnected"` or `"refused"`, `isKnown` is false and everything
-quickdraw cached is gone, so the gate shows the sign-in:
+another device, revoked, expired) or refuses a connect for it (its
+`authenticate` failed, or the handshake was `FORBIDDEN`), the hello is
+forgotten: `isKnown` is false, `status` is `"disconnected"` or
+`"refused"`, and everything quickdraw cached is gone, so a gate that finds
+the connection stopped with nobody known shows the sign-in. Another
+protocol (`refusal.code` `"PROTOCOL_MISMATCH"`) keeps the hello; the
+provider reloads the page once for it:
 
 <!-- example: apps/web/src/components/AuthGate.tsx#gate -->
 
@@ -1720,12 +1724,10 @@ quickdraw cached is gone, so the gate shows the sign-in:
 export function AuthGate({ children }: { readonly children: ReactNode }) {
   // isKnown: the server's hello named the user, so userId is final (null: signed out)
   const { status, isKnown, userId, reconnecting } = useQuickdraw();
-  // the server ended the session (signed out elsewhere, revoked, expired) or refused it: signed out
-  if (status === "disconnected" || status === "refused") {
-    return <SignIn />;
-  }
   if (!isKnown) {
-    return <p>Connecting…</p>;
+    // stopped with nobody known: the server ended or refused the session (signed out elsewhere,
+    // revoked, expired), and what quickdraw cached is gone
+    return status === "disconnected" || status === "refused" ? <SignIn /> : <p>Connecting…</p>;
   }
   if (userId === null) {
     return <SignIn />;

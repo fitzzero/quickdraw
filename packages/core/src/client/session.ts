@@ -15,8 +15,9 @@
 // - the first hello on new credentials naming the same user (a refreshed
 //   token) keeps the cache and refetches it, as the new credentials;
 // - a hello after a reconnect with the same credentials changes nothing;
-// - a session the server ends (its disconnect, or a reconnect refused with
-//   `UNAUTHENTICATED` or `FORBIDDEN`; the 5.1 audit's CLIENT-1) empties the
+// - a session the server ends (its disconnect, or a connect or reconnect
+//   refused with `UNAUTHENTICATED` or `FORBIDDEN`; the 5.1 audit's CLIENT-1),
+//   data a server render prefetched included, empties the
 //   cache as another user's hello does, and the cache is then loaded for
 //   nobody: the hooks show nothing of what was cached, and the live data
 //   loads from scratch once a hello names a user again. The session listens

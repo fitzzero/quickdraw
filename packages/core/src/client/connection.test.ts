@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { QuickdrawError, QUICKDRAW_VERSION, type ProtocolMismatch } from "../index";
 import { captureLogger, tick } from "../server/__tests__/fixtures";
 import { callData } from "./call";
-import { createQuickdrawConnection } from "./connection";
+import { createQuickdrawConnection, isServerDisconnect, isSessionRefusal } from "./connection";
 import { reloadOncePerSession, RELOAD_KEY_PREFIX } from "./reload";
 import { alice, bob, clientHarness, testAuth, until, whenStatus } from "./__tests__/fixtures";
 
@@ -161,6 +161,54 @@ describe("createQuickdrawConnection", () => {
       refusal: { code: "UNAUTHENTICATED" },
     });
     await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+  });
+
+  it("keeps the hello through a refusal that is not the session's", async () => {
+    const { app } = await harness.start();
+    const onProtocolMismatch = vi.fn();
+    const connection = await harness.connect(app.url, { onProtocolMismatch });
+    await until(() => connection.getState().hello !== null);
+    const { hello, serviceAccess } = connection.getState();
+    // A reconnect a server of another protocol refused, once Socket.IO gave up on the socket.
+    connection.socket.disconnect();
+    const refused = Object.assign(new Error("This server speaks quickdraw protocol 6"), {
+      data: { code: "PROTOCOL_MISMATCH", expected: 6 },
+    });
+    (
+      connection.socket as unknown as { emitReserved(event: string, error: Error): void }
+    ).emitReserved("connect_error", refused);
+    expect(connection.getState()).toMatchObject({
+      status: "refused",
+      refusal: { code: "PROTOCOL_MISMATCH" },
+    });
+    expect(connection.getState().hello).toBe(hello);
+    expect(connection.getState().serviceAccess).toBe(serviceAccess);
+    expect(onProtocolMismatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends the session for the server's disconnect and a refusal of the session, nothing else", () => {
+    expect(isServerDisconnect("io server disconnect")).toBe(true);
+    for (const reason of [
+      "io client disconnect",
+      "transport close",
+      "transport error",
+      "ping timeout",
+      "parse error",
+      undefined,
+    ]) {
+      expect(isServerDisconnect(reason)).toBe(false);
+    }
+    expect(isSessionRefusal({ code: "UNAUTHENTICATED" })).toBe(true);
+    expect(isSessionRefusal({ code: "FORBIDDEN" })).toBe(true);
+    for (const data of [
+      { code: "PROTOCOL_MISMATCH", expected: 6 },
+      { code: "REFUSED" },
+      "UNAUTHENTICATED",
+      null,
+      undefined,
+    ]) {
+      expect(isSessionRefusal(data)).toBe(false);
+    }
   });
 
   it("reconnects with new credentials, and only when they change", async () => {

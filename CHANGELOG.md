@@ -305,12 +305,16 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   throws.
 - **A session the server ends signs the client out.** After the server's
   disconnect (`disconnectUser`, `onRevoke`, a session that expires, a
-  flooded channel) or a reconnect refused with `UNAUTHENTICATED` or
-  `FORBIDDEN`, `isKnown` is false, `userId`, `hello` and `serviceAccess`
-  are null, and quickdraw's cache is empty; calls queued during that
-  reconnect fail with `CANCELLED`. A gate on `isKnown` alone now shows its
-  loading state there: check `status` first (`"disconnected"` or
-  `"refused"` is signed out), as the README's `AuthGate` does. A client
+  flooded channel) or a connect or reconnect refused with `UNAUTHENTICATED`
+  or `FORBIDDEN`, `isKnown` is false, `userId`, `hello` and `serviceAccess`
+  are null, and quickdraw's cache is empty, data a server render
+  prefetched included; calls queued during that reconnect fail with
+  `CANCELLED`. A handshake is `UNAUTHENTICATED` whenever `authenticate`
+  fails, a session store that does not answer included, so a reconnect
+  during such an outage signs the client out too. A gate on `isKnown` alone
+  now shows its loading state there: while it is false, treat `status`
+  `"disconnected"` or `"refused"` as signed out, as the README's `AuthGate`
+  does. A client
   disconnected for flooding a channel now looks signed out, where before
   it was silently disconnected (Socket.IO never reconnected it; a reload
   signs back in while the session lives). A dropped transport or a
