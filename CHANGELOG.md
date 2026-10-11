@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Codemod
+
+- **An inline `import("./x.js")` type in a 4.x method map now resolves from
+  the contract.** A method map can write a payload or response type as
+  `import("./ops-types.js").OpsConfigDTO` instead of importing it. The
+  codemod copied that text into the contract unchanged, so the path named a
+  file next to the contract that does not exist (TS2307; Conveyor's run had
+  58 such lines). A relative specifier in such a type is now written from
+  the contract file (`import("../types/ops-types.js").OpsConfigDTO`); a
+  package name stays as it is. The type keeps its inline form.
+- **The codemod's own tests check that every name and module of the
+  contracts it writes binds**, review markers or not: a `todoSchema` line no
+  longer hides an unresolved module or an undeclared name.
+
 ## [5.1.0] - 2026-10-10
 
 Additions for migrating a large 4.x app, filed while planning Conveyor's
