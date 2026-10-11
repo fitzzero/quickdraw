@@ -1,18 +1,21 @@
 // What a tool call runs as: the principal the registry's `principal` hook
 // maps the session or token to, the `ctx.mcp` fields its `context` hook adds,
-// and a synthetic connection id. An MCP call has no socket, so the session id
-// stands in for one: the queries of one stdio session share one concurrency
-// lane (RFC 0003 section 9, step 2), exactly as a socket's queries do.
+// and a synthetic connection id: the concurrency lane its queries share (RFC
+// 0003 section 9, step 2), as a socket's queries do. A stdio session is one
+// lane; an HTTP request's lane is its caller's (`lanes.ts`; the 5.1 audit's
+// MCP-4): its bearer token's, its user's without a token, or its address's
+// when anonymous. A hook's refusal (`QuickdrawError` `UNAUTHENTICATED` or
+// `FORBIDDEN`) is logged at debug.
 
 import type { Logger } from "../../contract/logger";
 import { QuickdrawError } from "../../protocol/errors";
 import { lazyMembers, type CallOptions } from "../caller";
-import type { Dispatcher } from "../dispatcher";
 import { toQuickdrawError } from "../pipeline/errors";
 import { describeError } from "../pipeline/metrics";
 import type { DispatchRequest, DispatchResult } from "../pipeline/request";
-import { toPrincipal } from "../transports/auth";
+import { isForbiddenCredential, isRefusal, toPrincipal } from "../transports/auth";
 import type { McpContext, Principal } from "../types";
+import { laneOf } from "./lanes";
 import type { McpCallOptions, McpCallResult, McpRequest } from "./types";
 
 /** Who a tool call acts for, what it adds to `ctx.mcp`, and the connection it counts against. */
@@ -30,7 +33,7 @@ export type ContextHook = (request: McpRequest, principal: Principal | null) => 
 
 /** What resolving sessions and making calls in them needs. */
 export interface SessionSettings {
-  readonly dispatcher: Pick<Dispatcher, "call">;
+  readonly dispatcher: { call(request: DispatchRequest): Promise<DispatchResult> };
   readonly principal: PrincipalHook | undefined;
   readonly context: ContextHook | undefined;
   readonly logger: Logger;
@@ -48,7 +51,9 @@ async function principalOf(
   try {
     return toPrincipal(await settings.principal(request));
   } catch (error) {
-    settings.logger.error("MCP authentication failed", {
+    // A refusal the hook made on purpose is the caller's doing; a hook that broke is the app's.
+    const refused = isRefusal(error) || isForbiddenCredential(error);
+    settings.logger[refused ? "debug" : "error"]("MCP authentication failed", {
       category: CATEGORY,
       transport: request.transport,
       error: describeError(error),
@@ -86,7 +91,7 @@ export async function openSession(
 ): Promise<McpSession> {
   const principal = await principalOf(settings, request);
   const mcp = await contextOf(settings, request, principal);
-  return { principal, mcp, connectionId: `mcp:${request.sessionId}` };
+  return { principal, mcp, connectionId: laneOf(request, principal) };
 }
 
 /** A failed call's result. An `INTERNAL` failure is logged with what was thrown. */

@@ -24,9 +24,12 @@ export const STREAM_MAX_SEED = 1000;
 export const CHANNEL_DEFAULT_RATE = 30;
 
 /**
- * The app room a stream's subscriber must be in (`access: { room }`): the
- * room's name, `{ prefix }` for any room whose name starts with it, or for a
- * scoped stream a function of the scope (`(worldId) => \`world:${worldId}\``).
+ * The app room a stream's subscriber must be in (`access: { room }`): for a
+ * global stream the room's name, or `{ prefix }` for any room whose name
+ * starts with it; for a scoped stream a function of the scope
+ * (`(worldId) => \`world:${worldId}\``), since a name or a prefix would let
+ * a socket in that room read every scope (`defineContract` refuses them
+ * there).
  */
 export type StreamRoom = string | RoomPrefix | ((scope: string) => string | null | undefined);
 
@@ -38,7 +41,9 @@ export type StreamRoom = string | RoomPrefix | ((scope: string) => string | null
  * `{ room }` opens it to the sockets in an app room a method joined them to
  * (signed in or not), as a channel's `requires: { room }` does its messages:
  * a socket that leaves the room, or is taken out of it, leaves the feed too.
- * A stream that declares none is closed: no client may subscribe.
+ * A scoped stream computes that room from its scope; a name or `{ prefix }`
+ * serves a global stream only. A stream that declares none is closed: no
+ * client may subscribe.
  */
 export type StreamAccess =
   | "public"
@@ -116,9 +121,10 @@ export interface RoomPrefix {
  * (`(payload) => \`lobby:${payload.lobbyId}\``), or `{ prefix }`, any room
  * whose name starts with it (`{ prefix: "world:" }`). Unlike a
  * {@link PayloadSelector}, a string here is the room's name, not a payload
- * key. A name starting with `qd:` or `user:` is never an app room: a literal
- * one (or such a prefix) is refused when the contract is defined, and a
- * computed one drops the message.
+ * key. A name starting with `qd:` or `user:`, or one with the shape of a
+ * Socket.IO socket id (20 letters, digits, `_` or `-`), is never an app
+ * room: a literal one (or such a prefix) is refused when the contract is
+ * defined, and a computed one drops the message.
  */
 export type RoomSelector = string | ((payload: never) => string | null | undefined) | RoomPrefix;
 
@@ -162,7 +168,13 @@ export interface ChannelDef<Payload extends StandardSchemaV1 = StandardSchemaV1>
   readonly ratePerSecond?: number;
   /** How many messages one socket may send at once. Default twice `ratePerSecond`. */
   readonly burst?: number;
-  /** What the sender must already be subscribed to, or the app room it must be in. */
+  /**
+   * What the sender must already be subscribed to, or the app room it must
+   * be in. Without it every signed-in user may send the channel, about any
+   * row or room its payload names, and the server warns
+   * `channel-without-requires` unless the service declares the channel's
+   * `access` (`"authenticated"` when any signed-in user may send it).
+   */
   readonly requires?: ChannelRequires;
   /** What a message says, in a sentence or two, for the generated docs. */
   readonly describe?: string;

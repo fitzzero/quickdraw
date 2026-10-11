@@ -111,7 +111,12 @@ export type {
 export { CHANNEL_ABUSE_MULTIPLIER, CHANNEL_ABUSE_WINDOW_MS } from "./realtime/channels";
 export { MAX_APP_ROOMS, PRESENCE_MAX_LAST_SEEN } from "./realtime/presence";
 export { STREAM_MAX_SCOPES } from "./realtime/seeds";
-export { MAX_STREAMS_PER_SOCKET } from "./realtime/streamSubscriptions";
+export { MAX_STREAMS_PER_SOCKET } from "./realtime/streamSubscribe";
+export {
+  MAX_ENTITY_IDS_PER_SOCKET,
+  MAX_SCOPES_PER_SOCKET,
+  MAX_TOPICS_PER_SOCKET,
+} from "../protocol/version";
 export type { CallOptions, Caller, CallerFor, MethodCaller, ServiceCaller } from "./caller";
 
 // The dispatcher and its pipeline
@@ -121,6 +126,7 @@ export {
   type DbOfServices,
   type Dispatcher,
   type DispatcherCollections,
+  type DispatcherBaseOptions,
   type DispatcherOptions,
   type PrincipalOfServices,
 } from "./dispatcher";
@@ -281,6 +287,7 @@ export {
   storageOf,
   type CountArgs,
   type FindManyArgs,
+  type LinkInterest,
   type StorageAdapter,
   type StorageRow,
   type StorageWhere,

@@ -113,8 +113,10 @@ the socket is connected to, so it holds behind a cluster with no round trip:
   (`rooms.leave(room, { userId })`) or disconnecting ends it for the next
   message.
 - A string is the room's name, never a payload key (unlike `{ entity }`); a
-  name starting with `qd:` or `user:` is refused when the contract is
-  defined, and a computed one drops the message.
+  name starting with `qd:` or `user:`, or one with the shape of a Socket.IO
+  socket id (20 letters, digits, `_` or `-`), is refused when the contract
+  is defined, and a computed one drops the message. `ctx.rooms.join`
+  refuses those names too, so give an id a prefix (`world:${id}`).
 
 The server side of a game needs no handler to reach the room:
 

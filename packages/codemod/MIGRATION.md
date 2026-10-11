@@ -241,7 +241,11 @@ that reason: a 4.x `"Public"` method whose payload has `id` gets
 `todoSchema<{ id: string }>({ keys: ["id"] })` and `rowless: true`, so it
 boots, and dropping `rowless: true` before the schema is real gets the
 refusal at once instead of after the move to Zod 4. Lint's
-`no-todo-schema` says which placeholder inputs still have no keys.
+`no-todo-schema` says which placeholder inputs still have no keys. Since
+5.1 the refusal also covers `custom`, `{ scope, of, id }` and `{ entry, id }`
+forms naming another key, which check some other row than the one `id`
+names; the codemod writes `rowless: true` (marked) where a 4.x
+`resolveEntryId` named another key of a payload that also has `id`.
 
 `jsonAcl` keeps 4.x's semantics but one: a user with several entries in a
 row's list gets the highest of their levels, where 4.x's `checkEntryACL`
@@ -353,11 +357,17 @@ export const taskService = qd.defineService(taskContract, {
         return { count };
       },
     },
+    // new in 5.0: Read on the project puts the caller's socket in its room, which the cursor
+    // channel requires; 4.x took any signed-in socket's cursor for any project
+    joinProject: {
+      access: { scope: "Read", of: projectContract, id: "projectId" },
+      handler: ({ input, ctx }) => ctx.rooms.join(`project:${input.projectId}`),
+    },
   },
   channels: {
-    // was defineChannel: relay each cursor to the project's room
+    // was defineChannel: relay each cursor to the project's room its requires matched
     cursor: (payload, ctx) => {
-      ctx.rooms.emit(`project:${payload.projectId}`, taskContract, "cursorMoved", payload);
+      ctx.rooms.emit(ctx.room, taskContract, "cursorMoved", payload);
     },
   },
 });
@@ -402,6 +412,12 @@ export const taskContract = defineContract("taskService", {
       output: z.object({ count: z.number() }),
       describe: "Archives every task of a project.",
     }),
+    joinProject: mutation({
+      input: z.object({ projectId: z.string() }),
+      output: z.boolean(),
+      describe:
+        "Joins the caller's socket to a project's room, where its cursors and archive events go.",
+    }),
   },
   collections: {
     // was defineCollection("byProject", ...): declared, so its deltas follow tracked writes
@@ -423,8 +439,14 @@ export const taskContract = defineContract("taskService", {
     },
     cursorMoved: { payload: cursorSchema, describe: "Another user's cursor moved." },
   },
-  // was defineChannel
-  channels: { cursor: { payload: cursorSchema, describe: "Where a user's cursor is." } },
+  // was defineChannel; only from a socket joinProject put in the project's room
+  channels: {
+    cursor: {
+      payload: cursorSchema,
+      describe: "Where a user's cursor is.",
+      requires: { room: (cursor) => `project:${cursor.projectId}` },
+    },
+  },
 });
 ```
 
@@ -757,7 +779,7 @@ protected override checkAccess(
 <!-- example: apps/api/src/services/examples/access.ts#access -->
 
 ```ts
-import { anyOf, crud, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
+import { anyOf, crud, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
 
 export const projectService = qd.defineService(project, {
   // the Prisma model the rows live in
@@ -806,10 +828,9 @@ export const taskService = qd.defineService(task, {
         db.task.update({ where: { id: input.id }, data: { assigneeId: ctx.principal.userId } }),
     },
     triage: {
-      // a check on a token's claims stays a custom form
-      access: custom(
-        (ctx, input) => ctx.principal.claims?.scope === "triage" && input.status !== "archived",
-      ),
+      // Moderate on the task's project, from a token that may triage: claims add to the form
+      access: { entry: "Moderate" },
+      claims: (claims, input) => claims?.scope === "triage" && input.status !== "archived",
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { status: input.status } }),
     },
@@ -830,9 +851,10 @@ passes the check, a service-wide `Admin` grant included.
 `initQuickdraw({ kinds })` sets the kinds every service admits,
 `defineService(contract, { kinds })` narrows them for one service, and a
 method's `kinds` narrows them again. A service's list also holds for its
-subscriptions and channels. A check on a claim, such as a token's `scope`,
-stays a `custom` form (`triage` above). The `no-inline-auth-guard` lint rule
-reports a kind check that throws in a handler.
+subscriptions and channels. A check on a token's claims (a `scope`) becomes
+`claims` beside `access` (`triage` above): it adds to the form, and no grant
+passes it. The `no-inline-auth-guard` lint rule reports a kind check that
+throws in a handler.
 
 ### `defineCollection` becomes contract `collections`
 
@@ -881,7 +903,12 @@ the project. For a board, read [Boards](#boards-from-a-watched-query-to-a-collec
 
 A tracked write that lowers or removes someone's level on a scope's anchor
 row removes their sockets from the scope and sends `qd:revoked`; the client
-drops the scope. Delete the call.
+drops the scope. Delete the call. This holds only when the membership table
+has an `id` column: the write tracker keys rows by it, so a table keyed by a
+composite `@@id([projectId, userId])` is never tracked and a removal never
+revokes. Give it `id String @id @default(cuid())` and keep the pair unique
+with `@@unique([projectId, userId])`; `createServer` names such a table at
+start (`[quickdraw:untracked-access-model]`).
 
 <!-- example: ../../../codemod/test/guide-v4/apps/api/src/services/task.ts#kick -->
 
@@ -906,7 +933,12 @@ user) and received with `qd.<service>.<event>.useEvent(handler)`. Channels
 "world:" } }` for any room with that prefix (the handler reads the matched
 room as `ctx.room`). The sending socket must have joined that app room
 through `ctx.rooms.join` in a method it called; a message that names no
-room is dropped, where 4.x skipped the check. A room joined by a call
+room is dropped, where 4.x skipped the check. A channel without `requires`
+takes a message from every signed-in socket, as 4.x's did, so a handler
+that relays a payload's room lets any user reach that room: 5.1 warns
+`channel-without-requires` at startup (a strict test app does not start)
+until the channel declares `requires`, or its service declares
+`access: "authenticated"` for a channel any user may send. A room joined by a call
 belongs to its socket, so a client joins again after every reconnect:
 `useJoin(qd.game.watchWorld, input)` in React, where 4.x apps re-called
 from an `isConnected` effect. 4.x's `unsubscribeSocket` and `unsubscribe`
@@ -924,7 +956,12 @@ declare module "@fitzzero/quickdraw-core" {
 ```
 
 The 5.0 contract above declares `events: { archived, cursorMoved }` and the
-`cursor` channel; the service's `archiveAll` sends `archived`.
+`cursor` channel; the service's `archiveAll` sends `archived`. The channel
+requires the project's room, which the new `joinProject` method puts the
+calling socket in after checking `Read` on the project, and the handler
+relays each cursor to `ctx.room`, the room it matched: 4.x's channel took
+any signed-in socket's cursor for any project. The `Board` below joins the
+room with `useJoin` on every connection.
 
 ### `installAdminMethods` becomes the admin kit
 
@@ -1000,7 +1037,13 @@ export const taskService = qd.defineService(task, {
 `qd.createServer({ app, services, db, auth })` attaches to the app's own
 Express app and HTTP server and owns socket authentication, the user room,
 the hello frame, disconnect cleanup and graceful shutdown. It never listens
-or exits the process itself, and there is no default CORS origin.
+or exits the process itself, and there is no default CORS origin. The
+server's `authenticate` here is the auth routes kit's `socketAuth` (see
+"Hand-built auth to the auth routes kit"). An app still on its own sessions
+until that step checks its session store on every handshake and call, and
+checks the session cookie's `Origin` (`cookieOriginAllowed`; on HTTP the
+cookie arrives in `request.sessionCookie`); never `verifyJWT` alone, which
+a signed-out session still passes until its JWT expires.
 
 <!-- example: ../../../codemod/test/guide-v4/apps/api/src/index.ts#server -->
 
@@ -1027,7 +1070,15 @@ export const server = qd.createServer({
   services: [taskService, healthService],
   db,
   cors: { origin: ["https://app.example.com"], credentials: true },
-  auth: { authenticate: ({ auth }) => verifySession(auth.token) },
+  // the session cookie from an allowed page, or a bearer token, checked against the store
+  auth: {
+    authenticate: socketAuth({
+      sessions,
+      jwtSecret,
+      allowedOrigins: ["https://app.example.com"],
+      loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
+    }),
+  },
   // 4.x clients keep calling `socket.emit("taskService:renameTask", ...)` until they update
   legacyWire: true,
 });
@@ -1120,7 +1171,11 @@ export function Board({ projectId }: { projectId: string }) {
 <!-- example: apps/web/src/components/migration/TaskPanel.tsx#events -->
 
 ```tsx
+import { useJoin } from "@fitzzero/quickdraw-core/client";
+
 export function Board({ projectId, onArchived }: { projectId: string; onArchived: () => void }) {
+  // new in 5.0: the cursor channel takes only sockets in the project's room, joined on every connection
+  const room = useJoin(qd.taskService.joinProject, { projectId });
   // was useRoomEvents
   qd.taskService.archived.useEvent((event) => {
     if (event.projectId === projectId) {
@@ -1129,7 +1184,15 @@ export function Board({ projectId, onArchived }: { projectId: string; onArchived
   });
   // was useChannelSend
   const cursor = qd.taskService.cursor.useChannel();
-  return <div onMouseMove={(event) => cursor.send({ projectId, x: event.clientX })} />;
+  return (
+    <div
+      onMouseMove={(event) => {
+        if (room.isJoined) {
+          cursor.send({ projectId, x: event.clientX });
+        }
+      }}
+    />
+  );
 }
 ```
 
@@ -1360,6 +1423,7 @@ export const boardService = qd.defineService(boardContract, {
   methods: {
     getTasksByStatus: {
       access: { scope: "Read", of: projectContract, id: "projectId" },
+      // the result depends on the input alone, so one run serves every viewer
       share: "all",
       handler: async ({ input, db }) => {
         const tasks = await db.task.findMany({
@@ -1616,8 +1680,8 @@ existing user by email only when `emailVerified` is true.
 and the app's own REST routes. A provider without credentials in an
 environment (development without a Google app) is left out in place with
 `google.optional(...)`. 4.x's development sign-in by a user id in the
-handshake becomes `socketAuth({ devCredentials })`, which cannot run in
-production. `createRequireAuth({ getSession })` on REST routes becomes
+handshake becomes `socketAuth({ devCredentials })`, which runs only when
+`NODE_ENV` is `development` or `test`. `createRequireAuth({ getSession })` on REST routes becomes
 `requireSession(keys)`, which verifies the JWT once; the route reads the
 user with `sessionOf(req)` instead of `req.userId` (Express's `Request` type
 has no such member), and calls the services as `sessionOf(req).principal`
@@ -1626,7 +1690,10 @@ does (the README's auth routes kit section shows such a route). Give
 `requireSession` the `sessions` object the routes were given: it takes their
 `allowedOrigins` by that same store object, and a second
 `prismaSessions(...)` over the same table is another one. `onRevoke` ends
-the sockets of a revoked session:
+the sockets of a revoked session. `trust proxy` comes from `TRUST_PROXY`,
+the number of proxies in front of the app (0 by default): trusting a proxy
+that is not there lets a client pick its own `X-Forwarded-For`, and with it
+every per-IP rate limit:
 
 <!-- example: apps/api/src/auth/migrating.ts#wiring -->
 
@@ -1653,7 +1720,8 @@ async function devUser(userId: string): Promise<AppPrincipal | null> {
 }
 
 export const app: Express = express();
-app.set("trust proxy", 1);
+// behind a proxy, so the rate limits see the client's IP; with none, a client would pick its own
+app.set("trust proxy", env.TRUST_PROXY);
 app.use(
   createAuthRoutes({
     ...keys,
@@ -1694,7 +1762,7 @@ export const server = qd.createServer({
       ...keys,
       allowedOrigins,
       loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
-      // never in production: socketAuth refuses it there
+      // only when NODE_ENV is development or test: socketAuth refuses it otherwise
       devCredentials: env.ENABLE_DEV_CREDENTIALS === "true" ? devUser : undefined,
     }),
     loadServiceAccess: (userId) => loadGrants(userId),
@@ -1767,7 +1835,8 @@ native client sends the token as `auth.token`.
   longer opens every row to a subscriber, and a service without a policy
   can be subscribed to only with a service-wide `Admin` grant. The kits'
   single-row writes (`update`, `delete`, `reorder`) need the row level on
-  the row, whatever their form says.
+  the row, and `create` on each parent its row is written under, whatever
+  their form says.
 - **Invalidation never cancels a read.** The coordinator keeps one read in
   flight per query; an invalidation during it runs exactly one more when it
   settles. 4.x cancelled the read and issued it again.
@@ -1802,10 +1871,12 @@ native client sends the token as `auth.token`.
   name; else `session` when the cookie has a domain; else `__Host-session`
   (Secure, `Path=/`, no domain) on a request over HTTPS (`req.secure`,
   `X-Forwarded-Proto: https` or an `https:` `Origin`) and `session` over
-  plain HTTP. Each reads first the name it would set on the same request,
-  and over HTTPS without a domain never reads a `session` cookie, which a
-  sibling site could have planted. The OAuth state cookie is
-  `__Host-qd_oauth` when it is Secure. A cookie shared with subdomains
+  plain HTTP. Each reads `__Host-session` first wherever the request
+  carries it (only this host, over HTTPS, can have set it), then `session`
+  over plain HTTP or with a domain, and over HTTPS without a domain never
+  reads a `session` cookie, which a sibling site could have planted. The
+  OAuth state cookie is `__Host-qd_oauth` when it is Secure, and whenever
+  `publicUrl` is https. A cookie shared with subdomains
   through `COOKIE_DOMAIN` (as 4.x apps set it) is `session` everywhere with
   nothing to configure, since the transports read `COOKIE_DOMAIN` too; a
   domain given only as `cookie.domain` needs
@@ -1844,7 +1915,12 @@ native client sends the token as `auth.token`.
   which ids exist (only a service-wide `Admin` gets `NOT_FOUND`).
 - **A mutation ignores its caller's cancel**: only its time limit (30 s by
   default) stops it.
-- **MCP custom tools default to `access: "authenticated"`.**
+- **MCP custom tools default to `access: "authenticated"`**, and obey the
+  app's `initQuickdraw({ kinds })`.
+- **The MCP HTTP routes refuse a request from a web page** (one carrying an
+  `Origin` header) with 403 unless `createMcpHttpRouter({ allowedOrigins })`
+  lists its origin, and their queries share one lane per bearer token, or
+  per address when anonymous, where 4.x let each request run on its own.
 
 ## Running 4.x and 5.0 clients together
 
@@ -1997,6 +2073,10 @@ export const taskService = qd.defineService(taskContract, {
         return { count };
       },
     },
+    joinProject: {
+      access: { scope: "Read", of: projectContract, id: "projectId" },
+      handler: ({ input, ctx }) => ctx.rooms.join(`project:${input.projectId}`),
+    },
   },
 });
 ```
@@ -2020,126 +2100,126 @@ Generated from `@fitzzero/quickdraw-lint`'s `no-v4-api` rule, which reports each
 
 ### Names no 5.0 entry point exports
 
-| 4.x name                       | In 5.0                                                                                                                                                                                                                          |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ServiceResponse`              | Handlers return their result or throw `QuickdrawError(code, message)`; the reply on the wire is `{ ok: true, d }` or `{ ok: false, e: { code, message, data? } }`, and the client throws `QuickdrawError`.                      |
-| `ServiceMethodMap`             | Declare methods in a contract (`defineContract(name, { methods: { name: query({ input, output }) } })`), type them with `InputOf<C, M>` and `OutputOf<C, M>`, and implement them as `{ access, handler({ input, ctx, db }) }`.  |
-| `ServiceMethodDefinition`      | Declare methods in a contract (`defineContract(name, { methods: { name: query({ input, output }) } })`), type them with `InputOf<C, M>` and `OutputOf<C, M>`, and implement them as `{ access, handler({ input, ctx, db }) }`.  |
-| `ServiceMethodContext`         | Declare methods in a contract (`defineContract(name, { methods: { name: query({ input, output }) } })`), type them with `InputOf<C, M>` and `OutputOf<C, M>`, and implement them as `{ access, handler({ input, ctx, db }) }`.  |
-| `ExtractPayload`               | Declare methods in a contract (`defineContract(name, { methods: { name: query({ input, output }) } })`), type them with `InputOf<C, M>` and `OutputOf<C, M>`, and implement them as `{ access, handler({ input, ctx, db }) }`.  |
-| `ExtractResponse`              | Declare methods in a contract (`defineContract(name, { methods: { name: query({ input, output }) } })`), type them with `InputOf<C, M>` and `OutputOf<C, M>`, and implement them as `{ access, handler({ input, ctx, db }) }`.  |
-| `ServiceChannelMap`            | Declare channels in the contract (`channels: { name: { payload } }`), handle them in `qd.defineService(contract, { channels })`, and send with `qd.<service>.<channel>.useChannel()`.                                           |
-| `ServiceChannelDefinition`     | Declare channels in the contract (`channels: { name: { payload } }`), handle them in `qd.defineService(contract, { channels })`, and send with `qd.<service>.<channel>.useChannel()`.                                           |
-| `ServiceChannelContext`        | Declare channels in the contract (`channels: { name: { payload } }`), handle them in `qd.defineService(contract, { channels })`, and send with `qd.<service>.<channel>.useChannel()`.                                           |
-| `CHANNEL_EVENT_PREFIX`         | Channels travel on the single `qd:ch` event, which the socket rate limiter already skips: send with `qd.<service>.<channel>.useChannel()`.                                                                                      |
-| `channelEventName`             | Channels travel on the single `qd:ch` event, which the socket rate limiter already skips: send with `qd.<service>.<channel>.useChannel()`.                                                                                      |
-| `QuickdrawEventMap`            | Declare room events in the contract (`events: { name: { payload } }`), send them with `ctx.rooms.emit(room, contract, event, payload)`, and listen with `qd.<service>.<event>.useEvent(handler)`.                               |
-| `QuickdrawEventName`           | Declare room events in the contract (`events: { name: { payload } }`), send them with `ctx.rooms.emit(room, contract, event, payload)`, and listen with `qd.<service>.<event>.useEvent(handler)`.                               |
-| `QuickdrawEventData`           | Declare room events in the contract (`events: { name: { payload } }`), send them with `ctx.rooms.emit(room, contract, event, payload)`, and listen with `qd.<service>.<event>.useEvent(handler)`.                               |
-| `QuickdrawUser`                | The principal's type is the app's own, given to `initQuickdraw<{ db, principal }>()`; handlers read it as `ctx.principal`.                                                                                                      |
-| `ACLEntity`                    | A row shared through a JSON access list uses the `jsonAcl(field, { owner })` policy on `qd.defineService(contract, { access })`; the sharing kit (`sharing.contract({ mode: "acl" })`) edits the list.                          |
-| `AdminCreatePayload`           | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminDeletePayload`           | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminDeleteResponse`          | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminGetPayload`              | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminGetSubscribersPayload`   | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminListPayload`             | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminListResponse`            | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminMetaPayload`             | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminMetaResponse`            | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminReemitPayload`           | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminReemitResponse`          | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminSetACLPayload`           | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminSubscribersResponse`     | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminUnsubscribeAllPayload`   | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminUnsubscribeAllResponse`  | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `AdminUpdatePayload`           | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method. |
-| `SubscribePayload`             | Subscribe to rows with `qd.<service>.useEntity(id)` or `useEntities(ids)`; the client sends protocol v5's `qd:sub` itself.                                                                                                      |
-| `UnsubscribePayload`           | Subscribe to rows with `qd.<service>.useEntity(id)` or `useEntities(ids)`; the client sends protocol v5's `qd:sub` itself.                                                                                                      |
-| `CollectionSubscribePayload`   | Declare collections in the contract and read them with `qd.<service>.<collection>.useCollection(scope)`; the client sends protocol v5's `qd:col:sub` itself and holds a `CollectionState`.                                      |
-| `CollectionUnsubscribePayload` | Declare collections in the contract and read them with `qd.<service>.<collection>.useCollection(scope)`; the client sends protocol v5's `qd:col:sub` itself and holds a `CollectionState`.                                      |
-| `CollectionSnapshotPage`       | Declare collections in the contract and read them with `qd.<service>.<collection>.useCollection(scope)`; the client sends protocol v5's `qd:col:sub` itself and holds a `CollectionState`.                                      |
-| `CollectionSnapshotResponse`   | Declare collections in the contract and read them with `qd.<service>.<collection>.useCollection(scope)`; the client sends protocol v5's `qd:col:sub` itself and holds a `CollectionState`.                                      |
-| `serviceRoom`                  | Entity rooms are per access tier (`entityRoom(service, id, level)`) and joined by `useEntity`; join an app room with `ctx.rooms.join(room)` and reach one user with `ctx.rooms.emitToUser(userId, ...)`.                        |
-| `serviceFullRoom`              | Entity rooms are per access tier (`entityRoom(service, id, level)`) and joined by `useEntity`; join an app room with `ctx.rooms.join(room)` and reach one user with `ctx.rooms.emitToUser(userId, ...)`.                        |
-| `collectionEventName`          | Collection deltas all travel on the `qd:c` event and are applied by `qd.<service>.<collection>.useCollection(scope)`.                                                                                                           |
-| `BaseService`                  | Declare services with `qd.defineService(contract, { model, access, methods: { name: { access, handler } } })`; there are no service classes.                                                                                    |
-| `BaseRpcService`               | A service without rows is a contract without `entity`, implemented by `qd.defineService(contract, { methods })` without `model`.                                                                                                |
-| `BaseServiceInstance`          | `qd.defineService(contract, definition)` returns a `Service`; its options are the `ServiceDefinition` object.                                                                                                                   |
-| `BaseServiceOptions`           | `qd.defineService(contract, definition)` returns a `Service`; its options are the `ServiceDefinition` object.                                                                                                                   |
-| `ServiceRegistry`              | Pass the services to `qd.createServer({ app, services: [...], db, auth })`.                                                                                                                                                     |
-| `ServiceRegistryInstance`      | Pass the services to `qd.createServer({ app, services: [...], db, auth })`.                                                                                                                                                     |
-| `ServiceRegistryOptions`       | Pass the services to `qd.createServer({ app, services: [...], db, auth })`.                                                                                                                                                     |
-| `createQuickdrawServer`        | Create the server with `qd.createServer({ app, services, db, auth })` (`qd = initQuickdraw<{ db, principal }>()`); it attaches to the app's own Express app and HTTP server.                                                    |
-| `QuickdrawServerOptions`       | Create the server with `qd.createServer({ app, services, db, auth })` (`qd = initQuickdraw<{ db, principal }>()`); it attaches to the app's own Express app and HTTP server.                                                    |
-| `QuickdrawServerResult`        | Create the server with `qd.createServer({ app, services, db, auth })` (`qd = initQuickdraw<{ db, principal }>()`); it attaches to the app's own Express app and HTTP server.                                                    |
-| `QuickdrawIdentity`            | `qd.createServer({ auth: { authenticate } })`'s `authenticate` returns a principal, a user id string, or nothing for an anonymous caller.                                                                                       |
-| `CollectionManager`            | Declare collections in the contract (`collections: { name: { scope, item, order } }`) and anchor them in `qd.defineService(contract, { collections: { name: { anchor } } })`; their deltas follow tracked writes.               |
-| `CollectionDefinition`         | Declare collections in the contract (`collections: { name: { scope, item, order } }`) and anchor them in `qd.defineService(contract, { collections: { name: { anchor } } })`; their deltas follow tracked writes.               |
-| `CollectionWriteEvent`         | Declare collections in the contract (`collections: { name: { scope, item, order } }`) and anchor them in `qd.defineService(contract, { collections: { name: { anchor } } })`; their deltas follow tracked writes.               |
-| `InstallAdminMethodsOptions`   | Use the admin kit: `...admin.contract({ entity })` in the contract and `...admin.handlers(contract, { displayName, hiddenFields })` in `methods`.                                                                               |
-| `PrismaDelegate`               | Handlers write through the tracked client, `db.<model>`, from their `{ input, ctx, db }` argument.                                                                                                                              |
-| `zodToAdminFields`             | The admin kit's `adminMeta` derives the fields from the entity's JSON Schema; adjust them with `admin.handlers(contract, { fieldOverrides, hiddenFields })`.                                                                    |
-| `getDefaultEntityFields`       | The admin kit's `adminMeta` derives the fields from the entity's JSON Schema; adjust them with `admin.handlers(contract, { fieldOverrides, hiddenFields })`.                                                                    |
-| `mergeWithDefaultFields`       | The admin kit's `adminMeta` derives the fields from the entity's JSON Schema; adjust them with `admin.handlers(contract, { fieldOverrides, hiddenFields })`.                                                                    |
-| `ZodToAdminFieldsOptions`      | The admin kit's `adminMeta` derives the fields from the entity's JSON Schema; adjust them with `admin.handlers(contract, { fieldOverrides, hiddenFields })`.                                                                    |
-| `createMcpRoutes`              | Mount `createMcpHttpRouter({ registry })` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                                                           |
-| `McpHttpRoutesOptions`         | Mount `createMcpHttpRouter({ registry })` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                                                           |
-| `generateToolMetadata`         | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                       |
-| `GenerateToolMetadataOptions`  | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                       |
-| `ServiceToolSpec`              | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                       |
-| `MethodSpec`                   | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                       |
-| `ServiceInfo`                  | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                       |
-| `ServiceMethodInfo`            | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                       |
-| `McpToolDefinition`            | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                       |
-| `McpMethodDefinition`          | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                       |
-| `McpMethodContext`             | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                       |
-| `McpServiceInstance`           | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                       |
-| `McpRegistryInstance`          | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                       |
-| `useService`                   | Call methods through the typed client: `qd.<service>.<method>.useMutation()`, or `.useQuery(input)` for a query (`qd = createQuickdrawClient(contracts)`).                                                                      |
-| `useServiceMethod`             | Call methods through the typed client: `qd.<service>.<method>.useMutation()`, or `.useQuery(input)` for a query (`qd = createQuickdrawClient(contracts)`).                                                                      |
-| `UseServiceOptions`            | Call methods through the typed client: `qd.<service>.<method>.useMutation()`, or `.useQuery(input)` for a query (`qd = createQuickdrawClient(contracts)`).                                                                      |
-| `UseServiceResult`             | Call methods through the typed client: `qd.<service>.<method>.useMutation()`, or `.useQuery(input)` for a query (`qd = createQuickdrawClient(contracts)`).                                                                      |
-| `useServiceQuery`              | Read with `qd.<service>.<method>.useQuery(input)`; a query that must follow writes declares `watch` in its contract.                                                                                                            |
-| `UseServiceQueryOptions`       | Read with `qd.<service>.<method>.useQuery(input)`; a query that must follow writes declares `watch` in its contract.                                                                                                            |
-| `UseServiceQueryResult`        | Read with `qd.<service>.<method>.useQuery(input)`; a query that must follow writes declares `watch` in its contract.                                                                                                            |
-| `useSubscription`              | Subscribe to a row with `qd.<service>.useEntity(id)` (`useEntities(ids)` for several).                                                                                                                                          |
-| `UseSubscriptionOptions`       | Subscribe to a row with `qd.<service>.useEntity(id)` (`useEntities(ids)` for several).                                                                                                                                          |
-| `UseSubscriptionResult`        | Subscribe to a row with `qd.<service>.useEntity(id)` (`useEntities(ids)` for several).                                                                                                                                          |
-| `useCollection`                | Collections are members of the typed client: `qd.<service>.<collection>.useCollection(scope, { view, load })`.                                                                                                                  |
-| `useRoomEvents`                | Listen to a contract event with `qd.<service>.<event>.useEvent(handler)`.                                                                                                                                                       |
-| `UseRoomEventsOptions`         | Listen to a contract event with `qd.<service>.<event>.useEvent(handler)`.                                                                                                                                                       |
-| `QuickdrawRoomEventHandlers`   | Listen to a contract event with `qd.<service>.<event>.useEvent(handler)`.                                                                                                                                                       |
-| `useChannelSend`               | Send on a channel with `qd.<service>.<channel>.useChannel()`.                                                                                                                                                                   |
-| `UseChannelSendResult`         | Send on a channel with `qd.<service>.<channel>.useChannel()`.                                                                                                                                                                   |
-| `useQuickdrawSocket`           | Read the connection with `useQuickdraw()` (`connection`, `status`, `userId`, `serviceAccess`), and talk to the server through the typed client rather than the socket.                                                          |
-| `QuickdrawSocketContextValue`  | Read the connection with `useQuickdraw()` (`connection`, `status`, `userId`, `serviceAccess`), and talk to the server through the typed client rather than the socket.                                                          |
-| `getOAuthUrl`                  | Link to `signInUrl(provider, { returnTo })` from `./client`: the auth routes kit starts a sign-in at `GET /auth/{provider}/start`.                                                                                              |
-| `logout`                       | Call `signOut()` from `./client`: `POST /auth/logout` with the session cookie (and a stored token) revokes the session; it rejects when refused.                                                                                |
-| `logoutAllDevices`             | Call `signOutEverywhere()` from `./client`: `POST /auth/logout-all` revokes every session of the user; it resolves with nothing.                                                                                                |
-| `ServiceCallError`             | Failed calls throw `QuickdrawError`: branch on `error.code` (`FORBIDDEN`, `NOT_FOUND`, `VALIDATION`, `CONFLICT`, ...).                                                                                                          |
-| `ClientServiceMethodMap`       | The typed client infers every type from the contracts passed to `createQuickdrawClient(contracts)`.                                                                                                                             |
-| `SubscriptionDataMap`          | The typed client infers every type from the contracts passed to `createQuickdrawClient(contracts)`.                                                                                                                             |
-| `applySnapshot`                | Renamed `applyCollectionSnapshot`; the collection helpers work on `CollectionState`; `liveDataOf(connection, queryClient)` holds the live collections.                                                                          |
-| `applyPage`                    | Renamed `applyCollectionPage`; the collection helpers work on `CollectionState`; `liveDataOf(connection, queryClient)` holds the live collections.                                                                              |
-| `applyDelta`                   | Use `applyCollectionDeltas`, which applies a batch; the collection helpers work on `CollectionState`; `liveDataOf(connection, queryClient)` holds the live collections.                                                         |
-| `applyDeltas`                  | Use `applyCollectionDeltas`, which applies a batch; the collection helpers work on `CollectionState`; `liveDataOf(connection, queryClient)` holds the live collections.                                                         |
-| `createEmptyEntry`             | Use `emptyCollection()`; the collection helpers work on `CollectionState`; `liveDataOf(connection, queryClient)` holds the live collections.                                                                                    |
-| `CollectionCacheEntry`         | The collection state is `CollectionState`; the collection helpers work on `CollectionState`; `liveDataOf(connection, queryClient)` holds the live collections.                                                                  |
-| `SocketTextField`              | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                       |
-| `SocketTextFieldProps`         | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                       |
-| `SocketCheckbox`               | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                       |
-| `SocketCheckboxProps`          | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                       |
-| `SocketSelect`                 | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                       |
-| `SocketSelectProps`            | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                       |
-| `SocketSlider`                 | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                       |
-| `SocketSliderProps`            | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                       |
-| `SocketSwitch`                 | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                       |
-| `SocketSwitchProps`            | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                       |
-| `useSocketInput`               | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                       |
-| `UseSocketInputOptions`        | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                       |
-| `UseSocketInputResult`         | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                       |
-| `CommitMode`                   | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                       |
+| 4.x name                       | In 5.0                                                                                                                                                                                                                                                                |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ServiceResponse`              | Handlers return their result or throw `QuickdrawError(code, message)`; the reply on the wire is `{ ok: true, d }` or `{ ok: false, e: { code, message, data? } }`, and the client throws `QuickdrawError`.                                                            |
+| `ServiceMethodMap`             | Declare methods in a contract (`defineContract(name, { methods: { name: query({ input, output }) } })`), type them with `InputOf<C, M>` and `OutputOf<C, M>`, and implement them as `{ access, handler({ input, ctx, db }) }`.                                        |
+| `ServiceMethodDefinition`      | Declare methods in a contract (`defineContract(name, { methods: { name: query({ input, output }) } })`), type them with `InputOf<C, M>` and `OutputOf<C, M>`, and implement them as `{ access, handler({ input, ctx, db }) }`.                                        |
+| `ServiceMethodContext`         | Declare methods in a contract (`defineContract(name, { methods: { name: query({ input, output }) } })`), type them with `InputOf<C, M>` and `OutputOf<C, M>`, and implement them as `{ access, handler({ input, ctx, db }) }`.                                        |
+| `ExtractPayload`               | Declare methods in a contract (`defineContract(name, { methods: { name: query({ input, output }) } })`), type them with `InputOf<C, M>` and `OutputOf<C, M>`, and implement them as `{ access, handler({ input, ctx, db }) }`.                                        |
+| `ExtractResponse`              | Declare methods in a contract (`defineContract(name, { methods: { name: query({ input, output }) } })`), type them with `InputOf<C, M>` and `OutputOf<C, M>`, and implement them as `{ access, handler({ input, ctx, db }) }`.                                        |
+| `ServiceChannelMap`            | Declare channels in the contract (`channels: { name: { payload, requires } }`, where `requires` names what the sender must hold, such as `{ room }`), handle them in `qd.defineService(contract, { channels })`, and send with `qd.<service>.<channel>.useChannel()`. |
+| `ServiceChannelDefinition`     | Declare channels in the contract (`channels: { name: { payload, requires } }`, where `requires` names what the sender must hold, such as `{ room }`), handle them in `qd.defineService(contract, { channels })`, and send with `qd.<service>.<channel>.useChannel()`. |
+| `ServiceChannelContext`        | Declare channels in the contract (`channels: { name: { payload, requires } }`, where `requires` names what the sender must hold, such as `{ room }`), handle them in `qd.defineService(contract, { channels })`, and send with `qd.<service>.<channel>.useChannel()`. |
+| `CHANNEL_EVENT_PREFIX`         | Channels travel on the single `qd:ch` event, which the socket rate limiter already skips: send with `qd.<service>.<channel>.useChannel()`.                                                                                                                            |
+| `channelEventName`             | Channels travel on the single `qd:ch` event, which the socket rate limiter already skips: send with `qd.<service>.<channel>.useChannel()`.                                                                                                                            |
+| `QuickdrawEventMap`            | Declare room events in the contract (`events: { name: { payload } }`), send them with `ctx.rooms.emit(room, contract, event, payload)`, and listen with `qd.<service>.<event>.useEvent(handler)`.                                                                     |
+| `QuickdrawEventName`           | Declare room events in the contract (`events: { name: { payload } }`), send them with `ctx.rooms.emit(room, contract, event, payload)`, and listen with `qd.<service>.<event>.useEvent(handler)`.                                                                     |
+| `QuickdrawEventData`           | Declare room events in the contract (`events: { name: { payload } }`), send them with `ctx.rooms.emit(room, contract, event, payload)`, and listen with `qd.<service>.<event>.useEvent(handler)`.                                                                     |
+| `QuickdrawUser`                | The principal's type is the app's own, given to `initQuickdraw<{ db, principal }>()`; handlers read it as `ctx.principal`.                                                                                                                                            |
+| `ACLEntity`                    | A row shared through a JSON access list uses the `jsonAcl(field, { owner })` policy on `qd.defineService(contract, { access })`; the sharing kit (`sharing.contract({ mode: "acl" })`) edits the list.                                                                |
+| `AdminCreatePayload`           | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminDeletePayload`           | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminDeleteResponse`          | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminGetPayload`              | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminGetSubscribersPayload`   | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminListPayload`             | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminListResponse`            | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminMetaPayload`             | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminMetaResponse`            | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminReemitPayload`           | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminReemitResponse`          | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminSetACLPayload`           | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminSubscribersResponse`     | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminUnsubscribeAllPayload`   | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminUnsubscribeAllResponse`  | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `AdminUpdatePayload`           | The admin kit's methods are ordinary contract entries (`admin.contract({ entity })`, implemented by `admin.handlers(contract)`): type them with `InputOf<C, "adminList">` and `OutputOf<C, "adminList">`, and so on per method.                                       |
+| `SubscribePayload`             | Subscribe to rows with `qd.<service>.useEntity(id)` or `useEntities(ids)`; the client sends protocol v5's `qd:sub` itself.                                                                                                                                            |
+| `UnsubscribePayload`           | Subscribe to rows with `qd.<service>.useEntity(id)` or `useEntities(ids)`; the client sends protocol v5's `qd:sub` itself.                                                                                                                                            |
+| `CollectionSubscribePayload`   | Declare collections in the contract and read them with `qd.<service>.<collection>.useCollection(scope)`; the client sends protocol v5's `qd:col:sub` itself and holds a `CollectionState`.                                                                            |
+| `CollectionUnsubscribePayload` | Declare collections in the contract and read them with `qd.<service>.<collection>.useCollection(scope)`; the client sends protocol v5's `qd:col:sub` itself and holds a `CollectionState`.                                                                            |
+| `CollectionSnapshotPage`       | Declare collections in the contract and read them with `qd.<service>.<collection>.useCollection(scope)`; the client sends protocol v5's `qd:col:sub` itself and holds a `CollectionState`.                                                                            |
+| `CollectionSnapshotResponse`   | Declare collections in the contract and read them with `qd.<service>.<collection>.useCollection(scope)`; the client sends protocol v5's `qd:col:sub` itself and holds a `CollectionState`.                                                                            |
+| `serviceRoom`                  | Entity rooms are per access tier (`entityRoom(service, id, level)`) and joined by `useEntity`; join an app room with `ctx.rooms.join(room)` and reach one user with `ctx.rooms.emitToUser(userId, ...)`.                                                              |
+| `serviceFullRoom`              | Entity rooms are per access tier (`entityRoom(service, id, level)`) and joined by `useEntity`; join an app room with `ctx.rooms.join(room)` and reach one user with `ctx.rooms.emitToUser(userId, ...)`.                                                              |
+| `collectionEventName`          | Collection deltas all travel on the `qd:c` event and are applied by `qd.<service>.<collection>.useCollection(scope)`.                                                                                                                                                 |
+| `BaseService`                  | Declare services with `qd.defineService(contract, { model, access, methods: { name: { access, handler } } })`; there are no service classes.                                                                                                                          |
+| `BaseRpcService`               | A service without rows is a contract without `entity`, implemented by `qd.defineService(contract, { methods })` without `model`.                                                                                                                                      |
+| `BaseServiceInstance`          | `qd.defineService(contract, definition)` returns a `Service`; its options are the `ServiceDefinition` object.                                                                                                                                                         |
+| `BaseServiceOptions`           | `qd.defineService(contract, definition)` returns a `Service`; its options are the `ServiceDefinition` object.                                                                                                                                                         |
+| `ServiceRegistry`              | Pass the services to `qd.createServer({ app, services: [...], db, auth })`.                                                                                                                                                                                           |
+| `ServiceRegistryInstance`      | Pass the services to `qd.createServer({ app, services: [...], db, auth })`.                                                                                                                                                                                           |
+| `ServiceRegistryOptions`       | Pass the services to `qd.createServer({ app, services: [...], db, auth })`.                                                                                                                                                                                           |
+| `createQuickdrawServer`        | Create the server with `qd.createServer({ app, services, db, auth })` (`qd = initQuickdraw<{ db, principal }>()`); it attaches to the app's own Express app and HTTP server.                                                                                          |
+| `QuickdrawServerOptions`       | Create the server with `qd.createServer({ app, services, db, auth })` (`qd = initQuickdraw<{ db, principal }>()`); it attaches to the app's own Express app and HTTP server.                                                                                          |
+| `QuickdrawServerResult`        | Create the server with `qd.createServer({ app, services, db, auth })` (`qd = initQuickdraw<{ db, principal }>()`); it attaches to the app's own Express app and HTTP server.                                                                                          |
+| `QuickdrawIdentity`            | `qd.createServer({ auth: { authenticate } })`'s `authenticate` returns a principal, a user id string, or nothing for an anonymous caller.                                                                                                                             |
+| `CollectionManager`            | Declare collections in the contract (`collections: { name: { scope, item, order } }`) and anchor them in `qd.defineService(contract, { collections: { name: { anchor } } })`; their deltas follow tracked writes.                                                     |
+| `CollectionDefinition`         | Declare collections in the contract (`collections: { name: { scope, item, order } }`) and anchor them in `qd.defineService(contract, { collections: { name: { anchor } } })`; their deltas follow tracked writes.                                                     |
+| `CollectionWriteEvent`         | Declare collections in the contract (`collections: { name: { scope, item, order } }`) and anchor them in `qd.defineService(contract, { collections: { name: { anchor } } })`; their deltas follow tracked writes.                                                     |
+| `InstallAdminMethodsOptions`   | Use the admin kit: `...admin.contract({ entity })` in the contract and `...admin.handlers(contract, { displayName, hiddenFields })` in `methods`.                                                                                                                     |
+| `PrismaDelegate`               | Handlers write through the tracked client, `db.<model>`, from their `{ input, ctx, db }` argument.                                                                                                                                                                    |
+| `zodToAdminFields`             | The admin kit's `adminMeta` derives the fields from the entity's JSON Schema; adjust them with `admin.handlers(contract, { fieldOverrides, hiddenFields })`.                                                                                                          |
+| `getDefaultEntityFields`       | The admin kit's `adminMeta` derives the fields from the entity's JSON Schema; adjust them with `admin.handlers(contract, { fieldOverrides, hiddenFields })`.                                                                                                          |
+| `mergeWithDefaultFields`       | The admin kit's `adminMeta` derives the fields from the entity's JSON Schema; adjust them with `admin.handlers(contract, { fieldOverrides, hiddenFields })`.                                                                                                          |
+| `ZodToAdminFieldsOptions`      | The admin kit's `adminMeta` derives the fields from the entity's JSON Schema; adjust them with `admin.handlers(contract, { fieldOverrides, hiddenFields })`.                                                                                                          |
+| `createMcpRoutes`              | Mount `createMcpHttpRouter({ registry })` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                                                                                                 |
+| `McpHttpRoutesOptions`         | Mount `createMcpHttpRouter({ registry })` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                                                                                                 |
+| `generateToolMetadata`         | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                             |
+| `GenerateToolMetadataOptions`  | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                             |
+| `ServiceToolSpec`              | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                             |
+| `MethodSpec`                   | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                             |
+| `ServiceInfo`                  | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                             |
+| `ServiceMethodInfo`            | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                             |
+| `McpToolDefinition`            | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                             |
+| `McpMethodDefinition`          | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                             |
+| `McpMethodContext`             | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                             |
+| `McpServiceInstance`           | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                             |
+| `McpRegistryInstance`          | MCP tools are generated from the contracts: `createMcpRegistry({ services, dispatcher })` and `describeTools` from "@fitzzero/quickdraw-core/server/mcp".                                                                                                             |
+| `useService`                   | Call methods through the typed client: `qd.<service>.<method>.useMutation()`, or `.useQuery(input)` for a query (`qd = createQuickdrawClient(contracts)`).                                                                                                            |
+| `useServiceMethod`             | Call methods through the typed client: `qd.<service>.<method>.useMutation()`, or `.useQuery(input)` for a query (`qd = createQuickdrawClient(contracts)`).                                                                                                            |
+| `UseServiceOptions`            | Call methods through the typed client: `qd.<service>.<method>.useMutation()`, or `.useQuery(input)` for a query (`qd = createQuickdrawClient(contracts)`).                                                                                                            |
+| `UseServiceResult`             | Call methods through the typed client: `qd.<service>.<method>.useMutation()`, or `.useQuery(input)` for a query (`qd = createQuickdrawClient(contracts)`).                                                                                                            |
+| `useServiceQuery`              | Read with `qd.<service>.<method>.useQuery(input)`; a query that must follow writes declares `watch` in its contract.                                                                                                                                                  |
+| `UseServiceQueryOptions`       | Read with `qd.<service>.<method>.useQuery(input)`; a query that must follow writes declares `watch` in its contract.                                                                                                                                                  |
+| `UseServiceQueryResult`        | Read with `qd.<service>.<method>.useQuery(input)`; a query that must follow writes declares `watch` in its contract.                                                                                                                                                  |
+| `useSubscription`              | Subscribe to a row with `qd.<service>.useEntity(id)` (`useEntities(ids)` for several).                                                                                                                                                                                |
+| `UseSubscriptionOptions`       | Subscribe to a row with `qd.<service>.useEntity(id)` (`useEntities(ids)` for several).                                                                                                                                                                                |
+| `UseSubscriptionResult`        | Subscribe to a row with `qd.<service>.useEntity(id)` (`useEntities(ids)` for several).                                                                                                                                                                                |
+| `useCollection`                | Collections are members of the typed client: `qd.<service>.<collection>.useCollection(scope, { view, load })`.                                                                                                                                                        |
+| `useRoomEvents`                | Listen to a contract event with `qd.<service>.<event>.useEvent(handler)`.                                                                                                                                                                                             |
+| `UseRoomEventsOptions`         | Listen to a contract event with `qd.<service>.<event>.useEvent(handler)`.                                                                                                                                                                                             |
+| `QuickdrawRoomEventHandlers`   | Listen to a contract event with `qd.<service>.<event>.useEvent(handler)`.                                                                                                                                                                                             |
+| `useChannelSend`               | Send on a channel with `qd.<service>.<channel>.useChannel()`.                                                                                                                                                                                                         |
+| `UseChannelSendResult`         | Send on a channel with `qd.<service>.<channel>.useChannel()`.                                                                                                                                                                                                         |
+| `useQuickdrawSocket`           | Read the connection with `useQuickdraw()` (`connection`, `status`, `userId`, `serviceAccess`), and talk to the server through the typed client rather than the socket.                                                                                                |
+| `QuickdrawSocketContextValue`  | Read the connection with `useQuickdraw()` (`connection`, `status`, `userId`, `serviceAccess`), and talk to the server through the typed client rather than the socket.                                                                                                |
+| `getOAuthUrl`                  | Link to `signInUrl(provider, { returnTo })` from `./client`: the auth routes kit starts a sign-in at `GET /auth/{provider}/start`.                                                                                                                                    |
+| `logout`                       | Call `signOut()` from `./client`: `POST /auth/logout` with the session cookie (and a stored token) revokes the session; it rejects when refused.                                                                                                                      |
+| `logoutAllDevices`             | Call `signOutEverywhere()` from `./client`: `POST /auth/logout-all` revokes every session of the user; it resolves with nothing.                                                                                                                                      |
+| `ServiceCallError`             | Failed calls throw `QuickdrawError`: branch on `error.code` (`FORBIDDEN`, `NOT_FOUND`, `VALIDATION`, `CONFLICT`, ...).                                                                                                                                                |
+| `ClientServiceMethodMap`       | The typed client infers every type from the contracts passed to `createQuickdrawClient(contracts)`.                                                                                                                                                                   |
+| `SubscriptionDataMap`          | The typed client infers every type from the contracts passed to `createQuickdrawClient(contracts)`.                                                                                                                                                                   |
+| `applySnapshot`                | Renamed `applyCollectionSnapshot`; the collection helpers work on `CollectionState`; `liveDataOf(connection, queryClient)` holds the live collections.                                                                                                                |
+| `applyPage`                    | Renamed `applyCollectionPage`; the collection helpers work on `CollectionState`; `liveDataOf(connection, queryClient)` holds the live collections.                                                                                                                    |
+| `applyDelta`                   | Use `applyCollectionDeltas`, which applies a batch; the collection helpers work on `CollectionState`; `liveDataOf(connection, queryClient)` holds the live collections.                                                                                               |
+| `applyDeltas`                  | Use `applyCollectionDeltas`, which applies a batch; the collection helpers work on `CollectionState`; `liveDataOf(connection, queryClient)` holds the live collections.                                                                                               |
+| `createEmptyEntry`             | Use `emptyCollection()`; the collection helpers work on `CollectionState`; `liveDataOf(connection, queryClient)` holds the live collections.                                                                                                                          |
+| `CollectionCacheEntry`         | The collection state is `CollectionState`; the collection helpers work on `CollectionState`; `liveDataOf(connection, queryClient)` holds the live collections.                                                                                                        |
+| `SocketTextField`              | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                                                             |
+| `SocketTextFieldProps`         | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                                                             |
+| `SocketCheckbox`               | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                                                             |
+| `SocketCheckboxProps`          | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                                                             |
+| `SocketSelect`                 | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                                                             |
+| `SocketSelectProps`            | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                                                             |
+| `SocketSlider`                 | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                                                             |
+| `SocketSliderProps`            | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                                                             |
+| `SocketSwitch`                 | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                                                             |
+| `SocketSwitchProps`            | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                                                             |
+| `useSocketInput`               | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                                                             |
+| `UseSocketInputOptions`        | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                                                             |
+| `UseSocketInputResult`         | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                                                             |
+| `CommitMode`                   | The socket inputs were removed: keep your own input components and save with `qd.<service>.<method>.useMutation()` (a mutation with `id` and an `"entity"` output updates the cached row optimistically).                                                             |
 
 ### Names that moved
 
@@ -2199,29 +2279,29 @@ Generated from `@fitzzero/quickdraw-lint`'s `no-v4-api` rule, which reports each
 
 ### Service methods
 
-| 4.x method                       | In 5.0                                                                                                                                                                                                            |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `defineMethod()`                 | Implement methods in `qd.defineService(contract, { methods: { name: { access, handler } } })`.                                                                                                                    |
-| `verifyAllMethods()`             | `qd.defineService` checks at compile time that `methods` implements every method of the contract.                                                                                                                 |
-| `emitUpdate()`                   | Entity frames follow tracked writes: write through `db.<model>`, or record a write the client cannot see with `ctx.touch(model, ids)`.                                                                            |
-| `emitCollectionUpsert()`         | Collection deltas follow tracked writes: write through `db.<model>`, or record a write the client cannot see with `ctx.touch(model, ids)`.                                                                        |
-| `emitCollectionRemove()`         | Collection deltas follow tracked writes: write through `db.<model>`, or record a write the client cannot see with `ctx.touch(model, ids)`.                                                                        |
-| `emitCollectionMove()`           | Collection deltas follow tracked writes: write through `db.<model>`, or record a write the client cannot see with `ctx.touch(model, ids)`.                                                                        |
-| `notifyCollections()`            | Collection deltas follow tracked writes: write through `db.<model>`, or record a write the client cannot see with `ctx.touch(model, ids)`.                                                                        |
-| `emitCollectionReset()`          | Send one scope a reset with `qd.collections.reset(contract, collection, scope)`.                                                                                                                                  |
-| `kickFromCollection()`           | Revocation is automatic: a tracked write that lowers someone's access removes their sockets from the scope and sends `qd:revoked`.                                                                                |
-| `emitToRoom()`                   | Declare the event in the contract's `events` and send it with `ctx.rooms.emit(room, contract, event, payload)`.                                                                                                   |
-| `emitToUserRoom()`               | Send to one user with `ctx.rooms.emitToUser(userId, contract, event, payload)`.                                                                                                                                   |
-| `emitToRoomVolatile()`           | Declare a stream with `volatile: true` in the contract's `streams` and push with `qd.stream(contract, name).push(...)`.                                                                                           |
-| `defineCollection()`             | Declare collections in the contract (`collections: { name: { scope, item, order } }`) and anchor them in `qd.defineService(contract, { collections: { name: { anchor } } })`; their deltas follow tracked writes. |
-| `defineChannel()`                | Declare channels in the contract (`channels: { name: { payload } }`), handle them in `qd.defineService(contract, { channels })`, and send with `qd.<service>.<channel>.useChannel()`.                             |
-| `installAdminMethods()`          | Use the admin kit: `...admin.contract({ entity })` in the contract and `...admin.handlers(contract, options)` in `methods`.                                                                                       |
-| `setDelegate()`                  | Name the service's model in `qd.defineService(contract, { model: "chat" })`; handlers write through `db.<model>`.                                                                                                 |
-| `checkEntryACL()`                | Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `everyone`, `anyOf`, `resolver`) and each method's `access` form.                           |
-| `checkBatchSubscriptionAccess()` | Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `everyone`, `anyOf`, `resolver`) and each method's `access` form.                           |
-| `ensureAccessForMethod()`        | Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `everyone`, `anyOf`, `resolver`) and each method's `access` form.                           |
-| `getProtectedFields()`           | Field tiers are declared in the contract's `fields` (`fields: { notes: "Admin" }`) and stripped per caller.                                                                                                       |
-| `hasElevatedAccess()`            | Field tiers are declared in the contract's `fields` (`fields: { notes: "Admin" }`) and stripped per caller.                                                                                                       |
+| 4.x method                       | In 5.0                                                                                                                                                                                                                                                                |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `defineMethod()`                 | Implement methods in `qd.defineService(contract, { methods: { name: { access, handler } } })`.                                                                                                                                                                        |
+| `verifyAllMethods()`             | `qd.defineService` checks at compile time that `methods` implements every method of the contract.                                                                                                                                                                     |
+| `emitUpdate()`                   | Entity frames follow tracked writes: write through `db.<model>`, or record a write the client cannot see with `ctx.touch(model, ids)`.                                                                                                                                |
+| `emitCollectionUpsert()`         | Collection deltas follow tracked writes: write through `db.<model>`, or record a write the client cannot see with `ctx.touch(model, ids)`.                                                                                                                            |
+| `emitCollectionRemove()`         | Collection deltas follow tracked writes: write through `db.<model>`, or record a write the client cannot see with `ctx.touch(model, ids)`.                                                                                                                            |
+| `emitCollectionMove()`           | Collection deltas follow tracked writes: write through `db.<model>`, or record a write the client cannot see with `ctx.touch(model, ids)`.                                                                                                                            |
+| `notifyCollections()`            | Collection deltas follow tracked writes: write through `db.<model>`, or record a write the client cannot see with `ctx.touch(model, ids)`.                                                                                                                            |
+| `emitCollectionReset()`          | Send one scope a reset with `qd.collections.reset(contract, collection, scope)`.                                                                                                                                                                                      |
+| `kickFromCollection()`           | Revocation is automatic: a tracked write that lowers someone's access removes their sockets from the scope and sends `qd:revoked`.                                                                                                                                    |
+| `emitToRoom()`                   | Declare the event in the contract's `events` and send it with `ctx.rooms.emit(room, contract, event, payload)`.                                                                                                                                                       |
+| `emitToUserRoom()`               | Send to one user with `ctx.rooms.emitToUser(userId, contract, event, payload)`.                                                                                                                                                                                       |
+| `emitToRoomVolatile()`           | Declare a stream with `volatile: true` in the contract's `streams` and push with `qd.stream(contract, name).push(...)`.                                                                                                                                               |
+| `defineCollection()`             | Declare collections in the contract (`collections: { name: { scope, item, order } }`) and anchor them in `qd.defineService(contract, { collections: { name: { anchor } } })`; their deltas follow tracked writes.                                                     |
+| `defineChannel()`                | Declare channels in the contract (`channels: { name: { payload, requires } }`, where `requires` names what the sender must hold, such as `{ room }`), handle them in `qd.defineService(contract, { channels })`, and send with `qd.<service>.<channel>.useChannel()`. |
+| `installAdminMethods()`          | Use the admin kit: `...admin.contract({ entity })` in the contract and `...admin.handlers(contract, options)` in `methods`.                                                                                                                                           |
+| `setDelegate()`                  | Name the service's model in `qd.defineService(contract, { model: "chat" })`; handlers write through `db.<model>`.                                                                                                                                                     |
+| `checkEntryACL()`                | Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `everyone`, `anyOf`, `resolver`) and each method's `access` form.                                                                               |
+| `checkBatchSubscriptionAccess()` | Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `everyone`, `anyOf`, `resolver`) and each method's `access` form.                                                                               |
+| `ensureAccessForMethod()`        | Row access comes from a policy on `qd.defineService(contract, { access })` (`owner`, `jsonAcl`, `members`, `inherit`, `everyone`, `anyOf`, `resolver`) and each method's `access` form.                                                                               |
+| `getProtectedFields()`           | Field tiers are declared in the contract's `fields` (`fields: { notes: "Admin" }`) and stripped per caller.                                                                                                                                                           |
+| `hasElevatedAccess()`            | Field tiers are declared in the contract's `fields` (`fields: { notes: "Admin" }`) and stripped per caller.                                                                                                                                                           |
 
 ### Option keys
 

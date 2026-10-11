@@ -13,7 +13,10 @@
 // (4.1 `src/client/QuickdrawProvider.tsx:297-298`); here the connection is
 // retained by the mounted provider and closed a tick after its last release,
 // so a strict-mode remount keeps the same socket instead of reconnecting.
-// Nothing is cleared on a disconnect: cached data stays. After a reconnect
+// A dropped connection clears nothing: cached data stays. A session the
+// server ends (its disconnect, or a reconnect refused with `UNAUTHENTICATED`
+// or `FORBIDDEN`) is signed out: the hello, the grants and everything
+// quickdraw cached are gone (`session.ts`). After a reconnect
 // with the same credentials, the coordinator refetches only the queries that
 // watch a topic (they missed its changes) or are stale, each after a random
 // delay of up to 2 s by default (`reconnectJitterMs`), where 4.1 invalidated
@@ -86,10 +89,16 @@ export interface QuickdrawStatus {
   readonly isConnected: boolean;
   /**
    * True once the server's hello on the current credentials has arrived:
-   * `userId` is then final, `null` meaning anonymous. False before it, and
-   * again from new credentials (`auth` changed) until their hello; it stays
-   * true while the connection reconnects with the same credentials. Gate on
-   * it, not on `isConnected`, to tell "signed out" from "not known yet".
+   * `userId` is then final, `null` meaning anonymous. False before it, again
+   * from new credentials (`auth` changed) until their hello, and again once
+   * the server ended the session or refused a connect for it (`status`
+   * `"disconnected"`, or `"refused"` after the handshake's error code
+   * `UNAUTHENTICATED` or `FORBIDDEN`): the hello, the grants and everything
+   * quickdraw cached are gone. Another protocol (`refusal.code`
+   * `"PROTOCOL_MISMATCH"`) keeps them. It stays true while the connection
+   * reconnects with the same credentials. Gate on it, not on `isConnected`;
+   * while it is false, a stopped `status` tells "signed out" from "not
+   * known yet".
    */
   readonly isKnown: boolean;
   /**
@@ -102,13 +111,15 @@ export interface QuickdrawStatus {
   readonly hello: HelloFrame | null;
   /**
    * The user the connection acts for, from the server's hello: `null` while
-   * anonymous, and before the hello on the current credentials arrives
-   * (`isKnown` tells the two apart).
+   * anonymous, before the hello on the current credentials arrives, and
+   * once the server ended the session (`isKnown` and `status` tell them
+   * apart).
    */
   readonly userId: string | null;
   /**
    * The user's service grants: from the server's hello, then from each
-   * `qd:access` push; `null` before the hello on the current credentials.
+   * `qd:access` push; `null` before the hello on the current credentials,
+   * and once the server ended the session.
    */
   readonly serviceAccess: Readonly<Record<string, AccessLevel>> | null;
   /** Why the server refused the connection, while `status` is `refused`. */
@@ -230,8 +241,9 @@ export function QuickdrawProvider<Contracts extends ContractMap>(
  * `RATE_LIMITED`.
  *
  * @example
- * const { isKnown, userId } = useQuickdraw();
- * if (!isKnown) return <Spinner />;
+ * const { status, isKnown, userId } = useQuickdraw();
+ * // stopped with nobody known: the server ended or refused the session
+ * if (!isKnown) return status === "disconnected" || status === "refused" ? <SignIn /> : <Spinner />;
  * return userId === null ? <SignIn /> : <App />;
  */
 export function useQuickdraw(): QuickdrawStatus {

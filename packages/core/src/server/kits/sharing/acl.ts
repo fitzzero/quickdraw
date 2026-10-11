@@ -7,8 +7,9 @@
 // subscriptions that lost it. A change:
 //
 // - first reads the caller's own level on the row again, inside the
-//   transaction: `FORBIDDEN` when it no longer meets the method's form, or
-//   when the change would give a level above it (`checks.ts`);
+//   transaction: `FORBIDDEN` when it no longer meets the method's form,
+//   when the change would give a level above it, or when the user's level
+//   in the list is above it (`checks.ts`; equal passes);
 // - never touches the owner's access, which the owner column gives:
 //   `CONFLICT`;
 // - never leaves a row without an Admin it had (no owner column, the last
@@ -17,9 +18,10 @@
 // - refuses a malformed list (`CONFLICT`), leaving it as it is;
 // - writes nothing when the user already has exactly that level.
 //
-// `share` adds the user or replaces their level; `setLevel` and `unshare`
-// need the user in the list (`NOT_FOUND`). Each returns the list as
-// `listShares` does: `[{ userId, level }]`, one entry per user.
+// `share` adds the user or replaces their level, unless it is above the
+// caller's; `setLevel` and `unshare` need the user in the list
+// (`NOT_FOUND`). Each returns the list as `listShares` does:
+// `[{ userId, level }]`, one entry per user.
 //
 // Statements, inside the transaction: the caller's level (the policy's
 // reads; none with a service-wide `Admin` grant), one read of the row, then
@@ -45,7 +47,7 @@ import {
   withLevel,
   type StoredEntry,
 } from "./aclList";
-import { adminElsewhere, capGrant, checkCaller } from "./checks";
+import { adminElsewhere, capGrant, capTarget, checkCaller } from "./checks";
 import { resolveTarget, type HandlerContext } from "./context";
 import { aclColumnsOf } from "./policy";
 import { inSerializable, notifyChange, sharingCall, tableOf, type SharingCall } from "./runtime";
@@ -141,15 +143,17 @@ async function changeList(
 ): Promise<ACE[]> {
   const columns = aclColumnsOf(call.runtime.service);
   return await inSerializable(call.db, async (tx) => {
-    capGrant(await checkCaller(call, context.form, change.id), change.level, call.model);
+    const own = await checkCaller(call, context.form, change.id);
+    capGrant(own, change.level, call.model);
     const table = tableOf(tx, call.model);
     const listed = await readList(table, columns, change.id, call.model);
     const problem = refusal(listed, change, call.model);
     if (problem !== undefined) {
       throw problem;
     }
-    await checkLastAdmin(call, tx, listed, change);
     const before = levelIn(listed.entries, change.userId);
+    capTarget(own, before, call.model);
+    await checkLastAdmin(call, tx, listed, change);
     if (before === change.level && entriesOf(listed.entries, change.userId) === 1) {
       return sharesOf(listed.entries);
     }

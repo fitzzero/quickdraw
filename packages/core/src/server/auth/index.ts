@@ -53,6 +53,7 @@ export type {
   AuthRoutes,
   AuthRoutesOptions,
 } from "./routes/types";
+export { bearerAuth, type BearerAuthenticate, type BearerAuthOptions } from "./routes/bearerAuth";
 export {
   cookieOriginAllowed,
   socketAuth,

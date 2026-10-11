@@ -6,10 +6,12 @@
 // and per service, so a flush computes only the topics someone here watches,
 // and finds the watches an access change can concern by the rows a scope's
 // access is derived from (its anchors), as `collections/scopes.ts` does.
-// Rooms stay the source of truth for who receives `qd:changed`.
+// Rooms stay the source of truth for who receives `qd:changed`: a watch still
+// settling its races is recorded but out of the room (`hold`, then `join`).
 
 import { SERVICE_TOPIC, topicRoom } from "../contract/names";
-import { MAX_SCOPE_LENGTH } from "../protocol/version";
+import { QuickdrawError } from "../protocol/errors";
+import { MAX_SCOPE_LENGTH, MAX_TOPICS_PER_SOCKET } from "../protocol/version";
 import type { AccessChange } from "./access/changes";
 import { anchorKey } from "./access/tools";
 import { PendingKeys } from "./emit/pending";
@@ -88,6 +90,10 @@ export class TopicIndex {
   readonly #pending = new PendingKeys();
   readonly #byAnchor = new Map<string, Counts>();
   readonly #byAnchorService = new Map<string, Counts>();
+  /** Per socket, the rooms of watches recorded by `hold` and not joined yet. */
+  readonly #held = new WeakMap<QuickdrawServerSocket, Set<string>>();
+  /** Per socket, how many topics it watches: counted, so checking the cap copies no keys. */
+  readonly #sizes = new WeakMap<QuickdrawServerSocket, number>();
 
   #index(socket: QuickdrawServerSocket, watch: TopicWatch, by: 1 | -1): void {
     for (const anchor of watch.anchors ?? []) {
@@ -121,19 +127,57 @@ export class TopicIndex {
     }
   }
 
-  /** Records a watch and puts the socket in the topic's room; watching a topic again records its anchors anew. */
-  watch(socket: QuickdrawServerSocket, watch: TopicWatch): void {
-    const room = topicRoom(watch.s, watch.topic);
+  #record(socket: QuickdrawServerSocket, room: string, watch: TopicWatch): void {
     const watches = (socket.data.topics ??= emptyRecords());
     const previous = ownRecord(watches, room);
     watches[room] = watch;
     this.#index(socket, watch, 1);
     if (previous === undefined) {
       this.#count(watch, 1);
+      this.#sizes.set(socket, this.size(socket) + 1);
     } else {
       this.#index(socket, previous, -1);
     }
-    void socket.join(room);
+  }
+
+  /**
+   * Records a watch and puts the socket in the topic's room; watching a
+   * topic again records its anchors anew. One `hold` recorded stays out of
+   * the room until `join`.
+   */
+  watch(socket: QuickdrawServerSocket, watch: TopicWatch): void {
+    const room = topicRoom(watch.s, watch.topic);
+    this.#record(socket, room, watch);
+    if (this.#held.get(socket)?.has(room) !== true) {
+      void socket.join(room);
+    }
+  }
+
+  /**
+   * Records a watch still settling its races: revocation finds it, but the
+   * socket is not put in the topic's room (it stays there if an earlier
+   * watch put it there) until `join`.
+   */
+  hold(socket: QuickdrawServerSocket, watch: TopicWatch): void {
+    const room = topicRoom(watch.s, watch.topic);
+    this.#record(socket, room, watch);
+    const held = this.#held.get(socket) ?? new Set<string>();
+    held.add(room);
+    this.#held.set(socket, held);
+  }
+
+  /**
+   * Puts the socket in the room of a watch `hold` recorded: the watch, or
+   * `undefined` when nothing (an unwatch, a revocation or a disconnect ended
+   * it), and the socket stays out.
+   */
+  join(socket: QuickdrawServerSocket, room: string): TopicWatch | undefined {
+    this.#held.get(socket)?.delete(room);
+    const watch = this.get(socket, room);
+    if (watch !== undefined) {
+      void socket.join(room);
+    }
+    return watch;
   }
 
   /** The socket's watch of a topic, by room, or `undefined`. */
@@ -146,15 +190,36 @@ export class TopicIndex {
     return Object.values(socket.data.topics ?? {});
   }
 
+  /** How many topics the socket watches, a watch still settling included. */
+  size(socket: QuickdrawServerSocket): number {
+    return this.#sizes.get(socket) ?? 0;
+  }
+
+  /**
+   * `CONFLICT` when the socket watches `MAX_TOPICS_PER_SOCKET` topics and
+   * `room` is not one of them (the 5.1 audit's COLL-4): a topic watched
+   * already never counts again.
+   */
+  checkRoom(socket: QuickdrawServerSocket, room: string): void {
+    if (this.get(socket, room) === undefined && this.size(socket) >= MAX_TOPICS_PER_SOCKET) {
+      throw new QuickdrawError(
+        "CONFLICT",
+        `A socket may watch at most ${MAX_TOPICS_PER_SOCKET} change topics; unwatch one first`,
+      );
+    }
+  }
+
   /** Ends a watch the socket may no longer hold: it leaves the topic's room. */
   leave(socket: QuickdrawServerSocket, room: string): void {
     const watches = socket.data.topics;
     const watch = ownRecord(watches, room);
     if (watches !== undefined && watch !== undefined) {
       delete watches[room];
+      this.#sizes.set(socket, this.size(socket) - 1);
       this.#count(watch, -1);
       this.#index(socket, watch, -1);
     }
+    this.#held.get(socket)?.delete(room);
     void socket.leave(room);
   }
 
@@ -186,6 +251,8 @@ export class TopicIndex {
       this.#index(socket, watch, -1);
     }
     socket.data.topics = emptyRecords();
+    this.#held.delete(socket);
+    this.#sizes.delete(socket);
   }
 
   /**

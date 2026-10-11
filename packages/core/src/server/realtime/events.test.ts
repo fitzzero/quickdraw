@@ -77,6 +77,17 @@ describe("ctx.rooms.emit", () => {
     expect(seen).toEqual([[event], [event], []]);
   });
 
+  it("refuses a user's room: only emitToUser sends to a user (RT-I1)", async () => {
+    const app = await start();
+    const ada = await app.connect(as(board.ada));
+    const seen = frames(ada, "qd:event");
+    expect(() => {
+      app.server.rooms.emit(`user:${board.ada}`, liveContract, "celebrated", { taskId: board.t1 });
+    }).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+    await settle(ada);
+    expect(seen).toEqual([]);
+  });
+
   it("fails the call with INTERNAL, sending nothing, when the payload fails the event's schema", async () => {
     const app = await start();
     const ada = await app.connect(as(board.ada));
@@ -134,6 +145,15 @@ describe("the event checks", () => {
     expect(sent).toEqual([]);
   });
 
+  it("refuse the framework's rooms: a user's sockets are reached through emitToUser (RT-I1)", () => {
+    for (const room of ["user:u1", "qd:e:taskService:t1@Read"]) {
+      expect(() => {
+        loose.emit(room, liveContract, "celebrated", { taskId: "t1" });
+      }).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+    }
+    expect(sent).toEqual([]);
+  });
+
   it("send the validated payload, as one qd:event frame: keys the schema does not name are stripped", () => {
     const extra = { taskId: "t1", secret: "not in the schema" } as { taskId: string };
     events.emit("lobby", liveContract, "celebrated", extra);
@@ -141,6 +161,14 @@ describe("the event checks", () => {
     expect(sent).toEqual([
       ["lobby", "qd:event", ["taskService", "celebrated", { taskId: "t1" }]],
       ["user:u1", "qd:event", ["taskService", "celebrated", { taskId: "t2" }]],
+    ]);
+  });
+
+  it("send to a room with the shape of a socket id: an event sent to one socket grants nothing", () => {
+    sent.splice(0);
+    events.emit("abcdefghij0123456789", liveContract, "celebrated", { taskId: "t3" });
+    expect(sent).toEqual([
+      ["abcdefghij0123456789", "qd:event", ["taskService", "celebrated", { taskId: "t3" }]],
     ]);
   });
 

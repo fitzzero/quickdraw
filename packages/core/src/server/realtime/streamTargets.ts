@@ -83,8 +83,9 @@ export function streamTarget(hub: Hub, value: unknown, event: string): StreamTar
 /**
  * Whether `socket` is in the app room a stream's `access: { room }` names for
  * `scope`: one its own calls joined (`socket.data.appRooms`, which has no
- * prototype), the named one, any with the prefix, or the one computed from
- * the scope.
+ * prototype), the named one or any with the prefix (global streams only:
+ * `defineContract` refuses both on a scoped stream), or the one computed
+ * from the scope.
  */
 export function inStreamRoom(
   socket: QuickdrawServerSocket,

@@ -49,7 +49,8 @@ export const task = defineContract("taskService", {
 - Methods, collections, streams, channels and events share one namespace
   (`qd.<service>.<name>` on the client). `subscribe`, `unsubscribe`, `call`,
   `then`, `useEntity`, `useEntities`, `admin` and `$`-names are reserved.
-  A contract without `entity` is an RPC-only service.
+  A contract without `entity` is an RPC-only service. A service name holds
+  no `:` or `@` (it is part of every room name of the service).
 
 ## The service implements it
 
@@ -82,6 +83,16 @@ export const taskService = qd.defineService(task, {
   quickdraw-access.md), `timeoutMs`, and for queries `share` (`"caller"` or
   `"all"`), `ttlMs` and `version`. A service takes `kinds` too: the kinds of
   principal its methods and subscriptions admit.
+- `share: "all"` runs one handler for every caller, with the first caller's
+  `ctx`, and gives every caller its result: use it only for a result that
+  depends on the input alone. Its handler reads nothing of the caller
+  (`ctx.principal`, `ctx.services`, `ctx.mcp`, or a context field made from
+  them); in development a read of one of the first three warns
+  `[quickdraw:shared-principal]`. It is refused with `custom` access and on
+  the kit methods whose result depends on the caller (the read/write kit's
+  `list` and `getMany`, `search`, the sharing kit's `listShares` and
+  `listMembers`, the admin kit's `adminList` and `adminGet`): give those
+  `share: "caller"`.
 - A handler receives `{ input, ctx, db }`: the parsed input, the context
   (`principal`, `signal`, `log`, `requestId`, `transport`, `touch`, `rooms`,
   `presence`, `mcp`, `services`) and the tracked client.
@@ -135,6 +146,22 @@ principal that carries `serviceAccess` keeps exactly those grants. Never
 read `req.userId` through a cast, and never build a principal with grants
 by hand to get past a check.
 
+Authentication goes through the auth routes kit's helpers, which check the
+session store on every call, so a signed-out or revoked session stops at
+once:
+
+- `socketAuth(...)` is `createServer`'s `authenticate`: the session cookie
+  from an allowed page (the Origin rule), or a bearer token.
+- `requireSession(keys)` guards the app's own REST routes.
+- `bearerAuth(...)` is for a hook handed a bearer token alone: the MCP
+  bridge's `principal`, an `authenticate` that reads `auth.token`.
+- Never `verifyJWT` alone: it checks the signature and expiry, not the
+  session store.
+- A custom `authenticate` takes the session cookie only from
+  `request.sessionCookie` (HTTP), after `cookieOriginAllowed(request,
+allowedOrigins)`, and checks it with `liveSession`; `auth.token` holds
+  only a bearer token for it.
+
 ## Writes are tracked; frames are derived
 
 Entity frames, collection deltas and change topics are computed from the
@@ -169,9 +196,12 @@ in `id`), and optionally `where`, `limit`, `maxLimit`, `index` (small fields
 sent for the whole scope), `views` (`(row, who) => boolean` over index rows)
 and `access`. The service says who may open a scope: `{ anchor: project }`
 (the level on the row the scope value names) or `{ scopeAccess: "self" }`
-(the subscriber's own user id). Everyone in a scope sees every item, so
-derive the item service's access from the anchor (`inherit`). An item that
-reads its `via` junction (a member count) declares
+(the subscriber's own user id). Everyone in an anchored scope sees every
+item, so derive the item service's access from the anchor (`inherit`); a
+self scope's items follow the item service's policy, so its user gets only
+the rows they may read. A `via` scope over the item service's own `members`
+table counts only links whose role gives at least the collection's
+`access`. An item that reads its `via` junction (a member count) declares
 `via({ model, entry, scope, refreshEntry: true })`, or the count goes stale
 in every scope but the one a membership write links.
 
@@ -201,10 +231,17 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   `admin.contract` too, so the input schemas and MCP tools name only those):
   every other field is read-only, and a write naming one is `VALIDATION`.
   Without it the kit writes every field it shows but `id` and the
-  timestamps, owner and foreign-key columns included.
+  timestamps, owner and foreign-key columns included. No kit ever writes a
+  relation field or a nested write (`{ connect }`, `{ update }`): either is
+  `VALIDATION`, whoever the caller, and `adminMeta` shows a relation field
+  (one a projection selects with a nested select) as read-only.
   On a users service, `admin.handlers(user, { grants: true })` lets the admin
-  screen edit `serviceAccess` through `adminUpdate` (service-wide Admins
-  only); never hand-write a `setServiceAccess` method for it. `adminMeta`
+  screen edit `serviceAccess` (or the column `auth.serviceAccessSource`
+  names, whatever its name) through `adminUpdate` (service-wide Admins
+  only); never hand-write a `setServiceAccess` method for it. A dispatcher
+  made without `createServer` (HTTP only, an MCP process) names that column
+  as `createDispatcher({ serviceAccessSource })`. Without
+  `grants: true` the kit hides that column. `adminMeta`
   marks that field `kind: "grants"`; an app with a grants editor of its own
   keeps it out of the generic form with
   `fieldOverrides: { serviceAccess: { showInForm: false } }`. What an admin
@@ -223,9 +260,12 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   `streams: { world: { seed: (worldId, ctx) => [snapshotOf(worldId)] } }`,
   never a bootstrap call beside the stream; `validate: "development"` there
   skips the per-item schema check in production for a hot stream. A feed
-  only a room's sockets may read takes `access: { room }` (a name,
-  `{ prefix }`, or `(scope) => room`), never an entry policy that repeats
-  the room's membership.
+  only a room's sockets may read takes `access: { room }`, never an entry
+  policy that repeats the room's membership: a scoped stream computes the
+  room from its scope, ``{ room: (worldId) => `world:${worldId}` }``, and
+  only a global stream names it or takes `{ prefix }` (on a scoped stream
+  those would let a socket in one world read every world, so
+  `defineContract` refuses them).
 - A query over a model the service only `writes` (no service owns it)
   declares `watch: { service: ["gameScore"] }`, naming the models it reads
   (the service's `model` and its `writes`), with `watchAccess` on the
@@ -241,19 +281,33 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   computes it, `{ room: { prefix: "world:" } }` takes any room with that
   prefix. The handler reads the matched room as `ctx.room`; never repeat a
   world's id in every input frame. 4.x's `requireRoom` becomes `{ room }`.
+  Give every channel a `requires`: without one any signed-in user may send
+  it, about any room its payload names, and the server warns
+  `channel-without-requires`. A handler that relays a message emits to
+  `ctx.room`, never to a room built from the payload. Only when any
+  signed-in user may send it, say so on the service:
+  `channels: { ping: { access: "authenticated", handler } }`.
 - A game loop asks `qd.rooms.size(room)` (this node's sockets, spectators
   included, synchronous) at its tick rate, never Socket.IO's adapter;
   `ctx.socketId` names the calling socket in a method.
 - Events: `events: { moved: { payload } }`, sent with
   `ctx.rooms.emit(room, task, "moved", payload)` to an app room
-  (`ctx.rooms.join(room)` in a method puts the caller's socket in one).
+  (`ctx.rooms.join(room)` in a method puts the caller's socket in one), and
+  to a user's sockets with `ctx.rooms.emitToUser(userId, ...)`, never
+  `emit("user:...")` (refused, as are `qd:` rooms). Name app rooms with a
+  prefix (`doc:${id}`), never a bare 20-character id: a name with the shape
+  of a Socket.IO socket id is refused.
   Code that is not a handler (a game loop, a timer, a job) sends with
   `qd.rooms.emit(room, task, "moved", payload)`; never keep the `io` server
   to emit by hand.
 - When a user loses the right to a room (removed from a chat, kicked from a
   game), `await ctx.rooms.leave(room, { userId })` (or `qd.rooms.leave`)
   takes all their sockets out on every node, before anything they must not
-  hear is sent. 4.x's "emit to the user instead of the room" workaround is
+  hear is sent; a sharing kit's `onChange` does it for a user a change left
+  below the room's join check (`change.after === null`, or with custom
+  `members` `levels`, a role below that level too), inside the change's
+  transaction (a join racing the commit can put them back until they
+  disconnect). 4.x's "emit to the user instead of the room" workaround is
   not needed.
 - React to a socket leaving with the service's own `onRoomLeave`
   (`defineService(game, { onRoomLeave })`, beside `methods`), never with
@@ -283,9 +337,11 @@ matches no row or has nothing to write (`data: {}`) signals nothing; every
 other write signals, one that sets a column to the value it already holds
 too, so re-ensure a row with that upsert rather than by writing its values
 again.
-`share: "caller"` for hot queries;
-`versionColumn: "updatedAt"` answers "not modified" cheaply. The quickdraw
-lint rules enforce most of this file (`no-untracked-write`,
+`share: "caller"` for hot queries (`"all"` only for a result that depends
+on the input alone); `versionColumn: "updatedAt"` answers "not modified"
+cheaply, for a query whose form checked the row its `id` names (an `entry`
+form on `id`), or that says `rowless: true` under a form that checks no
+row. The quickdraw lint rules enforce most of this file (`no-untracked-write`,
 `no-foreign-write`, `no-nested-write`, `no-raw-sql-write`, `no-manual-emit`,
 `no-unbounded-read`, `no-db-call-in-loop`, `no-load-then-filter`,
 `prefer-kit`): fix the code, not the rule. In development the server also

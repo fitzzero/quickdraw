@@ -7,14 +7,18 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { defineContract, query, via, type AnyContract } from "../../index";
 import {
+  anyOf,
   createDispatcher,
   inherit,
   initQuickdraw,
+  members,
   owner,
+  resolver,
   type AnyService,
   type StorageAdapter,
 } from "../index";
 import { createInterestRegistry } from "../storage";
+import { linkQualifies, linkWhere, type ViaCollectionScope } from "./define";
 
 const qd = initQuickdraw();
 
@@ -150,6 +154,98 @@ describe("a service's collections option", () => {
       scope: { kind: "via", model: "TaskLabel", entry: "taskId", scope: "labelId" },
       anchor: undefined,
       bulkThreshold: 200,
+    });
+  });
+});
+
+describe("a via scope over the item service's members table", () => {
+  const labelRead = { model: "TaskLabel", entry: "taskId", user: "labelId", level: "role" };
+
+  /** The compiled `byLabel` scope of the task service under `access`. */
+  function byLabel(access: unknown): ViaCollectionScope {
+    return defineLoosely({ access, collections: anchored }).collections.get("byLabel")
+      ?.scope as ViaCollectionScope;
+  }
+
+  it("counts the links whose role gives the collection's access, from members alone or in anyOf", () => {
+    const counted = [{ column: "role", roles: ["Read", "Moderate", "Admin"] }];
+    expect(byLabel(members(labelRead)).levels).toEqual(counted);
+    const nested = anyOf(
+      inherit({ from: projectContract, via: "projectId" }),
+      anyOf(members({ ...labelRead, model: "taskLabel" })),
+    );
+    expect(byLabel(nested).levels).toEqual(counted);
+  });
+
+  it("reads a levels map, and counts no link when no role reaches the access", () => {
+    const mapped = members({
+      ...labelRead,
+      levels: { guest: "Public", member: "Read", lead: "Admin" },
+    });
+    expect(byLabel(mapped).levels).toEqual([{ column: "role", roles: ["member", "lead"] }]);
+    const guests = members({ ...labelRead, levels: { guest: "Public" } });
+    expect(byLabel(guests).levels).toEqual([{ column: "role", roles: [] }]);
+  });
+
+  it("has no rule for a resolver's memberships, or for a members read keyed differently", () => {
+    const declared = resolver({
+      levelsFor: () => Promise.resolve(new Map()),
+      reads: { memberships: [labelRead] },
+    });
+    expect(byLabel(declared).levels).toBeUndefined();
+    expect(
+      byLabel(members({ ...labelRead, entry: "labelId", user: "taskId" })).levels,
+    ).toBeUndefined();
+  });
+
+  it("takes every members read of the table: one rule per role column, a link any rule counts counts", () => {
+    const two = anyOf(
+      members({ ...labelRead, levels: { member: "Read" } }),
+      members({ ...labelRead, levels: { lead: "Admin" } }),
+      members({ ...labelRead, level: "guestRole" }),
+    );
+    const scope = byLabel(two);
+    expect(scope.levels).toEqual([
+      { column: "role", roles: ["member", "lead"] },
+      { column: "guestRole", roles: ["Read", "Moderate", "Admin"] },
+    ]);
+    expect(linkWhere(scope, { taskId: "t1" })).toEqual({
+      AND: [
+        { taskId: "t1" },
+        {
+          OR: [
+            { role: { in: ["member", "lead"] } },
+            { guestRole: { in: ["Read", "Moderate", "Admin"] } },
+          ],
+        },
+      ],
+    });
+    expect(linkQualifies(scope, { role: "guest", guestRole: "Read" })).toBe(true);
+    expect(linkQualifies(scope, { role: "guest", guestRole: "Public" })).toBe(false);
+    expect(linkQualifies(scope, { role: "guest" })).toBeUndefined();
+    expect(linkQualifies(scope, { role: "lead" })).toBe(true);
+  });
+
+  it("counts from the collection's own access: an anchored list at Moderate", () => {
+    const contract = defineContract("taskService", {
+      entity: z.object({ id: z.string(), projectId: z.string() }),
+      collections: {
+        leads: {
+          scope: via({ model: "TaskLabel", entry: "taskId", scope: "labelId" }),
+          item: "entity",
+          order: [["id", "asc"]],
+          access: "Moderate",
+        },
+      },
+    });
+    const service = qd.defineService(contract, {
+      model: "task",
+      access: members(labelRead),
+      collections: { leads: { anchor: projectContract } },
+      methods: {},
+    });
+    expect(service.collections.get("leads")?.scope).toMatchObject({
+      levels: [{ column: "role", roles: ["Moderate", "Admin"] }],
     });
   });
 });

@@ -268,6 +268,27 @@ describe("a scope collection ordered by a tiered column", () => {
       .taskService.search({ q: "Task", scope: board.p1, limit: 1 });
     expect(idsOf(owner)).toEqual([board.t1]);
   });
+
+  it("orders an unscoped search by id, so its cursor carries no tiered column (CRUD-4)", async () => {
+    const board = kit.board();
+    const prisma = kit.harness().prisma;
+    await prisma.task.update({ where: { id: board.t1 }, data: { title: "Task one" } });
+    const two = await prisma.task.create({ data: { projectId: board.p1, title: "Task two" } });
+    // By notes the row with the higher id would come first; by id, the lower one does.
+    const [low = "", high = ""] = [board.t1, two.id].sort();
+    await prisma.task.update({ where: { id: high }, data: { notes: "AAA secret" } });
+    await prisma.task.update({ where: { id: low }, data: { notes: "BBB secret" } });
+    const app = await createTestApp({
+      services: [projectService, define(ordered("Admin"))],
+      db: kit.harness().db,
+    });
+    kit.track(app as unknown as TestApp);
+    const page = await app.as(as(board.cy)).taskService.search({ q: "Task", limit: 1 });
+    expect(Buffer.from(page.nextCursor ?? "", "base64url").toString("utf8")).not.toContain(
+      "secret",
+    );
+    expect(idsOf(page)).toEqual([low]);
+  });
 });
 
 describe("paging", () => {
@@ -315,8 +336,9 @@ describe("paging", () => {
         { ordinal: "first", id: board.t1 },
       ),
     ];
+    // In the scope collection's order: an id-only cursor is another order's.
     for (const cursor of crafted) {
-      await expect(owner.search({ q: "bulk", cursor })).rejects.toMatchObject({
+      await expect(owner.search({ q: "bulk", scope: board.p1, cursor })).rejects.toMatchObject({
         code: "VALIDATION",
       });
     }
@@ -430,7 +452,7 @@ describe("strategies", () => {
       log: consoleLogger,
       requestId: "r1",
       transport: "internal",
-      kit: { service, access, storage: kit.harness().storage },
+      kit: { service, services: new Map(), access, storage: kit.harness().storage },
     });
     const db = { task: { findMany } };
     await expect(

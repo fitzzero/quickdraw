@@ -19,10 +19,11 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { defineContract, via } from "../../src/index";
 import { qd } from "../../src/server/emit/__tests__/live";
+import { inherit } from "../../src/server/index";
 import { storageOf } from "../../src/server/storage";
 import { emitWithAck, expectBudget } from "../../src/testing/index";
 import { inCluster } from "../cluster/mode";
-import { as, e2eApp } from "../fixtures/app";
+import { as, e2eApp, projectContract } from "../fixtures/app";
 
 const e2e = e2eApp();
 
@@ -65,6 +66,26 @@ const myProjectsService = qd.defineService(myProjectsContract, {
       }),
     },
   },
+  methods: {},
+});
+
+/**
+ * The tasks assigned to each user, on a task service with a policy: a self
+ * scope whose items follow that policy, so each flush checks the rows it
+ * sends there for the scope's user (COLL-1).
+ */
+const assignedContract = defineContract("assignedService", {
+  entity: z.object({ id: z.string(), title: z.string(), assigneeId: z.string().nullable() }),
+  methods: {},
+  collections: {
+    assigned: { scope: "assigneeId", item: "entity", order: [["id", "asc"]] },
+  },
+});
+
+const assignedService = qd.defineService(assignedContract, {
+  model: "task",
+  access: inherit({ from: projectContract, via: "projectId" }),
+  collections: { assigned: { scopeAccess: "self" } },
   methods: {},
 });
 
@@ -216,6 +237,31 @@ describe("the fixture app's budgets", () => {
         .map(({ event }) => event)
         .sort(),
     ).toEqual(["qd:c", "qd:changed", "qd:e"]);
+  });
+
+  it.skipIf(inCluster())("checks a self scope's rows on a flush", async () => {
+    const { app, write } = await start({ services: [assignedService] });
+    const board = e2e.board();
+    await e2e.prisma().task.update({ where: { id: board.t1 }, data: { assigneeId: board.bo } });
+    const { socket } = await app.connect(as(board.bo));
+    expect(
+      await emitWithAck(socket, "qd:col:sub", {
+        s: "assignedService",
+        c: "assigned",
+        scope: board.bo,
+      }),
+    ).toMatchObject({ ok: true, items: [{ id: board.t1 }] });
+    app.frames.clear();
+    await expectBudget(async () => {
+      await write((db) => db.task.update({ where: { id: board.t1 }, data: { title: "Renamed" } }));
+      await app.frames.waitFor({ event: "qd:c", userId: board.bo });
+    }, step("one update in a self scope"));
+    expect(app.frames({ event: "qd:c" }).map(({ data }) => data)).toEqual([
+      expect.objectContaining({
+        c: "assigned",
+        deltas: [{ t: "patched", id: board.t1, d: { title: "Renamed" } }],
+      }),
+    ]);
   });
 
   it("lists a page of tasks with the read/write kit", async () => {

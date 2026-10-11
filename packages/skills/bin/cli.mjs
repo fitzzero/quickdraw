@@ -25,6 +25,13 @@
 // or `.claude/<kind>` is a symlink, or resolves outside the repo, that kind is
 // left alone with a warning, since relative links written through it would
 // land elsewhere (a shared or global directory) and resolve against it.
+//
+// The repo is the project that installs this package: the nearest directory
+// above the working directory with a `package.json` and
+// `node_modules/@fitzzero/quickdraw-skills`, whatever `.git` is around it (the
+// 5.1 audit's CLIENT-7: run by a consumer's `prepare` inside a dotfiles repo
+// in the home directory, it linked into `~/.claude`). It never links into the
+// home directory itself, whose `.claude` holds every project's settings.
 
 import {
   existsSync,
@@ -36,6 +43,7 @@ import {
   rmSync,
   symlinkSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -45,8 +53,10 @@ const PACKAGE = "@fitzzero/quickdraw-skills";
 const USAGE = `Usage: quickdraw-skills link [--check]
 
   link            link this package's rules into .claude/rules and its skills
-                  into .claude/skills of the repo around the working directory,
-                  and prune links to rules or skills it no longer ships
+                  into .claude/skills of the project that installs the package
+                  (the nearest package.json above the working directory with
+                  node_modules/@fitzzero/quickdraw-skills), and prune links to
+                  rules or skills it no longer ships
   link --check    change nothing; exit 1 when a link is missing, stale or dangling
 `;
 
@@ -65,22 +75,33 @@ function fail(message) {
   process.exit(1);
 }
 
-/** The nearest directory above `start` that holds `.git`, else the nearest that holds `package.json`. */
-function findRepoRoot(start) {
-  for (const marker of [".git", "package.json"]) {
-    let dir = start;
-    for (;;) {
-      if (existsSync(join(dir, marker))) {
-        return dir;
-      }
-      const parent = dirname(dir);
-      if (parent === dir) {
-        break;
-      }
-      dir = parent;
+/**
+ * The nearest directory from `start` up that has a `package.json` and
+ * installs this package (`node_modules/@fitzzero/quickdraw-skills/package.json`):
+ * the project whose install runs the link. A `.git` around it plays no part.
+ */
+function findProjectRoot(start) {
+  const installed = join("node_modules", ...PACKAGE.split("/"), "package.json");
+  let dir = start;
+  for (;;) {
+    if (existsSync(join(dir, "package.json")) && existsSync(join(dir, installed))) {
+      return dir;
     }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      return undefined;
+    }
+    dir = parent;
   }
-  return undefined;
+}
+
+/** True when `dir` is the home directory, through any symlink. */
+function isHome(dir) {
+  try {
+    return realpathSync(dir) === realpathSync(homedir());
+  } catch {
+    return false;
+  }
 }
 
 function isSymlink(path) {
@@ -125,17 +146,23 @@ const { check } = parseArgs(process.argv.slice(2));
 // This package's own directory, through any install symlink (bun and pnpm may
 // install it as a link into their store).
 const packageDir = realpathSync(dirname(dirname(fileURLToPath(import.meta.url))));
-const repoRoot = findRepoRoot(process.cwd());
+const repoRoot = findProjectRoot(process.cwd());
 if (repoRoot === undefined) {
-  fail("found no repo root (a .git or package.json) above the working directory");
+  fail(`found no package.json above the working directory that installs ${PACKAGE}`);
+}
+if (isHome(repoRoot)) {
+  fail(
+    "refusing to link into the home directory (~/.claude holds every project's settings): run quickdraw-skills link from the app's repo",
+  );
 }
 
 /**
  * What one kind links: its entries, where the links go, and the directory
- * they point into. Links prefer the stable `node_modules/@fitzzero/quickdraw-skills`
- * path, so committed links never embed a package store's hashed path; without
- * it (the package not installed at the repo root) they point at the package
- * where it is.
+ * they point into. Links name the project's stable
+ * `node_modules/@fitzzero/quickdraw-skills` path, which the project root
+ * always installs, so committed links never embed a package store's hashed
+ * path; only an installed copy that lacks this kind's directory (a broken
+ * install) makes them point at the package that runs.
  */
 function planKind(kind) {
   const sourceDir = join(packageDir, kind.name);

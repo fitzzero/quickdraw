@@ -10,7 +10,7 @@ import { z } from "zod";
 import { defineContract, httpStatus, mutation, query, toWire } from "../../../index";
 import { captureLogger, db, type AppPrincipal } from "../../__tests__/fixtures";
 import { initQuickdraw } from "../../init";
-import { verifyJWT } from "../jwt";
+import { readVerifiedJWT } from "../jwt";
 import { APP_ORIGIN, authHarness, get, post, SECRET, signIn, userIdOf } from "./__tests__/harness";
 import {
   requireSession,
@@ -25,7 +25,7 @@ import type * as tokens from "./tokens";
 // Counts the JWT verifications: requireSession makes one per request.
 vi.mock("../jwt", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../jwt")>();
-  return { ...actual, verifyJWT: vi.fn(actual.verifyJWT) };
+  return { ...actual, readVerifiedJWT: vi.fn(actual.readVerifiedJWT) };
 });
 
 const harness = authHarness();
@@ -72,6 +72,21 @@ describe("requireSession", () => {
     expect((await get(`${booted.url}/api/me`)).status).toBe(401);
   });
 
+  it("reads __Host-session first: a planted session never stands in for it (AUTH-2a)", async () => {
+    let keys: tokens.SessionKeys | undefined;
+    const booted = await harness.boot({}, () =>
+      appWith(() => keys ?? { sessions: createMemorySessionStore(), jwtSecret: SECRET }),
+    );
+    keys = { sessions: booted.sessions, jwtSecret: SECRET };
+    const victim = (await signIn(booted.url, "ada@demo.local")).session.slice("session=".length);
+    const attacker = (await signIn(booted.url, "bob@demo.local")).session.slice("session=".length);
+    const response = await get(
+      `${booted.url}/api/me`,
+      `__Host-session=${victim}; session=${attacker}`,
+    );
+    expect(await response.json()).toMatchObject({ userId: userIdOf("ada@demo.local") });
+  });
+
   it("verifies the JWT once per request, and reads the store once", async () => {
     let keys: tokens.SessionKeys | undefined;
     const booted = await harness.boot({}, () =>
@@ -80,9 +95,9 @@ describe("requireSession", () => {
     keys = { sessions: booted.sessions, jwtSecret: SECRET };
     const { session } = await signIn(booted.url, "bob@demo.local");
     const reads = vi.spyOn(booted.sessions, "get");
-    vi.mocked(verifyJWT).mockClear();
+    vi.mocked(readVerifiedJWT).mockClear();
     expect((await get(`${booted.url}/api/me`, session)).status).toBe(200);
-    expect(vi.mocked(verifyJWT)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(readVerifiedJWT)).toHaveBeenCalledTimes(1);
     expect(reads).toHaveBeenCalledTimes(1);
   });
 

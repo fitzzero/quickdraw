@@ -7,7 +7,8 @@
 // A query that declares `version(input, ctx)` answers for itself. For every
 // other query the dispatcher asks its `versions` option, which the entity
 // subscriptions card implements for queries whose output is one projection
-// row (from the service's `versionColumn` or the in-process change log).
+// row (from the service's `versionColumn` or the in-process change log),
+// when the method's access form checked that row (`emit/versions.ts`).
 
 import type { Version } from "../../protocol/envelope";
 import type { AnyContext } from "../context";
@@ -30,6 +31,12 @@ export interface VersionRequest {
  * checked, for queries that declare no `version` of their own. It must take
  * the version before any row is read, so a reply is never older than the
  * version it claims.
+ *
+ * A version is a one-bit oracle: "not modified" comes before the handler
+ * runs, and tells the caller that what the version stands for exists and
+ * has not changed. Answer only for rows the method's access form let the
+ * caller read; the default answers for an `entry` form on `id`, a `rowless`
+ * method and a caller the service's `Admin` bypass passes.
  */
 export interface VersionSource {
   versionOf(request: VersionRequest): MaybePromise<Version | undefined>;

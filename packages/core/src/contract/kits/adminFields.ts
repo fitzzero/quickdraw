@@ -76,9 +76,11 @@ export interface AdminFieldConfig {
   readonly relationService?: string;
   /**
    * What the field holds, when the kit knows it: `"grants"` for a user's
-   * service-wide grants (`serviceAccess`), which `admin.handlers(contract,
-   * { grants: true })` shows. An admin screen with a grants editor of its own
-   * finds that field by it, never by its name. Absent for any other field.
+   * service-wide grants (`serviceAccess`, or the column the server's
+   * `auth.serviceAccessSource` names, whatever its name), which
+   * `admin.handlers(contract, { grants: true })` shows. An admin screen with
+   * a grants editor of its own finds that field by it, never by its name.
+   * Absent for any other field.
    */
   readonly kind?: "grants";
   /**

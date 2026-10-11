@@ -46,7 +46,10 @@ reads (no HTTP long polling, no binary attachments).
 7. A client leaves with Socket.IO's DISCONNECT, `41`, then closes the
    WebSocket itself. The server ends a socket with `41` and closes the
    WebSocket after it; a message longer than `maxPayload` bytes closes it
-   too.
+   too. The server sends `41` when it ends the socket's session (signed
+   out, revoked or expired) or for a flooded channel: the client is then
+   signed out. It forgets the user and what it cached, and connects again
+   only when the app asks.
 
 | Packet         | Meaning                                                         | Sent by |
 | -------------- | --------------------------------------------------------------- | ------- |
@@ -118,12 +121,16 @@ credentials are bad or could not be checked. A client tells it apart from
 ### `HelloSubscriptionLimits`
 
 Each socket's lane of subscription events (`qd:sub`, `qd:col:sub`,
-`qd:col:items`, `qd:watch`; RFC 0003 section 8.2), as `qd:hello` announces it.
+`qd:col:items`, `qd:watch`; RFC 0003 section 8.2), and how much one
+socket may hold at once, as `qd:hello` announces them.
 
-| Field         | Type     | Default | Meaning                                                                                   |
-| ------------- | -------- | ------- | ----------------------------------------------------------------------------------------- |
-| `maxInFlight` | `number` | 8       | Subscription events one socket may have running at once.                                  |
-| `maxQueued`   | `number` | 64      | Subscription events one socket may have waiting; past that one fails with `RATE_LIMITED`. |
+| Field           | Type     | Default | Meaning                                                                                                                                    |
+| --------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `maxInFlight`   | `number` | 8       | Subscription events one socket may have running at once.                                                                                   |
+| `maxQueued`     | `number` | 64      | Subscription events one socket may have waiting; past that one fails with `RATE_LIMITED`.                                                  |
+| `maxEntityIds?` | `number` | 10000   | Rows one socket may hold entity subscriptions to at once; one more is `CONFLICT`. Absent from servers up to 5.1.0, which have no such cap. |
+| `maxScopes?`    | `number` | 1000    | Collection scopes one socket may hold at once; one more is `CONFLICT`. Absent from servers up to 5.1.0, which have no such cap.            |
+| `maxTopics?`    | `number` | 1000    | Change topics one socket may watch at once; one more is `CONFLICT`. Absent from servers up to 5.1.0, which have no such cap.               |
 
 ### `HelloLimits`
 
@@ -643,7 +650,8 @@ arrive as `qd:stream` frames (possibly before this acknowledgement). The
 seed is the latest items the server kept, or what the service computed
 for this subscriber (the current state the items change); a computed one
 the server had to wait for may also reflect items that arrived as frames
-meanwhile. A client replaces what it held with it.
+meanwhile. A subscribe an unsubscribe overtook answers an empty seed. A
+client replaces what it held with it.
 
 One of:
 
@@ -840,17 +848,23 @@ collection scope's.
 
 A server announces its call and subscription limits in `qd:hello` (above):
 the defaults shown there are the server's own, and an app may set others,
-so read them from the hello. The limits below are fixed: every 5.0 server
-holds them, and no option changes them.
+so read them from the hello. The limits below are fixed, and no option
+changes them. Every 5.0 server holds them, except the per-socket caps of rows,
+scopes and topics (`MAX_ENTITY_IDS_PER_SOCKET`, `MAX_SCOPES_PER_SOCKET`,
+`MAX_TOPICS_PER_SOCKET`): a server that holds them announces them in
+`qd:hello`, and servers up to 5.1.0 hold none of them.
 
-| Constant                   | Value                        | Meaning                                                                                                   |
-| -------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `MAX_SUBSCRIBE_IDS`        | 500 ids                      | The most ids one `qd:sub` may name (RFC 0003 section 6), as `qd:hello` announces it.                      |
-| `MAX_ITEM_IDS`             | 200 ids                      | The most ids one `qd:col:items` may name.                                                                 |
-| `MAX_SCOPE_LENGTH`         | 256 characters               | The longest collection scope value or change topic a frame may name, in characters.                       |
-| `MAX_STREAMS_PER_SOCKET`   | 500 feeds                    | The most stream feeds one socket may subscribe to at once.                                                |
-| `CHANNEL_ABUSE_WINDOW_MS`  | 10000 ms                     | How long the abuse guard counts a socket's messages dropped for one channel's rate before it starts over. |
-| `CHANNEL_ABUSE_MULTIPLIER` | 100 times the channel's rate | A socket is disconnected once its drops within the window exceed this many times the channel's rate.      |
+| Constant                    | Value                        | Meaning                                                                                                   |
+| --------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `MAX_SUBSCRIBE_IDS`         | 500 ids                      | The most ids one `qd:sub` may name (RFC 0003 section 6), as `qd:hello` announces it.                      |
+| `MAX_ITEM_IDS`              | 200 ids                      | The most ids one `qd:col:items` may name.                                                                 |
+| `MAX_SCOPE_LENGTH`          | 256 characters               | The longest collection scope value or change topic a frame may name, in characters.                       |
+| `MAX_ENTITY_IDS_PER_SOCKET` | 10000 ids                    | The most rows one socket may hold entity subscriptions to at once, as `qd:hello` announces it.            |
+| `MAX_SCOPES_PER_SOCKET`     | 1000 scopes                  | The most collection scopes one socket may hold at once, as `qd:hello` announces it.                       |
+| `MAX_TOPICS_PER_SOCKET`     | 1000 topics                  | The most change topics one socket may watch at once, as `qd:hello` announces it.                          |
+| `MAX_STREAMS_PER_SOCKET`    | 500 feeds                    | The most stream feeds one socket may subscribe to at once.                                                |
+| `CHANNEL_ABUSE_WINDOW_MS`   | 10000 ms                     | How long the abuse guard counts a socket's messages dropped for one channel's rate before it starts over. |
+| `CHANNEL_ABUSE_MULTIPLIER`  | 100 times the channel's rate | A socket is disconnected once its drops within the window exceed this many times the channel's rate.      |
 
 These are defaults. An app changes the socket rate limiter with
 `createServer({ rateLimit })` and a channel's rate with its contract's
@@ -864,8 +878,17 @@ the client's own, for an answer that names no wait:
 | `DEFAULT_BACKOFF_MS`   | 5000 ms                         | The wait when a `RATE_LIMITED` answer carries no `retryAfterMs`, as in 4.1.                                                                                                                                                                                                  |
 
 A `qd:sub` naming more than `MAX_SUBSCRIBE_IDS` ids, or a
-`qd:col:items` more than `MAX_ITEM_IDS`, fails whole with `VALIDATION`; a
-`qd:stream:sub` past `MAX_STREAMS_PER_SOCKET` feeds fails with `CONFLICT`.
+`qd:col:items` more than `MAX_ITEM_IDS`, fails whole with `VALIDATION`. A
+socket that holds `MAX_ENTITY_IDS_PER_SOCKET` rows, `MAX_SCOPES_PER_SOCKET`
+collection scopes, `MAX_TOPICS_PER_SOCKET` change topics or
+`MAX_STREAMS_PER_SOCKET` feeds is answered `CONFLICT` for one more: a
+`qd:sub` whose new ids would pass the cap fails whole, and so does a
+`qd:col:sub`, `qd:watch` or `qd:stream:sub`; one already held never
+counts again, and an unsubscribe makes room. While `qd:sub` batches of one
+socket run at once, each can pass that first check and then find the cap
+reached when it records its rows: it answers each row it found no room for
+`{ ok: false, e: { code: "CONFLICT" } }` in its `r`, and the batch itself
+is `ok`.
 A socket whose `qd:ch` messages dropped for one channel's rate within
 `CHANNEL_ABUSE_WINDOW_MS` exceed `CHANNEL_ABUSE_MULTIPLIER` times that rate
 is disconnected (Socket.IO DISCONNECT, `41`, then the WebSocket closes): that

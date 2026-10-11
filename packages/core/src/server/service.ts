@@ -6,7 +6,7 @@ import type { AnyContract } from "../contract/defineContract";
 import type { MethodKind } from "../contract/methods";
 import type { StandardSchemaV1 } from "../contract/standardSchema";
 import type { Version } from "../protocol/envelope";
-import type { AccessForm, AnyAccessPolicy, WatchAccess } from "./access/types";
+import type { AccessForm, AnyAccessPolicy, ClaimsCheck, WatchAccess } from "./access/types";
 import type { ServiceCollection } from "./collections/define";
 import type { AnyContext, ContextExtender } from "./context";
 import type { ProjectedOutput, Projection } from "./emit/projection";
@@ -77,6 +77,14 @@ export interface ServiceMethod {
    * caller is left to the form.
    */
   readonly kinds: readonly string[] | undefined;
+  /**
+   * The method's requirement on the caller's claims (RFC 0003 section 4.1,
+   * `access/claims.ts`), checked right after `kinds`, outside the access
+   * engine: `UNAUTHENTICATED` without a principal, `FORBIDDEN` unless it
+   * returns `true`. It adds to the access form, and no grant passes it, a
+   * service-wide `Admin` grant included. `undefined` when not declared.
+   */
+  readonly claims: ClaimsCheck | undefined;
   readonly handler: AnyHandler;
   readonly share: ShareMode | undefined;
   /** How long a shared result is reused after its run, in milliseconds. */
@@ -225,6 +233,38 @@ export function handlerProblem(handler: object, service: AnyService): string | u
   return handlerChecks.get(handler)?.(service);
 }
 
+/** What `createDispatcher` knows of the server a handler is served in. */
+export interface ServedContext {
+  readonly service: AnyService;
+  /**
+   * The dispatcher's `serviceAccessSource` (`createServer`'s
+   * `auth.serviceAccessSource`): where users' service-wide grants live.
+   */
+  readonly grantsSource: { readonly model: string; readonly column: string } | undefined;
+}
+
+/** Why a handler cannot be served as `served` says, or `undefined` when it can. */
+export type ServedCheck = (served: ServedContext) => string | undefined;
+
+const servedChecks = new WeakMap<object, ServedCheck>();
+
+/**
+ * Makes `createDispatcher` run `check` for each service it serves `handler`
+ * in, once the dispatcher's options are known (the admin kit's grants
+ * column, `serviceAccessSource`), so a clash fails when the dispatcher is
+ * made, never on a call. Only the handler the kit made carries the check:
+ * an app that wraps it serves the wrapper unchecked, and a clash then fails
+ * its calls closed, `INTERNAL`, as `checkWhenDefined`'s would.
+ */
+export function checkWhenServed(handler: object, check: ServedCheck): void {
+  servedChecks.set(handler, check);
+}
+
+/** Why `handler` cannot be served as `served` says, from the check `checkWhenServed` attached. */
+export function servedProblem(handler: object, served: ServedContext): string | undefined {
+  return servedChecks.get(handler)?.(served);
+}
+
 /**
  * True for a handler a kit made (it registered a check with
  * `checkWhenDefined`): framework code, whose statements the development
@@ -241,8 +281,8 @@ const rowChecked = new WeakSet<object>();
  * names without checking the caller's level on that row itself, whatever its
  * access form says: the read/write kit's `update`, `delete` and `reorder`
  * (they need the method's row level on the row) and `create` (its `id`, when
- * it has one, names a new row). `defineService`'s rowless check leaves such
- * a handler alone.
+ * it has one, names a new row; it checks the anchors it writes instead).
+ * `defineService`'s rowless check leaves such a handler alone.
  */
 export function checksRowsItself(handler: object): void {
   rowChecked.add(handler);
@@ -251,4 +291,24 @@ export function checksRowsItself(handler: object): void {
 /** True for a handler marked with {@link checksRowsItself}. */
 export function isRowChecked(handler: object): boolean {
   return rowChecked.has(handler);
+}
+
+const callerDependent = new WeakSet<object>();
+
+/**
+ * Marks a kit handler whose result is what the caller may see: a run shared
+ * across principals (`share: "all"`) would hand one caller's result to every
+ * other, so `defineService` refuses `"all"` on it. The read/write kit's
+ * `list` and `getMany` (the rows the caller's level reaches), every search
+ * handler, the admin kit's `adminList` and `adminGet` (fields above the
+ * caller's grant are left out) and the sharing kit's `listShares` and
+ * `listMembers` (input-only today, marked so a later change cannot leak).
+ */
+export function dependsOnCaller(handler: object): void {
+  callerDependent.add(handler);
+}
+
+/** True for a handler marked with {@link dependsOnCaller}. */
+export function isCallerDependent(handler: object): boolean {
+  return callerDependent.has(handler);
 }

@@ -27,7 +27,7 @@ export const PROTOCOL_SOURCES = Object.freeze({
   items: "src/server/collections/items.ts",
   realtime: "src/contract/realtime.ts",
   channels: "src/server/realtime/channels.ts",
-  streams: "src/server/realtime/streamSubscriptions.ts",
+  streams: "src/server/realtime/streamSubscribe.ts",
 });
 
 export type SourceName = keyof typeof PROTOCOL_SOURCES;

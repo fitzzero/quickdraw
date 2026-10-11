@@ -1,5 +1,5 @@
 import * as jose from "jose";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createJWT, verifyJWT } from "./jwt";
 
 // Pins createJWT/verifyJWT to their 4.1 behavior on jose 6.
@@ -17,6 +17,11 @@ describe("createJWT / verifyJWT", () => {
   });
 
   it("carries the session id as sid, and leaves it out when the token has none", async () => {
+    // verifyJWT warns, once per process, that it checks no session store.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    onTestFinished(() => {
+      warn.mockRestore();
+    });
     const withSid = await verifyJWT(
       await createJWT({ userId: "user-1", sid: "s-1" }, SECRET),
       SECRET,
@@ -44,5 +49,42 @@ describe("createJWT / verifyJWT", () => {
     expect(await verifyJWT(expired, SECRET)).toBeNull();
 
     expect(await verifyJWT("not-a-jwt", SECRET)).toBeNull();
+  });
+});
+
+describe("verifyJWT on a session token", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  /** A fresh copy of the module, whose warn-once flag is unset, and a spy on console.warn. */
+  async function fresh() {
+    vi.resetModules();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const jwt = await import("./jwt");
+    return { jwt, warn };
+  }
+
+  it("warns once in development that it checks no session store, naming liveSession", async () => {
+    const { jwt, warn } = await fresh();
+    const withSid = await jwt.createJWT({ userId: "user-1", sid: "s-1" }, SECRET);
+    expect(await jwt.readVerifiedJWT(withSid, SECRET)).toMatchObject({ sid: "s-1" });
+    expect(warn).not.toHaveBeenCalled();
+    expect(await jwt.verifyJWT(await jwt.createJWT({ userId: "u" }, SECRET), SECRET)).toMatchObject(
+      { userId: "u" },
+    );
+    expect(warn).not.toHaveBeenCalled();
+    await jwt.verifyJWT(withSid, SECRET);
+    await jwt.verifyJWT(withSid, SECRET);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain("liveSession");
+  });
+
+  it("does not warn in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const { jwt, warn } = await fresh();
+    await jwt.verifyJWT(await jwt.createJWT({ userId: "user-1", sid: "s-1" }, SECRET), SECRET);
+    expect(warn).not.toHaveBeenCalled();
   });
 });

@@ -34,6 +34,7 @@ import { socketAuth } from "../auth/routes/socketAuth";
 import { issueSession } from "../auth/routes/tokens";
 import { createCallLimiter } from "../express/rateLimit";
 import { transportHarness } from "./__tests__/harness";
+import { markSocketAuth } from "./auth";
 import { createProbe, probe as probeContract } from "./__tests__/probe";
 
 /** Express 5, installed as the `express5` alias; its API matches Express 4's types here. */
@@ -47,12 +48,17 @@ const TOKENS: Readonly<Record<string, AppPrincipal>> = {
 };
 
 const tokenAuth: ServerAuth<AppPrincipal> = {
-  authenticate: ({ auth, transport }) => {
-    if (auth.token === "broken") {
+  authenticate: (request) => {
+    expect(request.transport).toBe("http");
+    // The session cookie reaches an authenticate socketAuth did not make beside auth.token.
+    const token =
+      request.transport === "http"
+        ? (request.sessionCookie ?? request.auth.token)
+        : request.auth.token;
+    if (token === "broken") {
       throw new Error("the session store is down");
     }
-    expect(transport).toBe("http");
-    return typeof auth.token === "string" ? TOKENS[auth.token] : null;
+    return typeof token === "string" ? TOKENS[token] : null;
   },
 };
 
@@ -129,6 +135,25 @@ async function expectStatuses(url: string): Promise<void> {
     },
   });
 }
+
+describe("every reply's headers (TRANSPORT-3)", () => {
+  it("say no-store and nosniff, on a success, a refusal and an unknown method alike", async () => {
+    const { url } = await serve();
+    const replies = [
+      await post(url, "/qd/taskService/get", {
+        body: JSON.stringify({ id: "t1" }),
+        headers: bearer("alice-token"),
+      }),
+      await post(url, "/qd/probeService/wait", { body: '{"key":"x"}' }),
+      await post(url, "/qd/nope/nothing", { body: "{}" }),
+    ];
+    expect(replies.map(({ status }) => status)).toEqual([200, 401, 404]);
+    for (const { headers } of replies) {
+      expect(headers.get("cache-control")).toBe("no-store");
+      expect(headers.get("x-content-type-options")).toBe("nosniff");
+    }
+  });
+});
 
 describe("on an Express 4 app with its own JSON parser", () => {
   it("answers 200, 401, 403 and 422, and leaves the app's routes alone", async () => {
@@ -217,7 +242,7 @@ describe("credentials", () => {
     expect(await echo({})).toMatchObject({ status: 200, body: { d: { userId: null } } });
   });
 
-  it("reads session before __Host-session over plain HTTP, only a cookie name it is given, and no repeated name", async () => {
+  it("reads __Host-session before session over plain HTTP, only a cookie name it is given, and no repeated name", async () => {
     const { url } = await serve();
     const echo = (headers: Record<string, string>) =>
       post(url, "/qd/probeService/echo", { body: '{"text":"hi"}', headers });
@@ -226,10 +251,10 @@ describe("credentials", () => {
     // The moderator token is Alice's, with a Moderate grant.
     const grantsOf = async (headers: Record<string, string>) =>
       ((await echo(headers)).body as { d?: { grants?: unknown } }).d?.grants;
-    // Over plain HTTP the routes set `session`, so it is read first.
+    // __Host-session wins wherever it is present: only this host can have set it (AUTH-2a).
     expect(
       await grantsOf({ cookie: "__Host-session=moderator-token; session=alice-token" }),
-    ).toBeNull();
+    ).toEqual({ probeService: "Moderate" });
     expect(await grantsOf({ cookie: "__Host-session=moderator-token" })).toEqual({
       probeService: "Moderate",
     });
@@ -238,9 +263,14 @@ describe("credentials", () => {
     expect(
       await grantsOf({ cookie: "session=alice-token; session=x", ...bearer("moderator-token") }),
     ).toEqual({ probeService: "Moderate" });
-    // A repeated session does not let __Host-session stand in for it, and over HTTPS a
-    // repeated __Host-session is no credential either.
-    expect(await userOf({ cookie: "session=a; session=b; __Host-session=alice-token" })).toBeNull();
+    // A repeated session does not matter once __Host-session is there; a repeated
+    // __Host-session is no credential, and session does not stand in for it, over HTTPS either.
+    expect(await userOf({ cookie: "session=a; session=b; __Host-session=alice-token" })).toBe(
+      "alice",
+    );
+    expect(
+      await userOf({ cookie: "__Host-session=a; __Host-session=b; session=alice-token" }),
+    ).toBeNull();
     expect(
       await userOf({
         cookie: "__Host-session=a; __Host-session=b; session=alice-token",
@@ -296,6 +326,34 @@ describe("credentials", () => {
       headers: { ...planted, "x-forwarded-proto": "https" },
     });
     expect((response.body as { d?: { userId: unknown } }).d?.userId).toBe("alice");
+  });
+
+  it("gives the session cookie as auth.token only to socketAuth's authenticate", async () => {
+    const seen: unknown[] = [];
+    const { url } = await serve({
+      auth: {
+        authenticate: (request) => {
+          if (request.transport === "http") {
+            seen.push({
+              auth: request.auth,
+              credential: request.credential,
+              sessionCookie: request.sessionCookie,
+            });
+          }
+          return null;
+        },
+      },
+    });
+    const echo = (headers: Record<string, string>) =>
+      post(url, "/qd/probeService/echo", { body: '{"text":"hi"}', headers });
+    await echo({ cookie: "session=alice-token" });
+    await echo({ cookie: "session=alice-token", ...bearer("moderator-token") });
+    await echo(bearer("alice-token"));
+    expect(seen).toEqual([
+      { auth: {}, credential: "cookie", sessionCookie: "alice-token" },
+      { auth: { token: "moderator-token" }, credential: "cookie", sessionCookie: "alice-token" },
+      { auth: { token: "alice-token" }, credential: "bearer", sessionCookie: undefined },
+    ]);
   });
 
   it("answers 401 when authenticate throws", async () => {
@@ -539,6 +597,9 @@ describe("the http option", () => {
       },
     });
     expect(Number(limited.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+    // The limiter's refusal is a `/qd` reply too (TRANSPORT-3).
+    expect(limited.headers.get("cache-control")).toBe("no-store");
+    expect(limited.headers.get("x-content-type-options")).toBe("nosniff");
     // The app's own routes are not counted, and the refused call never ran.
     for (let index = 0; index < 3; index += 1) {
       expect((await fetch(`${url}/health`)).status).toBe(200);
@@ -568,6 +629,55 @@ describe("the http option", () => {
     expect(logger.at("error").map((entry) => entry.message)).toEqual([
       "The HTTP transport failed to serve a call",
     ]);
+  });
+});
+
+describe("socketAuth's authenticate", () => {
+  it("gets the session cookie as auth.token, through createServer and createHttpRouter alike", async () => {
+    const seen: unknown[] = [];
+    const authenticate: NonNullable<ServerAuth<AppPrincipal>["authenticate"]> = (request) => {
+      if (request.transport === "http") {
+        seen.push({
+          auth: request.auth,
+          credential: request.credential,
+          sessionCookie: request.sessionCookie,
+        });
+      }
+      return null;
+    };
+    // What socketAuth marks its authenticate with.
+    markSocketAuth(authenticate, { devCredentials: false });
+    const both = { cookie: "session=alice-token", ...bearer("moderator-token") };
+    const { url } = await serve({ auth: { authenticate } });
+    await post(url, "/qd/probeService/echo", { body: '{"text":"hi"}', headers: both });
+    const dispatcher = createDispatcher({
+      services: [createProbe().service],
+      db,
+      logger: captureLogger(),
+    });
+    const httpServer = createHttpServer(
+      createHttpRouter({ dispatcher, auth: { authenticate }, logger: captureLogger() }),
+    );
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const { port } = httpServer.address() as AddressInfo;
+      await post(`http://127.0.0.1:${port}`, "/qd/probeService/echo", {
+        body: '{"text":"hi"}',
+        headers: both,
+      });
+    } finally {
+      await new Promise((resolve) => {
+        httpServer.close(resolve);
+      });
+    }
+    const handed = {
+      auth: { token: "alice-token" },
+      credential: "cookie",
+      sessionCookie: "alice-token",
+    };
+    expect(seen).toEqual([handed, handed]);
   });
 });
 

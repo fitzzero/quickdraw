@@ -15,6 +15,7 @@ import { outputSchemaOf, schemaOutputOf } from "./pipeline/validation";
 import { compileChannels, compileStreams } from "./realtime/define";
 import {
   handlerProblem,
+  isCallerDependent,
   registerRuntime,
   type AnyHandler,
   type AnyService,
@@ -23,6 +24,7 @@ import {
 } from "./service";
 import {
   checkAppKinds,
+  checkMethodClaims,
   checkMethodKinds,
   checkServiceData,
   checkWatchedModels,
@@ -59,6 +61,7 @@ const METHOD_KEYS = new Set([
   "version",
   "rowless",
   "kinds",
+  "claims",
 ]);
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -104,6 +107,11 @@ function checkShare(owner: string, entry: UnknownRecord, fail: Fail): void {
   if (share === "all" && isRecord(entry.access) && entry.access.kind === "custom") {
     fail(
       `${owner} has custom access, so it cannot share: "all"; its result may depend on who asks`,
+    );
+  }
+  if (share === "all" && typeof entry.handler === "function" && isCallerDependent(entry.handler)) {
+    fail(
+      `${owner} is a kit method whose result depends on who asks, so it cannot share: "all"; share: "caller" runs one principal's identical calls once`,
     );
   }
   if (ttlMs !== undefined && (share === undefined || !isDuration(ttlMs, MAX_TIMEOUT_MS))) {
@@ -161,6 +169,7 @@ function checkMethod(
   }
   checkQueryOptions(owner, entry, def.kind, fail);
   const kinds = checkMethodKinds(owner, entry, data, fail);
+  const claims = checkMethodClaims(owner, entry, fail);
   const projection = projectedOutput(def.output, projections);
   return Object.freeze({
     name,
@@ -171,6 +180,7 @@ function checkMethod(
     schemaOutput: projection === undefined ? schemaOutputOf(def.output) : undefined,
     access: entry.access as ServiceMethod["access"],
     kinds,
+    claims,
     handler: entry.handler as AnyHandler,
     share: entry.share as ServiceMethod["share"],
     ttlMs: entry.ttlMs as number | undefined,
@@ -276,11 +286,13 @@ function checkRowForms(
 
 /**
  * On a service with an access policy, a method whose input has `id` and
- * whose form checks no row is refused unless it says `rowless: true`
- * (`access/rowless.ts`). A service without a policy has no row check to
- * skip.
+ * whose form asks the policy nothing about the row that id names (an open
+ * form, `custom`, `{ scope }`, or `{ entry }` on another key) is refused
+ * unless it says `rowless: true` (`access/rowless.ts`). A service without a
+ * policy has no row check to skip.
  */
 function checkRowless(
+  contract: AnyContract,
   methods: Readonly<Record<string, ServiceMethod>>,
   data: ServiceData,
   fail: Fail,
@@ -289,7 +301,7 @@ function checkRowless(
     return;
   }
   for (const method of Object.values(methods)) {
-    const problem = rowlessProblem(method);
+    const problem = rowlessProblem(method, contract.name);
     if (problem !== undefined) {
       fail(problem);
     }
@@ -363,11 +375,12 @@ export function buildService(
     data.model,
     definition.collections,
     fail,
+    data.access,
   );
   checkWatches(checked, collections, data, fail);
   const methods = checkMethods(checked, projections, data, definition.methods, fail);
   checkRowForms(methods, data, fail);
-  checkRowless(methods, data, fail);
+  checkRowless(checked, methods, data, fail);
   const service: AnyService = Object.freeze({
     name: checked.name,
     contract: checked,

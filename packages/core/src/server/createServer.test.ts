@@ -284,6 +284,14 @@ describe("the app's own Express app and HTTP server", () => {
     expect(() => createServer({ ...base, shutdownTimeoutMs: -1 })).toThrow(
       "createServer: shutdownTimeoutMs must be a whole number of milliseconds",
     );
+    // A recovered socket would skip authentication (the 5.1 audit's TRANSPORT-1).
+    expect(() =>
+      createServer({
+        ...base,
+        // @ts-expect-error -- SocketOptions leaves connectionStateRecovery out
+        socket: { connectionStateRecovery: {} },
+      }),
+    ).toThrow("createServer: socket.connectionStateRecovery is refused");
   });
 
   it("refuses an httpServer without its app, which would serve no HTTP calls, unless http is off", async () => {

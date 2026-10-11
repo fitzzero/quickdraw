@@ -120,13 +120,17 @@ describe("call frames", () => {
     expectTypeOf<HelloFrame["protocol"]>().toEqualTypeOf<5>();
   });
 
-  test("the hello names the socket's user and grants, and announces the subscription lane", () => {
+  test("the hello names the socket's user and grants, and announces the subscription lane and caps", () => {
     expectTypeOf<HelloFrame["userId"]>().toEqualTypeOf<string | null>();
     expectTypeOf<HelloFrame["serviceAccess"]>().toEqualTypeOf<
       Readonly<Record<string, AccessLevel>>
     >();
     expectTypeOf<HelloLimits["subscriptions"]>().toEqualTypeOf<HelloSubscriptionLimits>();
-    expectTypeOf<keyof HelloSubscriptionLimits>().toEqualTypeOf<"maxInFlight" | "maxQueued">();
+    expectTypeOf<keyof HelloSubscriptionLimits>().toEqualTypeOf<
+      "maxInFlight" | "maxQueued" | "maxEntityIds" | "maxScopes" | "maxTopics"
+    >();
+    // Optional: servers up to 5.1.0 announce no caps.
+    expectTypeOf<HelloSubscriptionLimits["maxScopes"]>().toEqualTypeOf<number | undefined>();
     expectTypeOf<keyof HelloFrame>().toEqualTypeOf<
       "protocol" | "server" | "serverId" | "limits" | "features" | "userId" | "serviceAccess"
     >();

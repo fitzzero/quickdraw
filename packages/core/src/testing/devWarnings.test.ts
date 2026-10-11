@@ -252,7 +252,9 @@ describe("development warnings in a running app", () => {
     const { logger, probe } = await start();
     await probe.nested({ projectId });
     expect(devWarnings(logger)).toEqual([
-      "[quickdraw:nested-write] probeService.nested: A nested write (task.labels: { create }) is not tracked; only the task row is. Write related rows through their own model",
+      "[quickdraw:nested-write] probeService.nested: A nested write (task.labels: { create }) is not tracked: the related rows it creates, changes or deletes send no frames and revoke nothing. " +
+        "The task row is tracked, and an update of it reads its access and scope columns first, so a foreign key a to-one connect or disconnect sets on it is seen. " +
+        "Write related rows through their own model, or set the foreign key column",
     ]);
   });
 });

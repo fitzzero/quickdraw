@@ -4,11 +4,13 @@
 // (4.1 `src/server/mcp/McpRegistry.ts:13`), which validated input, checked
 // access and ran handlers itself, as whatever user the tool's `userId`
 // argument named. Here a method's tool call goes through the dispatcher with
-// transport `"mcp"`, so validation, access checks and limits apply exactly as
-// for a socket call; the transport says who is calling through `principal`,
-// and `context` adds the session's own fields to the handler's `ctx.mcp`.
-// `bind` fills chosen arguments from that principal instead of the agent, so
-// an agent bound to one task cannot name another in its calls.
+// transport `"mcp"`, so validation and access checks apply as for a socket
+// call, and its queries share a concurrency lane per caller (`session.ts`);
+// the transport says who is calling through `principal`, and `context` adds
+// the session's own fields to the handler's `ctx.mcp`. `bind` fills chosen
+// arguments from that principal instead of the agent, so an agent bound to
+// one task cannot name another in its calls, and a call that sends a bound
+// argument its tool does not fill is refused (`FORBIDDEN`).
 
 import { consoleLogger, type Logger } from "../../contract/logger";
 import { QuickdrawError } from "../../protocol/errors";
@@ -58,7 +60,13 @@ export interface McpRegistryOptions<
    * anonymous caller, who may call `"public"` methods and `"public"` custom
    * tools only. A stdio server usually reads a token from its environment;
    * an HTTP request carries one as a bearer token. Throwing fails the call
-   * with `UNAUTHENTICATED`. Without it every call is anonymous.
+   * with `UNAUTHENTICATED`: throw `QuickdrawError("UNAUTHENTICATED")` (or
+   * `FORBIDDEN`) to refuse a token, which is logged at debug, and never put
+   * the token in a message; anything else thrown is logged as an error.
+   * Without it every call is anonymous. An HTTP request's queries share the
+   * lane of its bearer token: a hook that authenticates by anything else (a
+   * cookie, an API key header) must refuse a request whose bearer token it
+   * does not verify, or a caller makes a lane per made-up token.
    */
   readonly principal?: (
     request: McpRequest,
@@ -81,10 +89,15 @@ export interface McpRegistryOptions<
    * before the method runs when the caller is anonymous (`UNAUTHENTICATED`),
    * or when the binder returns `undefined` or `null` or the caller sent the
    * argument with another value (`FORBIDDEN`); a binder that throws fails it
-   * with `INTERNAL`, or with the code of a `QuickdrawError`. Custom tools are
-   * never bound. Binding is not access control: the same principal reaches
-   * the method over a socket or HTTP with nothing bound, so the method's
-   * access must still confine it.
+   * with `INTERNAL`, or with the code of a `QuickdrawError`. A call of any
+   * other method's tool that sends a bound argument is refused (`FORBIDDEN`).
+   * An input that is a `$ref` to an object counts as that object, and a
+   * bound key anywhere else in an input (in a union's or an intersection's
+   * branch, or an input that is no object) fails when the registry is built.
+   * Only top-level arguments are bound. Custom tools are never bound.
+   * Binding is not access control: the same principal reaches the method
+   * over a socket or HTTP with nothing bound, so the method's access must
+   * still confine it.
    */
   readonly bind?: Readonly<Record<string, McpBinder<S>>>;
   /** The app's own tools, listed after the generated ones. */
@@ -229,7 +242,7 @@ function resolveRegistry(options: McpRegistryOptions<readonly AnyService[]>): Re
   const binders = checkBinders(options.bind, fail);
   const methodTools = planMethodTools(options.services, options, fail, [...binders.keys()]);
   checkBound(binders, methodTools, fail);
-  const customTools = checkCustomTools(options.customTools, fail);
+  const customTools = checkCustomTools(options.customTools, fail, options.services);
   const entries: Entry[] = [
     ...methodTools.map((tool) => ({ kind: "method" as const, ...tool })),
     ...customTools.map((tool) => ({ kind: "custom" as const, ...tool })),
@@ -330,6 +343,20 @@ async function dispatchMethod(
   session: McpSession,
   options: McpCallOptions,
 ): Promise<McpCallResult> {
+  // A bound argument the tool does not fill is never the agent's to send (MCP-1): refused, not passed on.
+  const stray =
+    settings.binders.size === 0 || !isRecord(input) || Array.isArray(input)
+      ? undefined
+      : [...settings.binders.keys()].find(
+          (key) => !tool.bound.includes(key) && Object.hasOwn(input, key),
+        );
+  if (stray !== undefined) {
+    const error = new QuickdrawError(
+      "FORBIDDEN",
+      `"${stray}" is bound to the caller; ${tool.service}.${tool.method} does not take it from the agent`,
+    );
+    return settle(settings, options, failure(settings, error, tool.tool.name));
+  }
   let bound = input;
   if (tool.bound.length > 0) {
     try {
@@ -393,9 +420,14 @@ function callMethodTool(
  * `customTools`, served by `dispatcher`. Throws at once when a method's
  * input schema cannot describe itself as JSON Schema (use Zod 4.2 or later
  * for it, or `exclude` the method), when two tools share a name, when the
- * dispatcher does not serve one of the services, or when an argument of
- * `bind` is in no tool's object input or is in an input that is not an
- * object.
+ * dispatcher does not serve one of the services, when an argument of
+ * `bind` is in no tool's object input or may be anywhere in an input where
+ * it cannot be filled (an input that is not an object schema, or a branch
+ * of a union or an intersection, behind a `$ref` too), or when custom tools
+ * are served beside the services of apps that admit no kind in common.
+ * Every call runs in its caller's concurrency lane: a stdio session, or on
+ * HTTP its bearer token, its user without a token, or its address when
+ * anonymous.
  *
  * @example
  * const registry = createMcpRegistry({

@@ -10,6 +10,7 @@ import { trackPrisma } from "./trackPrisma";
 
 let h: Harness;
 let projectId: string;
+let userId: string;
 
 beforeAll(async () => {
   h = await createHarness();
@@ -22,7 +23,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await h.database.reset();
   h.logger.warnings.length = 0;
-  ({ projectId } = await h.seed());
+  ({ projectId, userId } = await h.seed());
 });
 
 function addTask(title: string, data: { status?: string; parentTaskId?: string } = {}) {
@@ -125,6 +126,65 @@ describe("create and upsert", () => {
         after: { projectId, status: "done", parentTaskId: null },
       },
     ]);
+  });
+});
+
+describe("relation-form foreign keys (DATA-1)", () => {
+  it("reads every interested column first when an update connects a relation, and reports them all", async () => {
+    const { ownerId } = await h.prisma.project.findUniqueOrThrow({ where: { id: projectId } });
+    const other = await h.prisma.project.create({ data: { name: "Other", ownerId } });
+    const task = await addTask("Moved", { status: "open" });
+    const moved = await h.storage.countStatements(() =>
+      h.inUnit(() =>
+        h.db.task.update({
+          where: { id: task.id },
+          data: { project: { connect: { id: other.id } } },
+        }),
+      ),
+    );
+    expect(moved.statements).toBe(2);
+    expect(moved.value.writes).toEqual([
+      {
+        model: "task",
+        id: task.id,
+        op: "update",
+        fields: ["project", "projectId", "status", "parentTaskId"],
+        before: { projectId, status: "open", parentTaskId: null },
+        after: { projectId: other.id, status: "open", parentTaskId: null },
+      },
+    ]);
+  });
+
+  it("sees a foreign key a disconnect clears", async () => {
+    const parent = await addTask("Parent");
+    const child = await addTask("Child", { parentTaskId: parent.id });
+    const { writes } = await h.inUnit(() =>
+      h.db.task.update({ where: { id: child.id }, data: { parent: { disconnect: true } } }),
+    );
+    expect(writes[0]?.before?.parentTaskId).toBe(parent.id);
+    expect(writes[0]?.after?.parentTaskId).toBeNull();
+  });
+
+  it("records an upsert whose update connects a relation as an update, with the old values", async () => {
+    const other = await h.prisma.user.create({
+      data: { email: "other@example.com", name: "Other" },
+    });
+    await h.prisma.projectMember.create({ data: { projectId, userId, role: "Read" } });
+    const { writes } = await h.inUnit(() =>
+      h.db.projectMember.upsert({
+        where: { projectId_userId: { projectId, userId } },
+        create: { projectId, userId, role: "Read" },
+        update: { user: { connect: { id: other.id } } },
+      }),
+    );
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({
+      model: "projectMember",
+      op: "update",
+      before: { projectId, userId, role: "Read" },
+      after: { userId: other.id },
+    });
+    expect(writes[0]).not.toHaveProperty("mayHaveExisted");
   });
 });
 
@@ -488,6 +548,120 @@ describe("writes that change nothing (finding F7.2)", () => {
   });
 });
 
+describe("the links of a via entry's delete (COLL-3)", () => {
+  // Labels are the entries of a via list over taskLabel; no other test here deletes one.
+  beforeAll(() => {
+    h.storage.registerLinks?.("label", {
+      model: "taskLabel",
+      entry: "labelId",
+      columns: ["taskId"],
+    });
+  });
+
+  const labelOf = (name: string) => h.prisma.label.create({ data: { projectId, name } });
+
+  it("reads a deleted row's links first, in one more statement, and records them, none included", async () => {
+    const task = await addTask("Linked");
+    const bug = await labelOf("Bug");
+    await h.prisma.taskLabel.create({ data: { taskId: task.id, labelId: bug.id } });
+    const counted = await h.storage.countStatements(() =>
+      h.inUnit(() => h.db.label.delete({ where: { id: bug.id } })),
+    );
+    expect(counted.statements).toBe(2);
+    expect(counted.value.writes).toEqual([
+      expect.objectContaining({
+        model: "label",
+        id: bug.id,
+        op: "delete",
+        links: { taskLabel: [{ labelId: bug.id, taskId: task.id }] },
+      }),
+    ]);
+    const idea = await labelOf("Idea");
+    const { writes } = await h.inUnit(() => h.db.label.delete({ where: { id: idea.id } }));
+    expect(writes).toEqual([expect.objectContaining({ id: idea.id, links: { taskLabel: [] } })]);
+  });
+
+  it("reads each row's links once after deleteMany's ids, and none when nothing matches", async () => {
+    const task = await addTask("Linked");
+    const bug = await labelOf("Bug");
+    const idea = await labelOf("Idea");
+    await h.prisma.taskLabel.create({ data: { taskId: task.id, labelId: bug.id } });
+    const where = { name: { in: ["Bug", "Idea"] } };
+    const counted = await h.storage.countStatements(() =>
+      h.inUnit(() => h.db.label.deleteMany({ where })),
+    );
+    expect(counted.statements).toBe(3);
+    expect(counted.value.writes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: bug.id,
+          links: { taskLabel: [{ labelId: bug.id, taskId: task.id }] },
+        }),
+        expect.objectContaining({ id: idea.id, links: { taskLabel: [] } }),
+      ]),
+    );
+    const none = await h.storage.countStatements(() =>
+      h.inUnit(() => h.db.label.deleteMany({ where })),
+    );
+    expect(none.statements).toBe(2);
+  });
+
+  it.each([
+    [
+      "a column the junction does not have",
+      { model: "taskLabel", entry: "nope", columns: ["taskId"] },
+    ],
+    [
+      "a junction model the client does not have",
+      { model: "noSuchJunction", entry: "labelId", columns: [] },
+    ],
+  ])(
+    "records deletes without links when their read fails on %s, warns once, and keeps tracking",
+    async (_case, link) => {
+      const db = trackPrisma(h.prisma, { logger: h.logger, development: false });
+      const storage = storageOf(db);
+      storage?.registerLinks?.("label", link);
+      const writes: Record<string, unknown>[] = [];
+      storage?.onWrite((write) => writes.push(write as unknown as Record<string, unknown>));
+      const one = await labelOf("One");
+      const two = await labelOf("Two");
+      await db.label.delete({ where: { id: one.id } });
+      await db.label.deleteMany({ where: { id: two.id } });
+      expect(writes.map(({ id, op }) => [id, op])).toEqual([
+        [one.id, "delete"],
+        [two.id, "delete"],
+      ]);
+      expect(writes.every((write) => !("links" in write))).toBe(true);
+      expect(h.logger.warnings).toEqual([
+        expect.stringContaining("so its deletes tell every subscribed scope of its via lists"),
+      ]);
+    },
+  );
+
+  it("reads the id first for a delete by another unique key", async () => {
+    h.storage.registerLinks?.("user", {
+      model: "projectMember",
+      entry: "userId",
+      columns: ["projectId"],
+    });
+    const member = await h.prisma.user.create({
+      data: { email: "member@example.com", name: "Member" },
+    });
+    await h.prisma.projectMember.create({ data: { projectId, userId: member.id, role: "Read" } });
+    const counted = await h.storage.countStatements(() =>
+      h.inUnit(() => h.db.user.delete({ where: { email: "member@example.com" } })),
+    );
+    expect(counted.statements).toBe(3);
+    expect(counted.value.writes).toEqual([
+      expect.objectContaining({
+        model: "user",
+        id: member.id,
+        links: { projectMember: [{ userId: member.id, projectId }] },
+      }),
+    ]);
+  });
+});
+
 describe("models and registrations", () => {
   it("lets writes to a model without an id column through, untracked, with one warning", async () => {
     const expires = new Date("2030-01-01T00:00:00Z");
@@ -544,6 +718,21 @@ describe("models and registrations", () => {
     );
     expect(writes).toEqual([expect.objectContaining({ id: task.id, op: "update" })]);
     expect(h.logger.warnings).toEqual([]);
+  });
+
+  it("says whether a model can be tracked, asking the database once per model (DATA-3)", async () => {
+    const storage = storageOf(trackPrisma(h.prisma, { development: false }));
+    if (storage?.trackable === undefined) {
+      throw new Error("no trackable probe");
+    }
+    const { trackable } = storage;
+    expect(await trackable("verificationToken")).toBe(false);
+    expect(await trackable("Task")).toBe(true);
+    const again = await storage.countStatements(async () => [
+      await trackable("verificationToken"),
+      await trackable("task"),
+    ]);
+    expect(again).toEqual({ value: [false, true], statements: 0 });
   });
 
   it("refuses to track a client twice, or anything that is not a client", () => {

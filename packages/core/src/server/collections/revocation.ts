@@ -13,16 +13,21 @@
 // - a lookup that fails denies, as everywhere else.
 //
 // A changed `serviceAccess` re-authorizes every scope of the user's sockets.
-// 4.1 left this to a hand-written `kickFromCollection`
+// A self scope has no anchors, since its user may always open it; when its
+// items follow its service's policy, the same changes re-check them
+// (`selfRecheck.ts`: a lost row is `removed`, or the scope resets, and a
+// resume of one nobody here subscribes to reads a page). 4.1 left
+// this to a hand-written `kickFromCollection`
 // (4.1 `src/server/collections.ts:305-318`).
 
 import { SERVER_EVENTS } from "../../contract/names";
-import type { RevocationHook } from "../emit/revocation";
+import { settleAll, type RevocationHook } from "../emit/revocation";
 import { describeError } from "../pipeline/metrics";
 import type { QuickdrawServerSocket } from "../transports/types";
 import { authorizeScopes } from "./access";
 import type { BoundCollection, CollectionHub } from "./bind";
 import { roomOf, type ScopeSubscription } from "./scopes";
+import { recheckSelf, resetSelf } from "./selfRecheck";
 
 type Found = ReadonlyMap<QuickdrawServerSocket, readonly ScopeSubscription[]>;
 
@@ -104,17 +109,23 @@ async function reauthorizeAll(hub: CollectionHub, found: Found): Promise<void> {
       work.push(reauthorize(hub, socket, own));
     }
   }
-  await Promise.all(work);
+  await settleAll(work);
 }
 
 /** The collection half of a dispatcher's revocation. */
 export function createScopeRevocation(hub: CollectionHub): RevocationHook {
   return Object.freeze({
-    changed: async (change) => await reauthorizeAll(hub, hub.collections.scopes.matching(change)),
-    regranted: async (sockets) =>
-      await reauthorizeAll(
-        hub,
-        new Map(sockets.map((socket) => [socket, hub.collections.scopes.entries(socket)])),
-      ),
+    changed: async (change) => {
+      await settleAll([
+        reauthorizeAll(hub, hub.collections.scopes.matching(change)),
+        recheckSelf(hub, change),
+      ]);
+    },
+    regranted: async (sockets, userId) => {
+      const found = new Map(
+        sockets.map((socket) => [socket, hub.collections.scopes.entries(socket)]),
+      );
+      await settleAll([reauthorizeAll(hub, found), resetSelf(hub, sockets, userId)]);
+    },
   } satisfies RevocationHook);
 }

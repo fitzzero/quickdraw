@@ -9,7 +9,8 @@ import { createHarness, pauseNext, type Harness } from "../../prisma/__tests__/h
 import { createTestApp, type TestApp } from "../../testing/index";
 import { deferred } from "../__tests__/fixtures";
 import { as, seedBoard, type Board } from "../access/__tests__/board";
-import { inherit, type Principal, type StorageAdapter } from "../index";
+import { inherit, MAX_ENTITY_IDS_PER_SOCKET, type Principal, type StorageAdapter } from "../index";
+import { versionTime } from "../rev";
 import {
   cardService,
   defineTaskService,
@@ -130,6 +131,102 @@ describe("projections in method results", () => {
       label: "open: T1",
     });
   });
+});
+
+describe("the per-socket cap (COLL-4)", () => {
+  it(`holds at most ${MAX_ENTITY_IDS_PER_SOCKET} rows per socket`, async () => {
+    await h.prisma.task.createMany({
+      data: Array.from({ length: MAX_ENTITY_IDS_PER_SOCKET + 1 }, (_, n) => ({
+        projectId: board.p2,
+        title: `Cap ${n}`,
+      })),
+    });
+    const tasks = await h.prisma.task.findMany({
+      where: { title: { startsWith: "Cap " } },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    });
+    const ids = tasks.map((task) => task.id);
+    const [last, ...rest] = [ids.pop() ?? "", ...ids];
+    const { app } = await start();
+    // A service-wide Admin reads every row without a policy read.
+    const { connection } = await connect(app, as(board.ed, { taskService: "Admin" }));
+    // In runs that fit the socket's lane (8 running, 64 waiting).
+    for (let first = 0; first < rest.length; first += 4_000) {
+      const batches = [];
+      for (let at = first; at < Math.min(first + 4_000, rest.length); at += 500) {
+        batches.push(sub(connection, "taskService", rest.slice(at, at + 500)));
+      }
+      for (const reply of await Promise.all(batches)) {
+        expect(reply).toMatchObject({ ok: true });
+        expect((reply as { r: { ok: boolean }[] }).r.every((result) => result.ok)).toBe(true);
+      }
+    }
+    expect(await sub(connection, "taskService", [last])).toMatchObject({
+      ok: false,
+      e: { code: "CONFLICT" },
+    });
+    // A row held already is no more; one unsubscribed makes room.
+    expect(await sub(connection, "taskService", [rest[0] ?? ""])).toMatchObject({
+      ok: true,
+      r: [{ ok: true }],
+    });
+    await connection.socket.emitWithAck("qd:unsub", { s: "taskService", ids: [rest[0]] });
+    expect(await sub(connection, "taskService", [last])).toMatchObject({
+      ok: true,
+      r: [{ ok: true }],
+    });
+  }, 120_000);
+
+  it("answers CONFLICT for each row batches running at once left no room for", async () => {
+    await h.prisma.task.createMany({
+      data: Array.from({ length: MAX_ENTITY_IDS_PER_SOCKET + 200 }, (_, n) => ({
+        projectId: board.p2,
+        title: `Cap ${n}`,
+      })),
+    });
+    const tasks = await h.prisma.task.findMany({
+      where: { title: { startsWith: "Cap " } },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    });
+    const ids = tasks.map((task) => task.id);
+    const fill = ids.slice(0, MAX_ENTITY_IDS_PER_SOCKET - 400);
+    const first = ids.slice(fill.length, fill.length + 300);
+    const second = ids.slice(fill.length + 300);
+    const { app } = await start();
+    const { connection } = await connect(app, as(board.ed, { taskService: "Admin" }));
+    for (let at = 0; at < fill.length; at += 4_000) {
+      const batches = [];
+      for (let from = at; from < Math.min(at + 4_000, fill.length); from += 500) {
+        batches.push(sub(connection, "taskService", fill.slice(from, from + 500)));
+      }
+      await Promise.all(batches);
+    }
+    // Each batch passes the check before its read: the first is held at its read
+    // while the second takes 300 of the 400 rows left.
+    const pause = pauseNext(h.database, /^\s*SELECT\b[\s\S]*FROM\s+"public"\."Task"/iu);
+    try {
+      const firstReply = sub(connection, "taskService", first);
+      await pause.reached;
+      const secondReply = (await sub(connection, "taskService", second)) as {
+        r: { ok: boolean }[];
+      };
+      expect(secondReply.r.every((result) => result.ok)).toBe(true);
+      pause.release();
+      const results = ((await firstReply) as { r: { ok: boolean; e?: { code: string } }[] }).r;
+      expect(results.filter((result) => result.ok)).toHaveLength(100);
+      const refused = first.filter((_, n) => results[n]?.e?.code === "CONFLICT");
+      expect(refused).toHaveLength(200);
+      expect(refused.flatMap((id) => roomsOf(app, "taskService", id))).toEqual([]);
+    } finally {
+      pause.restore();
+    }
+    const socket = app.server.io.sockets.sockets.get(connection.socket.id ?? "");
+    expect(Object.keys(socket?.data.entities?.taskService ?? {})).toHaveLength(
+      MAX_ENTITY_IDS_PER_SOCKET,
+    );
+  }, 120_000);
 });
 
 describe("qd:sub", () => {
@@ -556,6 +653,8 @@ describe("not modified", () => {
       methods: {
         latestIn: {
           access: { scope: "Read", of: projectContract, id: "id" },
+          // id names a project, which the scope form checks, not a task
+          rowless: true,
           handler: ({ input, db }) =>
             db.task.findFirst({ where: { projectId: input.id }, orderBy: { createdAt: "desc" } }),
         },
@@ -592,6 +691,126 @@ describe("not modified", () => {
     expect(own).toMatchObject({ ok: true, version: expect.any(Number) });
     const version = own.ok && own.notModified !== true ? (own.version as number) : 0;
     expect(await call("task", board.t1, version)).toEqual({ ok: true, notModified: true, version });
+  });
+
+  it("answers not modified only for a row the method's form checked (ACCESS-6)", async () => {
+    // A policy-less service: the rowless check needs a policy, so a scope
+    // form keyed by projectId can still take a task's id.
+    const scopedContract = defineContract("scopedTaskService", {
+      entity: taskEntity,
+      methods: {
+        inProject: query({
+          input: z.object({ projectId: z.string(), id: z.string() }),
+          output: nullable("entity"),
+        }),
+        anyTask: query({ input: z.object({ id: z.string() }), output: nullable("entity") }),
+      },
+    });
+    const scopedService = qd.defineService(scopedContract, {
+      model: "task",
+      versionColumn: "updatedAt",
+      methods: {
+        inProject: {
+          access: { scope: "Read", of: projectContract, id: "projectId" },
+          handler: ({ input, db }) =>
+            db.task.findFirst({ where: { id: input.id, projectId: input.projectId } }),
+        },
+        anyTask: {
+          access: "authenticated",
+          rowless: true,
+          handler: ({ input, db }) => db.task.findUnique({ where: { id: input.id } }),
+        },
+      },
+    });
+    const app = await createTestApp({ services: [projectService, scopedService], db: h.db });
+    apps.push(app as unknown as TestApp);
+    const v = versionTime(
+      (await h.prisma.task.findUniqueOrThrow({ where: { id: board.t1 } })).updatedAt,
+    );
+    const call = (principal: Principal, method: "inProject" | "anyTask", input: object) =>
+      app.server.dispatcher.call({
+        service: "scopedTaskService",
+        method,
+        input,
+        principal,
+        transport: "internal",
+        v,
+      });
+    // ed reads P2: T1 is not in it, and its version says nothing of T1.
+    expect(await call(as(board.ed), "inProject", { projectId: board.p2, id: board.t1 })).toEqual({
+      ok: true,
+      data: null,
+    });
+    const ada = await call(as(board.ada), "inProject", { projectId: board.p1, id: board.t1 });
+    expect(ada).toEqual({ ok: true, data: expect.objectContaining({ id: board.t1 }) });
+    // A rowless method keeps it, and so does a service-wide Admin.
+    expect(await call(as(board.ed), "anyTask", { id: board.t1 })).toEqual({
+      ok: true,
+      notModified: true,
+      version: v,
+    });
+    expect(
+      await call(as(board.ed, { scopedTaskService: "Admin" }), "inProject", {
+        projectId: board.p2,
+        id: board.t1,
+      }),
+    ).toEqual({ ok: true, notModified: true, version: v });
+  });
+
+  it("keeps not modified for rowless only under a form that checks no row (ACCESS-6)", async () => {
+    // On a service with a policy, the scope form keyed by projectId must say
+    // rowless: it narrows in its handler, so a version would still tell ed of T1.
+    const policedContract = defineContract("policedTaskService", {
+      entity: taskEntity,
+      methods: {
+        inProject: query({
+          input: z.object({ projectId: z.string(), id: z.string() }),
+          output: nullable("entity"),
+        }),
+        own: query({ input: z.object({ id: z.string() }), output: nullable("entity") }),
+      },
+    });
+    const policedService = qd.defineService(policedContract, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      versionColumn: "updatedAt",
+      methods: {
+        inProject: {
+          access: { scope: "Read", of: projectContract, id: "projectId" },
+          rowless: true,
+          handler: ({ input, db }) =>
+            db.task.findFirst({ where: { id: input.id, projectId: input.projectId } }),
+        },
+        // A scope form on the service's own rows by id checks the row id names.
+        own: {
+          access: { scope: "Read", of: policedContract, id: "id" },
+          handler: ({ input, db }) => db.task.findUnique({ where: { id: input.id } }),
+        },
+      },
+    });
+    const app = await createTestApp({ services: [projectService, policedService], db: h.db });
+    apps.push(app as unknown as TestApp);
+    const v = versionTime(
+      (await h.prisma.task.findUniqueOrThrow({ where: { id: board.t1 } })).updatedAt,
+    );
+    const call = (principal: Principal, method: "inProject" | "own", input: object) =>
+      app.server.dispatcher.call({
+        service: "policedTaskService",
+        method,
+        input,
+        principal,
+        transport: "internal",
+        v,
+      });
+    expect(await call(as(board.ed), "inProject", { projectId: board.p2, id: board.t1 })).toEqual({
+      ok: true,
+      data: null,
+    });
+    expect(await call(as(board.ada), "own", { id: board.t1 })).toEqual({
+      ok: true,
+      notModified: true,
+      version: v,
+    });
   });
 
   it("gives no version without a change log or version column", async () => {

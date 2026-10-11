@@ -12,8 +12,16 @@
 // A page costs one statement, plus a second when the call counts the rows,
 // run beside the first. The first page of a sort on an optional column also
 // asks the storage adapter once per process whether it may hold null.
+//
+// A cursor longer than a cursor may be (`MAX_CURSOR_LENGTH`: a sort value
+// of thousands of characters) names its row instead of holding its values,
+// so paging goes on (the 5.1 audit's CRUD-8: such a cursor was refused).
+// The next page reads that row's order values first, inside the list's own
+// filter, so the row must still be one the caller may list: one more
+// statement, and `VALIDATION` once the row has left the list.
 
 import type { OrderBy } from "../../../contract/collections";
+import { MAX_CURSOR_LENGTH } from "../../../contract/kits/crudList";
 import { QuickdrawError } from "../../../protocol/errors";
 import { afterCursor, decodeCursor, encodeCursor, orderByOf } from "../../collections/cursor";
 import type { StorageAdapter, StorageWhere } from "../../storage";
@@ -65,23 +73,48 @@ function signed(order: OrderBy): OrderBy {
   return [[SIGNATURE, "asc"], ...order] as unknown as OrderBy;
 }
 
-/** The cursor of the page after `row`. */
+/** How a cursor that names its row is signed: this, then the order's signature. */
+const ROW = "row ";
+
+/** The shape of a cursor that names its row: its signature, then the row's id. */
+const ROW_CURSOR = [
+  [SIGNATURE, "asc"],
+  ["id", "asc"],
+] as unknown as OrderBy;
+
+/**
+ * The cursor of the page after `row`: its order values, or, when they would
+ * make the cursor longer than `MAX_CURSOR_LENGTH`, its id.
+ */
 export function cursorAfter(order: OrderBy, row: Row): string {
-  return encodeCursor(signed(order), { ...row, [SIGNATURE]: signatureOf(order) });
+  const cursor = encodeCursor(signed(order), { ...row, [SIGNATURE]: signatureOf(order) });
+  return cursor.length <= MAX_CURSOR_LENGTH
+    ? cursor
+    : encodeCursor(ROW_CURSOR, { [SIGNATURE]: `${ROW}${signatureOf(order)}`, id: row.id });
 }
 
-/** The order column values a cursor holds, or `VALIDATION` for one that is not a cursor of `order`. */
-export function cursorValues(order: OrderBy, cursor: string): readonly unknown[] {
-  let values: readonly unknown[];
-  try {
-    values = decodeCursor(signed(order), cursor);
-  } catch {
-    throw unreadable(NOT_A_CURSOR, ["cursor"]);
+/** What a cursor holds: the order values of the row before the page, or that row's id. */
+type CursorHeld = { readonly values: readonly unknown[] } | { readonly row: string };
+
+/** What a cursor of `order` holds, or `VALIDATION` for one that is not a cursor of `order`. */
+export function readCursor(order: OrderBy, cursor: string): CursorHeld {
+  const signature = signatureOf(order);
+  const decoded = (shape: OrderBy): readonly unknown[] | undefined => {
+    try {
+      return decodeCursor(shape, cursor);
+    } catch {
+      return undefined;
+    }
+  };
+  const values = decoded(signed(order));
+  if (values?.[0] === signature) {
+    return { values: values.slice(1) };
   }
-  if (values[0] !== signatureOf(order)) {
-    throw unreadable(NOT_A_CURSOR, ["cursor"]);
+  const named = decoded(ROW_CURSOR);
+  if (named?.[0] === `${ROW}${signature}` && typeof named[1] === "string") {
+    return { row: named[1] };
   }
-  return values.slice(1);
+  throw unreadable(NOT_A_CURSOR, ["cursor"]);
 }
 
 /**
@@ -133,9 +166,33 @@ export function refusal(error: unknown, read: Pick<PageRead, "cursor" | "filtere
   return refused;
 }
 
+/**
+ * The order values a page starts after: the cursor's, or those of the row it
+ * names, read inside the list's filter (`VALIDATION` once it has left).
+ */
+async function startValues(read: PageRead, cursor: string): Promise<readonly unknown[]> {
+  const held = readCursor(read.order, cursor);
+  if ("values" in held) {
+    return held.values;
+  }
+  let row: Row | null;
+  try {
+    row = await read.table.findFirst({
+      where: { AND: [read.where, { id: held.row }] },
+      select: Object.fromEntries(read.order.map(([column]) => [column, true])),
+    });
+  } catch (error) {
+    throw refusal(error, read);
+  }
+  if (row === null) {
+    throw unreadable(NOT_A_CURSOR, ["cursor"]);
+  }
+  return read.order.map(([column]) => row[column]);
+}
+
 /** Reads one page: `limit` rows after the cursor, in `order`, the next cursor, and the count when asked. */
 export async function readPage(read: PageRead): Promise<RowsPage> {
-  const values = read.cursor === undefined ? undefined : cursorValues(read.order, read.cursor);
+  const values = read.cursor === undefined ? undefined : await startValues(read, read.cursor);
   const nullable = await nullableColumns(read, values);
   const where =
     values === undefined

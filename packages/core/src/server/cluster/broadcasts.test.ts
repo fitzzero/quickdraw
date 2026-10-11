@@ -21,6 +21,8 @@ function never(): Promise<never> {
 function fakeServer() {
   const state = { ready: true, answering: true };
   const sent: { readonly event: unknown; readonly answered: boolean }[] = [];
+  /** What each send carried: the event and its arguments. */
+  const payloads: unknown[][] = [];
   const listeners = new Map<string, (...args: unknown[]) => void>();
   const io = {
     sockets: {
@@ -33,19 +35,21 @@ function fakeServer() {
         },
       },
     },
-    serverSideEmit(event: string) {
+    serverSideEmit(event: string, ...args: unknown[]) {
       sent.push({ event, answered: false });
+      payloads.push([event, ...args]);
       return true;
     },
-    serverSideEmitWithAck(event: string) {
+    serverSideEmitWithAck(event: string, ...args: unknown[]) {
       sent.push({ event, answered: true });
+      payloads.push([event, ...args]);
       return state.answering ? Promise.resolve([]) : never();
     },
     on(event: string, listener: (...args: unknown[]) => void) {
       listeners.set(event, listener);
     },
   };
-  return { io: io as unknown as QuickdrawIo, state, sent, listeners };
+  return { io: io as unknown as QuickdrawIo, state, sent, payloads, listeners };
 }
 
 const sleep = (ms: number) =>
@@ -69,6 +73,25 @@ function broadcastsOf(io: QuickdrawIo) {
 }
 
 describe("a node's answered broadcasts", () => {
+  it("carry the server's deployment, answered or not, and so do probes (RT-2)", async () => {
+    const { io, state, payloads } = fakeServer();
+    const { broadcasts } = broadcastsOf(io);
+    await broadcasts.broadcast("quickdraw:grants", { userId: "u1" });
+    state.answering = false;
+    await broadcasts.broadcast("quickdraw:grants", { userId: "u2" });
+    await broadcasts.broadcast("quickdraw:grants", { userId: "u3" });
+    await sleep(20);
+    expect(payloads.slice(0, 3)).toEqual([
+      ["quickdraw:grants", { userId: "u1", deployment: "quickdraw" }],
+      ["quickdraw:grants", { userId: "u2", deployment: "quickdraw" }],
+      ["quickdraw:grants", { userId: "u3", deployment: "quickdraw" }],
+    ]);
+    expect(payloads.find(([event]) => event === PROBE_EVENT)).toEqual([
+      PROBE_EVENT,
+      { deployment: "quickdraw" },
+    ]);
+  });
+
   it("wait for every node's answer while every node answers", async () => {
     const { io, sent } = fakeServer();
     const { broadcasts, logger } = broadcastsOf(io);

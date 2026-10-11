@@ -7,11 +7,12 @@
 // With a condition (the default "contains", or a strategy's `where`): one
 // keyset page (`../crud/page.ts`) of the rows that match it, that the
 // policy's `accessWhere` lets the caller read at the method's row level and,
-// in a scope, that are its members; in the scope collection's order, else by
-// id. Statements: the scope's authorization (the anchor's policy reads; none
-// with a service-wide `Admin` grant), the links of a `via` scope, the access
-// filter's own reads (none for `owner` and `jsonAcl` policies or a
-// service-wide `Admin` grant), then one for the page.
+// in a scope, that are its members; a call with a scope comes in the scope
+// collection's order, one without by id. Statements: the scope's
+// authorization (the anchor's policy reads; none with a service-wide `Admin`
+// grant), the links of a `via` scope, the access filter's own reads (none
+// for `owner` and `jsonAcl` policies or a service-wide `Admin` grant), then
+// one for the page.
 //
 // With a strategy's `ids`: the rows of the ranked ids (and, in a scope, its
 // members), read in one statement, then only those the caller may read at

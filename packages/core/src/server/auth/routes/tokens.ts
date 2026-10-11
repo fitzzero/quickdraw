@@ -6,7 +6,7 @@
 // app's own sign-in flows (login codes, an embedded activity), so the
 // sessions they start work with `socketAuth` like the routes' own.
 
-import { createJWT, verifyJWT } from "../jwt";
+import { createJWT, readVerifiedJWT } from "../jwt";
 import type { AuthSession, SessionMeta, SessionStore } from "./sessions";
 
 /** The shortest `jwtSecret` the kit accepts: HS256 wants a key of 256 bits or more. */
@@ -81,7 +81,7 @@ export async function issueSession(
  */
 export async function liveSession(keys: SessionKeys, token: string): Promise<AuthSession | null> {
   checkSessionKeys(keys, "liveSession");
-  const payload = await verifyJWT(token, keys.jwtSecret);
+  const payload = await readVerifiedJWT(token, keys.jwtSecret);
   if (
     payload === null ||
     typeof payload.userId !== "string" ||

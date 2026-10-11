@@ -8,6 +8,7 @@ import { z } from "zod";
 import { defineContract, search as contractSearch } from "../../../index";
 import { projectContract, qd } from "../../emit/__tests__/live";
 import { describeTools } from "../../mcp/index";
+import { labelContract } from "../../collections/__tests__/fixture";
 import { inherit, search } from "../../index";
 import { cardSchema, defineSearchService, searchContract } from "./__tests__/fixture";
 import { taskEntity } from "../crud/__tests__/fixture";
@@ -80,6 +81,23 @@ describe("search.handlers", () => {
     expect(() => search.handlers(strayItem, { access: "public" })).toThrow(
       "the item of cService.search must be its entity schema or one of its projections' schemas",
     );
+  });
+});
+
+describe('share: "all" on a search', () => {
+  it("is refused: its result depends on who asks (ACCESS-2)", () => {
+    const handlers = search.handlers(searchContract, { access: "authenticated" });
+    const define = (entry: object) => () =>
+      qd.defineService(searchContract, {
+        model: "task",
+        access: inherit({ from: projectContract, via: "projectId" }),
+        collections: { board: { anchor: projectContract }, byLabel: { anchor: labelContract } },
+        methods: { ...handlers, search: { ...handlers.search, ...entry } } as never,
+      });
+    expect(define({ share: "all" })).toThrow(
+      'method "search" is a kit method whose result depends on who asks, so it cannot share: "all"',
+    );
+    expect(define({ share: "caller" })).not.toThrow();
   });
 });
 

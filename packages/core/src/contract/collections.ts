@@ -43,7 +43,11 @@ export interface ViaOptions<
   Entry extends string = string,
   Scope extends string = string,
 > {
-  /** The junction model, as the database client names it: `"chatMember"`. */
+  /**
+   * The junction model, as the database client names it: `"chatMember"`. It
+   * needs an `id` column (keep the pair unique with `@@unique`, never a
+   * composite `@@id`), or its writes are not tracked and never move a scope.
+   */
   readonly model: Model;
   /** The junction column holding the entry's id: `"chatId"`. */
   readonly entry: Entry;

@@ -14,7 +14,15 @@
 //   scratch (`live/liveData.ts`);
 // - the first hello on new credentials naming the same user (a refreshed
 //   token) keeps the cache and refetches it, as the new credentials;
-// - a hello after a reconnect with the same credentials changes nothing.
+// - a hello after a reconnect with the same credentials changes nothing;
+// - a session the server ends (its disconnect, or a connect or reconnect
+//   refused with `UNAUTHENTICATED` or `FORBIDDEN`; the 5.1 audit's CLIENT-1),
+//   data a server render prefetched included, empties the
+//   cache as another user's hello does, and the cache is then loaded for
+//   nobody: the hooks show nothing of what was cached, and the live data
+//   loads from scratch once a hello names a user again. The session listens
+//   to the socket's own events for this, so new credentials (`setAuth`),
+//   which also clear the hello, still await the hello to decide.
 //
 // The hooks and the live stores read nothing before the hello on the current
 // credentials has arrived (`context.ts`, `query.ts`, `live/host.ts`), so no
@@ -37,15 +45,18 @@ import type { QueryClient } from "@tanstack/react-query";
 import { SERVER_EVENTS } from "../contract/names";
 import { isName, isRecord } from "../protocol/guards";
 import type { HelloFrame } from "../protocol/version";
-import type { QuickdrawConnection } from "./connection";
+import { isServerDisconnect, isSessionRefusal, type QuickdrawConnection } from "./connection";
 import type { InvalidationCoordinator } from "./coordinator";
 import { KEY_ROOT, serviceKeyPrefix } from "./keys";
 import { resetOverlays } from "./optimistic";
 import { notifyEach } from "./watch";
 
-/** What a new `qd:hello` meant for the cache. */
+/** What a new `qd:hello`, or the end of the session, meant for the cache. */
 export interface HelloChange {
-  /** It names another user than the cache was loaded for: the cache was emptied. */
+  /**
+   * It names another user than the cache was loaded for, or the server ended
+   * the session: the cache was emptied.
+   */
   readonly switched: boolean;
   /** No hello was held before it: the connection's first, or the first on new credentials. */
   readonly first: boolean;
@@ -116,6 +127,26 @@ function createSession(connection: QuickdrawConnection, queryClient: QueryClient
       notifyEach(listeners, (listener) => {
         listener(change);
       });
+    }
+  });
+  // The server ended the session: nothing cached is anyone's any more.
+  const end = (): void => {
+    queryClient.removeQueries({ queryKey: [KEY_ROOT] });
+    resetOverlays(queryClient);
+    loadedFor.set(queryClient, { userId: null });
+    notifyEach(listeners, (listener) => {
+      listener({ switched: true, first: false });
+    });
+  };
+  const { socket } = connection;
+  socket.on("disconnect", (reason: unknown) => {
+    if (isServerDisconnect(reason)) {
+      end();
+    }
+  });
+  socket.on("connect_error", (error: unknown) => {
+    if (!socket.active && isRecord(error) && isSessionRefusal(error.data)) {
+      end();
     }
   });
   return Object.freeze({

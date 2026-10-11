@@ -14,6 +14,15 @@
 // - A refused handshake says why in its `connect_error` data: another
 //   protocol (`PROTOCOL_MISMATCH`, which calls `onProtocolMismatch`) or failed
 //   authentication (`UNAUTHENTICATED`). Socket.IO does not retry either.
+// - A session the server ends is signed out (the 5.1 audit's CLIENT-1): the
+//   server's disconnect (`io server disconnect`: signed out everywhere,
+//   revoked, expired, or a flooded channel) and a connect or reconnect
+//   refused with `UNAUTHENTICATED` or `FORBIDDEN` (its `authenticate`
+//   failed for any reason, or the handshake was forbidden) forget the hello
+//   and the grants, and such a refusal fails the calls waiting in the send
+//   buffer with `CANCELLED`; the cache session empties every cache, data a
+//   server render prefetched included (`session.ts`). A dropped transport,
+//   a `qd:rotate` or another protocol keeps everything.
 // - `qd:rotate` reconnects at a random moment within its window; `qd:access`
 //   updates the grants in the state.
 // - `RATE_LIMITED` answers start a backoff window per kind (`backoff.ts`).
@@ -36,8 +45,9 @@
 // (4.1 `src/client/QuickdrawProvider.tsx:306-312`), and cleared every
 // subscription on a disconnect (`:326-330`). Here one socket lives as long as
 // the connection (`socket.ts`): new credentials reconnect it, and
-// `socketOptions` pass through to `io()`. Caches are never cleared on a
-// disconnect.
+// `socketOptions` pass through to `io()`. Caches are kept across a disconnect
+// the client did not cause the session's end with: a dropped transport or a
+// rotation; a session the server ended empties them.
 
 import { SERVER_EVENTS } from "../contract/names";
 import { QuickdrawError } from "../protocol/errors";
@@ -127,12 +137,16 @@ export interface ConnectionState {
    * buffer); `setAuth` and `close` end it.
    */
   readonly reconnecting: boolean;
-  /** The server's `qd:hello` on the current credentials, or `null` before it arrives. */
+  /**
+   * The server's `qd:hello` on the current credentials, or `null` before it
+   * arrives, and again once the server ended the session (its disconnect, or
+   * a connect or reconnect refused with `UNAUTHENTICATED` or `FORBIDDEN`).
+   */
   readonly hello: HelloFrame | null;
   /**
    * The principal's service grants: from the server's `qd:hello`, then from
    * every `qd:access` push; `null` before the hello on the current
-   * credentials arrives.
+   * credentials arrives, and once the server ended the session.
    */
   readonly serviceAccess: HelloFrame["serviceAccess"] | null;
   /** Why the last handshake was refused, while `status` is `refused`. */
@@ -326,6 +340,21 @@ function failBuffered(socket: QuickdrawSocket, error: Error): void {
       }
     }
   }
+}
+
+/**
+ * True for the reason Socket.IO gives a disconnect the server made
+ * (`socket.disconnect(true)`: signed out everywhere, revoked, expired, a
+ * flooded channel). A dropped transport, a ping timeout and the client's own
+ * disconnect give other reasons.
+ */
+export function isServerDisconnect(reason: unknown): boolean {
+  return reason === "io server disconnect";
+}
+
+/** True for the `connect_error` data of a handshake refused for its session: `UNAUTHENTICATED` or `FORBIDDEN`. */
+export function isSessionRefusal(data: unknown): boolean {
+  return isRecord(data) && (data.code === "UNAUTHENTICATED" || data.code === "FORBIDDEN");
 }
 
 function refusalOf(error: Error & { readonly data?: unknown }): ConnectionRefusal {
@@ -558,9 +587,11 @@ function listenToSocket(wiring: Wiring): void {
       });
     }
   });
-  socket.on("disconnect", () => {
+  socket.on("disconnect", (reason: unknown) => {
     const status = socket.active ? "connecting" : lifecycle.stoppedStatus();
-    store.set({ status, reconnecting: status === "connecting" && session.established });
+    // The server ended the session: who it was is no longer known.
+    const ended = isServerDisconnect(reason) ? { hello: null, serviceAccess: null } : {};
+    store.set({ status, reconnecting: status === "connecting" && session.established, ...ended });
   });
   socket.on("connect_error", (error: Error & { readonly data?: unknown }) => {
     if (socket.active) {
@@ -568,7 +599,20 @@ function listenToSocket(wiring: Wiring): void {
     }
     const refusal = refusalOf(error);
     session.established = false;
-    store.set({ status: "refused", reconnecting: false, refusal });
+    const ended = isSessionRefusal(error.data);
+    if (ended) {
+      // Socket.IO would send them on the next connect, as whoever the credentials then name.
+      failBuffered(
+        socket,
+        new QuickdrawError("CANCELLED", "The session ended before the call was sent"),
+      );
+    }
+    store.set({
+      status: "refused",
+      reconnecting: false,
+      refusal,
+      ...(ended ? { hello: null, serviceAccess: null } : {}),
+    });
     if (refusal.code === "PROTOCOL_MISMATCH") {
       wiring.onProtocolMismatch(refusal);
     }

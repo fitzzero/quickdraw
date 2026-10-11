@@ -192,10 +192,13 @@ export function transportCookieNaming(cookieName: string | undefined): SessionCo
 }
 
 /**
- * Where an HTTP call's token came from. `"cookie"`: the session cookie, which
- * a browser sends with a request any page makes, so whoever accepts it checks
- * the request's `Origin` (`socketAuth` does). `"bearer"`: an
- * `Authorization: Bearer` header, which a page sends only on purpose.
+ * The credential the HTTP transport chose for a call (the cookie first).
+ * `"cookie"`: the session cookie, which a browser sends with a request any
+ * page makes, so whoever accepts it checks the request's `Origin`
+ * (`socketAuth` does). `"bearer"`: an `Authorization: Bearer` header, which a
+ * page sends only on purpose. For an `authenticate` `socketAuth` did not
+ * make, `auth.token` holds the bearer token alone, even when this says
+ * `"cookie"`; the cookie is `request.sessionCookie`.
  */
 export type HttpCredentialSource = "cookie" | "bearer";
 
@@ -205,24 +208,38 @@ export interface HttpCredential {
   readonly from: HttpCredentialSource;
 }
 
+/** An HTTP call's session cookie and bearer token, each `null` when it has none. */
+export interface HttpCredentials {
+  readonly cookie: string | null;
+  readonly bearer: string | null;
+}
+
 /**
- * The credential an HTTP call authenticates with: its session cookie, under
- * the names `sessionCookieNamesFor` gives the request (by how the app named
- * the cookie and whether the request came over HTTPS), or else its bearer
- * token; `null` with neither.
+ * Both credentials an HTTP call carries: its session cookie, under the names
+ * `sessionCookieNamesFor` gives the request (by how the app named the cookie
+ * and whether the request came over HTTPS), and its bearer token.
+ */
+export function httpCredentialsOf(req: HttpRequest, naming: SessionCookieNaming): HttpCredentials {
+  const cookie = cookieToken(cookiesOf(req), sessionCookieNamesFor(req, naming));
+  const bearer = extractBearerOrCookieToken({
+    headers: { authorization: req.headers.authorization },
+  });
+  return { cookie, bearer: bearer === "" ? null : bearer };
+}
+
+/**
+ * The credential an HTTP call authenticates with: its session cookie (see
+ * `httpCredentialsOf`), or else its bearer token; `null` with neither.
  */
 export function httpCredentialOf(
   req: HttpRequest,
   naming: SessionCookieNaming,
 ): HttpCredential | null {
-  const cookie = cookieToken(cookiesOf(req), sessionCookieNamesFor(req, naming));
+  const { cookie, bearer } = httpCredentialsOf(req, naming);
   if (cookie !== null) {
     return { token: cookie, from: "cookie" };
   }
-  const bearer = extractBearerOrCookieToken({
-    headers: { authorization: req.headers.authorization },
-  });
-  return bearer === null || bearer === "" ? null : { token: bearer, from: "bearer" };
+  return bearer === null ? null : { token: bearer, from: "bearer" };
 }
 
 /** The token of {@link httpCredentialOf}, or `null`. */

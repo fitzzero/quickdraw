@@ -7,14 +7,17 @@
  * via `registerMockOAuthProvider`. Users are supplied by the app (typically
  * seeded demo accounts); no real credentials are involved.
  *
- * Production hard-block: routes are never mounted when NODE_ENV is
- * "production" or ENABLE_MOCK_OAUTH !== "true", and every handler re-checks
- * NODE_ENV at request time. Apps should add a third layer and refuse to boot
- * in production with the flag set.
+ * Development only: routes are mounted only when ENABLE_MOCK_OAUTH is
+ * "true" and NODE_ENV is "development" or "test" (an allowlist: an unset
+ * NODE_ENV, "prod" or "staging" mount nothing, the 5.1 audit's AUTH-3), every
+ * handler re-checks NODE_ENV at request time, and mounting them logs a
+ * warning. Apps should add a third layer and refuse to boot outside
+ * development with the flag set.
  */
 
 import { randomBytes } from "crypto";
 import { consoleLogger, type Logger } from "../../contract/logger";
+import { developmentSignInsAllowed, nodeEnvLabel } from "./devSignIns";
 import type { GoogleUser } from "./google";
 import type { OAuthProvider } from "./oauth";
 import { validateRedirectOrigin } from "./validateOrigin";
@@ -35,8 +38,9 @@ const TOKEN_TTL_MS = 60 * 60 * 1000;
 const DEV_PRIVATE_ORIGIN_REGEX =
   /^http:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):\d+$/;
 
+/** True when ENABLE_MOCK_OAUTH is "true" and NODE_ENV is "development" or "test". */
 export function isMockOAuthEnabled(): boolean {
-  return process.env.ENABLE_MOCK_OAUTH === "true" && process.env.NODE_ENV !== "production";
+  return process.env.ENABLE_MOCK_OAUTH === "true" && developmentSignInsAllowed();
 }
 
 export interface MockOAuthProviderOptions {
@@ -242,7 +246,7 @@ function sweep(store: Map<string, MockGrant>): void {
 
 function guard(res: MockResponse): boolean {
   // Request-time re-check defends against env mutation after boot.
-  if (process.env.NODE_ENV === "production") {
+  if (!developmentSignInsAllowed()) {
     res.status(404).json({ error: "Not found" });
     return false;
   }
@@ -349,8 +353,9 @@ function userinfoHandler({ options, tokens }: MockEndpoints): MockHandler {
  * Mount the mock OAuth provider endpoints (authorize, token, userinfo) on an
  * Express-compatible router.
  *
- * No-ops (returning false) unless `isMockOAuthEnabled()` — i.e. in production
- * or without ENABLE_MOCK_OAUTH=true the routes are never mounted.
+ * No-ops (returning false) unless `isMockOAuthEnabled()` — i.e. without
+ * ENABLE_MOCK_OAUTH=true, or unless NODE_ENV is development or test, the
+ * routes are never mounted. Mounting them logs a warning.
  */
 export function registerMockOAuthProvider(
   router: MockOAuthRouter,
@@ -360,7 +365,9 @@ export function registerMockOAuthProvider(
 
   if (!isMockOAuthEnabled()) {
     if (process.env.ENABLE_MOCK_OAUTH === "true") {
-      logger.error("Mock OAuth is enabled but NODE_ENV is production — refusing to mount routes");
+      logger.error(
+        `Mock OAuth is enabled but NODE_ENV is ${nodeEnvLabel()}: the mock runs only when NODE_ENV is development or test, so its routes are not mounted; set NODE_ENV=development to use it`,
+      );
     }
     return false;
   }
@@ -377,6 +384,8 @@ export function registerMockOAuthProvider(
   router.post(`${endpoints.prefix}/token`, tokenHandler(endpoints));
   router.get(`${endpoints.prefix}/userinfo`, userinfoHandler(endpoints));
 
-  logger.info(`Mock OAuth provider mounted at ${endpoints.prefix} (development only)`);
+  logger.warn(
+    `Mock OAuth provider mounted at ${endpoints.prefix}: anyone who reaches it signs in as any user it lists (NODE_ENV=${process.env.NODE_ENV ?? ""}; development and tests only)`,
+  );
   return true;
 }

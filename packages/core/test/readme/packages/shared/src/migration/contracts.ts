@@ -39,6 +39,12 @@ export const taskContract = defineContract("taskService", {
       output: z.object({ count: z.number() }),
       describe: "Archives every task of a project.",
     }),
+    joinProject: mutation({
+      input: z.object({ projectId: z.string() }),
+      output: z.boolean(),
+      describe:
+        "Joins the caller's socket to a project's room, where its cursors and archive events go.",
+    }),
   },
   collections: {
     // was defineCollection("byProject", ...): declared, so its deltas follow tracked writes
@@ -60,8 +66,14 @@ export const taskContract = defineContract("taskService", {
     },
     cursorMoved: { payload: cursorSchema, describe: "Another user's cursor moved." },
   },
-  // was defineChannel
-  channels: { cursor: { payload: cursorSchema, describe: "Where a user's cursor is." } },
+  // was defineChannel; only from a socket joinProject put in the project's room
+  channels: {
+    cursor: {
+      payload: cursorSchema,
+      describe: "Where a user's cursor is.",
+      requires: { room: (cursor) => `project:${cursor.projectId}` },
+    },
+  },
 });
 // #endregion
 

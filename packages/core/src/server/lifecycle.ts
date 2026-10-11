@@ -5,6 +5,7 @@
 
 import type { Server as HttpServer } from "node:http";
 import type { Logger } from "../contract/logger";
+import { startTrackedModelsCheck } from "./access/trackedModels";
 import {
   callerGrantsOf,
   createCaller,
@@ -203,4 +204,30 @@ export function prepareWatchdog<O extends { readonly onCall?: (record: CallRecor
       return watchdog;
     },
   };
+}
+
+/** The checks each server started at start, by the server's dispatcher, which a test app awaits. */
+const STARTUP_CHECKS = new WeakMap<object, Promise<void>>();
+
+/**
+ * Starts the checks `createServer` makes at start, in the background since
+ * it starts synchronously: that every model access depends on is tracked
+ * (`access/trackedModels.ts`). They are kept by `dispatcher`, the server's,
+ * for {@link startupChecksOf}.
+ */
+export function startStartupChecks(
+  dispatcher: Pick<Dispatcher, "registry">,
+  options: Parameters<typeof startTrackedModelsCheck>[1],
+  logger: Logger,
+): void {
+  STARTUP_CHECKS.set(dispatcher, startTrackedModelsCheck(dispatcher.registry, options, logger));
+}
+
+/**
+ * The checks `server` started at start: resolved once they are done, or
+ * rejected with the `DevWarningError` of a strict test app. `createTestApp`
+ * awaits them; an app need not.
+ */
+export function startupChecksOf(server: { readonly dispatcher: object }): Promise<void> {
+  return STARTUP_CHECKS.get(server.dispatcher) ?? Promise.resolve();
 }

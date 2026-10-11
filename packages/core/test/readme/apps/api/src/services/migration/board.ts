@@ -45,6 +45,7 @@ export const boardService = qd.defineService(boardContract, {
   methods: {
     getTasksByStatus: {
       access: { scope: "Read", of: projectContract, id: "projectId" },
+      // the result depends on the input alone, so one run serves every viewer
       share: "all",
       handler: async ({ input, db }) => {
         const tasks = await db.task.findMany({

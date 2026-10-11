@@ -41,9 +41,12 @@ working on matching files.
 ## The command
 
 - `quickdraw-skills link` writes each link as a relative symlink into
-  `node_modules/@fitzzero/quickdraw-skills` (or into the package wherever it
-  is installed, when it is not at the repo root) in the nearest directory
-  above the working directory that holds `.git`. It replaces or prunes only
+  `node_modules/@fitzzero/quickdraw-skills`, in the project that installs
+  the package: the nearest directory above the working directory with a
+  `package.json` and `node_modules/@fitzzero/quickdraw-skills`, whatever
+  `.git` is around it. It fails when there is none, and refuses to link
+  into the home directory, whose `.claude` holds every project's settings.
+  It replaces or prunes only
   links that point into this package (through
   `@fitzzero/quickdraw-skills/`, or landing in its directory): a real file
   or directory, or another package's link, is left alone with a warning,

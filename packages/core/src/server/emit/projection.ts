@@ -63,7 +63,7 @@ function isPlain(value: unknown): value is object {
  * document `root` (`#`, `#/definitions/<name>` or `#/$defs/<name>`), or
  * itself without one; `undefined` for a reference it cannot follow.
  */
-function referenced(node: UnknownRecord, root: UnknownRecord): UnknownRecord | undefined {
+export function referenced(node: UnknownRecord, root: UnknownRecord): UnknownRecord | undefined {
   const ref = node.$ref;
   if (typeof ref !== "string") {
     return node;
@@ -73,8 +73,15 @@ function referenced(node: UnknownRecord, root: UnknownRecord): UnknownRecord | u
   }
   const match = /^#\/(definitions|\$defs)\/(.+)$/.exec(ref);
   const defs = match === null ? undefined : root[match[1] ?? ""];
-  const target = isRecord(defs) ? defs[match?.[2] ?? ""] : undefined;
+  // A JSON Pointer writes "~" as "~0" and "/" as "~1" (RFC 6901): Zod does, for an id holding them.
+  const name = (match?.[2] ?? "").replaceAll("~1", "/").replaceAll("~0", "~");
+  const target = isRecord(defs) ? defs[name] : undefined;
   return isRecord(target) ? target : undefined;
+}
+
+/** `name` as a JSON Pointer token: "~" as "~0" and "/" as "~1" (RFC 6901). */
+export function pointerToken(name: string): string {
+  return name.replaceAll("~", "~0").replaceAll("/", "~1");
 }
 
 /**

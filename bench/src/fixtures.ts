@@ -1,12 +1,19 @@
 import { assemble } from "./assemble";
 import { parseOptions } from "./cli";
 import type { BenchResult, Repetition } from "./result-schema";
-import { buildWorkload } from "./workload";
+import { buildWorkload, type Workload } from "./workload";
 
 /**
  * Result files built the way the runner builds them, for the harness's unit
  * tests (`*.test.ts`). Nothing here runs a server.
  */
+
+/**
+ * The workload every sample describes. It is deterministic and takes about a
+ * quarter of a second to build, which a loaded machine stretched past the
+ * tests' 5 s limit when every sample built its own: built once.
+ */
+let workload: Workload | undefined;
 
 export interface RepetitionValues {
   p95: number;
@@ -115,7 +122,7 @@ export function sampleResult(options: SampleOptions = {}): BenchResult {
       dbPoolMax: 10,
       logging: `${target} defaults`,
     },
-    workload: buildWorkload(),
+    workload: (workload ??= buildWorkload()),
     order: ["board-steady#1", "board-steady#2", "board-steady#3"],
     runs: new Map([
       [

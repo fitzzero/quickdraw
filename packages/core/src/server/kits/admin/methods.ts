@@ -4,9 +4,12 @@
 // (4.1 `src/server/BaseService.ts:1167-1183`).
 
 import type { AdminMethodName } from "../../../contract/kits/admin";
+import { kitRuntimeOf } from "../../context";
+import { relationKeysOf } from "../columns";
 import type { KitHandler, KitHandlerArgs } from "../crud/runtime";
 import { adminListHandler } from "./list";
 import { adminReemitHandler, adminSubscribersHandler } from "./live";
+import { grantsColumnFor, withReadOnlyFields } from "./meta";
 import {
   adminCreateHandler,
   adminDeleteHandler,
@@ -30,10 +33,32 @@ const MAKERS: Readonly<
   adminReemit: adminReemitHandler,
 });
 
-/** `adminMeta`'s handler: the answer worked out when the handlers were made. */
+type Meta = ReturnType<AdminContext["fieldsFor"]>["meta"];
+
+/**
+ * `adminMeta`'s handler: the answer worked out for the server's grants
+ * column on the service's model (`grantsColumnFor`), with the relations of
+ * the service's model (which only the service knows, from its projections)
+ * shown as not editable, once per service and column.
+ */
 function adminMetaHandler(context: AdminContext): KitHandler {
-  const { meta } = context.fields;
-  const handler = (_args: KitHandlerArgs): Promise<typeof meta> => Promise.resolve(meta);
+  const byService = new WeakMap<object, Map<string, Meta>>();
+  const handler = (args: KitHandlerArgs): Promise<Meta> => {
+    const runtime = kitRuntimeOf(args.ctx);
+    if (runtime === undefined) {
+      return Promise.resolve(context.fieldsFor(undefined).meta);
+    }
+    const { service } = runtime;
+    const column = grantsColumnFor(service.model, runtime.grantsSource);
+    const answers = byService.get(service) ?? new Map<string, Meta>();
+    byService.set(service, answers);
+    let answer = answers.get(column ?? "");
+    if (answer === undefined) {
+      answer = withReadOnlyFields(context.fieldsFor(column).meta, relationKeysOf(service));
+      answers.set(column ?? "", answer);
+    }
+    return Promise.resolve(answer);
+  };
   return handler as KitHandler;
 }
 

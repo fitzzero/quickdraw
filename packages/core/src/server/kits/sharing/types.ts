@@ -97,9 +97,13 @@ export interface SharingUserLookup {
 }
 
 /**
- * Finds the user a by-name method means: their user id, or `null` (or
+ * Finds the one user a by-name method means: their user id, or `null` (or
  * `undefined`) when there is no such user, which fails the call with
- * `NOT_FOUND`.
+ * `NOT_FOUND`. It must name exactly one user: look a user up by something
+ * unique and verified (an email, with `findUnique`), and take a display
+ * name's user only when exactly one user has that name, else `null`. A
+ * `findFirst` by name hands the share to whoever registered the name first
+ * (the 5.1 audit's SHARE-2).
  */
 export type SharingResolveUser<Db = unknown> = (
   lookup: SharingUserLookup,
@@ -129,11 +133,16 @@ export type SharingHandlersOptions<C extends AnyContract, A, Db = unknown> = {
   readonly onChange?: SharingOnChange<Db>;
   /**
    * The kit's methods whose access form is their whole check on purpose:
-   * each gets `rowless: true`. On a service with an access policy,
+   * each gets `rowless: true`. A change still never touches a user above
+   * the caller's own level on the row, which under such a form is their
+   * level on the row (often none): name `service` in the form for a
+   * service-wide grant to count. On a service with an access policy,
    * `defineService` refuses an access-list method (`share`, `unshare`,
    * `setLevel`, `listShares`, `shareByName`: their input names the row as
-   * `id`) under `"public"`, `"authenticated"` or `{ service: L }` below
-   * `Admin` unless it is named here.
+   * `id`) under a form that asks the policy nothing about that row
+   * (`"public"`, `"authenticated"`, `{ service: L }` below `Admin`,
+   * `custom`, `{ scope }`, or `{ entry }` on another key) unless it is named
+   * here.
    */
   readonly rowless?: readonly SharingMethodsOf<C>[];
 } & ([SharingByNameOf<C>] extends [never]
@@ -141,7 +150,10 @@ export type SharingHandlersOptions<C extends AnyContract, A, Db = unknown> = {
       readonly resolveUser?: `sharing.handlers: resolveUser is for shareByName and inviteByName, which ${C["name"]} does not have`;
     }
   : {
-      /** Finds the user `shareByName` and `inviteByName` mean, by name or email. */
+      /**
+       * Finds the one user `shareByName` and `inviteByName` mean, by name or
+       * email, or `null`: never the first of several (`SharingResolveUser`).
+       */
       readonly resolveUser: SharingResolveUser<Db>;
     });
 

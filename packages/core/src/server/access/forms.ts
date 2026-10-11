@@ -14,6 +14,11 @@ import type { AccessForm, CustomAccess, EntryAccess, ScopeAccess } from "./types
  * custom access cannot `share: "all"`, because its result may depend on who
  * asks.
  *
+ * It replaces the row check: on a service with an access policy,
+ * `defineService` refuses it on a method whose input has `id` unless the
+ * method says `rowless: true`. A check on the caller's claims is the
+ * method's `claims`, beside an `entry` form: no grant skips that.
+ *
  * @example
  * access: custom((ctx, input) => ctx.principal.userId === input.ownerId),
  */

@@ -353,7 +353,9 @@ export const cardSchema = taskSchema.omit({ notes: true });
 
 The sessions, the secret and the grants the server reads,
 `apps/api/src/auth.ts`. Sessions are issued by the auth routes, mounted on
-the same `app` (see the [auth routes kit](#auth-routes-kit)):
+the same `app` (see the [auth routes kit](#auth-routes-kit)). `verifySession`
+checks a bearer token against the session store on every call
+(`bearerAuth`), so a signed-out or revoked session stops at once:
 
 <!-- example: apps/api/src/auth.ts -->
 
@@ -361,7 +363,7 @@ the same `app` (see the [auth routes kit](#auth-routes-kit)):
 // The app's sessions, token check and grants, for the README's server examples.
 
 import type { AccessLevel } from "@fitzzero/quickdraw-core";
-import { createMemorySessionStore, verifyJWT } from "@fitzzero/quickdraw-core/server/auth";
+import { bearerAuth, createMemorySessionStore } from "@fitzzero/quickdraw-core/server/auth";
 import { db } from "./db";
 import type { AppPrincipal } from "./quickdraw";
 
@@ -371,14 +373,17 @@ export const jwtSecret = process.env.JWT_SECRET ?? "";
 /** The sessions the auth routes issue. In production, a store over the database (see the auth routes kit). */
 export const sessions = createMemorySessionStore();
 
-/** The user a bearer token signs in, or `null` for no token. */
-export async function verifySession(token: unknown): Promise<AppPrincipal | null> {
-  if (typeof token !== "string") {
-    return null;
-  }
-  const payload = await verifyJWT(token, jwtSecret);
-  return payload === null ? null : { userId: payload.userId, kind: "user" };
-}
+/**
+ * The agent a bearer token signs in, or `null` for no token: checked against
+ * the session store on every call, so a signed-out or revoked session stops
+ * at once. An agent, so methods with `kinds: ["user"]` refuse it. Never
+ * `verifyJWT` alone, which checks no session.
+ */
+export const verifySession = bearerAuth({
+  sessions,
+  jwtSecret,
+  loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "agent" }),
+});
 
 /** A user's service-wide grants, as stored in `User.serviceAccess`. */
 export async function loadGrants(userId: string): Promise<Record<string, AccessLevel>> {
@@ -422,6 +427,9 @@ model Project {
 }
 
 // A membership table: role holds an access level ("Read" | "Moderate" | "Admin").
+// It has an id, and its pair is unique by @@unique: the write tracker keys
+// rows by id, so a table keyed by a composite @@id is never tracked, and a
+// member removed from it would never be revoked.
 model ProjectMember {
   id        String  @id @default(cuid())
   projectId String
@@ -541,6 +549,9 @@ export const healthContract = defineContract("healthService", {
   because the client exposes each as `qd.<service>.<name>`. `subscribe`,
   `unsubscribe`, `call`, `then`, `useEntity`, `useEntities`, `admin` and
   names starting with `$` are reserved.
+- A service name holds no `:` or `@`: it is part of every room name of the
+  service (`qd:e:{service}:{id}@{level}`, `qd:c:{service}:{collection}:{scope}`),
+  which must split one way only, so `defineContract` throws on one.
 - Schemas are any Standard Schema. A projection's keys, admin field
   metadata, MCP tool schemas and `quickdraw-docs` read Standard JSON Schema,
   which Zod 4.2 or later provides; a projection whose schema cannot describe
@@ -611,9 +622,19 @@ export const taskService = qd.defineService(task, {
   flush together once; and it is cancelled with `ctx.signal`. It is typed
   by the `contracts` of `initQuickdraw`'s types, as `qd.caller` is.
 - `share: "caller"` runs identical concurrent calls of one principal once,
-  `share: "all"` across principals (not with `custom` access); `ttlMs` keeps
-  a shared result. Callers of a shared run whose levels hide the same fields
-  get one copy of its result, encoded once for all of their sockets.
+  `share: "all"` across principals; `ttlMs` keeps a shared result. A
+  `"all"` run's handler sees the first caller's `ctx` and every caller gets
+  its result, so a result shared across principals must depend on the
+  input only: it never reads `ctx.principal`, `ctx.services`, `ctx.mcp` or
+  a context field made from them (in development, reading one of the first
+  three warns `[quickdraw:shared-principal]`; copying or logging the whole
+  `ctx` reads them too). `"all"` is refused with
+  `custom` access and on the kit methods whose result depends on the caller
+  (the read/write kit's `list` and `getMany`, `search`, the sharing kit's
+  `listShares` and `listMembers`, the admin kit's `adminList` and
+  `adminGet`): give those `"caller"`. Callers of a shared run whose levels
+  hide the same fields get one copy of its result, encoded once for all of
+  their sockets.
   `version(input, ctx)` answers "not modified" for a query whose result the
   caller already holds.
 - Every call runs a pipeline: look up, concurrency (16 queries in flight per
@@ -679,7 +700,7 @@ not exist or a malformed access list denies.
 <!-- example: apps/api/src/services/examples/access.ts#access -->
 
 ```ts
-import { anyOf, crud, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
+import { anyOf, crud, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
 
 export const projectService = qd.defineService(project, {
   // the Prisma model the rows live in
@@ -728,10 +749,9 @@ export const taskService = qd.defineService(task, {
         db.task.update({ where: { id: input.id }, data: { assigneeId: ctx.principal.userId } }),
     },
     triage: {
-      // a check on a token's claims stays a custom form
-      access: custom(
-        (ctx, input) => ctx.principal.claims?.scope === "triage" && input.status !== "archived",
-      ),
+      // Moderate on the task's project, from a token that may triage: claims add to the form
+      access: { entry: "Moderate" },
+      claims: (claims, input) => claims?.scope === "triage" && input.status !== "archived",
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { status: input.status } }),
     },
@@ -745,7 +765,9 @@ export const taskService = qd.defineService(task, {
   `{ scope: L, of, id }` (the level on a row of another service) and
   `custom(fn)`. Without a principal every form but `"public"` answers
   `UNAUTHENTICATED`; a principal that fails gets `FORBIDDEN`. The levels,
-  lowest first, are `Public`, `Read`, `Moderate` and `Admin`.
+  lowest first, are `Public`, `Read`, `Moderate` and `Admin`. A `custom`
+  form replaces the row check, and a service-wide `Admin` grant skips it: a
+  check on the caller's claims is `claims` (below).
 - `kinds`, beside `access`, says which kinds of principal
   (`principal.kind`) may call: `initQuickdraw({ kinds: ["user", "agent"] })`
   for every service the app defines, `defineService(contract, { kinds })`
@@ -758,26 +780,44 @@ export const taskService = qd.defineService(task, {
   `"public"` method takes no `kinds` of its own: a refused caller would call
   it signed out. A service's list also holds for its entity, collection,
   topic and stream subscriptions, and its channels drop the messages of
-  other kinds. A check on a claim, such as a token's `scope`, stays a
-  `custom` form (`triage` above).
+  other kinds.
+- `claims: (claims, input) => boolean`, beside `access` on a method, is a
+  requirement on the caller's verified claims (`principal.claims`, a
+  token's `scope`; `triage` above). It adds to the form, so `triage` needs
+  Moderate on the task's project and a triage token. It runs right after
+  `kinds`, outside the access engine, so no grant passes it, a service-wide
+  `Admin` grant included. Without a principal the call is
+  `UNAUTHENTICATED`; when it returns anything but `true`, `FORBIDDEN`. It is
+  synchronous, and a `"public"` method takes none. A token narrowed by
+  `claims` is narrowed only on the methods that declare it; elsewhere it
+  acts with its user's grants (`kinds` keeps a kind of token out).
 - On a service with a policy, a method whose input has `id` under a form
-  that checks no row (`"public"`, `"authenticated"`, `{ service: L }` below
-  `Admin`) would let anyone that form admits reach any row by its id, so
-  `defineService` refuses it, naming the method and the two ways out: a form
-  the policy decides (`{ entry: L }`, or `{ service: L, entry: L }` to keep
-  the grant), or `rowless: true` on the method when every such caller may
-  reach any row on purpose (the `title` method above; public profiles,
-  lookups by an id that tells nothing). A kit's methods take it as
+  that asks the policy nothing about the row that id names would let anyone
+  that form admits reach any row by its id, so `defineService` refuses it,
+  naming the method and the ways out. Those forms are the ones that check
+  no row (`"public"`, `"authenticated"`, `{ service: L }` below `Admin`),
+  `custom(fn)`, `{ scope, of, id }` (a row of another service) and
+  `{ entry, id }` naming another key. The ways out: a form the policy
+  decides (`{ entry: L }`, or `{ service: L, entry: L }` to keep the grant,
+  with `claims` beside it for a check on the caller's claims), or
+  `rowless: true` on the method when every such caller may reach any row on
+  purpose (the `title` method above; public profiles, lookups by an id that
+  tells nothing), or when `id` names a row the method creates (an id the
+  client made, under a `scope` form). A `rowless` query under a form that
+  checks no row also answers "not modified" for any `id`; under any other
+  form it runs its handler every time. A kit's methods take it as
   `rowless: ["get"]` in the kit's options. The input's keys come from its
   JSON Schema: an `id` in any branch of a union counts, and so does one
   beside a value JSON Schema cannot write (a `Date`, a `Set`). Not checked:
   an input without JSON Schema (Zod 3) or whose JSON Schema names no keys (a
   `todoSchema` without `keys`), one that is no object (a bare string
-  that is the id itself) and a row named by another key (`ids`, `taskId`, a
-  nested `where.id`).
-- A service-wide `Admin` grant passes every check on its service
-  (`adminBypass: false` turns that off). A grant below `Admin` counts only
-  where the form names `service`: a `Read` grant does not read every row.
+  that is the id itself), a row named by another key (`ids`, `taskId`, a
+  nested `where.id`) under a form that checks the row `id` names, and an
+  `entry` form whose `id` is a function, which names its row in code.
+- A service-wide `Admin` grant passes every access form on its service
+  (`adminBypass: false` turns that off), though not `kinds` or `claims`. A
+  grant below `Admin` counts only where the form names `service`: a `Read`
+  grant does not read every row.
 - Grants come from `principal.serviceAccess`, as `authenticate` returns it or
   `createServer({ auth: { loadServiceAccess } })` loads it for a principal
   that carries none: at a socket's handshake, for each HTTP call, and for
@@ -803,20 +843,26 @@ export const taskService = qd.defineService(task, {
   call, so checking 60 ids costs what checking one does. `entry` access
   needs a policy; a service without `model` may only use `"public"`,
   `"authenticated"`, `{ service }` and `custom`. `inherit` uses the
-  parent's policy only: grants on the parent's service do not flow down.
+  parent's policy only: grants on the parent's service do not flow down. A
+  membership table needs an `id` column (the pair unique by `@@unique`),
+  or its writes are not tracked and a removed member is never revoked.
 - One policy decides every surface: method calls, entity subscriptions,
   collection scopes, the kits' lists and searches, streams and channels.
-- When a tracked write lowers or removes someone's access, their sockets
-  leave the rooms anchored on that row and get `qd:revoked`; a changed level
-  moves them to that level's room. In a cluster the change is broadcast to
-  every node.
+- When a tracked write lowers or removes someone's access, a relation-form
+  foreign key included (`project: { connect }`), their sockets leave the
+  rooms anchored on that row and get `qd:revoked`; a changed level moves
+  them to that level's room. In a cluster the change is broadcast to every
+  node. Every socket's re-resolution settles before the flush's frames go
+  out, a failed one included.
 - `server.dispatcher.access` gives the same answers to other code:
   `levelsFor(service, principal, ids)`, `accessWhere(service, principal, level)`
   (a `where` filter for `findMany`, or `"none"`) and `onAccessChanged(listener)`.
 - `createServer({ access: { cacheMs: 30_000 } })` keeps policy lookups across
   requests; tracked writes to the columns and membership tables the policies
   read evict them. Writes the tracked client cannot see are picked up only
-  when the time passes, so the cache is off by default.
+  when the time passes, so the cache is off by default. A lookup inside a
+  transaction (`db.$transaction`, a sharing change) reads the database,
+  never the cache.
 
 ## Tracked writes
 
@@ -882,8 +928,12 @@ export async function markStale(before: Date): Promise<number> {
 }
 ```
 
-- Not seen: nested writes (`{ labels: { create: [...] } }`, which warn in
-  development), raw SQL and database cascades. Record raw SQL with
+- Not seen: the related rows of a nested write
+  (`{ labels: { create: [...] } }`, which warns in development), raw SQL and
+  database cascades. A foreign key a nested write sets on the written row
+  (`project: { connect }`, `parent: { disconnect: true }`) is seen: such an
+  `update` or `upsert` reads the row's interested columns first, one more
+  statement. Record raw SQL with
   `ctx.touch("task", ids)`, or `{ removed: true }` for deleted rows. A job
   gets the same `touch` from `qd.run`, whose `fn` receives
   `{ touch, log, principal: null }`:
@@ -905,7 +955,13 @@ export async function spreadOrdinals(projectId: string): Promise<void> {
 ```
 
 - Tracked models need a string `id` column; writes to other models pass
-  through untracked, with one warning.
+  through untracked, with one warning. Membership and junction tables
+  included: give them `id String @id @default(cuid())` and keep the pair
+  unique with `@@unique([...])`, never a composite `@@id`. `createServer`
+  checks, at start, every model a policy, a membership table or a `via`
+  junction depends on, and logs `[quickdraw:untracked-access-model]` as an
+  error, in every environment, for one it cannot track; a test app made
+  with `strictWarnings` fails to start.
 - `createServer({ flushSink })` adds the app's own sinks (an audit log, say);
   `createRecordingSink()` on `./testing` records what is flushed, for tests.
 
@@ -1003,7 +1059,14 @@ export const taskService = qd.defineService(task, {
   by `id`) comes from `versionColumn`, or from an in-process change log of
   recent flushes. The change log sees only this process's writes: an app
   running several processes without a Socket.IO cluster adapter declares
-  `versionColumn`s or passes `changeLog: false`.
+  `versionColumn`s or passes `changeLog: false`. For a query, it comes only
+  when its form checked the row `id` names (an `entry` form on `id`, a
+  `scope` form on the service's own rows by `id`, `{ service: "Admin" }`),
+  for a caller the service's `Admin` bypass passes, or for a `rowless`
+  method under a form that checks no row (`"public"`, `"authenticated"`,
+  `{ service: L }`): it answers before the handler runs, so it would tell
+  any other caller that the row exists and has not changed. Any other
+  query runs its handler.
 - Revisions are microseconds since the epoch: a flush takes
   `max(Date.now() * 1000, last + 1)`. Clients compare them as numbers.
 - Behind a cluster adapter (`setupRedisAdapter`), every touched row is read
@@ -1015,10 +1078,14 @@ export const taskService = qd.defineService(task, {
   Flushes take their revisions from a counter in the cluster's Valkey, on
   Valkey's clock in microseconds, so revisions from all nodes are one order;
   its key needs persistence or replication. A node whose Valkey connection
-  comes back has its clients reconnect to catch up.
+  comes back has its clients reconnect to catch up. Give each deployment its
+  own Valkey, or its own `cluster.keyPrefix` (which `setupRedisAdapter` takes
+  as its key): a node applies only its own deployment's events (once every
+  deployment that shares the Valkey runs this version), and a Valkey's `db`
+  does not separate pub/sub.
   [docs/deploying.md](docs/deploying.md) has the wiring, what holds across
-  nodes, what it costs, and what happens when a node or Valkey stops
-  answering.
+  nodes, what it costs, what happens when a node or Valkey stops
+  answering, and a production checklist.
 
 ## Collections and change topics
 
@@ -1075,7 +1142,7 @@ export const taskService = qd.defineService(task, {
   collections: {
     // Read on the project opens its scope
     byProject: { anchor: projectContract },
-    // a user opens only the scope that is their id
+    // a user opens only the scope that is their id; its items still follow access above
     assigned: { scopeAccess: "self" },
   },
   // opens the service topic to Read grants; closed without it
@@ -1090,7 +1157,13 @@ export const taskService = qd.defineService(task, {
   pages; `where` is an equality filter on membership; `access` is the level
   needed on the anchor (default `Read`).
 - A junction write adds or removes its entry in the one scope it links.
-  When the item reads the junction (a chat's `memberCount`), declare
+  Over the item service's own `members` table (a `members` read of the
+  policy, alone or inside `anyOf`, whose `entry` is the via's `entry` and
+  whose `user` is the via's `scope`), a link counts only when its
+  role gives at least the collection's `access`: a role change across that
+  line adds or removes the entry, and a link below it is in no page, count,
+  index, `qd:col:items` or scoped search. When the item reads the junction
+  (a chat's `memberCount`), declare
   `via({ model, entry, scope, refreshEntry: true })`: every junction write
   then also sends the entry again, `updated`, to each scope that still
   holds it, for one more read of the item per flush.
@@ -1099,13 +1172,21 @@ export const taskService = qd.defineService(task, {
   deltas to it (`added`, `updated`, `patched`, `removed`, or `reset` for more
   than `bulkThreshold` rows, default 200). A `"self"` scope is the
   subscriber's own user id: its items are stripped at `Read`, and it may not
-  declare a higher `access`.
-- Items are visible to everyone in the scope: no per-row policy or field
-  tier applies inside a collection. Derive the item service's own access
-  from the anchor (`inherit` from it, as above): a per-row policy on the item
-  service (an owner column, a row's access list) is not applied to
-  collection items, so a row it would hide still reaches everyone in its
-  scope.
+  declare a higher `access`. On a service with an access policy its items
+  still follow that policy: a page, `qd:col:items` and every flush hold only
+  the rows its user may read at `Read`. A row the user loses goes out
+  `removed`, and a change to their membership of a parent row (or a reload
+  of their grants) sends `reset`, so the list loads again; a client that
+  resumes the list after such a change reads a page. A change to a parent
+  row's own access columns (a project's owner or access list) reaches the
+  list only at the rows' next write or the list's next load.
+- Items are visible to everyone in an anchored scope: no per-row policy or
+  field tier applies inside it. Derive the item service's own access from
+  the anchor (`inherit` from it, as above): a per-row policy on the item
+  service (an owner column, a row's access list) is not applied to an
+  anchored scope's items, so a row it would hide still reaches everyone in
+  its scope. A `"self"` scope is the exception: its items follow the item
+  service's policy for its user.
 - `index` sends one small row per member (`[id, rev, ...fields]`, up to
   50,000) with the first page, so the client knows the whole membership and
   order at once; `views` are pure predicates over index rows the client runs.
@@ -1128,11 +1209,27 @@ export const taskService = qd.defineService(task, {
   changed it (`models`). The service topic is closed
   (`FORBIDDEN`) unless the service declares `watchAccess` (`"public"`,
   `"authenticated"` or `{ service: level }`). A watcher that loses access
-  leaves the topic after one last `qd:changed`.
+  leaves the topic after one last `qd:changed`. A watch whose access
+  changed while it was answered is authorized again before it joins the
+  topic, with the socket's principal as it is then, and answered
+  `FORBIDDEN` when it lost access; it hears nothing until it joins. Entity
+  and collection subscribes re-check the same way, with the grants the
+  socket holds then (a grant lowered mid-subscribe denies, a raised one
+  answers at its level), but from inside their room, which they need to
+  catch every change after the snapshot they read: a frame sent while they
+  re-check can reach a socket that is then refused, and the client drops
+  it with the refusal.
 - The socket rate limiter does not count subscription events; each socket
   runs `qd:sub`, `qd:col:sub`, `qd:col:items` and `qd:watch` in a lane
   instead: `limits.subscriptions` (8 at once, 64 waiting), then
-  `RATE_LIMITED`.
+  `RATE_LIMITED`. A socket holds at most 10,000 entity ids, 1,000
+  collection scopes, 1,000 topic watches and 500 stream feeds at once:
+  one more is `CONFLICT` (a `qd:sub` whose new ids would pass the cap is
+  refused whole, and a row that batches running at once left no room for
+  is answered `CONFLICT` on its own), one held already never counts again,
+  and `qd:hello`
+  announces the caps (`limits.subscriptions.maxEntityIds`, `maxScopes`,
+  `maxTopics`).
 
 ## The server and its transports
 
@@ -1151,21 +1248,36 @@ over three transports (design: sections 3, 8 and 10):
   events per minute per socket; channels, cancels and subscription events not
   counted); configure it with `rateLimit`, or turn it off with
   `rateLimit: false`. There is no default CORS origin: pass `cors`.
+  Socket.IO's connection state recovery is refused: `createServer` throws
+  for `socket: { connectionStateRecovery }`, since a recovered socket would
+  come back with its principal and rooms without authenticating again, so a
+  revoked session or a lowered grant would return. Clients resume by
+  revision on every reconnect instead.
 - **HTTP**: `POST /qd/{service}/{method}` with the input as a JSON body and
   `Content-Type: application/json` (required, even without a body, so a
   cross-site page cannot use a session cookie without a CORS preflight). The
   principal comes from the session cookie (`__Host-session` over HTTPS,
   `session` over plain HTTP or with `COOKIE_DOMAIN`, as the auth routes name
   it) or an `Authorization: Bearer` token through the same
-  `authenticate`, which is told which one it was (`request.credential`):
-  `socketAuth` answers a cookie sent from a page outside `allowedOrigins`
-  with `FORBIDDEN`, as it refuses such a socket; the reply is `{ ok: true, d }` or
+  `authenticate`, which is told which one the transport chose
+  (`request.credential`): `socketAuth` answers a cookie sent from a page
+  outside `allowedOrigins` with `FORBIDDEN`, as it refuses such a socket.
+  The cookie is `auth.token` only for `socketAuth`'s `authenticate`; any
+  other finds it in `request.sessionCookie` alone, and `auth.token` holds
+  only a bearer token. The reply is `{ ok: true, d }` or
   `{ ok: false, e: { code, message, data? } }` with the code's HTTP status.
   Works on Express 4 and 5, and on a bare Node server. Move it with
   `http: { path }`, turn it off with `http: false`, or mount
   `createHttpRouter({ dispatcher, auth })` yourself. It has no rate limit of
   its own: on Express, set `http: { rateLimit: createCallLimiter() }` (from
-  `./server/express`), which refuses with the `RATE_LIMITED` reply.
+  `./server/express`), which refuses with the `RATE_LIMITED` reply. An app
+  without sockets makes its dispatcher with
+  `createDispatcher({ services, db, serviceAccessSource })` when users'
+  grants are stored in a column (the admin kit protects that column only
+  where the dispatcher names it, as `createServer` does from
+  `auth.serviceAccessSource`), and `createHttpRouter` throws when its
+  `auth.serviceAccessSource` is not its dispatcher's. An MCP process made
+  with `createDispatcher` names it the same way.
 - **In process**: `server.dispatcher.caller(principal)` or
   `qd.caller(principal)`: `await qd.caller(user).taskService.rename(input)`,
   typed by the `contracts` of `initQuickdraw`'s types. A principal that
@@ -1176,9 +1288,11 @@ over three transports (design: sections 3, 8 and 10):
   `auth.serviceAccessSource`). One that carries grants (even `{}`) keeps
   exactly those. A load that fails rejects the call with `INTERNAL`.
 
-`authenticate` takes one request (`{ transport, auth, headers, socket | req }`)
-for both transports and returns a principal, a user id, or nothing for an
-anonymous caller; throwing `QuickdrawError("UNAUTHENTICATED", ...)` refuses.
+`authenticate` takes one request (`{ transport, auth, headers, socket | req }`,
+plus `credential` and `sessionCookie` on HTTP) for both transports and
+returns a principal, a user id, or nothing for an anonymous caller; throwing
+`QuickdrawError("UNAUTHENTICATED", ...)` refuses. On HTTP the session cookie
+is in `auth.token` only for `socketAuth`'s `authenticate`.
 Pass your own HTTP server as `httpServer` together with the `app` it was
 created from (or with `http: false`).
 
@@ -1231,13 +1345,25 @@ one, by `service.method (kind)`, which tells an agent nothing), with the
 input schema's JSON Schema as its arguments and `readOnlyHint` on every
 query. The API docs print each method's default tool name and its read-only
 hint. Every tool call goes through the dispatcher with transport `"mcp"`,
-so input validation, access checks and limits apply exactly as on a socket.
-A method whose input cannot describe itself as JSON Schema stops the
-registry at startup, naming the method, unless it is excluded.
+so input validation and access checks apply as on a socket. Queries share
+a concurrency lane per caller (16 run and 64 wait by default, the
+dispatcher's `limits`, then `RATE_LIMITED`): a stdio process, and on HTTP
+a bearer token, a user without a token, or the address of an anonymous
+caller (Express's `req.ip`, an IPv6 address by its /56). Behind a proxy,
+set Express's `trust proxy`, or every anonymous caller shares the proxy's
+lane. A `principal` hook that authenticates by anything but the bearer
+token (a cookie, an API key header) must refuse a request whose bearer
+token it does not verify, or a caller makes a lane per made-up token. The
+HTTP routes have no rate limit of their own: limit them per address, as
+below (`createPublicApiLimiter` answers 429 with `{ error }`, not the
+routes' `{ success: false, code }`). A method whose input cannot describe
+itself as JSON Schema stops the registry at startup, naming the method,
+unless it is excluded.
 
 <!-- example: apps/api/src/mcp.ts#mcp -->
 
 ```ts
+import { createPublicApiLimiter } from "@fitzzero/quickdraw-core/server/express";
 import {
   createMcpHttpRouter,
   createMcpRegistry,
@@ -1249,7 +1375,7 @@ const summarizeInput = z.object({ projectId: z.string() });
 const registry = createMcpRegistry({
   services: [projectService, taskService],
   dispatcher: server.dispatcher,
-  // who a stdio session or an HTTP bearer token stands for; nothing is anonymous
+  // an agent acting for the user of a session token, checked on every call; no token is anonymous
   principal: (request) =>
     verifySession(request.transport === "http" ? request.token : process.env.AGENT_TOKEN),
   // handlers read it as ctx.mcp
@@ -1269,7 +1395,9 @@ const registry = createMcpRegistry({
   ],
 });
 
-// GET /mcp/tools, POST /mcp/invoke
+// GET /mcp/tools, POST /mcp/invoke; the routes have no rate limit of their own, so limit them per
+// address (never by the bearer token, which nothing has checked yet)
+app.use("/mcp", createPublicApiLimiter({ max: 600 }));
 app.use(createMcpHttpRouter({ registry }));
 // in an MCP client's process
 createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
@@ -1284,7 +1412,17 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   sends console output to stderr so only the protocol reaches stdout.
 - **HTTP**: `GET /mcp/tools` and `POST /mcp/invoke`, which takes
   `{ name, arguments }` and answers `{ success: true, data }`, or
-  `{ success: false, error, code, data? }` with the code's HTTP status.
+  `{ success: false, error, code, data? }` with the code's HTTP status. A
+  request from a web page (one with an `Origin` header) is answered 403
+  unless `createMcpHttpRouter({ allowedOrigins })` lists its origin (exact
+  origins or anchored patterns, as `socketAuth` takes them; none by
+  default); an MCP client sends no `Origin`. `allowedOrigins` adds no CORS
+  headers: a page on another origin still needs the app's CORS setup. For a
+  server on a developer's machine or a LAN,
+  `allowedHosts: ["localhost", "127.0.0.1", "::1"]` also refuses a request
+  for any other `Host`, which a DNS-rebinding page would send. An entry with
+  a port matches that port only (a `Host` without one is for port 80 or
+  443).
 - An anonymous caller (the `principal` hook returned nothing) may call
   `"public"` methods, and custom tools that declare `access: "public"`; any
   other tool answers `UNAUTHENTICATED` before it runs. A failed call reaches
@@ -1294,6 +1432,19 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   tools it may not call (and its call is refused). Keep a tool out of the
   list with `exclude` or `include`, per registry, and serve agents of
   different reach from separate registries.
+- `kinds` sees only what the `principal` hook labels: `verifySession` above
+  labels every MCP caller `kind: "agent"`, so a method with
+  `kinds: ["user"]` refuses it. Check a session token against the store on
+  every call (`bearerAuth`), never with `verifyJWT` alone, which a
+  signed-out session still passes. A custom tool obeys the app's
+  `initQuickdraw({ kinds })` too, and takes `kinds` of its own within it
+  (`FORBIDDEN` for another kind, before its arguments are read); a
+  `"public"` tool takes none. Custom tools served beside the services of
+  apps that admit no kind in common stop the registry at startup.
+- To refuse a token, the `principal` hook throws
+  `QuickdrawError("UNAUTHENTICATED")`, which is logged at debug, as the
+  caller's doing; anything else it throws is logged as an error. Never put
+  the token in the message.
 
 `bind` fills chosen arguments from who is calling instead of from the agent,
 so an agent bound to one project cannot name another in its calls. Here an
@@ -1322,9 +1473,14 @@ app.use(createMcpHttpRouter({ registry: projectAgents, path: "/agents" }));
 
 - Each bound argument is left out of the `inputSchema` of every method's tool
   whose object input has it: `create_task` lists `id` and `title`, and
-  `count_tasks` takes no arguments. Every call of such a tool gets the
-  binder's value before its input is validated, through `tools/call` and both
-  shapes of `POST /mcp/invoke` alike.
+  `count_tasks` takes no arguments. An object schema with `.meta({ id })`,
+  which JSON Schema writes as a `$ref`, counts as the object it names; a
+  schema made from it (`.optional()`, `.refine()`, `.default()` and the
+  like) is not an object input. Every call of such a tool gets the binder's
+  value before its input is validated, through `tools/call` and both shapes
+  of `POST /mcp/invoke` alike, and a call of any other method's tool that
+  sends a bound argument is `FORBIDDEN`. Only top-level arguments are
+  bound.
 - A call fails closed, before the method runs: `UNAUTHENTICATED` for an
   anonymous caller, and `FORBIDDEN` when the binder returns `undefined` or
   `null`, or when the agent sent the argument with another value. A binder
@@ -1332,9 +1488,10 @@ app.use(createMcpHttpRouter({ registry: projectAgents, path: "/agents" }));
   `QuickdrawError` it threw.
 - `createMcpRegistry` throws at startup when a bound argument is in no
   selected method's object input (a misspelled name would leave the real
-  argument to the agent), and when it is a property of an input that is not
-  an object, which it names: leave that method out, or make its input an
-  object.
+  argument to the agent), and when an input may hold it anywhere it cannot
+  be filled (an input that is not an object, or a branch of a union or an
+  intersection, behind a `$ref` too), which it names: leave that method
+  out, or make its input an object.
 - Custom tools are never bound, and neither are the calls their `caller`
   makes: a custom tool reads `principal` itself. `describeTools` and the API
   docs list the inputs as the contracts declare them, with nothing bound.
@@ -1347,7 +1504,9 @@ Two more needs are met by the options above, with nothing added:
 - **A tool set per kind of caller.** Make one registry per kind, each with its
   own `include`, `bind` and `principal`, and serve each at its own `path` or
   from its own stdio entry, as above. A registry's `principal` hook refuses
-  the other kinds: throwing fails their calls with `UNAUTHENTICATED`.
+  the other kinds: throwing `QuickdrawError("UNAUTHENTICATED")` fails their
+  calls with `UNAUTHENTICATED` and logs at debug; never put a token in the
+  message.
 - **Frozen public tools.** `name` gives a method's tool any public name, as
   `create_task` above. When agents depend on tool names and argument shapes
   that must never change, give that surface a contract of its own: its
@@ -1551,16 +1710,25 @@ for an anonymous socket and before the server's hello, so a gate waits for
 `isKnown` (the hello on the current credentials arrived; false again from
 new credentials until theirs). `isConnected` turns true before the hello and
 false while the connection reconnects; `reconnecting` says the user and the
-page stay meanwhile:
+page stay meanwhile. When the server ends the session (signed out on
+another device, revoked, expired) or refuses a connect for it (its
+`authenticate` failed, or the handshake was `FORBIDDEN`), the hello is
+forgotten: `isKnown` is false, `status` is `"disconnected"` or
+`"refused"`, and everything quickdraw cached is gone, so a gate that finds
+the connection stopped with nobody known shows the sign-in. Another
+protocol (`refusal.code` `"PROTOCOL_MISMATCH"`) keeps the hello; the
+provider reloads the page once for it:
 
 <!-- example: apps/web/src/components/AuthGate.tsx#gate -->
 
 ```tsx
 export function AuthGate({ children }: { readonly children: ReactNode }) {
   // isKnown: the server's hello named the user, so userId is final (null: signed out)
-  const { isKnown, userId, reconnecting } = useQuickdraw();
+  const { status, isKnown, userId, reconnecting } = useQuickdraw();
   if (!isKnown) {
-    return <p>Connecting…</p>;
+    // stopped with nobody known: the server ended or refused the session (signed out elsewhere,
+    // revoked, expired), and what quickdraw cached is gone
+    return status === "disconnected" || status === "refused" ? <SignIn /> : <p>Connecting…</p>;
   }
   if (userId === null) {
     return <SignIn />;
@@ -1710,7 +1878,8 @@ export const taskService = qd.defineService(task, {
         delete: { entry: "Admin" },
         reorder: { entry: "Moderate" },
         bulkUpdate: "authenticated",
-        bulkDelete: "authenticated",
+        // all or nothing: Admin on every id, as delete needs
+        bulkDelete: { entry: "Admin", id: "ids" },
       },
       // what `create` writes: columns from the principal, the next ordinal
       prepare: async (input, ctx, db) => ({
@@ -1720,7 +1889,7 @@ export const taskService = qd.defineService(task, {
       }),
     }),
     archive: {
-      access: { entry: "Admin" },
+      access: { entry: "Moderate" },
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { status: "archived" } }),
     },
@@ -1736,11 +1905,20 @@ export const taskService = qd.defineService(task, {
   `get`, `update`, `delete` and `reorder` act on `input.id`, which
   `{ entry: L }` checks; a write on one row also needs the row level
   (`Moderate`, or the form's `entry`) on that row whatever its form, so
-  `update: "authenticated"` edits no row. `list`, `getMany`, `bulkUpdate`
+  `update: "authenticated"` edits no row. `create` makes a new row and
+  checks no row of its own: it needs that row level on each parent its new
+  row names (each anchor column it writes, below), whatever its form, so
+  `create: "authenticated"` writes into no project its caller cannot
+  moderate; give it `{ scope: "Moderate", of: project, id: "projectId" }`.
+  `list`, `getMany`, `bulkUpdate`
   and `bulkDelete` act on many rows, so they also keep only the rows the
   service's policy gives the caller at the form's `entry` or `scope` level
-  (else `Read` for reads and `Moderate` for writes): a list never shows a
-  row `get` would refuse. A service-wide `Admin` grant reaches every row,
+  (else `Read` for reads and `Moderate` for writes; a bulk method's form
+  that names none takes `update`'s or `delete`'s row level when it is
+  higher): a list never shows a row `get` would refuse, and a bulk delete
+  never deletes a row `delete`'s `{ entry: L }` would refuse. When the
+  single-row form names no row level (`{ service: L }`, `custom`), give the
+  bulk method the same form. A service-wide `Admin` grant reaches every row,
   and a grant a `{ service: L }` form names is a row level of the grant on
   every row (the read is not filtered, and its rows are stripped at the
   grant). A `"public"` read's rows are not filtered (a public bulk write
@@ -1754,26 +1932,59 @@ export const taskService = qd.defineService(task, {
   above the caller's level is `FORBIDDEN`, and a default sort on one falls
   back to `id`), keyset cursors that stay put when rows are inserted, 50
   items by default and at most 200 (a larger `limit` is clamped), and a
-  total only when asked (a second statement). Items are the `item`
+  total only when asked (a second statement). A sort value too long for a
+  cursor (4,096 characters) makes the cursor name its row instead: the next
+  page reads that row first, and the cursor is `VALIDATION` once the row has
+  left the list (or for a caller whose list never held it). Such a cursor
+  follows its row: a change to that row's sort value between pages can skip
+  or repeat rows. Items are the `item`
   projection, stripped of fields above the level the page was read at, as
   collection items are.
 - `getMany({ ids })` (at most 200) leaves out ids the caller cannot read and
   ids with no row. Bulk writes skip rows the caller cannot write, run in one
-  transaction and return `{ count }`.
+  transaction and return `{ count }`; give one `{ entry: L, id: "ids" }` to
+  refuse the whole call instead of skipping rows (an empty `ids`, or an id
+  with no row, is then `FORBIDDEN`).
 - Writes go through the tracked client: `create` sends `added`, `update` a
   patch and `delete` `removed`, and a bulk write past a scope's
   `bulkThreshold` sends it one `reset`. A missing row is `NOT_FOUND`, a
   unique violation `CONFLICT`.
-- `update` and `bulkUpdate` (and the admin kit's writes) never let a caller
-  without a service-wide `Admin` grant set a column the policy reads (an
-  owner column, an access list), and move a row into another parent (an
-  `inherit` policy's `via`, an anchored collection's scope column) only
-  when the caller's level on the new parent meets the method's row level:
-  `FORBIDDEN` otherwise.
+- Without a service-wide `Admin` grant, `update` and `bulkUpdate` (and the
+  admin kit's writes) never set a column the policy reads (an owner column,
+  an access list), even one an anchored collection also scopes by. They
+  never set a membership table's entry, user or role column that any policy
+  reads either: change memberships with the sharing kit. They move a row
+  into another parent (an `inherit` policy's `via`, an anchored
+  collection's scope column) only when the caller's level on the new parent
+  meets the method's row level. Each refusal is `FORBIDDEN`. An `inherit`
+  `via` column stays movable, so never inherit a row's access from the
+  users' own rows (`inherit({ from: user, via: "ownerId" })`): a caller
+  would hand the row to themself.
+- `create` takes a column the policy reads, and a membership column, only
+  from `prepare` (`ownerId: ctx.principal.userId`), never from a caller
+  without a service-wide `Admin` grant. It writes a parent only where the
+  caller has the row level on it, after `prepare` ran.
+- Every kit write holds column values only, in every environment and for
+  every caller, a service-wide Admin included: a key that is a relation of
+  the model (one a projection selects with a nested `select`) or a value
+  that is a Prisma nested write (`{ connect }`, `{ update }`, a to-many
+  `{ set: [...] }`) is `VALIDATION`, since nested writes are not tracked
+  and would skip the checks above. A `prepare` that returns one is
+  `INTERNAL`. A Json value whose own key is a relation operation holding an
+  object or list, or `delete`/`disconnect` set to `true`, is refused too;
+  keep such data one level deeper. Any `{ set: [...] }` is refused, a scalar
+  list's included: write a scalar list as the list itself.
 - `reorder({ id, beforeId?, afterId? })` puts the row between its new
   neighbors (`beforeId` comes right before it) with one write, or renumbers
   the `within` list in steps of 1,024 when no gap is left, in a transaction
-  given 5 s plus 10 ms per row of the list. Moves run SERIALIZABLE: two at
+  given 5 s plus 10 ms per row of the list. The neighbors it names need the
+  method's row level, as the moved row does (a neighbor below it is
+  `NOT_FOUND`, as a missing one is), and the list is the rows sharing the
+  `within` values that the caller may write: a list with no `within` or a
+  null one is each caller's own. The rows it names are read through that
+  same filter, so a policy whose filter matches no row (a `resolver` without
+  `where`) moves nothing below a service-wide grant, as its lists show
+  nothing. Moves run SERIALIZABLE: two at
   once into one gap fail one of them with `CONFLICT` (try again).
 - The generated inputs carry JSON Schema, so the kit's methods are MCP tools
   too. For hand-written handlers, `./server` has `requireRow(row, message?)`
@@ -1895,8 +2106,8 @@ export function TaskSearch({ projectId }: { readonly projectId: string }) {
 - `search({ q, scope?, cursor?, limit? })` returns `{ items, nextCursor }`
   (and `rev`, below). `q` is trimmed, and one shorter than `minLength`
   (default 2) finds nothing and reads nothing. 20 results by default, at
-  most 100, with keyset cursors as for `list`. There is no ranking: results
-  come in the scope collection's order, else by id.
+  most 100, with keyset cursors as for `list`. There is no ranking: a call
+  with `scope` comes in the scope collection's order, one without by id.
 - By default a row matches when one of the declared `fields` contains `q`,
   ignoring case; `%`, `_` and `\` in `q` are taken literally. `fields` is an
   explicit list because an unbounded "contains" over every column is slow. A
@@ -1984,7 +2195,7 @@ export const project = defineContract("projectService", {
     }),
   },
   collections: {
-    // each user's projects: an invite adds the project, a remove or a leave takes it out
+    // each user's projects: an invite adds the project; a remove, a leave or a role below Read takes it out
     mine: {
       describe: "The projects a user is a member of.",
       scope: via({ model: "projectMember", entry: "projectId", scope: "userId" }),
@@ -2009,12 +2220,27 @@ export const projectService = qd.defineService(project, {
   collections: { mine: { scopeAccess: "self" } },
   methods: {
     ...sharing.handlers(project, {
-      // finds the user inviteByName means; none is NOT_FOUND
-      resolveUser: async ({ name, email }) =>
-        (await db.user.findFirst({ where: name === undefined ? { email } : { name } }))?.id,
+      // the one user a by-name call means, or null (NOT_FOUND): an email is unique
+      // (and wins when both are given), a display name counts only when exactly
+      // one user has it
+      resolveUser: async ({ name, email }) => {
+        if (email !== undefined) {
+          return (await db.user.findUnique({ where: { email }, select: { id: true } }))?.id;
+        }
+        if (name === undefined) {
+          return null;
+        }
+        const named = await db.user.findMany({ where: { name }, select: { id: true }, take: 2 });
+        return named.length === 1 ? named[0]?.id : null;
+      },
       // runs inside the change's transaction: its writes commit with it, a throw undoes it
-      onChange: (change, ctx) => {
+      onChange: async (change, ctx) => {
         ctx.log.info("sharing changed", { kind: change.kind, id: change.id, user: change.userId });
+        // the flush revokes their subscriptions, but rooms are the app's: a user whose entry or
+        // membership is gone leaves the project's board on every node (removeFromBoard, rooms.ts)
+        if (change.after === null) {
+          await removeFromBoard(change.id, change.userId);
+        }
       },
     }),
   },
@@ -2022,8 +2248,9 @@ export const projectService = qd.defineService(project, {
 ```
 
 - Access list methods: `share({ id, userId, level })` gives a user `Read`,
-  `Moderate` or `Admin` (replacing any level they had), `setLevel` changes
-  the level of a user the row is shared with, `unshare({ id, userId })`
+  `Moderate` or `Admin` (replacing a level they had, unless it is above the
+  caller's), `setLevel` changes the level of a user the row is shared
+  with, `unshare({ id, userId })`
   takes it away, and `listShares({ id })` lists the row's shares; each
   returns the list as `[{ userId, level }]`, one entry per user. Membership
   methods: `invite({ entryId, userId, role? })` and
@@ -2032,22 +2259,32 @@ export const projectService = qd.defineService(project, {
   `leave({ entryId })` return `null`, and
   `listMembers({ entryId, cursor?, limit? })` pages the members in user id
   order (50 by default, at most 200). `shareByName` and `inviteByName` take
-  `name` or `email` instead of `userId`, and need `resolveUser`; a mode adds
-  every method but those two unless `methods` names its own list.
+  `name` or `email` instead of `userId`, and need `resolveUser`, which
+  returns exactly one user's id or `null` (`NOT_FOUND`): an email by
+  `findUnique`, a name only when exactly one user has it, as above, never
+  the first of several (a `findFirst` by name shares with whoever
+  registered that name first); a mode adds every method but those two
+  unless `methods` names its own list.
 - Who may call: a change needs `{ entry: "Admin" }` on the row, a list
   `{ entry: "Read" }`, and `leave` a signed-in member (`FORBIDDEN` for
   anyone else). `access: { share: { entry: "Moderate" } }` replaces one
   method's form. Whatever the form, no caller shares, sets or invites at a
-  level above their own on the row (`FORBIDDEN`; a service-wide grant
-  counts where the form names `service`), and each change reads the
-  caller's level again inside its transaction, refusing one lowered by a
-  concurrent change (`FORBIDDEN`).
+  level above their own on the row, nor changes or removes a user whose
+  current level there is above their own (`FORBIDDEN`; a service-wide
+  grant counts where the form names `service`; equal levels may, so one
+  Admin changes another), and each change reads the caller's level again
+  inside its transaction, refusing one lowered by a concurrent change
+  (`FORBIDDEN`).
 - The kit changes the list or the table the service's policy reads, alone
   or inside `anyOf`, and takes their names from it: a service whose policy
   has none for a mode the contract uses (or two) fails when it is defined.
   Roles are the policy's `levels` keys, or the level names `Read`,
   `Moderate` and `Admin` without it; another role is `VALIDATION`, and
   `invite` without a role gives the lowest one that can read the row.
+  Roles that map to one level are peers: with
+  `{ owner: "Admin", admin: "Admin" }` an `admin` may demote or remove the
+  `owner`, so protect an owner with an owner column
+  (`anyOf(owner("ownerId"), members(...))`).
 - The owner's access never changes (`CONFLICT`). A row keeps its last
   Admin, counted across every policy of an `anyOf`: an owner column, an
   `Admin` entry of the access list, an `Admin` member (so a project's owner
@@ -2065,6 +2302,17 @@ export const projectService = qd.defineService(project, {
   the `via` collections over the table `added` and `removed`; the kit sends
   nothing itself. The by-name methods tell a row's owner whether an account
   exists; list them only where that is acceptable.
+- App rooms are not subscriptions: a user who loses access stays in the
+  rooms a method joined them to until the app takes them out. The example's
+  `onChange` does that when the change leaves the user with no entry or
+  role (`change.after === null`): `removeFromBoard` takes their sockets out
+  of the project's board on every node. With custom `members` `levels`, a
+  role below the join's level must take the user out too. Under `anyOf` a user who still has
+  the other list is taken out too, and joins again on their next connection
+  (`useJoin`). `onChange` runs inside the change's transaction, before it
+  commits: a join that runs before the commit (a check that still sees the
+  old list) puts the user back until they disconnect, and a change whose
+  commit fails has still taken them out until their next connection.
 
 ### Admin kit
 
@@ -2169,8 +2417,10 @@ export function AdminTasks() {
   service-wide `Admin` grant, nor are the columns the policy reads, and a
   row moves to another parent only with the row level on it (`FORBIDDEN`,
   as for the read/write kit); each value is checked by the entity schema
-  itself, and a value the database refuses is `VALIDATION`. A missing row
-  is `NOT_FOUND`.
+  itself, and a value the database refuses is `VALIDATION`. A relation of
+  the model (a key a projection selects with a nested `select`) or a nested
+  write (`{ connect }`, `{ update }`) is `VALIDATION`, for every caller: the
+  kit writes column values only. A missing row is `NOT_FOUND`.
 - `editable: ["title", "status"]` names the only fields `adminCreate` and
   `adminUpdate` write: `adminMeta` reports every other field
   `editable: false`, so a generic form leaves it read-only, and a write
@@ -2180,8 +2430,10 @@ export function AdminTasks() {
   list, so the writes' input checks, types and JSON Schema (and the MCP
   tools made from it) name only those fields; given to both halves, the
   two lists must name the same fields. Without either list the kit writes
-  what it wrote in 5.0.0: every field it shows but `id` and the timestamps,
-  less those an override made read-only.
+  what it wrote in 5.0.0: every field it shows but `id`, the timestamps and
+  the model's relations, less those an override made read-only. An `editable` list, or a
+  `fieldOverrides` entry with `editable: true`, that names a relation of the
+  model fails when the service is defined.
 - `adminMeta()` returns `{ serviceName, displayName, fields }`, one
   `{ name, type, label, required, editable, showInTable, sortable, filterable, enumValues?, relationService?, kind?, showInForm? }`
   per field: `type` is
@@ -2190,11 +2442,19 @@ export function AdminTasks() {
   `sortable` and `filterable` are the declared fields (`filterable` is
   optional in the `AdminFieldConfig` type, default `false`, so field
   configurations written for 4.x still type); `id` and the
-  timestamps come first and are not editable; `acl`, `serviceAccess` and
-  `service_access` are hidden.
+  timestamps come first and are not editable; a relation of the model (a
+  field a projection selects with a nested `select`) is `editable: false`;
+  `acl`, `serviceAccess` and `service_access` are hidden, and so is the
+  column `auth.serviceAccessSource` (a bare dispatcher's
+  `serviceAccessSource`) names on this service's model, whatever its name.
 - Grants: on a users service, `admin.handlers(user, { grants: true })`
-  shows and writes the entity's `serviceAccess` (a `json` field the entity
-  schema checks), so the admin screen edits grants through `adminUpdate`.
+  shows and writes the entity's grants field (`serviceAccess`, or the
+  column `auth.serviceAccessSource` names, whatever its name and type; the
+  entity schema checks what is written), so the admin screen edits grants
+  through `adminUpdate`. Options that clash with that column (hiding it
+  beside `grants: true`, or naming it in `editable`, `fieldOverrides`, a
+  filter or a sort without), and `grants: true` on an entity with no grants
+  field, fail when the server is made.
   Only a caller whose own service-wide grant on that service is `Admin`
   reads or writes it, whatever `access` gives the method: anyone else gets
   rows without it and `FORBIDDEN` for a write, filter or sort naming it.
@@ -2325,9 +2585,9 @@ export const taskService = qd.defineService(task, {
     },
   },
   channels: {
-    // relay each cursor to the board's room
+    // relay each cursor to the board's room, the one its requires matched (ctx.room)
     cursor: (payload, ctx) => {
-      ctx.rooms.emit(`board:${payload.projectId}`, task, "cursorMoved", payload);
+      ctx.rooms.emit(ctx.room, task, "cursorMoved", payload);
     },
   },
   // once per socket that leaves app rooms, in every server this service runs in, in a unit of its own
@@ -2395,13 +2655,21 @@ export function TaskRoom({
   out as its own frame, in order; use it rather than `push` in a loop
   (`no-emit-in-loop`). `qd:stream:sub` is authorized with the
   stream's `access` through the access engine, the scope being the row an
-  `entry` or `scope` form checks; `access: { room }` (a name, `{ prefix }`,
-  or for a scoped stream a function of the scope) opens it to the sockets
-  in that app room instead, signed in or not, and a socket that leaves the
-  room, or is taken out, leaves the feed; a stream without `access` is
-  closed. The answer is the seed; `useStream` then appends, keeps the
+  `entry` or `scope` form checks; `access: { room }` opens it to the
+  sockets in an app room instead, signed in or not, and a socket that
+  leaves the room, or is taken out, leaves the feed; a stream without
+  `access` is closed. A global stream names the room, or `{ prefix }` for
+  any room whose name starts with it; a scoped stream computes it from the
+  scope, ``(worldId) => `world:${worldId}` ``, because a name or a prefix
+  would let a socket in that room read every scope (`defineContract`
+  refuses both on a scoped stream, by type and when it runs). The answer is the seed; `useStream` then appends, keeps the
   latest `max` (default 500), and subscribes again after a reconnect, when
-  the seed replaces what it held. A socket holds at most 500 feeds. A
+  the seed replaces what it held. A subscribe an access change overlapped
+  is authorized again before it joins the feed, with the socket's
+  principal as it is then, and answered `FORBIDDEN` when it lost access;
+  nothing pushed meanwhile reaches it as a frame, and its seed is read as
+  it joins. A subscribe an unsubscribe overtook answers `seed: []`. A
+  socket holds at most 500 feeds. A
   subscriber whose access is lowered is authorized again; one refused
   leaves the feed and gets
   `qd:revoked { kind: "stream", reason: "access", s, stream, scope? }`, and
@@ -2433,20 +2701,40 @@ export function TaskRoom({
   sending socket's own: a room another socket of the user joined does not
   count, a reconnected socket must join again, and behind a cluster the
   check runs on the node the socket is connected to, with no round trip.
-- Presence: `isOnline`, `lastSeen` (now while online, else when the user's
-  last socket on this process disconnected), `count` and `users` (each user
-  once, anonymous sockets left out; app rooms only) come from this process's
-  sockets, and from every node's (`fetchSockets`) behind a Redis adapter.
+  A channel without `requires` takes a message from every signed-in socket,
+  about any row or room its payload names: a handler that relays it to a
+  room (``ctx.rooms.emit(`project:${payload.projectId}`, ...)``) lets any
+  user reach that room. The server warns `channel-without-requires` for
+  each such channel when it starts (a strict test app does not start). Give
+  the channel a `requires` and relay to `ctx.room`, the room it matched; or,
+  when any signed-in user may send it, say so on the service, `channels: {
+ping: { access: "authenticated", handler } }`, which delivers as before
+  and silences the warning.
+- Presence: `isOnline` and `lastSeen` (now while online, else when the
+  user's last socket on this process disconnected) come from this process's
+  sockets, whatever rooms they are in; `count` and `users` (each user once,
+  anonymous sockets left out; app rooms only) come from this process's
+  records of the rooms `ctx.rooms.join` joined (a socket a raw
+  `socket.join` put in a room is not counted). Behind a Redis adapter each
+  also asks the other nodes, which answer from the same records with user
+  ids alone (or whether they hold a socket of the user); concurrent reads
+  of one room or user share one request.
   `ctx.rooms.join(room)` and `leave` put the calling socket in an app room
   (calls without a socket get `false`; names starting with `qd:` or `user:`
-  are refused with `VALIDATION`; at most 100 per socket; a method that shares
-  its runs, `share`, may not join or leave with its caller's socket:
-  `INTERNAL`), and the room's sockets get `qd:presence` frames: the list on
-  joining, then who joins and who leaves. `usePresence(room)` shows them.
+  are refused with `VALIDATION`, and so are names with the shape of a
+  Socket.IO socket id, 20 letters, digits, `_` or `-`, because every socket
+  is alone in the room of its id: give such an id a prefix, `doc:${id}`; at
+  most 100 per socket; a method that shares its runs, `share`, may not join
+  or leave with its caller's socket: `INTERNAL`), and the room's sockets get
+  `qd:presence` frames: the list on joining, then who joins and who leaves.
+  `usePresence(room)` shows them. `rooms.size`, `rooms.leave` and presence
+  refuse the same names.
 - Events: `ctx.rooms.emit(room, contract, event, payload)` and
   `emitToUser(userId, ...)` check the payload first (`INTERNAL`, nothing
   sent, when it fails), then send the validated payload as
-  `qd:event [service, event, payload]`; `useEvent` hears them.
+  `qd:event [service, event, payload]`; `useEvent` hears them. `emit`
+  refuses the framework's rooms (`qd:`, `user:`) with `VALIDATION`: a
+  user's sockets are reached with `emitToUser`.
 - Rooms belong to a socket: a reconnect (a lost network, `qd:rotate`, new
   credentials) is a new socket in no room, which hears none of its events
   and whose channel messages requiring it are dropped. `useJoin(member,
@@ -2474,8 +2762,9 @@ export function showCursor(projectId: string, taskId: string, x: number): void {
   qd.rooms.emit(boardRoom(projectId), task, "cursorMoved", { projectId, taskId, x });
 }
 
-// a member removed from the project: their sockets leave its board on every node, so they hear
-// nothing more of it and its cursor channel drops their messages (also ctx.rooms.leave)
+// a member removed from the project (the sharing kit's onChange calls it): their sockets leave
+// its board on every node, so they hear nothing more of it and its cursor channel drops their
+// messages (also ctx.rooms.leave)
 export async function removeFromBoard(projectId: string, userId: string): Promise<void> {
   await qd.rooms.leave(boardRoom(projectId), { userId });
 }
@@ -2605,17 +2894,25 @@ nothing is cached:
 | `GET /{provider}/callback`             | 302 to `{origin}{successPath}` with the session cookie, or to `{origin}{errorPath}?error=state`, `denied` or `failed` |
 | `POST /guest`                          | `createUser(body)`, then `{ userId, name? }` with the session cookie (and `token` with `guest({ token: true })`)      |
 | `GET /providers`                       | `{ providers: [{ id, name, kind }] }`: the sign-ins served now (`routes.providers()` on the server)                   |
-| `GET /me`                              | `{ userId }`, or 401                                                                                                  |
+| `GET /me`                              | `{ userId }`, or 401; 403 for a cookie from a page `allowedOrigins` does not list                                     |
 | `POST /logout`                         | 204: revokes the session, clears the cookie                                                                           |
 | `POST /logout-all`                     | 204: revokes every session of the user; 401 without a live session                                                    |
 | `/mock/provider/*`                     | the mock provider's own endpoints, while `isMockOAuthEnabled()`                                                       |
 
 - The OAuth state is 256 random bits, sent to the provider and kept in a
   10-minute HttpOnly, SameSite=Lax cookie (`__Host-qd_oauth` on `/` over a
-  secure request, else `qd_oauth` on `basePath`). The callback clears it
-  whatever happens, and accepts only that state, for that provider, within
-  its 10 minutes, once (each redeemed state is remembered by the process),
-  so a sign-in cannot be finished in another browser or replayed.
+  secure request or whenever `publicUrl` is https, else `qd_oauth` on
+  `basePath`). The `__Host-` name is what keeps another site under the
+  same parent domain from planting a state of its own (a state the routes
+  issued to an attacker, to sign the browser in as them): only this host,
+  over HTTPS, can set it. So serve the API over HTTPS with an https
+  `publicUrl`: a plain `qd_oauth` keeps that risk. The cookie is also
+  signed with an HMAC under a key derived from `jwtSecret`, so its state,
+  return origin, provider and age cannot be forged; the MAC does not say
+  which browser a state was issued to. The callback clears it whatever
+  happens, and accepts only that state, for that provider, within its 10
+  minutes, once (each redeemed state is remembered by the process), so a
+  sign-in cannot be finished in another browser or replayed.
 - `returnTo` is an origin or a URL on one; only its origin is kept, and only
   when `allowedOrigins` lists it (exact origins, or patterns anchored with
   `^` and `$`; nothing is read from the environment, and localhost or
@@ -2638,7 +2935,11 @@ nothing is cached:
   the same name, and the server cannot tell which is its own.
 - `me` answers the same 401 whether the request had no credential, a forged
   or expired one, or one whose session was revoked. It, `logout` and
-  `logout-all` read the cookie, else an `Authorization: Bearer` token.
+  `logout-all` read the cookie, else an `Authorization: Bearer` token. A
+  cookie sent from a page `allowedOrigins` does not list is answered 403
+  (`FORBIDDEN`), as on the HTTP transport, and `guest`, which sets the
+  cookie, refuses such a page whatever it sends; a bearer token is not
+  ambient, so any page may send it.
 - `socketAuth` reads a socket's `auth.token` (a bearer token, for clients
   without cookies), else the session cookie from its handshake; an HTTP
   call's credential is the one the transport found. No credential is
@@ -2657,17 +2958,24 @@ nothing is cached:
   a browser sends `Origin` with every POST, so it comes from curl or a
   server rendering a page with the user's forwarded cookie (refused only
   when `Sec-Fetch-Site` names another site). Bearer tokens need no Origin
-  on either transport. An app's own `authenticate` learns where an HTTP
-  call's token came from in `request.credential` (`"cookie"` or
-  `"bearer"`, type `HttpCredentialSource`), applies the same rule with
-  `cookieOriginAllowed(request, allowedOrigins)`, and a
-  `QuickdrawError("FORBIDDEN")` it throws on HTTP is answered as it is.
+  on either transport. An app's own `authenticate` finds an HTTP call's
+  session cookie in `request.sessionCookie`, never in `auth.token` (which
+  holds only a bearer token for it), and `request.credential` says which
+  one the transport chose (`"cookie"` or `"bearer"`, type
+  `HttpCredentialSource`). One that accepts the cookie applies the same
+  rule with `cookieOriginAllowed(request, allowedOrigins)` and checks the
+  session in the store on every call (`liveSession`); a
+  `QuickdrawError("FORBIDDEN")` it throws on HTTP is answered as it is. A
+  hook that takes bearer tokens only (the MCP bridge's `principal`, an
+  `authenticate` reading `auth.token`) uses `bearerAuth`.
 - `socketAuth({ devCredentials })` signs a socket in by the user id its
   handshake names (`auth: { userId }`, no token), as the function answers
   (the principal, or `null` to refuse): for a game editor or load-test bots
-  in development. `socketAuth` throws when it is given while `NODE_ENV` is
-  `production`, and refuses such a handshake there anyway; pass it only
-  behind the app's own flag.
+  in development. It runs only when `NODE_ENV` is `development` or `test`:
+  `socketAuth` throws when it is given otherwise (an unset `NODE_ENV`
+  included: set `NODE_ENV=development`), refuses such a handshake once
+  `NODE_ENV` says otherwise, and `createServer` warns at startup while it
+  is on; pass it only behind the app's own flag.
 - `google.optional(...)` and `discord.optional(...)` build nothing when
   neither credential is set (only one is a misconfiguration, refused), and
   `providers` skips `undefined`, `null` and `false` entries, so an
@@ -2706,8 +3014,10 @@ nothing is cached:
   many users calls from one address: give it its own `keyGenerator` or a
   higher `max`.
 - The mock provider is mounted only while `isMockOAuthEnabled()`
-  (`ENABLE_MOCK_OAUTH=true` and `NODE_ENV` other than `production`), and
-  every request checks again. Set `mock({ internalUrl })` where the API
+  (`ENABLE_MOCK_OAUTH=true` and `NODE_ENV` `development` or `test`; an
+  unset `NODE_ENV` mounts nothing and logs an error saying to set
+  `NODE_ENV=development`), mounting it logs a warning, and every request
+  checks again. Set `mock({ internalUrl })` where the API
   cannot reach itself at `publicUrl`. Routes made with nothing that can
   sign anyone in (only a mock that is off) warn when they are made.
 - `publicUrl` is where providers send the browser back, so a deployment
@@ -2718,33 +3028,57 @@ nothing is cached:
   (`X-Forwarded-Host`, else `Host`) logs an error naming it, once.
 - One rule names the session cookie, written and read: the routes,
   `setSessionCookie`, `socketAuth` and the HTTP transport give a request
-  the same name, and read first the name they would set on it. Without a
+  the same name, and read `__Host-session` first wherever it is present:
+  only this host, over a secure context, can have set it. Without a
   domain, a request over HTTPS reads only `__Host-session`, never
   `session`: another site under the same parent domain can set that cookie
   for the whole domain, and while the user holds no `__Host-session` it
   would sign them in as whoever set it. A plain HTTP request reads
-  `session`, then `__Host-session`. A configured name is read as it is, on
+  `__Host-session`, then `session` (the name the routes set there); when
+  the routes or `setSessionCookie` and `clearSessionCookie` set or clear
+  `session`, they also clear a stale `__Host-session` the request carries,
+  which would otherwise shadow it, or outlive a sign-out. A configured name is read as it is, on
   any request, so a changed name goes in all three places:
   `createAuthRoutes({ cookie: { name } })`, `socketAuth({ cookieName })`
   and `createServer({ http: { cookieName } })`. The transports see the
   cookie's domain through `COOKIE_DOMAIN` only: share the cookie with
   subdomains by setting `COOKIE_DOMAIN`; a `cookie.domain` given only to
   the routes needs `cookieName: "session"` on the other two, and the routes
-  warn at startup until the cookie is named. Behind a proxy that ends TLS,
+  warn at startup until the cookie is named. They also warn for
+  `cookie.domain: ""` while `COOKIE_DOMAIN` is set: the transports then
+  take a `session` cookie over HTTPS too, which the routes never set there
+  and any site under that domain can. Behind a proxy that ends TLS,
   have it send `X-Forwarded-Proto`, which every request carries, so the
   name does not depend on which requests carry an `Origin`.
-- A socket keeps the principal it authenticated with until it reconnects,
-  so a revoked session's open sockets are ended with
+- A socket whose session expires is disconnected then (`io server
+disconnect`; `socketAuth` records the expiry, and an app's own
+  `authenticate` may, through `recordSocketSession(socket, sessionId,
+expiresAt)`, with `expiresAt` a `Date` or epoch milliseconds: a JWT's
+  `exp` is in seconds). A handshake whose recorded session expired before
+  it ended (a slow `loadPrincipal`) is refused, `UNAUTHENTICATED`. Otherwise a socket keeps the principal it authenticated
+  with until it reconnects, so a revoked session's open sockets are ended with
   `server.access.disconnectUser(userId, { sessionId?, reason? })`: every
   socket of the user, or those `socketAuth` recorded for one session
   (`recordSocketSession` on `./server` for an app's own `authenticate`), on
   every node behind a cluster adapter. `onRevoke(userId, sessionId | null)`
   tells the app when `logout` (the session's id) or `logout-all` (`null`)
   revoked; wire it as above. A disconnected client does not reconnect on
-  its own; its next connect is authenticated afresh.
+  its own; its next connect is authenticated afresh. It forgets the user
+  and everything quickdraw cached (`isKnown` false, `status`
+  `"disconnected"`), and calls waiting to be sent when a reconnect is
+  refused fail with `CANCELLED`, so a shared machine shows nothing of
+  theirs.
 - `issueSession({ sessions, jwtSecret }, userId, { provider })` starts a
   session for an app's own sign-in flow (login codes, an embedded activity),
   and `liveSession` reads a token back; both work with `socketAuth`.
+- `bearerAuth({ sessions, jwtSecret, loadPrincipal? })` is `socketAuth`'s
+  counterpart for a hook handed a bearer token alone (the MCP bridge's
+  `principal`, `authenticate: ({ auth }) => verify(auth.token)`): no token
+  is anonymous, a token whose session is not live is refused with
+  `UNAUTHENTICATED`, on every call, and it never reads cookies. It records
+  no socket session: use `socketAuth` for `createServer`. `verifyJWT`
+  checks a token's signature and expiry only, never the store, and warns
+  once in development when it verifies a session token.
 
 From the browser, `./client` speaks to these routes: `authProviders({
 apiUrl })` lists the sign-ins the API serves (`GET /providers`: a provider
@@ -2759,7 +3093,8 @@ and the token `setAuthToken` stored, if any, as a bearer token; the stored
 token is forgotten either way, and a refusal or an unreachable server
 rejects with a `QuickdrawError`. A socket keeps the user it signed in as
 until it connects again, so reconnect the provider's connection after
-signing out (with a token in `auth`, clearing it does that):
+signing out: `connection.close()`, then `open()`, as below, or a reload
+(with a token in `auth`, clearing it does that):
 
 <!-- example: apps/web/src/components/SignIn.tsx#browser -->
 
@@ -3106,29 +3441,36 @@ What it does with them:
 
 While `NODE_ENV` is not `"production"`, a running app warns about the slow
 and untracked patterns lint cannot see, as they happen. Every warning has
-one format and names the method call it happened in:
+one format and names the method call it happened in (one exception:
+`untracked-access-model` is checked as the server starts and logged as an
+error under `category: "quickdraw.access"`, in every environment, at each
+start):
 
 ```text
 [quickdraw:n-plus-one] taskService.board: task.findUnique by id ran 10 times in one call, once per item (N+1); ...
 ```
 
-| Kind                     | Raised when                                                                                                                                                                                        |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `n-plus-one`             | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])`                                                                                               |
-| `unbounded-read`         | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)                                                                                                         |
-| `oversized-response`     | a reply was larger than `maxResponseBytes` (default 1 MiB)                                                                                                                                         |
-| `nested-write`           | a write's `data` wrote a related row, which is not tracked                                                                                                                                         |
-| `ambient-write`          | a tracked write ran outside any unit of work                                                                                                                                                       |
-| `batch-read`             | a write in an array-form `$transaction` read its rows outside the batch                                                                                                                            |
-| `batch-create-many`      | a `createMany` in an array-form `$transaction` could not report its rows                                                                                                                           |
-| `repeated-call`          | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                                                                                                               |
-| `tiered-field-in-output` | a method's own output schema declares a field the contract tiers, which only projection outputs strip; raised when the server is made (for an output without JSON Schema, when a reply carries it) |
-| `resolver-without-reads` | a service's policy is, or combines in `anyOf`, a `resolver` without `reads`, so no tracked write re-checks it; raised when the server is made                                                      |
+| Kind                       | Raised when                                                                                                                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `n-plus-one`               | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])`                                                                                                                      |
+| `unbounded-read`           | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)                                                                                                                                |
+| `oversized-response`       | a reply was larger than `maxResponseBytes` (default 1 MiB)                                                                                                                                                                |
+| `nested-write`             | a write's `data` wrote a related row, which is not tracked                                                                                                                                                                |
+| `ambient-write`            | a tracked write ran outside any unit of work                                                                                                                                                                              |
+| `batch-read`               | a write in an array-form `$transaction` read its rows outside the batch                                                                                                                                                   |
+| `batch-create-many`        | a `createMany` in an array-form `$transaction` could not report its rows                                                                                                                                                  |
+| `repeated-call`            | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                                                                                                                                      |
+| `tiered-field-in-output`   | a method's own output schema declares a field the contract tiers, which only projection outputs strip; raised when the server is made (for an output without JSON Schema, when a reply carries it)                        |
+| `resolver-without-reads`   | a service's policy is, or combines in `anyOf`, a `resolver` without `reads`, so no tracked write re-checks it; raised when the server is made                                                                             |
+| `untracked-access-model`   | a model a policy, a membership table or a `via` junction depends on has no `id` the write tracker can key its rows by, so no write to it revokes; checked when the server starts, logged as an error in every environment |
+| `shared-principal`         | the handler of a `share: "all"` run (an app's, not a kit's) read `ctx.principal`, `ctx.services` or `ctx.mcp`: the run has the first caller's, and every caller gets its result                                           |
+| `channel-without-requires` | a channel's contract declares no `requires` and its service no `access`, so every signed-in user may send it; raised when the server is made                                                                              |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
 writes). Each is logged once per kind, service, method and subject (the
-model, or the field of a nested write), under `category: "quickdraw.dev"`.
+model, the field of a nested write, or the member a shared run read), under
+`category: "quickdraw.dev"`.
 Only an app's own statements are checked: the framework's reads and the
 kits' own reads are not, while the app's callbacks a kit calls (`prepare`,
 `onChange`, `resolveUser`, a search strategy) are. A statement filtered by
@@ -3142,9 +3484,10 @@ once the reply was recorded (over a socket or HTTP the reply was already
 sent, so that error is logged, not thrown). Strictness belongs to the app:
 warnings outside its calls (an ambient write while seeding, another app's
 calls) are logged as usual, and `app.close()` ends it. The ones raised when
-the app is made, `tiered-field-in-output` and `resolver-without-reads`, are
-thrown from `createTestApp` itself, so a strict app over such a method or
-policy does not start.
+the app is made, `tiered-field-in-output`, `resolver-without-reads`,
+`untracked-access-model` and `channel-without-requires`, are thrown from
+`createTestApp` itself, so a strict app over such a method, policy, table
+or channel does not start.
 
 A `repeated-call` warning names a client caught in a loop (a mutation fired
 from an effect that its own result runs again, a refetch that triggers
@@ -3280,6 +3623,16 @@ to the test client exactly as in production.
 
 ## Observability
 
+Logs go to `createServer({ logger })`, any logger with Winston's methods
+(default `consoleLogger`). The console default drops `debug` when
+`NODE_ENV` is `"production"`, since a call's record logs at debug with its
+caller's user id: `createConsoleLogger({ level: "debug" })` keeps it, and
+`level: "warn"` drops `info` too. An error is logged with its message and
+stack, but a Prisma client error only with its class, `code`, the schema
+names and codes of its `meta` (never a value, nor the database's own text,
+which quotes the row), the reason a validation error gives, and its stack
+frames: its message renders the call, values included.
+
 `createServer({ stallWatchdog: true })` watches the event loop. It samples
 the loop's delay every 20 ms (`perf_hooks.monitorEventLoopDelay`), reads it
 every 10 s, and logs a warning (`category: "quickdraw.stall"`) when the 99th
@@ -3406,8 +3759,8 @@ so an app can adopt it before fixing old code.
 
 The guards follow one order of preference, so an agent moving fast meets a
 mistake as early as it can be caught: a type error; then a refusal when the
-service is defined (an access form that checks no row on a method that
-takes an `id`, unless it says `rowless: true`); then lint; then a
+service is defined (an access form that asks the policy nothing about the
+row a method's `id` names, unless it says `rowless: true`); then lint; then a
 development warning as it happens (`repeated-call`, `repeated-mutation` and
 `repeated-invalidation` name a client loop before the rate limit does).
 
@@ -3444,9 +3797,9 @@ bunx @fitzzero/quickdraw-codemod v5 .
 
 | Export             | Holds                                                                                                                                                                                                                                           |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.`                | `defineContract`, `query`, `mutation`, `nullable`, `listOf`, `via`, the kits' contract halves, inference types, `QuickdrawError`, error codes, protocol types, room and topic names                                                             |
+| `.`                | `defineContract`, `query`, `mutation`, `nullable`, `listOf`, `via`, the kits' contract halves, inference types, `QuickdrawError`, error codes, protocol types, room and topic names, `consoleLogger` and `createConsoleLogger`                  |
 | `./server`         | `initQuickdraw`, `createServer`, `createDispatcher`, `createHttpRouter`, policies, `custom`, the kits' handlers, `requireRow`, `nextOrdinal`, `storageOf`, dev warnings, the Redis adapter, the socket rate limiter, env and encryption helpers |
-| `./server/auth`    | `createAuthRoutes`, `socketAuth`, `requireSession` and `sessionOf`, providers (`google`, `discord`, `mock`, `guest`), session stores, `issueSession`, `liveSession`, JWT, cookie and origin helpers                                             |
+| `./server/auth`    | `createAuthRoutes`, `socketAuth`, `bearerAuth`, `requireSession` and `sessionOf`, providers (`google`, `discord`, `mock`, `guest`), session stores, `issueSession`, `liveSession`, JWT, cookie and origin helpers                               |
 | `./server/express` | Express rate limits: `createAuthLimiter`, `createAuthStatusLimiter`, `createCallLimiter`, `createPublicApiLimiter`, `createWebhookLimiter`                                                                                                      |
 | `./server/mcp`     | `createMcpRegistry`, `describeTools`, `createMcpStdioServer`, `createMcpHttpRouter`, `bootstrapMcpServer`                                                                                                                                       |
 | `./server/otel`    | `otelOnCall`                                                                                                                                                                                                                                    |

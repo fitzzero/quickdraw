@@ -121,9 +121,12 @@ function limitDefault(model: ProtocolModel, type: string): ((field: Field) => st
   if (prefix === undefined) {
     return undefined;
   }
-  // `maxSubscribeIds` is fixed, not a dispatcher limit.
+  // `maxSubscribeIds` and the per-socket caps are fixed, not dispatcher limits.
   const fixed: Readonly<Record<string, string | undefined>> = {
     maxSubscribeIds: model.constants.get("MAX_SUBSCRIBE_IDS")?.value,
+    maxEntityIds: model.constants.get("MAX_ENTITY_IDS_PER_SOCKET")?.value,
+    maxScopes: model.constants.get("MAX_SCOPES_PER_SOCKET")?.value,
+    maxTopics: model.constants.get("MAX_TOPICS_PER_SOCKET")?.value,
   };
   return (field) => model.defaults.get(`${prefix}${field.name}`) ?? fixed[field.name] ?? "";
 }
@@ -277,6 +280,9 @@ function limitsSection(model: ProtocolModel): string[] {
       row("MAX_SUBSCRIBE_IDS", " ids"),
       row("MAX_ITEM_IDS", " ids"),
       row("MAX_SCOPE_LENGTH", " characters"),
+      row("MAX_ENTITY_IDS_PER_SOCKET", " ids"),
+      row("MAX_SCOPES_PER_SOCKET", " scopes"),
+      row("MAX_TOPICS_PER_SOCKET", " topics"),
       row("MAX_STREAMS_PER_SOCKET", " feeds"),
       row("CHANNEL_ABUSE_WINDOW_MS", " ms"),
       row("CHANNEL_ABUSE_MULTIPLIER", " times the channel's rate"),

@@ -11,21 +11,29 @@
 //   sockets (of one session) are disconnected, on every node.
 //
 // The adapter probe tells the live data whether rooms are local: true while
-// the server runs the in-memory adapter it was created with.
+// the server runs the in-memory adapter it was created with. Every event to
+// the other nodes carries this server's deployment, and a node applies only
+// its own deployment's (`../cluster/deployment.ts`).
 
 import type { Logger } from "../../contract/logger";
 import { SERVER_EVENTS, userRoom } from "../../contract/names";
-import { answerOf } from "../cluster/acks";
+import { emitToNodes, onNodeEvent } from "../cluster/deployment";
 import type { ClusterBroadcasts } from "../cluster/broadcasts";
 import type { ClusterOptions } from "../cluster/revisions";
 import type { AdapterProbe } from "../emit/hub";
 import { describeError } from "../pipeline/metrics";
-import { socketSessionOf, type ServerAuth, type ServiceGrants } from "./auth";
+import {
+  socketSessionExpiryOf,
+  socketSessionOf,
+  type ServerAuth,
+  type ServiceGrants,
+} from "./auth";
 import type { SocketExtension } from "./socketio";
-import type { QuickdrawIo } from "./types";
+import type { QuickdrawIo, QuickdrawServerSocket } from "./types";
 
 export type { ClusterOptions } from "../cluster/revisions";
 export { serveBroadcasts } from "../cluster/broadcasts";
+export { registerClusterDeployment } from "../cluster/deployment";
 
 /** The server-to-server event reloaded grants are broadcast on behind a cluster adapter. */
 export const GRANTS_EVENT = "quickdraw:grants";
@@ -116,6 +124,46 @@ function disconnectHere(io: QuickdrawIo, userId: string, sessionId: string | und
   return ended;
 }
 
+/** The longest delay a timer keeps: `setTimeout` fires a longer one at once. */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * Disconnects `socket` when the session it authenticated with expires
+ * (`recordSocketSession` with an expiry, as `socketAuth` records it; the
+ * 5.1 audit's AUTH-4): the client gets `io server disconnect` and does not
+ * reconnect on its own, and its next connect is authenticated afresh. An
+ * expiry past the longest timer is waited out in steps; the wait ends when
+ * the socket disconnects. Never in the call itself, so the connection's
+ * other listeners see the socket connect, then disconnect. Nothing for a
+ * socket recorded without an expiry.
+ */
+export function endAtSessionExpiry(socket: QuickdrawServerSocket, logger: Logger): void {
+  const expiresAt = socketSessionExpiryOf(socket);
+  if (expiresAt === undefined) {
+    return;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  socket.once("disconnect", () => {
+    clearTimeout(timer);
+  });
+  const wait = (): void => {
+    timer = setTimeout(arm, Math.min(Math.max(expiresAt - Date.now(), 0), MAX_TIMER_MS));
+    timer.unref();
+  };
+  const arm = (): void => {
+    if (expiresAt > Date.now()) {
+      wait();
+      return;
+    }
+    logger.debug("Disconnected a socket whose session expired", {
+      category: "quickdraw.socket",
+      socketId: socket.id,
+    });
+    socket.disconnect(true);
+  };
+  wait();
+}
+
 /** A broadcast `disconnectUser`, read; `undefined` for anything else. */
 function readDisconnect(
   value: unknown,
@@ -135,7 +183,8 @@ function readDisconnect(
  * of the user on this node (only those of one session with `sessionId`), and,
  * behind a cluster adapter, tells every other node to do the same. For a
  * session the app revoked (`createAuthRoutes`' `onRevoke`): a socket keeps
- * the principal it authenticated with until it reconnects, and its
+ * the principal it authenticated with until it reconnects (or until its
+ * session expires, when that was recorded: `endAtSessionExpiry`), and its
  * reconnect is authenticated afresh. Returns how many sockets this node ended.
  */
 export function disconnectUser(
@@ -150,7 +199,8 @@ export function disconnectUser(
   }
   const { sessionId, reason } = options;
   if (!probe.local()) {
-    io.serverSideEmit(
+    emitToNodes(
+      io,
       DISCONNECT_USER_EVENT,
       sessionId === undefined ? { userId } : { userId, sessionId },
     );
@@ -166,9 +216,9 @@ export function disconnectUser(
   return ended;
 }
 
-/** Listens for `disconnectUser` broadcasts from other nodes, and ends this node's sockets they name. */
-export function listenForDisconnects(io: QuickdrawIo): void {
-  io.on(DISCONNECT_USER_EVENT, (broadcast: unknown) => {
+/** Listens for `disconnectUser` broadcasts from other nodes of its deployment, and ends this node's sockets they name. */
+export function listenForDisconnects(io: QuickdrawIo, logger: Logger): void {
+  onNodeEvent(io, logger, DISCONNECT_USER_EVENT, (broadcast) => {
     const request = readDisconnect(broadcast);
     if (request !== undefined) {
       disconnectHere(io, request.userId, request.sessionId);
@@ -177,13 +227,13 @@ export function listenForDisconnects(io: QuickdrawIo): void {
 }
 
 /**
- * Listens for grants other nodes reloaded, and applies them to this node's
- * sockets; the node that reloaded them waits for the answer, sent once this
- * node's subscriptions of the user are resolved again.
+ * Listens for grants other nodes of its deployment reloaded, and applies
+ * them to this node's sockets; the node that reloaded them waits for the
+ * answer, sent once this node's subscriptions of the user are resolved
+ * again. Another deployment's grants are answered and never applied.
  */
 export function listenForGrants(io: QuickdrawIo, live: LiveData | undefined, logger: Logger): void {
-  io.on(GRANTS_EVENT, (broadcast: unknown, ...rest: unknown[]) => {
-    const answer = answerOf(rest);
+  onNodeEvent(io, logger, GRANTS_EVENT, (broadcast, answer) => {
     const { userId, serviceAccess } = (broadcast ?? {}) as {
       readonly userId?: unknown;
       readonly serviceAccess?: unknown;

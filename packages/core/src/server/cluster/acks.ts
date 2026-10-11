@@ -33,7 +33,7 @@ export async function within<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 /** The acknowledgement a server-to-server event came with (its last argument), or one that does nothing. */
-export function answerOf(rest: readonly unknown[]): (done: boolean) => void {
+export function answerOf<T = boolean>(rest: readonly unknown[]): (value: T) => void {
   const last = rest.at(-1);
-  return typeof last === "function" ? (last as (done: boolean) => void) : () => undefined;
+  return typeof last === "function" ? (last as (value: T) => void) : () => undefined;
 }

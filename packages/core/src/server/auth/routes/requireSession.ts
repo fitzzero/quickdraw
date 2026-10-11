@@ -35,7 +35,7 @@ import { httpCredentialOf, transportCookieNaming, type HttpRequest } from "../..
 import type { Principal } from "../../types";
 import { originAllowlist, routeOriginsOf, type AllowedOrigin } from "./origins";
 import { refuse } from "./respond";
-import { httpCookieOriginAllowed, type PrincipalLoader } from "./socketAuth";
+import { COOKIE_REFUSED, httpCookieOriginAllowed, type PrincipalLoader } from "./socketAuth";
 import { checkSessionKeys, liveSession, type SessionKeys } from "./tokens";
 
 /** Options of {@link requireSession}. */
@@ -110,10 +110,6 @@ const SESSIONS = new WeakMap<object, RequestSession>();
 
 /** No page may use the cookie: what applies without `allowedOrigins` and without the routes' list. */
 const NO_ORIGINS = originAllowlist([], "requireSession", true);
-
-/** What a page whose Origin may not use the session cookie is told. */
-const COOKIE_REFUSED =
-  "This page's origin may not use the session cookie; send it from an allowed origin or use a bearer token";
 
 /**
  * Why the cookie is refused when there is no list at all (finding F11.4):

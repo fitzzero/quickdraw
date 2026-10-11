@@ -12,9 +12,11 @@
 // `Admin`, which reaches every tier; a service that gives a method a lower
 // form shows that method's callers less, and refuses them a filter, a sort
 // or a write that names a field they cannot see (it would tell what the
-// field holds). The grant fields `grants: true` shows (`serviceAccess`) are
-// seen only by callers whose service-wide grant is `Admin`, whatever form
-// the method runs under: editing grants never comes with a lowered form.
+// field holds). The grant fields `grants: true` shows (`serviceAccess`, or
+// the column `auth.serviceAccessSource` names on the service's model:
+// `grantsColumnOf`) are seen only by callers whose service-wide grant is
+// `Admin`, whatever form the method runs under: editing grants never comes
+// with a lowered form.
 
 import { QuickdrawError } from "../../../protocol/errors";
 import { serviceGrant } from "../../access/levels";
@@ -24,7 +26,7 @@ import { modelKey } from "../../storage";
 import type { Principal } from "../../types";
 import { pageItem } from "../crud/list";
 import type { KitHandlerArgs, ModelDelegate } from "../crud/runtime";
-import type { AdminFields } from "./meta";
+import { grantsColumnFor, type AdminFields } from "./meta";
 
 /** One call of an admin method. */
 export interface AdminCall {
@@ -39,6 +41,13 @@ export interface AdminCall {
   readonly unseen: ReadonlySet<string>;
   /** `unseen` and the fields the service hides from the kit: what no row of this call shows. */
   readonly omitted: ReadonlySet<string>;
+  /** The service's fields as the kit configures them for the server's grants column. */
+  readonly fields: AdminFields;
+}
+
+/** The column `auth.serviceAccessSource` names on the service's model, or `undefined`: the kit's grants field there. */
+export function grantsColumnOf(runtime: KitRuntime): string | undefined {
+  return grantsColumnFor(runtime.service.model, runtime.grantsSource);
 }
 
 /** The delegate of `model` on the dispatcher's database client (or a transaction's client). */
@@ -59,8 +68,12 @@ export function tableOf(db: unknown, model: string): ModelDelegate {
   return delegate as ModelDelegate;
 }
 
-/** The admin kit call `ctx` belongs to. */
-export function adminCall(ctx: KitHandlerArgs["ctx"], db: unknown, fields: AdminFields): AdminCall {
+/** The admin kit call `ctx` belongs to, with the fields `fieldsFor` gives the server's grants column. */
+export function adminCall(
+  ctx: KitHandlerArgs["ctx"],
+  db: unknown,
+  fieldsFor: (grantsColumn: string | undefined) => AdminFields,
+): AdminCall {
   const runtime = kitRuntimeOf(ctx);
   const model = runtime?.service.model;
   const projection = runtime?.service.projections.get("entity");
@@ -70,6 +83,7 @@ export function adminCall(ctx: KitHandlerArgs["ctx"], db: unknown, fields: Admin
       "The admin kit's handlers run through a dispatcher, in a service with a model and an entity",
     );
   }
+  const fields = fieldsFor(grantsColumnOf(runtime));
   const { principal } = ctx;
   const level = principal === null ? null : (serviceGrant(principal, runtime.service.name) ?? null);
   const tiered = projection.tiers.hidden(level);
@@ -82,6 +96,7 @@ export function adminCall(ctx: KitHandlerArgs["ctx"], db: unknown, fields: Admin
     projection,
     unseen,
     omitted: new Set([...unseen, ...fields.hidden]),
+    fields,
   };
 }
 

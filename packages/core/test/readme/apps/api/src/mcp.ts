@@ -8,6 +8,7 @@ import { projectService } from "./services/project";
 import { taskService } from "./services/task";
 
 // #region mcp
+import { createPublicApiLimiter } from "@fitzzero/quickdraw-core/server/express";
 import {
   createMcpHttpRouter,
   createMcpRegistry,
@@ -19,7 +20,7 @@ const summarizeInput = z.object({ projectId: z.string() });
 const registry = createMcpRegistry({
   services: [projectService, taskService],
   dispatcher: server.dispatcher,
-  // who a stdio session or an HTTP bearer token stands for; nothing is anonymous
+  // an agent acting for the user of a session token, checked on every call; no token is anonymous
   principal: (request) =>
     verifySession(request.transport === "http" ? request.token : process.env.AGENT_TOKEN),
   // handlers read it as ctx.mcp
@@ -39,7 +40,9 @@ const registry = createMcpRegistry({
   ],
 });
 
-// GET /mcp/tools, POST /mcp/invoke
+// GET /mcp/tools, POST /mcp/invoke; the routes have no rate limit of their own, so limit them per
+// address (never by the bearer token, which nothing has checked yet)
+app.use("/mcp", createPublicApiLimiter({ max: 600 }));
 app.use(createMcpHttpRouter({ registry }));
 // in an MCP client's process
 createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });

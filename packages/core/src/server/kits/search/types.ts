@@ -55,7 +55,8 @@ export type SearchStrategy<Ctx = SearchStrategyContext> =
        * The filter of the rows that match `q`, in the database client's
        * `where` shape: a Postgres full-text condition, say. The kit adds the
        * access filter and the scope, and pages the rows by keyset cursor in
-       * the scope collection's order (else by id).
+       * the scope collection's order when the call passes a scope, else by
+       * id.
        */
       readonly where: (q: string, ctx: Ctx) => MaybePromise<StorageWhere>;
       readonly ids?: never;

@@ -184,6 +184,11 @@ export type ContextExtender = (base: AnyContext) => object;
  */
 export interface KitRuntime {
   readonly service: AnyService;
+  /**
+   * Every service of the dispatcher, by name: the kits lock the columns of a
+   * membership table that any of their policies reads.
+   */
+  readonly services: ReadonlyMap<string, AnyService>;
   /** `dispatcher.access`, and `resolve` for levels without service grants (a collection scope's). */
   readonly access: DispatcherAccess & Pick<PolicyEngine, "resolve">;
   readonly storage: StorageAdapter | undefined;
@@ -201,6 +206,8 @@ export interface KitRuntime {
    * admin kit's `onCommitted`), whose writes flush on their own.
    */
   readonly runDetached?: (fn: () => unknown) => Promise<unknown>;
+  /** The dispatcher's `serviceAccessSource`: where users' service-wide grants live (the admin kit's grants column). */
+  readonly grantsSource?: { readonly model: string; readonly column: string };
 }
 
 /** The sockets in a room (RFC 0003 section 6), as this process sees its rooms. */
@@ -357,4 +364,29 @@ export function withSignal(ctx: AnyContext, signal: AbortSignal): AnyContext {
   const next =
     services === undefined ? { ...ctx, signal } : { ...ctx, signal, services: services(signal) };
   return withRuntime(Object.freeze(next), KIT_RUNTIMES.get(ctx), services);
+}
+
+/** The members of `ctx` that say who the caller is. */
+export type CallerMember = "principal" | "services" | "mcp";
+
+/**
+ * The same `ctx`, calling `onRead` each time code reads one of the members
+ * that say who the caller is: the development check of a `share: "all"`
+ * run, whose result every caller gets. Reads return the very values, so
+ * `ctx` stays as frozen as it was, and its kit runtime and service callers
+ * stay registered for the proxy.
+ */
+export function watchCallerReads(
+  ctx: AnyContext,
+  onRead: (member: CallerMember) => void,
+): AnyContext {
+  const watched = new Proxy(ctx, {
+    get(target, key, receiver) {
+      if (key === "principal" || key === "services" || key === "mcp") {
+        onRead(key);
+      }
+      return Reflect.get(target, key, receiver) as unknown;
+    },
+  });
+  return withRuntime(watched, KIT_RUNTIMES.get(ctx), SERVICE_CALLERS.get(ctx));
 }

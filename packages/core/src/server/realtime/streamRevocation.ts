@@ -18,13 +18,15 @@
 //
 // A feed open to an app room's sockets (`access: { room }`) is checked again
 // when its socket leaves an app room, by its own leave or a removal: one it
-// no longer meets is revoked the same way, at once.
+// no longer meets is revoked the same way, at once. A subscribe an access
+// change overlapped is authorized again the same way once it joined
+// (`anchorsNow`, from `streamSubscribe.ts`).
 
 import { SERVER_EVENTS } from "../../contract/names";
 import type { RevokedFrame } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
 import type { Hub } from "../emit/hub";
-import type { RevocationHook } from "../emit/revocation";
+import { settleAll, type RevocationHook } from "../emit/revocation";
 import { describeError } from "../pipeline/metrics";
 import type { QuickdrawServerSocket } from "../transports/types";
 import { streamRoomOf, subscriptionOf, type StreamIndex } from "./streamIndex";
@@ -34,7 +36,7 @@ import type { StreamSubscription } from "./types";
 type Found = Iterable<readonly [QuickdrawServerSocket, readonly StreamSubscription[]]>;
 
 /** The anchors the subscription may keep, or `undefined` when it may no longer read the feed. */
-async function anchorsNow(
+export async function anchorsNow(
   hub: Hub,
   socket: QuickdrawServerSocket,
   subscription: StreamSubscription,
@@ -122,7 +124,7 @@ async function reauthorizeAll(hub: Hub, index: StreamIndex, found: Found): Promi
       work.push(reauthorize(hub, index, socket, subscription));
     }
   }
-  await Promise.all(work);
+  await settleAll(work);
 }
 
 /** The stream half of a dispatcher's revocation. */

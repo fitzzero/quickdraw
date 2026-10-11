@@ -5,6 +5,7 @@
 // spreads into `defineService`'s `methods`, which checks each form against
 // what the service declares (an `entry` form needs its access policy).
 
+import type { AccessLevel } from "../../../contract/access";
 import type { AnyContract } from "../../../contract/defineContract";
 import type { MethodName, ParsedInputOf } from "../../../contract/infer";
 import type { CrudMethodName, CrudSpec } from "../../../contract/kits/crud";
@@ -57,13 +58,21 @@ export interface CrudHandlersOptions<C extends AnyContract, A, Db = unknown> {
    * Who may call each of the kit's methods: one form per method, required.
    * `get`, `update`, `delete` and `reorder` take `{ entry: L }` to check the
    * row; the methods on many rows also keep only the rows the service's
-   * policy gives the caller at the form's level.
+   * policy gives the caller at the form's level. A bulk method whose form
+   * names no level takes its single-row counterpart's row level (`delete`'s
+   * for `bulkDelete`, `update`'s for `bulkUpdate`) when it is higher than
+   * `Moderate`; give `{ entry: L, id: "ids" }` to refuse the whole call
+   * instead of skipping rows.
    */
   readonly access: A & NoInfer<NotAKitMethod<C, A>>;
   /**
    * What `create` writes, from its parsed input: set owner or scope columns
    * from `ctx.principal`, an ordinal from `nextOrdinal`. `create` writes the
-   * input as it is without it.
+   * input as it is without it. An owner or access-list column (one the
+   * policy reads) comes only from here: the caller may not send one. The
+   * anchors of what it returns (each `inherit` parent and anchored
+   * collection's scope it sets) are checked at the method's row level, and
+   * it returns column values only, never a relation or a nested write.
    */
   readonly prepare?: [CrudCreateOf<C>] extends [never]
     ? `crud.handlers: prepare is for the kit's create, which ${C["name"]} does not have`
@@ -71,10 +80,11 @@ export interface CrudHandlersOptions<C extends AnyContract, A, Db = unknown> {
   /**
    * The kit's methods whose access form is their whole check on purpose:
    * each gets `rowless: true`. On a service with an access policy,
-   * `defineService` refuses `get` under `"public"`, `"authenticated"` or
-   * `{ service: L }` below `Admin` (any such caller could read any row by
-   * its id) unless it is named here: `rowless: ["get"]` for public
-   * profiles, say. `update`, `delete` and `reorder` check the row whatever
+   * `defineService` refuses `get` under a form that asks the policy nothing
+   * about the row its `id` names (`"public"`, `"authenticated"`,
+   * `{ service: L }` below `Admin`, `custom`, `{ scope }`, or `{ entry }` on
+   * another key: any such caller could read any row by its id) unless it is
+   * named here: `rowless: ["get"]` for public profiles, say. `update`, `delete` and `reorder` check the row whatever
    * their form, and need nothing.
    */
   readonly rowless?: readonly CrudMethodsOf<C>[];
@@ -100,4 +110,10 @@ export interface MethodContext {
   /** The projection a `list`'s items are. */
   readonly projection: string;
   readonly prepare: AnyPrepare | undefined;
+  /**
+   * The row level a bulk method needs when its own form names none: the
+   * higher of `Moderate` and its single-row counterpart's (`delete` for
+   * `bulkDelete`, `update` for `bulkUpdate`; `bulkFallback`).
+   */
+  readonly bulkLevel: AccessLevel;
 }

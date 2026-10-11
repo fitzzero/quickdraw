@@ -24,7 +24,12 @@ import {
   type TaskServiceOptions,
 } from "./collections/__tests__/fixture";
 import { projectService, qd, recordingStorage, type Read } from "./emit/__tests__/live";
-import type { AnyService, Principal, ServiceGrants } from "./index";
+import {
+  MAX_TOPICS_PER_SOCKET,
+  type AnyService,
+  type Principal,
+  type ServiceGrants,
+} from "./index";
 
 let h: Harness;
 let board: Board;
@@ -467,6 +472,78 @@ describe("qd:watch", () => {
     expect(inTopic(app, `board:${board.p1}`)).toBe(0);
   });
 
+  it.each([
+    ["refuses a watch whose access a removal took while it was authorized (LIVE-2)", "cy"],
+    ["keeps a watch an unrelated removal left alone", "bo"],
+  ] as const)("%s", async (_name, removed) => {
+    let appRef: App | undefined;
+    let armed = true;
+    const { app } = await start({
+      // The watch's authorization reads the membership table: remove a member right then.
+      after: (read) => {
+        if (!armed || read.model !== "projectMember" || appRef === undefined) {
+          return undefined;
+        }
+        armed = false;
+        return appRef
+          .as(as(board.ada))
+          .projectService.removeMember({ projectId: board.p1, userId: board[removed] })
+          .then(() => undefined);
+      },
+    });
+    appRef = app;
+    const cy = await connect(app, as(board.cy));
+    const topic = `board:${board.p1}`;
+    if (removed === "bo") {
+      expect(await watch(cy.connection, topic)).toEqual(ok);
+      expect(inTopic(app, topic)).toBe(1);
+      return;
+    }
+    expect(await watch(cy.connection, topic)).toEqual(refused("FORBIDDEN"));
+    expect(inTopic(app, topic)).toBe(0);
+    await write(app, (db) =>
+      db.task.update({ where: { id: board.t1 }, data: { title: "Unseen" } }),
+    );
+    await cy.scopes.settle();
+    expect(cy.scopes.changed).toEqual([]);
+  });
+
+  it("sends a watcher a removal took nothing while its watch settles: it joins only after", async () => {
+    let appRef: App | undefined;
+    let reads = 0;
+    let busy = false;
+    const { app } = await start({
+      after: (read) => {
+        if (busy || read.model !== "projectMember" || appRef === undefined) {
+          return undefined;
+        }
+        reads += 1;
+        const target = appRef;
+        busy = true;
+        // The watch's authorization reads first: cy is removed. The settle's check reads next.
+        const work =
+          reads === 1
+            ? target
+                .as(as(board.ada))
+                .projectService.removeMember({ projectId: board.p1, userId: board.cy })
+            : write(target, (db) =>
+                db.task.update({ where: { id: board.t1 }, data: { title: "During the settle" } }),
+              );
+        return work
+          .finally(() => {
+            busy = false;
+          })
+          .then(() => undefined);
+      },
+    });
+    appRef = app;
+    const cy = await connect(app, as(board.cy));
+    expect(await watch(cy.connection, `board:${board.p1}`)).toEqual(refused("FORBIDDEN"));
+    await cy.scopes.settle();
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(cy.scopes.changed).toEqual([]);
+  });
+
   it("is not counted by the socket rate limiter", async () => {
     const { app } = await start({ rateLimit: { maxRequests: 2 } });
     const { connection } = await connect(app, as(board.ada));
@@ -485,6 +562,54 @@ describe("qd:watch", () => {
     expect(await call(2)).toMatchObject({ ok: true });
     expect(await call(3)).toMatchObject(refused("RATE_LIMITED"));
   });
+});
+
+describe("the per-socket cap (COLL-4)", () => {
+  it(`watches at most ${MAX_TOPICS_PER_SOCKET} topics per socket`, async () => {
+    const { app } = await start();
+    // A service-wide Admin watches any scope's topic without a read.
+    const { connection } = await connect(app, as(board.ed, { taskService: "Admin" }));
+    // In runs that fit the socket's lane (8 running, 64 waiting), which refuses more at once.
+    const answers: unknown[] = [];
+    for (let run = 0; run < MAX_TOPICS_PER_SOCKET; run += 50) {
+      const batch = Array.from({ length: 50 }, (_, n) =>
+        watch(connection, `byProject:cap-${run + n}`),
+      );
+      answers.push(...(await Promise.all(batch)));
+    }
+    expect(answers.every((answer) => (answer as { ok: boolean }).ok)).toBe(true);
+    expect(await watch(connection, "byProject:one-more")).toEqual(refused("CONFLICT"));
+    expect(inTopic(app, "byProject:one-more")).toBe(0);
+    // One watched already is no more; one unwatched makes room.
+    expect(await watch(connection, "byProject:cap-0")).toEqual(ok);
+    await unwatch(connection, "byProject:cap-0");
+    expect(await watch(connection, "byProject:one-more")).toEqual(ok);
+  }, 60_000);
+
+  it("lets one of the watches running at once take the last topic", async () => {
+    const { app } = await start();
+    const { connection } = await connect(app, as(board.ed, { taskService: "Admin" }));
+    // 999 in runs of 37, which fit the socket's lane (8 running, 64 waiting).
+    for (let run = 0; run < MAX_TOPICS_PER_SOCKET - 1; run += 37) {
+      const batch = Array.from({ length: 37 }, (_, n) =>
+        watch(connection, `byProject:cap-${run + n}`),
+      );
+      expect((await Promise.all(batch)).every((answer) => (answer as { ok: boolean }).ok)).toBe(
+        true,
+      );
+    }
+    // Eight at once each pass the check before they are authorized; where each is
+    // recorded, only the first finds room.
+    const topics = Array.from({ length: 8 }, (_, n) => `byProject:extra-${n}`);
+    const answers = await Promise.all(topics.map((topic) => watch(connection, topic)));
+    expect(answers.filter((answer) => (answer as { ok: boolean }).ok)).toHaveLength(1);
+    expect(answers.filter((answer) => !(answer as { ok: boolean }).ok)).toEqual(
+      Array.from({ length: 7 }, () => refused("CONFLICT")),
+    );
+    expect(topics.filter((topic) => inTopic(app, topic) > 0)).toHaveLength(1);
+    const socket = app.server.io.sockets.sockets.get(connection.socket.id ?? "");
+    expect(Object.keys(socket?.data.topics ?? {})).toHaveLength(MAX_TOPICS_PER_SOCKET);
+  }, 60_000);
 });
 
 describe("what topics read", () => {

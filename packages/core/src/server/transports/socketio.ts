@@ -24,6 +24,7 @@ import {
   type Acknowledge,
 } from "./ack";
 import { attachLegacyShim, type LegacyCallers, type LegacyWire } from "./legacy";
+import { endAtSessionExpiry } from "./pushes";
 import type { QuickdrawServerSocket, SocketContext } from "./types";
 
 /**
@@ -153,10 +154,11 @@ export function attachCallListeners(socket: QuickdrawServerSocket, context: Sock
 }
 
 /**
- * The server's `connection` handler: joins the socket's user room, then
- * gives a v5 socket its listeners and `qd:hello`, or a 4.x socket the legacy
- * shim and the legacy extensions. Only sockets the handshake middleware
- * admitted get here.
+ * The server's `connection` handler: joins the socket's user room, sets the
+ * socket to end when its session expires (`endAtSessionExpiry`), then gives
+ * a v5 socket its listeners and `qd:hello`, or a 4.x socket the legacy shim
+ * and the legacy extensions. Only sockets the handshake middleware admitted
+ * get here.
  */
 export function onConnection(
   settings: ConnectionSettings,
@@ -166,6 +168,7 @@ export function onConnection(
     if (principal !== null) {
       void socket.join(userRoom(principal.userId));
     }
+    endAtSessionExpiry(socket, settings.logger);
     if (socket.data.protocol === "legacy") {
       attachLegacyShim(socket, settings, settings.legacyCallers, settings.legacyWire);
       for (const extension of settings.legacyExtensions) {

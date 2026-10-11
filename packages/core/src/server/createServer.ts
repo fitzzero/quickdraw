@@ -18,15 +18,16 @@ import {
   createDispatcher,
   detachDispatcher,
   loopsOf,
-  withAccessSinks,
+  withServerParts,
   type Dispatcher,
-  type DispatcherOptions,
+  type DispatcherBaseOptions,
   type PrincipalOfServices,
 } from "./dispatcher";
 import { liveOf, type RoomLeaveHandler, type RoomLeaveHook } from "./emit/live";
 import {
   closer,
   prepareWatchdog,
+  startStartupChecks,
   trackCalls,
   watchSignals,
   type StallWatchdogOptions,
@@ -35,6 +36,7 @@ import { editsGrants, type AnyService } from "./service";
 import {
   createGrantsSink,
   createPrincipalResolver,
+  socketAuthOf,
   type ServerAuth,
   type ServiceGrants,
 } from "./transports/auth";
@@ -45,6 +47,7 @@ import {
   type HttpTransportOptions,
 } from "./transports/http";
 import {
+  checkKeyPrefix,
   createSocketServer,
   type ClusterOptions,
   type DisconnectUserOptions,
@@ -56,6 +59,8 @@ import {
   type SocketRateLimitOptions,
 } from "./transports/socketServer";
 import type { Principal } from "./types";
+
+export { startupChecksOf } from "./lifecycle";
 
 /**
  * The parts of an Express app (4 or 5) `createServer` uses: it is a request
@@ -85,7 +90,13 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
   readonly auth?: ServerAuth<P>;
   /** Socket.IO's CORS for its handshake. The app configures CORS for its own routes. */
   readonly cors?: SocketCors;
-  /** Other Socket.IO server options, such as `path` or `pingInterval`. */
+  /**
+   * Other Socket.IO server options, such as `path` or `pingInterval`.
+   * `connectionStateRecovery` is refused: a recovered socket would come back
+   * with its principal and rooms without authenticating again, so a revoked
+   * session or a lowered grant would return; quickdraw clients resume by
+   * revision on every reconnect.
+   */
   readonly socket?: SocketOptions;
   /**
    * Use the stock Socket.IO parser, so events may carry binary. Default
@@ -138,8 +149,11 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
    * Behind a cluster adapter: where the cluster's shared state lives (the
    * revision counter every node's flushes take their revision from, and
    * users' last-seen times). By default the Socket.IO Redis adapter's own
-   * Valkey or Redis client, under keys prefixed `quickdraw:`; see
-   * `docs/deploying.md`.
+   * Valkey or Redis client, under keys prefixed `quickdraw:`. Its
+   * `keyPrefix` also names the deployment every server-to-server event
+   * carries (a node ignores another deployment's) and is
+   * `setupRedisAdapter`'s default key: each deployment sharing a Valkey
+   * needs its own. See `docs/deploying.md`.
    */
   readonly cluster?: ClusterOptions;
   /**
@@ -175,8 +189,10 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
 /**
  * Options of {@link createServer}: the dispatcher's (`services`, `db`,
  * `logger`, `limits`, `onCall` and the pipeline seams) and the server's own.
+ * The grants column is `auth.serviceAccessSource` here, which the server
+ * gives its dispatcher.
  */
-export type ServerOptions<S extends readonly AnyService[]> = DispatcherOptions<S> &
+export type ServerOptions<S extends readonly AnyService[]> = DispatcherBaseOptions<S> &
   ServerOnlyOptions<PrincipalOfServices<S>>;
 
 /** Options of `server.rotate`. */
@@ -250,7 +266,28 @@ export interface QuickdrawServer<S extends readonly AnyService[] = readonly AnyS
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
 
+/**
+ * The startup warnings about `auth`: grants no tracked write refreshes
+ * (`warnUnsourcedGrants`), and `socketAuth`'s `devCredentials` while it is
+ * on (the 5.1 audit's AUTH-3).
+ */
+function warnOnAuth(
+  services: readonly AnyService[],
+  auth: { readonly authenticate?: unknown; readonly serviceAccessSource?: unknown } | undefined,
+  logger: Logger,
+): void {
+  warnUnsourcedGrants(services, auth?.serviceAccessSource !== undefined, logger);
+  if (socketAuthOf(auth?.authenticate)?.devCredentials === true) {
+    logger.warn(
+      "socketAuth's devCredentials is on: a socket handshake that names a user id signs in as that user, from any page; never set it outside development",
+      { category: "quickdraw.auth" },
+    );
+  }
+}
+
 function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void {
+  // Before any server, adapter subscription or background check exists.
+  checkKeyPrefix(options.cluster);
   if (options.app !== undefined && typeof options.app.use !== "function") {
     throw new TypeError("createServer: app must be an Express app");
   }
@@ -272,6 +309,13 @@ function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void 
   if (options.onRoomLeave !== undefined && typeof options.onRoomLeave !== "function") {
     throw new TypeError(
       "createServer: onRoomLeave must be a function of the leave and a run context",
+    );
+  }
+  // Socket.IO turns recovery on for any truthy value, `{}` included.
+  const socket = options.socket as Readonly<Record<string, unknown>> | undefined;
+  if (socket?.connectionStateRecovery) {
+    throw new TypeError(
+      "createServer: socket.connectionStateRecovery is refused: Socket.IO's connection state recovery restores a reconnecting socket's principal and rooms without authenticating it again, so a revoked session or a lowered grant would come back. quickdraw clients resume by revision on every reconnect; remove the option",
     );
   }
 }
@@ -303,12 +347,14 @@ function listenForLeaves<P extends Principal>(
 /** The HTTP transport, mounted on `app` when there is one. */
 function mountRouter<P extends Principal>(
   options: ServerOnlyOptions<P>,
-  base: Parameters<typeof httpRouterSettings>[1],
+  base: Omit<Parameters<typeof httpRouterSettings>[1], "cookieAsToken">,
 ): HttpRouter | undefined {
   if (options.http === false) {
     return undefined;
   }
-  const router = httpRouter(httpRouterSettings(options.http ?? {}, base));
+  // socketAuth's authenticate takes the session cookie as auth.token; any other gets it beside.
+  const cookieAsToken = socketAuthOf(options.auth?.authenticate) !== undefined;
+  const router = httpRouter(httpRouterSettings(options.http ?? {}, { ...base, cookieAsToken }));
   options.app?.use(router);
   return router;
 }
@@ -347,6 +393,27 @@ function warnUnsourcedGrants(
 }
 
 /**
+ * `options` with what the server adds to its dispatcher: the grants sink
+ * right after the access sink (a flush that lowers grants revokes before its
+ * frames go out), and `auth.serviceAccessSource`, which the admin kit reads.
+ */
+function withGrants<O extends object>(
+  options: O,
+  grants: ReturnType<typeof createGrantsSink>,
+  grantsSource: { readonly model: string; readonly column: string } | undefined,
+): O & { readonly serviceAccessSource?: { readonly model: string; readonly column: string } } {
+  if ((options as { readonly serviceAccessSource?: unknown }).serviceAccessSource !== undefined) {
+    throw new TypeError(
+      "createServer: name the grants column as auth.serviceAccessSource, which also refreshes the grants it stores; serviceAccessSource is createDispatcher's option",
+    );
+  }
+  return withServerParts(
+    { ...options, ...(grantsSource === undefined ? {} : { serviceAccessSource: grantsSource }) },
+    { accessSinks: grants === undefined ? [] : [grants] },
+  );
+}
+
+/**
  * Serves `services` over Socket.IO and HTTP on the app's own Express app and
  * HTTP server: socket authentication, the `user:{id}` room, `qd:hello`, the
  * v5 transport (or the 4.x shim), the HTTP transport at `POST /qd/{service}/{method}`,
@@ -365,16 +432,17 @@ export function createServer<const S extends readonly AnyService[]>(
   checkOptions(options);
   const legacyWire = resolveLegacyWire(options.legacyWire, options.services);
   const logger = options.logger ?? consoleLogger;
-  warnUnsourcedGrants(options.services, options.auth?.serviceAccessSource !== undefined, logger);
+  warnOnAuth(options.services, options.auth, logger);
   const watchdog = prepareWatchdog(options, options.stallWatchdog);
   let refresh: ((userId: string) => Promise<ServiceGrants>) | undefined;
   const grants = createGrantsSink(options.auth, () => refresh, logger);
-  // Right after the access sink: a flush that lowers grants revokes before its frames go out.
   const created = createDispatcher(
-    grants === undefined ? watchdog.options : withAccessSinks(watchdog.options, [grants]),
+    withGrants(watchdog.options, grants, options.auth?.serviceAccessSource),
   );
   const calls = trackCalls(created);
   const { dispatcher } = calls;
+  // In the background: a test app awaits them (`startupChecksOf`).
+  startStartupChecks(dispatcher, options, logger);
   listenForLeaves(created as Dispatcher, options.onRoomLeave);
   const resolvePrincipal = createPrincipalResolver(options.auth);
   const router = mountRouter(options, { call: dispatcher.call, resolvePrincipal, logger });

@@ -10,8 +10,11 @@
 // ids (`VALIDATION`), names an unknown service or one without rows
 // (`NOT_FOUND`), comes from an anonymous socket (`UNAUTHENTICATED`), or from
 // a principal of a kind the service does not admit (`FORBIDDEN`,
-// `../access/kinds.ts`); a failed lookup or read is `INTERNAL`, logged.
-// `qd:unsub` is checked the same way, kinds aside: leaving needs no kind.
+// `../access/kinds.ts`), or when its new ids would take the socket past
+// `MAX_ENTITY_IDS_PER_SOCKET` rows (`CONFLICT`); a failed lookup or read is
+// `INTERNAL`, logged. One row batches running at once left no room for is
+// answered `CONFLICT` on its own (`subscribe.ts`). `qd:unsub` is checked the
+// same way, kinds aside: leaving needs no kind.
 //
 // No listener of the live data throws (`answer.ts`), and `qd:sub` runs in
 // the socket's lane of subscription work (`lane.ts`).

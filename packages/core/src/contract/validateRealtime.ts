@@ -5,7 +5,7 @@
 // collections, streams, channels and events share `qd.<service>.<name>`.
 
 import { ACCESS_LEVELS, isAccessLevel } from "./access";
-import { reservedRoomPrefix } from "./names";
+import { reservedRoomPrefix, socketIdShaped } from "./names";
 import type { ChannelDef, EventDef, StreamDef } from "./realtime";
 import { isScopedStream, STREAM_MAX_SEED } from "./realtime";
 import { isStandardSchema } from "./standardSchema";
@@ -105,6 +105,11 @@ function checkMember(
   return value;
 }
 
+/** Why a literal room of the shape of a socket id names no app room (`socketIdShaped`). */
+function socketIdProblem(room: string): string {
+  return `room "${room}" has the shape of a Socket.IO socket id (20 letters, digits, "_" or "-"), which ctx.rooms.join refuses: no socket is in it as an app room`;
+}
+
 /** Why `access: { room }` names no app room a subscriber could be in, or `undefined`. */
 function streamRoomProblem(access: UnknownRecord, scoped: boolean): string | undefined {
   const { room } = access;
@@ -114,14 +119,18 @@ function streamRoomProblem(access: UnknownRecord, scoped: boolean): string | und
   if (typeof room === "function") {
     return scoped ? undefined : "a room computed from the scope needs a scoped stream";
   }
+  if (scoped) {
+    return "a room for a scoped stream is a function of its scope, (scope) => room: a name or { prefix } admits a socket in that room to every scope";
+  }
   const name = isRecord(room) && Object.keys(room).length === 1 ? room.prefix : room;
   if (!isName(name) || name.length > MAX_ROOM_LENGTH) {
     return `room must be an app room's name, { prefix } or a function of the scope, of 1 to ${MAX_ROOM_LENGTH} characters`;
   }
   const reserved = reservedRoomPrefix(name);
-  return reserved === undefined
-    ? undefined
-    : `room "${name}" is no app room: names starting with "${reserved}" are the framework's own rooms`;
+  if (reserved !== undefined) {
+    return `room "${name}" is no app room: names starting with "${reserved}" are the framework's own rooms`;
+  }
+  return typeof room === "string" && socketIdShaped(room) ? socketIdProblem(room) : undefined;
 }
 
 /** Why `access` is not a stream access form, or `undefined` when it is one. */
@@ -244,6 +253,9 @@ function checkRoomRequirement(owner: string, form: UnknownRecord, fail: Fail): v
     fail(
       `${owner}: requires.room "${room}" is not an app room: names starting with "${prefix}" are the framework's own rooms, which ctx.rooms.join refuses`,
     );
+  }
+  if (socketIdShaped(room)) {
+    fail(`${owner}: requires.${socketIdProblem(room)}`);
   }
 }
 

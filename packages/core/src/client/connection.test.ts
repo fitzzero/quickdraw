@@ -1,16 +1,17 @@
 // The client connection against real servers (RFC 0003 sections 8.1 and
 // 11.1): the v5 handshake, refusals for another protocol and for failed
-// authentication, new credentials, `qd:access`, `qd:rotate`, retaining across
-// a strict-mode remount, and backoff windows.
+// authentication, a session the server ends (the 5.1 audit's CLIENT-1), new
+// credentials, `qd:access`, `qd:rotate`, retaining across a strict-mode
+// remount, and backoff windows.
 
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Server } from "socket.io";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { QUICKDRAW_VERSION, type ProtocolMismatch } from "../index";
+import { QuickdrawError, QUICKDRAW_VERSION, type ProtocolMismatch } from "../index";
 import { captureLogger, tick } from "../server/__tests__/fixtures";
 import { callData } from "./call";
-import { createQuickdrawConnection } from "./connection";
+import { createQuickdrawConnection, isServerDisconnect, isSessionRefusal } from "./connection";
 import { reloadOncePerSession, RELOAD_KEY_PREFIX } from "./reload";
 import { alice, bob, clientHarness, testAuth, until, whenStatus } from "./__tests__/fixtures";
 
@@ -116,6 +117,98 @@ describe("createQuickdrawConnection", () => {
     await whenStatus(connection, "refused");
     expect(connection.getState().refusal).toEqual({ code: "UNAUTHENTICATED" });
     expect(onProtocolMismatch).not.toHaveBeenCalled();
+  });
+
+  it("forgets the hello and the grants when the server ends the session (CLIENT-1)", async () => {
+    const { app } = await harness.start();
+    const connection = await harness.connect(app.url);
+    await until(() => connection.getState().hello !== null);
+    app.server.access.disconnectUser("alice");
+    await whenStatus(connection, "disconnected");
+    expect(connection.getState()).toMatchObject({
+      hello: null,
+      serviceAccess: null,
+      reconnecting: false,
+    });
+  });
+
+  it("forgets the hello and fails the calls it buffered when a reconnect is refused (CLIENT-1)", async () => {
+    let revoked = false;
+    const { app } = await harness.start({
+      auth: {
+        authenticate: (request) => {
+          if (revoked) {
+            throw new QuickdrawError("UNAUTHENTICATED", "revoked");
+          }
+          return testAuth.authenticate?.(request);
+        },
+      },
+      logger: captureLogger(),
+    });
+    const connection = await harness.connect(app.url);
+    await until(() => connection.getState().hello !== null);
+    revoked = true;
+    // The transport drops without the server ending the session: the client reconnects, and is refused.
+    for (const socket of app.server.io.sockets.sockets.values()) {
+      socket.conn.close();
+    }
+    await until(() => connection.getState().reconnecting);
+    const pending = callData(connection, echo);
+    await whenStatus(connection, "refused");
+    expect(connection.getState()).toMatchObject({
+      hello: null,
+      serviceAccess: null,
+      refusal: { code: "UNAUTHENTICATED" },
+    });
+    await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+  });
+
+  it("keeps the hello through a refusal that is not the session's", async () => {
+    const { app } = await harness.start();
+    const onProtocolMismatch = vi.fn();
+    const connection = await harness.connect(app.url, { onProtocolMismatch });
+    await until(() => connection.getState().hello !== null);
+    const { hello, serviceAccess } = connection.getState();
+    // A reconnect a server of another protocol refused, once Socket.IO gave up on the socket.
+    connection.socket.disconnect();
+    const refused = Object.assign(new Error("This server speaks quickdraw protocol 6"), {
+      data: { code: "PROTOCOL_MISMATCH", expected: 6 },
+    });
+    (
+      connection.socket as unknown as { emitReserved(event: string, error: Error): void }
+    ).emitReserved("connect_error", refused);
+    expect(connection.getState()).toMatchObject({
+      status: "refused",
+      refusal: { code: "PROTOCOL_MISMATCH" },
+    });
+    expect(connection.getState().hello).toBe(hello);
+    expect(connection.getState().serviceAccess).toBe(serviceAccess);
+    expect(onProtocolMismatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends the session for the server's disconnect and a refusal of the session, nothing else", () => {
+    expect(isServerDisconnect("io server disconnect")).toBe(true);
+    for (const reason of [
+      "io client disconnect",
+      "transport close",
+      "transport error",
+      "ping timeout",
+      "parse error",
+      undefined,
+    ]) {
+      expect(isServerDisconnect(reason)).toBe(false);
+    }
+    expect(isSessionRefusal({ code: "UNAUTHENTICATED" })).toBe(true);
+    expect(isSessionRefusal({ code: "FORBIDDEN" })).toBe(true);
+    for (const data of [
+      { code: "PROTOCOL_MISMATCH", expected: 6 },
+      { code: "REFUSED" },
+      "UNAUTHENTICATED",
+      null,
+      undefined,
+    ]) {
+      expect(isSessionRefusal(data)).toBe(false);
+    }
   });
 
   it("reconnects with new credentials, and only when they change", async () => {

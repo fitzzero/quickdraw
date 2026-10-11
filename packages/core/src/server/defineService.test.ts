@@ -235,12 +235,19 @@ describe("the rowless check", () => {
   const withEntry = (name: string, entry: object, policed = true): (() => AnyService) => {
     const definition = withMethod(name, entry) as object;
     return () =>
-      defineLoosely(task, policed ? { model: "task", access: policy, ...definition } : definition);
+      defineLoosely(task, { model: "task", ...(policed ? { access: policy } : {}), ...definition });
   };
   const refusal = "takes a row id (its input has id), but its access";
 
   it("refuses an id-taking method whose form checks no row, on a service with a policy, unless it is rowless", () => {
-    const forms = ["authenticated", "public", { service: "Read" }, { service: "Moderate" }];
+    const forms = [
+      "authenticated",
+      "public",
+      { service: "Read" },
+      { service: "Moderate" },
+      custom(() => true),
+      { scope: "Read", of: project, id: "projectId" },
+    ];
     const methods = [
       ["rename", true],
       ["get", true],
@@ -253,7 +260,7 @@ describe("the rowless check", () => {
         ),
       ),
     );
-    expect(cases).toHaveLength(48);
+    expect(cases).toHaveLength(72);
     for (const { access, name, takesId, policed, rowless } of cases) {
       const entry = { access, handler: () => taskRow(), ...(rowless ? { rowless } : {}) };
       const define = withEntry(name, entry, policed);
@@ -280,14 +287,87 @@ describe("the rowless check", () => {
     );
   });
 
-  it("leaves alone the forms that check a row or decide for themselves, and Admin grants", () => {
+  it("names the other row a custom, scope or other-key entry form checks, and the ways out", () => {
+    expect(withEntry("rename", { access: custom(() => true), handler: () => taskRow() })).toThrow(
+      'defineService("taskService"): method "rename" takes a row id (its input has id), but its access custom(check) asks the policy nothing about that row: ' +
+        "on a service with an access policy, a check that passes lets the caller reach any row by its id, and a service-wide Admin grant skips the check. " +
+        'Give it { entry: "Moderate" } so the policy decides, with claims: (claims, input) => ... beside it for a check on the caller\'s claims, ' +
+        "or, if every caller the check admits may reach any row, set rowless: true on the method",
+    );
+    expect(
+      withEntry("get", {
+        access: { scope: "Read", of: project, id: "projectId" },
+        handler: () => taskRow(),
+      }),
+    ).toThrow(
+      'method "get" takes a row id (its input has id), but its access { scope: "Read", of: projectService, id: "projectId" } checks a row of projectService, not the row id names: ' +
+        "on a service with an access policy, that lets everyone it admits reach any row by its id. " +
+        'Give it { entry: "Read" } so the policy decides on the row id names, or, if id names a row the method creates (an id the client made) or every caller its access admits may reach any row, set rowless: true on the method',
+    );
+    expect(
+      withEntry("get", {
+        access: { scope: "Read", of: project, id: (input: { id: string }) => input.id },
+        handler: () => taskRow(),
+      }),
+    ).toThrow('its access { scope: "Read", of: projectService, id: (input) => ... } checks a row');
+    expect(
+      withEntry("get", {
+        access: { scope: "Read", of: project, id: "id" },
+        handler: () => taskRow(),
+      }),
+    ).toThrow(
+      'its access { scope: "Read", of: projectService, id: "id" } checks the projectService row id names, not a row of this service: ' +
+        "if id names a row of this service, that lets everyone it admits reach any row by its id. " +
+        'Give it { entry: "Read" } so the policy decides on the row id names, or, if id names a projectService row as the form says, or a row the method creates, or every caller its access admits may reach any row, set rowless: true on the method',
+    );
+    const nested = defineContract("taskService", {
+      entity: taskSchema,
+      methods: {
+        move: query({
+          input: z.object({ id: z.string(), parentId: z.string(), title: z.string() }),
+          output: z.null(),
+        }),
+      },
+    });
+    /** Defines `nested`'s `move` under `access`, on a service with a policy when `policed`. */
+    const defineMove =
+      (access: unknown, extra: object = {}, policed = true) =>
+      () =>
+        defineLoosely(nested, {
+          model: "task",
+          ...(policed ? { access: policy } : {}),
+          methods: { move: { access, handler: () => null, ...extra } },
+        });
+    expect(defineMove({ entry: "Read", id: "parentId" })).toThrow(
+      'method "move" takes a row id (its input has id), but its access { entry: "Read", id: "parentId" } checks the row parentId names, not the row id names: ' +
+        "on a service with an access policy, that lets everyone it admits reach any row by its id. " +
+        'Give it { entry: "Read" } so the policy decides on the row id names, or, if every caller its access admits may reach any row, set rowless: true on the method',
+    );
+    expect(defineMove({ service: "Read", entry: "Read", id: "parentId" })).toThrow(
+      'its access { service: "Read", entry: "Read", id: "parentId" } checks the row parentId names, not the row id names: ' +
+        "on a service with an access policy, that lets everyone it admits reach any row by its id. " +
+        'Give it { service: "Read", entry: "Read" } so the policy decides',
+    );
+    expect(defineMove({ entry: "Read", id: "parentId" }, { rowless: true })).not.toThrow();
+    expect(defineMove({ scope: "Read", of: project, id: "parentId" }, {}, false)).not.toThrow();
+    expect(
+      defineMove(
+        custom(() => true),
+        {},
+        false,
+      ),
+    ).not.toThrow();
+  });
+
+  it("leaves alone the forms that check the row id names, and Admin grants", () => {
     for (const access of [
       { service: "Admin" },
       { entry: "Read" },
       { service: "Read", entry: "Read" },
       { entry: "Read", id: "id" },
-      { scope: "Read", of: project, id: "id" },
-      custom(() => true),
+      { entry: "Read", id: (input: { id: string }) => input.id },
+      // a scope form on the service's own rows by id asks its own policy
+      { scope: "Read", of: task, id: "id" },
     ]) {
       expect(
         withEntry("get", { access, handler: () => taskRow() }),
@@ -404,6 +484,35 @@ describe("the rowless check", () => {
     expect(
       withEntry("rename", { access: "authenticated", rowless: "yes", handler: () => 0 }),
     ).toThrow('method "rename": rowless must be true, or left out');
+  });
+});
+
+describe("a method's claims", () => {
+  const triage = (claims: Readonly<Record<string, unknown>> | undefined) =>
+    claims?.scope === "triage";
+
+  it("stores the check on the method, and undefined when it declares none", () => {
+    const service = qd.defineService(task, {
+      methods: { ...taskDefaults, rename: { ...taskDefaults.rename, claims: triage } },
+    });
+    expect(service.methods.rename?.claims).toBe(triage);
+    expect(service.methods.get?.claims).toBeUndefined();
+  });
+
+  it("takes only a function, and not on a public method", () => {
+    expect(() =>
+      defineLoosely(task, withMethod("rename", { ...taskDefaults.rename, claims: "triage" })),
+    ).toThrow(
+      'defineService("taskService"): method "rename": claims must be a function of (claims, input) that returns true when the caller\'s claims allow the call',
+    );
+    expect(() =>
+      defineLoosely(task, withMethod("get", { ...taskDefaults.get, claims: triage })),
+    ).toThrow(
+      'defineService("taskService"): method "get" is "public", so claims cannot hold: an anonymous caller, whom "public" admits, has no claims',
+    );
+    expect(() =>
+      defineLoosely(task, withMethod("rename", { ...taskDefaults.rename, claims: triage })),
+    ).not.toThrow();
   });
 });
 

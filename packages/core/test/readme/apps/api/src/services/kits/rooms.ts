@@ -9,8 +9,9 @@ export function showCursor(projectId: string, taskId: string, x: number): void {
   qd.rooms.emit(boardRoom(projectId), task, "cursorMoved", { projectId, taskId, x });
 }
 
-// a member removed from the project: their sockets leave its board on every node, so they hear
-// nothing more of it and its cursor channel drops their messages (also ctx.rooms.leave)
+// a member removed from the project (the sharing kit's onChange calls it): their sockets leave
+// its board on every node, so they hear nothing more of it and its cursor channel drops their
+// messages (also ctx.rooms.leave)
 export async function removeFromBoard(projectId: string, userId: string): Promise<void> {
   await qd.rooms.leave(boardRoom(projectId), { userId });
 }

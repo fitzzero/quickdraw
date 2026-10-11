@@ -42,7 +42,13 @@ export function stripIp(raw: string | undefined): string {
 /**
  * Key by Bearer token when present, falling back to client IP. Lets
  * token-authenticated clients get their own bucket instead of sharing
- * a NAT'd IP.
+ * a NAT'd IP. Nothing here checks the token (the 5.1 audit's
+ * TRANSPORT-4): a caller that sends a new made-up token on each request
+ * gets a fresh bucket each time, even behind `requireSession`, which signs
+ * a request in by its cookie first and never reads the bearer token then.
+ * Key a limiter mounted behind `requireSession` by the user it verified
+ * instead (`keyGenerator: (req) => sessionOf(req).userId`), and anonymous
+ * traffic by IP, as `createPublicApiLimiter` does.
  */
 export function bearerOrIp(req: Request): string {
   const auth = req.headers.authorization ?? "";
@@ -97,7 +103,8 @@ export function createPublicApiLimiter(overrides: PartialOptions = {}): RateLimi
 /**
  * Answers a refused call in the HTTP transport's own reply shape, so a
  * server caller (`createServerCaller`) reports `RATE_LIMITED` with
- * `retryAfterMs` instead of an unreadable reply.
+ * `retryAfterMs` instead of an unreadable reply, with the headers of every
+ * `/qd` reply (`no-store`, `nosniff`).
  */
 function callHandler(req: Request, res: Response, _next: NextFunction, options: Options): void {
   const info = (req as Request & Partial<Record<string, { resetTime?: Date }>>)[
@@ -109,6 +116,8 @@ function callHandler(req: Request, res: Response, _next: NextFunction, options: 
   if (!res.getHeader("Retry-After")) {
     res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
   }
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
   res.status(options.statusCode).json({
     ok: false,
     e: { code: "RATE_LIMITED", message: "Rate limit exceeded", data: { retryAfterMs } },
@@ -121,7 +130,8 @@ function callHandler(req: Request, res: Response, _next: NextFunction, options: 
  * minute per IP, refused with `429 { ok: false, e: { code: "RATE_LIMITED",
  * message, data: { retryAfterMs } } }`. Server-side prefetch reaches the API
  * from the web server's address, so key it some other way (`keyGenerator`)
- * or raise `max` when the web server prefetches for many users.
+ * or raise `max` when the web server prefetches for many users; never by
+ * an unverified bearer token (`bearerOrIp`).
  */
 export function createCallLimiter(overrides: PartialOptions = {}): RateLimitRequestHandler {
   return createJsonRateLimiter({

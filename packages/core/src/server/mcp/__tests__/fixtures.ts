@@ -118,7 +118,8 @@ export function agentAuth(tokenOf: (request: McpRequest) => string | null) {
       }
       const entry = TOKENS[token];
       if (entry === undefined) {
-        throw new Error(`unknown token ${token}`);
+        // A refusal, without the token: a hook never puts one in a message.
+        throw new QuickdrawError("UNAUTHENTICATED", "Unknown agent token");
       }
       return entry.principal;
     },

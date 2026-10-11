@@ -26,6 +26,7 @@ import {
   type RoomLeave,
   type RoomLeaveHandler,
 } from "../index";
+import { peeredCluster } from "../transports/__tests__/harness";
 import {
   defineLiveService,
   frames,
@@ -59,27 +60,24 @@ afterEach(async () => {
 
 interface StartOptions {
   readonly onRoomLeave?: RoomLeaveHandler;
-  /** Behind a cluster adapter that is still in memory, for the path that asks every node. */
+  /**
+   * Behind a cluster adapter, alone on the in-process peered bus: the path
+   * that asks the other nodes, which answer at once since there are none.
+   */
   readonly cluster?: boolean;
 }
 
 async function start(options: StartOptions = {}) {
   const into = received();
+  const bus = options.cluster === true ? peeredCluster() : undefined;
   const app = await createTestApp({
     services: [projectService, defineLiveService(into)],
     db: h.db,
     ...(options.onRoomLeave === undefined ? {} : { onRoomLeave: options.onRoomLeave }),
+    ...(bus === undefined ? {} : { socket: { adapter: bus.adapter } }),
   });
   apps.push(app as unknown as TestApp);
-  if (options.cluster === true && !inCluster()) {
-    // Any adapter other than the one the server was created with counts as a
-    // cluster adapter (`transports/pushes.ts`); this one still answers
-    // `fetchSockets` from this process, through the cluster path.
-    const { io } = app.server;
-    const InMemory = io.adapter() as unknown as new (...args: never[]) => object;
-    class Cluster extends InMemory {}
-    io.adapter(Cluster as unknown as Parameters<typeof io.adapter>[0]);
-  }
+  bus?.servers.push(app.server.io);
   return { app, into };
 }
 
@@ -339,7 +337,7 @@ describe("onRoomLeave", () => {
     });
   });
 
-  it("asks every node whether the user is still in the room behind a cluster adapter", async () => {
+  it("asks the other nodes whether the user is still in the room behind a cluster adapter", async () => {
     const { heard, hook } = leaves();
     const { app } = await start({ onRoomLeave: hook, cluster: true });
     const ada1 = await member(app, as(board.ada));

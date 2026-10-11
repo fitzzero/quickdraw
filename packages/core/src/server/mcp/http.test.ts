@@ -3,11 +3,21 @@
 // Node server, authenticated by bearer token through the registry's
 // `principal` hook.
 
-import { createServer as createHttpServer, type RequestListener, type Server } from "node:http";
+import {
+  createServer as createHttpServer,
+  request as httpRequest,
+  type RequestListener,
+  type Server,
+} from "node:http";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createJWT } from "../auth/jwt";
+import { bearerAuth } from "../auth/routes/bearerAuth";
+import { createMemorySessionStore } from "../auth/routes/sessions";
+import { issueSession } from "../auth/routes/tokens";
+import type { PipelineOptions } from "../index";
 import { agentAuth, bindSetup, setup } from "./__tests__/fixtures";
 import { createMcpHttpRouter, type McpHttpRouterOptions } from "./index";
 
@@ -38,9 +48,13 @@ async function listen(listener: RequestListener): Promise<string> {
 }
 
 /** The registry's tools over HTTP, with bearer tokens mapped by the fixtures' `agentAuth`. */
-function routes(options: Omit<McpHttpRouterOptions, "registry"> = {}) {
+function routes(
+  options: Omit<McpHttpRouterOptions, "registry"> = {},
+  pipeline: PipelineOptions = {},
+) {
   const fixture = setup(
     agentAuth((request) => (request.transport === "http" ? request.token : null)),
+    pipeline,
   );
   const router = createMcpHttpRouter({
     registry: fixture.registry,
@@ -169,6 +183,32 @@ describe("on a bare Node server", () => {
       body: { success: false, error: "Not found", code: "NOT_FOUND" },
     });
   });
+
+  it("says no-store and nosniff on the tool list, a call, a refusal and a 404 alike", async () => {
+    const { router } = routes();
+    const url = await listen(router);
+    const post = (body: unknown, token?: string) =>
+      fetch(`${url}/mcp/invoke`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+        },
+        body: JSON.stringify(body),
+      });
+    const call = { name: "taskService_get", arguments: { id: "t1" } };
+    const responses = await Promise.all([
+      fetch(`${url}/mcp/tools`),
+      post(call, "reader-token"),
+      post(call),
+      fetch(`${url}/elsewhere`),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200, 401, 404]);
+    for (const { headers } of responses) {
+      expect(headers.get("cache-control")).toBe("no-store");
+      expect(headers.get("x-content-type-options")).toBe("nosniff");
+    }
+  });
 });
 
 describe("requests the routes refuse", () => {
@@ -209,10 +249,121 @@ describe("requests the routes refuse", () => {
       status: 401,
       body: { success: false, error: "Authentication failed", code: "UNAUTHENTICATED" },
     });
-    expect(logger.at("error").map((entry) => entry.message)).toEqual(["MCP authentication failed"]);
+    // The hook refused the token: logged at debug, and the token is never logged (MCP-7).
+    expect(logger.at("error")).toEqual([]);
+    expect(logger.at("debug").map((entry) => entry.message)).toContain("MCP authentication failed");
+    expect(JSON.stringify(logger.entries)).not.toContain("stolen-token");
     expect(() => createMcpHttpRouter({ registry: setup().registry, maxBodyBytes: 0 })).toThrow(
       "createMcpHttpRouter: maxBodyBytes must be a whole number of bytes, 1 or more",
     );
+  });
+});
+
+/** A raw request, whose Host and Origin headers are sent as given (fetch may drop or rewrite them). */
+function raw(
+  url: string,
+  options: {
+    readonly method: "GET" | "POST";
+    readonly path: string;
+    readonly headers?: Readonly<Record<string, string>>;
+    readonly body?: unknown;
+  },
+): Promise<Answer> {
+  const target = new URL(url);
+  const body = options.body === undefined ? undefined : JSON.stringify(options.body);
+  return new Promise((resolveAnswer, rejectAnswer) => {
+    const sent = httpRequest(
+      {
+        host: target.hostname,
+        port: target.port,
+        method: options.method,
+        path: options.path,
+        headers: {
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+          ...options.headers,
+        },
+      },
+      (response) => {
+        let text = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          text += chunk;
+        });
+        response.on("end", () => {
+          resolveAnswer({
+            status: response.statusCode ?? 0,
+            body: text === "" ? undefined : (JSON.parse(text) as unknown),
+          });
+        });
+      },
+    );
+    sent.on("error", rejectAnswer);
+    sent.end(body);
+  });
+}
+
+describe("a request from a web page (MCP-3)", () => {
+  const search = { name: "noteService_search", arguments: { input: "x" } };
+  const refused = { status: 403, body: { success: false, code: "FORBIDDEN" } };
+
+  it("is refused unless allowedOrigins lists its Origin; a request without one is no page's", async () => {
+    const url = await listen(routes().router);
+    const attacker = { origin: "http://attacker.example" };
+    expect(await raw(url, { method: "GET", path: "/mcp/tools", headers: attacker })).toMatchObject(
+      refused,
+    );
+    expect(
+      await raw(url, { method: "POST", path: "/mcp/invoke", headers: attacker, body: search }),
+    ).toMatchObject(refused);
+    expect(await raw(url, { method: "POST", path: "/mcp/invoke", body: search })).toMatchObject({
+      status: 200,
+    });
+    const listed = await listen(routes({ allowedOrigins: ["http://app.example"] }).router);
+    const call = (origin: string) =>
+      raw(listed, { method: "POST", path: "/mcp/invoke", headers: { origin }, body: search });
+    expect(await call("http://app.example")).toMatchObject({ status: 200 });
+    expect(await call("http://other.example")).toMatchObject(refused);
+  });
+
+  it("is refused for a Host that allowedHosts does not list", async () => {
+    const url = await listen(routes({ allowedHosts: ["127.0.0.1"] }).router);
+    expect(await raw(url, { method: "POST", path: "/mcp/invoke", body: search })).toMatchObject({
+      status: 200,
+    });
+    expect(
+      await raw(url, {
+        method: "POST",
+        path: "/mcp/invoke",
+        headers: { host: "attacker.example:4000" },
+        body: search,
+      }),
+    ).toMatchObject(refused);
+  });
+
+  it("checks the options when the router is made", () => {
+    const { registry } = setup();
+    expect(() => createMcpHttpRouter({ registry, allowedOrigins: ["not an origin"] })).toThrow(
+      TypeError,
+    );
+    expect(() => createMcpHttpRouter({ registry, allowedHosts: [""] })).toThrow(TypeError);
+  });
+});
+
+describe("one caller's lane over HTTP (MCP-4)", () => {
+  it("holds the queries of every anonymous request from one address", async () => {
+    const { router, services } = routes(
+      {},
+      { limits: { maxInFlightQueries: 1, maxQueuedQueries: 0 } },
+    );
+    const url = await listen(router);
+    const first = invoke(url, { name: "noteService_wait", arguments: { key: "a" } });
+    await vi.waitFor(() => expect(services.gates.has("a")).toBe(true));
+    expect(await invoke(url, { name: "noteService_wait", arguments: { key: "b" } })).toMatchObject({
+      status: 429,
+      body: { code: "RATE_LIMITED" },
+    });
+    services.gates.get("a")?.resolve("A");
+    expect(await first).toMatchObject({ status: 200, body: { success: true, data: "A" } });
   });
 });
 
@@ -330,6 +481,38 @@ describe("bound arguments over HTTP", () => {
     expect(fixture.records.map((record) => [record.method, record.outcome])).toEqual([
       ["post", "ok"],
     ]);
+  });
+});
+
+describe("a session token through bearerAuth", () => {
+  it("stops working as soon as its session is revoked, and a JWT without a session never works (MCP-2)", async () => {
+    const sessions = createMemorySessionStore();
+    const jwtSecret = "a-test-secret-of-at-least-thirty-two-characters";
+    const verify = bearerAuth({
+      sessions,
+      jwtSecret,
+      loadPrincipal: (userId) => ({ userId, kind: "agent" as const }),
+    });
+    const fixture = setup({
+      principal: (request) => verify(request.transport === "http" ? request.token : null),
+      context: () => ({ scopes: [] }),
+    });
+    const url = await listen(
+      createMcpHttpRouter({ registry: fixture.registry, logger: fixture.logger }),
+    );
+    const { token } = await issueSession({ sessions, jwtSecret }, "alice", { provider: "test" });
+    const get = { name: "taskService_get", arguments: { id: "t1" } };
+    expect(await invoke(url, get, { token })).toMatchObject({
+      status: 200,
+      body: { success: true },
+    });
+    sessions.revokeAll("alice");
+    expect(await invoke(url, get, { token })).toMatchObject({
+      status: 401,
+      body: { code: "UNAUTHENTICATED" },
+    });
+    const sessionless = await createJWT({ userId: "alice" }, jwtSecret);
+    expect(await invoke(url, get, { token: sessionless })).toMatchObject({ status: 401 });
   });
 });
 

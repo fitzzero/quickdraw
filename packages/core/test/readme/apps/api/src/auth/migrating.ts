@@ -21,6 +21,8 @@ const env = {
   DISCORD_CLIENT_ID: process.env.DISCORD_CLIENT_ID,
   DISCORD_CLIENT_SECRET: process.env.DISCORD_CLIENT_SECRET,
   ENABLE_DEV_CREDENTIALS: process.env.ENABLE_DEV_CREDENTIALS,
+  // how many proxies are in front (a TLS tunnel, a load balancer): 0 when none
+  TRUST_PROXY: Number(process.env.TRUST_PROXY ?? 0),
 };
 
 /** The app's own exchange of an embedded Activity's code for the Discord profile (not shown). */
@@ -49,7 +51,8 @@ async function devUser(userId: string): Promise<AppPrincipal | null> {
 }
 
 export const app: Express = express();
-app.set("trust proxy", 1);
+// behind a proxy, so the rate limits see the client's IP; with none, a client would pick its own
+app.set("trust proxy", env.TRUST_PROXY);
 app.use(
   createAuthRoutes({
     ...keys,
@@ -90,7 +93,7 @@ export const server = qd.createServer({
       ...keys,
       allowedOrigins,
       loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
-      // never in production: socketAuth refuses it there
+      // only when NODE_ENV is development or test: socketAuth refuses it otherwise
       devCredentials: env.ENABLE_DEV_CREDENTIALS === "true" ? devUser : undefined,
     }),
     loadServiceAccess: (userId) => loadGrants(userId),

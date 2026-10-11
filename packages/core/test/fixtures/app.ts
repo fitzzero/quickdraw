@@ -169,6 +169,8 @@ function defineTaskService(gate: Gate) {
       },
       create: {
         access: { scope: "Moderate", of: projectContract, id: "projectId" },
+        // id is one the client made, naming the task this creates: no row to check yet
+        rowless: true,
         handler: async ({ input, db }) => {
           await gate.wait();
           if (input.title === "conflict") {

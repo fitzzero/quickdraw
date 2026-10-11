@@ -178,6 +178,26 @@ describe("admin.handlers", () => {
   });
 });
 
+describe('share: "all" on the admin kit\'s reads', () => {
+  it("is refused on adminList and adminGet, and allowed on adminMeta (ACCESS-2)", () => {
+    const handlers = admin.handlers(notes);
+    const define = (methods: object) => () =>
+      qd.defineService(notes, {
+        model: "task",
+        access: owner("assigneeId"),
+        methods: { ...handlers, ...methods } as never,
+      });
+    const refusal = 'is a kit method whose result depends on who asks, so it cannot share: "all"';
+    expect(define({ adminList: { ...handlers.adminList, share: "all" } })).toThrow(
+      `method "adminList" ${refusal}`,
+    );
+    expect(define({ adminGet: { ...handlers.adminGet, share: "all" } })).toThrow(
+      `method "adminGet" ${refusal}`,
+    );
+    expect(define({ adminMeta: { ...handlers.adminMeta, share: "all" } })).not.toThrow();
+  });
+});
+
 describe("defineService with the admin kit", () => {
   it("refuses a service without a model, and handlers made for another contract", () => {
     expect(() => qd.defineService(notes, { methods: { ...admin.handlers(notes) } })).toThrow(

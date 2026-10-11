@@ -21,7 +21,7 @@ import {
   type RateLimiter,
   type RateLimitOptions,
 } from "../rateLimit";
-import { isRefusal, type ResolvePrincipal } from "./auth";
+import { isRefusal, socketSessionExpiryOf, type ResolvePrincipal } from "./auth";
 import { legacyFailure } from "./legacy";
 import type { QuickdrawIo, QuickdrawServerSocket, SocketContext } from "./types";
 
@@ -76,6 +76,31 @@ export function protocolMiddleware(
   };
 }
 
+/** Epoch milliseconds of 2001-09-09: an expiry before it was almost surely given in seconds. */
+const SECONDS_LIKE = 1e12;
+
+/**
+ * Logs a socket refused because the session its `authenticate` recorded had
+ * expired by the time the handshake ended: at debug, as a session that ran
+ * out during a slow `loadPrincipal`; at warn for an expiry so old it was
+ * likely given in seconds (a JWT's `exp`) where milliseconds are taken.
+ */
+function logExpired(
+  context: Pick<SocketContext, "logger">,
+  socket: QuickdrawServerSocket,
+  expiresAt: number,
+): void {
+  const meta = { category: "quickdraw.socket", socketId: socket.id, expiresAt };
+  if (expiresAt < SECONDS_LIKE) {
+    context.logger.warn(
+      "Refused a socket whose recorded session expired in 1970: recordSocketSession takes a Date or epoch milliseconds, and a JWT's exp is in seconds",
+      meta,
+    );
+    return;
+  }
+  context.logger.debug("Refused a socket whose session expired during its handshake", meta);
+}
+
 /**
  * Authenticates the socket and keeps its principal on `socket.data`. A
  * failure refuses the connection with "Authentication failed", as 4.1 did,
@@ -83,6 +108,9 @@ export function protocolMiddleware(
  * can tell it from a protocol mismatch. A refusal `authenticate` makes on
  * purpose, by throwing a `QuickdrawError` with that code (a revoked session,
  * say), is the client's doing and logs at debug; any other failure at error.
+ * So is a socket whose recorded session (`recordSocketSession`) expired
+ * before the handshake ended: it never connects, rather than connecting and
+ * being disconnected at once (the 5.1 audit's AUTH-4).
  */
 export function authMiddleware(
   resolvePrincipal: ResolvePrincipal,
@@ -97,6 +125,12 @@ export function authMiddleware(
     } as const;
     resolvePrincipal(request).then(
       (principal) => {
+        const expiresAt = socketSessionExpiryOf(socket);
+        if (expiresAt !== undefined && expiresAt <= Date.now()) {
+          logExpired(context, socket, expiresAt);
+          next(refusal("Authentication failed", UNAUTHENTICATED));
+          return;
+        }
         socket.data.principal = principal;
         next();
       },

@@ -12,7 +12,8 @@
 //   loaded for, the cache was emptied (`../session.ts`), and the state held
 //   is dropped and loaded again from scratch: rows and items are shown at
 //   the subscriber's access tier, and a "not modified" answer would keep the
-//   last user's.
+//   last user's. A session the server ends is dropped the same way at once,
+//   and loaded again once a hello names a user.
 //
 // Made for a connection and `QueryClient` pair when the provider mounts
 // (before its socket connects, so no `qd:presence` frame is missed), or on

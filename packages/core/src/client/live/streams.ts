@@ -12,7 +12,8 @@
 // - The server joins the feed's room and reads its seed in one tick, so an
 //   item pushed after the seed can arrive before the answer: frames that
 //   arrive while a subscribe is unanswered are kept and appended after the
-//   seed.
+//   seed. A seed the server computes asynchronously may also hold such an
+//   item, which then shows twice.
 // - Every connect subscribes again, and the seed then replaces what is held:
 //   the server forgot the socket's feeds, and nothing says which items were
 //   missed meanwhile. Another user on the connection drops every feed's items

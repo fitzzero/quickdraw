@@ -34,7 +34,11 @@ export function TaskPanel({ taskId, projectId }: { taskId: string; projectId: st
 // #endregion
 
 // #region events
+import { useJoin } from "@fitzzero/quickdraw-core/client";
+
 export function Board({ projectId, onArchived }: { projectId: string; onArchived: () => void }) {
+  // new in 5.0: the cursor channel takes only sockets in the project's room, joined on every connection
+  const room = useJoin(qd.taskService.joinProject, { projectId });
   // was useRoomEvents
   qd.taskService.archived.useEvent((event) => {
     if (event.projectId === projectId) {
@@ -43,7 +47,15 @@ export function Board({ projectId, onArchived }: { projectId: string; onArchived
   });
   // was useChannelSend
   const cursor = qd.taskService.cursor.useChannel();
-  return <div onMouseMove={(event) => cursor.send({ projectId, x: event.clientX })} />;
+  return (
+    <div
+      onMouseMove={(event) => {
+        if (room.isJoined) {
+          cursor.send({ projectId, x: event.clientX });
+        }
+      }}
+    />
+  );
 }
 // #endregion
 

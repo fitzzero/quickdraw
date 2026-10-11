@@ -14,16 +14,25 @@
 // 4. read the other allowed rows in one `findMany` with the entity
 //    projection's select;
 // 5. put the socket in the room of each row found, for its level, and record
-//    the subscription and its anchors on `socket.data`;
-// 6. settle the races: an access change while the batch ran re-resolves the
-//    joined rows, and a flush that touched a joined row after the revision
-//    (its frame may have gone out before the join) re-reads that row (behind
-//    a cluster's counter, any flush on any node: every joined row). Then,
-//    while access keeps changing, the joined rows are resolved again, at most
-//    `MAX_RECHECKS` times; a row whose anchors were still moving is denied.
-//    A subscription the batch recorded and someone else ended meanwhile
-//    (revocation, a disconnect) is `FORBIDDEN`; one someone else replaced (a
-//    newer resolution) is answered at that one's level;
+//    the subscription and its anchors on `socket.data`. A socket holds at
+//    most `MAX_ENTITY_IDS_PER_SOCKET` rows (the 5.1 audit's COLL-4): a batch
+//    whose new rows would pass it is refused whole, `CONFLICT`, before step
+//    1, and a row batches running at once left no room for is answered
+//    `CONFLICT` here; a row held already never counts again;
+// 6. settle the races: an access change while the batch ran (or a replaced
+//    principal: new grants) re-resolves the joined rows with the socket's
+//    principal as it is then, never the one the batch began with (the 5.1
+//    audit's LIVE-1: a demoted Admin joined the Admin room and kept it), so
+//    a lowered grant denies and a raised one answers at its level; another
+//    identity, or none, denies every row. A flush that touched a joined row
+//    after the revision (its frame may have gone out before the join)
+//    re-reads that row (behind a cluster's counter, any flush on any node:
+//    every joined row). Then, while access keeps changing, the joined rows
+//    are resolved again, at most `MAX_RECHECKS` times; a row whose anchors
+//    were still moving is denied. A subscription the batch recorded and
+//    someone else ended meanwhile (revocation, a disconnect) is `FORBIDDEN`;
+//    one someone else replaced (a newer resolution) is answered at that
+//    one's level;
 // 7. answer each id: its row stripped for its level, "not modified", or why
 //    not.
 //
@@ -39,7 +48,7 @@ import type { QuickdrawServerSocket } from "../transports/types";
 import type { Hub, LiveService } from "./hub";
 import { projectRow } from "./projection";
 import { anchorsOf, resolveAccess, subscriberLevel } from "./resolve";
-import type { EntitySubscription } from "./subscriptions";
+import { TOO_MANY_ROWS, type EntitySubscription } from "./subscriptions";
 import { strip } from "./tiers";
 import { rowVersions, unchangedRows } from "./versions";
 
@@ -66,12 +75,17 @@ interface Batch {
   readonly hub: Hub;
   readonly socket: QuickdrawServerSocket;
   readonly target: LiveService;
+  /** The principal the batch began with: step 1 resolves with it. */
   readonly principal: NonNullable<QuickdrawServerSocket["data"]["principal"]>;
   /** The access changes the process had seen when the batch last resolved access. */
   checkedAt: number;
+  /** The socket's principal when the batch last resolved access. */
+  resolvedWith: QuickdrawServerSocket["data"]["principal"];
   /** Per id, how often the socket had unsubscribed from it when the batch began. */
   readonly unsubscribes: ReadonlyMap<string, number>;
   readonly denied: Set<string>;
+  /** Answered rows the socket could not hold: past `MAX_ENTITY_IDS_PER_SOCKET` (`CONFLICT`). */
+  readonly refused: Set<string>;
   readonly answers: Map<string, Answer>;
   /** The subscription the batch recorded for each row it joined, while the batch manages it. */
   readonly joined: Map<string, EntitySubscription>;
@@ -87,6 +101,11 @@ const FORBIDDEN: EntityResult = Object.freeze({
 const NOT_FOUND: EntityResult = Object.freeze({
   ok: false,
   e: Object.freeze({ code: "NOT_FOUND", message: "No such row" }),
+});
+
+const CONFLICT: EntityResult = Object.freeze({
+  ok: false,
+  e: Object.freeze({ code: "CONFLICT", message: TOO_MANY_ROWS }),
 });
 
 /** The rows `ids`, read in one query with the entity projection's select. */
@@ -131,6 +150,12 @@ function join(batch: Batch, anchors: (id: string) => readonly string[]): void {
   const service = target.service.name;
   for (const [id, answer] of batch.answers) {
     if (!joinable(batch, id)) {
+      continue;
+    }
+    if (!hub.subscriptions.hasRoom(socket, service, id)) {
+      // Batches running at once filled the socket meanwhile.
+      batch.answers.delete(id);
+      batch.refused.add(id);
       continue;
     }
     const subscription: EntitySubscription = { level: answer.level, anchors: anchors(id) };
@@ -201,25 +226,37 @@ function sameSubscription(a: EntitySubscription | undefined, b: EntitySubscripti
   );
 }
 
-/** True when access changed since the batch last resolved it. */
+/** True when access changed, or the socket's principal was replaced, since the batch last resolved it. */
 function accessMoved(batch: Batch): boolean {
-  return batch.hub.subscriptions.accessChanges !== batch.checkedAt;
+  return (
+    batch.hub.subscriptions.accessChanges !== batch.checkedAt ||
+    batch.socket.data.principal !== batch.resolvedWith
+  );
 }
 
-/** Step 6: access changed since the batch last resolved it, so the joined rows are resolved again. */
+/**
+ * Step 6: access changed since the batch last resolved it, so the joined
+ * rows are resolved again, with the socket's principal as it is now: the
+ * same user's current grants, and nothing for another identity or none.
+ */
 async function recheckAccess(batch: Batch): Promise<void> {
   const { hub, target, principal, socket } = batch;
   if (!accessMoved(batch)) {
     return;
   }
   batch.checkedAt = hub.subscriptions.accessChanges;
+  const now = socket.data.principal;
+  batch.resolvedWith = now;
   batch.moving = new Set();
   if (batch.joined.size === 0) {
     return;
   }
   const service = target.service.name;
   const ids = [...batch.joined.keys()];
-  const access = await resolveAccess(hub, target.service, principal, ids);
+  const access =
+    now !== null && now.userId === principal.userId
+      ? await resolveAccess(hub, target.service, now, ids)
+      : undefined;
   const moving = new Set<string>();
   for (const id of ids) {
     if (!isOwn(batch, id)) {
@@ -231,9 +268,9 @@ async function recheckAccess(batch: Batch): Promise<void> {
       abandon(batch, id);
       continue;
     }
-    const level = subscriberLevel(access, id);
+    const level = access === undefined ? undefined : subscriberLevel(access, id);
     const answer = batch.answers.get(id);
-    if (level === undefined || answer === undefined) {
+    if (access === undefined || level === undefined || answer === undefined) {
       retract(batch, id, "denied");
       continue;
     }
@@ -340,6 +377,9 @@ function resultOf(batch: Batch, id: string): EntityResult {
   if (batch.denied.has(id)) {
     return FORBIDDEN;
   }
+  if (batch.refused.has(id)) {
+    return CONFLICT;
+  }
   const found = batch.answers.get(id);
   if (found === undefined) {
     return NOT_FOUND;
@@ -374,14 +414,18 @@ export async function subscribe(
     throw new TypeError("subscribe: the socket has no principal");
   }
   const service = target.service.name;
+  // At most MAX_ENTITY_IDS_PER_SOCKET rows a socket: the whole batch is refused before any read.
+  hub.subscriptions.checkRoom(socket, service, request.ids);
   const batch: Batch = {
     hub,
     socket,
     target,
     principal,
     checkedAt: hub.subscriptions.accessChanges,
+    resolvedWith: principal,
     unsubscribes: hub.subscriptions.begin(socket, service, request.ids),
     denied: new Set(),
+    refused: new Set(),
     answers: new Map(),
     joined: new Map(),
     moving: new Set(),

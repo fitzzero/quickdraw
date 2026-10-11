@@ -3,8 +3,9 @@
 // which `defineService`'s rowless check reads (`../access/rowless.ts`): on a
 // service with an access policy, a kit method whose input has `id` (the
 // read/write kit's `get`, the admin kit's `adminGet`, the sharing kit's
-// access-list methods) under a form that checks no row is refused unless it
-// is named here.
+// access-list methods) under a form that asks the policy nothing about the
+// row its `id` names (an open form, `custom`, `{ scope }`, or `{ entry }` on
+// another key) is refused unless it is named here.
 
 import type { AccessForm } from "../access/types";
 

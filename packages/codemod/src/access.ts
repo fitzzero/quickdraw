@@ -13,13 +13,17 @@
 // - `"Moderate"` or `"Admin"` without a row id needed the service grant:
 //   `{ service: L }`.
 //
-// 5.0 refuses, when a service with an access policy is defined, a method
-// whose input has `id` under a form that checks no row (`"public"`,
-// `"authenticated"`, `{ service: L }` below `Admin`) unless it says
-// `rowless: true`. Where the mapping writes such a form for a method whose
-// input has `id` (a "Public" method that named a row, which 4.x let anyone
-// call), it writes `rowless: true` beside it, marked: still exactly the
-// callers 4.x admitted, and a decision to review.
+// 5.x refuses, when a service with an access policy is defined, a method
+// whose input has `id` under a form that asks the policy nothing about the
+// row that id names unless it says `rowless: true`: a form that checks no
+// row (`"public"`, `"authenticated"`, `{ service: L }` below `Admin`), and,
+// since 5.1, `custom`, `{ scope, of, id }` and `{ entry, id }` naming
+// another key. Where the mapping writes such a form for a method whose input
+// has `id` (a "Public" method that named a row, which 4.x let anyone call;
+// a `resolveEntryId` that named another key of a payload that also has
+// `id`), it writes `rowless: true` beside it, marked: still exactly the
+// callers 4.x admitted, and a decision to review. The mapping writes no
+// `custom` or `scope` form.
 
 import type { Node } from "ts-morph";
 import type { Category } from "./markers";
@@ -80,19 +84,31 @@ function checksNoRow(access: AccessForm): boolean {
 }
 
 /**
- * `access` with `rowless: true` and its marker when it checks no row on a
- * method whose input has `id`, of a service with rows: 5.0 refuses that
- * shape without the flag.
+ * `access` with `rowless: true` and its marker when, on a method whose input
+ * has `id`, of a service with rows, it checks no row, or checks the row
+ * another key names (4.x's `resolveEntryId`): 5.x refuses both shapes
+ * without the flag.
  */
 function withRowless(access: AccessForm, facts: MethodFacts): AccessForm {
-  if (!facts.rows || !facts.inputHasId || !checksNoRow(access)) {
+  if (!facts.rows || !facts.inputHasId) {
     return access;
   }
-  const note: Note = {
-    category: "access",
-    message: `this method takes an id but its access ${access.code} checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant`,
-  };
-  return { ...access, rowless: true, notes: [...access.notes, note] };
+  if (checksNoRow(access)) {
+    const note: Note = {
+      category: "access",
+      message: `this method takes an id but its access ${access.code} checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant`,
+    };
+    return { ...access, rowless: true, notes: [...access.notes, note] };
+  }
+  const { entryId } = facts;
+  if (access.entry && entryId?.kind === "key" && entryId.key !== "id") {
+    const note: Note = {
+      category: "access",
+      message: `this method takes an id, but its access checks the row its ${entryId.key} names (4.x's resolveEntryId), not the row id names, which 5.x refuses unless the method says rowless: true, written here: check that the handler only reaches that row (or rows within it), or give it { service: L, entry: L } on id`,
+    };
+    return { ...access, rowless: true, notes: [...access.notes, note] };
+  }
+  return access;
 }
 
 function entryForm(level: Level, id: string, notes: Note[] = []): AccessForm {

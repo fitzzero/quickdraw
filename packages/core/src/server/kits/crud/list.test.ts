@@ -7,10 +7,12 @@
 import { describe, expect, it } from "vitest";
 import { defineContract } from "../../../index";
 import { createTestApp, type TestApp } from "../../../testing/index";
+import { captureLogger } from "../../__tests__/fixtures";
 import { projectContract, projectService, qd } from "../../emit/__tests__/live";
 import { crud, inherit } from "../../index";
+import { MAX_CURSOR_LENGTH } from "../../../contract/kits/crudList";
 import { cursorAfter } from "./page";
-import { addTasks, as, CARD_KEYS, kitApp, taskEntity } from "./__tests__/fixture";
+import { addTasks, as, CARD_KEYS, kitApp, taskContract, taskEntity } from "./__tests__/fixture";
 
 const kit = kitApp();
 
@@ -316,5 +318,149 @@ describe("statements", () => {
     // projects the owner may read (members, then the projects), then the page.
     expect(await count(() => owner.list({ limit: 2 }))).toBe(3);
     expect(await count(() => owner.list({ limit: 2, totalCount: true }))).toBe(4);
+  });
+});
+
+describe('a list kept per caller (share: "caller")', () => {
+  it("gives each principal its own rows, within the ttl and concurrently (ACCESS-2)", async () => {
+    const board = kit.board();
+    const handlers = crud.handlers(taskContract, {
+      access: {
+        get: { entry: "Read" },
+        getMany: "authenticated",
+        list: "authenticated",
+        create: { scope: "Moderate", of: projectContract, id: "projectId" },
+        update: { entry: "Moderate" },
+        delete: { entry: "Moderate" },
+        reorder: { entry: "Moderate" },
+        bulkUpdate: "authenticated",
+        bulkDelete: "authenticated",
+      },
+    });
+    const service = qd.defineService(taskContract, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      collections: { board: { anchor: projectContract } },
+      methods: { ...handlers, list: { ...handlers.list, share: "caller", ttlMs: 5_000 } },
+    });
+    const app = await createTestApp({ services: [projectService, service], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    const ids = (page: { readonly items: readonly { readonly id: string }[] }) =>
+      page.items.map((item) => item.id);
+    expect(ids(await app.as(as(board.ada)).taskService.list({}))).toEqual([board.t1]);
+    // ed asks within ada's ttl: ed's own run, ed's own rows.
+    expect(ids(await app.as(as(board.ed)).taskService.list({}))).toEqual([board.t2]);
+    const [ada, ed] = await Promise.all([
+      app.as(as(board.ada)).taskService.list({ limit: 10 }),
+      app.as(as(board.ed)).taskService.list({ limit: 10 }),
+    ]);
+    expect(ids(ada)).toEqual([board.t1]);
+    expect(ids(ed)).toEqual([board.t2]);
+  });
+});
+
+describe('an app handler that wraps the kit\'s list under share: "all"', () => {
+  /** The fixture's task service, whose list is an app function calling the kit's handler. */
+  function wrappedService() {
+    const handlers = crud.handlers(taskContract, {
+      access: {
+        get: { entry: "Read" },
+        getMany: "authenticated",
+        list: "authenticated",
+        create: { scope: "Moderate", of: projectContract, id: "projectId" },
+        update: { entry: "Moderate" },
+        delete: { entry: "Moderate" },
+        reorder: { entry: "Moderate" },
+        bulkUpdate: "authenticated",
+        bulkDelete: "authenticated",
+      },
+    });
+    return qd.defineService(taskContract, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      collections: { board: { anchor: projectContract } },
+      methods: {
+        ...handlers,
+        // The kit marks its own handler only: this function is the app's, and defines.
+        list: {
+          access: "authenticated",
+          share: "all",
+          handler: (args) => handlers.list.handler(args as never),
+        },
+      },
+    });
+  }
+
+  it("warns shared-principal in development, and a strict app fails the call", async () => {
+    const board = kit.board();
+    const logger = captureLogger();
+    const app = await createTestApp({
+      services: [projectService, wrappedService()],
+      db: kit.harness().db,
+      logger,
+    });
+    kit.track(app as unknown as TestApp);
+    await app.as(as(board.ada)).taskService.list({});
+    await app.as(as(board.ed)).taskService.list({ limit: 5 });
+    expect(
+      logger
+        .at("warn")
+        .map((entry) => entry.message)
+        .filter((message) => message.startsWith("[quickdraw:shared-principal]")),
+    ).toEqual([
+      expect.stringMatching(
+        /^\[quickdraw:shared-principal\] taskService\.list: its handler read ctx\.principal/,
+      ),
+    ]);
+    const strict = await createTestApp({
+      services: [projectService, wrappedService()],
+      db: kit.harness().db,
+      strictWarnings: true,
+    });
+    kit.track(strict as unknown as TestApp);
+    await expect(strict.as(as(board.ada)).taskService.list({})).rejects.toMatchObject({
+      code: "INTERNAL",
+      cause: { warning: { kind: "shared-principal", subject: "principal" } },
+    });
+  });
+});
+
+describe("a sort value too long for a cursor (CRUD-8)", () => {
+  it("makes the cursor name its row, which pages on until it leaves the list", async () => {
+    const { app } = await kit.start();
+    const board = kit.board();
+    const prisma = kit.harness().prisma;
+    const [long = ""] = await addTasks(prisma, board.p1, [1], { title: "A".repeat(3100) });
+    const [short = ""] = await addTasks(prisma, board.p1, [2], { title: "B" });
+    const owner = app.as(as(board.ada)).taskService;
+    const first = await owner.list({ sort: { field: "title" }, limit: 1 });
+    expect(first.items.map((item) => item.id)).toEqual([long]);
+    const cursor = first.nextCursor ?? "";
+    expect(cursor.length).toBeLessThanOrEqual(MAX_CURSOR_LENGTH);
+    const second = await owner.list({ sort: { field: "title" }, limit: 1, cursor });
+    expect(second.items.map((item) => item.id)).toEqual([short]);
+    await prisma.task.delete({ where: { id: long } });
+    await expect(owner.list({ sort: { field: "title" }, limit: 1, cursor })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+  });
+
+  it("reads the named row inside the caller's own list: another caller's or filter's is VALIDATION", async () => {
+    const { app } = await kit.start();
+    const board = kit.board();
+    const prisma = kit.harness().prisma;
+    await addTasks(prisma, board.p1, [1], { title: "A".repeat(3100) });
+    await addTasks(prisma, board.p1, [2], { title: "B" });
+    const sort = { field: "title" } as const;
+    const owner = app.as(as(board.ada)).taskService;
+    const cursor = (await owner.list({ sort, limit: 1 })).nextCursor ?? "";
+    const garbage = { code: "VALIDATION" };
+    // ed reads no row of P1: the row the cursor names is not in his list.
+    await expect(
+      app.as(as(board.ed)).taskService.list({ sort, limit: 1, cursor }),
+    ).rejects.toMatchObject(garbage);
+    await expect(
+      owner.list({ sort, limit: 1, cursor, filter: { status: "done" } }),
+    ).rejects.toMatchObject(garbage);
   });
 });

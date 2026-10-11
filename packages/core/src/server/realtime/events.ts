@@ -11,11 +11,19 @@
 // `qd:event` frame, `[service, event, payload]`, to every socket in the room
 // (on every node, through the adapter). Without a server there is nobody to
 // send to.
+//
+// `emit` refuses the framework's rooms (`qd:`, `user:`) with `VALIDATION`
+// (the 5.1 audit's RT-I1): a handler that relays a payload's room would
+// otherwise reach every socket of a user, or every subscriber of a row.
+// `emitToUser` is the way to a user's sockets. A name with the shape of a
+// socket id is not refused here: an event sent to one socket grants it
+// nothing, while `ctx.rooms.join` refuses such names.
 
 import type { AnyContract } from "../../contract/defineContract";
-import { SERVER_EVENTS, userRoom } from "../../contract/names";
+import { reservedRoomPrefix, SERVER_EVENTS, userRoom } from "../../contract/names";
 import type { EventFrame } from "../../protocol/envelope";
 import type { Hub } from "../emit/hub";
+import { unreadable } from "../transports/ack";
 import type { ContextRooms } from "./types";
 import { checkOutgoing } from "./validate";
 
@@ -40,10 +48,8 @@ export type RoomEvents = Pick<ContextRooms, "emit" | "emitToUser">;
 
 /** `ctx.rooms.emit` and `emitToUser` for one dispatcher, sending through its server once one is attached. */
 export function createRoomEvents(hub: Hub): RoomEvents {
-  const send = (room: unknown, contract: AnyContract, event: string, payload: unknown): void => {
-    if (typeof room !== "string" || room === "") {
-      throw new TypeError("ctx.rooms.emit: room must be a non-empty string");
-    }
+  /** Checks the payload and sends it to `room`, whatever its name. */
+  const deliver = (room: string, contract: AnyContract, event: string, payload: unknown): void => {
     const def = payloadSchemaOf(contract, event);
     const checked = checkOutgoing(
       def.payload,
@@ -55,13 +61,21 @@ export function createRoomEvents(hub: Hub): RoomEvents {
   };
   return Object.freeze({
     emit: (room: string, contract: AnyContract, event: string, payload: unknown) => {
-      send(room, contract, event, payload);
+      if (typeof room !== "string" || room === "") {
+        throw new TypeError("ctx.rooms.emit: room must be a non-empty string");
+      }
+      if (reservedRoomPrefix(room) !== undefined) {
+        throw unreadable(
+          `ctx.rooms.emit: room "${room}" is reserved: rooms starting with qd: or user: are the framework's own; send to a user with emitToUser(userId, ...)`,
+        );
+      }
+      deliver(room, contract, event, payload);
     },
     emitToUser: (userId: string, contract: AnyContract, event: string, payload: unknown) => {
       if (typeof userId !== "string" || userId === "") {
         throw new TypeError("ctx.rooms.emitToUser: userId must be a non-empty string");
       }
-      send(userRoom(userId), contract, event, payload);
+      deliver(userRoom(userId), contract, event, payload);
     },
   }) as RoomEvents;
 }

@@ -31,7 +31,7 @@ import {
 } from "../../../contract/kits/search";
 import { accessFormProblem } from "../../access/forms";
 import type { AccessForm } from "../../access/types";
-import { checkWhenDefined, type AnyService } from "../../service";
+import { checkWhenDefined, dependsOnCaller, type AnyService } from "../../service";
 import { everyRowProblem } from "../crud/access";
 import type { AnyStrategy } from "./context";
 import { searchHandler } from "./run";
@@ -196,6 +196,8 @@ function handlers<
     checkScope(contract, name, spec, projection);
     const handler = searchHandler({ spec, form, projection, strategy });
     checkWhenDefined(handler, (service) => serviceProblem(service, contract, name, form));
+    // Its hits are the rows the caller's level reaches: never shared across principals.
+    dependsOnCaller(handler);
     entries[name] = Object.freeze({ access: form, handler, share: "caller" });
   }
   return Object.freeze(entries) as SearchImplementations<M, A>;

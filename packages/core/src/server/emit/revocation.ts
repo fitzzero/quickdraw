@@ -25,11 +25,15 @@
 // (`server.access.refresh`) re-resolves the user's subscriptions the same way.
 // Collection scopes, change topic watches and stream feeds are authorized
 // again alongside, through the hooks they give (`collections/revocation.ts`,
-// `topicRevocation.ts`, `realtime/streamRevocation.ts`).
+// `topicRevocation.ts`, `realtime/streamRevocation.ts`). The access sink
+// waits for every socket's re-resolution, a failed one included
+// (`settleAll`), before the flush moves on to its frames: one socket's
+// failure must not let a demoted socket receive them (the 5.1 audit's
+// DATA-I1).
 
 import { SERVER_EVENTS, userRoom } from "../../contract/names";
 import type { AccessChange } from "../access/changes";
-import { answerOf } from "../cluster/acks";
+import { onNodeEvent } from "../cluster/deployment";
 import { describeError } from "../pipeline/metrics";
 import type { QuickdrawServerSocket } from "../transports/types";
 import type { Hub } from "./hub";
@@ -185,7 +189,24 @@ async function reresolveAll(
       work.push(reresolve(hub, socket, service, own, trustLog));
     }
   }
-  await Promise.all(work);
+  await settleAll(work);
+}
+
+/**
+ * Waits for every piece of `work` to settle, then rejects with the first
+ * failure, if any: unlike `Promise.all`, it never moves on while some of the
+ * work still runs.
+ */
+export async function settleAll(work: Iterable<unknown>): Promise<void> {
+  const results = await Promise.allSettled(work);
+  const failed = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failed !== undefined) {
+    throw failed.reason instanceof Error
+      ? failed.reason
+      : new Error("A re-resolution failed", { cause: failed.reason });
+  }
 }
 
 /**
@@ -244,8 +265,12 @@ export interface Revocation {
 export interface RevocationHook {
   /** Re-resolves the subscriptions `change` concerns on this process. */
   changed(change: AccessChange): Promise<void>;
-  /** Re-resolves every subscription of these sockets, whose user's grants changed. */
-  regranted(sockets: readonly QuickdrawServerSocket[]): Promise<void>;
+  /**
+   * Re-resolves every subscription of these sockets, whose user's grants
+   * changed: `userId`'s, whose sockets on this process they are (none when
+   * the user has none here).
+   */
+  regranted(sockets: readonly QuickdrawServerSocket[], userId: string): Promise<void>;
 }
 
 /**
@@ -261,7 +286,7 @@ export function createRevocation(hub: Hub, hooks: readonly RevocationHook[] = []
           ? broadcastChange(hub, withRowState(hub, change))
           : undefined;
       const trustLog = !remote || change.removed !== undefined;
-      await Promise.all([
+      await settleAll([
         others,
         reresolveAll(hub, hub.subscriptions.matching(change), trustLog),
         ...hooks.map(async (hook) => await hook.changed(change)),
@@ -278,9 +303,9 @@ export function createRevocation(hub: Hub, hooks: readonly RevocationHook[] = []
         }
       }
       const sockets = [...found.keys()];
-      await Promise.all([
+      await settleAll([
         reresolveAll(hub, found, true),
-        ...hooks.map(async (hook) => await hook.regranted(sockets)),
+        ...hooks.map(async (hook) => await hook.regranted(sockets, userId)),
       ]);
     },
   });
@@ -334,8 +359,11 @@ export function listenForChanges(
   revocation: Revocation,
   forget: (change: AccessChange) => void,
 ): void {
-  hub.io?.on(ACCESS_CHANGED_EVENT, (broadcast: unknown, ...rest: unknown[]) => {
-    const answer = answerOf(rest);
+  if (hub.io === undefined) {
+    return;
+  }
+  // Another deployment's change is answered and never applied (`../cluster/deployment.ts`).
+  onNodeEvent(hub.io, hub.logger, ACCESS_CHANGED_EVENT, (broadcast, answer) => {
     const change = readChange(broadcast);
     if (change === undefined) {
       answer(false);

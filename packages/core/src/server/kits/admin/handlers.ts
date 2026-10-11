@@ -26,13 +26,20 @@
 // "Moderate" }`, `"authenticated"`) unless `rowless` names it, since such a
 // method reaches any row by its id.
 //
-// `grants: true` (a users service) shows and writes the entity's
-// `serviceAccess`, hidden by default, so an admin screen can edit grants
-// through `adminUpdate`; only a caller whose own service-wide grant is
-// `Admin` reads or writes it, whatever `access` says. The write goes through
-// the tracked client, so with `auth.serviceAccessSource` naming that column
-// the user's open sockets get the new grants on every node, as for any
-// grant change.
+// `grants: true` (a users service) shows and writes the entity's grants
+// field, hidden by default (`serviceAccess`, `service_access`, or the column
+// `auth.serviceAccessSource` names on the service's model, whatever its
+// name: the 5.1 audit's ADMIN-2), so an admin screen can edit grants through
+// `adminUpdate`; only a caller whose own service-wide grant is `Admin` reads
+// or writes it, whatever `access` says. The write goes through the tracked
+// client, so with `auth.serviceAccessSource` naming that column the user's
+// open sockets get the new grants on every node, as for any grant change.
+// Only the server knows that column, so the fields are worked out once per
+// column (`fieldsFor`), first without one here, so a bad option still fails
+// in `admin.handlers`; `createDispatcher` checks the server's column
+// (`checkWhenServed`), so a clash with it fails when the server is made,
+// never on a call, and so does `grants: true` on an entity without a grants
+// field.
 //
 // `onWrite` runs in one transaction with each write, before it commits;
 // `onCommitted` (finding F6.5) once it has, in a detached unit of work, a
@@ -43,9 +50,17 @@ import type { AnyContract } from "../../../contract/defineContract";
 import { admin as contractHalf, adminSpecOf, type AdminSpec } from "../../../contract/kits/admin";
 import { accessFormProblem } from "../../access/forms";
 import type { AccessForm } from "../../access/types";
-import { checkWhenDefined, markGrantsEditor, type AnyService } from "../../service";
+import {
+  checkWhenDefined,
+  checkWhenServed,
+  dependsOnCaller,
+  markGrantsEditor,
+  type AnyService,
+  type ServedContext,
+} from "../../service";
+import { relationKeysOf } from "../columns";
 import { kitEntry, rowlessMethods } from "../rowless";
-import { adminFieldsOf, type AdminFields } from "./meta";
+import { adminFieldsOf, grantsColumnFor, type AdminFields } from "./meta";
 import { ADMIN_DEFAULT_ACCESS, handlerOf } from "./methods";
 import type {
   AdminAccess,
@@ -163,11 +178,12 @@ function contractEditable(
   return [...lists.values()][0];
 }
 
-/** The kit's fields across its methods: every method's declared filter and sort fields. */
+/** The kit's fields across its methods (every method's declared filter and sort fields), for a grants column. */
 function fieldsOf(
   contract: AnyContract,
   kit: readonly [string, AdminSpec][],
   options: UnknownRecord,
+  grantsColumn: string | undefined,
 ): AdminFields {
   const specs = kit.map(([, spec]) => spec);
   const [first] = specs;
@@ -186,19 +202,78 @@ function fieldsOf(
       editable: options.editable,
       fieldOverrides: options.fieldOverrides,
       grants: options.grants,
+      ...(grantsColumn === undefined ? {} : { grantsColumn }),
     },
     fail,
   );
 }
 
-/** Why a service cannot run the admin kit's handlers made for `contract`. */
-function serviceProblem(service: AnyService, contract: AnyContract): string | undefined {
+/** The kit's fields per grants column, worked out once each; none for the column-less ones. */
+function fieldsByColumn(
+  contract: AnyContract,
+  kit: readonly [string, AdminSpec][],
+  options: UnknownRecord,
+): (grantsColumn: string | undefined) => AdminFields {
+  const byColumn = new Map<string, AdminFields>();
+  return (grantsColumn) => {
+    let fields = byColumn.get(grantsColumn ?? "");
+    if (fields === undefined) {
+      fields = fieldsOf(contract, kit, options, grantsColumn);
+      byColumn.set(grantsColumn ?? "", fields);
+    }
+    return fields;
+  };
+}
+
+/**
+ * Why a server cannot serve the kit (`checkWhenServed`): an option that
+ * clashes with its grants column on the service's model, or `grants: true`
+ * on an entity with no grants field.
+ */
+function servedProblemOf(
+  fieldsFor: (grantsColumn: string | undefined) => AdminFields,
+  grants: boolean,
+  { service, grantsSource }: ServedContext,
+): string | undefined {
+  const column = grantsColumnFor(service.model, grantsSource);
+  let fields: AdminFields;
+  try {
+    fields = fieldsFor(column);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  if (grants && fields.grants.size === 0) {
+    const named =
+      column === undefined
+        ? `auth.serviceAccessSource names no column of model "${service.model ?? ""}"`
+        : `the entity has no field "${column}", the column auth.serviceAccessSource names`;
+    return `grants: true needs a grants field: the entity has no serviceAccess or service_access field, and ${named}`;
+  }
+  return undefined;
+}
+
+/**
+ * Why a service cannot run the admin kit's handlers made for `contract`: a
+ * service of another contract, one without a model, or one where `editable`
+ * or a `fieldOverrides` entry makes a relation of the model editable (the
+ * kit writes column values only).
+ */
+function serviceProblem(
+  service: AnyService,
+  contract: AnyContract,
+  fields: AdminFields,
+): string | undefined {
   if (service.contract !== contract) {
     return `its admin kit handlers were made for another contract; pass ${service.name}'s own contract to admin.handlers`;
   }
-  return service.model === undefined
-    ? "the admin kit reads and writes the service's rows: declare its model"
-    : undefined;
+  if (service.model === undefined) {
+    return "the admin kit reads and writes the service's rows: declare its model";
+  }
+  const relations = relationKeysOf(service);
+  const relation = [...fields.named].find((name) => relations.has(name));
+  return relation === undefined
+    ? undefined
+    : `"${relation}" is a relation of ${service.name}'s model (a projection selects it with a nested select): the admin kit writes column values only; leave it out of editable and fieldOverrides`;
 }
 
 function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty, Db = unknown>(
@@ -210,7 +285,9 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty,
   const names = kit.map(([name]) => name);
   const access = checkAccess(checked.access, names);
   const rowless = rowlessMethods(checked.rowless, names, fail);
-  const fields = fieldsOf(contract, kit, checked);
+  const fieldsFor = fieldsByColumn(contract, kit, checked);
+  // Without a grants column now, so an option that names no field still fails here.
+  const fields = fieldsFor(undefined);
   const { onWrite, onCommitted } = checked;
   if (onWrite !== undefined && typeof onWrite !== "function") {
     fail("onWrite must be a function of (write, ctx, db)");
@@ -225,11 +302,18 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty,
   const entries: Record<string, object> = {};
   for (const [name, spec] of kit) {
     const form = (access[name] as AccessForm | undefined) ?? ADMIN_DEFAULT_ACCESS;
-    const handler = handlerOf({ spec, fields, form, ...hooks });
-    checkWhenDefined(handler, (service) => serviceProblem(service, contract));
+    const handler = handlerOf({ spec, fieldsFor, form, ...hooks });
+    checkWhenDefined(handler, (service) => serviceProblem(service, contract, fields));
+    checkWhenServed(handler, (served) =>
+      servedProblemOf(fieldsFor, checked.grants === true, served),
+    );
     if (checked.grants === true) {
       // `createServer` warns when no `auth.serviceAccessSource` says where these grants live.
       markGrantsEditor(handler);
+    }
+    if (spec.method === "adminList" || spec.method === "adminGet") {
+      // Fields above the caller's grant are left out of their rows (`adminCall`).
+      dependsOnCaller(handler);
     }
     entries[name] = kitEntry(name, form, handler, rowless);
   }

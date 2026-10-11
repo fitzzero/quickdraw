@@ -52,7 +52,10 @@ reads (no HTTP long polling, no binary attachments).
 7. A client leaves with Socket.IO's DISCONNECT, \`41\`, then closes the
    WebSocket itself. The server ends a socket with \`41\` and closes the
    WebSocket after it; a message longer than \`maxPayload\` bytes closes it
-   too.`;
+   too. The server sends \`41\` when it ends the socket's session (signed
+   out, revoked or expired) or for a flooded channel: the client is then
+   signed out. It forgets the user and what it cached, and connects again
+   only when the app asks.`;
 
 /** The packets a WebSocket-only client sees: the text they start with, what they are, who sends them. */
 export const PACKETS: readonly (readonly [string, string, string])[] = [
@@ -186,8 +189,11 @@ collection scope's.`;
 /** Before the table of fixed limits. */
 export const LIMITS_INTRO = `A server announces its call and subscription limits in \`qd:hello\` (above):
 the defaults shown there are the server's own, and an app may set others,
-so read them from the hello. The limits below are fixed: every 5.0 server
-holds them, and no option changes them.`;
+so read them from the hello. The limits below are fixed, and no option
+changes them. Every 5.0 server holds them, except the per-socket caps of rows,
+scopes and topics (\`MAX_ENTITY_IDS_PER_SOCKET\`, \`MAX_SCOPES_PER_SOCKET\`,
+\`MAX_TOPICS_PER_SOCKET\`): a server that holds them announces them in
+\`qd:hello\`, and servers up to 5.1.0 hold none of them.`;
 
 /** Before the table of defaults. */
 export const DEFAULTS_INTRO = `These are defaults. An app changes the socket rate limiter with
@@ -197,8 +203,17 @@ the client's own, for an answer that names no wait:`;
 
 /** After the tables: what a client meets past a limit. */
 export const LIMITS_OUTCOMES = `A \`qd:sub\` naming more than \`MAX_SUBSCRIBE_IDS\` ids, or a
-\`qd:col:items\` more than \`MAX_ITEM_IDS\`, fails whole with \`VALIDATION\`; a
-\`qd:stream:sub\` past \`MAX_STREAMS_PER_SOCKET\` feeds fails with \`CONFLICT\`.
+\`qd:col:items\` more than \`MAX_ITEM_IDS\`, fails whole with \`VALIDATION\`. A
+socket that holds \`MAX_ENTITY_IDS_PER_SOCKET\` rows, \`MAX_SCOPES_PER_SOCKET\`
+collection scopes, \`MAX_TOPICS_PER_SOCKET\` change topics or
+\`MAX_STREAMS_PER_SOCKET\` feeds is answered \`CONFLICT\` for one more: a
+\`qd:sub\` whose new ids would pass the cap fails whole, and so does a
+\`qd:col:sub\`, \`qd:watch\` or \`qd:stream:sub\`; one already held never
+counts again, and an unsubscribe makes room. While \`qd:sub\` batches of one
+socket run at once, each can pass that first check and then find the cap
+reached when it records its rows: it answers each row it found no room for
+\`{ ok: false, e: { code: "CONFLICT" } }\` in its \`r\`, and the batch itself
+is \`ok\`.
 A socket whose \`qd:ch\` messages dropped for one channel's rate within
 \`CHANNEL_ABUSE_WINDOW_MS\` exceed \`CHANNEL_ABUSE_MULTIPLIER\` times that rate
 is disconnected (Socket.IO DISCONNECT, \`41\`, then the WebSocket closes): that

@@ -19,7 +19,8 @@ export const taskService = qd.defineService(task, {
         delete: { entry: "Admin" },
         reorder: { entry: "Moderate" },
         bulkUpdate: "authenticated",
-        bulkDelete: "authenticated",
+        // all or nothing: Admin on every id, as delete needs
+        bulkDelete: { entry: "Admin", id: "ids" },
       },
       // what `create` writes: columns from the principal, the next ordinal
       prepare: async (input, ctx, db) => ({
@@ -29,7 +30,7 @@ export const taskService = qd.defineService(task, {
       }),
     }),
     archive: {
-      access: { entry: "Admin" },
+      access: { entry: "Moderate" },
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { status: "archived" } }),
     },
