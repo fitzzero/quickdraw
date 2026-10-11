@@ -73,9 +73,9 @@ export interface StorageAdapter {
   linksOf?(model: string): readonly LinkInterest[];
   /**
    * True where the caller runs inside an open transaction of this adapter,
-   * whose reads see writes that may still roll back. The access cache keeps
-   * nothing read there; an adapter without this method gets no access cache
-   * across requests.
+   * whose reads see writes that may still roll back. The access cache
+   * neither reads nor keeps anything there; an adapter without this method
+   * gets no access cache across requests.
    */
   inTransaction?(): boolean;
   /**

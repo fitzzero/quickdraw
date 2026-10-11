@@ -444,6 +444,52 @@ describe("the transaction", () => {
     expect(await prisma.projectMember.count({ where: { userId: board.gus } })).toBe(0);
   });
 
+  it("reads the caller's level from the database inside the transaction, never the access cache (SHARE-4)", async () => {
+    const board = kit.board();
+    const { prisma } = kit.harness();
+    // Another change demotes Fay, P1's Admin member, after the pipeline checked her and
+    // before her change's transaction opens.
+    let demote = false;
+    const db = new Proxy(kit.harness().db, {
+      get(target, key) {
+        if (key !== "$transaction") {
+          return Reflect.get(target, key) as unknown;
+        }
+        return async (fn: unknown, given?: unknown) => {
+          if (demote) {
+            await prisma.projectMember.updateMany({
+              where: { projectId: board.p1, userId: board.fay },
+              data: { role: "Read" },
+            });
+          }
+          return await target.$transaction(fn as never, given as never);
+        };
+      },
+    });
+    // The pipeline's check keeps Fay's Admin for a minute; the demotion evicts nothing.
+    const app = await createTestApp({
+      services: [defineProjectService()],
+      db,
+      access: { cacheMs: 60_000 },
+    });
+    kit.track(app as unknown as TestApp);
+    const fay = app.as(as(board.fay)).projectService;
+    demote = true;
+    await expect(
+      fay.share({ id: board.p1, userId: board.gus, level: "Read" }),
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("no longer have Admin"),
+    });
+    await expect(fay.invite({ entryId: board.p1, userId: board.gus })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect((await prisma.project.findUniqueOrThrow({ where: { id: board.p1 } })).acl).toEqual([
+      { userId: board.di, level: "Read" },
+    ]);
+    expect(await prisma.projectMember.count({ where: { userId: board.gus } })).toBe(0);
+  });
+
   it("asks for the caller's level from inside the transaction's callback", async () => {
     const service = defineProjectService();
     let inside = false;

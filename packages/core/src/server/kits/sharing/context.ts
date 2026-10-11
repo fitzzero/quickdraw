@@ -1,8 +1,9 @@
 // What every sharing kit handler is made from: the hooks `sharing.handlers`
 // was given, and its method's access form. And the user a by-name method means (`shareByName`,
-// `inviteByName`): the app's `resolveUser` finds them by the `name` or
-// `email` the call gave, before the change's transaction opens; no such user
-// is `NOT_FOUND`.
+// `inviteByName`): the app's `resolveUser` finds the one user the `name` or
+// `email` the call gave names, before the change's transaction opens; none,
+// or a name more than one user has (a resolver answers `null`), is
+// `NOT_FOUND`.
 
 import { QuickdrawError } from "../../../protocol/errors";
 import type { AccessForm } from "../../access/types";
@@ -24,7 +25,7 @@ interface GivenLookup {
   readonly email: string | undefined;
 }
 
-/** The user id `resolveUser` finds for the call's `name` or `email`; `NOT_FOUND` when it finds none. */
+/** The one user id `resolveUser` finds for the call's `name` or `email`; `NOT_FOUND` when it finds none. */
 export async function resolveTarget(
   call: SharingCall,
   context: HandlerContext,

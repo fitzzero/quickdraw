@@ -47,7 +47,11 @@ export interface MembersOptions<
   /**
    * Maps stored roles to access levels: `{ owner: "Admin", editor: "Moderate", viewer: "Read" }`.
    * Without it a stored role must be a level name. A role that maps to no
-   * level grants nothing.
+   * level grants nothing. Roles that map to one level are peers: with
+   * `{ owner: "Admin", admin: "Admin" }` the sharing kit lets an `admin`
+   * demote or remove the `owner`. To make an owner untouchable, give the
+   * row an owner column (`anyOf(owner("ownerId"), members(...))`, or
+   * `jsonAcl(..., { owner })`).
    */
   readonly levels?: Readonly<Record<string, AccessLevel>>;
 }

@@ -198,7 +198,8 @@ compile time.
   job, alone or in `anyOf`.
 - Lookups are batched per call: checking 60 ids costs what one does.
   `createServer({ access: { cacheMs } })` keeps them across calls; tracked
-  writes to the columns and tables a policy reads evict them.
+  writes to the columns and tables a policy reads evict them. A lookup
+  inside a transaction always reads the database.
 - Membership and junction tables need an `id` column
   (`id String @id @default(cuid())`, the pair unique by `@@unique`), never a
   composite `@@id`: the write tracker keys rows by `id`, so such a table is
@@ -256,7 +257,12 @@ channel `requires`.
 
 - Change access lists and memberships with the sharing kit
   (`sharing.contract({ mode: "acl" | "members" })`), which refuses granting
-  above the caller's own level and removing the last `Admin`. Without a
+  above the caller's own level, changing or removing a user above it (equal
+  may; roles that map to one level are peers, so protect an owner with an
+  owner column), and removing the last `Admin`. Its `resolveUser` returns
+  exactly one user or `null`: an email with `findUnique`, a name only when
+  `findMany({ where: { name }, take: 2 })` finds one; never `findFirst` by
+  name. Without a
   service-wide `Admin` grant, the read/write and admin kits refuse a
   membership table's entry, user and role columns, whichever policy reads
   them. They also refuse a column the policy reads. That holds even for a

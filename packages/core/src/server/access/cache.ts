@@ -19,6 +19,10 @@
 //   happened while it ran (the namespace's generation is unchanged), and
 //   only when it did not read inside a transaction, whose uncommitted rows
 //   may yet roll back. A deny is kept like a grant, under the same eviction.
+// - A lookup inside a transaction does not read the cache either: a check
+//   made there (a sharing change's re-check of its caller) must see the
+//   rows as the transaction does, not a value kept before it began (the 5.1
+//   audit's SHARE-4).
 
 /** A namespace of cached values; compared by identity. */
 export interface Namespace {
@@ -212,7 +216,7 @@ export function createAccessCache(options: AccessCacheOptions): AccessCache {
 export interface LookupScope {
   readonly memo: RequestMemo;
   readonly cache: AccessCache | undefined;
-  /** Whether a lookup starting now may be kept across requests (it is not inside a transaction). */
+  /** Whether a lookup starting now may read or keep the cross-request cache (it is not inside a transaction). */
   keepable(): boolean;
 }
 
@@ -231,9 +235,10 @@ export async function lookup<V>(
 ): Promise<Map<string, V | null>> {
   const pending = new Map<string, Promise<V | null>>();
   const missing: string[] = [];
+  const kept = where.cache !== undefined && where.keepable() ? where.cache : undefined;
   for (const id of new Set(ids)) {
     const memoized = where.memo.get(ns, scope, id) as Promise<V | null> | undefined;
-    const cached = memoized === undefined ? where.cache?.get(ns, scope, id) : undefined;
+    const cached = memoized === undefined ? kept?.get(ns, scope, id) : undefined;
     if (memoized !== undefined) {
       pending.set(id, memoized);
     } else if (cached === undefined) {
@@ -245,12 +250,11 @@ export async function lookup<V>(
     }
   }
   if (missing.length > 0) {
-    const keepIn = where.cache !== undefined && where.keepable() ? where.cache : undefined;
-    const generation = keepIn?.generation(ns);
+    const generation = kept?.generation(ns);
     const batch = load(missing).then((loaded) => {
-      if (keepIn !== undefined && keepIn.generation(ns) === generation) {
+      if (kept !== undefined && kept.generation(ns) === generation) {
         for (const id of missing) {
-          keepIn.set(ns, scope, id, loaded.get(id) ?? null);
+          kept.set(ns, scope, id, loaded.get(id) ?? null);
         }
       }
       return loaded;

@@ -208,6 +208,17 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   with `removed`) still reaches every subscribed scope, and a client
   resuming any scope of that collection across one, subscribed on the
   server or not, reloads the scope instead of replaying it.
+- **Sharing changes refuse users above the caller.** Under a lowered form
+  (`share: { entry: "Moderate" }` and the like), `share` replacing a level,
+  `setLevel`, `unshare`, `remove` and `setRole` answer `FORBIDDEN` for a
+  user whose current level is above the caller's; equal levels pass.
+- **With `cacheMs`, access checks inside a transaction read the database.**
+  A sharing change's re-check of its caller (and any `levelsFor` inside
+  `db.$transaction`) no longer reads the access cache, so it costs its
+  statements there.
+- **The sharing kit's method descriptions changed.** They say the caps and
+  the one-user lookup; MCP tool descriptions and generated API docs show
+  them, so apps that commit docs pages regenerate them.
 
 ### Security
 
@@ -365,6 +376,22 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   Every subscribed scope of a `via` collection, and every watched topic of
   it, got the removal of every deleted entry, and every resume buffer kept
   it.
+- **A sharing change can no longer demote or remove someone above the
+  caller (SHARE-1).** Under a lowered form, a Moderate member could replace
+  an `Admin` entry with `share`, or demote or remove an Admin with
+  `setLevel`, `unshare`, `setRole` or `remove`.
+- **The README's `resolveUser` names exactly one user (SHARE-2).** It took
+  the first user with a display name, so whoever registered a name first
+  received every by-name share meant for another. It now finds an email by
+  `findUnique`, and a name only when exactly one user has it. Apps that
+  copied the old resolver must change theirs: the kit takes what the
+  resolver returns. Roles that map to one level are peers (SHARE-3): an
+  `admin` role may demote an `owner` role, so protect an owner with an
+  owner column.
+- **A sharing change's re-check no longer reads a stale cache (SHARE-4).**
+  With `cacheMs`, the re-check of the caller inside the change's
+  transaction read the access cache, so a caller demoted by a write the
+  tracked client did not see kept their old level for up to `cacheMs`.
 
 ### Codemod
 

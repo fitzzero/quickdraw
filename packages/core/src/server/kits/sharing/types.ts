@@ -97,9 +97,13 @@ export interface SharingUserLookup {
 }
 
 /**
- * Finds the user a by-name method means: their user id, or `null` (or
+ * Finds the one user a by-name method means: their user id, or `null` (or
  * `undefined`) when there is no such user, which fails the call with
- * `NOT_FOUND`.
+ * `NOT_FOUND`. It must name exactly one user: look a user up by something
+ * unique and verified (an email, with `findUnique`), and take a display
+ * name's user only when exactly one user has that name, else `null`. A
+ * `findFirst` by name hands the share to whoever registered the name first
+ * (the 5.1 audit's SHARE-2).
  */
 export type SharingResolveUser<Db = unknown> = (
   lookup: SharingUserLookup,
@@ -143,7 +147,10 @@ export type SharingHandlersOptions<C extends AnyContract, A, Db = unknown> = {
       readonly resolveUser?: `sharing.handlers: resolveUser is for shareByName and inviteByName, which ${C["name"]} does not have`;
     }
   : {
-      /** Finds the user `shareByName` and `inviteByName` mean, by name or email. */
+      /**
+       * Finds the one user `shareByName` and `inviteByName` mean, by name or
+       * email, or `null`: never the first of several (`SharingResolveUser`).
+       */
       readonly resolveUser: SharingResolveUser<Db>;
     });
 

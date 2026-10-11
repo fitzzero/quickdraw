@@ -13,8 +13,9 @@
 //   `leave` is for members only (`FORBIDDEN` for anyone else).
 // - Each change but `leave` first reads the caller's own level on the row
 //   again, inside the transaction: `FORBIDDEN` when it no longer meets the
-//   method's form, or when `invite` or `setRole` would give a role whose
-//   level is above it (`checks.ts`).
+//   method's form, when `invite` or `setRole` would give a role whose level
+//   is above it, or when `remove` or `setRole` would touch a member whose
+//   role's level is above it (`checks.ts`; equal passes).
 // - The last Admin of a row cannot leave, be removed or lose Admin
 //   (`CONFLICT`): whether someone else keeps Admin is read in the same
 //   transaction as the change. Under `anyOf` every policy counts: another
@@ -38,7 +39,7 @@ import type {
 import { QuickdrawError } from "../../../protocol/errors";
 import type { MembershipRead } from "../../access/policy";
 import type { KitHandler, KitHandlerArgs, ModelDelegate, Row } from "../crud/runtime";
-import { adminElsewhere, capGrant, checkCaller } from "./checks";
+import { adminElsewhere, capGrant, capTarget, checkCaller } from "./checks";
 import { resolveTarget, type HandlerContext } from "./context";
 import { membershipTableOf } from "./policy";
 import { adminRolesOf, checkRole, currentRole, levelOfRole, memberOf } from "./roles";
@@ -146,9 +147,8 @@ async function end(
 ): Promise<null> {
   const read = membershipTableOf(call.runtime.service);
   return await inSerializable(call.db, async (tx) => {
-    if (kind === "remove") {
-      await checkCaller(call, context.form, target.entryId);
-    }
+    const own =
+      kind === "remove" ? await checkCaller(call, context.form, target.entryId) : undefined;
     const table = tableOf(tx, read.model);
     const rows = await rowsOf(table, read, target);
     if (rows.length === 0) {
@@ -157,6 +157,9 @@ async function end(
         : new QuickdrawError("NOT_FOUND", `That user is not a member of this ${call.model}`);
     }
     const current = currentRole(read, rows);
+    if (own !== undefined) {
+      capTarget(own, current.level, call.model);
+    }
     if (current.level === "Admin" && !(await anotherAdmin(call, tx, read, target))) {
       throw lastAdmin(call.model);
     }
@@ -188,6 +191,7 @@ async function changeRole(
       throw new QuickdrawError("NOT_FOUND", `That user is not a member of this ${call.model}`);
     }
     const current = currentRole(read, rows);
+    capTarget(own, current.level, call.model);
     if (rows.length === 1 && current.role === role) {
       return memberOf(read, target.userId, role);
     }

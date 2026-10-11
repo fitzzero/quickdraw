@@ -65,13 +65,21 @@ export const projectMembers = members({
   level: "role",
 });
 
-/** Finds a user by name or email, as an app's `resolveUser` would. */
+/** Finds the one user a by-name call means, as the README's `resolveUser` does: by email, or a name one user alone has. */
 async function findUser(
   lookup: { readonly name?: string; readonly email?: string },
   db: unknown,
-): Promise<string | undefined> {
-  const where = lookup.name === undefined ? { email: lookup.email } : { name: lookup.name };
-  return (await (db as PrismaClient).user.findFirst({ where, select: { id: true } }))?.id;
+): Promise<string | null | undefined> {
+  const users = (db as PrismaClient).user;
+  if (lookup.email !== undefined) {
+    return (await users.findUnique({ where: { email: lookup.email }, select: { id: true } }))?.id;
+  }
+  const named = await users.findMany({
+    where: { name: lookup.name },
+    select: { id: true },
+    take: 2,
+  });
+  return named.length === 1 ? named[0]?.id : null;
 }
 
 /** Options of {@link defineProjectService}. */

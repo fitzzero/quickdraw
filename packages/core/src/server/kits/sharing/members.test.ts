@@ -6,6 +6,7 @@
 // the policy's own; members page by keyset cursor. Access is in
 // `access.test.ts`.
 
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { defineContract, type CollectionFrame } from "../../../index";
 import { createTestApp, emitWithAck, type TestApp } from "../../../testing/index";
@@ -140,6 +141,28 @@ describe("invite, remove and leave", () => {
     });
     await expect(owner.inviteByName({ entryId: board.p1, name: "Nobody" })).rejects.toMatchObject({
       code: "NOT_FOUND",
+    });
+  });
+
+  it("invites no one by a name two users have, and the one meant by email (SHARE-2)", async () => {
+    const { app } = await kit.start();
+    const board = kit.board();
+    const { prisma } = kit.harness();
+    const mallory = await prisma.user.create({
+      data: { name: "Ivy Chen", email: `${randomUUID()}@example.com` },
+    });
+    const ivy = await prisma.user.create({
+      data: { name: "Ivy Chen", email: `${randomUUID()}@example.com` },
+    });
+    const owner = app.as(as(board.ada)).projectService;
+    await expect(
+      owner.inviteByName({ entryId: board.p1, name: "Ivy Chen", role: "Admin" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(
+      await prisma.projectMember.count({ where: { userId: { in: [mallory.id, ivy.id] } } }),
+    ).toBe(0);
+    expect(await owner.inviteByName({ entryId: board.p1, email: ivy.email })).toMatchObject({
+      userId: ivy.id,
     });
   });
 });

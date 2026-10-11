@@ -242,4 +242,84 @@ describe("forms an app gives", () => {
       level: "Admin",
     });
   });
+
+  it("never let a caller change or remove a user whose level is above their own (SHARE-1)", async () => {
+    const capped = defineContract("cappedService", {
+      entity: projectEntity,
+      methods: {
+        ...sharing.contract({ mode: "acl", methods: ["share", "setLevel", "unshare"] }),
+        ...sharing.contract({ mode: "members", methods: ["setRole", "remove"] }),
+      },
+    });
+    const cappedService = qd.defineService(capped, {
+      model: "project",
+      access: anyOf(jsonAcl("acl", { owner: "ownerId" }), projectMembers),
+      methods: {
+        ...sharing.handlers(capped, {
+          access: {
+            share: { entry: "Moderate" },
+            setLevel: { entry: "Moderate" },
+            unshare: { entry: "Moderate" },
+            setRole: { entry: "Moderate", id: "entryId" },
+            remove: { entry: "Moderate", id: "entryId" },
+          },
+        }),
+      },
+    });
+    const app = await createTestApp({ services: [cappedService], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    const board = kit.board();
+    const { p1, gus, fay, di } = board;
+    const { prisma } = kit.harness();
+    const owner = app.as(as(board.ada)).cappedService;
+    await owner.share({ id: p1, userId: gus, level: "Admin" });
+    // Bo, P1's Moderate member, is below gus (Admin in the list) and fay (an Admin member).
+    const bo = app.as(as(board.bo)).cappedService;
+    const above = { code: "FORBIDDEN", message: expect.stringContaining("That user has Admin") };
+    await expect(bo.share({ id: p1, userId: gus, level: "Read" })).rejects.toMatchObject(above);
+    await expect(bo.setLevel({ id: p1, userId: gus, level: "Read" })).rejects.toMatchObject(above);
+    await expect(bo.unshare({ id: p1, userId: gus })).rejects.toMatchObject(above);
+    await expect(bo.setRole({ entryId: p1, userId: fay, role: "Read" })).rejects.toMatchObject(
+      above,
+    );
+    await expect(bo.remove({ entryId: p1, userId: fay })).rejects.toMatchObject(above);
+    expect((await prisma.project.findUniqueOrThrow({ where: { id: p1 } })).acl).toContainEqual({
+      userId: gus,
+      level: "Admin",
+    });
+    expect(
+      await prisma.projectMember.findMany({
+        where: { projectId: p1, userId: fay },
+        select: { role: true },
+      }),
+    ).toEqual([{ role: "Admin" }]);
+    // Equal levels pass: one Moderate changes another.
+    await owner.setLevel({ id: p1, userId: di, level: "Moderate" });
+    expect(await bo.setLevel({ id: p1, userId: di, level: "Read" })).toContainEqual({
+      userId: di,
+      level: "Read",
+    });
+  });
+
+  it("let one Admin change or remove another under the default forms", async () => {
+    const { app } = await kit.start();
+    const board = kit.board();
+    const { p1, gus, ed } = board;
+    const owner = app.as(as(board.ada)).projectService;
+    await owner.invite({ entryId: p1, userId: gus, role: "Admin" });
+    await owner.share({ id: p1, userId: ed, level: "Admin" });
+    // Fay is an Admin member: an equal level is hers to change or take away.
+    const fay = app.as(as(board.fay)).projectService;
+    expect(await fay.setRole({ entryId: p1, userId: gus, role: "Read" })).toMatchObject({
+      level: "Read",
+    });
+    expect(await fay.remove({ entryId: p1, userId: gus })).toBeNull();
+    expect(await fay.setLevel({ id: p1, userId: ed, level: "Read" })).toContainEqual({
+      userId: ed,
+      level: "Read",
+    });
+    expect(await fay.unshare({ id: p1, userId: ed })).not.toContainEqual(
+      expect.objectContaining({ userId: ed }),
+    );
+  });
 });

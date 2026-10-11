@@ -857,7 +857,9 @@ export const taskService = qd.defineService(task, {
 - `createServer({ access: { cacheMs: 30_000 } })` keeps policy lookups across
   requests; tracked writes to the columns and membership tables the policies
   read evict them. Writes the tracked client cannot see are picked up only
-  when the time passes, so the cache is off by default.
+  when the time passes, so the cache is off by default. A lookup inside a
+  transaction (`db.$transaction`, a sharing change) reads the database,
+  never the cache.
 
 ## Tracked writes
 
@@ -2148,9 +2150,15 @@ export const projectService = qd.defineService(project, {
   collections: { mine: { scopeAccess: "self" } },
   methods: {
     ...sharing.handlers(project, {
-      // finds the user inviteByName means; none is NOT_FOUND
-      resolveUser: async ({ name, email }) =>
-        (await db.user.findFirst({ where: name === undefined ? { email } : { name } }))?.id,
+      // the one user a by-name call means, or null (NOT_FOUND): an email is unique,
+      // a display name counts only when exactly one user has it
+      resolveUser: async ({ name, email }) => {
+        if (email !== undefined) {
+          return (await db.user.findUnique({ where: { email }, select: { id: true } }))?.id;
+        }
+        const named = await db.user.findMany({ where: { name }, select: { id: true }, take: 2 });
+        return named.length === 1 ? named[0]?.id : null;
+      },
       // runs inside the change's transaction: its writes commit with it, a throw undoes it
       onChange: (change, ctx) => {
         ctx.log.info("sharing changed", { kind: change.kind, id: change.id, user: change.userId });
@@ -2161,7 +2169,8 @@ export const projectService = qd.defineService(project, {
 ```
 
 - Access list methods: `share({ id, userId, level })` gives a user `Read`,
-  `Moderate` or `Admin` (replacing any level they had), `setLevel` changes
+  `Moderate` or `Admin` (replacing a level they had, unless it is above the
+  caller's), `setLevel` changes
   the level of a user the row is shared with, `unshare({ id, userId })`
   takes it away, and `listShares({ id })` lists the row's shares; each
   returns the list as `[{ userId, level }]`, one entry per user. Membership
@@ -2171,22 +2180,31 @@ export const projectService = qd.defineService(project, {
   `leave({ entryId })` return `null`, and
   `listMembers({ entryId, cursor?, limit? })` pages the members in user id
   order (50 by default, at most 200). `shareByName` and `inviteByName` take
-  `name` or `email` instead of `userId`, and need `resolveUser`; a mode adds
-  every method but those two unless `methods` names its own list.
+  `name` or `email` instead of `userId`, and need `resolveUser`, which
+  returns exactly one user's id or `null` (`NOT_FOUND`): an email by
+  `findUnique`, a name only when exactly one user has it, as above, never
+  the first of several (a `findFirst` by name shares with whoever
+  registered that name first); a mode adds every method but those two
+  unless `methods` names its own list.
 - Who may call: a change needs `{ entry: "Admin" }` on the row, a list
   `{ entry: "Read" }`, and `leave` a signed-in member (`FORBIDDEN` for
   anyone else). `access: { share: { entry: "Moderate" } }` replaces one
   method's form. Whatever the form, no caller shares, sets or invites at a
-  level above their own on the row (`FORBIDDEN`; a service-wide grant
-  counts where the form names `service`), and each change reads the
-  caller's level again inside its transaction, refusing one lowered by a
-  concurrent change (`FORBIDDEN`).
+  level above their own on the row, nor changes or removes a user whose
+  current level there is above their own (`FORBIDDEN`; a service-wide
+  grant counts where the form names `service`; equal levels may, so one
+  Admin changes another), and each change reads the caller's level again
+  inside its transaction, refusing one lowered by a concurrent change
+  (`FORBIDDEN`).
 - The kit changes the list or the table the service's policy reads, alone
   or inside `anyOf`, and takes their names from it: a service whose policy
   has none for a mode the contract uses (or two) fails when it is defined.
   Roles are the policy's `levels` keys, or the level names `Read`,
   `Moderate` and `Admin` without it; another role is `VALIDATION`, and
   `invite` without a role gives the lowest one that can read the row.
+  Roles that map to one level are peers: with `{ owner: "Admin", admin:
+"Admin" }` an `admin` may demote or remove the `owner`, so protect an
+  owner with an owner column (`anyOf(owner("ownerId"), members(...))`).
 - The owner's access never changes (`CONFLICT`). A row keeps its last
   Admin, counted across every policy of an `anyOf`: an owner column, an
   `Admin` entry of the access list, an `Admin` member (so a project's owner
