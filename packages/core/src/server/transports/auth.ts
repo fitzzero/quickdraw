@@ -135,9 +135,11 @@ const SOCKET_SESSIONS = new WeakMap<object, SocketSession>();
  * Records the session a socket authenticated with, so that
  * `server.access.disconnectUser(userId, { sessionId })` can end that
  * session's sockets alone, and, with `expiresAt`, so that the server
- * disconnects the socket when the session expires (the 5.1 audit's AUTH-4).
- * `socketAuth` calls it for the auth routes' sessions; an app's own
- * `authenticate` may too.
+ * disconnects the socket when the session expires (the 5.1 audit's AUTH-4)
+ * and refuses its handshake when it already has. `expiresAt` is a `Date`, a
+ * date string, or epoch milliseconds: a JWT's `exp` is in seconds, so pass
+ * `exp * 1000`. `socketAuth` calls it for the auth routes' sessions; an
+ * app's own `authenticate` may too.
  */
 export function recordSocketSession(
   socket: object,

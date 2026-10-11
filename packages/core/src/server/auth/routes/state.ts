@@ -1,12 +1,16 @@
 // The OAuth `state` of a sign-in (RFC 6749 section 10.12), bound to the
 // browser that started it and redeemable once. `start` sends the state to
 // the provider and keeps it, with the provider and the validated return
-// origin, in a short-lived HttpOnly cookie (`__Host-qd_oauth` on `/` over a
+// origin, in a short-lived HttpOnly cookie: `__Host-qd_oauth` on `/` over a
 // secure request or whenever `publicUrl` is https, else `qd_oauth` on the
-// auth routes' path), signed with an HMAC-SHA256 under a key derived from
-// the JWT secret: a cookie the routes did not write (one a sibling site
-// planted, with a state the attacker had the provider sign them in to) is
-// no sign-in at all (the 5.1 audit's AUTH-2b, a login CSRF). The callback
+// auth routes' path. The `__Host-` name is what keeps a sibling site from
+// planting a state the routes issued to an attacker, to sign the browser in
+// as them (the 5.1 audit's AUTH-2b, a login CSRF): only this host, over
+// HTTPS, can set it, so a deployment whose state cookie is `qd_oauth` keeps
+// that risk. The cookie is also signed with an HMAC-SHA256 under a key
+// derived from the JWT secret, so a payload the routes did not write (its
+// state, origin, provider or issue time) is no sign-in; the MAC does not
+// say which browser a state was issued to. The callback
 // clears that cookie whatever happens, accepts the state only when the
 // provider sent back the cookie's own value, for the same provider and
 // within ten minutes, and remembers each redeemed state in this process until

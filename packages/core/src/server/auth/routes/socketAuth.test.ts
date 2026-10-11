@@ -394,6 +394,7 @@ describe("a socket whose session expires (AUTH-4)", () => {
 
   it("waits out an expiry longer than one timer can, and stops waiting once the socket goes", () => {
     vi.useFakeTimers();
+    const delays = vi.spyOn(globalThis, "setTimeout");
     try {
       const day = 24 * 60 * 60 * 1000;
       const socketOf = () =>
@@ -401,6 +402,8 @@ describe("a socket whose session expires (AUTH-4)", () => {
       const socket = socketOf();
       recordSocketSession(socket, "sid", Date.now() + 40 * day);
       endAtSessionExpiry(socket as never, captureLogger());
+      // Clamped: a longer delay fires at once.
+      expect(delays.mock.calls.map(([, delay]) => delay)).toEqual([2_147_483_647]);
       vi.advanceTimersByTime(30 * day);
       expect(socket.disconnect).not.toHaveBeenCalled();
       vi.advanceTimersByTime(10 * day);
@@ -412,19 +415,72 @@ describe("a socket whose session expires (AUTH-4)", () => {
       gone.emit("disconnect", "client namespace disconnect");
       vi.advanceTimersByTime(2 * day);
       expect(gone.disconnect).not.toHaveBeenCalled();
-      // Expired already, or no expiry recorded.
+      // Expired already: at the next turn, never inside the connection's listener.
       const late = socketOf();
       recordSocketSession(late, "sid", Date.now() - 1);
       endAtSessionExpiry(late as never, captureLogger());
+      expect(late.disconnect).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(0);
       expect(late.disconnect).toHaveBeenCalledTimes(1);
+      // No expiry recorded.
       const unknown = socketOf();
       recordSocketSession(unknown, "sid");
       endAtSessionExpiry(unknown as never, captureLogger());
       vi.advanceTimersByTime(400 * day);
       expect(unknown.disconnect).not.toHaveBeenCalled();
     } finally {
+      delays.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it("refuses a handshake whose session expired before it ended: the socket never connects", async () => {
+    const slow: Authenticate = (sessions) => ({
+      authenticate: socketAuth({
+        sessions,
+        jwtSecret: SECRET,
+        allowedOrigins: [APP_ORIGIN],
+        // The session runs out while the principal loads.
+        loadPrincipal: async (userId): Promise<AppPrincipal> => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 1100);
+          });
+          return { userId, kind: "user" };
+        },
+      }),
+    });
+    const { url, sessions, logger } = await boot(slow);
+    const { token } = await issueSession(
+      { sessions, jwtSecret: SECRET },
+      "victim",
+      { provider: "test" },
+      1000,
+    );
+    expect(await connect(url, {}, { ...v5Auth(null), token })).toEqual(REFUSED);
+    expect(logger.at("debug").map((entry) => entry.message)).toContain(
+      "Refused a socket whose session expired during its handshake",
+    );
+  });
+
+  it("refuses every handshake of an authenticate that records an expiry in seconds, and says why", async () => {
+    const logger = captureLogger();
+    const { url } = await servers.start({
+      services: [whoService],
+      logger,
+      auth: {
+        authenticate: (request) => {
+          if (request.transport === "socket") {
+            // A JWT's exp, in seconds, where recordSocketSession takes milliseconds.
+            recordSocketSession(request.socket, "sid", Math.floor(Date.now() / 1000) + 3600);
+          }
+          return { userId: "alice", kind: "user" } as AppPrincipal;
+        },
+      },
+    });
+    expect(await connect(url, {})).toEqual(REFUSED);
+    expect(logger.at("warn").map((entry) => entry.message)).toContainEqual(
+      expect.stringContaining("a JWT's exp is in seconds"),
+    );
   });
 });
 

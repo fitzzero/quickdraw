@@ -168,10 +168,12 @@ connectionStateRecovery } })` throws a `TypeError` at startup, and
 - **`__Host-session` is read first wherever the request carries it.** On a
   plain HTTP request (development, an SSR hop without `X-Forwarded-Proto`),
   the transports, `requireSession` and the auth routes read
-  `__Host-session` before `session`, and the routes clear a stale
-  `__Host-session` when they set `session`. The startup warning for an
-  empty `cookie.domain` while `COOKIE_DOMAIN` is set is gone: it reads
-  well now.
+  `__Host-session` before `session`, and the routes, `setSessionCookie`
+  and `clearSessionCookie` clear a stale `__Host-session` when they set or
+  clear `session`. The startup warning for an empty `cookie.domain` while
+  `COOKIE_DOMAIN` is set now says why it matters: the transports take a
+  `session` cookie over HTTPS there, which any site under that domain can
+  set.
 - **The OAuth state cookie is signed.** Its format changed, so a sign-in in
   flight during the deploy lands once on `?error=state`. It is named
   `__Host-qd_oauth` whenever `publicUrl` is https.
@@ -184,6 +186,9 @@ connectionStateRecovery } })` throws a `TypeError` at startup, and
   authenticated is disconnected (`io server disconnect`, no automatic
   reconnect) when its session expires; `recordSocketSession(socket,
 sessionId, expiresAt)` does the same for an app's own `authenticate`.
+  `expiresAt` is a `Date` or epoch milliseconds (a JWT's `exp` is in
+  seconds: pass `exp * 1000`), and a handshake whose recorded session
+  expired before it ended is refused `UNAUTHENTICATED`.
 - **The cookie routes check the page's Origin.** `/me`, `/logout` and
   `/logout-all` answer 403 to a session cookie sent from a page
   `allowedOrigins` does not list, and `/guest` to such a page whatever it
@@ -330,9 +335,14 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   user in as the attacker on the SSR hop, same-origin GETs,
   `requireSession`, `/auth/me` and a polling handshake behind a TLS proxy
   that sent no `X-Forwarded-Proto`.
-- **The OAuth state cookie is signed (AUTH-2b).** It was unsigned JSON, so
-  a planted state cookie, with a state the attacker had the provider sign
-  them in to, signed the victim's browser in as the attacker (login CSRF).
+- **The OAuth state cookie cannot be planted over HTTPS (AUTH-2b).** It was
+  `qd_oauth` unless the request looked secure, so a sibling site could
+  plant one, with a state the attacker had the provider sign them in to,
+  and sign the victim's browser in as the attacker (login CSRF). It is now
+  `__Host-qd_oauth` whenever `publicUrl` is https, which no other site can
+  set; a deployment on an http `publicUrl` keeps the risk. It is also
+  signed, so its payload (state, return origin, provider, age) cannot be
+  forged.
 - **Development sign-ins no longer run outside development (AUTH-3).**
   `devCredentials` and the mock ran whenever `NODE_ENV` was not exactly
   `production`, so with `NODE_ENV` unset, `prod` or `staging` a raw socket

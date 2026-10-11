@@ -220,4 +220,41 @@ describe("the session cookie's name", () => {
       else process.env.COOKIE_DOMAIN = originalDomain;
     }
   });
+
+  it("clears a stale __Host-session when setSessionCookie or clearSessionCookie writes session", () => {
+    const originalDomain = process.env.COOKIE_DOMAIN;
+    try {
+      delete process.env.COOKIE_DOMAIN;
+      // Read first wherever present, a stale __Host-session would shadow session, or outlive a sign-out.
+      const stale = { headers: { cookie: "session=old; __Host-session=stale" } };
+      const set = createFakeResponse(stale);
+      setSessionCookie(set.res, "jwt-value");
+      const cleared = createFakeResponse(stale);
+      clearSessionCookie(cleared.res);
+      expect(set.calls.map((call) => [call.name, call.value])).toEqual([
+        [SESSION_COOKIE, "jwt-value"],
+        [HOST_SESSION_COOKIE, undefined],
+      ]);
+      expect(cleared.calls.map((call) => [call.name, call.value])).toEqual([
+        [SESSION_COOKIE, undefined],
+        [HOST_SESSION_COOKIE, undefined],
+      ]);
+      for (const { calls } of [set, cleared]) {
+        expect(calls[1]?.options).toMatchObject({ secure: true, path: "/" });
+        expect(calls[1]?.options.domain).toBeUndefined();
+      }
+      // Without one, or under a name the app gave (the only name read then), nothing more.
+      const fresh = createFakeResponse({ headers: { cookie: "session=old" } });
+      setSessionCookie(fresh.res, "jwt-value");
+      const named = createFakeResponse(stale);
+      setSessionCookie(named.res, "jwt-value", { cookieName: "sid" });
+      expect([...fresh.calls, ...named.calls].map((call) => call.name)).toEqual([
+        SESSION_COOKIE,
+        "sid",
+      ]);
+    } finally {
+      if (originalDomain === undefined) delete process.env.COOKIE_DOMAIN;
+      else process.env.COOKIE_DOMAIN = originalDomain;
+    }
+  });
 });

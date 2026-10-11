@@ -130,7 +130,9 @@ const MAX_TIMER_MS = 2_147_483_647;
  * 5.1 audit's AUTH-4): the client gets `io server disconnect` and does not
  * reconnect on its own, and its next connect is authenticated afresh. An
  * expiry past the longest timer is waited out in steps; the wait ends when
- * the socket disconnects. Nothing for a socket recorded without an expiry.
+ * the socket disconnects. Never in the call itself, so the connection's
+ * other listeners see the socket connect, then disconnect. Nothing for a
+ * socket recorded without an expiry.
  */
 export function endAtSessionExpiry(socket: QuickdrawServerSocket, logger: Logger): void {
   const expiresAt = socketSessionExpiryOf(socket);
@@ -141,20 +143,22 @@ export function endAtSessionExpiry(socket: QuickdrawServerSocket, logger: Logger
   socket.once("disconnect", () => {
     clearTimeout(timer);
   });
-  const arm = (): void => {
-    const left = expiresAt - Date.now();
-    if (left <= 0) {
-      logger.debug("Disconnected a socket whose session expired", {
-        category: "quickdraw.socket",
-        socketId: socket.id,
-      });
-      socket.disconnect(true);
-      return;
-    }
-    timer = setTimeout(arm, Math.min(left, MAX_TIMER_MS));
+  const wait = (): void => {
+    timer = setTimeout(arm, Math.min(Math.max(expiresAt - Date.now(), 0), MAX_TIMER_MS));
     timer.unref();
   };
-  arm();
+  const arm = (): void => {
+    if (expiresAt > Date.now()) {
+      wait();
+      return;
+    }
+    logger.debug("Disconnected a socket whose session expired", {
+      category: "quickdraw.socket",
+      socketId: socket.id,
+    });
+    socket.disconnect(true);
+  };
+  wait();
 }
 
 /** A broadcast `disconnectUser`, read; `undefined` for anything else. */

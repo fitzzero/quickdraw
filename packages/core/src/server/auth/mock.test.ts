@@ -196,4 +196,23 @@ describe("mock OAuth provider", () => {
       process.env.NODE_ENV = "test";
     }
   });
+
+  it("404s at request time under any NODE_ENV but development or test, an unset one included (AUTH-3)", async () => {
+    const url = new URL(provider().authorizationUrl);
+    url.searchParams.set("redirect_uri", config.redirectUri);
+    try {
+      for (const env of ["staging", "prod", "", undefined]) {
+        if (env === undefined) {
+          delete process.env.NODE_ENV;
+        } else {
+          process.env.NODE_ENV = env;
+        }
+        expect((await fetch(url, { redirect: "manual" })).status, String(env)).toBe(404);
+      }
+      process.env.NODE_ENV = "development";
+      expect((await fetch(url, { redirect: "manual" })).status).not.toBe(404);
+    } finally {
+      process.env.NODE_ENV = "test";
+    }
+  });
 });

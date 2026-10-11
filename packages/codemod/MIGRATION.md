@@ -1831,10 +1831,12 @@ native client sends the token as `auth.token`.
   name; else `session` when the cookie has a domain; else `__Host-session`
   (Secure, `Path=/`, no domain) on a request over HTTPS (`req.secure`,
   `X-Forwarded-Proto: https` or an `https:` `Origin`) and `session` over
-  plain HTTP. Each reads first the name it would set on the same request,
-  and over HTTPS without a domain never reads a `session` cookie, which a
-  sibling site could have planted. The OAuth state cookie is
-  `__Host-qd_oauth` when it is Secure. A cookie shared with subdomains
+  plain HTTP. Each reads `__Host-session` first wherever the request
+  carries it (only this host, over HTTPS, can have set it), then `session`
+  over plain HTTP or with a domain, and over HTTPS without a domain never
+  reads a `session` cookie, which a sibling site could have planted. The
+  OAuth state cookie is `__Host-qd_oauth` when it is Secure, and whenever
+  `publicUrl` is https. A cookie shared with subdomains
   through `COOKIE_DOMAIN` (as 4.x apps set it) is `session` everywhere with
   nothing to configure, since the transports read `COOKIE_DOMAIN` too; a
   domain given only as `cookie.domain` needs

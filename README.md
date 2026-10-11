@@ -2754,7 +2754,7 @@ nothing is cached:
 | `GET /{provider}/callback`             | 302 to `{origin}{successPath}` with the session cookie, or to `{origin}{errorPath}?error=state`, `denied` or `failed` |
 | `POST /guest`                          | `createUser(body)`, then `{ userId, name? }` with the session cookie (and `token` with `guest({ token: true })`)      |
 | `GET /providers`                       | `{ providers: [{ id, name, kind }] }`: the sign-ins served now (`routes.providers()` on the server)                   |
-| `GET /me`                              | `{ userId }`, or 401                                                                                                  |
+| `GET /me`                              | `{ userId }`, or 401; 403 for a cookie from a page `allowedOrigins` does not list                                     |
 | `POST /logout`                         | 204: revokes the session, clears the cookie                                                                           |
 | `POST /logout-all`                     | 204: revokes every session of the user; 401 without a live session                                                    |
 | `/mock/provider/*`                     | the mock provider's own endpoints, while `isMockOAuthEnabled()`                                                       |
@@ -2762,12 +2762,17 @@ nothing is cached:
 - The OAuth state is 256 random bits, sent to the provider and kept in a
   10-minute HttpOnly, SameSite=Lax cookie (`__Host-qd_oauth` on `/` over a
   secure request or whenever `publicUrl` is https, else `qd_oauth` on
-  `basePath`), signed with an HMAC under a key derived from `jwtSecret`, so
-  a cookie the routes did not write (one a sibling site planted, to sign
-  the browser in as the attacker) is no state at all. The callback clears it
-  whatever happens, and accepts only that state, for that provider, within
-  its 10 minutes, once (each redeemed state is remembered by the process),
-  so a sign-in cannot be finished in another browser or replayed.
+  `basePath`). The `__Host-` name is what keeps another site under the
+  same parent domain from planting a state of its own (a state the routes
+  issued to an attacker, to sign the browser in as them): only this host,
+  over HTTPS, can set it. So serve the API over HTTPS with an https
+  `publicUrl`: a plain `qd_oauth` keeps that risk. The cookie is also
+  signed with an HMAC under a key derived from `jwtSecret`, so its state,
+  return origin, provider and age cannot be forged; the MAC does not say
+  which browser a state was issued to. The callback clears it whatever
+  happens, and accepts only that state, for that provider, within its 10
+  minutes, once (each redeemed state is remembered by the process), so a
+  sign-in cannot be finished in another browser or replayed.
 - `returnTo` is an origin or a URL on one; only its origin is kept, and only
   when `allowedOrigins` lists it (exact origins, or patterns anchored with
   `^` and `$`; nothing is read from the environment, and localhost or
@@ -2890,21 +2895,27 @@ nothing is cached:
   for the whole domain, and while the user holds no `__Host-session` it
   would sign them in as whoever set it. A plain HTTP request reads
   `__Host-session`, then `session` (the name the routes set there); when
-  the routes set `session`, they also clear a stale `__Host-session` the
-  request carries, which would otherwise shadow it. A configured name is read as it is, on
+  the routes or `setSessionCookie` and `clearSessionCookie` set or clear
+  `session`, they also clear a stale `__Host-session` the request carries,
+  which would otherwise shadow it, or outlive a sign-out. A configured name is read as it is, on
   any request, so a changed name goes in all three places:
   `createAuthRoutes({ cookie: { name } })`, `socketAuth({ cookieName })`
   and `createServer({ http: { cookieName } })`. The transports see the
   cookie's domain through `COOKIE_DOMAIN` only: share the cookie with
   subdomains by setting `COOKIE_DOMAIN`; a `cookie.domain` given only to
   the routes needs `cookieName: "session"` on the other two, and the routes
-  warn at startup until the cookie is named. Behind a proxy that ends TLS,
+  warn at startup until the cookie is named. They also warn for
+  `cookie.domain: ""` while `COOKIE_DOMAIN` is set: the transports then
+  take a `session` cookie over HTTPS too, which the routes never set there
+  and any site under that domain can. Behind a proxy that ends TLS,
   have it send `X-Forwarded-Proto`, which every request carries, so the
   name does not depend on which requests carry an `Origin`.
 - A socket whose session expires is disconnected then (`io server
 disconnect`; `socketAuth` records the expiry, and an app's own
   `authenticate` may, through `recordSocketSession(socket, sessionId,
-expiresAt)`). Otherwise a socket keeps the principal it authenticated
+expiresAt)`, with `expiresAt` a `Date` or epoch milliseconds: a JWT's
+  `exp` is in seconds). A handshake whose recorded session expired before
+  it ended (a slow `loadPrincipal`) is refused, `UNAUTHENTICATED`. Otherwise a socket keeps the principal it authenticated
   with until it reconnects, so a revoked session's open sockets are ended with
   `server.access.disconnectUser(userId, { sessionId?, reason? })`: every
   socket of the user, or those `socketAuth` recorded for one session

@@ -13,6 +13,7 @@ import { createJWT } from "../jwt";
 import {
   APP_ORIGIN,
   authHarness,
+  baseOptions,
   consent,
   cookiesSet,
   cookieValue,
@@ -24,6 +25,7 @@ import {
   SECRET,
   signIn,
   start,
+  USERS,
   userIdOf,
 } from "./__tests__/harness";
 import { createAuthRoutes } from "./createAuthRoutes";
@@ -113,7 +115,7 @@ describe("the OAuth state", () => {
     expect(locationOf(otherProvider)).toBe(`${APP_ORIGIN}/?error=state`);
   });
 
-  it("refuses a state cookie it did not sign: a planted one cannot sign the browser in as the attacker (AUTH-2b)", async () => {
+  it("refuses a state cookie whose payload it did not sign: unsigned, or under another key (AUTH-2b)", async () => {
     const { url, logins, sessions } = await harness.boot();
     const started = await start(url);
     const authorizeUrl = new URL(started.authorizeUrl);
@@ -147,6 +149,32 @@ describe("the OAuth state", () => {
     expect(cookies.get("__Host-qd_oauth")?.attributes).toEqual(
       expect.arrayContaining(["secure", "path=/", "httponly", "samesite=lax"]),
     );
+  });
+
+  it("finishes a sign-in that reaches it over plain HTTP while publicUrl is https, by its __Host- state", async () => {
+    vi.stubEnv("ENABLE_MOCK_OAUTH", "true");
+    const app = express();
+    const { server, url } = await listen(app);
+    harness.servers.push(server);
+    const record = { logins: [], guests: [] };
+    const publicUrl = "https://api.app.test";
+    app.use(
+      createAuthRoutes({
+        ...baseOptions(url, captureLogger(), createMemorySessionStore(), record),
+        publicUrl,
+        // The routes exchange the mock's code at this process's own address.
+        providers: [mock({ listUsers: () => Promise.resolve(USERS), internalUrl: url })],
+      }),
+    );
+    const started = await get(`${url}/auth/mock/start`);
+    const stateCookie = `__Host-qd_oauth=${cookieValue(started, "__Host-qd_oauth")}`;
+    const authorize = new URL(locationOf(started).replace(publicUrl, url));
+    authorize.searchParams.set("email", "ada@demo.local");
+    const callbackUrl = locationOf(await get(authorize.href)).replace(publicUrl, url);
+    const callback = await get(callbackUrl, stateCookie);
+    expect(locationOf(callback)).toBe(`${APP_ORIGIN}/`);
+    expect(cookiesSet(callback).get("__Host-qd_oauth")?.value).toBe("");
+    expect(record.logins).toHaveLength(1);
   });
 
   it("sets the state cookie HttpOnly, Lax and short-lived on the routes' path only", async () => {
@@ -415,9 +443,13 @@ describe("signing in", () => {
     vi.stubEnv("COOKIE_DOMAIN", "app.test");
     const both = await harness.boot({ cookie: { domain: "app.test" } });
     expect(routeWarnings(both.logger)).toEqual([]);
-    // The transports read __Host-session first, so an empty domain no longer misreads.
+    // The transports read __Host-session first, but they also take a plantable session there.
     const cleared = await harness.boot({ cookie: { domain: "" } });
-    expect(routeWarnings(cleared.logger)).toEqual([]);
+    expect(routeWarnings(cleared.logger).map((entry) => entry.message)).toEqual([
+      expect.stringContaining('cookie.domain is "" while COOKIE_DOMAIN is set'),
+    ]);
+    const clearedNamed = await harness.boot({ cookie: { domain: "", name: "sid" } });
+    expect(routeWarnings(clearedNamed.logger)).toEqual([]);
   });
 
   it("counts a repeated session or state cookie name as no credential", async () => {

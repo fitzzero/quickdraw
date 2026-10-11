@@ -3,10 +3,9 @@
 // URLs, the cookie, and the process's record of redeemed OAuth states.
 
 import { consoleLogger, type Logger } from "../../../contract/logger";
-import { cookiesOf } from "../../transports/body";
 import {
+  clearStaleHostSession,
   cookieDomainFromEnv,
-  HOST_SESSION_COOKIE,
   isSecureSessionRequest,
   sessionCookieNameFor,
   type CookieResponse,
@@ -148,22 +147,28 @@ function cookieOf(options: AuthRoutesOptions["cookie"]): ResolvedCookie {
 /**
  * Warns, once at startup, when the routes and the transports would name the
  * session cookie differently: the transports know the cookie's domain only
- * from `COOKIE_DOMAIN`, so a `cookie.domain` without it makes the routes set
- * `session` over HTTPS where `socketAuth` and the HTTP transport read only
- * `__Host-session`, unless the app names the cookie in all three places.
- * (The reverse, an empty `cookie.domain` while `COOKIE_DOMAIN` is set, reads
- * well: the transports read `__Host-session` first wherever it is present.)
+ * from `COOKIE_DOMAIN`, unless the app names the cookie in all three places.
+ *
+ * - `cookie.domain` without `COOKIE_DOMAIN`: the routes set `session` over
+ *   HTTPS, where `socketAuth` and the HTTP transport read only
+ *   `__Host-session`.
+ * - `cookie.domain: ""` while `COOKIE_DOMAIN` is set: the routes set
+ *   `__Host-session` over HTTPS, which the transports read first; but they
+ *   also take a `session` cookie there, which the routes never set and any
+ *   site under `COOKIE_DOMAIN` can, so it signs a signed-out browser in as
+ *   whoever planted it.
  */
 function warnOnCookieDomain(cookie: ResolvedCookie, logger: Logger): void {
-  if (
-    cookie.name !== undefined ||
-    cookie.domain === undefined ||
-    cookieDomainFromEnv() !== undefined
-  ) {
+  const transportsSeeDomain = cookieDomainFromEnv() !== undefined;
+  if (cookie.name !== undefined || (cookie.domain !== undefined) === transportsSeeDomain) {
     return;
   }
+  const why =
+    cookie.domain === undefined
+      ? 'cookie.domain is "" while COOKIE_DOMAIN is set, so over HTTPS the routes set __Host-session, but socketAuth and the HTTP transport also take a "session" cookie there, which any site under COOKIE_DOMAIN can set for a browser that holds no __Host-session. Unset COOKIE_DOMAIN'
+      : 'cookie.domain is set and COOKIE_DOMAIN is not, so the routes set "session" on every request, which socketAuth and the HTTP transport read over HTTPS only under that name. Set COOKIE_DOMAIN to the cookie\'s domain instead';
   logger.warn(
-    `${OWNER}: cookie.domain is set and COOKIE_DOMAIN is not, so the routes set "session" on every request, which socketAuth and the HTTP transport read over HTTPS only under that name. Set COOKIE_DOMAIN to the cookie's domain instead, or name the cookie in all three places: cookie.name, socketAuth's cookieName and createServer's http.cookieName.`,
+    `${OWNER}: ${why}, or name the cookie in all three places: cookie.name, socketAuth's cookieName and createServer's http.cookieName.`,
     { category: "quickdraw.auth" },
   );
 }
@@ -365,34 +370,6 @@ function fromPage(req: AuthRouteRequest, pageOrigin: string | undefined): Sessio
 }
 
 /**
- * Clears a `__Host-session` the request carries when the routes write
- * another name (`session`, over plain HTTP or with a domain): the transports
- * read `__Host-session` first wherever it is present, so a stale one would
- * shadow the session just written. Not when the app named the cookie, which
- * is then the only name read.
- */
-function clearStaleHostSession(
-  res: CookieResponse,
-  settings: RouteSettings,
-  req: AuthRouteRequest,
-  written: string,
-): void {
-  if (
-    settings.cookie.name !== undefined ||
-    written === HOST_SESSION_COOKIE ||
-    !Object.hasOwn(cookiesOf(req), HOST_SESSION_COOKIE)
-  ) {
-    return;
-  }
-  res.clearCookie(HOST_SESSION_COOKIE, {
-    httpOnly: true,
-    secure: true,
-    sameSite: settings.cookie.sameSite,
-    path: "/",
-  });
-}
-
-/**
  * Sets the session cookie carrying `token`, for the cookie, the JWT and the
  * session to end together; `pageOrigin` is the page an OAuth callback
  * returns to. Clears a stale `__Host-session` that would shadow it.
@@ -407,7 +384,9 @@ export function setSession(
   const from = fromPage(req, pageOrigin);
   const name = sessionCookieName(settings, from);
   res.cookie(name, token, sessionCookieSettings(settings, from, name, true));
-  clearStaleHostSession(res, settings, req, name);
+  if (settings.cookie.name === undefined) {
+    clearStaleHostSession(res, req, name, settings.cookie.sameSite);
+  }
 }
 
 /** Clears the session cookie, and a stale `__Host-session` beside it. */
@@ -418,7 +397,9 @@ export function clearSession(
 ): void {
   const name = sessionCookieName(settings, req);
   res.clearCookie(name, sessionCookieSettings(settings, req, name, false));
-  clearStaleHostSession(res, settings, req, name);
+  if (settings.cookie.name === undefined) {
+    clearStaleHostSession(res, req, name, settings.cookie.sameSite);
+  }
 }
 
 /**
