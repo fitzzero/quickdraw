@@ -52,7 +52,9 @@ All notable changes to this project will be documented in this file.
   `StorageAdapter` gains an optional `trackable(model)`.
 - **A kit write holding a relation key or a nested write is `VALIDATION`**,
   for service-wide Admins too, and for a Json value whose own key is a
-  relation operation holding rows (keep such data a level deeper). A
+  relation operation holding rows, or `delete`/`disconnect` set to `true`
+  (keep such data a level deeper), and for any `{ set: [...] }`, a scalar
+  list's included (write the list itself). A
   `prepare` that returns one is `INTERNAL`. The admin kit shows relation
   fields as `editable: false`, refuses writes to them, and refuses an
   `editable` list or `fieldOverrides` entry naming one when the service is

@@ -129,7 +129,8 @@ no row (`"public"`, `"authenticated"`, `{ service: L }` below `Admin`),
   its own: it checks the anchors it writes (each `inherit` parent and
   anchored collection's scope column, from what `prepare` returns) at the
   method's row level, and takes a column the policy reads only from
-  `prepare` (`ownerId: ctx.principal.userId`). Give it
+  `prepare` (`ownerId: ctx.principal.userId`), unless the caller holds a
+  service-wide `Admin` grant. Give it
   `{ scope: "Moderate", of: project, id: "projectId" }`.
 - The check reads the input's keys from its JSON Schema: an `id` in any
   branch of a union counts, as does one beside a `Date` or a `Set`. An input

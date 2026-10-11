@@ -5,9 +5,10 @@
 // another), and ids with no row, are skipped, even for a `"public"` method;
 // the result counts the rows changed. The tracked client records every row, and a flush touching more
 // rows of one collection scope than its `bulkThreshold` sends that scope one
-// `reset` instead of a delta per row. `bulkUpdate`'s data may not set a
-// column that decides access, nor move the rows into an anchor row the
-// caller lacks the row level on (`../columns.ts`).
+// `reset` instead of a delta per row. `bulkUpdate`'s data holds column
+// values only (never a relation or a nested write), and may not set a column
+// that decides access, nor move the rows into an anchor row the caller lacks
+// the row level on (`../columns.ts`).
 
 import type { IdsInput } from "../../../contract/kits/crudSchemas";
 import type { AccessForm } from "../../access/types";

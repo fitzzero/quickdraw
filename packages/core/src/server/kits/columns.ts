@@ -212,7 +212,10 @@ export function columnValueIssues(
   path: readonly PropertyKey[] = [],
 ): ColumnValueIssue[] {
   const relationKeys = relationKeysOf(service);
-  const nested = new Map(findNestedWrites(data).map(({ field, operation }) => [field, operation]));
+  // A copy of its own keys: Prisma would walk the keys of any object it is given.
+  const nested = new Map(
+    findNestedWrites({ ...data }).map(({ field, operation }) => [field, operation]),
+  );
   const issues: ColumnValueIssue[] = [];
   for (const [key, value] of Object.entries(data)) {
     if (value === undefined) {

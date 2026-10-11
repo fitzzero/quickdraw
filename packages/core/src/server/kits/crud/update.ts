@@ -4,9 +4,10 @@
 // (`p`) and collections a `patched` delta. A row that is not there is
 // `NOT_FOUND`, a unique violation `CONFLICT`. A call that changes nothing
 // reads the row instead of writing it. The caller needs the method's row
-// level on the row whatever the form (`checkRowWrite`), and a patch may not
-// set a column that decides access to the row, nor move it into an anchor
-// row the caller does not have that level on (`../columns.ts`).
+// level on the row whatever the form (`checkRowWrite`), and a patch holds
+// column values only (never a relation or a nested write), and may not set a
+// column that decides access to the row, nor move it into an anchor row the
+// caller does not have that level on (`../columns.ts`).
 
 import type { AccessForm } from "../../access/types";
 import { checkWritableColumns } from "../columns";

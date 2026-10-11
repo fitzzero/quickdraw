@@ -1824,9 +1824,9 @@ export const taskService = qd.defineService(task, {
   `inherit` policy's `via`, an anchored collection's scope column) only
   when the caller's level on the new parent meets the method's row level:
   `FORBIDDEN` otherwise. `create` takes a column the policy reads only from
-  `prepare` (`ownerId: ctx.principal.userId`), never from the caller, and
-  writes a parent only where the caller has the row level on it, after
-  `prepare` ran.
+  `prepare` (`ownerId: ctx.principal.userId`), never from a caller without
+  a service-wide `Admin` grant, and writes a parent only where the caller
+  has the row level on it, after `prepare` ran.
 - Every kit write holds column values only, in every environment and for
   every caller, a service-wide Admin included: a key that is a relation of
   the model (one a projection selects with a nested `select`) or a value
@@ -1834,7 +1834,9 @@ export const taskService = qd.defineService(task, {
   `{ set: [...] }`) is `VALIDATION`, since nested writes are not tracked
   and would skip the checks above. A `prepare` that returns one is
   `INTERNAL`. A Json value whose own key is a relation operation holding an
-  object or list is refused too; keep such data one level deeper.
+  object or list, or `delete`/`disconnect` set to `true`, is refused too;
+  keep such data one level deeper. Any `{ set: [...] }` is refused, a scalar
+  list's included: write a scalar list as the list itself.
 - `reorder({ id, beforeId?, afterId? })` puts the row between its new
   neighbors (`beforeId` comes right before it) with one write, or renumbers
   the `within` list in steps of 1,024 when no gap is left, in a transaction
@@ -2247,8 +2249,8 @@ export function AdminTasks() {
   list, so the writes' input checks, types and JSON Schema (and the MCP
   tools made from it) name only those fields; given to both halves, the
   two lists must name the same fields. Without either list the kit writes
-  what it wrote in 5.0.0: every field it shows but `id` and the timestamps,
-  less those an override made read-only. An `editable` list, or a
+  what it wrote in 5.0.0: every field it shows but `id`, the timestamps and
+  the model's relations, less those an override made read-only. An `editable` list, or a
   `fieldOverrides` entry with `editable: true`, that names a relation of the
   model fails when the service is defined.
 - `adminMeta()` returns `{ serviceName, displayName, fields }`, one

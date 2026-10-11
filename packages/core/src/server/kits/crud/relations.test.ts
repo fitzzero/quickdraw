@@ -148,7 +148,7 @@ describe("a kit write that holds a relation or a nested write", () => {
     const app = await start((input) => ({ ...input, labels: { create: [] } }));
     await expect(
       app.as(as(board.bo)).taskService.create({ projectId: board.p1, title: "labelled" }),
-    ).rejects.toMatchObject({ code: "INTERNAL" });
+    ).rejects.toMatchObject({ code: "INTERNAL", message: /must return column values/ });
     expect(await prisma.task.count({ where: { title: "labelled" } })).toBe(0);
   });
 });
