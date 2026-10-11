@@ -48,6 +48,8 @@ export type { SocketRateLimitOptions } from "./middleware";
 export type { ClusterOptions, DisconnectUserOptions } from "./pushes";
 export type { QuickdrawIo } from "./types";
 export { resolveLegacyWire, type LegacyWireOptions } from "./legacy";
+// `createServer` checks the deployment before anything starts, within its import budget.
+export { checkKeyPrefix } from "../cluster/deployment";
 
 /**
  * Socket.IO server options `createServer` passes through; it sets `parser`

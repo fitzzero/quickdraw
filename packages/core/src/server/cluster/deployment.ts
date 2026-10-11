@@ -1,7 +1,7 @@
 // Deployments sharing one Valkey (the 5.1 audit's RT-2). Valkey pub/sub is
 // global across databases, so two deployments on one Valkey (staging and
 // production, say) whose adapters share channels hear each other's
-// server-to-server events, and before 5.1 each node applied whatever
+// server-to-server events, and up to 5.1.0 each node applied whatever
 // arrived: another deployment's reloaded grants (an escalation until the
 // socket reconnects), its disconnects, stream items, room removals, access
 // changes and unnamed removals.
@@ -13,7 +13,9 @@
 // through `onNodeEvent`, which applies an event of its own deployment only:
 //
 // - an untagged event comes from a node of an earlier quickdraw version
-//   during a rolling deploy: it is applied, with one warning per server;
+//   (during a rolling deploy, or of another deployment that shares the
+//   Valkey and was not upgraded yet, which a node cannot tell apart): it is
+//   applied, with one warning per server;
 // - a foreign one is not applied, with one error per server; an event that
 //   asks for an answer is still answered (`true`, or `null` for presence),
 //   so the other deployment's wait ends and it does not go degraded.
@@ -57,11 +59,20 @@ export function registerClusterDeployment(
   io: object,
   cluster: { readonly keyPrefix?: unknown } | undefined,
 ): void {
-  const prefix = cluster?.keyPrefix ?? DEFAULT_KEY_PREFIX;
+  registerDeployment(io, checkKeyPrefix(cluster));
+}
+
+/**
+ * The deployment `cluster` names: its `keyPrefix`, "quickdraw" when it has
+ * none. Throws for one that is not a non-empty string (`null` included);
+ * `createServer` checks it before anything starts.
+ */
+export function checkKeyPrefix(cluster: { readonly keyPrefix?: unknown } | undefined): string {
+  const prefix = cluster?.keyPrefix === undefined ? DEFAULT_KEY_PREFIX : cluster.keyPrefix;
   if (typeof prefix !== "string" || prefix === "") {
     throw new TypeError("createServer: cluster.keyPrefix must be a non-empty string");
   }
-  registerDeployment(io, prefix);
+  return prefix;
 }
 
 /** The deployment of the server `io`: its `cluster.keyPrefix`, "quickdraw" by default. */
@@ -116,7 +127,7 @@ export function onNodeEvent(
       if (!logged.untagged) {
         logged.untagged = true;
         logger.warn(
-          `A node sent ${event} without its deployment: a node of an earlier quickdraw version, during a rolling deploy. Its events are applied; none arrives once every node runs this version`,
+          `A node sent ${event} without its deployment: a node of an earlier quickdraw version, during a rolling deploy or of another deployment that shares this Valkey and still runs one. Its events are applied, so upgrade every deployment that shares the Valkey; none arrives once every node runs this version`,
           { category: "quickdraw.cluster", event },
         );
       }

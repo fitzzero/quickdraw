@@ -81,23 +81,28 @@ Give each deployment (production, staging, a preview) its own Valkey, or its
 own `cluster.keyPrefix` and adapter key. Valkey's pub/sub is shared across
 its databases, so `db` separates nothing: two deployments on one Valkey whose
 adapters share channels hear each other's server-to-server events.
-Before 5.1 every node applied them, whoever sent them: another deployment's
+Up to 5.1.0 every node applied them, whoever sent them: another deployment's
 reloaded grants reached this deployment's sockets (a user made `Admin` on
 staging was `Admin` in production until their socket reconnected), and its
 disconnects, stream items, room removals and access changes acted here too.
 
-Since 5.1 every such event carries its deployment, the sender's
+Now every such event carries its deployment, the sender's
 `cluster.keyPrefix`, and a node applies only its own deployment's. An event
 of another deployment is answered, so that deployment never waits it out or
 goes degraded, and ignored, with one error logged. The tags have limits:
 
-- the adapter itself still carries room broadcasts (frames, events) and
-  `qd:rotate` to every node on its key, so two deployments that share an
-  adapter key still reach each other's sockets: give each its own key;
-- two deployments that both keep the default prefix are one deployment to
-  quickdraw;
-- a node of an earlier version sends events without a deployment and
-  applies every event it hears.
+- they separate deployments with different prefixes only: two deployments
+  that both keep the default prefix are one deployment to quickdraw;
+- the adapter itself still carries room broadcasts (frames, events),
+  `qd:rotate`, its remote room operations (taking sockets out of a room) and
+  `fetchSockets` (presence's fallback) to every node on its key, so two
+  deployments that share an adapter key still reach each other's sockets:
+  give each its own key;
+- a node of an earlier version sends events without a deployment, which
+  every node applies (it cannot tell a rolling deploy from another
+  deployment that was not upgraded), and applies every event it hears:
+  upgrade every deployment that shares the Valkey before relying on the
+  tags.
 
 A rolling deploy from an earlier 5.x: an event without a deployment (from a
 node not replaced yet) is applied, with one warning per node. An app that
@@ -277,9 +282,15 @@ Presence has its own fallback. A presence request a node does not answer
 within `cluster.timeoutMs` (a node of an earlier version, during a rolling
 deploy, never answers one) makes the asking node read every node's sockets
 (`fetchSockets`) instead, for every presence read of the next 30 s, and log
-one warning ("A node did not answer a presence request within
-cluster.timeoutMs ..."). The first read after each window asks again, so a
-rolling deploy costs one `cluster.timeoutMs` wait per 30 s, never a failure.
+a warning ("A node did not answer a presence request within
+cluster.timeoutMs ..."), for the first window of an episode and at most
+once every 10 minutes. The first read after each window asks again, so a
+rolling deploy costs one `cluster.timeoutMs` wait per 30 s, never a
+failure. The fallback counts what earlier versions counted: a socket a raw
+`socket.join` put in the room, and, on an adapter key another deployment
+shares, that deployment's sockets. An adapter that does not answer
+server-side events (one built on the in-memory adapter) costs the same
+wait per window.
 
 ## When Valkey stops answering
 
@@ -314,12 +325,14 @@ rolling deploy costs one `cluster.timeoutMs` wait per 30 s, never a failure.
   counter answers, the node's revisions compare with other nodes' within the
   skew between its clock and Valkey's.
 - **Access and presence.** While the node's connection is down, its access
-  changes are broadcast without waiting (they wait in the client's queue);
-  a presence read across nodes waits `cluster.timeoutMs` for the other
+  changes are broadcast without waiting (they wait in the client's queue).
+  A presence read across nodes waits `cluster.timeoutMs` for the other
   nodes' answers, and then, like every presence read of the next 30 s,
-  reads every node's sockets (`fetchSockets`), which waits up to the
-  adapter's `requestsTimeout`; `lastSeen` answers from the node's own
-  records.
+  reads every node's sockets (`fetchSockets`). That read waits for Valkey:
+  the adapter asks it how many nodes there are before it arms its
+  `requestsTimeout`, so presence answers and the room frames that need
+  them come late, or not at all, until Valkey is back. `lastSeen` answers
+  from the node's own records.
 
 ## Cloud Run
 

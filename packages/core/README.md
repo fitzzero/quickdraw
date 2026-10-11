@@ -1080,8 +1080,9 @@ export const taskService = qd.defineService(task, {
   its key needs persistence or replication. A node whose Valkey connection
   comes back has its clients reconnect to catch up. Give each deployment its
   own Valkey, or its own `cluster.keyPrefix` (which `setupRedisAdapter` takes
-  as its key): a node applies only its own deployment's events, and a
-  Valkey's `db` does not separate pub/sub.
+  as its key): a node applies only its own deployment's events (once every
+  deployment that shares the Valkey runs this version), and a Valkey's `db`
+  does not separate pub/sub.
   [docs/deploying.md](https://github.com/fitzzero/quickdraw/blob/main/docs/deploying.md) has the wiring, what holds across
   nodes, what it costs, what happens when a node or Valkey stops
   answering, and a production checklist.

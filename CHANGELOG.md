@@ -300,7 +300,9 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
 - **Nodes log events from other deployments and older nodes.** An event of
   another `cluster.keyPrefix` is answered and ignored, with one error; an
   event without a deployment (a node of an earlier version, during a rolling
-  deploy) is applied, with one warning.
+  deploy or of a deployment that shares the Valkey and was not upgraded) is
+  applied, with one warning. `createServer` checks `cluster.keyPrefix`
+  before it starts anything, and refuses `null` as well.
 - **`cluster.keyPrefix` must be a non-empty string**, or `createServer`
   throws.
 - **The default console logger drops `debug` in production.** A call's
@@ -341,7 +343,8 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   asks the others with `quickdraw:presence` instead of reading their
   sockets. During a rolling deploy from an earlier version, whose nodes
   never answer it, a read waits `cluster.timeoutMs` once and then reads
-  every node's sockets for 30 s at a time, with one warning.
+  every node's sockets for 30 s at a time, with a warning at most once
+  every 10 minutes.
 
 ### Security
 
@@ -560,12 +563,16 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   custom tool of a users-only app.
 - **A refused MCP token is no error log (MCP-7).** A hook's refusal was
   logged as an error, with whatever its message held.
-- **Deployments sharing a Valkey stay apart (RT-2).** Pub/sub is shared
-  across a Valkey's databases, and nodes applied every server-to-server
-  event they heard: staging's reloaded grants made a production user Admin
-  until they reconnected, and its disconnects, stream items, room removals
-  and access changes acted on production too. Every event now carries its
-  deployment, and a node applies only its own's.
+- **Deployments sharing a Valkey stay apart, each with its own
+  `cluster.keyPrefix` (RT-2).** Pub/sub is shared across a Valkey's
+  databases, and nodes applied every server-to-server event they heard:
+  staging's reloaded grants made a production user Admin until they
+  reconnected, and its disconnects, stream items, room removals and access
+  changes acted on production too. Every event now carries its deployment,
+  and a node applies only its own's. Two deployments that keep the default
+  prefix are still one, and a node of an earlier version sends untagged
+  events, which every node applies: give each deployment its own prefix and
+  adapter key, and upgrade every deployment that shares the Valkey.
 - **No cache keeps a `/qd` reply (TRANSPORT-3).** A call's reply carried no
   `Cache-Control`, so a shared proxy or the browser's cache could keep one
   user's data.

@@ -22,6 +22,7 @@ import {
   settle,
   streamSub,
 } from "../realtime/__tests__/fixture";
+import { UNNAMED_EVENT } from "../collections/unnamed";
 import { peeredCluster } from "../transports/__tests__/harness";
 import { GRANTS_EVENT } from "../transports/pushes";
 
@@ -82,9 +83,11 @@ const messagesOf = (deployment: Deployment, level: "warn" | "error") =>
 
 describe("two deployments on one bus (RT-2)", () => {
   it("need a cluster.keyPrefix that is a non-empty string", async () => {
-    await expect(
-      createTestApp({ services: [projectService], db: h.db, cluster: { keyPrefix: "" } }),
-    ).rejects.toThrow("createServer: cluster.keyPrefix must be a non-empty string");
+    for (const keyPrefix of ["", null, 7]) {
+      await expect(
+        createTestApp({ services: [projectService], db: h.db, cluster: { keyPrefix } as never }),
+      ).rejects.toThrow("createServer: cluster.keyPrefix must be a non-empty string");
+    }
   });
 
   it("never apply each other's grants, and answer them so neither goes degraded", async () => {
@@ -116,6 +119,8 @@ describe("two deployments on one bus (RT-2)", () => {
     ).toMatchObject({ ok: true, r: [{ ok: true }] });
 
     staging.app.server.access.disconnectUser(board.cy);
+    // The bus hands the event over at once: a disconnect applied here would have ended cy's socket already.
+    expect(prod.app.server.io.sockets.sockets.has(cy.socket.id ?? "")).toBe(true);
     staging.app.server.stream(liveContract, "status").push("from staging");
     await staging.app.server.rooms.leave("lobby", { userId: board.cy });
     // The test database is shared, which real deployments never share: the point is that
@@ -131,6 +136,41 @@ describe("two deployments on one bus (RT-2)", () => {
     expect(revoked).toEqual([]);
     const ada = await prod.app.connect(as(board.ada));
     expect(await streamSub(ada, "status")).toMatchObject({ ok: true, seed: [] });
+  });
+
+  it("never apply each other's unnamed collection removals", async () => {
+    const { prod } = await deployments();
+    const cy = await prod.app.connect(as(board.cy));
+    const collection = frames(cy, "qd:c");
+    expect(
+      await emitWithAck(cy.socket, "qd:col:sub", {
+        s: "taskService",
+        c: "byProject",
+        scope: board.p1,
+      }),
+    ).toMatchObject({ items: expect.any(Array) });
+    const node = prod.app.server.io.sockets as unknown as {
+      _onServerSideEmit(args: unknown[]): void;
+    };
+    // What a flush of each deployment broadcasts when it cannot place a removal.
+    const removal = {
+      s: "taskService",
+      c: "byProject",
+      rev: Date.now() * 1000,
+      removed: [board.t1],
+      reset: false,
+    };
+    node._onServerSideEmit([UNNAMED_EVENT, { ...removal, deployment: "staging" }]);
+    await settle(cy);
+    expect(collection).toEqual([]);
+    node._onServerSideEmit([UNNAMED_EVENT, { ...removal, deployment: "prod" }]);
+    await settle(cy);
+    expect(collection).toEqual([
+      expect.objectContaining({ deltas: [{ t: "removed", id: board.t1 }] }),
+    ]);
+    expect(messagesOf(prod, "error")).toEqual([
+      expect.stringContaining('cluster.keyPrefix "staging"'),
+    ]);
   });
 
   it("apply an event without a deployment, from a node of an earlier version, warning once", async () => {

@@ -47,6 +47,7 @@ import {
   type HttpTransportOptions,
 } from "./transports/http";
 import {
+  checkKeyPrefix,
   createSocketServer,
   type ClusterOptions,
   type DisconnectUserOptions,
@@ -285,6 +286,8 @@ function warnOnAuth(
 }
 
 function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void {
+  // Before any server, adapter subscription or background check exists.
+  checkKeyPrefix(options.cluster);
   if (options.app !== undefined && typeof options.app.use !== "function") {
     throw new TypeError("createServer: app must be an Express app");
   }

@@ -15,8 +15,11 @@
 //
 // A node of an earlier version does not know the event and never answers.
 // A request nobody answered within `cluster.timeoutMs` falls back to the old
-// read of every node's sockets for the next 30 s (warned once), so a rolling
-// deploy costs one timeout per window, never a failure.
+// read of every node's sockets for the next 30 s (warned for the first
+// window of an episode, at most once every 10 minutes), so a rolling deploy
+// costs one timeout per window, never a failure. That read counts what it
+// always counted: a socket a raw `socket.join` put in the room, and on an
+// adapter key another deployment shares, that deployment's sockets.
 
 import { userRoom } from "../../contract/names";
 import { DEFAULT_CLUSTER_TIMEOUT_MS, within } from "../cluster/acks";
@@ -29,6 +32,9 @@ export const PRESENCE_EVENT = "quickdraw:presence";
 
 /** How long a node reads every node's sockets after a presence request went unanswered. */
 export const PRESENCE_FALLBACK_MS = 30_000;
+
+/** How long after one fallback warning a window opens without another. */
+export const PRESENCE_WARN_EVERY_MS = 10 * 60_000;
 
 /** A node's presence requests to the other nodes of its cluster, and its answers to theirs. */
 export interface PresenceRequests {
@@ -153,14 +159,16 @@ export function createPresenceRequests(
 ): PresenceRequests {
   const coalesced = coalescer();
   let fallbackUntil = 0;
-  let warned = false;
+  let warnedAt: number | undefined;
 
+  /** Opens a fallback window; warns for the first of an episode, at most once every 10 minutes. */
   const fallBack = (): void => {
-    fallbackUntil = now() + PRESENCE_FALLBACK_MS;
-    if (!warned) {
-      warned = true;
+    const at = now();
+    fallbackUntil = at + PRESENCE_FALLBACK_MS;
+    if (warnedAt === undefined || at - warnedAt >= PRESENCE_WARN_EVERY_MS) {
+      warnedAt = at;
       hub.logger.warn(
-        "A node did not answer a presence request within cluster.timeoutMs (a node of an earlier quickdraw version during a rolling deploy, or one that stopped answering): presence reads every node's sockets (fetchSockets) for the next 30 s",
+        "A node did not answer a presence request within cluster.timeoutMs (a node of an earlier quickdraw version during a rolling deploy, a node that stopped answering, or an adapter that does not answer server-side events): presence reads every node's sockets (fetchSockets) for the next 30 s",
         { category: "quickdraw.presence" },
       );
     }

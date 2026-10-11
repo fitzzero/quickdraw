@@ -9,8 +9,13 @@ import { describe, expect, it, vi } from "vitest";
 import { captureLogger, deferred, type Deferred } from "../__tests__/fixtures";
 import { registerDeployment } from "../cluster/deployment";
 import type { Hub } from "../emit/hub";
-import { PresenceRecords } from "./presence";
-import { createPresenceRequests, PRESENCE_EVENT, PRESENCE_FALLBACK_MS } from "./presenceRequests";
+import { PresenceRecords, usersInRoom } from "./presence";
+import {
+  createPresenceRequests,
+  PRESENCE_EVENT,
+  PRESENCE_FALLBACK_MS,
+  PRESENCE_WARN_EVERY_MS,
+} from "./presenceRequests";
 
 /** A server whose answers the test gives, one request at a time. */
 function fakeServer() {
@@ -109,7 +114,23 @@ describe("presence requests", () => {
     expect(io.sockets.adapter.rooms.has("raw")).toBe(false);
   });
 
-  it("read every node's sockets for 30 s after a request nobody answered, warning once", async () => {
+  it("let a room's users be read after the other nodes answered, so a join meanwhile counts", async () => {
+    const { hub, asked } = fakeServer();
+    const records = new PresenceRecords();
+    records.entered("lobby", "here");
+    const state = {
+      hub: { ...hub, probe: { local: () => false } } as unknown as Hub,
+      records,
+      requests: createPresenceRequests(hub, records),
+    };
+    const users = usersInRoom(state, "lobby");
+    // A socket joins on this node while the request is out: the list it gets must not undo its `joined`.
+    records.entered("lobby", "late");
+    asked[0]?.resolve([["ada"]]);
+    expect((await users).sort()).toEqual(["ada", "here", "late"]);
+  });
+
+  it("read every node's sockets for 30 s after a request nobody answered, warning once an episode", async () => {
     const { hub, asked, fetched, logger } = fakeServer();
     let clock = 1_000;
     const requests = createPresenceRequests(hub, new PresenceRecords(), () => clock);
@@ -132,5 +153,9 @@ describe("presence requests", () => {
     asked[1]?.resolve([["ada"]]);
     expect(await users).toEqual(["ada"]);
     expect(logger.at("warn")).toHaveLength(1);
+    // Ten minutes after the first warning, a window opens with another.
+    clock += PRESENCE_WARN_EVERY_MS;
+    expect(await requests.users("lobby")).toEqual(["far"]);
+    expect(logger.at("warn")).toHaveLength(2);
   });
 });

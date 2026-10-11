@@ -102,7 +102,7 @@ describe("onNodeEvent", () => {
       { room: "lobby", userId: "u2" },
     ]);
     expect(logger.at("warn").map(({ message }) => message)).toEqual([
-      "A node sent quickdraw:room-leave without its deployment: a node of an earlier quickdraw version, during a rolling deploy. Its events are applied; none arrives once every node runs this version",
+      "A node sent quickdraw:room-leave without its deployment: a node of an earlier quickdraw version, during a rolling deploy or of another deployment that shares this Valkey and still runs one. Its events are applied, so upgrade every deployment that shares the Valkey; none arrives once every node runs this version",
     ]);
     expect(logger.at("error")).toEqual([]);
   });
