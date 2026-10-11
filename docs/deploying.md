@@ -177,6 +177,11 @@ statements and bytes) and the split end-to-end suite:
   a collection are read too (one statement per service and collection of a
   flush that only removes);
 - changes go out whole: that step sends 400 bytes against 268;
+- a flush checks each self scope it names (`scopeAccess: "self"` on a
+  service with a policy) with one batched `levelsFor` for the scope's user:
+  every such scope, since rooms are invisible, where one server checks only
+  the scopes subscribed on it. A node without the user's socket decides for
+  the user without their service-wide grants;
 - a flush that changes access waits for every node's answer: a few Valkey
   round trips and the slowest node's re-resolution, at most
   `cluster.timeoutMs`. The wait is in line with the node's flushes, which run

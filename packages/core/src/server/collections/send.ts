@@ -30,7 +30,12 @@ import { broadcastUnnamed } from "./unnamed";
 
 type Io = NonNullable<CollectionHub["io"]>;
 
-/** Sends one scope's frame for a flush and keeps it for resumes; a `reset` frame resets the buffer. */
+/**
+ * Sends one scope's frame for a flush and keeps it for resumes; a `reset`
+ * frame resets the buffer. `local` sends it to this process's sockets only:
+ * a self scope's re-check, which every node makes for its own sockets
+ * (`selfAccess.ts`).
+ */
 export function sendFrame(
   hub: CollectionHub,
   io: Io | undefined,
@@ -38,6 +43,7 @@ export function sendFrame(
   scope: string,
   rev: Revision,
   deltas: readonly CollectionDelta[],
+  options: { readonly local?: boolean } = {},
 ): void {
   if (deltas.length === 0) {
     return;
@@ -45,7 +51,8 @@ export function sendFrame(
   const s = collection.service.name;
   const room = collectionRoom(s, collection.name, scope);
   const frame: CollectionFrame = { s, c: collection.name, scope, rev, deltas };
-  io?.to(room).emit(SERVER_EVENTS.collection, frame);
+  const target = options.local === true ? io?.local.to(room) : io?.to(room);
+  target?.emit(SERVER_EVENTS.collection, frame);
   if (deltas.some((delta) => delta.t === "reset")) {
     hub.collections.buffer.reset(room, rev);
   } else {

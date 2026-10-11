@@ -13,7 +13,17 @@ import type { AccessChange } from "../access/changes";
 import { anchorKey } from "../access/tools";
 import { PendingKeys } from "../emit/pending";
 import { emptyRecords, ownRecord } from "../emit/subscriptions";
+import type { Revision } from "../../protocol/envelope";
 import type { QuickdrawServerSocket } from "../transports/types";
+import type { PageRequest } from "./snapshot";
+
+/** A `qd:col:sub` frame, read. */
+export interface ScopeRequest extends PageRequest {
+  readonly s: string;
+  readonly c: string;
+  /** The revision the client holds the scope at. */
+  readonly since?: Revision;
+}
 
 /** One live collection subscription, as `socket.data.collections[room]` records it. */
 export interface ScopeSubscription {

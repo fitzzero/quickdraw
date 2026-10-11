@@ -36,6 +36,11 @@
 // columns. One server keeps its cheaper rule (no read for a removal): a
 // write that commits first and flushes last can still leave a client
 // without a member there until the row's next write.
+//
+// A self scope that follows its service's policy has its deltas checked
+// for its user before anything is read (`selfAccess.ts`): a row the user may
+// not read is a `denied` removal, whose row is never read, and which no
+// read-time decision turns back into an item.
 
 import { collectionRoom } from "../../contract/names";
 import type { CollectionDelta, Revision } from "../../protocol/envelope";
@@ -54,6 +59,8 @@ type Pending =
       readonly id: string;
       /** The row left scopes nobody could name: this scope may never have held it. */
       readonly unnamed?: true;
+      /** Its scope's user may not read the row (`selfAccess.ts`): nothing turns it back into an item. */
+      readonly denied?: true;
     }
   | { readonly t: "patched"; readonly id: string; readonly fields: readonly string[] };
 
@@ -118,6 +125,18 @@ export function planScopes(
 const WHOLE: FrameKind = Object.freeze({ t: "u" });
 
 /**
+ * True when a delta needs no row read: its row was read already, or it is a
+ * removal (behind a cluster adapter, a `denied` one only).
+ */
+function readsNothing(
+  delta: Pending,
+  read: ReadonlyMap<string, StorageRow>,
+  cluster: boolean,
+): boolean {
+  return read.has(delta.id) || (delta.t === "removed" && (!cluster || delta.denied === true));
+}
+
+/**
  * The rows the plans' deltas take items from: those the moves read, and one
  * read for the others. Behind a cluster adapter (`cluster`) every change
  * reads its whole item, and the rows of `removed` deltas and of `also` are
@@ -135,7 +154,7 @@ export async function readItems(
   const kinds = new Map<string, FrameKind>();
   for (const plan of plans.filter(({ reset }) => !reset)) {
     for (const delta of plan.deltas) {
-      if (read.has(delta.id) || (delta.t === "removed" && !cluster)) {
+      if (readsNothing(delta, read, cluster)) {
         continue;
       }
       const item = cluster || delta.t !== "patched" || kinds.get(delta.id)?.t === "u";
@@ -181,7 +200,8 @@ function added(collection: BoundCollection, row: StorageRow, rev: Revision): Col
  * is not: a removal becomes `updated` (`added` for a row that left scopes
  * nobody could name, which this scope may never have held). A `via` scope's
  * links were already read at flush time (`moves.ts`), so there only a row
- * gone since is `removed`.
+ * gone since is `removed`. A removal its scope's user may not read
+ * (`denied`) stays a removal.
  */
 function decided(
   collection: BoundCollection,
@@ -189,6 +209,9 @@ function decided(
   pending: Pending,
   row: StorageRow | undefined,
 ): Pending {
+  if (pending.t === "removed" && pending.denied === true) {
+    return pending;
+  }
   if (collection.scope.kind !== "column") {
     return row === undefined && pending.t !== "removed"
       ? { t: "removed", id: pending.id }

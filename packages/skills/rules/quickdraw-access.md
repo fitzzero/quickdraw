@@ -215,10 +215,12 @@ collection scopes (through the collection's `anchor`), the rows the kits'
 `list`, `getMany`, `search` and bulk methods return or write, streams and
 channel `requires`.
 
-- Everyone who may open a collection scope sees every item in it, stripped
-  at the collection's `access` level (default `Read`). Per-row policies and
-  field tiers do not apply inside a collection: give the item service
-  `inherit` from the anchor, or use separate scopes.
+- Everyone who may open an anchored collection scope sees every item in it,
+  stripped at the collection's `access` level (default `Read`). Per-row
+  policies and field tiers do not apply inside an anchored scope: give the
+  item service `inherit` from the anchor, or use separate scopes. A self
+  scope (`scopeAccess: "self"`) is the exception: its items follow the item
+  service's policy, so its user gets only the rows they may read.
 - A hand-written method that reads many rows authorizes the parent
   (`{ scope: "Read", of: project, id: "projectId" }`) and filters by it, or
   uses the read/write kit's `list` or a collection, which filter by policy.

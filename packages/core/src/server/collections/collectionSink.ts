@@ -19,12 +19,16 @@
 //    visible, so every scope is sent, and what no scope could be named for
 //    (a removal without its scope, junction rows removed without values) is
 //    broadcast for the other nodes' subscribed scopes (`unnamed.ts`);
-// 5. read the items the remaining deltas need, in one query per collection,
-//    and send one `qd:c` frame per scope, which the resume buffer keeps. An
-//    indexed collection's `added` deltas carry index rows built from those
-//    items (`index.ts`). Behind a cluster adapter the same read also takes
-//    the rows of removals, and each delta is decided by its row as read
-//    then (`deltas.ts`): a write that committed first can flush last.
+// 5. in a self scope that follows its service's policy, check the deltas
+//    for the scope's user first, one batched lookup per scope: a row the
+//    user may not read goes out `removed`, and is never read
+//    (`selfAccess.ts`). Then read the items the remaining deltas need, in
+//    one query per collection, and send one `qd:c` frame per scope, which
+//    the resume buffer keeps. An indexed collection's `added` deltas carry
+//    index rows built from those items (`index.ts`). Behind a cluster
+//    adapter the same read also takes the rows of removals, and each delta
+//    is decided by its row as read then (`deltas.ts`): a write that
+//    committed first can flush last.
 //
 // A collection with no subscriber on this process (and rooms visible here)
 // skips steps 2 to 5 and reads nothing (`skipTouched`).
@@ -39,6 +43,7 @@ import type { WriteRecord } from "../uow/types";
 import type { BoundCollection, CollectionHub } from "./bind";
 import { buildDeltas, planScopes, readItems, type ScopePlan } from "./deltas";
 import { movesOf } from "./moves";
+import { denyUnreadable } from "./selfAccess";
 import { closeAnchors, resetTouched, sendFrame, skipTouched } from "./send";
 import { broadcastUnnamed, unnamedOf } from "./unnamed";
 
@@ -119,6 +124,7 @@ async function emitCollection(
       hub.collections.buffer.skip(plan.room, rev);
     }
   }
+  await denyUnreadable(hub, io, collection, sending);
   // Behind a cluster adapter, changes go out whole (frames of two nodes can arrive out of
   // order), decided by the rows read now; the rows of removals no scope could be named for
   // are read too, so the other nodes keep such a row where it is again.

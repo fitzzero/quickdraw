@@ -291,9 +291,11 @@ describe("qd:col:sub", () => {
     });
   });
 
-  it("answers a self scope for the subscriber's own user id only", async () => {
+  it("answers a self scope for the subscriber's own user id only, with the rows they may read", async () => {
     const { app } = await start();
-    const [mine] = await addTasks(h.prisma, board.p2, [4], { assigneeId: board.ada });
+    const [mine] = await addTasks(h.prisma, board.p1, [4], { assigneeId: board.ada });
+    // Assigned to ada in P2, which she cannot read: not hers to see (COLL-1).
+    await addTasks(h.prisma, board.p2, [5], { assigneeId: board.ada });
     const { connection } = await connect(app, as(board.ada));
     expect(await colSub(connection, "mine", board.ada)).toMatchObject({
       ok: true,

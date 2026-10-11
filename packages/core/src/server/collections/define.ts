@@ -9,7 +9,9 @@
 // contract needs one or the other, so a scope nobody could authorize fails
 // when the service is defined rather than when a client subscribes. A
 // `"self"` scope is stripped at `Read` and may not declare a higher
-// `access`, since no level is checked to subscribe to it. The
+// `access`, since no level is checked to subscribe to it; on a service with
+// a policy its items are the rows the policy gives its user at least `Read`
+// on (`selfAccess.ts`). The
 // index fields are checked here too, against the item projection only the
 // service compiles: a contract cannot see a schema's keys. No order column
 // may sit above the collection's `access` in the contract's `fields`, since
@@ -224,7 +226,8 @@ function checkIndexOrder(name: string, order: OrderBy, index: readonly string[],
  * scope is authorized by the subscriber's own user id, never by a level, so
  * its items are stripped at `Read` and it may not declare more: a higher
  * `access` would hand every subscriber that level's fields of the rows in
- * their own scope.
+ * their own scope. On a service with a policy its items are the rows the
+ * policy gives its user at least `Read` on (`selfAccess.ts`).
  */
 function accessOf(
   name: string,

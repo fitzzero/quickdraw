@@ -13,7 +13,10 @@
 // - a lookup that fails denies, as everywhere else.
 //
 // A changed `serviceAccess` re-authorizes every scope of the user's sockets.
-// 4.1 left this to a hand-written `kickFromCollection`
+// A self scope has no anchors, since its user may always open it; when its
+// items follow its service's policy, the same changes re-check them
+// (`selfAccess.ts`: a lost row is `removed`, or the scope resets). 4.1 left
+// this to a hand-written `kickFromCollection`
 // (4.1 `src/server/collections.ts:305-318`).
 
 import { SERVER_EVENTS } from "../../contract/names";
@@ -23,6 +26,7 @@ import type { QuickdrawServerSocket } from "../transports/types";
 import { authorizeScopes } from "./access";
 import type { BoundCollection, CollectionHub } from "./bind";
 import { roomOf, type ScopeSubscription } from "./scopes";
+import { recheckSelf, resetSelf } from "./selfAccess";
 
 type Found = ReadonlyMap<QuickdrawServerSocket, readonly ScopeSubscription[]>;
 
@@ -110,11 +114,17 @@ async function reauthorizeAll(hub: CollectionHub, found: Found): Promise<void> {
 /** The collection half of a dispatcher's revocation. */
 export function createScopeRevocation(hub: CollectionHub): RevocationHook {
   return Object.freeze({
-    changed: async (change) => await reauthorizeAll(hub, hub.collections.scopes.matching(change)),
-    regranted: async (sockets) =>
-      await reauthorizeAll(
-        hub,
-        new Map(sockets.map((socket) => [socket, hub.collections.scopes.entries(socket)])),
-      ),
+    changed: async (change) => {
+      await settleAll([
+        reauthorizeAll(hub, hub.collections.scopes.matching(change)),
+        recheckSelf(hub, change),
+      ]);
+    },
+    regranted: async (sockets) => {
+      const found = new Map(
+        sockets.map((socket) => [socket, hub.collections.scopes.entries(socket)]),
+      );
+      await settleAll([reauthorizeAll(hub, found), resetSelf(hub, sockets)]);
+    },
   } satisfies RevocationHook);
 }

@@ -17,29 +17,33 @@
 // 6. settle the races: an access change while the subscribe ran authorizes
 //    again (a denied scope leaves its room), and a flush that changed the
 //    scope after the revision (its frame may have gone out before the join)
-//    reads the page again, at a newer revision. Then, while access keeps
-//    changing, the scope is authorized again, at most `MAX_RECHECKS` times,
-//    and refused when its anchors were still moving. A subscription the
-//    subscribe recorded and revocation ended meanwhile is `FORBIDDEN`.
+//    reads the page again, at a newer revision. So does any access change
+//    in a self scope whose items follow its service's policy (`selfAccess.ts`):
+//    the page was filtered before the change, which found no subscription
+//    to re-check. Then, while access keeps changing, the scope is
+//    authorized again, at most `MAX_RECHECKS` times, and refused when its
+//    anchors were still moving. A subscription the subscribe recorded and
+//    revocation ended meanwhile is `FORBIDDEN`.
+//
+// Every page of a self scope on a service with a policy, cursor pages too,
+// is filtered by that policy for the subscriber (`selfAccess.ts`).
 
-import type { CollectionSubscribeReply, Revision } from "../../protocol/envelope";
+import type {
+  CollectionSnapshot,
+  CollectionSubscribeReply,
+  Revision,
+} from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
 import { usableChangeLog } from "../emit/hub";
 import { MAX_RECHECKS } from "../emit/subscribe";
 import { currentRev, nextRev } from "../rev";
 import type { QuickdrawServerSocket } from "../transports/types";
-import { authorizeScopes } from "./access";
+import { authorizeScopes, followsPolicy, itemsWhere } from "./access";
 import type { BoundCollection, CollectionHub } from "./bind";
-import { groupOf, roomOf, type ScopeSubscription } from "./scopes";
-import { readPage, type PageRequest } from "./snapshot";
+import { groupOf, roomOf, type ScopeRequest, type ScopeSubscription } from "./scopes";
+import { readPage } from "./snapshot";
 
-/** A `qd:col:sub` frame, read. */
-export interface ScopeRequest extends PageRequest {
-  readonly s: string;
-  readonly c: string;
-  /** The revision the client holds the scope at. */
-  readonly since?: Revision;
-}
+export type { ScopeRequest } from "./scopes";
 
 interface Attempt {
   readonly hub: CollectionHub;
@@ -192,12 +196,42 @@ async function changedSince(attempt: Attempt, rev: Revision): Promise<Revision |
     : undefined;
 }
 
+/** A page of the scope at `rev`, filtered by the item service's policy in a self scope that follows it. */
+async function pageOf(attempt: Attempt, rev: Revision): Promise<CollectionSnapshot> {
+  const { hub, storage, collection, request, principal } = attempt;
+  return await readPage(
+    storage,
+    collection,
+    request,
+    rev,
+    await itemsWhere(hub, collection, principal),
+  );
+}
+
+/**
+ * Step 6: the revision to read the page again at, or `undefined`: a flush
+ * changed the scope after `rev` (`changedSince`), or, in a self scope that
+ * follows its service's policy, access changed since `accessAt`.
+ */
+async function rereadAt(
+  attempt: Attempt,
+  rev: Revision,
+  accessAt: number,
+): Promise<Revision | undefined> {
+  const changed = await changedSince(attempt, rev);
+  if (changed !== undefined) {
+    return changed;
+  }
+  const moved = attempt.hub.subscriptions.accessChanges !== accessAt;
+  return moved && followsPolicy(attempt.collection) ? await pageRev(attempt) : undefined;
+}
+
 /** Steps 4 to 6. */
 async function answer(
   attempt: Attempt,
   anchors: readonly string[],
 ): Promise<CollectionSubscribeReply> {
-  const { hub, storage, collection, request, room } = attempt;
+  const { hub, request, room } = attempt;
   const group = groupOf(request.s, request.c);
   if (request.since !== undefined && usableChangeLog(hub) !== undefined) {
     join(attempt, anchors);
@@ -208,14 +242,15 @@ async function answer(
       return { ok: true, resumed: true, rev: replay.rev, deltas: replay.deltas };
     }
   }
+  const accessAt = hub.subscriptions.accessChanges;
   const claimed = pageRev(attempt);
   const rev = typeof claimed === "number" ? claimed : await claimed;
-  let page = await readPage(storage, collection, request, rev);
+  let page = await pageOf(attempt, rev);
   join(attempt, anchors);
   await recheckAccess(attempt);
-  const again = attempt.record === undefined ? undefined : await changedSince(attempt, rev);
+  const again = attempt.record === undefined ? undefined : await rereadAt(attempt, rev, accessAt);
   if (again !== undefined) {
-    page = await readPage(storage, collection, request, again);
+    page = await pageOf(attempt, again);
   }
   await settleRaces(attempt);
   return page;
@@ -259,7 +294,7 @@ export async function subscribeScope(
       throw forbidden();
     }
     if (request.cursor !== undefined) {
-      return await readPage(storage, collection, request, await pageRev(attempt));
+      return await pageOf(attempt, await pageRev(attempt));
     }
     return await answer(attempt, anchors);
   } catch (error) {

@@ -1127,7 +1127,7 @@ export const taskService = qd.defineService(task, {
   collections: {
     // Read on the project opens its scope
     byProject: { anchor: projectContract },
-    // a user opens only the scope that is their id
+    // a user opens only the scope that is their id; its items still follow access above
     assigned: { scopeAccess: "self" },
   },
   // opens the service topic to Read grants; closed without it
@@ -1151,13 +1151,18 @@ export const taskService = qd.defineService(task, {
   deltas to it (`added`, `updated`, `patched`, `removed`, or `reset` for more
   than `bulkThreshold` rows, default 200). A `"self"` scope is the
   subscriber's own user id: its items are stripped at `Read`, and it may not
-  declare a higher `access`.
-- Items are visible to everyone in the scope: no per-row policy or field
-  tier applies inside a collection. Derive the item service's own access
-  from the anchor (`inherit` from it, as above): a per-row policy on the item
-  service (an owner column, a row's access list) is not applied to
-  collection items, so a row it would hide still reaches everyone in its
-  scope.
+  declare a higher `access`. On a service with an access policy its items
+  still follow that policy: a page, `qd:col:items` and every flush hold only
+  the rows its user may read at `Read`. A row the user loses goes out
+  `removed`, and a change to their membership of a parent row (or a reload
+  of their grants) sends `reset`, so the list loads again.
+- Items are visible to everyone in an anchored scope: no per-row policy or
+  field tier applies inside it. Derive the item service's own access from
+  the anchor (`inherit` from it, as above): a per-row policy on the item
+  service (an owner column, a row's access list) is not applied to an
+  anchored scope's items, so a row it would hide still reaches everyone in
+  its scope. A `"self"` scope is the exception: its items follow the item
+  service's policy for its user.
 - `index` sends one small row per member (`[id, rev, ...fields]`, up to
   50,000) with the first page, so the client knows the whole membership and
   order at once; `views` are pure predicates over index rows the client runs.

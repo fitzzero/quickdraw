@@ -195,8 +195,10 @@ in `id`), and optionally `where`, `limit`, `maxLimit`, `index` (small fields
 sent for the whole scope), `views` (`(row, who) => boolean` over index rows)
 and `access`. The service says who may open a scope: `{ anchor: project }`
 (the level on the row the scope value names) or `{ scopeAccess: "self" }`
-(the subscriber's own user id). Everyone in a scope sees every item, so
-derive the item service's access from the anchor (`inherit`). An item that
+(the subscriber's own user id). Everyone in an anchored scope sees every
+item, so derive the item service's access from the anchor (`inherit`); a
+self scope's items follow the item service's policy, so its user gets only
+the rows they may read. An item that
 reads its `via` junction (a member count) declares
 `via({ model, entry, scope, refreshEntry: true })`, or the count goes stale
 in every scope but the one a membership write links.

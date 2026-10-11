@@ -322,6 +322,31 @@ describe("races with a subscribe", () => {
     expect(inRoom(app, "byProject", board.p1)).toBe(0);
   });
 
+  it("reads a self scope's page again when access changed while it ran", async () => {
+    await h.prisma.task.update({ where: { id: board.t1 }, data: { assigneeId: board.cy } });
+    // cy reads P2 too, so the page read again is a read, not a filter that matches nothing.
+    await h.prisma.project.update({
+      where: { id: board.p2 },
+      data: { acl: [{ userId: board.cy, level: "Read" }] },
+    });
+    let appRef: App | undefined;
+    const { app, reads } = await start({
+      after: holdPageRead(
+        async () =>
+          await appRef
+            ?.as(as(board.ada))
+            .projectService.removeMember({ projectId: board.p1, userId: board.cy }),
+      ),
+    });
+    appRef = app;
+    const member = await connect(app, as(board.cy));
+    expect(await colSub(member.connection, "mine", board.cy)).toMatchObject({
+      ok: true,
+      items: [],
+    });
+    expect(reads.filter(isPageRead)).toHaveLength(2);
+  });
+
   it("reads the page again when a flush changed the scope after its revision", async () => {
     let appRef: App | undefined;
     const { app, reads } = await start({

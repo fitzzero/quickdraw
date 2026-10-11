@@ -306,7 +306,8 @@ export interface ServiceDefinition<
    * section 7.1): `{ anchor: contract }`, the contract whose rows the scope
    * values are ids of, or `{ scopeAccess: "self" }` for a scope that is the
    * subscriber's user id; plus `bulkThreshold`. Required when the contract
-   * declares collections. Needs `model`.
+   * declares collections. Needs `model`. A self scope's items still follow
+   * the service's `access` policy, when it has one.
    */
   readonly collections?: CollectionOptions<C>;
   /**

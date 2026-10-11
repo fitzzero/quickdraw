@@ -7,9 +7,12 @@
 //
 // `qd:col:items` (section 7.4) loads items by id: a client holding a scope's
 // index asks for the members it shows. The read applies the scope and
-// `where`, so an id that is not a member is simply absent from the answer.
+// `where`, and in a self scope on a service with a policy the policy's
+// filter for the subscriber (`selfAccess.ts`), so an id that is not a member
+// the subscriber may read is simply absent from the answer.
 
 import type { Revision } from "../../protocol/envelope";
+import type { AccessFilter } from "../access/policy";
 import { pickKeys, projectRow } from "../emit/projection";
 import { strip } from "../emit/tiers";
 import type { StorageAdapter, StorageRow, StorageWhere } from "../storage";
@@ -97,6 +100,23 @@ export function selectWith(
 }
 
 /**
+ * A scope's members filter with an access filter ANDed in; `undefined` when
+ * there are no members or no member is readable (`"none"`). An empty filter
+ * (`{}`, every row) adds nothing.
+ */
+export function readableMembers(
+  members: StorageWhere | undefined,
+  filter: AccessFilter | undefined,
+): StorageWhere | undefined {
+  if (members === undefined || filter === "none") {
+    return undefined;
+  }
+  return filter === undefined || Object.keys(filter).length === 0
+    ? members
+    : { AND: [members, filter] };
+}
+
+/**
  * The filter matching the members of `scope` among `ids`: its scope column,
  * or the ids among them its `via` junction links to it, and `where`.
  * `undefined` when none can be a member.
@@ -126,7 +146,8 @@ async function membersAmong(
  * The items of the members of `scope` among `ids`, in the order of `ids`,
  * each once, and the revision they were read at (`rev`, claimed before the
  * first read): one read for a column scope, two for a `via` scope (its
- * links among `ids`, then the rows). An id that is not a member is left out.
+ * links among `ids`, then the rows). An id that is not a member is left out,
+ * and so is a row `filter` does not match (`"none"`: every row).
  */
 export async function readItemsById(
   storage: StorageAdapter,
@@ -134,10 +155,15 @@ export async function readItemsById(
   scope: string,
   ids: readonly string[],
   rev: Revision,
+  filter?: AccessFilter,
 ): Promise<{ readonly rev: Revision; readonly items: unknown[] }> {
   const wanted = [...new Set(ids)];
-  const members =
-    wanted.length === 0 ? undefined : await membersAmong(storage, collection, scope, wanted);
+  const members = readableMembers(
+    wanted.length === 0 || filter === "none"
+      ? undefined
+      : await membersAmong(storage, collection, scope, wanted),
+    filter,
+  );
   if (members === undefined) {
     return { rev, items: [] };
   }
