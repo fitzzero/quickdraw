@@ -5,6 +5,7 @@
 // spreads into `defineService`'s `methods`, which checks each form against
 // what the service declares (an `entry` form needs its access policy).
 
+import type { AccessLevel } from "../../../contract/access";
 import type { AnyContract } from "../../../contract/defineContract";
 import type { MethodName, ParsedInputOf } from "../../../contract/infer";
 import type { CrudMethodName, CrudSpec } from "../../../contract/kits/crud";
@@ -57,7 +58,11 @@ export interface CrudHandlersOptions<C extends AnyContract, A, Db = unknown> {
    * Who may call each of the kit's methods: one form per method, required.
    * `get`, `update`, `delete` and `reorder` take `{ entry: L }` to check the
    * row; the methods on many rows also keep only the rows the service's
-   * policy gives the caller at the form's level.
+   * policy gives the caller at the form's level. A bulk method whose form
+   * names no level takes its single-row counterpart's row level (`delete`'s
+   * for `bulkDelete`, `update`'s for `bulkUpdate`); give
+   * `{ entry: L, id: "ids" }` to refuse the whole call instead of skipping
+   * rows.
    */
   readonly access: A & NoInfer<NotAKitMethod<C, A>>;
   /**
@@ -105,4 +110,10 @@ export interface MethodContext {
   /** The projection a `list`'s items are. */
   readonly projection: string;
   readonly prepare: AnyPrepare | undefined;
+  /**
+   * The row level a bulk method needs when its own form names none: its
+   * single-row counterpart's (`delete` for `bulkDelete`, `update` for
+   * `bulkUpdate`), else `Moderate`.
+   */
+  readonly bulkLevel: AccessLevel;
 }

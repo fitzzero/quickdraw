@@ -99,6 +99,21 @@ All notable changes to this project will be documented in this file.
   load; behind a cluster, a node without the owner's socket decides without
   the owner's service-wide grants; a regained row comes back at its next
   change or the list's next load.
+- **The read/write kit's bulk methods take their single-row level.** A
+  bulk method whose form names no level (`"authenticated"`, `"public"`,
+  `{ service }`, `custom`) now skips the rows below the row level of
+  `delete`'s form (`bulkDelete`) or `update`'s (`bulkUpdate`), not only
+  those below `Moderate`. The README sample's `bulkDelete` is
+  `{ entry: "Admin", id: "ids" }`, which refuses the whole call (an empty
+  `ids` is `FORBIDDEN`), and its `archive` is `Moderate`.
+- **An owner column an anchored collection scopes by stays read-only.**
+  Without a service-wide Admin grant, a kit write may not set a column the
+  policy reads even when a collection is anchored by it: set it in
+  `prepare` on create.
+- **Membership columns are read-only through the kits.** A membership
+  table's entry, user and role columns that any policy reads are refused
+  in the read/write kit's `create` input and writes and in the admin kit's
+  writes without a service-wide Admin grant: use the sharing kit.
 
 ### Security
 
@@ -183,6 +198,18 @@ All notable changes to this project will be documented in this file.
   its project kept reaching them, title and all, and no access change ever
   reached a self subscription. Its reads and frames now follow the item
   service's policy.
+- **A bulk delete no longer deletes rows `delete` refuses (CRUD-2).** The
+  README's map paired `delete: { entry: "Admin" }` with
+  `bulkDelete: "authenticated"`, which wrote at `Moderate`: a member
+  deleted Admin-only rows in bulk. Bulk methods now take their
+  counterpart's row level.
+- **A member can no longer make themself a row's owner (CRUD-3).** An
+  owner column that an anchored collection also scoped by (`assigneeId`,
+  a `jsonAcl` owner) was only checked as an anchor move, so a member set
+  it to themself and became the row's Admin, or took over a project.
+- **A member can no longer raise their own role through a kit (CRUD-7).**
+  The kits locked only the written service's policy columns, so crud on a
+  membership table set the caller's own role to `Admin`.
 - **MIGRATION no longer trusts a proxy unconditionally (CLIENT-6).** Its
   `app.set("trust proxy", 1)` let a client without a proxy in front pick its
   own `X-Forwarded-For`, and pass every per-IP limiter; it reads

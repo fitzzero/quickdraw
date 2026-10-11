@@ -134,6 +134,7 @@ export function contextFor(
     dispatch,
     kit: {
       service: target.service,
+      services: settings.registry.services,
       access: settings.policies,
       storage: settings.storage,
       occupancy: settings.live.occupancy,

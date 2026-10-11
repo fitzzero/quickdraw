@@ -184,6 +184,12 @@ export type ContextExtender = (base: AnyContext) => object;
  */
 export interface KitRuntime {
   readonly service: AnyService;
+  /**
+   * Every service of the dispatcher, by name: the kits lock the columns of a
+   * membership table that any of their policies reads. Absent on a context
+   * built by hand.
+   */
+  readonly services?: ReadonlyMap<string, AnyService>;
   /** `dispatcher.access`, and `resolve` for levels without service grants (a collection scope's). */
   readonly access: DispatcherAccess & Pick<PolicyEngine, "resolve">;
   readonly storage: StorageAdapter | undefined;

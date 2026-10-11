@@ -9,7 +9,9 @@
 // every row, as everywhere.
 //
 // The row level is the form's own (`{ entry: L }` or `{ scope: L }`), or
-// else `Read` for reads and `Moderate` for writes. A `"public"` read's rows
+// else `Read` for reads and `Moderate` for writes; a bulk method's is its
+// single-row counterpart's (`delete`'s for `bulkDelete`, `update`'s for
+// `bulkUpdate`) before `Moderate`. A `"public"` read's rows
 // are public; a write always needs the level, so an anonymous caller writes
 // nothing, and a write on one row needs it on that row whatever its form
 // (`checkRowWrite`); `create` needs it on each anchor row its new row names

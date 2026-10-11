@@ -15,7 +15,15 @@
 //   deeper.
 // - Locked columns (`checkLockedColumns`): a column the service's policy
 //   reads (an owner column, an access list) is read-only, and on `create`
-//   comes only from the kit's `prepare`.
+//   comes only from the kit's `prepare`, even when an anchored collection
+//   also scopes by it: checked as an anchor move only, `assigneeId` under
+//   `anyOf(owner("assigneeId"), inherit(...))` beside an `assigned`
+//   collection anchored on users made a member the row's owner (CRUD-3).
+//   Only an `inherit` policy's `via` columns leave the locked set. A
+//   membership table's entry, user and level columns are read-only on that
+//   table whichever bound policy reads them (`members`, alone, in `anyOf`
+//   or a resolver's `reads`): crud on the table raised a member's own role
+//   (CRUD-7). They change through the sharing kit.
 // - Anchor columns (`checkAnchorColumns`): a column that places the row
 //   under an anchor row (an `inherit` policy's `via`, an anchored
 //   collection's scope column) may name only an anchor row on which the
@@ -40,6 +48,7 @@ import { QuickdrawError } from "../../protocol/errors";
 import { meetsLevel, serviceGrant } from "../access/levels";
 import type { KitRuntime } from "../context";
 import type { AnyService } from "../service";
+import { modelKey } from "../storage";
 import type { Principal } from "../types";
 
 /** A column whose value is the id of an anchor row, and the service that row belongs to. */
@@ -70,9 +79,45 @@ function guardedColumns(service: AnyService): GuardedColumns {
       add(collection.scope.column, collection.anchor.name);
     }
   }
-  const moving = new Set([...anchors.values()].map(({ column }) => column));
-  const locked = (reads?.columns ?? []).filter((column) => column !== "id" && !moving.has(column));
+  // Only an inherit parent's column moves the row; any other column the policy reads stays locked.
+  const parents = new Set((reads?.parents ?? []).map(({ via }) => via));
+  const locked = (reads?.columns ?? []).filter((column) => column !== "id" && !parents.has(column));
   return { locked: new Set(locked), anchors: [...anchors.values()] };
+}
+
+const MEMBERSHIPS = new WeakMap<object, Map<string, ReadonlyMap<string, string>>>();
+
+/**
+ * The columns of `model` that hold memberships a policy of `services` reads
+ * (each membership's entry, user and level column), with the service whose
+ * policy reads each. Found once per dispatcher's services and model.
+ */
+export function membershipColumnsOf(
+  services: ReadonlyMap<string, AnyService>,
+  model: string,
+): ReadonlyMap<string, string> {
+  const byModel = MEMBERSHIPS.get(services) ?? new Map<string, ReadonlyMap<string, string>>();
+  MEMBERSHIPS.set(services, byModel);
+  const key = modelKey(model);
+  const kept = byModel.get(key);
+  if (kept !== undefined) {
+    return kept;
+  }
+  const columns = new Map<string, string>();
+  for (const service of services.values()) {
+    for (const read of service.access?.reads.memberships ?? []) {
+      if (modelKey(read.model) !== key) {
+        continue;
+      }
+      for (const column of [read.entry, read.user, read.level]) {
+        if (!columns.has(column)) {
+          columns.set(column, service.name);
+        }
+      }
+    }
+  }
+  byModel.set(key, columns);
+  return columns;
 }
 
 function forbidden(message: string): QuickdrawError {
@@ -96,12 +141,28 @@ function namedColumns(data: Readonly<Record<string, unknown>>): Set<string> {
   return new Set(Object.keys(data).filter((column) => data[column] !== undefined));
 }
 
+/** The membership column of the service's model `columns` names first, with the service that reads it. */
+function membershipNamed(
+  runtime: Pick<KitRuntime, "service" | "services">,
+  columns: readonly string[],
+): readonly [string, string] | undefined {
+  const { service, services } = runtime;
+  if (services === undefined || service.model === undefined) {
+    return undefined;
+  }
+  const memberships = membershipColumnsOf(services, service.model);
+  const column = columns.find((named) => memberships.has(named));
+  return column === undefined ? undefined : [column, memberships.get(column) ?? service.name];
+}
+
 /**
  * `FORBIDDEN` when `data` gives a value to a column the service's policy
- * reads, unless the caller holds a service-wide `Admin` grant.
+ * reads, or to a membership column of the service's model that any policy
+ * of the dispatcher reads, unless the caller holds a service-wide `Admin`
+ * grant.
  */
 export function checkLockedColumns(
-  runtime: Pick<KitRuntime, "service">,
+  runtime: Pick<KitRuntime, "service" | "services">,
   principal: Principal | null,
   data: Readonly<Record<string, unknown>>,
   options: ColumnCheckOptions = {},
@@ -111,15 +172,25 @@ export function checkLockedColumns(
     return;
   }
   const { locked } = guardedColumns(service);
-  const readOnly = [...namedColumns(data)].find((column) => locked.has(column));
-  if (readOnly === undefined) {
-    return;
+  const named = [...namedColumns(data)];
+  const readOnly = named.find((column) => locked.has(column));
+  const creating = options.creating === true;
+  if (readOnly !== undefined) {
+    throw forbidden(
+      creating
+        ? `"${readOnly}" decides who may reach rows of ${service.name}: only a service-wide Admin may send it; set it in the kit's prepare`
+        : `"${readOnly}" decides who may reach rows of ${service.name}: only a service-wide Admin may change it`,
+    );
   }
-  throw forbidden(
-    options.creating === true
-      ? `"${readOnly}" decides who may reach rows of ${service.name}: only a service-wide Admin may send it; set it in the kit's prepare`
-      : `"${readOnly}" decides who may reach rows of ${service.name}: only a service-wide Admin may change it`,
-  );
+  const membership = membershipNamed(runtime, named);
+  if (membership !== undefined) {
+    const [column, reader] = membership;
+    throw forbidden(
+      creating
+        ? `"${column}" holds a membership in ${reader}'s policy: only a service-wide Admin may send it through a kit; add members with the sharing kit`
+        : `"${column}" holds a membership in ${reader}'s policy: only a service-wide Admin may change it through a kit; change memberships with the sharing kit`,
+    );
+  }
 }
 
 /**
@@ -266,7 +337,7 @@ export function checkColumnValues(
  * `path` goes before each key of an issue (`["data"]`).
  */
 export async function checkWritableColumns(
-  runtime: Pick<KitRuntime, "service" | "access">,
+  runtime: Pick<KitRuntime, "service" | "access" | "services">,
   principal: Principal | null,
   data: Readonly<Record<string, unknown>>,
   level: AccessLevel,

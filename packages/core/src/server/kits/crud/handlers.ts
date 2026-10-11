@@ -40,10 +40,10 @@ import {
   type AnyService,
 } from "../../service";
 import { kitEntry, rowlessMethods } from "../rowless";
-import { everyRowProblem } from "./access";
+import { everyRowProblem, rowLevel } from "./access";
 import type { AnyPrepare } from "./create";
 import { handlerOf } from "./methods";
-import type { CrudAccess, CrudHandlersOptions, CrudImplementations } from "./types";
+import type { CrudAccess, CrudHandlersOptions, CrudImplementations, MethodContext } from "./types";
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
@@ -160,6 +160,28 @@ const CHECKS_ROWS: ReadonlySet<CrudSpec["method"]> = new Set([
  */
 const CALLER_DEPENDENT: ReadonlySet<CrudSpec["method"]> = new Set(["list", "getMany"]);
 
+/** The single-row method whose row level each bulk method takes when its own form names none. */
+const COUNTERPARTS = { bulkDelete: "delete", bulkUpdate: "update" } as const;
+
+/**
+ * The row level `spec`'s method falls back to when its form names none: a
+ * bulk method's counterpart's (the 5.1 audit's CRUD-2: `bulkDelete` under
+ * `"authenticated"` beside `delete: { entry: "Admin" }` deleted Admin-only
+ * rows at `Moderate`), else `Moderate`.
+ */
+function bulkLevelOf(
+  kit: readonly (readonly [string, CrudSpec])[],
+  access: Readonly<Record<string, unknown>>,
+  spec: CrudSpec,
+): MethodContext["bulkLevel"] {
+  const counterpart =
+    spec.method === "bulkDelete" || spec.method === "bulkUpdate"
+      ? COUNTERPARTS[spec.method]
+      : undefined;
+  const found = kit.find(([, other]) => other.method === counterpart);
+  return found === undefined ? "Moderate" : rowLevel(access[found[0]] as AccessForm, "Moderate");
+}
+
 const OPTION_KEYS: readonly string[] = ["access", "prepare", "rowless"];
 
 /** Why a service cannot run the kit's method `name`, made for `contract` with `form`. */
@@ -198,7 +220,8 @@ function handlers<C extends AnyContract, const A extends CrudAccess<C>, Db = unk
   for (const [name, spec] of kit) {
     const form = access[name] as AccessForm;
     const projection = spec.method === "list" ? itemProjection(contract, spec) : "entity";
-    const handler = handlerOf({ spec, form, projection, prepare });
+    const bulkLevel = bulkLevelOf(kit, access, spec);
+    const handler = handlerOf({ spec, form, projection, prepare, bulkLevel });
     checkWhenDefined(handler, (service) => serviceProblem(service, contract, [name, spec], form));
     if (CHECKS_ROWS.has(spec.method)) {
       checksRowsItself(handler);
