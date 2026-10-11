@@ -4,9 +4,18 @@
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineContract, query } from "../index";
+import { defineContract, query, todoSchema } from "../index";
 import { z as z3 } from "zod3";
-import { project, qd, task, taskDefaults, taskRow, taskSchema } from "./__tests__/fixtures";
+import {
+  project,
+  qd,
+  task,
+  taskDefaults,
+  taskRow,
+  taskSchema,
+  type AppPrincipal,
+  type FakeDb,
+} from "./__tests__/fixtures";
 import { custom, inherit, initQuickdraw, owner, type AnyService } from "./index";
 import { createRegistry } from "./registry";
 
@@ -351,6 +360,39 @@ describe("the rowless check", () => {
     ).not.toThrow();
   });
 
+  it("reads a todoSchema's keys, so a keyed placeholder is refused like Zod 4 and a keyless one is not", () => {
+    /** Defines a task service whose `get` takes `input` under `"authenticated"`. */
+    const defineWith = (input: Parameters<typeof query>[0]["input"]) => () =>
+      defineLoosely(
+        defineContract("taskService", {
+          entity: taskSchema,
+          methods: { get: query({ input, output: "entity" }) },
+        }),
+        {
+          model: "task",
+          access: policy,
+          methods: { get: { access: "authenticated", handler: () => taskRow() } },
+        },
+      );
+    /** The message `define` throws, or undefined when it defines the service. */
+    const refusalOf = (define: () => unknown): string | undefined => {
+      try {
+        define();
+      } catch (error) {
+        return (error as Error).message;
+      }
+      return undefined;
+    };
+    const zod4 = refusalOf(defineWith(z.object({ id: z.string() })));
+    expect(zod4).toContain(`method "get" ${refusal}`);
+    expect(refusalOf(defineWith(todoSchema<{ id: string }>({ keys: ["id"] })))).toBe(zod4);
+    expect(
+      refusalOf(defineWith(todoSchema<{ id: string; name: string }>({ keys: ["id", "name"] }))),
+    ).toBe(zod4);
+    expect(refusalOf(defineWith(todoSchema<{ id: string }>()))).toBeUndefined();
+    expect(refusalOf(defineWith(todoSchema<{ id: string }>({ keys: [] })))).toBeUndefined();
+  });
+
   it("stores rowless on the method, and takes only a boolean", () => {
     const service = withEntry("rename", {
       access: "authenticated",
@@ -362,6 +404,94 @@ describe("the rowless check", () => {
     expect(
       withEntry("rename", { access: "authenticated", rowless: "yes", handler: () => 0 }),
     ).toThrow('method "rename": rowless must be true, or left out');
+  });
+});
+
+describe("principal kinds", () => {
+  /** An instance whose services admit only `kinds` by default. */
+  const admitting = (kinds: readonly string[]) =>
+    initQuickdraw<{ db: FakeDb; principal: AppPrincipal }>({
+      kinds: kinds as AppPrincipal["kind"][],
+    });
+  /** Calls `instance.defineService` the way untyped JavaScript would. */
+  const defineOn = (instance: ReturnType<typeof admitting>, definition: unknown) =>
+    (instance.defineService as unknown as (contract: unknown, definition: unknown) => AnyService)(
+      task,
+      definition,
+    );
+  const rename = (kinds: unknown) => ({ ...taskDefaults.rename, kinds });
+
+  it("gives each method its own kinds, else its service's, else the app's, and none by default", () => {
+    const open = qd.defineService(task, { methods: taskDefaults });
+    expect(open.kinds).toBeUndefined();
+    expect(open.methods.rename?.kinds).toBeUndefined();
+    const app = admitting(["user", "agent"]);
+    const byApp = app.defineService(task, {
+      methods: { ...taskDefaults, rename: { ...taskDefaults.rename, kinds: ["user"] } },
+    });
+    expect(byApp.kinds).toEqual(["user", "agent"]);
+    expect(byApp.methods.count?.kinds).toEqual(["user", "agent"]);
+    expect(byApp.methods.rename?.kinds).toEqual(["user"]);
+    const byService = app.defineService(task, { kinds: ["agent"], methods: taskDefaults });
+    expect(byService.kinds).toEqual(["agent"]);
+    expect(byService.methods.rename?.kinds).toEqual(["agent"]);
+    // A public method keeps the service's list: it holds for signed-in callers.
+    expect(byService.methods.get?.kinds).toEqual(["agent"]);
+    const repeated = qd.defineService(task, { kinds: ["user", "user"], methods: taskDefaults });
+    expect(repeated.kinds).toEqual(["user"]);
+    expect(Object.isFrozen(repeated.kinds)).toBe(true);
+  });
+
+  it("refuses a list that is empty or holds anything but kind names, at every level", () => {
+    const message = "kinds must be a non-empty list of principal kinds (strings)";
+    for (const kinds of [[], [""], ["user", 1], "user", { user: true }, null]) {
+      const label = JSON.stringify(kinds);
+      expect(() => defineLoosely(task, { kinds, methods: taskDefaults }), label).toThrow(
+        `defineService("taskService"): ${message}`,
+      );
+      expect(() => defineLoosely(task, withMethod("rename", rename(kinds))), label).toThrow(
+        `defineService("taskService"): method "rename": ${message}`,
+      );
+      const init = initQuickdraw as unknown as (options: unknown) => unknown;
+      expect(() => init({ kinds }), label).toThrow(`initQuickdraw: ${message}`);
+    }
+  });
+
+  it("refuses a list wider than the one above it, naming that list", () => {
+    const app = admitting(["user", "agent"]);
+    expect(() => defineOn(app, { kinds: ["user", "runner"], methods: taskDefaults })).toThrow(
+      `defineService("taskService"): kinds may only narrow the kinds initQuickdraw admits (user, agent), and "runner" is not one of them`,
+    );
+    expect(() =>
+      defineOn(app, { kinds: ["user"], methods: { ...taskDefaults, rename: rename(["agent"]) } }),
+    ).toThrow(
+      `defineService("taskService"): method "rename": kinds may only narrow the kinds its service admits (user), and "agent" is not one of them`,
+    );
+    expect(() =>
+      defineOn(admitting(["user"]), { methods: { ...taskDefaults, rename: rename(["agent"]) } }),
+    ).toThrow(
+      `method "rename": kinds may only narrow the kinds its service admits (user), and "agent" is not one of them`,
+    );
+    expect(() =>
+      defineOn(app, { kinds: ["agent"], methods: { ...taskDefaults, rename: rename(["agent"]) } }),
+    ).not.toThrow();
+  });
+
+  it("refuses kinds on a public method, which a refused caller would call signed out", () => {
+    expect(() =>
+      defineLoosely(
+        task,
+        withMethod("count", { access: "public", kinds: ["user"], handler: () => 0 }),
+      ),
+    ).toThrow(
+      'method "count" is "public", so kinds cannot narrow who may call it: a caller of a kind it left out would call it signed out',
+    );
+    expect(() =>
+      defineLoosely(
+        task,
+        withMethod("count", { access: "authenticated", kinds: ["user"], handler: () => 0 }),
+      ),
+    ).not.toThrow();
   });
 });
 

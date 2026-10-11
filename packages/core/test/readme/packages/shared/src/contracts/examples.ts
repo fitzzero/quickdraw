@@ -16,18 +16,38 @@ const labelSchema = z.object({ id: z.string(), projectId: z.string(), name: z.st
 
 // #region outputs
 export const labelContract = defineContract("labelService", {
+  describe: "Labels a project puts on its tasks.",
   entity: labelSchema,
   projections: { chip: z.object({ id: z.string(), name: z.string() }) },
   methods: {
-    find: query({ input: z.object({ name: z.string() }), output: nullable("entity") }),
-    chips: query({ input: z.object({ projectId: z.string() }), output: listOf("chip") }),
-    usage: query({ input: z.undefined(), output: z.record(z.string(), z.number()) }),
+    find: query({
+      input: z.object({ name: z.string() }),
+      output: nullable("entity"),
+      describe: "Finds a label by its name, or null.",
+    }),
+    chips: query({
+      input: z.object({ projectId: z.string() }),
+      output: listOf("chip"),
+      describe: "Lists a project's labels as chips.",
+    }),
+    usage: query({
+      input: z.undefined(),
+      output: z.record(z.string(), z.number()),
+      describe: "Counts the tasks of each label.",
+    }),
   },
 });
 
 // No entity: an RPC-only service, with no projections, field tiers or collections.
 export const healthContract = defineContract("healthService", {
-  methods: { ping: query({ input: z.undefined(), output: z.literal("pong") }) },
+  describe: "Tells a caller the server is up.",
+  methods: {
+    ping: query({
+      input: z.undefined(),
+      output: z.literal("pong"),
+      describe: "Answers pong while the server runs.",
+    }),
+  },
 });
 // #endregion
 

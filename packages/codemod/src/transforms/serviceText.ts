@@ -7,7 +7,7 @@ import type { MethodEntry } from "../handlers";
 import { markerText } from "../markers";
 import type { ServiceModel } from "../model";
 import type { MethodPlan, ServicePlan } from "../plan";
-import { lowerFirst, quote } from "../text";
+import { listText, lowerFirst, quote } from "../text";
 
 /** The service object's name: `ProjectService` gives `projectService`. */
 export function serviceVar(service: ServiceModel): string {
@@ -90,10 +90,20 @@ export function defineServiceText(
   ].join("\n");
 }
 
+/**
+ * What the marker above a `registerX(service)` function (or an aggregator)
+ * that also did other work says; `removed` names its calls of converted
+ * functions, which the run removed.
+ */
+export function registerLeftoverMessage(name: string, removed: readonly string[] = []): string {
+  const calls =
+    removed.length === 0
+      ? ""
+      : ` (the codemod removed its ${removed.length === 1 ? "call" : "calls"} of ${listText(removed)}, whose methods the service lists now)`;
+  return `${name} also did more than register methods${calls}: a service object is not passed around any more; move what still matters, then delete it`;
+}
+
 /** The marker above a `registerX(service)` function that also did other work. */
-export function registerLeftoverMarker(name: string): string {
-  return markerText(
-    "this",
-    `${name} also did more than register methods: a service object is not passed around any more; move what still matters, then delete it`,
-  );
+export function registerLeftoverMarker(name: string, removed: readonly string[] = []): string {
+  return markerText("this", registerLeftoverMessage(name, removed));
 }

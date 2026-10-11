@@ -14,7 +14,10 @@
 // - `access` is required, and its form decides `ctx.principal`: nullable
 //   under `"public"` only;
 // - `share`, `ttlMs` and `version` exist for queries only, `ttlMs` needs
-//   `share`, and a method with `custom` access cannot `share: "all"`.
+//   `share`, and a method with `custom` access cannot `share: "all"`;
+// - `kinds`, on a method and on the service, names kinds of the app's
+//   principal (`PrincipalKindOf`); that each narrows the list above it, and
+//   that a `"public"` method declares none, is checked at run time.
 //
 // Each method's access form is inferred into the type parameter `A`, one
 // member per method, and checked by that method's `access` (`AccessValue`)
@@ -51,7 +54,7 @@ import type {
   HandlerOutputOf,
   ProjectCheck,
 } from "./serviceTypes";
-import type { DbOf, MaybePromise, PrincipalOf, QuickdrawTypes } from "./types";
+import type { DbOf, MaybePromise, PrincipalKindOf, PrincipalOf, QuickdrawTypes } from "./types";
 
 type Empty = Record<never, never>;
 
@@ -180,6 +183,16 @@ export type MethodImplementation<
 > = {
   /** Who may call: `"public"`, `"authenticated"`, `{ service }`, `{ entry }`, `{ scope, of, id }` or `custom(fn)`. */
   readonly access: AccessValue<A, MethodAccess<T, C, M, Rows>>;
+  /**
+   * The kinds of principal that may call this method (RFC 0003 section
+   * 4.1), within its service's `kinds` (or the app's): `kinds: ["user"]`
+   * keeps an agent's token out of a method that mints tokens. A principal
+   * of another kind, or without a `kind`, gets `FORBIDDEN` before `access`
+   * is asked, whatever its grants; an anonymous caller is left to `access`.
+   * Not on a `"public"` method, which a caller of any kind could call
+   * signed out. Leave it out for the service's list.
+   */
+  readonly kinds?: readonly PrincipalKindOf<T>[];
   /**
    * Runs the method. For a projection output it returns the database row
    * (or rows, or `null`), which the framework projects: only the
@@ -324,6 +337,18 @@ export interface ServiceDefinition<
    * service (RFC 0003 section 4.1). Default `true`.
    */
   readonly adminBypass?: boolean;
+  /**
+   * The kinds of principal that may call the service's methods and
+   * subscribe to its live data (RFC 0003 section 4.1): `kinds: ["user"]`.
+   * Within the app's `initQuickdraw({ kinds })`, which the service takes
+   * when it leaves this out; a method's own `kinds` narrows it further. A
+   * principal of another kind, or without a `kind`, gets `FORBIDDEN` before
+   * any access form is asked, and a service-wide `Admin` grant does not
+   * pass it; an anonymous caller is left to the form. Its entity, collection,
+   * topic and stream subscriptions refuse such a principal the same way, and
+   * its channels drop its messages.
+   */
+  readonly kinds?: readonly PrincipalKindOf<T>[];
 }
 
 /** `qd.defineService`, typed by the app's `QuickdrawTypes`. */

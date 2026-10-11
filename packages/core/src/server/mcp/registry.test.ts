@@ -1,17 +1,26 @@
 // The MCP registry (RFC 0003 section 10): every method's tool call goes
 // through the dispatcher with transport "mcp", so validation, access checks
 // and the per-session concurrency cap apply as on a socket; the principal and
-// `ctx.mcp` come from the registry's hooks; custom tools sit beside the
-// generated ones.
+// `ctx.mcp` come from the registry's hooks; `bind` fills chosen arguments
+// from the principal; custom tools sit beside the generated ones.
 
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { z as z3 } from "zod3";
 import { defineContract, query, QuickdrawError } from "../../index";
 import { createDispatcher } from "../index";
-import { agentAuth, createServices, qd, setup, TOKENS, type AgentMcp } from "./__tests__/fixtures";
+import {
+  agentAuth,
+  bindSetup,
+  createServices,
+  qd,
+  setup,
+  TOKENS,
+  type AgentMcp,
+} from "./__tests__/fixtures";
 import {
   createMcpRegistry,
+  describeTools,
   toToolResult,
   type McpCallResult,
   type McpRequest,
@@ -236,6 +245,328 @@ describe("sessions", () => {
     expect(respond).toHaveBeenLastCalledWith(unknown);
     expect(registry.has("noteService_search")).toBe(true);
     expect(registry.has("nope")).toBe(false);
+  });
+});
+
+describe("bound arguments", () => {
+  const DIALECT = "http://json-schema.org/draft-07/schema#";
+  const inputSchemaOf = (
+    registry: { tools: readonly { name: string; inputSchema: unknown }[] },
+    name: string,
+  ) => registry.tools.find((tool) => tool.name === name)?.inputSchema;
+
+  it("are left out of the listed schema of each tool whose object input has them", () => {
+    const { registry, served } = bindSetup();
+    expect(inputSchemaOf(registry, "messageService_post")).toEqual({
+      $schema: DIALECT,
+      type: "object",
+      properties: { message: { type: "string", minLength: 1 } },
+      required: ["message"],
+    });
+    // the bound argument was the only required one, so nothing is required
+    expect(inputSchemaOf(registry, "messageService_history")).toEqual({
+      $schema: DIALECT,
+      type: "object",
+      properties: {
+        limit: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: Number.MAX_SAFE_INTEGER,
+          default: 20,
+        },
+      },
+    });
+    expect(inputSchemaOf(registry, "taskService_get")).toEqual({
+      $schema: DIALECT,
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+    });
+    // describeTools lists what the contracts declare: binding is the registry's
+    expect(
+      describeTools(served).find((tool) => tool.name === "messageService_post")?.inputSchema,
+    ).toMatchObject({
+      properties: { taskId: { type: "string" } },
+      required: ["taskId", "message"],
+    });
+  });
+
+  it("are filled from the principal before the input is validated", async () => {
+    const seen: unknown[] = [];
+    const { registry, records } = bindSetup({
+      bind: {
+        taskId: async (call) => {
+          seen.push(call);
+          return await Promise.resolve(call.principal.claims?.taskId);
+        },
+      },
+    });
+    expect(
+      await registry.call("messageService_post", { message: "hi" }, { request: stdio() }),
+    ).toEqual({
+      ok: true,
+      data: { taskId: "t1", message: "hi", by: "bob" },
+    });
+    expect(seen).toEqual([
+      {
+        principal: TOKENS["task-token"]?.principal,
+        mcp: { scopes: ["tasks:read", "tasks:write"] },
+        request: stdio(),
+        service: "messageService",
+        method: "post",
+      },
+    ]);
+    // the agent may send its own task's id, as a prompt written for the full schema does
+    expect(
+      await registry.call(
+        "messageService_post",
+        { taskId: "t1", message: "again" },
+        { request: stdio() },
+      ),
+    ).toMatchObject({ ok: true, data: { taskId: "t1", message: "again" } });
+    const invalid = await registry.call(
+      "messageService_post",
+      { message: "" },
+      { request: stdio() },
+    );
+    expect(errorOf(invalid)).toMatchObject({
+      code: "VALIDATION",
+      data: { issues: [{ path: ["message"] }] },
+    });
+    // a tool without the bound argument is called as it is
+    expect(
+      await registry.call("taskService_get", { id: "t9" }, { request: stdio() }),
+    ).toMatchObject({
+      ok: true,
+      data: { id: "t9" },
+    });
+    expect(seen).toHaveLength(3);
+    expect(records.map((record) => [record.method, record.outcome])).toEqual([
+      ["post", "ok"],
+      ["post", "ok"],
+      ["post", "VALIDATION"],
+      ["get", "ok"],
+    ]);
+  });
+
+  it("refuse another value, a principal without the claim and an anonymous caller before the method runs", async () => {
+    const { registry, records } = bindSetup();
+    const other = await registry.call(
+      "messageService_post",
+      { taskId: "t2", message: "hi" },
+      { request: stdio() },
+    );
+    expect(errorOf(other)).toMatchObject({
+      code: "FORBIDDEN",
+      message: '"taskId" is bound to the caller and cannot be set to another value',
+    });
+    expect(toToolResult(other).isError).toBe(true);
+    const nonObject = await registry.call("messageService_post", ["t2"], { request: stdio() });
+    expect(errorOf(nonObject)).toMatchObject({
+      code: "VALIDATION",
+      message: "Invalid input for messageService.post",
+      data: { issues: [{ path: [], message: "Expected an object" }] },
+    });
+
+    const binder = vi.fn(() => undefined);
+    const unbound = bindSetup({
+      ...agentAuth(() => "writer-token"),
+      bind: { taskId: binder },
+    }).registry;
+    expect(
+      errorOf(await unbound.call("messageService_post", { message: "hi" }, { request: stdio() })),
+    ).toMatchObject({
+      code: "FORBIDDEN",
+      message: '"taskId" is bound to the caller, who has none',
+    });
+    expect(binder).toHaveBeenCalledOnce();
+    const empty = bindSetup({ bind: { taskId: () => null } }).registry;
+    expect(errorOf(await empty.call("messageService_history", {}, { request: stdio() })).code).toBe(
+      "FORBIDDEN",
+    );
+
+    const anonymous = bindSetup({
+      principal: () => null,
+      context: undefined,
+      bind: { taskId: binder },
+    }).registry;
+    expect(
+      errorOf(await anonymous.call("messageService_post", { message: "hi" }, { request: stdio() })),
+    ).toMatchObject({
+      code: "UNAUTHENTICATED",
+      message: "Authentication required",
+    });
+    expect(binder).toHaveBeenCalledOnce();
+    // an anonymous caller still calls the public methods that have nothing bound
+    expect(
+      await anonymous.call("noteService_search", { input: "rfc" }, { request: stdio() }),
+    ).toMatchObject({
+      ok: true,
+    });
+    expect(records).toEqual([]);
+  });
+
+  it("are filled in callMethod calls, the 4.1 route's shape, too", async () => {
+    const { registry } = bindSetup();
+    expect(
+      await registry.callMethod("messageService", "post", { message: "hi" }, { request: stdio() }),
+    ).toEqual({
+      ok: true,
+      data: { taskId: "t1", message: "hi", by: "bob" },
+    });
+    expect(
+      await registry.callMethod("messageService", "history", undefined, { request: stdio() }),
+    ).toEqual({
+      ok: true,
+      data: ["the last 20 messages of t1"],
+    });
+    const other = await registry.callMethod(
+      "messageService",
+      "post",
+      { taskId: "t2", message: "hi" },
+      { request: stdio() },
+    );
+    expect(errorOf(other).code).toBe("FORBIDDEN");
+  });
+
+  it("fail the call when a binder throws, with INTERNAL or a QuickdrawError's code, and hand every refusal to respond once", async () => {
+    const { registry, logger } = bindSetup({
+      bind: {
+        taskId: () => {
+          throw new Error("the claims store is down");
+        },
+      },
+    });
+    const respond = vi.fn(() => 0);
+    const broken = await registry.call(
+      "messageService_post",
+      { message: "hi" },
+      { request: stdio(), respond },
+    );
+    expect(errorOf(broken)).toMatchObject({ code: "INTERNAL", message: "Internal error" });
+    expect(respond).toHaveBeenCalledExactlyOnceWith(broken);
+    expect(logger.at("error").map((entry) => entry.message)).toEqual([
+      'The MCP tool "messageService_post" failed',
+    ]);
+
+    const revoked = bindSetup({
+      bind: {
+        taskId: () =>
+          Promise.reject(new QuickdrawError("UNAUTHENTICATED", "The task token was revoked")),
+      },
+    }).registry;
+    respond.mockClear();
+    const refused = await revoked.call(
+      "messageService_post",
+      { message: "hi" },
+      { request: stdio(), respond },
+    );
+    expect(errorOf(refused)).toMatchObject({
+      code: "UNAUTHENTICATED",
+      message: "The task token was revoked",
+    });
+    expect(respond).toHaveBeenCalledExactlyOnceWith(refused);
+    respond.mockClear();
+    const other = await bindSetup().registry.callMethod(
+      "messageService",
+      "post",
+      { taskId: "t2", message: "hi" },
+      { request: stdio(), respond },
+    );
+    expect(errorOf(other).code).toBe("FORBIDDEN");
+    expect(respond).toHaveBeenCalledExactlyOnceWith(other);
+  });
+
+  it("serve a method under a public name: name maps messageService.post to post_to_chat", async () => {
+    const { registry } = bindSetup({
+      include: ["messageService.post"],
+      name: (service, method) =>
+        service === "messageService" && method === "post" ? "post_to_chat" : method,
+    });
+    expect(registry.tools).toEqual([
+      {
+        name: "post_to_chat",
+        description: "Posts a message to a task's chat.",
+        inputSchema: {
+          $schema: DIALECT,
+          type: "object",
+          properties: { message: { type: "string", minLength: 1 } },
+          required: ["message"],
+        },
+      },
+    ]);
+    expect(await registry.call("post_to_chat", { message: "hi" }, { request: stdio() })).toEqual({
+      ok: true,
+      data: { taskId: "t1", message: "hi", by: "bob" },
+    });
+    expect(
+      errorOf(
+        await registry.call("post_to_chat", { taskId: "t2", message: "hi" }, { request: stdio() }),
+      ).code,
+    ).toBe("FORBIDDEN");
+  });
+
+  it("leave custom tools alone: they are never bound", async () => {
+    const handler = vi.fn(({ arguments: args }: { readonly arguments: unknown }) => args);
+    const { registry } = bindSetup({
+      customTools: [
+        {
+          name: "route_to_child",
+          description: "Posts to a child task.",
+          inputSchema: z.object({ taskId: z.string(), message: z.string() }),
+          handler,
+        },
+      ],
+    });
+    expect(inputSchemaOf(registry, "route_to_child")).toMatchObject({
+      required: ["taskId", "message"],
+    });
+    expect(
+      await registry.call("route_to_child", { taskId: "t2", message: "hi" }, { request: stdio() }),
+    ).toEqual({
+      ok: true,
+      data: { taskId: "t2", message: "hi" },
+    });
+  });
+
+  it("are checked when the registry is built", () => {
+    const { served, dispatcher } = bindSetup();
+    type Excluded = "noteService.archive" | "messageService";
+    const build =
+      (bind: unknown, exclude: readonly Excluded[] = []) =>
+      () =>
+        createMcpRegistry({
+          services: served,
+          dispatcher,
+          bind: bind as Record<string, () => string>,
+          exclude,
+        });
+    expect(build("taskId")).toThrow(
+      "createMcpRegistry: bind must be an object of functions, one per argument it fills",
+    );
+    expect(build([() => "t1"])).toThrow("bind must be an object of functions");
+    expect(build({ taskId: "t1" })).toThrow(
+      "createMcpRegistry: bind.taskId must be a function of the call, returning the argument's value",
+    );
+    // a misspelled argument would leave the real one for the agent to fill
+    expect(build({ tsakId: () => "t1" })).toThrow(
+      'createMcpRegistry: bind.tsakId fills nothing: no method served as a tool has "tsakId" in its object input',
+    );
+    expect(build({ taskId: () => "t1" }, ["messageService"])).toThrow(
+      'bind.taskId fills nothing: no method served as a tool has "taskId" in its object input',
+    );
+    // noteService.archive's input is a union: { by: "id", id } or { by: "tag", tag }
+    expect(build({ tag: () => "x" })).toThrow(
+      "createMcpRegistry: bind.tag names a property of the input of noteService.archive, which is not an object: bind fills properties of object inputs only; leave noteService.archive out with exclude, or make its input an object",
+    );
+    expect(build({ id: () => "t1" })).toThrow(
+      "bind.id names a property of the input of noteService.archive, which is not an object",
+    );
+    const registry = build({ id: () => "t1" }, ["noteService.archive"])();
+    expect(inputSchemaOf(registry, "taskService_rename")).toMatchObject({
+      properties: { title: { type: "string" } },
+      required: ["title"],
+    });
   });
 });
 

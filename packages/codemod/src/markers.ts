@@ -17,6 +17,7 @@ export const MARKER = "quickdraw-migrate: review";
 
 /** The kinds of item a marker can name, in the order the report lists them. */
 export const CATEGORIES = [
+  "service",
   "contract",
   "access",
   "access-override",

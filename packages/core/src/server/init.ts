@@ -9,9 +9,9 @@
 
 import type { AnyContract } from "../contract/defineContract";
 import { QuickdrawError } from "../protocol/errors";
-import { buildService } from "./buildService";
+import { buildService, createRuntime } from "./buildService";
 import { callerGrantsOf, createCaller, type CallerFor } from "./caller";
-import type { BaseContext, ContextExtender, RunContext, RunOptions } from "./context";
+import type { BaseContext, RunContext, RunOptions } from "./context";
 import { createServer, type QuickdrawServer, type ServerOptions } from "./createServer";
 import type { DefineService } from "./defineService";
 import {
@@ -24,7 +24,13 @@ import {
   type Service,
   type StreamHandle,
 } from "./dispatcher";
-import type { ContextExtensionOf, McpContextOf, PrincipalOf, QuickdrawTypes } from "./types";
+import type {
+  ContextExtensionOf,
+  McpContextOf,
+  PrincipalKindOf,
+  PrincipalOf,
+  QuickdrawTypes,
+} from "./types";
 import { runBeforeAnyDispatcher } from "./uow/unitOfWork";
 
 /**
@@ -39,6 +45,15 @@ export type ContextFactory<T extends QuickdrawTypes> = (
 export interface InitOptions<T extends QuickdrawTypes> {
   /** Adds the app's fields to every handler's `ctx`. Required when the app's types declare `context`. */
   readonly context?: ContextFactory<T>;
+  /**
+   * The kinds of principal every service this instance defines admits
+   * (RFC 0003 section 4.1), so a new service starts closed to the rest:
+   * `kinds: ["user", "agent"]`. A service's `kinds`, and a method's, may
+   * only narrow it. A principal of another kind, or without a `kind`, gets
+   * `FORBIDDEN` before any access form or `Admin` grant is asked; an
+   * anonymous caller is left to the form. Leave it out to admit every kind.
+   */
+  readonly kinds?: readonly PrincipalKindOf<T>[];
 }
 
 /** `initQuickdraw`'s arguments: the options are required when `T` declares `context`. */
@@ -150,20 +165,6 @@ export interface Quickdraw<T extends QuickdrawTypes> {
   ): QuickdrawServer<S>;
 }
 
-function contextOption(options: unknown): ContextExtender | undefined {
-  if (options === undefined) {
-    return undefined;
-  }
-  if (typeof options !== "object" || options === null) {
-    throw new TypeError("initQuickdraw: options must be an object");
-  }
-  const { context } = options as { readonly context?: unknown };
-  if (context !== undefined && typeof context !== "function") {
-    throw new TypeError("initQuickdraw: context must be a function of the base context");
-  }
-  return context as ContextExtender | undefined;
-}
-
 const NEEDS: Readonly<Record<string, string>> = Object.freeze({
   "qd.collections.reset": "send through",
   "qd.stream": "push through",
@@ -252,11 +253,8 @@ export function initQuickdraw<T extends QuickdrawTypes = QuickdrawTypes>(
   ...args: InitArgs<T>
 ): Quickdraw<T> {
   let current: Dispatcher | undefined;
-  const runtime = Object.freeze({
-    extendContext: contextOption(args[0]),
-    adopt: (dispatcher: object) => {
-      current = dispatcher as Dispatcher;
-    },
+  const runtime = createRuntime(args[0], (dispatcher) => {
+    current = dispatcher as Dispatcher;
   });
   const qd: Quickdraw<T> = {
     defineService: ((contract: unknown, definition: unknown) =>

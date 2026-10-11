@@ -8,9 +8,10 @@
 //
 // The whole batch fails when the frame is malformed or holds more than 500
 // ids (`VALIDATION`), names an unknown service or one without rows
-// (`NOT_FOUND`), or comes from an anonymous socket (`UNAUTHENTICATED`); a
-// failed lookup or read is `INTERNAL`, logged. `qd:unsub` is checked the same
-// way.
+// (`NOT_FOUND`), comes from an anonymous socket (`UNAUTHENTICATED`), or from
+// a principal of a kind the service does not admit (`FORBIDDEN`,
+// `../access/kinds.ts`); a failed lookup or read is `INTERNAL`, logged.
+// `qd:unsub` is checked the same way, kinds aside: leaving needs no kind.
 //
 // No listener of the live data throws (`answer.ts`), and `qd:sub` runs in
 // the socket's lane of subscription work (`lane.ts`).
@@ -19,6 +20,7 @@ import { CLIENT_EVENTS } from "../../contract/names";
 import type { EntitySubscribeReply, Ok, Revision } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
 import { MAX_SUBSCRIBE_IDS } from "../../protocol/version";
+import { checkKind } from "../access/kinds";
 import { unreadable } from "../transports/ack";
 import type { QuickdrawServerSocket, SocketContext } from "../transports/types";
 import { answerEvent, answerNow, onDisconnect } from "./answer";
@@ -82,6 +84,7 @@ async function onSubscribe(
   if (socket.data.principal === null) {
     throw new QuickdrawError("UNAUTHENTICATED", "Authentication required");
   }
+  checkKind(target.service.kinds, socket.data.principal, target.service.name);
   if (hub.storage === undefined) {
     throw new QuickdrawError(
       "INTERNAL",

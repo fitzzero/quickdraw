@@ -39,3 +39,9 @@ export function registerUpdateTasks(service: TaskService): void {
     { resolveEntryId: (p) => p.taskId },
   );
 }
+
+// Registers the edit methods, and says so: more than registering
+export function defineEditMethods(service: TaskService): void {
+  registerUpdateTasks(service);
+  console.info("task edit methods registered");
+}

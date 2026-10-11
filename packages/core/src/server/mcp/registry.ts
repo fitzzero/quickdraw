@@ -7,6 +7,8 @@
 // transport `"mcp"`, so validation, access checks and limits apply exactly as
 // for a socket call; the transport says who is calling through `principal`,
 // and `context` adds the session's own fields to the handler's `ctx.mcp`.
+// `bind` fills chosen arguments from that principal instead of the agent, so
+// an agent bound to one task cannot name another in its calls.
 
 import { consoleLogger, type Logger } from "../../contract/logger";
 import { QuickdrawError } from "../../protocol/errors";
@@ -27,6 +29,8 @@ import {
 import { checkUniqueNames, inputOf, planMethodTools, type MethodTool } from "./tools";
 import type {
   DescribeToolsOptions,
+  McpBindCall,
+  McpBinder,
   McpCallOptions,
   McpCallResult,
   McpContextOfServices,
@@ -68,6 +72,21 @@ export interface McpRegistryOptions<
     request: McpRequest,
     principal: PrincipalOfServices<S> | null,
   ) => MaybePromise<McpContextOfServices<S>>;
+  /**
+   * Arguments filled from who is calling instead of by the agent, by name:
+   * `{ taskId: ({ principal }) => principal.claims?.taskId }`. Each one is
+   * left out of the `inputSchema` of every method's tool whose object input
+   * has it, and each call of such a tool, by `call` or `callMethod`, gets the
+   * binder's value before its input is validated. The call is refused
+   * before the method runs when the caller is anonymous (`UNAUTHENTICATED`),
+   * or when the binder returns `undefined` or `null` or the caller sent the
+   * argument with another value (`FORBIDDEN`); a binder that throws fails it
+   * with `INTERNAL`, or with the code of a `QuickdrawError`. Custom tools are
+   * never bound. Binding is not access control: the same principal reaches
+   * the method over a socket or HTTP with nothing bound, so the method's
+   * access must still confine it.
+   */
+  readonly bind?: Readonly<Record<string, McpBinder<S>>>;
   /** The app's own tools, listed after the generated ones. */
   readonly customTools?: { readonly [K in keyof Tools]: McpCustomTool<S, Tools[K]> };
   /** Receives tool failures and authentication errors. Default: the console. */
@@ -96,7 +115,8 @@ export interface McpRegistry {
   /**
    * Calls a method's tool by its service and method name with the method's
    * `input` as it is, without the tool's argument mapping: the shape 4.1's
-   * HTTP route took. A method that is not a tool is `NOT_FOUND`.
+   * HTTP route took. Bound arguments are filled as for `call`. A method that
+   * is not a tool is `NOT_FOUND`.
    */
   callMethod(
     service: string,
@@ -110,11 +130,16 @@ type Entry =
   | ({ readonly kind: "method" } & MethodTool)
   | ({ readonly kind: "custom" } & CustomTool);
 
+/** A function of the registry's `bind` option, as the bridge calls it. */
+type BindHook = (call: McpBindCall) => unknown;
+
 interface RegistrySettings extends SessionSettings {
   /** Every tool by name, in listing order. */
   readonly entries: ReadonlyMap<string, Entry>;
   /** The method tools by {@link methodKey}. */
   readonly methods: ReadonlyMap<string, MethodTool>;
+  /** The `bind` option's functions by the argument each fills. */
+  readonly binders: ReadonlyMap<string, BindHook>;
 }
 
 type Fail = (message: string) => never;
@@ -158,6 +183,39 @@ function checkDispatcher(dispatcher: unknown, services: unknown, fail: Fail): vo
   }
 }
 
+/** Checks the registry's `bind` option: an object of functions, one per argument. */
+function checkBinders(bind: unknown, fail: Fail): ReadonlyMap<string, BindHook> {
+  if (bind === undefined) {
+    return new Map();
+  }
+  if (!isRecord(bind) || Array.isArray(bind)) {
+    fail("bind must be an object of functions, one per argument it fills");
+  }
+  const binders = new Map<string, BindHook>();
+  for (const [key, binder] of Object.entries(bind)) {
+    if (typeof binder !== "function") {
+      fail(`bind.${key} must be a function of the call, returning the argument's value`);
+    }
+    binders.set(key, binder as BindHook);
+  }
+  return binders;
+}
+
+/** Fails when an argument of `bind` is in no tool's object input: a misspelled name would bind nothing. */
+function checkBound(
+  binders: ReadonlyMap<string, BindHook>,
+  methodTools: readonly MethodTool[],
+  fail: Fail,
+): void {
+  for (const key of binders.keys()) {
+    if (!methodTools.some((tool) => tool.bound.includes(key))) {
+      fail(
+        `bind.${key} fills nothing: no method served as a tool has "${key}" in its object input`,
+      );
+    }
+  }
+}
+
 function resolveRegistry(options: McpRegistryOptions<readonly AnyService[]>): RegistrySettings {
   const fail: Fail = (message) => {
     throw new TypeError(`createMcpRegistry: ${message}`);
@@ -168,7 +226,9 @@ function resolveRegistry(options: McpRegistryOptions<readonly AnyService[]>): Re
   checkDispatcher(options.dispatcher, options.services, fail);
   checkHook("principal", options.principal, fail);
   checkHook("context", options.context, fail);
-  const methodTools = planMethodTools(options.services, options, fail);
+  const binders = checkBinders(options.bind, fail);
+  const methodTools = planMethodTools(options.services, options, fail, [...binders.keys()]);
+  checkBound(binders, methodTools, fail);
   const customTools = checkCustomTools(options.customTools, fail);
   const entries: Entry[] = [
     ...methodTools.map((tool) => ({ kind: "method" as const, ...tool })),
@@ -188,6 +248,7 @@ function resolveRegistry(options: McpRegistryOptions<readonly AnyService[]>): Re
     logger: options.logger ?? consoleLogger,
     entries: new Map(entries.map((entry) => [entry.tool.name, entry])),
     methods: new Map(methodTools.map((tool) => [methodKey(tool.service, tool.method), tool])),
+    binders,
   };
 }
 
@@ -207,6 +268,60 @@ async function inSession(
   return run(session);
 }
 
+/**
+ * The input of a call of a tool with bound arguments: `input` with each of
+ * them filled by its binder. Rejects with `UNAUTHENTICATED` for an anonymous
+ * caller, `VALIDATION` when the arguments are not an object, and `FORBIDDEN`
+ * when a binder has no value or the caller sent another one.
+ */
+async function bindInput(
+  settings: RegistrySettings,
+  tool: MethodTool,
+  input: unknown,
+  session: McpSession,
+  request: McpRequest,
+): Promise<unknown> {
+  const { principal } = session;
+  if (principal === null) {
+    throw new QuickdrawError("UNAUTHENTICATED", "Authentication required");
+  }
+  const given: unknown = input ?? {};
+  if (!isRecord(given) || Array.isArray(given)) {
+    throw new QuickdrawError("VALIDATION", `Invalid input for ${tool.service}.${tool.method}`, {
+      issues: [{ path: [], message: "Expected an object" }],
+    });
+  }
+  const call: McpBindCall = {
+    principal,
+    mcp: session.mcp,
+    request,
+    service: tool.service,
+    method: tool.method,
+  };
+  const filled: [string, unknown][] = [];
+  for (const [key, binder] of settings.binders) {
+    if (!tool.bound.includes(key)) {
+      continue;
+    }
+    const value = await binder(call);
+    if (value === undefined || value === null) {
+      throw new QuickdrawError("FORBIDDEN", `"${key}" is bound to the caller, who has none`);
+    }
+    // The binder's value replaces what the caller sent. Another value is
+    // refused rather than replaced in silence, so an agent never believes it
+    // called with the value it named.
+    const sent = Object.hasOwn(given, key) ? given[key] : undefined;
+    if (sent !== undefined && JSON.stringify(sent) !== JSON.stringify(value)) {
+      throw new QuickdrawError(
+        "FORBIDDEN",
+        `"${key}" is bound to the caller and cannot be set to another value`,
+      );
+    }
+    filled.push([key, value]);
+  }
+  return { ...given, ...Object.fromEntries(filled) };
+}
+
 /** Calls a method through the dispatcher, which hands the result to `respond` before it flushes. */
 async function dispatchMethod(
   settings: RegistrySettings,
@@ -215,11 +330,19 @@ async function dispatchMethod(
   session: McpSession,
   options: McpCallOptions,
 ): Promise<McpCallResult> {
+  let bound = input;
+  if (tool.bound.length > 0) {
+    try {
+      bound = await bindInput(settings, tool, input, session, options.request);
+    } catch (error) {
+      return settle(settings, options, failure(settings, error, tool.tool.name));
+    }
+  }
   const { respond } = options;
   const request = sessionRequest(session, {
     service: tool.service,
     method: tool.method,
-    input,
+    input: bound,
     signal: options.signal,
     respond: respond === undefined ? undefined : (result) => respond(fromDispatch(result)),
   });
@@ -269,8 +392,10 @@ function callMethodTool(
  * Builds the MCP tools of `services` (see `describeTools`) and the app's
  * `customTools`, served by `dispatcher`. Throws at once when a method's
  * input schema cannot describe itself as JSON Schema (use Zod 4.2 or later
- * for it, or `exclude` the method), when two tools share a name, or when the
- * dispatcher does not serve one of the services.
+ * for it, or `exclude` the method), when two tools share a name, when the
+ * dispatcher does not serve one of the services, or when an argument of
+ * `bind` is in no tool's object input or is in an input that is not an
+ * object.
  *
  * @example
  * const registry = createMcpRegistry({

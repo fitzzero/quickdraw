@@ -116,6 +116,9 @@
     "quickdraw/no-v4-api": "error",
     // The migration's placeholder schema, until a real schema replaces it.
     "quickdraw/no-todo-schema": "warn",
+    // A describe on every contract member: MCP tool descriptions and the API docs.
+    // A warning so an upgrade never breaks lint; set it to "error" once the app has caught up.
+    "quickdraw/require-describe": "warn",
   },
   "overrides": [
     // Client/React code: relax server-oriented strictness.

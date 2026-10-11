@@ -57,6 +57,13 @@ export type PrincipalOf<T extends QuickdrawTypes> = T extends {
   ? P
   : Principal;
 
+/**
+ * The kinds of the app's principal (`"user" | "agent"` when it declares
+ * `kind: "user" | "agent"`): what a `kinds` list names. Any string with the
+ * base {@link Principal}.
+ */
+export type PrincipalKindOf<T extends QuickdrawTypes> = NonNullable<PrincipalOf<T>["kind"]>;
+
 /** The fields `initQuickdraw({ context })` adds to every handler's `ctx`. */
 export type ContextExtensionOf<T extends QuickdrawTypes> = T extends {
   readonly context: infer Extension extends object;

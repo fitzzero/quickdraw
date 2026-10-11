@@ -2,6 +2,8 @@
 
 # taskService
 
+Tasks on a project's board.
+
 ## Entity
 
 | Field        | Type             | Level |
@@ -33,7 +35,12 @@ A caller receives a field only with at least its level on the row.
 
 ### `get`
 
+Reads one task by its id.
+
 A query.
+
+- MCP tool (default name): `taskService_get`
+- MCP read-only hint: yes, as on every query's tool
 
 Input:
 
@@ -47,6 +54,9 @@ Output: one row as the `entity` projection.
 
 A query that watches the `board` collection: a cached result is fetched again when the scope its input names changes.
 
+- MCP tool (default name): `taskService_countOnBoard`
+- MCP read-only hint: yes, as on every query's tool
+
 Input:
 
 | Field       | Type     |
@@ -58,6 +68,8 @@ Output: `number`.
 ### `create`
 
 A mutation.
+
+- MCP tool (default name): `taskService_create`
 
 Input:
 
@@ -74,6 +86,8 @@ Output: one row as the `entity` projection.
 
 A mutation.
 
+- MCP tool (default name): `taskService_rename`
+
 Input:
 
 | Field   | Type     |
@@ -86,6 +100,8 @@ Output: one row as the `entity` projection.
 ### `reorder`
 
 A mutation.
+
+- MCP tool (default name): `taskService_reorder`
 
 Input:
 
@@ -100,6 +116,8 @@ Output: one row as the `entity` projection.
 
 A mutation.
 
+- MCP tool (default name): `taskService_assign`
+
 Input:
 
 | Field        | Type             |
@@ -112,6 +130,8 @@ Output: one row as the `entity` projection.
 ### `move`
 
 A mutation.
+
+- MCP tool (default name): `taskService_move`
 
 Input:
 
@@ -126,6 +146,8 @@ Output: one row as the `entity` projection.
 
 A mutation.
 
+- MCP tool (default name): `taskService_setNotes`
+
 Input:
 
 | Field   | Type     |
@@ -138,6 +160,8 @@ Output: one row as the `entity` projection.
 ### `remove`
 
 A mutation.
+
+- MCP tool (default name): `taskService_remove`
 
 Input:
 
@@ -152,6 +176,9 @@ Output: `null`.
 Lists the rows the caller can read, a page at a time, filtered and sorted by the declared fields. Pass a page's nextCursor back as cursor for the next page.
 
 A query.
+
+- MCP tool (default name): `taskService_list`
+- MCP read-only hint: yes, as on every query's tool
 
 Input:
 
@@ -171,6 +198,9 @@ Searches the rows the caller can read for the text q (at least 2 characters), a 
 
 A query.
 
+- MCP tool (default name): `taskService_search`
+- MCP read-only hint: yes, as on every query's tool
+
 Input:
 
 | Field     | Type      | Notes                  |
@@ -186,6 +216,8 @@ Output: `{ items: { id: string; projectId: string; title: string; status: string
 Live lists of the service's rows, one per scope value.
 
 ### `board`
+
+A project's tasks, in board order.
 
 | Option    | Value                             |
 | --------- | --------------------------------- |

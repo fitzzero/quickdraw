@@ -1,7 +1,9 @@
 // The run-time half of `defineService`: the checks the types already make,
 // repeated for JavaScript callers and casts, so a broken service fails when
 // it is defined rather than on its first call. It returns the frozen
-// service the registry and the dispatcher read.
+// service the registry and the dispatcher read. The runtime it is given,
+// what every service of one `initQuickdraw` keeps, is made here too, from
+// that call's options, checked.
 
 import type { AnyContract } from "../contract/defineContract";
 import { accessFormProblem, isCustomAccess } from "./access/forms";
@@ -19,7 +21,13 @@ import {
   type ServiceMethod,
   type ServiceRuntime,
 } from "./service";
-import { checkServiceData, checkWatchedModels, type ServiceData } from "./serviceData";
+import {
+  checkAppKinds,
+  checkMethodKinds,
+  checkServiceData,
+  checkWatchedModels,
+  type ServiceData,
+} from "./serviceData";
 
 type Fail = (message: string) => never;
 
@@ -39,6 +47,7 @@ const DEFINITION_KEYS = new Set([
   "streams",
   "onRoomLeave",
   "adminBypass",
+  "kinds",
 ]);
 
 const METHOD_KEYS = new Set([
@@ -49,6 +58,7 @@ const METHOD_KEYS = new Set([
   "timeoutMs",
   "version",
   "rowless",
+  "kinds",
 ]);
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -120,6 +130,7 @@ function checkQueryOptions(
 function checkMethod(
   contract: AnyContract,
   projections: ReadonlyMap<string, Projection>,
+  data: ServiceData,
   name: string,
   entry: unknown,
   fail: Fail,
@@ -149,6 +160,7 @@ function checkMethod(
     fail(`${owner}: rowless must be true, or left out`);
   }
   checkQueryOptions(owner, entry, def.kind, fail);
+  const kinds = checkMethodKinds(owner, entry, data, fail);
   const projection = projectedOutput(def.output, projections);
   return Object.freeze({
     name,
@@ -158,6 +170,7 @@ function checkMethod(
     projection,
     schemaOutput: projection === undefined ? schemaOutputOf(def.output) : undefined,
     access: entry.access as ServiceMethod["access"],
+    kinds,
     handler: entry.handler as AnyHandler,
     share: entry.share as ServiceMethod["share"],
     ttlMs: entry.ttlMs as number | undefined,
@@ -170,6 +183,7 @@ function checkMethod(
 function checkMethods(
   contract: AnyContract,
   projections: ReadonlyMap<string, Projection>,
+  data: ServiceData,
   value: unknown,
   fail: Fail,
 ): Record<string, ServiceMethod> {
@@ -182,7 +196,7 @@ function checkMethods(
   }
   const methods: Record<string, ServiceMethod> = {};
   for (const [name, entry] of Object.entries(value)) {
-    methods[name] = checkMethod(contract, projections, name, entry, fail);
+    methods[name] = checkMethod(contract, projections, data, name, entry, fail);
   }
   return methods;
 }
@@ -292,6 +306,34 @@ function checkHandlers(service: AnyService, fail: Fail): void {
   }
 }
 
+/**
+ * The runtime every service of one `initQuickdraw` keeps, from that call's
+ * options, checked: `context`, which adds the app's fields to every
+ * handler's `ctx`, and `kinds`, the kinds of principal every service admits
+ * unless it narrows them (RFC 0003 section 4.1). `adopt` makes a dispatcher
+ * the instance's own.
+ */
+export function createRuntime(
+  options: unknown,
+  adopt: NonNullable<ServiceRuntime["adopt"]>,
+): ServiceRuntime {
+  if (options === undefined) {
+    return Object.freeze({ extendContext: undefined, kinds: undefined, adopt });
+  }
+  if (typeof options !== "object" || options === null) {
+    throw new TypeError("initQuickdraw: options must be an object");
+  }
+  const { context, kinds } = options as { readonly context?: unknown; readonly kinds?: unknown };
+  if (context !== undefined && typeof context !== "function") {
+    throw new TypeError("initQuickdraw: context must be a function of the base context");
+  }
+  return Object.freeze({
+    extendContext: context as ServiceRuntime["extendContext"],
+    kinds: checkAppKinds(kinds),
+    adopt,
+  });
+}
+
 /** Checks a service definition and returns the frozen service, registered with `runtime`. */
 export function buildService(
   runtime: ServiceRuntime,
@@ -313,7 +355,7 @@ export function buildService(
   if (onRoomLeave !== undefined && typeof onRoomLeave !== "function") {
     fail("onRoomLeave must be a function of the leave and a run context");
   }
-  const data = checkServiceData(definition, fail);
+  const data = checkServiceData(definition, runtime.kinds, fail);
   const projections = compileProjections(checked, definition.project, fail);
   const collections = compileCollections(
     checked,
@@ -323,7 +365,7 @@ export function buildService(
     fail,
   );
   checkWatches(checked, collections, data, fail);
-  const methods = checkMethods(checked, projections, definition.methods, fail);
+  const methods = checkMethods(checked, projections, data, definition.methods, fail);
   checkRowForms(methods, data, fail);
   checkRowless(methods, data, fail);
   const service: AnyService = Object.freeze({
@@ -334,7 +376,7 @@ export function buildService(
     collections,
     adminBypass,
     methods: Object.freeze(methods),
-    channels: compileChannels(checked, definition.channels, fail),
+    channels: compileChannels(checked, definition.channels, data.kinds, fail),
     streams: compileStreams(
       checked,
       { model: data.model, hasPolicy: data.access !== undefined },

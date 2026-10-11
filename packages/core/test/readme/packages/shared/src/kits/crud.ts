@@ -7,6 +7,7 @@ const newTaskSchema = z.object({ projectId: z.string(), title: z.string() });
 const taskPatch = z.object({ title: z.string(), status: z.string() }).partial();
 
 export const task = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity: taskSchema,
   projections: { card: cardSchema },
   methods: {
@@ -24,6 +25,10 @@ export const task = defineContract("taskService", {
       bulkUpdate: { input: taskPatch },
       bulkDelete: true,
     }),
-    archive: mutation({ input: z.object({ id: z.string() }), output: "entity" }),
+    archive: mutation({
+      input: z.object({ id: z.string() }),
+      output: "entity",
+      describe: "Archives a task, which leaves its board.",
+    }),
   },
 });

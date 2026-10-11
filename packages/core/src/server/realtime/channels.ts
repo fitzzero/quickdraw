@@ -9,19 +9,20 @@
 // work per message. In order: a malformed frame or an unknown service or
 // channel is dropped; the socket's token bucket for that service and channel
 // (refilled at `ratePerSecond`, holding at most `burst`) drops a message over
-// the rate; an anonymous socket's message is dropped; the payload is checked
-// against the channel's schema, synchronously, and dropped when it fails; the
-// access check runs in memory (the service-wide grant a `{ service }` access
-// names, then the contract's `requires`: the socket must already hold the
-// entity or collection subscription the payload names, or be in the app room
-// the requirement names (or in one whose name starts with its `prefix`),
-// joined by a call over this very socket); then the handler runs with the
-// parsed payload, and the room that matched as `ctx.room`. 4.1's
-// `requireRoom` skipped its check
-// when it named no room; every form here drops the message instead. A socket
-// whose dropped messages within 10 s exceed 100 times the channel's rate is
-// disconnected: sustained flooding, not a burst. The rate limiter never
-// counts `qd:ch` (`transports/middleware.ts`).
+// the rate; an anonymous socket's message is dropped, and so is one from a
+// principal of a kind the service does not admit (`../access/kinds.ts`, a
+// set made when the service was defined); the payload is checked against
+// the channel's schema, synchronously, and dropped when it fails; the access
+// check runs in memory (the service-wide grant a `{ service }` access names,
+// then the contract's `requires`: the socket must already hold the entity or
+// collection subscription the payload names, or be in the app room the
+// requirement names (or in one whose name starts with its `prefix`), joined
+// by a call over this very socket); then the handler runs with the parsed
+// payload, and the room that matched as `ctx.room`. 4.1's `requireRoom`
+// skipped its check when it named no room; every form here drops the message
+// instead. A socket whose dropped messages within 10 s exceed 100 times the
+// channel's rate is disconnected: sustained flooding, not a burst. The rate
+// limiter never counts `qd:ch` (`transports/middleware.ts`).
 //
 // A handler's throw or rejection is logged and does not stop the channel:
 // at error, or at debug for a `QuickdrawError` the client caused (any code
@@ -289,8 +290,13 @@ function receive(deps: ChannelDeps, state: SocketChannels, frame: unknown): void
     return;
   }
   const { principal } = state.socket.data;
-  const parsed = principal === null ? undefined : parse(deps, channel, payload);
-  if (principal === null || parsed === undefined) {
+  // Of a kind the service does not admit (`../access/kinds.ts`); no list
+  // holds "", so a principal without a kind is dropped too.
+  if (principal === null || channel.kinds?.has(principal.kind ?? "") === false) {
+    return;
+  }
+  const parsed = parse(deps, channel, payload);
+  if (parsed === undefined) {
     return;
   }
   const room = allowed(channel, state.socket, principal, parsed.value);

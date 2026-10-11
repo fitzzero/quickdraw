@@ -11,6 +11,7 @@ import type { ACL, AccessLevel, CollectionSnapshotPage } from "@fitzzero/quickdr
 import { z } from "zod";
 import { byIdSchema, cuidSchema, paginationSchema } from "./shared/schemas.js";
 import { requireAuth } from "./shared/guards.js";
+import { registerProjectLimits } from "./project-methods/limits.js";
 
 const createProjectSchema = z.object({
   name: z.string().min(1, "Name is required").max(100),
@@ -119,6 +120,7 @@ export class ProjectService extends BaseService<
   private initMethods(): void {
     this.initCrudMethods();
     this.initSharingMethods();
+    registerProjectLimits(this);
     // Fail fast at construction if the method map and definitions drift
     this.verifyAllMethods([
       "createProject",
@@ -129,6 +131,7 @@ export class ProjectService extends BaseService<
       "shareProject",
       "archiveProject",
       "deleteProject",
+      "getProjectLimits",
     ]);
   }
 

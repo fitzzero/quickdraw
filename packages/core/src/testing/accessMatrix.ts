@@ -14,6 +14,11 @@
 //     ],
 //   });
 //
+// Each cell records the principal's `kind`, so a matrix over principals of
+// several kinds (a user, an agent's token) shows which kind each outcome is
+// for: a method's `kinds` refuses the others with `FORBIDDEN`, before its
+// access form, and the report names the kind of each cell that differs.
+//
 // Every cell calls the method for real, so a mutation runs once per principal
 // it allows: give inputs that can run again, or `input` as a function, called
 // for each cell with the principal it runs as, which makes a fresh row (a
@@ -87,6 +92,8 @@ export interface AccessMatrixOptions<C extends AnyContract, P, Name extends stri
 export interface AccessMatrixCell {
   readonly case: string;
   readonly principal: string;
+  /** The principal's `kind`; `undefined` for the anonymous caller and a principal without one. */
+  readonly kind: string | undefined;
   readonly expected: MatrixOutcome;
   /** `"allow"` when the call succeeded, or its error code. */
   readonly actual: "allow" | ErrorCode;
@@ -122,9 +129,10 @@ async function outcomeOf(call: () => Promise<unknown>): Promise<"allow" | ErrorC
 
 function report(serviceName: string, cells: readonly AccessMatrixCell[]): string {
   const failed = cells.filter((cell) => !cell.pass);
-  const lines = failed.map(
-    (cell) => `  ${cell.case} as ${cell.principal}: expected ${cell.expected}, got ${cell.actual}`,
-  );
+  const lines = failed.map((cell) => {
+    const kind = cell.kind === undefined ? "" : ` (kind ${cell.kind})`;
+    return `  ${cell.case} as ${cell.principal}${kind}: expected ${cell.expected}, got ${cell.actual}`;
+  });
   return `describeAccessMatrix(${serviceName}): ${failed.length} of ${cells.length} cells differ\n${lines.join("\n")}`;
 }
 
@@ -201,7 +209,14 @@ export async function describeAccessMatrix<
             : input;
         const actual = await outcomeOf(() => method(made));
         const pass = matches(expected, actual, principal === null);
-        cells.push({ case: entry.label ?? entry.method, principal: name, expected, actual, pass });
+        cells.push({
+          case: entry.label ?? entry.method,
+          principal: name,
+          kind: principal?.kind,
+          expected,
+          actual,
+          pass,
+        });
       }
     }
   } finally {

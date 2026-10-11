@@ -22,7 +22,7 @@ import { type Category, MarkerSet } from "../markers";
 import type { MethodKind, ServicePlan } from "../plan";
 import { isUnder } from "../project";
 import { infraPaths } from "./infra";
-import { resolveHook, WRAPPED } from "./hookResolution";
+import { HOOK_NAME, OTHER_HOOKS, resolveHook, WRAPPED } from "./hookResolution";
 import { completeCollectionResults, deleteOrphanTypes, localTypesOf } from "./webTypes";
 
 /** What the client transform knows of each migrated service. */
@@ -337,7 +337,11 @@ class FileRewrite {
 }
 
 function markRefetches(rewrite: FileRewrite): void {
-  for (const call of rewrite.file.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+  const { file } = rewrite;
+  const calls = file.getFullText().includes("refetch")
+    ? file.getDescendantsOfKind(SyntaxKind.CallExpression)
+    : [];
+  for (const call of calls) {
     const callee = call.getExpression();
     const name = Node.isPropertyAccessExpression(callee) ? callee.getName() : callee.getText();
     if (name === "refetch") {
@@ -348,13 +352,6 @@ function markRefetches(rewrite: FileRewrite): void {
     }
   }
 }
-
-const OTHER_HOOKS: Readonly<Record<string, string>> = {
-  useRoomEvents:
-    "room events: declare them in the contract's events and listen with qd.<service>.<event>.useEvent(handler)",
-  useChannelSend:
-    "channels: declare them in the contract's channels and send with qd.<service>.<channel>.useChannel()",
-};
 
 /** Rewrites the 4.x hook calls of the web app; returns the wrappers that may now be deleted. */
 export function migrateClient(
@@ -383,8 +380,10 @@ export function migrateClient(
       continue;
     }
     const rewrite = new FileRewrite(file, work, services);
-    for (const identifier of file.getDescendantsOfKind(SyntaxKind.Identifier)) {
-      visitIdentifier(identifier, rewrite, wrappers);
+    if (HOOK_NAME.test(file.getFullText())) {
+      for (const identifier of file.getDescendantsOfKind(SyntaxKind.Identifier)) {
+        visitIdentifier(identifier, rewrite, wrappers);
+      }
     }
     markRefetches(rewrite);
     completeCollectionResults(file, work);

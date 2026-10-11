@@ -324,6 +324,50 @@ describe("definition-time checks", () => {
     }
   });
 
+  it("keeps a describe on the contract, its collections, streams, channels and events", () => {
+    const described = defineContract("boardService", {
+      describe: "Task boards and what happens on them.",
+      entity: taskSchema,
+      collections: {
+        byProject: {
+          describe: "A project's tasks, by ordinal.",
+          scope: "projectId",
+          item: "entity",
+          order: [["id", "asc"]],
+        },
+      },
+      streams: { logs: { item: z.string(), describe: "A task's log lines." } },
+      channels: { cursor: { payload: idInput, describe: "Where a user's cursor is." } },
+      events: { celebrated: { payload: idInput, describe: "A task was finished." } },
+    });
+    expect(described.describe).toBe("Task boards and what happens on them.");
+    expect(described.collections.byProject.describe).toBe("A project's tasks, by ordinal.");
+    expect(described.streams.logs.describe).toBe("A task's log lines.");
+    expect(described.channels.cursor.describe).toBe("Where a user's cursor is.");
+    expect(described.events.celebrated.describe).toBe("A task was finished.");
+    expect(define("taskService", entityOnly)).not.toHaveProperty("describe");
+  });
+
+  it("rejects a member describe that is not a non-empty string", () => {
+    for (const text of ["", 42]) {
+      expect(() => define("taskService", { ...entityOnly, describe: text })).toThrow(
+        'defineContract("taskService"): describe must be a non-empty string',
+      );
+      expect(withCollection({ describe: text })).toThrow(
+        'collection "c": describe must be a non-empty string',
+      );
+      expect(() => define("s", { streams: { s: { item: idInput, describe: text } } })).toThrow(
+        'stream "s": describe must be a non-empty string',
+      );
+      expect(() => define("s", { channels: { c: { payload: idInput, describe: text } } })).toThrow(
+        'channel "c": describe must be a non-empty string',
+      );
+      expect(() => define("s", { events: { e: { payload: idInput, describe: text } } })).toThrow(
+        'event "e": describe must be a non-empty string',
+      );
+    }
+  });
+
   it("rejects collection names that clash with a method or are reserved", () => {
     const list = query({ input: idInput, output: "entity" });
     expect(() =>

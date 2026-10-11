@@ -4,6 +4,7 @@ import { z } from "zod";
 const projectSchema = z.object({ id: z.string(), name: z.string() });
 
 export const project = defineContract("projectService", {
+  describe: "Projects and the people they are shared with.",
   entity: projectSchema,
   methods: {
     // the JSON access list jsonAcl reads: share, unshare, setLevel, listShares
@@ -17,6 +18,7 @@ export const project = defineContract("projectService", {
   collections: {
     // each user's projects: an invite adds the project, a remove or a leave takes it out
     mine: {
+      describe: "The projects a user is a member of.",
       scope: via({ model: "projectMember", entry: "projectId", scope: "userId" }),
       item: "entity",
       order: [["id", "asc"]],

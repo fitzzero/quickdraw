@@ -20,6 +20,8 @@ import {
   type HandlerContext,
   type MethodImplementation,
   type Principal,
+  type PrincipalKindOf,
+  type QuickdrawTypes,
   type Service,
 } from "./index";
 
@@ -743,5 +745,55 @@ describe("the in-process caller", () => {
 
   test("a version is a number or a string", () => {
     expectTypeOf<Version>().toEqualTypeOf<number | string>();
+  });
+});
+
+describe("principal kinds", () => {
+  test("are kinds of the app's principal, on initQuickdraw, the service and its methods", () => {
+    expectTypeOf<PrincipalKindOf<{ principal: AppPrincipal }>>().toEqualTypeOf<"user" | "agent">();
+    initQuickdraw<{ principal: AppPrincipal }>({ kinds: ["user", "agent"] });
+    // @ts-expect-error -- "runner" is no kind of the app's principal
+    initQuickdraw<{ principal: AppPrincipal }>({ kinds: ["user", "runner"] });
+    qd.defineService(project, {
+      kinds: ["user", "agent"],
+      methods: {
+        get: {
+          access: "authenticated",
+          kinds: ["user"],
+          handler: ({ input }) => ({ id: input.id, name: "" }),
+        },
+      },
+    });
+    qd.defineService(project, {
+      // @ts-expect-error -- a misspelled kind
+      kinds: ["usr"],
+      methods: {
+        get: { access: "authenticated", handler: ({ input }) => ({ id: input.id, name: "" }) },
+      },
+    });
+    qd.defineService(project, {
+      methods: {
+        get: {
+          access: "authenticated",
+          // @ts-expect-error -- a misspelled kind
+          kinds: ["agnet"],
+          handler: ({ input }) => ({ id: input.id, name: "" }),
+        },
+      },
+    });
+  });
+
+  test("are any string with the base Principal", () => {
+    expectTypeOf<PrincipalKindOf<QuickdrawTypes>>().toEqualTypeOf<string>();
+    initQuickdraw({ kinds: ["user", "runner"] }).defineService(project, {
+      kinds: ["runner"],
+      methods: {
+        get: {
+          access: "authenticated",
+          kinds: ["runner"],
+          handler: ({ input }) => ({ id: input.id, name: "" }),
+        },
+      },
+    });
   });
 });

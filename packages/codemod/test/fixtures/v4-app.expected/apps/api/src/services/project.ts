@@ -8,6 +8,7 @@ import { jsonAcl } from "@fitzzero/quickdraw-core/server";
 // quickdraw-migrate: review [v4-api] 4.x API CollectionSnapshotPage (removed): lint's no-v4-api names each replacement
 import type { ACL, AccessLevel, CollectionSnapshotPage } from "@fitzzero/quickdraw-core";
 import { z } from "zod";
+import { getProjectLimits } from "./project-methods/limits.js";
 import { qd } from "../quickdraw.js";
 import { db } from "../db.js";
 
@@ -204,5 +205,6 @@ export const projectService = qd.defineService(projectContract, {
         return { id: input.id };
       },
     },
+    getProjectLimits,
   },
 });

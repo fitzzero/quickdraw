@@ -35,6 +35,14 @@ export class LabelService extends BaseService<
       return await this.prisma.label.findUnique({ where: { id: payload.id } });
     });
 
+    // Anyone may read a label's name by its id: "Public" with an id and no schema
+    this.defineMethod("getLabelName", "Public", async (payload) => {
+      return await this.prisma.label.findUnique({
+        where: { id: payload.id },
+        select: { name: true },
+      });
+    });
+
     this.defineMethod(
       "renameLabel",
       "Moderate",
@@ -95,5 +103,17 @@ export class LabelService extends BaseService<
     const created = await super.adminCreate(data);
     this.onChange?.(created.id);
     return created;
+  }
+
+  // Deletes tell the listener too: 4.x's delete, whose name is a reserved word
+  protected override async delete(id: string): Promise<boolean> {
+    await this.prisma.label.delete({ where: { id } });
+    this.onChange?.(id);
+    return true;
+  }
+
+  /** Deletes a label for the admin page, through the override. */
+  public async removeLabel(id: string): Promise<boolean> {
+    return await this.delete(id);
   }
 }

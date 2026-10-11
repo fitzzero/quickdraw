@@ -4,7 +4,9 @@
 
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { main } from "../src/cli";
+import { main, relaunchHeap } from "../src/cli";
+import { findLayout } from "../src/layout";
+import { countSourceFiles } from "../src/project";
 import { MOVED_NAMES, PROVIDER_PROPS, REMOVED_ENTRIES, REMOVED_NAMES } from "../src/v4names";
 import { copyFixture, readTree, removeCopies, REPO } from "./helpers";
 
@@ -66,13 +68,32 @@ describe("quickdraw-codemod", () => {
     const { code, out } = run("v5", root, "--dry-run");
     expect(code).toBe(0);
     expect(out).toContain("quickdraw-codemod v5 (dry run: nothing written)");
-    expect(out).toContain("5 services, 22 methods, 5 contracts");
+    expect(out).toContain("5 services, 26 methods (2 aggregator functions removed), 5 contracts");
     expect(out).toContain("  A packages/shared/src/contracts/project.ts");
+    expect(out).toContain("  D apps/api/src/services/task/methods/index.ts");
     expect(out).toContain("  D apps/web/src/hooks/useService.ts");
     // The report does not exist yet: the run would create it.
     expect(out).toContain("  A quickdraw-migration-report.md");
     expect(out).not.toContain("  M quickdraw-migration-report.md");
     expect(readTree(root)).toEqual(before);
+  });
+
+  it("refuses a --heap that is not a whole number of MiB", () => {
+    const { code, err } = run("v5", ".", "--heap", "1.5");
+    expect(code).toBe(2);
+    expect(err).toMatch(/^quickdraw-codemod: --heap takes a whole number of MiB, 256 or more\n/u);
+    expect(run("v5", ".", "--heap", "64").code).toBe(2);
+  });
+
+  it("runs a small app in this process, and starts again for --heap", () => {
+    const root = copyFixture("cli-heap");
+    expect(relaunchHeap(["v5", root, "--dry-run"])).toBeUndefined();
+    const files = countSourceFiles(findLayout(root));
+    expect(relaunchHeap(["v5", root, "--heap", "4096"])).toEqual({ heap: 4096, files });
+    // main reports these
+    expect(relaunchHeap(["--help"])).toBeUndefined();
+    expect(relaunchHeap(["v5", "/nowhere", "--heap", "4096"])).toBeUndefined();
+    expect(relaunchHeap(["v5", root, "--heap", "x"])).toBeUndefined();
   });
 });
 

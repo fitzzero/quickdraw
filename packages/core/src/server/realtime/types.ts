@@ -411,6 +411,12 @@ export interface ServiceChannel {
     | { readonly kind: "roomPrefix"; readonly prefix: string }
     | undefined;
   readonly access: ChannelAccess;
+  /**
+   * The kinds of principal the channel's service admits, as a set for the
+   * per-message check: a message from a socket of another kind, or without
+   * one, is dropped. `undefined` admits every kind.
+   */
+  readonly kinds: ReadonlySet<string> | undefined;
   readonly handler: AnyChannelHandler;
 }
 

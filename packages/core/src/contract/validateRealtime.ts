@@ -25,14 +25,22 @@ export interface RealtimeScope {
   readonly reserved: ReadonlySet<string>;
 }
 
-const STREAM_KEYS: ReadonlySet<string> = new Set(["item", "scope", "seed", "volatile", "access"]);
+const STREAM_KEYS: ReadonlySet<string> = new Set([
+  "item",
+  "scope",
+  "seed",
+  "volatile",
+  "access",
+  "describe",
+]);
 const CHANNEL_KEYS: ReadonlySet<string> = new Set([
   "payload",
   "ratePerSecond",
   "burst",
   "requires",
+  "describe",
 ]);
-const EVENT_KEYS: ReadonlySet<string> = new Set(["payload"]);
+const EVENT_KEYS: ReadonlySet<string> = new Set(["payload", "describe"]);
 
 /** The longest app room name `ctx.rooms.join` takes, so the longest prefix one can start with. */
 const MAX_ROOM_LENGTH = 256;
@@ -90,6 +98,9 @@ function checkMember(
     if (!keys.has(key)) {
       fail(`${kind} "${name}" has an unknown option "${key}"; the options are ${quote(keys)}`);
     }
+  }
+  if (value.describe !== undefined && !isName(value.describe)) {
+    fail(`${kind} "${name}": describe must be a non-empty string`);
   }
   return value;
 }

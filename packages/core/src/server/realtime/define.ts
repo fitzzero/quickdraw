@@ -109,6 +109,7 @@ function checkChannel(
   name: string,
   def: ChannelDef,
   entry: unknown,
+  kinds: ReadonlySet<string> | undefined,
   fail: Fail,
 ): ServiceChannel {
   const owner = `channel "${name}"`;
@@ -132,17 +133,20 @@ function checkChannel(
     burst: def.burst ?? Math.max(1, ratePerSecond * 2),
     requires: compileRequires(def),
     access: checkChannelAccess(owner, implementation.access, fail),
+    kinds,
     handler: implementation.handler as AnyChannelHandler,
   });
 }
 
 /**
  * The channels of a service: `defineService`'s `channels` option checked
- * against the contract's channels, one implementation each.
+ * against the contract's channels, one implementation each, with the kinds
+ * of principal the service admits (`undefined`: every kind) as a set.
  */
 export function compileChannels(
   contract: AnyContract,
   value: unknown,
+  kinds: readonly string[] | undefined,
   fail: Fail,
 ): ReadonlyMap<string, ServiceChannel> {
   const declared = Object.entries(contract.channels);
@@ -157,12 +161,13 @@ export function compileChannels(
     fail(`channels has no implementation for ${missing.map((name) => `"${name}"`).join(", ")}`);
   }
   const channels = new Map<string, ServiceChannel>();
+  const admitted = kinds === undefined ? undefined : new Set(kinds);
   for (const [name, entry] of Object.entries(value)) {
     const def = Object.hasOwn(contract.channels, name) ? contract.channels[name] : undefined;
     if (def === undefined) {
       fail(`"${name}" is not a channel of the contract`);
     }
-    channels.set(name, checkChannel(contract.name, name, def, entry, fail));
+    channels.set(name, checkChannel(contract.name, name, def, entry, admitted, fail));
   }
   return channels;
 }

@@ -23,7 +23,7 @@ import {
   unreadable,
   type Acknowledge,
 } from "./ack";
-import { attachLegacyShim, type LegacyCallers } from "./legacy";
+import { attachLegacyShim, type LegacyCallers, type LegacyWire } from "./legacy";
 import type { QuickdrawServerSocket, SocketContext } from "./types";
 
 /**
@@ -45,8 +45,15 @@ export interface ConnectionSettings extends SocketContext {
    */
   readonly hello: ServerHello;
   readonly extensions: readonly SocketExtension[];
+  /**
+   * Added to every 4.x socket after the legacy shim: the live data's room
+   * bookkeeping, so the app rooms its calls joined are left on disconnect.
+   */
+  readonly legacyExtensions: readonly SocketExtension[];
   /** The 4.x callers already logged, shared by every socket of the server. */
   readonly legacyCallers: LegacyCallers;
+  /** The legacy shim's settings (its aliases); only 4.x sockets read them. */
+  readonly legacyWire: LegacyWire;
 }
 
 type Calls = Map<CallId, AbortController>;
@@ -148,7 +155,8 @@ export function attachCallListeners(socket: QuickdrawServerSocket, context: Sock
 /**
  * The server's `connection` handler: joins the socket's user room, then
  * gives a v5 socket its listeners and `qd:hello`, or a 4.x socket the legacy
- * shim. Only sockets the handshake middleware admitted get here.
+ * shim and the legacy extensions. Only sockets the handshake middleware
+ * admitted get here.
  */
 export function onConnection(
   settings: ConnectionSettings,
@@ -159,7 +167,10 @@ export function onConnection(
       void socket.join(userRoom(principal.userId));
     }
     if (socket.data.protocol === "legacy") {
-      attachLegacyShim(socket, settings, settings.legacyCallers);
+      attachLegacyShim(socket, settings, settings.legacyCallers, settings.legacyWire);
+      for (const extension of settings.legacyExtensions) {
+        extension(socket, settings);
+      }
       return;
     }
     attachCallListeners(socket, settings);

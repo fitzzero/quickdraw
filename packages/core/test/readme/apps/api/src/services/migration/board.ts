@@ -15,6 +15,7 @@ const card = z.object({
 
 // #region fat
 export const boardContract = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity: card.extend({ projectId: z.string() }),
   methods: {
     // every task of the project, grouped by status, fetched again after every write
@@ -22,10 +23,12 @@ export const boardContract = defineContract("taskService", {
       input: z.object({ projectId: z.string() }),
       output: z.record(z.string(), z.array(card)),
       watch: { collection: "board", scope: (input) => input.projectId },
+      describe: "Lists a project's tasks, grouped by status.",
     }),
   },
   collections: {
     board: {
+      describe: "A project's tasks, by ordinal.",
       scope: "projectId",
       item: "entity",
       order: [

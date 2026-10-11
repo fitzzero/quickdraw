@@ -13,7 +13,7 @@ import type { QuickdrawError } from "../../protocol/errors";
 import type { Caller } from "../caller";
 import type { ContractOfServices, PrincipalOfServices } from "../dispatcher";
 import type { AnyService } from "../service";
-import type { McpContext, McpContextOf } from "../types";
+import type { MaybePromise, McpContext, McpContextOf } from "../types";
 
 /** The JSON Schema of a tool's arguments. MCP requires an object schema. */
 export interface McpInputSchema {
@@ -157,6 +157,32 @@ export interface McpToolCall<
   readonly signal: AbortSignal;
   readonly request: McpRequest;
 }
+
+/** What a function of the registry's `bind` receives: one call of a tool whose method's input has its argument. */
+export interface McpBindCall<S extends readonly AnyService[] = readonly AnyService[]> {
+  /**
+   * Who the call acts for, from the registry's `principal`. Never `null`: an
+   * anonymous caller of a tool with a bound argument is refused with
+   * `UNAUTHENTICATED` before any binder runs.
+   */
+  readonly principal: PrincipalOfServices<S>;
+  /** The fields the registry's `context` produced for the call, if any. */
+  readonly mcp: McpContextOfServices<S> | undefined;
+  readonly request: McpRequest;
+  /** The service and method the tool calls, for example `"messageService"` and `"post"`. */
+  readonly service: string;
+  readonly method: string;
+}
+
+/**
+ * Fills one argument of the registry's `bind` from who is calling, for
+ * example a claim of the principal's token. Returning `undefined` or `null`
+ * refuses the call with `FORBIDDEN`; throwing fails it with `INTERNAL`, or
+ * with the code of a `QuickdrawError`.
+ */
+export type McpBinder<S extends readonly AnyService[] = readonly AnyService[]> = (
+  call: McpBindCall<S>,
+) => MaybePromise<unknown>;
 
 /**
  * Who may call a custom tool: `"authenticated"` callers only, or `"public"`,

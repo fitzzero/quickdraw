@@ -4,7 +4,7 @@
 
 One page per service, generated from its contract by `quickdraw-docs`.
 
-| Service                             | Methods | Collections | Streams | Channels | Events |
-| ----------------------------------- | ------- | ----------- | ------- | -------- | ------ |
-| [projectService](projectService.md) | 4       | 0           | 0       | 0        | 0      |
-| [taskService](taskService.md)       | 11      | 1           | 0       | 0        | 0      |
+| Service                             | Description                 | Methods | Collections | Streams | Channels | Events |
+| ----------------------------------- | --------------------------- | ------- | ----------- | ------- | -------- | ------ |
+| [projectService](projectService.md) |                             | 4       | 0           | 0       | 0        | 0      |
+| [taskService](taskService.md)       | Tasks on a project's board. | 11      | 1           | 0       | 0        | 0      |

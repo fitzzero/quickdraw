@@ -2,7 +2,7 @@
 // package's own habit: with a `.js` extension where its relative imports
 // have one (NodeNext packages), without where they do not (bundlers).
 
-import { dirname, relative } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import { Node, SyntaxKind, type Project, type SourceFile } from "ts-morph";
 import { isUnder } from "./project";
 
@@ -161,6 +161,34 @@ export function removeUnusedImports(file: SourceFile, only?: ReadonlySet<string>
       declaration.remove();
     }
   }
+}
+
+/**
+ * The project's file a relative module specifier of `file` names (`./x.js`,
+ * `./x`, `./dir`), read from its path: an empty file is no module, so the
+ * type checker resolves no import of it.
+ */
+function relativeTarget(file: SourceFile, specifier: string): SourceFile | undefined {
+  const base = resolve(dirname(file.getFilePath()), specifier).replace(/\.(?:m?js|jsx)$/u, "");
+  const project = file.getProject();
+  return [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]
+    .map((candidate) => project.getSourceFile(candidate))
+    .find((found) => found !== undefined);
+}
+
+/** Whether any file of the project imports or re-exports `file`, even a file left empty. */
+export function isImported(project: Project, file: SourceFile): boolean {
+  return project.getSourceFiles().some((other) =>
+    [...other.getImportDeclarations(), ...other.getExportDeclarations()].some((declaration) => {
+      const specifier = declaration.getModuleSpecifierValue();
+      if (specifier === undefined) {
+        return false;
+      }
+      return specifier.startsWith(".")
+        ? relativeTarget(other, specifier) === file
+        : declaration.getModuleSpecifierSourceFile() === file;
+    }),
+  );
 }
 
 /** The module `name` is imported from in `file`, and the name it is imported as. */

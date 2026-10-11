@@ -3,7 +3,7 @@
 // registered (`registerX(service)`) stays in that module as an exported,
 // typed method object, which `methods` lists by name.
 
-import type { FunctionDeclaration, SourceFile } from "ts-morph";
+import type { FunctionDeclaration, Node, SourceFile } from "ts-morph";
 import { accessFor } from "../access";
 import type { Work } from "../apply";
 import type { RunContext } from "../context";
@@ -18,6 +18,19 @@ import {
   registerLeftoverMarker,
   startWithComments,
 } from "./serviceText";
+
+/**
+ * The calls of converted functions (register functions and the aggregators
+ * that call them, `aggregators.ts`): a function the run keeps loses them.
+ */
+export interface ConvertedCalls {
+  /** `fn`'s statements that call a converted function, the callees they name, and `fn`'s text without them. */
+  of(fn: FunctionDeclaration): {
+    readonly statements: ReadonlySet<Node>;
+    readonly callees: readonly string[];
+    readonly text: string;
+  };
+}
 
 /** A service's methods, built: entries of `methods`, and the method modules' objects. */
 export interface ServiceBuild {
@@ -96,12 +109,17 @@ export function buildMethods(
   return build;
 }
 
-/** Replaces each method module's `registerX(service)` with its method objects. */
+/**
+ * Replaces each method module's `registerX(service)` with its method objects.
+ * Its calls of other register functions and of aggregators (`converted`) go
+ * too: the run turns those into method objects, or removes them.
+ */
 export function convertModules(
   ctx: RunContext,
   plan: ServicePlan,
   build: ServiceBuild,
   work: Work,
+  converted: ConvertedCalls,
 ): void {
   const quickdraw = infraPaths(ctx).quickdraw;
   for (const [register, consts] of build.modules) {
@@ -112,13 +130,12 @@ export function convertModules(
         .filter((method) => method.call.register === register)
         .map((method) => method.call.call.getParentOrThrow()),
     );
+    const calls = converted.of(register);
     const leftovers = register
       .getStatements()
-      .filter((statement) => !defineStatements.has(statement));
-    const kept =
-      leftovers.length === 0
-        ? []
-        : [registerLeftoverMarker(register.getName() ?? "this function"), register.getText()];
+      .filter((statement) => !defineStatements.has(statement) && !calls.statements.has(statement));
+    const marker = registerLeftoverMarker(register.getName() ?? "this function", calls.callees);
+    const kept = leftovers.length === 0 ? [] : [`${marker}\n${calls.text}`];
     fileWork.edits.push({
       start: startWithComments(register),
       end: register.getEnd(),

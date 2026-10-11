@@ -118,6 +118,10 @@ const EXAMPLES = {
     "apps/api/src/services/hand.ts",
     `export const s = qd.defineService(task, { model: "task", methods: { getTask: { access: { entry: "Read" }, handler: ({ input, db }) => db.task.findUniqueOrThrow({ where: { id: input.id } }) } } });\n`,
   ],
+  "require-describe": [
+    "packages/shared/src/contracts/undescribed.ts",
+    `import { defineContract } from "@fitzzero/quickdraw-core";\nexport const c = defineContract("noteService", { describe: "Notes a user keeps." , events: { saved: { payload: s } } });\n`,
+  ],
   "no-raw-button-strings": [
     "apps/web/src/components/Button.tsx",
     `export const B = () => <Button>Save</Button>;\n`,

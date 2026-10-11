@@ -16,8 +16,26 @@ Run it from the app's repository root, on a clean working tree, after
 upgrading `@fitzzero/quickdraw-core` to 5.0. It formats what it writes with
 the app's formatter (oxfmt, prettier or Biome, when the root `package.json`
 has it and it is installed), so the output passes the app's format check as
-written. It expects the quickdraw template's layout; the options move each
-part:
+written. Files the formatter's config ignores (an app that ignores Markdown
+ignores the report) are left as written. When the formatter fails, the
+codemod prints its exit code, the formatter's own error and the files it
+left unformatted.
+
+It holds the whole app in one TypeScript program, which needs more than
+Node's default heap on a large app. With more than 1,500 source files (the
+`.ts` and `.tsx` files it reads, outside `node_modules`, `dist`, `generated`
+and other build output), it starts itself again in a Node with a larger heap:
+three quarters of the memory it may use (the container's limit, else the
+machine's), at most 16384 MiB. It says so first:
+`quickdraw-codemod: 4270 source files: running with a 10752 MiB heap (--heap to change)`.
+Pass `--heap <MiB>` to choose the heap on any app, for example on a machine
+shared with other work. A heap you give Node yourself
+(`NODE_OPTIONS=--max-old-space-size=...`) is kept, and under `bun --bun`,
+which ignores V8's heap flags, nothing changes. When the system stops the
+run (SIGKILL), the machine most likely ran out of memory: pass a smaller
+`--heap`. When it runs out of heap, pass a larger one.
+
+It expects the quickdraw template's layout; the options move each part:
 
 | Option                | Default                                       |
 | --------------------- | --------------------------------------------- |
@@ -26,6 +44,7 @@ part:
 | `--web <dir>`         | `apps/web`                                    |
 | `--db-package <name>` | `packages/db`'s name                          |
 | `--dry-run`           | write nothing; list the files it would change |
+| `--heap <MiB>`        | over 1,500 files: 75% of memory, ≤ 16384 MiB  |
 
 ## What it does
 
@@ -33,7 +52,9 @@ part:
   service in `packages/shared/src/contracts/`, from the service's method map
   and `defineMethod` calls. Each method's `input` is the schema its
   `defineMethod` validated with, moved into the shared package with the
-  helpers it needs (or `todoSchema<Payload>()` when it had none); its output
+  helpers it needs (or `todoSchema<Payload>({ keys })` when it had none,
+  with the payload type's top-level keys, so `defineService`'s rowless check
+  sees an `id` among them); its output
   is `"entity"` when the 4.x response was the service's DTO (or
   `todoSchema<Response>()`); its kind is `query` when its name starts with
   get, list, search, find or count, or the web app reads it with
@@ -53,7 +74,28 @@ part:
   `"entity"`, marked (a tracked write throws `NOT_FOUND` rather than
   answering null, and only `"entity"` is optimistic by default). In a file
   whose helpers use the tracked `db`, handlers use that one rather than
-  shadow it. A split service's method modules export typed method objects.
+  shadow it. A split service's method modules export typed method objects,
+  whether their parameter is the class or a port of it, read from the
+  source: `Pick`, `Omit`, `Partial`, `Readonly` or `Required` of the class
+  or of `BaseService<...>` over its method map, through type aliases,
+  interfaces, type parameters and intersections. The port type is marked. A
+  `defineMethod` call tied to no service is named at its file and line in
+  the contract's marker for the method map's unimplemented methods. A
+  function that only calls the modules' register functions, or other such
+  functions (an aggregator, such as
+  `defineQueryMethods(service) { defineGetTarget(service); ... }`), is
+  removed with its calls, and so is a file it leaves empty that nothing
+  imports; the summary counts the removed aggregators. One that does more
+  (a condition, logging, another call) stays under a `[this]` marker that
+  names the calls the codemod removed from it, and a register function
+  loses its calls of the others the same way.
+- **Which class.** A service is read from one class nothing extends, outside
+  test code (`__tests__`, `testing`, `*.test.ts(x)`, `*.spec.ts(x)`): of
+  several with one service name, the class `registerService` instantiates,
+  else the one named after the service; the others are marked `[service]`.
+  Test code's 4.x service classes are marked `[service]` and hide nothing;
+  its uses of the services are rewritten. A contract whose class implements
+  none of its method map is marked `[service]` and named on stderr.
 - **Access.** Each method gets the 5.0 form that admits exactly the callers
   4.x admitted:
 

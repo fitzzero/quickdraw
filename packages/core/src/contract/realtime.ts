@@ -90,6 +90,8 @@ export interface StreamDef<Item extends StandardSchemaV1 = StandardSchemaV1> {
   readonly volatile?: boolean;
   /** Who may subscribe. Without it the stream is closed. */
   readonly access?: StreamAccess;
+  /** What the stream carries, in a sentence or two, for the generated docs. */
+  readonly describe?: string;
 }
 
 /**
@@ -162,11 +164,15 @@ export interface ChannelDef<Payload extends StandardSchemaV1 = StandardSchemaV1>
   readonly burst?: number;
   /** What the sender must already be subscribed to, or the app room it must be in. */
   readonly requires?: ChannelRequires;
+  /** What a message says, in a sentence or two, for the generated docs. */
+  readonly describe?: string;
 }
 
 /** A typed custom room event, delivered as `qd:event` (RFC 0003 section 8.3). */
 export interface EventDef<Payload extends StandardSchemaV1 = StandardSchemaV1> {
   readonly payload: Payload;
+  /** What the event announces, in a sentence or two, for the generated docs. */
+  readonly describe?: string;
 }
 
 /** True when a stream has one feed per scope value; false for a global stream. */

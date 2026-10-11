@@ -14,11 +14,16 @@ const cardSchema = z.object({
 });
 
 const task = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity: taskSchema,
   projections: { card: cardSchema },
   methods: {
     ...crud.contract({ entity: taskSchema, get: true }),
-    card: query({ input: z.object({ id: z.string() }), output: "card" }),
+    card: query({
+      input: z.object({ id: z.string() }),
+      output: "card",
+      describe: "Reads one task as its card.",
+    }),
   },
 });
 

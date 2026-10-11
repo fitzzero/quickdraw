@@ -25,7 +25,7 @@ import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const packageDir = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SKILLS = ["quickdraw-migrate-v5", "quickdraw-new-service"];
+const SKILLS = ["quickdraw-api-docs", "quickdraw-migrate-v5", "quickdraw-new-service"];
 const RULES = [
   "quickdraw-access.md",
   "quickdraw-client.md",
@@ -104,7 +104,7 @@ describe("quickdraw-skills link", () => {
     assert.ok(
       existsSync(join(repo.root, ".claude", "skills", "quickdraw-new-service", "SKILL.md")),
     );
-    assert.match(result.stdout, /2 skills and 4 rules in \.claude \(6 updated, 0 pruned\)/);
+    assert.match(result.stdout, /3 skills and 4 rules in \.claude \(7 updated, 0 pruned\)/);
   });
 
   it("changes nothing when run again", () => {
@@ -276,7 +276,7 @@ describe("quickdraw-skills link --check", () => {
     run(repo, ["link"]);
     const result = run(repo, ["link", "--check"]);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /2 skills and 4 rules linked and up to date/);
+    assert.match(result.stdout, /3 skills and 4 rules linked and up to date/);
   });
 
   it("reports missing links without creating them", () => {
@@ -286,7 +286,7 @@ describe("quickdraw-skills link --check", () => {
     for (const name of [...SKILLS, ...RULES]) {
       assert.match(result.stderr, new RegExp(`${name.replace(".", "\\.")} is missing`));
     }
-    assert.match(result.stderr, /6 link\(s\) out of date: run 'quickdraw-skills link'/);
+    assert.match(result.stderr, /7 link\(s\) out of date: run 'quickdraw-skills link'/);
     assert.equal(existsSync(join(repo.root, ".claude")), false);
   });
 

@@ -48,4 +48,12 @@ export interface TaskServiceMethods {
     payload: { projectId: string };
     response: { count: number };
   };
+  archiveTask: {
+    payload: { id: string };
+    response: TaskDTO;
+  };
+  listArchivedTasks: {
+    payload: { projectId: string };
+    response: TaskDTO[];
+  };
 }

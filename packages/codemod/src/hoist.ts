@@ -43,6 +43,45 @@ const CONSTRUCTION = new Set(["setDelegate", "verifyAllMethods", "defineMethod"]
 /** Names a hoisted function may not take in the service file. */
 const RESERVED = new Set(["qd", "db", "input", "ctx"]);
 
+/**
+ * JavaScript's reserved words (strict mode, since a module is strict, plus
+ * `await`, `enum` and the literals). A class member may be named after one
+ * (4.x's BaseService has `delete`), but a function or a binding may not:
+ * `function delete()` does not parse.
+ */
+const RESERVED_WORDS = new Set([
+  ...["break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete"],
+  ...["do", "else", "export", "extends", "finally", "for", "function", "if", "import", "in"],
+  ...["instanceof", "new", "return", "super", "switch", "this", "throw", "try", "typeof"],
+  ...["var", "void", "while", "with"],
+  ...["implements", "interface", "let", "package", "private", "protected", "public", "static"],
+  ...["yield", "await", "enum", "null", "true", "false"],
+]);
+
+/** Why a member's own name cannot be its module-level name, or undefined when it can. */
+export function unusableName(name: string): string | undefined {
+  if (!/^[A-Za-z_$][\w$]*$/u.test(name)) {
+    return `${name} is not an identifier`;
+  }
+  return RESERVED_WORDS.has(name) ? `${name} is a reserved word` : undefined;
+}
+
+/**
+ * The module-level name of the member `name` of `className`: its own name,
+ * unless that is taken in the file or cannot name a function, then
+ * `<name>Of<className>` (a name that is no identifier first loses what an
+ * identifier cannot hold).
+ */
+export function moduleName(name: string, className: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(name) && unusableName(name) === undefined) {
+    return name;
+  }
+  const words = name.split(/[^\w$]+/u).filter((word) => word !== "");
+  const base = words.map((word, index) => (index === 0 ? word : upperFirst(word))).join("");
+  const safe = /^[A-Za-z_$]/u.test(base) ? base : `member${upperFirst(base)}`;
+  return `${safe}Of${className}`;
+}
+
 /** `this.<name>(...)` as a statement: its name, or undefined. */
 function thisCallName(statement: Statement): string | undefined {
   const expression = Node.isExpressionStatement(statement) ? statement.getExpression() : undefined;
@@ -147,10 +186,9 @@ export function hoistedNames(
       if (hoisted.has(name)) {
         continue;
       }
-      const moduleName = taken.has(name) ? `${name}Of${cls.getName() ?? "Service"}` : name;
       const publicMember = !member.hasModifier("private") && !member.hasModifier("protected");
       hoisted.set(name, {
-        name: moduleName,
+        name: moduleName(name, cls.getName() ?? "Service", taken),
         file,
         exported: publicMember && !member.hasModifier("override"),
         ...(Node.isGetAccessorDeclaration(member) ? { getter: true } : {}),
@@ -286,23 +324,30 @@ function methodText(
   imports: Hoisted[],
   setupOnly: ReadonlySet<string>,
 ): { text: string; usesDb: boolean } {
+  const name = method.getName();
+  const unusable = unusableName(name);
+  const renamed = unusable === undefined ? "" : `hoisted as ${target.name}: ${unusable}`;
   const note =
-    (Object.hasOwn(HOOK_NOTES, method.getName()) ? HOOK_NOTES[method.getName()] : undefined) ??
+    (Object.hasOwn(HOOK_NOTES, name) ? HOOK_NOTES[name] : undefined) ??
     (method.hasModifier("override")
       ? {
           category: "this" as const,
-          message: `overrode the 4.x BaseService method ${method.getName()}, which 5.0 does not have: keep what it still needs elsewhere, then delete it`,
+          message: `overrode the 4.x BaseService method ${name}, which 5.0 does not have: keep what it still needs elsewhere, then delete it`,
         }
       : undefined);
-  return functionText(
-    method,
-    target.name,
-    target.exported,
-    note === undefined ? [] : [note],
-    scope,
-    imports,
-    setupOnly,
-  );
+  const notes: { category: Category; message: string }[] = note === undefined ? [] : [note];
+  if (renamed !== "") {
+    // the rename goes on the method's own marker, or on one of its own
+    const [first] = notes;
+    notes.splice(
+      0,
+      1,
+      first === undefined
+        ? { category: "this", message: `4.x method ${name} ${renamed}` }
+        : { ...first, message: `${first.message}; ${renamed}` },
+    );
+  }
+  return functionText(method, target.name, target.exported, notes, scope, imports, setupOnly);
 }
 
 /** `defineCollection(name, options)` or `installAdminMethods(options)`, kept as a marked const. */

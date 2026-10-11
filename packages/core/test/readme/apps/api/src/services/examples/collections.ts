@@ -6,11 +6,13 @@ import { qd } from "../../quickdraw";
 
 // #region contract
 export const task = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity: taskSchema,
   projections: { card: cardSchema },
   methods: { ...crud.contract({ entity: taskSchema, get: true }) },
   collections: {
     byProject: {
+      describe: "A project's open tasks, in board order.",
       // a column holding the scope value
       scope: "projectId",
       // the projection each item is sent as
@@ -27,7 +29,12 @@ export const task = defineContract("taskService", {
       views: { mine: (row, who) => row.assigneeId === who.userId },
     },
     // each user's own
-    assigned: { scope: "assigneeId", item: "card", order: [["id", "asc"]] },
+    assigned: {
+      describe: "The tasks assigned to a user.",
+      scope: "assigneeId",
+      item: "card",
+      order: [["id", "asc"]],
+    },
   },
 });
 // #endregion

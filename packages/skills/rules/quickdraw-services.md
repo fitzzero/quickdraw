@@ -17,6 +17,7 @@ without server code. Everything else is typed from it.
 
 ```ts
 export const task = defineContract("taskService", {
+  describe: "Tasks on a project's board.", // what the service is for
   entity: taskSchema, // the full row; every row schema has `id: string`
   projections: { card: cardSchema }, // named lean shapes; "entity" is implicit
   fields: { notes: "Admin" }, // the level a caller needs to receive a field
@@ -26,15 +27,23 @@ export const task = defineContract("taskService", {
       input: z.object({ projectId: z.string() }),
       output: z.number(),
       watch: { collection: "board", scope: (input) => input.projectId },
+      describe: "Counts the tasks on a project's board.",
     }),
   },
-  collections: { board: { scope: "projectId", item: "card", order: byOrdinal } }, // ends in "id"
+  collections: {
+    board: { describe: "A project's tasks.", scope: "projectId", item: "card", order: byOrdinal },
+  },
 });
 ```
 
 - Every method is `query` or `mutation`, with `input` and `output`. `output`
   is a schema or a projection: `"entity"`, `"card"`, `nullable("entity")`,
   `listOf("card")`. Only a query may `watch`.
+- Give the contract and every member a `describe`: a sentence or two on what
+  it is for (each method, collection, stream, channel and event). The MCP
+  bridge uses a method's as its tool's description, and `quickdraw-docs`
+  leads each section with it. Lint's `require-describe` warns on each one
+  missing; kits' contract halves write their own.
 - Schemas are any Standard Schema. Use Zod 4.2 or later: MCP tools, the admin
   kit, projection keys and `quickdraw-docs` read their JSON Schema.
 - Methods, collections, streams, channels and events share one namespace
@@ -65,12 +74,14 @@ export const taskService = qd.defineService(task, {
 
 - `qd` comes from one `initQuickdraw<{ db: typeof db; principal: AppPrincipal }>()`
   for the whole app (`context: (base) => ({...})` adds app fields to every
-  `ctx`). `db` is `trackPrisma(new PrismaClient({ adapter }))` from
+  `ctx`; `kinds: ["user", "agent"]` the kinds of principal every service
+  admits). `db` is `trackPrisma(new PrismaClient({ adapter }))` from
   `@fitzzero/quickdraw-core/prisma`, applied as the last extension.
 - `methods` implements exactly the contract's methods; each is
-  `{ access, handler }`, plus `timeoutMs`, `rowless` (see
-  quickdraw-access.md), and for queries `share` (`"caller"` or `"all"`),
-  `ttlMs` and `version`.
+  `{ access, handler }`, plus `kinds` and `rowless` (see
+  quickdraw-access.md), `timeoutMs`, and for queries `share` (`"caller"` or
+  `"all"`), `ttlMs` and `version`. A service takes `kinds` too: the kinds of
+  principal its methods and subscriptions admit.
 - A handler receives `{ input, ctx, db }`: the parsed input, the context
   (`principal`, `signal`, `log`, `requestId`, `transport`, `touch`, `rooms`,
   `presence`, `mcp`, `services`) and the tracked client.

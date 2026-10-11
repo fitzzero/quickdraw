@@ -4,6 +4,7 @@ import { z } from "zod";
 const label = z.object({ id: z.string(), projectId: z.string(), name: z.string() });
 
 export const labelContract = defineContract("labelService", {
+  describe: "Labels a project puts on its tasks.",
   entity: label,
   methods: {
     ...crud.contract({ entity: label, get: true, create: { input: label.omit({ id: true }) } }),
@@ -15,6 +16,7 @@ export const labelContract = defineContract("labelService", {
   },
   collections: {
     byProject: {
+      describe: "A project's labels, by name.",
       scope: "projectId",
       item: "entity",
       order: [

@@ -1,12 +1,15 @@
 // The run-time checks of `defineService`'s data options (RFC 0003 sections 3,
-// 5.3, 6 and 11.3): the `model` the rows live in and its `access` policy, the
-// other models the service `writes`, the rows a write `affects`, the
-// `versionColumn` "not modified" answers read, and who may watch the
-// service's change topic (`watchAccess`). The types make the same checks;
-// these repeat them for JavaScript callers and casts.
+// 4.1, 5.3, 6 and 11.3): the `model` the rows live in and its `access`
+// policy, the other models the service `writes`, the rows a write `affects`,
+// the `versionColumn` "not modified" answers read, who may watch the
+// service's change topic (`watchAccess`), and the kinds of principal it
+// admits (`kinds`, within the app's; each method's within the service's,
+// `access/kinds.ts`). The types make the same checks, kinds' narrowing
+// aside; these repeat them for JavaScript callers and casts.
 
 import { isAccessLevel } from "../contract/access";
 import type { AnyContract } from "../contract/defineContract";
+import { narrowKinds } from "./access/kinds";
 import { isAccessPolicy, type AnyAccessPolicy } from "./access/policy";
 import type { WatchAccess } from "./access/types";
 import type { AffectsLink } from "./service";
@@ -24,6 +27,8 @@ export interface ServiceData {
   readonly affects: readonly AffectsLink[];
   readonly versionColumn: string | undefined;
   readonly watchAccess: WatchAccess | undefined;
+  /** The kinds of principal the service admits: its own `kinds`, else the app's; `undefined` admits every kind. */
+  readonly kinds: readonly string[] | undefined;
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -113,8 +118,48 @@ function checkWatchAccess(value: unknown, fail: Fail): WatchAccess | undefined {
   return Object.freeze({ service: value.service });
 }
 
-/** Checks a definition's `model`, `access`, `writes`, `affects`, `versionColumn` and `watchAccess`. */
-export function checkServiceData(definition: UnknownRecord, fail: Fail): ServiceData {
+/**
+ * `initQuickdraw`'s `kinds`, checked: the kinds of principal every service
+ * the instance defines admits, unless it narrows them.
+ */
+export function checkAppKinds(value: unknown): readonly string[] | undefined {
+  return narrowKinds(value, undefined, (message) => {
+    throw new TypeError(`initQuickdraw: ${message}`);
+  });
+}
+
+/**
+ * A method's own `kinds`, within its service's: the kinds it admits, its
+ * service's when it declares none. A `"public"` method declares none, since a
+ * caller of a kind it left out would call it signed out; it keeps the
+ * service's list, which signed-in callers meet.
+ */
+export function checkMethodKinds(
+  owner: string,
+  entry: UnknownRecord,
+  data: ServiceData,
+  fail: Fail,
+): readonly string[] | undefined {
+  if (entry.kinds !== undefined && entry.access === "public") {
+    fail(
+      `${owner} is "public", so kinds cannot narrow who may call it: a caller of a kind it left out would call it signed out. Leave kinds out, or give it a form that needs a principal`,
+    );
+  }
+  return narrowKinds(entry.kinds, { kinds: data.kinds, by: "its service" }, (message) =>
+    fail(`${owner}: ${message}`),
+  );
+}
+
+/**
+ * Checks a definition's `model`, `access`, `writes`, `affects`,
+ * `versionColumn`, `watchAccess` and `kinds`, the last within `appKinds`, the
+ * kinds of principal `initQuickdraw` admits.
+ */
+export function checkServiceData(
+  definition: UnknownRecord,
+  appKinds: readonly string[] | undefined,
+  fail: Fail,
+): ServiceData {
   const { model, access, versionColumn } = definition;
   if (model !== undefined && !isName(model)) {
     fail('model must be the database model the rows live in, as the client names it ("task")');
@@ -135,6 +180,7 @@ export function checkServiceData(definition: UnknownRecord, fail: Fail): Service
     affects: Object.freeze(checkAffects(definition.affects, model, fail)),
     versionColumn,
     watchAccess: checkWatchAccess(definition.watchAccess, fail),
+    kinds: narrowKinds(definition.kinds, { kinds: appKinds, by: "initQuickdraw" }, fail),
   };
 }
 

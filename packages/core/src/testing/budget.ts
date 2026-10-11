@@ -200,7 +200,7 @@ async function measure(run: () => unknown): Promise<Budget> {
 const EXPECT_GLOBAL = Symbol.for("expect-global");
 
 /** The test runner's global `expect` (vitest's, or jest's), and the running test's file and name. */
-interface RunnerState {
+export interface RunnerState {
   readonly runner: object | undefined;
   readonly testPath: string | undefined;
   readonly testName: string | undefined;
@@ -210,8 +210,8 @@ function nonEmpty(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-/** What the test runner's global `expect` says about the running test. */
-function runnerState(): RunnerState {
+/** What the test runner's global `expect` says about the running test (`snapshotAccessMatrix` reads it too). */
+export function runnerState(): RunnerState {
   const holder = globalThis as Record<PropertyKey, unknown>;
   for (const candidate of [holder[EXPECT_GLOBAL], holder.expect]) {
     const getState = (candidate as { readonly getState?: unknown } | undefined)?.getState;
@@ -255,7 +255,7 @@ function claimName(path: string, name: string, state: RunnerState): void {
 }
 
 /** `path` relative to the working directory when it is inside it. */
-function shownPath(path: string): string {
+export function shownPath(path: string): string {
   const near = relative(process.cwd(), path);
   return near.startsWith("..") ? path : near;
 }

@@ -250,6 +250,57 @@ describe("quickdraw-docs", () => {
     expect(page).toContain("Shown in lists");
     expect(page.startsWith(`${GENERATED_MARKER}\n\n# chatService\n`)).toBe(true);
   });
+
+  it("leads with each describe, and names every method's default MCP tool", () => {
+    const payload = z.object({ chatId: z.string() });
+    const chat = defineContract("chatService", {
+      describe: "Chats and the people in them.",
+      entity: z.object({ id: z.string(), ownerId: z.string() }),
+      methods: {
+        find: query({ input: payload, output: "entity", describe: "Reads one chat." }),
+        leave: mutation({ input: payload, output: z.null() }),
+      },
+      collections: {
+        owned: {
+          describe: "The chats a user owns.",
+          scope: "ownerId",
+          item: "entity",
+          order: [["id", "asc"]],
+        },
+      },
+      streams: { log: { item: z.string(), describe: "Lines of the chat's log." } },
+      channels: { typing: { payload, describe: "Who is typing." } },
+      events: { joined: { payload, describe: "Someone joined the chat." } },
+    });
+    const plain = defineContract("plainService", {});
+    const files = generateDocs([chat, plain]);
+    const page = files.get("chatService.md") ?? "";
+    expect(
+      page.startsWith(
+        `${GENERATED_MARKER}\n\n# chatService\n\nChats and the people in them.\n\n## Entity`,
+      ),
+    ).toBe(true);
+    expect(page).toContain(
+      "### `find`\n\nReads one chat.\n\nA query.\n\n- MCP tool (default name): `chatService_find`\n- MCP read-only hint: yes, as on every query's tool\n",
+    );
+    expect(page).toContain(
+      "A mutation.\n\n- MCP tool (default name): `chatService_leave`\n\nInput:",
+    );
+    for (const text of [
+      "The chats a user owns.",
+      "Lines of the chat's log.",
+      "Who is typing.",
+      "Someone joined the chat.",
+    ]) {
+      expect(page).toContain(`\n\n${text}\n\n| Option`);
+    }
+    const index = files.get(INDEX_FILE) ?? "";
+    expect(index).toMatch(
+      /\| \[chatService\]\(chatService\.md\) +\| Chats and the people in them\. +\| 2 /,
+    );
+    expect(index).toMatch(/\| \[plainService\]\(plainService\.md\) +\| +\| 0 /);
+    expect(generateDocs([plain]).get(INDEX_FILE)).not.toContain("Description");
+  });
 });
 
 describe("quickdraw-docs --services (finding F5.3)", () => {
@@ -258,6 +309,7 @@ describe("quickdraw-docs --services (finding F5.3)", () => {
     expect([...files.keys()]).toEqual([
       "noteService.md",
       "playerService.md",
+      "scoreService.md",
       "teamService.md",
       INDEX_FILE,
     ]);
@@ -270,6 +322,17 @@ describe("quickdraw-docs --services (finding F5.3)", () => {
     );
     expect(team).toContain('| Change topic       | `"authenticated"`: any signed-in caller');
     expect(team).toContain("| Field levels       | `notes`: Admin");
+    // Principal kinds: the service's list, and each method's, narrowed or not.
+    expect(team).toContain(
+      "| Principal kinds    | `user`, `agent`: its methods, subscriptions and channels refuse every other kind",
+    );
+    expect(team).toContain(
+      "- MCP tool (default name): `teamService_rename`\n- Callable by: `user`\n",
+    );
+    expect(team).toContain(
+      "- MCP read-only hint: yes, as on every query's tool\n- Callable by: `user`, `agent`\n",
+    );
+    expect(team).toContain("- Callable by: `user`, `agent`, or anonymously\n");
     expect(team).toContain(
       'Access: `{ entry: "Read" }`: Read or more on the row `input.id` names.',
     );
@@ -301,6 +364,8 @@ describe("quickdraw-docs --services (finding F5.3)", () => {
     expect(players).toContain("Read or more on the `teamService` row the scope names");
     expect(players).toContain('the subscriber\'s own user id (`scopeAccess: "self"`)');
     expect(players).toContain("closed: the service declares no `watchAccess`");
+    expect(players).not.toContain("Principal kinds");
+    expect(players).not.toContain("Callable by");
     expect(files.get("noteService.md")).toContain(
       "The services module defines no `noteService`: who may call its methods is not documented.",
     );
@@ -308,6 +373,7 @@ describe("quickdraw-docs --services (finding F5.3)", () => {
     const plain = generateDocs(contractsOf(accessApp)).get("teamService.md") ?? "";
     expect(plain).not.toContain("## Access");
     expect(plain).not.toContain("Access: ");
+    expect(plain).not.toContain("Callable by");
     // A seed the service computes: known with --services, never "none" without it (finding F6.8).
     expect(plain).not.toContain("computed by the service");
     expect(plain).toContain("none in the contract; the service may compute one");
@@ -373,7 +439,9 @@ describe("quickdraw-docs --services (finding F5.3)", () => {
 
   it("refuses a service no contract documents, and two services of one name", () => {
     const services = servicesOf(accessApp);
-    expect(() => generateDocs([accessApp.teamContract], { services })).toThrow(
+    expect(() =>
+      generateDocs([accessApp.teamContract, accessApp.scoreContract], { services }),
+    ).toThrow(
       "the services module defines playerService, but the contracts module exports no contract of that name",
     );
     const twin = { ...accessApp.teamService };
@@ -387,7 +455,84 @@ describe("quickdraw-docs --services (finding F5.3)", () => {
         byName: { team: accessApp.teamService },
         notAService: { name: "x" },
       }).keys(),
-    ]).toEqual(["playerService", "teamService"]);
+    ]).toEqual(["playerService", "scoreService", "teamService"]);
+  });
+
+  it("says which services each depends on, from their declarations, and graphs them on the index", () => {
+    const files = generateDocs(contractsOf(accessApp), { services: servicesOf(accessApp) });
+    // playerService inherits from teamService and writes scoreService's model.
+    const players = files.get("playerService.md") ?? "";
+    expect(players).toContain("## Depends on");
+    expect(players).toContain("| `scoreService` | `writes`: its `score` model ");
+    expect(players).toContain(
+      "| `teamService`  | row policy: `inherit` through the `teamId` column; method `join`: `{ scope, of }`; collection `byTeam`: anchored on its rows |",
+    );
+    expect(players).toContain("It also `writes` models no service's rows live in: `teamMember`.");
+    expect(files.get("scoreService.md")).toContain(
+      "| `teamService` | row policy: `inherit` through the `teamId` column; `affects`: a write to a row here changes its rows; stream `board`: `{ scope, of }` |",
+    );
+    expect(files.get("teamService.md")).toContain(
+      "## Depends on\n\nNo other service: its declarations name none.\n",
+    );
+    // A contract without a service has no such section.
+    expect(files.get("noteService.md")).not.toContain("## Depends on");
+    const index = files.get(INDEX_FILE) ?? "";
+    expect(index).toContain("```mermaid\ngraph LR\n");
+    expect(index).toContain("  playerService -->|writes| scoreService\n");
+    expect(index).toContain("  playerService -->|inherit, scope, anchor| teamService\n");
+    expect(index).toContain("  scoreService -->|inherit, affects, scope| teamService\n");
+    // Without --services, neither.
+    const plain = generateDocs(contractsOf(accessApp));
+    expect(plain.get("playerService.md")).not.toContain("Depends on");
+    expect(plain.get(INDEX_FILE)).not.toContain("## Dependencies");
+  });
+
+  it("finds an inherit inside anyOf, a channel's scope form and a model by either spelling, never the service itself", () => {
+    const fake = (name: string, definition: Readonly<Record<string, unknown>> = {}) => ({
+      name,
+      contract: { name },
+      methods: {},
+      collections: new Map(),
+      channels: new Map(),
+      streams: new Map(),
+      ...definition,
+    });
+    const parent = defineContract("end", { methods: {} });
+    const child = defineContract("child.service", { methods: {} });
+    const twin = defineContract("child-service", { methods: {} });
+    const services = servicesOf({
+      parent: fake("end", { model: "Folder" }),
+      child: fake("child.service", {
+        model: "file",
+        access: anyOf(owner("ownerId"), inherit({ from: parent, via: "folderId" })),
+        writes: ["folder", "file"],
+        channels: new Map([["typing", { access: { scope: "Read", of: parent } }]]),
+        methods: {
+          self: { access: { scope: "Read", of: child }, handler: () => undefined },
+        },
+      }),
+      twin: fake("child-service", { access: inherit({ from: child, via: "fileId" }) }),
+    });
+    const files = generateDocs([parent, child, twin], { services });
+    expect(files.get("child.service.md")).toContain(
+      "| `end`   | row policy: `inherit` through the `folderId` column; `writes`: its `folder` model; channel `typing`: `{ scope, of }` |",
+    );
+    expect(files.get("child.service.md")).not.toContain("method `self`");
+    // A Mermaid id for each name: made safe, unique, and never the keyword `end`.
+    expect(files.get(INDEX_FILE)).toContain(
+      [
+        "graph LR",
+        '  child_service["child-service"]',
+        '  child_service_2["child.service"]',
+        '  end_["end"]',
+        "  child_service -->|inherit| child_service_2",
+        "  child_service_2 -->|inherit, writes, scope| end_",
+      ].join("\n"),
+    );
+    // Services that name no other: the index says so.
+    expect(
+      generateDocs([parent], { services: servicesOf({ parent: fake("end") }) }).get(INDEX_FILE),
+    ).toContain("## Dependencies\n\nNo service's declarations name another service.\n");
   });
 
   it("writes every access form and row policy", () => {

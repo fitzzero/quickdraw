@@ -11,6 +11,7 @@ import { cardSchema, columnSchema, taskChangesSchema, taskSchema } from "./schem
  * everyone watching it sees the change without a hand-written event.
  */
 export const taskContract = defineContract("taskService", {
+  describe: "Tasks on a project's board.",
   entity: taskSchema,
   projections: { card: cardSchema },
   methods: {
@@ -34,6 +35,7 @@ export const taskContract = defineContract("taskService", {
   },
   collections: {
     cardsByProject: {
+      describe: "A project's tasks as cards, in board order.",
       scope: "projectId",
       item: "card",
       order: [

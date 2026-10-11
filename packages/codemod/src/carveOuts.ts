@@ -12,7 +12,7 @@
 // belongs to a carve-out says so in a `[carve-out]` review marker, which the
 // report lists: the script's list of files to delete needs it.
 
-import { Node, type Project, type SourceFile, SyntaxKind } from "ts-morph";
+import { Node, type Project, SyntaxKind } from "ts-morph";
 import type { Layout } from "./layout";
 import type { ServiceModel } from "./model";
 import { isUnder } from "./project";
@@ -62,15 +62,53 @@ export function regionOf(node: Node): string | undefined {
   )?.name;
 }
 
-/** The carve-out the first of `nodes` inside one belongs to. */
-function firstRegion(nodes: readonly Node[]): string | undefined {
-  for (const node of nodes) {
-    const name = regionOf(node);
-    if (name !== undefined) {
-      return name;
+/** The first carve-out each name is used in, by kind of use. */
+interface CarveOutUses {
+  /** Identifiers in the shared package (a 4.x method map's entry and its import). */
+  readonly shared: Map<string, string>;
+  /** Identifiers a `new` expression holds (`new GameService(...)`). */
+  readonly constructions: Map<string, string>;
+}
+
+const usesByProject = new WeakMap<Project, CarveOutUses>();
+
+/**
+ * The names used inside carve-out regions, read once per project from the
+ * files that hold a region marker (the regions as the project stood when the
+ * services were planned, before any edit).
+ */
+function carveOutUses(project: Project, layout: Layout): CarveOutUses {
+  const cached = usesByProject.get(project);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const uses: CarveOutUses = { shared: new Map(), constructions: new Map() };
+  for (const file of project.getSourceFiles()) {
+    const text = file.getFullText();
+    if (!START.test(text)) {
+      continue;
+    }
+    const regions = regionsOf(text);
+    const shared = isUnder(file, layout.shared.src);
+    for (const identifier of file.getDescendantsOfKind(SyntaxKind.Identifier)) {
+      const position = identifier.getStart();
+      const region = regions.find(
+        (candidate) => candidate.start <= position && position <= candidate.end,
+      )?.name;
+      if (region === undefined) {
+        continue;
+      }
+      const name = identifier.getText();
+      if (shared && !uses.shared.has(name)) {
+        uses.shared.set(name, region);
+      }
+      if (Node.isNewExpression(identifier.getParent()) && !uses.constructions.has(name)) {
+        uses.constructions.set(name, region);
+      }
     }
   }
-  return undefined;
+  usesByProject.set(project, uses);
+  return uses;
 }
 
 /**
@@ -83,20 +121,9 @@ export function carveOutOf(
   layout: Layout,
   service: ServiceModel,
 ): string | undefined {
-  const files = project.getSourceFiles();
-  const named = (file: SourceFile, name: string | undefined): Node[] =>
-    name === undefined
-      ? []
-      : file
-          .getDescendantsOfKind(SyntaxKind.Identifier)
-          .filter((identifier) => identifier.getText() === name);
-  const mapUses = files
-    .filter((file) => isUnder(file, layout.shared.src))
-    .flatMap((file) => named(file, service.methodMapName));
-  const constructions = files.flatMap((file) =>
-    named(file, service.className).filter((identifier) =>
-      Node.isNewExpression(identifier.getParent()),
-    ),
+  const uses = carveOutUses(project, layout);
+  return (
+    (service.methodMapName === undefined ? undefined : uses.shared.get(service.methodMapName)) ??
+    uses.constructions.get(service.className)
   );
-  return firstRegion(mapUses) ?? firstRegion(constructions);
 }

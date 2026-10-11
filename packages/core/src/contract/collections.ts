@@ -113,6 +113,8 @@ export interface CollectionWhere {
 
 /** Any collection of any contract, as `defineContract` stores it. */
 export interface CollectionDef {
+  /** What the list holds, in a sentence or two, for the generated docs. */
+  readonly describe?: string | undefined;
   /** A string column of the entity, or `via(...)` for a junction table. */
   readonly scope: string | ViaScope;
   /** The projection each item is sent as: `"entity"` or a named projection. */

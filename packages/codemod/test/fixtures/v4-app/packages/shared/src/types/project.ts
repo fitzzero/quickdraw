@@ -66,4 +66,8 @@ export interface ProjectServiceMethods {
     payload: { id: string };
     response: { id: string; deleted: true };
   };
+  getProjectLimits: {
+    payload: Record<string, never>;
+    response: { maxProjects: number; maxMembers: number };
+  };
 }

@@ -5,7 +5,9 @@ import {
   createTestApp,
   describeAccessMatrix,
   expectBudget,
+  snapshotAccessMatrix,
 } from "@fitzzero/quickdraw-core/testing";
+import { resetDatabase } from "@fitzzero/quickdraw-core/testing/prisma";
 import { prisma } from "@project/db";
 import { beforeEach, expect, it } from "vitest";
 import { db } from "../db";
@@ -21,7 +23,7 @@ let taskId = "";
 
 // Seed with the untracked client: nothing subscribes yet, and a tracked write
 // outside any unit of work would flush on its own with an `ambient-write` warning.
-beforeEach(async () => {
+async function seed(): Promise<{ readonly projectId: string; readonly taskId: string }> {
   for (const { userId } of [ada, bo, ed]) {
     await prisma.user.create({
       data: { id: userId, name: userId, email: `${userId}@example.com` },
@@ -31,8 +33,14 @@ beforeEach(async () => {
   await prisma.projectMember.create({
     data: { projectId: project.id, userId: bo.userId, role: "Read" },
   });
-  projectId = project.id;
-  taskId = (await prisma.task.create({ data: { projectId, title: "Write the docs" } })).id;
+  const task = await prisma.task.create({
+    data: { projectId: project.id, title: "Write the docs" },
+  });
+  return { projectId: project.id, taskId: task.id };
+}
+
+beforeEach(async () => {
+  ({ projectId, taskId } = await seed());
 });
 
 // #region app
@@ -65,6 +73,22 @@ it("lets the owner rename, members read, and nobody else in", async () => {
       },
     ],
   });
+  await app.close();
+});
+// #endregion
+
+// #region snapshot
+it("pins who may call what, for every method, subscribe and scope", async () => {
+  const app = await createTestApp({ services: [projectService, taskService], db });
+  const report = await snapshotAccessMatrix(app, {
+    principals: { owner: ada, member: bo, stranger: ed },
+    reset: async () => {
+      await resetDatabase(prisma); // at the start, and after each write access let through
+      return await seed();
+    },
+    rows: (board) => ({ projectService: board.projectId, taskService: board.taskId }),
+  });
+  expect(report.inconclusive).toEqual([]); // every cell ran, with an input its schema accepts
   await app.close();
 });
 // #endregion

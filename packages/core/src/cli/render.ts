@@ -2,7 +2,8 @@
 // read from the contracts, laid out as oxfmt lays out Markdown
 // (`markdown.ts`), so `--check` does not report formatting as drift. With
 // `--services`, each page also says who may call what, read from the
-// services' definitions (`access.ts`).
+// services' definitions (`access.ts`), and which other services it depends
+// on, with a graph of those on the index (`dependencies.ts`).
 
 import {
   DEFAULT_COLLECTION_LIMIT,
@@ -11,6 +12,7 @@ import {
 } from "../contract/collections";
 import type { AnyContract } from "../contract/defineContract";
 import type { MethodDef, MethodOutput } from "../contract/methods";
+import { defaultToolName } from "../contract/toolName";
 import {
   CHANNEL_DEFAULT_RATE,
   isScopedStream,
@@ -27,6 +29,7 @@ import {
   watchAccessText,
   type ServiceDoc,
 } from "./access";
+import { dependencyGraph, dependsOnSection, type ServiceDependencies } from "./dependencies";
 import { code, list, paragraph, section, table } from "./markdown";
 import {
   jsonSchemaOf,
@@ -46,6 +49,8 @@ export const GENERATED_MARKER =
  */
 export interface AccessInfo {
   readonly service: ServiceDoc | undefined;
+  /** The services the service's declarations name (`dependenciesOf`); `undefined` without a service. */
+  readonly dependencies?: ServiceDependencies | undefined;
 }
 
 /** True when the schema accepts `undefined`: a method that takes no input. */
@@ -163,6 +168,44 @@ function kindLine(method: MethodDef): string {
   return `A query that watches the ${code(method.watch.collection)} collection: a cached result is fetched again when the scope its input names changes.`;
 }
 
+/** A member's `describe`, as the paragraph that opens its section, or nothing. */
+function described(text: string | undefined): string[] {
+  return text === undefined ? [] : [paragraph(text)];
+}
+
+/**
+ * Who may call a method by the kind of principal, with `--services`, when its
+ * service or the app limits it: the kinds, and for a `"public"` method the
+ * anonymous callers its form admits besides. Nothing when every kind may.
+ */
+function callableBy(name: string, access: AccessInfo | undefined): string[] {
+  const method = access?.service?.methods.get(name);
+  if (method?.kinds === undefined) {
+    return [];
+  }
+  const anonymous = method.access === "public" ? ", or anonymously" : "";
+  return [`- Callable by: ${list(method.kinds)}${anonymous}`];
+}
+
+/**
+ * Facts about a method, as a list: the name the MCP bridge gives its tool
+ * when the registry has no `name` option (the docs cannot see the app's
+ * registry), for a query the read-only hint that tool carries, and with
+ * `--services` the kinds of principal that may call it.
+ */
+function methodFacts(
+  service: string,
+  name: string,
+  method: MethodDef,
+  access: AccessInfo | undefined,
+): string[] {
+  return [
+    `- MCP tool (default name): ${code(defaultToolName(service, name))}`,
+    ...(method.kind === "query" ? ["- MCP read-only hint: yes, as on every query's tool"] : []),
+    ...callableBy(name, access),
+  ];
+}
+
 /** Who may call a method, and its `rowless`, when the page documents access. */
 function methodAccess(name: string, access: AccessInfo | undefined): string[] {
   const method = access?.service?.methods.get(name);
@@ -177,11 +220,16 @@ function methodAccess(name: string, access: AccessInfo | undefined): string[] {
   return [`Access: ${accessFormText(method.access)}.`, ...rowless];
 }
 
-function methodSection(name: string, method: MethodDef, access: AccessInfo | undefined): string[] {
-  const described = method.describe === undefined ? [] : [paragraph(method.describe)];
+function methodSection(
+  service: string,
+  name: string,
+  method: MethodDef,
+  access: AccessInfo | undefined,
+): string[] {
   return section(`### ${code(name)}`, [
-    ...described,
+    ...described(method.describe),
     kindLine(method),
+    methodFacts(service, name, method, access),
     ...methodAccess(name, access),
     ...inputBlocks(method),
     `Output: ${outputText(method.output)}.`,
@@ -196,7 +244,7 @@ function methodsSection(contract: AnyContract, access: AccessInfo | undefined): 
   return [
     "## Methods",
     "",
-    ...entries.flatMap(([name, method]) => methodSection(name, method, access)),
+    ...entries.flatMap(([name, method]) => methodSection(contract.name, name, method, access)),
   ];
 }
 
@@ -236,6 +284,7 @@ function collectionSection(
   const maxLimit = collection.maxLimit ?? DEFAULT_COLLECTION_MAX_LIMIT;
   const served = access?.service?.collections.get(name);
   return section(`### ${code(name)}`, [
+    ...described(collection.describe),
     optionTable([
       ["Scope", scopeText(collection.scope)],
       ["Item", code(collection.item)],
@@ -319,6 +368,7 @@ function streamSection(name: string, stream: StreamDef, access: AccessInfo | und
   const scoped = isScopedStream(stream);
   const served = access?.service?.streams.get(name);
   return section(`### ${code(name)}`, [
+    ...described(stream.describe),
     optionTable([
       ["Item", code(typeOf(stream.item, "output"))],
       ["Scope", scoped ? `one feed per ${code(stream.scope ?? "")}` : "one global feed"],
@@ -361,6 +411,7 @@ function channelSection(
   const rate = channel.ratePerSecond ?? CHANNEL_DEFAULT_RATE;
   const served = access?.service?.channels.has(name) === true;
   return section(`### ${code(name)}`, [
+    ...described(channel.describe),
     optionTable([
       ["Payload", code(typeOf(channel.payload, "input"))],
       [
@@ -379,6 +430,7 @@ function channelSection(
 
 function eventSection(name: string, event: EventDef): string[] {
   return section(`### ${code(name)}`, [
+    ...described(event.describe),
     optionTable([["Payload", code(typeOf(event.payload, "output"))]]),
   ]);
 }
@@ -403,7 +455,7 @@ function fieldLevelsText(contract: AnyContract): string {
     : tiers.map(([field, level]) => `${code(field)}: ${String(level)}`).join(", ");
 }
 
-/** The page's "Access" section, with `--services`: the service's policy, bypass, topic and field levels. */
+/** The page's "Access" section, with `--services`: the service's policy, bypass, kinds, topic and field levels. */
 function accessSection(contract: AnyContract, access: AccessInfo | undefined): string[] {
   if (access === undefined) {
     return [];
@@ -423,6 +475,12 @@ function accessSection(contract: AnyContract, access: AccessInfo | undefined): s
           ? "passes every check of the service"
           : `passes only the forms that name ${code("service")} (${code("adminBypass: false")})`,
       ],
+      [
+        "Principal kinds",
+        service.kinds === undefined
+          ? undefined
+          : `${list(service.kinds)}: its methods, subscriptions and channels refuse every other kind`,
+      ],
       ["Change topic", watchAccessText(service.watchAccess)],
       ["Field levels", fieldLevelsText(contract)],
     ]),
@@ -431,9 +489,9 @@ function accessSection(contract: AnyContract, access: AccessInfo | undefined): s
 }
 
 /**
- * One service's page: its entity, projections, methods, collections,
- * streams, channels and events, and with `access` (`--services`) who may
- * call what.
+ * One service's page: its `describe`, entity, projections, methods,
+ * collections, streams, channels and events, and with `access`
+ * (`--services`) who may call what and which services it depends on.
  */
 export function renderService(contract: AnyContract, access?: AccessInfo): string {
   const lines = [
@@ -441,7 +499,9 @@ export function renderService(contract: AnyContract, access?: AccessInfo): strin
     "",
     `# ${contract.name}`,
     "",
+    ...described(contract.describe).flatMap((text) => [text, ""]),
     ...accessSection(contract, access),
+    ...(access?.dependencies === undefined ? [] : dependsOnSection(access.dependencies)),
     ...entitySection(contract),
     ...projectionsSection(contract),
     ...methodsSection(contract, access),
@@ -473,11 +533,20 @@ export function fileOf(contract: AnyContract): string {
   return `${contract.name.replace(/[^\w.-]/g, "-")}.md`;
 }
 
-/** The index page: every service with a link to its page and its members counted. */
-export function renderIndex(contracts: readonly AnyContract[]): string {
+/**
+ * The index page: every service with a link to its page, its members
+ * counted, and its `describe` when any service has one; with `dependencies`
+ * (`--services`), a graph of which services depend on which.
+ */
+export function renderIndex(
+  contracts: readonly AnyContract[],
+  dependencies?: ReadonlyMap<string, ServiceDependencies>,
+): string {
   const count = (members: object): string => String(Object.keys(members).length);
+  const hasDescribe = contracts.some((contract) => contract.describe !== undefined);
   const rows = contracts.map((contract) => [
     `[${contract.name}](${fileOf(contract)})`,
+    ...(hasDescribe ? [contract.describe ?? ""] : []),
     count(contract.methods),
     count(contract.collections),
     count(contract.streams),
@@ -491,7 +560,19 @@ export function renderIndex(contracts: readonly AnyContract[]): string {
     "",
     "One page per service, generated from its contract by `quickdraw-docs`.",
     "",
-    ...table(["Service", "Methods", "Collections", "Streams", "Channels", "Events"], rows),
+    ...table(
+      [
+        "Service",
+        ...(hasDescribe ? ["Description"] : []),
+        "Methods",
+        "Collections",
+        "Streams",
+        "Channels",
+        "Events",
+      ],
+      rows,
+    ),
+    ...(dependencies === undefined ? [] : ["", ...dependencyGraph(dependencies)]),
   ];
-  return `${lines.join("\n")}\n`;
+  return `${lines.join("\n").trimEnd()}\n`;
 }

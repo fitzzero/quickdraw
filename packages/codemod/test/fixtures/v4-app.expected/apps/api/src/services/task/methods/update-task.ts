@@ -1,3 +1,4 @@
+import type { taskService } from "../index.js";
 import { toTaskDto, toCard } from "../service-core.js";
 import type { MethodOf } from "../../../quickdraw.js";
 import type { taskContract } from "@project/shared";
@@ -30,3 +31,9 @@ export const moveTask = {
     return { id: task.id };
   },
 } satisfies MethodOf<typeof taskContract, "moveTask">;
+
+// Registers the edit methods, and says so: more than registering
+// quickdraw-migrate: review [this] defineEditMethods also did more than register methods (the codemod removed its call of registerUpdateTasks, whose methods the service lists now): a service object is not passed around any more; move what still matters, then delete it
+export function defineEditMethods(service: typeof taskService): void {
+  console.info("task edit methods registered");
+}

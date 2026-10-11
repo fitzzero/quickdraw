@@ -20,6 +20,9 @@ and the Prisma model the rows live in. Decide:
   no `entity`, `model` or row policy).
 - **Who may see a row**: an owner column, a JSON access list, a membership
   table, or the parent row's access (`inherit`). This is the row policy.
+- **Which kinds of principal may call**: when the app's principals come in
+  kinds (a user, an agent's token, a runner), which of them the service and
+  each method admit. These are `kinds` lists, beside `access`.
 - **What a client lists**: which scopes (a project's tasks, a user's chats).
   Each is a collection, not a list method.
 
@@ -62,6 +65,7 @@ import { z } from "zod";
 const label = z.object({ id: z.string(), projectId: z.string(), name: z.string() });
 
 export const labelContract = defineContract("labelService", {
+  describe: "Labels a project puts on its tasks.",
   entity: label,
   methods: {
     ...crud.contract({ entity: label, get: true, create: { input: label.omit({ id: true }) } }),
@@ -73,6 +77,7 @@ export const labelContract = defineContract("labelService", {
   },
   collections: {
     byProject: {
+      describe: "A project's labels, by name.",
       scope: "projectId",
       item: "entity",
       order: [
@@ -86,8 +91,10 @@ export const labelContract = defineContract("labelService", {
 
 - Service names end in `Service` and never change once deployed: they are
   stored in users' grants and sent on the wire.
-- Use Zod 4.2 or later for every schema; give each method a `describe`
-  sentence when agents or MCP clients will call it.
+- Use Zod 4.2 or later for every schema. Give the contract and each of its
+  methods, collections, streams, channels and events a `describe` sentence:
+  MCP clients and the generated API docs read it, and lint's
+  `require-describe` warns on each one missing.
 - Export the contract from `packages/shared/src/contracts/index.ts`, next to
   the others, and add it to the `contracts` map there: that map types the
   web client and `qd.caller`.
@@ -136,6 +143,11 @@ export const labelService = qd.defineService(labelContract, {
   `defineService` refuses `"public"`, `"authenticated"` or `{ service: L }`
   below `Admin` there unless the method says `rowless: true` (every caller
   the form admits may reach any row, on purpose).
+- A method or service that only some kinds of principal may call says so
+  with `kinds` beside `access` (`kinds: ["user"]`), within the app's
+  `initQuickdraw({ kinds })`: never with a check of `ctx.principal.kind` in
+  the handler or in a `custom` form. Other kinds get `FORBIDDEN`, whatever
+  their grants (see quickdraw-access.md).
 - Reach for a kit before hand-writing CRUD, search, sharing or admin; lint's
   `prefer-kit` warns on a hand-written `get`, `list`, `create` or
   `getLabel`-style method in a service that uses no kit.
@@ -196,7 +208,11 @@ Components rendered against the server go in
 `apps/web/src/__tests__/<name>.int.test.tsx`.
 
 - `describeAccessMatrix` over every method, as an owner, a member, a
-  stranger and anonymously.
+  stranger and anonymously, plus a principal of each kind the service or a
+  method refuses; or `snapshotAccessMatrix`, which records every method,
+  entity subscribe and collection scope of the service in
+  `__access__/<test file>.json` (commit it, and keep its report's
+  `inconclusive` empty).
 - One live test: a write by one user reaches another user's collection or
   entity (`app.frames.waitFor`, or a component through
   `renderWithQuickdraw`).
@@ -211,5 +227,6 @@ Components rendered against the server go in
 Run the app's lint (the quickdraw rules catch untracked writes, foreign
 writes, unbounded reads and raw socket use), typecheck and the unit and
 integration tests. If the app generates API docs with `quickdraw-docs`
-(with `--services`, its pages also say who may call each method),
+(with `--services`, its pages also say who may call each method and which
+services each depends on),
 regenerate them and commit the result.

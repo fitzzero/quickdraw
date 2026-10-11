@@ -13,8 +13,13 @@
 // - an input with no JSON Schema form that accepts `undefined`
 //   (`z.undefined()`, `z.void()`) is a tool without arguments;
 // - any other input (a string, a union) is the `input` argument.
+//
+// A registry's `bind` names arguments it fills from the principal: they are
+// left out of the `inputSchema` of each object input that has them, and may
+// not appear in any other input.
 
 import type { MethodKind } from "../../contract/methods";
+import { defaultToolName } from "../../contract/toolName";
 import {
   hasJsonSchema,
   type StandardSchemaV1,
@@ -37,6 +42,8 @@ export interface MethodTool extends ToolInput {
   readonly tool: McpTool;
   readonly service: string;
   readonly method: string;
+  /** The arguments the registry's `bind` fills, which `tool.inputSchema` leaves out. */
+  readonly bound: readonly string[];
 }
 
 type Fail = (message: string) => never;
@@ -167,7 +174,8 @@ function toolNamer(
     fail("name must be a function of (service, method)");
   }
   return (service, method) => {
-    const named: unknown = name === undefined ? `${service}_${method}` : name(service, method);
+    const named: unknown =
+      name === undefined ? defaultToolName(service, method) : name(service, method);
     if (typeof named !== "string" || named === "") {
       const shown = typeof named === "string" ? `""` : String(named);
       fail(`name returned ${shown} for ${service}.${method}; a tool name is a non-empty string`);
@@ -180,15 +188,77 @@ function describeMethod(service: string, method: string, kind: MethodKind, text:
   return typeof text === "string" && text !== "" ? text : `${service}.${method} (${kind})`;
 }
 
+function propertiesOf(schema: unknown): string[] {
+  return isRecord(schema) && isRecord(schema.properties) ? Object.keys(schema.properties) : [];
+}
+
+/** The properties a JSON Schema's `anyOf`, `oneOf` and `allOf` branches declare, through nested branches. */
+function branchProperties(schema: unknown, found = new Set<string>()): Set<string> {
+  if (!isRecord(schema)) {
+    return found;
+  }
+  for (const keyword of ["anyOf", "oneOf", "allOf"]) {
+    const branches: unknown = schema[keyword];
+    for (const branch of Array.isArray(branches) ? (branches as unknown[]) : []) {
+      for (const key of propertiesOf(branch)) {
+        found.add(key);
+      }
+      branchProperties(branch, found);
+    }
+  }
+  return found;
+}
+
+/**
+ * The arguments of `bind` that are properties of the object input of
+ * `label`. Fails when one of them is a property of an input that is not an
+ * object, or of one of its `anyOf`, `oneOf` or `allOf` branches, where it
+ * cannot be filled. An input without arguments has none.
+ */
+function boundArguments(
+  label: string,
+  input: ToolInput,
+  bind: readonly string[],
+  fail: Fail,
+): string[] {
+  if (input.mode === "object") {
+    const properties = propertiesOf(input.schema);
+    return bind.filter((key) => properties.includes(key));
+  }
+  const wrapped: unknown = input.schema.properties?.input;
+  const unbindable = branchProperties(wrapped, new Set(propertiesOf(wrapped)));
+  const misplaced = bind.find((key) => unbindable.has(key));
+  if (misplaced !== undefined) {
+    fail(
+      `bind.${misplaced} names a property of the input of ${label}, which is not an object: bind fills properties of object inputs only; leave ${label} out with exclude, or make its input an object`,
+    );
+  }
+  return [];
+}
+
+/** An object input's schema without the bound arguments, as the tool lists it. */
+function withoutArguments(schema: McpInputSchema, bound: readonly string[]): McpInputSchema {
+  const kept = (key: string) => !bound.includes(key);
+  const { properties = {}, required, ...rest } = schema;
+  const stillRequired = required?.filter(kept) ?? [];
+  return {
+    ...rest,
+    properties: Object.fromEntries(Object.entries(properties).filter(([key]) => kept(key))),
+    ...(stillRequired.length === 0 ? {} : { required: stillRequired }),
+  };
+}
+
 /**
  * The method tools of `services`, in service order and then contract order,
  * with what each calls. Fails on a reference, name or schema that cannot
- * make a tool; `fail` prefixes the message with the caller's name.
+ * make a tool; `fail` prefixes the message with the caller's name. `bind`
+ * names the arguments a registry fills from the principal.
  */
 export function planMethodTools(
   services: readonly AnyService[],
   options: DescribeToolsOptions,
   fail: Fail,
+  bind: readonly string[] = [],
 ): MethodTool[] {
   const given: unknown = services;
   if (!Array.isArray(given)) {
@@ -204,13 +274,14 @@ export function planMethodTools(
       }
       const label = `${service.name}.${method}`;
       const input = toolInputOf(label, def.input, fail);
+      const bound = boundArguments(label, input, bind, fail);
       const tool: McpTool = {
         name: toolName(service.name, method),
         description: describeMethod(service.name, method, def.kind, def.describe),
-        inputSchema: input.schema,
+        inputSchema: bound.length === 0 ? input.schema : withoutArguments(input.schema, bound),
         ...(def.kind === "query" ? { annotations: { readOnlyHint: true } } : {}),
       };
-      planned.push({ ...input, tool: Object.freeze(tool), service: service.name, method });
+      planned.push({ ...input, tool: Object.freeze(tool), service: service.name, method, bound });
     }
   }
   return planned;

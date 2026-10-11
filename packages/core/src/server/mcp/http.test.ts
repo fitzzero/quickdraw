@@ -8,7 +8,7 @@ import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { agentAuth, setup } from "./__tests__/fixtures";
+import { agentAuth, bindSetup, setup } from "./__tests__/fixtures";
 import { createMcpHttpRouter, type McpHttpRouterOptions } from "./index";
 
 /** Express 5, installed as the `express5` alias; its API matches Express 4's types here. */
@@ -257,6 +257,79 @@ describe("custom tools over HTTP", () => {
       status: 200,
       body: { success: true, data: { ranAs: null } },
     });
+  });
+});
+
+describe("bound arguments over HTTP", () => {
+  it("are left out of GET /mcp/tools, and a refused call answers 403 at once", async () => {
+    const fixture = bindSetup(
+      agentAuth((request) => (request.transport === "http" ? request.token : null)),
+    );
+    const url = await listen(
+      createMcpHttpRouter({ registry: fixture.registry, logger: fixture.logger }),
+    );
+    const { tools } = (await (await fetch(`${url}/mcp/tools`)).json()) as {
+      tools: { name: string; inputSchema: { properties: object } }[];
+    };
+    expect(
+      tools.find((tool) => tool.name === "messageService_post")?.inputSchema.properties,
+    ).toEqual({ message: { type: "string", minLength: 1 } });
+    // a refusal that never reached respond would leave the request open until this aborts it
+    const signal = AbortSignal.timeout(5_000);
+    expect(
+      await invoke(
+        url,
+        { name: "messageService_post", arguments: { message: "hi" } },
+        { token: "task-token", signal },
+      ),
+    ).toEqual({
+      status: 200,
+      body: { success: true, data: { taskId: "t1", message: "hi", by: "bob" } },
+    });
+    expect(
+      await invoke(
+        url,
+        { name: "messageService_post", arguments: { taskId: "t2", message: "hi" } },
+        { token: "task-token", signal },
+      ),
+    ).toEqual({
+      status: 403,
+      body: {
+        success: false,
+        error: '"taskId" is bound to the caller and cannot be set to another value',
+        code: "FORBIDDEN",
+      },
+    });
+    expect(
+      await invoke(
+        url,
+        { service: "messageService", method: "post", payload: { taskId: "t2", message: "hi" } },
+        { token: "task-token", signal },
+      ),
+    ).toMatchObject({ status: 403, body: { code: "FORBIDDEN" } });
+    expect(
+      await invoke(
+        url,
+        { name: "messageService_post", arguments: { message: "hi" } },
+        { token: "writer-token", signal },
+      ),
+    ).toEqual({
+      status: 403,
+      body: {
+        success: false,
+        error: '"taskId" is bound to the caller, who has none',
+        code: "FORBIDDEN",
+      },
+    });
+    expect(
+      await invoke(url, { name: "messageService_post", arguments: { message: "hi" } }, { signal }),
+    ).toEqual({
+      status: 401,
+      body: { success: false, error: "Authentication required", code: "UNAUTHENTICATED" },
+    });
+    expect(fixture.records.map((record) => [record.method, record.outcome])).toEqual([
+      ["post", "ok"],
+    ]);
   });
 });
 

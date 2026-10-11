@@ -20,6 +20,8 @@ export const listTasks = {
   },
 } satisfies MethodOf<typeof taskContract, "listTasks">;
 
+// Renumber a whole board, then tell its subscribers to re-snapshot
+
 export const reindexProject = {
   access: { service: "Moderate" },
   handler: async ({ input, db }) => {

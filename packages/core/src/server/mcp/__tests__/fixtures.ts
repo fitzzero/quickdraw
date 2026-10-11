@@ -1,7 +1,8 @@
 // Shared fixtures for the MCP bridge tests: two sample contracts (a task
 // service with an entity and an RPC-only note service), their services,
-// agent tokens with scopes, and a registry over a dispatcher. Nothing here
-// imports vitest, so the stdio child process loads it too.
+// agent tokens with scopes, and a registry over a dispatcher; plus a message
+// service whose `taskId` a registry binds from the agent's claims. Nothing
+// here imports vitest, so the stdio child process loads it too.
 
 import { z } from "zod";
 import { defineContract, mutation, query, QuickdrawError } from "../../../index";
@@ -74,6 +75,20 @@ export const note = defineContract("noteService", {
   },
 });
 
+export const message = defineContract("messageService", {
+  methods: {
+    post: mutation({
+      input: z.object({ taskId: z.string(), message: z.string().min(1) }),
+      output: z.object({ taskId: z.string(), message: z.string(), by: z.string() }),
+      describe: "Posts a message to a task's chat.",
+    }),
+    history: query({
+      input: z.object({ taskId: z.string(), limit: z.number().int().positive().default(20) }),
+      output: z.array(z.string()),
+    }),
+  },
+});
+
 /** The agent tokens the tests use, and what each stands for. */
 export const TOKENS: Readonly<
   Record<string, { readonly principal: AgentPrincipal; readonly scopes: readonly string[] }>
@@ -81,6 +96,11 @@ export const TOKENS: Readonly<
   "reader-token": { principal: { userId: "alice", kind: "agent" }, scopes: ["tasks:read"] },
   "writer-token": {
     principal: { userId: "alice", kind: "agent" },
+    scopes: ["tasks:read", "tasks:write"],
+  },
+  // an agent bound to one task: its token's verified claims name the task
+  "task-token": {
+    principal: { userId: "bob", kind: "agent", claims: { taskId: "t1" } },
     scopes: ["tasks:read", "tasks:write"],
   },
 };
@@ -192,4 +212,57 @@ export function setup(options: Options = {}, pipeline: PipelineOptions = {}) {
     ...options,
   });
   return { registry, dispatcher, logger, records, services };
+}
+
+/** A message service: `post` answers where it posted and as whom. */
+export function createMessageService() {
+  return qd.defineService(message, {
+    methods: {
+      post: {
+        access: "authenticated",
+        handler: ({ input, ctx }) => ({
+          taskId: input.taskId,
+          message: input.message,
+          by: ctx.principal?.userId ?? "nobody",
+        }),
+      },
+      history: {
+        access: "authenticated",
+        handler: ({ input }) => [`the last ${String(input.limit)} messages of ${input.taskId}`],
+      },
+    },
+  });
+}
+
+type MessageService = ReturnType<typeof createMessageService>;
+
+type BindOptions = Partial<
+  McpRegistryOptions<readonly [Services["taskService"], Services["noteService"], MessageService]>
+>;
+
+/**
+ * A registry over the task, note and message services that binds `taskId`
+ * from the principal's claims, calling as the agent of `task-token` unless
+ * `options` says otherwise.
+ */
+export function bindSetup(options: BindOptions = {}) {
+  const logger = captureLogger();
+  const records: CallRecord[] = [];
+  const { taskService, noteService } = createServices();
+  const messageService = createMessageService();
+  const served = [taskService, noteService, messageService] as const;
+  const dispatcher = createDispatcher({
+    services: served,
+    logger,
+    onCall: (record) => records.push(record),
+  });
+  const registry = createMcpRegistry({
+    services: served,
+    dispatcher,
+    logger,
+    ...agentAuth(() => "task-token"),
+    bind: { taskId: ({ principal }) => principal.claims?.taskId },
+    ...options,
+  });
+  return { registry, dispatcher, logger, records, served };
 }

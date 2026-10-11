@@ -16,6 +16,9 @@ None: an RPC-only service, without projections, field levels or collections.
 
 A query.
 
+- MCP tool (default name): `noteService_read`
+- MCP read-only hint: yes, as on every query's tool
+
 Input: none.
 
 Output: `string`.

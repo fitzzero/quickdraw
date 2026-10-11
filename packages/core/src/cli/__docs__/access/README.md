@@ -8,4 +8,16 @@ One page per service, generated from its contract by `quickdraw-docs`.
 | --------------------------------- | ------- | ----------- | ------- | -------- | ------ |
 | [noteService](noteService.md)     | 1       | 0           | 0       | 0        | 0      |
 | [playerService](playerService.md) | 2       | 2           | 0       | 0        | 0      |
+| [scoreService](scoreService.md)   | 1       | 0           | 1       | 0        | 0      |
 | [teamService](teamService.md)     | 7       | 0           | 3       | 1        | 0      |
+
+## Dependencies
+
+An arrow points from a service to another its declarations name: `inherit` (its row policy), `writes` (that service's model), `affects`, `scope` (a `{ scope, of }` access form) or `anchor` (a collection's anchor). Each service's page lists them.
+
+```mermaid
+graph LR
+  playerService -->|writes| scoreService
+  playerService -->|inherit, scope, anchor| teamService
+  scoreService -->|inherit, affects, scope| teamService
+```

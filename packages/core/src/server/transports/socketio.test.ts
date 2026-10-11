@@ -430,7 +430,7 @@ describe("the registration hook for later listeners", () => {
       resolvePrincipal: () => Promise.resolve(alice),
       loadServiceAccess: undefined,
       binary: false,
-      legacyWire: false,
+      legacyWire: undefined,
       cors: undefined,
       socket: undefined,
       rateLimit: false,

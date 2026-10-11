@@ -62,8 +62,56 @@ run("no-todo-schema", {
             "`todoSchema()` is a placeholder left by the 4.x migration: it validates nothing, so any value passes as its type. Replace it with a real schema (Zod 4.2 or later where JSON Schema is read: MCP tools, admin metadata, projection keys).",
           line: 4,
         },
+        {
+          message:
+            "`todoSchema()` is a placeholder left by the 4.x migration: it validates nothing, so any value passes as its type. Without `keys`, it also hides this input's keys from defineService's id-reach (rowless) check, which refuses an `id` input under an access form that checks no row; give it keys (`todoSchema<T>({ keys: [\"id\", ...] })`) until a real schema (Zod 4.2 or later) replaces it.",
+          line: 6,
+        },
+        { messageId: "todoSchema", line: 7 },
+      ],
+    },
+    {
+      name: "a keyless placeholder input, under local names, a namespace and an assertion",
+      filename: CONTRACT,
+      code: `
+        import { mutation as m, query, todoSchema as later } from "@fitzzero/quickdraw-core";
+        import * as quickdraw from "@fitzzero/quickdraw-core";
+        export const a = query({ input: later<{ id: string }>({}), output: "entity" });
+        export const b = m({ output: "entity", input: later({ keys: [] }) as never });
+        export const c = quickdraw.mutation({ input: quickdraw.todoSchema<{ id: string }>() });
+      `,
+      errors: [
+        { messageId: "keylessInput", line: 4 },
+        { messageId: "keylessInput", line: 5 },
+        { messageId: "keylessInput", line: 6 },
+      ],
+    },
+    {
+      name: "the first message where keys are named or cannot be read, or the placeholder is no method input",
+      filename: CONTRACT,
+      code: `
+        import { defineContract, mutation, query, todoSchema } from "@fitzzero/quickdraw-core";
+        import { query as local } from "./methods";
+        export const project = defineContract("projectService", {
+          methods: {
+            get: query({ input: todoSchema<{ id: string }>({ keys: ["id"] }), output: "entity" }),
+            find: query({ input: todoSchema<{ id: string }>({ keys }), output: "entity" }),
+            rename: mutation({ input: todoSchema<{ id: string }>(options), output: "entity" }),
+            spread: mutation({ input: todoSchema<{ id: string }>({ ...options }), output: "entity" }),
+            mine: local({ input: todoSchema<{ id: string }>() }),
+            output: query({ input: z.null(), output: todoSchema<{ id: string }>() }),
+          },
+        });
+        export const loose = { input: todoSchema<{ id: string }>() };
+      `,
+      errors: [
         { messageId: "todoSchema", line: 6 },
         { messageId: "todoSchema", line: 7 },
+        { messageId: "todoSchema", line: 8 },
+        { messageId: "todoSchema", line: 9 },
+        { messageId: "todoSchema", line: 10 },
+        { messageId: "todoSchema", line: 11 },
+        { messageId: "todoSchema", line: 14 },
       ],
     },
     {
