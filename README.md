@@ -1709,14 +1709,21 @@ for an anonymous socket and before the server's hello, so a gate waits for
 `isKnown` (the hello on the current credentials arrived; false again from
 new credentials until theirs). `isConnected` turns true before the hello and
 false while the connection reconnects; `reconnecting` says the user and the
-page stay meanwhile:
+page stay meanwhile. When the server ends the session (signed out on
+another device, revoked, expired) or refuses a reconnect, `status` is
+`"disconnected"` or `"refused"`, `isKnown` is false and everything
+quickdraw cached is gone, so the gate shows the sign-in:
 
 <!-- example: apps/web/src/components/AuthGate.tsx#gate -->
 
 ```tsx
 export function AuthGate({ children }: { readonly children: ReactNode }) {
   // isKnown: the server's hello named the user, so userId is final (null: signed out)
-  const { isKnown, userId, reconnecting } = useQuickdraw();
+  const { status, isKnown, userId, reconnecting } = useQuickdraw();
+  // the server ended the session (signed out elsewhere, revoked, expired) or refused it: signed out
+  if (status === "disconnected" || status === "refused") {
+    return <SignIn />;
+  }
   if (!isKnown) {
     return <p>Connecting…</p>;
   }
@@ -3052,7 +3059,11 @@ expiresAt)`, with `expiresAt` a `Date` or epoch milliseconds: a JWT's
   every node behind a cluster adapter. `onRevoke(userId, sessionId | null)`
   tells the app when `logout` (the session's id) or `logout-all` (`null`)
   revoked; wire it as above. A disconnected client does not reconnect on
-  its own; its next connect is authenticated afresh.
+  its own; its next connect is authenticated afresh. It forgets the user
+  and everything quickdraw cached (`isKnown` false, `status`
+  `"disconnected"`), and calls waiting to be sent when a reconnect is
+  refused fail with `CANCELLED`, so a shared machine shows nothing of
+  theirs.
 - `issueSession({ sessions, jwtSecret }, userId, { provider })` starts a
   session for an app's own sign-in flow (login codes, an embedded activity),
   and `liveSession` reads a token back; both work with `socketAuth`.
@@ -3078,7 +3089,8 @@ and the token `setAuthToken` stored, if any, as a bearer token; the stored
 token is forgotten either way, and a refusal or an unreachable server
 rejects with a `QuickdrawError`. A socket keeps the user it signed in as
 until it connects again, so reconnect the provider's connection after
-signing out (with a token in `auth`, clearing it does that):
+signing out: `connection.close()`, then `open()`, as below, or a reload
+(with a token in `auth`, clearing it does that):
 
 <!-- example: apps/web/src/components/SignIn.tsx#browser -->
 

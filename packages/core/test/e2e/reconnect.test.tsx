@@ -3,6 +3,8 @@
 // it showed, catches up on what changed meanwhile, and resumes a board from
 // the server's recent-delta buffer when the buffer covers the outage, with
 // no snapshot read; when nobody kept the scope's buffer, it reads a snapshot.
+// A session the server ends is another matter (the 5.1 audit's CLIENT-1):
+// the client forgets the user and everything it cached.
 
 import { within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -89,5 +91,20 @@ describe("disconnect() and reconnect()", () => {
     await ada.shown.findByText("board While away");
     await ada.shown.findByText("row While away");
     expect(pageReads()).toBeGreaterThan(before);
+  });
+});
+
+describe("a session the server ends", () => {
+  it("leaves nothing of the user's data on screen or in the cache", async () => {
+    const { app, board, renderAs } = await boards();
+    const ada = await renderAs(board.ada);
+    app.server.access.disconnectUser(board.ada);
+    await ada.shown.findByText("row -");
+    expect(ada.view.connection.getState()).toMatchObject({ status: "disconnected", hello: null });
+    const cached = ada.view.queryClient
+      .getQueryCache()
+      .getAll()
+      .map((query) => query.state.data);
+    expect(JSON.stringify(cached)).not.toContain("T1");
   });
 });

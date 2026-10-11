@@ -46,7 +46,10 @@ reads (no HTTP long polling, no binary attachments).
 7. A client leaves with Socket.IO's DISCONNECT, `41`, then closes the
    WebSocket itself. The server ends a socket with `41` and closes the
    WebSocket after it; a message longer than `maxPayload` bytes closes it
-   too.
+   too. The server sends `41` when it ends the socket's session (signed
+   out, revoked or expired) or for a flooded channel: the client is then
+   signed out. It forgets the user and what it cached, and connects again
+   only when the app asks.
 
 | Packet         | Meaning                                                         | Sent by |
 | -------------- | --------------------------------------------------------------- | ------- |

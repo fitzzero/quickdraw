@@ -11,8 +11,8 @@
 // - runs only while the connection is connected (or reconnecting with the
 //   same credentials), the server's hello has named the user, and queries
 //   are not backing off after `RATE_LIMITED`, besides its own `enabled`;
-//   after another user's hello it renders again over the emptied cache
-//   (`session.ts`);
+//   after another user's hello, or once the server ended the session, it
+//   renders again over the emptied cache (`session.ts`);
 // - passes TanStack's abort signal to the call, so unmounting the last
 //   component that reads it, or `cancelQueries`, sends `qd:cancel`;
 // - sends the cached result's version and keeps the cached result when the

@@ -37,19 +37,24 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   user empties everything quickdraw cached.
 - `useQuickdraw()` gives
   `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, refusal, isRateLimited }`.
-  Gate on `isKnown` (the server's hello named the user; `userId` is then
-  final, `null` meaning signed out), never on `isConnected` or `userId`
-  alone: `userId` is `null` before the hello too, `isConnected` turns true
-  before it and false while reconnecting, and `reconnecting` keeps the user.
+  Gate on `status` first: `"disconnected"` or `"refused"` means signed out
+  (the server ended or refused the session: signed out elsewhere, revoked,
+  expired), and quickdraw's cache is already empty. Then gate on `isKnown`
+  (the server's hello named the user; `userId` is then final, `null`
+  meaning signed out), never on `isConnected` or `userId` alone: `userId`
+  is `null` before the hello too, `isConnected` turns true before it and
+  false while reconnecting, and `reconnecting` keeps the user. Never keep
+  showing data the app holds itself once `isKnown` turns false.
   `hello.serverId` changes when the server restarts (or the socket lands
   on another node): compare it to tell a new server from a network blip.
 - Sign-in and out in the browser go through the auth routes kit's routes:
   `authProviders()` lists the sign-ins the API serves (render a button for
   those only, never from build-time flags), `signInUrl(provider, {
 returnTo })` is the provider button's link, `signOut()` and
-  `signOutEverywhere()` end the session (they reject when refused). Never
-  call `/auth/...` by hand; 4.x's `getOAuthUrl`, `logout` and
-  `logoutAllDevices` are gone.
+  `signOutEverywhere()` end the session (they reject when refused); then
+  call `connection.close()` and `open()` (or reload), since a socket keeps
+  its user until it connects again. Never call `/auth/...` by hand; 4.x's
+  `getOAuthUrl`, `logout` and `logoutAllDevices` are gone.
 
 ## Reading
 

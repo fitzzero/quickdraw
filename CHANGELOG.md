@@ -303,6 +303,18 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   deploy) is applied, with one warning.
 - **`cluster.keyPrefix` must be a non-empty string**, or `createServer`
   throws.
+- **A session the server ends signs the client out.** After the server's
+  disconnect (`disconnectUser`, `onRevoke`, a session that expires, a
+  flooded channel) or a reconnect refused with `UNAUTHENTICATED` or
+  `FORBIDDEN`, `isKnown` is false, `userId`, `hello` and `serviceAccess`
+  are null, and quickdraw's cache is empty; calls queued during that
+  reconnect fail with `CANCELLED`. A gate on `isKnown` alone now shows its
+  loading state there: check `status` first (`"disconnected"` or
+  `"refused"` is signed out), as the README's `AuthGate` does. A client
+  disconnected for flooding a channel now looks signed out, where before
+  it was silently disconnected (Socket.IO never reconnected it; a reload
+  signs back in while the session lives). A dropped transport or a
+  `qd:rotate` keeps everything, as before.
 - **Presence across nodes is a request answered with user ids.** A node
   asks the others with `quickdraw:presence` instead of reading their
   sockets. During a rolling deploy from an earlier version, whose nodes
@@ -532,6 +544,12 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   until they reconnected, and its disconnects, stream items, room removals
   and access changes acted on production too. Every event now carries its
   deployment, and a node applies only its own's.
+- **A browser the server signed out shows nothing of the last user
+  (CLIENT-1).** After the server ended a session (signed out everywhere,
+  revoked, expired), the client kept its hello and its cache, so the
+  README's gate still showed the user signed in, with their data, on a
+  shared machine. The client now forgets the hello, the grants and every
+  quickdraw query, and fails the calls it buffered for a refused reconnect.
 - **Presence no longer ships every socket's handshake between nodes
   (RT-5).** Behind a cluster adapter each join and each user's last leave
   read every node's sockets (`fetchSockets`): their handshake headers and

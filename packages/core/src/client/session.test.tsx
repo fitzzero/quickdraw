@@ -50,6 +50,44 @@ describe("the session of a connection and a QueryClient", () => {
     return { fake, queryClient, changes, fill, cached };
   }
 
+  it("empties the cache when the server ends the session or refuses it, as for another user (CLIENT-1)", () => {
+    for (const end of [
+      (fake: ReturnType<typeof fakeConnection>) => {
+        fake.deliver("disconnect", "io server disconnect");
+      },
+      (fake: ReturnType<typeof fakeConnection>) => {
+        fake.deliver(
+          "connect_error",
+          Object.assign(new Error("Authentication failed"), { data: { code: "UNAUTHENTICATED" } }),
+        );
+      },
+    ]) {
+      const { fake, changes, fill, cached } = setup();
+      fake.setState({ hello: fakeHello("ada") });
+      fill();
+      fake.setState({ hello: null, status: "disconnected" });
+      end(fake);
+      expect(cached()).toEqual([undefined, undefined, undefined]);
+      expect(changes.at(-1)).toEqual({ switched: true, first: false });
+    }
+  });
+
+  it("keeps the cache through a dropped transport and the client's own disconnect", () => {
+    const { fake, changes, fill, cached } = setup();
+    fake.setState({ hello: fakeHello("ada") });
+    fill();
+    const before = changes.length;
+    fake.deliver("disconnect", "transport close");
+    fake.deliver("disconnect", "ping timeout");
+    fake.deliver("disconnect", "io client disconnect");
+    expect(cached()).toEqual([
+      { id: "t1", notes: "SECRET" },
+      { id: "t1", notes: "SECRET" },
+      { id: "t1", notes: "SECRET" },
+    ]);
+    expect(changes).toHaveLength(before);
+  });
+
   it("removes every quickdraw query and every overlay when a hello names another user", async () => {
     const { fake, queryClient, changes, fill, cached } = setup();
     fake.setState({ hello: fakeHello("ada") });

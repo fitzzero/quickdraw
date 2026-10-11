@@ -1,13 +1,14 @@
 // The client connection against real servers (RFC 0003 sections 8.1 and
 // 11.1): the v5 handshake, refusals for another protocol and for failed
-// authentication, new credentials, `qd:access`, `qd:rotate`, retaining across
-// a strict-mode remount, and backoff windows.
+// authentication, a session the server ends (the 5.1 audit's CLIENT-1), new
+// credentials, `qd:access`, `qd:rotate`, retaining across a strict-mode
+// remount, and backoff windows.
 
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Server } from "socket.io";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { QUICKDRAW_VERSION, type ProtocolMismatch } from "../index";
+import { QuickdrawError, QUICKDRAW_VERSION, type ProtocolMismatch } from "../index";
 import { captureLogger, tick } from "../server/__tests__/fixtures";
 import { callData } from "./call";
 import { createQuickdrawConnection } from "./connection";
@@ -116,6 +117,50 @@ describe("createQuickdrawConnection", () => {
     await whenStatus(connection, "refused");
     expect(connection.getState().refusal).toEqual({ code: "UNAUTHENTICATED" });
     expect(onProtocolMismatch).not.toHaveBeenCalled();
+  });
+
+  it("forgets the hello and the grants when the server ends the session (CLIENT-1)", async () => {
+    const { app } = await harness.start();
+    const connection = await harness.connect(app.url);
+    await until(() => connection.getState().hello !== null);
+    app.server.access.disconnectUser("alice");
+    await whenStatus(connection, "disconnected");
+    expect(connection.getState()).toMatchObject({
+      hello: null,
+      serviceAccess: null,
+      reconnecting: false,
+    });
+  });
+
+  it("forgets the hello and fails the calls it buffered when a reconnect is refused (CLIENT-1)", async () => {
+    let revoked = false;
+    const { app } = await harness.start({
+      auth: {
+        authenticate: (request) => {
+          if (revoked) {
+            throw new QuickdrawError("UNAUTHENTICATED", "revoked");
+          }
+          return testAuth.authenticate?.(request);
+        },
+      },
+      logger: captureLogger(),
+    });
+    const connection = await harness.connect(app.url);
+    await until(() => connection.getState().hello !== null);
+    revoked = true;
+    // The transport drops without the server ending the session: the client reconnects, and is refused.
+    for (const socket of app.server.io.sockets.sockets.values()) {
+      socket.conn.close();
+    }
+    await until(() => connection.getState().reconnecting);
+    const pending = callData(connection, echo);
+    await whenStatus(connection, "refused");
+    expect(connection.getState()).toMatchObject({
+      hello: null,
+      serviceAccess: null,
+      refusal: { code: "UNAUTHENTICATED" },
+    });
+    await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
   });
 
   it("reconnects with new credentials, and only when they change", async () => {

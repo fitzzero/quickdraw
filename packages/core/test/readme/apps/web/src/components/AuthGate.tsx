@@ -7,7 +7,11 @@ import { SignIn } from "./SignIn";
 // #region gate
 export function AuthGate({ children }: { readonly children: ReactNode }) {
   // isKnown: the server's hello named the user, so userId is final (null: signed out)
-  const { isKnown, userId, reconnecting } = useQuickdraw();
+  const { status, isKnown, userId, reconnecting } = useQuickdraw();
+  // the server ended the session (signed out elsewhere, revoked, expired) or refused it: signed out
+  if (status === "disconnected" || status === "refused") {
+    return <SignIn />;
+  }
   if (!isKnown) {
     return <p>Connecting…</p>;
   }
