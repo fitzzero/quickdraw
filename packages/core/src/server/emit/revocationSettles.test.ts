@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { deferred, tick } from "../__tests__/fixtures";
 import type { Hub } from "./hub";
-import { createRevocation, type RevocationHook } from "./revocation";
+import { createRevocation, settleAll, type RevocationHook } from "./revocation";
 
 /** A hub with no sockets and no subscriptions: only the hooks re-resolve anything. */
 const hub = {
@@ -74,5 +74,34 @@ describe("revocation", () => {
     gate.resolve();
     await expect(regranted).rejects.toBe(failure);
     expect(finished).toEqual(["regranted"]);
+  });
+});
+
+describe("settleAll", () => {
+  it("waits for every piece of work, then rejects with the first failure", async () => {
+    const gate = deferred();
+    let finished = false;
+    const first = new Error("first");
+    const settled = settleAll([
+      Promise.reject(first),
+      (async () => {
+        await gate.promise;
+        finished = true;
+      })(),
+      Promise.reject(new Error("second")),
+    ]);
+    const flag = settledFlag(settled);
+    await tick();
+    expect(flag.settled()).toBe(false);
+    gate.resolve();
+    await expect(settled).rejects.toBe(first);
+    expect(finished).toBe(true);
+  });
+
+  it("keeps a failure that is no Error as the cause of the one it throws", async () => {
+    await expect(settleAll([Promise.reject("not an error")])).rejects.toMatchObject({
+      cause: "not an error",
+    });
+    await expect(settleAll([Promise.resolve(1), undefined])).resolves.toBeUndefined();
   });
 });

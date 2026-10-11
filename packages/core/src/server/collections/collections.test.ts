@@ -460,6 +460,30 @@ describe("deltas after a flush", () => {
     ]);
   });
 
+  it("moves a row whose scope column a relation connect sets, as a scalar move does (DATA-1)", async () => {
+    const { app } = await start();
+    const left = await connect(app, as(board.ada));
+    const entered = await connect(app, as(board.ed));
+    await colSub(left.connection, "byProject", board.p1);
+    await colSub(entered.connection, "byProject", board.p2);
+    await write(app, (db) =>
+      db.task.update({
+        where: { id: board.t1 },
+        data: { project: { connect: { id: board.p2 } } },
+      }),
+    );
+    await Promise.all([left.scopes.settle(), entered.scopes.settle()]);
+    expect(left.scopes.frames).toEqual([
+      expect.objectContaining({ scope: board.p1, deltas: [{ t: "removed", id: board.t1 }] }),
+    ]);
+    expect(entered.scopes.frames).toEqual([
+      expect.objectContaining({
+        scope: board.p2,
+        deltas: [{ t: "added", item: card(board.t1, board.p2, "T1") }],
+      }),
+    ]);
+  });
+
   it("moves a row deleted and created again in one unit: removed where it was, added where it is", async () => {
     const { app } = await start();
     const left = await connect(app, as(board.ada));

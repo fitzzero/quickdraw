@@ -34,19 +34,25 @@ export interface WriteRecord {
   /** The written row's id. */
   readonly id: string;
   readonly op: "create" | "update" | "delete";
-  /** The fields the write set; `[ANY_FIELD]` when they are unknown. */
+  /**
+   * The fields the write set; `[ANY_FIELD]` when they are unknown. An update
+   * whose data held a nested write, which may set a foreign key through a
+   * relation, lists every interested column of the model besides its keys.
+   */
   readonly fields: readonly string[];
   /**
    * The row before the unit of work wrote it, for its interested columns: an
    * update's old values of the interested columns it changed (read first,
-   * narrowly), or a delete's values. A row the unit created has none.
+   * narrowly), or of every interested column when its data held a nested
+   * write, or a delete's values. A row the unit created has none.
    */
   readonly before?: Readonly<Record<string, unknown>>;
   /** The interested columns' values after the write, when the write returned them. */
   readonly after?: Readonly<Record<string, unknown>>;
   /**
    * Set on a `create` an `upsert` recorded without reading whether its row
-   * existed (its `update` set no interested column): the row may have been
+   * existed (its `update` set no interested column and held no nested
+   * write, or the model has no interested columns): the row may have been
    * updated rather than created. Only merging reads it: a row created and
    * deleted in one unit is dropped from the flush only when its create is
    * certain.

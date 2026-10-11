@@ -213,7 +213,7 @@ function warnNested(op: Operation, data: unknown): boolean {
     op.runtime.tracker.warn({
       kind: "nested-write",
       subject: `${op.model}.${field}.${operation}`,
-      message: `A nested write (${op.model}.${field}: { ${operation} }) is not tracked: the related rows it creates, changes or deletes send nothing. The ${op.model} row is, with its access and scope columns read first, so a foreign key a to-one connect or disconnect sets on it is seen. Write related rows through their own model, or set the foreign key column`,
+      message: `A nested write (${op.model}.${field}: { ${operation} }) is not tracked: the related rows it creates, changes or deletes send no frames and revoke nothing. The ${op.model} row is tracked, and an update of it reads its access and scope columns first, so a foreign key a to-one connect or disconnect sets on it is seen. Write related rows through their own model, or set the foreign key column`,
       meta: { model: op.model, field, operation },
     });
   }

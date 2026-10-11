@@ -202,8 +202,11 @@ compile time.
   composite `@@id`: the write tracker keys rows by `id`, so such a table is
   never tracked and a removed member is never revoked. `createServer` logs
   `[quickdraw:untracked-access-model]` as an error for one, and a strict
-  test app fails to start. A foreign key set through a relation
-  (`project: { connect }`) revokes like a scalar one.
+  test app fails to start. A foreign key set through a relation on the
+  written row (`task.update({ data: { project: { connect } } })`) revokes
+  like a scalar one; one set from the parent's side
+  (`project.update({ data: { tasks: { connect } } })`) is a nested write
+  whose rows are not tracked: write the foreign key on the row itself.
 
 ## One policy, every surface
 

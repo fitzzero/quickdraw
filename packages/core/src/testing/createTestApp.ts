@@ -7,8 +7,9 @@
 // defined the services, so `qd.stream`, `qd.presence` and `qd.run` reach
 // it. While it runs, `expectBudget` measures it (`instrument.ts`), and
 // `strictWarnings` makes the development warnings of its method calls
-// throw, and a warning raised at start (`untracked-access-model`, checked in
-// the background by `createServer`, which it awaits) fail its start;
+// throw, and a warning raised at start (`tiered-field-in-output`,
+// `resolver-without-reads`, or `untracked-access-model`, which `createServer`
+// checks in the background and this awaits) fails its start;
 // `close()` ends both. It replaces 4.1's
 // `createTestServer` and `connectAsUser` (4.1 `src/server/testing.ts:62-130`),
 // which took a fixed port counter and authenticated by a bare user id.
@@ -137,8 +138,11 @@ const TIMEOUT_MS = 5000;
  * 127.0.0.1, for tests that call them in process or over real sockets.
  * `strictWarnings: true` (under vitest or jest) makes every development
  * warning raised in the app's method calls throw where it is raised, so a
- * test that causes one fails; warnings outside its calls (seeding through
- * the tracked client, say) are logged, and nothing is strict after `close()`.
+ * test that causes one fails, and one raised at start
+ * (`tiered-field-in-output`, `resolver-without-reads`,
+ * `untracked-access-model`) rejects this; warnings outside its calls
+ * (seeding through the tracked client, say) are logged, and nothing is
+ * strict after `close()`.
  *
  * @example
  * const app = await createTestApp({ services: [taskService], db: testPrisma });
@@ -167,7 +171,8 @@ export async function createTestApp<const S extends readonly AnyService[]>(
     // The checks createServer starts in the background: a strict app fails to start on one.
     await startupChecksOf(server);
   } catch (error) {
-    await server.close();
+    // The warning is the answer, whatever closing the server that never listened says.
+    await server.close().catch(() => undefined);
     throw error;
   }
   adoptDispatcher(options.services, server.dispatcher);

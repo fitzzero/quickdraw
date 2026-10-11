@@ -32,8 +32,6 @@ import {
   watchSignals,
   type StallWatchdogOptions,
 } from "./lifecycle";
-
-export { startupChecksOf } from "./lifecycle";
 import { editsGrants, type AnyService } from "./service";
 import {
   createGrantsSink,
@@ -60,6 +58,8 @@ import {
   type SocketRateLimitOptions,
 } from "./transports/socketServer";
 import type { Principal } from "./types";
+
+export { startupChecksOf } from "./lifecycle";
 
 /**
  * The parts of an Express app (4 or 5) `createServer` uses: it is a request

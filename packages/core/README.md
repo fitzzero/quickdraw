@@ -3191,7 +3191,10 @@ What it does with them:
 
 While `NODE_ENV` is not `"production"`, a running app warns about the slow
 and untracked patterns lint cannot see, as they happen. Every warning has
-one format and names the method call it happened in:
+one format and names the method call it happened in (one exception:
+`untracked-access-model` is checked as the server starts and logged as an
+error under `category: "quickdraw.access"`, in every environment, at each
+start):
 
 ```text
 [quickdraw:n-plus-one] taskService.board: task.findUnique by id ran 10 times in one call, once per item (N+1); ...

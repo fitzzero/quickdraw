@@ -44,7 +44,12 @@ All notable changes to this project will be documented in this file.
   When its model has interested columns (a policy's, a collection's), it
   runs one more statement and its record's `fields` lists those columns, so
   revocation, cache eviction and collection moves follow relation-form
-  foreign keys. The `nested-write` warning's text changed.
+  foreign keys on the written row. Every such write to a row a policy reads
+  is now an access change, whether or not the foreign key moved: it
+  re-resolves that row's subscribers (entities, collection scopes, topics,
+  streams), and behind a cluster the flush's frames wait for every node to
+  answer, as for any access change. The `nested-write` warning's text
+  changed.
 - **`createServer` names access models it cannot track.** A model a policy,
   a membership table or a `via` junction depends on without an `id` column
   (a composite `@@id`) logs `[quickdraw:untracked-access-model]` at error

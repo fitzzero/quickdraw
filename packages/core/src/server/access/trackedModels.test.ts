@@ -13,6 +13,9 @@ import { createTestApp, type TestApp } from "../../testing/index";
 import { captureLogger } from "../__tests__/fixtures";
 import { projectService, qd } from "../emit/__tests__/live";
 import { members } from "../index";
+import { createRegistry } from "../registry";
+import type { StorageAdapter } from "../storage";
+import { checkTrackedModels } from "./trackedModels";
 
 let h: Harness;
 const apps: TestApp[] = [];
@@ -88,6 +91,23 @@ describe("createServer's check of the models access depends on", () => {
         logger,
         strictWarnings: true,
       })) as never,
+    );
+    expect(logger.at("error")).toEqual([]);
+  });
+});
+
+describe("a probe that fails", () => {
+  it("is logged as a warning and never fails the check, strict or not", async () => {
+    const logger = captureLogger();
+    const storage = {
+      trackable: () => Promise.reject(new Error("the database is down")),
+    } as unknown as StorageAdapter;
+    const registry = createRegistry([untrackedService]);
+    await expect(
+      checkTrackedModels(registry, storage, { logger, strict: true }),
+    ).resolves.toBeUndefined();
+    expect(logger.at("warn").map((entry) => entry.message)).toContain(
+      "createServer: could not check whether verificationToken is tracked",
     );
     expect(logger.at("error")).toEqual([]);
   });
