@@ -361,7 +361,8 @@ describe("ctx.rooms.join and leave", () => {
   it("count no socket a raw join put in a room: presence answers for the rooms ctx.rooms.join recorded", async () => {
     const app = await start();
     const cy = await app.connect(as(board.cy));
-    app.server.io.in(cy.socket.id ?? "").socketsJoin("raw");
+    // On the socket's own server: behind Valkey, `io.in(...).socketsJoin` goes through the adapter.
+    await app.server.io.sockets.sockets.get(cy.socket.id ?? "")?.join("raw");
     expect(app.server.io.sockets.adapter.rooms.get("raw")?.size).toBe(1);
     expect(await app.server.presence.users("raw")).toEqual([]);
     expect(await app.server.presence.count("raw")).toBe(0);

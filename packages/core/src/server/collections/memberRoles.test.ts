@@ -12,6 +12,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { inCluster } from "../../../test/cluster/mode";
 import type { PrismaClient } from "../../../test/prisma/setup";
 import { defineContract, mutation, via, type CollectionFrame } from "../../index";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
@@ -217,7 +218,9 @@ describe("a via list over the item service's members table", () => {
     expect(ada.deltas()).toEqual([]);
     await setRole("Public");
     await ada.scopes.settle();
-    expect(junctionReads()).toHaveLength(1);
+    // Behind a cluster adapter the writing node sees no room, so it also serves the self list
+    // `mine` over the same table: its links, and cy's own membership row for its policy.
+    expect(junctionReads()).toHaveLength(inCluster() ? 3 : 1);
     expect(ada.deltas()).toEqual([[{ t: "removed", id: board.p1 }]]);
   });
 });
