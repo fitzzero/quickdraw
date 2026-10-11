@@ -3,7 +3,8 @@
 // COLL-1, its `via` variant): a member demoted to a role below `Read` kept
 // the project in their list, with its updates. The list here is anchored on
 // a directory of users, so only this rule decides, not the self scope's
-// policy filter.
+// policy filter; a self list over the same table checks that the flush's
+// removal reaches it once.
 //
 //            owner   access list    members
 //   P1       ada     di: Read       bo: Moderate, cy: Read
@@ -12,11 +13,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { PrismaClient } from "../../../test/prisma/setup";
-import { defineContract, via, type CollectionFrame } from "../../index";
+import { defineContract, mutation, via, type CollectionFrame } from "../../index";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
 import { as, projectMembers, seedBoard, type Board } from "../access/__tests__/board";
-import { qd } from "../emit/__tests__/live";
+import { qd, recordingStorage } from "../emit/__tests__/live";
 import { anyOf, everyone, jsonAcl } from "../index";
 import { receiveScopes } from "./__tests__/fixture";
 
@@ -41,16 +42,27 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map(async (app) => await app.close()));
 });
 
-/** Every user, readable by everyone: what the lists are anchored on. */
+/** Every user, readable by everyone: what the lists are anchored on; `touchMember` touches a junction row. */
 const directory = defineContract("directoryService", {
   entity: z.object({ id: z.string(), name: z.string() }),
-  methods: {},
+  methods: {
+    touchMember: mutation({ input: z.object({ id: z.string() }), output: z.null() }),
+  },
 });
 
 const directoryService = qd.defineService(directory, {
   model: "user",
   access: everyone("Read"),
-  methods: {},
+  methods: {
+    touchMember: {
+      access: "authenticated",
+      rowless: true,
+      handler: ({ input, ctx }) => {
+        ctx.touch("projectMember", [input.id]);
+        return null;
+      },
+    },
+  },
 });
 
 /** Each user's projects, through the very membership table the projects' policy reads. */
@@ -73,8 +85,37 @@ const projectsOfService = qd.defineService(projectsOf, {
   methods: {},
 });
 
+/** Each user's own list of their projects, through the same table. */
+const myProjects = defineContract("myProjectsService", {
+  entity: z.object({ id: z.string(), name: z.string() }),
+  methods: {},
+  collections: {
+    mine: {
+      scope: via({ model: "projectMember", entry: "projectId", scope: "userId" }),
+      item: "entity",
+      order: [["id", "asc"]],
+    },
+  },
+});
+
+const myProjectsService = qd.defineService(myProjects, {
+  model: "project",
+  access: anyOf(jsonAcl("acl", { owner: "ownerId" }), projectMembers),
+  collections: { mine: { scopeAccess: "self" } },
+  methods: {},
+});
+
+const recorded = () => recordingStorage(h.storage);
+let reads: ReturnType<typeof recorded>["reads"] = [];
+
 async function start() {
-  const app = await createTestApp({ services: [directoryService, projectsOfService], db: h.db });
+  const storage = recorded();
+  reads = storage.reads;
+  const app = await createTestApp({
+    services: [directoryService, projectsOfService, myProjectsService],
+    db: h.db,
+    storage: storage.storage,
+  });
   apps.push(app as unknown as TestApp);
   return app;
 }
@@ -137,19 +178,94 @@ describe("a via list over the item service's members table", () => {
     expect(ada.deltas()).toEqual([]);
   });
 
-  it("costs no new statement", async () => {
-    await start();
-    const counted = await h.storage.countStatements(() =>
-      h.inUnit(() =>
-        h.db.projectMember.updateMany({
+  it("reads nothing for a role change that keeps the link counted, and the junction once for one that does not", async () => {
+    const app = await start();
+    const ada = await watcher(app);
+    await ada.subscribe();
+    const junctionReads = () => reads.filter((read) => read.model === "projectMember");
+    const setRole = (role: string) =>
+      write(app, (db) =>
+        db.projectMember.updateMany({
           where: { projectId: board.p1, userId: board.cy },
-          data: { role: "Moderate" },
+          data: { role },
         }),
-      ),
-    );
-    expect(counted.statements).toBe(STATEMENTS);
+      );
+    reads.length = 0;
+    await setRole("Moderate");
+    await ada.scopes.settle();
+    expect(junctionReads()).toEqual([]);
+    expect(ada.deltas()).toEqual([]);
+    await setRole("Public");
+    await ada.scopes.settle();
+    expect(junctionReads()).toHaveLength(1);
+    expect(ada.deltas()).toEqual([[{ t: "removed", id: board.p1 }]]);
   });
 });
 
-/** The statements of the role update above, measured before the rule: its rows read first, then the write. */
-const STATEMENTS = 2;
+describe("a demotion the write does not carry whole", () => {
+  /** cy's membership of P1. */
+  const membership = () =>
+    h.prisma.projectMember.findUniqueOrThrow({
+      where: { projectId_userId: { projectId: board.p1, userId: board.cy } },
+    });
+
+  it.each([
+    [
+      "a batch transaction, which reports no values",
+      async (app: App) => {
+        await write(app, (db) =>
+          db.$transaction([
+            db.projectMember.updateMany({
+              where: { projectId: board.p1, userId: board.cy },
+              data: { role: "Public" },
+            }),
+          ]),
+        );
+      },
+    ],
+    [
+      "an untracked write and a touch of the row",
+      async (app: App) => {
+        const { id } = await membership();
+        await h.prisma.projectMember.update({ where: { id }, data: { role: "Public" } });
+        await app.as(as(board.ada)).directoryService.touchMember({ id });
+      },
+    ],
+    [
+      "the row deleted and created again with its id in one unit",
+      async (app: App) => {
+        const row = await membership();
+        await write(app, async (db) => {
+          await db.projectMember.delete({ where: { id: row.id } });
+          await db.projectMember.create({ data: { ...row, role: "Public" } });
+        });
+      },
+    ],
+  ])("removes the project from the list: %s", async (_name, demote) => {
+    const app = await start();
+    const ada = await watcher(app);
+    expect(await ada.subscribe()).toMatchObject({ ok: true, items: [{ id: board.p1 }] });
+    await demote(app);
+    await ada.scopes.settle();
+    expect(ada.deltas()).toEqual([[{ t: "removed", id: board.p1 }]]);
+  });
+
+  it("removes it from the member's own list once, when the row is created again", async () => {
+    const app = await start();
+    const connection = await app.connect(as(board.cy));
+    const scopes = receiveScopes(connection);
+    const request = { s: "myProjectsService", c: "mine", scope: board.cy };
+    expect(await emitWithAck(connection.socket, "qd:col:sub", request)).toMatchObject({
+      ok: true,
+      items: [{ id: board.p1 }],
+    });
+    const row = await membership();
+    await write(app, async (db) => {
+      await db.projectMember.delete({ where: { id: row.id } });
+      await db.projectMember.create({ data: { ...row, role: "Public" } });
+    });
+    await scopes.settle();
+    const deltas = scopes.frames.flatMap((frame: CollectionFrame) => frame.deltas);
+    expect(deltas).toEqual([{ t: "removed", id: board.p1 }]);
+  });
+});

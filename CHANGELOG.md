@@ -121,10 +121,12 @@ All notable changes to this project will be documented in this file.
   `members` policy reads), a link whose role maps below the collection's
   `access` no longer makes the row a member: it is in no page, count,
   index, `qd:col:items`, scoped search or delta, and a role change across
-  that line sends `removed` or `added`. Apps whose roles are level names
-  (the sharing kit's default) see no change; a guest-like role
-  (`levels: { guest: "Public" }`) drops those rows from guests' lists. A
-  role missing from the map counts as no level, as in the policy.
+  that line sends `removed` or `added`. Apps whose members all hold at
+  least the list's access see no change; a member below it (a `Public`
+  role, or a guest-like one such as `levels: { guest: "Public" }`) drops
+  out of the list. A role missing from the map counts as no level, as in
+  the policy. A role change that keeps the link counted (`Read` to
+  `Moderate`) reads nothing; one across the line reads the junction once.
 - **The read/write kit's bulk methods take their single-row level.** A
   bulk method whose form names no level (`"authenticated"`, `"public"`,
   `{ service }`, `custom`) now skips the rows below the row level of

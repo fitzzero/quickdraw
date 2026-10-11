@@ -1148,8 +1148,9 @@ export const taskService = qd.defineService(task, {
   pages; `where` is an equality filter on membership; `access` is the level
   needed on the anchor (default `Read`).
 - A junction write adds or removes its entry in the one scope it links.
-  Over the item service's own `members` table (its policy reads the
-  junction with the same `entry` and `user`), a link counts only when its
+  Over the item service's own `members` table (a `members` read of the
+  policy, alone or inside `anyOf`, whose `entry` is the via's `entry` and
+  whose `user` is the via's `scope`), a link counts only when its
   role gives at least the collection's `access`: a role change across that
   line adds or removes the entry, and a link below it is in no page, count,
   index, `qd:col:items` or scoped search. When the item reads the junction

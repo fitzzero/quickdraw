@@ -60,50 +60,59 @@ export type CollectionScope =
       readonly refreshEntry: boolean;
       /**
        * The junction is the item service's `members` table: only links whose
-       * role gives at least the collection's `access` count, and a write of
-       * the role column moves the link in or out.
+       * role gives at least the collection's `access` count, by one rule per
+       * role column the policy's `members` reads of the table use (a link
+       * any rule counts counts), and a write of a role column can move the
+       * link in or out.
        */
-      readonly level?: LinkLevel;
+      readonly levels?: readonly LinkLevel[];
     };
 
-/** The role rule of a `via` scope over the item service's `members` table. */
+/** One role rule of a `via` scope over the item service's `members` table. */
 export interface LinkLevel {
   /** The junction's role column. */
   readonly column: string;
-  /** The stored roles that give at least the collection's `access`; none: no link counts. */
+  /** The stored roles that give at least the collection's `access`; none: no link counts by this column. */
   readonly roles: readonly string[];
 }
 
 /** A `via` scope, compiled. */
 export type ViaCollectionScope = Extract<CollectionScope, { readonly kind: "via" }>;
 
-type Values = Readonly<Record<string, unknown>>;
-
 /**
  * The filter of a `via` scope's junction rows that count as links: `where`,
- * and over the item service's `members` table a role from the scope's rule.
+ * and over the item service's `members` table a role one of the scope's
+ * rules counts.
  */
-export function linkWhere(via: ViaCollectionScope, where: Values): Values {
-  return via.level === undefined
-    ? where
-    : { ...where, [via.level.column]: { in: [...via.level.roles] } };
+export function linkWhere(via: ViaCollectionScope, where: UnknownRecord): UnknownRecord {
+  const rules = (via.levels ?? []).map((rule) => ({ [rule.column]: { in: [...rule.roles] } }));
+  if (rules.length === 0) {
+    return where;
+  }
+  return rules.length === 1 ? { ...where, ...rules[0] } : { AND: [where, { OR: rules }] };
 }
 
 /**
- * Whether junction row values make a link under the scope's role rule:
- * always without one; `undefined` when the values lack the role.
+ * Whether junction row values make a link under the scope's role rules:
+ * always without any; `undefined` when no rule counts them and the values
+ * lack a role a rule reads.
  */
 export function linkQualifies(
   via: ViaCollectionScope,
-  values: Values | undefined,
+  values: UnknownRecord | undefined,
 ): boolean | undefined {
-  if (via.level === undefined) {
+  if (via.levels === undefined) {
     return true;
   }
-  const role = values?.[via.level.column];
-  return role === undefined
-    ? undefined
-    : typeof role === "string" && via.level.roles.includes(role);
+  let unknown = false;
+  for (const rule of via.levels) {
+    const role = values?.[rule.column];
+    if (typeof role === "string" && rule.roles.includes(role)) {
+      return true;
+    }
+    unknown ||= role === undefined;
+  }
+  return unknown ? undefined : false;
 }
 
 /** One collection of a service: its contract declaration and the service's option, checked. */
@@ -297,16 +306,17 @@ function accessOf(
 }
 
 /**
- * The `members` read of `policy`, alone or inside `anyOf` at any depth,
- * over the junction `via` names: the same model, its `entry` the via's
- * entry, its `user` the via's scope. A `resolver`'s memberships do not count.
+ * The `members` reads of `policy`, alone or inside `anyOf` at any depth,
+ * over the junction `via` names: the same model, the policy's `entry` the
+ * via's `entry`, and its `user` the via's `scope`. A `resolver`'s
+ * memberships do not count.
  */
-function membersReadOf(
+function membersReadsOf(
   policy: AnyAccessPolicy | undefined,
   via: { readonly model: string; readonly entry: string; readonly scope: string },
-): MembershipRead | undefined {
+): MembershipRead[] {
   if (policy === undefined) {
-    return undefined;
+    return [];
   }
   const read = membershipOf(policy);
   const same =
@@ -314,16 +324,32 @@ function membersReadOf(
     modelKey(read.model) === modelKey(via.model) &&
     read.entry === via.entry &&
     read.user === via.scope;
-  if (same) {
-    return read;
+  return [
+    ...(same ? [read] : []),
+    ...(anyOfPolicies(policy) ?? []).flatMap((member) => membersReadsOf(member, via)),
+  ];
+}
+
+/** The role rules of `reads` at `access`: one per role column, with the roles any read counts. */
+function linkLevels(
+  reads: readonly MembershipRead[],
+  access: AccessLevel,
+): readonly LinkLevel[] | undefined {
+  if (reads.length === 0) {
+    return undefined;
   }
-  for (const member of anyOfPolicies(policy) ?? []) {
-    const found = membersReadOf(member, via);
-    if (found !== undefined) {
-      return found;
-    }
+  const roles = new Map<string, Set<string>>();
+  for (const read of reads) {
+    roles.set(
+      read.level,
+      new Set([...(roles.get(read.level) ?? []), ...rolesAtLeast(read, access)]),
+    );
   }
-  return undefined;
+  return Object.freeze(
+    [...roles].map(([column, counted]) =>
+      Object.freeze({ column, roles: Object.freeze([...counted]) }),
+    ),
+  );
 }
 
 function scopeOf(
@@ -335,18 +361,14 @@ function scopeOf(
   if (typeof scope === "string") {
     return Object.freeze({ kind: "column", column: scope });
   }
-  const read = membersReadOf(policy, scope);
-  const level =
-    read === undefined
-      ? undefined
-      : Object.freeze({ column: read.level, roles: Object.freeze(rolesAtLeast(read, access)) });
+  const levels = linkLevels(membersReadsOf(policy, scope), access);
   return Object.freeze({
     kind: "via",
     model: scope.model,
     entry: scope.entry,
     scope: scope.scope,
     refreshEntry: scope.refreshEntry === true,
-    ...(level === undefined ? {} : { level }),
+    ...(levels === undefined ? {} : { levels }),
   });
 }
 

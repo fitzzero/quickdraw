@@ -165,8 +165,13 @@ describe("a self scope on a service with a policy", () => {
     );
     await cy.scopes.settle();
     const lost = deltasOf(cy.scopes.frames, "mine", "myProjectService");
-    expect(lost.length).toBeGreaterThan(0);
-    expect(lost.filter((delta) => !(delta.t === "removed" && delta.id === board.p1))).toEqual([]);
+    if (inCluster()) {
+      // Behind a cluster the two nodes decide apart: only check that what came is the removal.
+      expect(lost.length).toBeGreaterThan(0);
+      expect(lost.filter((delta) => !(delta.t === "removed" && delta.id === board.p1))).toEqual([]);
+    } else {
+      expect(lost).toEqual([{ t: "removed", id: board.p1 }]);
+    }
     cy.scopes.clear();
     await write(app, (db) =>
       db.project.update({ where: { id: board.p1 }, data: { name: "Secret plans" } }),
