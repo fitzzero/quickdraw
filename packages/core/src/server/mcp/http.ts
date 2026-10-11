@@ -131,6 +131,9 @@ function send(res: ServerResponse, status: number, body: string): number | undef
   res.statusCode = status;
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.setHeader("content-length", bytes);
+  // As on `/qd`: a caller's data is never cached, nor read as anything but JSON (TRANSPORT-3).
+  res.setHeader("cache-control", "no-store");
+  res.setHeader("x-content-type-options", "nosniff");
   res.end(body);
   return bytes;
 }

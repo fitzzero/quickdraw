@@ -183,6 +183,32 @@ describe("on a bare Node server", () => {
       body: { success: false, error: "Not found", code: "NOT_FOUND" },
     });
   });
+
+  it("says no-store and nosniff on the tool list, a call, a refusal and a 404 alike", async () => {
+    const { router } = routes();
+    const url = await listen(router);
+    const post = (body: unknown, token?: string) =>
+      fetch(`${url}/mcp/invoke`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+        },
+        body: JSON.stringify(body),
+      });
+    const call = { name: "taskService_get", arguments: { id: "t1" } };
+    const responses = await Promise.all([
+      fetch(`${url}/mcp/tools`),
+      post(call, "reader-token"),
+      post(call),
+      fetch(`${url}/elsewhere`),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200, 401, 404]);
+    for (const { headers } of responses) {
+      expect(headers.get("cache-control")).toBe("no-store");
+      expect(headers.get("x-content-type-options")).toBe("nosniff");
+    }
+  });
 });
 
 describe("requests the routes refuse", () => {

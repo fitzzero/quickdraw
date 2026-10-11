@@ -573,9 +573,10 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   prefix are still one, and a node of an earlier version sends untagged
   events, which every node applies: give each deployment its own prefix and
   adapter key, and upgrade every deployment that shares the Valkey.
-- **No cache keeps a `/qd` reply (TRANSPORT-3).** A call's reply carried no
-  `Cache-Control`, so a shared proxy or the browser's cache could keep one
-  user's data.
+- **No cache keeps a `/qd` or MCP reply (TRANSPORT-3).** A call's reply
+  carried no `Cache-Control`, so a shared proxy or the browser's cache could
+  keep one user's data. `/qd` and the MCP bridge's HTTP routes now say
+  `no-store` and `nosniff`.
 - **Logs hold no values a Prisma error rendered (CLIENT-5).** A Prisma
   error's message renders the failed call: the audit's create logged an
   email and a plaintext password. Under Prisma 7 its `meta` also carries

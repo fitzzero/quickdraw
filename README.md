@@ -2306,7 +2306,8 @@ export const projectService = qd.defineService(project, {
   rooms a method joined them to until the app takes them out. The example's
   `onChange` does that when the change leaves the user with no entry or
   role (`change.after === null`): `removeFromBoard` takes their sockets out
-  of the project's board on every node. Under `anyOf` a user who still has
+  of the project's board on every node. With custom `members` `levels`, a
+  role below the join's level must take the user out too. Under `anyOf` a user who still has
   the other list is taken out too, and joins again on their next connection
   (`useJoin`). `onChange` runs inside the change's transaction, before it
   commits: a join that runs before the commit (a check that still sees the
