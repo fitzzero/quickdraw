@@ -17,7 +17,7 @@
 // (4.1 `src/server/collections.ts:305-318`).
 
 import { SERVER_EVENTS } from "../../contract/names";
-import type { RevocationHook } from "../emit/revocation";
+import { settleAll, type RevocationHook } from "../emit/revocation";
 import { describeError } from "../pipeline/metrics";
 import type { QuickdrawServerSocket } from "../transports/types";
 import { authorizeScopes } from "./access";
@@ -104,7 +104,7 @@ async function reauthorizeAll(hub: CollectionHub, found: Found): Promise<void> {
       work.push(reauthorize(hub, socket, own));
     }
   }
-  await Promise.all(work);
+  await settleAll(work);
 }
 
 /** The collection half of a dispatcher's revocation. */

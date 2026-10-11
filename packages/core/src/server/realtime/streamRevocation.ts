@@ -24,7 +24,7 @@ import { SERVER_EVENTS } from "../../contract/names";
 import type { RevokedFrame } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
 import type { Hub } from "../emit/hub";
-import type { RevocationHook } from "../emit/revocation";
+import { settleAll, type RevocationHook } from "../emit/revocation";
 import { describeError } from "../pipeline/metrics";
 import type { QuickdrawServerSocket } from "../transports/types";
 import { streamRoomOf, subscriptionOf, type StreamIndex } from "./streamIndex";
@@ -122,7 +122,7 @@ async function reauthorizeAll(hub: Hub, index: StreamIndex, found: Found): Promi
       work.push(reauthorize(hub, index, socket, subscription));
     }
   }
-  await Promise.all(work);
+  await settleAll(work);
 }
 
 /** The stream half of a dispatcher's revocation. */

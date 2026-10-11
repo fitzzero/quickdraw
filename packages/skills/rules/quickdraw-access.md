@@ -196,6 +196,13 @@ compile time.
 - Lookups are batched per call: checking 60 ids costs what one does.
   `createServer({ access: { cacheMs } })` keeps them across calls; tracked
   writes to the columns and tables a policy reads evict them.
+- Membership and junction tables need an `id` column
+  (`id String @id @default(cuid())`, the pair unique by `@@unique`), never a
+  composite `@@id`: the write tracker keys rows by `id`, so such a table is
+  never tracked and a removed member is never revoked. `createServer` logs
+  `[quickdraw:untracked-access-model]` as an error for one, and a strict
+  test app fails to start. A foreign key set through a relation
+  (`project: { connect }`) revokes like a scalar one.
 
 ## One policy, every surface
 

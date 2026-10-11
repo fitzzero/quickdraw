@@ -885,7 +885,12 @@ the project. For a board, read [Boards](#boards-from-a-watched-query-to-a-collec
 
 A tracked write that lowers or removes someone's level on a scope's anchor
 row removes their sockets from the scope and sends `qd:revoked`; the client
-drops the scope. Delete the call.
+drops the scope. Delete the call. This holds only when the membership table
+has an `id` column: the write tracker keys rows by it, so a table keyed by a
+composite `@@id([projectId, userId])` is never tracked and a removal never
+revokes. Give it `id String @id @default(cuid())` and keep the pair unique
+with `@@unique([projectId, userId])`; `createServer` names such a table at
+start (`[quickdraw:untracked-access-model]`).
 
 <!-- example: ../../../codemod/test/guide-v4/apps/api/src/services/task.ts#kick -->
 

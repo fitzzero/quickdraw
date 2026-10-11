@@ -162,10 +162,12 @@ test that caused it (an oversized reply fails an in-process `app.as(...)`
 call; over a socket or HTTP the reply was already sent, so it is logged, not
 thrown). Warnings outside its calls (an `ambient-write` while seeding) are
 logged, and `app.close()` ends it. `tiered-field-in-output` (a method's own
-output schema declares a tiered field, at any depth) and
-`resolver-without-reads` (a `resolver` policy declares no `reads`) are
-thrown by `createTestApp` itself: answer `"entity"` from that method, or
-declare the resolver's `reads`, rather than turning strictness off.
+output schema declares a tiered field, at any depth),
+`resolver-without-reads` (a `resolver` policy declares no `reads`) and
+`untracked-access-model` (a membership or junction table without an `id`)
+are thrown by `createTestApp` itself: answer `"entity"` from that method,
+declare the resolver's `reads`, or give the table an `id`, rather than
+turning strictness off.
 Turn it on for service suites.
 `createRecordingSink()` passed as `flushSink` records what each flush wrote.
 

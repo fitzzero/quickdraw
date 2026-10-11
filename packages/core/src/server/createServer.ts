@@ -27,10 +27,13 @@ import { liveOf, type RoomLeaveHandler, type RoomLeaveHook } from "./emit/live";
 import {
   closer,
   prepareWatchdog,
+  startStartupChecks,
   trackCalls,
   watchSignals,
   type StallWatchdogOptions,
 } from "./lifecycle";
+
+export { startupChecksOf } from "./lifecycle";
 import { editsGrants, type AnyService } from "./service";
 import {
   createGrantsSink,
@@ -378,6 +381,8 @@ export function createServer<const S extends readonly AnyService[]>(
   );
   const calls = trackCalls(created);
   const { dispatcher } = calls;
+  // In the background: a test app awaits them (`startupChecksOf`).
+  startStartupChecks(dispatcher, options, logger);
   listenForLeaves(created as Dispatcher, options.onRoomLeave);
   const resolvePrincipal = createPrincipalResolver(options.auth);
   const router = mountRouter(options, { call: dispatcher.call, resolvePrincipal, logger });

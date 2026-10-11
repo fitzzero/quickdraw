@@ -45,6 +45,12 @@ model Label {
 }
 ```
 
+A membership or junction table (`projectMember`, `taskLabel`) gets the same
+`id` and keeps its pair unique with `@@unique([projectId, userId])`, never a
+composite `@@id`: the write tracker keys rows by `id`, so a table without one
+is never tracked, and removing a member would never revoke them (the server
+names such a table at start).
+
 Then, in `packages/db`, create the migration and generate the client, in
 that order: `bun run db:migrate --name add_labels` (`prisma migrate dev`,
 which writes `prisma/migrations/<time>_add_labels/migration.sql` and applies

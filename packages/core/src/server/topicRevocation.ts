@@ -17,7 +17,7 @@ import { SERVER_EVENTS, topicRoom } from "../contract/names";
 import { QuickdrawError } from "../protocol/errors";
 import { authorizeWatch, type WatchTarget } from "./collections/access";
 import type { CollectionHub } from "./collections/bind";
-import type { RevocationHook } from "./emit/revocation";
+import { settleAll, type RevocationHook } from "./emit/revocation";
 import { describeError } from "./pipeline/metrics";
 import { currentRev } from "./rev";
 import type { TopicIndex, TopicWatch } from "./topicIndex";
@@ -100,7 +100,7 @@ async function rewatchAll(
       work.push(rewatch(hub, index, socket, watch));
     }
   }
-  await Promise.all(work);
+  await settleAll(work);
 }
 
 /** The topic half of a dispatcher's revocation. */

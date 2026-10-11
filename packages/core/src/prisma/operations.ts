@@ -6,10 +6,11 @@
 // |---------------------|-------------|------------------------------------|------------------------------|
 // | create              | create      | the result                         | none                         |
 // | upsert              | create, or  | the result; old values from a read | one read, only when `update` |
-// |                     | update when | that also says the row existed     | sets an interested column    |
-// |                     | read found  |                                    |                              |
+// |                     | update when | that also says the row existed     | sets an interested column or |
+// |                     | read found  |                                    | holds a nested write         |
 // | update              | update      | the result; old values from a read | one read, only when `data`   |
-// |                     |             |                                    | sets an interested column    |
+// |                     |             |                                    | sets an interested column or |
+// |                     |             |                                    | holds a nested write         |
 // | delete              | delete      | the result (the deleted row)       | none                         |
 // | createMany          | create      | rewritten to createManyAndReturn   | none                         |
 // | updateMany          | update      | rewritten to updateManyAndReturn   | as updateManyAndReturn       |
@@ -20,7 +21,13 @@
 //
 // `fields` are the keys of `data` (for upsert, of `update` when the row
 // existed, of `create` when it did not, and of both when no read told; such
-// a create is marked `mayHaveExisted`).
+// a create is marked `mayHaveExisted`). An `update` (or an upsert's
+// `update`) whose `data` holds a nested write may set a foreign key through
+// a relation (`project: { connect }`, `parent: { disconnect: true }`), which
+// its keys do not name: it reads every interested column first and lists
+// them all in `fields`, so an access change it makes is seen (the 5.1
+// audit's DATA-1). The rows the nested write itself creates, changes or
+// deletes are not seen.
 // When a `select` (or `omit`) would hide the `id` or an interested column,
 // the hook adds it and strips it from the result again, so the caller gets
 // exactly what it asked for. Reads go through the open interactive
@@ -145,7 +152,8 @@ export async function runUntracked(op: Operation, reason: string): Promise<unkno
   return result;
 }
 
-function idOf(row: Row): string | undefined {
+/** A row's id as the tracker keys it: a string, or a number or bigint as a string. */
+export function idOf(row: Row): string | undefined {
   const { id } = row;
   if (typeof id === "string") {
     return id;
@@ -194,15 +202,27 @@ function countOwn(op: Operation, operation: string, args: Args): void {
   op.runtime.tracker.observe({ model: op.model, operation, args });
 }
 
-function warnNested(op: Operation, data: unknown): void {
-  for (const { field, operation } of findNestedWrites(data)) {
+/**
+ * Whether `data` holds a nested write, warning (in development) once per
+ * write that the related rows are not tracked. It is found in every
+ * environment: such a `data` may set a foreign key the tracker must read.
+ */
+function warnNested(op: Operation, data: unknown): boolean {
+  const nested = findNestedWrites(data);
+  for (const { field, operation } of nested) {
     op.runtime.tracker.warn({
       kind: "nested-write",
       subject: `${op.model}.${field}.${operation}`,
-      message: `A nested write (${op.model}.${field}: { ${operation} }) is not tracked; only the ${op.model} row is. Write related rows through their own model`,
+      message: `A nested write (${op.model}.${field}: { ${operation} }) is not tracked: the related rows it creates, changes or deletes send nothing. The ${op.model} row is, with its access and scope columns read first, so a foreign key a to-one connect or disconnect sets on it is seen. Write related rows through their own model, or set the foreign key column`,
       meta: { model: op.model, field, operation },
     });
   }
+  return nested.length > 0;
+}
+
+/** The keys of `data` and `columns`, each once: the fields of a write that holds a nested write. */
+function withColumns(data: unknown, columns: readonly string[]): string[] {
+  return [...new Set([...keysOf(data), ...columns])];
 }
 
 /** The interested columns `data` sets. */
@@ -412,8 +432,11 @@ async function upsert(op: Operation): Promise<unknown> {
     return upsertWithoutUpdate(op);
   }
   warnNested(op, op.args.create);
-  warnNested(op, op.args.update);
-  const touched = touchedInterest(op, op.args.update);
+  // A nested write may set a foreign key through a relation: read every interested column.
+  const nested = warnNested(op, op.args.update);
+  const touched = nested
+    ? [...op.runtime.interestOf(op.model)]
+    : touchedInterest(op, op.args.update);
   // Reading the interested columns first also tells whether the row existed.
   const before =
     touched.length === 0
@@ -421,7 +444,8 @@ async function upsert(op: Operation): Promise<unknown> {
       : await readBefore(op, op.args.where, touched, { unique: true });
   const { result, rows } = await runWidened(op);
   if (before !== undefined && before.size > 0) {
-    record(op, writesOf(op, "update", rows, keysOf(op.args.update), before));
+    const fields = nested ? withColumns(op.args.update, touched) : keysOf(op.args.update);
+    record(op, writesOf(op, "update", rows, fields, before));
   } else if (before === undefined) {
     // Nothing read: the row may have existed, and been updated.
     const writes = writesOf(op, "create", rows, keysOf([op.args.create, op.args.update]));
@@ -440,14 +464,16 @@ async function update(op: Operation): Promise<unknown> {
     // Prisma only reads the row (and answers NOT_FOUND without one): nothing to record.
     return op.query(op.args);
   }
-  warnNested(op, op.args.data);
-  const touched = touchedInterest(op, op.args.data);
+  // A nested write may set a foreign key through a relation: read every interested column.
+  const nested = warnNested(op, op.args.data);
+  const touched = nested ? [...op.runtime.interestOf(op.model)] : touchedInterest(op, op.args.data);
   const before =
     touched.length === 0
       ? undefined
       : await readBefore(op, op.args.where, touched, { unique: true });
   const { result, rows } = await runWidened(op);
-  record(op, writesOf(op, "update", rows, keysOf(op.args.data), before));
+  const fields = nested ? withColumns(op.args.data, touched) : keysOf(op.args.data);
+  record(op, writesOf(op, "update", rows, fields, before));
   return result;
 }
 

@@ -695,3 +695,72 @@ describe("the socket rate limiter", () => {
     expect(await call(3)).toMatchObject({ ok: false, e: { code: "RATE_LIMITED" } });
   });
 });
+
+describe("relation-form foreign keys (DATA-1)", () => {
+  const t1Revoked = { kind: "entity", reason: "access", s: "taskService", id: "" };
+
+  it("revoke a task moved to another project by connect, as a scalar move does", async () => {
+    const { app } = await start();
+    const reader = await connect(app, as(board.cy));
+    await sub(reader.connection, "taskService", [board.t1]);
+    await app.server.dispatcher.run(() =>
+      h.db.task.update({
+        where: { id: board.t1 },
+        data: { project: { connect: { id: board.p2 } } },
+      }),
+    );
+    await reader.frames.settle();
+    expect(reader.frames.revoked).toEqual([{ ...t1Revoked, id: board.t1 }]);
+    reader.frames.clear();
+    await app.server.dispatcher.run(() =>
+      h.db.task.update({ where: { id: board.t1 }, data: { title: "After" } }),
+    );
+    await reader.frames.settle();
+    expect(reader.frames.entity).toEqual([]);
+  });
+
+  it("revoke the old owner when a project's owner changes by connect", async () => {
+    const { app } = await start();
+    const owner = await connect(app, as(board.ada));
+    await sub(owner.connection, "projectService", [board.p1]);
+    await app.server.dispatcher.run(() =>
+      h.db.project.update({
+        where: { id: board.p1 },
+        data: { owner: { connect: { id: board.ed } } },
+      }),
+    );
+    await owner.frames.settle();
+    expect(owner.frames.revoked).toEqual([
+      { kind: "entity", reason: "access", s: "projectService", id: board.p1 },
+    ]);
+  });
+
+  it("revoke a member whose membership row is re-pointed to another user", async () => {
+    const { app } = await start();
+    const reader = await connect(app, as(board.cy));
+    await sub(reader.connection, "taskService", [board.t1]);
+    await app.server.dispatcher.run(() =>
+      h.db.projectMember.update({
+        where: { projectId_userId: { projectId: board.p1, userId: board.cy } },
+        data: { user: { connect: { id: board.ed } } },
+      }),
+    );
+    await reader.frames.settle();
+    expect(reader.frames.revoked).toEqual([{ ...t1Revoked, id: board.t1 }]);
+  });
+
+  it("evict a cached level", async () => {
+    const { app } = await start({ cacheMs: 60_000 });
+    const cy = app.as(as(board.cy));
+    expect(await cy.taskService.get({ id: board.t1 })).toMatchObject({ id: board.t1 });
+    await app.server.dispatcher.run(() =>
+      h.db.task.update({
+        where: { id: board.t1 },
+        data: { project: { connect: { id: board.p2 } } },
+      }),
+    );
+    await expect(cy.taskService.get({ id: board.t1 })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+});

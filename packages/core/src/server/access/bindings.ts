@@ -11,6 +11,8 @@
 //
 // and registers the columns policies read with the storage adapter
 // (`registerInterest`), so tracked writes carry their `before` and `after`.
+// Whether the tracker can key those models at all is `createServer`'s check
+// at start (`trackedModels.ts`).
 
 import type { AnyContract } from "../../contract/defineContract";
 import type { Registry } from "../registry";

@@ -7,14 +7,21 @@
 // defined the services, so `qd.stream`, `qd.presence` and `qd.run` reach
 // it. While it runs, `expectBudget` measures it (`instrument.ts`), and
 // `strictWarnings` makes the development warnings of its method calls
-// throw; `close()` ends both. It replaces 4.1's
+// throw, and a warning raised at start (`untracked-access-model`, checked in
+// the background by `createServer`, which it awaits) fail its start;
+// `close()` ends both. It replaces 4.1's
 // `createTestServer` and `connectAsUser` (4.1 `src/server/testing.ts:62-130`),
 // which took a fixed port counter and authenticated by a bare user id.
 
 import type { AddressInfo } from "node:net";
 import type { HelloFrame } from "../protocol/version";
 import type { Caller } from "../server/caller";
-import { createServer, type QuickdrawServer, type ServerOptions } from "../server/createServer";
+import {
+  createServer,
+  startupChecksOf,
+  type QuickdrawServer,
+  type ServerOptions,
+} from "../server/createServer";
 import type { ContractOfServices, PrincipalOfServices } from "../server/dispatcher";
 import { runtimeOf, type AnyService } from "../server/service";
 import { isPrincipal, type ServerAuth } from "../server/transports/auth";
@@ -156,6 +163,13 @@ export async function createTestApp<const S extends readonly AnyService[]>(
       ...options.auth,
     },
   } as ServerOptions<S>);
+  try {
+    // The checks createServer starts in the background: a strict app fails to start on one.
+    await startupChecksOf(server);
+  } catch (error) {
+    await server.close();
+    throw error;
+  }
   adoptDispatcher(options.services, server.dispatcher);
   const frames = recordFrames(server.io);
   const unmeter = meterServer({ io: server.io, db: options.db, storage: options.storage });

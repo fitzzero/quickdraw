@@ -427,6 +427,9 @@ model Project {
 }
 
 // A membership table: role holds an access level ("Read" | "Moderate" | "Admin").
+// It has an id, and its pair is unique by @@unique: the write tracker keys
+// rows by id, so a table keyed by a composite @@id is never tracked, and a
+// member removed from it would never be revoked.
 model ProjectMember {
   id        String  @id @default(cuid())
   projectId String
@@ -825,13 +828,17 @@ export const taskService = qd.defineService(task, {
   call, so checking 60 ids costs what checking one does. `entry` access
   needs a policy; a service without `model` may only use `"public"`,
   `"authenticated"`, `{ service }` and `custom`. `inherit` uses the
-  parent's policy only: grants on the parent's service do not flow down.
+  parent's policy only: grants on the parent's service do not flow down. A
+  membership table needs an `id` column (the pair unique by `@@unique`),
+  or its writes are not tracked and a removed member is never revoked.
 - One policy decides every surface: method calls, entity subscriptions,
   collection scopes, the kits' lists and searches, streams and channels.
-- When a tracked write lowers or removes someone's access, their sockets
-  leave the rooms anchored on that row and get `qd:revoked`; a changed level
-  moves them to that level's room. In a cluster the change is broadcast to
-  every node.
+- When a tracked write lowers or removes someone's access, a relation-form
+  foreign key included (`project: { connect }`), their sockets leave the
+  rooms anchored on that row and get `qd:revoked`; a changed level moves
+  them to that level's room. In a cluster the change is broadcast to every
+  node. Every socket's re-resolution settles before the flush's frames go
+  out, a failed one included.
 - `server.dispatcher.access` gives the same answers to other code:
   `levelsFor(service, principal, ids)`, `accessWhere(service, principal, level)`
   (a `where` filter for `findMany`, or `"none"`) and `onAccessChanged(listener)`.
@@ -904,8 +911,12 @@ export async function markStale(before: Date): Promise<number> {
 }
 ```
 
-- Not seen: nested writes (`{ labels: { create: [...] } }`, which warn in
-  development), raw SQL and database cascades. Record raw SQL with
+- Not seen: the related rows of a nested write
+  (`{ labels: { create: [...] } }`, which warns in development), raw SQL and
+  database cascades. A foreign key a nested write sets on the written row
+  (`project: { connect }`, `parent: { disconnect: true }`) is seen: such an
+  `update` or `upsert` reads the row's interested columns first, one more
+  statement. Record raw SQL with
   `ctx.touch("task", ids)`, or `{ removed: true }` for deleted rows. A job
   gets the same `touch` from `qd.run`, whose `fn` receives
   `{ touch, log, principal: null }`:
@@ -927,7 +938,13 @@ export async function spreadOrdinals(projectId: string): Promise<void> {
 ```
 
 - Tracked models need a string `id` column; writes to other models pass
-  through untracked, with one warning.
+  through untracked, with one warning. Membership and junction tables
+  included: give them `id String @id @default(cuid())` and keep the pair
+  unique with `@@unique([...])`, never a composite `@@id`. `createServer`
+  checks, at start, every model a policy, a membership table or a `via`
+  junction depends on, and logs `[quickdraw:untracked-access-model]` as an
+  error, in every environment, for one it cannot track; a test app made
+  with `strictWarnings` fails to start.
 - `createServer({ flushSink })` adds the app's own sinks (an audit log, say);
   `createRecordingSink()` on `./testing` records what is flushed, for tests.
 
@@ -3178,18 +3195,19 @@ one format and names the method call it happened in:
 [quickdraw:n-plus-one] taskService.board: task.findUnique by id ran 10 times in one call, once per item (N+1); ...
 ```
 
-| Kind                     | Raised when                                                                                                                                                                                        |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `n-plus-one`             | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])`                                                                                               |
-| `unbounded-read`         | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)                                                                                                         |
-| `oversized-response`     | a reply was larger than `maxResponseBytes` (default 1 MiB)                                                                                                                                         |
-| `nested-write`           | a write's `data` wrote a related row, which is not tracked                                                                                                                                         |
-| `ambient-write`          | a tracked write ran outside any unit of work                                                                                                                                                       |
-| `batch-read`             | a write in an array-form `$transaction` read its rows outside the batch                                                                                                                            |
-| `batch-create-many`      | a `createMany` in an array-form `$transaction` could not report its rows                                                                                                                           |
-| `repeated-call`          | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                                                                                                               |
-| `tiered-field-in-output` | a method's own output schema declares a field the contract tiers, which only projection outputs strip; raised when the server is made (for an output without JSON Schema, when a reply carries it) |
-| `resolver-without-reads` | a service's policy is, or combines in `anyOf`, a `resolver` without `reads`, so no tracked write re-checks it; raised when the server is made                                                      |
+| Kind                     | Raised when                                                                                                                                                                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `n-plus-one`             | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])`                                                                                                                      |
+| `unbounded-read`         | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)                                                                                                                                |
+| `oversized-response`     | a reply was larger than `maxResponseBytes` (default 1 MiB)                                                                                                                                                                |
+| `nested-write`           | a write's `data` wrote a related row, which is not tracked                                                                                                                                                                |
+| `ambient-write`          | a tracked write ran outside any unit of work                                                                                                                                                                              |
+| `batch-read`             | a write in an array-form `$transaction` read its rows outside the batch                                                                                                                                                   |
+| `batch-create-many`      | a `createMany` in an array-form `$transaction` could not report its rows                                                                                                                                                  |
+| `repeated-call`          | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                                                                                                                                      |
+| `tiered-field-in-output` | a method's own output schema declares a field the contract tiers, which only projection outputs strip; raised when the server is made (for an output without JSON Schema, when a reply carries it)                        |
+| `resolver-without-reads` | a service's policy is, or combines in `anyOf`, a `resolver` without `reads`, so no tracked write re-checks it; raised when the server is made                                                                             |
+| `untracked-access-model` | a model a policy, a membership table or a `via` junction depends on has no `id` the write tracker can key its rows by, so no write to it revokes; checked when the server starts, logged as an error in every environment |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
@@ -3208,9 +3226,9 @@ once the reply was recorded (over a socket or HTTP the reply was already
 sent, so that error is logged, not thrown). Strictness belongs to the app:
 warnings outside its calls (an ambient write while seeding, another app's
 calls) are logged as usual, and `app.close()` ends it. The ones raised when
-the app is made, `tiered-field-in-output` and `resolver-without-reads`, are
-thrown from `createTestApp` itself, so a strict app over such a method or
-policy does not start.
+the app is made, `tiered-field-in-output`, `resolver-without-reads` and
+`untracked-access-model`, are thrown from `createTestApp` itself, so a
+strict app over such a method, policy or table does not start.
 
 A `repeated-call` warning names a client caught in a loop (a mutation fired
 from an effect that its own result runs again, a refetch that triggers

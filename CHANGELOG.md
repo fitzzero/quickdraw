@@ -40,6 +40,16 @@ All notable changes to this project will be documented in this file.
   Admin included, since anchors are asked without grants, as `update`'s
   moves already were; an anonymous create that names an anchor is
   `FORBIDDEN`. It costs one more engine call per anchor column it writes.
+- **An `update` or `upsert` whose data holds a nested write reads first.**
+  When its model has interested columns (a policy's, a collection's), it
+  runs one more statement and its record's `fields` lists those columns, so
+  revocation, cache eviction and collection moves follow relation-form
+  foreign keys. The `nested-write` warning's text changed.
+- **`createServer` names access models it cannot track.** A model a policy,
+  a membership table or a `via` junction depends on without an `id` column
+  (a composite `@@id`) logs `[quickdraw:untracked-access-model]` at error
+  level, in every environment; a strict test app fails to start.
+  `StorageAdapter` gains an optional `trackable(model)`.
 - **A kit write holding a relation key or a nested write is `VALIDATION`**,
   for service-wide Admins too, and for a Json value whose own key is a
   relation operation holding rows (keep such data a level deeper). A
@@ -97,6 +107,21 @@ All notable changes to this project will be documented in this file.
   name, so `{ project: { update: { ownerId } } }` made a member the
   project's owner and `{ assignee: { update: { serviceAccess } } }` rewrote
   the caller's own grants. Every kit write now refuses them.
+- **A foreign key set through a relation revokes access (DATA-1).** A
+  write like `db.task.update({ data: { project: { connect: { id } } } })`,
+  `owner: { connect }` or `{ disconnect: true }` changed an access column,
+  but the tracker reported only the relation's name: no revocation, no cache
+  eviction, no collection move, and the old tenant or owner kept receiving
+  frames. Such a write now reads the row's access and scope columns first
+  and reports them.
+- **A membership table without an `id` is no longer silently untracked
+  (DATA-3).** A table keyed by a composite `@@id` (the `members()` doc
+  example had no `id`) was never tracked, so removing a member never
+  revoked them. `createServer` now names every such model access depends
+  on, at start; give it an `id` and keep the pair unique with `@@unique`.
+- **Revocation settles before a flush's frames (DATA-I1).** One socket's
+  failed re-resolution let the flush send its frames while other sockets
+  were still being re-resolved, so a demoted socket could receive them.
 - **MIGRATION no longer trusts a proxy unconditionally (CLIENT-6).** Its
   `app.set("trust proxy", 1)` let a client without a proxy in front pick its
   own `X-Forwarded-For`, and pass every per-IP limiter; it reads

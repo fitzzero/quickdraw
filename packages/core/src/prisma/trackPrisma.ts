@@ -31,6 +31,7 @@ import {
 import { createWriteTracker, type WriteTracker } from "../server/uow/unitOfWork";
 import {
   delegates,
+  idOf,
   runUntracked,
   Untrackable,
   WRITE_OPERATIONS,
@@ -190,6 +191,43 @@ function createNullability(
 }
 
 /**
+ * `StorageAdapter.trackable`: whether the tracker can key `model`'s writes,
+ * that is whether its rows have an `id`. One read of one row's id per model,
+ * kept for the life of the client: Prisma refuses the select of a model
+ * without an `id` column (a composite `@@id`). Any other failure (the
+ * database down) is thrown, and asked again next time.
+ */
+function createTrackability(
+  delegate: (model: string) => Delegate,
+): (model: string) => Promise<boolean> {
+  const known = new Map<string, Promise<boolean>>();
+  const probe = async (key: string): Promise<boolean> => {
+    try {
+      const rows = await quietly(() => delegate(key).findMany({ select: { id: true }, take: 1 }));
+      const [row] = Array.isArray(rows) ? (rows as Readonly<Record<string, unknown>>[]) : [];
+      return row === undefined || idOf(row) !== undefined;
+    } catch (error) {
+      if (error instanceof Error && error.name === "PrismaClientValidationError") {
+        return false;
+      }
+      throw error;
+    }
+  };
+  return async (model) => {
+    const key = modelKey(model);
+    let answer = known.get(key);
+    if (answer === undefined) {
+      answer = probe(key);
+      known.set(key, answer);
+      answer.catch(() => {
+        known.delete(key);
+      });
+    }
+    return await answer;
+  };
+}
+
+/**
  * The adapter the framework reads through. Its reads are the framework's own
  * (access checks, subscriptions, flushes, kits), so the development checks
  * of statements leave them alone.
@@ -210,6 +248,7 @@ function createStorage(
     interestOf: interest.of,
     inTransaction: () => tracker.transactionClient() !== undefined || tracker.inBatch(),
     nullable: createNullability(delegate),
+    trackable: createTrackability(delegate),
     unitOfWork: tracker.unitOfWork,
   });
 }

@@ -72,6 +72,15 @@ export interface StorageAdapter {
    * cursor shows holding null.
    */
   nullable?(model: string, column: string): Promise<boolean>;
+  /**
+   * Whether the adapter can key `model`'s writes: false for a model without
+   * a string `id` column (a table keyed by a composite `@@id`), whose writes
+   * are never tracked. `createServer` asks it, at start, for every model an
+   * access policy, a membership table or a `via` junction depends on, and
+   * names each it cannot track (the `untracked-access-model` warning). An
+   * adapter without it is not asked.
+   */
+  trackable?(model: string): Promise<boolean>;
   /** The units of work that record this adapter's writes; the dispatcher uses them. */
   readonly unitOfWork: UnitOfWorkFactory;
 }

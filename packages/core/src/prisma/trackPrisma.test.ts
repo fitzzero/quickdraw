@@ -10,6 +10,7 @@ import { trackPrisma } from "./trackPrisma";
 
 let h: Harness;
 let projectId: string;
+let userId: string;
 
 beforeAll(async () => {
   h = await createHarness();
@@ -22,7 +23,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await h.database.reset();
   h.logger.warnings.length = 0;
-  ({ projectId } = await h.seed());
+  ({ projectId, userId } = await h.seed());
 });
 
 function addTask(title: string, data: { status?: string; parentTaskId?: string } = {}) {
@@ -125,6 +126,65 @@ describe("create and upsert", () => {
         after: { projectId, status: "done", parentTaskId: null },
       },
     ]);
+  });
+});
+
+describe("relation-form foreign keys (DATA-1)", () => {
+  it("reads every interested column first when an update connects a relation, and reports them all", async () => {
+    const { ownerId } = await h.prisma.project.findUniqueOrThrow({ where: { id: projectId } });
+    const other = await h.prisma.project.create({ data: { name: "Other", ownerId } });
+    const task = await addTask("Moved", { status: "open" });
+    const moved = await h.storage.countStatements(() =>
+      h.inUnit(() =>
+        h.db.task.update({
+          where: { id: task.id },
+          data: { project: { connect: { id: other.id } } },
+        }),
+      ),
+    );
+    expect(moved.statements).toBe(2);
+    expect(moved.value.writes).toEqual([
+      {
+        model: "task",
+        id: task.id,
+        op: "update",
+        fields: ["project", "projectId", "status", "parentTaskId"],
+        before: { projectId, status: "open", parentTaskId: null },
+        after: { projectId: other.id, status: "open", parentTaskId: null },
+      },
+    ]);
+  });
+
+  it("sees a foreign key a disconnect clears", async () => {
+    const parent = await addTask("Parent");
+    const child = await addTask("Child", { parentTaskId: parent.id });
+    const { writes } = await h.inUnit(() =>
+      h.db.task.update({ where: { id: child.id }, data: { parent: { disconnect: true } } }),
+    );
+    expect(writes[0]?.before?.parentTaskId).toBe(parent.id);
+    expect(writes[0]?.after?.parentTaskId).toBeNull();
+  });
+
+  it("records an upsert whose update connects a relation as an update, with the old values", async () => {
+    const other = await h.prisma.user.create({
+      data: { email: "other@example.com", name: "Other" },
+    });
+    await h.prisma.projectMember.create({ data: { projectId, userId, role: "Read" } });
+    const { writes } = await h.inUnit(() =>
+      h.db.projectMember.upsert({
+        where: { projectId_userId: { projectId, userId } },
+        create: { projectId, userId, role: "Read" },
+        update: { user: { connect: { id: other.id } } },
+      }),
+    );
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({
+      model: "projectMember",
+      op: "update",
+      before: { projectId, userId, role: "Read" },
+      after: { userId: other.id },
+    });
+    expect(writes[0]).not.toHaveProperty("mayHaveExisted");
   });
 });
 
@@ -544,6 +604,21 @@ describe("models and registrations", () => {
     );
     expect(writes).toEqual([expect.objectContaining({ id: task.id, op: "update" })]);
     expect(h.logger.warnings).toEqual([]);
+  });
+
+  it("says whether a model can be tracked, asking the database once per model (DATA-3)", async () => {
+    const storage = storageOf(trackPrisma(h.prisma, { development: false }));
+    if (storage?.trackable === undefined) {
+      throw new Error("no trackable probe");
+    }
+    const { trackable } = storage;
+    expect(await trackable("verificationToken")).toBe(false);
+    expect(await trackable("Task")).toBe(true);
+    const again = await storage.countStatements(async () => [
+      await trackable("verificationToken"),
+      await trackable("task"),
+    ]);
+    expect(again).toEqual({ value: [false, true], statements: 0 });
   });
 
   it("refuses to track a client twice, or anything that is not a client", () => {
