@@ -7,7 +7,7 @@
 
 import { isAccessLevel } from "../../contract/access";
 import type { AnyContract } from "../../contract/defineContract";
-import { reservedRoomPrefix } from "../../contract/names";
+import { reservedRoomPrefix, socketIdShaped } from "../../contract/names";
 import {
   CHANNEL_DEFAULT_RATE,
   isScopedStream,
@@ -57,8 +57,9 @@ function compileSelector(selector: PayloadSelector): CompiledSelector {
 /**
  * The app room a message must come from: a fixed name (checked when the
  * contract was defined), or a function of the payload whose answer names no
- * room when it is not a string, is empty or is reserved (`qd:`, `user:`),
- * since a socket is never in such a room as an app room.
+ * room when it is not a string, is empty, is reserved (`qd:`, `user:`) or
+ * has the shape of a socket id, since `ctx.rooms.join` never puts a socket
+ * in such a room.
  */
 function compileRoom(room: Exclude<RoomSelector, RoomPrefix>): CompiledSelector {
   if (typeof room === "string") {
@@ -67,7 +68,9 @@ function compileRoom(room: Exclude<RoomSelector, RoomPrefix>): CompiledSelector 
   const computed = compileSelector(room);
   return (payload) => {
     const name = computed(payload);
-    return name === undefined || reservedRoomPrefix(name) !== undefined ? undefined : name;
+    return name === undefined || reservedRoomPrefix(name) !== undefined || socketIdShaped(name)
+      ? undefined
+      : name;
   };
 }
 
@@ -133,6 +136,7 @@ function checkChannel(
     burst: def.burst ?? Math.max(1, ratePerSecond * 2),
     requires: compileRequires(def),
     access: checkChannelAccess(owner, implementation.access, fail),
+    accessDeclared: implementation.access !== undefined,
     kinds,
     handler: implementation.handler as AnyChannelHandler,
   });

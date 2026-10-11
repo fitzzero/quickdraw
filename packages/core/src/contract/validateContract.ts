@@ -412,6 +412,11 @@ export function assembleContract(name: unknown, def: unknown): AnyContract {
   if (!isName(name)) {
     throw new TypeError("defineContract: the service name must be a non-empty string");
   }
+  if (/[:@]/u.test(name)) {
+    throw new TypeError(
+      `defineContract("${name}"): the service name may not contain ":" or "@": it is part of every room name of the service (qd:e:{service}:{id}@{level}, qd:c:{service}:{collection}:{scope}), which must split one way only`,
+    );
+  }
   const fail: Fail = (message) => {
     throw new TypeError(`defineContract("${name}"): ${message}`);
   };

@@ -225,11 +225,18 @@ export function defineLiveService(
           into.adminPings.push(payload.note);
         },
       },
-      tight: (payload) => {
-        into.tight.push(payload.n);
+      // Any signed-in user may send these two: said on the service, so neither warns.
+      tight: {
+        access: "authenticated",
+        handler: (payload) => {
+          into.tight.push(payload.n);
+        },
       },
-      relay: (payload, ctx) => {
-        ctx.rooms.emit(payload.room, liveContract, "celebrated", { taskId: payload.taskId });
+      relay: {
+        access: "authenticated",
+        handler: (payload, ctx) => {
+          ctx.rooms.emit(payload.room, liveContract, "celebrated", { taskId: payload.taskId });
+        },
       },
       shout: (payload, ctx) => {
         into.shout.push({

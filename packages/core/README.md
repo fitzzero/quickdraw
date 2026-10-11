@@ -549,6 +549,9 @@ export const healthContract = defineContract("healthService", {
   because the client exposes each as `qd.<service>.<name>`. `subscribe`,
   `unsubscribe`, `call`, `then`, `useEntity`, `useEntities`, `admin` and
   names starting with `$` are reserved.
+- A service name holds no `:` or `@`: it is part of every room name of the
+  service (`qd:e:{service}:{id}@{level}`, `qd:c:{service}:{collection}:{scope}`),
+  which must split one way only, so `defineContract` throws on one.
 - Schemas are any Standard Schema. A projection's keys, admin field
   metadata, MCP tool schemas and `quickdraw-docs` read Standard JSON Schema,
   which Zod 4.2 or later provides; a projection whose schema cannot describe
@@ -2171,8 +2174,13 @@ export const projectService = qd.defineService(project, {
         return named.length === 1 ? named[0]?.id : null;
       },
       // runs inside the change's transaction: its writes commit with it, a throw undoes it
-      onChange: (change, ctx) => {
+      onChange: async (change, ctx) => {
         ctx.log.info("sharing changed", { kind: change.kind, id: change.id, user: change.userId });
+        // the flush revokes their subscriptions, but rooms are the app's: a user whose entry or
+        // membership is gone leaves the project's board on every node (removeFromBoard, rooms.ts)
+        if (change.after === null) {
+          await removeFromBoard(change.id, change.userId);
+        }
       },
     }),
   },
@@ -2234,6 +2242,13 @@ export const projectService = qd.defineService(project, {
   the `via` collections over the table `added` and `removed`; the kit sends
   nothing itself. The by-name methods tell a row's owner whether an account
   exists; list them only where that is acceptable.
+- App rooms are not subscriptions: a user who loses access stays in the
+  rooms a method joined them to until the app takes them out. The example's
+  `onChange` does that when the change leaves the user with no entry or
+  role (`change.after === null`): `removeFromBoard` takes their sockets out
+  of the project's board on every node. Under `anyOf` a user who still has
+  the other list is taken out too, and joins again on their next connection
+  (`useJoin`).
 
 ### Admin kit
 
@@ -2505,9 +2520,9 @@ export const taskService = qd.defineService(task, {
     },
   },
   channels: {
-    // relay each cursor to the board's room
+    // relay each cursor to the board's room, the one its requires matched (ctx.room)
     cursor: (payload, ctx) => {
-      ctx.rooms.emit(`board:${payload.projectId}`, task, "cursorMoved", payload);
+      ctx.rooms.emit(ctx.room, task, "cursorMoved", payload);
     },
   },
   // once per socket that leaves app rooms, in every server this service runs in, in a unit of its own
@@ -2575,11 +2590,14 @@ export function TaskRoom({
   out as its own frame, in order; use it rather than `push` in a loop
   (`no-emit-in-loop`). `qd:stream:sub` is authorized with the
   stream's `access` through the access engine, the scope being the row an
-  `entry` or `scope` form checks; `access: { room }` (a name, `{ prefix }`,
-  or for a scoped stream a function of the scope) opens it to the sockets
-  in that app room instead, signed in or not, and a socket that leaves the
-  room, or is taken out, leaves the feed; a stream without `access` is
-  closed. The answer is the seed; `useStream` then appends, keeps the
+  `entry` or `scope` form checks; `access: { room }` opens it to the
+  sockets in an app room instead, signed in or not, and a socket that
+  leaves the room, or is taken out, leaves the feed; a stream without
+  `access` is closed. A global stream names the room, or `{ prefix }` for
+  any room whose name starts with it; a scoped stream computes it from the
+  scope, ``(worldId) => `world:${worldId}` ``, because a name or a prefix
+  would let a socket in that room read every scope (`defineContract`
+  refuses both on a scoped stream, by type and when it runs). The answer is the seed; `useStream` then appends, keeps the
   latest `max` (default 500), and subscribes again after a reconnect, when
   the seed replaces what it held. A subscribe an access change overlapped
   is authorized again before it joins the feed, with the socket's
@@ -2618,20 +2636,37 @@ export function TaskRoom({
   sending socket's own: a room another socket of the user joined does not
   count, a reconnected socket must join again, and behind a cluster the
   check runs on the node the socket is connected to, with no round trip.
+  A channel without `requires` takes a message from every signed-in socket,
+  about any row or room its payload names: a handler that relays it to a
+  room (``ctx.rooms.emit(`project:${payload.projectId}`, ...)``) lets any
+  user reach that room. The server warns `channel-without-requires` for
+  each such channel when it starts (a strict test app does not start). Give
+  the channel a `requires` and relay to `ctx.room`, the room it matched; or,
+  when any signed-in user may send it, say so on the service, `channels: {
+ping: { access: "authenticated", handler } }`, which delivers as before
+  and silences the warning.
 - Presence: `isOnline`, `lastSeen` (now while online, else when the user's
   last socket on this process disconnected), `count` and `users` (each user
   once, anonymous sockets left out; app rooms only) come from this process's
-  sockets, and from every node's (`fetchSockets`) behind a Redis adapter.
+  records of the rooms `ctx.rooms.join` joined (a socket a raw
+  `socket.join` put in a room is not counted), and from every node's
+  sockets (`fetchSockets`) behind a Redis adapter.
   `ctx.rooms.join(room)` and `leave` put the calling socket in an app room
   (calls without a socket get `false`; names starting with `qd:` or `user:`
-  are refused with `VALIDATION`; at most 100 per socket; a method that shares
-  its runs, `share`, may not join or leave with its caller's socket:
-  `INTERNAL`), and the room's sockets get `qd:presence` frames: the list on
-  joining, then who joins and who leaves. `usePresence(room)` shows them.
+  are refused with `VALIDATION`, and so are names with the shape of a
+  Socket.IO socket id, 20 letters, digits, `_` or `-`, because every socket
+  is alone in the room of its id: give such an id a prefix, `doc:${id}`; at
+  most 100 per socket; a method that shares its runs, `share`, may not join
+  or leave with its caller's socket: `INTERNAL`), and the room's sockets get
+  `qd:presence` frames: the list on joining, then who joins and who leaves.
+  `usePresence(room)` shows them. `rooms.size`, `rooms.leave` and presence
+  refuse the same names.
 - Events: `ctx.rooms.emit(room, contract, event, payload)` and
   `emitToUser(userId, ...)` check the payload first (`INTERNAL`, nothing
   sent, when it fails), then send the validated payload as
-  `qd:event [service, event, payload]`; `useEvent` hears them.
+  `qd:event [service, event, payload]`; `useEvent` hears them. `emit`
+  refuses the framework's rooms (`qd:`, `user:`) with `VALIDATION`: a
+  user's sockets are reached with `emitToUser`.
 - Rooms belong to a socket: a reconnect (a lost network, `qd:rotate`, new
   credentials) is a new socket in no room, which hears none of its events
   and whose channel messages requiring it are dropped. `useJoin(member,
@@ -2659,8 +2694,9 @@ export function showCursor(projectId: string, taskId: string, x: number): void {
   qd.rooms.emit(boardRoom(projectId), task, "cursorMoved", { projectId, taskId, x });
 }
 
-// a member removed from the project: their sockets leave its board on every node, so they hear
-// nothing more of it and its cursor channel drops their messages (also ctx.rooms.leave)
+// a member removed from the project (the sharing kit's onChange calls it): their sockets leave
+// its board on every node, so they hear nothing more of it and its cursor channel drops their
+// messages (also ctx.rooms.leave)
 export async function removeFromBoard(projectId: string, userId: string): Promise<void> {
   await qd.rooms.leave(boardRoom(projectId), { userId });
 }
@@ -3341,20 +3377,21 @@ start):
 [quickdraw:n-plus-one] taskService.board: task.findUnique by id ran 10 times in one call, once per item (N+1); ...
 ```
 
-| Kind                     | Raised when                                                                                                                                                                                                               |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `n-plus-one`             | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])`                                                                                                                      |
-| `unbounded-read`         | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)                                                                                                                                |
-| `oversized-response`     | a reply was larger than `maxResponseBytes` (default 1 MiB)                                                                                                                                                                |
-| `nested-write`           | a write's `data` wrote a related row, which is not tracked                                                                                                                                                                |
-| `ambient-write`          | a tracked write ran outside any unit of work                                                                                                                                                                              |
-| `batch-read`             | a write in an array-form `$transaction` read its rows outside the batch                                                                                                                                                   |
-| `batch-create-many`      | a `createMany` in an array-form `$transaction` could not report its rows                                                                                                                                                  |
-| `repeated-call`          | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                                                                                                                                      |
-| `tiered-field-in-output` | a method's own output schema declares a field the contract tiers, which only projection outputs strip; raised when the server is made (for an output without JSON Schema, when a reply carries it)                        |
-| `resolver-without-reads` | a service's policy is, or combines in `anyOf`, a `resolver` without `reads`, so no tracked write re-checks it; raised when the server is made                                                                             |
-| `untracked-access-model` | a model a policy, a membership table or a `via` junction depends on has no `id` the write tracker can key its rows by, so no write to it revokes; checked when the server starts, logged as an error in every environment |
-| `shared-principal`       | the handler of a `share: "all"` run (an app's, not a kit's) read `ctx.principal`, `ctx.services` or `ctx.mcp`: the run has the first caller's, and every caller gets its result                                           |
+| Kind                       | Raised when                                                                                                                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `n-plus-one`               | a call ran 10 statements of one shape (model, operation, `where` keys), outside a `$transaction([])`                                                                                                                      |
+| `unbounded-read`           | a call ran `findMany` with neither `take` nor ids to read (`id`, `{ in }` or `{ equals }`)                                                                                                                                |
+| `oversized-response`       | a reply was larger than `maxResponseBytes` (default 1 MiB)                                                                                                                                                                |
+| `nested-write`             | a write's `data` wrote a related row, which is not tracked                                                                                                                                                                |
+| `ambient-write`            | a tracked write ran outside any unit of work                                                                                                                                                                              |
+| `batch-read`               | a write in an array-form `$transaction` read its rows outside the batch                                                                                                                                                   |
+| `batch-create-many`        | a `createMany` in an array-form `$transaction` could not report its rows                                                                                                                                                  |
+| `repeated-call`            | one connection repeated a call or was refused `RATE_LIMITED` again and again (below)                                                                                                                                      |
+| `tiered-field-in-output`   | a method's own output schema declares a field the contract tiers, which only projection outputs strip; raised when the server is made (for an output without JSON Schema, when a reply carries it)                        |
+| `resolver-without-reads`   | a service's policy is, or combines in `anyOf`, a `resolver` without `reads`, so no tracked write re-checks it; raised when the server is made                                                                             |
+| `untracked-access-model`   | a model a policy, a membership table or a `via` junction depends on has no `id` the write tracker can key its rows by, so no write to it revokes; checked when the server starts, logged as an error in every environment |
+| `shared-principal`         | the handler of a `share: "all"` run (an app's, not a kit's) read `ctx.principal`, `ctx.services` or `ctx.mcp`: the run has the first caller's, and every caller gets its result                                           |
+| `channel-without-requires` | a channel's contract declares no `requires` and its service no `access`, so every signed-in user may send it; raised when the server is made                                                                              |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
@@ -3374,9 +3411,10 @@ once the reply was recorded (over a socket or HTTP the reply was already
 sent, so that error is logged, not thrown). Strictness belongs to the app:
 warnings outside its calls (an ambient write while seeding, another app's
 calls) are logged as usual, and `app.close()` ends it. The ones raised when
-the app is made, `tiered-field-in-output`, `resolver-without-reads` and
-`untracked-access-model`, are thrown from `createTestApp` itself, so a
-strict app over such a method, policy or table does not start.
+the app is made, `tiered-field-in-output`, `resolver-without-reads`,
+`untracked-access-model` and `channel-without-requires`, are thrown from
+`createTestApp` itself, so a strict app over such a method, policy, table
+or channel does not start.
 
 A `repeated-call` warning names a client caught in a loop (a mutation fired
 from an effect that its own result runs again, a refetch that triggers

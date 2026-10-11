@@ -300,6 +300,40 @@ describe("ctx.rooms.join and leave", () => {
     expect([...(socket?.rooms ?? [])].sort()).toEqual([cy.socket.id, `user:${board.cy}`].sort());
   });
 
+  it("refuse a name with the shape of a socket id: every socket is alone in the room of its id (RT-I1)", async () => {
+    const app = await start();
+    const ada = await app.connect(as(board.ada));
+    const cy = await app.connect(as(board.cy));
+    const victim = ada.socket.id ?? "";
+    expect(victim).toMatch(/^[\w-]{20}$/);
+    const refused = { code: "VALIDATION", message: expect.stringContaining("socket id") };
+    await expect(cy.call.taskService.enter({ room: victim })).rejects.toMatchObject(refused);
+    await expect(cy.call.taskService.exit({ room: victim })).rejects.toMatchObject(refused);
+    await expect(app.server.presence.users(victim)).rejects.toMatchObject(refused);
+    await expect(app.server.presence.count(victim)).rejects.toMatchObject(refused);
+    expect(() => app.server.rooms.size(victim)).toThrow(
+      expect.objectContaining({ code: "VALIDATION" }),
+    );
+    await expect(app.server.rooms.leave(victim, { userId: board.ada })).rejects.toMatchObject(
+      refused,
+    );
+    const socket = app.server.io.sockets.sockets.get(cy.socket.id ?? "");
+    expect([...(socket?.rooms ?? [])].sort()).toEqual([cy.socket.id, `user:${board.cy}`].sort());
+  });
+
+  // Behind Valkey presence still asks every node's sockets (fetchSockets) until the cluster card.
+  it.skipIf(inCluster())(
+    "count no socket a raw join put in a room: presence answers for the rooms ctx.rooms.join recorded",
+    async () => {
+      const app = await start();
+      const cy = await app.connect(as(board.cy));
+      app.server.io.in(cy.socket.id ?? "").socketsJoin("raw");
+      expect(app.server.io.sockets.adapter.rooms.get("raw")?.size).toBe(1);
+      expect(await app.server.presence.users("raw")).toEqual([]);
+      expect(await app.server.presence.count("raw")).toBe(0);
+    },
+  );
+
   it("join nothing for a call that did not arrive over a socket", async () => {
     const app = await start();
     expect(await app.as(as(board.ada)).taskService.enter({ room: "lobby" })).toBe(false);

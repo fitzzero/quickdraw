@@ -238,6 +238,25 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   it beside `grants: true`) fail at startup, and `grants: true` type-checks
   on any entity but fails when the dispatcher is made for one with no
   grants field. Apps that use `serviceAccess` see no change.
+- **A channel without `requires` warns.** A channel whose contract
+  declares no `requires`, and whose service declares no `access` for it,
+  logs `[quickdraw:channel-without-requires]` when the server starts, and a
+  test app made with `strictWarnings` fails to start until the channel
+  gets a `requires` or `access: "authenticated"` (which delivers as
+  before).
+- **A scoped stream's room is a function of its scope.** A scoped stream
+  with `access: { room: "name" }` or `{ room: { prefix } }` fails at
+  `defineContract`, by type and when it runs; it takes `(scope) => room`.
+  Global streams keep both forms.
+- **Room names with the shape of a socket id are refused.** An app room
+  name of exactly 20 letters, digits, `_` or `-` (a Firestore-style id,
+  say) is `VALIDATION` in `ctx.rooms.join`, `rooms.size`, `rooms.leave`
+  and presence, and refused as a literal in a contract: give it a prefix.
+- **`rooms.emit` refuses the framework's rooms.** `emit("user:…")` and
+  `emit("qd:…")` are `VALIDATION`; send to a user with `emitToUser`.
+- **Presence counts only rooms joined through `ctx.rooms.join`.** A socket
+  a raw `socket.join` put in a room is no longer counted on this process.
+- **A service name with `:` or `@` throws** at `defineContract`.
 
 ### Security
 
@@ -419,6 +438,26 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   With `cacheMs`, the re-check of the caller inside the change's
   transaction read the access cache, so a caller demoted by a write the
   tracked client did not see kept their old level for up to `cacheMs`.
+- **An open channel is named at startup (RT-3).** A channel without
+  `requires` takes every signed-in socket's message, and MIGRATION.md's
+  example relayed a cursor to the project room its payload named, so any
+  user reached any project's room. The server now warns on such channels,
+  and the example's channel requires the room a checked `joinProject`
+  joins.
+- **A scoped stream's room follows its scope (RT-4).** A name or prefix
+  room let a socket in `world:1` read scope `2`; `defineContract` refuses
+  both on a scoped stream.
+- **No app room reaches one socket, and `rooms.emit` no framework room
+  (RT-I1).** `ctx.rooms.join(<socket id>)` joined another socket's own
+  room, presence answered with its user, `rooms.size` counted it, and
+  `rooms.emit("user:<id>")` reached any user. Those names are refused, and
+  presence reads only the rooms `ctx.rooms.join` joined.
+- **Service names split rooms one way (LIVE-3, COLL-6).** A `:` or `@` in
+  a service name let two services share an entity, collection or stream
+  room name, which authorizes `qd:col:items` and keys the resume buffers.
+- **The README's sharing example takes a removed user out of the board
+  room (RT-6).** Its `onChange` only logged, so a user who lost access kept
+  receiving the board's events.
 
 ### Codemod
 

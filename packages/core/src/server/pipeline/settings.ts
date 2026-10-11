@@ -10,7 +10,6 @@ import {
   type LoopWatch,
 } from "../devWarnings";
 import { createLive, type ChangeLogOptions, type Live } from "../emit/live";
-import { warnTieredOutputs } from "../emit/tieredOutputs";
 import type { Registry } from "../registry";
 import type { FlushSink } from "../uow/flushSink";
 import {
@@ -19,6 +18,7 @@ import {
   type AccessOptions,
   type PolicyEngine,
 } from "./accessSettings";
+import { warnDefinitions } from "./definitionWarnings";
 import { createRecorder, type CallRecord, type RecordDetails } from "./metrics";
 import type { VersionSource } from "./notModified";
 import { resolveTracking, storageFor, type Tracking, type TrackingOptions } from "./tracking";
@@ -202,7 +202,7 @@ export function resolveSettings(
   const development = process.env.NODE_ENV !== "production";
   const logger = options.logger ?? consoleLogger;
   const warnings = createDevWarnings({ logger, development, strict: strictWarningsOf(options) });
-  warnTieredOutputs(registry, warnings);
+  warnDefinitions(registry, warnings);
   const storage = storageFor(options, db);
   const { access, policies } = resolveAccess(options.access, registry, storage, {
     logger,

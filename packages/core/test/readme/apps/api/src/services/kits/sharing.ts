@@ -1,6 +1,7 @@
 import { project } from "../../../../../packages/shared/src/kits/sharing";
 import { db } from "../../db";
 import { qd } from "../../quickdraw";
+import { removeFromBoard } from "./rooms";
 
 // #region service
 import { anyOf, jsonAcl, members, sharing } from "@fitzzero/quickdraw-core/server";
@@ -28,8 +29,13 @@ export const projectService = qd.defineService(project, {
         return named.length === 1 ? named[0]?.id : null;
       },
       // runs inside the change's transaction: its writes commit with it, a throw undoes it
-      onChange: (change, ctx) => {
+      onChange: async (change, ctx) => {
         ctx.log.info("sharing changed", { kind: change.kind, id: change.id, user: change.userId });
+        // the flush revokes their subscriptions, but rooms are the app's: a user whose entry or
+        // membership is gone leaves the project's board on every node (removeFromBoard, rooms.ts)
+        if (change.after === null) {
+          await removeFromBoard(change.id, change.userId);
+        }
       },
     }),
   },

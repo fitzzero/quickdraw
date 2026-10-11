@@ -357,11 +357,17 @@ export const taskService = qd.defineService(taskContract, {
         return { count };
       },
     },
+    // new in 5.0: Read on the project puts the caller's socket in its room, which the cursor
+    // channel requires; 4.x took any signed-in socket's cursor for any project
+    joinProject: {
+      access: { scope: "Read", of: projectContract, id: "projectId" },
+      handler: ({ input, ctx }) => ctx.rooms.join(`project:${input.projectId}`),
+    },
   },
   channels: {
-    // was defineChannel: relay each cursor to the project's room
+    // was defineChannel: relay each cursor to the project's room its requires matched
     cursor: (payload, ctx) => {
-      ctx.rooms.emit(`project:${payload.projectId}`, taskContract, "cursorMoved", payload);
+      ctx.rooms.emit(ctx.room, taskContract, "cursorMoved", payload);
     },
   },
 });
@@ -406,6 +412,12 @@ export const taskContract = defineContract("taskService", {
       output: z.object({ count: z.number() }),
       describe: "Archives every task of a project.",
     }),
+    joinProject: mutation({
+      input: z.object({ projectId: z.string() }),
+      output: z.boolean(),
+      describe:
+        "Joins the caller's socket to a project's room, where its cursors and archive events go.",
+    }),
   },
   collections: {
     // was defineCollection("byProject", ...): declared, so its deltas follow tracked writes
@@ -427,8 +439,14 @@ export const taskContract = defineContract("taskService", {
     },
     cursorMoved: { payload: cursorSchema, describe: "Another user's cursor moved." },
   },
-  // was defineChannel
-  channels: { cursor: { payload: cursorSchema, describe: "Where a user's cursor is." } },
+  // was defineChannel; only from a socket joinProject put in the project's room
+  channels: {
+    cursor: {
+      payload: cursorSchema,
+      describe: "Where a user's cursor is.",
+      requires: { room: (cursor) => `project:${cursor.projectId}` },
+    },
+  },
 });
 ```
 
@@ -915,7 +933,12 @@ user) and received with `qd.<service>.<event>.useEvent(handler)`. Channels
 "world:" } }` for any room with that prefix (the handler reads the matched
 room as `ctx.room`). The sending socket must have joined that app room
 through `ctx.rooms.join` in a method it called; a message that names no
-room is dropped, where 4.x skipped the check. A room joined by a call
+room is dropped, where 4.x skipped the check. A channel without `requires`
+takes a message from every signed-in socket, as 4.x's did, so a handler
+that relays a payload's room lets any user reach that room: 5.0 warns
+`channel-without-requires` at startup (a strict test app does not start)
+until the channel declares `requires`, or its service declares
+`access: "authenticated"` for a channel any user may send. A room joined by a call
 belongs to its socket, so a client joins again after every reconnect:
 `useJoin(qd.game.watchWorld, input)` in React, where 4.x apps re-called
 from an `isConnected` effect. 4.x's `unsubscribeSocket` and `unsubscribe`
@@ -933,7 +956,12 @@ declare module "@fitzzero/quickdraw-core" {
 ```
 
 The 5.0 contract above declares `events: { archived, cursorMoved }` and the
-`cursor` channel; the service's `archiveAll` sends `archived`.
+`cursor` channel; the service's `archiveAll` sends `archived`. The channel
+requires the project's room, which the new `joinProject` method puts the
+calling socket in after checking `Read` on the project, and the handler
+relays each cursor to `ctx.room`, the room it matched: 4.x's channel took
+any signed-in socket's cursor for any project. The `Board` below joins the
+room with `useJoin` on every connection.
 
 ### `installAdminMethods` becomes the admin kit
 
@@ -1143,7 +1171,11 @@ export function Board({ projectId }: { projectId: string }) {
 <!-- example: apps/web/src/components/migration/TaskPanel.tsx#events -->
 
 ```tsx
+import { useJoin } from "@fitzzero/quickdraw-core/client";
+
 export function Board({ projectId, onArchived }: { projectId: string; onArchived: () => void }) {
+  // new in 5.0: the cursor channel takes only sockets in the project's room, joined on every connection
+  const room = useJoin(qd.taskService.joinProject, { projectId });
   // was useRoomEvents
   qd.taskService.archived.useEvent((event) => {
     if (event.projectId === projectId) {
@@ -1152,7 +1184,15 @@ export function Board({ projectId, onArchived }: { projectId: string; onArchived
   });
   // was useChannelSend
   const cursor = qd.taskService.cursor.useChannel();
-  return <div onMouseMove={(event) => cursor.send({ projectId, x: event.clientX })} />;
+  return (
+    <div
+      onMouseMove={(event) => {
+        if (room.isJoined) {
+          cursor.send({ projectId, x: event.clientX });
+        }
+      }}
+    />
+  );
 }
 ```
 
@@ -2027,6 +2067,10 @@ export const taskService = qd.defineService(taskContract, {
         });
         return { count };
       },
+    },
+    joinProject: {
+      access: { scope: "Read", of: projectContract, id: "projectId" },
+      handler: ({ input, ctx }) => ctx.rooms.join(`project:${input.projectId}`),
     },
   },
 });

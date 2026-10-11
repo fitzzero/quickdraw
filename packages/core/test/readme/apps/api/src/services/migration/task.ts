@@ -45,11 +45,17 @@ export const taskService = qd.defineService(taskContract, {
         return { count };
       },
     },
+    // new in 5.0: Read on the project puts the caller's socket in its room, which the cursor
+    // channel requires; 4.x took any signed-in socket's cursor for any project
+    joinProject: {
+      access: { scope: "Read", of: projectContract, id: "projectId" },
+      handler: ({ input, ctx }) => ctx.rooms.join(`project:${input.projectId}`),
+    },
   },
   channels: {
-    // was defineChannel: relay each cursor to the project's room
+    // was defineChannel: relay each cursor to the project's room its requires matched
     cursor: (payload, ctx) => {
-      ctx.rooms.emit(`project:${payload.projectId}`, taskContract, "cursorMoved", payload);
+      ctx.rooms.emit(ctx.room, taskContract, "cursorMoved", payload);
     },
   },
 });

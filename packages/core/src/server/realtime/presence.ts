@@ -10,7 +10,11 @@
 // or room named `__proto__` is an ordinary key.
 //
 // `count` and `users` answer for app rooms only: a framework room (`qd:`,
-// `user:`) is `VALIDATION`, as for `ctx.rooms.join`.
+// `user:`) or a name with the shape of a socket id is `VALIDATION`, as for
+// `ctx.rooms.join`, and on this process they answer from the records of the
+// rooms `ctx.rooms.join` joined, never from the adapter's rooms, which hold
+// every socket's own room and any room a raw `socket.join` made (the 5.1
+// audit's RT-I1).
 //
 // The answers come from this process's rooms while the server runs the
 // in-memory adapter it was created with. Behind a cluster adapter (Redis)
@@ -19,11 +23,10 @@
 // `lastSeen` also reads the last disconnect any node recorded in the
 // cluster's Valkey (`../cluster/lastSeen.ts`).
 
-import { RESERVED_ROOM_PREFIXES, userRoom } from "../../contract/names";
+import { RESERVED_ROOM_PREFIXES, socketIdShaped, userRoom } from "../../contract/names";
 import { readLastSeen, recordLastSeen } from "../cluster/lastSeen";
 import type { Hub } from "../emit/hub";
 import { unreadable } from "../transports/ack";
-import type { QuickdrawIo } from "../transports/types";
 import type { Presence } from "./types";
 
 /** How many users' last-seen times one process keeps; the least recently seen go first. */
@@ -113,16 +116,9 @@ function distinctUsers(
   return [...users];
 }
 
-/** The users of this process's sockets in `room`, read from the app-room records or the adapter's rooms. */
-function localUsers(io: QuickdrawIo, records: PresenceRecords, room: string): string[] {
-  const tracked = records.users(room);
-  if (tracked !== undefined) {
-    return tracked;
-  }
-  const socketIds = io.sockets.adapter.rooms.get(room) ?? [];
-  return distinctUsers(
-    [...socketIds].map((socketId) => io.sockets.sockets.get(socketId)?.data.principal),
-  );
+/** The users of this process's sockets in `room`, from the records of the rooms `ctx.rooms.join` joined. */
+function localUsers(records: PresenceRecords, room: string): string[] {
+  return records.users(room) ?? [];
 }
 
 /**
@@ -142,13 +138,13 @@ export async function usersInRoom(
     return [];
   }
   if (hub.probe.local()) {
-    return localUsers(io, records, room);
+    return localUsers(records, room);
   }
   const sockets = await io.in(room).fetchSockets();
   const remote = sockets.filter((socket) => !io.sockets.sockets.has(socket.id));
   return distinctUsers([
     ...remote.map((socket) => socket.data.principal),
-    ...localUsers(io, records, room).map((userId) => ({ userId })),
+    ...localUsers(records, room).map((userId) => ({ userId })),
   ]);
 }
 
@@ -170,15 +166,21 @@ function checkName(member: string, value: unknown): asserts value is string {
 
 /**
  * Throws `VALIDATION` for a framework room (`qd:` entity, collection, topic
- * and stream rooms, `user:` rooms), as `ctx.rooms.join` does: who sits in
- * one would tell who is subscribed to a row, or which sockets a user has.
- * Presence answers for app rooms only.
+ * and stream rooms, `user:` rooms) or a name with the shape of a socket id,
+ * as `ctx.rooms.join` does: who sits in one would tell who is subscribed to
+ * a row, which sockets a user has, or whose socket an id is. Presence
+ * answers for app rooms only.
  */
 function checkRoom(member: string, room: unknown): asserts room is string {
   checkName(member, room);
   if (RESERVED_ROOM_PREFIXES.some((prefix) => room.startsWith(prefix))) {
     throw unreadable(
       `presence.${member}: room "${room}" is reserved; presence answers for app rooms, not for rooms starting with ${RESERVED_ROOM_PREFIXES.join(" or ")}`,
+    );
+  }
+  if (socketIdShaped(room)) {
+    throw unreadable(
+      `presence.${member}: room "${room}" has the shape of a Socket.IO socket id (20 letters, digits, "_" or "-"); presence answers for app rooms, and every socket is alone in the room of its id`,
     );
   }
 }

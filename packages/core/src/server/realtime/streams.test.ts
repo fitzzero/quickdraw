@@ -879,6 +879,15 @@ describe("access: { room }", () => {
       "a room computed from the scope needs a scoped stream",
     );
     expect(stream({ room: () => "lobby" }, "lobbyId")).not.toThrow();
+    // A scoped stream's room is a function of its scope: a name or prefix admits every scope (RT-4).
+    expect(stream({ room: "world" }, "worldId")).toThrow(
+      "a room for a scoped stream is a function of its scope",
+    );
+    expect(stream({ room: { prefix: "world:" } }, "worldId")).toThrow(
+      "a room for a scoped stream is a function of its scope",
+    );
+    expect(stream({ room: { prefix: "world:" } })).not.toThrow();
+    expect(stream({ room: "lobby" })).not.toThrow();
   });
 });
 

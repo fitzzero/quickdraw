@@ -36,6 +36,10 @@
 // | `shared-principal`   | the handler of a `share: "all"` run (an app's, not a kit's) read   | the member               |
 // |                      | `ctx.principal`, `ctx.services` or `ctx.mcp`: the run has the      | (`principal`, `services`,|
 // |                      | first caller's, and every caller gets its result                   | `mcp`)                   |
+// | `channel-without-    | a channel's contract declares no `requires` and its service no     | the channel              |
+// | requires`            | `access`, so every signed-in user may send it                      |                          |
+// |                      | (`realtime/channelWarnings.ts`); raised when a dispatcher is made, |                          |
+// |                      | so a strict test app fails to start                                 |                          |
 //
 // `nested-write`, `ambient-write`, `batch-read` and `batch-create-many` are
 // the write tracker's (`uow/unitOfWork.ts`), raised exactly where they were
@@ -69,7 +73,8 @@ export type DevWarningKind =
   | "tiered-field-in-output"
   | "resolver-without-reads"
   | "untracked-access-model"
-  | "shared-principal";
+  | "shared-principal"
+  | "channel-without-requires";
 
 /** One development warning. */
 export interface DevWarning {

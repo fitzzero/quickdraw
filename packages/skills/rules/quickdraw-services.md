@@ -49,7 +49,8 @@ export const task = defineContract("taskService", {
 - Methods, collections, streams, channels and events share one namespace
   (`qd.<service>.<name>` on the client). `subscribe`, `unsubscribe`, `call`,
   `then`, `useEntity`, `useEntities`, `admin` and `$`-names are reserved.
-  A contract without `entity` is an RPC-only service.
+  A contract without `entity` is an RPC-only service. A service name holds
+  no `:` or `@` (it is part of every room name of the service).
 
 ## The service implements it
 
@@ -257,9 +258,12 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   `streams: { world: { seed: (worldId, ctx) => [snapshotOf(worldId)] } }`,
   never a bootstrap call beside the stream; `validate: "development"` there
   skips the per-item schema check in production for a hot stream. A feed
-  only a room's sockets may read takes `access: { room }` (a name,
-  `{ prefix }`, or `(scope) => room`), never an entry policy that repeats
-  the room's membership.
+  only a room's sockets may read takes `access: { room }`, never an entry
+  policy that repeats the room's membership: a scoped stream computes the
+  room from its scope, ``{ room: (worldId) => `world:${worldId}` }``, and
+  only a global stream names it or takes `{ prefix }` (on a scoped stream
+  those would let a socket in one world read every world, so
+  `defineContract` refuses them).
 - A query over a model the service only `writes` (no service owns it)
   declares `watch: { service: ["gameScore"] }`, naming the models it reads
   (the service's `model` and its `writes`), with `watchAccess` on the
@@ -275,20 +279,31 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   computes it, `{ room: { prefix: "world:" } }` takes any room with that
   prefix. The handler reads the matched room as `ctx.room`; never repeat a
   world's id in every input frame. 4.x's `requireRoom` becomes `{ room }`.
+  Give every channel a `requires`: without one any signed-in user may send
+  it, about any room its payload names, and the server warns
+  `channel-without-requires`. A handler that relays a message emits to
+  `ctx.room`, never to a room built from the payload. Only when any
+  signed-in user may send it, say so on the service:
+  `channels: { ping: { access: "authenticated", handler } }`.
 - A game loop asks `qd.rooms.size(room)` (this node's sockets, spectators
   included, synchronous) at its tick rate, never Socket.IO's adapter;
   `ctx.socketId` names the calling socket in a method.
 - Events: `events: { moved: { payload } }`, sent with
   `ctx.rooms.emit(room, task, "moved", payload)` to an app room
-  (`ctx.rooms.join(room)` in a method puts the caller's socket in one).
+  (`ctx.rooms.join(room)` in a method puts the caller's socket in one), and
+  to a user's sockets with `ctx.rooms.emitToUser(userId, ...)`, never
+  `emit("user:...")` (refused, as are `qd:` rooms). Name app rooms with a
+  prefix (`doc:${id}`), never a bare 20-character id: a name with the shape
+  of a Socket.IO socket id is refused.
   Code that is not a handler (a game loop, a timer, a job) sends with
   `qd.rooms.emit(room, task, "moved", payload)`; never keep the `io` server
   to emit by hand.
 - When a user loses the right to a room (removed from a chat, kicked from a
   game), `await ctx.rooms.leave(room, { userId })` (or `qd.rooms.leave`)
   takes all their sockets out on every node, before anything they must not
-  hear is sent. 4.x's "emit to the user instead of the room" workaround is
-  not needed.
+  hear is sent; a sharing kit's `onChange` does it for a user a change left
+  with no entry or role (`change.after === null`). 4.x's "emit to the user
+  instead of the room" workaround is not needed.
 - React to a socket leaving with the service's own `onRoomLeave`
   (`defineService(game, { onRoomLeave })`, beside `methods`), never with
   `socket.on("disconnect")` or a hook each server root must remember:
