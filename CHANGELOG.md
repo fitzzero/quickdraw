@@ -14,6 +14,21 @@ All notable changes to this project will be documented in this file.
   58 such lines). A relative specifier in such a type is now written from
   the contract file (`import("../types/ops-types.js").OpsConfigDTO`); a
   package name stays as it is. The type keeps its inline form.
+- **Moved schemas are written under the names the contract binds.** A
+  contract holds the schemas of every method module of its service, and the
+  codemod printed each under its 4.x name: eleven of Conveyor's project
+  modules each declare `const projectIdSchema = ...`, so its contract
+  declared `projectIdSchema` 12 times (TS2451). Same-named schemas that are
+  the same code (whatever their layout or comments, naming the same things)
+  are now written once; any other is renamed `<name>Of<Module>`
+  (`byTaskIdSchemaOfUpdateTask` for `update-task.ts`), wherever the contract
+  uses it, with a note in its method's marker. A schema passed by an import
+  or re-export alias (`export { deleteByIdSchema as deleteAchievementSchema }`)
+  was moved but referenced by the alias, which the contract never declares
+  (TS2304, on 7 of Conveyor's contracts); it is now written by its declared
+  name. The summary line counts the merged and renamed schemas. An api
+  schema that only a moved schema used is now removed with it, with the
+  comment right above it.
 - **The codemod's own tests check that every name and module of the
   contracts it writes binds**, review markers or not: a `todoSchema` line no
   longer hides an unresolved module or an undeclared name.

@@ -60,7 +60,10 @@ It expects the quickdraw template's layout; the options move each part:
   get, list, search, find or count, or the web app reads it with
   `useServiceQuery`. A type the method map wrote inline, as
   `import("./x.js").T`, keeps that form, its path written from the contract
-  file. Service names are kept exactly.
+  file. Same-named schemas of several method modules are written once when
+  they are the same code and renamed `<name>Of<Module>` when not, and a
+  schema passed by an import or re-export alias is written by its declared
+  name. Service names are kept exactly.
 - **Services.** Each `BaseService` (or `BaseRpcService`) class becomes
   `qd.defineService(contract, { model, access, methods })` in its own file.
   Handler bodies are kept, with `({ input, ctx, db })` for

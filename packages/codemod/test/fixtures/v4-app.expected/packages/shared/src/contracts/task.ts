@@ -10,13 +10,16 @@ import { cuidSchema } from "./helpers.js";
 
 const byTaskIdSchema = z.object({ id: z.string().min(1) });
 
+const projectIdSchema = z.object({ projectId: z.string() });
+
 const createTaskSchema = z.object({
   projectId: z.string().min(1),
   title: z.string().min(1).max(200),
 });
 
-const updateTaskSchema = z.object({
-  id: cuidSchema("task ID"),
+const byTaskIdSchemaOfUpdateTask = z.object({ id: cuidSchema("task ID") });
+
+const updateTaskSchema = byTaskIdSchemaOfUpdateTask.extend({
   title: z.string().min(1).max(200).optional(),
   notes: z.string().max(10_000).nullable().optional(),
 });
@@ -28,14 +31,14 @@ export const taskContract = defineContract("taskService", {
     // quickdraw-migrate: review [contract] mutation, chosen from its name
     archiveTask: mutation({ input: byTaskIdSchema, output: "entity" }),
     // quickdraw-migrate: review [contract] query, chosen from its name
-    listArchivedTasks: query({ input: z.object({ projectId: z.string() }), output: listOf("entity") }),
+    listArchivedTasks: query({ input: projectIdSchema, output: listOf("entity") }),
     // quickdraw-migrate: review [contract] mutation, chosen from its name
     createTask: mutation({ input: createTaskSchema, output: "entity" }),
     // quickdraw-migrate: review [contract] query, chosen from its name; output: todoSchema of the 4.x response type
-    listTasks: query({ input: z.object({ projectId: z.string() }), output: todoSchema<TaskCard[]>() }),
+    listTasks: query({ input: projectIdSchema, output: todoSchema<TaskCard[]>() }),
     // quickdraw-migrate: review [contract] mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
     reindexProject: mutation({ input: todoSchema<{ projectId: string }>({ keys: ["projectId"] }), output: todoSchema<{ count: number }>() }),
-    // quickdraw-migrate: review [contract] mutation, chosen from its name; output: "entity", where 4.x answered TaskDTO | null (null for a missing row, which a tracked write answers with NOT_FOUND instead); only an exact "entity" output is optimistic by default. Use nullable("entity") if the handler still answers null
+    // quickdraw-migrate: review [contract] mutation, chosen from its name; output: "entity", where 4.x answered TaskDTO | null (null for a missing row, which a tracked write answers with NOT_FOUND instead); only an exact "entity" output is optimistic by default. Use nullable("entity") if the handler still answers null; its schema's byTaskIdSchema (apps/api/src/services/task/methods/update-task.ts) is byTaskIdSchemaOfUpdateTask here, since the contract has another byTaskIdSchema
     updateTask: mutation({ input: updateTaskSchema, output: "entity" }),
     // quickdraw-migrate: review [contract] mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
     moveTask: mutation({ input: todoSchema<{ taskId: string; status: string; ordinal: number }>({ keys: ["taskId", "status", "ordinal"] }), output: todoSchema<{ id: string }>() }),

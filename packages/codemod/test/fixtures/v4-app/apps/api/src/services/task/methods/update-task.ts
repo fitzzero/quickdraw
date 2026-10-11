@@ -2,8 +2,10 @@ import { z } from "zod";
 import { cuidSchema } from "../../shared/schemas.js";
 import type { TaskService } from "../index.js";
 
-const updateTaskSchema = z.object({
-  id: cuidSchema("task ID"),
+// Not archive.ts's byTaskIdSchema: this one checks a cuid
+const byTaskIdSchema = z.object({ id: cuidSchema("task ID") });
+
+const updateTaskSchema = byTaskIdSchema.extend({
   title: z.string().min(1).max(200).optional(),
   notes: z.string().max(10_000).nullable().optional(),
 });

@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { TaskService } from "../index.js";
 
+// The same schema as archive.ts's, laid out differently
+const projectIdSchema = z.object({
+  projectId: z.string(),
+});
+
 export function registerListTasks(service: TaskService): void {
   service.defineMethod(
     "listTasks",
@@ -16,7 +21,7 @@ export function registerListTasks(service: TaskService): void {
       });
       return tasks.map((task) => service.toCard(task));
     },
-    { schema: z.object({ projectId: z.string() }) },
+    { schema: projectIdSchema },
   );
 }
 

@@ -4,7 +4,10 @@
 // go into the contract file, those of other api files (the template's
 // `cuidSchema`, `byIdSchema`) into `contracts/helpers.ts`. A schema that
 // depends on anything else (another package, a type, a class) stays where
-// it is, and the contract gets a `todoSchema` instead.
+// it is, and the contract gets a `todoSchema` instead. Each moved piece of
+// code records where it names a moved declaration (directly, or through an
+// import or re-export alias), so the contract can write it under the name
+// the contract binds.
 
 import {
   type FunctionDeclaration,
@@ -16,21 +19,35 @@ import {
   type VariableDeclaration,
 } from "ts-morph";
 
+/** Where moved code names a moved declaration: `code.slice(start, end)`, the declaration of `key`. */
+export interface Reference {
+  readonly start: number;
+  readonly end: number;
+  readonly key: string;
+}
+
 /** A declaration the moved schema needs. */
 export interface MovedDeclaration {
   /** `<file>#<name>`: the same helper reached twice is written once. */
   readonly key: string;
   readonly name: string;
+  /** The file it is declared in. */
+  readonly file: string;
   /** Its statement, without `export`, and the JSDoc above it. */
   readonly code: string;
   readonly docs: string;
+  /** Where `code` names moved declarations, its own name included. */
+  readonly references: readonly Reference[];
   /** `local` (from the service file: into the contract file) or `helper` (into helpers.ts). */
   readonly place: "local" | "helper";
 }
 
 /** A schema that can move: the code to use as `input`, and what must come with it. */
 export interface MovedSchema {
+  /** The 4.x schema's text, which may name a declaration by an alias: write it through `references`. */
   readonly code: string;
+  /** Where `code` names moved declarations. */
+  readonly references: readonly Reference[];
   /** Dependencies first. */
   readonly declarations: readonly MovedDeclaration[];
   /** The helpers the contract file itself refers to (its code and its local declarations). */
@@ -45,6 +62,13 @@ export type SchemaMove =
 
 type Movable = VariableDeclaration | FunctionDeclaration;
 
+/** The code being walked: `base` is the file offset of its first character. */
+interface Owner {
+  readonly base: number;
+  readonly length: number;
+  readonly references: Reference[];
+}
+
 const ZOD = /^zod(\/.*)?$/u;
 
 class Closure {
@@ -56,21 +80,36 @@ class Closure {
 
   constructor(private readonly serviceFile: SourceFile) {}
 
-  /** Walks `root` (inside a declaration of `place`, or the schema itself when `place` is undefined). */
-  walk(root: Node, place: "local" | "helper" | undefined): void {
+  /**
+   * Walks `root` (inside a declaration of `place`, or the schema itself when
+   * `place` is undefined), recording its references in `owner`.
+   */
+  walk(root: Node, place: "local" | "helper" | undefined, owner: Owner): void {
     const identifiers = Node.isIdentifier(root)
       ? [root]
       : root.getDescendantsOfKind(SyntaxKind.Identifier);
     for (const identifier of identifiers) {
       if (this.problem === undefined) {
-        this.visit(identifier, root, place);
+        this.visit(identifier, root, place, owner);
       }
     }
   }
 
-  private visit(identifier: Identifier, root: Node, place: "local" | "helper" | undefined): void {
+  private visit(
+    identifier: Identifier,
+    root: Node,
+    place: "local" | "helper" | undefined,
+    owner: Owner,
+  ): void {
     const declaration = identifier.getSymbol()?.getDeclarations()[0];
-    if (declaration === undefined || isWithin(declaration, root)) {
+    if (declaration === undefined) {
+      return;
+    }
+    if (isWithin(declaration, root)) {
+      // a function that calls itself
+      if (declaration === root && Node.isFunctionDeclaration(root)) {
+        refer(owner, identifier, keyOf(root));
+      }
       return;
     }
     // a library's own declarations: zod's members, globals
@@ -85,10 +124,11 @@ class Closure {
       Node.isNamespaceImport(declaration) ||
       Node.isImportClause(declaration)
     ) {
-      this.visitImport(identifier, declaration, place);
+      this.visitImport(identifier, declaration, place, owner);
       return;
     }
     if (isModuleLevel(declaration)) {
+      refer(owner, identifier, keyOf(declaration));
       this.add(declaration, place);
       return;
     }
@@ -101,6 +141,7 @@ class Closure {
     identifier: Identifier,
     declaration: Node,
     place: "local" | "helper" | undefined,
+    owner: Owner,
   ): void {
     const statement = declaration.getFirstAncestorByKind(SyntaxKind.ImportDeclaration);
     const source = statement?.getModuleSpecifierValue() ?? "";
@@ -117,6 +158,8 @@ class Closure {
       this.problem = `it uses \`${identifier.getText()}\` from "${source}", which cannot move to the shared package`;
       return;
     }
+    // the declaration's own name, which the contract binds, not the alias
+    refer(owner, identifier, keyOf(target));
     this.add(target, place);
   }
 
@@ -127,18 +170,51 @@ class Closure {
     if (place === "helper" && from !== "helper") {
       this.direct.add(name);
     }
-    const key = `${file.getFilePath()}#${name}`;
+    const key = keyOf(declaration);
     if (this.visited.has(key)) {
       return;
     }
     this.visited.add(key);
+    const { docs, code, base } = statementText(declaration);
+    const owner: Owner = { base, length: code.length, references: [] };
+    const nameNode = declaration.getNameNode();
+    if (nameNode !== undefined && Node.isIdentifier(nameNode)) {
+      refer(owner, nameNode, key);
+    }
     this.walk(
       Node.isVariableDeclaration(declaration)
         ? (declaration.getInitializer() ?? declaration)
         : declaration,
       place,
+      owner,
     );
-    this.declarations.push({ key, name, ...statementText(declaration), place });
+    this.declarations.push({
+      key,
+      name,
+      file: file.getFilePath(),
+      code,
+      docs,
+      references: owner.references.toSorted((a, b) => a.start - b.start),
+      place,
+    });
+  }
+}
+
+function keyOf(declaration: Movable): string {
+  return `${declaration.getSourceFile().getFilePath()}#${declaration.getName() ?? ""}`;
+}
+
+/** Records that `identifier`, inside `owner`'s code, names the declaration of `key`. */
+function refer(owner: Owner, identifier: Identifier, key: string): void {
+  const start = identifier.getStart() - owner.base;
+  const end = identifier.getEnd() - owner.base;
+  // a JSDoc's {@link} lies outside the code; a function's own name is met twice
+  if (
+    start >= 0 &&
+    end <= owner.length &&
+    !owner.references.some((reference) => reference.start === start)
+  ) {
+    owner.references.push({ start, end, key });
   }
 }
 
@@ -180,8 +256,12 @@ function isProperty(node: Node): boolean {
   );
 }
 
-/** A declaration's statement, as its own `const` (or function) without `export`, and its JSDoc. */
-function statementText(declaration: Movable): { docs: string; code: string } {
+/**
+ * A declaration's statement, as its own `const` (or function) without
+ * `export`, and its JSDoc; `base` is the file offset of the code's first
+ * character, which may lie before the declaration (the `const` it writes).
+ */
+function statementText(declaration: Movable): { docs: string; code: string; base: number } {
   const statement = Node.isFunctionDeclaration(declaration)
     ? declaration
     : declaration.getVariableStatement();
@@ -192,32 +272,35 @@ function statementText(declaration: Movable): { docs: string; code: string } {
       .join("\n") ?? "";
   if (Node.isFunctionDeclaration(declaration)) {
     const start = declaration.getStart() - declaration.getStart(true);
-    return {
-      docs,
-      code: declaration
-        .getText(true)
-        .slice(start)
-        .replace(/^export\s+/u, ""),
-    };
+    const text = declaration.getText(true).slice(start);
+    const code = text.replace(/^export\s+/u, "");
+    return { docs, code, base: declaration.getStart() + text.length - code.length };
   }
   const kind =
     statement === undefined || !Node.isVariableStatement(statement)
       ? "const"
       : statement.getDeclarationKind();
-  return { docs, code: `${kind} ${declaration.getText()};` };
+  return {
+    docs,
+    code: `${kind} ${declaration.getText()};`,
+    base: declaration.getStart() - kind.length - 1,
+  };
 }
 
 /** Moves `schema` (the `schema:` option of a defineMethod call in `serviceFile`), or says why it cannot. */
 export function moveSchema(schema: Node, serviceFile: SourceFile): SchemaMove {
   const closure = new Closure(serviceFile);
-  closure.walk(schema, undefined);
+  const code = schema.getText();
+  const owner: Owner = { base: schema.getStart(), length: code.length, references: [] };
+  closure.walk(schema, undefined, owner);
   if (closure.problem !== undefined) {
     return { ok: false, reason: closure.problem };
   }
   return {
     ok: true,
     schema: {
-      code: schema.getText(),
+      code,
+      references: owner.references.toSorted((a, b) => a.start - b.start),
       declarations: closure.declarations,
       directHelpers: [...closure.direct],
       zod: [...closure.zod.entries()].map(([localName, statement]) => ({

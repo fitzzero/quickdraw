@@ -12,6 +12,7 @@ import { z } from "zod";
 import { byIdSchema, cuidSchema, paginationSchema } from "./shared/schemas.js";
 import { requireAuth } from "./shared/guards.js";
 import { registerProjectLimits } from "./project-methods/limits.js";
+import { deleteProjectSchema } from "./project-schemas.js";
 
 const createProjectSchema = z.object({
   name: z.string().min(1, "Name is required").max(100),
@@ -213,7 +214,7 @@ export class ProjectService extends BaseService<
         }
         return { id: payload.id, deleted: true as const };
       },
-      { schema: byIdSchema },
+      { schema: deleteProjectSchema },
     );
   }
 
