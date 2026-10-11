@@ -133,9 +133,10 @@ export interface AdminHandlersOptions<C extends AnyContract, A, Db = unknown> {
   readonly displayName?: string;
   /**
    * Fields the kit leaves out entirely: from `adminMeta`, from the rows it
-   * returns and from what it writes. `acl`, `serviceAccess` and
-   * `service_access` are always hidden, as in 4.1, unless `grants` shows
-   * the last two.
+   * returns and from what it writes. `acl`, `serviceAccess`,
+   * `service_access` and the column the dispatcher's `serviceAccessSource`
+   * names on this service's model are always hidden (the first three as in
+   * 4.1), unless `grants` shows the grants field.
    */
   readonly hiddenFields?: readonly Exclude<AdminFieldOf<C>, "id">[];
   /**

@@ -126,6 +126,7 @@ export {
   type DbOfServices,
   type Dispatcher,
   type DispatcherCollections,
+  type DispatcherBaseOptions,
   type DispatcherOptions,
   type PrincipalOfServices,
 } from "./dispatcher";

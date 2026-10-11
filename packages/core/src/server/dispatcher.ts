@@ -39,16 +39,32 @@ export type ContractOfServices<S extends readonly AnyService[]> = [S[number]] ex
   : S[number]["contract"];
 
 /**
- * Options of {@link createDispatcher}: the services and the database client
- * handlers receive, plus the pipeline's seams and limits. `db` may be left
- * out only when the services declared no database type.
+ * The options `createDispatcher` and `createServer` share: the services and
+ * the database client handlers receive, plus the pipeline's seams and
+ * limits. `db` may be left out only when the services declared no database
+ * type.
  */
-export type DispatcherOptions<S extends readonly AnyService[]> = PipelineOptions & {
+export type DispatcherBaseOptions<S extends readonly AnyService[]> = PipelineOptions & {
   /** The services to serve. Two services with one name are an error. */
   readonly services: S;
 } & (unknown extends DbOfServices<S>
     ? { readonly db?: DbOfServices<S> }
     : { readonly db: DbOfServices<S> });
+
+/** Options of {@link createDispatcher}: the shared ones, and where users' grants are stored. */
+export type DispatcherOptions<S extends readonly AnyService[]> = DispatcherBaseOptions<S> & {
+  /**
+   * Where users' service-wide grants are stored, as `{ model: "user",
+   * column: "serviceAccess" }`: the admin kit on that model treats the
+   * column as the grants field, whatever its name (hidden unless
+   * `grants: true`, and then for service-wide Admins only). `createServer`
+   * takes it as `auth.serviceAccessSource`, which also refreshes the grants
+   * it stores; a dispatcher made without `createServer` (an app that serves
+   * HTTP with `createHttpRouter`, an MCP process) names it here, or the
+   * column is an ordinary field there.
+   */
+  readonly serviceAccessSource?: { readonly model: string; readonly column: string };
+};
 
 /** `dispatcher.collections` and `qd.collections`: the services' collections (RFC 0003 section 7). */
 export interface DispatcherCollections {
@@ -128,6 +144,13 @@ export interface Dispatcher<S extends readonly AnyService[] = readonly AnyServic
   readonly registry: Registry;
   /** The resolved limits, for a server to announce in `qd:hello`. */
   readonly limits: DispatcherLimits;
+  /**
+   * Where users' service-wide grants are stored, as the dispatcher was made
+   * with it (`serviceAccessSource`, which `createServer` takes from
+   * `auth.serviceAccessSource`): the admin kit on that model treats the
+   * column as the grants field. `undefined` without one.
+   */
+  readonly serviceAccessSource: { readonly model: string; readonly column: string } | undefined;
 }
 
 /** What `createServer` gives the dispatcher it makes, beside the app's options. */
@@ -139,8 +162,6 @@ export interface ServerParts {
    * them.
    */
   readonly accessSinks: readonly PipelineSettings["flushSink"][];
-  /** `auth.serviceAccessSource`: the column the admin kit treats as the grants field on its model. */
-  readonly grantsSource: ServedContext["grantsSource"];
 }
 
 const SERVER_PARTS = new WeakMap<object, ServerParts>();
@@ -150,6 +171,23 @@ export function withServerParts<O extends object>(options: O, parts: ServerParts
   const copy = { ...options };
   SERVER_PARTS.set(copy, parts);
   return copy;
+}
+
+/** The `serviceAccessSource` option, checked: `{ model, column }`, or `undefined`. */
+function grantsSourceOf(source: unknown): ServedContext["grantsSource"] {
+  if (source === undefined) {
+    return undefined;
+  }
+  const { model, column } = (source ?? {}) as {
+    readonly model?: unknown;
+    readonly column?: unknown;
+  };
+  if (typeof model !== "string" || model === "" || typeof column !== "string" || column === "") {
+    throw new TypeError(
+      'createDispatcher: serviceAccessSource must be { model, column }, as { model: "user", column: "serviceAccess" }',
+    );
+  }
+  return Object.freeze({ model, column });
 }
 
 /** `TypeError` for the first handler a service cannot be served with (`checkWhenServed`). */
@@ -232,9 +270,12 @@ export function createDispatcher<const S extends readonly AnyService[]>(
     throw new TypeError("createDispatcher: options must be an object with services and db");
   }
   const registry = createRegistry(options.services);
-  const parts = SERVER_PARTS.get(options);
-  checkServed(options.services, parts?.grantsSource);
-  const settings = resolveSettings(options, registry, options.db, parts);
+  const grantsSource = grantsSourceOf(options.serviceAccessSource);
+  checkServed(options.services, grantsSource);
+  const settings = resolveSettings(options, registry, options.db, {
+    accessSinks: SERVER_PARTS.get(options)?.accessSinks ?? [],
+    grantsSource,
+  });
   // Writes made outside any unit of work flush to this dispatcher's sinks,
   // and the tracker's development warnings go out as this dispatcher's,
   // until a server's `close()` detaches it.
@@ -265,6 +306,7 @@ export function createDispatcher<const S extends readonly AnyService[]>(
       settings.live.realtime.stream(contract, name) as unknown as StreamHandle<C, K>,
     registry,
     limits: settings.limits,
+    serviceAccessSource: grantsSource,
   });
   // `createServer` attaches its Socket.IO server to the dispatcher's live data.
   registerLive(dispatcher, settings.live);

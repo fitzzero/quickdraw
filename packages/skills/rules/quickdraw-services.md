@@ -238,7 +238,9 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   On a users service, `admin.handlers(user, { grants: true })` lets the admin
   screen edit `serviceAccess` (or the column `auth.serviceAccessSource`
   names, whatever its name) through `adminUpdate` (service-wide Admins
-  only); never hand-write a `setServiceAccess` method for it. Without
+  only); never hand-write a `setServiceAccess` method for it. A dispatcher
+  made without `createServer` (HTTP only, an MCP process) names that column
+  as `createDispatcher({ serviceAccessSource })`. Without
   `grants: true` the kit hides that column. `adminMeta`
   marks that field `kind: "grants"`; an app with a grants editor of its own
   keeps it out of the generic form with

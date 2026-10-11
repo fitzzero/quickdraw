@@ -206,7 +206,7 @@ export interface KitRuntime {
    * admin kit's `onCommitted`), whose writes flush on their own.
    */
   readonly runDetached?: (fn: () => unknown) => Promise<unknown>;
-  /** `createServer`'s `auth.serviceAccessSource`: where users' service-wide grants live (the admin kit's grants column). */
+  /** The dispatcher's `serviceAccessSource`: where users' service-wide grants live (the admin kit's grants column). */
   readonly grantsSource?: { readonly model: string; readonly column: string };
 }
 

@@ -236,7 +236,10 @@ export function handlerProblem(handler: object, service: AnyService): string | u
 /** What `createDispatcher` knows of the server a handler is served in. */
 export interface ServedContext {
   readonly service: AnyService;
-  /** `createServer`'s `auth.serviceAccessSource`: where users' service-wide grants live. */
+  /**
+   * The dispatcher's `serviceAccessSource` (`createServer`'s
+   * `auth.serviceAccessSource`): where users' service-wide grants live.
+   */
   readonly grantsSource: { readonly model: string; readonly column: string } | undefined;
 }
 
@@ -247,9 +250,11 @@ const servedChecks = new WeakMap<object, ServedCheck>();
 
 /**
  * Makes `createDispatcher` run `check` for each service it serves `handler`
- * in, once the server's options are known (the admin kit's grants column,
- * which only `createServer` names), so a clash fails when the server is
- * made, never on a call.
+ * in, once the dispatcher's options are known (the admin kit's grants
+ * column, `serviceAccessSource`), so a clash fails when the dispatcher is
+ * made, never on a call. Only the handler the kit made carries the check:
+ * an app that wraps it serves the wrapper unchecked, and a clash then fails
+ * its calls closed, `INTERNAL`, as `checkWhenDefined`'s would.
  */
 export function checkWhenServed(handler: object, check: ServedCheck): void {
   servedChecks.set(handler, check);

@@ -140,7 +140,7 @@ export interface PipelineSettings extends Tracking {
   /** Counts each connection's calls and refusals, and warns when they look like a client loop (`../devWarnings.ts`). */
   readonly loops: LoopWatch;
   readonly record: (record: CallRecord, details: RecordDetails) => void;
-  /** `createServer`'s `auth.serviceAccessSource`: the admin kit's grants column on its model. */
+  /** The dispatcher's `serviceAccessSource`: the admin kit's grants column on its model. */
   readonly grantsSource: { readonly model: string; readonly column: string } | undefined;
 }
 
@@ -184,10 +184,10 @@ function resolveLimits(limits: LimitsOptions = {}): DispatcherLimits {
 }
 
 /**
- * Applies the defaults to the dispatcher's options. `parts` are what
- * `createServer` adds: `accessSinks` run right after the access sink, before
- * any frame of a flush is sent, and `grantsSource` is its
- * `auth.serviceAccessSource`.
+ * Applies the defaults to the dispatcher's options. `parts`:
+ * `accessSinks`, which `createServer` adds, run right after the access sink,
+ * before any frame of a flush is sent, and `grantsSource` is the checked
+ * `serviceAccessSource`.
  */
 export function resolveSettings(
   options: PipelineOptions,

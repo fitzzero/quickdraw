@@ -234,10 +234,18 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   users service of an app whose `auth.serviceAccessSource` column is not
   named `serviceAccess`, that column leaves `adminMeta`, rows and writes
   unless `grants: true`, and then shows to service-wide Admins only. Kits
-  that name it in `editable`, `fieldOverrides`, a filter or a sort (or hide
-  it beside `grants: true`) fail at startup, and `grants: true` type-checks
-  on any entity but fails when the dispatcher is made for one with no
-  grants field. Apps that use `serviceAccess` see no change.
+  that name it in `editable`, `fieldOverrides`, a filter or a sort without
+  `grants: true` (or hide it beside `grants: true`) fail at startup, and
+  `grants: true` type-checks on any entity but fails when the dispatcher is
+  made for one with no grants field. Apps that use `serviceAccess` see no
+  change.
+- **A dispatcher made without `createServer` names the grants column
+  itself.** `createDispatcher` takes `serviceAccessSource: { model, column }`
+  (`createServer` passes its `auth.serviceAccessSource` and refuses the
+  option at the top level), and `createHttpRouter` throws when its
+  `auth.serviceAccessSource` is not its dispatcher's. An app that serves
+  HTTP or MCP from `createDispatcher` and stores grants in a column passes
+  it there, or the admin kit treats that column as an ordinary field.
 - **A channel without `requires` warns.** A channel whose contract
   declares no `requires`, and whose service declares no `access` for it,
   logs `[quickdraw:channel-without-requires]` when the server starts, and a
@@ -433,7 +441,9 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
 - **The admin kit protects a grants column of any name (ADMIN-2).** It hid
   and Admin-gated only `serviceAccess` and `service_access`, so with
   grants stored under another name every admin caller saw them, and a user
-  under a lowered form could write their own.
+  under a lowered form could write their own. That holds on a dispatcher
+  made without `createServer` too (`createDispatcher({ serviceAccessSource
+})`), which `createHttpRouter` checks.
 - **A sharing change's re-check no longer reads a stale cache (SHARE-4).**
   With `cacheMs`, the re-check of the caller inside the change's
   transaction read the access cache, so a caller demoted by a write the

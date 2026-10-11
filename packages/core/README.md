@@ -1266,7 +1266,14 @@ over three transports (design: sections 3, 8 and 10):
   `http: { path }`, turn it off with `http: false`, or mount
   `createHttpRouter({ dispatcher, auth })` yourself. It has no rate limit of
   its own: on Express, set `http: { rateLimit: createCallLimiter() }` (from
-  `./server/express`), which refuses with the `RATE_LIMITED` reply.
+  `./server/express`), which refuses with the `RATE_LIMITED` reply. An app
+  without sockets makes its dispatcher with
+  `createDispatcher({ services, db, serviceAccessSource })` when users'
+  grants are stored in a column (the admin kit protects that column only
+  where the dispatcher names it, as `createServer` does from
+  `auth.serviceAccessSource`), and `createHttpRouter` throws when its
+  `auth.serviceAccessSource` is not its dispatcher's. An MCP process made
+  with `createDispatcher` names it the same way.
 - **In process**: `server.dispatcher.caller(principal)` or
   `qd.caller(principal)`: `await qd.caller(user).taskService.rename(input)`,
   typed by the `contracts` of `initQuickdraw`'s types. A principal that
@@ -2381,15 +2388,16 @@ export function AdminTasks() {
   timestamps come first and are not editable; a relation of the model (a
   field a projection selects with a nested `select`) is `editable: false`;
   `acl`, `serviceAccess` and `service_access` are hidden, and so is the
-  column `auth.serviceAccessSource` names on this service's model, whatever
-  its name.
+  column `auth.serviceAccessSource` (a bare dispatcher's
+  `serviceAccessSource`) names on this service's model, whatever its name.
 - Grants: on a users service, `admin.handlers(user, { grants: true })`
   shows and writes the entity's grants field (`serviceAccess`, or the
-  column `auth.serviceAccessSource` names, whatever its name: a `json`
-  field the entity schema checks), so the admin screen edits grants through
-  `adminUpdate`. Options that clash with that column (hiding it beside
-  `grants: true`, or making it editable without), and `grants: true` on an
-  entity with no grants field, fail when the server is made.
+  column `auth.serviceAccessSource` names, whatever its name and type; the
+  entity schema checks what is written), so the admin screen edits grants
+  through `adminUpdate`. Options that clash with that column (hiding it
+  beside `grants: true`, or naming it in `editable`, `fieldOverrides`, a
+  filter or a sort without), and `grants: true` on an entity with no grants
+  field, fail when the server is made.
   Only a caller whose own service-wide grant on that service is `Admin`
   reads or writes it, whatever `access` gives the method: anyone else gets
   rows without it and `FORBIDDEN` for a write, filter or sort naming it.

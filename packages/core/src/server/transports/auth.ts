@@ -107,9 +107,13 @@ export interface ServerAuth<P extends Principal = Principal> {
    * sets that column, or creates, deletes or touches such a row, refreshes
    * that user's grants once it is flushed (`server.access.refresh`), so a
    * changed grant reaches their sockets without a reconnect (RFC 0003
-   * section 4.4). The admin kit on that model treats the column as the
-   * grants field, whatever its name: hidden unless `grants: true`, and then
-   * for service-wide Admins only. Needs `loadServiceAccess`.
+   * section 4.4). `createServer` gives it to its dispatcher, whose admin kit
+   * on that model treats the column as the grants field, whatever its name:
+   * hidden unless `grants: true`, and then for service-wide Admins only. A
+   * dispatcher made without `createServer` takes it as
+   * `createDispatcher({ serviceAccessSource })`, and `createHttpRouter`
+   * refuses an `auth.serviceAccessSource` its dispatcher does not name.
+   * Needs `loadServiceAccess`.
    */
   readonly serviceAccessSource?: ServiceAccessSource;
 }

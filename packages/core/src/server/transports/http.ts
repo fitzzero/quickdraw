@@ -96,8 +96,14 @@ export interface HttpTransportOptions {
 /** Options of {@link createHttpRouter}. */
 export interface HttpRouterOptions<P extends Principal = Principal> extends HttpTransportOptions {
   /** The dispatcher whose methods the router serves. */
-  readonly dispatcher: Pick<Dispatcher, "call">;
-  /** Authenticates each request, with the same hooks as `createServer`'s `auth`. */
+  readonly dispatcher: Pick<Dispatcher, "call"> & Partial<Pick<Dispatcher, "serviceAccessSource">>;
+  /**
+   * Authenticates each request, with the same hooks as `createServer`'s
+   * `auth`. Its `serviceAccessSource` must be the dispatcher's own (made
+   * with `createDispatcher({ serviceAccessSource })`), or the router throws:
+   * the admin kit protects the grants column only where the dispatcher
+   * names it.
+   */
   readonly auth?: ServerAuth<P>;
   /** Default: the console. */
   readonly logger?: Logger;
@@ -365,6 +371,25 @@ export function httpRouterSettings(
 }
 
 /**
+ * `TypeError` when the router's `auth.serviceAccessSource` is not its
+ * dispatcher's (the 5.1 audit's ADMIN-2): the admin kit hides and guards the
+ * grants column only where the dispatcher names it, so a router that names
+ * it alone would leave it an ordinary, writable field.
+ */
+function checkGrantsSource(
+  own: Dispatcher["serviceAccessSource"],
+  named: Dispatcher["serviceAccessSource"],
+): void {
+  if (named === undefined || (own?.model === named.model && own.column === named.column)) {
+    return;
+  }
+  const made = own === undefined ? "without one" : `with ${own.model}.${own.column}`;
+  throw new TypeError(
+    `createHttpRouter: auth.serviceAccessSource names ${named.model}.${named.column}, but its dispatcher was made ${made}: pass serviceAccessSource: { model: "${named.model}", column: "${named.column}" } to createDispatcher, so the admin kit there protects that column`,
+  );
+}
+
+/**
  * Creates the HTTP transport for a dispatcher: `POST /qd/{service}/{method}`
  * with a JSON body. `createServer` mounts one on the app's Express app; use
  * this to serve calls from an app without sockets, or under another path.
@@ -375,6 +400,7 @@ export function httpRouterSettings(
 export function createHttpRouter<P extends Principal = Principal>(
   options: HttpRouterOptions<P>,
 ): HttpRouter {
+  checkGrantsSource(options.dispatcher.serviceAccessSource, options.auth?.serviceAccessSource);
   return httpRouter(
     httpRouterSettings(options, {
       call: options.dispatcher.call,

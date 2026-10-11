@@ -20,7 +20,7 @@ import {
   loopsOf,
   withServerParts,
   type Dispatcher,
-  type DispatcherOptions,
+  type DispatcherBaseOptions,
   type PrincipalOfServices,
 } from "./dispatcher";
 import { liveOf, type RoomLeaveHandler, type RoomLeaveHook } from "./emit/live";
@@ -185,8 +185,10 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
 /**
  * Options of {@link createServer}: the dispatcher's (`services`, `db`,
  * `logger`, `limits`, `onCall` and the pipeline seams) and the server's own.
+ * The grants column is `auth.serviceAccessSource` here, which the server
+ * gives its dispatcher.
  */
-export type ServerOptions<S extends readonly AnyService[]> = DispatcherOptions<S> &
+export type ServerOptions<S extends readonly AnyService[]> = DispatcherBaseOptions<S> &
   ServerOnlyOptions<PrincipalOfServices<S>>;
 
 /** Options of `server.rotate`. */
@@ -393,11 +395,16 @@ function withGrants<O extends object>(
   options: O,
   grants: ReturnType<typeof createGrantsSink>,
   grantsSource: { readonly model: string; readonly column: string } | undefined,
-): O {
-  return withServerParts(options, {
-    accessSinks: grants === undefined ? [] : [grants],
-    grantsSource,
-  });
+): O & { readonly serviceAccessSource?: { readonly model: string; readonly column: string } } {
+  if ((options as { readonly serviceAccessSource?: unknown }).serviceAccessSource !== undefined) {
+    throw new TypeError(
+      "createServer: name the grants column as auth.serviceAccessSource, which also refreshes the grants it stores; serviceAccessSource is createDispatcher's option",
+    );
+  }
+  return withServerParts(
+    { ...options, ...(grantsSource === undefined ? {} : { serviceAccessSource: grantsSource }) },
+    { accessSinks: grants === undefined ? [] : [grants] },
+  );
 }
 
 /**
