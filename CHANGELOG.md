@@ -272,15 +272,24 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   `createMcpHttpRouter({ allowedOrigins })` lists its origin; a page that
   calls `/mcp/invoke` must be listed. `allowedHosts` optionally refuses
   other `Host` names.
-- **MCP queries over HTTP share one lane per caller.** Per bearer token, or
-  per address when anonymous: a busy agent can see `RATE_LIMITED`.
+- **MCP queries over HTTP share one lane per caller.** Per bearer token,
+  per user without a token, or per address when anonymous (an IPv6 address
+  by its /56): a busy agent can see `RATE_LIMITED`, and the development
+  `repeated-call` warning now counts one HTTP caller's calls together, so a
+  `strictWarnings` test app throws on more than 10 identical calls a
+  second from one caller.
 - **An MCP input with `.meta({ id })` takes its object's properties as
-  arguments**, no longer `{ input }`, and its bound keys bind; a bound key
-  in an id'd union or intersection branch now fails `createMcpRegistry`, and
-  a call that sends a bound argument its tool does not fill is `FORBIDDEN`
-  (before, it was stripped or passed on).
+  arguments**, no longer `{ input }`, and its bound keys bind (a schema
+  made from it, as `.optional()` or `.refine()` make, still takes
+  `{ input }`); a bound key in an id'd union or intersection branch, or in
+  an input without arguments, now fails `createMcpRegistry`, and a call
+  that sends a bound argument its tool does not fill is `FORBIDDEN`
+  (before, it was stripped or passed on). A wrapped input's `definitions`
+  move to the tool schema's root, and a recursive one refers to itself as
+  `#/properties/input`, so listed references resolve.
 - **MCP custom tools obey `initQuickdraw({ kinds })`**, and take `kinds` of
-  their own.
+  their own; custom tools served beside the services of apps that admit no
+  kind in common fail `createMcpRegistry`.
 - **A `principal` hook's `QuickdrawError` refusal logs at debug**, not as an
   error.
 - **`setupRedisAdapter` without `keyPrefix` keys the adapter by
@@ -511,7 +520,8 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
 - **A web page cannot call the MCP HTTP routes from a user's browser
   (MCP-3).** They answered any `Origin` and `Host`.
 - **One MCP HTTP caller cannot run unlimited queries (MCP-4).** Each request
-  was a lane of its own; 120 concurrent anonymous calls all ran.
+  was a lane of its own; 120 concurrent anonymous calls all ran. An IPv6
+  caller's lane is its /56, which one host commonly holds.
 - **MCP custom tools check the caller's kind (MCP-6).** An agent ran a
   custom tool of a users-only app.
 - **A refused MCP token is no error log (MCP-7).** A hook's refusal was

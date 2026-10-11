@@ -1345,12 +1345,19 @@ input schema's JSON Schema as its arguments and `readOnlyHint` on every
 query. The API docs print each method's default tool name and its read-only
 hint. Every tool call goes through the dispatcher with transport `"mcp"`,
 so input validation and access checks apply as on a socket. Queries share
-a concurrency lane per caller: a stdio process, and on HTTP one per bearer
-token, or per address when anonymous (16 run, 64 wait, then
-`RATE_LIMITED`). The HTTP routes have no rate limit of their own: limit
-them per address, as below. A method whose input cannot describe itself
-as JSON Schema stops the registry at startup, naming the method, unless it
-is excluded.
+a concurrency lane per caller (16 run and 64 wait by default, the
+dispatcher's `limits`, then `RATE_LIMITED`): a stdio process, and on HTTP
+a bearer token, a user without a token, or the address of an anonymous
+caller (Express's `req.ip`, an IPv6 address by its /56). Behind a proxy,
+set Express's `trust proxy`, or every anonymous caller shares the proxy's
+lane. A `principal` hook that authenticates by anything but the bearer
+token (a cookie, an API key header) must refuse a request whose bearer
+token it does not verify, or a caller makes a lane per made-up token. The
+HTTP routes have no rate limit of their own: limit them per address, as
+below (`createPublicApiLimiter` answers 429 with `{ error }`, not the
+routes' `{ success: false, code }`). A method whose input cannot describe
+itself as JSON Schema stops the registry at startup, naming the method,
+unless it is excluded.
 
 <!-- example: apps/api/src/mcp.ts#mcp -->
 
@@ -1408,9 +1415,13 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   request from a web page (one with an `Origin` header) is answered 403
   unless `createMcpHttpRouter({ allowedOrigins })` lists its origin (exact
   origins or anchored patterns, as `socketAuth` takes them; none by
-  default); an MCP client sends no `Origin`. For a server on a developer's
-  machine or a LAN, `allowedHosts: ["localhost", "127.0.0.1"]` also refuses
-  a request for any other `Host`, which a DNS-rebinding page would send.
+  default); an MCP client sends no `Origin`. `allowedOrigins` adds no CORS
+  headers: a page on another origin still needs the app's CORS setup. For a
+  server on a developer's machine or a LAN,
+  `allowedHosts: ["localhost", "127.0.0.1", "::1"]` also refuses a request
+  for any other `Host`, which a DNS-rebinding page would send. An entry with
+  a port matches that port only (a `Host` without one is for port 80 or
+  443).
 - An anonymous caller (the `principal` hook returned nothing) may call
   `"public"` methods, and custom tools that declare `access: "public"`; any
   other tool answers `UNAUTHENTICATED` before it runs. A failed call reaches
@@ -1427,7 +1438,8 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   signed-out session still passes. A custom tool obeys the app's
   `initQuickdraw({ kinds })` too, and takes `kinds` of its own within it
   (`FORBIDDEN` for another kind, before its arguments are read); a
-  `"public"` tool takes none.
+  `"public"` tool takes none. Custom tools served beside the services of
+  apps that admit no kind in common stop the registry at startup.
 - To refuse a token, the `principal` hook throws
   `QuickdrawError("UNAUTHENTICATED")`, which is logged at debug, as the
   caller's doing; anything else it throws is logged as an error. Never put
@@ -1460,12 +1472,14 @@ app.use(createMcpHttpRouter({ registry: projectAgents, path: "/agents" }));
 
 - Each bound argument is left out of the `inputSchema` of every method's tool
   whose object input has it: `create_task` lists `id` and `title`, and
-  `count_tasks` takes no arguments. An input that is a `$ref` (a Zod schema
-  with `.meta({ id })`) counts as the object it names. Every call of such a
-  tool gets the binder's value before its input is validated, through
-  `tools/call` and both shapes of `POST /mcp/invoke` alike, and a call of
-  any other tool that sends a bound argument is `FORBIDDEN`. Only top-level
-  arguments are bound.
+  `count_tasks` takes no arguments. An object schema with `.meta({ id })`,
+  which JSON Schema writes as a `$ref`, counts as the object it names; a
+  schema made from it (`.optional()`, `.refine()`, `.default()` and the
+  like) is not an object input. Every call of such a tool gets the binder's
+  value before its input is validated, through `tools/call` and both shapes
+  of `POST /mcp/invoke` alike, and a call of any other method's tool that
+  sends a bound argument is `FORBIDDEN`. Only top-level arguments are
+  bound.
 - A call fails closed, before the method runs: `UNAUTHENTICATED` for an
   anonymous caller, and `FORBIDDEN` when the binder returns `undefined` or
   `null`, or when the agent sent the argument with another value. A binder

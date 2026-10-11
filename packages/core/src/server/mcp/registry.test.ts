@@ -226,6 +226,22 @@ describe("sessions", () => {
     anonymous.services.gates.get("f")?.resolve("F");
     expect(await held).toEqual({ ok: true, data: "D" });
     expect(await otherAddress).toEqual({ ok: true, data: "F" });
+
+    // An IPv6 caller's lane is its /56: one host commonly holds a /64 or more.
+    const v6 = anonymous.registry.call(
+      "noteService_wait",
+      { key: "g" },
+      { request: http(null, "2001:db8:1:2::1") },
+    );
+    await vi.waitFor(() => expect(anonymous.services.gates.has("g")).toBe(true));
+    const sameNetwork = await anonymous.registry.call(
+      "noteService_wait",
+      { key: "h" },
+      { request: http(null, "2001:db8:1:ff::9") },
+    );
+    expect(errorOf(sameNetwork).code).toBe("RATE_LIMITED");
+    anonymous.services.gates.get("g")?.resolve("G");
+    expect(await v6).toEqual({ ok: true, data: "G" });
   });
 
   it("cancels a query when the call's signal aborts", async () => {
@@ -636,7 +652,7 @@ describe("bound arguments", () => {
     );
     // noteService.archive's input is a union: { by: "id", id } or { by: "tag", tag }
     expect(build({ tag: () => "x" })).toThrow(
-      "createMcpRegistry: bind.tag names a property of the input of noteService.archive, which is not an object: bind fills properties of object inputs only; leave noteService.archive out with exclude, or make its input an object",
+      "createMcpRegistry: bind.tag names a property of the input of noteService.archive, which is not an object: bind fills properties of object inputs only (an object schema, or one with .meta({ id }); not a union, an intersection, or a schema made from an object, as .optional() or .refine() make); leave noteService.archive out with exclude, or make its input an object",
     );
     expect(build({ id: () => "t1" })).toThrow(
       "bind.id names a property of the input of noteService.archive, which is not an object",
@@ -893,6 +909,48 @@ describe("custom tools", () => {
     expect(() =>
       registryOf(["user"], user, [{ ...report, access: "public", kinds: ["user"], handler }]),
     ).toThrow("kinds");
+    // The kind is checked before the arguments are read: a refused kind never learns they were wrong.
+    const parse = {
+      ...report,
+      inputSchema: z.object({ n: z.number() }),
+      kinds: ["agent"],
+      handler,
+    };
+    const callParse = async (principal: AgentPrincipal) =>
+      errorOf(
+        await registryOf(["user", "agent"], principal, [parse]).call(
+          "report",
+          { n: "x" },
+          { request: stdio() },
+        ),
+      ).code;
+    expect(await callParse(user)).toBe("FORBIDDEN");
+    expect(await callParse(agent)).toBe("VALIDATION");
+  });
+
+  it("refuse to be served beside the services of apps that admit no kind in common", () => {
+    const usersApp = initQuickdraw<{ principal: AgentPrincipal }>({ kinds: ["user"] });
+    const agentsApp = initQuickdraw<{ principal: AgentPrincipal }>({ kinds: ["agent"] });
+    const pingOf = (name: string, app: typeof usersApp) =>
+      app.defineService(
+        defineContract(name, {
+          methods: { ping: query({ input: z.undefined(), output: z.string() }) },
+        }),
+        { methods: { ping: { access: "public", handler: () => "pong" } } },
+      );
+    const services = [pingOf("usersPingService", usersApp), pingOf("agentsPingService", agentsApp)];
+    const report = { name: "report", description: "Reports.", inputSchema: { type: "object" } };
+    const build = (customTools: readonly Record<string, unknown>[]) => () =>
+      createMcpRegistry({
+        services,
+        dispatcher: createDispatcher({ services }),
+        principal: () => null,
+        customTools: customTools as never,
+      });
+    expect(build([{ ...report, handler: () => "ran" }])).toThrow(
+      "the served services' apps admit no kind in common",
+    );
+    expect(build([])).not.toThrow();
   });
 
   it("refuse an anonymous caller before anything runs, unless their access is public", async () => {

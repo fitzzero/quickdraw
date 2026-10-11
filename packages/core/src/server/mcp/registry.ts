@@ -63,7 +63,10 @@ export interface McpRegistryOptions<
    * with `UNAUTHENTICATED`: throw `QuickdrawError("UNAUTHENTICATED")` (or
    * `FORBIDDEN`) to refuse a token, which is logged at debug, and never put
    * the token in a message; anything else thrown is logged as an error.
-   * Without it every call is anonymous.
+   * Without it every call is anonymous. An HTTP request's queries share the
+   * lane of its bearer token: a hook that authenticates by anything else (a
+   * cookie, an API key header) must refuse a request whose bearer token it
+   * does not verify, or a caller makes a lane per made-up token.
    */
   readonly principal?: (
     request: McpRequest,
@@ -417,9 +420,14 @@ function callMethodTool(
  * `customTools`, served by `dispatcher`. Throws at once when a method's
  * input schema cannot describe itself as JSON Schema (use Zod 4.2 or later
  * for it, or `exclude` the method), when two tools share a name, when the
- * dispatcher does not serve one of the services, or when an argument of
- * `bind` is in no tool's object input or is in an input that is not an
- * object.
+ * dispatcher does not serve one of the services, when an argument of
+ * `bind` is in no tool's object input or may be anywhere in an input where
+ * it cannot be filled (an input that is not an object schema, or a branch
+ * of a union or an intersection, behind a `$ref` too), or when custom tools
+ * are served beside the services of apps that admit no kind in common.
+ * Every call runs in its caller's concurrency lane: a stdio session, or on
+ * HTTP its bearer token, its user without a token, or its address when
+ * anonymous.
  *
  * @example
  * const registry = createMcpRegistry({

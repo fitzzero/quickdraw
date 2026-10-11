@@ -68,7 +68,12 @@ export interface McpStdioRequest {
   readonly sessionId: string;
 }
 
-/** What one request to the MCP HTTP routes stands for. Each request is a session of its own. */
+/**
+ * What one request to the MCP HTTP routes stands for. Each request is a
+ * session of its own, and its queries share its caller's concurrency lane:
+ * its bearer token's, its user's without a token, or its address's when
+ * anonymous.
+ */
 export interface McpHttpRequest {
   readonly transport: "http";
   readonly sessionId: string;

@@ -31,7 +31,7 @@ import {
   type StandardSchemaV1,
   type StandardSchemaWithJSON,
 } from "../../contract/standardSchema";
-import { inputKeys, referenced } from "../emit/projection";
+import { inputKeys, pointerToken, referenced } from "../emit/projection";
 import type { AnyService } from "../service";
 import type { DescribeToolsOptions, McpInputSchema, McpTool } from "./types";
 
@@ -121,13 +121,40 @@ export function toolInputOf(
     schema: {
       ...(dialect === undefined ? {} : { $schema: dialect }),
       type: "object",
-      properties: { input },
+      properties: { input: rerooted(input) },
       ...(acceptsUndefined(schema) ? {} : { required: ["input"] }),
-      ...(definitions === undefined ? {} : { definitions }),
-      ...($defs === undefined ? {} : { $defs }),
+      ...(definitions === undefined ? {} : { definitions: rerooted(definitions) }),
+      ...($defs === undefined ? {} : { $defs: rerooted($defs) }),
     },
     mode: "wrapped",
   };
+}
+
+/** Where a wrapped input sits in its tool's schema. */
+const WRAPPED_INPUT = "#/properties/input";
+
+/**
+ * `value` with every `$ref` into the input's root, but its definitions,
+ * pointed where the wrapped input sits: a recursive input refers to itself
+ * as `#`, which is the tool's schema once the input is wrapped. The
+ * definitions stay at the root, so their references hold.
+ */
+function rerooted(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(rerooted);
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => {
+      const intoRoot =
+        key === "$ref" &&
+        typeof item === "string" &&
+        (item === "#" || (item.startsWith("#/") && !/^#\/(?:definitions|\$defs)\//u.test(item)));
+      return [key, intoRoot ? `${WRAPPED_INPUT}${item.slice(1)}` : rerooted(item)];
+    }),
+  );
 }
 
 /** True when `value` holds a `$ref` to `ref` anywhere inside it. */
@@ -166,7 +193,7 @@ function inlined(
       continue;
     }
     const others = Object.fromEntries(
-      Object.entries(defs).filter(([name]) => `#/${keyword}/${name}` !== ref),
+      Object.entries(defs).filter(([name]) => `#/${keyword}/${pointerToken(name)}` !== ref),
     );
     // The target's own entry stays only for a schema that still refers to it (a recursive one).
     const kept = refersTo({ ...schema, [keyword]: others }, ref) ? defs : others;
@@ -271,7 +298,7 @@ function boundArguments(
   const misplaced = bind.find((key) => keys.includes(key) && !bindable.includes(key));
   if (misplaced !== undefined) {
     fail(
-      `bind.${misplaced} names a property of the input of ${label}, which is not an object: bind fills properties of object inputs only; leave ${label} out with exclude, or make its input an object`,
+      `bind.${misplaced} names a property of the input of ${label}, which is not an object: bind fills properties of object inputs only (an object schema, or one with .meta({ id }); not a union, an intersection, or a schema made from an object, as .optional() or .refine() make); leave ${label} out with exclude, or make its input an object`,
     );
   }
   return bind.filter((key) => bindable.includes(key));

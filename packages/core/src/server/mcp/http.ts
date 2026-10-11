@@ -17,10 +17,11 @@
 // data? }` where 4.1 answered 500 and `{ error }`; `invoke` needs
 // `Content-Type: application/json`, as every HTTP transport call does; and a
 // client that goes away cancels its call. Each request is a session of its
-// own, and its queries share the lane of its caller: its bearer token, or
-// its address when anonymous (`session.ts`). A request from a web page is
-// refused unless `allowedOrigins` lists its origin, and with `allowedHosts`
-// a request for another `Host` (`httpRequest.ts`).
+// own, and its queries share the lane of its caller: its bearer token, its
+// user without a token, or its address when anonymous (`lanes.ts`). A
+// request from a web page is refused unless `allowedOrigins` lists its
+// origin, and with `allowedHosts` a request for another `Host`
+// (`httpRequest.ts`).
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { consoleLogger, type Logger } from "../../contract/logger";

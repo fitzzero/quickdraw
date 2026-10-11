@@ -73,8 +73,15 @@ export function referenced(node: UnknownRecord, root: UnknownRecord): UnknownRec
   }
   const match = /^#\/(definitions|\$defs)\/(.+)$/.exec(ref);
   const defs = match === null ? undefined : root[match[1] ?? ""];
-  const target = isRecord(defs) ? defs[match?.[2] ?? ""] : undefined;
+  // A JSON Pointer writes "~" as "~0" and "/" as "~1" (RFC 6901): Zod does, for an id holding them.
+  const name = (match?.[2] ?? "").replaceAll("~1", "/").replaceAll("~0", "~");
+  const target = isRecord(defs) ? defs[name] : undefined;
   return isRecord(target) ? target : undefined;
+}
+
+/** `name` as a JSON Pointer token: "~" as "~0" and "/" as "~1" (RFC 6901). */
+export function pointerToken(name: string): string {
+  return name.replaceAll("~", "~0").replaceAll("/", "~1");
 }
 
 /**

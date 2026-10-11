@@ -207,6 +207,48 @@ describe("describeTools", () => {
     expect(schema.properties.input).not.toHaveProperty("definitions");
   });
 
+  it("points a recursive wrapped input's references to itself where the input sits", () => {
+    type Tree = (string | Tree)[];
+    const tree: z.ZodType<Tree> = z.lazy(() => z.array(z.union([z.string(), tree])));
+    const trees = defineContract("treeService", {
+      methods: { walk: query({ input: tree, output: z.string() }) },
+    });
+    const service = qd.defineService(trees, {
+      methods: { walk: { access: "public", handler: () => "walked" } },
+    });
+    const [tool] = describeTools([service]);
+    // `#` was the input's root; once wrapped it is the tool's, so it points at the input instead.
+    expect(tool?.inputSchema).toMatchObject({
+      properties: {
+        input: {
+          type: "array",
+          items: { anyOf: [{ type: "string" }, { $ref: "#/properties/input" }] },
+        },
+      },
+    });
+  });
+
+  it("follows a $ref to an id holding / or ~, which JSON Pointer escapes", () => {
+    const escaped = defineContract("escapedService", {
+      methods: {
+        post: mutation({
+          input: z.object({ text: z.string() }).meta({ id: "McpTools/Slash~Tilde" }),
+          output: z.string(),
+        }),
+      },
+    });
+    const service = qd.defineService(escaped, {
+      methods: { post: { access: "public", handler: () => "posted" } },
+    });
+    const [tool] = describeTools([service]);
+    expect(tool?.inputSchema).toMatchObject({
+      type: "object",
+      properties: { text: { type: "string" } },
+      required: ["text"],
+    });
+    expect(tool?.inputSchema).not.toHaveProperty("definitions");
+  });
+
   it("names tools with the name option, and selects them with include and exclude", () => {
     const names = (options: Parameters<typeof describeTools>[1]) =>
       describeTools([taskService, noteService], options).map((tool) => tool.name);

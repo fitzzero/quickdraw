@@ -154,6 +154,11 @@ export function checkCustomTools(
     fail("customTools must be an array of { name, description, inputSchema, handler }");
   }
   const appKinds = appKindsOf(services);
+  if (appKinds?.length === 0 && value.length > 0) {
+    fail(
+      "customTools: the served services' apps admit no kind in common (initQuickdraw({ kinds })), so no principal could call a custom tool: serve custom tools beside the services of one app, or of apps that admit a kind in common",
+    );
+  }
   return value.map((tool: unknown, index) => checkCustomTool(tool, index, appKinds, fail));
 }
 
