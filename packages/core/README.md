@@ -1845,7 +1845,10 @@ export const taskService = qd.defineService(task, {
   above the caller's level is `FORBIDDEN`, and a default sort on one falls
   back to `id`), keyset cursors that stay put when rows are inserted, 50
   items by default and at most 200 (a larger `limit` is clamped), and a
-  total only when asked (a second statement). Items are the `item`
+  total only when asked (a second statement). A sort value too long for a
+  cursor (4,096 characters) makes the cursor name its row instead: the next
+  page reads that row first, and the cursor is `VALIDATION` once the row has
+  left the list. Items are the `item`
   projection, stripped of fields above the level the page was read at, as
   collection items are.
 - `getMany({ ids })` (at most 200) leaves out ids the caller cannot read and
@@ -1885,7 +1888,11 @@ export const taskService = qd.defineService(task, {
 - `reorder({ id, beforeId?, afterId? })` puts the row between its new
   neighbors (`beforeId` comes right before it) with one write, or renumbers
   the `within` list in steps of 1,024 when no gap is left, in a transaction
-  given 5 s plus 10 ms per row of the list. Moves run SERIALIZABLE: two at
+  given 5 s plus 10 ms per row of the list. The neighbors it names need the
+  method's row level, as the moved row does (a neighbor below it is
+  `NOT_FOUND`, as a missing one is), and the list is the rows sharing the
+  `within` values that the caller may write: a list with no `within` or a
+  null one is each caller's own. Moves run SERIALIZABLE: two at
   once into one gap fail one of them with `CONFLICT` (try again).
 - The generated inputs carry JSON Schema, so the kit's methods are MCP tools
   too. For hand-written handlers, `./server` has `requireRow(row, message?)`
@@ -2007,8 +2014,8 @@ export function TaskSearch({ projectId }: { readonly projectId: string }) {
 - `search({ q, scope?, cursor?, limit? })` returns `{ items, nextCursor }`
   (and `rev`, below). `q` is trimmed, and one shorter than `minLength`
   (default 2) finds nothing and reads nothing. 20 results by default, at
-  most 100, with keyset cursors as for `list`. There is no ranking: results
-  come in the scope collection's order, else by id.
+  most 100, with keyset cursors as for `list`. There is no ranking: a call
+  with `scope` comes in the scope collection's order, one without by id.
 - By default a row matches when one of the declared `fields` contains `q`,
   ignoring case; `%`, `_` and `\` in `q` are taken literally. `fields` is an
   explicit list because an unbounded "contains" over every column is slow. A

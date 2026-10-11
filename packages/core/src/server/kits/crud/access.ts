@@ -111,15 +111,17 @@ function grantReaches(call: CrudCall, form: AccessForm, level: AccessLevel): boo
 }
 
 /**
- * The filter matching the rows the caller may see at `level`, `"none"` when
- * it may see none, or `undefined` when every row is visible.
+ * The filter matching the rows the caller may see (`use` `"read"`) or
+ * write (`"write"`, where a `"public"` form filters too) at `level`,
+ * `"none"` when it may reach none, or `undefined` when it reaches every row.
  */
 export async function rowsWhere(
   call: CrudCall,
   form: AccessForm,
   level: AccessLevel,
+  use: "read" | "write" = "read",
 ): Promise<AccessFilter | undefined> {
-  if (unchecked(call, form, "read") || grantReaches(call, form, level)) {
+  if (unchecked(call, form, use) || grantReaches(call, form, level)) {
     return undefined;
   }
   if (call.principal === null) {

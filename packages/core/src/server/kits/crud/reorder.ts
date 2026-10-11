@@ -11,10 +11,20 @@
 // into one gap at once would otherwise both take its midpoint. A conflict
 // the database reports is `CONFLICT`; the caller may try again.
 //
-// Statements, in one transaction: one read of the row and its neighbors,
-// one more to find the missing neighbor when only one is given, and the
-// write. When no gap is left, that transaction ends without writing; the
-// list's rows are counted, and a second transaction, given
+// The moved row and the neighbors a move names need the method's row level
+// (one batched lookup): a neighbor below it is `NOT_FOUND`, as a missing
+// one or one of another list is. The list a move reads, counts and
+// renumbers is the rows sharing the moved row's `within` values that the
+// caller may write at that level, so a list with no `within` or a null one
+// is the caller's own and reaches no other tenant's row (the 5.1 audit's
+// CRUD-6: a caller named other tenants' rows as neighbors, read their
+// ordinals, and made renumbering write them).
+//
+// Statements: the lookup and the write filter's reads (none when the
+// caller's grant reaches every row), then, in one transaction: one read of
+// the row and its neighbors, one more to find the missing neighbor when only
+// one is given, and the write. When no gap is left, that transaction ends
+// without writing; the list's rows are counted, and a second transaction, given
 // `RENUMBER_BASE_MS` plus `RENUMBER_MS_PER_ROW` for each row (a client's
 // default limit, Prisma's 5 s, would fail a long list every time), reads the
 // rows again, renumbers (one read, and one write per row whose ordinal
@@ -24,10 +34,11 @@
 import type { CrudSpec } from "../../../contract/kits/crud";
 import type { ReorderInput } from "../../../contract/kits/crudSchemas";
 import { QuickdrawError } from "../../../protocol/errors";
+import type { AccessFilter } from "../../access/policy";
 import type { StorageWhere } from "../../storage";
 import type { AccessForm } from "../../access/types";
 import { inKitTransaction } from "../transactions";
-import { checkRowWrite } from "./access";
+import { allowedIds, rowLevel, rowsWhere } from "./access";
 import { isOrdinal, ordinalBetween, ORDINAL_STEP } from "./ordinal";
 import {
   crudCall,
@@ -38,6 +49,7 @@ import {
   type KitHandlerArgs,
   type ModelDelegate,
   type Row,
+  uniqueIds,
 } from "./runtime";
 
 type ReorderSpec = Extract<CrudSpec, { method: "reorder" }>;
@@ -88,10 +100,15 @@ async function readNamed(
   };
 }
 
-/** The rows of the moved row's list, the moved row left out. */
-function listOf(spec: ReorderSpec, moved: Row): StorageWhere {
+/**
+ * The rows of the moved row's list, the moved row left out: those sharing
+ * its `within` values that the caller may write (`writable`; `undefined`:
+ * every row, `"none"`: none).
+ */
+function listOf(spec: ReorderSpec, moved: Row, writable: AccessFilter | undefined): StorageWhere {
   const scope = Object.fromEntries(spec.within.map((column) => [column, moved[column] ?? null]));
-  return { AND: [scope, { id: { not: moved.id } }] };
+  const mine = writable === undefined ? [] : [writable === "none" ? { id: { in: [] } } : writable];
+  return { AND: [scope, { id: { not: moved.id } }, ...mine] };
 }
 
 /** The row right after (`"next"`) or right before (`"previous"`) `row` in the list. */
@@ -126,10 +143,11 @@ async function bounds(
   table: ModelDelegate,
   spec: ReorderSpec,
   named: Named,
+  writable: AccessFilter | undefined,
 ): Promise<[low: number | null, high: number | null] | undefined> {
   const { column } = spec;
   const { before, after } = named;
-  const list = listOf(spec, named.moved);
+  const list = listOf(spec, named.moved, writable);
   const low =
     before ?? (after === undefined ? null : await adjacent(table, spec, list, after, "previous"));
   const high =
@@ -149,13 +167,13 @@ async function bounds(
 /** Renumbers the list in steps with the moved row in its new place; returns the moved row's ordinal. */
 async function renumber(
   table: ModelDelegate,
-  spec: ReorderSpec,
+  [spec, writable]: readonly [ReorderSpec, AccessFilter | undefined],
   named: Named,
   move: ReorderInput,
 ): Promise<number> {
   const { column } = spec;
   const rows = await table.findMany({
-    where: listOf(spec, named.moved),
+    where: listOf(spec, named.moved, writable),
     select: { id: true, [column]: true },
     orderBy: [{ [column]: "asc" }, { id: "asc" }],
   });
@@ -188,11 +206,12 @@ const OWNER = "The read/write kit's reorder";
 
 const CONFLICT = "Another change to this list ran at the same time; try again";
 
-/** One move: the call, what it asks, and what the moved row is read back with. */
+/** One move: the call, what it asks, the rows the caller may write, and what the moved row is read back with. */
 interface Move {
   readonly call: CrudCall;
   readonly spec: ReorderSpec;
   readonly move: ReorderInput;
+  readonly writable: AccessFilter | undefined;
   readonly select: Readonly<Record<string, unknown>>;
 }
 
@@ -203,34 +222,67 @@ interface Move {
  */
 async function moveIn(
   tx: unknown,
-  { call, spec, move, select }: Move,
+  { call, spec, move, writable, select }: Move,
   mayRenumber: boolean,
 ): Promise<{ readonly row: Row } | { readonly list: StorageWhere }> {
   const table = delegateOf(tx, call.model);
   const named = await readNamed(table, spec, move, call.model);
-  const range = await bounds(table, spec, named);
+  const range = await bounds(table, spec, named, writable);
   const between =
     range === undefined ? undefined : ordinalBetween(range[0] ?? undefined, range[1] ?? undefined);
   if (between === undefined && !mayRenumber) {
-    return { list: listOf(spec, named.moved) };
+    return { list: listOf(spec, named.moved, writable) };
   }
-  const value = between ?? (await renumber(table, spec, named, move));
+  const value = between ?? (await renumber(table, [spec, writable], named, move));
   return {
     row: await table.update({ where: { id: move.id }, data: { [spec.column]: value }, select }),
   };
 }
 
-/** The `reorder` handler: the caller needs the method's row level on the moved row whatever the form. */
+/**
+ * `FORBIDDEN` unless the caller may write the moved row at `level`, and
+ * `NOT_FOUND` for a named neighbor it may not, as for a missing one: one
+ * batched lookup.
+ */
+async function checkNamed(
+  call: CrudCall,
+  [form, level]: readonly [AccessForm, ReturnType<typeof rowLevel>],
+  move: ReorderInput,
+): Promise<void> {
+  const named = [move.beforeId, move.afterId].filter((id) => id !== undefined);
+  const ids = uniqueIds([move.id, ...named]);
+  const writable = new Set(await allowedIds(call, form, ids, level, "write"));
+  if (!writable.has(move.id)) {
+    throw new QuickdrawError("FORBIDDEN", "Insufficient permissions");
+  }
+  for (const [id, key] of [
+    [move.beforeId, "beforeId"],
+    [move.afterId, "afterId"],
+  ] as const) {
+    if (id !== undefined && !writable.has(id)) {
+      throw new QuickdrawError("NOT_FOUND", `No such ${call.model} in this list as ${key}`);
+    }
+  }
+}
+
+/**
+ * The `reorder` handler: the caller needs the method's row level on the
+ * moved row and on the neighbors it names, whatever the form, and the list
+ * is the rows it may write.
+ */
 export function reorderHandler(spec: ReorderSpec, form: AccessForm): KitHandler {
+  const level = rowLevel(form, "Moderate");
   const handler = async ({ input, ctx, db }: KitHandlerArgs): Promise<Row> => {
     const call = crudCall(ctx, db);
+    const asked = input as ReorderInput;
+    await checkNamed(call, [form, level], asked);
     const move: Move = {
       call,
       spec,
-      move: input as ReorderInput,
+      move: asked,
+      writable: await rowsWhere(call, form, level, "write"),
       select: projectionOf(call, "entity").select,
     };
-    await checkRowWrite(call, form, move.move.id);
     const how = { owner: OWNER, conflict: CONFLICT };
     const first = await inKitTransaction(db, async (tx) => await moveIn(tx, move, false), how);
     if ("row" in first) {

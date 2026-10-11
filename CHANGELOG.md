@@ -104,6 +104,18 @@ All notable changes to this project will be documented in this file.
   through a service-wide grant goes out `removed`, and a `resolver` that
   needs more of the principal must cope with that one; a regained row comes
   back at its next change or the list's next load.
+- **`reorder` keeps to the rows its caller may write.** A neighbor the
+  caller cannot write at the method's row level is `NOT_FOUND`, as a
+  missing one is, and the list a move reads and renumbers is the caller's
+  writable rows of the `within` list. A list with no `within` or a null one
+  is each caller's own; per-row policies make such lists per caller. A move
+  costs one batched lookup more, plus the write filter's reads.
+- **An unscoped search comes in id order.** `search` without `scope` no
+  longer uses the scope collection's order.
+- **A cursor too long names its row.** A `list`, `search` or
+  `listMembers` cursor that would pass 4,096 characters (a long sort value)
+  names its row instead: the next page costs one more read, and the cursor
+  is `VALIDATION` once the row has left the list.
 - **A via list over the item service's members table counts only links at
   its access.** In such a list (the junction is the table the service's
   `members` policy reads), a link whose role maps below the collection's
@@ -215,6 +227,13 @@ All notable changes to this project will be documented in this file.
   its project kept reaching them, title and all, and no access change ever
   reached a self subscription. Its reads and frames now follow the item
   service's policy.
+- **`reorder` no longer reaches other tenants' rows (CRUD-6).** It
+  checked only the moved row, so with a null or absent `within` a caller
+  named another tenant's rows as neighbors, read their ordinals, and made
+  renumbering rewrite every tenant's rows.
+- **An unscoped search no longer leaks a tiered order column (CRUD-4).** It
+  ordered by the scope collection's order, which may hold a column tiered
+  at the collection's access, and `nextCursor` carried that column's values.
 - **A demoted member drops out of a via list (COLL-1, via variant).** A
   `via` collection over a membership table counted every link, so a member
   demoted below the list's access kept the project in their list, with its

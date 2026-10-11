@@ -10,6 +10,7 @@ import { createTestApp, type TestApp } from "../../../testing/index";
 import { captureLogger } from "../../__tests__/fixtures";
 import { projectContract, projectService, qd } from "../../emit/__tests__/live";
 import { crud, inherit } from "../../index";
+import { MAX_CURSOR_LENGTH } from "../../../contract/kits/crudList";
 import { cursorAfter } from "./page";
 import { addTasks, as, CARD_KEYS, kitApp, taskContract, taskEntity } from "./__tests__/fixture";
 
@@ -420,6 +421,27 @@ describe('an app handler that wraps the kit\'s list under share: "all"', () => {
     await expect(strict.as(as(board.ada)).taskService.list({})).rejects.toMatchObject({
       code: "INTERNAL",
       cause: { warning: { kind: "shared-principal", subject: "principal" } },
+    });
+  });
+});
+
+describe("a sort value too long for a cursor (CRUD-8)", () => {
+  it("makes the cursor name its row, which pages on until it leaves the list", async () => {
+    const { app } = await kit.start();
+    const board = kit.board();
+    const prisma = kit.harness().prisma;
+    const [long = ""] = await addTasks(prisma, board.p1, [1], { title: "A".repeat(3100) });
+    const [short = ""] = await addTasks(prisma, board.p1, [2], { title: "B" });
+    const owner = app.as(as(board.ada)).taskService;
+    const first = await owner.list({ sort: { field: "title" }, limit: 1 });
+    expect(first.items.map((item) => item.id)).toEqual([long]);
+    const cursor = first.nextCursor ?? "";
+    expect(cursor.length).toBeLessThanOrEqual(MAX_CURSOR_LENGTH);
+    const second = await owner.list({ sort: { field: "title" }, limit: 1, cursor });
+    expect(second.items.map((item) => item.id)).toEqual([short]);
+    await prisma.task.delete({ where: { id: long } });
+    await expect(owner.list({ sort: { field: "title" }, limit: 1, cursor })).rejects.toMatchObject({
+      code: "VALIDATION",
     });
   });
 });
