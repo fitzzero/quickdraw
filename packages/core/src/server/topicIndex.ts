@@ -92,6 +92,8 @@ export class TopicIndex {
   readonly #byAnchorService = new Map<string, Counts>();
   /** Per socket, the rooms of watches recorded by `hold` and not joined yet. */
   readonly #held = new WeakMap<QuickdrawServerSocket, Set<string>>();
+  /** Per socket, how many topics it watches: counted, so checking the cap copies no keys. */
+  readonly #sizes = new WeakMap<QuickdrawServerSocket, number>();
 
   #index(socket: QuickdrawServerSocket, watch: TopicWatch, by: 1 | -1): void {
     for (const anchor of watch.anchors ?? []) {
@@ -132,6 +134,7 @@ export class TopicIndex {
     this.#index(socket, watch, 1);
     if (previous === undefined) {
       this.#count(watch, 1);
+      this.#sizes.set(socket, this.size(socket) + 1);
     } else {
       this.#index(socket, previous, -1);
     }
@@ -189,7 +192,7 @@ export class TopicIndex {
 
   /** How many topics the socket watches, a watch still settling included. */
   size(socket: QuickdrawServerSocket): number {
-    return Object.keys(socket.data.topics ?? {}).length;
+    return this.#sizes.get(socket) ?? 0;
   }
 
   /**
@@ -212,6 +215,7 @@ export class TopicIndex {
     const watch = ownRecord(watches, room);
     if (watches !== undefined && watch !== undefined) {
       delete watches[room];
+      this.#sizes.set(socket, this.size(socket) - 1);
       this.#count(watch, -1);
       this.#index(socket, watch, -1);
     }
@@ -248,6 +252,7 @@ export class TopicIndex {
     }
     socket.data.topics = emptyRecords();
     this.#held.delete(socket);
+    this.#sizes.delete(socket);
   }
 
   /**

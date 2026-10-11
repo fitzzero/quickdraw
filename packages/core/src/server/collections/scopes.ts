@@ -86,6 +86,8 @@ export class ScopeIndex {
   readonly #byService = new Map<string, Counts>();
   /** Per collection (`service\0collection`), how many sockets here subscribe to each scope. */
   readonly #scopes = new Map<string, Map<string, number>>();
+  /** Per socket, how many scopes it holds: counted, so checking the cap copies no keys. */
+  readonly #sizes = new WeakMap<QuickdrawServerSocket, number>();
   /** The scopes each socket has a `qd:col:sub` in flight for, by room. */
   readonly #pending = new PendingKeys();
   readonly #listener: ScopeListener | undefined;
@@ -130,7 +132,7 @@ export class ScopeIndex {
 
   /** How many scopes the socket holds. */
   size(socket: QuickdrawServerSocket): number {
-    return Object.keys(socket.data.collections ?? {}).length;
+    return this.#sizes.get(socket) ?? 0;
   }
 
   /**
@@ -154,7 +156,9 @@ export class ScopeIndex {
     socket.data.collections ??= emptyRecords();
     socket.data.collections[room] = subscription;
     this.#index(socket, subscription, 1);
-    if (previous !== undefined) {
+    if (previous === undefined) {
+      this.#sizes.set(socket, this.size(socket) + 1);
+    } else {
       this.#index(socket, previous, -1);
     }
     void socket.join(room);
@@ -170,6 +174,7 @@ export class ScopeIndex {
     if (subscriptions !== undefined) {
       delete subscriptions[room];
     }
+    this.#sizes.set(socket, this.size(socket) - 1);
     this.#index(socket, previous, -1);
     void socket.leave(room);
     return previous;
@@ -202,6 +207,7 @@ export class ScopeIndex {
       this.#index(socket, subscription, -1);
     }
     socket.data.collections = emptyRecords();
+    this.#sizes.delete(socket);
   }
 
   /** The scopes of a collection that sockets of this process subscribe to. */

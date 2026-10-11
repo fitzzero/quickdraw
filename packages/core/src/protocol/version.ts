@@ -94,11 +94,11 @@ export interface HelloSubscriptionLimits {
   readonly maxInFlight: number;
   /** Subscription events one socket may have waiting; past that one fails with `RATE_LIMITED`. */
   readonly maxQueued: number;
-  /** Rows one socket may hold entity subscriptions to at once; one more is `CONFLICT`. Absent from servers before 5.1. */
+  /** Rows one socket may hold entity subscriptions to at once; one more is `CONFLICT`. Absent from servers up to 5.1.0, which have no such cap. */
   readonly maxEntityIds?: number;
-  /** Collection scopes one socket may hold at once; one more is `CONFLICT`. Absent from servers before 5.1. */
+  /** Collection scopes one socket may hold at once; one more is `CONFLICT`. Absent from servers up to 5.1.0, which have no such cap. */
   readonly maxScopes?: number;
-  /** Change topics one socket may watch at once; one more is `CONFLICT`. Absent from servers before 5.1. */
+  /** Change topics one socket may watch at once; one more is `CONFLICT`. Absent from servers up to 5.1.0, which have no such cap. */
   readonly maxTopics?: number;
 }
 

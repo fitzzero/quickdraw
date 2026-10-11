@@ -129,7 +129,7 @@ describe("call frames", () => {
     expectTypeOf<keyof HelloSubscriptionLimits>().toEqualTypeOf<
       "maxInFlight" | "maxQueued" | "maxEntityIds" | "maxScopes" | "maxTopics"
     >();
-    // Optional: servers before 5.1 announce no caps.
+    // Optional: servers up to 5.1.0 announce no caps.
     expectTypeOf<HelloSubscriptionLimits["maxScopes"]>().toEqualTypeOf<number | undefined>();
     expectTypeOf<keyof HelloFrame>().toEqualTypeOf<
       "protocol" | "server" | "serverId" | "limits" | "features" | "userId" | "serviceAccess"

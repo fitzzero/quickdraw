@@ -1218,7 +1218,9 @@ export const taskService = qd.defineService(task, {
   `RATE_LIMITED`. A socket holds at most 10,000 entity ids, 1,000
   collection scopes, 1,000 topic watches and 500 stream feeds at once:
   one more is `CONFLICT` (a `qd:sub` whose new ids would pass the cap is
-  refused whole), one held already never counts again, and `qd:hello`
+  refused whole, and a row that batches running at once left no room for
+  is answered `CONFLICT` on its own), one held already never counts again,
+  and `qd:hello`
   announces the caps (`limits.subscriptions.maxEntityIds`, `maxScopes`,
   `maxTopics`).
 

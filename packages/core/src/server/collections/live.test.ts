@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { inCluster } from "../../../test/cluster/mode";
 import type { PrismaClient } from "../../../test/prisma/setup";
 import { collectionRoom } from "../../index";
-import { createHarness, type Harness } from "../../prisma/__tests__/harness";
+import { createHarness, pauseNext, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
 import { as, seedBoard, type Board } from "../access/__tests__/board";
 import { projectService, recordingStorage, type Read } from "../emit/__tests__/live";
@@ -516,5 +516,32 @@ describe("the per-socket cap (COLL-4)", () => {
     expect(await colSub(connection, "byProject", "one-more", { since })).toMatchObject({
       ok: true,
     });
+  }, 60_000);
+
+  it("refuses at the join a scope subscribes running at once left no room for", async () => {
+    const { app } = await start();
+    const { connection } = await connect(app, as(board.ed, { taskService: "Admin" }));
+    // 999 in runs of 37, which fit the socket's lane (8 running, 64 waiting).
+    for (let run = 0; run < MAX_SCOPES_PER_SOCKET - 1; run += 37) {
+      const batch = Array.from({ length: 37 }, (_, n) =>
+        colSub(connection, "byProject", `cap-${run + n}`),
+      );
+      expect((await Promise.all(batch)).every((answer) => answer.ok === true)).toBe(true);
+    }
+    // Both pass the check before their reads: the first is held at its page read
+    // while the second takes the last scope.
+    const pause = pauseNext(h.database, /^\s*SELECT\b[\s\S]*FROM\s+"public"\."Task"/iu);
+    try {
+      const first = colSub(connection, "byProject", "first");
+      await pause.reached;
+      expect(await colSub(connection, "byProject", "second")).toMatchObject({ ok: true });
+      pause.release();
+      expect(await first).toMatchObject({ ok: false, e: { code: "CONFLICT" } });
+    } finally {
+      pause.restore();
+    }
+    expect(inRoom(app, "byProject", "first")).toBe(0);
+    const socket = app.server.io.sockets.sockets.get(connection.socket.id ?? "");
+    expect(Object.keys(socket?.data.collections ?? {})).toHaveLength(MAX_SCOPES_PER_SOCKET);
   }, 60_000);
 });

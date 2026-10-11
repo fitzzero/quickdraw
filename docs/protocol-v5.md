@@ -121,13 +121,13 @@ Each socket's lane of subscription events (`qd:sub`, `qd:col:sub`,
 `qd:col:items`, `qd:watch`; RFC 0003 section 8.2), and how much one
 socket may hold at once, as `qd:hello` announces them.
 
-| Field           | Type     | Default | Meaning                                                                                                           |
-| --------------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------- |
-| `maxInFlight`   | `number` | 8       | Subscription events one socket may have running at once.                                                          |
-| `maxQueued`     | `number` | 64      | Subscription events one socket may have waiting; past that one fails with `RATE_LIMITED`.                         |
-| `maxEntityIds?` | `number` | 10000   | Rows one socket may hold entity subscriptions to at once; one more is `CONFLICT`. Absent from servers before 5.1. |
-| `maxScopes?`    | `number` | 1000    | Collection scopes one socket may hold at once; one more is `CONFLICT`. Absent from servers before 5.1.            |
-| `maxTopics?`    | `number` | 1000    | Change topics one socket may watch at once; one more is `CONFLICT`. Absent from servers before 5.1.               |
+| Field           | Type     | Default | Meaning                                                                                                                                    |
+| --------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `maxInFlight`   | `number` | 8       | Subscription events one socket may have running at once.                                                                                   |
+| `maxQueued`     | `number` | 64      | Subscription events one socket may have waiting; past that one fails with `RATE_LIMITED`.                                                  |
+| `maxEntityIds?` | `number` | 10000   | Rows one socket may hold entity subscriptions to at once; one more is `CONFLICT`. Absent from servers up to 5.1.0, which have no such cap. |
+| `maxScopes?`    | `number` | 1000    | Collection scopes one socket may hold at once; one more is `CONFLICT`. Absent from servers up to 5.1.0, which have no such cap.            |
+| `maxTopics?`    | `number` | 1000    | Change topics one socket may watch at once; one more is `CONFLICT`. Absent from servers up to 5.1.0, which have no such cap.               |
 
 ### `HelloLimits`
 
@@ -845,8 +845,11 @@ collection scope's.
 
 A server announces its call and subscription limits in `qd:hello` (above):
 the defaults shown there are the server's own, and an app may set others,
-so read them from the hello. The limits below are fixed: every 5.0 server
-holds them, and no option changes them.
+so read them from the hello. The limits below are fixed, and no option
+changes them. Every 5.0 server holds them, except the per-socket caps of rows,
+scopes and topics (`MAX_ENTITY_IDS_PER_SOCKET`, `MAX_SCOPES_PER_SOCKET`,
+`MAX_TOPICS_PER_SOCKET`): a server that holds them announces them in
+`qd:hello`, and servers up to 5.1.0 hold none of them.
 
 | Constant                    | Value                        | Meaning                                                                                                   |
 | --------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------- |
@@ -878,7 +881,11 @@ collection scopes, `MAX_TOPICS_PER_SOCKET` change topics or
 `MAX_STREAMS_PER_SOCKET` feeds is answered `CONFLICT` for one more: a
 `qd:sub` whose new ids would pass the cap fails whole, and so does a
 `qd:col:sub`, `qd:watch` or `qd:stream:sub`; one already held never
-counts again, and an unsubscribe makes room.
+counts again, and an unsubscribe makes room. While `qd:sub` batches of one
+socket run at once, each can pass that first check and then find the cap
+reached when it records its rows: it answers each row it found no room for
+`{ ok: false, e: { code: "CONFLICT" } }` in its `r`, and the batch itself
+is `ok`.
 A socket whose `qd:ch` messages dropped for one channel's rate within
 `CHANNEL_ABUSE_WINDOW_MS` exceed `CHANNEL_ABUSE_MULTIPLIER` times that rate
 is disconnected (Socket.IO DISCONNECT, `41`, then the WebSocket closes): that

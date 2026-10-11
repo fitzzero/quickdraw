@@ -177,6 +177,56 @@ describe("the per-socket cap (COLL-4)", () => {
       r: [{ ok: true }],
     });
   }, 120_000);
+
+  it("answers CONFLICT for each row batches running at once left no room for", async () => {
+    await h.prisma.task.createMany({
+      data: Array.from({ length: MAX_ENTITY_IDS_PER_SOCKET + 200 }, (_, n) => ({
+        projectId: board.p2,
+        title: `Cap ${n}`,
+      })),
+    });
+    const tasks = await h.prisma.task.findMany({
+      where: { title: { startsWith: "Cap " } },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    });
+    const ids = tasks.map((task) => task.id);
+    const fill = ids.slice(0, MAX_ENTITY_IDS_PER_SOCKET - 400);
+    const first = ids.slice(fill.length, fill.length + 300);
+    const second = ids.slice(fill.length + 300);
+    const { app } = await start();
+    const { connection } = await connect(app, as(board.ed, { taskService: "Admin" }));
+    for (let at = 0; at < fill.length; at += 4_000) {
+      const batches = [];
+      for (let from = at; from < Math.min(at + 4_000, fill.length); from += 500) {
+        batches.push(sub(connection, "taskService", fill.slice(from, from + 500)));
+      }
+      await Promise.all(batches);
+    }
+    // Each batch passes the check before its read: the first is held at its read
+    // while the second takes 300 of the 400 rows left.
+    const pause = pauseNext(h.database, /^\s*SELECT\b[\s\S]*FROM\s+"public"\."Task"/iu);
+    try {
+      const firstReply = sub(connection, "taskService", first);
+      await pause.reached;
+      const secondReply = (await sub(connection, "taskService", second)) as {
+        r: { ok: boolean }[];
+      };
+      expect(secondReply.r.every((result) => result.ok)).toBe(true);
+      pause.release();
+      const results = ((await firstReply) as { r: { ok: boolean; e?: { code: string } }[] }).r;
+      expect(results.filter((result) => result.ok)).toHaveLength(100);
+      const refused = first.filter((_, n) => results[n]?.e?.code === "CONFLICT");
+      expect(refused).toHaveLength(200);
+      expect(refused.flatMap((id) => roomsOf(app, "taskService", id))).toEqual([]);
+    } finally {
+      pause.restore();
+    }
+    const socket = app.server.io.sockets.sockets.get(connection.socket.id ?? "");
+    expect(Object.keys(socket?.data.entities?.taskService ?? {})).toHaveLength(
+      MAX_ENTITY_IDS_PER_SOCKET,
+    );
+  }, 120_000);
 });
 
 describe("qd:sub", () => {

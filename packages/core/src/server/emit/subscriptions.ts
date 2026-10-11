@@ -86,10 +86,10 @@ export function count(
   }
 }
 
-/** This process's entity subscriptions, indexed by anchor. */
 /** Why a socket at `MAX_ENTITY_IDS_PER_SOCKET` rows is refused one more (`CONFLICT`). */
 export const TOO_MANY_ROWS = `A socket may subscribe to at most ${MAX_ENTITY_IDS_PER_SOCKET} rows; unsubscribe from some first`;
 
+/** This process's entity subscriptions, indexed by anchor. */
 export class SubscriptionIndex {
   /** Moves on every access change this process handles; a subscribe that saw it move checks again. */
   accessChanges = 0;

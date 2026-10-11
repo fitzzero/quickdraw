@@ -585,6 +585,31 @@ describe("the per-socket cap (COLL-4)", () => {
     await unwatch(connection, "byProject:cap-0");
     expect(await watch(connection, "byProject:one-more")).toEqual(ok);
   }, 60_000);
+
+  it("lets one of the watches running at once take the last topic", async () => {
+    const { app } = await start();
+    const { connection } = await connect(app, as(board.ed, { taskService: "Admin" }));
+    // 999 in runs of 37, which fit the socket's lane (8 running, 64 waiting).
+    for (let run = 0; run < MAX_TOPICS_PER_SOCKET - 1; run += 37) {
+      const batch = Array.from({ length: 37 }, (_, n) =>
+        watch(connection, `byProject:cap-${run + n}`),
+      );
+      expect((await Promise.all(batch)).every((answer) => (answer as { ok: boolean }).ok)).toBe(
+        true,
+      );
+    }
+    // Eight at once each pass the check before they are authorized; where each is
+    // recorded, only the first finds room.
+    const topics = Array.from({ length: 8 }, (_, n) => `byProject:extra-${n}`);
+    const answers = await Promise.all(topics.map((topic) => watch(connection, topic)));
+    expect(answers.filter((answer) => (answer as { ok: boolean }).ok)).toHaveLength(1);
+    expect(answers.filter((answer) => !(answer as { ok: boolean }).ok)).toEqual(
+      Array.from({ length: 7 }, () => refused("CONFLICT")),
+    );
+    expect(topics.filter((topic) => inTopic(app, topic) > 0)).toHaveLength(1);
+    const socket = app.server.io.sockets.sockets.get(connection.socket.id ?? "");
+    expect(Object.keys(socket?.data.topics ?? {})).toHaveLength(MAX_TOPICS_PER_SOCKET);
+  }, 60_000);
 });
 
 describe("what topics read", () => {

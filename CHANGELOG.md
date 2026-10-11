@@ -226,8 +226,10 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
 - **One socket holds at most 10,000 rows, 1,000 collection scopes and
   1,000 topic watches.** One more is `CONFLICT` (the hook's error; the
   client retries only `RATE_LIMITED`), as a 501st stream feed already was;
-  a `qd:sub` whose new ids would pass the cap is refused whole. `qd:hello`
-  announces the caps in three more `limits.subscriptions` fields.
+  a `qd:sub` whose new ids would pass the cap is refused whole, and a row
+  that batches running at once left no room for is answered `CONFLICT` on
+  its own. `qd:hello` announces the caps in three more
+  `limits.subscriptions` fields.
 - **The admin kit hides the grants column by its configured name.** On the
   users service of an app whose `auth.serviceAccessSource` column is not
   named `serviceAccess`, that column leaves `adminMeta`, rows and writes
