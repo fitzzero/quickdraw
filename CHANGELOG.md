@@ -73,12 +73,17 @@ All notable changes to this project will be documented in this file.
   `ctx.principal`, `ctx.services` or `ctx.mcp` logs
   `[quickdraw:shared-principal]`, and a strict test app fails that call
   with `INTERNAL`. `DevWarningKind` gains `shared-principal`.
-- **"Not modified" answers only for a row the form checked.** A query
-  whose form does not check the row its input's `id` names (a scope form,
-  `custom`, an `entry` form on another key or an `id` function) no longer
-  gets the default "not modified" answer, and its handler runs every time:
-  more work, the same data. An `entry` form on `id`, a `rowless` method and
-  a caller the service's `Admin` bypass passes keep it.
+- **"Not modified" answers only for a row the form checked.** The default
+  "not modified" answer now comes only when the method's form checked the
+  row its input's `id` names (an `entry` form on `id`, a `scope` form on the
+  service's own rows by `id`, `{ service: "Admin" }`), for a caller the
+  service's `Admin` bypass passes, and for a `rowless: true` method under a
+  form that checks no row (`"public"`, `"authenticated"`, `{ service: L }`).
+  Every other query runs its handler every time, more work for the same
+  data: a `scope` form on another service, `custom`, an `entry` form on
+  another key or with an `id` function (`rowless` or not), and, on a service
+  without an access policy, a `"public"`, `"authenticated"` or
+  `{ service: L }` query that does not say `rowless: true`.
 - **A self list follows its service's policy.** A `scopeAccess: "self"`
   collection on a service with an access policy shows only the rows its
   user may read at `Read` (a service-wide Admin with `adminBypass` still

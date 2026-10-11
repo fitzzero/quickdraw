@@ -102,9 +102,10 @@ function warnSharedRead(
     method: target.method.name,
     subject: member,
     message:
-      `its handler read ctx.${member} in a run every caller shares (share: "all"): the run has the first ` +
-      `caller's, and every caller gets its result, another principal's included. A result shared across ` +
-      `principals must depend on the input only: read nothing of the caller, or use share: "caller"`,
+      `its handler read ctx.${member} in a run every caller shares (share: "all"): the run sees the first ` +
+      `caller's ctx.${member}, and every caller gets its result, another principal's included. A result ` +
+      `shared across principals must depend on the input only: read nothing of the caller (copying or ` +
+      `logging ctx reads it too), or use share: "caller"`,
     meta: { member },
   });
 }

@@ -624,7 +624,8 @@ export const taskService = qd.defineService(task, {
   its result, so a result shared across principals must depend on the
   input only: it never reads `ctx.principal`, `ctx.services`, `ctx.mcp` or
   a context field made from them (in development, reading one of the first
-  three warns `[quickdraw:shared-principal]`). `"all"` is refused with
+  three warns `[quickdraw:shared-principal]`; copying or logging the whole
+  `ctx` reads them too). `"all"` is refused with
   `custom` access and on the kit methods whose result depends on the caller
   (the read/write kit's `list` and `getMany`, `search`, the sharing kit's
   `listShares` and `listMembers`, the admin kit's `adminList` and
@@ -799,7 +800,9 @@ export const taskService = qd.defineService(task, {
   `rowless: true` on the method when every such caller may reach any row on
   purpose (the `title` method above; public profiles, lookups by an id that
   tells nothing), or when `id` names a row the method creates (an id the
-  client made, under a `scope` form). A kit's methods take it as
+  client made, under a `scope` form). A `rowless` query under a form that
+  checks no row also answers "not modified" for any `id`; under any other
+  form it runs its handler every time. A kit's methods take it as
   `rowless: ["get"]` in the kit's options. The input's keys come from its
   JSON Schema: an `id` in any branch of a union counts, and so does one
   beside a value JSON Schema cannot write (a `Date`, a `Set`). Not checked:
@@ -1053,9 +1056,12 @@ export const taskService = qd.defineService(task, {
   running several processes without a Socket.IO cluster adapter declares
   `versionColumn`s or passes `changeLog: false`. For a query, it comes only
   when its form checked the row `id` names (an `entry` form on `id`, a
-  `rowless` method, or a caller the service's `Admin` bypass passes): it
-  answers before the handler runs, so it would tell any other caller that
-  the row exists and has not changed. Any other query runs its handler.
+  `scope` form on the service's own rows by `id`, `{ service: "Admin" }`),
+  for a caller the service's `Admin` bypass passes, or for a `rowless`
+  method under a form that checks no row (`"public"`, `"authenticated"`,
+  `{ service: L }`): it answers before the handler runs, so it would tell
+  any other caller that the row exists and has not changed. Any other
+  query runs its handler.
 - Revisions are microseconds since the epoch: a flush takes
   `max(Date.now() * 1000, last + 1)`. Clients compare them as numbers.
 - Behind a cluster adapter (`setupRedisAdapter`), every touched row is read

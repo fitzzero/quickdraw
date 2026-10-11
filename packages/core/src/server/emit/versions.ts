@@ -12,19 +12,24 @@
 //   keyed by another id (the latest task of project `id`) returns some other
 //   row, whose changes that version does not follow, and gets none. This is
 //   the dispatcher's default `versions`.
-// - It answers only for a row the method's access form checked: an `entry`
-//   form on `id`, a `rowless` method (its form is its whole check), or a
-//   caller the service's `Admin` bypass passes. A version is a one-bit
-//   oracle: "not modified" before the handler runs told a caller a scope
-//   form let in (or a custom form, or an `entry` form on another key) that a
-//   row it may not read exists, and that it had not changed (the 5.1 audit's
-//   ACCESS-6). Any other query always runs its handler.
+// - It answers only for a row the method's access form checked (an `entry`
+//   form on `id`, a `scope` form on the service's own rows by `id`,
+//   `{ service: "Admin" }`), for a caller the service's `Admin` bypass
+//   passes, and for a `rowless` method whose form checks no row (`"public"`,
+//   `"authenticated"`, `{ service: L }`): it says any caller it admits may
+//   read any row. A version is a one-bit oracle: "not modified" before the
+//   handler runs told a caller a scope form let in (or a custom form, or an
+//   `entry` form on another key) that a row it may not read exists, and
+//   that it had not changed (the 5.1 audit's ACCESS-6). Any other query
+//   always runs its handler, `rowless` or not: such a form narrows in its
+//   handler.
 // - `qd:sub` answers "not modified" for an id whose held revision is no
 //   older than the row's version.
 
 import type { Revision } from "../../protocol/envelope";
 import { isCustomAccess } from "../access/forms";
 import { serviceGrant } from "../access/levels";
+import { reachOf } from "../access/rowless";
 import type { VersionRequest, VersionSource } from "../pipeline/notModified";
 import type { AnyService } from "../service";
 import { versionTime } from "../rev";
@@ -106,15 +111,15 @@ function inputId(input: unknown): string | undefined {
 
 /**
  * True when the method's access form checked the caller's level on the row
- * its input's `id` names, or needs no such check: an `entry` form on `id`,
- * a `rowless` method, or a caller the service's `Admin` bypass passes. A
- * scope form, a custom form, an `entry` form on another key or an `id`
- * function checked something else.
+ * its input's `id` names (`reachOf`: an `entry` form on `id`, a `scope` form
+ * on the service's own rows by `id`, `{ service: "Admin" }`; not an `id`
+ * function, which names its row in code), when the caller's service-wide
+ * `Admin` grant passes the service's bypass, or when the method is
+ * `rowless` under a form that checks no row. A scope form on another
+ * service, a custom form or an `entry` form on another key checked
+ * something else, `rowless` or not.
  */
 function checkedRow({ service, method, ctx }: VersionRequest): boolean {
-  if (method.rowless) {
-    return true;
-  }
   const { principal } = ctx;
   if (
     principal !== null &&
@@ -124,12 +129,12 @@ function checkedRow({ service, method, ctx }: VersionRequest): boolean {
     return true;
   }
   const form = method.access;
-  return (
-    typeof form === "object" &&
-    !isCustomAccess(form) &&
-    form.entry !== undefined &&
-    (form.id === undefined || form.id === "id")
-  );
+  const reach = reachOf(form, service.name);
+  if (reach === "none") {
+    return method.rowless;
+  }
+  const inCode = typeof form === "object" && !isCustomAccess(form) && typeof form.id === "function";
+  return reach === "checked" && !inCode;
 }
 
 /**

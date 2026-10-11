@@ -123,7 +123,9 @@ no row (`"public"`, `"authenticated"`, `{ service: L }` below `Admin`),
   public profile, a lookup by an id that tells nothing), or when `id` names
   a row the method creates (an id the client made, under a `scope` form),
   say so with `rowless: true` on the method, or `rowless: ["get"]` in a
-  kit's options (`crud.handlers`, `admin.handlers`, `sharing.handlers`).
+  kit's options (`crud.handlers`, `admin.handlers`, `sharing.handlers`). A
+  `rowless` query under a form that checks no row also answers "not
+  modified" for any `id`.
 - The read/write kit's `update`, `delete` and `reorder` check the row
   themselves and need neither. `create` makes a new row and checks no row of
   its own: it checks the anchors it writes (each `inherit` parent and

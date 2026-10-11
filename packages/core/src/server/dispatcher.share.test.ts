@@ -436,8 +436,12 @@ describe('a share: "all" handler that reads the caller (shared-principal)', () =
 
   it("warns once in development that it read ctx.principal, and still answers", async () => {
     const { call, logger } = setup([serviceWith(readsPrincipal)]);
-    expect(await call(list)).toMatchObject({ ok: true });
-    expect(await call({ ...list, principal: bob })).toMatchObject({ ok: true });
+    expect(await call(list)).toMatchObject({ ok: true, data: [{ id: "alice" }] });
+    // A second run, which read ctx.principal again: the warning is logged once.
+    expect(await call({ ...list, principal: bob })).toMatchObject({
+      ok: true,
+      data: [{ id: "bob" }],
+    });
     const warned = sharedWarnings(logger);
     expect(warned).toHaveLength(1);
     expect(warned[0]).toMatch(
@@ -445,16 +449,20 @@ describe('a share: "all" handler that reads the caller (shared-principal)', () =
     );
   });
 
-  it("names ctx.services as the member it read", async () => {
-    const readsServices: AnyHandler = ({ ctx }) => {
-      void ctx.services;
-      return [{ id: "x", title: "" }];
-    };
-    const { call, logger } = setup([serviceWith(readsServices)]);
-    expect(await call(list)).toMatchObject({ ok: true });
-    expect(sharedWarnings(logger)).toEqual([
-      expect.stringContaining("its handler read ctx.services"),
-    ]);
+  it("names ctx.services and ctx.mcp as the members it read", async () => {
+    const reads =
+      (member: "services" | "mcp"): AnyHandler =>
+      ({ ctx }) => {
+        void ctx[member];
+        return [{ id: "x", title: "" }];
+      };
+    for (const member of ["services", "mcp"] as const) {
+      const { call, logger } = setup([serviceWith(reads(member))]);
+      expect(await call(list)).toMatchObject({ ok: true });
+      expect(sharedWarnings(logger)).toEqual([
+        expect.stringContaining(`its handler read ctx.${member}`),
+      ]);
+    }
   });
 
   it("says nothing for a caller-shared run, an input-only handler, a kit's handler, or in production", async () => {

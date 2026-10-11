@@ -317,8 +317,8 @@ again.
 `share: "caller"` for hot queries (`"all"` only for a result that depends
 on the input alone); `versionColumn: "updatedAt"` answers "not modified"
 cheaply, for a query whose form checked the row its `id` names (an `entry`
-form on `id`, or `rowless`). The quickdraw
-lint rules enforce most of this file (`no-untracked-write`,
+form on `id`), or that says `rowless: true` under a form that checks no
+row. The quickdraw lint rules enforce most of this file (`no-untracked-write`,
 `no-foreign-write`, `no-nested-write`, `no-raw-sql-write`, `no-manual-emit`,
 `no-unbounded-read`, `no-db-call-in-loop`, `no-load-then-filter`,
 `prefer-kit`): fix the code, not the rule. In development the server also

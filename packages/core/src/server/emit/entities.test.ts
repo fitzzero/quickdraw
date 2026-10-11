@@ -661,6 +661,62 @@ describe("not modified", () => {
     ).toEqual({ ok: true, notModified: true, version: v });
   });
 
+  it("keeps not modified for rowless only under a form that checks no row (ACCESS-6)", async () => {
+    // On a service with a policy, the scope form keyed by projectId must say
+    // rowless: it narrows in its handler, so a version would still tell ed of T1.
+    const policedContract = defineContract("policedTaskService", {
+      entity: taskEntity,
+      methods: {
+        inProject: query({
+          input: z.object({ projectId: z.string(), id: z.string() }),
+          output: nullable("entity"),
+        }),
+        own: query({ input: z.object({ id: z.string() }), output: nullable("entity") }),
+      },
+    });
+    const policedService = qd.defineService(policedContract, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      versionColumn: "updatedAt",
+      methods: {
+        inProject: {
+          access: { scope: "Read", of: projectContract, id: "projectId" },
+          rowless: true,
+          handler: ({ input, db }) =>
+            db.task.findFirst({ where: { id: input.id, projectId: input.projectId } }),
+        },
+        // A scope form on the service's own rows by id checks the row id names.
+        own: {
+          access: { scope: "Read", of: policedContract, id: "id" },
+          handler: ({ input, db }) => db.task.findUnique({ where: { id: input.id } }),
+        },
+      },
+    });
+    const app = await createTestApp({ services: [projectService, policedService], db: h.db });
+    apps.push(app as unknown as TestApp);
+    const v = versionTime(
+      (await h.prisma.task.findUniqueOrThrow({ where: { id: board.t1 } })).updatedAt,
+    );
+    const call = (principal: Principal, method: "inProject" | "own", input: object) =>
+      app.server.dispatcher.call({
+        service: "policedTaskService",
+        method,
+        input,
+        principal,
+        transport: "internal",
+        v,
+      });
+    expect(await call(as(board.ed), "inProject", { projectId: board.p2, id: board.t1 })).toEqual({
+      ok: true,
+      data: null,
+    });
+    expect(await call(as(board.ada), "own", { id: board.t1 })).toEqual({
+      ok: true,
+      notModified: true,
+      version: v,
+    });
+  });
+
   it("gives no version without a change log or version column", async () => {
     const { app } = await start({ changeLog: false });
     const result = await app.server.dispatcher.call({

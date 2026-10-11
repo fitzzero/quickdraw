@@ -80,8 +80,8 @@ export interface DevWarning {
   /**
    * What the warning is about within its call, for the once-only rule: the
    * model of an ambient write, the model, field and operation of a nested
-   * write, the connection of a repeated call. Empty for the kinds that are
-   * once per call site.
+   * write, the connection of a repeated call, the `ctx` member a shared run
+   * read. Empty for the kinds that are once per call site.
    */
   readonly subject?: string;
   /** What happened and what to do instead. */

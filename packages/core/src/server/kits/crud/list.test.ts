@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { defineContract } from "../../../index";
 import { createTestApp, type TestApp } from "../../../testing/index";
+import { captureLogger } from "../../__tests__/fixtures";
 import { projectContract, projectService, qd } from "../../emit/__tests__/live";
 import { crud, inherit } from "../../index";
 import { cursorAfter } from "./page";
@@ -354,5 +355,71 @@ describe('a list kept per caller (share: "caller")', () => {
     ]);
     expect(ids(ada)).toEqual([board.t1]);
     expect(ids(ed)).toEqual([board.t2]);
+  });
+});
+
+describe('an app handler that wraps the kit\'s list under share: "all"', () => {
+  /** The fixture's task service, whose list is an app function calling the kit's handler. */
+  function wrappedService() {
+    const handlers = crud.handlers(taskContract, {
+      access: {
+        get: { entry: "Read" },
+        getMany: "authenticated",
+        list: "authenticated",
+        create: { scope: "Moderate", of: projectContract, id: "projectId" },
+        update: { entry: "Moderate" },
+        delete: { entry: "Moderate" },
+        reorder: { entry: "Moderate" },
+        bulkUpdate: "authenticated",
+        bulkDelete: "authenticated",
+      },
+    });
+    return qd.defineService(taskContract, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      collections: { board: { anchor: projectContract } },
+      methods: {
+        ...handlers,
+        // The kit marks its own handler only: this function is the app's, and defines.
+        list: {
+          access: "authenticated",
+          share: "all",
+          handler: (args) => handlers.list.handler(args as never),
+        },
+      },
+    });
+  }
+
+  it("warns shared-principal in development, and a strict app fails the call", async () => {
+    const board = kit.board();
+    const logger = captureLogger();
+    const app = await createTestApp({
+      services: [projectService, wrappedService()],
+      db: kit.harness().db,
+      logger,
+    });
+    kit.track(app as unknown as TestApp);
+    await app.as(as(board.ada)).taskService.list({});
+    await app.as(as(board.ed)).taskService.list({ limit: 5 });
+    expect(
+      logger
+        .at("warn")
+        .map((entry) => entry.message)
+        .filter((message) => message.startsWith("[quickdraw:shared-principal]")),
+    ).toEqual([
+      expect.stringMatching(
+        /^\[quickdraw:shared-principal\] taskService\.list: its handler read ctx\.principal/,
+      ),
+    ]);
+    const strict = await createTestApp({
+      services: [projectService, wrappedService()],
+      db: kit.harness().db,
+      strictWarnings: true,
+    });
+    kit.track(strict as unknown as TestApp);
+    await expect(strict.as(as(board.ada)).taskService.list({})).rejects.toMatchObject({
+      code: "INTERNAL",
+      cause: { warning: { kind: "shared-principal", subject: "principal" } },
+    });
   });
 });

@@ -49,9 +49,10 @@ import type { AccessForm, EntryAccess, ScopeAccess } from "./types";
  * `"other"` when it checks another row (a `scope` form, an `entry` form on
  * another key).
  */
-type Reach = "checked" | "none" | "custom" | "other";
+export type Reach = "checked" | "none" | "custom" | "other";
 
-function reachOf(form: AccessForm, service: string): Reach {
+/** What `form`, on service `service`, checks of the row `input.id` names ({@link Reach}). */
+export function reachOf(form: AccessForm, service: string): Reach {
   if (form === "public" || form === "authenticated") {
     return "none";
   }
