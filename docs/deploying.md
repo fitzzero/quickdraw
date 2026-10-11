@@ -409,8 +409,10 @@ setting no default can make for it.
   (README, "MCP bridge").
 - **Logs.** The console default drops `debug` in production
   (`createConsoleLogger({ level })` names another level), and a Prisma
-  client error is logged summarized, never with the values its message
-  renders. A logger of the app's own gets the same summaries.
+  client error is logged summarized: never with the values its message
+  renders, nor the database's own text in its `meta`, which quotes the row.
+  A logger of the app's own gets the same summaries. Errors an app's own
+  Express middleware passes to `next` are Express's to print.
 - **Connections per client.** Every quickdraw limit is per socket: 600
   events a minute, 16 queries in flight and 64 waiting, the subscription
   lanes, the channel buckets. Nothing caps how many sockets one address

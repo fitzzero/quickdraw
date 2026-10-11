@@ -58,6 +58,10 @@ describe("the console logger", () => {
   });
 
   it("refuses a level it does not know", () => {
-    expect(() => createConsoleLogger({ level: "trace" as never })).toThrow(TypeError);
+    expect(() => createConsoleLogger({ level: "trace" as never })).toThrow(
+      new TypeError(
+        'createConsoleLogger: level must be "debug", "info", "warn" or "error", not "trace"',
+      ),
+    );
   });
 });

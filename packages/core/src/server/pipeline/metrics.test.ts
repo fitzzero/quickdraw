@@ -1,8 +1,9 @@
 // What a failure's log holds (the 5.1 audit's CLIENT-5): a Prisma error's
-// message renders the call it failed, values included, so `describeError`
-// and `errorText` summarize it (class, code, `meta` without the database's
-// own text, the reason a validation error gives, stack frames) and keep
-// every other error whole. The audit's PoC E runs against the PGlite
+// message renders the call it failed, values included, and its `meta` can
+// hold the database's own text, which quotes the row (Prisma 7's
+// `driverAdapterError`), so `describeError` and `errorText` summarize it
+// (class, code, the schema names and codes of its `meta`, the reason a
+// validation error gives, stack frames) and keep every other error whole. The audit's PoC E runs against the PGlite
 // harness: a create with an unknown argument logged an email and a password.
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -75,6 +76,46 @@ describe("describeError", () => {
     expect(describeError(raw)).toMatchObject({ code: "P2010", meta: { code: "23505" } });
   });
 
+  it("keeps the schema names of meta, and of a driver adapter's cause, never a value (Prisma 7)", () => {
+    const adapterError = Object.assign(new Error("DriverAdapterError"), {
+      name: "DriverAdapterError",
+      cause: {
+        originalCode: "23514",
+        originalMessage: 'new row for relation "User" violates check constraint "name_not_bad"',
+        kind: "postgres",
+        code: "23514",
+        severity: "ERROR",
+        message: 'new row for relation "User" violates check constraint "name_not_bad"',
+        detail: `Failing row contains (u1, ${EMAIL}, bad, null).`,
+        cause: `value "${SECRET}"`,
+      },
+    });
+    const check = prismaError("PrismaClientKnownRequestError", RENDERED, {
+      code: "P2039",
+      meta: {
+        modelName: "User",
+        driverAdapterError: adapterError,
+        argument_value: EMAIL,
+        field_value: SECRET,
+        details: `value "${SECRET}" is out of range`,
+      },
+    });
+    expect(describeError(check)).toMatchObject({
+      code: "P2039",
+      meta: {
+        modelName: "User",
+        driverAdapterError: {
+          name: "DriverAdapterError",
+          cause: { originalCode: "23514", kind: "postgres", code: "23514" },
+        },
+      },
+    });
+    const logged = JSON.stringify(describeError(toQuickdrawError(check)));
+    expect(logged).not.toContain(EMAIL);
+    expect(logged).not.toContain(SECRET);
+    expect(logged).not.toContain("check constraint");
+  });
+
   it("keeps any other error whole: its message and stack", () => {
     const error = new Error(`no row for ${EMAIL}`);
     expect(describeError(error)).toMatchObject({
@@ -123,5 +164,33 @@ describe("a Prisma error from a real client (the audit's PoC E)", () => {
     expect(logged).toContain("P2002");
     expect(logged).not.toContain(EMAIL);
     expect(errorText(error)).not.toContain(EMAIL);
+  });
+
+  it("logs no value of a row a check constraint refused, a value out of range, or a raw query", async () => {
+    await h.prisma.$executeRawUnsafe(
+      `ALTER TABLE "User" ADD CONSTRAINT name_not_bad CHECK (name <> 'bad')`,
+    );
+    const owner = await h.prisma.user.create({ data: { email: "owner@example.com", name: "O" } });
+    const project = await h.prisma.project.create({ data: { name: "P", ownerId: owner.id } });
+    const failures: unknown[] = [
+      await h.prisma.user
+        .create({ data: { email: `bob-${SECRET}@example.com`, name: "bad" } })
+        .catch((caught: unknown) => caught),
+      await h.prisma.task
+        .create({ data: { projectId: project.id, title: SECRET, ordinal: 2 ** 31 } })
+        .catch((caught: unknown) => caught),
+      await h.prisma.$queryRaw`SELECT ${SECRET}::uuid`.catch((caught: unknown) => caught),
+    ];
+    for (const error of failures) {
+      expect(error).toBeInstanceOf(Error);
+      for (const logged of [
+        JSON.stringify(describeError(toQuickdrawError(error))),
+        errorText(error),
+      ]) {
+        expect(logged).not.toContain(SECRET);
+        expect(logged).not.toContain("2147483648");
+      }
+    }
+    expect(JSON.stringify(describeError(failures[0]))).toContain("driverAdapterError");
   });
 });

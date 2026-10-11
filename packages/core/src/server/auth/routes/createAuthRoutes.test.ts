@@ -709,6 +709,28 @@ describe("the guest route", () => {
     expect(invalid.status).toBe(422);
     expect(sessions.size).toBe(0);
   });
+
+  it("logs a Prisma error createUser throws as its summary, never the values its message renders (CLIENT-5)", async () => {
+    const rendered = Object.assign(
+      new Error(
+        'Invalid `prisma.user.create()` invocation:\n\n{ data: { email: "ada@example.com" } }\n\nUnique constraint failed on the fields: (`email`)',
+      ),
+      { name: "PrismaClientKnownRequestError", code: "P2002", meta: { target: ["email"] } },
+    );
+    const { url, logger } = await harness.boot({
+      providers: [
+        guest({
+          createUser: () => {
+            throw rendered;
+          },
+        }),
+      ],
+    });
+    expect((await post(`${url}/auth/guest`, { body: {} })).status).toBe(500);
+    const [entry] = logger.at("error");
+    expect(entry?.meta?.error).toBe("PrismaClientKnownRequestError P2002");
+    expect(JSON.stringify(logger.entries)).not.toContain("ada@example.com");
+  });
 });
 
 describe("rate limits", () => {

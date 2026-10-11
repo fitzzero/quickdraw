@@ -158,10 +158,11 @@ if (isHome(repoRoot)) {
 
 /**
  * What one kind links: its entries, where the links go, and the directory
- * they point into. Links prefer the stable `node_modules/@fitzzero/quickdraw-skills`
- * path, so committed links never embed a package store's hashed path; without
- * it (the package not installed at the repo root) they point at the package
- * where it is.
+ * they point into. Links name the project's stable
+ * `node_modules/@fitzzero/quickdraw-skills` path, which the project root
+ * always installs, so committed links never embed a package store's hashed
+ * path; only an installed copy that lacks this kind's directory (a broken
+ * install) makes them point at the package that runs.
  */
 function planKind(kind) {
   const sourceDir = join(packageDir, kind.name);

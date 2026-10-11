@@ -597,6 +597,9 @@ describe("the http option", () => {
       },
     });
     expect(Number(limited.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+    // The limiter's refusal is a `/qd` reply too (TRANSPORT-3).
+    expect(limited.headers.get("cache-control")).toBe("no-store");
+    expect(limited.headers.get("x-content-type-options")).toBe("nosniff");
     // The app's own routes are not counted, and the refused call never ran.
     for (let index = 0; index < 3; index += 1) {
       expect((await fetch(`${url}/health`)).status).toBe(200);

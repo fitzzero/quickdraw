@@ -4,8 +4,9 @@
 // `NODE_ENV` is "production" (a call's record logs at debug with its caller's
 // user id); `createConsoleLogger({ level })` names the lowest level written
 // instead. A Prisma client error's message renders the call it failed,
-// values included, so a log gets its summary (`prismaSummary`, `errorText`),
-// never its message. Isomorphic: `process` may not exist, and NODE_ENV is
+// values included, and its `meta` can hold the database's own text, which
+// quotes the row, so a log gets its summary (`prismaSummary`, `errorText`),
+// never its message or that text. Isomorphic: `process` may not exist, and NODE_ENV is
 // read at each call.
 
 /**
@@ -92,15 +93,79 @@ export function isPrismaError(error: Error): boolean {
   return /^PrismaClient\w*Error$/u.test(error.name);
 }
 
-/** The keys of a Prisma error's `meta` that hold the database's own text, which can quote values. */
-const DATABASE_TEXT = new Set(["message", "database_error"]);
+/**
+ * The keys of a Prisma error's `meta` a log keeps: each names the schema (a
+ * model, field, constraint, relation or operation) or a code, never a value.
+ * Every other key is dropped: `argument_value`, `field_value`, `details`,
+ * `database_error` and `message` quote the row or the database's own text.
+ */
+const META_KEYS: ReadonlySet<string> = new Set([
+  "modelName",
+  "model_name",
+  "operation",
+  "target",
+  "field_name",
+  "column_name",
+  "argument_name",
+  "relation_name",
+  "model_a_name",
+  "model_b_name",
+  "object_name",
+  "constraint",
+  "table",
+  "column",
+  "path",
+  "code",
+]);
+
+/**
+ * The keys of a driver adapter error's cause a log keeps (Prisma 7 puts it
+ * in every database error's `meta.driverAdapterError`): its kind, its codes
+ * and the schema it names. Its `originalMessage`, `message`, `detail` and
+ * `cause` are the database's own text, which quotes values ("Failing row
+ * contains (...)").
+ */
+const ADAPTER_CAUSE_KEYS: ReadonlySet<string> = new Set([
+  "kind",
+  "originalCode",
+  "code",
+  "constraint",
+  "column",
+  "table",
+]);
+
+function isObject(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The entries of `value` whose keys `keys` holds. */
+function picked(
+  value: Readonly<Record<string, unknown>>,
+  keys: ReadonlySet<string>,
+): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([key]) => keys.has(key)));
+}
+
+/** A Prisma error's `meta` as a log keeps it: the schema it names and its codes, never a value. */
+function metaOf(meta: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const kept = picked(meta, META_KEYS);
+  const adapter = meta.driverAdapterError;
+  if (isObject(adapter)) {
+    kept.driverAdapterError = {
+      ...(typeof adapter.name === "string" ? { name: adapter.name } : {}),
+      ...(isObject(adapter.cause) ? { cause: picked(adapter.cause, ADAPTER_CAUSE_KEYS) } : {}),
+    };
+  }
+  return kept;
+}
 
 /** The longest `reason` kept of a Prisma error's message. */
 const MAX_REASON = 300;
 
 /**
  * A Prisma error, summarized (the 5.1 audit's CLIENT-5): its class, code,
- * `meta` without the database's own text, client version and stack frames;
+ * the schema names and codes of its `meta` (`metaOf`), client version and
+ * stack frames;
  * for a validation or initialization error, its message's last line, which
  * names arguments and never their values. Never the message: it renders the
  * call, values included, and the stack's first lines repeat it.
@@ -113,10 +178,8 @@ export function prismaSummary(error: Error): Record<string, unknown> {
   if (typeof kept === "string") {
     described.code = kept;
   }
-  if (typeof meta === "object" && meta !== null && !Array.isArray(meta)) {
-    described.meta = Object.fromEntries(
-      Object.entries(meta).filter(([key]) => !DATABASE_TEXT.has(key)),
-    );
+  if (isObject(meta)) {
+    described.meta = metaOf(meta);
   }
   if (typeof clientVersion === "string") {
     described.clientVersion = clientVersion;

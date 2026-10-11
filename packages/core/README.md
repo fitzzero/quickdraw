@@ -3626,9 +3626,10 @@ Logs go to `createServer({ logger })`, any logger with Winston's methods
 `NODE_ENV` is `"production"`, since a call's record logs at debug with its
 caller's user id: `createConsoleLogger({ level: "debug" })` keeps it, and
 `level: "warn"` drops `info` too. An error is logged with its message and
-stack, but a Prisma client error only with its class, `code`, `meta`
-(without the database's own text), the reason a validation error gives,
-and its stack frames: its message renders the call, values included.
+stack, but a Prisma client error only with its class, `code`, the schema
+names and codes of its `meta` (never a value, nor the database's own text,
+which quotes the row), the reason a validation error gives, and its stack
+frames: its message renders the call, values included.
 
 `createServer({ stallWatchdog: true })` watches the event loop. It samples
 the loop's delay every 20 ms (`perf_hooks.monitorEventLoopDelay`), reads it

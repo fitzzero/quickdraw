@@ -309,9 +309,12 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
 - **A Prisma error is logged summarized.** `describeError`, and so every
   log of a failed call, gives a Prisma client error as
   `{ name, code, meta, reason?, clientVersion, stack }` (the stack's frames
-  only), and the auth routes', the admin kit's and the write tracker's
+  only; `meta` keeps only the keys that name the schema or a code, and of
+  Prisma 7's `driverAdapterError` its kind, codes, constraint, column and
+  table), and the auth routes', the admin kit's and the write tracker's
   string `error` fields as `"<class> <code>: <reason>"`: a log processor
   keyed on `error.cause.message` of a Prisma failure finds none.
+- **The HTTP call limiter's 429 says `no-store` and `nosniff`** too.
 - **`/qd` replies say `Cache-Control: no-store`** and
   `X-Content-Type-Options: nosniff`.
 - **`quickdraw-skills link` links into the project that installs it.** It
@@ -568,8 +571,10 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   user's data.
 - **Logs hold no values a Prisma error rendered (CLIENT-5).** A Prisma
   error's message renders the failed call: the audit's create logged an
-  email and a plaintext password. The console default also logged every
-  call's user id at debug in production.
+  email and a plaintext password. Under Prisma 7 its `meta` also carries
+  the database's own text (`driverAdapterError`), which quotes the row
+  ("Failing row contains (...)") or the value out of range. The console
+  default also logged every call's user id at debug in production.
 - **`quickdraw-skills link` stays inside the project (CLIENT-7).** Run by
   an app's `prepare` inside a dotfiles repo in the home directory, it
   linked its rules and skills into `~/.claude`, which every project reads.
