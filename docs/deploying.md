@@ -372,6 +372,61 @@ Number(process.env.TRUST_PROXY ?? 0))`, with `TRUST_PROXY=1` behind one.
   ends TLS must send `X-Forwarded-Proto`, or the API sets a cookie the
   next request does not read.
 
+## Production checklist
+
+What every deployed process needs, whatever its size (the 5.1 audit's
+CLIENT-8 and TRANSPORT-2). Each item is a default an app inherits or a
+setting no default can make for it.
+
+- **`NODE_ENV=production`** on every deployed process, staging included. It
+  turns off the development warnings and the console logger's `debug`, makes
+  the auth routes' cookies `Secure`, and keeps the development sign-ins off:
+  the mock OAuth provider and `socketAuth({ devCredentials })` run only when
+  `NODE_ENV` is `development` or `test` (an unset `NODE_ENV` is neither).
+- **The development sign-in switches stay off.** Leave the switches an app
+  reads for them (the template's `ENABLE_MOCK_OAUTH` and
+  `ENABLE_DEV_CREDENTIALS`) unset in every deployed environment, and out of
+  committed env files: both sign anyone in as any user. The mock logs a
+  warning when it mounts, and an error when it is switched on under another
+  `NODE_ENV`; `socketAuth` throws at startup when given `devCredentials`
+  under another `NODE_ENV`.
+- **`JWT_SECRET`**: at least 32 random characters (the auth routes refuse a
+  shorter one), from the platform's secret store, one per deployment.
+  Rotating it signs everyone out.
+- **HTTPS and `wss:` only.** The proxy that ends TLS sends
+  `X-Forwarded-Proto`, `publicUrl` is an `https:` URL, and the session
+  cookie is then `__Host-session` ("Behind a proxy, in production or not").
+- **CORS for every route the web app calls.** `createServer({ cors })`
+  covers Socket.IO only. The auth routes and the app's REST routes need
+  `app.use(cors({ origin: allowedOrigins, credentials: true }))` with
+  explicit origins from the environment, never `origin: true` or `"*"` with
+  credentials. Give the same list to `createAuthRoutes`, `socketAuth` and
+  `requireSession`.
+- **MCP.** The registry's `principal` hook checks a session against the
+  store on every call (`bearerAuth`), never with `verifyJWT` alone, which a
+  signed-out session still passes. Pages that call the MCP HTTP routes are
+  listed in `allowedOrigins`; the routes have no rate limit of their own
+  (README, "MCP bridge").
+- **Logs.** The console default drops `debug` in production
+  (`createConsoleLogger({ level })` names another level), and a Prisma
+  client error is logged summarized, never with the values its message
+  renders. A logger of the app's own gets the same summaries.
+- **Connections per client.** Every quickdraw limit is per socket: 600
+  events a minute, 16 queries in flight and 64 waiting, the subscription
+  lanes, the channel buckets. Nothing caps how many sockets one address
+  opens, so cap concurrent WebSocket connections and handshakes per address
+  at the proxy or load balancer (nginx `limit_conn` and `limit_req` on
+  `/socket.io/`, Cloud Armor rate rules), and limit the HTTP transport with
+  `http: { rateLimit: createCallLimiter() }`.
+- **Valkey is a trust boundary.** Whoever can publish on the adapter's
+  channels pushes frames to every client, and forges access changes and
+  `disconnectUser`. Keep it on a private network, with a password or an ACL
+  user, and TLS: `setupRedisAdapter` takes `password`; for TLS, create
+  `rediss://` clients yourself and pass `createAdapter(pub, sub, { key })`
+  as `socket.adapter`. Give each deployment its own Valkey, or its own
+  `cluster.keyPrefix` and adapter key ("Deployments sharing a Valkey"; a
+  Valkey `db` number does not separate pub/sub).
+
 ## Gaps that remain
 
 - Frames of one row from two nodes still arrive out of revision order;

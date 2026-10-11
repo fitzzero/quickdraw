@@ -33,6 +33,7 @@ import type { AuthSession } from "./sessions";
 import { clearSession, sessionCookieNaming, type RouteSettings } from "./settings";
 import { COOKIE_REFUSED, httpCookieOriginAllowed } from "./socketAuth";
 import { liveSession } from "./tokens";
+import { errorText } from "../../../contract/logger";
 
 type Handler = (req: AuthRouteRequest, res: AuthRouteResponse) => Promise<void>;
 
@@ -89,7 +90,7 @@ async function revoked(
     settings.logger.error("onRevoke failed", {
       category: "quickdraw.auth",
       userId,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorText(error),
     });
   }
 }

@@ -14,6 +14,7 @@ import type { MaybePromise } from "../../types";
 import { refuse, sendJson, type AuthRouteRequest, type AuthRouteResponse } from "./respond";
 import { issueFor, setSession, type RouteSettings } from "./settings";
 import { COOKIE_REFUSED, httpCookieOriginAllowed } from "./socketAuth";
+import { errorText } from "../../../contract/logger";
 
 /** The largest guest request body read, in bytes. */
 export const GUEST_MAX_BODY_BYTES = 16_384;
@@ -101,7 +102,7 @@ async function createGuest(
     }
     settings.logger.error("Creating a guest user failed", {
       category: "quickdraw.auth",
-      error: error instanceof Error ? error.message : String(error),
+      error: errorText(error),
     });
     refuse(res, "INTERNAL", INTERNAL_MESSAGE);
     return null;

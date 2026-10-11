@@ -194,6 +194,9 @@ function sendResult(
   res.statusCode = status;
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.setHeader("content-length", bytes);
+  // A reply is one caller's data: no cache keeps it, and no browser reads it as anything but JSON.
+  res.setHeader("cache-control", "no-store");
+  res.setHeader("x-content-type-options", "nosniff");
   const retryAfter = retryAfterSeconds(result);
   if (retryAfter !== undefined) {
     res.setHeader("retry-after", String(retryAfter));

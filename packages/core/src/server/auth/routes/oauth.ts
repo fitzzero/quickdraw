@@ -32,6 +32,7 @@ import {
   type RouteSettings,
 } from "./settings";
 import { decodePending, encodePending, newState, stateMatches } from "./state";
+import { errorText } from "../../../contract/logger";
 
 /** A provider the routes drive; `enabled` is checked again on every request (the mock provider's). */
 export interface SignInFlow extends OAuthSignInProvider {
@@ -41,10 +42,6 @@ export interface SignInFlow extends OAuthSignInProvider {
 type Handler = (req: AuthRouteRequest, res: AuthRouteResponse) => void | Promise<void>;
 
 const CATEGORY = "quickdraw.auth";
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /** `GET {basePath}/{provider}/start`. */
 export function startRoute(settings: RouteSettings, flow: SignInFlow): Handler {
@@ -86,7 +83,7 @@ async function userFor(
     settings.logger.warn("A sign-in's code exchange failed", {
       category: CATEGORY,
       provider: flow.id,
-      error: messageOf(error),
+      error: errorText(error),
     });
     return { error: "failed" };
   }
@@ -101,7 +98,7 @@ async function userFor(
     settings.logger.error("onLogin failed", {
       category: CATEGORY,
       provider: flow.id,
-      error: messageOf(error),
+      error: errorText(error),
     });
     return { error: "failed" };
   }
@@ -132,7 +129,7 @@ async function complete(
   } catch (error) {
     settings.logger.error("Creating a session failed", {
       category: CATEGORY,
-      error: messageOf(error),
+      error: errorText(error),
     });
     redirect(res, landingOf(settings, origin, "failed"));
     return;

@@ -23,6 +23,9 @@ import { createRecorder, type CallRecord, type RecordDetails } from "./metrics";
 import type { VersionSource } from "./notModified";
 import { resolveTracking, storageFor, type Tracking, type TrackingOptions } from "./tracking";
 
+// The dispatcher's logs write errors with it, through this module, within its import budget.
+export { errorText } from "../../contract/logger";
+
 /**
  * The lane each socket's subscription events (`qd:sub`, `qd:col:sub`,
  * `qd:col:items`, `qd:watch`) run in, as queries run in theirs: the socket
@@ -71,7 +74,13 @@ export const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /** The pipeline's options: every seam and limit has a default. */
 export interface PipelineOptions extends TrackingOptions {
-  /** Receives one entry per call, and the original error of every `INTERNAL` failure. Default: the console. */
+  /**
+   * Receives one entry per call, and the original error of every `INTERNAL`
+   * failure; a Prisma error is summarized (class, code, `meta`, frames),
+   * never its message, which renders the call's values. Default: the
+   * console (`consoleLogger`), which drops `debug` when `NODE_ENV` is
+   * "production"; `createConsoleLogger({ level })` names another level.
+   */
   readonly logger?: Logger;
   /**
    * The access options (`{ cacheMs }`), or an engine of the app's own that

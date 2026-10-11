@@ -10,6 +10,7 @@ import type { RunContext, RunOptions } from "./context";
 import { registerLive, type Presence, type ServerRooms, type StreamHandle } from "./emit/live";
 import { createPipeline, type DispatchRequest, type DispatchResult } from "./pipeline/pipeline";
 import {
+  errorText,
   resolveSettings,
   type DispatcherLimits,
   type PipelineOptions,
@@ -250,7 +251,7 @@ export async function runInUnit<T>(
     } catch (error) {
       settings.logger.error("Flushing a run's writes failed", {
         category: "quickdraw.flush",
-        error: error instanceof Error ? error.message : String(error),
+        error: errorText(error),
       });
     }
   }

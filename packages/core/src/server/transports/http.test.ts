@@ -136,6 +136,25 @@ async function expectStatuses(url: string): Promise<void> {
   });
 }
 
+describe("every reply's headers (TRANSPORT-3)", () => {
+  it("say no-store and nosniff, on a success, a refusal and an unknown method alike", async () => {
+    const { url } = await serve();
+    const replies = [
+      await post(url, "/qd/taskService/get", {
+        body: JSON.stringify({ id: "t1" }),
+        headers: bearer("alice-token"),
+      }),
+      await post(url, "/qd/probeService/wait", { body: '{"key":"x"}' }),
+      await post(url, "/qd/nope/nothing", { body: "{}" }),
+    ];
+    expect(replies.map(({ status }) => status)).toEqual([200, 401, 404]);
+    for (const { headers } of replies) {
+      expect(headers.get("cache-control")).toBe("no-store");
+      expect(headers.get("x-content-type-options")).toBe("nosniff");
+    }
+  });
+});
+
 describe("on an Express 4 app with its own JSON parser", () => {
   it("answers 200, 401, 403 and 422, and leaves the app's routes alone", async () => {
     const app = express();

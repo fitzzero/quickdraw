@@ -303,6 +303,21 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   deploy) is applied, with one warning.
 - **`cluster.keyPrefix` must be a non-empty string**, or `createServer`
   throws.
+- **The default console logger drops `debug` in production.** A call's
+  record logs at debug with its caller's user id; pass
+  `createConsoleLogger({ level: "debug" })` as `logger` to keep it.
+- **A Prisma error is logged summarized.** `describeError`, and so every
+  log of a failed call, gives a Prisma client error as
+  `{ name, code, meta, reason?, clientVersion, stack }` (the stack's frames
+  only), and the auth routes', the admin kit's and the write tracker's
+  string `error` fields as `"<class> <code>: <reason>"`: a log processor
+  keyed on `error.cause.message` of a Prisma failure finds none.
+- **`/qd` replies say `Cache-Control: no-store`** and
+  `X-Content-Type-Options: nosniff`.
+- **`quickdraw-skills link` links into the project that installs it.** It
+  anchors on the nearest `package.json` above the working directory whose
+  `node_modules` holds the package, not on the nearest `.git`; it fails
+  (exit 1) when there is none, and refuses the home directory.
 - **A session the server ends signs the client out.** After the server's
   disconnect (`disconnectUser`, `onRevoke`, a session that expires, a
   flooded channel) or a connect or reconnect refused with `UNAUTHENTICATED`
@@ -548,6 +563,24 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   until they reconnected, and its disconnects, stream items, room removals
   and access changes acted on production too. Every event now carries its
   deployment, and a node applies only its own's.
+- **No cache keeps a `/qd` reply (TRANSPORT-3).** A call's reply carried no
+  `Cache-Control`, so a shared proxy or the browser's cache could keep one
+  user's data.
+- **Logs hold no values a Prisma error rendered (CLIENT-5).** A Prisma
+  error's message renders the failed call: the audit's create logged an
+  email and a plaintext password. The console default also logged every
+  call's user id at debug in production.
+- **`quickdraw-skills link` stays inside the project (CLIENT-7).** Run by
+  an app's `prepare` inside a dotfiles repo in the home directory, it
+  linked its rules and skills into `~/.claude`, which every project reads.
+- **The publish workflow pins its actions by SHA (SUPPLY-1).**
+  `oven-sh/setup-bun@v2` ran by tag in the job that holds the npm
+  publishing token; renovate now keeps every action pinned by digest.
+- **`docs/deploying.md` has a production checklist (CLIENT-8,
+  TRANSPORT-2)**, including per-address connection caps at the proxy, since
+  every quickdraw limit is per socket, and Valkey as a trust boundary;
+  `bearerOrIp`'s documentation says it keys by a token nothing has checked
+  (TRANSPORT-4).
 - **A browser the server signed out shows nothing of the last user
   (CLIENT-1).** After the server ended a session (signed out everywhere,
   revoked, expired), the client kept its hello and its cache, so the

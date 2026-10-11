@@ -20,6 +20,7 @@ import { inKitTransaction } from "../transactions";
 import { adminCall, rowOut, rowWhole, tableOf, type AdminCall } from "./runtime";
 import type { AdminContext, AdminWrite } from "./types";
 import { checkWrite, writeRefusal } from "./writes";
+import { errorText } from "../../../contract/logger";
 
 async function readRow(call: AdminCall, id: string): Promise<unknown> {
   const row = await call.table.findUnique({ where: { id }, select: call.projection.select });
@@ -55,7 +56,7 @@ function committed(context: AdminContext, args: KitHandlerArgs, write: AdminWrit
       category: "quickdraw.admin",
       method: write.method,
       id: write.id,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorText(error),
     });
   };
   try {

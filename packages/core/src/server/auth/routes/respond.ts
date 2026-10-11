@@ -6,7 +6,8 @@
 // (RFC 0003 section 3), and nothing the routes answer is cached.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { httpStatus, type ErrorCode } from "../../../protocol/errors";
+import { errorText, type Logger } from "../../../contract/logger";
+import { httpStatus, INTERNAL_MESSAGE, type ErrorCode } from "../../../protocol/errors";
 import type { CookieResponse } from "../sessionCookie";
 
 /** The request the routes read: Express's, of which they use these. */
@@ -60,6 +61,25 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
 /** Answers a failure: `{ error: code, message }` with the code's HTTP status. */
 export function refuse(res: ServerResponse, code: ErrorCode, message: string): void {
   sendJson(res, httpStatus(code), { error: code, message });
+}
+
+/**
+ * Answers a route that failed with `INTERNAL`, and logs why: the error's
+ * text, a Prisma error summarized (`errorText`), never the call its message
+ * renders.
+ */
+export function failRoute(
+  logger: Logger,
+  req: AuthRouteRequest,
+  res: ServerResponse,
+  error: unknown,
+): void {
+  logger.error("An auth route failed", {
+    category: "quickdraw.auth",
+    path: pathOf(req),
+    error: errorText(error),
+  });
+  refuse(res, "INTERNAL", INTERNAL_MESSAGE);
 }
 
 /** Redirects the browser (302). */

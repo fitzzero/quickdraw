@@ -1083,8 +1083,8 @@ export const taskService = qd.defineService(task, {
   as its key): a node applies only its own deployment's events, and a
   Valkey's `db` does not separate pub/sub.
   [docs/deploying.md](docs/deploying.md) has the wiring, what holds across
-  nodes, what it costs, and what happens when a node or Valkey stops
-  answering.
+  nodes, what it costs, what happens when a node or Valkey stops
+  answering, and a production checklist.
 
 ## Collections and change topics
 
@@ -3621,6 +3621,15 @@ to the test client exactly as in production.
 
 ## Observability
 
+Logs go to `createServer({ logger })`, any logger with Winston's methods
+(default `consoleLogger`). The console default drops `debug` when
+`NODE_ENV` is `"production"`, since a call's record logs at debug with its
+caller's user id: `createConsoleLogger({ level: "debug" })` keeps it, and
+`level: "warn"` drops `info` too. An error is logged with its message and
+stack, but a Prisma client error only with its class, `code`, `meta`
+(without the database's own text), the reason a validation error gives,
+and its stack frames: its message renders the call, values included.
+
 `createServer({ stallWatchdog: true })` watches the event loop. It samples
 the loop's delay every 20 ms (`perf_hooks.monitorEventLoopDelay`), reads it
 every 10 s, and logs a warning (`category: "quickdraw.stall"`) when the 99th
@@ -3785,7 +3794,7 @@ bunx @fitzzero/quickdraw-codemod v5 .
 
 | Export             | Holds                                                                                                                                                                                                                                           |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.`                | `defineContract`, `query`, `mutation`, `nullable`, `listOf`, `via`, the kits' contract halves, inference types, `QuickdrawError`, error codes, protocol types, room and topic names                                                             |
+| `.`                | `defineContract`, `query`, `mutation`, `nullable`, `listOf`, `via`, the kits' contract halves, inference types, `QuickdrawError`, error codes, protocol types, room and topic names, `consoleLogger` and `createConsoleLogger`                  |
 | `./server`         | `initQuickdraw`, `createServer`, `createDispatcher`, `createHttpRouter`, policies, `custom`, the kits' handlers, `requireRow`, `nextOrdinal`, `storageOf`, dev warnings, the Redis adapter, the socket rate limiter, env and encryption helpers |
 | `./server/auth`    | `createAuthRoutes`, `socketAuth`, `bearerAuth`, `requireSession` and `sessionOf`, providers (`google`, `discord`, `mock`, `guest`), session stores, `issueSession`, `liveSession`, JWT, cookie and origin helpers                               |
 | `./server/express` | Express rate limits: `createAuthLimiter`, `createAuthStatusLimiter`, `createCallLimiter`, `createPublicApiLimiter`, `createWebhookLimiter`                                                                                                      |

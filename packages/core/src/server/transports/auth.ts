@@ -9,7 +9,7 @@
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import type { Socket } from "socket.io";
 import type { AccessLevel } from "../../contract/access";
-import type { Logger } from "../../contract/logger";
+import { errorText, type Logger } from "../../contract/logger";
 import { QuickdrawError } from "../../protocol/errors";
 import { modelKey } from "../storage";
 import type { MaybePromise, Principal } from "../types";
@@ -306,7 +306,7 @@ export function createGrantsSink<P extends Principal>(
             logger.error("Refreshing a user's written grants failed", {
               category: "quickdraw.access",
               userId,
-              error: error instanceof Error ? error.message : String(error),
+              error: errorText(error),
             });
           }
         }),
