@@ -1849,7 +1849,9 @@ export const taskService = qd.defineService(task, {
   total only when asked (a second statement). A sort value too long for a
   cursor (4,096 characters) makes the cursor name its row instead: the next
   page reads that row first, and the cursor is `VALIDATION` once the row has
-  left the list. Items are the `item`
+  left the list (or for a caller whose list never held it). Such a cursor
+  follows its row: a change to that row's sort value between pages can skip
+  or repeat rows. Items are the `item`
   projection, stripped of fields above the level the page was read at, as
   collection items are.
 - `getMany({ ids })` (at most 200) leaves out ids the caller cannot read and
@@ -1893,7 +1895,10 @@ export const taskService = qd.defineService(task, {
   method's row level, as the moved row does (a neighbor below it is
   `NOT_FOUND`, as a missing one is), and the list is the rows sharing the
   `within` values that the caller may write: a list with no `within` or a
-  null one is each caller's own. Moves run SERIALIZABLE: two at
+  null one is each caller's own. The rows it names are read through that
+  same filter, so a policy whose filter matches no row (a `resolver` without
+  `where`) moves nothing below a service-wide grant, as its lists show
+  nothing. Moves run SERIALIZABLE: two at
   once into one gap fail one of them with `CONFLICT` (try again).
 - The generated inputs carry JSON Schema, so the kit's methods are MCP tools
   too. For hand-written handlers, `./server` has `requireRow(row, message?)`

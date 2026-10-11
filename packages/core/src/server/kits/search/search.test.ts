@@ -272,13 +272,12 @@ describe("a scope collection ordered by a tiered column", () => {
   it("orders an unscoped search by id, so its cursor carries no tiered column (CRUD-4)", async () => {
     const board = kit.board();
     const prisma = kit.harness().prisma;
-    await prisma.task.update({
-      where: { id: board.t1 },
-      data: { notes: "AAA secret", title: "Task one" },
-    });
-    const two = await prisma.task.create({
-      data: { projectId: board.p1, title: "Task two", notes: "BBB secret" },
-    });
+    await prisma.task.update({ where: { id: board.t1 }, data: { title: "Task one" } });
+    const two = await prisma.task.create({ data: { projectId: board.p1, title: "Task two" } });
+    // By notes the row with the higher id would come first; by id, the lower one does.
+    const [low = "", high = ""] = [board.t1, two.id].sort();
+    await prisma.task.update({ where: { id: high }, data: { notes: "AAA secret" } });
+    await prisma.task.update({ where: { id: low }, data: { notes: "BBB secret" } });
     const app = await createTestApp({
       services: [projectService, define(ordered("Admin"))],
       db: kit.harness().db,
@@ -288,7 +287,7 @@ describe("a scope collection ordered by a tiered column", () => {
     expect(Buffer.from(page.nextCursor ?? "", "base64url").toString("utf8")).not.toContain(
       "secret",
     );
-    expect(idsOf(page)).toEqual([[board.t1, two.id].sort()[0]]);
+    expect(idsOf(page)).toEqual([low]);
   });
 });
 

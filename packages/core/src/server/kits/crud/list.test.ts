@@ -444,4 +444,23 @@ describe("a sort value too long for a cursor (CRUD-8)", () => {
       code: "VALIDATION",
     });
   });
+
+  it("reads the named row inside the caller's own list: another caller's or filter's is VALIDATION", async () => {
+    const { app } = await kit.start();
+    const board = kit.board();
+    const prisma = kit.harness().prisma;
+    await addTasks(prisma, board.p1, [1], { title: "A".repeat(3100) });
+    await addTasks(prisma, board.p1, [2], { title: "B" });
+    const sort = { field: "title" } as const;
+    const owner = app.as(as(board.ada)).taskService;
+    const cursor = (await owner.list({ sort, limit: 1 })).nextCursor ?? "";
+    const garbage = { code: "VALIDATION" };
+    // ed reads no row of P1: the row the cursor names is not in his list.
+    await expect(
+      app.as(as(board.ed)).taskService.list({ sort, limit: 1, cursor }),
+    ).rejects.toMatchObject(garbage);
+    await expect(
+      owner.list({ sort, limit: 1, cursor, filter: { status: "done" } }),
+    ).rejects.toMatchObject(garbage);
+  });
 });

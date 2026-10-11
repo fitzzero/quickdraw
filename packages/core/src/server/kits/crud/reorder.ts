@@ -18,7 +18,11 @@
 // caller may write at that level, so a list with no `within` or a null one
 // is the caller's own and reaches no other tenant's row (the 5.1 audit's
 // CRUD-6: a caller named other tenants' rows as neighbors, read their
-// ordinals, and made renumbering write them).
+// ordinals, and made renumbering write them). The rows a move names are
+// read through that same filter, so the neighbors and the list agree: a
+// moved row the filter leaves out is `FORBIDDEN`, and a policy whose filter
+// matches no row (a `resolver` without `where`) moves nothing below a
+// service-wide grant, as its lists show nothing.
 //
 // Statements: the lookup and the write filter's reads (none when the
 // caller's grant reaches every row), then, in one transaction: one read of
@@ -66,23 +70,32 @@ function invalid(message: string, path: readonly string[]): QuickdrawError {
 }
 
 /**
- * Reads the moved row and its named neighbors. A neighbor that is missing or
- * in another list is `NOT_FOUND` alike, so a move cannot tell whether a row
- * of another list exists.
+ * Reads the moved row and its named neighbors among the rows the caller may
+ * write (`writable`, as `listOf` takes it). A neighbor that is missing, in
+ * another list or not writable is `NOT_FOUND` alike, so a move cannot tell
+ * whether a row of another list exists. A moved row the filter leaves out
+ * is `FORBIDDEN`: the lookup let it through, so the policy's filter does not
+ * match it, or access changed meanwhile. Unfiltered, a missing one is
+ * `NOT_FOUND`.
  */
 async function readNamed(
   table: ModelDelegate,
-  spec: ReorderSpec,
+  [spec, writable]: readonly [ReorderSpec, AccessFilter | undefined],
   move: ReorderInput,
   model: string,
 ): Promise<Named> {
   const select = Object.fromEntries(["id", spec.column, ...spec.within].map((key) => [key, true]));
-  const ids = [move.id, move.beforeId, move.afterId].filter((id) => id !== undefined);
-  const rows = await table.findMany({ where: { id: { in: ids } }, select });
+  const ids = {
+    id: { in: [move.id, move.beforeId, move.afterId].filter((id) => id !== undefined) },
+  };
+  const where = writable === undefined ? ids : { AND: [ids, writable] };
+  const rows = writable === "none" ? [] : await table.findMany({ where, select });
   const byId = new Map(rows.map((row) => [row.id, row]));
   const moved = byId.get(move.id);
   if (moved === undefined) {
-    throw new QuickdrawError("NOT_FOUND", `No such ${model}`);
+    throw writable === undefined
+      ? new QuickdrawError("NOT_FOUND", `No such ${model}`)
+      : new QuickdrawError("FORBIDDEN", "Insufficient permissions");
   }
   const neighbor = (id: string | undefined, key: string): Row | undefined => {
     const row = id === undefined ? undefined : byId.get(id);
@@ -178,6 +191,14 @@ async function renumber(
     orderBy: [{ [column]: "asc" }, { id: "asc" }],
   });
   const order = rows.map((row) => row.id);
+  const neighbor = move.beforeId ?? move.afterId;
+  if (neighbor !== undefined && !order.includes(neighbor)) {
+    // Read through the same filter, in the same transaction, as the list: never guess its place.
+    throw new QuickdrawError(
+      "INTERNAL",
+      "A reorder's neighbor is missing from the list it renumbers",
+    );
+  }
   const at =
     move.beforeId === undefined
       ? Math.max(order.indexOf(move.afterId), 0)
@@ -206,7 +227,10 @@ const OWNER = "The read/write kit's reorder";
 
 const CONFLICT = "Another change to this list ran at the same time; try again";
 
-/** One move: the call, what it asks, the rows the caller may write, and what the moved row is read back with. */
+/**
+ * One move: the call, what it asks, the rows the caller may write, and what
+ * the moved row is read back with.
+ */
 interface Move {
   readonly call: CrudCall;
   readonly spec: ReorderSpec;
@@ -226,7 +250,7 @@ async function moveIn(
   mayRenumber: boolean,
 ): Promise<{ readonly row: Row } | { readonly list: StorageWhere }> {
   const table = delegateOf(tx, call.model);
-  const named = await readNamed(table, spec, move, call.model);
+  const named = await readNamed(table, [spec, writable], move, call.model);
   const range = await bounds(table, spec, named, writable);
   const between =
     range === undefined ? undefined : ordinalBetween(range[0] ?? undefined, range[1] ?? undefined);

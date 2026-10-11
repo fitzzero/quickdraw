@@ -107,15 +107,20 @@ All notable changes to this project will be documented in this file.
 - **`reorder` keeps to the rows its caller may write.** A neighbor the
   caller cannot write at the method's row level is `NOT_FOUND`, as a
   missing one is, and the list a move reads and renumbers is the caller's
-  writable rows of the `within` list. A list with no `within` or a null one
-  is each caller's own; per-row policies make such lists per caller. A move
-  costs one batched lookup more, plus the write filter's reads.
+  writable rows of the `within` list: under a per-row policy every list is
+  per caller, and a list with no `within` or a null one is the caller's own
+  rows. The rows a move names are read through the same filter, so a policy
+  whose filter matches no row (a `resolver` without `where`) makes `reorder`
+  `FORBIDDEN` below a service-wide grant. A move under an `{ entry }` form
+  costs one batched lookup more (other forms made one already), plus the
+  write filter's reads.
 - **An unscoped search comes in id order.** `search` without `scope` no
   longer uses the scope collection's order.
 - **A cursor too long names its row.** A `list`, `search` or
   `listMembers` cursor that would pass 4,096 characters (a long sort value)
   names its row instead: the next page costs one more read, and the cursor
-  is `VALIDATION` once the row has left the list.
+  is `VALIDATION` once the row has left the list. Such a cursor follows its
+  row's current sort value.
 - **A via list over the item service's members table counts only links at
   its access.** In such a list (the junction is the table the service's
   `members` policy reads), a link whose role maps below the collection's
