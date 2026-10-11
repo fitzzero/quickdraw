@@ -158,12 +158,9 @@ connectionStateRecovery } })` throws a `TypeError` at startup, and
   refused.** A `qd:watch` or `qd:stream:sub` whose access an access change
   took while it was authorized answers `FORBIDDEN` instead of joining. A
   subscribe whose window overlapped an unrelated access change costs one
-  more access lookup.
-- **A stream seed may repeat an item after an access change.** A stream
-  subscribe that overlapped an access change reads its seed after it is
-  authorized again, so an item pushed meanwhile may arrive both in the seed
-  and as a frame, as an asynchronous computed seed already can. A subscribe
-  that did not join answers `seed: []`.
+  more access lookup, and joins once that lookup allows it: a stream item
+  pushed meanwhile is in its seed, not sent as a frame. A stream subscribe
+  an unsubscribe overtook answers `seed: []`, not the kept items.
 - **Subscribes re-check with the socket's current grants.** Entity and
   collection subscribes that overlapped an access change resolve again with
   the grants the socket holds at that moment: a grant lowered mid-subscribe

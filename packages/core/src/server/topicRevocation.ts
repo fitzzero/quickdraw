@@ -13,17 +13,19 @@
 // the watching query again, and that read is refused. A lookup that fails
 // denies, as everywhere else.
 //
-// A `qd:watch` an access change overlapped is settled here too
-// (`settleWatch`, through `emit/race.ts`): once it joined, it is authorized
-// again with the socket's principal as it is then, and one that lost access
-// meanwhile leaves the room and is answered `FORBIDDEN` (the 5.1 audit's
-// LIVE-2: a member removed while watching kept the topic's `qd:changed`).
+// A `qd:watch` is authorized and joined here too (`joinWatch`). One an
+// access change overlapped is settled first (through `emit/race.ts`):
+// recorded, so revocation finds it, but out of the topic's room, it is
+// authorized again with the socket's principal as it is then, and one that
+// lost access meanwhile is answered `FORBIDDEN` (the 5.1 audit's LIVE-2: a
+// member removed while watching kept the topic's `qd:changed`). It joins
+// the room only once it settled.
 
 import { SERVER_EVENTS, topicRoom } from "../contract/names";
 import { QuickdrawError } from "../protocol/errors";
 import { authorizeWatch, type WatchTarget } from "./collections/access";
 import type { CollectionHub } from "./collections/bind";
-import { settleJoin, type RaceStart } from "./emit/race";
+import { enterSettled, raceMoved, raceStart, settleJoin, type RaceStart } from "./emit/race";
 import { settleAll, type RevocationHook } from "./emit/revocation";
 import { describeError } from "./pipeline/metrics";
 import { currentRev } from "./rev";
@@ -95,23 +97,24 @@ async function rewatch(
   socket.emit(SERVER_EVENTS.changed, { s: watch.s, topic: watch.topic, rev: currentRev() });
 }
 
-/**
- * Settles a `qd:watch` that joined its topic's room as `own` against the
- * access changes made since `start`, noted before it was authorized
- * (`emit/race.ts`): throws `FORBIDDEN`, the socket out of the room, when it
- * lost access meanwhile. `unwatches` is how often the client had unwatched
- * the topic when the watch began.
- */
-export async function settleWatch(
+/** A watch recorded: its record, what it settles against, and whether the client withdrew it since. */
+interface Held {
+  readonly own: TopicWatch;
+  readonly start: RaceStart;
+  readonly withdrawn: () => boolean;
+}
+
+/** Settles a recorded watch against the access changes made since it began (`emit/race.ts`). */
+async function settleWatch(
   hub: CollectionHub,
   index: TopicIndex,
   socket: QuickdrawServerSocket,
-  joined: { readonly own: TopicWatch; readonly start: RaceStart; readonly unwatches: number },
-): Promise<void> {
-  const room = topicRoom(joined.own.s, joined.own.topic);
-  await settleJoin(hub, socket, joined.start, joined.own, {
+  held: Held,
+): Promise<TopicWatch | undefined> {
+  const room = topicRoom(held.own.s, held.own.topic);
+  return await settleJoin(hub, socket, held.start, held.own, {
     current: () => index.get(socket, room),
-    withdrawn: () => !socket.connected || index.unwatches(socket, room) !== joined.unwatches,
+    withdrawn: held.withdrawn,
     authorize: async (watch) => await anchorsNow(hub, socket, watch),
     reanchor: (watch, anchors) => {
       const next = { ...watch, anchors };
@@ -122,6 +125,41 @@ export async function settleWatch(
       index.leave(socket, room);
     },
   });
+}
+
+/**
+ * Authorizes one `qd:watch` of `target` and joins the topic's room, unless
+ * the client unwatched the topic meanwhile (the module header). Throws the
+ * authorization's refusal, or `FORBIDDEN` when the watch lost access while
+ * it was answered.
+ */
+export async function joinWatch(
+  hub: CollectionHub,
+  index: TopicIndex,
+  socket: QuickdrawServerSocket,
+  [watch, target]: readonly [TopicWatch, WatchTarget],
+): Promise<void> {
+  const room = topicRoom(watch.s, watch.topic);
+  const unwatches = index.begin(socket, room);
+  const withdrawn = (): boolean => !socket.connected || index.unwatches(socket, room) !== unwatches;
+  // What the watch settles against, noted before it is authorized.
+  const start = raceStart(hub, socket);
+  try {
+    const anchors = await authorizeWatch(hub, start.principal, target);
+    if (withdrawn()) {
+      return;
+    }
+    const own = { ...watch, anchors };
+    index.hold(socket, own);
+    const settled = raceMoved(hub, socket, start)
+      ? await settleWatch(hub, index, socket, { own, start, withdrawn })
+      : own;
+    if (settled !== undefined) {
+      enterSettled(() => index.join(socket, room), withdrawn);
+    }
+  } finally {
+    index.end(socket, room);
+  }
 }
 
 /** Authorizes the given watches again, each socket's one by one. */

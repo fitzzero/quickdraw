@@ -236,7 +236,7 @@ describe("qd:stream:sub", () => {
     expect(app.server.io.sockets.sockets.get(connection.socket.id ?? "")?.data.streams).toEqual({});
   });
 
-  it("does not join when the client unsubscribed while the subscribe was being authorized", async () => {
+  it("does not join, and answers an empty seed, when the client unsubscribed while the subscribe was being authorized", async () => {
     let release = (): void => undefined;
     let reading = (): void => undefined;
     const held = new Promise<void>((resolve) => {
@@ -254,12 +254,14 @@ describe("qd:stream:sub", () => {
         return held;
       },
     });
+    logs(app).push(board.t1, { line: "kept" });
+    await pushed();
     const { connection, items } = await connect(app, as(board.cy));
     const subscribing = streamSub(connection, "logs", board.t1);
     await started;
     expect(await streamUnsub(connection, "logs", board.t1)).toEqual({ ok: true });
     release();
-    expect(await subscribing).toMatchObject({ ok: true });
+    expect(await subscribing).toEqual({ ok: true, seed: [] });
     logs(app).push(board.t1, { line: "unheard" });
     await settle(connection);
     expect(items).toEqual([]);
@@ -342,6 +344,70 @@ describe("races with a subscribe", () => {
     await settle(connection);
     expect(items).toEqual([]);
     expect(app.server.io.sockets.sockets.get(connection.socket.id ?? "")?.data.streams).toEqual({});
+  });
+
+  /**
+   * The app, with `userId`'s membership of P1 removed during the first read
+   * of the membership table (the subscribe's authorization), and an item
+   * pushed during the first one made while a socket holds the feed: the
+   * settle's check.
+   */
+  async function startRacing(userId: () => string) {
+    let appRef: App | undefined;
+    let removed = false;
+    let pushedDuring = false;
+    const holding = (): boolean =>
+      [...(appRef?.server.io.sockets.sockets.values() ?? [])].some(
+        (socket) => Object.keys(socket.data.streams ?? {}).length > 0,
+      );
+    const app = await start({
+      after: (read) => {
+        if (read.model !== "projectMember" || appRef === undefined) {
+          return undefined;
+        }
+        const target = appRef;
+        if (!removed) {
+          removed = true;
+          return target.server.dispatcher
+            .run(() =>
+              h.db.projectMember.deleteMany({ where: { projectId: board.p1, userId: userId() } }),
+            )
+            .then(() => undefined);
+        }
+        if (!pushedDuring && holding()) {
+          pushedDuring = true;
+          logs(target).push(board.t1, { line: "during the settle" });
+          return pushed();
+        }
+        return undefined;
+      },
+    });
+    appRef = app;
+    return { app, pushedDuring: () => pushedDuring };
+  }
+
+  it("sends a member a removal took nothing pushed while the subscribe settles (RT-1)", async () => {
+    const { app, pushedDuring } = await startRacing(() => board.cy);
+    const { connection, items } = await connect(app, as(board.cy));
+    expect(await streamSub(connection, "logs", board.t1)).toEqual(refused("FORBIDDEN"));
+    await settle(connection);
+    expect(pushedDuring()).toBe(true);
+    expect(items).toEqual([]);
+  });
+
+  it("gives a subscriber an unrelated removal overlapped each item pushed meanwhile once, in its seed", async () => {
+    const { app, pushedDuring } = await startRacing(() => board.bo);
+    logs(app).push(board.t1, { line: "kept" });
+    await pushed();
+    const { connection, items } = await connect(app, as(board.cy));
+    expect(await streamSub(connection, "logs", board.t1)).toEqual({
+      ok: true,
+      seed: [{ line: "kept" }, { line: "during the settle" }],
+    });
+    expect(pushedDuring()).toBe(true);
+    logs(app).push(board.t1, { line: "after" });
+    await settle(connection);
+    expect(items).toEqual([["taskService", "logs", board.t1, { line: "after" }]]);
   });
 
   it("keeps a subscriber an unrelated removal left alone, seed and all", async () => {

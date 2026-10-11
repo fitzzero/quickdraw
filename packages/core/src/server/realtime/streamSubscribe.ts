@@ -1,18 +1,18 @@
-// One `qd:stream:sub` (RFC 0003 sections 8.2 and 12.5), in the order the
-// other subscribes go (`../emit/subscribe.ts`): authorize the subscriber
-// (`streamTargets.ts`), join the feed's room, settle the races, then read
-// the seed.
+// One `qd:stream:sub` (RFC 0003 sections 8.2 and 12.5): authorize the
+// subscriber (`streamTargets.ts`), record the subscription, settle the races
+// with access changes, then join the feed's room and read the seed in one
+// tick, so every item pushed after the seed reaches the socket as a
+// `qd:stream` frame (possibly before the acknowledgement), and none arrives
+// both ways.
 //
-// - A subscribe no access change overlapped joins the feed's room and reads
-//   its seed in the same tick, so every item pushed after the seed reaches
-//   the socket as a `qd:stream` frame (possibly before the acknowledgement).
+// - A subscribe no access change overlapped joins in the tick it is
+//   recorded.
 // - One an access change overlapped (or whose socket's principal was
-//   replaced meanwhile) is authorized again once it joined, with the
-//   socket's principal as it is then (`../emit/race.ts`): one that lost
-//   access leaves the room and is answered `FORBIDDEN` (the 5.1 audit's
-//   RT-1: a member removed while subscribing kept the feed, seed and all).
-//   Its seed is read after that, so an item pushed meanwhile may arrive both
-//   as a frame and in the seed.
+//   replaced meanwhile) is authorized again first, with the socket's
+//   principal as it is then (`../emit/race.ts`): recorded, so revocation
+//   finds it, but out of the room, so nothing pushed meanwhile reaches it.
+//   One that lost access is answered `FORBIDDEN` (the 5.1 audit's RT-1: a
+//   member removed while subscribing kept the feed, seed and all).
 // - A stream whose service computes its seed (`streams: { <name>: { seed }
 //   }`) calls that function instead of reading the kept items, at that same
 //   point, under the subscriber's principal: one that returns at once keeps
@@ -21,9 +21,8 @@
 //   against the item schema, and what it throws (or a mismatch) answers the
 //   subscribe and takes the socket out of the feed.
 // - An unsubscribe that arrives while a subscribe of the same feed is being
-//   authorized stops it from joining. A subscribe that did not join, or
-//   whose record the client ended while it settled, is answered `{ ok: true,
-//   seed: [] }`: nobody reads that seed.
+//   authorized stops it from joining. A subscribe that did not join is
+//   answered `{ ok: true, seed: [] }`: nobody reads that seed.
 //
 // A socket holds at most `MAX_STREAMS_PER_SOCKET` feeds (`CONFLICT` past
 // that), recorded on `socket.data.streams` with the rows their access is
@@ -33,7 +32,7 @@
 import { QuickdrawError } from "../../protocol/errors";
 import type { Hub } from "../emit/hub";
 import type { PendingKeys } from "../emit/pending";
-import { raceMoved, raceStart, settleJoin, type RaceStart } from "../emit/race";
+import { enterSettled, raceMoved, raceStart, settleJoin, type RaceStart } from "../emit/race";
 import type { QuickdrawServerSocket } from "../transports/types";
 import { computeSeed, streamKey, type StreamSeeds } from "./seeds";
 import { subscriptionOf, type StreamIndex } from "./streamIndex";
@@ -59,19 +58,19 @@ export interface StreamState {
   readonly pending: PendingKeys;
 }
 
-/** A subscribe that joined: its record, what it settles against, and the unsubscribes when it began. */
-interface Joined {
+/** A subscribe recorded: its record, what it settles against, and the unsubscribes when it began. */
+interface Held {
   readonly own: StreamSubscription;
   readonly start: RaceStart;
   readonly unsubscribes: number;
 }
 
 /**
- * Joins the feed's room with `anchors`, unless an unsubscribe or a
- * disconnect overtook the subscribe: the record it joined with. `CONFLICT`
+ * Records the subscription with `anchors`, out of the feed's room, unless an
+ * unsubscribe or a disconnect overtook the subscribe: the record. `CONFLICT`
  * past the socket's feeds.
  */
-function joinFeed(
+function holdFeed(
   state: StreamState,
   socket: QuickdrawServerSocket,
   target: StreamTarget,
@@ -84,26 +83,35 @@ function joinFeed(
       `A socket may subscribe to at most ${MAX_STREAMS_PER_SOCKET} stream feeds; unsubscribe from one first`,
     );
   }
-  if (!socket.connected || state.pending.count(socket, target.room) !== unsubscribes) {
+  if (withdrawn(state, socket, target, unsubscribes)) {
     return undefined;
   }
   const own = subscriptionOf(target, anchors);
-  state.index.set(socket, own);
+  state.index.hold(socket, own);
   return own;
 }
 
-/** Settles a joined subscribe against the access changes made since it began (`../emit/race.ts`). */
+/** True when the client unsubscribed from the feed since the subscribe began, or the socket went. */
+function withdrawn(
+  state: StreamState,
+  socket: QuickdrawServerSocket,
+  target: StreamTarget,
+  unsubscribes: number,
+): boolean {
+  return !socket.connected || state.pending.count(socket, target.room) !== unsubscribes;
+}
+
+/** Settles a recorded subscribe against the access changes made since it began (`../emit/race.ts`). */
 async function settleFeed(
   state: StreamState,
   socket: QuickdrawServerSocket,
   target: StreamTarget,
-  joined: Joined,
+  held: Held,
 ): Promise<StreamSubscription | undefined> {
-  const { hub, index, pending } = state;
-  return await settleJoin(hub, socket, joined.start, joined.own, {
+  const { hub, index } = state;
+  return await settleJoin(hub, socket, held.start, held.own, {
     current: () => index.get(socket, target.room),
-    withdrawn: () =>
-      !socket.connected || pending.count(socket, target.room) !== joined.unsubscribes,
+    withdrawn: () => withdrawn(state, socket, target, held.unsubscribes),
     authorize: async (subscription) => await anchorsNow(hub, socket, subscription),
     reanchor: (_subscription, anchors) => {
       const next = subscriptionOf(target, anchors);
@@ -174,13 +182,19 @@ export async function subscribeFeed(
   try {
     await authorizeStream(state.hub, socket, target);
     const anchors = await streamAnchors(state.hub, socket, target);
-    held = joinFeed(state, socket, target, [anchors, unsubscribes]);
+    held = holdFeed(state, socket, target, [anchors, unsubscribes]);
     if (held !== undefined && raceMoved(state.hub, socket, start)) {
       held = await settleFeed(state, socket, target, { own: held, start, unsubscribes });
+    }
+    if (held !== undefined) {
+      held = enterSettled(
+        () => state.index.join(socket, room),
+        () => withdrawn(state, socket, target, unsubscribes),
+      );
     }
   } finally {
     state.pending.end(socket, [room]);
   }
-  // Unsettled, this runs in the tick the socket joined the feed.
+  // The tick the socket joined the feed's room.
   return held === undefined ? { ok: true, seed: [] } : await seedOf(state, socket, target, held);
 }

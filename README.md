@@ -1201,11 +1201,15 @@ export const taskService = qd.defineService(task, {
   (`FORBIDDEN`) unless the service declares `watchAccess` (`"public"`,
   `"authenticated"` or `{ service: level }`). A watcher that loses access
   leaves the topic after one last `qd:changed`. A watch whose access
-  changed while it was answered is authorized again once it joins, with
-  the socket's principal as it is then, and answered `FORBIDDEN` when it
-  lost access. Entity and collection subscribes re-check the same way, with
-  the grants the socket holds then: a grant lowered mid-subscribe denies,
-  a raised one answers at its level.
+  changed while it was answered is authorized again before it joins the
+  topic, with the socket's principal as it is then, and answered
+  `FORBIDDEN` when it lost access; it hears nothing until it joins. Entity
+  and collection subscribes re-check the same way, with the grants the
+  socket holds then (a grant lowered mid-subscribe denies, a raised one
+  answers at its level), but from inside their room, which they need to
+  catch every change after the snapshot they read: a frame sent while they
+  re-check can reach a socket that is then refused, and the client drops
+  it with the refusal.
 - The socket rate limiter does not count subscription events; each socket
   runs `qd:sub`, `qd:col:sub`, `qd:col:items` and `qd:watch` in a lane
   instead: `limits.subscriptions` (8 at once, 64 waiting), then
@@ -2542,10 +2546,11 @@ export function TaskRoom({
   closed. The answer is the seed; `useStream` then appends, keeps the
   latest `max` (default 500), and subscribes again after a reconnect, when
   the seed replaces what it held. A subscribe an access change overlapped
-  is authorized again once it joins, with the socket's principal as it is
-  then, and answered `FORBIDDEN` when it lost access; its seed is read
-  after that, so an item pushed meanwhile may arrive both in the seed and
-  as a frame. A subscribe an unsubscribe overtook answers `seed: []`. A socket holds at most 500 feeds. A
+  is authorized again before it joins the feed, with the socket's
+  principal as it is then, and answered `FORBIDDEN` when it lost access;
+  nothing pushed meanwhile reaches it as a frame, and its seed is read as
+  it joins. A subscribe an unsubscribe overtook answers `seed: []`. A
+  socket holds at most 500 feeds. A
   subscriber whose access is lowered is authorized again; one refused
   leaves the feed and gets
   `qd:revoked { kind: "stream", reason: "access", s, stream, scope? }`, and
@@ -2553,8 +2558,7 @@ export function TaskRoom({
 - A service's `streams: { <name>: { seed, validate } }` (type
   `StreamImplementation`) computes a stream's seed per subscriber, `seed: (scope, ctx) => items` (the current state,
   where the items that follow are deltas; on whichever node the subscriber
-  is on, under its principal, in the tick it joins the feed, or once an
-  access change that overlapped the subscribe is settled; a contract
+  is on, under its principal, in the tick it joins the feed; a contract
   `seed: n` and a seed function cannot both be declared), and
   `validate: "development"` checks pushed items only while the dispatcher
   checks outputs (`outputValidation`, off in production), for a hot stream:

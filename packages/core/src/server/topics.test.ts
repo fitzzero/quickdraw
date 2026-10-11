@@ -503,6 +503,42 @@ describe("qd:watch", () => {
     expect(cy.scopes.changed).toEqual([]);
   });
 
+  it("sends a watcher a removal took nothing while its watch settles: it joins only after", async () => {
+    let appRef: App | undefined;
+    let reads = 0;
+    let busy = false;
+    const { app } = await start({
+      after: (read) => {
+        if (busy || read.model !== "projectMember" || appRef === undefined) {
+          return undefined;
+        }
+        reads += 1;
+        const target = appRef;
+        busy = true;
+        // The watch's authorization reads first: cy is removed. The settle's check reads next.
+        const work =
+          reads === 1
+            ? target
+                .as(as(board.ada))
+                .projectService.removeMember({ projectId: board.p1, userId: board.cy })
+            : write(target, (db) =>
+                db.task.update({ where: { id: board.t1 }, data: { title: "During the settle" } }),
+              );
+        return work
+          .finally(() => {
+            busy = false;
+          })
+          .then(() => undefined);
+      },
+    });
+    appRef = app;
+    const cy = await connect(app, as(board.cy));
+    expect(await watch(cy.connection, `board:${board.p1}`)).toEqual(refused("FORBIDDEN"));
+    await cy.scopes.settle();
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(cy.scopes.changed).toEqual([]);
+  });
+
   it("is not counted by the socket rate limiter", async () => {
     const { app } = await start({ rateLimit: { maxRequests: 2 } });
     const { connection } = await connect(app, as(board.ada));

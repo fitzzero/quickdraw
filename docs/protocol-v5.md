@@ -643,10 +643,8 @@ arrive as `qd:stream` frames (possibly before this acknowledgement). The
 seed is the latest items the server kept, or what the service computed
 for this subscriber (the current state the items change); a computed one
 the server had to wait for may also reflect items that arrived as frames
-meanwhile, and so may a seed read after the server authorized the
-subscriber again (an access change overlapped the subscribe). A
-subscribe an unsubscribe overtook answers an empty seed. A client
-replaces what it held with it.
+meanwhile. A subscribe an unsubscribe overtook answers an empty seed. A
+client replaces what it held with it.
 
 One of:
 

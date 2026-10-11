@@ -6,7 +6,8 @@
 // and per service, so a flush computes only the topics someone here watches,
 // and finds the watches an access change can concern by the rows a scope's
 // access is derived from (its anchors), as `collections/scopes.ts` does.
-// Rooms stay the source of truth for who receives `qd:changed`.
+// Rooms stay the source of truth for who receives `qd:changed`: a watch still
+// settling its races is recorded but out of the room (`hold`, then `join`).
 
 import { SERVICE_TOPIC, topicRoom } from "../contract/names";
 import { MAX_SCOPE_LENGTH } from "../protocol/version";
@@ -88,6 +89,8 @@ export class TopicIndex {
   readonly #pending = new PendingKeys();
   readonly #byAnchor = new Map<string, Counts>();
   readonly #byAnchorService = new Map<string, Counts>();
+  /** Per socket, the rooms of watches recorded by `hold` and not joined yet. */
+  readonly #held = new WeakMap<QuickdrawServerSocket, Set<string>>();
 
   #index(socket: QuickdrawServerSocket, watch: TopicWatch, by: 1 | -1): void {
     for (const anchor of watch.anchors ?? []) {
@@ -121,9 +124,7 @@ export class TopicIndex {
     }
   }
 
-  /** Records a watch and puts the socket in the topic's room; watching a topic again records its anchors anew. */
-  watch(socket: QuickdrawServerSocket, watch: TopicWatch): void {
-    const room = topicRoom(watch.s, watch.topic);
+  #record(socket: QuickdrawServerSocket, room: string, watch: TopicWatch): void {
     const watches = (socket.data.topics ??= emptyRecords());
     const previous = ownRecord(watches, room);
     watches[room] = watch;
@@ -133,7 +134,46 @@ export class TopicIndex {
     } else {
       this.#index(socket, previous, -1);
     }
-    void socket.join(room);
+  }
+
+  /**
+   * Records a watch and puts the socket in the topic's room; watching a
+   * topic again records its anchors anew. One `hold` recorded stays out of
+   * the room until `join`.
+   */
+  watch(socket: QuickdrawServerSocket, watch: TopicWatch): void {
+    const room = topicRoom(watch.s, watch.topic);
+    this.#record(socket, room, watch);
+    if (this.#held.get(socket)?.has(room) !== true) {
+      void socket.join(room);
+    }
+  }
+
+  /**
+   * Records a watch still settling its races: revocation finds it, but the
+   * socket is not put in the topic's room (it stays there if an earlier
+   * watch put it there) until `join`.
+   */
+  hold(socket: QuickdrawServerSocket, watch: TopicWatch): void {
+    const room = topicRoom(watch.s, watch.topic);
+    this.#record(socket, room, watch);
+    const held = this.#held.get(socket) ?? new Set<string>();
+    held.add(room);
+    this.#held.set(socket, held);
+  }
+
+  /**
+   * Puts the socket in the room of a watch `hold` recorded: the watch, or
+   * `undefined` when nothing (an unwatch, a revocation or a disconnect ended
+   * it), and the socket stays out.
+   */
+  join(socket: QuickdrawServerSocket, room: string): TopicWatch | undefined {
+    this.#held.get(socket)?.delete(room);
+    const watch = this.get(socket, room);
+    if (watch !== undefined) {
+      void socket.join(room);
+    }
+    return watch;
   }
 
   /** The socket's watch of a topic, by room, or `undefined`. */
@@ -155,6 +195,7 @@ export class TopicIndex {
       this.#count(watch, -1);
       this.#index(socket, watch, -1);
     }
+    this.#held.get(socket)?.delete(room);
     void socket.leave(room);
   }
 
@@ -186,6 +227,7 @@ export class TopicIndex {
       this.#index(socket, watch, -1);
     }
     socket.data.topics = emptyRecords();
+    this.#held.delete(socket);
   }
 
   /**

@@ -4,7 +4,8 @@
 // rows its access is derived from (its anchors). The index finds the
 // subscriptions an access change can concern by anchor, so revocation
 // (`streamRevocation.ts`) authorizes only those again. Rooms stay the source
-// of truth for who receives `qd:stream` frames.
+// of truth for who receives `qd:stream` frames: a subscribe still settling
+// its races is recorded but out of the room (`hold`, then `join`).
 
 import { streamRoom } from "../../contract/names";
 import type { AccessChange } from "../access/changes";
@@ -37,6 +38,8 @@ export function subscriptionOf(
 export class StreamIndex {
   readonly #byAnchor = new Map<string, Counts>();
   readonly #byService = new Map<string, Counts>();
+  /** Per socket, the rooms of subscriptions recorded by `hold` and not joined yet. */
+  readonly #held = new WeakMap<QuickdrawServerSocket, Set<string>>();
 
   #index(socket: QuickdrawServerSocket, subscription: StreamSubscription, by: 1 | -1): void {
     for (const anchor of subscription.anchors) {
@@ -60,9 +63,7 @@ export class StreamIndex {
     return Object.keys(socket.data.streams ?? {}).length;
   }
 
-  /** Records a subscription and puts the socket in the feed's room, replacing any earlier one. */
-  set(socket: QuickdrawServerSocket, subscription: StreamSubscription): void {
-    const room = streamRoomOf(subscription);
+  #record(socket: QuickdrawServerSocket, room: string, subscription: StreamSubscription): void {
     const previous = this.get(socket, room);
     socket.data.streams ??= emptyRecords();
     socket.data.streams[room] = subscription;
@@ -70,7 +71,45 @@ export class StreamIndex {
     if (previous !== undefined) {
       this.#index(socket, previous, -1);
     }
-    void socket.join(room);
+  }
+
+  /**
+   * Records a subscription and puts the socket in the feed's room, replacing
+   * any earlier one; one `hold` recorded stays out of the room until `join`.
+   */
+  set(socket: QuickdrawServerSocket, subscription: StreamSubscription): void {
+    const room = streamRoomOf(subscription);
+    this.#record(socket, room, subscription);
+    if (this.#held.get(socket)?.has(room) !== true) {
+      void socket.join(room);
+    }
+  }
+
+  /**
+   * Records a subscription still settling its races, replacing any earlier
+   * one: revocation finds it, but the socket is not put in the feed's room
+   * (it stays there if an earlier subscription put it there) until `join`.
+   */
+  hold(socket: QuickdrawServerSocket, subscription: StreamSubscription): void {
+    const room = streamRoomOf(subscription);
+    this.#record(socket, room, subscription);
+    const held = this.#held.get(socket) ?? new Set<string>();
+    held.add(room);
+    this.#held.set(socket, held);
+  }
+
+  /**
+   * Puts the socket in the room of a subscription `hold` recorded: what it
+   * holds there, or `undefined` when nothing (an unsubscribe, a revocation
+   * or a disconnect ended it), and the socket stays out.
+   */
+  join(socket: QuickdrawServerSocket, room: string): StreamSubscription | undefined {
+    this.#held.get(socket)?.delete(room);
+    const subscription = this.get(socket, room);
+    if (subscription !== undefined) {
+      void socket.join(room);
+    }
+    return subscription;
   }
 
   /** Ends a subscription: the socket leaves the feed's room. Returns what it was. */
@@ -80,6 +119,7 @@ export class StreamIndex {
       delete socket.data.streams[room];
       this.#index(socket, previous, -1);
     }
+    this.#held.get(socket)?.delete(room);
     void socket.leave(room);
     return previous;
   }
@@ -90,6 +130,7 @@ export class StreamIndex {
       this.#index(socket, subscription, -1);
     }
     socket.data.streams = emptyRecords();
+    this.#held.delete(socket);
   }
 
   /**

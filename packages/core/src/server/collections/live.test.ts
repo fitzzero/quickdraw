@@ -360,6 +360,25 @@ describe("races with a subscribe", () => {
     expect(reads.filter(isPageRead)).toHaveLength(2);
   });
 
+  it("filters a self scope's page read again for the grants the socket holds then (LIVE-1)", async () => {
+    // ed reads T1 (in P1) only through the service-wide Admin grant; T2 is in P2, ed's own.
+    await h.prisma.task.updateMany({
+      where: { id: { in: [board.t1, board.t2] } },
+      data: { assigneeId: board.ed },
+    });
+    let appRef: App | undefined;
+    const { app, reads } = await start({
+      after: holdPageRead(async () => await appRef?.server.access.refresh(board.ed)),
+      loadServiceAccess: () => ({}),
+    });
+    appRef = app;
+    const admin = await connect(app, as(board.ed, { taskService: "Admin" }));
+    const reply = await colSub(admin.connection, "mine", board.ed);
+    expect(reads.filter(isPageRead)).toHaveLength(2);
+    expect(reply).toMatchObject({ ok: true, items: [{ id: board.t2 }] });
+    expect((reply as { items: readonly unknown[] }).items).toHaveLength(1);
+  });
+
   it("reads the page again when a flush changed the scope after its revision", async () => {
     let appRef: App | undefined;
     const { app, reads } = await start({
