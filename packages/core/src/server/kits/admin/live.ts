@@ -39,7 +39,7 @@ function subscribersOf(call: AdminCall, id: string): AdminSubscribers {
 /** The `adminSubscribers` handler. */
 export function adminSubscribersHandler(context: AdminContext): KitHandler {
   const handler = ({ input, ctx, db }: KitHandlerArgs): Promise<AdminSubscribers> => {
-    const call = adminCall(ctx, db, context.fields);
+    const call = adminCall(ctx, db, context.fieldsFor);
     return Promise.resolve(subscribersOf(call, (input as IdInput).id));
   };
   return handler as KitHandler;
@@ -48,7 +48,7 @@ export function adminSubscribersHandler(context: AdminContext): KitHandler {
 /** The `adminReemit` handler. */
 export function adminReemitHandler(context: AdminContext): KitHandler {
   const handler = async ({ input, ctx, db }: KitHandlerArgs): Promise<AdminSubscribers> => {
-    const call = adminCall(ctx, db, context.fields);
+    const call = adminCall(ctx, db, context.fieldsFor);
     const { id } = input as IdInput;
     requireRow(
       await call.table.findUnique({ where: { id }, select: { id: true } }),

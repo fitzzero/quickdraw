@@ -62,8 +62,12 @@ export type AdminOnCommitted<Row = unknown> = (
 export interface AdminContext {
   /** What the contract half made the method for: its filter and sort fields. */
   readonly spec: AdminSpec;
-  /** The service's fields as the kit configures them: what it hides, and what it does not write. */
-  readonly fields: AdminFields;
+  /**
+   * The service's fields as the kit configures them for the server's grants
+   * column on the service's model (`grantsColumnOf`), or none: what it hides,
+   * and what it does not write.
+   */
+  readonly fieldsFor: (grantsColumn: string | undefined) => AdminFields;
   /** The method's access form: a write's row level comes from it. */
   readonly form: AccessForm;
   /** The app's hook after each write, if it gave one. */
@@ -135,22 +139,22 @@ export interface AdminHandlersOptions<C extends AnyContract, A, Db = unknown> {
    */
   readonly hiddenFields?: readonly Exclude<AdminFieldOf<C>, "id">[];
   /**
-   * Show and write the entity's `serviceAccess` (or `service_access`), the
-   * user's service-wide grants, which the kit hides by default: an admin
-   * screen then edits grants through `adminUpdate` (a JSON field, checked by
-   * the entity's schema). Only a caller whose own service-wide grant on this
-   * service is `Admin` reads or writes it, whatever `access` gives a method;
-   * anyone else is refused a write, filter or sort naming it (`FORBIDDEN`)
-   * and gets rows without it. Such an Admin can grant any service,
-   * themself included, so give that grant only to those who may. With
-   * `auth.serviceAccessSource` naming the column, a change reaches the
-   * user's open sockets on every node at once (`qd:access`, their
-   * subscriptions resolved again), as any tracked write to it does. Only for
-   * an entity with such a field. Default `false`.
+   * Show and write the entity's grants field, the user's service-wide
+   * grants, which the kit hides by default: `serviceAccess`,
+   * `service_access`, or the column `auth.serviceAccessSource` names on this
+   * service's model, whatever its name. An admin screen then edits grants
+   * through `adminUpdate` (a JSON field, checked by the entity's schema).
+   * Only a caller whose own service-wide grant on this service is `Admin`
+   * reads or writes it, whatever `access` gives a method; anyone else is
+   * refused a write, filter or sort naming it (`FORBIDDEN`) and gets rows
+   * without it. Such an Admin can grant any service, themself included, so
+   * give that grant only to those who may. With `auth.serviceAccessSource`
+   * naming the column, a change reaches the user's open sockets on every
+   * node at once (`qd:access`, their subscriptions resolved again), as any
+   * tracked write to it does. The dispatcher refuses `true` for an entity
+   * without a grants field, when it is made. Default `false`.
    */
-  readonly grants?: [Extract<AdminFieldOf<C>, "serviceAccess" | "service_access">] extends [never]
-    ? never
-    : boolean;
+  readonly grants?: boolean;
   /**
    * The only fields `adminCreate` and `adminUpdate` write (finding R1.4 of
    * the 5.0.0 review): `adminMeta` reports every other field `editable:

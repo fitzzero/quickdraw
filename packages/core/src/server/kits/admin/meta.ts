@@ -5,12 +5,16 @@
 // (4.1 `src/server/utils/zodToAdminFields.ts:138-265`):
 //
 // - hidden fields are left out: 4.1's `acl`, `serviceAccess` and
-//   `service_access`, and those `hiddenFields` names; `grants: true` shows
-//   and writes the entity's `serviceAccess` (or `service_access`) instead,
-//   for callers with a service-wide `Admin` grant only (`runtime.ts`),
-//   marked `kind: "grants"` so a screen with a grants editor of its own
-//   finds it without its name (finding F5.5 of the quickdraw-chat
-//   migration);
+//   `service_access`, the column `auth.serviceAccessSource` names on the
+//   service's model whatever its name (`grantsColumn`; the 5.1 audit's
+//   ADMIN-2), and those `hiddenFields` names; `grants: true` shows and
+//   writes the entity's grants field instead (`serviceAccess`,
+//   `service_access` or that column), for callers with a service-wide
+//   `Admin` grant only (`runtime.ts`), marked `kind: "grants"` so a screen
+//   with a grants editor of its own finds it without its name (finding F5.5
+//   of the quickdraw-chat migration). The column is known only to the
+//   server, so the handlers work their fields out once per column
+//   (`handlers.ts`), and the dispatcher checks them when it is made;
 // - `id`, `createdAt` and `updatedAt` come first with 4.1's fixed
 //   configurations ("ID", "Created At", "Updated At"; `updatedAt` stays out
 //   of the table), then the other fields in the schema's order;
@@ -39,6 +43,7 @@ import {
   type AdminServiceMeta,
 } from "../../../contract/kits/adminFields";
 import type { AdminSpec } from "../../../contract/kits/admin";
+import { modelKey } from "../../storage";
 
 /** Fields 4.1 always hid from admin screens (4.1 `src/server/utils/zodToAdminFields.ts:12`). */
 export const ADMIN_HIDDEN_FIELDS: readonly string[] = Object.freeze([
@@ -48,7 +53,8 @@ export const ADMIN_HIDDEN_FIELDS: readonly string[] = Object.freeze([
 ]);
 
 /**
- * The fields a user's service-wide grants live in. Hidden unless
+ * The fields a user's service-wide grants live in, besides the column
+ * `auth.serviceAccessSource` names on the service's model. Hidden unless
  * `admin.handlers(contract, { grants: true })`; then shown and written, but
  * only to callers whose own service-wide grant on the service is `Admin`.
  */
@@ -110,6 +116,27 @@ export interface MetaOptions {
   readonly editable?: unknown;
   readonly fieldOverrides: unknown;
   readonly grants?: unknown;
+  /** The column `auth.serviceAccessSource` names on the service's model: a grants field whatever its name. */
+  readonly grantsColumn?: string;
+}
+
+/** The names a grants field may have: `ADMIN_GRANT_FIELDS`, and the server's grants column. */
+function grantNamesOf(column: string | undefined): readonly string[] {
+  return column === undefined || ADMIN_GRANT_FIELDS.includes(column)
+    ? ADMIN_GRANT_FIELDS
+    : [...ADMIN_GRANT_FIELDS, column];
+}
+
+/**
+ * The column `auth.serviceAccessSource` (`source`) names when its model is
+ * `model`, the service's: the admin kit's grants field there.
+ */
+export function grantsColumnFor(
+  model: string | undefined,
+  source: { readonly model: string; readonly column: string } | undefined,
+): string | undefined {
+  const same = model !== undefined && source !== undefined;
+  return same && modelKey(source.model) === modelKey(model) ? source.column : undefined;
 }
 
 /** `adminMeta`'s answer, and the fields the kit's reads and writes leave alone. */
@@ -167,10 +194,14 @@ function checkDisplayName(displayName: unknown, serviceName: string, fail: MetaF
   return displayName;
 }
 
-/** The grant fields `grants: true` shows: those of the entity's fields that hold grants, at least one. */
+/**
+ * The grant fields `grants: true` shows: those of the entity's fields named
+ * `grantNames`, possibly none (the dispatcher refuses that, once it knows
+ * the server's grants column: `handlers.ts`).
+ */
 function checkGrants(
   grants: unknown,
-  names: readonly string[],
+  [names, grantNames]: readonly [readonly string[], readonly string[]],
   fail: MetaFailure,
 ): ReadonlySet<string> {
   if (grants === undefined || grants === false) {
@@ -179,26 +210,23 @@ function checkGrants(
   if (grants !== true) {
     fail("grants must be true or false");
   }
-  const fields = ADMIN_GRANT_FIELDS.filter((name) => names.includes(name));
-  if (fields.length === 0) {
-    fail(
-      `grants: the entity has no ${ADMIN_GRANT_FIELDS.join(" or ")} field for the kit to show and write`,
-    );
-  }
-  return new Set(fields);
+  return new Set(grantNames.filter((name) => names.includes(name)));
 }
 
 /**
- * The fields hidden: 4.1's defaults but the grant fields `grants: true`
- * shows, and `hiddenFields`, which must name fields of the entity but `id`.
+ * The fields hidden: 4.1's defaults and the server's grants column but the
+ * grant fields `grants: true` shows, and `hiddenFields`, which must name
+ * fields of the entity but `id`.
  */
 function checkHidden(
   hiddenFields: unknown,
-  names: readonly string[],
+  [names, grantNames]: readonly [readonly string[], readonly string[]],
   grants: ReadonlySet<string>,
   fail: MetaFailure,
 ): ReadonlySet<string> {
-  const defaults = ADMIN_HIDDEN_FIELDS.filter((name) => !grants.has(name));
+  const defaults = [...new Set([...ADMIN_HIDDEN_FIELDS, ...grantNames])].filter(
+    (name) => !grants.has(name),
+  );
   if (hiddenFields === undefined) {
     return new Set(defaults);
   }
@@ -396,8 +424,9 @@ export function adminFieldsOf(
   fail: MetaFailure,
 ): AdminFields {
   const names = spec.fields.map((field) => field.name);
-  const grants = checkGrants(options.grants, names, fail);
-  const hidden = checkHidden(options.hiddenFields, names, grants, fail);
+  const grantNames = grantNamesOf(options.grantsColumn);
+  const grants = checkGrants(options.grants, [names, grantNames], fail);
+  const hidden = checkHidden(options.hiddenFields, [names, grantNames], grants, fail);
   const listed = [...spec.filter, ...spec.sort].find((name) => hidden.has(name));
   if (listed !== undefined) {
     fail(`"${listed}" is hidden, so adminList may not filter or sort on it`);

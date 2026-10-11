@@ -233,6 +233,33 @@ export function handlerProblem(handler: object, service: AnyService): string | u
   return handlerChecks.get(handler)?.(service);
 }
 
+/** What `createDispatcher` knows of the server a handler is served in. */
+export interface ServedContext {
+  readonly service: AnyService;
+  /** `createServer`'s `auth.serviceAccessSource`: where users' service-wide grants live. */
+  readonly grantsSource: { readonly model: string; readonly column: string } | undefined;
+}
+
+/** Why a handler cannot be served as `served` says, or `undefined` when it can. */
+export type ServedCheck = (served: ServedContext) => string | undefined;
+
+const servedChecks = new WeakMap<object, ServedCheck>();
+
+/**
+ * Makes `createDispatcher` run `check` for each service it serves `handler`
+ * in, once the server's options are known (the admin kit's grants column,
+ * which only `createServer` names), so a clash fails when the server is
+ * made, never on a call.
+ */
+export function checkWhenServed(handler: object, check: ServedCheck): void {
+  servedChecks.set(handler, check);
+}
+
+/** Why `handler` cannot be served as `served` says, from the check `checkWhenServed` attached. */
+export function servedProblem(handler: object, served: ServedContext): string | undefined {
+  return servedChecks.get(handler)?.(served);
+}
+
 /**
  * True for a handler a kit made (it registered a check with
  * `checkWhenDefined`): framework code, whose statements the development

@@ -235,8 +235,10 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   `VALIDATION`, whoever the caller, and `adminMeta` shows a relation field
   (one a projection selects with a nested select) as read-only.
   On a users service, `admin.handlers(user, { grants: true })` lets the admin
-  screen edit `serviceAccess` through `adminUpdate` (service-wide Admins
-  only); never hand-write a `setServiceAccess` method for it. `adminMeta`
+  screen edit `serviceAccess` (or the column `auth.serviceAccessSource`
+  names, whatever its name) through `adminUpdate` (service-wide Admins
+  only); never hand-write a `setServiceAccess` method for it. Without
+  `grants: true` the kit hides that column. `adminMeta`
   marks that field `kind: "grants"`; an app with a grants editor of its own
   keeps it out of the generic form with
   `fieldOverrides: { serviceAccess: { showInForm: false } }`. What an admin

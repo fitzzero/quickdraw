@@ -27,7 +27,7 @@ const NO_NULLABLE: ReadonlySet<string> = new Set();
 /** The `adminList` handler. */
 export function adminListHandler(context: AdminContext): KitHandler {
   const handler = async ({ input, ctx, db }: KitHandlerArgs): Promise<AdminPage<unknown>> => {
-    const call = adminCall(ctx, db, context.fields);
+    const call = adminCall(ctx, db, context.fieldsFor);
     const query = input as AdminListQuery;
     checkSeen(call, namedFields(query));
     const order = listOrder(defaultSorts(context.spec.sort, call.unseen), query.sort);

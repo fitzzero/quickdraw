@@ -18,7 +18,7 @@ import {
   createDispatcher,
   detachDispatcher,
   loopsOf,
-  withAccessSinks,
+  withServerParts,
   type Dispatcher,
   type DispatcherOptions,
   type PrincipalOfServices,
@@ -385,6 +385,22 @@ function warnUnsourcedGrants(
 }
 
 /**
+ * `options` with what the server adds to its dispatcher: the grants sink
+ * right after the access sink (a flush that lowers grants revokes before its
+ * frames go out), and `auth.serviceAccessSource`, which the admin kit reads.
+ */
+function withGrants<O extends object>(
+  options: O,
+  grants: ReturnType<typeof createGrantsSink>,
+  grantsSource: { readonly model: string; readonly column: string } | undefined,
+): O {
+  return withServerParts(options, {
+    accessSinks: grants === undefined ? [] : [grants],
+    grantsSource,
+  });
+}
+
+/**
  * Serves `services` over Socket.IO and HTTP on the app's own Express app and
  * HTTP server: socket authentication, the `user:{id}` room, `qd:hello`, the
  * v5 transport (or the 4.x shim), the HTTP transport at `POST /qd/{service}/{method}`,
@@ -407,9 +423,8 @@ export function createServer<const S extends readonly AnyService[]>(
   const watchdog = prepareWatchdog(options, options.stallWatchdog);
   let refresh: ((userId: string) => Promise<ServiceGrants>) | undefined;
   const grants = createGrantsSink(options.auth, () => refresh, logger);
-  // Right after the access sink: a flush that lowers grants revokes before its frames go out.
   const created = createDispatcher(
-    grants === undefined ? watchdog.options : withAccessSinks(watchdog.options, [grants]),
+    withGrants(watchdog.options, grants, options.auth?.serviceAccessSource),
   );
   const calls = trackCalls(created);
   const { dispatcher } = calls;

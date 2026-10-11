@@ -2358,10 +2358,16 @@ export function AdminTasks() {
   configurations written for 4.x still type); `id` and the
   timestamps come first and are not editable; a relation of the model (a
   field a projection selects with a nested `select`) is `editable: false`;
-  `acl`, `serviceAccess` and `service_access` are hidden.
+  `acl`, `serviceAccess` and `service_access` are hidden, and so is the
+  column `auth.serviceAccessSource` names on this service's model, whatever
+  its name.
 - Grants: on a users service, `admin.handlers(user, { grants: true })`
-  shows and writes the entity's `serviceAccess` (a `json` field the entity
-  schema checks), so the admin screen edits grants through `adminUpdate`.
+  shows and writes the entity's grants field (`serviceAccess`, or the
+  column `auth.serviceAccessSource` names, whatever its name: a `json`
+  field the entity schema checks), so the admin screen edits grants through
+  `adminUpdate`. Options that clash with that column (hiding it beside
+  `grants: true`, or making it editable without), and `grants: true` on an
+  entity with no grants field, fail when the server is made.
   Only a caller whose own service-wide grant on that service is `Admin`
   reads or writes it, whatever `access` gives the method: anyone else gets
   rows without it and `FORBIDDEN` for a write, filter or sort naming it.

@@ -287,7 +287,7 @@ describe("admin.handlers", () => {
     admin.handlers(plain);
   });
 
-  test("grants is for an entity that holds serviceAccess", () => {
+  test("grants takes a boolean on any entity: the dispatcher checks it against the grants column", () => {
     const userRow = z.object({
       id: z.string(),
       name: z.string(),
@@ -298,7 +298,7 @@ describe("admin.handlers", () => {
       methods: { ...adminContract.contract({ entity: userRow }) },
     });
     admin.handlers(users, { grants: true });
-    // @ts-expect-error the task entity holds no grants
+    // Its grants may live in a column auth.serviceAccessSource names, which only the server knows.
     admin.handlers(task, { grants: true });
     // A grants editor of the app's own keeps the field out of a generic form.
     admin.handlers(users, {

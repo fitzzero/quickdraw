@@ -258,6 +258,41 @@ describe("editable (finding R1.4)", () => {
   });
 });
 
+describe("a grants column auth.serviceAccessSource names (ADMIN-2)", () => {
+  const fail = (message: string): never => {
+    throw new TypeError(message);
+  };
+  const options = { displayName: undefined, hiddenFields: undefined, fieldOverrides: undefined };
+
+  it("hides the column without grants: true, and shows it as the grants field with it", () => {
+    const spec = adminSpecOf(adminContract.contract({ entity: taskEntity }).adminMeta);
+    if (spec === undefined) {
+      throw new Error("admin.contract made adminMeta");
+    }
+    const hidden = adminFieldsOf(
+      "taskService",
+      spec,
+      { ...options, grantsColumn: "details" },
+      fail,
+    );
+    expect(hidden.meta.fields.map(({ name }) => name)).not.toContain("details");
+    expect(hidden.hidden.has("details")).toBe(true);
+    const shown = adminFieldsOf(
+      "taskService",
+      spec,
+      { ...options, grants: true, grantsColumn: "details" },
+      fail,
+    );
+    expect(shown.meta.fields).toContainEqual(
+      expect.objectContaining({ name: "details", kind: "grants" }),
+    );
+    expect(shown.grants.has("details")).toBe(true);
+    // Without the column the entity has no grants field: nothing to show, and nothing thrown here.
+    const none = adminFieldsOf("taskService", spec, { ...options, grants: true }, fail);
+    expect(none.grants.size).toBe(0);
+  });
+});
+
 describe("the entity schema", () => {
   it("must describe itself as JSON Schema, as for MCP tools", () => {
     const zod3 = z3.object({ id: z3.string(), title: z3.string() });

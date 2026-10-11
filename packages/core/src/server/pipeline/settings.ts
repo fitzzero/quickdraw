@@ -140,6 +140,8 @@ export interface PipelineSettings extends Tracking {
   /** Counts each connection's calls and refusals, and warns when they look like a client loop (`../devWarnings.ts`). */
   readonly loops: LoopWatch;
   readonly record: (record: CallRecord, details: RecordDetails) => void;
+  /** `createServer`'s `auth.serviceAccessSource`: the admin kit's grants column on its model. */
+  readonly grantsSource: { readonly model: string; readonly column: string } | undefined;
 }
 
 function checkCount(name: string, value: number, max: number): number {
@@ -182,15 +184,21 @@ function resolveLimits(limits: LimitsOptions = {}): DispatcherLimits {
 }
 
 /**
- * Applies the defaults to the dispatcher's options. `accessSinks` run right
- * after the access sink, before any frame of a flush is sent.
+ * Applies the defaults to the dispatcher's options. `parts` are what
+ * `createServer` adds: `accessSinks` run right after the access sink, before
+ * any frame of a flush is sent, and `grantsSource` is its
+ * `auth.serviceAccessSource`.
  */
 export function resolveSettings(
   options: PipelineOptions,
   registry: Registry,
   db: unknown,
-  accessSinks: readonly FlushSink[] = [],
+  parts: {
+    readonly accessSinks: readonly FlushSink[];
+    readonly grantsSource: PipelineSettings["grantsSource"];
+  } = { accessSinks: [], grantsSource: undefined },
 ): PipelineSettings {
+  const { accessSinks } = parts;
   const development = process.env.NODE_ENV !== "production";
   const logger = options.logger ?? consoleLogger;
   const warnings = createDevWarnings({ logger, development, strict: strictWarningsOf(options) });
@@ -238,5 +246,6 @@ export function resolveSettings(
       maxResponseBytes: options.maxResponseBytes ?? 1_048_576,
       warnings,
     }),
+    grantsSource: parts.grantsSource,
   });
 }

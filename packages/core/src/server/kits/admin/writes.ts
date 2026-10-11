@@ -28,7 +28,7 @@ export async function checkWrite(
   context: AdminContext,
   data: Readonly<Record<string, unknown>>,
 ): Promise<void> {
-  const { hidden, readOnly } = context.fields;
+  const { hidden, readOnly } = call.fields;
   const names = Object.keys(data);
   const issues = names
     .filter((name) => hidden.has(name) || readOnly.has(name))

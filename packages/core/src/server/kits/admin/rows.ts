@@ -116,7 +116,7 @@ async function written(
 /** The `adminGet` handler. */
 export function adminGetHandler(context: AdminContext): KitHandler {
   const handler = async ({ input, ctx, db }: KitHandlerArgs): Promise<unknown> => {
-    const call = adminCall(ctx, db, context.fields);
+    const call = adminCall(ctx, db, context.fieldsFor);
     return await readRow(call, (input as IdInput).id);
   };
   return handler as KitHandler;
@@ -130,7 +130,7 @@ function idOf(row: object): string {
 /** The `adminCreate` handler. */
 export function adminCreateHandler(context: AdminContext): KitHandler {
   const handler = async (args: KitHandlerArgs): Promise<unknown> => {
-    const call = adminCall(args.ctx, args.db, context.fields);
+    const call = adminCall(args.ctx, args.db, context.fieldsFor);
     const { data } = args.input as AdminCreateQuery;
     await checkWrite(call, context, data);
     return await written(context, call, args, "adminCreate", async (table) => {
@@ -144,7 +144,7 @@ export function adminCreateHandler(context: AdminContext): KitHandler {
 /** The `adminUpdate` handler. A call that changes nothing reads the row instead of writing it. */
 export function adminUpdateHandler(context: AdminContext): KitHandler {
   const handler = async (args: KitHandlerArgs): Promise<unknown> => {
-    const call = adminCall(args.ctx, args.db, context.fields);
+    const call = adminCall(args.ctx, args.db, context.fieldsFor);
     const { id, data } = args.input as AdminUpdateQuery;
     await checkWrite(call, context, data);
     if (Object.keys(data).length === 0) {
@@ -163,7 +163,7 @@ export function adminUpdateHandler(context: AdminContext): KitHandler {
 /** The `adminDelete` handler. */
 export function adminDeleteHandler(context: AdminContext): KitHandler {
   const handler = async (args: KitHandlerArgs): Promise<unknown> => {
-    const call = adminCall(args.ctx, args.db, context.fields);
+    const call = adminCall(args.ctx, args.db, context.fieldsFor);
     const { id } = args.input as IdInput;
     return await written(context, call, args, "adminDelete", async (table, withBefore) => {
       const select = withBefore ? call.projection.select : { id: true };

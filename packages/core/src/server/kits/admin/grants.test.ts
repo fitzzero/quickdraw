@@ -12,7 +12,7 @@ import { admin as adminContract, defineContract } from "../../../index";
 import { createTestApp, emitWithAck, type TestApp } from "../../../testing/index";
 import { captureLogger } from "../../__tests__/fixtures";
 import { qd } from "../../emit/__tests__/live";
-import { admin, owner } from "../../index";
+import { admin, owner, type AnyService } from "../../index";
 import { adminApp, as } from "./__tests__/fixture";
 
 const level = z.enum(["Public", "Read", "Moderate", "Admin"]);
@@ -214,15 +214,160 @@ describe("serviceAccess in the admin kit", () => {
       entity: note,
       methods: { ...adminContract.contract({ entity: note }) },
     });
-    expect(() => admin.handlers(noGrants, { grants: true as never })).toThrow(
-      "grants: the entity has no serviceAccess or service_access field",
-    );
+    // Whether an entity has a grants field is known only with the server's grants source.
+    expect(() => admin.handlers(noGrants, { grants: true })).not.toThrow();
     expect(() => admin.handlers(userContract, { grants: "yes" as unknown as boolean })).toThrow(
       "grants must be true or false",
     );
     expect(() =>
       admin.handlers(userContract, { grants: true, hiddenFields: ["serviceAccess"] }),
     ).toThrow('"serviceAccess" holds the grants that grants: true shows');
+  });
+});
+
+describe("a grants column of another name (ADMIN-2)", () => {
+  // The task model stands in for an app's users: grants live in `details`.
+  const accountEntity = z.object({
+    id: z.string(),
+    title: z.string(),
+    details: z.record(z.string(), level).nullable(),
+  });
+  const accountContract = defineContract("accountService", {
+    entity: accountEntity,
+    methods: { ...adminContract.contract({ entity: accountEntity, sort: ["title"] }) },
+  });
+  const lowered = {
+    access: { adminGet: { service: "Moderate" }, adminUpdate: { service: "Moderate" } },
+    rowless: ["adminGet", "adminUpdate"],
+  } as const;
+  const accountsOf = (options: Parameters<typeof admin.handlers<typeof accountContract>>[1]) =>
+    qd.defineService(accountContract, {
+      model: "task",
+      access: owner("id"),
+      methods: { ...admin.handlers(accountContract, options) },
+    });
+
+  async function startAccounts(service: AnyService, source = true): Promise<TestApp> {
+    const { db, prisma } = kit.harness();
+    const app = await createTestApp({
+      services: [service],
+      db,
+      auth: {
+        loadServiceAccess: async (userId) => {
+          const row = await prisma.task.findUnique({
+            where: { id: userId },
+            select: { details: true },
+          });
+          return (row?.details ?? {}) as Record<string, z.infer<typeof level>>;
+        },
+        ...(source ? { serviceAccessSource: { model: "task", column: "details" } } : {}),
+      },
+    });
+    kit.track(app as unknown as TestApp);
+    return app as unknown as TestApp;
+  }
+
+  type Accounts = {
+    readonly accountService: {
+      adminMeta(input: undefined): Promise<{
+        readonly fields: readonly { readonly name: string; readonly kind?: string }[];
+      }>;
+      adminGet(input: { readonly id: string }): Promise<Record<string, unknown>>;
+      adminUpdate(input: {
+        readonly id: string;
+        readonly data: Readonly<Record<string, unknown>>;
+      }): Promise<Record<string, unknown>>;
+    };
+  };
+  const accountsAs = (app: TestApp, principal: ReturnType<typeof as>): Accounts["accountService"] =>
+    (app.as(principal) as unknown as Accounts).accountService;
+  const takeOver = { details: { accountService: "Admin", projectService: "Admin" } };
+  const detailsOf = async (id: string) =>
+    (await kit.harness().prisma.task.findUniqueOrThrow({ where: { id } })).details;
+
+  it("hides the column from every caller and every write without grants: true", async () => {
+    const app = await startAccounts(accountsOf({}));
+    const board = kit.board();
+    const ada = accountsAs(app, as(board.ada, { accountService: "Admin" }));
+    expect((await ada.adminMeta(undefined)).fields.map(({ name }) => name)).not.toContain(
+      "details",
+    );
+    expect(await ada.adminGet({ id: board.t1 })).not.toHaveProperty("details");
+    await expect(ada.adminUpdate({ id: board.t1, data: takeOver })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    expect(await detailsOf(board.t1)).toBeNull();
+  });
+
+  it("keeps a user under a lowered form from writing their own grants (the audit's case)", async () => {
+    const app = await startAccounts(accountsOf(lowered));
+    const board = kit.board();
+    await kit.harness().prisma.task.update({
+      where: { id: board.t1 },
+      data: { details: { accountService: "Moderate" } },
+    });
+    // The row is the user's own (owner("id")), and its grants say Moderate.
+    const me = accountsAs(app, as(board.t1));
+    await expect(me.adminMeta(undefined)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(me.adminUpdate({ id: board.t1, data: takeOver })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    expect(await detailsOf(board.t1)).toEqual({ accountService: "Moderate" });
+    await expect(me.adminMeta(undefined)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("with grants: true, shows and writes the column for a service-wide Admin only", async () => {
+    const app = await startAccounts(accountsOf({ ...lowered, grants: true }));
+    const board = kit.board();
+    await kit.harness().prisma.task.update({
+      where: { id: board.t1 },
+      data: { details: { accountService: "Moderate" } },
+    });
+    const ada = accountsAs(app, as(board.ada, { accountService: "Admin" }));
+    expect((await ada.adminMeta(undefined)).fields).toContainEqual(
+      expect.objectContaining({ name: "details", kind: "grants" }),
+    );
+    expect(
+      await ada.adminUpdate({ id: board.t2, data: { details: { accountService: "Read" } } }),
+    ).toMatchObject({ details: { accountService: "Read" } });
+    const me = accountsAs(app, as(board.t1));
+    expect(await me.adminGet({ id: board.t1 })).not.toHaveProperty("details");
+    await expect(me.adminUpdate({ id: board.t1, data: takeOver })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(await detailsOf(board.t1)).toEqual({ accountService: "Moderate" });
+  });
+
+  it("fails when the server is made for options that clash with the column, and not without it", async () => {
+    const hiding = () => accountsOf({ grants: true, hiddenFields: ["details"] });
+    await expect(startAccounts(hiding())).rejects.toThrow("holds the grants");
+    const editableContract = defineContract("accountService", {
+      entity: accountEntity,
+      methods: {
+        ...adminContract.contract({ entity: accountEntity, editable: ["title", "details"] }),
+      },
+    });
+    const editing = qd.defineService(editableContract, {
+      model: "task",
+      access: owner("id"),
+      methods: { ...admin.handlers(editableContract) },
+    });
+    await expect(startAccounts(editing)).rejects.toThrow(
+      '"details" is not a field of the entity the kit shows',
+    );
+    // Without a grants source, details is an ordinary field.
+    await expect(
+      startAccounts(accountsOf({ hiddenFields: ["details"] }), false),
+    ).resolves.toBeDefined();
+    await expect(startAccounts(editing, false)).resolves.toBeDefined();
+  });
+
+  it("checks grants: true when the server is made, where the grants column is known", async () => {
+    const granting = accountsOf({ grants: true });
+    await expect(startAccounts(granting, false)).rejects.toThrow(
+      "grants: true needs a grants field",
+    );
+    await expect(startAccounts(granting)).resolves.toBeDefined();
   });
 });
 

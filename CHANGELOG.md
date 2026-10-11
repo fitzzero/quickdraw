@@ -224,6 +224,14 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   client retries only `RATE_LIMITED`), as a 501st stream feed already was;
   a `qd:sub` whose new ids would pass the cap is refused whole. `qd:hello`
   announces the caps in three more `limits.subscriptions` fields.
+- **The admin kit hides the grants column by its configured name.** On the
+  users service of an app whose `auth.serviceAccessSource` column is not
+  named `serviceAccess`, that column leaves `adminMeta`, rows and writes
+  unless `grants: true`, and then shows to service-wide Admins only. Kits
+  that name it in `editable`, `fieldOverrides`, a filter or a sort (or hide
+  it beside `grants: true`) fail at startup, and `grants: true` type-checks
+  on any entity but fails when the dispatcher is made for one with no
+  grants field. Apps that use `serviceAccess` see no change.
 
 ### Security
 
@@ -397,6 +405,10 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   subscriptions (COLL-4).** Nothing counted the collection scopes, topic
   watches and rows one socket held, so a client subscribing to an endless
   run of made-up scopes grew the server's memory without end.
+- **The admin kit protects a grants column of any name (ADMIN-2).** It hid
+  and Admin-gated only `serviceAccess` and `service_access`, so with
+  grants stored under another name every admin caller saw them, and a user
+  under a lowered form could write their own.
 - **A sharing change's re-check no longer reads a stale cache (SHARE-4).**
   With `cacheMs`, the re-check of the caller inside the change's
   transaction read the access cache, so a caller demoted by a write the

@@ -16,7 +16,7 @@ import {
   type PipelineSettings,
 } from "./pipeline/settings";
 import { createRegistry, type Registry } from "./registry";
-import type { AnyService, Service } from "./service";
+import { servedProblem, type AnyService, type ServedContext, type Service } from "./service";
 import type { DbOf, Principal, PrincipalOf } from "./types";
 
 export type { Presence, ServerRooms, Service, StreamHandle };
@@ -130,21 +130,41 @@ export interface Dispatcher<S extends readonly AnyService[] = readonly AnyServic
   readonly limits: DispatcherLimits;
 }
 
-const ACCESS_SINKS = new WeakMap<object, readonly PipelineSettings["flushSink"][]>();
+/** What `createServer` gives the dispatcher it makes, beside the app's options. */
+export interface ServerParts {
+  /**
+   * Sinks to run right after the access sink, before any frame of a flush
+   * is sent: `createServer`'s grants refresh, so a flush that lowers a
+   * user's grants revokes what they held before that flush's frames reach
+   * them.
+   */
+  readonly accessSinks: readonly PipelineSettings["flushSink"][];
+  /** `auth.serviceAccessSource`: the column the admin kit treats as the grants field on its model. */
+  readonly grantsSource: ServedContext["grantsSource"];
+}
 
-/**
- * A copy of `options` whose dispatcher runs `sinks` right after its access
- * sink, before any frame of a flush is sent: `createServer`'s grants
- * refresh, so a flush that lowers a user's grants revokes what they held
- * before that flush's frames reach them.
- */
-export function withAccessSinks<O extends object>(
-  options: O,
-  sinks: readonly PipelineSettings["flushSink"][],
-): O {
+const SERVER_PARTS = new WeakMap<object, ServerParts>();
+
+/** A copy of `options` whose dispatcher gets `parts` (one marker: each copy would lose another's). */
+export function withServerParts<O extends object>(options: O, parts: ServerParts): O {
   const copy = { ...options };
-  ACCESS_SINKS.set(copy, sinks);
+  SERVER_PARTS.set(copy, parts);
   return copy;
+}
+
+/** `TypeError` for the first handler a service cannot be served with (`checkWhenServed`). */
+function checkServed(
+  services: readonly AnyService[],
+  grantsSource: ServedContext["grantsSource"],
+): void {
+  for (const service of services) {
+    for (const method of Object.values(service.methods)) {
+      const problem = servedProblem(method.handler, { service, grantsSource });
+      if (problem !== undefined) {
+        throw new TypeError(`createDispatcher: ${service.name}: ${problem}`);
+      }
+    }
+  }
 }
 
 /** `run`'s `detached` option, checked. */
@@ -212,7 +232,9 @@ export function createDispatcher<const S extends readonly AnyService[]>(
     throw new TypeError("createDispatcher: options must be an object with services and db");
   }
   const registry = createRegistry(options.services);
-  const settings = resolveSettings(options, registry, options.db, ACCESS_SINKS.get(options));
+  const parts = SERVER_PARTS.get(options);
+  checkServed(options.services, parts?.grantsSource);
+  const settings = resolveSettings(options, registry, options.db, parts);
   // Writes made outside any unit of work flush to this dispatcher's sinks,
   // and the tracker's development warnings go out as this dispatcher's,
   // until a server's `close()` detaches it.
