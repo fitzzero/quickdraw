@@ -265,8 +265,12 @@ export interface Revocation {
 export interface RevocationHook {
   /** Re-resolves the subscriptions `change` concerns on this process. */
   changed(change: AccessChange): Promise<void>;
-  /** Re-resolves every subscription of these sockets, whose user's grants changed. */
-  regranted(sockets: readonly QuickdrawServerSocket[]): Promise<void>;
+  /**
+   * Re-resolves every subscription of these sockets, whose user's grants
+   * changed: `userId`'s, whose sockets on this process they are (none when
+   * the user has none here).
+   */
+  regranted(sockets: readonly QuickdrawServerSocket[], userId: string): Promise<void>;
 }
 
 /**
@@ -301,7 +305,7 @@ export function createRevocation(hub: Hub, hooks: readonly RevocationHook[] = []
       const sockets = [...found.keys()];
       await settleAll([
         reresolveAll(hub, found, true),
-        ...hooks.map(async (hook) => await hook.regranted(sockets)),
+        ...hooks.map(async (hook) => await hook.regranted(sockets, userId)),
       ]);
     },
   });

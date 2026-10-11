@@ -15,7 +15,8 @@
 // A changed `serviceAccess` re-authorizes every scope of the user's sockets.
 // A self scope has no anchors, since its user may always open it; when its
 // items follow its service's policy, the same changes re-check them
-// (`selfAccess.ts`: a lost row is `removed`, or the scope resets). 4.1 left
+// (`selfRecheck.ts`: a lost row is `removed`, or the scope resets, and a
+// resume of one nobody here subscribes to reads a page). 4.1 left
 // this to a hand-written `kickFromCollection`
 // (4.1 `src/server/collections.ts:305-318`).
 
@@ -26,7 +27,7 @@ import type { QuickdrawServerSocket } from "../transports/types";
 import { authorizeScopes } from "./access";
 import type { BoundCollection, CollectionHub } from "./bind";
 import { roomOf, type ScopeSubscription } from "./scopes";
-import { recheckSelf, resetSelf } from "./selfAccess";
+import { recheckSelf, resetSelf } from "./selfRecheck";
 
 type Found = ReadonlyMap<QuickdrawServerSocket, readonly ScopeSubscription[]>;
 
@@ -120,11 +121,11 @@ export function createScopeRevocation(hub: CollectionHub): RevocationHook {
         recheckSelf(hub, change),
       ]);
     },
-    regranted: async (sockets) => {
+    regranted: async (sockets, userId) => {
       const found = new Map(
         sockets.map((socket) => [socket, hub.collections.scopes.entries(socket)]),
       );
-      await settleAll([reauthorizeAll(hub, found), resetSelf(hub, sockets)]);
+      await settleAll([reauthorizeAll(hub, found), resetSelf(hub, sockets, userId)]);
     },
   } satisfies RevocationHook);
 }

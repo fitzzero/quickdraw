@@ -1161,7 +1161,10 @@ export const taskService = qd.defineService(task, {
   still follow that policy: a page, `qd:col:items` and every flush hold only
   the rows its user may read at `Read`. A row the user loses goes out
   `removed`, and a change to their membership of a parent row (or a reload
-  of their grants) sends `reset`, so the list loads again.
+  of their grants) sends `reset`, so the list loads again; a client that
+  resumes the list after such a change reads a page. A change to a parent
+  row's own access columns (a project's owner or access list) reaches the
+  list only at the rows' next write or the list's next load.
 - Items are visible to everyone in an anchored scope: no per-row policy or
   field tier applies inside it. Derive the item service's own access from
   the anchor (`inherit` from it, as above): a per-row policy on the item

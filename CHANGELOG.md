@@ -88,17 +88,22 @@ All notable changes to this project will be documented in this file.
   collection on a service with an access policy shows only the rows its
   user may read at `Read` (a service-wide Admin with `adminBypass` still
   sees all of their scope). A row the user loses goes out `removed`. A
-  change to the user's membership of a parent row, a membership write
-  without values, or a reload of their grants sends their open self lists
-  `reset`, and clients load them again. Pages and `qd:col:items` of such a
-  scope cost the policy filter's reads, and each flush costs one batched
-  lookup per self scope it sends to. A service-wide Admin who views another
-  user's self scope reads it whole, but its frames follow the owner's level.
-  Gaps: a parent row's own access columns (a project's owner or access
-  list) reach a self list only at the rows' next write or the list's next
-  load; behind a cluster, a node without the owner's socket decides without
-  the owner's service-wide grants; a regained row comes back at its next
-  change or the list's next load.
+  change to the user's membership of a parent row, or a reload of their
+  grants, sends their open self lists `reset`; a membership write without
+  values resets every open self list of that service. Clients load them
+  again, and a resume after such a change reads a page. Pages and
+  `qd:col:items` of such a scope cost the policy filter's reads, and each
+  flush costs one batched lookup per self scope it sends to (per distinct
+  principal of its user there; on one server, none for a frame of removals
+  alone). A service-wide Admin who views another user's self scope reads it
+  whole, but its frames follow the owner's level. Gaps: a parent row's own
+  access columns (a project's owner or access list) reach a self list only
+  at the rows' next write or the list's next load; behind a cluster, a node
+  without the owner's socket decides for a principal that holds the owner's
+  user id only (no grants, kind, claims or app fields), so a row read only
+  through a service-wide grant goes out `removed`, and a `resolver` that
+  needs more of the principal must cope with that one; a regained row comes
+  back at its next change or the list's next load.
 - **The read/write kit's bulk methods take their single-row level.** A
   bulk method whose form names no level (`"authenticated"`, `"public"`,
   `{ service }`, `custom`) now skips the rows below the row level of

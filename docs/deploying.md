@@ -178,10 +178,13 @@ statements and bytes) and the split end-to-end suite:
   flush that only removes);
 - changes go out whole: that step sends 400 bytes against 268;
 - a flush checks each self scope it names (`scopeAccess: "self"` on a
-  service with a policy) with one batched `levelsFor` for the scope's user:
-  every such scope, since rooms are invisible, where one server checks only
-  the scopes subscribed on it. A node without the user's socket decides for
-  the user without their service-wide grants;
+  service with a policy) with one batched `levelsFor` for the scope's user,
+  16 scopes at a time: every such scope, since rooms are invisible, where
+  one server checks only the scopes subscribed on it, and none whose frame
+  holds removals alone. A node without the user's socket decides for a
+  principal that holds the user id only: no grants, kind, claims or app
+  fields, so a row the user reads only through a service-wide grant goes
+  out `removed`, and a `resolver` policy must cope with such a principal;
 - a flush that changes access waits for every node's answer: a few Valkey
   round trips and the slowest node's re-resolution, at most
   `cluster.timeoutMs`. The wait is in line with the node's flushes, which run

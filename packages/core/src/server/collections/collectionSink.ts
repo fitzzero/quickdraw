@@ -124,7 +124,7 @@ async function emitCollection(
       hub.collections.buffer.skip(plan.room, rev);
     }
   }
-  await denyUnreadable(hub, io, collection, sending);
+  await denyUnreadable(hub, io, collection, sending, cluster);
   // Behind a cluster adapter, changes go out whole (frames of two nodes can arrive out of
   // order), decided by the rows read now; the rows of removals no scope could be named for
   // are read too, so the other nodes keep such a row where it is again.
