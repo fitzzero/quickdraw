@@ -375,6 +375,7 @@ export function buildService(
     data.model,
     definition.collections,
     fail,
+    data.access,
   );
   checkWatches(checked, collections, data, fail);
   const methods = checkMethods(checked, projections, data, definition.methods, fail);

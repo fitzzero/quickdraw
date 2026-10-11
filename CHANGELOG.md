@@ -104,6 +104,15 @@ All notable changes to this project will be documented in this file.
   through a service-wide grant goes out `removed`, and a `resolver` that
   needs more of the principal must cope with that one; a regained row comes
   back at its next change or the list's next load.
+- **A via list over the item service's members table counts only links at
+  its access.** In such a list (the junction is the table the service's
+  `members` policy reads), a link whose role maps below the collection's
+  `access` no longer makes the row a member: it is in no page, count,
+  index, `qd:col:items`, scoped search or delta, and a role change across
+  that line sends `removed` or `added`. Apps whose roles are level names
+  (the sharing kit's default) see no change; a guest-like role
+  (`levels: { guest: "Public" }`) drops those rows from guests' lists. A
+  role missing from the map counts as no level, as in the policy.
 - **The read/write kit's bulk methods take their single-row level.** A
   bulk method whose form names no level (`"authenticated"`, `"public"`,
   `{ service }`, `custom`) now skips the rows below the row level of
@@ -206,6 +215,10 @@ All notable changes to this project will be documented in this file.
   its project kept reaching them, title and all, and no access change ever
   reached a self subscription. Its reads and frames now follow the item
   service's policy.
+- **A demoted member drops out of a via list (COLL-1, via variant).** A
+  `via` collection over a membership table counted every link, so a member
+  demoted below the list's access kept the project in their list, with its
+  updates.
 - **A bulk delete no longer deletes rows `delete` refuses (CRUD-2).** The
   README's map paired `delete: { entry: "Admin" }` with
   `bulkDelete: "authenticated"`, which wrote at `Moderate`: a member

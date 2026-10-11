@@ -9,8 +9,9 @@
 // | `{ service: S, id }`         | nothing more: the same flush's deltas reach every self scope     |
 // |                              | holding the row, and are checked                                 |
 // | `{ service: S, id, userId }` | scope `userId`: `levelsFor` the row; below `access`, `removed`   |
-// |                              | (a `via` scope that no longer links the row is left to the flush |
-// |                              | that removed the link, which sends the removal itself)           |
+// |                              | (a `via` scope that no longer links the row, or links it below   |
+// |                              | its role rule, is left to the flush that removed or demoted the  |
+// |                              | link, which sends the removal itself)                            |
 // | `{ service: S }`             | every self scope of S: `reset`                                   |
 // | `{ service: P, id, userId }` | scope `userId`: `reset`; the client loads it again, filtered     |
 // | `{ service: P }`             | every self scope of S: `reset`                                   |
@@ -34,7 +35,7 @@ import type { QuickdrawServerSocket } from "../transports/types";
 import { followsPolicy } from "./access";
 import type { BoundCollection, CollectionHub } from "./bind";
 import { groupOf, roomOf } from "./scopes";
-import { ownersOf } from "./selfAccess";
+import { ownersOf, stillLinked } from "./selfAccess";
 import { sendFrame } from "./send";
 
 type Io = NonNullable<CollectionHub["io"]>;
@@ -132,30 +133,6 @@ async function resetScope(
   } catch (error) {
     logFailure(hub, collection, error);
   }
-}
-
-/**
- * False when a `via` scope's junction no longer links row `id` to `scope`:
- * the flush that removed the link sends the row's removal itself (a member
- * removed from a project, in a list of their projects through the very
- * membership table). True for a column scope, whose row is not read.
- */
-async function stillLinked(
-  hub: CollectionHub,
-  collection: BoundCollection,
-  scope: string,
-  id: string,
-): Promise<boolean> {
-  if (collection.scope.kind !== "via" || hub.storage === undefined) {
-    return true;
-  }
-  const { model, entry, scope: column } = collection.scope;
-  const links = await hub.storage.findMany(model, {
-    where: { [column]: scope, [entry]: id },
-    select: { [entry]: true },
-    take: 1,
-  });
-  return links.length > 0;
 }
 
 /**

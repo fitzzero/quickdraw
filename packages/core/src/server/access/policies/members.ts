@@ -89,8 +89,13 @@ export function membershipRead(options: object, owner: (option: string) => strin
   });
 }
 
-/** The stored roles that give at least `level`. */
-function rolesAtLeast(read: MembershipRead, level: AccessLevel): string[] {
+/**
+ * The stored roles that give at least `level`: the level names from `level`
+ * up without a `levels` map, else the roles the map gives such a level. A
+ * `via` collection over the item service's own membership table counts only
+ * the links holding one (`collections/define.ts`).
+ */
+export function rolesAtLeast(read: MembershipRead, level: AccessLevel): string[] {
   const enough = new Set<string>(levelsAtLeast(level));
   if (read.levels === undefined) {
     return [...enough];

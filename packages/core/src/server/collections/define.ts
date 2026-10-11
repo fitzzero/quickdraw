@@ -32,7 +32,11 @@ import {
 } from "../../contract/collections";
 import type { AnyContract } from "../../contract/defineContract";
 import { meetsLevel } from "../access/levels";
+import { anyOfPolicies } from "../access/policies/anyOf";
+import { membershipOf, rolesAtLeast } from "../access/policies/members";
+import type { AnyAccessPolicy, MembershipRead } from "../access/policy";
 import type { Projection } from "../emit/projection";
+import { modelKey } from "../storage";
 
 type Fail = (message: string) => never;
 
@@ -54,7 +58,53 @@ export type CollectionScope =
       readonly scope: string;
       /** A junction write sends its entry again to every scope that still holds it (`via`'s `refreshEntry`). */
       readonly refreshEntry: boolean;
+      /**
+       * The junction is the item service's `members` table: only links whose
+       * role gives at least the collection's `access` count, and a write of
+       * the role column moves the link in or out.
+       */
+      readonly level?: LinkLevel;
     };
+
+/** The role rule of a `via` scope over the item service's `members` table. */
+export interface LinkLevel {
+  /** The junction's role column. */
+  readonly column: string;
+  /** The stored roles that give at least the collection's `access`; none: no link counts. */
+  readonly roles: readonly string[];
+}
+
+/** A `via` scope, compiled. */
+export type ViaCollectionScope = Extract<CollectionScope, { readonly kind: "via" }>;
+
+type Values = Readonly<Record<string, unknown>>;
+
+/**
+ * The filter of a `via` scope's junction rows that count as links: `where`,
+ * and over the item service's `members` table a role from the scope's rule.
+ */
+export function linkWhere(via: ViaCollectionScope, where: Values): Values {
+  return via.level === undefined
+    ? where
+    : { ...where, [via.level.column]: { in: [...via.level.roles] } };
+}
+
+/**
+ * Whether junction row values make a link under the scope's role rule:
+ * always without one; `undefined` when the values lack the role.
+ */
+export function linkQualifies(
+  via: ViaCollectionScope,
+  values: Values | undefined,
+): boolean | undefined {
+  if (via.level === undefined) {
+    return true;
+  }
+  const role = values?.[via.level.column];
+  return role === undefined
+    ? undefined
+    : typeof role === "string" && via.level.roles.includes(role);
+}
 
 /** One collection of a service: its contract declaration and the service's option, checked. */
 export interface ServiceCollection {
@@ -246,17 +296,57 @@ function accessOf(
   return "Read";
 }
 
-function scopeOf(def: CollectionDef): CollectionScope {
+/**
+ * The `members` read of `policy`, alone or inside `anyOf` at any depth,
+ * over the junction `via` names: the same model, its `entry` the via's
+ * entry, its `user` the via's scope. A `resolver`'s memberships do not count.
+ */
+function membersReadOf(
+  policy: AnyAccessPolicy | undefined,
+  via: { readonly model: string; readonly entry: string; readonly scope: string },
+): MembershipRead | undefined {
+  if (policy === undefined) {
+    return undefined;
+  }
+  const read = membershipOf(policy);
+  const same =
+    read !== undefined &&
+    modelKey(read.model) === modelKey(via.model) &&
+    read.entry === via.entry &&
+    read.user === via.scope;
+  if (same) {
+    return read;
+  }
+  for (const member of anyOfPolicies(policy) ?? []) {
+    const found = membersReadOf(member, via);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+  return undefined;
+}
+
+function scopeOf(
+  def: CollectionDef,
+  policy: AnyAccessPolicy | undefined,
+  access: AccessLevel,
+): CollectionScope {
   const { scope } = def;
   if (typeof scope === "string") {
     return Object.freeze({ kind: "column", column: scope });
   }
+  const read = membersReadOf(policy, scope);
+  const level =
+    read === undefined
+      ? undefined
+      : Object.freeze({ column: read.level, roles: Object.freeze(rolesAtLeast(read, access)) });
   return Object.freeze({
     kind: "via",
     model: scope.model,
     entry: scope.entry,
     scope: scope.scope,
     refreshEntry: scope.refreshEntry === true,
+    ...(level === undefined ? {} : { level }),
   });
 }
 
@@ -264,7 +354,7 @@ function compileOne(
   [name, def]: readonly [string, CollectionDef],
   contract: Pick<AnyContract, "fields">,
   projections: ReadonlyMap<string, Projection>,
-  option: unknown,
+  [option, policy]: readonly [unknown, AnyAccessPolicy | undefined],
   fail: Fail,
 ): ServiceCollection {
   if (option === undefined) {
@@ -281,7 +371,7 @@ function compileOne(
   checkOrderTiers(name, def.order, contract.fields, access, fail);
   return Object.freeze({
     name,
-    scope: scopeOf(def),
+    scope: scopeOf(def, policy, access),
     item,
     where: Object.freeze({ ...def.where }),
     order: def.order,
@@ -306,6 +396,7 @@ export function compileCollections(
   model: string | undefined,
   option: unknown,
   fail: Fail,
+  policy?: AnyAccessPolicy,
 ): ReadonlyMap<string, ServiceCollection> {
   if (option !== undefined && !isRecord(option)) {
     fail(
@@ -325,7 +416,10 @@ export function compileCollections(
   }
   const compiled = new Map<string, ServiceCollection>();
   for (const [name, def] of declared) {
-    compiled.set(name, compileOne([name, def], contract, projections, options[name], fail));
+    compiled.set(
+      name,
+      compileOne([name, def], contract, projections, [options[name], policy], fail),
+    );
   }
   return compiled;
 }

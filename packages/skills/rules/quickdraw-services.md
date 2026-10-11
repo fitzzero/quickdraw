@@ -198,8 +198,9 @@ and `access`. The service says who may open a scope: `{ anchor: project }`
 (the subscriber's own user id). Everyone in an anchored scope sees every
 item, so derive the item service's access from the anchor (`inherit`); a
 self scope's items follow the item service's policy, so its user gets only
-the rows they may read. An item that
-reads its `via` junction (a member count) declares
+the rows they may read. A `via` scope over the item service's own `members`
+table counts only links whose role gives at least the collection's
+`access`. An item that reads its `via` junction (a member count) declares
 `via({ model, entry, scope, refreshEntry: true })`, or the count goes stale
 in every scope but the one a membership write links.
 

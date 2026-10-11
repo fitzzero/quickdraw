@@ -34,6 +34,7 @@ import { meetsLevel } from "../access/levels";
 import type { Principal } from "../types";
 import { followsPolicy } from "./access";
 import type { BoundCollection, CollectionHub } from "./bind";
+import { linkWhere } from "./define";
 import type { ScopePlan } from "./deltas";
 
 type Io = NonNullable<CollectionHub["io"]>;
@@ -126,4 +127,29 @@ export async function denyUnreadable(
       batch.map(async (plan) => await denyPlan(hub, io, collection, plan, cluster)),
     );
   }
+}
+
+/**
+ * False when a `via` scope's junction no longer links row `id` to `scope`
+ * (a link below its role rule counts as none): the flush that removed or
+ * demoted the link sends the row's removal itself, so a member removed from
+ * a project, in a list of their projects through the very membership table,
+ * gets it once. True for a column scope, whose row is not read.
+ */
+export async function stillLinked(
+  hub: Pick<CollectionHub, "storage">,
+  collection: BoundCollection,
+  scope: string,
+  id: string,
+): Promise<boolean> {
+  if (collection.scope.kind !== "via" || hub.storage === undefined) {
+    return true;
+  }
+  const via = collection.scope;
+  const links = await hub.storage.findMany(via.model, {
+    where: linkWhere(via, { [via.scope]: scope, [via.entry]: id }),
+    select: { [via.entry]: true },
+    take: 1,
+  });
+  return links.length > 0;
 }

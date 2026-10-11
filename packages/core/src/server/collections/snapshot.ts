@@ -27,7 +27,7 @@ import type { StorageAdapter, StorageRow, StorageWhere } from "../storage";
 import { unreadable } from "../transports/ack";
 import type { BoundCollection } from "./bind";
 import { afterCursor, decodeCursor, encodeCursor, orderByOf, type CursorValues } from "./cursor";
-import type { ServiceCollection } from "./define";
+import { linkWhere, type ServiceCollection } from "./define";
 import { readIndex } from "./index";
 import { itemOf, readableMembers, selectWith } from "./items";
 
@@ -79,7 +79,7 @@ export async function membersWhere(
   }
   const { model, entry, scope: column } = collection.scope;
   const links = await storage.findMany(model, {
-    where: { [column]: scope },
+    where: linkWhere(collection.scope, { [column]: scope }),
     select: { [entry]: true },
     ...(maxLinks === undefined ? {} : { orderBy: { [entry]: "asc" }, take: maxLinks }),
   });

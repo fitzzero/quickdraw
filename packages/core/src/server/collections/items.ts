@@ -17,7 +17,7 @@ import { pickKeys, projectRow } from "../emit/projection";
 import { strip } from "../emit/tiers";
 import type { StorageAdapter, StorageRow, StorageWhere } from "../storage";
 import type { BoundCollection } from "./bind";
-import type { ServiceCollection } from "./define";
+import { linkWhere, type ServiceCollection } from "./define";
 
 /** The most ids one `qd:col:items` may name. */
 export const MAX_ITEM_IDS = 200;
@@ -135,7 +135,7 @@ async function membersAmong(
   }
   const { model, entry, scope: column } = collection.scope;
   const links = await storage.findMany(model, {
-    where: { [column]: scope, [entry]: { in: [...ids] } },
+    where: linkWhere(collection.scope, { [column]: scope, [entry]: { in: [...ids] } }),
     select: { [entry]: true },
   });
   const linked = links.map((link) => link[entry]).filter((id) => typeof id === "string");

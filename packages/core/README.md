@@ -1148,7 +1148,12 @@ export const taskService = qd.defineService(task, {
   pages; `where` is an equality filter on membership; `access` is the level
   needed on the anchor (default `Read`).
 - A junction write adds or removes its entry in the one scope it links.
-  When the item reads the junction (a chat's `memberCount`), declare
+  Over the item service's own `members` table (its policy reads the
+  junction with the same `entry` and `user`), a link counts only when its
+  role gives at least the collection's `access`: a role change across that
+  line adds or removes the entry, and a link below it is in no page, count,
+  index, `qd:col:items` or scoped search. When the item reads the junction
+  (a chat's `memberCount`), declare
   `via({ model, entry, scope, refreshEntry: true })`: every junction write
   then also sends the entry again, `updated`, to each scope that still
   holds it, for one more read of the item per flush.
@@ -2091,7 +2096,7 @@ export const project = defineContract("projectService", {
     }),
   },
   collections: {
-    // each user's projects: an invite adds the project, a remove or a leave takes it out
+    // each user's projects: an invite adds the project; a remove, a leave or a role below Read takes it out
     mine: {
       describe: "The projects a user is a member of.",
       scope: via({ model: "projectMember", entry: "projectId", scope: "userId" }),

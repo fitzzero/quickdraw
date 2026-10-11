@@ -22,6 +22,15 @@
 // |                                | ones it removed           |                |
 // | `via` entry created or touched | the same (its links       | its links now  |
 // |                                | before this flush)        | (read)         |
+// | `via` junction role update     | the old link, if its role | the new link,  |
+// | (a `members` table)            | counted                   | if it counts   |
+//
+// A `via` scope over the item service's own `members` table counts only the
+// links whose role gives at least the collection's `access` (`define.ts`):
+// a junction row below it links nothing, every link read asks for such a
+// role, and a write of the role column is a move like one of the entry or
+// scope columns. The members policy registers the role as interest already,
+// so this costs no read.
 //
 // Left gives `removed`, entered `added` with the full item (never a patch: a
 // client cannot patch a row it never had), stayed `patched` or `updated` as
@@ -58,7 +67,7 @@ import { frameKind, type FrameKind } from "../emit/frames";
 import { modelKey, type StorageAdapter, type StorageRow } from "../storage";
 import { ANY_FIELD, type WriteRecord } from "../uow/types";
 import type { BoundCollection } from "./bind";
-import type { CollectionScope } from "./define";
+import { linkQualifies, linkWhere, type CollectionScope } from "./define";
 import { indexColumns } from "./index";
 import { matchesWhere, membershipColumns, scopeIn, selectWith } from "./items";
 
@@ -256,6 +265,11 @@ function addLink(
   }
 }
 
+/** True when a write of `field` can move a junction row's link: its entry, its scope, or the role the rule reads. */
+function movesLink(via: Via, field: string): boolean {
+  return field === via.entry || field === via.scope || field === via.level?.column;
+}
+
 function linkEvents(via: Via, writes: readonly WriteRecord[]): LinkEvents {
   const events: LinkEvents = {
     linked: new Map(),
@@ -272,38 +286,46 @@ function linkEvents(via: Via, writes: readonly WriteRecord[]): LinkEvents {
   for (const write of writes) {
     if (write.op === "delete") {
       const link = linkOf(via, write.before);
-      addLink(events.unlinked, link);
+      // A link below the role rule was never one; without its role, it is removed to be safe.
+      if (linkQualifies(via, write.before) !== false) {
+        addLink(events.unlinked, link);
+      }
       name(link);
       events.resetAll ||= link === undefined;
       continue;
     }
     const now = linkOf(via, write.after);
-    if (now === undefined || write.fields.includes(ANY_FIELD)) {
+    const counts = linkQualifies(via, write.after);
+    // Values missing (its link, or the role the rule needs): the links are read instead.
+    if (now === undefined || counts === undefined || write.fields.includes(ANY_FIELD)) {
       events.unknown.push(write.id);
       continue;
     }
     name(now);
-    const moved = write.fields.some((field) => field === via.entry || field === via.scope);
-    if (write.op === "create" || moved) {
+    const moved = write.fields.some((field) => movesLink(via, field));
+    if ((write.op === "create" || moved) && counts) {
       addLink(events.linked, now);
     }
     if (write.op === "update" && moved) {
-      const old = linkOf(via, { ...write.after, ...write.before });
-      addLink(events.unlinked, old);
+      const before = { ...write.after, ...write.before };
+      const old = linkOf(via, before);
+      if (linkQualifies(via, before) !== false) {
+        addLink(events.unlinked, old);
+      }
       name(old);
     }
   }
   return events;
 }
 
-/** The current links of `ids` (rows of the junction), by entry. */
+/** The current links among the junction rows `where` matches (those the role rule counts), by entry. */
 async function readLinks(
   storage: StorageAdapter,
   via: Via,
   where: Readonly<Record<string, unknown>>,
 ): Promise<Map<string, Set<string>>> {
   const rows = await storage.findMany(modelKey(via.model), {
-    where,
+    where: linkWhere(via, where),
     select: { [via.entry]: true, [via.scope]: true },
   });
   const links = new Map<string, Set<string>>();

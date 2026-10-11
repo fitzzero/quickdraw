@@ -96,7 +96,8 @@ function registerInterest(storage: StorageAdapter | undefined, bound: BoundColle
     storage?.registerInterest(bound.model, [scope.column, ...where]);
     return;
   }
-  storage?.registerInterest(modelKey(scope.model), [scope.entry, scope.scope]);
+  const role = scope.level === undefined ? [] : [scope.level.column];
+  storage?.registerInterest(modelKey(scope.model), [scope.entry, scope.scope, ...role]);
   if (where.length > 0) {
     storage?.registerInterest(bound.model, where);
   }
