@@ -63,7 +63,7 @@ function isPlain(value: unknown): value is object {
  * document `root` (`#`, `#/definitions/<name>` or `#/$defs/<name>`), or
  * itself without one; `undefined` for a reference it cannot follow.
  */
-function referenced(node: UnknownRecord, root: UnknownRecord): UnknownRecord | undefined {
+export function referenced(node: UnknownRecord, root: UnknownRecord): UnknownRecord | undefined {
   const ref = node.$ref;
   if (typeof ref !== "string") {
     return node;

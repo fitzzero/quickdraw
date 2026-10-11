@@ -265,6 +265,22 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
 - **Presence counts only rooms joined through `ctx.rooms.join`.** A socket
   a raw `socket.join` put in a room is no longer counted on this process.
 - **A service name with `:` or `@` throws** at `defineContract`.
+- **The MCP HTTP routes refuse web pages unless listed.** A request
+  carrying an `Origin` header gets 403 unless
+  `createMcpHttpRouter({ allowedOrigins })` lists its origin; a page that
+  calls `/mcp/invoke` must be listed. `allowedHosts` optionally refuses
+  other `Host` names.
+- **MCP queries over HTTP share one lane per caller.** Per bearer token, or
+  per address when anonymous: a busy agent can see `RATE_LIMITED`.
+- **An MCP input with `.meta({ id })` takes its object's properties as
+  arguments**, no longer `{ input }`, and its bound keys bind; a bound key
+  in an id'd union or intersection branch now fails `createMcpRegistry`, and
+  a call that sends a bound argument its tool does not fill is `FORBIDDEN`
+  (before, it was stripped or passed on).
+- **MCP custom tools obey `initQuickdraw({ kinds })`**, and take `kinds` of
+  their own.
+- **A `principal` hook's `QuickdrawError` refusal logs at debug**, not as an
+  error.
 
 ### Security
 
@@ -468,6 +484,19 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
 - **The README's sharing example takes a removed user out of the board
   room (RT-6).** Its `onChange` only logged, so a user who lost access kept
   receiving the board's events.
+- **An MCP agent bound to one task stays on it (MCP-1).** An input written
+  as a `$ref` (a Zod schema with `.meta({ id })`) was not seen as an object,
+  so its bound key was never filled and the agent named any task; a bound
+  key behind a `$ref` in a branch went unchecked; and a loose input passed a
+  stray bound key on.
+- **A web page cannot call the MCP HTTP routes from a user's browser
+  (MCP-3).** They answered any `Origin` and `Host`.
+- **One MCP HTTP caller cannot run unlimited queries (MCP-4).** Each request
+  was a lane of its own; 120 concurrent anonymous calls all ran.
+- **MCP custom tools check the caller's kind (MCP-6).** An agent ran a
+  custom tool of a users-only app.
+- **A refused MCP token is no error log (MCP-7).** A hook's refusal was
+  logged as an error, with whatever its message held.
 
 ### Codemod
 

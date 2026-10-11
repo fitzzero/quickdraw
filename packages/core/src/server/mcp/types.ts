@@ -209,6 +209,14 @@ export interface McpCustomTool<
    */
   readonly access?: McpToolAccess;
   /**
+   * The kinds of principal (`principal.kind`) that may call the tool, within
+   * the ones the app's `initQuickdraw({ kinds })` admits, which it admits by
+   * default: a caller of another kind gets `FORBIDDEN` before the arguments
+   * are read or the handler runs. A `"public"` tool takes none of its own (a
+   * caller of a refused kind could call it signed out).
+   */
+  readonly kinds?: readonly NonNullable<PrincipalOfServices<S>["kind"]>[];
+  /**
    * The tool's arguments. A Standard Schema that can describe itself as JSON
    * Schema (Zod 4.2 or later) validates them before the handler runs; a JSON
    * Schema object is listed as it is, and the handler checks the arguments.

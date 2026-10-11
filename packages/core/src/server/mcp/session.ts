@@ -1,17 +1,21 @@
 // What a tool call runs as: the principal the registry's `principal` hook
 // maps the session or token to, the `ctx.mcp` fields its `context` hook adds,
-// and a synthetic connection id. An MCP call has no socket, so the session id
-// stands in for one: the queries of one stdio session share one concurrency
-// lane (RFC 0003 section 9, step 2), exactly as a socket's queries do.
+// and a synthetic connection id: the concurrency lane its queries share (RFC
+// 0003 section 9, step 2), as a socket's queries do. A stdio session is one
+// lane. Each HTTP request is a session of its own, so its lane is its
+// caller's (the 5.1 audit's MCP-4): one per bearer token (by a hash, never
+// the token itself), per user for a principal without a token, and per
+// remote address for an anonymous request. A hook's refusal
+// (`QuickdrawError` `UNAUTHENTICATED` or `FORBIDDEN`) is logged at debug.
 
+import { createHash } from "node:crypto";
 import type { Logger } from "../../contract/logger";
 import { QuickdrawError } from "../../protocol/errors";
 import { lazyMembers, type CallOptions } from "../caller";
-import type { Dispatcher } from "../dispatcher";
 import { toQuickdrawError } from "../pipeline/errors";
 import { describeError } from "../pipeline/metrics";
 import type { DispatchRequest, DispatchResult } from "../pipeline/request";
-import { toPrincipal } from "../transports/auth";
+import { isForbiddenCredential, isRefusal, toPrincipal } from "../transports/auth";
 import type { McpContext, Principal } from "../types";
 import type { McpCallOptions, McpCallResult, McpRequest } from "./types";
 
@@ -30,7 +34,7 @@ export type ContextHook = (request: McpRequest, principal: Principal | null) => 
 
 /** What resolving sessions and making calls in them needs. */
 export interface SessionSettings {
-  readonly dispatcher: Pick<Dispatcher, "call">;
+  readonly dispatcher: { call(request: DispatchRequest): Promise<DispatchResult> };
   readonly principal: PrincipalHook | undefined;
   readonly context: ContextHook | undefined;
   readonly logger: Logger;
@@ -48,13 +52,38 @@ async function principalOf(
   try {
     return toPrincipal(await settings.principal(request));
   } catch (error) {
-    settings.logger.error("MCP authentication failed", {
+    // A refusal the hook made on purpose is the caller's doing; a hook that broke is the app's.
+    const refused = isRefusal(error) || isForbiddenCredential(error);
+    settings.logger[refused ? "debug" : "error"]("MCP authentication failed", {
       category: CATEGORY,
       transport: request.transport,
       error: describeError(error),
     });
     throw new QuickdrawError("UNAUTHENTICATED", "Authentication failed");
   }
+}
+
+/** The address an HTTP request came from: Express's `req.ip` (which honors trust proxy), or the socket's. */
+function addressOf(request: McpRequest & { readonly transport: "http" }): string {
+  const { ip } = request.req as { readonly ip?: unknown };
+  return typeof ip === "string" && ip !== ""
+    ? ip
+    : (request.req.socket?.remoteAddress ?? "unknown");
+}
+
+/** The lane a call's queries share: its stdio session's, or its HTTP caller's. */
+function laneOf(request: McpRequest, principal: Principal | null): string {
+  if (request.transport === "stdio") {
+    return `mcp:${request.sessionId}`;
+  }
+  if (principal === null) {
+    return `mcp:http:address:${addressOf(request)}`;
+  }
+  if (request.token === null) {
+    return `mcp:http:user:${principal.userId}`;
+  }
+  const hash = createHash("sha256").update(request.token).digest("base64url").slice(0, 22);
+  return `mcp:http:token:${hash}`;
 }
 
 async function contextOf(
@@ -86,7 +115,7 @@ export async function openSession(
 ): Promise<McpSession> {
   const principal = await principalOf(settings, request);
   const mcp = await contextOf(settings, request, principal);
-  return { principal, mcp, connectionId: `mcp:${request.sessionId}` };
+  return { principal, mcp, connectionId: laneOf(request, principal) };
 }
 
 /** A failed call's result. An `INTERNAL` failure is logged with what was thrown. */

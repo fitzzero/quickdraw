@@ -180,6 +180,33 @@ describe("describeTools", () => {
     `);
   });
 
+  it("lists the definitions of a wrapped input at the root, where its $refs resolve", () => {
+    const branchy = defineContract("branchyService", {
+      methods: {
+        pick: query({
+          input: z.union([z.object({ a: z.string() }).meta({ id: "McpToolsBranch" }), z.string()]),
+          output: z.string(),
+        }),
+      },
+    });
+    const service = qd.defineService(branchy, {
+      methods: { pick: { access: "public", handler: () => "picked" } },
+    });
+    const [tool] = describeTools([service]);
+    const schema = tool?.inputSchema as unknown as {
+      readonly definitions?: Readonly<Record<string, unknown>>;
+      readonly properties: { readonly input: Readonly<Record<string, unknown>> };
+    };
+    expect(schema.definitions?.McpToolsBranch).toMatchObject({
+      type: "object",
+      properties: { a: { type: "string" } },
+    });
+    expect((schema.properties.input.anyOf as unknown[])[0]).toEqual({
+      $ref: "#/definitions/McpToolsBranch",
+    });
+    expect(schema.properties.input).not.toHaveProperty("definitions");
+  });
+
   it("names tools with the name option, and selects them with include and exclude", () => {
     const names = (options: Parameters<typeof describeTools>[1]) =>
       describeTools([taskService, noteService], options).map((tool) => tool.name);

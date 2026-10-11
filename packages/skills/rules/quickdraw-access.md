@@ -72,7 +72,9 @@ export const tokenService = qd.defineService(token, {
 - Kinds separate only what the hooks label: label an MCP caller
   `kind: "agent"` in the bridge's `principal` hook (`bearerAuth` with
   `loadPrincipal: (userId) => ({ userId, kind: "agent" })`), or a method
-  with `kinds: ["user"]` lets it in as a user.
+  with `kinds: ["user"]` lets it in as a user. An MCP custom tool obeys the
+  app's kinds too, and takes `kinds` of its own within them, never a kind
+  check in its handler.
 - Never check the kind in a handler (`if (ctx.principal.kind !== "user")
 throw ...`; `no-inline-auth-guard` reports it) or in a `custom` form:
   `kinds` combines with any form (`{ entry: "Moderate" }` and

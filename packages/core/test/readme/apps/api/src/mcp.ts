@@ -8,6 +8,7 @@ import { projectService } from "./services/project";
 import { taskService } from "./services/task";
 
 // #region mcp
+import { createPublicApiLimiter } from "@fitzzero/quickdraw-core/server/express";
 import {
   createMcpHttpRouter,
   createMcpRegistry,
@@ -39,7 +40,9 @@ const registry = createMcpRegistry({
   ],
 });
 
-// GET /mcp/tools, POST /mcp/invoke
+// GET /mcp/tools, POST /mcp/invoke; the routes have no rate limit of their own, so limit them per
+// address (never by the bearer token, which nothing has checked yet)
+app.use("/mcp", createPublicApiLimiter({ max: 600 }));
 app.use(createMcpHttpRouter({ registry }));
 // in an MCP client's process
 createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });

@@ -248,6 +248,28 @@ describe("createMcpRegistry", () => {
     });
   });
 
+  test("a custom tool's kinds are the app's principal kinds", () => {
+    const tool = { description: "A tool.", inputSchema: { type: "object" as const } };
+    createMcpRegistry({
+      services: [noteService],
+      dispatcher,
+      customTools: [{ ...tool, name: "agents", kinds: ["agent"], handler: () => null }],
+    });
+    createMcpRegistry({
+      services: [noteService],
+      dispatcher,
+      customTools: [
+        {
+          ...tool,
+          name: "robots",
+          // @ts-expect-error -- "robot" is no kind of the app's principal
+          kinds: ["robot"],
+          handler: () => null,
+        },
+      ],
+    });
+  });
+
   test("a custom tool's access is public or authenticated, and may be left out", () => {
     expectTypeOf<NonNullable<McpCustomTool["access"]>>().toEqualTypeOf<McpToolAccess>();
     expectTypeOf<McpToolAccess>().toEqualTypeOf<"public" | "authenticated">();

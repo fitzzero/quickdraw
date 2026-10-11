@@ -1341,13 +1341,18 @@ one, by `service.method (kind)`, which tells an agent nothing), with the
 input schema's JSON Schema as its arguments and `readOnlyHint` on every
 query. The API docs print each method's default tool name and its read-only
 hint. Every tool call goes through the dispatcher with transport `"mcp"`,
-so input validation, access checks and limits apply exactly as on a socket.
-A method whose input cannot describe itself as JSON Schema stops the
-registry at startup, naming the method, unless it is excluded.
+so input validation and access checks apply as on a socket. Queries share
+a concurrency lane per caller: a stdio process, and on HTTP one per bearer
+token, or per address when anonymous (16 run, 64 wait, then
+`RATE_LIMITED`). The HTTP routes have no rate limit of their own: limit
+them per address, as below. A method whose input cannot describe itself
+as JSON Schema stops the registry at startup, naming the method, unless it
+is excluded.
 
 <!-- example: apps/api/src/mcp.ts#mcp -->
 
 ```ts
+import { createPublicApiLimiter } from "@fitzzero/quickdraw-core/server/express";
 import {
   createMcpHttpRouter,
   createMcpRegistry,
@@ -1379,7 +1384,9 @@ const registry = createMcpRegistry({
   ],
 });
 
-// GET /mcp/tools, POST /mcp/invoke
+// GET /mcp/tools, POST /mcp/invoke; the routes have no rate limit of their own, so limit them per
+// address (never by the bearer token, which nothing has checked yet)
+app.use("/mcp", createPublicApiLimiter({ max: 600 }));
 app.use(createMcpHttpRouter({ registry }));
 // in an MCP client's process
 createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
@@ -1394,7 +1401,13 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   sends console output to stderr so only the protocol reaches stdout.
 - **HTTP**: `GET /mcp/tools` and `POST /mcp/invoke`, which takes
   `{ name, arguments }` and answers `{ success: true, data }`, or
-  `{ success: false, error, code, data? }` with the code's HTTP status.
+  `{ success: false, error, code, data? }` with the code's HTTP status. A
+  request from a web page (one with an `Origin` header) is answered 403
+  unless `createMcpHttpRouter({ allowedOrigins })` lists its origin (exact
+  origins or anchored patterns, as `socketAuth` takes them; none by
+  default); an MCP client sends no `Origin`. For a server on a developer's
+  machine or a LAN, `allowedHosts: ["localhost", "127.0.0.1"]` also refuses
+  a request for any other `Host`, which a DNS-rebinding page would send.
 - An anonymous caller (the `principal` hook returned nothing) may call
   `"public"` methods, and custom tools that declare `access: "public"`; any
   other tool answers `UNAUTHENTICATED` before it runs. A failed call reaches
@@ -1408,7 +1421,14 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   labels every MCP caller `kind: "agent"`, so a method with
   `kinds: ["user"]` refuses it. Check a session token against the store on
   every call (`bearerAuth`), never with `verifyJWT` alone, which a
-  signed-out session still passes.
+  signed-out session still passes. A custom tool obeys the app's
+  `initQuickdraw({ kinds })` too, and takes `kinds` of its own within it
+  (`FORBIDDEN` for another kind, before its arguments are read); a
+  `"public"` tool takes none.
+- To refuse a token, the `principal` hook throws
+  `QuickdrawError("UNAUTHENTICATED")`, which is logged at debug, as the
+  caller's doing; anything else it throws is logged as an error. Never put
+  the token in the message.
 
 `bind` fills chosen arguments from who is calling instead of from the agent,
 so an agent bound to one project cannot name another in its calls. Here an
@@ -1437,9 +1457,12 @@ app.use(createMcpHttpRouter({ registry: projectAgents, path: "/agents" }));
 
 - Each bound argument is left out of the `inputSchema` of every method's tool
   whose object input has it: `create_task` lists `id` and `title`, and
-  `count_tasks` takes no arguments. Every call of such a tool gets the
-  binder's value before its input is validated, through `tools/call` and both
-  shapes of `POST /mcp/invoke` alike.
+  `count_tasks` takes no arguments. An input that is a `$ref` (a Zod schema
+  with `.meta({ id })`) counts as the object it names. Every call of such a
+  tool gets the binder's value before its input is validated, through
+  `tools/call` and both shapes of `POST /mcp/invoke` alike, and a call of
+  any other tool that sends a bound argument is `FORBIDDEN`. Only top-level
+  arguments are bound.
 - A call fails closed, before the method runs: `UNAUTHENTICATED` for an
   anonymous caller, and `FORBIDDEN` when the binder returns `undefined` or
   `null`, or when the agent sent the argument with another value. A binder
@@ -1447,9 +1470,10 @@ app.use(createMcpHttpRouter({ registry: projectAgents, path: "/agents" }));
   `QuickdrawError` it threw.
 - `createMcpRegistry` throws at startup when a bound argument is in no
   selected method's object input (a misspelled name would leave the real
-  argument to the agent), and when it is a property of an input that is not
-  an object, which it names: leave that method out, or make its input an
-  object.
+  argument to the agent), and when an input may hold it anywhere it cannot
+  be filled (an input that is not an object, or a branch of a union or an
+  intersection, behind a `$ref` too), which it names: leave that method
+  out, or make its input an object.
 - Custom tools are never bound, and neither are the calls their `caller`
   makes: a custom tool reads `principal` itself. `describeTools` and the API
   docs list the inputs as the contracts declare them, with nothing bound.
@@ -1462,7 +1486,9 @@ Two more needs are met by the options above, with nothing added:
 - **A tool set per kind of caller.** Make one registry per kind, each with its
   own `include`, `bind` and `principal`, and serve each at its own `path` or
   from its own stdio entry, as above. A registry's `principal` hook refuses
-  the other kinds: throwing fails their calls with `UNAUTHENTICATED`.
+  the other kinds: throwing `QuickdrawError("UNAUTHENTICATED")` fails their
+  calls with `UNAUTHENTICATED` and logs at debug; never put a token in the
+  message.
 - **Frozen public tools.** `name` gives a method's tool any public name, as
   `create_task` above. When agents depend on tool names and argument shapes
   that must never change, give that surface a contract of its own: its

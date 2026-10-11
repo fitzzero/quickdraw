@@ -1915,7 +1915,12 @@ native client sends the token as `auth.token`.
   which ids exist (only a service-wide `Admin` gets `NOT_FOUND`).
 - **A mutation ignores its caller's cancel**: only its time limit (30 s by
   default) stops it.
-- **MCP custom tools default to `access: "authenticated"`.**
+- **MCP custom tools default to `access: "authenticated"`**, and obey the
+  app's `initQuickdraw({ kinds })`.
+- **The MCP HTTP routes refuse a request from a web page** (one carrying an
+  `Origin` header) with 403 unless `createMcpHttpRouter({ allowedOrigins })`
+  lists its origin, and their queries share one lane per bearer token, or
+  per address when anonymous, where 4.x let each request run on its own.
 
 ## Running 4.x and 5.0 clients together
 

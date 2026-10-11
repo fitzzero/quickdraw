@@ -4,11 +4,13 @@
 // `ctx.mcp` come from the registry's hooks; `bind` fills chosen arguments
 // from the principal; custom tools sit beside the generated ones.
 
+import { randomUUID } from "node:crypto";
+import type { IncomingMessage } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { z as z3 } from "zod3";
-import { defineContract, query, QuickdrawError } from "../../index";
-import { createDispatcher } from "../index";
+import { defineContract, mutation, query, QuickdrawError } from "../../index";
+import { createDispatcher, initQuickdraw } from "../index";
 import {
   agentAuth,
   bindSetup,
@@ -17,6 +19,7 @@ import {
   setup,
   TOKENS,
   type AgentMcp,
+  type AgentPrincipal,
 } from "./__tests__/fixtures";
 import {
   createMcpRegistry,
@@ -163,6 +166,68 @@ describe("sessions", () => {
     expect(await otherSession).toEqual({ ok: true, data: "C" });
   });
 
+  it("gives each HTTP caller one lane: its bearer token's, or its address's when anonymous (MCP-4)", async () => {
+    const limits = { limits: { maxInFlightQueries: 1, maxQueuedQueries: 0 } };
+    const http = (token: string | null, remoteAddress: string): McpRequest => ({
+      transport: "http",
+      sessionId: randomUUID(),
+      token,
+      headers: {},
+      req: { socket: { remoteAddress } } as unknown as IncomingMessage,
+    });
+    const agents = setup(
+      agentAuth((request) => (request.transport === "http" ? request.token : null)),
+      limits,
+    );
+    const first = agents.registry.call(
+      "noteService_wait",
+      { key: "a" },
+      { request: http("writer-token", "10.0.0.1") },
+    );
+    await vi.waitFor(() => expect(agents.services.gates.has("a")).toBe(true));
+    // Another request with the same token, from another address, waits in the same lane.
+    const sameToken = await agents.registry.call(
+      "noteService_wait",
+      { key: "b" },
+      { request: http("writer-token", "10.0.0.9") },
+    );
+    expect(errorOf(sameToken).code).toBe("RATE_LIMITED");
+    const otherToken = agents.registry.call(
+      "noteService_wait",
+      { key: "c" },
+      { request: http("reader-token", "10.0.0.1") },
+    );
+    await vi.waitFor(() => expect(agents.services.gates.has("c")).toBe(true));
+    agents.services.gates.get("a")?.resolve("A");
+    agents.services.gates.get("c")?.resolve("C");
+    expect(await first).toEqual({ ok: true, data: "A" });
+    expect(await otherToken).toEqual({ ok: true, data: "C" });
+
+    const anonymous = setup({ principal: () => null, context: undefined }, limits);
+    const held = anonymous.registry.call(
+      "noteService_wait",
+      { key: "d" },
+      { request: http(null, "10.0.0.1") },
+    );
+    await vi.waitFor(() => expect(anonymous.services.gates.has("d")).toBe(true));
+    const sameAddress = await anonymous.registry.call(
+      "noteService_wait",
+      { key: "e" },
+      { request: http(null, "10.0.0.1") },
+    );
+    expect(errorOf(sameAddress).code).toBe("RATE_LIMITED");
+    const otherAddress = anonymous.registry.call(
+      "noteService_wait",
+      { key: "f" },
+      { request: http(null, "10.0.0.2") },
+    );
+    await vi.waitFor(() => expect(anonymous.services.gates.has("f")).toBe(true));
+    anonymous.services.gates.get("d")?.resolve("D");
+    anonymous.services.gates.get("f")?.resolve("F");
+    expect(await held).toEqual({ ok: true, data: "D" });
+    expect(await otherAddress).toEqual({ ok: true, data: "F" });
+  });
+
   it("cancels a query when the call's signal aborts", async () => {
     const { registry, services } = setup();
     const controller = new AbortController();
@@ -203,7 +268,21 @@ describe("sessions", () => {
       code: "UNAUTHENTICATED",
       message: "Authentication failed",
     });
-    expect(logger.at("error").map((entry) => entry.message)).toEqual(["MCP authentication failed"]);
+    // A hook's refusal is the caller's, logged at debug, and no token reaches the log (MCP-7).
+    expect(logger.at("error")).toEqual([]);
+    expect(logger.at("debug").map((entry) => entry.message)).toContain("MCP authentication failed");
+    expect(JSON.stringify(logger.entries)).not.toContain("stolen-token");
+    // A hook that breaks is still an error.
+    const broken = setup({
+      principal: () => {
+        throw new Error("the token store is down");
+      },
+    });
+    const down = await broken.registry.call("taskService_list", {}, { request: stdio() });
+    expect(errorOf(down).code).toBe("UNAUTHENTICATED");
+    expect(broken.logger.at("error").map((entry) => entry.message)).toEqual([
+      "MCP authentication failed",
+    ]);
     const anonymous = setup({ principal: () => null, context: undefined }).registry;
     expect(await anonymous.call("taskService_whoami", {}, { request: stdio() })).toMatchObject({
       ok: true,
@@ -568,6 +647,128 @@ describe("bound arguments", () => {
       required: ["title"],
     });
   });
+
+  it("follow an input's $ref to its object, refuse a bound key in any branch, and refuse a stray bound argument (MCP-1)", async () => {
+    const echo = z.object({ taskId: z.string().nullable(), by: z.string().nullable() });
+    const chat = defineContract("chatService", {
+      methods: {
+        history: query({ input: z.object({ taskId: z.string() }), output: echo }),
+        post: mutation({
+          input: z.object({ taskId: z.string(), message: z.string() }).meta({ id: "McpBindPost" }),
+          output: echo,
+        }),
+        loose: mutation({ input: z.looseObject({ message: z.string() }), output: echo }),
+        note: mutation({
+          input: z
+            .object({ message: z.string() })
+            .and(z.object({ taskId: z.string() }).meta({ id: "McpBindTaskRef" })),
+          output: echo,
+        }),
+      },
+    });
+    const echoOf = (input: object, userId: string | undefined) => {
+      const { taskId } = input as { readonly taskId?: unknown };
+      return { taskId: typeof taskId === "string" ? taskId : null, by: userId ?? null };
+    };
+    const chatService = qd.defineService(chat, {
+      methods: {
+        history: {
+          access: "authenticated",
+          handler: ({ input, ctx }) => echoOf(input, ctx.principal?.userId),
+        },
+        post: {
+          access: "authenticated",
+          handler: ({ input, ctx }) => echoOf(input, ctx.principal?.userId),
+        },
+        loose: {
+          access: "authenticated",
+          handler: ({ input, ctx }) => echoOf(input, ctx.principal?.userId),
+        },
+        note: {
+          access: "authenticated",
+          handler: ({ input, ctx }) => echoOf(input, ctx.principal?.userId),
+        },
+      },
+    });
+    const served = [chatService] as const;
+    const build = (exclude: readonly "chatService.note"[] = []) =>
+      createMcpRegistry({
+        services: served,
+        dispatcher: createDispatcher({ services: served }),
+        ...agentAuth(() => "task-token"),
+        bind: { taskId: ({ principal }) => principal.claims?.taskId },
+        exclude,
+      });
+    // note's taskId sits behind a $ref in an allOf branch, where it cannot be filled.
+    expect(() => build()).toThrow("bind.taskId names a property of the input of chatService.note");
+    const registry = build(["chatService.note"]);
+    const post = inputSchemaOf(registry, "chatService_post");
+    expect(post).toMatchObject({
+      type: "object",
+      properties: { message: { type: "string" } },
+      required: ["message"],
+    });
+    expect(post).not.toHaveProperty("definitions");
+    expect(JSON.stringify(post)).not.toContain("taskId");
+    expect(
+      await registry.call("chatService_post", { message: "hi" }, { request: stdio() }),
+    ).toEqual({ ok: true, data: { taskId: "t1", by: "bob" } });
+    const refusals = [
+      await registry.call(
+        "chatService_post",
+        { taskId: "t2", message: "hi" },
+        { request: stdio() },
+      ),
+      await registry.callMethod(
+        "chatService",
+        "post",
+        { taskId: "t3", message: "hi" },
+        { request: stdio() },
+      ),
+      await registry.call(
+        "chatService_loose",
+        { message: "hi", taskId: "t2" },
+        { request: stdio() },
+      ),
+      await registry.callMethod(
+        "chatService",
+        "loose",
+        { message: "hi", taskId: "t2" },
+        { request: stdio() },
+      ),
+    ];
+    expect(refusals.map((refusal) => errorOf(refusal).code)).toEqual([
+      "FORBIDDEN",
+      "FORBIDDEN",
+      "FORBIDDEN",
+      "FORBIDDEN",
+    ]);
+    expect(errorOf(refusals[2] as McpCallResult).message).toContain("is bound to the caller");
+    // A bound key in an id'd branch of a union fails when the registry is built.
+    const branch = defineContract("branchService", {
+      methods: {
+        post: mutation({
+          input: z.union([
+            z.object({ taskId: z.string(), message: z.string() }).meta({ id: "McpBindBranch" }),
+            z.object({ other: z.string() }),
+          ]),
+          output: echo,
+        }),
+      },
+    });
+    const branchService = qd.defineService(branch, {
+      methods: {
+        post: { access: "authenticated", handler: ({ ctx }) => echoOf({}, ctx.principal?.userId) },
+      },
+    });
+    expect(() =>
+      createMcpRegistry({
+        services: [branchService],
+        dispatcher: createDispatcher({ services: [branchService] }),
+        bind: { taskId: ({ principal }) => principal.claims?.taskId },
+      }),
+    ).toThrow("bind.taskId names a property of the input of branchService.post");
+  });
 });
 
 describe("custom tools", () => {
@@ -636,6 +837,62 @@ describe("custom tools", () => {
       code: "CONFLICT",
       message: "Already summarized",
     });
+  });
+
+  it("admit the kinds the app admits, and take kinds of their own within them (MCP-6)", async () => {
+    const ping = defineContract("pingService", {
+      methods: { ping: query({ input: z.undefined(), output: z.string() }) },
+    });
+    const registryOf = (
+      kinds: readonly ("user" | "agent")[],
+      principal: AgentPrincipal,
+      customTools: readonly Record<string, unknown>[],
+    ) => {
+      const app = initQuickdraw<{ principal: AgentPrincipal }>({ kinds });
+      const pingService = app.defineService(ping, {
+        methods: { ping: { access: "public", handler: () => "pong" } },
+      });
+      return createMcpRegistry({
+        services: [pingService],
+        dispatcher: createDispatcher({ services: [pingService] }),
+        principal: () => principal,
+        customTools: customTools as never,
+      });
+    };
+    const handler = vi.fn(() => "ran");
+    const report = { name: "report", description: "Reports.", inputSchema: { type: "object" } };
+    const agent: AgentPrincipal = { userId: "alice", kind: "agent" };
+    const user: AgentPrincipal = { userId: "bob", kind: "user" };
+    // The app admits users only: an agent's call is refused before anything runs.
+    const usersOnly = registryOf(["user"], agent, [{ ...report, handler }]);
+    expect(errorOf(await usersOnly.call("report", {}, { request: stdio() })).code).toBe(
+      "FORBIDDEN",
+    );
+    expect(handler).not.toHaveBeenCalled();
+    // A tool narrows the app's kinds.
+    const agentTool = [{ ...report, kinds: ["agent"], handler }];
+    expect(
+      errorOf(
+        await registryOf(["user", "agent"], user, agentTool).call(
+          "report",
+          {},
+          { request: stdio() },
+        ),
+      ).code,
+    ).toBe("FORBIDDEN");
+    expect(
+      await registryOf(["user", "agent"], agent, agentTool).call(
+        "report",
+        {},
+        { request: stdio() },
+      ),
+    ).toEqual({ ok: true, data: "ran" });
+    expect(() => registryOf(["user"], user, [{ ...report, kinds: ["robot"], handler }])).toThrow(
+      "kinds may only narrow",
+    );
+    expect(() =>
+      registryOf(["user"], user, [{ ...report, access: "public", kinds: ["user"], handler }]),
+    ).toThrow("kinds");
   });
 
   it("refuse an anonymous caller before anything runs, unless their access is public", async () => {
