@@ -1640,8 +1640,8 @@ existing user by email only when `emailVerified` is true.
 and the app's own REST routes. A provider without credentials in an
 environment (development without a Google app) is left out in place with
 `google.optional(...)`. 4.x's development sign-in by a user id in the
-handshake becomes `socketAuth({ devCredentials })`, which cannot run in
-production. `createRequireAuth({ getSession })` on REST routes becomes
+handshake becomes `socketAuth({ devCredentials })`, which runs only when
+`NODE_ENV` is `development` or `test`. `createRequireAuth({ getSession })` on REST routes becomes
 `requireSession(keys)`, which verifies the JWT once; the route reads the
 user with `sessionOf(req)` instead of `req.userId` (Express's `Request` type
 has no such member), and calls the services as `sessionOf(req).principal`
@@ -1722,7 +1722,7 @@ export const server = qd.createServer({
       ...keys,
       allowedOrigins,
       loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
-      // never in production: socketAuth refuses it there
+      // only when NODE_ENV is development or test: socketAuth refuses it otherwise
       devCredentials: env.ENABLE_DEV_CREDENTIALS === "true" ? devUser : undefined,
     }),
     loadServiceAccess: (userId) => loadGrants(userId),

@@ -3,12 +3,15 @@
 // and HTTP calls authenticated by the session the routes issue, refused once
 // it is revoked, and the Origin check on cookie-authenticated handshakes.
 
+import { EventEmitter } from "node:events";
 import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineContract, isAuthenticationRefused, query } from "../../../index";
 import { captureLogger, type AppPrincipal } from "../../__tests__/fixtures";
 import { initQuickdraw, type ServerAuth } from "../../index";
+import { recordSocketSession } from "../../transports/auth";
+import { endAtSessionExpiry } from "../../transports/pushes";
 import { call, peeredCluster, transportHarness, v5Auth } from "../../transports/__tests__/harness";
 import { APP_ORIGIN, baseOptions, post, SECRET, signIn, userIdOf } from "./__tests__/harness";
 import { createAuthRoutes } from "./createAuthRoutes";
@@ -218,7 +221,7 @@ describe("a socket with the session cookie", () => {
     }
   });
 
-  it("is read over plain HTTP from session, the name the routes set there, then __Host-session, and not at all when its name is repeated", async () => {
+  it("is read over plain HTTP from __Host-session, which no other site can plant, then session, and not at all when its name is repeated", async () => {
     const { url } = await boot();
     const { session } = await signIn(url, "ada@demo.local");
     const token = session.slice("session=".length);
@@ -229,9 +232,17 @@ describe("a socket with the session cookie", () => {
     expect(await connect(url, { cookie: `__Host-session=${token}`, origin: APP_ORIGIN })).toEqual(
       ada,
     );
+    expect(await connect(url, { cookie: session, origin: APP_ORIGIN })).toEqual(ada);
+    // __Host-session wins wherever it is present: a planted session never stands in for it.
     expect(
       await connect(url, {
         cookie: `__Host-session=garbage; session=${token}`,
+        origin: APP_ORIGIN,
+      }),
+    ).toEqual(REFUSED);
+    expect(
+      await connect(url, {
+        cookie: `session=a; session=b; __Host-session=${token}`,
         origin: APP_ORIGIN,
       }),
     ).toEqual(ada);
@@ -241,10 +252,27 @@ describe("a socket with the session cookie", () => {
     expect(twice).toEqual(anonymous);
     expect(
       await connect(url, {
-        cookie: `${session}; session=planted; __Host-session=${token}`,
+        cookie: `__Host-session=${token}; __Host-session=planted; ${session}`,
         origin: APP_ORIGIN,
       }),
     ).toEqual(anonymous);
+  });
+
+  it("signs in as the __Host-session's user, never a planted session's, on sockets, HTTP and the routes (AUTH-2a)", async () => {
+    const { url } = await boot();
+    const victim = (await signIn(url, "ada@demo.local")).session.slice("session=".length);
+    const attacker = (await signIn(url, "bob@demo.local")).session.slice("session=".length);
+    const cookie = `__Host-session=${victim}; session=${attacker}`;
+    const ada = userIdOf("ada@demo.local");
+    expect(await connect(url, { cookie, "sec-fetch-site": "same-origin" })).toEqual(signedIn(ada));
+    // The SSR hop: no Origin, no X-Forwarded-Proto.
+    const whoami = await fetch(`${url}/qd/whoService/whoami`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+    });
+    expect(await whoami.json()).toMatchObject({ d: { userId: ada } });
+    const me = await fetch(`${url}/auth/me`, { headers: { cookie, origin: APP_ORIGIN } });
+    expect(await me.json()).toEqual({ userId: ada });
   });
 
   it("is read from the plain session cookie over plain HTTP only, unless its name is given", async () => {
@@ -335,6 +363,71 @@ describe("a socket whose session is revoked", () => {
   });
 });
 
+describe("a socket whose session expires (AUTH-4)", () => {
+  it("is disconnected by the server when its session expires", async () => {
+    const { url, sessions } = await boot();
+    const { token } = await issueSession(
+      { sessions, jwtSecret: SECRET },
+      "victim",
+      { provider: "test" },
+      1000,
+    );
+    const opened = servers.open(url, { ...v5Auth(null), token });
+    const disconnected = new Promise<string>((resolve) => {
+      opened.socket.once("disconnect", resolve);
+    });
+    await opened.connected;
+    await opened.hello;
+    expect(await call(opened.socket, { id: 1, s: "whoService", m: "whoami" })).toMatchObject({
+      ok: true,
+    });
+    const reason = await Promise.race([
+      disconnected,
+      new Promise<string>((resolve) => {
+        setTimeout(() => {
+          resolve("still connected");
+        }, 2500);
+      }),
+    ]);
+    expect(reason).toBe("io server disconnect");
+  });
+
+  it("waits out an expiry longer than one timer can, and stops waiting once the socket goes", () => {
+    vi.useFakeTimers();
+    try {
+      const day = 24 * 60 * 60 * 1000;
+      const socketOf = () =>
+        Object.assign(new EventEmitter(), { id: "s1", data: {}, disconnect: vi.fn() });
+      const socket = socketOf();
+      recordSocketSession(socket, "sid", Date.now() + 40 * day);
+      endAtSessionExpiry(socket as never, captureLogger());
+      vi.advanceTimersByTime(30 * day);
+      expect(socket.disconnect).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(10 * day);
+      expect(socket.disconnect).toHaveBeenCalledTimes(1);
+      expect(socket.disconnect).toHaveBeenCalledWith(true);
+      const gone = socketOf();
+      recordSocketSession(gone, "sid", new Date(Date.now() + day));
+      endAtSessionExpiry(gone as never, captureLogger());
+      gone.emit("disconnect", "client namespace disconnect");
+      vi.advanceTimersByTime(2 * day);
+      expect(gone.disconnect).not.toHaveBeenCalled();
+      // Expired already, or no expiry recorded.
+      const late = socketOf();
+      recordSocketSession(late, "sid", Date.now() - 1);
+      endAtSessionExpiry(late as never, captureLogger());
+      expect(late.disconnect).toHaveBeenCalledTimes(1);
+      const unknown = socketOf();
+      recordSocketSession(unknown, "sid");
+      endAtSessionExpiry(unknown as never, captureLogger());
+      vi.advanceTimersByTime(400 * day);
+      expect(unknown.disconnect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("a socket without the cookie", () => {
   it("is anonymous without credentials, whatever its Origin", async () => {
     const { url } = await boot();
@@ -402,29 +495,40 @@ describe("devCredentials", () => {
     });
   });
 
-  it("cannot be used in production: refused when made, and at a handshake", async () => {
+  it("runs only when NODE_ENV is development or test: refused when made, and at a handshake (AUTH-3)", async () => {
     const sessions = createMemorySessionStore();
     const dev = (userId: string): AppPrincipal => ({ userId, kind: "user" });
-    vi.stubEnv("NODE_ENV", "production");
-    expect(() =>
-      socketAuth({ sessions, jwtSecret: SECRET, allowedOrigins: [], devCredentials: dev }),
-    ).toThrow("devCredentials signs sockets in by a user id alone");
-    vi.unstubAllEnvs();
-    const authenticate = socketAuth({
-      sessions,
-      jwtSecret: SECRET,
-      allowedOrigins: [],
-      devCredentials: dev,
-    });
-    vi.stubEnv("NODE_ENV", "production");
-    await expect(
-      authenticate({
-        transport: "socket",
-        auth: { userId: "dev-1" },
-        headers: {},
-        socket: {} as never,
-      }),
-    ).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+    const make = () =>
+      socketAuth({ sessions, jwtSecret: SECRET, allowedOrigins: [], devCredentials: dev });
+    for (const env of ["", "staging", "prod", "production", undefined]) {
+      vi.stubEnv("NODE_ENV", env);
+      expect(make, String(env)).toThrow("devCredentials signs sockets in by a user id alone");
+      expect(make, String(env)).toThrow("set NODE_ENV=development");
+    }
+    vi.stubEnv("NODE_ENV", "test");
+    const authenticate = make();
+    for (const env of ["", "production"]) {
+      vi.stubEnv("NODE_ENV", env);
+      await expect(
+        authenticate({
+          transport: "socket",
+          auth: { userId: "dev-1" },
+          headers: {},
+          socket: {} as never,
+        }),
+      ).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+    }
+  });
+
+  it("is named in a startup warning while it is on", async () => {
+    const { logger } = await boot(withDev);
+    expect(logger.at("warn").map((entry) => entry.message)).toEqual(
+      expect.arrayContaining([expect.stringContaining("socketAuth's devCredentials is on")]),
+    );
+    const without = await boot();
+    expect(without.logger.at("warn").map((entry) => entry.message)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("devCredentials")]),
+    );
   });
 });
 

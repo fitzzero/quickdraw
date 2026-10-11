@@ -62,7 +62,10 @@ export function startRoute(settings: RouteSettings, flow: SignInFlow): Handler {
     }
     const state = newState();
     const location = flow.authorizeUrl(state, redirectUriOf(settings, flow.id));
-    const pending = encodePending({ state, provider: flow.id, origin, issuedAt: Date.now() });
+    const pending = encodePending(
+      { state, provider: flow.id, origin, issuedAt: Date.now() },
+      settings.stateKey,
+    );
     res.cookie(stateCookieName(settings, req), pending, stateCookieOf(settings, req, true));
     redirect(res, location);
   };
@@ -149,7 +152,7 @@ export function callbackRoute(settings: RouteSettings, flow: SignInFlow): Handle
     }
     const name = stateCookieName(settings, req);
     // A repeated name reads as "": no state, since either could be a planted one.
-    const pending = decodePending(cookiesOf(req)[name]);
+    const pending = decodePending(cookiesOf(req)[name], settings.stateKey);
     // Single use: the state cookie goes whatever happens next.
     res.clearCookie(name, stateCookieOf(settings, req));
     if (pending === null) {

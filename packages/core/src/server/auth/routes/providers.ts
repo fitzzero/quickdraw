@@ -213,7 +213,8 @@ discord.optional = optionalOf(discord);
  * The development sign-in: a picker of the app's demo users, served by the
  * routes through `registerMockOAuthProvider`. Left out (its routes answer
  * nothing) unless `isMockOAuthEnabled()`: `ENABLE_MOCK_OAUTH=true` and
- * `NODE_ENV` other than `production`.
+ * `NODE_ENV` `development` or `test` (an unset `NODE_ENV` leaves it out: set
+ * `NODE_ENV=development`). Mounting it logs a warning.
  */
 export function mock(options: MockSignInOptions): MockSignInProvider {
   if (typeof options.listUsers !== "function") {

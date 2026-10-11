@@ -123,21 +123,42 @@ export interface ServiceAccessSource {
 /** Resolves a request to its principal, or `null`; rejects when authentication fails. */
 export type ResolvePrincipal = (request: AuthenticateRequest) => Promise<Principal | null>;
 
-const SOCKET_SESSIONS = new WeakMap<object, string>();
+/** The session a socket authenticated with: its id, and when it expires (epoch milliseconds). */
+interface SocketSession {
+  readonly id: string;
+  readonly expiresAt: number | undefined;
+}
+
+const SOCKET_SESSIONS = new WeakMap<object, SocketSession>();
 
 /**
  * Records the session a socket authenticated with, so that
  * `server.access.disconnectUser(userId, { sessionId })` can end that
- * session's sockets alone. `socketAuth` calls it for the auth routes'
- * sessions; an app's own `authenticate` may too.
+ * session's sockets alone, and, with `expiresAt`, so that the server
+ * disconnects the socket when the session expires (the 5.1 audit's AUTH-4).
+ * `socketAuth` calls it for the auth routes' sessions; an app's own
+ * `authenticate` may too.
  */
-export function recordSocketSession(socket: object, sessionId: string): void {
-  SOCKET_SESSIONS.set(socket, sessionId);
+export function recordSocketSession(
+  socket: object,
+  sessionId: string,
+  expiresAt?: Date | number | string,
+): void {
+  const time = expiresAt === undefined ? Number.NaN : new Date(expiresAt).getTime();
+  SOCKET_SESSIONS.set(socket, {
+    id: sessionId,
+    expiresAt: Number.isNaN(time) ? undefined : time,
+  });
 }
 
 /** The session a socket authenticated with, when its `authenticate` recorded one. */
 export function socketSessionOf(socket: object): string | undefined {
-  return SOCKET_SESSIONS.get(socket);
+  return SOCKET_SESSIONS.get(socket)?.id;
+}
+
+/** When the session a socket authenticated with expires (epoch milliseconds), when it was recorded with one. */
+export function socketSessionExpiryOf(socket: object): number | undefined {
+  return SOCKET_SESSIONS.get(socket)?.expiresAt;
 }
 
 /** What the server knows of an `authenticate` that `socketAuth` made. */

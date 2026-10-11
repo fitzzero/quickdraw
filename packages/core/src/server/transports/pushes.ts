@@ -20,9 +20,14 @@ import type { ClusterBroadcasts } from "../cluster/broadcasts";
 import type { ClusterOptions } from "../cluster/revisions";
 import type { AdapterProbe } from "../emit/hub";
 import { describeError } from "../pipeline/metrics";
-import { socketSessionOf, type ServerAuth, type ServiceGrants } from "./auth";
+import {
+  socketSessionExpiryOf,
+  socketSessionOf,
+  type ServerAuth,
+  type ServiceGrants,
+} from "./auth";
 import type { SocketExtension } from "./socketio";
-import type { QuickdrawIo } from "./types";
+import type { QuickdrawIo, QuickdrawServerSocket } from "./types";
 
 export type { ClusterOptions } from "../cluster/revisions";
 export { serveBroadcasts } from "../cluster/broadcasts";
@@ -116,6 +121,42 @@ function disconnectHere(io: QuickdrawIo, userId: string, sessionId: string | und
   return ended;
 }
 
+/** The longest delay a timer keeps: `setTimeout` fires a longer one at once. */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * Disconnects `socket` when the session it authenticated with expires
+ * (`recordSocketSession` with an expiry, as `socketAuth` records it; the
+ * 5.1 audit's AUTH-4): the client gets `io server disconnect` and does not
+ * reconnect on its own, and its next connect is authenticated afresh. An
+ * expiry past the longest timer is waited out in steps; the wait ends when
+ * the socket disconnects. Nothing for a socket recorded without an expiry.
+ */
+export function endAtSessionExpiry(socket: QuickdrawServerSocket, logger: Logger): void {
+  const expiresAt = socketSessionExpiryOf(socket);
+  if (expiresAt === undefined) {
+    return;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  socket.once("disconnect", () => {
+    clearTimeout(timer);
+  });
+  const arm = (): void => {
+    const left = expiresAt - Date.now();
+    if (left <= 0) {
+      logger.debug("Disconnected a socket whose session expired", {
+        category: "quickdraw.socket",
+        socketId: socket.id,
+      });
+      socket.disconnect(true);
+      return;
+    }
+    timer = setTimeout(arm, Math.min(left, MAX_TIMER_MS));
+    timer.unref();
+  };
+  arm();
+}
+
 /** A broadcast `disconnectUser`, read; `undefined` for anything else. */
 function readDisconnect(
   value: unknown,
@@ -135,7 +176,8 @@ function readDisconnect(
  * of the user on this node (only those of one session with `sessionId`), and,
  * behind a cluster adapter, tells every other node to do the same. For a
  * session the app revoked (`createAuthRoutes`' `onRevoke`): a socket keeps
- * the principal it authenticated with until it reconnects, and its
+ * the principal it authenticated with until it reconnects (or until its
+ * session expires, when that was recorded: `endAtSessionExpiry`), and its
  * reconnect is authenticated afresh. Returns how many sockets this node ended.
  */
 export function disconnectUser(

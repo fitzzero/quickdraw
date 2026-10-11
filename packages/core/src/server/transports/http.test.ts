@@ -223,7 +223,7 @@ describe("credentials", () => {
     expect(await echo({})).toMatchObject({ status: 200, body: { d: { userId: null } } });
   });
 
-  it("reads session before __Host-session over plain HTTP, only a cookie name it is given, and no repeated name", async () => {
+  it("reads __Host-session before session over plain HTTP, only a cookie name it is given, and no repeated name", async () => {
     const { url } = await serve();
     const echo = (headers: Record<string, string>) =>
       post(url, "/qd/probeService/echo", { body: '{"text":"hi"}', headers });
@@ -232,10 +232,10 @@ describe("credentials", () => {
     // The moderator token is Alice's, with a Moderate grant.
     const grantsOf = async (headers: Record<string, string>) =>
       ((await echo(headers)).body as { d?: { grants?: unknown } }).d?.grants;
-    // Over plain HTTP the routes set `session`, so it is read first.
+    // __Host-session wins wherever it is present: only this host can have set it (AUTH-2a).
     expect(
       await grantsOf({ cookie: "__Host-session=moderator-token; session=alice-token" }),
-    ).toBeNull();
+    ).toEqual({ probeService: "Moderate" });
     expect(await grantsOf({ cookie: "__Host-session=moderator-token" })).toEqual({
       probeService: "Moderate",
     });
@@ -244,9 +244,14 @@ describe("credentials", () => {
     expect(
       await grantsOf({ cookie: "session=alice-token; session=x", ...bearer("moderator-token") }),
     ).toEqual({ probeService: "Moderate" });
-    // A repeated session does not let __Host-session stand in for it, and over HTTPS a
-    // repeated __Host-session is no credential either.
-    expect(await userOf({ cookie: "session=a; session=b; __Host-session=alice-token" })).toBeNull();
+    // A repeated session does not matter once __Host-session is there; a repeated
+    // __Host-session is no credential, and session does not stand in for it, over HTTPS either.
+    expect(await userOf({ cookie: "session=a; session=b; __Host-session=alice-token" })).toBe(
+      "alice",
+    );
+    expect(
+      await userOf({ cookie: "__Host-session=a; __Host-session=b; session=alice-token" }),
+    ).toBeNull();
     expect(
       await userOf({
         cookie: "__Host-session=a; __Host-session=b; session=alice-token",

@@ -72,6 +72,21 @@ describe("requireSession", () => {
     expect((await get(`${booted.url}/api/me`)).status).toBe(401);
   });
 
+  it("reads __Host-session first: a planted session never stands in for it (AUTH-2a)", async () => {
+    let keys: tokens.SessionKeys | undefined;
+    const booted = await harness.boot({}, () =>
+      appWith(() => keys ?? { sessions: createMemorySessionStore(), jwtSecret: SECRET }),
+    );
+    keys = { sessions: booted.sessions, jwtSecret: SECRET };
+    const victim = (await signIn(booted.url, "ada@demo.local")).session.slice("session=".length);
+    const attacker = (await signIn(booted.url, "bob@demo.local")).session.slice("session=".length);
+    const response = await get(
+      `${booted.url}/api/me`,
+      `__Host-session=${victim}; session=${attacker}`,
+    );
+    expect(await response.json()).toMatchObject({ userId: userIdOf("ada@demo.local") });
+  });
+
   it("verifies the JWT once per request, and reads the store once", async () => {
     let keys: tokens.SessionKeys | undefined;
     const booted = await harness.boot({}, () =>

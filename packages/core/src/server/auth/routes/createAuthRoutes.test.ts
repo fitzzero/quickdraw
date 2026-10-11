@@ -20,6 +20,7 @@ import {
   listen,
   locationOf,
   post,
+  routeWarnings,
   SECRET,
   signIn,
   start,
@@ -28,8 +29,9 @@ import {
 import { createAuthRoutes } from "./createAuthRoutes";
 import { guest } from "./guest";
 import { discord, google, mock } from "./providers";
+import { isMockOAuthEnabled } from "../mock";
 import { createMemorySessionStore } from "./sessions";
-import { encodePending, OAUTH_STATE_TTL_MS } from "./state";
+import { encodePending, OAUTH_STATE_TTL_MS, oauthStateKey } from "./state";
 
 /** Express 5, installed as the `express5` alias; its API matches Express 4's types here. */
 const express5 = createRequire(import.meta.url)("express5") as typeof express;
@@ -97,7 +99,10 @@ describe("the OAuth state", () => {
   it("refuses a state older than ten minutes, or one issued for another provider", async () => {
     const { url } = await harness.boot();
     const callback = (state: string, cookie: Parameters<typeof encodePending>[0]) =>
-      get(`${url}/auth/mock/callback?code=c&state=${state}`, `qd_oauth=${encodePending(cookie)}`);
+      get(
+        `${url}/auth/mock/callback?code=c&state=${state}`,
+        `qd_oauth=${encodePending(cookie, oauthStateKey(SECRET))}`,
+      );
     const pending = { state: "s1", provider: "mock", origin: APP_ORIGIN, issuedAt: Date.now() };
     const expired = await callback("s1", {
       ...pending,
@@ -106,6 +111,42 @@ describe("the OAuth state", () => {
     expect(locationOf(expired)).toBe(`${APP_ORIGIN}/?error=state`);
     const otherProvider = await callback("s1", { ...pending, provider: "google" });
     expect(locationOf(otherProvider)).toBe(`${APP_ORIGIN}/?error=state`);
+  });
+
+  it("refuses a state cookie it did not sign: a planted one cannot sign the browser in as the attacker (AUTH-2b)", async () => {
+    const { url, logins, sessions } = await harness.boot();
+    const started = await start(url);
+    const authorizeUrl = new URL(started.authorizeUrl);
+    authorizeUrl.searchParams.set("state", "attacker-chosen-state");
+    const callbackUrl = await consent({ ...started, authorizeUrl }, "bob@demo.local");
+    const pending = {
+      state: "attacker-chosen-state",
+      provider: "mock",
+      origin: APP_ORIGIN,
+      issuedAt: Date.now(),
+    };
+    const unsigned = Buffer.from(JSON.stringify(pending)).toString("base64url");
+    const otherKey = encodePending(
+      pending,
+      oauthStateKey("another-secret-of-at-least-thirty-two-chars"),
+    );
+    for (const planted of [unsigned, otherKey]) {
+      const response = await get(callbackUrl.href, `qd_oauth=${planted}`);
+      expect(locationOf(response)).toBe(`${APP_ORIGIN}/?error=state`);
+      expect(cookiesSet(response).has("session")).toBe(false);
+    }
+    expect(logins).toEqual([]);
+    expect(sessions.size).toBe(0);
+  });
+
+  it("names the state cookie __Host-qd_oauth, Secure on /, whenever publicUrl is https", async () => {
+    const { url } = await harness.boot({ publicUrl: "https://api.app.test" });
+    const response = await get(`${url}/auth/mock/start`);
+    const cookies = cookiesSet(response);
+    expect(cookies.has("qd_oauth")).toBe(false);
+    expect(cookies.get("__Host-qd_oauth")?.attributes).toEqual(
+      expect.arrayContaining(["secure", "path=/", "httponly", "samesite=lax"]),
+    );
   });
 
   it("sets the state cookie HttpOnly, Lax and short-lived on the routes' path only", async () => {
@@ -154,12 +195,10 @@ describe("the return origin", () => {
 
   it("validates the remembered origin again before redirecting to it", async () => {
     const { url, logins } = await harness.boot();
-    const tampered = encodePending({
-      state: "s1",
-      provider: "mock",
-      origin: "https://evil.test",
-      issuedAt: Date.now(),
-    });
+    const tampered = encodePending(
+      { state: "s1", provider: "mock", origin: "https://evil.test", issuedAt: Date.now() },
+      oauthStateKey(SECRET),
+    );
     const response = await get(`${url}/auth/mock/callback?code=c&state=s1`, `qd_oauth=${tampered}`);
     expect(response.status).toBe(422);
     expect(response.headers.get("location")).toBeNull();
@@ -257,7 +296,7 @@ describe("signing in", () => {
       started.stateCookie,
     );
     expect(locationOf(response)).toBe(`${APP_ORIGIN}/?error=failed`);
-    expect(logger.at("warn").map((entry) => entry.message)).toEqual([
+    expect(routeWarnings(logger).map((entry) => entry.message)).toEqual([
       "A sign-in's code exchange failed",
     ]);
   });
@@ -368,18 +407,17 @@ describe("signing in", () => {
       harness.boot({ cookie: { name: "__Host-sid", domain: "app.test" } }),
     ).rejects.toThrow('cookie.name cannot start with "__Host-"');
     const optionOnly = await harness.boot({ cookie: { domain: "app.test" } });
-    expect(optionOnly.logger.at("warn").map((entry) => entry.message)).toEqual([
+    expect(routeWarnings(optionOnly.logger).map((entry) => entry.message)).toEqual([
       expect.stringContaining("cookie.domain is set and COOKIE_DOMAIN is not"),
     ]);
     const named = await harness.boot({ cookie: { domain: "app.test", name: "session" } });
-    expect(named.logger.at("warn")).toEqual([]);
+    expect(routeWarnings(named.logger)).toEqual([]);
     vi.stubEnv("COOKIE_DOMAIN", "app.test");
     const both = await harness.boot({ cookie: { domain: "app.test" } });
-    expect(both.logger.at("warn")).toEqual([]);
+    expect(routeWarnings(both.logger)).toEqual([]);
+    // The transports read __Host-session first, so an empty domain no longer misreads.
     const cleared = await harness.boot({ cookie: { domain: "" } });
-    expect(cleared.logger.at("warn").map((entry) => entry.message)).toEqual([
-      expect.stringContaining('cookie.domain is "" while COOKIE_DOMAIN is set'),
-    ]);
+    expect(routeWarnings(cleared.logger)).toEqual([]);
   });
 
   it("counts a repeated session or state cookie name as no credential", async () => {
@@ -393,6 +431,54 @@ describe("signing in", () => {
     const twice = await get(callbackUrl.href, `${started.stateCookie}; ${started.stateCookie}`);
     expect(new URL(locationOf(twice)).searchParams.get("error")).toBe("state");
     expect(cookiesSet(twice).get("session")).toBeUndefined();
+  });
+
+  it("clears a stale __Host-session when it sets session, which it would otherwise shadow", async () => {
+    const { url } = await harness.boot();
+    const started = await start(url);
+    const callbackUrl = await consent(started, "ada@demo.local");
+    const callback = await get(callbackUrl.href, `${started.stateCookie}; __Host-session=stale`);
+    expect(cookiesSet(callback).get("session")?.value).not.toBe("");
+    const stale = cookiesSet(callback).get("__Host-session");
+    expect(stale?.value).toBe("");
+    expect(stale?.attributes).toEqual(expect.arrayContaining(["secure", "path=/"]));
+    const token = cookieValue(callback, "session");
+    // The browser keeps only session now: the user is signed in.
+    expect((await get(`${url}/auth/me`, `session=${token}`)).status).toBe(200);
+    const out = await post(`${url}/auth/logout`, { cookie: `session=${token}; __Host-session=x` });
+    expect(cookiesSet(out).get("__Host-session")?.value).toBe("");
+  });
+});
+
+describe("the session routes' Origin rule (AUTH-5)", () => {
+  it("refuses the session cookie from a page allowedOrigins does not list, and a guest sign-in from one", async () => {
+    const { url, guests } = await harness.boot();
+    const { session } = await signIn(url, "ada@demo.local");
+    const evil = { origin: "http://evil.test" };
+    const refused = { error: "FORBIDDEN", message: expect.stringContaining("session cookie") };
+    for (const headers of [evil, { "sec-fetch-site": "cross-site" }]) {
+      const me = await get(`${url}/auth/me`, session, headers);
+      expect(me.status).toBe(403);
+      expect(await me.json()).toEqual(refused);
+    }
+    for (const route of ["logout-all", "logout"]) {
+      const out = await post(`${url}/auth/${route}`, { cookie: session, headers: evil });
+      expect(out.status, route).toBe(403);
+      expect(cookiesSet(out).size, route).toBe(0);
+    }
+    // Nothing was signed out: the app's own page still reads the session.
+    expect((await get(`${url}/auth/me`, session, { origin: APP_ORIGIN })).status).toBe(200);
+    const asGuest = await post(`${url}/auth/guest`, { headers: evil });
+    expect(asGuest.status).toBe(403);
+    expect(guests).toEqual([]);
+    expect(cookiesSet(asGuest).size).toBe(0);
+    // A bearer token is not ambient: any page may send it.
+    const token = session.slice("session=".length);
+    const bearer = await get(`${url}/auth/me`, undefined, {
+      ...evil,
+      authorization: `Bearer ${token}`,
+    });
+    expect(bearer.status).toBe(200);
   });
 });
 
@@ -667,6 +753,29 @@ describe("the mock provider", () => {
     }
   });
 
+  it("runs only when NODE_ENV is development or test, and warns while it is mounted (AUTH-3)", async () => {
+    for (const env of ["", "staging"]) {
+      const off = await harness.boot({}, () => {
+        vi.stubEnv("NODE_ENV", env);
+        return express();
+      });
+      expect(isMockOAuthEnabled(), env).toBe(false);
+      expect((await get(`${off.url}/auth/mock/start`)).status, env).toBe(404);
+      expect(off.logger.at("error").map((entry) => entry.message)).toEqual([
+        expect.stringContaining("set NODE_ENV=development"),
+      ]);
+    }
+    vi.stubEnv("NODE_ENV", "test");
+    const on = await harness.boot();
+    expect(isMockOAuthEnabled()).toBe(true);
+    expect(on.logger.at("warn").map((entry) => entry.message)).toEqual([
+      expect.stringContaining("Mock OAuth provider mounted"),
+    ]);
+    // Refused again at request time once NODE_ENV says otherwise.
+    vi.stubEnv("NODE_ENV", "");
+    expect((await get(`${on.url}/auth/mock/start`)).status).toBe(404);
+  });
+
   it("passes other requests on to the app", async () => {
     const app = express();
     const { url } = await harness.boot({}, () => app);
@@ -855,7 +964,7 @@ describe("the providers it serves (findings F9.1, F10.1 and F10.3)", () => {
     // The mock's routes refuse once it is off, and the list says so.
     vi.stubEnv("ENABLE_MOCK_OAUTH", "false");
     expect(await answer()).toEqual({ providers: all.filter((entry) => entry.id !== "mock") });
-    expect(logger.at("warn")).toEqual([]);
+    expect(routeWarnings(logger)).toEqual([]);
   });
 
   it("lists none where nothing can sign in, and says so when it is made; one where one can", async () => {

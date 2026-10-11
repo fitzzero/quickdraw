@@ -109,19 +109,22 @@ export function sessionCookieNameFor(
 const SECURE_SESSION_COOKIES: readonly string[] = Object.freeze([HOST_SESSION_COOKIE]);
 
 const PLAIN_SESSION_COOKIES: readonly string[] = Object.freeze([
-  SESSION_COOKIE,
   HOST_SESSION_COOKIE,
+  SESSION_COOKIE,
 ]);
 
 /**
- * The cookie names a session is read from on `req`, the first of them being
- * the name {@link sessionCookieNameFor} writes for the same request. A name
- * the app gave is the only one read. Otherwise a secure request reads only
- * `__Host-session`: a site under the same parent domain can set a `session`
- * cookie for the whole domain, and while the user holds no `__Host-session`
- * that planted cookie would sign them in as whoever planted it. A plain HTTP
- * request, or a cookie with a domain, reads `session` and then
- * `__Host-session`, which only this host can have set.
+ * The cookie names a session is read from on `req`, among them the name
+ * {@link sessionCookieNameFor} writes for the same request. A name the app
+ * gave is the only one read. Otherwise `__Host-session` wins wherever it is
+ * present: a browser keeps it only as a Secure, host-only cookie on `/`, so
+ * only this host, over a secure context, can have set it. A secure request
+ * reads only `__Host-session`: a site under the same parent domain can set
+ * a `session` cookie for the whole domain, and while the user holds no
+ * `__Host-session` that planted cookie would sign them in as whoever
+ * planted it. A plain HTTP request, or a cookie with a domain, reads
+ * `__Host-session` and then `session`, so a planted `session` never stands
+ * in for a `__Host-session` the request carries (the 5.1 audit's AUTH-2a).
  */
 export function sessionCookieNamesFor(
   req: SessionCookieRequest,

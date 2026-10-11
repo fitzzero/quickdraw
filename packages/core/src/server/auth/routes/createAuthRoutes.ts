@@ -141,7 +141,7 @@ function routeTable(
   const mounted = providers.filter((provider) => addProvider(table, settings, provider));
   if (mounted.length === 0) {
     settings.logger.warn(
-      "createAuthRoutes: no provider can sign anyone in (the mock is mounted only while ENABLE_MOCK_OAUTH is set outside production): every sign-in route answers 404",
+      "createAuthRoutes: no provider can sign anyone in (the mock is mounted only while ENABLE_MOCK_OAUTH is set and NODE_ENV is development or test): every sign-in route answers 404",
       { category: "quickdraw.auth" },
     );
   }

@@ -117,6 +117,16 @@ export function authHarness(): {
   };
 }
 
+/**
+ * The warnings `logger` captured, without the mock provider's mount warning,
+ * which every test app that mounts the mock gets.
+ */
+export function routeWarnings(logger: CapturingLogger): ReturnType<CapturingLogger["at"]> {
+  return logger
+    .at("warn")
+    .filter((entry) => !entry.message.startsWith("Mock OAuth provider mounted"));
+}
+
 /** A cookie a response set: its value (empty when it clears it) and its attributes, lowercased. */
 export interface SetCookie {
   readonly value: string;

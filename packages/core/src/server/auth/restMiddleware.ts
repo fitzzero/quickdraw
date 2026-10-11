@@ -37,8 +37,8 @@ export interface RequireAuthOptions {
   /**
    * Cookie to read the JWT from. Default: the names `setSessionCookie` and
    * the auth routes set on the same request (`sessionCookieNamesFor`):
-   * `__Host-session` over HTTPS, `session` (then `__Host-session`) over
-   * plain HTTP or when `COOKIE_DOMAIN` is set.
+   * `__Host-session` over HTTPS, `__Host-session` then `session` over plain
+   * HTTP or when `COOKIE_DOMAIN` is set.
    */
   cookieName?: string;
 }

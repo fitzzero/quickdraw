@@ -64,8 +64,8 @@ describe("extractBearerOrCookieToken", () => {
 
   it("reads the cookie under the name setSessionCookie sets on the same request, or the one given", () => {
     const both = { session: "plain-token", "__Host-session": "host-token" };
-    // Over plain HTTP `session`, then `__Host-session`; over HTTPS only `__Host-session`.
-    expect(extractBearerOrCookieToken({ cookies: both, headers: {} })).toBe("plain-token");
+    // Over plain HTTP `__Host-session`, then `session`; over HTTPS only `__Host-session`.
+    expect(extractBearerOrCookieToken({ cookies: both, headers: {} })).toBe("host-token");
     expect(
       extractBearerOrCookieToken({ cookies: { "__Host-session": "host-token" }, headers: {} }),
     ).toBe("host-token");

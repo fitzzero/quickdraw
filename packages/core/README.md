@@ -2757,7 +2757,10 @@ nothing is cached:
 
 - The OAuth state is 256 random bits, sent to the provider and kept in a
   10-minute HttpOnly, SameSite=Lax cookie (`__Host-qd_oauth` on `/` over a
-  secure request, else `qd_oauth` on `basePath`). The callback clears it
+  secure request or whenever `publicUrl` is https, else `qd_oauth` on
+  `basePath`), signed with an HMAC under a key derived from `jwtSecret`, so
+  a cookie the routes did not write (one a sibling site planted, to sign
+  the browser in as the attacker) is no state at all. The callback clears it
   whatever happens, and accepts only that state, for that provider, within
   its 10 minutes, once (each redeemed state is remembered by the process),
   so a sign-in cannot be finished in another browser or replayed.
@@ -2783,7 +2786,11 @@ nothing is cached:
   the same name, and the server cannot tell which is its own.
 - `me` answers the same 401 whether the request had no credential, a forged
   or expired one, or one whose session was revoked. It, `logout` and
-  `logout-all` read the cookie, else an `Authorization: Bearer` token.
+  `logout-all` read the cookie, else an `Authorization: Bearer` token. A
+  cookie sent from a page `allowedOrigins` does not list is answered 403
+  (`FORBIDDEN`), as on the HTTP transport, and `guest`, which sets the
+  cookie, refuses such a page whatever it sends; a bearer token is not
+  ambient, so any page may send it.
 - `socketAuth` reads a socket's `auth.token` (a bearer token, for clients
   without cookies), else the session cookie from its handshake; an HTTP
   call's credential is the one the transport found. No credential is
@@ -2815,9 +2822,11 @@ nothing is cached:
 - `socketAuth({ devCredentials })` signs a socket in by the user id its
   handshake names (`auth: { userId }`, no token), as the function answers
   (the principal, or `null` to refuse): for a game editor or load-test bots
-  in development. `socketAuth` throws when it is given while `NODE_ENV` is
-  `production`, and refuses such a handshake there anyway; pass it only
-  behind the app's own flag.
+  in development. It runs only when `NODE_ENV` is `development` or `test`:
+  `socketAuth` throws when it is given otherwise (an unset `NODE_ENV`
+  included: set `NODE_ENV=development`), refuses such a handshake once
+  `NODE_ENV` says otherwise, and `createServer` warns at startup while it
+  is on; pass it only behind the app's own flag.
 - `google.optional(...)` and `discord.optional(...)` build nothing when
   neither credential is set (only one is a misconfiguration, refused), and
   `providers` skips `undefined`, `null` and `false` entries, so an
@@ -2856,8 +2865,10 @@ nothing is cached:
   many users calls from one address: give it its own `keyGenerator` or a
   higher `max`.
 - The mock provider is mounted only while `isMockOAuthEnabled()`
-  (`ENABLE_MOCK_OAUTH=true` and `NODE_ENV` other than `production`), and
-  every request checks again. Set `mock({ internalUrl })` where the API
+  (`ENABLE_MOCK_OAUTH=true` and `NODE_ENV` `development` or `test`; an
+  unset `NODE_ENV` mounts nothing and logs an error saying to set
+  `NODE_ENV=development`), mounting it logs a warning, and every request
+  checks again. Set `mock({ internalUrl })` where the API
   cannot reach itself at `publicUrl`. Routes made with nothing that can
   sign anyone in (only a mock that is off) warn when they are made.
 - `publicUrl` is where providers send the browser back, so a deployment
@@ -2868,12 +2879,15 @@ nothing is cached:
   (`X-Forwarded-Host`, else `Host`) logs an error naming it, once.
 - One rule names the session cookie, written and read: the routes,
   `setSessionCookie`, `socketAuth` and the HTTP transport give a request
-  the same name, and read first the name they would set on it. Without a
+  the same name, and read `__Host-session` first wherever it is present:
+  only this host, over a secure context, can have set it. Without a
   domain, a request over HTTPS reads only `__Host-session`, never
   `session`: another site under the same parent domain can set that cookie
   for the whole domain, and while the user holds no `__Host-session` it
   would sign them in as whoever set it. A plain HTTP request reads
-  `session`, then `__Host-session`. A configured name is read as it is, on
+  `__Host-session`, then `session` (the name the routes set there); when
+  the routes set `session`, they also clear a stale `__Host-session` the
+  request carries, which would otherwise shadow it. A configured name is read as it is, on
   any request, so a changed name goes in all three places:
   `createAuthRoutes({ cookie: { name } })`, `socketAuth({ cookieName })`
   and `createServer({ http: { cookieName } })`. The transports see the
@@ -2883,8 +2897,11 @@ nothing is cached:
   warn at startup until the cookie is named. Behind a proxy that ends TLS,
   have it send `X-Forwarded-Proto`, which every request carries, so the
   name does not depend on which requests carry an `Origin`.
-- A socket keeps the principal it authenticated with until it reconnects,
-  so a revoked session's open sockets are ended with
+- A socket whose session expires is disconnected then (`io server
+disconnect`; `socketAuth` records the expiry, and an app's own
+  `authenticate` may, through `recordSocketSession(socket, sessionId,
+expiresAt)`). Otherwise a socket keeps the principal it authenticated
+  with until it reconnects, so a revoked session's open sockets are ended with
   `server.access.disconnectUser(userId, { sessionId?, reason? })`: every
   socket of the user, or those `socketAuth` recorded for one session
   (`recordSocketSession` on `./server` for an app's own `authenticate`), on

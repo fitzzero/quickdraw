@@ -168,6 +168,29 @@ connectionStateRecovery } })` throws a `TypeError` at startup, and
   collection subscribes that overlapped an access change resolve again with
   the grants the socket holds at that moment: a grant lowered mid-subscribe
   denies, a raised one answers at the new level.
+- **`__Host-session` is read first wherever the request carries it.** On a
+  plain HTTP request (development, an SSR hop without `X-Forwarded-Proto`),
+  the transports, `requireSession` and the auth routes read
+  `__Host-session` before `session`, and the routes clear a stale
+  `__Host-session` when they set `session`. The startup warning for an
+  empty `cookie.domain` while `COOKIE_DOMAIN` is set is gone: it reads
+  well now.
+- **The OAuth state cookie is signed.** Its format changed, so a sign-in in
+  flight during the deploy lands once on `?error=state`. It is named
+  `__Host-qd_oauth` whenever `publicUrl` is https.
+- **Development sign-ins need `NODE_ENV` `development` or `test`.**
+  `socketAuth({ devCredentials })` throws at startup, and the mock provider
+  mounts nothing (logging an error), when `NODE_ENV` is anything else,
+  unset included: set `NODE_ENV=development`. The server warns at startup
+  while `devCredentials` is on, and mounting the mock logs a warning.
+- **Sockets end when their session expires.** A socket `socketAuth`
+  authenticated is disconnected (`io server disconnect`, no automatic
+  reconnect) when its session expires; `recordSocketSession(socket,
+sessionId, expiresAt)` does the same for an app's own `authenticate`.
+- **The cookie routes check the page's Origin.** `/me`, `/logout` and
+  `/logout-all` answer 403 to a session cookie sent from a page
+  `allowedOrigins` does not list, and `/guest` to such a page whatever it
+  sends.
 
 ### Security
 
@@ -291,6 +314,26 @@ connectionStateRecovery } })` throws a `TypeError` at startup, and
   (TRANSPORT-1).** Socket.IO's recovery skipped the auth middleware and
   restored a socket's principal and rooms, so a revoked session or a
   lowered grant came back for up to 2 minutes.
+- **A planted `session` cookie no longer chooses the account (AUTH-2a,
+  CLIENT-4).** A plain HTTP request read `session` before
+  `__Host-session`, so a sibling site that planted `session` signed the
+  user in as the attacker on the SSR hop, same-origin GETs,
+  `requireSession`, `/auth/me` and a polling handshake behind a TLS proxy
+  that sent no `X-Forwarded-Proto`.
+- **The OAuth state cookie is signed (AUTH-2b).** It was unsigned JSON, so
+  a planted state cookie, with a state the attacker had the provider sign
+  them in to, signed the victim's browser in as the attacker (login CSRF).
+- **Development sign-ins no longer run outside development (AUTH-3).**
+  `devCredentials` and the mock ran whenever `NODE_ENV` was not exactly
+  `production`, so with `NODE_ENV` unset, `prod` or `staging` a raw socket
+  naming an admin's user id signed in as them from any page.
+- **A socket no longer outlives its session (AUTH-4).** Authentication ran
+  once per handshake, so a socket kept its principal after its session
+  expired.
+- **The cookie routes apply the Origin rule (AUTH-5).** `/me`, `/logout`,
+  `/logout-all` and `/guest` skipped the session cookie's Origin rule, so a
+  cross-site page with CORS help could read the user id, sign the user out
+  everywhere, or sign the browser in as a new guest.
 
 ### Codemod
 

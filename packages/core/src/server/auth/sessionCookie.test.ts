@@ -142,12 +142,12 @@ describe("the session cookie's name", () => {
     "a name and a domain": { cookieName: "sid", domain: ".example.com" },
   };
 
-  it("written for a request is the first name read for the same request", () => {
+  it("written for a request is among the names read for the same request", () => {
     for (const [requestName, req] of Object.entries(requests)) {
       for (const [namingName, naming] of Object.entries(namings)) {
         const written = sessionCookieNameFor(req, naming);
         const read = sessionCookieNamesFor(req, naming);
-        expect(read[0], `${requestName}, ${namingName}`).toBe(written);
+        expect(read, `${requestName}, ${namingName}`).toContain(written);
         // A configured name wins everywhere; __Host- is never used with a domain.
         if (naming.cookieName !== undefined) {
           expect(read, `${requestName}, ${namingName}`).toEqual([naming.cookieName]);
@@ -169,7 +169,8 @@ describe("the session cookie's name", () => {
     for (const name of ["plain HTTP", "plain HTTP from an http: page", "X-Forwarded-Proto: http"]) {
       const req = requests[name] ?? { headers: {} };
       expect(sessionCookieNameFor(req), name).toBe(SESSION_COOKIE);
-      expect(sessionCookieNamesFor(req), name).toEqual([SESSION_COOKIE, HOST_SESSION_COOKIE]);
+      // __Host-session first: only this host, over a secure context, can have set it (AUTH-2a).
+      expect(sessionCookieNamesFor(req), name).toEqual([HOST_SESSION_COOKIE, SESSION_COOKIE]);
     }
   });
 

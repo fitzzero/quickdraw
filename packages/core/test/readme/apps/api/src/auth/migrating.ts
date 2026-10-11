@@ -93,7 +93,7 @@ export const server = qd.createServer({
       ...keys,
       allowedOrigins,
       loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
-      // never in production: socketAuth refuses it there
+      // only when NODE_ENV is development or test: socketAuth refuses it otherwise
       devCredentials: env.ENABLE_DEV_CREDENTIALS === "true" ? devUser : undefined,
     }),
     loadServiceAccess: (userId) => loadGrants(userId),

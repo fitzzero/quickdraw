@@ -2,15 +2,19 @@
 // browser that started it and redeemable once. `start` sends the state to
 // the provider and keeps it, with the provider and the validated return
 // origin, in a short-lived HttpOnly cookie (`__Host-qd_oauth` on `/` over a
-// secure request, else `qd_oauth` on the auth routes' path). The
-// callback clears that cookie whatever happens, accepts the state only when
-// the provider sent back the cookie's own value, for the same provider and
+// secure request or whenever `publicUrl` is https, else `qd_oauth` on the
+// auth routes' path), signed with an HMAC-SHA256 under a key derived from
+// the JWT secret: a cookie the routes did not write (one a sibling site
+// planted, with a state the attacker had the provider sign them in to) is
+// no sign-in at all (the 5.1 audit's AUTH-2b, a login CSRF). The callback
+// clears that cookie whatever happens, accepts the state only when the
+// provider sent back the cookie's own value, for the same provider and
 // within ten minutes, and remembers each redeemed state in this process until
 // it would have expired anyway, so a replayed callback is refused even when
 // its cookie is replayed with it. The return origin read back from the cookie
 // is validated again before any redirect (`createAuthRoutes`).
 
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 /** The cookie that carries a sign-in in progress, on a request that is not secure. */
 export const OAUTH_STATE_COOKIE = "qd_oauth";
@@ -45,19 +49,40 @@ export function newState(): string {
   return randomBytes(32).toString("base64url");
 }
 
-/** The state cookie's value for a sign-in. */
-export function encodePending(pending: PendingSignIn): string {
-  return Buffer.from(JSON.stringify(pending), "utf8").toString("base64url");
+/** The key the state cookie is signed with: derived from the JWT secret, for this use only. */
+export function oauthStateKey(jwtSecret: string): Buffer {
+  return createHmac("sha256", jwtSecret).update("quickdraw:oauth-state").digest();
 }
 
-/** The sign-in a state cookie's value carries, or `null` when it carries none. */
-export function decodePending(raw: string | undefined): PendingSignIn | null {
-  if (raw === undefined || raw === "") {
+function macOf(payload: string, key: Buffer): Buffer {
+  return createHmac("sha256", key).update(payload).digest();
+}
+
+/** The state cookie's value for a sign-in: its JSON, base64url, then `.` and its MAC under `key`. */
+export function encodePending(pending: PendingSignIn, key: Buffer): string {
+  const payload = Buffer.from(JSON.stringify(pending), "utf8").toString("base64url");
+  return `${payload}.${macOf(payload, key).toString("base64url")}`;
+}
+
+/**
+ * The sign-in a state cookie's value carries, or `null` when it carries
+ * none: its MAC under `key` is checked (in constant time) before anything
+ * is read, so a cookie the routes did not write is none.
+ */
+export function decodePending(raw: string | undefined, key: Buffer): PendingSignIn | null {
+  const dot = raw === undefined ? -1 : raw.lastIndexOf(".");
+  if (raw === undefined || dot <= 0) {
+    return null;
+  }
+  const payload = raw.slice(0, dot);
+  const mac = Buffer.from(raw.slice(dot + 1), "base64url");
+  const expected = macOf(payload, key);
+  if (mac.length !== expected.length || !timingSafeEqual(mac, expected)) {
     return null;
   }
   let value: unknown;
   try {
-    value = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+    value = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
   } catch {
     return null;
   }

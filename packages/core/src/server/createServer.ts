@@ -260,6 +260,25 @@ export interface QuickdrawServer<S extends readonly AnyService[] = readonly AnyS
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
 
+/**
+ * The startup warnings about `auth`: grants no tracked write refreshes
+ * (`warnUnsourcedGrants`), and `socketAuth`'s `devCredentials` while it is
+ * on (the 5.1 audit's AUTH-3).
+ */
+function warnOnAuth(
+  services: readonly AnyService[],
+  auth: { readonly authenticate?: unknown; readonly serviceAccessSource?: unknown } | undefined,
+  logger: Logger,
+): void {
+  warnUnsourcedGrants(services, auth?.serviceAccessSource !== undefined, logger);
+  if (socketAuthOf(auth?.authenticate)?.devCredentials === true) {
+    logger.warn(
+      "socketAuth's devCredentials is on: a socket handshake that names a user id signs in as that user, from any page; never set it outside development",
+      { category: "quickdraw.auth" },
+    );
+  }
+}
+
 function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void {
   if (options.app !== undefined && typeof options.app.use !== "function") {
     throw new TypeError("createServer: app must be an Express app");
@@ -384,7 +403,7 @@ export function createServer<const S extends readonly AnyService[]>(
   checkOptions(options);
   const legacyWire = resolveLegacyWire(options.legacyWire, options.services);
   const logger = options.logger ?? consoleLogger;
-  warnUnsourcedGrants(options.services, options.auth?.serviceAccessSource !== undefined, logger);
+  warnOnAuth(options.services, options.auth, logger);
   const watchdog = prepareWatchdog(options, options.stallWatchdog);
   let refresh: ((userId: string) => Promise<ServiceGrants>) | undefined;
   const grants = createGrantsSink(options.auth, () => refresh, logger);

@@ -77,7 +77,8 @@ export interface HttpTransportOptions {
    * the cookie a domain; else `"__Host-session"` on a request over HTTPS
    * (`req.secure`, `X-Forwarded-Proto: https` or an `https:` `Origin`),
    * which never reads the plain name a sibling site could plant, and
-   * `"session"` (then `"__Host-session"`) on a plain HTTP one. A name given
+   * `"session"` on a plain HTTP one, where `"__Host-session"` is read first
+   * all the same. A name given
    * here is the only one read, on any request. A name the request repeats
    * counts as no cookie.
    */
