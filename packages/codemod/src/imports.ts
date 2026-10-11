@@ -3,7 +3,7 @@
 // have one (NodeNext packages), without where they do not (bundlers).
 
 import { dirname, relative, resolve } from "node:path";
-import { Node, SyntaxKind, type Project, type SourceFile } from "ts-morph";
+import { Node, SyntaxKind, type Project, type SourceFile, type StringLiteral } from "ts-morph";
 import { isUnder } from "./project";
 
 /** A relative module specifier from `from` to `to` (both file paths). */
@@ -19,6 +19,25 @@ export function relativeSpecifier(from: string, to: string, withJs: boolean): st
     path = `${path}.js`;
   }
   return path;
+}
+
+/**
+ * The module specifier `literal` (of an import, or of an `import("...")`
+ * type) written from the file at `from` instead: a relative one names the
+ * file it resolves to, a package name stays as it is.
+ */
+export function rebasedSpecifier(literal: StringLiteral, from: string, withJs: boolean): string {
+  const specifier = literal.getLiteralValue();
+  if (!specifier.startsWith(".")) {
+    return specifier;
+  }
+  const target = literal
+    .getSymbol()
+    ?.getDeclarations()
+    .find((declaration) => Node.isSourceFile(declaration));
+  return target === undefined
+    ? specifier
+    : relativeSpecifier(from, target.getSourceFile().getFilePath(), withJs);
 }
 
 /** Whether the relative imports under `dir` end in `.js`. */

@@ -49,6 +49,6 @@ export const projectContract = defineContract("projectService", {
     // quickdraw-migrate: review [contract] mutation, chosen from its name; output: todoSchema of the 4.x response type
     shareProject: mutation({ input: shareProjectSchema, output: todoSchema<{ id: string }>() }),
     // quickdraw-migrate: review [contract] query, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
-    getProjectLimits: query({ input: todoSchema<Record<string, never>>(), output: todoSchema<{ maxProjects: number; maxMembers: number }>() }),
+    getProjectLimits: query({ input: todoSchema<{ scope?: import("../types/limits.js").LimitsScope }>({ keys: ["scope"] }), output: todoSchema<import("../types/limits.js").ProjectLimits>() }),
   },
 });

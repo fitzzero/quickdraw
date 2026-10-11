@@ -29,7 +29,7 @@ import {
 import type { MethodCall, ServiceModel } from "./model";
 import { markerText } from "./markers";
 import { moveSchema, type MovedSchema } from "./schemas";
-import { quote } from "./text";
+import { quote, typeText } from "./text";
 
 export type MethodKind = "query" | "mutation";
 
@@ -94,17 +94,23 @@ function compact(text: string): string {
   return text.replace(/\s+/gu, "");
 }
 
-/** The contract output for a 4.x response type; `oneRow` for a mutation whose input names a row. */
+/**
+ * The contract output for a 4.x response type, written into `contractFile`;
+ * `oneRow` for a mutation whose input names a row.
+ */
 function outputFor(
   response: TypeNode | undefined,
   dto: string | undefined,
   hasEntity: boolean,
   oneRow: boolean,
+  contractFile: string,
+  withJs: boolean,
 ): { code: string; todo: boolean; nonNull?: boolean } {
   if (response === undefined) {
     return { code: "todoSchema<unknown>()", todo: true };
   }
-  const text = compact(response.getText());
+  const type = typeText(response, contractFile, withJs);
+  const text = compact(type);
   if (hasEntity && dto !== undefined) {
     if (text === dto) {
       return { code: quote("entity"), todo: false };
@@ -118,7 +124,7 @@ function outputFor(
       return { code: 'listOf("entity")', todo: false };
     }
   }
-  return { code: `todoSchema<${response.getText()}>()`, todo: true };
+  return { code: `todoSchema<${type}>()`, todo: true };
 }
 
 /** What the contract and the handler say of a 4.x `DTO | null` mutation of one row, now `"entity"`. */
@@ -182,14 +188,20 @@ function payloadKeys(payload: TypeNode): string[] | undefined {
  * schema. Without a payload type, `{ id: unknown }` when the 4.x schema has
  * an `id`; without keys either way, a placeholder the check cannot read.
  */
-function placeholderInput(payload: TypeNode | undefined, inputHasId: boolean): string {
+function placeholderInput(
+  payload: TypeNode | undefined,
+  inputHasId: boolean,
+  contractFile: string,
+  withJs: boolean,
+): string {
   if (payload === undefined) {
     return inputHasId ? 'todoSchema<{ id: unknown }>({ keys: ["id"] })' : "todoSchema<unknown>()";
   }
+  const type = typeText(payload, contractFile, withJs);
   const keys = payloadKeys(payload);
   return keys === undefined
-    ? `todoSchema<${payload.getText()}>()`
-    : `todoSchema<${payload.getText()}>({ keys: [${keys.map((key) => quote(key)).join(", ")}] })`;
+    ? `todoSchema<${type}>()`
+    : `todoSchema<${type}>({ keys: [${keys.map((key) => quote(key)).join(", ")}] })`;
 }
 
 function entryIdOf(call: MethodCall, entry: MethodMapEntry | undefined): EntryId {
@@ -212,6 +224,7 @@ function planMethod(
   dto: string | undefined,
   hasEntity: boolean,
   queried: boolean,
+  contractFile: string,
 ): MethodPlan {
   const byName = classify(call.name);
   const kind = queried ? "query" : byName;
@@ -223,7 +236,7 @@ function planMethod(
   let moved: MovedSchema | undefined;
   const payload = entry?.payload;
   const inputHasId = payload?.getType().getProperty("id") !== undefined || schemaHasId(call.schema);
-  const fallbackInput = placeholderInput(payload, inputHasId);
+  const fallbackInput = placeholderInput(payload, inputHasId, contractFile, ctx.js.shared);
   let input = fallbackInput;
   const move =
     call.schema === undefined ? undefined : moveSchema(call.schema, call.call.getSourceFile());
@@ -239,7 +252,14 @@ function planMethod(
     );
     ctx.stats.todoSchemas += 1;
   }
-  const output = outputFor(entry?.response, dto, hasEntity, kind === "mutation" && inputHasId);
+  const output = outputFor(
+    entry?.response,
+    dto,
+    hasEntity,
+    kind === "mutation" && inputHasId,
+    contractFile,
+    ctx.js.shared,
+  );
   if (output.todo) {
     notes.push("output: todoSchema of the 4.x response type");
     ctx.stats.todoSchemas += 1;
@@ -337,6 +357,8 @@ export function planService(
   const hasEntity = !service.rpc && service.model !== undefined;
   const carveOut = carveOutOf(ctx.project, ctx.layout, service);
   const entity = entityOf(ctx, service, hasEntity, carveOut);
+  const base = baseName(service.serviceName);
+  const contractFile = join(ctx.layout.shared.src, "contracts", `${base}.ts`);
   const byName = new Map(service.methods.map((call) => [call.name, call]));
   const methods = [...byName.values()].map((call) =>
     planMethod(
@@ -346,14 +368,14 @@ export function planService(
       entity?.dto?.getName(),
       hasEntity,
       queried.has(`${service.serviceName}.${call.name}`),
+      contractFile,
     ),
   );
-  const base = baseName(service.serviceName);
   return {
     service,
     base,
     contractVar: `${base}Contract`,
-    contractFile: join(ctx.layout.shared.src, "contracts", `${base}.ts`),
+    contractFile,
     entity,
     methods,
     unimplemented: [...(map?.entries.keys() ?? [])].filter((name) => !byName.has(name)),

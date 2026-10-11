@@ -3,9 +3,10 @@
 // no review marker trails code on its line, and the TypeScript compiler
 // (against the built @fitzzero/quickdraw-core) and the 5.0 lint rules
 // (@fitzzero/quickdraw-lint's base config) report problems only on what a
-// review marker covers. The input, for contrast, is genuine 4.1 code: it
-// typechecks against the published @fitzzero/quickdraw-core 4.1.0, and the
-// 5.0 rules report it.
+// review marker covers, apart from a name or module that does not bind in a
+// contract, which no marker excuses. The input, for contrast, is genuine 4.1
+// code: it typechecks against the published @fitzzero/quickdraw-core 4.1.0,
+// and the 5.0 rules report it.
 
 import { cpSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,11 +31,11 @@ afterAll(() => {
   removeCopies();
 });
 
-/** The diagnostics TypeScript reports for the app at `appRoot`, as `file:line message`. */
+/** The diagnostics TypeScript reports for the app at `appRoot`, as `file:line code message`. */
 function typecheck(
   appRoot: string,
   core: Record<string, string[]>,
-): { file: string; line: number; message: string }[] {
+): { file: string; line: number; code: number; message: string }[] {
   const project = new Project({
     compilerOptions: {
       target: ScriptTarget.ES2022,
@@ -69,9 +70,17 @@ function typecheck(
     .map((diagnostic) => ({
       file: (diagnostic.getSourceFile()?.getFilePath() ?? "").slice(appRoot.length + 1),
       line: diagnostic.getLineNumber() ?? 0,
+      code: diagnostic.getCode(),
       message: ts.flattenDiagnosticMessageText(diagnostic.compilerObject.messageText, " "),
     }));
 }
+
+/**
+ * The codes of the diagnostics that say a name or a module does not bind:
+ * no review marker excuses them, since the reviewer of a todoSchema line
+ * fixes its schema, not a name the codemod printed wrong.
+ */
+const BINDING = new Set([2300, 2304, 2305, 2307, 2393, 2440, 2451, 2552, 2724, 6133, 6192, 6196]);
 
 /** Diagnostics on lines no review marker covers (or that use todoSchema). */
 function uncovered<T extends { file: string; line: number }>(
@@ -115,6 +124,13 @@ describe("the output", () => {
     const diagnostics = typecheck(root, {});
     expect(diagnostics.length).toBeGreaterThan(0);
     expect(uncovered(diagnostics, readTree(root))).toEqual([]);
+  });
+
+  it("binds every name and module the contracts use, review markers or not", () => {
+    const binding = typecheck(root, {})
+      .filter((diagnostic) => diagnostic.file.startsWith("packages/shared/src/contracts/"))
+      .filter((diagnostic) => BINDING.has(diagnostic.code));
+    expect(binding).toEqual([]);
   });
 
   it("passes the 5.0 lint rules, apart from what review markers cover", () => {

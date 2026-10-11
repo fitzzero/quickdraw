@@ -5,16 +5,20 @@
 // names are kept exactly: stored grants (`User.serviceAccess`) name them. A
 // service of a template carve-out (`carveOuts.ts`) keeps its markers: its
 // lines in `contracts/index.ts` and the helpers only it uses sit between
-// them, and its contract file says it belongs to the carve-out.
+// them, and its contract file says it belongs to the carve-out. Moved code
+// is written through the names its declarations take there
+// (`schemaNames.ts`): same-named locals of different method modules are
+// merged when they are the same code, renamed when not, and an aliased
+// schema is written by its declared name.
 
 import { join } from "node:path";
 import { Node, SyntaxKind, type SourceFile, type TypeNode } from "ts-morph";
 import { regionMarkers } from "../carveOuts";
 import type { RunContext } from "../context";
-import { relativeSpecifier } from "../imports";
+import { rebasedSpecifier, relativeSpecifier } from "../imports";
 import { repoPath } from "../layout";
 import { markerText } from "../markers";
-import type { MovedDeclaration } from "../schemas";
+import { nameDeclarations, renderCode } from "../schemaNames";
 import type { MethodPlan, ServicePlan } from "../plan";
 import { quote } from "../text";
 
@@ -52,16 +56,9 @@ function typeImports(ctx: RunContext, nodes: readonly Node[], file: string): str
       }
       if (Node.isImportSpecifier(declaration)) {
         const statement = declaration.getImportDeclaration();
-        const target = statement.getModuleSpecifierSourceFile();
-        const source = statement.getModuleSpecifierValue();
         const imported =
           declaration.getAliasNode() === undefined ? name : `${declaration.getName()} as ${name}`;
-        add(
-          source.startsWith(".") && target !== undefined
-            ? relativeSpecifier(file, target.getFilePath(), ctx.js.shared)
-            : source,
-          imported,
-        );
+        add(rebasedSpecifier(statement.getModuleSpecifier(), file, ctx.js.shared), imported);
       } else if (
         Node.isInterfaceDeclaration(declaration) ||
         Node.isTypeAliasDeclaration(declaration) ||
@@ -186,15 +183,38 @@ function contractBody(ctx: RunContext, plan: ServicePlan): string[] {
   return lines;
 }
 
+/** The names an import statement the codemod writes binds. */
+function importedNames(statement: string): string[] {
+  const named = /\{([^}]*)\}/u.exec(statement)?.[1];
+  if (named !== undefined) {
+    return named
+      .split(",")
+      .map((part) => part.trim().split(/\s+/u).at(-1) ?? "")
+      .filter((name) => name !== "");
+  }
+  const single = /^import\s+(?:type\s+)?(?:\*\s+as\s+)?([\w$]+)/u.exec(statement)?.[1];
+  return single === undefined ? [] : [single];
+}
+
+/** What the marker of a method says of each declaration its schema needs under another name. */
+function renamedNotes(
+  ctx: RunContext,
+  method: MethodPlan,
+  names: ReadonlyMap<string, string>,
+  renamed: ReadonlySet<string>,
+): string[] {
+  return (method.moved?.declarations ?? [])
+    .filter((declaration) => renamed.has(declaration.key))
+    .map(
+      (declaration) =>
+        `its schema's ${declaration.name} (${repoPath(ctx.layout, declaration.file)}) is ${names.get(declaration.key) ?? declaration.name} here, since the contract has another ${declaration.name}`,
+    );
+}
+
 /** The contract file's text. */
 function contractText(ctx: RunContext, plan: ServicePlan, helpers: ReadonlySet<string>): string {
   const moved = plan.methods.flatMap((method) =>
     method.moved === undefined ? [] : [method.moved],
-  );
-  const locals = dedupe(
-    moved
-      .flatMap((schema) => schema.declarations)
-      .filter((declaration) => declaration.place === "local"),
   );
   const zod = [...new Set(moved.flatMap((schema) => schema.zod.map((entry) => entry.statement)))];
   const direct = [...new Set(moved.flatMap((schema) => schema.directHelpers))].filter((name) =>
@@ -208,18 +228,41 @@ function contractText(ctx: RunContext, plan: ServicePlan, helpers: ReadonlySet<s
   if (plan.entity?.dto !== undefined) {
     typeNodes.push(plan.entity.dto);
   }
+  const types = typeImports(ctx, typeNodes, plan.contractFile);
   const imports = [
     `import { ${builders(plan).join(", ")} } from ${quote(CORE)};`,
     ...zod,
-    ...typeImports(ctx, typeNodes, plan.contractFile),
+    ...types,
     ...(direct.length === 0
       ? []
       : [
           `import { ${direct.toSorted().join(", ")} } from ${quote(relativeSpecifier(plan.contractFile, join(ctx.layout.shared.src, "contracts", "helpers.ts"), ctx.js.shared))};`,
         ]),
   ];
-  const body = locals.map((declaration) =>
-    declaration.docs === "" ? declaration.code : `${declaration.docs}\n${declaration.code}`,
+  const named = nameDeclarations(
+    moved,
+    new Set([
+      ...builders(plan),
+      ...moved.flatMap((schema) => schema.zod.map((entry) => entry.local)),
+      ...types.flatMap(importedNames),
+      ...direct,
+      plan.contractVar,
+    ]),
+  );
+  ctx.stats.schemasMerged += named.merged;
+  ctx.stats.schemasRenamed += named.renamed.size;
+  const body = named.locals.map((declaration) => {
+    const code = renderCode(declaration.code, declaration.references, named.names);
+    return declaration.docs === "" ? code : `${declaration.docs}\n${code}`;
+  });
+  const methods = plan.methods.map((method) =>
+    method.moved === undefined
+      ? method
+      : {
+          ...method,
+          input: renderCode(method.moved.code, method.moved.references, named.names),
+          notes: [...method.notes, ...renamedNotes(ctx, method, named.names, named.renamed)],
+        },
   );
   return [
     header(ctx, plan),
@@ -227,12 +270,12 @@ function contractText(ctx: RunContext, plan: ServicePlan, helpers: ReadonlySet<s
     ...imports,
     "",
     ...(body.length > 0 ? [body.join("\n\n"), ""] : []),
-    ...contractBody(ctx, plan),
+    ...contractBody(ctx, { ...plan, methods }),
     "",
   ].join("\n");
 }
 
-function dedupe(declarations: readonly MovedDeclaration[]): MovedDeclaration[] {
+function dedupe<T extends { readonly key: string }>(declarations: readonly T[]): T[] {
   const seen = new Set<string>();
   return declarations.filter((declaration) => {
     if (seen.has(declaration.key)) {
@@ -332,6 +375,8 @@ function writeHelpers(ctx: RunContext, plans: readonly ServicePlan[]): Set<strin
   );
   const regions = helperRegions(plans);
   const names = new Set(helpers.map((helper) => helper.name));
+  // helpers keep their names; a helper naming another by an import alias uses its name
+  const declared = new Map(helpers.map((helper) => [helper.key, helper.name] as const));
   if (helpers.length === 0) {
     return names;
   }
@@ -345,7 +390,7 @@ function writeHelpers(ctx: RunContext, plans: readonly ServicePlan[]): Set<strin
     helpers
       .map((helper) =>
         inRegion(regions.get(helper.key), [
-          `${helper.docs === "" ? "" : `${helper.docs}\n`}export ${helper.code}`,
+          `${helper.docs === "" ? "" : `${helper.docs}\n`}export ${renderCode(helper.code, helper.references, declared)}`,
         ]).join("\n"),
       )
       .join("\n\n"),

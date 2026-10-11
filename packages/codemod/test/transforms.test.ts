@@ -6,7 +6,9 @@
 // `defineService`'s rowless check sees an id among them), the report lists
 // every manual item of the fixture at its file and line, a service class's
 // fields, getters, constructor and overrides survive as marked module code,
-// and a second run changes nothing.
+// an inline import() type names its module from the contract file, moved
+// schemas of one name are merged or renamed and an aliased one is written by
+// its declared name, and a second run changes nothing.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -58,6 +60,8 @@ describe("the output on the 4.1 fixture app", () => {
       aggregatorsRemoved: 2,
       contracts: 5,
       schemasMoved: 16,
+      schemasMerged: 1,
+      schemasRenamed: 1,
       todoSchemas: 25,
       clientCalls: 8,
       wrappersDeleted: 3,
@@ -126,7 +130,7 @@ describe("method modules that take a port of the service", () => {
     runCodemod({ root: untied });
     const contract = readFileSync(join(untied, "packages/shared/src/contracts/task.ts"), "utf8");
     expect(contract).toContain(
-      `names archiveTask, listArchivedTasks, which no defineMethod call implements: add them here and in the service, or drop them. A defineMethod call on a receiver the codemod could not tie to a service (its parameter's type) probably holds the handler: archiveTask at ${archive}:12, listArchivedTasks at ${archive}:28`,
+      `names archiveTask, listArchivedTasks, which no defineMethod call implements: add them here and in the service, or drop them. A defineMethod call on a receiver the codemod could not tie to a service (its parameter's type) probably holds the handler: archiveTask at ${archive}:13, listArchivedTasks at ${archive}:29`,
     );
   });
 });
@@ -204,8 +208,8 @@ describe("aggregators, the functions that call method modules' register function
     // a register function whose only other statement calls another one
     edit(
       `${task}/methods/queries.ts`,
-      "    { schema: z.object({ projectId: z.string() }) },\n  );\n}",
-      "    { schema: z.object({ projectId: z.string() }) },\n  );\n  registerReindexProject(service);\n}",
+      "    { schema: projectIdSchema },\n  );\n}",
+      "    { schema: projectIdSchema },\n  );\n  registerReindexProject(service);\n}",
     );
     // and one that does more, calling another one under a condition
     edit(
@@ -518,6 +522,101 @@ describe("a placeholder input", () => {
     // the placeholder without keys hid the id: the check let it through
     expect(define(todoSchema(), false)).not.toThrow();
     /* oxlint-enable quickdraw/no-todo-schema */
+  });
+});
+
+describe("an inline import() type of a 4.x method map", () => {
+  it("names its module from the contract file, in the input and in the output", () => {
+    // types/project.ts writes import("./limits.js"), a path from types/
+    const line =
+      (output.get("packages/shared/src/contracts/project.ts") ?? "")
+        .split("\n")
+        .find((text) => text.includes("getProjectLimits:")) ?? "";
+    expect(line).toContain(
+      'input: todoSchema<{ scope?: import("../types/limits.js").LimitsScope }>({ keys: ["scope"] })',
+    );
+    expect(line).toContain('output: todoSchema<import("../types/limits.js").ProjectLimits>()');
+    expect(line).not.toContain('import("./limits.js")');
+  });
+});
+
+describe("moved schemas of one name, and schemas used through an alias", () => {
+  const contract = (): string => output.get("packages/shared/src/contracts/task.ts") ?? "";
+  const methodLine = (text: string, name: string): string =>
+    text.split("\n").find((line) => line.includes(`${name}:`)) ?? "";
+
+  it("writes the same schema of two method modules once, whatever its layout", () => {
+    // archive.ts writes it on one line, queries.ts on three with a trailing comma
+    expect(contract().match(/^const projectIdSchema = /gmu)).toHaveLength(1);
+    expect(methodLine(contract(), "listArchivedTasks")).toContain("input: projectIdSchema,");
+    expect(methodLine(contract(), "listTasks")).toContain("input: projectIdSchema,");
+    // the api copies go, with the comment above one
+    for (const file of ["archive.ts", "queries.ts"]) {
+      expect(output.get(`apps/api/src/services/task/methods/${file}`)).not.toContain(
+        "projectIdSchema",
+      );
+    }
+    expect(output.get("apps/api/src/services/task/methods/queries.ts")).not.toContain(
+      "laid out differently",
+    );
+  });
+
+  it("renames another schema of the name as <name>Of<Module>, where it is declared and used", () => {
+    expect(contract()).toContain(
+      'const byTaskIdSchemaOfUpdateTask = z.object({ id: cuidSchema("task ID") });',
+    );
+    expect(contract()).toContain("const updateTaskSchema = byTaskIdSchemaOfUpdateTask.extend({");
+    expect(methodLine(contract(), "archiveTask")).toContain("input: byTaskIdSchema,");
+    expect(contract()).toContain(
+      "its schema's byTaskIdSchema (apps/api/src/services/task/methods/update-task.ts) is byTaskIdSchemaOfUpdateTask here, since the contract has another byTaskIdSchema",
+    );
+    // the api copy goes once the schema that used it is gone
+    expect(output.get("apps/api/src/services/task/methods/update-task.ts")).not.toContain(
+      "byTaskIdSchema",
+    );
+  });
+
+  it("writes a schema used through a re-export alias by its declared name", () => {
+    // project.ts passes deleteProjectSchema, project-schemas.ts's alias of byIdSchema
+    const project = output.get("packages/shared/src/contracts/project.ts") ?? "";
+    expect(methodLine(project, "deleteProject")).toContain(
+      "deleteProject: mutation({ input: byIdSchema,",
+    );
+    expect(project).not.toContain("deleteProjectSchema");
+  });
+
+  it("keeps apart copies of the same text that name different declarations", () => {
+    const variant = copyFixture("same-text");
+    const edit = (file: string, from: string, to: string): void => {
+      const path = join(variant, "apps/api/src/services/task/methods", file);
+      const text = readFileSync(path, "utf8");
+      expect(text, file).toContain(from);
+      writeFileSync(path, text.replace(from, to));
+    };
+    edit(
+      "archive.ts",
+      "const projectIdSchema = z.object({ projectId: z.string() });",
+      "const idField = z.string().min(1);\nconst projectIdSchema = z.object({ projectId: idField });",
+    );
+    edit(
+      "queries.ts",
+      "const projectIdSchema = z.object({\n  projectId: z.string(),\n});",
+      "const idField = z.string().cuid();\nconst projectIdSchema = z.object({ projectId: idField });",
+    );
+    const run = runCodemod({ root: variant });
+    const text = readFileSync(join(variant, "packages/shared/src/contracts/task.ts"), "utf8");
+    expect(text).toContain("const idField = z.string().min(1);");
+    expect(text).toContain("const projectIdSchema = z.object({ projectId: idField });");
+    expect(text).toContain("const idFieldOfQueries = z.string().cuid();");
+    expect(text).toContain(
+      "const projectIdSchemaOfQueries = z.object({ projectId: idFieldOfQueries });",
+    );
+    expect(methodLine(text, "listArchivedTasks")).toContain("input: projectIdSchema,");
+    expect(methodLine(text, "listTasks")).toContain("input: projectIdSchemaOfQueries,");
+    expect({ merged: run.stats.schemasMerged, renamed: run.stats.schemasRenamed }).toEqual({
+      merged: 0,
+      renamed: 3,
+    });
   });
 });
 
