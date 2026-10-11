@@ -2691,7 +2691,9 @@ ping: { access: "authenticated", handler } }`, which delivers as before
   anonymous sockets left out; app rooms only) come from this process's
   records of the rooms `ctx.rooms.join` joined (a socket a raw
   `socket.join` put in a room is not counted). Behind a Redis adapter each
-  also asks every node's sockets (`fetchSockets`).
+  also asks the other nodes, which answer from the same records with user
+  ids alone (or whether they hold a socket of the user); concurrent reads
+  of one room or user share one request.
   `ctx.rooms.join(room)` and `leave` put the calling socket in an app room
   (calls without a socket get `false`; names starting with `qd:` or `user:`
   are refused with `VALIDATION`, and so are names with the shape of a

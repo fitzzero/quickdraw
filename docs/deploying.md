@@ -107,7 +107,10 @@ hear each other during that deploy (frames, access changes, logout
 everywhere, presence). Pass `keyPrefix: "socket.io"` to `setupRedisAdapter`
 for that deploy, and move to the new key in a deploy that replaces every
 node at once. The counter key `{keyPrefix}:rev` does not change, so
-revisions stay one order across the deploy.
+revisions stay one order across the deploy. A node of the earlier version
+never answers a presence request: while one is up, presence waits
+`cluster.timeoutMs` once and then reads every node's sockets for 30 s at a
+time ("When a node stops answering").
 
 ## What holds across nodes
 
@@ -238,7 +241,16 @@ statements and bytes) and the split end-to-end suite:
   one after another: every flush behind it waits too;
 - a collection resume (`qd:col:sub` with `since`) always reads a page, and
   "not modified" comes from `versionColumn` only: a process's change log and
-  delta buffer see its own flushes.
+  delta buffer see its own flushes;
+- presence across nodes (`users` and `count`, `isOnline` for a user with no
+  socket on the node that asks, a joining socket's list, and the `left` of
+  a user's last socket on a node) is one request to the other nodes,
+  `quickdraw:presence`, each answering with the user ids of its records (or
+  whether it holds a socket of the user). Concurrent reads of one room, or
+  of one user, share it: one request in flight, and one more for every read
+  that arrives meanwhile. Before 5.1 each read had every node send every
+  socket in the room, handshake headers and cookies included (about
+  15.6 KB a socket), to every node (the 5.1 audit's RT-5).
 
 ## When a node stops answering
 
@@ -260,6 +272,14 @@ it revoked in their rooms, so they can receive frames the change should have
 kept from them (a field above their new level, a row they lost) until that
 node applies it. Live frames are fail-open across nodes for that long; calls
 and subscription reads are always authorized on the node that serves them.
+
+Presence has its own fallback. A presence request a node does not answer
+within `cluster.timeoutMs` (a node of an earlier version, during a rolling
+deploy, never answers one) makes the asking node read every node's sockets
+(`fetchSockets`) instead, for every presence read of the next 30 s, and log
+one warning ("A node did not answer a presence request within
+cluster.timeoutMs ..."). The first read after each window asks again, so a
+rolling deploy costs one `cluster.timeoutMs` wait per 30 s, never a failure.
 
 ## When Valkey stops answering
 
@@ -295,8 +315,11 @@ and subscription reads are always authorized on the node that serves them.
   skew between its clock and Valkey's.
 - **Access and presence.** While the node's connection is down, its access
   changes are broadcast without waiting (they wait in the client's queue);
-  presence across nodes waits on `fetchSockets` up to the adapter's
-  `requestsTimeout`; `lastSeen` answers from the node's own records.
+  a presence read across nodes waits `cluster.timeoutMs` for the other
+  nodes' answers, and then, like every presence read of the next 30 s,
+  reads every node's sockets (`fetchSockets`), which waits up to the
+  adapter's `requestsTimeout`; `lastSeen` answers from the node's own
+  records.
 
 ## Cloud Run
 
@@ -361,6 +384,9 @@ Number(process.env.TRUST_PROXY ?? 0))`, with `TRUST_PROXY=1` behind one.
   clients, even after a short drop that lost nothing.
 - A room's presence list read from the other nodes can race a `joined` or
   `left` another node sends meanwhile (this node's own joins are counted).
+- Presence asks the other nodes on every join and on every user's last
+  leave from a node: a client that joins and leaves a room in a loop costs
+  one small request per cycle, which nothing rate-limits.
 - Two deployments that both keep the default `cluster.keyPrefix` on one
   Valkey are one deployment to quickdraw, and a shared adapter key carries
   room broadcasts between deployments whatever their prefixes ("Deployments

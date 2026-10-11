@@ -24,7 +24,8 @@ import type { Principal, PrincipalOf, QuickdrawTypes } from "../types";
  * Who is online and who is in a room (RFC 0003 section 12.5): `ctx.presence`,
  * `server.presence`, `qd.presence`. Every answer is a promise: on a server
  * with the in-memory adapter it comes from this process's sockets; behind a
- * cluster adapter (Redis) it asks every node (`io.in(room).fetchSockets()`).
+ * cluster adapter (Redis) it asks the other nodes too, which answer with
+ * user ids (or whether they have a socket of the user) alone.
  */
 export interface Presence {
   /** True while the user has a socket connected (on any node). */

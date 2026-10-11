@@ -19,14 +19,16 @@
 // The answers come from this process's rooms while the server runs the
 // in-memory adapter it was created with. Behind a cluster adapter (Redis)
 // other nodes' sockets are not visible here, so `isOnline`, `count` and
-// `users` ask every node through `io.in(room).fetchSockets()`, and
-// `lastSeen` also reads the last disconnect any node recorded in the
-// cluster's Valkey (`../cluster/lastSeen.ts`).
+// `users` ask the other nodes with an answered request that carries user
+// ids alone (`presenceRequests.ts`; the 5.1 audit's RT-5), and `lastSeen`
+// also reads the last disconnect any node recorded in the cluster's Valkey
+// (`../cluster/lastSeen.ts`).
 
 import { RESERVED_ROOM_PREFIXES, socketIdShaped, userRoom } from "../../contract/names";
 import { readLastSeen, recordLastSeen } from "../cluster/lastSeen";
 import type { Hub } from "../emit/hub";
 import { unreadable } from "../transports/ack";
+import { createPresenceRequests, type PresenceRequests } from "./presenceRequests";
 import type { Presence } from "./types";
 
 /** How many users' last-seen times one process keeps; the least recently seen go first. */
@@ -93,6 +95,19 @@ export class PresenceRecords {
   }
 }
 
+/** The presence of one dispatcher: its hub, this process's records, and its requests to the other nodes. */
+export interface PresenceState {
+  readonly hub: Hub;
+  readonly records: PresenceRecords;
+  readonly requests: PresenceRequests;
+}
+
+/** Creates the presence state of the dispatcher whose hub this is. */
+export function createPresenceState(hub: Hub): PresenceState {
+  const records = new PresenceRecords();
+  return { hub, records, requests: createPresenceRequests(hub, records) };
+}
+
 /**
  * The user's last socket on this process disconnected at `at`: kept here,
  * and behind a cluster's Valkey for every node (`../cluster/lastSeen.ts`).
@@ -102,60 +117,33 @@ export function markSeen(hub: Hub, records: PresenceRecords, userId: string, at:
   recordLastSeen(hub, userId, at);
 }
 
-/** The distinct user ids of these principals, in order; anonymous sockets have none. */
-function distinctUsers(
-  principals: Iterable<{ readonly userId?: unknown } | null | undefined>,
-): string[] {
-  const users = new Set<string>();
-  for (const principal of principals) {
-    const userId = principal?.userId;
-    if (typeof userId === "string" && userId !== "") {
-      users.add(userId);
-    }
-  }
-  return [...users];
-}
-
 /** The users of this process's sockets in `room`, from the records of the rooms `ctx.rooms.join` joined. */
 function localUsers(records: PresenceRecords, room: string): string[] {
   return records.users(room) ?? [];
 }
 
 /**
- * The users with a socket in `room` on any node: through every node's sockets
- * behind a cluster adapter. This node's own are read once the other nodes
- * answered, not when they were asked: a socket that joined here meanwhile
- * sent its `joined` to the room already, and a list that left it out would
- * undo it.
+ * The users with a socket in `room` on any node: behind a cluster adapter,
+ * what the other nodes answer (`presenceRequests.ts`). This node's own are
+ * read once the other nodes answered, not when they were asked: a socket
+ * that joined here meanwhile sent its `joined` to the room already, and a
+ * list that left it out would undo it.
  */
-export async function usersInRoom(
-  hub: Hub,
-  records: PresenceRecords,
-  room: string,
-): Promise<string[]> {
-  const { io } = hub;
-  if (io === undefined) {
+export async function usersInRoom(state: PresenceState, room: string): Promise<string[]> {
+  const { hub, records } = state;
+  if (hub.io === undefined) {
     return [];
   }
   if (hub.probe.local()) {
     return localUsers(records, room);
   }
-  const sockets = await io.in(room).fetchSockets();
-  const remote = sockets.filter((socket) => !io.sockets.sockets.has(socket.id));
-  return distinctUsers([
-    ...remote.map((socket) => socket.data.principal),
-    ...localUsers(records, room).map((userId) => ({ userId })),
-  ]);
+  const remote = await state.requests.users(room);
+  return [...new Set([...remote, ...localUsers(records, room)])];
 }
 
 /** True while some socket of `userId` is in `room`, on any node. */
-export async function inRoom(
-  hub: Hub,
-  records: PresenceRecords,
-  room: string,
-  userId: string,
-): Promise<boolean> {
-  return (await usersInRoom(hub, records, room)).includes(userId);
+export async function inRoom(state: PresenceState, room: string, userId: string): Promise<boolean> {
+  return (await usersInRoom(state, room)).includes(userId);
 }
 
 function checkName(member: string, value: unknown): asserts value is string {
@@ -186,21 +174,21 @@ function checkRoom(member: string, room: unknown): asserts room is string {
 }
 
 /** The presence API of one dispatcher, answered from its server's sockets (none before a server attaches). */
-export function createPresence(hub: Hub, records: PresenceRecords): Presence {
+export function createPresence(state: PresenceState): Presence {
+  const { hub, records } = state;
   const isOnline = async (userId: string): Promise<boolean> => {
     checkName("isOnline", userId);
     const { io } = hub;
     if (io === undefined) {
       return false;
     }
-    if (hub.probe.local()) {
-      return (io.sockets.adapter.rooms.get(userRoom(userId))?.size ?? 0) > 0;
-    }
-    return (await io.in(userRoom(userId)).fetchSockets()).length > 0;
+    // A socket of the user here answers at once; behind a cluster adapter, else the other nodes do.
+    const here = (io.sockets.adapter.rooms.get(userRoom(userId))?.size ?? 0) > 0;
+    return here || hub.probe.local() ? here : await state.requests.online(userId);
   };
   const users = async (room: string): Promise<string[]> => {
     checkRoom("users", room);
-    return await usersInRoom(hub, records, room);
+    return await usersInRoom(state, room);
   };
   return Object.freeze({
     isOnline,
@@ -214,7 +202,7 @@ export function createPresence(hub: Hub, records: PresenceRecords): Presence {
     },
     async count(room: string): Promise<number> {
       checkRoom("count", room);
-      return (await usersInRoom(hub, records, room)).length;
+      return (await usersInRoom(state, room)).length;
     },
     users,
   });

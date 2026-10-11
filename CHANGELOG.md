@@ -294,6 +294,11 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   deploy) is applied, with one warning.
 - **`cluster.keyPrefix` must be a non-empty string**, or `createServer`
   throws.
+- **Presence across nodes is a request answered with user ids.** A node
+  asks the others with `quickdraw:presence` instead of reading their
+  sockets. During a rolling deploy from an earlier version, whose nodes
+  never answer it, a read waits `cluster.timeoutMs` once and then reads
+  every node's sockets for 30 s at a time, with one warning.
 
 ### Security
 
@@ -517,6 +522,12 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   until they reconnected, and its disconnects, stream items, room removals
   and access changes acted on production too. Every event now carries its
   deployment, and a node applies only its own's.
+- **Presence no longer ships every socket's handshake between nodes
+  (RT-5).** Behind a cluster adapter each join and each user's last leave
+  read every node's sockets (`fetchSockets`): their handshake headers and
+  cookies, auth and data, about 15.6 KB a socket, parsed by every node. The
+  other nodes now answer with user ids (or whether they hold a socket of the
+  user), and concurrent reads of one room or user share one request.
 
 ### Codemod
 
