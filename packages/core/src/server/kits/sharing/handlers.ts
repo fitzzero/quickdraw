@@ -15,7 +15,8 @@
 // own policy reads, so `defineService` refuses a service whose policy has
 // none for a mode the contract uses (`policy.ts`), or that has no model. An
 // access-list method (its input names the row as `id`) given a form that
-// checks no row (`"authenticated"`, say) must be named in `rowless`.
+// asks the policy nothing about that row (`"authenticated"`, `custom`, say)
+// must be named in `rowless`.
 
 import type { AnyContract } from "../../../contract/defineContract";
 import {

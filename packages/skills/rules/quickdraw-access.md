@@ -146,8 +146,9 @@ its first call. With
 tracked write to that column refreshes the user's open sockets, and an
 in-process caller loads the grants again at its next call.
 
-- A service-wide `Admin` grant passes every check on its service
-  (`adminBypass: false` on the service turns that off).
+- A service-wide `Admin` grant passes every access form on its service
+  (`adminBypass: false` on the service turns that off), though not `kinds`
+  or `claims`.
 - A grant below `Admin` counts only where the form names `service`: a `Read`
   grant does not read every row through an `entry` form.
 

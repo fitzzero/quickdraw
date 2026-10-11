@@ -23,9 +23,11 @@
 // service must declare its `model`; `defineService` checks that when the
 // service is defined, that a method on many rows of a service without an
 // access policy has `"public"` or `{ service }` access (`access.ts`), and,
-// on a service with one, that `get` under a form that checks no row
-// (`"public"`, `"authenticated"`, `{ service }` below `Admin`) is named in
-// `rowless`, which says every caller the form admits may read any row.
+// on a service with one, that `get` under a form that asks the policy
+// nothing about the row its `id` names (`"public"`, `"authenticated"`,
+// `{ service }` below `Admin`, `custom`, `{ scope }`, `{ entry }` on another
+// key) is named in `rowless`, which says every caller the form admits may
+// read any row.
 
 import type { AnyContract } from "../../../contract/defineContract";
 import { crud as contractHalf, crudSpecOf, type CrudSpec } from "../../../contract/kits/crud";
@@ -137,7 +139,7 @@ const MANY_ROWS: ReadonlySet<CrudSpec["method"]> = new Set([
  * names whatever their form (`checkRowWrite`), and `create`, whose `id` (when
  * its input has one) names a new row: `defineService`'s rowless check leaves
  * them alone. `get` reads the row its form lets the caller read, so a form
- * that checks no row needs `rowless`.
+ * that asks the policy nothing about that row needs `rowless`.
  */
 const CHECKS_ROWS: ReadonlySet<CrudSpec["method"]> = new Set([
   "create",

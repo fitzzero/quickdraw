@@ -169,9 +169,10 @@ export interface AdminHandlersOptions<C extends AnyContract, A, Db = unknown> {
    * The kit's methods whose access form is their whole check on purpose:
    * each gets `rowless: true`. On a service with an access policy,
    * `defineService` refuses `adminGet`, `adminUpdate` or `adminDelete`
-   * under a form below the default that checks no row (`{ service:
-   * "Moderate" }`, `"authenticated"`) unless it is named here, since any
-   * caller the form admits reaches any row by its id.
+   * under a form below the default that asks the policy nothing about the
+   * row its `id` names (`{ service: "Moderate" }`, `"authenticated"`,
+   * `custom`, `{ scope }`, or `{ entry }` on another key) unless it is named
+   * here, since any caller the form admits reaches any row by its id.
    */
   readonly rowless?: readonly AdminMethodsOf<C>[];
   /**

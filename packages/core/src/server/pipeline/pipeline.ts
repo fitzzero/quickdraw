@@ -21,7 +21,7 @@
 // ignores its signal) runs on unanswered. A query keeps its slot until that
 // work has settled, so a connection never runs more of it than its cap.
 
-import { checkCaller } from "../access/claims";
+import { checkKindAndClaims } from "../access/claims";
 import { createConcurrencyLimiter, type ConcurrencyLimiter, type QuerySlot } from "./concurrency";
 import { throwIfCancelled, toQuickdrawError } from "./errors";
 import { execute, forCaller, type ExecuteCall } from "./execute";
@@ -99,7 +99,7 @@ async function proceed(
   // (`../access/claims.ts`): outside the access engine, so before any Admin
   // bypass, and before the app's context runs. An anonymous caller is left
   // to the form by `kinds`, and refused by `claims`.
-  checkCaller(target.method, request.principal, input, label);
+  checkKindAndClaims(target.method, request.principal, input, label);
   const ctx = contextFor(settings, request, call.requestId, target, call.signal, pipeline.dispatch);
   const access = {
     service: target.service,

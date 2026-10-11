@@ -280,11 +280,13 @@ function checkRowForms(
 
 /**
  * On a service with an access policy, a method whose input has `id` and
- * whose form checks no row is refused unless it says `rowless: true`
- * (`access/rowless.ts`). A service without a policy has no row check to
- * skip.
+ * whose form asks the policy nothing about the row that id names (an open
+ * form, `custom`, `{ scope }`, or `{ entry }` on another key) is refused
+ * unless it says `rowless: true` (`access/rowless.ts`). A service without a
+ * policy has no row check to skip.
  */
 function checkRowless(
+  contract: AnyContract,
   methods: Readonly<Record<string, ServiceMethod>>,
   data: ServiceData,
   fail: Fail,
@@ -293,7 +295,7 @@ function checkRowless(
     return;
   }
   for (const method of Object.values(methods)) {
-    const problem = rowlessProblem(method);
+    const problem = rowlessProblem(method, contract.name);
     if (problem !== undefined) {
       fail(problem);
     }
@@ -371,7 +373,7 @@ export function buildService(
   checkWatches(checked, collections, data, fail);
   const methods = checkMethods(checked, projections, data, definition.methods, fail);
   checkRowForms(methods, data, fail);
-  checkRowless(methods, data, fail);
+  checkRowless(checked, methods, data, fail);
   const service: AnyService = Object.freeze({
     name: checked.name,
     contract: checked,

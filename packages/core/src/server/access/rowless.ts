@@ -43,14 +43,15 @@ import type { AccessForm, EntryAccess, ScopeAccess } from "./types";
 /**
  * What a form checks of the row `input.id` names: `"checked"` when the
  * policy decides on it (an `entry` form on `id`, or a function naming the
- * row in code, and a service-wide `Admin` grant), `"none"` when the form
+ * row in code, a `scope` form on the service's own rows by `id`, and a
+ * service-wide `Admin` grant), `"none"` when the form
  * checks the caller's level on no row, `"custom"` for `custom(fn)`, and
  * `"other"` when it checks another row (a `scope` form, an `entry` form on
  * another key).
  */
 type Reach = "checked" | "none" | "custom" | "other";
 
-function reachOf(form: AccessForm): Reach {
+function reachOf(form: AccessForm, service: string): Reach {
   if (form === "public" || form === "authenticated") {
     return "none";
   }
@@ -58,7 +59,8 @@ function reachOf(form: AccessForm): Reach {
     return "custom";
   }
   if (form.scope !== undefined) {
-    return "other";
+    // A scope form on the service's own rows by `id` asks its own policy about that row.
+    return form.of.name === service && form.id === "id" ? "checked" : "other";
   }
   if (form.entry !== undefined) {
     return typeof form.id === "string" && form.id !== "id" ? "other" : "checked";
@@ -101,9 +103,18 @@ function selector(id: unknown): string {
  */
 function otherRow(form: EntryAccess<unknown> | ScopeAccess<unknown>, optOut: string): string {
   if (form.scope !== undefined) {
-    const { scope, of, id } = form as ScopeAccess<unknown>;
+    const { scope, of } = form as ScopeAccess<unknown>;
+    const id: unknown = form.id;
+    const shown = `{ scope: "${scope}", of: ${of.name}, id: ${selector(id)} }`;
+    if (id === "id") {
+      return (
+        `${shown} checks the ${of.name} row id names, not a row of this service: ` +
+        "if id names a row of this service, that lets everyone it admits reach any row by its id. " +
+        `Give it { entry: "${scope}" } so the policy decides on the row id names, or, if id names a ${of.name} row as the form says, or a row the method creates, or every caller its access admits may reach any row, ${optOut}`
+      );
+    }
     return (
-      `{ scope: "${scope}", of: ${of.name}, id: ${selector(id)} } checks a row of ${of.name}, not the row id names: ` +
+      `${shown} checks a row of ${of.name}, not the row id names: ` +
       "on a service with an access policy, that lets everyone it admits reach any row by its id. " +
       `Give it { entry: "${scope}" } so the policy decides on the row id names, or, if id names a row the method creates (an id the client made) or every caller its access admits may reach any row, ${optOut}`
     );
@@ -123,9 +134,9 @@ function otherRow(form: EntryAccess<unknown> | ScopeAccess<unknown>, optOut: str
  * that id names, and it did not say `rowless: true`. `undefined` when it
  * may.
  */
-export function rowlessProblem(method: ServiceMethod): string | undefined {
+export function rowlessProblem(method: ServiceMethod, service: string): string | undefined {
   const { access, handler } = method;
-  const reach = reachOf(access);
+  const reach = reachOf(access, service);
   if (method.rowless || reach === "checked" || isRowChecked(handler)) {
     return undefined;
   }

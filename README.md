@@ -796,9 +796,10 @@ export const taskService = qd.defineService(task, {
   that is the id itself), a row named by another key (`ids`, `taskId`, a
   nested `where.id`) under a form that checks the row `id` names, and an
   `entry` form whose `id` is a function, which names its row in code.
-- A service-wide `Admin` grant passes every check on its service
-  (`adminBypass: false` turns that off). A grant below `Admin` counts only
-  where the form names `service`: a `Read` grant does not read every row.
+- A service-wide `Admin` grant passes every access form on its service
+  (`adminBypass: false` turns that off), though not `kinds` or `claims`. A
+  grant below `Admin` counts only where the form names `service`: a `Read`
+  grant does not read every row.
 - Grants come from `principal.serviceAccess`, as `authenticate` returns it or
   `createServer({ auth: { loadServiceAccess } })` loads it for a principal
   that carries none: at a socket's handshake, for each HTTP call, and for
@@ -3450,8 +3451,8 @@ so an app can adopt it before fixing old code.
 
 The guards follow one order of preference, so an agent moving fast meets a
 mistake as early as it can be caught: a type error; then a refusal when the
-service is defined (an access form that checks no row on a method that
-takes an `id`, unless it says `rowless: true`); then lint; then a
+service is defined (an access form that asks the policy nothing about the
+row a method's `id` names, unless it says `rowless: true`); then lint; then a
 development warning as it happens (`repeated-call`, `repeated-mutation` and
 `repeated-invalidation` name a client loop before the rate limit does).
 

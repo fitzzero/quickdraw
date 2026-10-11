@@ -15,6 +15,7 @@ import { defineContract, mutation } from "../../index";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, type TestApp } from "../../testing/index";
 import { inherit, initQuickdraw, type Principal } from "../index";
+import { checkClaims } from "./claims";
 import { createMcpRegistry } from "../mcp/index";
 import { isPrincipal } from "../transports/auth";
 import { projectContract, projectService, seedBoard, type Board } from "./__tests__/board";
@@ -196,5 +197,40 @@ describe("a method's claims", () => {
     expect(
       await dispatcher.caller(adaTriage).taskService.triage({ id: board.t2, status: "done" }),
     ).toMatchObject({ id: board.t2, status: "done" });
+  });
+});
+
+describe("a claims check that breaks the types", () => {
+  const principal: Principal = { userId: "u1", claims: { scope: "triage" } };
+
+  it("fails closed with INTERNAL when it returns a promise, and its rejection is observed", async () => {
+    const rejecting = (() => Promise.reject(new Error("no claims"))) as unknown as () => boolean;
+    expect(() => checkClaims(rejecting, principal, {}, "taskService.triage")).toThrow(
+      expect.objectContaining({ code: "INTERNAL" }),
+    );
+    const resolving = (() => Promise.resolve(true)) as unknown as () => boolean;
+    expect(() => checkClaims(resolving, principal, {}, "taskService.triage")).toThrow(
+      expect.objectContaining({ code: "INTERNAL" }),
+    );
+    // An unhandled rejection would fail the run here.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  });
+
+  it("is refused when it is defined as an async function", () => {
+    const define = qd.defineService as unknown as (
+      contract: unknown,
+      definition: unknown,
+    ) => unknown;
+    expect(() =>
+      define(taskContract, {
+        model: "task",
+        access: inherit({ from: projectContract, via: "projectId" }),
+        methods: {
+          triage: { access: { entry: "Moderate" }, claims: async () => true, handler: () => null },
+        },
+      }),
+    ).toThrow('method "triage": claims must be synchronous');
   });
 });

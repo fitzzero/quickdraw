@@ -310,6 +310,16 @@ describe("the rowless check", () => {
         handler: () => taskRow(),
       }),
     ).toThrow('its access { scope: "Read", of: projectService, id: (input) => ... } checks a row');
+    expect(
+      withEntry("get", {
+        access: { scope: "Read", of: project, id: "id" },
+        handler: () => taskRow(),
+      }),
+    ).toThrow(
+      'its access { scope: "Read", of: projectService, id: "id" } checks the projectService row id names, not a row of this service: ' +
+        "if id names a row of this service, that lets everyone it admits reach any row by its id. " +
+        'Give it { entry: "Read" } so the policy decides on the row id names, or, if id names a projectService row as the form says, or a row the method creates, or every caller its access admits may reach any row, set rowless: true on the method',
+    );
     const nested = defineContract("taskService", {
       entity: taskSchema,
       methods: {
@@ -356,6 +366,8 @@ describe("the rowless check", () => {
       { service: "Read", entry: "Read" },
       { entry: "Read", id: "id" },
       { entry: "Read", id: (input: { id: string }) => input.id },
+      // a scope form on the service's own rows by id asks its own policy
+      { scope: "Read", of: task, id: "id" },
     ]) {
       expect(
         withEntry("get", { access, handler: () => taskRow() }),

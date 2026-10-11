@@ -132,8 +132,10 @@ export type SharingHandlersOptions<C extends AnyContract, A, Db = unknown> = {
    * each gets `rowless: true`. On a service with an access policy,
    * `defineService` refuses an access-list method (`share`, `unshare`,
    * `setLevel`, `listShares`, `shareByName`: their input names the row as
-   * `id`) under `"public"`, `"authenticated"` or `{ service: L }` below
-   * `Admin` unless it is named here.
+   * `id`) under a form that asks the policy nothing about that row
+   * (`"public"`, `"authenticated"`, `{ service: L }` below `Admin`,
+   * `custom`, `{ scope }`, or `{ entry }` on another key) unless it is named
+   * here.
    */
   readonly rowless?: readonly SharingMethodsOf<C>[];
 } & ([SharingByNameOf<C>] extends [never]

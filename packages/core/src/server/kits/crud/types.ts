@@ -71,10 +71,11 @@ export interface CrudHandlersOptions<C extends AnyContract, A, Db = unknown> {
   /**
    * The kit's methods whose access form is their whole check on purpose:
    * each gets `rowless: true`. On a service with an access policy,
-   * `defineService` refuses `get` under `"public"`, `"authenticated"` or
-   * `{ service: L }` below `Admin` (any such caller could read any row by
-   * its id) unless it is named here: `rowless: ["get"]` for public
-   * profiles, say. `update`, `delete` and `reorder` check the row whatever
+   * `defineService` refuses `get` under a form that asks the policy nothing
+   * about the row its `id` names (`"public"`, `"authenticated"`,
+   * `{ service: L }` below `Admin`, `custom`, `{ scope }`, or `{ entry }` on
+   * another key: any such caller could read any row by its id) unless it is
+   * named here: `rowless: ["get"]` for public profiles, say. `update`, `delete` and `reorder` check the row whatever
    * their form, and need nothing.
    */
   readonly rowless?: readonly CrudMethodsOf<C>[];
