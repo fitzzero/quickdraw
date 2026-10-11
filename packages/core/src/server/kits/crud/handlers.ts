@@ -33,7 +33,12 @@ import type { AnyContract } from "../../../contract/defineContract";
 import { crud as contractHalf, crudSpecOf, type CrudSpec } from "../../../contract/kits/crud";
 import { accessFormProblem } from "../../access/forms";
 import type { AccessForm } from "../../access/types";
-import { checkWhenDefined, checksRowsItself, type AnyService } from "../../service";
+import {
+  checkWhenDefined,
+  checksRowsItself,
+  dependsOnCaller,
+  type AnyService,
+} from "../../service";
 import { kitEntry, rowlessMethods } from "../rowless";
 import { everyRowProblem } from "./access";
 import type { AnyPrepare } from "./create";
@@ -149,6 +154,12 @@ const CHECKS_ROWS: ReadonlySet<CrudSpec["method"]> = new Set([
   "reorder",
 ]);
 
+/**
+ * The kit's methods whose result is the rows the caller's level reaches:
+ * `defineService` refuses `share: "all"` on them (`dependsOnCaller`).
+ */
+const CALLER_DEPENDENT: ReadonlySet<CrudSpec["method"]> = new Set(["list", "getMany"]);
+
 const OPTION_KEYS: readonly string[] = ["access", "prepare", "rowless"];
 
 /** Why a service cannot run the kit's method `name`, made for `contract` with `form`. */
@@ -191,6 +202,9 @@ function handlers<C extends AnyContract, const A extends CrudAccess<C>, Db = unk
     checkWhenDefined(handler, (service) => serviceProblem(service, contract, [name, spec], form));
     if (CHECKS_ROWS.has(spec.method)) {
       checksRowsItself(handler);
+    }
+    if (CALLER_DEPENDENT.has(spec.method)) {
+      dependsOnCaller(handler);
     }
     entries[name] = kitEntry(name, form, handler, rowless);
   }

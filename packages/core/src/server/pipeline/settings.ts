@@ -83,7 +83,11 @@ export interface PipelineOptions extends TrackingOptions {
    * Answers query versions for "not modified" replies, for queries that
    * declare no `version` of their own. Default: the version of the row a
    * query returns, for a query whose output is one projection row and whose
-   * input has an `id`: the service's `versionColumn`, or the change log.
+   * input has an `id`: the service's `versionColumn`, or the change log;
+   * only when the method's form checked that row (an `entry` form on `id`, a
+   * `rowless` method, or the service's `Admin` bypass). A source of the
+   * app's own must answer only for rows the form let the caller read: a
+   * version is a one-bit oracle, answered before the handler runs.
    */
   readonly versions?: VersionSource;
   /**

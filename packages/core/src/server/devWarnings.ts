@@ -33,6 +33,9 @@
 // |                      | no write to it revokes (`access/trackedModels.ts`); checked by     |                          |
 // |                      | `createServer` at start, logged as an error in every environment,  |                          |
 // |                      | and a strict test app fails to start                                |                          |
+// | `shared-principal`   | the handler of a `share: "all"` run (an app's, not a kit's) read   | the member               |
+// |                      | `ctx.principal`, `ctx.services` or `ctx.mcp`: the run has the      | (`principal`, `services`,|
+// |                      | first caller's, and every caller gets its result                   | `mcp`)                   |
 //
 // `nested-write`, `ambient-write`, `batch-read` and `batch-create-many` are
 // the write tracker's (`uow/unitOfWork.ts`), raised exactly where they were
@@ -65,7 +68,8 @@ export type DevWarningKind =
   | "repeated-call"
   | "tiered-field-in-output"
   | "resolver-without-reads"
-  | "untracked-access-model";
+  | "untracked-access-model"
+  | "shared-principal";
 
 /** One development warning. */
 export interface DevWarning {

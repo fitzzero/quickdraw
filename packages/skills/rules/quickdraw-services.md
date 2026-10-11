@@ -82,6 +82,16 @@ export const taskService = qd.defineService(task, {
   quickdraw-access.md), `timeoutMs`, and for queries `share` (`"caller"` or
   `"all"`), `ttlMs` and `version`. A service takes `kinds` too: the kinds of
   principal its methods and subscriptions admit.
+- `share: "all"` runs one handler for every caller, with the first caller's
+  `ctx`, and gives every caller its result: use it only for a result that
+  depends on the input alone. Its handler reads nothing of the caller
+  (`ctx.principal`, `ctx.services`, `ctx.mcp`, or a context field made from
+  them); in development a read of one of the first three warns
+  `[quickdraw:shared-principal]`. It is refused with `custom` access and on
+  the kit methods whose result depends on the caller (the read/write kit's
+  `list` and `getMany`, `search`, the sharing kit's `listShares` and
+  `listMembers`, the admin kit's `adminList` and `adminGet`): give those
+  `share: "caller"`.
 - A handler receives `{ input, ctx, db }`: the parsed input, the context
   (`principal`, `signal`, `log`, `requestId`, `transport`, `touch`, `rooms`,
   `presence`, `mcp`, `services`) and the tracked client.
@@ -302,8 +312,10 @@ matches no row or has nothing to write (`data: {}`) signals nothing; every
 other write signals, one that sets a column to the value it already holds
 too, so re-ensure a row with that upsert rather than by writing its values
 again.
-`share: "caller"` for hot queries;
-`versionColumn: "updatedAt"` answers "not modified" cheaply. The quickdraw
+`share: "caller"` for hot queries (`"all"` only for a result that depends
+on the input alone); `versionColumn: "updatedAt"` answers "not modified"
+cheaply, for a query whose form checked the row its `id` names (an `entry`
+form on `id`, or `rowless`). The quickdraw
 lint rules enforce most of this file (`no-untracked-write`,
 `no-foreign-write`, `no-nested-write`, `no-raw-sql-write`, `no-manual-emit`,
 `no-unbounded-read`, `no-db-call-in-loop`, `no-load-then-filter`,

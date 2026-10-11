@@ -260,3 +260,23 @@ export function checksRowsItself(handler: object): void {
 export function isRowChecked(handler: object): boolean {
   return rowChecked.has(handler);
 }
+
+const callerDependent = new WeakSet<object>();
+
+/**
+ * Marks a kit handler whose result is what the caller may see: a run shared
+ * across principals (`share: "all"`) would hand one caller's result to every
+ * other, so `defineService` refuses `"all"` on it. The read/write kit's
+ * `list` and `getMany` (the rows the caller's level reaches), every search
+ * handler, the admin kit's `adminList` and `adminGet` (fields above the
+ * caller's grant are left out) and the sharing kit's `listShares` and
+ * `listMembers` (input-only today, marked so a later change cannot leak).
+ */
+export function dependsOnCaller(handler: object): void {
+  callerDependent.add(handler);
+}
+
+/** True for a handler marked with {@link dependsOnCaller}. */
+export function isCallerDependent(handler: object): boolean {
+  return callerDependent.has(handler);
+}

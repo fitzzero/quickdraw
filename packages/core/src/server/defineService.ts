@@ -14,7 +14,11 @@
 // - `access` is required, and its form decides `ctx.principal`: nullable
 //   under `"public"` only;
 // - `share`, `ttlMs` and `version` exist for queries only, `ttlMs` needs
-//   `share`, and a method with `custom` access cannot `share: "all"`;
+//   `share`, and a method with `custom` access cannot `share: "all"`; at run
+//   time neither can a kit method whose result depends on who asks, and in
+//   development an app's `"all"` handler that reads `ctx.principal`,
+//   `ctx.services` or `ctx.mcp` warns `shared-principal`: a result shared
+//   across principals depends on the input only;
 // - `kinds`, on a method and on the service, names kinds of the app's
 //   principal (`PrincipalKindOf`); that each narrows the list above it, and
 //   that a `"public"` method declares none, is checked at run time;
@@ -136,9 +140,15 @@ type ShareOptions<A> =
       /**
        * Run identical concurrent calls once: `"caller"` per principal, `"all"`
        * across principals. Every caller is authorized before it joins; the
-       * handler runs with the first caller's `ctx`, so a `"all"` handler must
-       * not depend on who asks. `"all"` is not allowed with `custom` access,
-       * whose result may depend on who asks.
+       * handler runs with the first caller's `ctx`, and every caller gets its
+       * result, so a `"all"` result must depend on the input only: its
+       * handler reads nothing of the caller (in development, reading
+       * `ctx.principal`, `ctx.services` or `ctx.mcp` warns
+       * `[quickdraw:shared-principal]`, and a strict test app fails the
+       * call). `"all"` is not allowed with `custom` access, nor on the kit
+       * methods whose result depends on who asks (the read/write kit's
+       * `list` and `getMany`, `search`, the sharing kit's `listShares` and
+       * `listMembers`, the admin kit's `adminList` and `adminGet`).
        */
       readonly share: A extends CustomAccess<never, never> ? "caller" : ShareMode;
       /** Reuse a successful result for this long after its run, in milliseconds. */

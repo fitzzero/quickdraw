@@ -12,11 +12,20 @@
 //   keyed by another id (the latest task of project `id`) returns some other
 //   row, whose changes that version does not follow, and gets none. This is
 //   the dispatcher's default `versions`.
+// - It answers only for a row the method's access form checked: an `entry`
+//   form on `id`, a `rowless` method (its form is its whole check), or a
+//   caller the service's `Admin` bypass passes. A version is a one-bit
+//   oracle: "not modified" before the handler runs told a caller a scope
+//   form let in (or a custom form, or an `entry` form on another key) that a
+//   row it may not read exists, and that it had not changed (the 5.1 audit's
+//   ACCESS-6). Any other query always runs its handler.
 // - `qd:sub` answers "not modified" for an id whose held revision is no
 //   older than the row's version.
 
 import type { Revision } from "../../protocol/envelope";
-import type { VersionSource } from "../pipeline/notModified";
+import { isCustomAccess } from "../access/forms";
+import { serviceGrant } from "../access/levels";
+import type { VersionRequest, VersionSource } from "../pipeline/notModified";
 import type { AnyService } from "../service";
 import { versionTime } from "../rev";
 import { usableChangeLog, type Hub } from "./hub";
@@ -96,19 +105,50 @@ function inputId(input: unknown): string | undefined {
 }
 
 /**
+ * True when the method's access form checked the caller's level on the row
+ * its input's `id` names, or needs no such check: an `entry` form on `id`,
+ * a `rowless` method, or a caller the service's `Admin` bypass passes. A
+ * scope form, a custom form, an `entry` form on another key or an `id`
+ * function checked something else.
+ */
+function checkedRow({ service, method, ctx }: VersionRequest): boolean {
+  if (method.rowless) {
+    return true;
+  }
+  const { principal } = ctx;
+  if (
+    principal !== null &&
+    service.adminBypass &&
+    serviceGrant(principal, service.name) === "Admin"
+  ) {
+    return true;
+  }
+  const form = method.access;
+  return (
+    typeof form === "object" &&
+    !isCustomAccess(form) &&
+    form.entry !== undefined &&
+    (form.id === undefined || form.id === "id")
+  );
+}
+
+/**
  * The dispatcher's default `versions`: the version of the row a query
  * returns, for a query whose output is one projection row and whose input
- * has an `id`, attached only when the row returned is row `id`. Any other
- * query has none, and always runs.
+ * has an `id`, when the method's form checked that row (`checkedRow`),
+ * attached only when the row returned is row `id`. Any other query has
+ * none, and always runs.
  */
 export function createVersionSource(hub: Hub): VersionSource {
   return Object.freeze({
-    async versionOf({ service, method, input }) {
+    async versionOf(request) {
+      const { service, method, input } = request;
       const id = inputId(input);
       if (
         id === undefined ||
         method.projection === undefined ||
-        method.projection.kind === "list"
+        method.projection.kind === "list" ||
+        !checkedRow(request)
       ) {
         return undefined;
       }

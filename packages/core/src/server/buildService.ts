@@ -15,6 +15,7 @@ import { outputSchemaOf, schemaOutputOf } from "./pipeline/validation";
 import { compileChannels, compileStreams } from "./realtime/define";
 import {
   handlerProblem,
+  isCallerDependent,
   registerRuntime,
   type AnyHandler,
   type AnyService,
@@ -106,6 +107,11 @@ function checkShare(owner: string, entry: UnknownRecord, fail: Fail): void {
   if (share === "all" && isRecord(entry.access) && entry.access.kind === "custom") {
     fail(
       `${owner} has custom access, so it cannot share: "all"; its result may depend on who asks`,
+    );
+  }
+  if (share === "all" && typeof entry.handler === "function" && isCallerDependent(entry.handler)) {
+    fail(
+      `${owner} is a kit method whose result depends on who asks, so it cannot share: "all"; share: "caller" runs one principal's identical calls once`,
     );
   }
   if (ttlMs !== undefined && (share === undefined || !isDuration(ttlMs, MAX_TIMEOUT_MS))) {

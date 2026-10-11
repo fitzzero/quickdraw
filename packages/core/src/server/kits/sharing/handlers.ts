@@ -27,7 +27,7 @@ import {
 } from "../../../contract/kits/sharing";
 import { accessFormProblem } from "../../access/forms";
 import type { AccessForm } from "../../access/types";
-import { checkWhenDefined, type AnyService } from "../../service";
+import { checkWhenDefined, dependsOnCaller, type AnyService } from "../../service";
 import { kitEntry, rowlessMethods } from "../rowless";
 import type { HandlerContext } from "./context";
 import { DEFAULT_ACCESS, handlerOf } from "./methods";
@@ -161,6 +161,10 @@ function handlers<C extends AnyContract, const A extends SharingAccess<C> = Empt
     const form = (access[name] as AccessForm | undefined) ?? DEFAULT_ACCESS[spec.method];
     const handler = handlerOf(spec.method, Object.freeze({ ...hooks, form }));
     checkWhenDefined(handler, (service) => serviceProblem(service, contract, spec.mode));
+    if (spec.method === "listShares" || spec.method === "listMembers") {
+      // Input-only today; marked so a run shared across principals never can leak a list.
+      dependsOnCaller(handler);
+    }
     entries[name] = kitEntry(name, form, handler, rowless);
   }
   return Object.freeze(entries) as SharingImplementations<C, A, Db>;

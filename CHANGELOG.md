@@ -64,6 +64,21 @@ All notable changes to this project will be documented in this file.
   fields as `editable: false`, refuses writes to them, and refuses an
   `editable` list or `fieldOverrides` entry naming one when the service is
   defined.
+- **`share: "all"` is refused on the kit methods whose result depends on
+  who asks.** `defineService` throws for `"all"` on the read/write kit's
+  `list` and `getMany`, `search`, the sharing kit's `listShares` and
+  `listMembers`, and the admin kit's `adminList` and `adminGet`: use
+  `share: "caller"`.
+- In development, an app handler of a `share: "all"` run that reads
+  `ctx.principal`, `ctx.services` or `ctx.mcp` logs
+  `[quickdraw:shared-principal]`, and a strict test app fails that call
+  with `INTERNAL`. `DevWarningKind` gains `shared-principal`.
+- **"Not modified" answers only for a row the form checked.** A query
+  whose form does not check the row its input's `id` names (a scope form,
+  `custom`, an `entry` form on another key or an `id` function) no longer
+  gets the default "not modified" answer, and its handler runs every time:
+  more work, the same data. An `entry` form on `id`, a `rowless` method and
+  a caller the service's `Admin` bypass passes keep it.
 
 ### Security
 
@@ -129,6 +144,18 @@ All notable changes to this project will be documented in this file.
 - **Revocation settles before a flush's frames (DATA-I1).** One socket's
   failed re-resolution let the flush send its frames while other sockets
   were still being re-resolved, so a demoted socket could receive them.
+- **`share: "all"` no longer hands one caller's rows to another
+  (ACCESS-2, CLIENT-3).** A `"all"` run's handler runs with the first
+  caller's `ctx`, and every caller gets its result, yet nothing stopped
+  `{ ...crud.handlers(...).list, share: "all" }`: a caller who owned one
+  project received another tenant's rows. The kits mark such methods and
+  `defineService` refuses `"all"` on them; the README and skills state that
+  a shared result must depend on the input only, and development warns
+  when an app's `"all"` handler reads who the caller is.
+- **"Not modified" answers only for a row the form checked (ACCESS-6).**
+  The default version source answered for `input.id`'s row whatever the
+  form checked, before the handler ran: a query under a scope form told a
+  caller outside it that a row existed and had not changed.
 - **MIGRATION no longer trusts a proxy unconditionally (CLIENT-6).** Its
   `app.set("trust proxy", 1)` let a client without a proxy in front pick its
   own `X-Forwarded-For`, and pass every per-IP limiter; it reads

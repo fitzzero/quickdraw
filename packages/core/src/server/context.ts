@@ -358,3 +358,28 @@ export function withSignal(ctx: AnyContext, signal: AbortSignal): AnyContext {
     services === undefined ? { ...ctx, signal } : { ...ctx, signal, services: services(signal) };
   return withRuntime(Object.freeze(next), KIT_RUNTIMES.get(ctx), services);
 }
+
+/** The members of `ctx` that say who the caller is. */
+export type CallerMember = "principal" | "services" | "mcp";
+
+/**
+ * The same `ctx`, calling `onRead` each time code reads one of the members
+ * that say who the caller is: the development check of a `share: "all"`
+ * run, whose result every caller gets. Reads return the very values, so
+ * `ctx` stays as frozen as it was, and its kit runtime and service callers
+ * stay registered for the proxy.
+ */
+export function watchCallerReads(
+  ctx: AnyContext,
+  onRead: (member: CallerMember) => void,
+): AnyContext {
+  const watched = new Proxy(ctx, {
+    get(target, key, receiver) {
+      if (key === "principal" || key === "services" || key === "mcp") {
+        onRead(key);
+      }
+      return Reflect.get(target, key, receiver) as unknown;
+    },
+  });
+  return withRuntime(watched, KIT_RUNTIMES.get(ctx), SERVICE_CALLERS.get(ctx));
+}

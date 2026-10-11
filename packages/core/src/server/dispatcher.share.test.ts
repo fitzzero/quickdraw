@@ -16,7 +16,9 @@ import {
   tick,
   type Deferred,
 } from "./__tests__/fixtures";
+import { STRICT_WARNINGS } from "./devWarnings";
 import type { DispatchResult, SharedData } from "./index";
+import { checkWhenDefined, type AnyHandler } from "./service";
 
 function codeOf(result: DispatchResult): string {
   return result.ok ? "ok" : result.error.code;
@@ -411,5 +413,86 @@ describe("shared results", () => {
       await setup([service]).call({ method: "list", input: { projectId: "p1" } }),
     );
     expect(Object.isFrozen(result)).toBe(false);
+  });
+});
+
+describe('a share: "all" handler that reads the caller (shared-principal)', () => {
+  /** The task service whose `list` runs `handler` under `share`. */
+  const serviceWith = (handler: AnyHandler, share: "caller" | "all" = "all") =>
+    qd.defineService(task, {
+      methods: {
+        ...taskDefaults,
+        list: { access: "public", share, handler: handler as never },
+      },
+    });
+  const readsPrincipal: AnyHandler = ({ ctx }) => [{ id: ctx.principal?.userId ?? "x", title: "" }];
+  const list = { method: "list", input: { projectId: "p1" } } as const;
+  /** The `shared-principal` warnings `logger` received. */
+  const sharedWarnings = (logger: ReturnType<typeof setup>["logger"]) =>
+    logger
+      .at("warn")
+      .map((entry) => entry.message)
+      .filter((message) => message.startsWith("[quickdraw:shared-principal]"));
+
+  it("warns once in development that it read ctx.principal, and still answers", async () => {
+    const { call, logger } = setup([serviceWith(readsPrincipal)]);
+    expect(await call(list)).toMatchObject({ ok: true });
+    expect(await call({ ...list, principal: bob })).toMatchObject({ ok: true });
+    const warned = sharedWarnings(logger);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toMatch(
+      /^\[quickdraw:shared-principal\] taskService\.list: its handler read ctx\.principal/,
+    );
+  });
+
+  it("names ctx.services as the member it read", async () => {
+    const readsServices: AnyHandler = ({ ctx }) => {
+      void ctx.services;
+      return [{ id: "x", title: "" }];
+    };
+    const { call, logger } = setup([serviceWith(readsServices)]);
+    expect(await call(list)).toMatchObject({ ok: true });
+    expect(sharedWarnings(logger)).toEqual([
+      expect.stringContaining("its handler read ctx.services"),
+    ]);
+  });
+
+  it("says nothing for a caller-shared run, an input-only handler, a kit's handler, or in production", async () => {
+    const inputOnly: AnyHandler = ({ input }) => [
+      { id: (input as { readonly projectId: string }).projectId, title: "" },
+    ];
+    const kitHandler: AnyHandler = ({ ctx }) => [{ id: ctx.principal?.userId ?? "x", title: "" }];
+    checkWhenDefined(kitHandler, () => undefined);
+    for (const service of [
+      serviceWith(readsPrincipal, "caller"),
+      serviceWith(inputOnly),
+      serviceWith(kitHandler),
+    ]) {
+      const { call, logger } = setup([service]);
+      expect(await call(list)).toMatchObject({ ok: true });
+      expect(sharedWarnings(logger)).toEqual([]);
+    }
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const { call, logger } = setup([serviceWith(readsPrincipal)]);
+      expect(await call(list)).toMatchObject({ ok: true });
+      expect(sharedWarnings(logger)).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("fails the call in a strict app, with the warning as the cause", async () => {
+    const { call } = setup([serviceWith(readsPrincipal)], { [STRICT_WARNINGS]: true } as never);
+    const result = await call(list);
+    expect(result).toMatchObject({ ok: false, error: { code: "INTERNAL" } });
+    expect(result.ok ? undefined : result.error.cause).toMatchObject({
+      warning: {
+        kind: "shared-principal",
+        service: "taskService",
+        method: "list",
+        subject: "principal",
+      },
+    });
   });
 });

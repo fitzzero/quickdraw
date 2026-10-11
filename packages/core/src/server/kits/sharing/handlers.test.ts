@@ -44,6 +44,35 @@ const team = defineContract("teamService", {
 const define = (contract: unknown, definition: unknown) =>
   qd.defineService(contract as never, definition as never);
 
+describe('share: "all" on the sharing kit\'s lists', () => {
+  it("is refused on listShares and listMembers (ACCESS-2)", () => {
+    const refusal = 'is a kit method whose result depends on who asks, so it cannot share: "all"';
+    const aclHandlers = sharing.handlers(acl);
+    expect(() =>
+      define(acl, {
+        model: "project",
+        access: jsonAcl("acl"),
+        methods: { ...aclHandlers, listShares: { ...aclHandlers.listShares, share: "all" } },
+      }),
+    ).toThrow(`method "listShares" ${refusal}`);
+    const crew = defineContract("crewService", {
+      entity: projectEntity,
+      methods: { ...sharing.contract({ mode: "members" }) },
+    });
+    const crewHandlers = sharing.handlers(crew);
+    const members = (listMembers: object) => () =>
+      define(crew, {
+        model: "project",
+        access: projectMembers,
+        methods: { ...crewHandlers, listMembers },
+      });
+    expect(members({ ...crewHandlers.listMembers, share: "all" })).toThrow(
+      `method "listMembers" ${refusal}`,
+    );
+    expect(members({ ...crewHandlers.listMembers, share: "caller" })).not.toThrow();
+  });
+});
+
 describe("the services sharing.handlers refuses", () => {
   it("needs the service's policy to have the mode's list or table, alone or inside anyOf", () => {
     expect(() =>

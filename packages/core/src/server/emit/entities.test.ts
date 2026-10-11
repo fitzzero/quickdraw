@@ -10,6 +10,7 @@ import { createTestApp, type TestApp } from "../../testing/index";
 import { deferred } from "../__tests__/fixtures";
 import { as, seedBoard, type Board } from "../access/__tests__/board";
 import { inherit, type Principal, type StorageAdapter } from "../index";
+import { versionTime } from "../rev";
 import {
   cardService,
   defineTaskService,
@@ -594,6 +595,70 @@ describe("not modified", () => {
     expect(own).toMatchObject({ ok: true, version: expect.any(Number) });
     const version = own.ok && own.notModified !== true ? (own.version as number) : 0;
     expect(await call("task", board.t1, version)).toEqual({ ok: true, notModified: true, version });
+  });
+
+  it("answers not modified only for a row the method's form checked (ACCESS-6)", async () => {
+    // A policy-less service: the rowless check needs a policy, so a scope
+    // form keyed by projectId can still take a task's id.
+    const scopedContract = defineContract("scopedTaskService", {
+      entity: taskEntity,
+      methods: {
+        inProject: query({
+          input: z.object({ projectId: z.string(), id: z.string() }),
+          output: nullable("entity"),
+        }),
+        anyTask: query({ input: z.object({ id: z.string() }), output: nullable("entity") }),
+      },
+    });
+    const scopedService = qd.defineService(scopedContract, {
+      model: "task",
+      versionColumn: "updatedAt",
+      methods: {
+        inProject: {
+          access: { scope: "Read", of: projectContract, id: "projectId" },
+          handler: ({ input, db }) =>
+            db.task.findFirst({ where: { id: input.id, projectId: input.projectId } }),
+        },
+        anyTask: {
+          access: "authenticated",
+          rowless: true,
+          handler: ({ input, db }) => db.task.findUnique({ where: { id: input.id } }),
+        },
+      },
+    });
+    const app = await createTestApp({ services: [projectService, scopedService], db: h.db });
+    apps.push(app as unknown as TestApp);
+    const v = versionTime(
+      (await h.prisma.task.findUniqueOrThrow({ where: { id: board.t1 } })).updatedAt,
+    );
+    const call = (principal: Principal, method: "inProject" | "anyTask", input: object) =>
+      app.server.dispatcher.call({
+        service: "scopedTaskService",
+        method,
+        input,
+        principal,
+        transport: "internal",
+        v,
+      });
+    // ed reads P2: T1 is not in it, and its version says nothing of T1.
+    expect(await call(as(board.ed), "inProject", { projectId: board.p2, id: board.t1 })).toEqual({
+      ok: true,
+      data: null,
+    });
+    const ada = await call(as(board.ada), "inProject", { projectId: board.p1, id: board.t1 });
+    expect(ada).toEqual({ ok: true, data: expect.objectContaining({ id: board.t1 }) });
+    // A rowless method keeps it, and so does a service-wide Admin.
+    expect(await call(as(board.ed), "anyTask", { id: board.t1 })).toEqual({
+      ok: true,
+      notModified: true,
+      version: v,
+    });
+    expect(
+      await call(as(board.ed, { scopedTaskService: "Admin" }), "inProject", {
+        projectId: board.p2,
+        id: board.t1,
+      }),
+    ).toEqual({ ok: true, notModified: true, version: v });
   });
 
   it("gives no version without a change log or version column", async () => {

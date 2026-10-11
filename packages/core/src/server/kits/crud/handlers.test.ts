@@ -145,6 +145,40 @@ describe("defineService with kit handlers", () => {
   });
 });
 
+describe('share: "all" on the kit\'s methods', () => {
+  it("is refused on list and getMany, whose result depends on who asks (ACCESS-2)", () => {
+    const handlers = crud.handlers(taskContract, {
+      access: {
+        get: { entry: "Read" },
+        getMany: "authenticated",
+        list: "authenticated",
+        create: { scope: "Moderate", of: projectContract, id: "projectId" },
+        update: { entry: "Moderate" },
+        delete: { entry: "Moderate" },
+        reorder: { entry: "Moderate" },
+        bulkUpdate: "authenticated",
+        bulkDelete: "authenticated",
+      },
+    });
+    const define = (methods: object) => () =>
+      qd.defineService(taskContract, {
+        model: "task",
+        access: inherit({ from: projectContract, via: "projectId" }),
+        collections: { board: { anchor: projectContract } },
+        methods: { ...handlers, ...methods } as never,
+      });
+    const refusal = 'is a kit method whose result depends on who asks, so it cannot share: "all"';
+    expect(define({ list: { ...handlers.list, share: "all" } })).toThrow(
+      `method "list" ${refusal}`,
+    );
+    expect(define({ getMany: { ...handlers.getMany, share: "all" } })).toThrow(
+      `method "getMany" ${refusal}`,
+    );
+    expect(define({ list: { ...handlers.list, share: "caller", ttlMs: 5_000 } })).not.toThrow();
+    expect(define({ get: { ...handlers.get, share: "all" } })).not.toThrow();
+  });
+});
+
 describe("the rowless check on the kit's methods", () => {
   const writes = {
     getMany: "authenticated",

@@ -157,8 +157,8 @@ await expectBudget(() => app.as(ada).taskService.list({ limit: 20 }), { name: "l
 `createTestApp({ strictWarnings: true })` (under vitest or jest) throws each
 development warning raised in that app's method calls (`n-plus-one`,
 `unbounded-read`, `oversized-response`, `nested-write`, `batch-read`,
-`batch-create-many`) as a `DevWarningError` where it happens, failing the
-test that caused it (an oversized reply fails an in-process `app.as(...)`
+`batch-create-many`, `shared-principal`) as a `DevWarningError` where it
+happens, failing the test that caused it (an oversized reply fails an in-process `app.as(...)`
 call; over a socket or HTTP the reply was already sent, so it is logged, not
 thrown). Warnings outside its calls (an `ambient-write` while seeding) are
 logged, and `app.close()` ends it. `tiered-field-in-output` (a method's own

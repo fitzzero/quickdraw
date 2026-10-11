@@ -619,9 +619,18 @@ export const taskService = qd.defineService(task, {
   flush together once; and it is cancelled with `ctx.signal`. It is typed
   by the `contracts` of `initQuickdraw`'s types, as `qd.caller` is.
 - `share: "caller"` runs identical concurrent calls of one principal once,
-  `share: "all"` across principals (not with `custom` access); `ttlMs` keeps
-  a shared result. Callers of a shared run whose levels hide the same fields
-  get one copy of its result, encoded once for all of their sockets.
+  `share: "all"` across principals; `ttlMs` keeps a shared result. A
+  `"all"` run's handler sees the first caller's `ctx` and every caller gets
+  its result, so a result shared across principals must depend on the
+  input only: it never reads `ctx.principal`, `ctx.services`, `ctx.mcp` or
+  a context field made from them (in development, reading one of the first
+  three warns `[quickdraw:shared-principal]`). `"all"` is refused with
+  `custom` access and on the kit methods whose result depends on the caller
+  (the read/write kit's `list` and `getMany`, `search`, the sharing kit's
+  `listShares` and `listMembers`, the admin kit's `adminList` and
+  `adminGet`): give those `"caller"`. Callers of a shared run whose levels
+  hide the same fields get one copy of its result, encoded once for all of
+  their sockets.
   `version(input, ctx)` answers "not modified" for a query whose result the
   caller already holds.
 - Every call runs a pipeline: look up, concurrency (16 queries in flight per
@@ -1042,7 +1051,11 @@ export const taskService = qd.defineService(task, {
   by `id`) comes from `versionColumn`, or from an in-process change log of
   recent flushes. The change log sees only this process's writes: an app
   running several processes without a Socket.IO cluster adapter declares
-  `versionColumn`s or passes `changeLog: false`.
+  `versionColumn`s or passes `changeLog: false`. For a query, it comes only
+  when its form checked the row `id` names (an `entry` form on `id`, a
+  `rowless` method, or a caller the service's `Admin` bypass passes): it
+  answers before the handler runs, so it would tell any other caller that
+  the row exists and has not changed. Any other query runs its handler.
 - Revisions are microseconds since the epoch: a flush takes
   `max(Date.now() * 1000, last + 1)`. Clients compare them as numbers.
 - Behind a cluster adapter (`setupRedisAdapter`), every touched row is read
@@ -3213,11 +3226,13 @@ start):
 | `tiered-field-in-output` | a method's own output schema declares a field the contract tiers, which only projection outputs strip; raised when the server is made (for an output without JSON Schema, when a reply carries it)                        |
 | `resolver-without-reads` | a service's policy is, or combines in `anyOf`, a `resolver` without `reads`, so no tracked write re-checks it; raised when the server is made                                                                             |
 | `untracked-access-model` | a model a policy, a membership table or a `via` junction depends on has no `id` the write tracker can key its rows by, so no write to it revokes; checked when the server starts, logged as an error in every environment |
+| `shared-principal`       | the handler of a `share: "all"` run (an app's, not a kit's) read `ctx.principal`, `ctx.services` or `ctx.mcp`: the run has the first caller's, and every caller gets its result                                           |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
 writes). Each is logged once per kind, service, method and subject (the
-model, or the field of a nested write), under `category: "quickdraw.dev"`.
+model, the field of a nested write, or the member a shared run read), under
+`category: "quickdraw.dev"`.
 Only an app's own statements are checked: the framework's reads and the
 kits' own reads are not, while the app's callbacks a kit calls (`prepare`,
 `onChange`, `resolveUser`, a search strategy) are. A statement filtered by

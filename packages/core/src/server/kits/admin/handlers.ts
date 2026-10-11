@@ -43,7 +43,12 @@ import type { AnyContract } from "../../../contract/defineContract";
 import { admin as contractHalf, adminSpecOf, type AdminSpec } from "../../../contract/kits/admin";
 import { accessFormProblem } from "../../access/forms";
 import type { AccessForm } from "../../access/types";
-import { checkWhenDefined, markGrantsEditor, type AnyService } from "../../service";
+import {
+  checkWhenDefined,
+  dependsOnCaller,
+  markGrantsEditor,
+  type AnyService,
+} from "../../service";
 import { relationKeysOf } from "../columns";
 import { kitEntry, rowlessMethods } from "../rowless";
 import { adminFieldsOf, type AdminFields } from "./meta";
@@ -245,6 +250,10 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty,
     if (checked.grants === true) {
       // `createServer` warns when no `auth.serviceAccessSource` says where these grants live.
       markGrantsEditor(handler);
+    }
+    if (spec.method === "adminList" || spec.method === "adminGet") {
+      // Fields above the caller's grant are left out of their rows (`adminCall`).
+      dependsOnCaller(handler);
     }
     entries[name] = kitEntry(name, form, handler, rowless);
   }

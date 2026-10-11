@@ -10,7 +10,7 @@ import { createTestApp, type TestApp } from "../../../testing/index";
 import { projectContract, projectService, qd } from "../../emit/__tests__/live";
 import { crud, inherit } from "../../index";
 import { cursorAfter } from "./page";
-import { addTasks, as, CARD_KEYS, kitApp, taskEntity } from "./__tests__/fixture";
+import { addTasks, as, CARD_KEYS, kitApp, taskContract, taskEntity } from "./__tests__/fixture";
 
 const kit = kitApp();
 
@@ -316,5 +316,43 @@ describe("statements", () => {
     // projects the owner may read (members, then the projects), then the page.
     expect(await count(() => owner.list({ limit: 2 }))).toBe(3);
     expect(await count(() => owner.list({ limit: 2, totalCount: true }))).toBe(4);
+  });
+});
+
+describe('a list kept per caller (share: "caller")', () => {
+  it("gives each principal its own rows, within the ttl and concurrently (ACCESS-2)", async () => {
+    const board = kit.board();
+    const handlers = crud.handlers(taskContract, {
+      access: {
+        get: { entry: "Read" },
+        getMany: "authenticated",
+        list: "authenticated",
+        create: { scope: "Moderate", of: projectContract, id: "projectId" },
+        update: { entry: "Moderate" },
+        delete: { entry: "Moderate" },
+        reorder: { entry: "Moderate" },
+        bulkUpdate: "authenticated",
+        bulkDelete: "authenticated",
+      },
+    });
+    const service = qd.defineService(taskContract, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      collections: { board: { anchor: projectContract } },
+      methods: { ...handlers, list: { ...handlers.list, share: "caller", ttlMs: 5_000 } },
+    });
+    const app = await createTestApp({ services: [projectService, service], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    const ids = (page: { readonly items: readonly { readonly id: string }[] }) =>
+      page.items.map((item) => item.id);
+    expect(ids(await app.as(as(board.ada)).taskService.list({}))).toEqual([board.t1]);
+    // ed asks within ada's ttl: ed's own run, ed's own rows.
+    expect(ids(await app.as(as(board.ed)).taskService.list({}))).toEqual([board.t2]);
+    const [ada, ed] = await Promise.all([
+      app.as(as(board.ada)).taskService.list({ limit: 10 }),
+      app.as(as(board.ed)).taskService.list({ limit: 10 }),
+    ]);
+    expect(ids(ada)).toEqual([board.t1]);
+    expect(ids(ed)).toEqual([board.t2]);
   });
 });
