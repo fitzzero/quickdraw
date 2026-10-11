@@ -89,7 +89,13 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
   readonly auth?: ServerAuth<P>;
   /** Socket.IO's CORS for its handshake. The app configures CORS for its own routes. */
   readonly cors?: SocketCors;
-  /** Other Socket.IO server options, such as `path` or `pingInterval`. */
+  /**
+   * Other Socket.IO server options, such as `path` or `pingInterval`.
+   * `connectionStateRecovery` is refused: a recovered socket would come back
+   * with its principal and rooms without authenticating again, so a revoked
+   * session or a lowered grant would return; quickdraw clients resume by
+   * revision on every reconnect.
+   */
   readonly socket?: SocketOptions;
   /**
    * Use the stock Socket.IO parser, so events may carry binary. Default
@@ -276,6 +282,13 @@ function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void 
   if (options.onRoomLeave !== undefined && typeof options.onRoomLeave !== "function") {
     throw new TypeError(
       "createServer: onRoomLeave must be a function of the leave and a run context",
+    );
+  }
+  // Socket.IO turns recovery on for any truthy value, `{}` included.
+  const socket = options.socket as Readonly<Record<string, unknown>> | undefined;
+  if (socket?.connectionStateRecovery) {
+    throw new TypeError(
+      "createServer: socket.connectionStateRecovery is refused: Socket.IO's connection state recovery restores a reconnecting socket's principal and rooms without authenticating it again, so a revoked session or a lowered grant would come back. quickdraw clients resume by revision on every reconnect; remove the option",
     );
   }
 }

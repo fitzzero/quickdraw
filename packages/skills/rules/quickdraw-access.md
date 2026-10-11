@@ -209,6 +209,11 @@ compile time.
   like a scalar one; one set from the parent's side
   (`project.update({ data: { tasks: { connect } } })`) is a nested write
   whose rows are not tracked: write the foreign key on the row itself.
+- Never pass Socket.IO's `connectionStateRecovery` in `createServer({ socket })`:
+  a recovered socket comes back with its principal and rooms without
+  authenticating again, so a revoked session or a lowered grant would
+  return. `createServer` refuses it; clients resume by revision on every
+  reconnect.
 
 ## One policy, every surface
 

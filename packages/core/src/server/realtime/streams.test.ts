@@ -39,7 +39,7 @@ import {
   streamUnsub,
 } from "./__tests__/fixture";
 import { STREAM_MAX_SCOPES, StreamSeeds } from "./seeds";
-import { MAX_STREAMS_PER_SOCKET } from "./streamSubscriptions";
+import { MAX_STREAMS_PER_SOCKET } from "./streamSubscribe";
 
 let h: Harness;
 let board: Board;
@@ -297,6 +297,65 @@ describe("qd:stream:sub", () => {
     expect(await streamSub(connection, "rooms", "r0")).toMatchObject({ ok: true });
     await streamUnsub(connection, "rooms", "r0");
     expect(await streamSub(connection, "rooms", "one-more")).toMatchObject({ ok: true });
+  });
+});
+
+describe("races with a subscribe", () => {
+  /**
+   * The app, with `userId`'s membership of P1 removed during the `nth` read
+   * of the membership table: the first is the subscribe's authorization,
+   * the second its anchors' read.
+   */
+  async function startRemoving(nth: number, userId: () => string) {
+    let seen = 0;
+    let appRef: App | undefined;
+    const app = await start({
+      after: (read) => {
+        if (read.model !== "projectMember" || appRef === undefined || seen >= nth) {
+          return undefined;
+        }
+        seen += 1;
+        if (seen < nth) {
+          return undefined;
+        }
+        return appRef.server.dispatcher
+          .run(() =>
+            h.db.projectMember.deleteMany({ where: { projectId: board.p1, userId: userId() } }),
+          )
+          .then(() => undefined);
+      },
+    });
+    appRef = app;
+    return app;
+  }
+
+  it.each([
+    ["while it is authorized", 1],
+    ["while its anchors are read", 2],
+  ])("refuses a member removed %s, and sends them nothing (RT-1)", async (_when, nth) => {
+    const app = await startRemoving(nth, () => board.cy);
+    logs(app).push(board.t1, { line: "kept" });
+    await pushed();
+    const { connection, items } = await connect(app, as(board.cy));
+    expect(await streamSub(connection, "logs", board.t1)).toEqual(refused("FORBIDDEN"));
+    logs(app).push(board.t1, { line: "secret after removal" });
+    await settle(connection);
+    expect(items).toEqual([]);
+    expect(app.server.io.sockets.sockets.get(connection.socket.id ?? "")?.data.streams).toEqual({});
+  });
+
+  it("keeps a subscriber an unrelated removal left alone, seed and all", async () => {
+    const app = await startRemoving(1, () => board.bo);
+    logs(app).push(board.t1, { line: "kept" });
+    await pushed();
+    const { connection, items } = await connect(app, as(board.cy));
+    expect(await streamSub(connection, "logs", board.t1)).toEqual({
+      ok: true,
+      seed: [{ line: "kept" }],
+    });
+    logs(app).push(board.t1, { line: "after" });
+    await settle(connection);
+    expect(items).toEqual([["taskService", "logs", board.t1, { line: "after" }]]);
   });
 });
 

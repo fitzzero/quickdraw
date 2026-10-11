@@ -16,7 +16,7 @@ import { MAX_SCOPE_LENGTH, MAX_SUBSCRIBE_IDS, PROTOCOL_VERSION } from "../protoc
 import { MAX_ITEM_IDS } from "../server/collections/items";
 import { createRateLimiter } from "../server/rateLimit";
 import { CHANNEL_ABUSE_MULTIPLIER, CHANNEL_ABUSE_WINDOW_MS } from "../server/realtime/channels";
-import { MAX_STREAMS_PER_SOCKET } from "../server/realtime/streamSubscriptions";
+import { MAX_STREAMS_PER_SOCKET } from "../server/realtime/streamSubscribe";
 import { defaultPaths, generateProtocol, main, type ProtocolOutput } from "./protocol";
 import { protocolModel } from "./protocolModel";
 import { PROTOCOL_MARKER } from "./protocolRender";

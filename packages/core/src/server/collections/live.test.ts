@@ -322,6 +322,19 @@ describe("races with a subscribe", () => {
     expect(inRoom(app, "byProject", board.p1)).toBe(0);
   });
 
+  it("authorizes again with the grants the socket holds then: a grant lowered while it ran denies (LIVE-1)", async () => {
+    let appRef: App | undefined;
+    const { app } = await start({
+      after: holdPageRead(async () => await appRef?.server.access.refresh(board.ed)),
+      loadServiceAccess: () => ({}),
+    });
+    appRef = app;
+    // Only the service-wide Admin grant lets ed open P1's scope.
+    const admin = await connect(app, as(board.ed, { taskService: "Admin" }));
+    expect(await colSub(admin.connection, "byProject", board.p1)).toEqual(forbidden);
+    expect(inRoom(app, "byProject", board.p1)).toBe(0);
+  });
+
   it("reads a self scope's page again when access changed while it ran", async () => {
     await h.prisma.task.update({ where: { id: board.t1 }, data: { assigneeId: board.cy } });
     // cy reads P2 too, so the page read again is a read, not a filter that matches nothing.

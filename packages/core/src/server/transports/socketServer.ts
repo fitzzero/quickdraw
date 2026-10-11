@@ -42,8 +42,15 @@ export type { ClusterOptions, DisconnectUserOptions } from "./pushes";
 export type { QuickdrawIo } from "./types";
 export { resolveLegacyWire, type LegacyWireOptions } from "./legacy";
 
-/** Socket.IO server options `createServer` passes through; it sets `parser` and `cors` itself. */
-export type SocketOptions = Partial<Omit<ServerOptions, "parser" | "cors">>;
+/**
+ * Socket.IO server options `createServer` passes through; it sets `parser`
+ * and `cors` itself, and refuses `connectionStateRecovery`: a recovered
+ * socket would come back with its principal and rooms without
+ * authenticating again.
+ */
+export type SocketOptions = Partial<
+  Omit<ServerOptions, "parser" | "cors" | "connectionStateRecovery">
+>;
 
 /** Socket.IO's CORS setting for the handshake and polling requests. */
 export type SocketCors = Partial<ServerOptions>["cors"];

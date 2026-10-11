@@ -28,7 +28,10 @@
 // joining. Neither counts against the socket rate limiter
 // (`transports/middleware.ts`), and neither listener throws
 // (`emit/answer.ts`). A watch whose access the socket loses leaves its room,
-// after one last `qd:changed` (`topicRevocation.ts`).
+// after one last `qd:changed` (`topicRevocation.ts`). A watch an access
+// change overlapped is authorized again once it joined, with the socket's
+// principal as it is then, and answered `FORBIDDEN` when it lost access
+// meanwhile (`settleWatch`).
 
 import { CLIENT_EVENTS, topicRoom } from "../contract/names";
 import type { Ok } from "../protocol/envelope";
@@ -38,10 +41,14 @@ import type { CollectionHub } from "./collections/bind";
 import { createTopicSink } from "./collections/changed";
 import { answerEvent, answerNow, onDisconnect } from "./emit/answer";
 import { readWatch, TopicIndex } from "./topicIndex";
-import { createTopicRevocation, targetOf } from "./topicRevocation";
+import { createTopicRevocation, settleWatch, targetOf } from "./topicRevocation";
 import type { QuickdrawServerSocket, SocketContext } from "./transports/types";
 
-/** Serves one `qd:watch`: authorizes it, then joins the topic's room unless the client unwatched meanwhile. */
+/**
+ * Serves one `qd:watch`: authorizes it, joins the topic's room unless the
+ * client unwatched meanwhile, then settles the races with the access
+ * changes made while it was authorized (`settleWatch`).
+ */
 async function watchTopic(
   hub: CollectionHub,
   index: TopicIndex,
@@ -58,10 +65,14 @@ async function watchTopic(
   }
   const room = topicRoom(watch.s, watch.topic);
   const unwatches = index.begin(socket, room);
+  // What the watch settles against, noted before it is authorized.
+  const start = { checkedAt: hub.subscriptions.accessChanges, principal: socket.data.principal };
   try {
-    const anchors = await authorizeWatch(hub, socket.data.principal, target);
+    const anchors = await authorizeWatch(hub, start.principal, target);
     if (socket.connected && index.unwatches(socket, room) === unwatches) {
-      index.watch(socket, { ...watch, anchors });
+      const own = { ...watch, anchors };
+      index.watch(socket, own);
+      await settleWatch(hub, index, socket, { own, start, unwatches });
     }
   } finally {
     index.end(socket, room);

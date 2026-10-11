@@ -150,6 +150,24 @@ All notable changes to this project will be documented in this file.
   table's entry, user and role columns that any policy reads are refused
   in the read/write kit's `create` input and writes and in the admin kit's
   writes without a service-wide Admin grant: use the sharing kit.
+- **Connection state recovery is refused.** `createServer({ socket: {
+connectionStateRecovery } })` throws a `TypeError` at startup, and
+  `SocketOptions` no longer accepts the key: a recovered socket skipped
+  authentication. quickdraw clients resume by revision on every reconnect.
+- **A watch or stream subscribe that loses access while it is answered is
+  refused.** A `qd:watch` or `qd:stream:sub` whose access an access change
+  took while it was authorized answers `FORBIDDEN` instead of joining. A
+  subscribe whose window overlapped an unrelated access change costs one
+  more access lookup.
+- **A stream seed may repeat an item after an access change.** A stream
+  subscribe that overlapped an access change reads its seed after it is
+  authorized again, so an item pushed meanwhile may arrive both in the seed
+  and as a frame, as an asynchronous computed seed already can. A subscribe
+  that did not join answers `seed: []`.
+- **Subscribes re-check with the socket's current grants.** Entity and
+  collection subscribes that overlapped an access change resolve again with
+  the grants the socket holds at that moment: a grant lowered mid-subscribe
+  denies, a raised one answers at the new level.
 
 ### Security
 
@@ -261,6 +279,18 @@ All notable changes to this project will be documented in this file.
   `app.set("trust proxy", 1)` let a client without a proxy in front pick its
   own `X-Forwarded-For`, and pass every per-IP limiter; it reads
   `TRUST_PROXY` (0 by default), as the README's routes do.
+- **A grant lowered mid-subscribe no longer keeps its room (LIVE-1).** A
+  subscribe's race re-check resolved with the principal captured when it
+  began, so a service-wide `Admin` demoted while a `qd:sub` or `qd:col:sub`
+  ran joined the `Admin` room or the scope, and kept it.
+- **Topic watches and stream subscribes settle their races (LIVE-2,
+  RT-1).** They authorized and joined with no re-check, so a member removed
+  while subscribing kept the topic's `qd:changed` or the stream's items,
+  seed included.
+- **Connection state recovery can no longer skip authentication
+  (TRANSPORT-1).** Socket.IO's recovery skipped the auth middleware and
+  restored a socket's principal and rooms, so a revoked session or a
+  lowered grant came back for up to 2 minutes.
 
 ### Codemod
 

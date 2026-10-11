@@ -467,6 +467,42 @@ describe("qd:watch", () => {
     expect(inTopic(app, `board:${board.p1}`)).toBe(0);
   });
 
+  it.each([
+    ["refuses a watch whose access a removal took while it was authorized (LIVE-2)", "cy"],
+    ["keeps a watch an unrelated removal left alone", "bo"],
+  ] as const)("%s", async (_name, removed) => {
+    let appRef: App | undefined;
+    let armed = true;
+    const { app } = await start({
+      // The watch's authorization reads the membership table: remove a member right then.
+      after: (read) => {
+        if (!armed || read.model !== "projectMember" || appRef === undefined) {
+          return undefined;
+        }
+        armed = false;
+        return appRef
+          .as(as(board.ada))
+          .projectService.removeMember({ projectId: board.p1, userId: board[removed] })
+          .then(() => undefined);
+      },
+    });
+    appRef = app;
+    const cy = await connect(app, as(board.cy));
+    const topic = `board:${board.p1}`;
+    if (removed === "bo") {
+      expect(await watch(cy.connection, topic)).toEqual(ok);
+      expect(inTopic(app, topic)).toBe(1);
+      return;
+    }
+    expect(await watch(cy.connection, topic)).toEqual(refused("FORBIDDEN"));
+    expect(inTopic(app, topic)).toBe(0);
+    await write(app, (db) =>
+      db.task.update({ where: { id: board.t1 }, data: { title: "Unseen" } }),
+    );
+    await cy.scopes.settle();
+    expect(cy.scopes.changed).toEqual([]);
+  });
+
   it("is not counted by the socket rate limiter", async () => {
     const { app } = await start({ rateLimit: { maxRequests: 2 } });
     const { connection } = await connect(app, as(board.ada));

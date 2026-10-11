@@ -589,6 +589,42 @@ describe("races with a subscribe batch", () => {
     );
     expect(accessReads(reads)).toEqual([]);
   });
+
+  it("re-checks with the grants the socket holds then: a grant lowered while the batch ran denies (LIVE-1)", async () => {
+    let appRef: App | undefined;
+    const hold = holdRowRead(async () => await appRef?.server.access.refresh(board.di));
+    const { app } = await start({ after: hold.after, loadServiceAccess: () => ({}) });
+    appRef = app;
+    // Only the service-wide Admin grant lets di read T2.
+    const admin = await connect(app, as(board.di, { taskService: "Admin" }));
+    expect(await sub(admin.connection, "taskService", [board.t2])).toEqual({
+      ok: true,
+      r: [{ ok: false, e: { code: "FORBIDDEN", message: "Insufficient permissions" } }],
+    });
+    expect(roomsOf(app, "taskService", board.t2)).toEqual([]);
+    await app.as(as(board.ed)).taskService.setNotes({ id: board.t2, notes: "Admins only" });
+    await admin.frames.settle();
+    expect(admin.frames.entity).toEqual([]);
+  });
+
+  it("re-checks with the grants the socket holds then: a grant raised while the batch ran answers at it", async () => {
+    let appRef: App | undefined;
+    const hold = holdRowRead(async () => await appRef?.server.access.refresh(board.di));
+    const { app } = await start({
+      after: hold.after,
+      loadServiceAccess: () => ({ taskService: "Admin" }),
+    });
+    appRef = app;
+    // di reads T1 through P1's access list, at Read.
+    const reader = await connect(app, as(board.di, {}));
+    const reply = (await sub(reader.connection, "taskService", [board.t1])) as {
+      r: [{ ok: true; d: Record<string, unknown> }];
+    };
+    expect(reply.r[0].d).toHaveProperty("notes");
+    expect(roomsOf(app, "taskService", board.t1)).toEqual([
+      entityRoom("taskService", board.t1, "Admin"),
+    ]);
+  });
 });
 
 describe("behind a cluster adapter", () => {

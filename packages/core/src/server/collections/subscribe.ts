@@ -14,16 +14,19 @@
 //    deltas since `since` when the buffer covers it. Joining first means a
 //    change recorded after the buffer is read reaches the socket as a frame;
 // 5. otherwise read the first page, then join;
-// 6. settle the races: an access change while the subscribe ran authorizes
-//    again (a denied scope leaves its room), and a flush that changed the
-//    scope after the revision (its frame may have gone out before the join)
-//    reads the page again, at a newer revision. So does any access change
-//    in a self scope whose items follow its service's policy (`selfAccess.ts`):
-//    the page was filtered before the change, which found no subscription
-//    to re-check. Then, while access keeps changing, the scope is
-//    authorized again, at most `MAX_RECHECKS` times, and refused when its
-//    anchors were still moving. A subscription the subscribe recorded and
-//    revocation ended meanwhile is `FORBIDDEN`.
+// 6. settle the races: an access change while the subscribe ran (or a
+//    replaced principal: new grants) authorizes again, with the socket's
+//    principal as it is then, never the one the subscribe began with (the
+//    5.1 audit's LIVE-1); another identity, or none, is denied, and a denied
+//    scope leaves its room. A flush that changed the scope after the
+//    revision (its frame may have gone out before the join) reads the page
+//    again, at a newer revision. So does any access change in a self scope
+//    whose items follow its service's policy (`selfAccess.ts`): the page was
+//    filtered before the change, which found no subscription to re-check,
+//    and is read again for the principal last authorized. Then, while access
+//    keeps changing, the scope is authorized again, at most `MAX_RECHECKS`
+//    times, and refused when its anchors were still moving. A subscription
+//    the subscribe recorded and revocation ended meanwhile is `FORBIDDEN`.
 //
 // Every page of a self scope on a service with a policy, cursor pages too,
 // is filtered by that policy for the subscriber (`selfAccess.ts`).
@@ -50,7 +53,10 @@ interface Attempt {
   readonly storage: NonNullable<CollectionHub["storage"]>;
   readonly socket: QuickdrawServerSocket;
   readonly collection: BoundCollection;
+  /** The principal the subscribe began with. */
   readonly principal: NonNullable<QuickdrawServerSocket["data"]["principal"]>;
+  /** The socket's principal when the subscribe last authorized the scope: pages are filtered for it. */
+  resolvedWith: NonNullable<QuickdrawServerSocket["data"]["principal"]>;
   readonly request: ScopeRequest;
   readonly room: string;
   /** The access changes the process had seen when the subscribe last authorized the scope. */
@@ -67,9 +73,12 @@ function forbidden(): QuickdrawError {
   return new QuickdrawError("FORBIDDEN", "Insufficient permissions");
 }
 
-/** The anchors of the scope, or `undefined` when the principal may not subscribe to it. */
-async function anchorsOf(attempt: Attempt): Promise<readonly string[] | undefined> {
-  const { hub, collection, principal, request } = attempt;
+/** The anchors of the scope, or `undefined` when `principal` may not subscribe to it. */
+async function anchorsOf(
+  attempt: Attempt,
+  principal: Attempt["principal"],
+): Promise<readonly string[] | undefined> {
+  const { hub, collection, request } = attempt;
   const allowed = await authorizeScopes(hub, collection, principal, [request.scope]);
   return allowed.get(request.scope);
 }
@@ -123,19 +132,32 @@ function sameAnchors(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((anchor, index) => anchor === b[index]);
 }
 
-/** True when access changed since the subscribe last authorized the scope. */
+/** True when access changed, or the socket's principal was replaced, since the subscribe last authorized the scope. */
 function accessMoved(attempt: Attempt): boolean {
-  return attempt.hub.subscriptions.accessChanges !== attempt.checkedAt;
+  return (
+    attempt.hub.subscriptions.accessChanges !== attempt.checkedAt ||
+    attempt.socket.data.principal !== attempt.resolvedWith
+  );
 }
 
-/** Step 6: access changed since the subscribe last authorized the scope, so it is authorized again. */
+/**
+ * Step 6: access changed since the subscribe last authorized the scope, so
+ * it is authorized again, with the socket's principal as it is now: the
+ * same user's current grants; another identity, or none, is `FORBIDDEN`.
+ */
 async function recheckAccess(attempt: Attempt): Promise<void> {
   if (!accessMoved(attempt)) {
     return;
   }
   attempt.checkedAt = attempt.hub.subscriptions.accessChanges;
   attempt.moving = false;
-  const anchors = await anchorsOf(attempt);
+  const now = attempt.socket.data.principal;
+  if (now === null || now.userId !== attempt.principal.userId) {
+    leave(attempt);
+    throw forbidden();
+  }
+  attempt.resolvedWith = now;
+  const anchors = await anchorsOf(attempt, now);
   if (anchors === undefined) {
     leave(attempt);
     throw forbidden();
@@ -196,33 +218,46 @@ async function changedSince(attempt: Attempt, rev: Revision): Promise<Revision |
     : undefined;
 }
 
-/** A page of the scope at `rev`, filtered by the item service's policy in a self scope that follows it. */
+/**
+ * A page of the scope at `rev`, filtered by the item service's policy in a
+ * self scope that follows it, for the principal the scope was last
+ * authorized with.
+ */
 async function pageOf(attempt: Attempt, rev: Revision): Promise<CollectionSnapshot> {
-  const { hub, storage, collection, request, principal } = attempt;
+  const { hub, storage, collection, request, resolvedWith } = attempt;
   return await readPage(
     storage,
     collection,
     request,
     rev,
-    await itemsWhere(hub, collection, principal),
+    await itemsWhere(hub, collection, resolvedWith),
   );
+}
+
+/** What the first page was read under: the access changes seen, and the principal it was filtered for. */
+interface ReadUnder {
+  readonly changes: number;
+  readonly principal: Attempt["resolvedWith"];
 }
 
 /**
  * Step 6: the revision to read the page again at, or `undefined`: a flush
  * changed the scope after `rev` (`changedSince`), or, in a self scope that
- * follows its service's policy, access changed since `accessAt`.
+ * follows its service's policy, access changed (or the principal the page
+ * is filtered for) since the page was read.
  */
 async function rereadAt(
   attempt: Attempt,
   rev: Revision,
-  accessAt: number,
+  under: ReadUnder,
 ): Promise<Revision | undefined> {
   const changed = await changedSince(attempt, rev);
   if (changed !== undefined) {
     return changed;
   }
-  const moved = attempt.hub.subscriptions.accessChanges !== accessAt;
+  const moved =
+    attempt.hub.subscriptions.accessChanges !== under.changes ||
+    attempt.resolvedWith !== under.principal;
   return moved && followsPolicy(attempt.collection) ? await pageRev(attempt) : undefined;
 }
 
@@ -242,13 +277,16 @@ async function answer(
       return { ok: true, resumed: true, rev: replay.rev, deltas: replay.deltas };
     }
   }
-  const accessAt = hub.subscriptions.accessChanges;
+  const under: ReadUnder = {
+    changes: hub.subscriptions.accessChanges,
+    principal: attempt.resolvedWith,
+  };
   const claimed = pageRev(attempt);
   const rev = typeof claimed === "number" ? claimed : await claimed;
   let page = await pageOf(attempt, rev);
   join(attempt, anchors);
   await recheckAccess(attempt);
-  const again = attempt.record === undefined ? undefined : await rereadAt(attempt, rev, accessAt);
+  const again = attempt.record === undefined ? undefined : await rereadAt(attempt, rev, under);
   if (again !== undefined) {
     page = await pageOf(attempt, again);
   }
@@ -281,6 +319,7 @@ export async function subscribeScope(
     socket,
     collection,
     principal,
+    resolvedWith: principal,
     request,
     room,
     checkedAt: hub.subscriptions.accessChanges,
@@ -289,7 +328,7 @@ export async function subscribeScope(
     moving: false,
   };
   try {
-    const anchors = await anchorsOf(attempt);
+    const anchors = await anchorsOf(attempt, principal);
     if (anchors === undefined) {
       throw forbidden();
     }
