@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { TaskServicePort } from "../service-ports.js";
 
 const byTaskIdSchema = z.object({ id: z.string().min(1) });
+const projectIdSchema = z.object({ projectId: z.string() });
 
 // A helper that takes the port, which a handler calls
 async function findTask(service: TaskServicePort, id: string) {
@@ -36,6 +37,6 @@ export function registerArchive(service: TaskServicePort): void {
       });
       return tasks.map((task) => service.toTaskDto(task));
     },
-    { schema: z.object({ projectId: z.string() }), resolveEntryId: (p) => p.projectId },
+    { schema: projectIdSchema, resolveEntryId: (p) => p.projectId },
   );
 }

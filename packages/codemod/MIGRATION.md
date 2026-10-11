@@ -80,7 +80,10 @@ faithfully. What it does:
   exactly (stored grants in `User.serviceAccess` name it). A method's
   `input` is the Zod schema its `defineMethod` passed as `schema:`, moved
   into the shared package with the helpers it uses (`cuidSchema`, say, into
-  `contracts/helpers.ts`); without one, `todoSchema<Payload>({ keys })`,
+  `contracts/helpers.ts`). Same-named schemas of several method modules are
+  written once when they are the same code, and renamed `<name>Of<Module>`
+  when not; a schema passed by an import or re-export alias is written by
+  its declared name. Without a schema, `todoSchema<Payload>({ keys })`,
   with the payload type's top-level keys (no `keys` for a payload type that
   has none, such as `Record<string, never>`). An output is
   `"entity"` (or `nullable("entity")`, `listOf("entity")`) when the 4.x

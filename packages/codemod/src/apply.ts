@@ -100,41 +100,56 @@ function typeOnlyImports(file: SourceFile): void {
   }
 }
 
-/** Removes the module-level declarations named in `names` that nothing in the file uses. */
+/**
+ * Removes the module-level declarations named in `names` that nothing in the
+ * file uses, until none is left to remove: a schema only a removed one used
+ * goes too.
+ */
 function dropUnused(file: SourceFile, names: ReadonlySet<string>): void {
-  for (const name of names) {
-    const variable = file.getVariableDeclaration(name);
-    const declaration =
-      variable ?? file.getFunction(name) ?? file.getInterface(name) ?? file.getTypeAlias(name);
-    if (declaration === undefined) {
-      continue;
-    }
-    const nameNode = declaration.getNameNode();
-    const used = file
-      .getDescendants()
-      .some(
-        (node) =>
-          node.getText() === name && node !== nameNode && node.getKindName() === "Identifier",
-      );
-    if (used) {
-      continue;
-    }
-    const statement = variable?.getVariableStatement();
-    if (statement !== undefined && statement.getDeclarations().length === 1) {
-      statement.remove();
-    } else if (
-      Node.isInterfaceDeclaration(declaration) ||
-      Node.isTypeAliasDeclaration(declaration)
-    ) {
-      removeWithComments(declaration);
-    } else if (variable === undefined && !Node.isVariableDeclaration(declaration)) {
-      declaration.remove();
+  const left = new Set(names);
+  for (let dropped = true; dropped; ) {
+    dropped = false;
+    for (const name of left) {
+      if (dropIfUnused(file, name)) {
+        left.delete(name);
+        dropped = true;
+      }
     }
   }
 }
 
+/** Removes the module-level declaration `name` if nothing in the file uses it; whether it did. */
+function dropIfUnused(file: SourceFile, name: string): boolean {
+  const variable = file.getVariableDeclaration(name);
+  const declaration =
+    variable ?? file.getFunction(name) ?? file.getInterface(name) ?? file.getTypeAlias(name);
+  if (declaration === undefined) {
+    return false;
+  }
+  const nameNode = declaration.getNameNode();
+  const used = file
+    .getDescendants()
+    .some(
+      (node) => node.getText() === name && node !== nameNode && node.getKindName() === "Identifier",
+    );
+  if (used) {
+    return false;
+  }
+  const statement = variable?.getVariableStatement();
+  if (statement !== undefined && statement.getDeclarations().length === 1) {
+    removeWithComments(statement);
+  } else if (Node.isInterfaceDeclaration(declaration) || Node.isTypeAliasDeclaration(declaration)) {
+    removeWithComments(declaration);
+  } else if (variable === undefined && !Node.isVariableDeclaration(declaration)) {
+    declaration.remove();
+  } else {
+    return false;
+  }
+  return true;
+}
+
 /**
- * Removes a type declaration with the comments right above it (no blank line
+ * Removes a declaration with the comments right above it (no blank line
  * between), which describe it, and the blank line after it.
  */
 function removeWithComments(declaration: Node): void {

@@ -13,6 +13,10 @@ export interface Stats {
   aggregatorsRemoved: number;
   contracts: number;
   schemasMoved: number;
+  /** Moved local declarations written once for several method modules: the same code under one name. */
+  schemasMerged: number;
+  /** Moved local declarations written as `<name>Of<Module>`, since the contract had another of their name. */
+  schemasRenamed: number;
   todoSchemas: number;
   clientCalls: number;
   wrappersDeleted: number;
@@ -47,6 +51,8 @@ export function createContext(project: Project, layout: Layout): RunContext {
       aggregatorsRemoved: 0,
       contracts: 0,
       schemasMoved: 0,
+      schemasMerged: 0,
+      schemasRenamed: 0,
       todoSchemas: 0,
       clientCalls: 0,
       wrappersDeleted: 0,
