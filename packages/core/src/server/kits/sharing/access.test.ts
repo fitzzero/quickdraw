@@ -301,6 +301,54 @@ describe("forms an app gives", () => {
     });
   });
 
+  it("refuse a target above the caller before the last-Admin rule, by name and by service grant too", async () => {
+    const board = kit.board();
+    const { p1, p2, gus, di, ed } = board;
+    const { prisma } = kit.harness();
+    // An access list with no owner column: a list's last Admin is its only one.
+    const listed = defineContract("listedService", {
+      entity: projectEntity,
+      methods: sharing.contract({ mode: "acl", methods: ["share", "shareByName", "unshare"] }),
+    });
+    const listedService = qd.defineService(listed, {
+      model: "project",
+      access: jsonAcl("acl"),
+      methods: {
+        ...sharing.handlers(listed, {
+          access: {
+            share: { entry: "Moderate" },
+            shareByName: { entry: "Moderate" },
+            unshare: { service: "Moderate", entry: "Moderate" },
+          },
+          resolveUser: async ({ email }) =>
+            (await prisma.user.findUnique({ where: { email: email ?? "" } }))?.id,
+        }),
+      },
+    });
+    const app = await createTestApp({ services: [listedService], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    const admins = [
+      { userId: gus, level: "Admin" },
+      { userId: di, level: "Moderate" },
+    ];
+    await prisma.project.update({ where: { id: p2 }, data: { acl: admins } });
+    const above = { code: "FORBIDDEN", message: expect.stringContaining("That user has Admin") };
+    // Gus is P2's last Admin, but di is refused for being below him, not for the rule.
+    const asDi = app.as(as(di)).listedService;
+    await expect(asDi.unshare({ id: p2, userId: gus })).rejects.toMatchObject(above);
+    const { email } = await prisma.user.findUniqueOrThrow({ where: { id: gus } });
+    await expect(asDi.shareByName({ id: p2, email, level: "Read" })).rejects.toMatchObject(above);
+    // A Moderate service grant counts where the form names service: below gus, equal to di.
+    const granted = app.as(as(ed, { listedService: "Moderate" })).listedService;
+    await expect(granted.unshare({ id: p2, userId: gus })).rejects.toMatchObject(above);
+    expect(await granted.unshare({ id: p2, userId: di })).toEqual([
+      { userId: gus, level: "Admin" },
+    ]);
+    expect((await prisma.project.findUniqueOrThrow({ where: { id: p1 } })).acl).toEqual([
+      { userId: di, level: "Read" },
+    ]);
+  });
+
   it("let one Admin change or remove another under the default forms", async () => {
     const { app } = await kit.start();
     const board = kit.board();

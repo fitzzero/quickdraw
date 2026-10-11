@@ -74,6 +74,9 @@ async function findUser(
   if (lookup.email !== undefined) {
     return (await users.findUnique({ where: { email: lookup.email }, select: { id: true } }))?.id;
   }
+  if (lookup.name === undefined) {
+    return null;
+  }
   const named = await users.findMany({
     where: { name: lookup.name },
     select: { id: true },

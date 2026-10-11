@@ -14,11 +14,15 @@ export const projectService = qd.defineService(project, {
   collections: { mine: { scopeAccess: "self" } },
   methods: {
     ...sharing.handlers(project, {
-      // the one user a by-name call means, or null (NOT_FOUND): an email is unique,
-      // a display name counts only when exactly one user has it
+      // the one user a by-name call means, or null (NOT_FOUND): an email is unique
+      // (and wins when both are given), a display name counts only when exactly
+      // one user has it
       resolveUser: async ({ name, email }) => {
         if (email !== undefined) {
           return (await db.user.findUnique({ where: { email }, select: { id: true } }))?.id;
+        }
+        if (name === undefined) {
+          return null;
         }
         const named = await db.user.findMany({ where: { name }, select: { id: true }, take: 2 });
         return named.length === 1 ? named[0]?.id : null;

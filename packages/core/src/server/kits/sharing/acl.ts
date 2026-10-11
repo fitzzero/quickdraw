@@ -19,8 +19,9 @@
 // - writes nothing when the user already has exactly that level.
 //
 // `share` adds the user or replaces their level, unless it is above the
-// caller's; `setLevel` and `unshare` need the user in the list (`NOT_FOUND`). Each returns the list as
-// `listShares` does: `[{ userId, level }]`, one entry per user.
+// caller's; `setLevel` and `unshare` need the user in the list
+// (`NOT_FOUND`). Each returns the list as `listShares` does:
+// `[{ userId, level }]`, one entry per user.
 //
 // Statements, inside the transaction: the caller's level (the policy's
 // reads; none with a service-wide `Admin` grant), one read of the row, then

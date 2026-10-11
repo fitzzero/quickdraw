@@ -211,7 +211,11 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
 - **Sharing changes refuse users above the caller.** Under a lowered form
   (`share: { entry: "Moderate" }` and the like), `share` replacing a level,
   `setLevel`, `unshare`, `remove` and `setRole` answer `FORBIDDEN` for a
-  user whose current level is above the caller's; equal levels pass.
+  user whose current level is above the caller's; equal levels pass. Under
+  a form with no row level (`custom`, `"authenticated"`, a scope form,
+  usually with `rowless`), the caller's own level is their level on the
+  row, often none, so such callers can no longer `unshare` or `remove`
+  users who have a level; name `service` in the form for a grant to count.
 - **With `cacheMs`, access checks inside a transaction read the database.**
   A sharing change's re-check of its caller (and any `levelsFor` inside
   `db.$transaction`) no longer reads the access cache, so it costs its

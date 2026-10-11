@@ -133,7 +133,10 @@ export type SharingHandlersOptions<C extends AnyContract, A, Db = unknown> = {
   readonly onChange?: SharingOnChange<Db>;
   /**
    * The kit's methods whose access form is their whole check on purpose:
-   * each gets `rowless: true`. On a service with an access policy,
+   * each gets `rowless: true`. A change still never touches a user above
+   * the caller's own level on the row, which under such a form is their
+   * level on the row (often none): name `service` in the form for a
+   * service-wide grant to count. On a service with an access policy,
    * `defineService` refuses an access-list method (`share`, `unshare`,
    * `setLevel`, `listShares`, `shareByName`: their input names the row as
    * `id`) under a form that asks the policy nothing about that row

@@ -2155,11 +2155,15 @@ export const projectService = qd.defineService(project, {
   collections: { mine: { scopeAccess: "self" } },
   methods: {
     ...sharing.handlers(project, {
-      // the one user a by-name call means, or null (NOT_FOUND): an email is unique,
-      // a display name counts only when exactly one user has it
+      // the one user a by-name call means, or null (NOT_FOUND): an email is unique
+      // (and wins when both are given), a display name counts only when exactly
+      // one user has it
       resolveUser: async ({ name, email }) => {
         if (email !== undefined) {
           return (await db.user.findUnique({ where: { email }, select: { id: true } }))?.id;
+        }
+        if (name === undefined) {
+          return null;
         }
         const named = await db.user.findMany({ where: { name }, select: { id: true }, take: 2 });
         return named.length === 1 ? named[0]?.id : null;
@@ -2175,8 +2179,8 @@ export const projectService = qd.defineService(project, {
 
 - Access list methods: `share({ id, userId, level })` gives a user `Read`,
   `Moderate` or `Admin` (replacing a level they had, unless it is above the
-  caller's), `setLevel` changes
-  the level of a user the row is shared with, `unshare({ id, userId })`
+  caller's), `setLevel` changes the level of a user the row is shared
+  with, `unshare({ id, userId })`
   takes it away, and `listShares({ id })` lists the row's shares; each
   returns the list as `[{ userId, level }]`, one entry per user. Membership
   methods: `invite({ entryId, userId, role? })` and
@@ -2207,9 +2211,10 @@ export const projectService = qd.defineService(project, {
   Roles are the policy's `levels` keys, or the level names `Read`,
   `Moderate` and `Admin` without it; another role is `VALIDATION`, and
   `invite` without a role gives the lowest one that can read the row.
-  Roles that map to one level are peers: with `{ owner: "Admin", admin:
-"Admin" }` an `admin` may demote or remove the `owner`, so protect an
-  owner with an owner column (`anyOf(owner("ownerId"), members(...))`).
+  Roles that map to one level are peers: with
+  `{ owner: "Admin", admin: "Admin" }` an `admin` may demote or remove the
+  `owner`, so protect an owner with an owner column
+  (`anyOf(owner("ownerId"), members(...))`).
 - The owner's access never changes (`CONFLICT`). A row keeps its last
   Admin, counted across every policy of an `anyOf`: an owner column, an
   `Admin` entry of the access list, an `Admin` member (so a project's owner
