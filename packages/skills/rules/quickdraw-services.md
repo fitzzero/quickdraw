@@ -135,6 +135,22 @@ principal that carries `serviceAccess` keeps exactly those grants. Never
 read `req.userId` through a cast, and never build a principal with grants
 by hand to get past a check.
 
+Authentication goes through the auth routes kit's helpers, which check the
+session store on every call, so a signed-out or revoked session stops at
+once:
+
+- `socketAuth(...)` is `createServer`'s `authenticate`: the session cookie
+  from an allowed page (the Origin rule), or a bearer token.
+- `requireSession(keys)` guards the app's own REST routes.
+- `bearerAuth(...)` is for a hook handed a bearer token alone: the MCP
+  bridge's `principal`, an `authenticate` that reads `auth.token`.
+- Never `verifyJWT` alone: it checks the signature and expiry, not the
+  session store.
+- A custom `authenticate` takes the session cookie only from
+  `request.sessionCookie` (HTTP), after `cookieOriginAllowed(request,
+allowedOrigins)`, and checks it with `liveSession`; `auth.token` holds
+  only a bearer token for it.
+
 ## Writes are tracked; frames are derived
 
 Entity frames, collection deltas and change topics are computed from the

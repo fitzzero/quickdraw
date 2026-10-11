@@ -15,7 +15,7 @@
 // which can end the sockets still open with the session
 // (`server.access.disconnectUser`).
 
-import { verifyJWT } from "../jwt";
+import { readVerifiedJWT } from "../jwt";
 import { tokenOf } from "../../transports/body";
 import {
   noContent,
@@ -71,7 +71,7 @@ async function revoked(
 export function logoutRoute(settings: RouteSettings): Handler {
   return async (req, res) => {
     const token = tokenOf(req, sessionCookieNaming(settings));
-    const payload = token === null ? null : await verifyJWT(token, settings.keys.jwtSecret);
+    const payload = token === null ? null : await readVerifiedJWT(token, settings.keys.jwtSecret);
     if (payload?.sid !== undefined) {
       await settings.keys.sessions.revoke(payload.sid);
       settings.logger.info("Signed out", { category: "quickdraw.auth", userId: payload.userId });

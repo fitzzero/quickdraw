@@ -47,6 +47,23 @@ describe("the new-service skill's server examples (finding F7.6)", () => {
   });
 });
 
+describe("the examples apps copy", () => {
+  const examples = DOCUMENTS.flatMap(
+    (document) => parseDocument(readFileSync(documentPath(document), "utf8")).examples,
+  );
+  const matching = (pattern: RegExp) =>
+    examples.filter((example) => pattern.test(example.code)).map((example) => example.file);
+
+  it("never check a session with verifyJWT alone, which a signed-out session still passes (AUTH-1)", () => {
+    expect(examples.length).toBeGreaterThan(0);
+    expect(matching(/\bverifyJWT\(/)).toEqual([]);
+  });
+
+  it("never trust a proxy that may not be there, which lets a client pick its own address (CLIENT-6)", () => {
+    expect(matching(/"trust proxy",\s*(\d|true)/)).toEqual([]);
+  });
+});
+
 describe("example copies", () => {
   const document = [
     "Text.",

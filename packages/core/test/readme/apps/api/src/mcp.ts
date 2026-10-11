@@ -19,7 +19,7 @@ const summarizeInput = z.object({ projectId: z.string() });
 const registry = createMcpRegistry({
   services: [projectService, taskService],
   dispatcher: server.dispatcher,
-  // who a stdio session or an HTTP bearer token stands for; nothing is anonymous
+  // an agent acting for the user of a session token, checked on every call; no token is anonymous
   principal: (request) =>
     verifySession(request.transport === "http" ? request.token : process.env.AGENT_TOKEN),
   // handlers read it as ctx.mcp

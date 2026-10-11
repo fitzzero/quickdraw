@@ -2,11 +2,16 @@
 // with the input as the JSON body, through the same pipeline and the same
 // `authenticate` as sockets, for server-side prefetch, load tests and
 // webhooks. The principal comes from the session cookie or a bearer token
-// (`httpCredentialOf`), and `authenticate` is told which one it was, so the
-// ambient cookie's `Origin` can be checked (`socketAuth` does; finding F7.1
-// of the quickdraw-chat review); the reply is the `qd:call` acknowledgement
-// shape, `{ ok: true, d }` or `{ ok: false, e }`, with the error code's HTTP
-// status (`httpStatus`). The call is cancelled when the client goes away.
+// (`httpCredentialsOf`), and `authenticate` is told which one the transport
+// chose, so the ambient cookie's `Origin` can be checked (`socketAuth` does;
+// finding F7.1 of the quickdraw-chat review). The cookie is `auth.token`
+// only for `socketAuth`'s `authenticate`, which checks that Origin and the
+// session store; every other finds it in `request.sessionCookie` alone, so
+// code written for bearer tokens never takes the ambient cookie for one
+// (the 5.1 audit's AUTH-1/CLIENT-2). The reply is the `qd:call`
+// acknowledgement shape, `{ ok: true, d }` or `{ ok: false, e }`, with the
+// error code's HTTP status (`httpStatus`). The call is cancelled when the
+// client goes away.
 //
 // The router is a plain Node request handler rather than an `express.Router`,
 // so it never imports Express: it mounts with `app.use(router)` on Express 4
@@ -25,14 +30,17 @@ import {
   createPrincipalResolver,
   isForbiddenCredential,
   isRefusal,
+  socketAuthOf,
   type ResolvePrincipal,
   type ServerAuth,
 } from "./auth";
 import {
-  httpCredentialOf,
+  httpCredentialsOf,
   isJsonRequest,
   readJsonInput,
   transportCookieNaming,
+  type HttpCredentials,
+  type HttpCredentialSource,
   type HttpRequest,
   type SessionCookieNaming,
 } from "./body";
@@ -103,6 +111,12 @@ export interface HttpRouterSettings {
   readonly maxBodyBytes: number;
   /** `cookieName`, and `COOKIE_DOMAIN` read when the router is made: a cookie with a domain is `session`. */
   readonly cookieNaming: SessionCookieNaming;
+  /**
+   * True when `authenticate` is `socketAuth`'s, which takes the session
+   * cookie as `auth.token` (checking its Origin and the store); every other
+   * `authenticate` gets it as `request.sessionCookie` alone.
+   */
+  readonly cookieAsToken: boolean;
   readonly rateLimit: HttpMiddleware | undefined;
 }
 
@@ -185,17 +199,29 @@ function failure(error: QuickdrawError): DispatchResult {
   return { ok: false, error };
 }
 
+/** The credential the transport chose: the session cookie, else the bearer token. */
+function chosenCredential(credentials: HttpCredentials): HttpCredentialSource | undefined {
+  if (credentials.cookie !== null) {
+    return "cookie";
+  }
+  return credentials.bearer === null ? undefined : "bearer";
+}
+
 async function authenticate(
   settings: HttpRouterSettings,
   req: HttpRequest,
 ): Promise<Principal | null | QuickdrawError> {
-  const credential = httpCredentialOf(req, settings.cookieNaming);
+  const credentials = httpCredentialsOf(req, settings.cookieNaming);
+  const { cookie, bearer } = credentials;
+  const token = settings.cookieAsToken ? (cookie ?? bearer) : bearer;
+  const credential = chosenCredential(credentials);
   try {
     return await settings.resolvePrincipal({
       transport: "http",
-      auth: credential === null ? {} : { token: credential.token },
+      auth: token === null ? {} : { token },
       // The session cookie is ambient: `socketAuth` checks such a call's Origin (F7.1).
-      ...(credential === null ? {} : { credential: credential.from }),
+      ...(credential === undefined ? {} : { credential }),
+      ...(cookie === null ? {} : { sessionCookie: cookie }),
       headers: req.headers,
       req,
     });
@@ -316,7 +342,7 @@ function normalizePath(path: string): string {
 /** Resolves the HTTP transport's options. */
 export function httpRouterSettings(
   options: HttpTransportOptions,
-  base: Pick<HttpRouterSettings, "call" | "resolvePrincipal" | "logger">,
+  base: Pick<HttpRouterSettings, "call" | "resolvePrincipal" | "logger" | "cookieAsToken">,
 ): HttpRouterSettings {
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 1) {
@@ -353,6 +379,7 @@ export function createHttpRouter<P extends Principal = Principal>(
       call: options.dispatcher.call,
       resolvePrincipal: createPrincipalResolver(options.auth),
       logger: options.logger ?? consoleLogger,
+      cookieAsToken: socketAuthOf(options.auth?.authenticate) !== undefined,
     }),
   );
 }

@@ -20,6 +20,18 @@ All notable changes to this project will be documented in this file.
   `id`.
 - A method takes a new option, `claims`, and `ServiceMethod` gains
   `claims`.
+- **An `authenticate` that `socketAuth` did not make no longer finds the
+  session cookie in `auth.token` on HTTP.** It is in
+  `request.sessionCookie`, and `auth.token` holds only a bearer token. An
+  app whose own `authenticate` accepted cookies on `/qd` reads that field
+  and checks `cookieOriginAllowed` and `liveSession`; bearer-only code now
+  ignores the cookie, so a cookie-only call is anonymous to it. An app's
+  wrapper around `socketAuth` keeps cookie sign-in.
+- `verifyJWT` logs one warning per process in development when it verifies
+  a token carrying `sid` (a session token), since it checks no session
+  store.
+- The README's MCP callers are `kind: "agent"`, and MIGRATION's
+  `trust proxy` defaults to 0 (`TRUST_PROXY`).
 
 ### Security
 
@@ -42,6 +54,22 @@ All notable changes to this project will be documented in this file.
   inputs that carry `id`: each lets everyone it admits reach any row by its
   id. `defineService` now refuses them too, each with a message naming the
   row it checks and the ways out.
+- **Session tokens are checked against the session store on MCP and in
+  custom auth (AUTH-1, MCP-2, CLIENT-2).** The README's `verifySession`,
+  the MCP bridge's `principal` hook and MIGRATION's server `authenticate`,
+  was `verifyJWT` alone: a signed-out, logged-out-everywhere or revoked
+  session kept working until its JWT expired (7 days), and a JWT without a
+  session forever. `bearerAuth({ sessions, jwtSecret, loadPrincipal? })`
+  (`./server/auth`) checks a bearer token against the store on every call,
+  and the examples use it (or `socketAuth`). The HTTP transport handed
+  every `authenticate` the ambient session cookie as `auth.token`, so code
+  written for bearer tokens took a cross-site page's cookie for one, past
+  the Origin rule only `socketAuth` applies; the cookie is now `auth.token`
+  only for `socketAuth`'s `authenticate`.
+- **MIGRATION no longer trusts a proxy unconditionally (CLIENT-6).** Its
+  `app.set("trust proxy", 1)` let a client without a proxy in front pick its
+  own `X-Forwarded-For`, and pass every per-IP limiter; it reads
+  `TRUST_PROXY` (0 by default), as the README's routes do.
 
 ### Codemod
 

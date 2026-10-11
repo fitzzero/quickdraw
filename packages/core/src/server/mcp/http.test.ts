@@ -8,6 +8,10 @@ import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createJWT } from "../auth/jwt";
+import { bearerAuth } from "../auth/routes/bearerAuth";
+import { createMemorySessionStore } from "../auth/routes/sessions";
+import { issueSession } from "../auth/routes/tokens";
 import { agentAuth, bindSetup, setup } from "./__tests__/fixtures";
 import { createMcpHttpRouter, type McpHttpRouterOptions } from "./index";
 
@@ -330,6 +334,38 @@ describe("bound arguments over HTTP", () => {
     expect(fixture.records.map((record) => [record.method, record.outcome])).toEqual([
       ["post", "ok"],
     ]);
+  });
+});
+
+describe("a session token through bearerAuth", () => {
+  it("stops working as soon as its session is revoked, and a JWT without a session never works (MCP-2)", async () => {
+    const sessions = createMemorySessionStore();
+    const jwtSecret = "a-test-secret-of-at-least-thirty-two-characters";
+    const verify = bearerAuth({
+      sessions,
+      jwtSecret,
+      loadPrincipal: (userId) => ({ userId, kind: "agent" as const }),
+    });
+    const fixture = setup({
+      principal: (request) => verify(request.transport === "http" ? request.token : null),
+      context: () => ({ scopes: [] }),
+    });
+    const url = await listen(
+      createMcpHttpRouter({ registry: fixture.registry, logger: fixture.logger }),
+    );
+    const { token } = await issueSession({ sessions, jwtSecret }, "alice", { provider: "test" });
+    const get = { name: "taskService_get", arguments: { id: "t1" } };
+    expect(await invoke(url, get, { token })).toMatchObject({
+      status: 200,
+      body: { success: true },
+    });
+    sessions.revokeAll("alice");
+    expect(await invoke(url, get, { token })).toMatchObject({
+      status: 401,
+      body: { code: "UNAUTHENTICATED" },
+    });
+    const sessionless = await createJWT({ userId: "alice" }, jwtSecret);
+    expect(await invoke(url, get, { token: sessionless })).toMatchObject({ status: 401 });
   });
 });
 

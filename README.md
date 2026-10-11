@@ -353,7 +353,9 @@ export const cardSchema = taskSchema.omit({ notes: true });
 
 The sessions, the secret and the grants the server reads,
 `apps/api/src/auth.ts`. Sessions are issued by the auth routes, mounted on
-the same `app` (see the [auth routes kit](#auth-routes-kit)):
+the same `app` (see the [auth routes kit](#auth-routes-kit)). `verifySession`
+checks a bearer token against the session store on every call
+(`bearerAuth`), so a signed-out or revoked session stops at once:
 
 <!-- example: apps/api/src/auth.ts -->
 
@@ -361,7 +363,7 @@ the same `app` (see the [auth routes kit](#auth-routes-kit)):
 // The app's sessions, token check and grants, for the README's server examples.
 
 import type { AccessLevel } from "@fitzzero/quickdraw-core";
-import { createMemorySessionStore, verifyJWT } from "@fitzzero/quickdraw-core/server/auth";
+import { bearerAuth, createMemorySessionStore } from "@fitzzero/quickdraw-core/server/auth";
 import { db } from "./db";
 import type { AppPrincipal } from "./quickdraw";
 
@@ -371,14 +373,17 @@ export const jwtSecret = process.env.JWT_SECRET ?? "";
 /** The sessions the auth routes issue. In production, a store over the database (see the auth routes kit). */
 export const sessions = createMemorySessionStore();
 
-/** The user a bearer token signs in, or `null` for no token. */
-export async function verifySession(token: unknown): Promise<AppPrincipal | null> {
-  if (typeof token !== "string") {
-    return null;
-  }
-  const payload = await verifyJWT(token, jwtSecret);
-  return payload === null ? null : { userId: payload.userId, kind: "user" };
-}
+/**
+ * The agent a bearer token signs in, or `null` for no token: checked against
+ * the session store on every call, so a signed-out or revoked session stops
+ * at once. An agent, so methods with `kinds: ["user"]` refuse it. Never
+ * `verifyJWT` alone, which checks no session.
+ */
+export const verifySession = bearerAuth({
+  sessions,
+  jwtSecret,
+  loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "agent" }),
+});
 
 /** A user's service-wide grants, as stored in `User.serviceAccess`. */
 export async function loadGrants(userId: string): Promise<Record<string, AccessLevel>> {
@@ -1173,9 +1178,12 @@ over three transports (design: sections 3, 8 and 10):
   principal comes from the session cookie (`__Host-session` over HTTPS,
   `session` over plain HTTP or with `COOKIE_DOMAIN`, as the auth routes name
   it) or an `Authorization: Bearer` token through the same
-  `authenticate`, which is told which one it was (`request.credential`):
-  `socketAuth` answers a cookie sent from a page outside `allowedOrigins`
-  with `FORBIDDEN`, as it refuses such a socket; the reply is `{ ok: true, d }` or
+  `authenticate`, which is told which one the transport chose
+  (`request.credential`): `socketAuth` answers a cookie sent from a page
+  outside `allowedOrigins` with `FORBIDDEN`, as it refuses such a socket.
+  The cookie is `auth.token` only for `socketAuth`'s `authenticate`; any
+  other finds it in `request.sessionCookie` alone, and `auth.token` holds
+  only a bearer token. The reply is `{ ok: true, d }` or
   `{ ok: false, e: { code, message, data? } }` with the code's HTTP status.
   Works on Express 4 and 5, and on a bare Node server. Move it with
   `http: { path }`, turn it off with `http: false`, or mount
@@ -1192,9 +1200,11 @@ over three transports (design: sections 3, 8 and 10):
   `auth.serviceAccessSource`). One that carries grants (even `{}`) keeps
   exactly those. A load that fails rejects the call with `INTERNAL`.
 
-`authenticate` takes one request (`{ transport, auth, headers, socket | req }`)
-for both transports and returns a principal, a user id, or nothing for an
-anonymous caller; throwing `QuickdrawError("UNAUTHENTICATED", ...)` refuses.
+`authenticate` takes one request (`{ transport, auth, headers, socket | req }`,
+plus `credential` and `sessionCookie` on HTTP) for both transports and
+returns a principal, a user id, or nothing for an anonymous caller; throwing
+`QuickdrawError("UNAUTHENTICATED", ...)` refuses. On HTTP the session cookie
+is in `auth.token` only for `socketAuth`'s `authenticate`.
 Pass your own HTTP server as `httpServer` together with the `app` it was
 created from (or with `http: false`).
 
@@ -1265,7 +1275,7 @@ const summarizeInput = z.object({ projectId: z.string() });
 const registry = createMcpRegistry({
   services: [projectService, taskService],
   dispatcher: server.dispatcher,
-  // who a stdio session or an HTTP bearer token stands for; nothing is anonymous
+  // an agent acting for the user of a session token, checked on every call; no token is anonymous
   principal: (request) =>
     verifySession(request.transport === "http" ? request.token : process.env.AGENT_TOKEN),
   // handlers read it as ctx.mcp
@@ -1310,6 +1320,11 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   tools it may not call (and its call is refused). Keep a tool out of the
   list with `exclude` or `include`, per registry, and serve agents of
   different reach from separate registries.
+- `kinds` sees only what the `principal` hook labels: `verifySession` above
+  labels every MCP caller `kind: "agent"`, so a method with
+  `kinds: ["user"]` refuses it. Check a session token against the store on
+  every call (`bearerAuth`), never with `verifyJWT` alone, which a
+  signed-out session still passes.
 
 `bind` fills chosen arguments from who is calling instead of from the agent,
 so an agent bound to one project cannot name another in its calls. Here an
@@ -2673,11 +2688,16 @@ nothing is cached:
   a browser sends `Origin` with every POST, so it comes from curl or a
   server rendering a page with the user's forwarded cookie (refused only
   when `Sec-Fetch-Site` names another site). Bearer tokens need no Origin
-  on either transport. An app's own `authenticate` learns where an HTTP
-  call's token came from in `request.credential` (`"cookie"` or
-  `"bearer"`, type `HttpCredentialSource`), applies the same rule with
-  `cookieOriginAllowed(request, allowedOrigins)`, and a
-  `QuickdrawError("FORBIDDEN")` it throws on HTTP is answered as it is.
+  on either transport. An app's own `authenticate` finds an HTTP call's
+  session cookie in `request.sessionCookie`, never in `auth.token` (which
+  holds only a bearer token for it), and `request.credential` says which
+  one the transport chose (`"cookie"` or `"bearer"`, type
+  `HttpCredentialSource`). One that accepts the cookie applies the same
+  rule with `cookieOriginAllowed(request, allowedOrigins)` and checks the
+  session in the store on every call (`liveSession`); a
+  `QuickdrawError("FORBIDDEN")` it throws on HTTP is answered as it is. A
+  hook that takes bearer tokens only (the MCP bridge's `principal`, an
+  `authenticate` reading `auth.token`) uses `bearerAuth`.
 - `socketAuth({ devCredentials })` signs a socket in by the user id its
   handshake names (`auth: { userId }`, no token), as the function answers
   (the principal, or `null` to refuse): for a game editor or load-test bots
@@ -2761,6 +2781,14 @@ nothing is cached:
 - `issueSession({ sessions, jwtSecret }, userId, { provider })` starts a
   session for an app's own sign-in flow (login codes, an embedded activity),
   and `liveSession` reads a token back; both work with `socketAuth`.
+- `bearerAuth({ sessions, jwtSecret, loadPrincipal? })` is `socketAuth`'s
+  counterpart for a hook handed a bearer token alone (the MCP bridge's
+  `principal`, `authenticate: ({ auth }) => verify(auth.token)`): no token
+  is anonymous, a token whose session is not live is refused with
+  `UNAUTHENTICATED`, on every call, and it never reads cookies. It records
+  no socket session: use `socketAuth` for `createServer`. `verifyJWT`
+  checks a token's signature and expiry only, never the store, and warns
+  once in development when it verifies a session token.
 
 From the browser, `./client` speaks to these routes: `authProviders({
 apiUrl })` lists the sign-ins the API serves (`GET /providers`: a provider
@@ -3462,7 +3490,7 @@ bunx @fitzzero/quickdraw-codemod v5 .
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `.`                | `defineContract`, `query`, `mutation`, `nullable`, `listOf`, `via`, the kits' contract halves, inference types, `QuickdrawError`, error codes, protocol types, room and topic names                                                             |
 | `./server`         | `initQuickdraw`, `createServer`, `createDispatcher`, `createHttpRouter`, policies, `custom`, the kits' handlers, `requireRow`, `nextOrdinal`, `storageOf`, dev warnings, the Redis adapter, the socket rate limiter, env and encryption helpers |
-| `./server/auth`    | `createAuthRoutes`, `socketAuth`, `requireSession` and `sessionOf`, providers (`google`, `discord`, `mock`, `guest`), session stores, `issueSession`, `liveSession`, JWT, cookie and origin helpers                                             |
+| `./server/auth`    | `createAuthRoutes`, `socketAuth`, `bearerAuth`, `requireSession` and `sessionOf`, providers (`google`, `discord`, `mock`, `guest`), session stores, `issueSession`, `liveSession`, JWT, cookie and origin helpers                               |
 | `./server/express` | Express rate limits: `createAuthLimiter`, `createAuthStatusLimiter`, `createCallLimiter`, `createPublicApiLimiter`, `createWebhookLimiter`                                                                                                      |
 | `./server/mcp`     | `createMcpRegistry`, `describeTools`, `createMcpStdioServer`, `createMcpHttpRouter`, `bootstrapMcpServer`                                                                                                                                       |
 | `./server/otel`    | `otelOnCall`                                                                                                                                                                                                                                    |

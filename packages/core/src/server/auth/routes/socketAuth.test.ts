@@ -13,6 +13,7 @@ import { call, peeredCluster, transportHarness, v5Auth } from "../../transports/
 import { APP_ORIGIN, baseOptions, post, SECRET, signIn, userIdOf } from "./__tests__/harness";
 import { createAuthRoutes } from "./createAuthRoutes";
 import { createMemorySessionStore } from "./sessions";
+import { bearerAuth } from "./bearerAuth";
 import { socketAuth } from "./socketAuth";
 import { issueSession } from "./tokens";
 
@@ -555,6 +556,65 @@ describe("an HTTP call", () => {
     expect(logger.at("debug").map((entry) => entry.message)).toContain(
       "HTTP authentication failed",
     );
+  });
+});
+
+describe("an HTTP call to an authenticate socketAuth did not make", () => {
+  const whoami = (url: string, headers: Record<string, string>) =>
+    fetch(`${url}/qd/whoService/whoami`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+    });
+
+  it("never finds the session cookie in auth.token: a bearer-only authenticate stays anonymous to it (CLIENT-2)", async () => {
+    const { url } = await boot((sessions) => {
+      const verify = bearerAuth({
+        sessions,
+        jwtSecret: SECRET,
+        loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
+      });
+      return { authenticate: ({ auth }) => verify(auth.token) };
+    });
+    const { session } = await signIn(url, "ada@demo.local");
+    // A cross-site page's call carries the ambient cookie, which only socketAuth reads, with the Origin rule.
+    const crossSite = await whoami(url, {
+      cookie: session,
+      origin: "http://evil.test",
+      "sec-fetch-site": "cross-site",
+    });
+    expect(crossSite.status).toBe(401);
+    expect(await crossSite.json()).toMatchObject({ ok: false, e: { code: "UNAUTHENTICATED" } });
+    const bearer = { authorization: `Bearer ${session.slice("session=".length)}` };
+    const byBearer = await whoami(url, bearer);
+    expect(byBearer.status).toBe(200);
+    expect(await byBearer.json()).toEqual({
+      ok: true,
+      d: { userId: userIdOf("ada@demo.local"), kind: "user" },
+    });
+    // The bearer token is checked against the store: logging out ends it at once.
+    await post(`${url}/auth/logout`, { cookie: session });
+    expect((await whoami(url, bearer)).status).toBe(401);
+  });
+
+  it("keeps cookie sign-in and its Origin rule when the app wraps socketAuth", async () => {
+    const { url } = await boot((sessions) => {
+      const inner = socketAuth({
+        sessions,
+        jwtSecret: SECRET,
+        allowedOrigins: [APP_ORIGIN],
+        loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
+      });
+      return { authenticate: (request) => inner(request) };
+    });
+    const { session } = await signIn(url, "ada@demo.local");
+    const fromApp = await whoami(url, { cookie: session, origin: APP_ORIGIN });
+    expect(await fromApp.json()).toEqual({
+      ok: true,
+      d: { userId: userIdOf("ada@demo.local"), kind: "user" },
+    });
+    const fromElsewhere = await whoami(url, { cookie: session, origin: "http://evil.test" });
+    expect(fromElsewhere.status).toBe(403);
+    expect(await fromElsewhere.json()).toMatchObject({ ok: false, e: { code: "FORBIDDEN" } });
   });
 });
 

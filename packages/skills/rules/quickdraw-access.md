@@ -69,6 +69,10 @@ export const tokenService = qd.defineService(token, {
   list, which holds for signed-in callers.
 - A service's list also refuses other kinds on `qd:sub`, `qd:col:sub`,
   `qd:watch` and `qd:stream:sub`, and its channels drop their messages.
+- Kinds separate only what the hooks label: label an MCP caller
+  `kind: "agent"` in the bridge's `principal` hook (`bearerAuth` with
+  `loadPrincipal: (userId) => ({ userId, kind: "agent" })`), or a method
+  with `kinds: ["user"]` lets it in as a user.
 - Never check the kind in a handler (`if (ctx.principal.kind !== "user")
 throw ...`; `no-inline-auth-guard` reports it) or in a `custom` form:
   `kinds` combines with any form (`{ entry: "Moderate" }` and

@@ -10,7 +10,7 @@ import { z } from "zod";
 import { defineContract, httpStatus, mutation, query, toWire } from "../../../index";
 import { captureLogger, db, type AppPrincipal } from "../../__tests__/fixtures";
 import { initQuickdraw } from "../../init";
-import { verifyJWT } from "../jwt";
+import { readVerifiedJWT } from "../jwt";
 import { APP_ORIGIN, authHarness, get, post, SECRET, signIn, userIdOf } from "./__tests__/harness";
 import {
   requireSession,
@@ -25,7 +25,7 @@ import type * as tokens from "./tokens";
 // Counts the JWT verifications: requireSession makes one per request.
 vi.mock("../jwt", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../jwt")>();
-  return { ...actual, verifyJWT: vi.fn(actual.verifyJWT) };
+  return { ...actual, readVerifiedJWT: vi.fn(actual.readVerifiedJWT) };
 });
 
 const harness = authHarness();
@@ -80,9 +80,9 @@ describe("requireSession", () => {
     keys = { sessions: booted.sessions, jwtSecret: SECRET };
     const { session } = await signIn(booted.url, "bob@demo.local");
     const reads = vi.spyOn(booted.sessions, "get");
-    vi.mocked(verifyJWT).mockClear();
+    vi.mocked(readVerifiedJWT).mockClear();
     expect((await get(`${booted.url}/api/me`, session)).status).toBe(200);
-    expect(vi.mocked(verifyJWT)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(readVerifiedJWT)).toHaveBeenCalledTimes(1);
     expect(reads).toHaveBeenCalledTimes(1);
   });
 

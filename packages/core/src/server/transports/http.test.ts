@@ -47,12 +47,17 @@ const TOKENS: Readonly<Record<string, AppPrincipal>> = {
 };
 
 const tokenAuth: ServerAuth<AppPrincipal> = {
-  authenticate: ({ auth, transport }) => {
-    if (auth.token === "broken") {
+  authenticate: (request) => {
+    expect(request.transport).toBe("http");
+    // The session cookie reaches an authenticate socketAuth did not make beside auth.token.
+    const token =
+      request.transport === "http"
+        ? (request.sessionCookie ?? request.auth.token)
+        : request.auth.token;
+    if (token === "broken") {
       throw new Error("the session store is down");
     }
-    expect(transport).toBe("http");
-    return typeof auth.token === "string" ? TOKENS[auth.token] : null;
+    return typeof token === "string" ? TOKENS[token] : null;
   },
 };
 
@@ -296,6 +301,34 @@ describe("credentials", () => {
       headers: { ...planted, "x-forwarded-proto": "https" },
     });
     expect((response.body as { d?: { userId: unknown } }).d?.userId).toBe("alice");
+  });
+
+  it("gives the session cookie as auth.token only to socketAuth's authenticate", async () => {
+    const seen: unknown[] = [];
+    const { url } = await serve({
+      auth: {
+        authenticate: (request) => {
+          if (request.transport === "http") {
+            seen.push({
+              auth: request.auth,
+              credential: request.credential,
+              sessionCookie: request.sessionCookie,
+            });
+          }
+          return null;
+        },
+      },
+    });
+    const echo = (headers: Record<string, string>) =>
+      post(url, "/qd/probeService/echo", { body: '{"text":"hi"}', headers });
+    await echo({ cookie: "session=alice-token" });
+    await echo({ cookie: "session=alice-token", ...bearer("moderator-token") });
+    await echo(bearer("alice-token"));
+    expect(seen).toEqual([
+      { auth: {}, credential: "cookie", sessionCookie: "alice-token" },
+      { auth: { token: "moderator-token" }, credential: "cookie", sessionCookie: "alice-token" },
+      { auth: { token: "alice-token" }, credential: "bearer", sessionCookie: undefined },
+    ]);
   });
 
   it("answers 401 when authenticate throws", async () => {

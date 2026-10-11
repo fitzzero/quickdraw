@@ -1004,7 +1004,13 @@ export const taskService = qd.defineService(task, {
 `qd.createServer({ app, services, db, auth })` attaches to the app's own
 Express app and HTTP server and owns socket authentication, the user room,
 the hello frame, disconnect cleanup and graceful shutdown. It never listens
-or exits the process itself, and there is no default CORS origin.
+or exits the process itself, and there is no default CORS origin. The
+server's `authenticate` here is the auth routes kit's `socketAuth` (see
+"Hand-built auth to the auth routes kit"). An app still on its own sessions
+until that step checks its session store on every handshake and call, and
+checks the session cookie's `Origin` (`cookieOriginAllowed`; on HTTP the
+cookie arrives in `request.sessionCookie`); never `verifyJWT` alone, which
+a signed-out session still passes until its JWT expires.
 
 <!-- example: ../../../codemod/test/guide-v4/apps/api/src/index.ts#server -->
 
@@ -1031,7 +1037,15 @@ export const server = qd.createServer({
   services: [taskService, healthService],
   db,
   cors: { origin: ["https://app.example.com"], credentials: true },
-  auth: { authenticate: ({ auth }) => verifySession(auth.token) },
+  // the session cookie from an allowed page, or a bearer token, checked against the store
+  auth: {
+    authenticate: socketAuth({
+      sessions,
+      jwtSecret,
+      allowedOrigins: ["https://app.example.com"],
+      loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
+    }),
+  },
   // 4.x clients keep calling `socket.emit("taskService:renameTask", ...)` until they update
   legacyWire: true,
 });
@@ -1630,7 +1644,10 @@ does (the README's auth routes kit section shows such a route). Give
 `requireSession` the `sessions` object the routes were given: it takes their
 `allowedOrigins` by that same store object, and a second
 `prismaSessions(...)` over the same table is another one. `onRevoke` ends
-the sockets of a revoked session:
+the sockets of a revoked session. `trust proxy` comes from `TRUST_PROXY`,
+the number of proxies in front of the app (0 by default): trusting a proxy
+that is not there lets a client pick its own `X-Forwarded-For`, and with it
+every per-IP rate limit:
 
 <!-- example: apps/api/src/auth/migrating.ts#wiring -->
 
@@ -1657,7 +1674,8 @@ async function devUser(userId: string): Promise<AppPrincipal | null> {
 }
 
 export const app: Express = express();
-app.set("trust proxy", 1);
+// behind a proxy, so the rate limits see the client's IP; with none, a client would pick its own
+app.set("trust proxy", env.TRUST_PROXY);
 app.use(
   createAuthRoutes({
     ...keys,

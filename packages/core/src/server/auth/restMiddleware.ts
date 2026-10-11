@@ -8,7 +8,7 @@
  */
 
 import type { IncomingHttpHeaders } from "node:http";
-import { verifyJWT } from "./jwt";
+import { readVerifiedJWT } from "./jwt";
 import { cookieDomainFromEnv, sessionCookieNamesFor } from "./sessionCookie";
 
 export interface AuthRequest {
@@ -82,7 +82,7 @@ export function createRequireAuth(
       return;
     }
 
-    const payload = await verifyJWT(token, secret);
+    const payload = await readVerifiedJWT(token, secret);
     if (!payload?.userId) {
       res.status(401).json({ error: "Invalid or expired token" });
       return;

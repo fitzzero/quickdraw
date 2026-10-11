@@ -47,6 +47,7 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { QuickdrawError } from "../../../protocol/errors";
 import {
+  markSocketAuth,
   recordSocketSession,
   type AuthenticateRequest,
   type SocketAuthenticateRequest,
@@ -147,6 +148,15 @@ function credentialOf(
   request: AuthenticateRequest,
   naming: SessionCookieNaming,
 ): Credential | null {
+  if (request.transport === "http") {
+    // The session cookie, which the transport hands every authenticate beside
+    // auth.token: an app's wrapper around socketAuth, which the transport
+    // does not know as socketAuth's, keeps cookie sign-in and its Origin rule.
+    const { sessionCookie } = request;
+    if (typeof sessionCookie === "string" && sessionCookie !== "") {
+      return { token: sessionCookie, checkOrigin: true };
+    }
+  }
   const { token } = request.auth;
   if (typeof token === "string" && token !== "") {
     // The HTTP transport found it, and says whether it was the session cookie.
@@ -211,13 +221,19 @@ export interface CookieOriginRequest {
  * `Sec-Fetch-Site` names another site, and a socket handshake only when
  * `Sec-Fetch-Site` is `same-origin` or with `allowMissingOrigin`. A bearer
  * token is not ambient: check only a credential that came from the cookie
- * (`request.credential === "cookie"` on an HTTP `authenticate` request).
+ * (`request.sessionCookie` on an HTTP `authenticate` request, where the
+ * transport hands an `authenticate` other than socketAuth's the cookie; it is
+ * in `auth.token` only for socketAuth's). Then check the session against the
+ * store, on every call (`liveSession`).
  *
  * @example
  * authenticate: async (request) => {
- *   if (request.transport === "http" && request.credential === "cookie" &&
- *       !cookieOriginAllowed(request, allowedOrigins)) {
- *     throw new QuickdrawError("FORBIDDEN", "This page may not use the session cookie");
+ *   if (request.transport === "http" && request.sessionCookie !== undefined) {
+ *     if (!cookieOriginAllowed(request, allowedOrigins)) {
+ *       throw new QuickdrawError("FORBIDDEN", "This page may not use the session cookie");
+ *     }
+ *     const session = await liveSession({ sessions, jwtSecret }, request.sessionCookie);
+ *     // ...
  *   }
  *   // ...
  * }
@@ -320,6 +336,29 @@ async function devPrincipal(
 }
 
 /**
+ * The principal of a live session's user: `{ userId, kind: "user" }`, or
+ * what `loadPrincipal` builds. `UNAUTHENTICATED` when it builds none; a
+ * `TypeError` naming `owner` when it builds another user's.
+ */
+export async function principalOfSession<P extends Principal>(
+  session: AuthSession,
+  loadPrincipal: PrincipalLoader<P> | undefined,
+  owner: string,
+): Promise<P | Principal> {
+  if (loadPrincipal === undefined) {
+    return { userId: session.userId, kind: "user" };
+  }
+  const principal = await loadPrincipal(session.userId, session);
+  if (principal === null || principal === undefined) {
+    throw refused("The session's user has no principal");
+  }
+  if (principal.userId !== session.userId) {
+    throw new TypeError(`${owner}: loadPrincipal must return the principal of the session's user`);
+  }
+  return principal;
+}
+
+/**
  * The `authenticate` for `createServer` over the auth routes' sessions:
  * `createServer({ auth: { authenticate: socketAuth({ sessions, jwtSecret, allowedOrigins }) } })`.
  */
@@ -337,7 +376,7 @@ export function socketAuth(options: SocketAuthOptions): SessionAuthenticate<Prin
     throw new TypeError("socketAuth: loadPrincipal must be a function");
   }
   const devCredentials = checkDevCredentials(options.devCredentials);
-  return async (request) => {
+  const authenticate: SessionAuthenticate<Principal> = async (request) => {
     const devUser = devCredentials === undefined ? undefined : devUserOf(request);
     if (devCredentials !== undefined && devUser !== undefined) {
       return await devPrincipal(devCredentials, devUser);
@@ -357,18 +396,9 @@ export function socketAuth(options: SocketAuthOptions): SessionAuthenticate<Prin
       // So `server.access.disconnectUser(userId, { sessionId })` can end this session's sockets.
       recordSocketSession(request.socket, session.id);
     }
-    if (loadPrincipal === undefined) {
-      return { userId: session.userId, kind: "user" };
-    }
-    const principal = await loadPrincipal(session.userId, session);
-    if (principal === null || principal === undefined) {
-      throw refused("The session's user has no principal");
-    }
-    if (principal.userId !== session.userId) {
-      throw new TypeError(
-        "socketAuth: loadPrincipal must return the principal of the session's user",
-      );
-    }
-    return principal;
+    return await principalOfSession(session, loadPrincipal, "socketAuth");
   };
+  // So the HTTP transport hands it the session cookie as auth.token, and the server knows it.
+  markSocketAuth(authenticate, { devCredentials: devCredentials !== undefined });
+  return authenticate;
 }

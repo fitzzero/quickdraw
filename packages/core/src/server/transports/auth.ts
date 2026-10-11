@@ -26,7 +26,10 @@ interface AuthenticateRequestBase {
   /**
    * The credentials. For a socket, its handshake `auth` as the client sent
    * it (`{ token, qd }` from a v5 client). For an HTTP request, `{ token }`
-   * with its session cookie or bearer token, or `{}` when it has neither.
+   * with its bearer token, or `{}` without one; for `socketAuth`'s
+   * `authenticate` alone, the session cookie when the request carries one,
+   * else the bearer token. Every other `authenticate` finds the cookie only
+   * in `sessionCookie`.
    */
   readonly auth: Readonly<Record<string, unknown>>;
   /** The request's headers, or the socket handshake's. */
@@ -44,13 +47,23 @@ export interface HttpAuthenticateRequest extends AuthenticateRequestBase {
   readonly transport: "http";
   readonly req: IncomingMessage;
   /**
-   * Where `auth.token` came from (finding F7.1): `"cookie"`, the session
-   * cookie, which a browser sends with a request any page makes, so an
-   * `authenticate` that accepts it checks the request's `Origin` as
-   * `socketAuth` does; `"bearer"`, an `Authorization: Bearer` header, which
-   * a page sends only on purpose. Absent without a token.
+   * The credential the transport chose (finding F7.1): `"cookie"` when the
+   * request carries the session cookie, which a browser sends with a
+   * request any page makes, so an `authenticate` that accepts it checks the
+   * request's `Origin` as `socketAuth` does; else `"bearer"` for an
+   * `Authorization: Bearer` header, which a page sends only on purpose.
+   * Absent with neither.
    */
   readonly credential?: HttpCredentialSource;
+  /**
+   * The session cookie's value, when the request carries one. It is
+   * ambient (a browser sends it with a request any page makes), so an
+   * `authenticate` that accepts it first checks
+   * `cookieOriginAllowed(request, allowedOrigins)`, then the session store,
+   * on every call (`liveSession`). It is in `auth.token` only for
+   * `socketAuth`'s `authenticate`.
+   */
+  readonly sessionCookie?: string;
 }
 
 /** What `authenticate` is asked about: a socket connecting, or an HTTP call. */
@@ -125,6 +138,29 @@ export function recordSocketSession(socket: object, sessionId: string): void {
 /** The session a socket authenticated with, when its `authenticate` recorded one. */
 export function socketSessionOf(socket: object): string | undefined {
   return SOCKET_SESSIONS.get(socket);
+}
+
+/** What the server knows of an `authenticate` that `socketAuth` made. */
+export interface SocketAuthInfo {
+  /** Whether it was given `devCredentials`, which sign a socket in by a user id alone. */
+  readonly devCredentials: boolean;
+}
+
+const SOCKET_AUTHS = new WeakMap<object, SocketAuthInfo>();
+
+/**
+ * Marks `authenticate` as `socketAuth`'s: the HTTP transport hands only such
+ * an `authenticate` the session cookie as `auth.token`, since it checks the
+ * cookie's `Origin` and the session store; every other gets the cookie as
+ * `request.sessionCookie` alone.
+ */
+export function markSocketAuth(authenticate: object, info: SocketAuthInfo): void {
+  SOCKET_AUTHS.set(authenticate, Object.freeze({ ...info }));
+}
+
+/** What `socketAuth` recorded of `authenticate`, or `undefined` for an `authenticate` it did not make. */
+export function socketAuthOf(authenticate: unknown): SocketAuthInfo | undefined {
+  return typeof authenticate === "function" ? SOCKET_AUTHS.get(authenticate) : undefined;
 }
 
 /**

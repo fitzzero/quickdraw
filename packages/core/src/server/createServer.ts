@@ -35,6 +35,7 @@ import { editsGrants, type AnyService } from "./service";
 import {
   createGrantsSink,
   createPrincipalResolver,
+  socketAuthOf,
   type ServerAuth,
   type ServiceGrants,
 } from "./transports/auth";
@@ -303,12 +304,14 @@ function listenForLeaves<P extends Principal>(
 /** The HTTP transport, mounted on `app` when there is one. */
 function mountRouter<P extends Principal>(
   options: ServerOnlyOptions<P>,
-  base: Parameters<typeof httpRouterSettings>[1],
+  base: Omit<Parameters<typeof httpRouterSettings>[1], "cookieAsToken">,
 ): HttpRouter | undefined {
   if (options.http === false) {
     return undefined;
   }
-  const router = httpRouter(httpRouterSettings(options.http ?? {}, base));
+  // socketAuth's authenticate takes the session cookie as auth.token; any other gets it beside.
+  const cookieAsToken = socketAuthOf(options.auth?.authenticate) !== undefined;
+  const router = httpRouter(httpRouterSettings(options.http ?? {}, { ...base, cookieAsToken }));
   options.app?.use(router);
   return router;
 }

@@ -1,7 +1,8 @@
+import { socketAuth } from "@fitzzero/quickdraw-core/server/auth";
 import express, { type Express } from "express";
-import { verifySession } from "../../auth";
+import { jwtSecret, sessions } from "../../auth";
 import { db } from "../../db";
-import { qd } from "../../quickdraw";
+import { qd, type AppPrincipal } from "../../quickdraw";
 import { healthService } from "./health";
 import { taskService } from "./task";
 
@@ -14,7 +15,15 @@ export const server = qd.createServer({
   services: [taskService, healthService],
   db,
   cors: { origin: ["https://app.example.com"], credentials: true },
-  auth: { authenticate: ({ auth }) => verifySession(auth.token) },
+  // the session cookie from an allowed page, or a bearer token, checked against the store
+  auth: {
+    authenticate: socketAuth({
+      sessions,
+      jwtSecret,
+      allowedOrigins: ["https://app.example.com"],
+      loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "user" }),
+    }),
+  },
   // 4.x clients keep calling `socket.emit("taskService:renameTask", ...)` until they update
   legacyWire: true,
 });
