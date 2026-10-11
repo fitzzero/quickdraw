@@ -33,7 +33,8 @@ export interface InstrumentedOptions {
    * unbounded reads, oversized replies, nested writes) as a `DevWarningError`
    * where it is raised, so the test that caused it fails. A warning raised
    * at start (`tiered-field-in-output`, `resolver-without-reads`,
-   * `untracked-access-model`) fails the app's start. Warnings outside its
+   * `untracked-access-model`, `channel-without-requires`) fails the app's
+   * start. Warnings outside its
    * calls, such as an ambient write while seeding, are logged; `close()`
    * ends it. Default `false`: warnings are logged once.
    */

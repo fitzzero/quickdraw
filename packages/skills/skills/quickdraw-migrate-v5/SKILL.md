@@ -97,7 +97,7 @@ guide's sections as the report sends you to them.
    `QuickdrawError(code, message)` where the caller should see the message),
    channels (each `[channel]` marker needs a `requires`, often a room a
    new joining method puts the socket in: 4.x channels took any signed-in
-   socket's message, and 5.0 warns `channel-without-requires`), the server
+   socket's message, and 5.1 warns `channel-without-requires`), the server
    set-up (`qd.createServer`, with `legacyWire: true`
    while 4.x clients remain, or `legacyWire: { aliases: { old: "new" } }`
    when you renamed a service they still call).

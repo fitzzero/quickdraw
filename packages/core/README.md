@@ -2281,7 +2281,10 @@ export const projectService = qd.defineService(project, {
   role (`change.after === null`): `removeFromBoard` takes their sockets out
   of the project's board on every node. Under `anyOf` a user who still has
   the other list is taken out too, and joins again on their next connection
-  (`useJoin`).
+  (`useJoin`). `onChange` runs inside the change's transaction, before it
+  commits: a join that runs before the commit (a check that still sees the
+  old list) puts the user back until they disconnect, and a change whose
+  commit fails has still taken them out until their next connection.
 
 ### Admin kit
 
@@ -2679,12 +2682,13 @@ export function TaskRoom({
   when any signed-in user may send it, say so on the service, `channels: {
 ping: { access: "authenticated", handler } }`, which delivers as before
   and silences the warning.
-- Presence: `isOnline`, `lastSeen` (now while online, else when the user's
-  last socket on this process disconnected), `count` and `users` (each user
-  once, anonymous sockets left out; app rooms only) come from this process's
+- Presence: `isOnline` and `lastSeen` (now while online, else when the
+  user's last socket on this process disconnected) come from this process's
+  sockets, whatever rooms they are in; `count` and `users` (each user once,
+  anonymous sockets left out; app rooms only) come from this process's
   records of the rooms `ctx.rooms.join` joined (a socket a raw
-  `socket.join` put in a room is not counted), and from every node's
-  sockets (`fetchSockets`) behind a Redis adapter.
+  `socket.join` put in a room is not counted). Behind a Redis adapter each
+  also asks every node's sockets (`fetchSockets`).
   `ctx.rooms.join(room)` and `leave` put the calling socket in an app room
   (calls without a socket get `false`; names starting with `qd:` or `user:`
   are refused with `VALIDATION`, and so are names with the shape of a

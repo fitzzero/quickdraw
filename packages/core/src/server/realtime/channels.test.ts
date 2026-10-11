@@ -370,7 +370,9 @@ describe("a channel without requires (RT-3)", () => {
   const openContract = defineContract("openService", {
     channels: {
       shout: { payload: n },
+      wrapped: { payload: n },
       chat: { payload: n },
+      staff: { payload: n },
       fixed: { payload: n, requires: { room: "lobby" } },
     },
   });
@@ -378,7 +380,10 @@ describe("a channel without requires (RT-3)", () => {
     methods: {},
     channels: {
       shout: () => undefined,
+      // { handler } alone declares nothing either.
+      wrapped: { handler: () => undefined },
       chat: { access: "authenticated", handler: () => undefined },
+      staff: { access: { service: "Read" }, handler: () => undefined },
       fixed: () => undefined,
     },
   });
@@ -390,6 +395,7 @@ describe("a channel without requires (RT-3)", () => {
     // The cluster projects boot two dispatchers: each warns once.
     expect([...new Set(log.warnings)]).toEqual([
       expect.stringContaining("[quickdraw:channel-without-requires] openService.shout:"),
+      expect.stringContaining("[quickdraw:channel-without-requires] openService.wrapped:"),
     ]);
   });
 

@@ -36,9 +36,14 @@ export interface Presence {
    * the 100,000 users seen last).
    */
   lastSeen(userId: string): Promise<number | null>;
-  /** How many users have a socket in `room`. Anonymous sockets do not count. */
+  /**
+   * How many users have a socket in app room `room` that `ctx.rooms.join`
+   * put there (a raw `socket.join` does not count on this process).
+   * Anonymous sockets do not count. A framework room (`qd:`, `user:`) or a
+   * name with the shape of a socket id is `VALIDATION`.
+   */
   count(room: string): Promise<number>;
-  /** The ids of the users with a socket in `room`, each once. */
+  /** The ids of the users `count` counts in `room`, each once. */
   users(room: string): Promise<string[]>;
 }
 

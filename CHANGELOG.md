@@ -258,8 +258,10 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
   Global streams keep both forms.
 - **Room names with the shape of a socket id are refused.** An app room
   name of exactly 20 letters, digits, `_` or `-` (a Firestore-style id,
-  say) is `VALIDATION` in `ctx.rooms.join`, `rooms.size`, `rooms.leave`
-  and presence, and refused as a literal in a contract: give it a prefix.
+  and plain names such as `general-announcement` or `tournament_finals_24`
+  too) is `VALIDATION` in `ctx.rooms.join`, `rooms.size`, `rooms.leave`
+  and presence, and refused as a literal in a contract: check literal room
+  names, and give such a name a prefix.
 - **`rooms.emit` refuses the framework's rooms.** `emit("user:…")` and
   `emit("qd:…")` are `VALIDATION`; send to a user with `emitToUser`.
 - **Presence counts only rooms joined through `ctx.rooms.join`.** A socket
@@ -473,11 +475,12 @@ sessionId, expiresAt)` does the same for an app's own `authenticate`.
 - **A scoped stream's room follows its scope (RT-4).** A name or prefix
   room let a socket in `world:1` read scope `2`; `defineContract` refuses
   both on a scoped stream.
-- **No app room reaches one socket, and `rooms.emit` no framework room
-  (RT-I1).** `ctx.rooms.join(<socket id>)` joined another socket's own
-  room, presence answered with its user, `rooms.size` counted it, and
-  `rooms.emit("user:<id>")` reached any user. Those names are refused, and
-  presence reads only the rooms `ctx.rooms.join` joined.
+- **No app room joins a socket's own room, and `rooms.emit` sends to no
+  framework room (RT-I1).** `ctx.rooms.join(<socket id>)` joined another
+  socket's own room, presence answered with its user, `rooms.size` counted
+  it, and `rooms.emit("user:<id>")` reached any user. Those names are
+  refused (`emit` still sends to a name of a socket id's shape, which grants
+  nothing), and presence reads only the rooms `ctx.rooms.join` joined.
 - **Service names split rooms one way (LIVE-3, COLL-6).** A `:` or `@` in
   a service name let two services share an entity, collection or stream
   room name, which authorizes `qd:col:items` and keys the resume buffers.

@@ -304,8 +304,10 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   game), `await ctx.rooms.leave(room, { userId })` (or `qd.rooms.leave`)
   takes all their sockets out on every node, before anything they must not
   hear is sent; a sharing kit's `onChange` does it for a user a change left
-  with no entry or role (`change.after === null`). 4.x's "emit to the user
-  instead of the room" workaround is not needed.
+  with no entry or role (`change.after === null`), inside the change's
+  transaction (a join racing the commit can put them back until they
+  disconnect). 4.x's "emit to the user instead of the room" workaround is
+  not needed.
 - React to a socket leaving with the service's own `onRoomLeave`
   (`defineService(game, { onRoomLeave })`, beside `methods`), never with
   `socket.on("disconnect")` or a hook each server root must remember:
