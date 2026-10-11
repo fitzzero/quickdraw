@@ -5,8 +5,8 @@
 //   1. look up the method                       NOT_FOUND
 //   2. take a query slot on the connection      RATE_LIMITED, CANCELLED
 //   3. validate the input                       VALIDATION
-//   4. check the principal's kind, then         FORBIDDEN
-//      authorize                                UNAUTHENTICATED, FORBIDDEN
+//   4. check the principal's kind and claims,   UNAUTHENTICATED, FORBIDDEN
+//      then authorize                           UNAUTHENTICATED, FORBIDDEN
 //   5. answer "not modified" when the caller's version is current
 //   6. join an identical shared run in flight
 //   7. run the handler in a unit of work        TIMEOUT, CANCELLED
@@ -21,7 +21,7 @@
 // ignores its signal) runs on unanswered. A query keeps its slot until that
 // work has settled, so a connection never runs more of it than its cap.
 
-import { checkKind } from "../access/kinds";
+import { checkCaller } from "../access/claims";
 import { createConcurrencyLimiter, type ConcurrencyLimiter, type QuerySlot } from "./concurrency";
 import { throwIfCancelled, toQuickdrawError } from "./errors";
 import { execute, forCaller, type ExecuteCall } from "./execute";
@@ -95,10 +95,11 @@ async function proceed(
   const { request } = call;
   const label = `${target.service.name}.${target.method.name}`;
   const input = await stage(call, parseInput(target.method.input, request.input, label));
-  // The method's `kinds` (`../access/kinds.ts`): outside the access engine,
-  // so before any Admin bypass, and before the app's context runs. An
-  // anonymous caller is left to the form.
-  checkKind(target.method.kinds, request.principal, label);
+  // The method's `kinds` (`../access/kinds.ts`), then its `claims`
+  // (`../access/claims.ts`): outside the access engine, so before any Admin
+  // bypass, and before the app's context runs. An anonymous caller is left
+  // to the form by `kinds`, and refused by `claims`.
+  checkCaller(target.method, request.principal, input, label);
   const ctx = contextFor(settings, request, call.requestId, target, call.signal, pipeline.dispatch);
   const access = {
     service: target.service,

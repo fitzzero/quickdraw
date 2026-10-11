@@ -556,6 +556,8 @@ describe("not modified", () => {
       methods: {
         latestIn: {
           access: { scope: "Read", of: projectContract, id: "id" },
+          // id names a project, which the scope form checks, not a task
+          rowless: true,
           handler: ({ input, db }) =>
             db.task.findFirst({ where: { projectId: input.id }, orderBy: { createdAt: "desc" } }),
         },

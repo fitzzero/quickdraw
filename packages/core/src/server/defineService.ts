@@ -17,7 +17,10 @@
 //   `share`, and a method with `custom` access cannot `share: "all"`;
 // - `kinds`, on a method and on the service, names kinds of the app's
 //   principal (`PrincipalKindOf`); that each narrows the list above it, and
-//   that a `"public"` method declares none, is checked at run time.
+//   that a `"public"` method declares none, is checked at run time;
+// - `claims`, on a method, is a synchronous check of the app principal's
+//   `claims` and the parsed input that returns a boolean; that a `"public"`
+//   method declares none is checked at run time.
 //
 // Each method's access form is inferred into the type parameter `A`, one
 // member per method, and checked by that method's `access` (`AccessValue`)
@@ -194,6 +197,22 @@ export type MethodImplementation<
    */
   readonly kinds?: readonly PrincipalKindOf<T>[];
   /**
+   * A requirement on the caller's verified claims (`principal.claims`, a
+   * token's `scope`), beside `access`: the call passes only when it returns
+   * `true`. It adds to the form, so `{ entry: "Moderate" }` with `claims`
+   * needs Moderate on the row and the claims. It runs right after `kinds`,
+   * outside the access engine, so no grant passes it, a service-wide
+   * `Admin` grant included. Without a principal the call is
+   * `UNAUTHENTICATED`; when it returns anything but `true`, `FORBIDDEN`. It
+   * is synchronous, and a `"public"` method takes none. Never write a check
+   * on claims as `custom`: that form replaces the row check, and an Admin
+   * grant skips it.
+   *
+   * @example
+   * claims: (claims) => claims?.scope === "triage",
+   */
+  readonly claims?: (claims: PrincipalOf<T>["claims"], input: ParsedInputOf<C, M>) => boolean;
+  /**
    * Runs the method. For a projection output it returns the database row
    * (or rows, or `null`), which the framework projects: only the
    * projection's keys are sent, dates as ISO strings.
@@ -206,11 +225,15 @@ export type MethodImplementation<
   /**
    * Says the access form is this method's whole check on purpose. On a
    * service with an access policy, `defineService` refuses a method whose
-   * input has `id` while its access is `"public"`, `"authenticated"` or `{
-   * service: L }` below `Admin`, since any caller the form admits could then
-   * reach any row by its id: give it `{ entry: L }` so the policy decides,
-   * or `rowless: true` when every such caller may reach any row (public
-   * profiles, lookups by an id that tells nothing).
+   * input has `id` while its access checks some other row or none:
+   * `"public"`, `"authenticated"`, `{ service: L }` below `Admin`,
+   * `custom(fn)`, `{ scope, of, id }`, or `{ entry, id }` naming another
+   * key. Any caller the form admits could then reach any row by its id:
+   * give it `{ entry: L }` so the policy decides (with `claims` beside it
+   * for a check on the caller's claims), or `rowless: true` when every such
+   * caller may reach any row (public profiles, lookups by an id that tells
+   * nothing), or when `id` names a row the method creates (an id the client
+   * made).
    */
   readonly rowless?: true;
 } & (KindOf<C, M> extends "query" ? QueryOptions<T, C, M, A> : MutationOptions);

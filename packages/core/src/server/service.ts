@@ -6,7 +6,7 @@ import type { AnyContract } from "../contract/defineContract";
 import type { MethodKind } from "../contract/methods";
 import type { StandardSchemaV1 } from "../contract/standardSchema";
 import type { Version } from "../protocol/envelope";
-import type { AccessForm, AnyAccessPolicy, WatchAccess } from "./access/types";
+import type { AccessForm, AnyAccessPolicy, ClaimsCheck, WatchAccess } from "./access/types";
 import type { ServiceCollection } from "./collections/define";
 import type { AnyContext, ContextExtender } from "./context";
 import type { ProjectedOutput, Projection } from "./emit/projection";
@@ -77,6 +77,14 @@ export interface ServiceMethod {
    * caller is left to the form.
    */
   readonly kinds: readonly string[] | undefined;
+  /**
+   * The method's requirement on the caller's claims (RFC 0003 section 4.1,
+   * `access/claims.ts`), checked right after `kinds`, outside the access
+   * engine: `UNAUTHENTICATED` without a principal, `FORBIDDEN` unless it
+   * returns `true`. It adds to the access form, and no grant passes it, a
+   * service-wide `Admin` grant included. `undefined` when not declared.
+   */
+  readonly claims: ClaimsCheck | undefined;
   readonly handler: AnyHandler;
   readonly share: ShareMode | undefined;
   /** How long a shared result is reused after its run, in milliseconds. */

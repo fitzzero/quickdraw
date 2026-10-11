@@ -140,14 +140,19 @@ export const labelService = qd.defineService(labelContract, {
   other model the handlers write in `writes`; return rows for projection
   outputs. Throw `QuickdrawError` with a code for expected failures.
 - A method whose input has `id` names a row: give it `{ entry: L }`.
-  `defineService` refuses `"public"`, `"authenticated"` or `{ service: L }`
-  below `Admin` there unless the method says `rowless: true` (every caller
-  the form admits may reach any row, on purpose).
+  `defineService` refuses `"public"`, `"authenticated"`, `{ service: L }`
+  below `Admin`, `custom(fn)`, `{ scope, of, id }` and `{ entry, id }`
+  naming another key there unless the method says `rowless: true` (every
+  caller the form admits may reach any row, on purpose).
 - A method or service that only some kinds of principal may call says so
   with `kinds` beside `access` (`kinds: ["user"]`), within the app's
   `initQuickdraw({ kinds })`: never with a check of `ctx.principal.kind` in
   the handler or in a `custom` form. Other kinds get `FORBIDDEN`, whatever
   their grants (see quickdraw-access.md).
+- A check on the caller's claims (a token's `scope`) is `claims` beside
+  `access` (`claims: (claims) => claims?.scope === "triage"`): it adds to
+  the form, and no grant passes it. Never write it as `custom`, which
+  replaces the row check.
 - Reach for a kit before hand-writing CRUD, search, sharing or admin; lint's
   `prefer-kit` warns on a hand-written `get`, `list`, `create` or
   `getLabel`-style method in a service that uses no kit.

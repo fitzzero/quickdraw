@@ -679,7 +679,7 @@ not exist or a malformed access list denies.
 <!-- example: apps/api/src/services/examples/access.ts#access -->
 
 ```ts
-import { anyOf, crud, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
+import { anyOf, crud, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
 
 export const projectService = qd.defineService(project, {
   // the Prisma model the rows live in
@@ -728,10 +728,9 @@ export const taskService = qd.defineService(task, {
         db.task.update({ where: { id: input.id }, data: { assigneeId: ctx.principal.userId } }),
     },
     triage: {
-      // a check on a token's claims stays a custom form
-      access: custom(
-        (ctx, input) => ctx.principal.claims?.scope === "triage" && input.status !== "archived",
-      ),
+      // Moderate on the task's project, from a token that may triage: claims add to the form
+      access: { entry: "Moderate" },
+      claims: (claims, input) => claims?.scope === "triage" && input.status !== "archived",
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { status: input.status } }),
     },
@@ -745,7 +744,9 @@ export const taskService = qd.defineService(task, {
   `{ scope: L, of, id }` (the level on a row of another service) and
   `custom(fn)`. Without a principal every form but `"public"` answers
   `UNAUTHENTICATED`; a principal that fails gets `FORBIDDEN`. The levels,
-  lowest first, are `Public`, `Read`, `Moderate` and `Admin`.
+  lowest first, are `Public`, `Read`, `Moderate` and `Admin`. A `custom`
+  form replaces the row check, and a service-wide `Admin` grant skips it: a
+  check on the caller's claims is `claims` (below).
 - `kinds`, beside `access`, says which kinds of principal
   (`principal.kind`) may call: `initQuickdraw({ kinds: ["user", "agent"] })`
   for every service the app defines, `defineService(contract, { kinds })`
@@ -758,23 +759,38 @@ export const taskService = qd.defineService(task, {
   `"public"` method takes no `kinds` of its own: a refused caller would call
   it signed out. A service's list also holds for its entity, collection,
   topic and stream subscriptions, and its channels drop the messages of
-  other kinds. A check on a claim, such as a token's `scope`, stays a
-  `custom` form (`triage` above).
+  other kinds.
+- `claims: (claims, input) => boolean`, beside `access` on a method, is a
+  requirement on the caller's verified claims (`principal.claims`, a
+  token's `scope`; `triage` above). It adds to the form, so `triage` needs
+  Moderate on the task's project and a triage token. It runs right after
+  `kinds`, outside the access engine, so no grant passes it, a service-wide
+  `Admin` grant included. Without a principal the call is
+  `UNAUTHENTICATED`; when it returns anything but `true`, `FORBIDDEN`. It is
+  synchronous, and a `"public"` method takes none. A token narrowed by
+  `claims` is narrowed only on the methods that declare it; elsewhere it
+  acts with its user's grants (`kinds` keeps a kind of token out).
 - On a service with a policy, a method whose input has `id` under a form
-  that checks no row (`"public"`, `"authenticated"`, `{ service: L }` below
-  `Admin`) would let anyone that form admits reach any row by its id, so
-  `defineService` refuses it, naming the method and the two ways out: a form
-  the policy decides (`{ entry: L }`, or `{ service: L, entry: L }` to keep
-  the grant), or `rowless: true` on the method when every such caller may
-  reach any row on purpose (the `title` method above; public profiles,
-  lookups by an id that tells nothing). A kit's methods take it as
+  that asks the policy nothing about the row that id names would let anyone
+  that form admits reach any row by its id, so `defineService` refuses it,
+  naming the method and the ways out. Those forms are the ones that check
+  no row (`"public"`, `"authenticated"`, `{ service: L }` below `Admin`),
+  `custom(fn)`, `{ scope, of, id }` (a row of another service) and
+  `{ entry, id }` naming another key. The ways out: a form the policy
+  decides (`{ entry: L }`, or `{ service: L, entry: L }` to keep the grant,
+  with `claims` beside it for a check on the caller's claims), or
+  `rowless: true` on the method when every such caller may reach any row on
+  purpose (the `title` method above; public profiles, lookups by an id that
+  tells nothing), or when `id` names a row the method creates (an id the
+  client made, under a `scope` form). A kit's methods take it as
   `rowless: ["get"]` in the kit's options. The input's keys come from its
   JSON Schema: an `id` in any branch of a union counts, and so does one
   beside a value JSON Schema cannot write (a `Date`, a `Set`). Not checked:
   an input without JSON Schema (Zod 3) or whose JSON Schema names no keys (a
   `todoSchema` without `keys`), one that is no object (a bare string
-  that is the id itself) and a row named by another key (`ids`, `taskId`, a
-  nested `where.id`).
+  that is the id itself), a row named by another key (`ids`, `taskId`, a
+  nested `where.id`) under a form that checks the row `id` names, and an
+  `entry` form whose `id` is a function, which names its row in code.
 - A service-wide `Admin` grant passes every check on its service
   (`adminBypass: false` turns that off). A grant below `Admin` counts only
   where the form names `service`: a `Read` grant does not read every row.

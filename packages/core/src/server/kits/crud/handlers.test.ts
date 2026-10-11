@@ -8,7 +8,7 @@ import { z } from "zod";
 import { crud as contractCrud, defineContract, mutation, QuickdrawError } from "../../../index";
 import { projectContract, qd } from "../../emit/__tests__/live";
 import { describeTools } from "../../mcp/index";
-import { inherit, crud } from "../../index";
+import { custom, inherit, crud } from "../../index";
 import { defineTaskService, taskContract, taskEntity } from "./__tests__/fixture";
 
 const notes = defineContract("noteService", {
@@ -177,6 +177,7 @@ describe("the rowless check on the kit's methods", () => {
     );
     expect(define("public")).toThrow('method "get" takes a row id');
     expect(define({ service: "Read" })).toThrow('method "get" takes a row id');
+    expect(define(custom(() => true))).toThrow('rowless: ["get"]');
   });
 
   it("defines get under such a form when rowless names it, and the methods that check their row whatever the form", () => {

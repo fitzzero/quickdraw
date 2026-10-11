@@ -9,6 +9,7 @@
 
 import { isAccessLevel } from "../contract/access";
 import type { AnyContract } from "../contract/defineContract";
+import { claimsOption, type ClaimsCheck } from "./access/claims";
 import { narrowKinds } from "./access/kinds";
 import { isAccessPolicy, type AnyAccessPolicy } from "./access/policy";
 import type { WatchAccess } from "./access/types";
@@ -148,6 +149,18 @@ export function checkMethodKinds(
   return narrowKinds(entry.kinds, { kinds: data.kinds, by: "its service" }, (message) =>
     fail(`${owner}: ${message}`),
   );
+}
+
+/**
+ * A method's `claims` (`access/claims.ts`): a function, on a method whose
+ * form needs a principal; `undefined` when it declares none.
+ */
+export function checkMethodClaims(
+  owner: string,
+  entry: UnknownRecord,
+  fail: Fail,
+): ClaimsCheck | undefined {
+  return claimsOption(owner, entry, fail);
 }
 
 /**

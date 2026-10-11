@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Behavior changes for 5.1 apps
+
+- **More id-taking methods are refused when they are defined.** On a
+  service with an access policy, `defineService` now throws at startup for
+  a method whose input has `id` under `custom(...)`, `{ scope, of, id }` or
+  `{ entry, id: "<another key>" }`, unless it says `rowless: true` (a kit
+  takes `rowless: [names]`). The ways out: `{ entry: L }` (with `claims`
+  beside it for a check on the caller's claims); `rowless: true` when every
+  caller the form admits may reach any row; and `rowless: true` on a
+  hand-written create whose optional `id` is one the client made, under a
+  `scope` form. The read/write kit's `create`, `update`, `delete` and
+  `reorder` stay exempt. The codemod now writes `rowless: true` (marked)
+  where a 4.x `resolveEntryId` named another key of a payload that also has
+  `id`.
+- A method takes a new option, `claims`, and `ServiceMethod` gains
+  `claims`.
+
+### Security
+
+- **A check on a token's claims adds to the row check (ACCESS-1,
+  ACCESS-4).** The README's, MIGRATION's and the sample app's `triage`
+  example checked a token's `scope` in a `custom` form on a method that
+  updates `input.id`. A `custom` form replaces the row check, so any token
+  holding that claim could write tasks in every tenant, and a missing id was
+  a `NOT_FOUND` existence oracle; a service-wide `Admin` grant skipped the
+  check, so an Admin user's narrowed token was not narrowed. A method now
+  takes `claims: (claims, input) => boolean` beside `access`: it adds to
+  the form, runs right after `kinds` outside the access engine, so no app
+  engine or grant skips it, and answers `UNAUTHENTICATED` without a
+  principal and `FORBIDDEN` unless it returns `true`. The example is now
+  `{ entry: "Moderate" }` plus `claims`.
+- **An id-taking method can no longer pass a check on another row
+  (ACCESS-1, ACCESS-5).** The pack H refusal of id-taking methods under a
+  form that checks no row exempted `custom` forms, and missed
+  `{ scope, of, id }` forms and `{ entry, id }` forms naming another key on
+  inputs that carry `id`: each lets everyone it admits reach any row by its
+  id. `defineService` now refuses them too, each with a message naming the
+  row it checks and the ways out.
+
 ### Codemod
 
 - **An inline `import("./x.js")` type in a 4.x method map now resolves from

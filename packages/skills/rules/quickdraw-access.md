@@ -18,15 +18,15 @@ unknown level or a malformed access list denies.
 
 Every method's `{ access, handler }` names one form:
 
-| Form                              | Passes when                                                                                 |
-| --------------------------------- | ------------------------------------------------------------------------------------------- |
-| `"public"`                        | always, with or without a principal                                                         |
-| `"authenticated"`                 | a principal exists                                                                          |
-| `{ service: L }`                  | the principal's service-wide grant is at least `L`                                          |
-| `{ entry: L, id? }`               | the policy gives the principal at least `L` on the row (`id` defaults to `input.id`)        |
-| `{ service: L1, entry: L2, id? }` | either of the two                                                                           |
-| `{ scope: L, of: contract, id }`  | at least `L` on a row of another service, whose id is `input[id]` (create and list methods) |
-| `custom((ctx, input) => boolean)` | the function resolves `true` (a principal is required first)                                |
+| Form                              | Passes when                                                                                                                        |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `"public"`                        | always, with or without a principal                                                                                                |
+| `"authenticated"`                 | a principal exists                                                                                                                 |
+| `{ service: L }`                  | the principal's service-wide grant is at least `L`                                                                                 |
+| `{ entry: L, id? }`               | the policy gives the principal at least `L` on the row (`id` defaults to `input.id`)                                               |
+| `{ service: L1, entry: L2, id? }` | either of the two                                                                                                                  |
+| `{ scope: L, of: contract, id }`  | at least `L` on a row of another service, whose id is `input[id]` (create and list methods)                                        |
+| `custom((ctx, input) => boolean)` | the function resolves `true` (a principal is required first); it replaces the row check, and a service-wide `Admin` grant skips it |
 
 - Levels are `"Read" < "Moderate" < "Admin"` (`AccessLevel` also has
   `"Public"`). `id` is an input key (type-checked) or a function of the input.
@@ -73,30 +73,62 @@ export const tokenService = qd.defineService(token, {
 throw ...`; `no-inline-auth-guard` reports it) or in a `custom` form:
   `kinds` combines with any form (`{ entry: "Moderate" }` and
   `kinds: ["user"]`), where `custom` would have to check the row by hand.
-  A check on a claim, such as a token's `scope`, stays `custom`.
+  A check on a claim, such as a token's `scope`, is `claims`, never
+  `custom` (below).
+
+## A requirement on the caller's claims
+
+A check on the caller's verified claims (`principal.claims`, a token's
+`scope`) is `claims`, beside `access` on the method:
+
+```ts
+triage: {
+  // Moderate on the task's project, from a token that may triage: claims add to the form
+  access: { entry: "Moderate" },
+  claims: (claims, input) => claims?.scope === "triage" && input.status !== "archived",
+  handler: ({ input, db }) =>
+    db.task.update({ where: { id: input.id }, data: { status: input.status } }),
+},
+```
+
+- It adds to the form: `triage` needs Moderate on the task's project and a
+  triage token. Never write it as `custom`: that form replaces the row
+  check, so any token holding the claim would write every tenant's rows,
+  and a service-wide `Admin` grant skips it.
+- It runs right after `kinds`, outside the access engine, so no grant passes
+  it, a service-wide `Admin` grant included. Without a principal the call
+  is `UNAUTHENTICATED`; when it returns anything but `true`, `FORBIDDEN`.
+- It is synchronous, and a `"public"` method takes none.
+- A token narrowed by `claims` is narrowed only on the methods that declare
+  it; elsewhere it acts with its user's grants (`kinds` keeps a kind of
+  token out).
 
 ## A method that takes a row id
 
 On a service with a policy, a method whose input has `id` reads or writes
-the row that id names. Under a form that checks no row (`"public"`,
-`"authenticated"`, `{ service: L }` below `Admin`), anyone the form admits
-reaches any row by its id, so `defineService` refuses it when the service is
-defined. Fix the form, not the error:
+the row that id names. Under a form that asks the policy nothing about that
+row, anyone the form admits reaches any row by its id, so `defineService`
+refuses it when the service is defined. Those forms are the ones that check
+no row (`"public"`, `"authenticated"`, `{ service: L }` below `Admin`),
+`custom(fn)`, `{ scope, of, id }` (a row of another service) and
+`{ entry, id }` naming another key. Fix the form, not the error:
 
 - Give it `{ entry: L }` (`"Read"` for a read, `"Moderate"` for a change),
   or `{ service: L, entry: L }` to keep a service grant: the policy decides.
 - Only when every caller the form admits may reach any row on purpose (a
-  public profile, a lookup by an id that tells nothing) say so with
-  `rowless: true` on the method, or `rowless: ["get"]` in a kit's options
-  (`crud.handlers`, `admin.handlers`, `sharing.handlers`).
+  public profile, a lookup by an id that tells nothing), or when `id` names
+  a row the method creates (an id the client made, under a `scope` form),
+  say so with `rowless: true` on the method, or `rowless: ["get"]` in a
+  kit's options (`crud.handlers`, `admin.handlers`, `sharing.handlers`).
 - The read/write kit's `update`, `delete`, `reorder` and `create` check the
   row themselves and need neither.
 - The check reads the input's keys from its JSON Schema: an `id` in any
   branch of a union counts, as does one beside a `Date` or a `Set`. An input
   without JSON Schema (a Zod 3 schema) or one that names no keys (a
-  `todoSchema` without `keys`), a bare string that is the id itself
-  and a row named by another key (`taskId`, `ids`) are not checked, so the
-  form is all yours there (`{ entry: L, id: "taskId" }` names another key).
+  `todoSchema` without `keys`), a bare string that is the id itself, a row
+  named by another key (`taskId`, `ids`) on an input without `id`, and an
+  `entry` form whose `id` is a function are not checked, so the form is all
+  yours there (`{ entry: L, id: "taskId" }` names another key).
 
 ## Service-wide grants
 

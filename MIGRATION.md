@@ -241,7 +241,11 @@ that reason: a 4.x `"Public"` method whose payload has `id` gets
 `todoSchema<{ id: string }>({ keys: ["id"] })` and `rowless: true`, so it
 boots, and dropping `rowless: true` before the schema is real gets the
 refusal at once instead of after the move to Zod 4. Lint's
-`no-todo-schema` says which placeholder inputs still have no keys.
+`no-todo-schema` says which placeholder inputs still have no keys. Since
+5.1 the refusal also covers `custom`, `{ scope, of, id }` and `{ entry, id }`
+forms naming another key, which check some other row than the one `id`
+names; the codemod writes `rowless: true` (marked) where a 4.x
+`resolveEntryId` named another key of a payload that also has `id`.
 
 `jsonAcl` keeps 4.x's semantics but one: a user with several entries in a
 row's list gets the highest of their levels, where 4.x's `checkEntryACL`
@@ -757,7 +761,7 @@ protected override checkAccess(
 <!-- example: apps/api/src/services/examples/access.ts#access -->
 
 ```ts
-import { anyOf, crud, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
+import { anyOf, crud, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
 
 export const projectService = qd.defineService(project, {
   // the Prisma model the rows live in
@@ -806,10 +810,9 @@ export const taskService = qd.defineService(task, {
         db.task.update({ where: { id: input.id }, data: { assigneeId: ctx.principal.userId } }),
     },
     triage: {
-      // a check on a token's claims stays a custom form
-      access: custom(
-        (ctx, input) => ctx.principal.claims?.scope === "triage" && input.status !== "archived",
-      ),
+      // Moderate on the task's project, from a token that may triage: claims add to the form
+      access: { entry: "Moderate" },
+      claims: (claims, input) => claims?.scope === "triage" && input.status !== "archived",
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { status: input.status } }),
     },
@@ -830,9 +833,10 @@ passes the check, a service-wide `Admin` grant included.
 `initQuickdraw({ kinds })` sets the kinds every service admits,
 `defineService(contract, { kinds })` narrows them for one service, and a
 method's `kinds` narrows them again. A service's list also holds for its
-subscriptions and channels. A check on a claim, such as a token's `scope`,
-stays a `custom` form (`triage` above). The `no-inline-auth-guard` lint rule
-reports a kind check that throws in a handler.
+subscriptions and channels. A check on a token's claims (a `scope`) becomes
+`claims` beside `access` (`triage` above): it adds to the form, and no grant
+passes it. The `no-inline-auth-guard` lint rule reports a kind check that
+throws in a handler.
 
 ### `defineCollection` becomes contract `collections`
 

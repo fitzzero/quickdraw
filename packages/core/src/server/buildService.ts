@@ -23,6 +23,7 @@ import {
 } from "./service";
 import {
   checkAppKinds,
+  checkMethodClaims,
   checkMethodKinds,
   checkServiceData,
   checkWatchedModels,
@@ -59,6 +60,7 @@ const METHOD_KEYS = new Set([
   "version",
   "rowless",
   "kinds",
+  "claims",
 ]);
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -161,6 +163,7 @@ function checkMethod(
   }
   checkQueryOptions(owner, entry, def.kind, fail);
   const kinds = checkMethodKinds(owner, entry, data, fail);
+  const claims = checkMethodClaims(owner, entry, fail);
   const projection = projectedOutput(def.output, projections);
   return Object.freeze({
     name,
@@ -171,6 +174,7 @@ function checkMethod(
     schemaOutput: projection === undefined ? schemaOutputOf(def.output) : undefined,
     access: entry.access as ServiceMethod["access"],
     kinds,
+    claims,
     handler: entry.handler as AnyHandler,
     share: entry.share as ServiceMethod["share"],
     ttlMs: entry.ttlMs as number | undefined,
