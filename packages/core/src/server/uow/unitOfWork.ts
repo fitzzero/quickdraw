@@ -35,7 +35,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { consoleLogger, type Logger } from "../../contract/logger";
+import { consoleLogger, errorText, type Logger } from "../../contract/logger";
 import type { RunContext, RunOptions, TouchOptions } from "../context";
 import { createDevWarnings, isQuiet, type DevWarning, type DevWarnings } from "../devWarnings";
 import { flushWrites } from "./flush";
@@ -231,7 +231,7 @@ function notify(state: TrackerState, writes: readonly WriteRecord[]): void {
       } catch (error) {
         state.logger.error("An onWrite listener threw", {
           category: "quickdraw.writes",
-          error: error instanceof Error ? error.message : String(error),
+          error: errorText(error),
         });
       }
     }

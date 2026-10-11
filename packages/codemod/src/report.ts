@@ -36,7 +36,7 @@ const SECTIONS: readonly Section[] = [
     title: "Access",
     categories: ["access"],
     intro:
-      'The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 4.x\'s `hasEntryACL` did, but for a user listed twice in a row\'s list (marked). "Read" without a row id was open to every signed-in user; decide whether that was meant. A method whose input has `id` under a form that checks no row ("public", say) carries `rowless: true` (marked): 5.0 refuses to define that shape on a service with an access policy without it, and it keeps the 4.x callers.',
+      'The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 4.x\'s `hasEntryACL` did, but for a user listed twice in a row\'s list (marked). "Read" without a row id was open to every signed-in user; decide whether that was meant. A method whose input has `id` under a form that checks no row ("public", say), or that checks the row another key names (a 4.x `resolveEntryId` on another key of a payload that also has `id`), carries `rowless: true` (marked): 5.x refuses to define those shapes on a service with an access policy without it, and it keeps the 4.x callers.',
   },
   {
     title: "Access overrides to turn into a policy",

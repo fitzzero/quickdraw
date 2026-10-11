@@ -116,7 +116,7 @@ export default {
       keylessInput:
         "`todoSchema()` is a placeholder left by the 4.x migration: it validates nothing, so any value passes as its type. " +
         "Without `keys`, it also hides this input's keys from defineService's id-reach (rowless) check, " +
-        "which refuses an `id` input under an access form that checks no row; give it keys " +
+        "which refuses an `id` input under an access form that asks the policy nothing about the row it names; give it keys " +
         '(`todoSchema<T>({ keys: ["id", ...] })`) until a real schema (Zod 4.2 or later) replaces it.',
     },
     schema: [],

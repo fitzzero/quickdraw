@@ -22,6 +22,27 @@
 // |                                | ones it removed           |                |
 // | `via` entry created or touched | the same (its links       | its links now  |
 // |                                | before this flush)        | (read)         |
+// | `via` entry deleted, its links | the links its delete read | none           |
+// | read first (`links`)           | (those that counted)      |                |
+// | `via` junction row created     | the deleted row's link,   | its link, if   |
+// | over one the unit deleted      | if it counted             | it counts      |
+// | `via` junction role update     | the old link, if its role | the new link,  |
+// | (a `members` table)            | counted                   | if it counts   |
+// | `via` junction row written     | its link read now, if it  | its link read  |
+// | without its values (a touch)   | does not count now        | now, if it     |
+// |                                | (or the old values' link) | counts         |
+//
+// A `via` scope over the item service's own `members` table counts only the
+// links whose role gives at least the collection's `access` (`define.ts`):
+// a junction row below it links nothing, and every link read asks for such
+// a role. A write of a role column that changes whether the row's link
+// counts is a move like one of the entry or scope columns; a change between
+// two roles that both count, or both do not, moves nothing and reads
+// nothing. The members policy registers the role as interest, so a write
+// carries the old role. A junction row written without the values that
+// place its link is read, role and all: below the rules, its link is
+// removed, unless its old values say it never counted (a `removed` of a row
+// a client never had changes nothing there).
 //
 // Left gives `removed`, entered `added` with the full item (never a patch: a
 // client cannot patch a row it never had), stayed `patched` or `updated` as
@@ -29,10 +50,14 @@
 // scope is `updated`, whole. A touched row's old scope is unknown, so it is
 // `added` to its scope now and its old scope is not told (a touch carries no
 // `before`), unless a tracked write merged with it says where it was: then
-// it moves, or stays `updated`, whole. A deleted row whose old scope the
-// write does not carry (a touch with `removed`, or a `via` entry whose links
-// a cascade removed) left scopes nobody can name: every scope of the
-// collection subscribed on this process gets `removed`.
+// it moves, or stays `updated`, whole. A deleted `via` entry left the
+// scopes its delete read its links in (the tracked client reads them before
+// a delete of a via entry model: `registerLinks`), so only those are told
+// (the 5.1 audit's COLL-3: every subscribed scope learned the id of every
+// row deleted). A deleted row whose old scope the write does not carry (a
+// touch with `removed`, a `via` entry deleted without its links read) left
+// scopes nobody can name: every scope of the collection subscribed on this
+// process gets `removed`, which no resume buffer keeps (`send.ts`).
 //
 // A `via` entry's scopes before the flush are known whatever wrote the
 // entry: its links now, without the ones this flush's junction writes made,
@@ -58,13 +83,13 @@ import { frameKind, type FrameKind } from "../emit/frames";
 import { modelKey, type StorageAdapter, type StorageRow } from "../storage";
 import { ANY_FIELD, type WriteRecord } from "../uow/types";
 import type { BoundCollection } from "./bind";
-import type { CollectionScope } from "./define";
+import { linkQualifies, linkWhere, type ViaCollectionScope } from "./define";
 import { indexColumns } from "./index";
 import { matchesWhere, membershipColumns, scopeIn, selectWith } from "./items";
 
 type Values = Readonly<Record<string, unknown>>;
 
-type Via = Extract<CollectionScope, { readonly kind: "via" }>;
+type Via = ViaCollectionScope;
 
 /** What one flush did to one row of one collection. */
 export interface Move {
@@ -235,7 +260,7 @@ interface LinkEvents {
   /** Every entry a junction write named, whatever it changed: `refreshEntry` sends them again. */
   readonly named: Set<string>;
   /** Junction rows whose link the write does not carry: read them. */
-  readonly unknown: string[];
+  readonly unknown: WriteRecord[];
   /** A junction row was removed without values. */
   resetAll: boolean;
 }
@@ -256,6 +281,53 @@ function addLink(
   }
 }
 
+/**
+ * True when a write of a role column changed whether the junction row's
+ * link counts under the scope's rules, or its old role is not known.
+ */
+function roleMoved(via: Via, write: WriteRecord): boolean {
+  const { before } = write;
+  const written = (via.levels ?? []).filter((rule) => write.fields.includes(rule.column));
+  if (written.length === 0) {
+    return false;
+  }
+  if (before === undefined || written.some((rule) => !Object.hasOwn(before, rule.column))) {
+    return true;
+  }
+  return linkQualifies(via, { ...write.after, ...before }) !== linkQualifies(via, write.after);
+}
+
+/**
+ * True when a write may have moved a junction row's link: a create over a
+ * row the same unit deleted (it carries that row's values), or an update of
+ * its entry, its scope, or a role whose rules now count it differently.
+ */
+function linkMoved(via: Via, write: WriteRecord): boolean {
+  if (write.op === "create") {
+    return write.before !== undefined;
+  }
+  return (
+    write.fields.some((field) => field === via.entry || field === via.scope) ||
+    roleMoved(via, write)
+  );
+}
+
+function nameLink(events: LinkEvents, link: readonly [string, string] | undefined): void {
+  if (link !== undefined) {
+    events.named.add(link[0]);
+  }
+}
+
+/** Removes the link a junction row's values before a write made, unless its role never counted. */
+function unlinkOld(events: LinkEvents, via: Via, before: Values): void {
+  const old = linkOf(via, before);
+  // A link below the role rules was never one; without its role, it is removed to be safe.
+  if (linkQualifies(via, before) !== false) {
+    addLink(events.unlinked, old);
+  }
+  nameLink(events, old);
+}
+
 function linkEvents(via: Via, writes: readonly WriteRecord[]): LinkEvents {
   const events: LinkEvents = {
     linked: new Map(),
@@ -264,46 +336,72 @@ function linkEvents(via: Via, writes: readonly WriteRecord[]): LinkEvents {
     unknown: [],
     resetAll: false,
   };
-  const name = (link: readonly [string, string] | undefined): void => {
-    if (link !== undefined) {
-      events.named.add(link[0]);
-    }
-  };
   for (const write of writes) {
     if (write.op === "delete") {
-      const link = linkOf(via, write.before);
-      addLink(events.unlinked, link);
-      name(link);
-      events.resetAll ||= link === undefined;
+      unlinkOld(events, via, write.before ?? {});
+      events.resetAll ||= linkOf(via, write.before) === undefined;
       continue;
     }
     const now = linkOf(via, write.after);
-    if (now === undefined || write.fields.includes(ANY_FIELD)) {
-      events.unknown.push(write.id);
+    const counts = linkQualifies(via, write.after);
+    // Values missing (its link, or a role the rules need): the row is read instead.
+    if (now === undefined || counts === undefined || write.fields.includes(ANY_FIELD)) {
+      events.unknown.push(write);
       continue;
     }
-    name(now);
-    const moved = write.fields.some((field) => field === via.entry || field === via.scope);
-    if (write.op === "create" || moved) {
+    nameLink(events, now);
+    const moved = linkMoved(via, write);
+    if ((write.op === "create" || moved) && counts) {
       addLink(events.linked, now);
     }
-    if (write.op === "update" && moved) {
-      const old = linkOf(via, { ...write.after, ...write.before });
-      addLink(events.unlinked, old);
-      name(old);
+    if (moved) {
+      unlinkOld(events, via, { ...write.after, ...write.before });
     }
   }
   return events;
 }
 
-/** The current links of `ids` (rows of the junction), by entry. */
+/**
+ * Reads the junction rows written without the values that place their link
+ * (a touch, a batch write that reported none), role and all: a link the
+ * rules count is linked; one they do not is removed, unless the write's old
+ * values say it never counted. Old values a merged tracked write carried
+ * name the link the row left.
+ */
+async function readUnknown(storage: StorageAdapter, via: Via, events: LinkEvents): Promise<void> {
+  if (events.unknown.length === 0) {
+    return;
+  }
+  const writes = new Map(events.unknown.map((write) => [write.id, write]));
+  const roles = (via.levels ?? []).map((rule) => [rule.column, true] as const);
+  const rows = await storage.findMany(modelKey(via.model), {
+    where: { id: { in: [...writes.keys()] } },
+    select: { id: true, [via.entry]: true, [via.scope]: true, ...Object.fromEntries(roles) },
+  });
+  for (const row of rows) {
+    const now = linkOf(via, row);
+    const before = typeof row.id === "string" ? writes.get(row.id)?.before : undefined;
+    nameLink(events, now);
+    const counts = linkQualifies(via, row) === true;
+    if (counts) {
+      addLink(events.linked, now);
+    }
+    if (before !== undefined) {
+      unlinkOld(events, via, { ...row, ...before });
+    } else if (!counts) {
+      addLink(events.unlinked, now);
+    }
+  }
+}
+
+/** The current links among the junction rows `where` matches (those the role rule counts), by entry. */
 async function readLinks(
   storage: StorageAdapter,
   via: Via,
   where: Readonly<Record<string, unknown>>,
 ): Promise<Map<string, Set<string>>> {
   const rows = await storage.findMany(modelKey(via.model), {
-    where,
+    where: linkWhere(via, where),
     select: { [via.entry]: true, [via.scope]: true },
   });
   const links = new Map<string, Set<string>>();
@@ -327,11 +425,74 @@ function filtered(collection: BoundCollection): boolean {
 }
 
 /**
+ * False only when a deleted entry's last values (`before`, which carries the
+ * `where` columns a filtered list registers) fail the list's `where`: no
+ * scope of the list held it. True without them, to stay safe.
+ */
+function listedBefore(collection: BoundCollection, before: Values | undefined): boolean {
+  if (!filtered(collection) || before === undefined) {
+    return true;
+  }
+  const columns = Object.keys(collection.where);
+  return (
+    columns.some((column) => !Object.hasOwn(before, column)) || matchesWhere(collection, before)
+  );
+}
+
+/**
+ * The scopes a deleted entry was linked to just before its delete, as the
+ * tracked client read them (`WriteRecord.links`): its junction rows the role
+ * rules count (or whose role was not read). `undefined` when the delete did
+ * not read them.
+ */
+function linkedBeforeDelete(via: Via, write: WriteRecord): ReadonlySet<string> | undefined {
+  const rows = write.links?.[modelKey(via.model)];
+  if (rows === undefined) {
+    return undefined;
+  }
+  const scopes = new Set<string>();
+  for (const row of rows) {
+    const link = linkOf(via, row);
+    if (link !== undefined && link[0] === write.id && linkQualifies(via, row) !== false) {
+      scopes.add(link[1]);
+    }
+  }
+  return scopes;
+}
+
+/**
+ * The move of a deleted `via` entry (`viaMove`): out of the scopes its
+ * delete read its links in, and the ones the flush's junction events
+ * unlinked; out of scopes nobody can name when its links were not read;
+ * out of none when its last values fail a filtered list's `where`. With
+ * `current`, the scopes it is linked to at the read (`after`) keep it.
+ */
+function deletedMove(
+  collection: BoundCollection,
+  write: WriteRecord,
+  [unlinked, after]: readonly [ReadonlySet<string>, ReadonlySet<string>],
+  current: boolean,
+): Move {
+  const { id } = write;
+  if (!listedBefore(collection, write.before)) {
+    return current ? movedTo(id, NONE, NONE, after, false) : moveOf(id, NONE, NONE, undefined);
+  }
+  const linked = linkedBeforeDelete(collection.scope as Via, write);
+  const left = linked === undefined ? unlinked : new Set([...unlinked, ...linked]);
+  const unknown = linked === undefined;
+  return current
+    ? movedTo(id, left, NONE, after, unknown)
+    : moveOf(id, left, NONE, undefined, unknown);
+}
+
+/**
  * A `via` entry's move: its links before the flush against its links now,
- * both filtered by `where`. A deleted entry left scopes nobody can name;
- * with `current` (behind a cluster adapter), the scopes it is linked to at
- * the read keep it. An entry created or touched is `added` to every scope it
- * is in now and `removed` from the ones it left.
+ * both filtered by `where`. A deleted entry left the scopes its delete read
+ * its links in (`linkedBeforeDelete`), or, when it read none, scopes nobody
+ * can name; none when its last values fail a filtered list's `where`
+ * (`listedBefore`); with `current` (behind a cluster adapter), the scopes it
+ * is linked to at the read keep it. An entry created or touched is `added`
+ * to every scope it is in now and `removed` from the ones it left.
  */
 function viaMove(
   collection: BoundCollection,
@@ -345,9 +506,7 @@ function viaMove(
     !filtered(collection) || (values !== undefined && matchesWhere(collection, values));
   const after = matches(row) ? links : NONE;
   if (write?.op === "delete") {
-    return current
-      ? movedTo(id, unlinked, NONE, after, true)
-      : moveOf(id, unlinked, NONE, undefined, true);
+    return deletedMove(collection, write, [unlinked, after], current);
   }
   const linked = events.linked.get(id) ?? NONE;
   const linksBefore = new Set([...[...links].filter((scope) => !linked.has(scope)), ...unlinked]);
@@ -433,14 +592,7 @@ export async function viaMoves(
     via,
     writes.filter((write) => modelKey(write.model) === modelKey(via.model)),
   );
-  if (events.unknown.length > 0) {
-    for (const [entry, scopes] of await readLinks(storage, via, { id: { in: events.unknown } })) {
-      events.named.add(entry);
-      for (const scope of scopes) {
-        addLink(events.linked, [entry, scope]);
-      }
-    }
-  }
+  await readUnknown(storage, via, events);
   const refreshed = new Set([...refresh, ...(via.refreshEntry ? events.named : [])]);
   const ids = [
     ...new Set([

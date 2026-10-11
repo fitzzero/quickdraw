@@ -83,6 +83,12 @@ export interface ScopeAccess<Input = never> {
 }
 
 /**
+ * A method's `claims`, as the pipeline calls it (`claims.ts`): `true` when
+ * the caller's claims allow the call with `input`.
+ */
+export type ClaimsCheck = (claims: Principal["claims"], input: unknown) => boolean;
+
+/**
  * `custom(fn)`: the call passes when `fn(ctx, input)` resolves `true`. The
  * caller must be authenticated before `fn` runs, so `ctx.principal` is never
  * `null` inside it.

@@ -33,6 +33,11 @@
         }
       ]
     },
+    "one update in a self scope": {
+      "statements": 5,
+      "bytes": 191,
+      "calls": []
+    },
     "one update with one subscriber": {
       "statements": 8,
       "bytes": 268,

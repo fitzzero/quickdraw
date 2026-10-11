@@ -3,7 +3,7 @@
 
 import * as jose from "jose";
 import { describe, expect, it } from "vitest";
-import { verifyJWT } from "../jwt";
+import { readVerifiedJWT } from "../jwt";
 import { createMemorySessionStore, type SessionStore } from "./sessions";
 import { DEFAULT_SESSION_TTL_MS, issueSession, liveSession } from "./tokens";
 
@@ -40,7 +40,7 @@ describe("issueSession and liveSession", () => {
     const keys = { sessions, jwtSecret: SECRET };
     const { session, token } = await issueSession(keys, "ada", { provider: "mock", ip: "1.2.3.4" });
     expect(session.expiresAt.getTime() - Date.now()).toBeGreaterThan(DEFAULT_SESSION_TTL_MS - 5000);
-    const payload = await verifyJWT(token, SECRET);
+    const payload = await readVerifiedJWT(token, SECRET);
     expect(payload).toMatchObject({ userId: "ada", sid: session.id });
     expect((payload?.exp ?? 0) - (payload?.iat ?? 0)).toBe(DEFAULT_SESSION_TTL_MS / 1000);
     expect(await liveSession(keys, token)).toBe(session);

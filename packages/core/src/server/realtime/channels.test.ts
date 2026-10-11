@@ -16,10 +16,19 @@ import { z } from "zod";
 import { defineContract } from "../../contract/defineContract";
 import type { Logger } from "../../contract/logger";
 import { entityRoom, userRoom } from "../../contract/names";
+import { mutation } from "../../index";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
-import { as, projectService, qd, seedBoard, type Board } from "../access/__tests__/board";
-import type { Principal } from "../index";
+import {
+  as,
+  projectContract,
+  projectService,
+  qd,
+  seedBoard,
+  type Board,
+} from "../access/__tests__/board";
+import { DevWarningError } from "../devWarnings";
+import { inherit, type Principal } from "../index";
 import {
   defineLiveService,
   frames,
@@ -356,6 +365,101 @@ describe("requires: { room }", () => {
   });
 });
 
+describe("a channel without requires (RT-3)", () => {
+  const n = z.object({ n: z.number() });
+  const openContract = defineContract("openService", {
+    channels: {
+      shout: { payload: n },
+      wrapped: { payload: n },
+      chat: { payload: n },
+      staff: { payload: n },
+      fixed: { payload: n, requires: { room: "lobby" } },
+    },
+  });
+  const openService = qd.defineService(openContract, {
+    methods: {},
+    channels: {
+      shout: () => undefined,
+      // { handler } alone declares nothing either.
+      wrapped: { handler: () => undefined },
+      chat: { access: "authenticated", handler: () => undefined },
+      staff: { access: { service: "Read" }, handler: () => undefined },
+      fixed: () => undefined,
+    },
+  });
+
+  it("warns once per dispatcher, unless the service declares its access", async () => {
+    const log = capturing();
+    const app = await createTestApp({ services: [openService], db: h.db, logger: log.logger });
+    apps.push(app as unknown as TestApp);
+    // The cluster projects boot two dispatchers: each warns once.
+    expect([...new Set(log.warnings)]).toEqual([
+      expect.stringContaining("[quickdraw:channel-without-requires] openService.shout:"),
+      expect.stringContaining("[quickdraw:channel-without-requires] openService.wrapped:"),
+    ]);
+  });
+
+  it("fails to start a test app made with strictWarnings", async () => {
+    const strict = createTestApp({ services: [openService], db: h.db, strictWarnings: true });
+    await expect(strict).rejects.toThrow(DevWarningError);
+    await expect(
+      createTestApp({ services: [openService], db: h.db, strictWarnings: true }),
+    ).rejects.toThrow("[quickdraw:channel-without-requires] openService.shout:");
+  });
+
+  it("relays a cursor only from a socket a checked call put in the project's room", async () => {
+    const cursorSchema = z.object({ projectId: z.string(), x: z.number() });
+    const cursorContract = defineContract("cursorService", {
+      entity: z.object({ id: z.string(), projectId: z.string(), title: z.string() }),
+      methods: {
+        joinProject: mutation({ input: z.object({ projectId: z.string() }), output: z.boolean() }),
+      },
+      events: { cursorMoved: { payload: cursorSchema } },
+      channels: {
+        cursor: {
+          payload: cursorSchema,
+          requires: { room: (cursor) => `project:${cursor.projectId}` },
+        },
+      },
+    });
+    const cursorService = qd.defineService(cursorContract, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      methods: {
+        joinProject: {
+          access: { scope: "Read", of: projectContract, id: "projectId" },
+          handler: ({ input: { projectId }, ctx }) => ctx.rooms.join(`project:${projectId}`),
+        },
+      },
+      channels: {
+        cursor: (payload, ctx) => {
+          ctx.rooms.emit(ctx.room, cursorContract, "cursorMoved", payload);
+        },
+      },
+    });
+    const log = capturing();
+    const app = await createTestApp({
+      services: [projectService, cursorService],
+      db: h.db,
+      logger: log.logger,
+    });
+    apps.push(app as unknown as TestApp);
+    const cy = await app.connect(as(board.cy));
+    const ed = await app.connect(as(board.ed));
+    const seen = frames(cy, "qd:event");
+    expect(await cy.call.cursorService.joinProject({ projectId: board.p1 })).toBe(true);
+    await expect(ed.call.cursorService.joinProject({ projectId: board.p1 })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    send(ed, "cursor", { projectId: board.p1, x: 666 }, "cursorService");
+    send(cy, "cursor", { projectId: board.p1, x: 1 }, "cursorService");
+    await settle(ed);
+    await settle(cy);
+    expect(seen).toEqual([["cursorService", "cursorMoved", { projectId: board.p1, x: 1 }]]);
+    expect(log.warnings).toEqual([]);
+  });
+});
+
 describe("qd:ch in 5.0", () => {
   it("drops malformed frames and unknown names, and finds nothing through prototype keys", async () => {
     const { app, into, log } = await start();
@@ -444,8 +548,11 @@ describe("qd:ch in 5.0", () => {
     const service = qd.defineService(contract, {
       methods: {},
       channels: {
-        slow: (payload) => {
-          got.push(payload);
+        slow: {
+          access: "authenticated",
+          handler: (payload) => {
+            got.push(payload);
+          },
         },
       },
     });

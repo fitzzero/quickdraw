@@ -3,13 +3,18 @@
 // it in with an ordinary session, so everything downstream (socket auth,
 // access policies) sees a real user id rather than an anonymous socket. Like
 // every POST route of the kit it needs a JSON body type, which a cross-site
-// form cannot send, so a page elsewhere cannot sign a visitor in as a guest.
+// form cannot send, and a page `allowedOrigins` does not list is refused
+// (403) before anything is created, since the route sets the session cookie:
+// a page elsewhere cannot sign a visitor in as a guest, even with CORS help
+// (the 5.1 audit's AUTH-5).
 
 import { INTERNAL_MESSAGE, QuickdrawError } from "../../../protocol/errors";
 import { readJsonInput } from "../../transports/body";
 import type { MaybePromise } from "../../types";
 import { refuse, sendJson, type AuthRouteRequest, type AuthRouteResponse } from "./respond";
 import { issueFor, setSession, type RouteSettings } from "./settings";
+import { COOKIE_REFUSED, httpCookieOriginAllowed } from "./socketAuth";
+import { errorText } from "../../../contract/logger";
 
 /** The largest guest request body read, in bytes. */
 export const GUEST_MAX_BODY_BYTES = 16_384;
@@ -97,7 +102,7 @@ async function createGuest(
     }
     settings.logger.error("Creating a guest user failed", {
       category: "quickdraw.auth",
-      error: error instanceof Error ? error.message : String(error),
+      error: errorText(error),
     });
     refuse(res, "INTERNAL", INTERNAL_MESSAGE);
     return null;
@@ -113,6 +118,11 @@ export function guestRoute(
   provider: GuestProvider,
 ): (req: AuthRouteRequest, res: AuthRouteResponse) => Promise<void> {
   return async (req, res) => {
+    // It sets the session cookie: never for a page allowedOrigins does not list (AUTH-5).
+    if (!httpCookieOriginAllowed(req.headers, settings.origins)) {
+      refuse(res, "FORBIDDEN", COOKIE_REFUSED);
+      return;
+    }
     const user = await createGuest(settings, provider, req, res);
     if (user === null) {
       return;

@@ -24,7 +24,8 @@ import type { Principal, PrincipalOf, QuickdrawTypes } from "../types";
  * Who is online and who is in a room (RFC 0003 section 12.5): `ctx.presence`,
  * `server.presence`, `qd.presence`. Every answer is a promise: on a server
  * with the in-memory adapter it comes from this process's sockets; behind a
- * cluster adapter (Redis) it asks every node (`io.in(room).fetchSockets()`).
+ * cluster adapter (Redis) it asks the other nodes too, which answer with
+ * user ids (or whether they have a socket of the user) alone.
  */
 export interface Presence {
   /** True while the user has a socket connected (on any node). */
@@ -36,9 +37,14 @@ export interface Presence {
    * the 100,000 users seen last).
    */
   lastSeen(userId: string): Promise<number | null>;
-  /** How many users have a socket in `room`. Anonymous sockets do not count. */
+  /**
+   * How many users have a socket in app room `room` that `ctx.rooms.join`
+   * put there (a raw `socket.join` does not count on this process).
+   * Anonymous sockets do not count. A framework room (`qd:`, `user:`) or a
+   * name with the shape of a socket id is `VALIDATION`.
+   */
   count(room: string): Promise<number>;
-  /** The ids of the users with a socket in `room`, each once. */
+  /** The ids of the users `count` counts in `room`, each once. */
   users(room: string): Promise<string[]>;
 }
 
@@ -63,8 +69,9 @@ export interface ServerRooms {
   /**
    * Sends the contract's event to every socket in `room` as `qd:event`, on
    * every node. The payload is checked against the event's schema first: a
-   * payload that fails it throws `INTERNAL` and nothing is sent. Without a
-   * server it does nothing more.
+   * payload that fails it throws `INTERNAL` and nothing is sent. A room of
+   * the framework's (`qd:`, `user:`) throws `VALIDATION`: send to a user's
+   * sockets with `emitToUser`. Without a server it does nothing more.
    */
   emit<C extends AnyContract, E extends EventName<C>>(
     room: string,
@@ -120,8 +127,10 @@ export interface ContextRooms extends ServerRooms {
    * nothing, for a call that did not arrive over a socket (HTTP, MCP, in
    * process). Room names starting with `qd:` or `user:` are refused with
    * `VALIDATION` (those rooms are joined only through their authorized
-   * paths), as are empty names and names over 256 characters; a socket in
-   * 100 app rooms is refused another with `CONFLICT`.
+   * paths), as are names with the shape of a Socket.IO socket id (20
+   * letters, digits, `_` or `-`: every socket is alone in the room of its
+   * id), empty names and names over 256 characters; a socket in 100 app
+   * rooms is refused another with `CONFLICT`.
    */
   join(room: string): boolean;
   /** Takes the calling socket out of an app room; `false` when it was not in it, or the call has no socket. */
@@ -329,7 +338,12 @@ export type ChannelImplementation<
 > =
   | ChannelHandler<T, Payload, Room>
   | {
-      /** Default `"authenticated"`. */
+      /**
+       * Default `"authenticated"`. A channel whose contract declares no
+       * `requires` takes a message from every signed-in socket: declaring
+       * `access` (even `"authenticated"`) says so on purpose, and silences
+       * the `channel-without-requires` warning the server raises otherwise.
+       */
       readonly access?: ChannelAccess;
       readonly handler: ChannelHandler<T, Payload, Room>;
     };
@@ -411,6 +425,12 @@ export interface ServiceChannel {
     | { readonly kind: "roomPrefix"; readonly prefix: string }
     | undefined;
   readonly access: ChannelAccess;
+  /**
+   * True when the service named `access` for the channel (`{ access,
+   * handler }`), not a bare handler or `{ handler }`: a channel without
+   * `requires` warns `channel-without-requires` unless it did.
+   */
+  readonly accessDeclared: boolean;
   /**
    * The kinds of principal the channel's service admits, as a set for the
    * per-message check: a message from a socket of another kind, or without

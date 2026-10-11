@@ -65,8 +65,12 @@ const taskService = qd.defineService(taskContract, {
     ping: { access: "public", handler: () => "pong" as const },
   },
   channels: {
-    wave: (payload, ctx) => {
-      waves.push({ userId: ctx.principal.userId, n: payload.n });
+    // Any signed-in user of the admitted kinds may wave: said on the service, so it does not warn.
+    wave: {
+      access: "authenticated",
+      handler: (payload, ctx) => {
+        waves.push({ userId: ctx.principal.userId, n: payload.n });
+      },
     },
   },
 });

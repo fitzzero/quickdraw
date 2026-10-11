@@ -138,6 +138,9 @@ export type HandlerOutputOf<
  *   that row, through its service's policy. Deleting the row closes its
  *   scopes (`qd:revoked` with reason `"anchor-deleted"`).
  * - `scopeAccess: "self"`: the scope value is the subscriber's own user id.
+ *   On a service with an access policy its items still follow that policy:
+ *   only the rows its user may read at `Read`, and a row the user loses goes
+ *   out `removed`.
  *
  * A service-wide `Admin` grant on this service passes either check, as it
  * passes every check of the service. `bulkThreshold` (default 200) is how

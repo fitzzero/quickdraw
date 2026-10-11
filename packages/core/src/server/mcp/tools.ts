@@ -14,9 +14,15 @@
 //   (`z.undefined()`, `z.void()`) is a tool without arguments;
 // - any other input (a string, a union) is the `input` argument.
 //
+// An input whose JSON Schema is a `$ref` to an object (a Zod schema with
+// `.meta({ id })`) counts as that object: its definition is inlined at the
+// root. A wrapped input keeps its `definitions` at the root of the tool's
+// schema, where its `$ref`s resolve for the client.
+//
 // A registry's `bind` names arguments it fills from the principal: they are
 // left out of the `inputSchema` of each object input that has them, and may
-// not appear in any other input.
+// not appear anywhere else in an input, behind a `$ref` or in any `anyOf`,
+// `oneOf` or `allOf` branch (`inputKeys`), where they could not be filled.
 
 import type { MethodKind } from "../../contract/methods";
 import { defaultToolName } from "../../contract/toolName";
@@ -25,6 +31,7 @@ import {
   type StandardSchemaV1,
   type StandardSchemaWithJSON,
 } from "../../contract/standardSchema";
+import { inputKeys, pointerToken, referenced } from "../emit/projection";
 import type { AnyService } from "../service";
 import type { DescribeToolsOptions, McpInputSchema, McpTool } from "./types";
 
@@ -105,19 +112,96 @@ export function toolInputOf(
       `the input schema of ${label} cannot be written as JSON Schema (${json.message}): change that schema, or ${instead}`,
     );
   }
-  if (json.type === "object") {
-    return { schema: json as McpInputSchema, mode: "object" };
+  const described = referenced(json, json);
+  if (described?.type === "object") {
+    return { schema: inlined(json, described) as McpInputSchema, mode: "object" };
   }
-  const { $schema: dialect, ...input } = json;
+  const { $schema: dialect, definitions, $defs, ...input } = json;
   return {
     schema: {
       ...(dialect === undefined ? {} : { $schema: dialect }),
       type: "object",
-      properties: { input },
+      properties: { input: rerooted(input) },
       ...(acceptsUndefined(schema) ? {} : { required: ["input"] }),
+      ...(definitions === undefined ? {} : { definitions: rerooted(definitions) }),
+      ...($defs === undefined ? {} : { $defs: rerooted($defs) }),
     },
     mode: "wrapped",
   };
+}
+
+/** Where a wrapped input sits in its tool's schema. */
+const WRAPPED_INPUT = "#/properties/input";
+
+/**
+ * `value` with every `$ref` into the input's root, but its definitions,
+ * pointed where the wrapped input sits: a recursive input refers to itself
+ * as `#`, which is the tool's schema once the input is wrapped. The
+ * definitions stay at the root, so their references hold.
+ */
+function rerooted(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(rerooted);
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => {
+      const intoRoot =
+        key === "$ref" &&
+        typeof item === "string" &&
+        (item === "#" || (item.startsWith("#/") && !/^#\/(?:definitions|\$defs)\//u.test(item)));
+      return [key, intoRoot ? `${WRAPPED_INPUT}${item.slice(1)}` : rerooted(item)];
+    }),
+  );
+}
+
+/** True when `value` holds a `$ref` to `ref` anywhere inside it. */
+function refersTo(value: unknown, ref: string): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => refersTo(item, ref));
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  return value.$ref === ref || Object.values(value).some((item) => refersTo(item, ref));
+}
+
+/**
+ * The object schema a root `$ref` names, inlined at the root (Zod writes an
+ * id'd schema as `{ $schema, $ref: "#/definitions/<id>", definitions }`):
+ * the root's dialect and definitions beside the target's keywords, without
+ * the target's own definition unless something still refers to it.
+ */
+function inlined(
+  json: Readonly<Record<string, unknown>>,
+  target: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  if (target === json) {
+    return json;
+  }
+  const ref = String(json.$ref);
+  const { $schema: dialect } = json;
+  const schema: Record<string, unknown> = {
+    ...(dialect === undefined ? {} : { $schema: dialect }),
+    ...target,
+  };
+  for (const keyword of ["definitions", "$defs"]) {
+    const defs = json[keyword];
+    if (!isRecord(defs)) {
+      continue;
+    }
+    const others = Object.fromEntries(
+      Object.entries(defs).filter(([name]) => `#/${keyword}/${pointerToken(name)}` !== ref),
+    );
+    // The target's own entry stays only for a schema that still refers to it (a recursive one).
+    const kept = refersTo({ ...schema, [keyword]: others }, ref) ? defs : others;
+    if (Object.keys(kept).length > 0) {
+      schema[keyword] = kept;
+    }
+  }
+  return schema;
 }
 
 /** The input a call passes to a tool's handler or method, from the tool's arguments. */
@@ -192,48 +276,32 @@ function propertiesOf(schema: unknown): string[] {
   return isRecord(schema) && isRecord(schema.properties) ? Object.keys(schema.properties) : [];
 }
 
-/** The properties a JSON Schema's `anyOf`, `oneOf` and `allOf` branches declare, through nested branches. */
-function branchProperties(schema: unknown, found = new Set<string>()): Set<string> {
-  if (!isRecord(schema)) {
-    return found;
-  }
-  for (const keyword of ["anyOf", "oneOf", "allOf"]) {
-    const branches: unknown = schema[keyword];
-    for (const branch of Array.isArray(branches) ? (branches as unknown[]) : []) {
-      for (const key of propertiesOf(branch)) {
-        found.add(key);
-      }
-      branchProperties(branch, found);
-    }
-  }
-  return found;
-}
-
 /**
  * The arguments of `bind` that are properties of the object input of
- * `label`. Fails when one of them is a property of an input that is not an
- * object, or of one of its `anyOf`, `oneOf` or `allOf` branches, where it
- * cannot be filled. An input without arguments has none.
+ * `label`. Fails when one of them is a key the input `schema` may have
+ * anywhere else (`inputKeys`: behind a `$ref`, in an `anyOf`, `oneOf` or
+ * `allOf` branch, or the input is not an object), where it cannot be
+ * filled. An input without arguments has none.
  */
 function boundArguments(
   label: string,
   input: ToolInput,
+  schema: StandardSchemaV1,
   bind: readonly string[],
   fail: Fail,
 ): string[] {
-  if (input.mode === "object") {
-    const properties = propertiesOf(input.schema);
-    return bind.filter((key) => properties.includes(key));
+  if (bind.length === 0) {
+    return [];
   }
-  const wrapped: unknown = input.schema.properties?.input;
-  const unbindable = branchProperties(wrapped, new Set(propertiesOf(wrapped)));
-  const misplaced = bind.find((key) => unbindable.has(key));
+  const bindable = input.mode === "object" ? propertiesOf(input.schema) : [];
+  const keys = inputKeys(schema) ?? [];
+  const misplaced = bind.find((key) => keys.includes(key) && !bindable.includes(key));
   if (misplaced !== undefined) {
     fail(
-      `bind.${misplaced} names a property of the input of ${label}, which is not an object: bind fills properties of object inputs only; leave ${label} out with exclude, or make its input an object`,
+      `bind.${misplaced} names a property of the input of ${label}, which is not an object: bind fills properties of object inputs only (an object schema, or one with .meta({ id }); not a union, an intersection, or a schema made from an object, as .optional() or .refine() make); leave ${label} out with exclude, or make its input an object`,
     );
   }
-  return [];
+  return bind.filter((key) => bindable.includes(key));
 }
 
 /** An object input's schema without the bound arguments, as the tool lists it. */
@@ -274,7 +342,7 @@ export function planMethodTools(
       }
       const label = `${service.name}.${method}`;
       const input = toolInputOf(label, def.input, fail);
-      const bound = boundArguments(label, input, bind, fail);
+      const bound = boundArguments(label, input, def.input, bind, fail);
       const tool: McpTool = {
         name: toolName(service.name, method),
         description: describeMethod(service.name, method, def.kind, def.describe),

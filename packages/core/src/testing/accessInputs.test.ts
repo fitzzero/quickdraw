@@ -87,7 +87,8 @@ const service = qd.defineService(contract, {
     lookup: { access: "authenticated", rowless: true, handler: () => null },
     ping: { access: "public", handler: () => null },
     search: { access: "authenticated", handler: () => null },
-    check: { access: custom(() => true), handler: () => null },
+    // a check that admits everyone, on purpose: the form is the whole check
+    check: { access: custom(() => true), rowless: true, handler: () => null },
   },
 });
 

@@ -71,7 +71,8 @@ export interface ResolverOptions<
   /**
    * A filter matching exactly the rows on which the principal has at least
    * `level`, or `"none"`. Without it, list filters through this policy match
-   * no row.
+   * no row, and the read/write kit's `reorder` moves none below a
+   * service-wide grant.
    */
   readonly where?: (
     principal: P,

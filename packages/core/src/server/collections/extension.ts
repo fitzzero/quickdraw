@@ -14,8 +14,9 @@
 // (`../access/kinds.ts`), for a scope the principal may not subscribe to (4.1
 // answered an unknown collection and a denied scope alike) or, for
 // `qd:col:items`, one the socket has not subscribed to, which a refused kind
-// never has; and `INTERNAL`, logged, for a lookup or read that failed. No
-// listener throws (`emit/answer.ts`).
+// never has; `CONFLICT` for a `qd:col:sub` of a new scope on a socket that
+// holds `MAX_SCOPES_PER_SOCKET` (`subscribe.ts`); and `INTERNAL`, logged,
+// for a lookup or read that failed. No listener throws (`emit/answer.ts`).
 
 import { CLIENT_EVENTS } from "../../contract/names";
 import { checkKind } from "../access/kinds";

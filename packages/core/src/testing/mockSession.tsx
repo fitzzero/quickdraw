@@ -33,7 +33,14 @@ import { QuickdrawContext, renderOnServerAs, type QuickdrawContextValue } from "
 import { createInvalidationCoordinator, type InvalidationCoordinator } from "../client/coordinator";
 import { inertLiveData } from "../client/live/liveData";
 import type { PresenceStore } from "../client/live/presence";
-import { MAX_SUBSCRIBE_IDS, PROTOCOL_VERSION, type HelloFrame } from "../protocol/version";
+import {
+  MAX_ENTITY_IDS_PER_SOCKET,
+  MAX_SCOPES_PER_SOCKET,
+  MAX_SUBSCRIBE_IDS,
+  MAX_TOPICS_PER_SOCKET,
+  PROTOCOL_VERSION,
+  type HelloFrame,
+} from "../protocol/version";
 import { QUICKDRAW_VERSION } from "../version";
 import type { MockStore } from "./mockLive";
 import { MockSessionScope, type ScopedSession, type SessionScope } from "./mockScope";
@@ -50,7 +57,13 @@ const MOCK_LIMITS: HelloFrame["limits"] = Object.freeze({
   maxQueuedQueries: 64,
   maxSubscribeIds: MAX_SUBSCRIBE_IDS,
   callTimeoutMs: 30_000,
-  subscriptions: Object.freeze({ maxInFlight: 8, maxQueued: 64 }),
+  subscriptions: Object.freeze({
+    maxInFlight: 8,
+    maxQueued: 64,
+    maxEntityIds: MAX_ENTITY_IDS_PER_SOCKET,
+    maxScopes: MAX_SCOPES_PER_SOCKET,
+    maxTopics: MAX_TOPICS_PER_SOCKET,
+  }),
 });
 
 function checkUser(owner: string, userId: unknown): string | null | undefined {

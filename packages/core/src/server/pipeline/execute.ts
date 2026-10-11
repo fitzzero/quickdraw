@@ -7,7 +7,13 @@
 // caller; callers who see the same fields share one copy (`replies.ts`).
 
 import { QuickdrawError } from "../../protocol/errors";
-import { NEVER_ABORTED, withSignal, type AnyContext } from "../context";
+import {
+  NEVER_ABORTED,
+  watchCallerReads,
+  withSignal,
+  type AnyContext,
+  type CallerMember,
+} from "../context";
 import { projectOutput } from "../emit/projection";
 import { warnTieredReply } from "../emit/tieredOutputs";
 import type { RegisteredMethod } from "../registry";
@@ -80,6 +86,30 @@ async function accept(
   return { ok: true, value: freeze ? deepFreeze(value) : value };
 }
 
+/**
+ * The development warning of a `share: "all"` run whose handler read who
+ * the caller is: the run has the first caller's, and every caller gets its
+ * result. Strict, it throws inside the read, and the run ends `INTERNAL`.
+ */
+function warnSharedRead(
+  settings: PipelineSettings,
+  target: RegisteredMethod,
+  member: CallerMember,
+): void {
+  settings.warnings.warn({
+    kind: "shared-principal",
+    service: target.service.name,
+    method: target.method.name,
+    subject: member,
+    message:
+      `its handler read ctx.${member} in a run every caller shares (share: "all"): the run sees the first ` +
+      `caller's ctx.${member}, and every caller gets its result, another principal's included. A result ` +
+      `shared across principals must depend on the input only: read nothing of the caller (copying or ` +
+      `logging ctx reads it too), or use share: "caller"`,
+    meta: { member },
+  });
+}
+
 /** Steps 6 to 8 for one authorized call with its parsed input. */
 export function execute(
   settings: PipelineSettings,
@@ -116,13 +146,22 @@ export function execute(
     sink: settings.flushSink,
     warnings: settings.warnings,
   });
+  // A kit's handler is framework code: the development checks are for the app's.
+  const kit = isKitHandler(method.handler);
+  const watch = settings.warnings.enabled && !kit && method.share === "all";
   const run = startRun({
     // The pipeline starts every call's time limit at admission, before this.
     timeLimit: call.expired ?? NEVER_ABORTED,
     unit,
-    invoke: (signal) => method.handler({ input, ctx: withSignal(ctx, signal), db: settings.db }),
-    // A kit's handler is framework code: the development checks of statements are for the app's.
-    quiet: settings.warnings.enabled && isKitHandler(method.handler),
+    invoke: (signal) => {
+      // Watched after withSignal, whose copy of ctx reads every member.
+      const runCtx = withSignal(ctx, signal);
+      const handlerCtx = watch
+        ? watchCallerReads(runCtx, (member) => warnSharedRead(settings, target, member))
+        : runCtx;
+      return method.handler({ input, ctx: handlerCtx, db: settings.db });
+    },
+    quiet: settings.warnings.enabled && kit,
     accept: (value) => accept(settings, target, value),
   });
   call.run = run;

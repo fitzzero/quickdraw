@@ -8,11 +8,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { inCluster } from "../../../test/cluster/mode";
 import type { PrismaClient } from "../../../test/prisma/setup";
 import { collectionRoom } from "../../index";
-import { createHarness, type Harness } from "../../prisma/__tests__/harness";
+import { createHarness, pauseNext, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
 import { as, seedBoard, type Board } from "../access/__tests__/board";
 import { projectService, recordingStorage, type Read } from "../emit/__tests__/live";
-import type { Principal, ServiceGrants } from "../index";
+import { MAX_SCOPES_PER_SOCKET, type Principal, type ServiceGrants } from "../index";
 import { peeredCluster } from "../transports/__tests__/harness";
 import {
   colSub,
@@ -322,6 +322,63 @@ describe("races with a subscribe", () => {
     expect(inRoom(app, "byProject", board.p1)).toBe(0);
   });
 
+  it("authorizes again with the grants the socket holds then: a grant lowered while it ran denies (LIVE-1)", async () => {
+    let appRef: App | undefined;
+    const { app } = await start({
+      after: holdPageRead(async () => await appRef?.server.access.refresh(board.ed)),
+      loadServiceAccess: () => ({}),
+    });
+    appRef = app;
+    // Only the service-wide Admin grant lets ed open P1's scope.
+    const admin = await connect(app, as(board.ed, { taskService: "Admin" }));
+    expect(await colSub(admin.connection, "byProject", board.p1)).toEqual(forbidden);
+    expect(inRoom(app, "byProject", board.p1)).toBe(0);
+  });
+
+  it("reads a self scope's page again when access changed while it ran", async () => {
+    await h.prisma.task.update({ where: { id: board.t1 }, data: { assigneeId: board.cy } });
+    // cy reads P2 too, so the page read again is a read, not a filter that matches nothing.
+    await h.prisma.project.update({
+      where: { id: board.p2 },
+      data: { acl: [{ userId: board.cy, level: "Read" }] },
+    });
+    let appRef: App | undefined;
+    const { app, reads } = await start({
+      after: holdPageRead(
+        async () =>
+          await appRef
+            ?.as(as(board.ada))
+            .projectService.removeMember({ projectId: board.p1, userId: board.cy }),
+      ),
+    });
+    appRef = app;
+    const member = await connect(app, as(board.cy));
+    expect(await colSub(member.connection, "mine", board.cy)).toMatchObject({
+      ok: true,
+      items: [],
+    });
+    expect(reads.filter(isPageRead)).toHaveLength(2);
+  });
+
+  it("filters a self scope's page read again for the grants the socket holds then (LIVE-1)", async () => {
+    // ed reads T1 (in P1) only through the service-wide Admin grant; T2 is in P2, ed's own.
+    await h.prisma.task.updateMany({
+      where: { id: { in: [board.t1, board.t2] } },
+      data: { assigneeId: board.ed },
+    });
+    let appRef: App | undefined;
+    const { app, reads } = await start({
+      after: holdPageRead(async () => await appRef?.server.access.refresh(board.ed)),
+      loadServiceAccess: () => ({}),
+    });
+    appRef = app;
+    const admin = await connect(app, as(board.ed, { taskService: "Admin" }));
+    const reply = await colSub(admin.connection, "mine", board.ed);
+    expect(reads.filter(isPageRead)).toHaveLength(2);
+    expect(reply).toMatchObject({ ok: true, items: [{ id: board.t2 }] });
+    expect((reply as { items: readonly unknown[] }).items).toHaveLength(1);
+  });
+
   it("reads the page again when a flush changed the scope after its revision", async () => {
     let appRef: App | undefined;
     const { app, reads } = await start({
@@ -427,4 +484,64 @@ describe("the socket rate limiter", () => {
     expect(await call(2)).toMatchObject({ ok: true });
     expect(await call(3)).toMatchObject({ ok: false, e: { code: "RATE_LIMITED" } });
   });
+});
+
+describe("the per-socket cap (COLL-4)", () => {
+  it(`holds at most ${MAX_SCOPES_PER_SOCKET} collection scopes per socket`, async () => {
+    const { app } = await start();
+    // A service-wide Admin opens any scope without a read.
+    const { connection } = await connect(app, as(board.ed, { taskService: "Admin" }));
+    const first = await colSub(connection, "byProject", board.p1);
+    const since = first.rev as number;
+    await colUnsub(connection, "byProject", board.p1);
+    // In runs that fit the socket's lane (8 running, 64 waiting), which refuses more at once.
+    const answers: Record<string, unknown>[] = [];
+    for (let run = 0; run < MAX_SCOPES_PER_SOCKET; run += 50) {
+      const batch = Array.from({ length: 50 }, (_, n) =>
+        colSub(connection, "byProject", `cap-${run + n}`, { since }),
+      );
+      answers.push(...(await Promise.all(batch)));
+    }
+    expect(answers.every((answer) => answer.ok === true)).toBe(true);
+    expect(await colSub(connection, "byProject", "one-more", { since })).toMatchObject({
+      ok: false,
+      e: { code: "CONFLICT" },
+    });
+    expect(inRoom(app, "byProject", "one-more")).toBe(0);
+    const socket = app.server.io.sockets.sockets.get(connection.socket.id ?? "");
+    expect(Object.keys(socket?.data.collections ?? {})).toHaveLength(MAX_SCOPES_PER_SOCKET);
+    // One held already is no more; one unsubscribed makes room.
+    expect(await colSub(connection, "byProject", "cap-0", { since })).toMatchObject({ ok: true });
+    await colUnsub(connection, "byProject", "cap-0");
+    expect(await colSub(connection, "byProject", "one-more", { since })).toMatchObject({
+      ok: true,
+    });
+  }, 60_000);
+
+  it("refuses at the join a scope subscribes running at once left no room for", async () => {
+    const { app } = await start();
+    const { connection } = await connect(app, as(board.ed, { taskService: "Admin" }));
+    // 999 in runs of 37, which fit the socket's lane (8 running, 64 waiting).
+    for (let run = 0; run < MAX_SCOPES_PER_SOCKET - 1; run += 37) {
+      const batch = Array.from({ length: 37 }, (_, n) =>
+        colSub(connection, "byProject", `cap-${run + n}`),
+      );
+      expect((await Promise.all(batch)).every((answer) => answer.ok === true)).toBe(true);
+    }
+    // Both pass the check before their reads: the first is held at its page read
+    // while the second takes the last scope.
+    const pause = pauseNext(h.database, /^\s*SELECT\b[\s\S]*FROM\s+"public"\."Task"/iu);
+    try {
+      const first = colSub(connection, "byProject", "first");
+      await pause.reached;
+      expect(await colSub(connection, "byProject", "second")).toMatchObject({ ok: true });
+      pause.release();
+      expect(await first).toMatchObject({ ok: false, e: { code: "CONFLICT" } });
+    } finally {
+      pause.restore();
+    }
+    expect(inRoom(app, "byProject", "first")).toBe(0);
+    const socket = app.server.io.sockets.sockets.get(connection.socket.id ?? "");
+    expect(Object.keys(socket?.data.collections ?? {})).toHaveLength(MAX_SCOPES_PER_SOCKET);
+  }, 60_000);
 });

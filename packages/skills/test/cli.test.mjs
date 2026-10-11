@@ -41,11 +41,8 @@ after(() => {
   }
 });
 
-/** A throwaway repo with a copy of this package installed in its node_modules. */
-function createRepo() {
-  const root = mkdtempSync(join(tmpdir(), "quickdraw-skills-"));
-  repos.push(root);
-  mkdirSync(join(root, ".git"));
+/** A project at `root`: its package.json, and a copy of this package installed in its node_modules. */
+function installInto(root) {
   writeFileSync(join(root, "package.json"), "{}\n");
   const installed = join(root, "node_modules", "@fitzzero", "quickdraw-skills");
   for (const part of ["bin", "skills", "rules", "package.json"]) {
@@ -54,9 +51,17 @@ function createRepo() {
   return { root, installed, cli: join(installed, "bin", "cli.mjs") };
 }
 
-/** Runs a CLI (the repo's installed copy by default) in `cwd`. */
-function run(repo, args, { cwd = repo.root, cli = repo.cli } = {}) {
-  const result = spawnSync(process.execPath, [cli, ...args], { cwd, encoding: "utf8" });
+/** A throwaway repo with a copy of this package installed in its node_modules. */
+function createRepo() {
+  const root = mkdtempSync(join(tmpdir(), "quickdraw-skills-"));
+  repos.push(root);
+  mkdirSync(join(root, ".git"));
+  return installInto(root);
+}
+
+/** Runs a CLI (the repo's installed copy by default) in `cwd`, with `env` (default this process's). */
+function run(repo, args, { cwd = repo.root, cli = repo.cli, env = process.env } = {}) {
+  const result = spawnSync(process.execPath, [cli, ...args], { cwd, env, encoding: "utf8" });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -122,10 +127,54 @@ describe("quickdraw-skills link", () => {
     const repo = createRepo();
     const nested = join(repo.root, "apps", "web");
     mkdirSync(nested, { recursive: true });
+    // A workspace's own package.json, without an install of its own, is not the project.
+    writeFileSync(join(nested, "package.json"), "{}\n");
     const result = run(repo, ["link"], { cwd: nested });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(linksIn(repo, "rules").length, RULES.length);
     assert.equal(existsSync(join(nested, ".claude")), false);
+  });
+});
+
+describe("quickdraw-skills link, in the project that installs it", () => {
+  it("links into the project that installs it, not into a repo around it (CLIENT-7)", () => {
+    // A dotfiles repo in the home directory, with its own .claude, around a project.
+    const outer = mkdtempSync(join(tmpdir(), "quickdraw-skills-outer-"));
+    repos.push(outer);
+    mkdirSync(join(outer, ".git"));
+    mkdirSync(join(outer, ".claude", "rules"), { recursive: true });
+    const app = join(outer, "projects", "app");
+    mkdirSync(app, { recursive: true });
+    const project = installInto(app);
+    const result = run(project, ["link"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(linksIn(project, "rules").length, RULES.length);
+    assert.equal(linksIn(project, "skills").length, SKILLS.length);
+    assert.deepEqual(readdirSync(join(outer, ".claude", "rules")), []);
+    assert.equal(existsSync(join(outer, ".claude", "skills")), false);
+  });
+
+  it("refuses to link into the home directory", () => {
+    const repo = createRepo();
+    const result = run(repo, ["link"], { env: { ...process.env, HOME: repo.root } });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /refusing to link into the home directory/);
+    assert.equal(existsSync(join(repo.root, ".claude")), false);
+  });
+
+  it("refuses to link when no package.json above it installs the package", () => {
+    const repo = createRepo();
+    const elsewhere = mkdtempSync(join(tmpdir(), "quickdraw-skills-elsewhere-"));
+    repos.push(elsewhere);
+    mkdirSync(join(elsewhere, ".git"));
+    writeFileSync(join(elsewhere, "package.json"), "{}\n");
+    const result = run(repo, ["link"], { cwd: elsewhere });
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /found no package\.json above the working directory that installs @fitzzero\/quickdraw-skills/,
+    );
+    assert.equal(existsSync(join(elsewhere, ".claude")), false);
   });
 });
 

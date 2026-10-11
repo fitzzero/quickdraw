@@ -11,7 +11,7 @@ import { projectContract, projectService, qd } from "../../emit/__tests__/live";
 import { createTestApp, type TestApp } from "../../../testing/index";
 import { crud, custom, inherit } from "../../index";
 import { rowLevel } from "./access";
-import { addTasks, as, kitApp, taskEntity } from "./__tests__/fixture";
+import { addTasks, as, kitApp, taskContract, taskEntity } from "./__tests__/fixture";
 
 const kit = kitApp();
 
@@ -189,6 +189,107 @@ describe("rows on many-row methods", () => {
     expect(
       await app.as(as(board.cy, { taskService: "Admin" })).taskService.bulkDelete({ ids }),
     ).toEqual({ count: 1 });
+  });
+});
+
+describe("a bulk method whose form names no level (CRUD-2)", () => {
+  type BulkDeleteForm =
+    | "authenticated"
+    | { entry: "Admin" | "Moderate"; id: "ids" }
+    | { service: "Moderate" };
+
+  /** The README's map: delete needs Admin, and the bulk methods name no level. */
+  async function start(
+    bulkDelete: BulkDeleteForm = "authenticated",
+    update: { entry: "Moderate" | "Admin" | "Read" } = { entry: "Moderate" },
+  ) {
+    const service = qd.defineService(taskContract, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      collections: { board: { anchor: projectContract } },
+      methods: {
+        ...crud.handlers(taskContract, {
+          access: {
+            get: { entry: "Read" },
+            getMany: "authenticated",
+            list: "authenticated",
+            create: { scope: "Moderate", of: projectContract, id: "projectId" },
+            update,
+            delete: { entry: "Admin" },
+            reorder: { entry: "Moderate" },
+            bulkUpdate: "authenticated",
+            bulkDelete,
+          },
+        }),
+      },
+    });
+    const app = await createTestApp({ services: [projectService, service], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    return app;
+  }
+
+  it("takes delete's row level for bulkDelete, and update's for bulkUpdate", async () => {
+    const board = kit.board();
+    const { prisma } = kit.harness();
+    const app = await start();
+    const member = app.as(as(board.bo)).taskService;
+    await expect(member.delete({ id: board.t1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await member.bulkDelete({ ids: [board.t1] })).toEqual({ count: 0 });
+    expect(await prisma.task.count({ where: { id: board.t1 } })).toBe(1);
+    expect(await member.bulkUpdate({ ids: [board.t1], data: { status: "done" } })).toEqual({
+      count: 1,
+    });
+    expect(await app.as(as(board.ada)).taskService.bulkDelete({ ids: [board.t1] })).toEqual({
+      count: 1,
+    });
+  });
+
+  it('refuses the whole call under { entry: "Admin", id: "ids" }', async () => {
+    const board = kit.board();
+    const app = await start({ entry: "Admin", id: "ids" });
+    await expect(
+      app.as(as(board.bo)).taskService.bulkDelete({ ids: [board.t1] }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await app.as(as(board.ada)).taskService.bulkDelete({ ids: [board.t1] })).toEqual({
+      count: 1,
+    });
+  });
+
+  it("takes update's Admin for bulkUpdate, and never goes below Moderate", async () => {
+    const board = kit.board();
+    const admin = await start("authenticated", { entry: "Admin" });
+    const data = { status: "done" };
+    expect(await admin.as(as(board.bo)).taskService.bulkUpdate({ ids: [board.t1], data })).toEqual({
+      count: 0,
+    });
+    expect(await admin.as(as(board.ada)).taskService.bulkUpdate({ ids: [board.t1], data })).toEqual(
+      { count: 1 },
+    );
+    // update: Read lets a reader edit one row; the bulk method keeps 5.0's Moderate.
+    const read = await start("authenticated", { entry: "Read" });
+    expect(await read.as(as(board.cy)).taskService.bulkUpdate({ ids: [board.t1], data })).toEqual({
+      count: 0,
+    });
+  });
+
+  it("takes delete's level under a service form that names no row level", async () => {
+    const board = kit.board();
+    const app = await start({ service: "Moderate" });
+    // A service-wide Moderate grant is a Moderate row level on every row: below delete's Admin.
+    expect(
+      await app
+        .as(as(board.ed, { taskService: "Moderate" }))
+        .taskService.bulkDelete({ ids: [board.t1] }),
+    ).toEqual({ count: 0 });
+    expect(await kit.harness().prisma.task.count({ where: { id: board.t1 } })).toBe(1);
+  });
+
+  it("lets a level the bulk form names win over its counterpart's", async () => {
+    const board = kit.board();
+    const app = await start({ entry: "Moderate", id: "ids" });
+    expect(await app.as(as(board.bo)).taskService.bulkDelete({ ids: [board.t1] })).toEqual({
+      count: 1,
+    });
   });
 });
 

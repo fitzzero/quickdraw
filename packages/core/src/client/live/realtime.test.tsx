@@ -51,8 +51,12 @@ const roomService = server.defineService(room, {
     },
   },
   channels: {
-    cursor: (payload, ctx) => {
-      cursors.push({ userId: ctx.principal.userId, ...payload });
+    // Any signed-in user may send a cursor here: said on the service, so it does not warn.
+    cursor: {
+      access: "authenticated",
+      handler: (payload, ctx) => {
+        cursors.push({ userId: ctx.principal.userId, ...payload });
+      },
     },
   },
 });

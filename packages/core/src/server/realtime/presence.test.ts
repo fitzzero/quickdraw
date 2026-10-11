@@ -3,20 +3,27 @@
 // remembered as last seen; `count` and `users` follow joins and leaves;
 // `qd:presence` tells each socket in an app room who is there; `ctx.rooms`
 // and presence refuse the framework's rooms; `ctx.rooms` joins nothing
-// without a socket, and caps a socket's rooms; behind a cluster adapter the
-// answers come from every node.
+// without a socket, and caps a socket's rooms. Behind a cluster adapter (two
+// servers on the in-process peered bus) the other nodes answer with user ids
+// alone, never their sockets (the 5.1 audit's RT-5); a node of an earlier
+// version, which never answers, makes presence read every node's sockets for
+// 30 s; another deployment's nodes answer nothing that counts.
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { Server } from "socket.io";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { inCluster } from "../../../test/cluster/mode";
 import { defineContract, query } from "../../index";
 import type { PresenceFrame } from "../../protocol/envelope";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, type TestApp, type TestConnection } from "../../testing/index";
+import { captureLogger } from "../__tests__/fixtures";
 import { as, projectService, seedBoard, type Board } from "../access/__tests__/board";
-import { createDispatcher, initQuickdraw, type Principal } from "../index";
+import { createDispatcher, initQuickdraw, type Principal, type QuickdrawIo } from "../index";
+import { peeredCluster } from "../transports/__tests__/harness";
 import { defineLiveService, frames, received, settle } from "./__tests__/fixture";
 import { MAX_APP_ROOMS, PresenceRecords, PRESENCE_MAX_LAST_SEEN } from "./presence";
+import { PRESENCE_EVENT } from "./presenceRequests";
 
 let h: Harness;
 let board: Board;
@@ -39,26 +46,51 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map(async (app) => await app.close()));
 });
 
-async function start(options: { readonly cluster?: boolean } = {}) {
+async function start() {
   const app = await createTestApp({
     services: [projectService, defineLiveService(received())],
     db: h.db,
   });
   apps.push(app as unknown as TestApp);
-  // In the cluster projects the app is behind a real cluster adapter already.
-  if (options.cluster === true && !inCluster()) {
-    // Any adapter other than the one the server was created with counts as a
-    // cluster adapter (`transports/pushes.ts`): this one is still in memory,
-    // so `fetchSockets` answers from this process, through the cluster path.
-    const { io } = app.server;
-    const InMemory = io.adapter() as unknown as new (...args: never[]) => object;
-    class Cluster extends InMemory {}
-    io.adapter(Cluster as unknown as Parameters<typeof io.adapter>[0]);
-  }
   return app;
 }
 
 type App = Awaited<ReturnType<typeof start>>;
+
+type Bus = ReturnType<typeof peeredCluster>;
+
+/**
+ * A server on `bus`, one node of a cluster: it hears the servers in
+ * `bus.servers`, itself included. With a `fetchSockets` spy on its adapter
+ * and the warnings it logged.
+ */
+async function node(
+  bus: Bus,
+  cluster: { readonly keyPrefix?: string; readonly timeoutMs?: number } = {},
+) {
+  const logger = captureLogger();
+  const app = await createTestApp({
+    services: [projectService, defineLiveService(received())],
+    db: h.db,
+    socket: { adapter: bus.adapter },
+    cluster,
+    logger,
+  });
+  apps.push(app as unknown as TestApp);
+  bus.servers.push(app.server.io);
+  const fetched = vi.spyOn(app.server.io.sockets.adapter, "fetchSockets");
+  const warnings = () => logger.at("warn").map(({ message }) => message);
+  return { app, fetched, warnings };
+}
+
+/** In the cluster projects, a spy on `fetchSockets` of each of the app's two nodes; elsewhere none. */
+async function fetchSocketsOfNodes(app: App) {
+  if (!inCluster()) {
+    return [];
+  }
+  const { nodesOf } = await import("../../../test/cluster/nodes");
+  return nodesOf(app).map((each) => vi.spyOn(each.app.server.io.sockets.adapter, "fetchSockets"));
+}
 
 /** The users a client holding `frames` sees in the room: a list replaces, `joined` adds, `left` removes. */
 function seenIn(sent: readonly PresenceFrame[]): string[] {
@@ -183,6 +215,7 @@ describe("presence", () => {
 describe("qd:presence", () => {
   it("gives a joining socket the list, then tells the room who joins and who leaves", async () => {
     const app = await start();
+    const fetched = await fetchSocketsOfNodes(app);
     const ada = await connect(app, as(board.ada));
     const cy1 = await connect(app, as(board.cy));
     const cy2 = await connect(app, as(board.cy));
@@ -214,6 +247,10 @@ describe("qd:presence", () => {
     await expect
       .poll(() => ada.presence.slice(before))
       .toEqual([{ room: "lobby", left: board.cy }]);
+    // In the cluster projects the lists and the `left` were the other node's answers: ids alone.
+    for (const spy of fetched) {
+      expect(spy).not.toHaveBeenCalled();
+    }
   });
 
   it("lists no anonymous socket, and tells nobody of one", async () => {
@@ -300,6 +337,37 @@ describe("ctx.rooms.join and leave", () => {
     expect([...(socket?.rooms ?? [])].sort()).toEqual([cy.socket.id, `user:${board.cy}`].sort());
   });
 
+  it("refuse a name with the shape of a socket id: every socket is alone in the room of its id (RT-I1)", async () => {
+    const app = await start();
+    const ada = await app.connect(as(board.ada));
+    const cy = await app.connect(as(board.cy));
+    const victim = ada.socket.id ?? "";
+    expect(victim).toMatch(/^[\w-]{20}$/);
+    const refused = { code: "VALIDATION", message: expect.stringContaining("socket id") };
+    await expect(cy.call.taskService.enter({ room: victim })).rejects.toMatchObject(refused);
+    await expect(cy.call.taskService.exit({ room: victim })).rejects.toMatchObject(refused);
+    await expect(app.server.presence.users(victim)).rejects.toMatchObject(refused);
+    await expect(app.server.presence.count(victim)).rejects.toMatchObject(refused);
+    expect(() => app.server.rooms.size(victim)).toThrow(
+      expect.objectContaining({ code: "VALIDATION" }),
+    );
+    await expect(app.server.rooms.leave(victim, { userId: board.ada })).rejects.toMatchObject(
+      refused,
+    );
+    const socket = app.server.io.sockets.sockets.get(cy.socket.id ?? "");
+    expect([...(socket?.rooms ?? [])].sort()).toEqual([cy.socket.id, `user:${board.cy}`].sort());
+  });
+
+  it("count no socket a raw join put in a room: presence answers for the rooms ctx.rooms.join recorded", async () => {
+    const app = await start();
+    const cy = await app.connect(as(board.cy));
+    // On the socket's own server: behind Valkey, `io.in(...).socketsJoin` goes through the adapter.
+    await app.server.io.sockets.sockets.get(cy.socket.id ?? "")?.join("raw");
+    expect(app.server.io.sockets.adapter.rooms.get("raw")?.size).toBe(1);
+    expect(await app.server.presence.users("raw")).toEqual([]);
+    expect(await app.server.presence.count("raw")).toBe(0);
+  });
+
   it("join nothing for a call that did not arrive over a socket", async () => {
     const app = await start();
     expect(await app.as(as(board.ada)).taskService.enter({ room: "lobby" })).toBe(false);
@@ -333,56 +401,96 @@ describe("ctx.rooms.join and leave", () => {
 });
 
 describe("behind a cluster adapter", () => {
-  it("answers through every node's sockets, and tells a room when a user's last socket leaves", async () => {
-    const app = await start({ cluster: true });
-    const { io } = app.server;
-    // Every answer goes through io.in(room).fetchSockets(): record the rooms asked about.
-    const asked: string[] = [];
-    const ask = io.in.bind(io);
-    io.in = ((room: string | string[]) => {
-      asked.push(String(room));
-      return ask(room);
-    }) as typeof io.in;
-    const ada = await connect(app, as(board.ada));
-    const cy1 = await connect(app, as(board.cy));
-    const cy2 = await connect(app, as(board.cy));
+  it("asks the other nodes for user ids alone, never their sockets, and tells a room once a user's last socket left", async () => {
+    const bus = peeredCluster();
+    const a = await node(bus);
+    const b = await node(bus);
+    const ada = await connect(a.app, as(board.ada));
+    const cy = await connect(b.app, as(board.cy));
     await ada.connection.call.taskService.enter({ room: "lobby" });
-    await cy1.connection.call.taskService.enter({ room: "lobby" });
-    await cy2.connection.call.taskService.enter({ room: "lobby" });
-    expect(await app.server.presence.isOnline(board.cy)).toBe(true);
-    expect((await app.server.presence.users("lobby")).sort()).toEqual([board.ada, board.cy].sort());
-    expect(await app.server.presence.count("lobby")).toBe(2);
-    await app.frames.waitFor(
-      (frame) => frame.event === "qd:presence" && frame.socketId === cy2.connection.socket.id,
-    );
-    await cy1.connection.call.taskService.exit({ room: "lobby" });
-    await close(app, cy2.connection);
-    await app.frames.waitFor({
-      event: "qd:presence",
-      userId: board.ada,
-      socketId: ada.connection.socket.id ?? "",
+    await cy.connection.call.taskService.enter({ room: "lobby" });
+    const both = [board.ada, board.cy].sort();
+    await expect.poll(() => seenIn(cy.presence)).toEqual(both);
+    const asks = vi.spyOn(b.app.server.io, "serverSideEmitWithAck");
+    expect((await b.app.server.presence.users("lobby")).sort()).toEqual(both);
+    expect(asks).toHaveBeenCalledWith(PRESENCE_EVENT, { room: "lobby", deployment: "quickdraw" });
+    await expect(asks.mock.results[0]?.value).resolves.toEqual([[board.ada]]);
+    expect(await b.app.server.presence.count("lobby")).toBe(2);
+    expect(await a.app.server.presence.isOnline(board.cy)).toBe(true);
+    expect(await a.app.server.presence.isOnline(board.bo)).toBe(false);
+
+    // Bo watches on node B. Cy's socket on node A leaves while cy keeps one in
+    // the room on node B: node A tells its room nothing. Then cy's socket on
+    // node B leaves, its last anywhere: node B's room hears it.
+    const bo = await connect(b.app, as(board.bo));
+    await bo.connection.call.taskService.enter({ room: "lobby" });
+    const cyOnA = await connect(a.app, as(board.cy));
+    await cyOnA.connection.call.taskService.enter({ room: "lobby" });
+    const asksA = vi.spyOn(a.app.server.io, "serverSideEmitWithAck");
+    await cyOnA.connection.call.taskService.exit({ room: "lobby" });
+    await vi.waitFor(() => {
+      expect(asksA).toHaveBeenCalledWith(PRESENCE_EVENT, {
+        room: "lobby",
+        deployment: "quickdraw",
+      });
     });
-    await app.frames.waitFor((frame) => {
-      const data = frame.data as PresenceFrame;
-      return frame.event === "qd:presence" && data.left === board.cy;
-    });
+    await asksA.mock.results[0]?.value;
     await settle(ada.connection);
-    if (inCluster()) {
-      // Behind Valkey the list is read from every node after the join's reply: it may come
-      // after a `joined` it already counts. What a client makes of the frames is the same.
-      expect(seenIn(ada.presence)).toEqual([board.ada]);
-    } else {
-      expect(ada.presence[0]).toEqual({ room: "lobby", users: [board.ada] });
+    expect(ada.presence.filter((frame) => frame.left !== undefined)).toEqual([]);
+    await cy.connection.call.taskService.exit({ room: "lobby" });
+    await expect
+      .poll(() => bo.presence.filter((frame) => frame.left !== undefined))
+      .toEqual([{ room: "lobby", left: board.cy }]);
+    expect((await a.app.server.presence.users("lobby")).sort()).toEqual(
+      [board.ada, board.bo].sort(),
+    );
+    for (const each of [a, b]) {
+      expect(each.fetched).not.toHaveBeenCalled();
+      expect(each.warnings()).toEqual([]);
     }
-    expect(ada.presence.filter((frame) => frame.left !== undefined)).toEqual([
-      { room: "lobby", left: board.cy },
+  });
+
+  it("reads every node's sockets for 30 s once a node of an earlier version left a request unanswered", async () => {
+    const bus = peeredCluster();
+    const a = await node(bus, { timeoutMs: 100 });
+    const ada = await connect(a.app, as(board.ada));
+    await ada.connection.call.taskService.enter({ room: "lobby" });
+    await expect.poll(() => ada.presence).toEqual([{ room: "lobby", users: [board.ada] }]);
+    // A node of an earlier version hears the bus but knows no `quickdraw:presence`: it never answers.
+    bus.servers.push(new Server() as unknown as QuickdrawIo);
+    const asks = vi.spyOn(a.app.server.io, "serverSideEmitWithAck");
+    expect(await a.app.server.presence.users("lobby")).toEqual([board.ada]);
+    expect(asks).toHaveBeenCalledTimes(1);
+    expect(a.fetched).toHaveBeenCalledTimes(1);
+    expect(a.warnings()).toEqual([
+      expect.stringContaining("did not answer a presence request within cluster.timeoutMs"),
     ]);
-    expect(await app.server.presence.isOnline(board.cy)).toBe(true);
-    expect(await app.server.presence.users("lobby")).toEqual([board.ada]);
-    // In the cluster projects `server.io` is the reader node's, and `server.presence` asks
-    // through the writer node's server: this one sees the rooms its own sockets' frames read.
-    const rooms = inCluster() ? ["lobby"] : ["lobby", `user:${board.cy}`];
-    expect(asked).toEqual(expect.arrayContaining(rooms));
+    // Within the 30 s that follow a read asks no node: it reads every node's sockets at once.
+    expect(await a.app.server.presence.count("lobby")).toBe(1);
+    expect(await a.app.server.presence.isOnline(board.cy)).toBe(false);
+    expect(asks).toHaveBeenCalledTimes(1);
+    expect(a.fetched).toHaveBeenCalledTimes(3);
+    expect(a.warnings()).toHaveLength(1);
+  });
+
+  it("counts none of another deployment's users: its nodes answer null, at once", async () => {
+    const bus = peeredCluster();
+    const prod = await node(bus, { keyPrefix: "prod" });
+    const staging = await node(bus, { keyPrefix: "staging" });
+    const ada = await connect(prod.app, as(board.ada));
+    const cy = await connect(staging.app, as(board.cy));
+    await ada.connection.call.taskService.enter({ room: "lobby" });
+    await cy.connection.call.taskService.enter({ room: "lobby" });
+    await expect.poll(() => seenIn(cy.presence)).toEqual([board.cy]);
+    expect(await prod.app.server.presence.users("lobby")).toEqual([board.ada]);
+    expect(await staging.app.server.presence.users("lobby")).toEqual([board.cy]);
+    expect(await prod.app.server.presence.isOnline(board.cy)).toBe(false);
+    expect(seenIn(ada.presence)).toEqual([board.ada]);
+    // Answered, so neither node waited for a timeout or read the other's sockets.
+    for (const deployment of [prod, staging]) {
+      expect(deployment.fetched).not.toHaveBeenCalled();
+      expect(deployment.warnings()).toEqual([]);
+    }
   });
 });
 

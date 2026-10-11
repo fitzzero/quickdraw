@@ -7,10 +7,12 @@
 //
 // `qd:col:items` serves a socket that subscribed to the scope already: its
 // subscription is the authorization, kept current by revocation, so it reads
-// no access and costs one statement (two for a `via` scope). A socket that
-// has not subscribed is `FORBIDDEN`, and more than 200 ids are `VALIDATION`,
-// as more than 500 are for `qd:sub`. A scope value longer than 256
-// characters is `VALIDATION` in every frame.
+// no access and costs one statement (two for a `via` scope). A self scope on
+// a service with a policy also asks the policy's filter for the subscriber
+// (`selfAccess.ts`): its items are only the rows the subscriber may read. A
+// socket that has not subscribed is `FORBIDDEN`, and more than 200 ids are
+// `VALIDATION`, as more than 500 are for `qd:sub`. A scope value longer than
+// 256 characters is `VALIDATION` in every frame.
 
 import type { CollectionItemsReply, Ok } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
@@ -18,10 +20,10 @@ import { MAX_SCOPE_LENGTH } from "../../protocol/version";
 import { liveService } from "../emit/hub";
 import { unreadable } from "../transports/ack";
 import type { QuickdrawServerSocket } from "../transports/types";
+import { itemsWhere } from "./access";
 import type { BoundCollection, CollectionHub } from "./bind";
 import { MAX_ITEM_IDS, readItemsById } from "./items";
-import { roomOf, type ScopeSubscription } from "./scopes";
-import type { ScopeRequest } from "./subscribe";
+import { roomOf, type ScopeRequest, type ScopeSubscription } from "./scopes";
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
@@ -119,9 +121,11 @@ export function servedCollection(
 ): {
   readonly collection: BoundCollection;
   readonly storage: NonNullable<CollectionHub["storage"]>;
+  readonly principal: NonNullable<QuickdrawServerSocket["data"]["principal"]>;
 } {
   const collection = collectionOf(hub, ref.s, ref.c);
-  if (socket.data.principal === null) {
+  const { principal } = socket.data;
+  if (principal === null) {
     throw new QuickdrawError("UNAUTHENTICATED", "Authentication required");
   }
   if (hub.storage === undefined) {
@@ -130,7 +134,7 @@ export function servedCollection(
       "Collections read rows through the dispatcher's storage adapter: pass db as trackPrisma(prisma)",
     );
   }
-  return { collection, storage: hub.storage };
+  return { collection, storage: hub.storage, principal };
 }
 
 /**
@@ -143,7 +147,7 @@ export async function loadItems(
   socket: QuickdrawServerSocket,
   request: ItemsRequest,
 ): Promise<CollectionItemsReply> {
-  const { collection, storage } = servedCollection(hub, socket, request);
+  const { collection, storage, principal } = servedCollection(hub, socket, request);
   if (hub.collections.scopes.get(socket, roomOf(request)) === undefined) {
     throw new QuickdrawError(
       "FORBIDDEN",
@@ -152,9 +156,10 @@ export async function loadItems(
   }
   // The revision is claimed before any read: behind a cluster's counter, the counter's.
   const rev = await hub.revisions.claim();
+  const filter = await itemsWhere(hub, collection, principal);
   return {
     ok: true,
-    ...(await readItemsById(storage, collection, request.scope, request.ids, rev)),
+    ...(await readItemsById(storage, collection, request.scope, request.ids, rev, filter)),
   };
 }
 

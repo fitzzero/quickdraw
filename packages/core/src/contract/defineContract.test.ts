@@ -485,6 +485,9 @@ describe("definition-time checks", () => {
   it("rejects a missing or empty service name, and a definition that is not an object", () => {
     expect(() => define("", {})).toThrow("the service name must be a non-empty string");
     expect(() => define(undefined, {})).toThrow("the service name must be a non-empty string");
+    // Every room name of a service holds its name, and must split one way only (LIVE-3).
+    expect(() => define("task:archive", {})).toThrow('may not contain ":" or "@"');
+    expect(() => define("task@v2", {})).toThrow('may not contain ":" or "@"');
     expect(() => define("s", null)).toThrow(
       'defineContract("s"): the definition must be an object',
     );
@@ -494,6 +497,25 @@ describe("definition-time checks", () => {
 
 describe("streams, channels and events (RFC 0003 section 12.5)", () => {
   const cursor = z.object({ docId: z.string(), x: z.number(), y: z.number() });
+
+  it("refuses a literal room with the shape of a Socket.IO socket id: no socket joins one", () => {
+    const socketId = "abcdefghij0123456789";
+    expect(() =>
+      define("s", { channels: { c: { payload: cursor, requires: { room: socketId } } } }),
+    ).toThrow("has the shape of a Socket.IO socket id");
+    expect(() =>
+      define("s", { streams: { feed: { item: z.string(), access: { room: socketId } } } }),
+    ).toThrow("has the shape of a Socket.IO socket id");
+    // A prefix is no room name, and a longer name is an app room's.
+    expect(() =>
+      define("s", {
+        streams: { feed: { item: z.string(), access: { room: { prefix: socketId } } } },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      define("s", { channels: { c: { payload: cursor, requires: { room: `${socketId}x` } } } }),
+    ).not.toThrow();
+  });
 
   it("keeps every option, frozen", () => {
     const board = defineContract("boardService", {

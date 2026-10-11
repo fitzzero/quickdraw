@@ -114,6 +114,40 @@ describe("mergeRecords", () => {
     ]);
   });
 
+  it("carries a delete's junction links to the merged delete, and drops them from anything else (COLL-3)", () => {
+    const bug = { taskId: "t1", labelId: "bug" };
+    const idea = { taskId: "t1", labelId: "idea" };
+    expect(
+      mergeRecords([
+        task("update", ["title"]),
+        task("delete", [], { links: { taskLabel: [bug] } }),
+      ]),
+    ).toEqual([expect.objectContaining({ op: "delete", links: { taskLabel: [bug] } })]);
+    // Deleted, created again and deleted again: both deletes' links.
+    expect(
+      mergeRecords([
+        task("delete", [], { links: { taskLabel: [bug] } }),
+        task("create", ["title"]),
+        task("delete", [], { links: { taskLabel: [idea] } }),
+      ]),
+    ).toEqual([expect.objectContaining({ op: "delete", links: { taskLabel: [bug, idea] } })]);
+    // One delete that read none: the links are unknown.
+    expect(
+      mergeRecords([
+        task("delete", [], { links: { taskLabel: [bug] } }),
+        task("create", ["title"]),
+        task("delete"),
+      ])[0],
+    ).not.toHaveProperty("links");
+    // Deleted and created again: a create, which carries none.
+    expect(
+      mergeRecords([
+        task("delete", [], { links: { taskLabel: [bug] } }),
+        task("create", ["title"]),
+      ])[0],
+    ).not.toHaveProperty("links");
+  });
+
   it("returns a lone record as it is, and nothing for nothing", () => {
     const only = task("update", ["title"]);
     expect(mergeRecords([only])[0]).toBe(only);

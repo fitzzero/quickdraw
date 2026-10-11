@@ -28,6 +28,18 @@
 // | reads`               | `anyOf`) that declares no `reads`, so no tracked write re-checks   |                          |
 // |                      | it (`access/resolverReads.ts`); raised when a dispatcher is made,  |                          |
 // |                      | so a strict test app fails to start                                 |                          |
+// | `untracked-access-   | a model an access policy, a membership table or a `via` junction   | the model                |
+// | model`               | depends on has no `id` the write tracker can key its rows by, so   |                          |
+// |                      | no write to it revokes (`access/trackedModels.ts`); checked by     |                          |
+// |                      | `createServer` at start, logged as an error in every environment,  |                          |
+// |                      | and a strict test app fails to start                                |                          |
+// | `shared-principal`   | the handler of a `share: "all"` run (an app's, not a kit's) read   | the member               |
+// |                      | `ctx.principal`, `ctx.services` or `ctx.mcp`: the run has the      | (`principal`, `services`,|
+// |                      | first caller's, and every caller gets its result                   | `mcp`)                   |
+// | `channel-without-    | a channel's contract declares no `requires` and its service no     | the channel              |
+// | requires`            | `access`, so every signed-in user may send it                      |                          |
+// |                      | (`realtime/channelWarnings.ts`); raised when a dispatcher is made, |                          |
+// |                      | so a strict test app fails to start                                 |                          |
 //
 // `nested-write`, `ambient-write`, `batch-read` and `batch-create-many` are
 // the write tracker's (`uow/unitOfWork.ts`), raised exactly where they were
@@ -59,7 +71,10 @@ export type DevWarningKind =
   | "batch-create-many"
   | "repeated-call"
   | "tiered-field-in-output"
-  | "resolver-without-reads";
+  | "resolver-without-reads"
+  | "untracked-access-model"
+  | "shared-principal"
+  | "channel-without-requires";
 
 /** One development warning. */
 export interface DevWarning {
@@ -70,8 +85,8 @@ export interface DevWarning {
   /**
    * What the warning is about within its call, for the once-only rule: the
    * model of an ambient write, the model, field and operation of a nested
-   * write, the connection of a repeated call. Empty for the kinds that are
-   * once per call site.
+   * write, the connection of a repeated call, the `ctx` member a shared run
+   * read. Empty for the kinds that are once per call site.
    */
   readonly subject?: string;
   /** What happened and what to do instead. */

@@ -50,7 +50,7 @@ const task = defineContract("taskService", {
 });
 
 // #region access
-import { anyOf, crud, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
+import { anyOf, crud, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
 
 export const projectService = qd.defineService(project, {
   // the Prisma model the rows live in
@@ -99,10 +99,9 @@ export const taskService = qd.defineService(task, {
         db.task.update({ where: { id: input.id }, data: { assigneeId: ctx.principal.userId } }),
     },
     triage: {
-      // a check on a token's claims stays a custom form
-      access: custom(
-        (ctx, input) => ctx.principal.claims?.scope === "triage" && input.status !== "archived",
-      ),
+      // Moderate on the task's project, from a token that may triage: claims add to the form
+      access: { entry: "Moderate" },
+      claims: (claims, input) => claims?.scope === "triage" && input.status !== "archived",
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { status: input.status } }),
     },

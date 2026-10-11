@@ -10,7 +10,6 @@ import {
   type LoopWatch,
 } from "../devWarnings";
 import { createLive, type ChangeLogOptions, type Live } from "../emit/live";
-import { warnTieredOutputs } from "../emit/tieredOutputs";
 import type { Registry } from "../registry";
 import type { FlushSink } from "../uow/flushSink";
 import {
@@ -19,9 +18,13 @@ import {
   type AccessOptions,
   type PolicyEngine,
 } from "./accessSettings";
+import { warnDefinitions } from "./definitionWarnings";
 import { createRecorder, type CallRecord, type RecordDetails } from "./metrics";
 import type { VersionSource } from "./notModified";
 import { resolveTracking, storageFor, type Tracking, type TrackingOptions } from "./tracking";
+
+// The dispatcher's logs write errors with it, through this module, within its import budget.
+export { errorText } from "../../contract/logger";
 
 /**
  * The lane each socket's subscription events (`qd:sub`, `qd:col:sub`,
@@ -71,7 +74,13 @@ export const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /** The pipeline's options: every seam and limit has a default. */
 export interface PipelineOptions extends TrackingOptions {
-  /** Receives one entry per call, and the original error of every `INTERNAL` failure. Default: the console. */
+  /**
+   * Receives one entry per call, and the original error of every `INTERNAL`
+   * failure; a Prisma error is summarized (class, code, `meta`, frames),
+   * never its message, which renders the call's values. Default: the
+   * console (`consoleLogger`), which drops `debug` when `NODE_ENV` is
+   * "production"; `createConsoleLogger({ level })` names another level.
+   */
   readonly logger?: Logger;
   /**
    * The access options (`{ cacheMs }`), or an engine of the app's own that
@@ -83,7 +92,11 @@ export interface PipelineOptions extends TrackingOptions {
    * Answers query versions for "not modified" replies, for queries that
    * declare no `version` of their own. Default: the version of the row a
    * query returns, for a query whose output is one projection row and whose
-   * input has an `id`: the service's `versionColumn`, or the change log.
+   * input has an `id`: the service's `versionColumn`, or the change log;
+   * only when the method's form checked that row (an `entry` form on `id`, a
+   * `rowless` method, or the service's `Admin` bypass). A source of the
+   * app's own must answer only for rows the form let the caller read: a
+   * version is a one-bit oracle, answered before the handler runs.
    */
   readonly versions?: VersionSource;
   /**
@@ -136,6 +149,8 @@ export interface PipelineSettings extends Tracking {
   /** Counts each connection's calls and refusals, and warns when they look like a client loop (`../devWarnings.ts`). */
   readonly loops: LoopWatch;
   readonly record: (record: CallRecord, details: RecordDetails) => void;
+  /** The dispatcher's `serviceAccessSource`: the admin kit's grants column on its model. */
+  readonly grantsSource: { readonly model: string; readonly column: string } | undefined;
 }
 
 function checkCount(name: string, value: number, max: number): number {
@@ -178,19 +193,25 @@ function resolveLimits(limits: LimitsOptions = {}): DispatcherLimits {
 }
 
 /**
- * Applies the defaults to the dispatcher's options. `accessSinks` run right
- * after the access sink, before any frame of a flush is sent.
+ * Applies the defaults to the dispatcher's options. `parts`:
+ * `accessSinks`, which `createServer` adds, run right after the access sink,
+ * before any frame of a flush is sent, and `grantsSource` is the checked
+ * `serviceAccessSource`.
  */
 export function resolveSettings(
   options: PipelineOptions,
   registry: Registry,
   db: unknown,
-  accessSinks: readonly FlushSink[] = [],
+  parts: {
+    readonly accessSinks: readonly FlushSink[];
+    readonly grantsSource: PipelineSettings["grantsSource"];
+  } = { accessSinks: [], grantsSource: undefined },
 ): PipelineSettings {
+  const { accessSinks } = parts;
   const development = process.env.NODE_ENV !== "production";
   const logger = options.logger ?? consoleLogger;
   const warnings = createDevWarnings({ logger, development, strict: strictWarningsOf(options) });
-  warnTieredOutputs(registry, warnings);
+  warnDefinitions(registry, warnings);
   const storage = storageFor(options, db);
   const { access, policies } = resolveAccess(options.access, registry, storage, {
     logger,
@@ -234,5 +255,6 @@ export function resolveSettings(
       maxResponseBytes: options.maxResponseBytes ?? 1_048_576,
       warnings,
     }),
+    grantsSource: parts.grantsSource,
   });
 }

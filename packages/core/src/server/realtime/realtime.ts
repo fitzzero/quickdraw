@@ -10,7 +10,7 @@ import { onDisconnect } from "../emit/answer";
 import type { Hub } from "../emit/hub";
 import type { QuickdrawServerSocket, SocketContext } from "../transports/types";
 import { channelMessages } from "./channels";
-import { createPresence, PresenceRecords } from "./presence";
+import { createPresence, createPresenceState } from "./presence";
 import { createRooms, unjoinable, type DetachedRun, type RoomLeaveHook } from "./rooms";
 import { createStreams, type Streams } from "./streams";
 import type {
@@ -67,17 +67,18 @@ export interface Realtime {
   readonly revocation: Streams["revocation"];
   /**
    * Listens on the server the hub was given for the items other nodes push
-   * to seeded streams, and for their `rooms.leave(room, { userId })`.
+   * to seeded streams, for their `rooms.leave(room, { userId })`, and for
+   * their presence requests.
    */
   listen(): void;
 }
 
 /** Creates the realtime half of a dispatcher's live data, on its hub. */
 export function createRealtime(hub: Hub): Realtime {
-  const records = new PresenceRecords();
-  const presence = createPresence(hub, records);
+  const state = createPresenceState(hub);
+  const presence = createPresence(state);
   const streams = createStreams(hub);
-  const rooms = createRooms({ hub, records }, streams.leftRooms);
+  const rooms = createRooms(state, streams.leftRooms);
   const channels = channelMessages({ hub, rooms, presence, warned: new WeakSet() });
   return Object.freeze({
     extension(socket: QuickdrawServerSocket, context: SocketContext): void {
@@ -114,6 +115,7 @@ export function createRealtime(hub: Hub): Realtime {
     listen: () => {
       streams.listen();
       rooms.listen();
+      state.requests.listen();
     },
   });
 }

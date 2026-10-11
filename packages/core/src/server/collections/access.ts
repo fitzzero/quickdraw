@@ -6,7 +6,9 @@
 // `access` level (default `Read`) on the anchor row, and grants on the
 // anchor's service do not count, as they do not flow through `inherit`. A
 // missing anchor row has no level, so it is `FORBIDDEN` unless the grant
-// passes. A `"self"` scope passes when it is the principal's own user id.
+// passes. A `"self"` scope passes when it is the principal's own user id;
+// it has no anchors, and on a service with a policy its items follow that
+// policy for its user (`selfAccess.ts`).
 // 4.1 asked each collection's `checkScopeAccess` (4.1 `src/server/collections.ts:45-49`).
 //
 // A change topic (RFC 0003 section 11.3) is watched on the same terms: a
@@ -20,6 +22,7 @@ import { QuickdrawError } from "../../protocol/errors";
 import type { PolicyEngine } from "../access/api";
 import { checkKind } from "../access/kinds";
 import { meetsLevel, serviceGrant } from "../access/levels";
+import type { AccessFilter } from "../access/policy";
 import { anchorKey } from "../access/tools";
 import type { AnyService } from "../service";
 import type { Principal } from "../types";
@@ -50,7 +53,8 @@ export interface ScopeRule {
 /**
  * The scopes of `scopes` the principal may subscribe to under `rule`, each
  * with the rows its access is derived from (its anchors): the anchor row and
- * its `inherit` parents, none for a `"self"` scope. One engine call; a lookup
+ * its `inherit` parents, none for a `"self"` scope, whose items follow the
+ * item service's policy instead (`selfAccess.ts`). One engine call; a lookup
  * that fails rejects.
  */
 export async function allowedScopes(
@@ -82,6 +86,30 @@ export async function allowedScopes(
     }
   }
   return allowed;
+}
+
+/**
+ * True for a self scope on a service with an access policy: its items follow
+ * that policy (`selfAccess.ts`).
+ */
+export function followsPolicy(collection: Pick<BoundCollection, "anchor" | "service">): boolean {
+  return collection.anchor === undefined && collection.service.access !== undefined;
+}
+
+/**
+ * The filter a read of a self scope's rows adds for `principal`: the item
+ * service's `accessWhere` at the collection's `access` (`{}` for a
+ * service-wide `Admin` with `adminBypass`, `"none"` when no row matches).
+ * `undefined` for any other collection.
+ */
+export async function itemsWhere(
+  hub: Pick<CollectionHub, "policies">,
+  collection: BoundCollection,
+  principal: Principal,
+): Promise<AccessFilter | undefined> {
+  return followsPolicy(collection)
+    ? await hub.policies.accessWhere(collection.service.name, principal, collection.access)
+    : undefined;
 }
 
 /** The scopes of `scopes` the principal may subscribe to in a served collection: {@link allowedScopes}. */

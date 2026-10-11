@@ -32,6 +32,7 @@ import {
   type RouteSettings,
 } from "./settings";
 import { decodePending, encodePending, newState, stateMatches } from "./state";
+import { errorText } from "../../../contract/logger";
 
 /** A provider the routes drive; `enabled` is checked again on every request (the mock provider's). */
 export interface SignInFlow extends OAuthSignInProvider {
@@ -41,10 +42,6 @@ export interface SignInFlow extends OAuthSignInProvider {
 type Handler = (req: AuthRouteRequest, res: AuthRouteResponse) => void | Promise<void>;
 
 const CATEGORY = "quickdraw.auth";
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /** `GET {basePath}/{provider}/start`. */
 export function startRoute(settings: RouteSettings, flow: SignInFlow): Handler {
@@ -62,7 +59,10 @@ export function startRoute(settings: RouteSettings, flow: SignInFlow): Handler {
     }
     const state = newState();
     const location = flow.authorizeUrl(state, redirectUriOf(settings, flow.id));
-    const pending = encodePending({ state, provider: flow.id, origin, issuedAt: Date.now() });
+    const pending = encodePending(
+      { state, provider: flow.id, origin, issuedAt: Date.now() },
+      settings.stateKey,
+    );
     res.cookie(stateCookieName(settings, req), pending, stateCookieOf(settings, req, true));
     redirect(res, location);
   };
@@ -83,7 +83,7 @@ async function userFor(
     settings.logger.warn("A sign-in's code exchange failed", {
       category: CATEGORY,
       provider: flow.id,
-      error: messageOf(error),
+      error: errorText(error),
     });
     return { error: "failed" };
   }
@@ -98,7 +98,7 @@ async function userFor(
     settings.logger.error("onLogin failed", {
       category: CATEGORY,
       provider: flow.id,
-      error: messageOf(error),
+      error: errorText(error),
     });
     return { error: "failed" };
   }
@@ -129,7 +129,7 @@ async function complete(
   } catch (error) {
     settings.logger.error("Creating a session failed", {
       category: CATEGORY,
-      error: messageOf(error),
+      error: errorText(error),
     });
     redirect(res, landingOf(settings, origin, "failed"));
     return;
@@ -149,7 +149,7 @@ export function callbackRoute(settings: RouteSettings, flow: SignInFlow): Handle
     }
     const name = stateCookieName(settings, req);
     // A repeated name reads as "": no state, since either could be a planted one.
-    const pending = decodePending(cookiesOf(req)[name]);
+    const pending = decodePending(cookiesOf(req)[name], settings.stateKey);
     // Single use: the state cookie goes whatever happens next.
     res.clearCookie(name, stateCookieOf(settings, req));
     if (pending === null) {

@@ -8,27 +8,40 @@ import {
   encodePending,
   newState,
   OAUTH_STATE_TTL_MS,
+  oauthStateKey,
   redeemedStates,
   stateMatches,
 } from "./state";
 
+const KEY = oauthStateKey("a-test-secret-of-at-least-thirty-two-characters");
+
 describe("the state cookie", () => {
-  it("round-trips a pending sign-in and reads anything else as none", () => {
+  it("round-trips a pending sign-in, signed, and reads anything else as none", () => {
     const pending = { state: newState(), provider: "mock", origin: "http://app.test", issuedAt: 1 };
     expect(pending.state).toMatch(/^[\w-]{43}$/);
-    expect(decodePending(encodePending(pending))).toEqual(pending);
+    expect(decodePending(encodePending(pending, KEY), KEY)).toEqual(pending);
     const encoded = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const signed = (value: unknown) => encodePending(value as typeof pending, KEY);
     for (const raw of [
       undefined,
       "",
       "%%%",
-      encoded(null),
-      encoded("text"),
-      encoded({ ...pending, issuedAt: "1" }),
-      encoded({ ...pending, state: undefined }),
+      signed(null),
+      signed("text"),
+      signed({ ...pending, issuedAt: "1" }),
+      signed({ ...pending, state: undefined }),
     ]) {
-      expect(decodePending(raw)).toBeNull();
+      expect(decodePending(raw, KEY)).toBeNull();
     }
+    // Unsigned (5.0's format), signed under another key, or tampered with: none (AUTH-2b).
+    expect(decodePending(encoded(pending), KEY)).toBeNull();
+    const otherKey = oauthStateKey("another-secret-of-at-least-thirty-two-chars");
+    expect(decodePending(encodePending(pending, otherKey), KEY)).toBeNull();
+    const [payload = "", mac = ""] = encodePending(pending, KEY).split(".");
+    const tampered = encoded({ ...pending, state: "attacker-chosen-state" });
+    expect(decodePending(`${tampered}.${mac}`, KEY)).toBeNull();
+    expect(decodePending(`${payload}.${mac.slice(1)}`, KEY)).toBeNull();
+    expect(decodePending(`${payload}.`, KEY)).toBeNull();
   });
 
   it("matches only its own state, for its provider, within its lifetime", () => {

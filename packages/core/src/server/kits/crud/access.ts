@@ -9,10 +9,13 @@
 // every row, as everywhere.
 //
 // The row level is the form's own (`{ entry: L }` or `{ scope: L }`), or
-// else `Read` for reads and `Moderate` for writes. A `"public"` read's rows
+// else `Read` for reads and `Moderate` for writes; a bulk method's is its
+// single-row counterpart's (`delete`'s for `bulkDelete`, `update`'s for
+// `bulkUpdate`) before `Moderate`. A `"public"` read's rows
 // are public; a write always needs the level, so an anonymous caller writes
 // nothing, and a write on one row needs it on that row whatever its form
-// (`checkRowWrite`). A service-wide grant at level L is a row level of L on
+// (`checkRowWrite`); `create` needs it on each anchor row its new row names
+// (`../columns.ts`). A service-wide grant at level L is a row level of L on
 // every row where the form names `service` (`grantRowLevel`): such a read is
 // unfiltered, its rows stripped at the grant. A service without a policy has
 // no row-level access: there the form is the whole check, so `defineService`
@@ -34,6 +37,19 @@ export function rowLevel(form: AccessForm, fallback: AccessLevel): AccessLevel {
     return fallback;
   }
   return form.entry ?? form.scope ?? fallback;
+}
+
+/**
+ * The row level a bulk method needs when its own form names none: the
+ * higher of `Moderate` and the row level of its single-row counterpart's
+ * form (`delete`'s for `bulkDelete`, `update`'s for `bulkUpdate`), so it
+ * never writes below 5.0's `Moderate`; `Moderate` without a counterpart, or
+ * when the counterpart's form names no row level (`{ service: L }`,
+ * `custom`): give both the same form then.
+ */
+export function bulkFallback(counterpart: AccessForm | undefined): AccessLevel {
+  const level = counterpart === undefined ? "Moderate" : rowLevel(counterpart, "Moderate");
+  return meetsLevel(level, "Moderate") ? level : "Moderate";
 }
 
 /** True when a method's rows are not checked against a policy: a public read, or no policy. */
@@ -95,15 +111,17 @@ function grantReaches(call: CrudCall, form: AccessForm, level: AccessLevel): boo
 }
 
 /**
- * The filter matching the rows the caller may see at `level`, `"none"` when
- * it may see none, or `undefined` when every row is visible.
+ * The filter matching the rows the caller may see (`use` `"read"`) or
+ * write (`"write"`, where a `"public"` form filters too) at `level`,
+ * `"none"` when it may reach none, or `undefined` when it reaches every row.
  */
 export async function rowsWhere(
   call: CrudCall,
   form: AccessForm,
   level: AccessLevel,
+  use: "read" | "write" = "read",
 ): Promise<AccessFilter | undefined> {
-  if (unchecked(call, form, "read") || grantReaches(call, form, level)) {
+  if (unchecked(call, form, use) || grantReaches(call, form, level)) {
     return undefined;
   }
   if (call.principal === null) {

@@ -142,12 +142,12 @@ describe("the session cookie's name", () => {
     "a name and a domain": { cookieName: "sid", domain: ".example.com" },
   };
 
-  it("written for a request is the first name read for the same request", () => {
+  it("written for a request is among the names read for the same request", () => {
     for (const [requestName, req] of Object.entries(requests)) {
       for (const [namingName, naming] of Object.entries(namings)) {
         const written = sessionCookieNameFor(req, naming);
         const read = sessionCookieNamesFor(req, naming);
-        expect(read[0], `${requestName}, ${namingName}`).toBe(written);
+        expect(read, `${requestName}, ${namingName}`).toContain(written);
         // A configured name wins everywhere; __Host- is never used with a domain.
         if (naming.cookieName !== undefined) {
           expect(read, `${requestName}, ${namingName}`).toEqual([naming.cookieName]);
@@ -169,7 +169,8 @@ describe("the session cookie's name", () => {
     for (const name of ["plain HTTP", "plain HTTP from an http: page", "X-Forwarded-Proto: http"]) {
       const req = requests[name] ?? { headers: {} };
       expect(sessionCookieNameFor(req), name).toBe(SESSION_COOKIE);
-      expect(sessionCookieNamesFor(req), name).toEqual([SESSION_COOKIE, HOST_SESSION_COOKIE]);
+      // __Host-session first: only this host, over a secure context, can have set it (AUTH-2a).
+      expect(sessionCookieNamesFor(req), name).toEqual([HOST_SESSION_COOKIE, SESSION_COOKIE]);
     }
   });
 
@@ -215,6 +216,43 @@ describe("the session cookie's name", () => {
       });
     } finally {
       process.env.NODE_ENV = originalNodeEnv;
+      if (originalDomain === undefined) delete process.env.COOKIE_DOMAIN;
+      else process.env.COOKIE_DOMAIN = originalDomain;
+    }
+  });
+
+  it("clears a stale __Host-session when setSessionCookie or clearSessionCookie writes session", () => {
+    const originalDomain = process.env.COOKIE_DOMAIN;
+    try {
+      delete process.env.COOKIE_DOMAIN;
+      // Read first wherever present, a stale __Host-session would shadow session, or outlive a sign-out.
+      const stale = { headers: { cookie: "session=old; __Host-session=stale" } };
+      const set = createFakeResponse(stale);
+      setSessionCookie(set.res, "jwt-value");
+      const cleared = createFakeResponse(stale);
+      clearSessionCookie(cleared.res);
+      expect(set.calls.map((call) => [call.name, call.value])).toEqual([
+        [SESSION_COOKIE, "jwt-value"],
+        [HOST_SESSION_COOKIE, undefined],
+      ]);
+      expect(cleared.calls.map((call) => [call.name, call.value])).toEqual([
+        [SESSION_COOKIE, undefined],
+        [HOST_SESSION_COOKIE, undefined],
+      ]);
+      for (const { calls } of [set, cleared]) {
+        expect(calls[1]?.options).toMatchObject({ secure: true, path: "/" });
+        expect(calls[1]?.options.domain).toBeUndefined();
+      }
+      // Without one, or under a name the app gave (the only name read then), nothing more.
+      const fresh = createFakeResponse({ headers: { cookie: "session=old" } });
+      setSessionCookie(fresh.res, "jwt-value");
+      const named = createFakeResponse(stale);
+      setSessionCookie(named.res, "jwt-value", { cookieName: "sid" });
+      expect([...fresh.calls, ...named.calls].map((call) => call.name)).toEqual([
+        SESSION_COOKIE,
+        "sid",
+      ]);
+    } finally {
       if (originalDomain === undefined) delete process.env.COOKIE_DOMAIN;
       else process.env.COOKIE_DOMAIN = originalDomain;
     }

@@ -49,6 +49,9 @@ model Project {
 }
 
 // A membership table: role holds an access level ("Read" | "Moderate" | "Admin").
+// It has an id, and its pair is unique by @@unique: the write tracker keys
+// rows by id, so a table keyed by a composite @@id is never tracked, and a
+// member removed from it would never be revoked.
 model ProjectMember {
   id        String  @id @default(cuid())
   projectId String

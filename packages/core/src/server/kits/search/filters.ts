@@ -138,12 +138,16 @@ export async function scopeWhere(run: SearchRun): Promise<StorageWhere | "none" 
   return (await membersWhere(reader, collection, run.query.scope, collection.maxLimit)) ?? "none";
 }
 
-/** The order results come in: the scope collection's, else by id. No ranking. */
+/**
+ * The order results come in: the scope collection's for a call kept to a
+ * scope, else by id. No ranking. An unscoped call is authorized for no
+ * scope and its order columns were tier-checked against no collection, so
+ * the collection's order (which may hold a column tiered at the
+ * collection's access) would leak it through the order and `nextCursor`
+ * (the 5.1 audit's CRUD-4).
+ */
 export function searchOrder(run: SearchRun): OrderBy {
-  const { scope } = run.context.spec;
-  const collection =
-    scope === undefined ? undefined : run.call.runtime.service.collections.get(scope);
-  return collection?.order ?? ID_ORDER;
+  return scopedCollection(run)?.order ?? ID_ORDER;
 }
 
 /**

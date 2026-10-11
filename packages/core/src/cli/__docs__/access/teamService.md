@@ -182,7 +182,7 @@ Feeds of items the server appends; a subscriber starts from the stream's seed.
 | Option   | Value                                            |
 | -------- | ------------------------------------------------ |
 | Item     | `string`                                         |
-| Scope    | one feed per `teamId`                            |
+| Scope    | one global feed                                  |
 | Seed     | computed by the service when a socket subscribes |
 | Volatile | no                                               |
 | Access   | `{ room: { prefix: "team:" } }`                  |

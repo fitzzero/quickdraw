@@ -44,6 +44,35 @@ const team = defineContract("teamService", {
 const define = (contract: unknown, definition: unknown) =>
   qd.defineService(contract as never, definition as never);
 
+describe('share: "all" on the sharing kit\'s lists', () => {
+  it("is refused on listShares and listMembers (ACCESS-2)", () => {
+    const refusal = 'is a kit method whose result depends on who asks, so it cannot share: "all"';
+    const aclHandlers = sharing.handlers(acl);
+    expect(() =>
+      define(acl, {
+        model: "project",
+        access: jsonAcl("acl"),
+        methods: { ...aclHandlers, listShares: { ...aclHandlers.listShares, share: "all" } },
+      }),
+    ).toThrow(`method "listShares" ${refusal}`);
+    const crew = defineContract("crewService", {
+      entity: projectEntity,
+      methods: { ...sharing.contract({ mode: "members" }) },
+    });
+    const crewHandlers = sharing.handlers(crew);
+    const members = (listMembers: object) => () =>
+      define(crew, {
+        model: "project",
+        access: projectMembers,
+        methods: { ...crewHandlers, listMembers },
+      });
+    expect(members({ ...crewHandlers.listMembers, share: "all" })).toThrow(
+      `method "listMembers" ${refusal}`,
+    );
+    expect(members({ ...crewHandlers.listMembers, share: "caller" })).not.toThrow();
+  });
+});
+
 describe("the services sharing.handlers refuses", () => {
   it("needs the service's policy to have the mode's list or table, alone or inside anyOf", () => {
     expect(() =>
@@ -415,6 +444,52 @@ describe("the transaction", () => {
     expect(await prisma.projectMember.count({ where: { userId: board.gus } })).toBe(0);
   });
 
+  it("reads the caller's level from the database inside the transaction, never the access cache (SHARE-4)", async () => {
+    const board = kit.board();
+    const { prisma } = kit.harness();
+    // Another change demotes Fay, P1's Admin member, after the pipeline checked her and
+    // before her change's transaction opens.
+    let demote = false;
+    const db = new Proxy(kit.harness().db, {
+      get(target, key) {
+        if (key !== "$transaction") {
+          return Reflect.get(target, key) as unknown;
+        }
+        return async (fn: unknown, given?: unknown) => {
+          if (demote) {
+            await prisma.projectMember.updateMany({
+              where: { projectId: board.p1, userId: board.fay },
+              data: { role: "Read" },
+            });
+          }
+          return await target.$transaction(fn as never, given as never);
+        };
+      },
+    });
+    // The pipeline's check keeps Fay's Admin for a minute; the demotion evicts nothing.
+    const app = await createTestApp({
+      services: [defineProjectService()],
+      db,
+      access: { cacheMs: 60_000 },
+    });
+    kit.track(app as unknown as TestApp);
+    const fay = app.as(as(board.fay)).projectService;
+    demote = true;
+    await expect(
+      fay.share({ id: board.p1, userId: board.gus, level: "Read" }),
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("no longer have Admin"),
+    });
+    await expect(fay.invite({ entryId: board.p1, userId: board.gus })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect((await prisma.project.findUniqueOrThrow({ where: { id: board.p1 } })).acl).toEqual([
+      { userId: board.di, level: "Read" },
+    ]);
+    expect(await prisma.projectMember.count({ where: { userId: board.gus } })).toBe(0);
+  });
+
   it("asks for the caller's level from inside the transaction's callback", async () => {
     const service = defineProjectService();
     let inside = false;
@@ -453,7 +528,7 @@ describe("the transaction", () => {
       log: consoleLogger,
       requestId: "r1",
       transport: "internal",
-      kit: { service, access, storage: undefined },
+      kit: { service, services: new Map(), access, storage: undefined },
     });
     const share = service.methods.share?.handler as unknown as (args: object) => Promise<unknown>;
     // The default form needs Admin; the caller holds Moderate by the time the change runs.

@@ -66,8 +66,13 @@ run("no-untracked-write", {
       name: "reads through the untracked client are left alone (README sharing kit)",
       filename: SERVICE,
       code: `
-        export const resolveUser = async ({ name, email }) =>
-          (await prisma.user.findFirst({ where: name === undefined ? { email } : { name } }))?.id;
+        export const resolveUser = async ({ name, email }) => {
+          if (email !== undefined) {
+            return (await prisma.user.findUnique({ where: { email }, select: { id: true } }))?.id;
+          }
+          const named = await prisma.user.findMany({ where: { name }, select: { id: true }, take: 2 });
+          return named.length === 1 ? named[0]?.id : null;
+        };
       `,
     },
     {

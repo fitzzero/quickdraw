@@ -13,7 +13,12 @@
 //   without a row level, `"authenticated"` say, is not checked again);
 // - caps what the change gives: a caller never shares, sets or invites at a
 //   level above their own on the row (`FORBIDDEN`), so a form lowered to
-//   `{ entry: "Moderate" }` cannot hand out `Admin`.
+//   `{ entry: "Moderate" }` cannot hand out `Admin`;
+// - caps whom the change touches: a caller never replaces, lowers or takes
+//   away the level of a user whose current level there is above their own
+//   (`FORBIDDEN`; the 5.1 audit's SHARE-1). Equal passes, so one Admin
+//   changes another. The current level is the one the list or table being
+//   changed gives the user, which is all the change touches.
 //
 // The caller's own level is the policy's (a service-wide `Admin` grant with
 // `adminBypass` gives `Admin`), or their service-wide grant when the form
@@ -70,6 +75,20 @@ export function capGrant(own: AccessLevel | null, given: AccessLevel | null, mod
     throw new QuickdrawError(
       "FORBIDDEN",
       `You cannot give ${given} on this ${model}: it is above your own level on it (${own ?? "none"})`,
+    );
+  }
+}
+
+/** `FORBIDDEN` when a change would replace, lower or take away `current`, a level above the caller's own on the row. */
+export function capTarget(
+  own: AccessLevel | null,
+  current: AccessLevel | null,
+  model: string,
+): void {
+  if (current !== null && !meetsLevel(own, current)) {
+    throw new QuickdrawError(
+      "FORBIDDEN",
+      `That user has ${current} on this ${model}, above your own level on it (${own ?? "none"}); you cannot change or take away their access`,
     );
   }
 }

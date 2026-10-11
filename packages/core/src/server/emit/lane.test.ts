@@ -113,7 +113,8 @@ it("runs one socket's 300 batches of 500 ids 8 at a time with 64 waiting, and re
   });
   // Never more than eight batches: the project policy's anyOf reads its two tables together.
   expect(gauge.peak).toBeLessThanOrEqual(16);
-});
+  // 150,000 ids through one socket: about 2.5 s alone, past the 5 s default on a loaded machine.
+}, 20_000);
 
 it("is shared by qd:sub, qd:col:sub, qd:col:items and qd:watch, and sized by limits.subscriptions", async () => {
   const { storage, gauge } = gaugedStorage();

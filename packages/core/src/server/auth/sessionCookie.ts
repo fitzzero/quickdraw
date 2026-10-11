@@ -109,19 +109,22 @@ export function sessionCookieNameFor(
 const SECURE_SESSION_COOKIES: readonly string[] = Object.freeze([HOST_SESSION_COOKIE]);
 
 const PLAIN_SESSION_COOKIES: readonly string[] = Object.freeze([
-  SESSION_COOKIE,
   HOST_SESSION_COOKIE,
+  SESSION_COOKIE,
 ]);
 
 /**
- * The cookie names a session is read from on `req`, the first of them being
- * the name {@link sessionCookieNameFor} writes for the same request. A name
- * the app gave is the only one read. Otherwise a secure request reads only
- * `__Host-session`: a site under the same parent domain can set a `session`
- * cookie for the whole domain, and while the user holds no `__Host-session`
- * that planted cookie would sign them in as whoever planted it. A plain HTTP
- * request, or a cookie with a domain, reads `session` and then
- * `__Host-session`, which only this host can have set.
+ * The cookie names a session is read from on `req`, among them the name
+ * {@link sessionCookieNameFor} writes for the same request. A name the app
+ * gave is the only one read. Otherwise `__Host-session` wins wherever it is
+ * present: a browser keeps it only as a Secure, host-only cookie on `/`, so
+ * only this host, over a secure context, can have set it. A secure request
+ * reads only `__Host-session`: a site under the same parent domain can set
+ * a `session` cookie for the whole domain, and while the user holds no
+ * `__Host-session` that planted cookie would sign them in as whoever
+ * planted it. A plain HTTP request, or a cookie with a domain, reads
+ * `__Host-session` and then `session`, so a planted `session` never stands
+ * in for a `__Host-session` the request carries (the 5.1 audit's AUTH-2a).
  */
 export function sessionCookieNamesFor(
   req: SessionCookieRequest,
@@ -215,9 +218,44 @@ function sessionCookie(
   };
 }
 
+/** True when the request carries a `__Host-session` cookie: in its `Cookie` header, or else in `req.cookies`. */
+function carriesHostSession(req: SessionCookieRequest): boolean {
+  const header = req.headers.cookie;
+  if (typeof header === "string") {
+    return header.split(";").some((pair) => pair.trimStart().startsWith(`${HOST_SESSION_COOKIE}=`));
+  }
+  const cookies: unknown = Reflect.get(req, "cookies");
+  return (
+    typeof cookies === "object" && cookies !== null && Object.hasOwn(cookies, HOST_SESSION_COOKIE)
+  );
+}
+
+/**
+ * Clears a `__Host-session` the request carries when a session cookie of
+ * another name (`session`: over plain HTTP, or with a domain) was just set
+ * or cleared. Readers take `__Host-session` first wherever it is present
+ * ({@link sessionCookieNamesFor}), so a stale one, left by an earlier
+ * response that looked secure (a proxy that sends `X-Forwarded-Proto` only
+ * some of the time), would shadow the session just written, or outlive a
+ * sign-out. A caller whose app named the cookie skips it: that name is then
+ * the only one read.
+ */
+export function clearStaleHostSession(
+  res: CookieResponse,
+  req: SessionCookieRequest,
+  written: string,
+  sameSite: "lax" | "none",
+): void {
+  if (written === HOST_SESSION_COOKIE || !carriesHostSession(req)) {
+    return;
+  }
+  res.clearCookie(HOST_SESSION_COOKIE, { httpOnly: true, secure: true, sameSite, path: "/" });
+}
+
 /**
  * Sets the session cookie, under the name {@link sessionCookieNameFor} gives
- * the response's request, so `socketAuth` and the HTTP transport read it.
+ * the response's request, so `socketAuth` and the HTTP transport read it,
+ * and clears a stale `__Host-session` that would shadow it.
  */
 export function setSessionCookie(
   res: CookieResponse,
@@ -226,10 +264,16 @@ export function setSessionCookie(
 ): void {
   const { name, settings } = sessionCookie(res, options);
   res.cookie(name, jwt, { ...settings, maxAge: options.maxAgeMs ?? DEFAULT_MAX_AGE_MS });
+  if (options.cookieName === undefined) {
+    clearStaleHostSession(res, requestOf(res), name, settings.sameSite);
+  }
 }
 
-/** Clears the session cookie `setSessionCookie` sets on the same request. */
+/** Clears the session cookie `setSessionCookie` sets on the same request, and a stale `__Host-session` beside it. */
 export function clearSessionCookie(res: CookieResponse, options: SessionCookieOptions = {}): void {
   const { name, settings } = sessionCookie(res, options);
   res.clearCookie(name, settings);
+  if (options.cookieName === undefined) {
+    clearStaleHostSession(res, requestOf(res), name, settings.sameSite);
+  }
 }

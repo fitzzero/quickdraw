@@ -31,8 +31,11 @@ export interface InstrumentedOptions {
    * Under vitest or jest (`VITEST` or `JEST_WORKER_ID` set), throw every
    * development warning raised in this app's method calls (N+1 statements,
    * unbounded reads, oversized replies, nested writes) as a `DevWarningError`
-   * where it is raised, so the test that caused it fails. Warnings outside
-   * its calls, such as an ambient write while seeding, are logged; `close()`
+   * where it is raised, so the test that caused it fails. A warning raised
+   * at start (`tiered-field-in-output`, `resolver-without-reads`,
+   * `untracked-access-model`, `channel-without-requires`) fails the app's
+   * start. Warnings outside its
+   * calls, such as an ambient write while seeding, are logged; `close()`
    * ends it. Default `false`: warnings are logged once.
    */
   readonly strictWarnings?: boolean;

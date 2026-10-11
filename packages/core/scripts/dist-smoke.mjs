@@ -194,6 +194,7 @@ const expectations = {
       "createJWT",
       "createAuthRoutes",
       "socketAuth",
+      "bearerAuth",
       "createMemorySessionStore",
       "google",
       "discord",
@@ -1390,6 +1391,9 @@ await new Promise((resolveListen) => {
 });
 const authUrl = `http://127.0.0.1:${authServer.httpServer.address().port}`;
 process.env.ENABLE_MOCK_OAUTH = "true";
+// The mock signs in only when NODE_ENV is development or test.
+const smokeNodeEnv = process.env.NODE_ENV;
+process.env.NODE_ENV = "development";
 authApp.use(
   auth.createAuthRoutes({
     providers: [
@@ -1453,6 +1457,11 @@ try {
   assert.deepEqual(await openSocket(sessionCookie), { refused: { code: "UNAUTHENTICATED" } });
 } finally {
   delete process.env.ENABLE_MOCK_OAUTH;
+  if (smokeNodeEnv === undefined) {
+    delete process.env.NODE_ENV;
+  } else {
+    process.env.NODE_ENV = smokeNodeEnv;
+  }
   await authServer.close();
 }
 console.log(

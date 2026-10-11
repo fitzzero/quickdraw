@@ -35,24 +35,29 @@
 // `session` when `COOKIE_DOMAIN` gives the cookie a domain; else, over HTTPS,
 // only `__Host-session` (a site under the same parent domain can plant a
 // plain `session` cookie, and a secure handshake must not take it in place of
-// the host-only one), and over plain HTTP `session`, then `__Host-session`.
+// the host-only one), and over plain HTTP `__Host-session`, then `session`:
+// the host-only cookie wins wherever it is present.
 //
 // `devCredentials` (finding F2.13 of the quickdraw-chat migration) signs a
 // socket in by the user id its handshake names (`auth: { userId }`), for a
-// game editor or load-test bots in development. It cannot be used in
-// production: `socketAuth` throws when it is given and `NODE_ENV` is
-// `"production"`, and a handshake is refused it there whatever the
-// environment says later.
+// game editor or load-test bots in development. It runs only when
+// `NODE_ENV` is `development` or `test` (`../devSignIns.ts`; an unset
+// `NODE_ENV`, `"prod"` or `"staging"` let it through in 5.0, the 5.1
+// audit's AUTH-3): `socketAuth` throws when it is given otherwise, a
+// handshake is refused it once `NODE_ENV` says otherwise, and `createServer`
+// warns at startup while it is on.
 
 import type { IncomingHttpHeaders } from "node:http";
 import { QuickdrawError } from "../../../protocol/errors";
 import {
+  markSocketAuth,
   recordSocketSession,
   type AuthenticateRequest,
   type SocketAuthenticateRequest,
 } from "../../transports/auth";
 import { cookiesOf, cookieToken, transportCookieNaming } from "../../transports/body";
 import type { MaybePromise, Principal } from "../../types";
+import { developmentSignInsAllowed, nodeEnvLabel } from "../devSignIns";
 import {
   sessionCookieNamesFor,
   type SessionCookieNaming,
@@ -92,8 +97,8 @@ export interface SocketAuthOptions<P extends Principal = Principal> {
    * The session cookie's name. Default: the name the auth routes set on the
    * same handshake: `"session"` when `COOKIE_DOMAIN` gives the cookie a
    * domain; else `"__Host-session"` over HTTPS, where the plain name a
-   * sibling site could plant is never read, and `"session"` (then
-   * `"__Host-session"`) over plain HTTP. A name given here is the only one
+   * sibling site could plant is never read, and `"session"` over plain HTTP,
+   * where `"__Host-session"` is read first all the same. A name given here is the only one
    * read, on any handshake: give the routes' `cookie.name` here, or
    * `"session"` when their `cookie.domain` is set without `COOKIE_DOMAIN`. A
    * name the handshake repeats counts as no credential.
@@ -110,9 +115,11 @@ export interface SocketAuthOptions<P extends Principal = Principal> {
    * Development sign-in without a session: a socket whose handshake carries
    * `auth: { userId }` and no token is that user, as this function answers:
    * their principal (its `userId` the one named), or `null` to refuse the
-   * handshake (an unknown id). For a game editor or load-test bots. Never in
-   * production: `socketAuth` throws when it is given while `NODE_ENV` is
-   * `"production"`, and refuses such a handshake there anyway. HTTP calls
+   * handshake (an unknown id). For a game editor or load-test bots. Only
+   * while `NODE_ENV` is `development` or `test`: `socketAuth` throws when it
+   * is given otherwise (an unset `NODE_ENV` included: set
+   * `NODE_ENV=development`), refuses such a handshake once `NODE_ENV` says
+   * otherwise, and `createServer` warns at startup while it is on. HTTP calls
    * never use it. Pass it only when the app's own flag is on:
    * `devCredentials: env.ENABLE_DEV_CREDENTIALS ? findDevUser : undefined`.
    */
@@ -147,6 +154,15 @@ function credentialOf(
   request: AuthenticateRequest,
   naming: SessionCookieNaming,
 ): Credential | null {
+  if (request.transport === "http") {
+    // The session cookie, which the transport hands every authenticate beside
+    // auth.token: an app's wrapper around socketAuth, which the transport
+    // does not know as socketAuth's, keeps cookie sign-in and its Origin rule.
+    const { sessionCookie } = request;
+    if (typeof sessionCookie === "string" && sessionCookie !== "") {
+      return { token: sessionCookie, checkOrigin: true };
+    }
+  }
   const { token } = request.auth;
   if (typeof token === "string" && token !== "") {
     // The HTTP transport found it, and says whether it was the session cookie.
@@ -211,13 +227,19 @@ export interface CookieOriginRequest {
  * `Sec-Fetch-Site` names another site, and a socket handshake only when
  * `Sec-Fetch-Site` is `same-origin` or with `allowMissingOrigin`. A bearer
  * token is not ambient: check only a credential that came from the cookie
- * (`request.credential === "cookie"` on an HTTP `authenticate` request).
+ * (`request.sessionCookie` on an HTTP `authenticate` request, where the
+ * transport hands an `authenticate` other than socketAuth's the cookie; it is
+ * in `auth.token` only for socketAuth's). Then check the session against the
+ * store, on every call (`liveSession`).
  *
  * @example
  * authenticate: async (request) => {
- *   if (request.transport === "http" && request.credential === "cookie" &&
- *       !cookieOriginAllowed(request, allowedOrigins)) {
- *     throw new QuickdrawError("FORBIDDEN", "This page may not use the session cookie");
+ *   if (request.transport === "http" && request.sessionCookie !== undefined) {
+ *     if (!cookieOriginAllowed(request, allowedOrigins)) {
+ *       throw new QuickdrawError("FORBIDDEN", "This page may not use the session cookie");
+ *     }
+ *     const session = await liveSession({ sessions, jwtSecret }, request.sessionCookie);
+ *     // ...
  *   }
  *   // ...
  * }
@@ -245,6 +267,10 @@ export function httpCookieOriginAllowed(
   return httpOriginAccepted(headers, origins);
 }
 
+/** What a page whose Origin may not use the session cookie is told. */
+export const COOKIE_REFUSED =
+  "This page's origin may not use the session cookie; send it from an allowed origin or use a bearer token";
+
 /** Refuses a session cookie used from a page `allowedOrigins` does not list. */
 function checkCookieOrigin(
   request: AuthenticateRequest,
@@ -254,10 +280,7 @@ function checkCookieOrigin(
   if (request.transport === "http") {
     if (!httpOriginAccepted(request.headers, origins)) {
       // FORBIDDEN, which the HTTP transport answers as it is: the session is fine, the page is not.
-      throw new QuickdrawError(
-        "FORBIDDEN",
-        "This page's origin may not use the session cookie; send it from an allowed origin or use a bearer token",
-      );
+      throw new QuickdrawError("FORBIDDEN", COOKIE_REFUSED);
     }
     return;
   }
@@ -270,11 +293,7 @@ function refused(message: string): QuickdrawError {
   return new QuickdrawError("UNAUTHENTICATED", message);
 }
 
-function production(): boolean {
-  return process.env.NODE_ENV === "production";
-}
-
-/** `devCredentials`, checked: a function, and never in production. */
+/** `devCredentials`, checked: a function, and only under NODE_ENV development or test. */
 function checkDevCredentials(
   devCredentials: DevCredentials<Principal> | undefined,
 ): DevCredentials<Principal> | undefined {
@@ -284,9 +303,9 @@ function checkDevCredentials(
   if (typeof devCredentials !== "function") {
     throw new TypeError("socketAuth: devCredentials must be a function of the user id");
   }
-  if (production()) {
+  if (!developmentSignInsAllowed()) {
     throw new TypeError(
-      "socketAuth: devCredentials signs sockets in by a user id alone, so it cannot be used when NODE_ENV is production",
+      `socketAuth: devCredentials signs sockets in by a user id alone, so it runs only when NODE_ENV is development or test (NODE_ENV is ${nodeEnvLabel()}); set NODE_ENV=development to use it`,
     );
   }
   return devCredentials;
@@ -301,13 +320,13 @@ function devUserOf(request: AuthenticateRequest): string | undefined {
     : undefined;
 }
 
-/** The principal of a development handshake's user; refused in production and for an unknown user. */
+/** The principal of a development handshake's user; refused outside development and tests, and for an unknown user. */
 async function devPrincipal(
   devCredentials: DevCredentials<Principal>,
   userId: string,
 ): Promise<Principal> {
-  if (production()) {
-    throw refused("Development credentials are refused in production");
+  if (!developmentSignInsAllowed()) {
+    throw refused("Development credentials are refused unless NODE_ENV is development or test");
   }
   const principal = await devCredentials(userId);
   if (principal === null || principal === undefined) {
@@ -315,6 +334,29 @@ async function devPrincipal(
   }
   if (principal.userId !== userId) {
     throw new TypeError("socketAuth: devCredentials must return the principal of the user named");
+  }
+  return principal;
+}
+
+/**
+ * The principal of a live session's user: `{ userId, kind: "user" }`, or
+ * what `loadPrincipal` builds. `UNAUTHENTICATED` when it builds none; a
+ * `TypeError` naming `owner` when it builds another user's.
+ */
+export async function principalOfSession<P extends Principal>(
+  session: AuthSession,
+  loadPrincipal: PrincipalLoader<P> | undefined,
+  owner: string,
+): Promise<P | Principal> {
+  if (loadPrincipal === undefined) {
+    return { userId: session.userId, kind: "user" };
+  }
+  const principal = await loadPrincipal(session.userId, session);
+  if (principal === null || principal === undefined) {
+    throw refused("The session's user has no principal");
+  }
+  if (principal.userId !== session.userId) {
+    throw new TypeError(`${owner}: loadPrincipal must return the principal of the session's user`);
   }
   return principal;
 }
@@ -337,7 +379,7 @@ export function socketAuth(options: SocketAuthOptions): SessionAuthenticate<Prin
     throw new TypeError("socketAuth: loadPrincipal must be a function");
   }
   const devCredentials = checkDevCredentials(options.devCredentials);
-  return async (request) => {
+  const authenticate: SessionAuthenticate<Principal> = async (request) => {
     const devUser = devCredentials === undefined ? undefined : devUserOf(request);
     if (devCredentials !== undefined && devUser !== undefined) {
       return await devPrincipal(devCredentials, devUser);
@@ -355,20 +397,11 @@ export function socketAuth(options: SocketAuthOptions): SessionAuthenticate<Prin
     }
     if (request.transport === "socket") {
       // So `server.access.disconnectUser(userId, { sessionId })` can end this session's sockets.
-      recordSocketSession(request.socket, session.id);
+      recordSocketSession(request.socket, session.id, session.expiresAt);
     }
-    if (loadPrincipal === undefined) {
-      return { userId: session.userId, kind: "user" };
-    }
-    const principal = await loadPrincipal(session.userId, session);
-    if (principal === null || principal === undefined) {
-      throw refused("The session's user has no principal");
-    }
-    if (principal.userId !== session.userId) {
-      throw new TypeError(
-        "socketAuth: loadPrincipal must return the principal of the session's user",
-      );
-    }
-    return principal;
+    return await principalOfSession(session, loadPrincipal, "socketAuth");
   };
+  // So the HTTP transport hands it the session cookie as auth.token, and the server knows it.
+  markSocketAuth(authenticate, { devCredentials: devCredentials !== undefined });
+  return authenticate;
 }

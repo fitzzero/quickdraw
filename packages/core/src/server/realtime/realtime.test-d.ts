@@ -239,6 +239,18 @@ describe("the server", () => {
         lobby: { item: z.number(), access: { room: "lobby", service: "Read" } },
       },
     });
+    defineContract("namedScopedStreamService", {
+      streams: {
+        // @ts-expect-error -- a scoped stream's room is a function of its scope
+        world: { item: z.number(), scope: "worldId", access: { room: "world" } },
+      },
+    });
+    defineContract("prefixScopedStreamService", {
+      streams: {
+        // @ts-expect-error -- a scoped stream's room is a function of its scope
+        world: { item: z.number(), scope: "worldId", access: { room: { prefix: "world:" } } },
+      },
+    });
   });
 
   test("rooms outside a handler: typed events, and a user taken out of a room", () => {

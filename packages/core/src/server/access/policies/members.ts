@@ -1,6 +1,10 @@
 // `members({ model, entry, user, level, levels? })` (RFC 0003 section 4.2):
 // the level comes from a membership table, one row per user and entry
-// (`projectMember { projectId, userId, role }`).
+// (`projectMember { id, projectId, userId, role }`, the pair unique by
+// `@@unique([projectId, userId])`). The table needs an `id` column: the
+// write tracker keys rows by it, so a table keyed by a composite `@@id` is
+// never tracked and a removed member is never revoked (`createServer` names
+// such a table at start: `../trackedModels.ts`).
 
 import { isAccessLevel, type AccessLevel } from "../../../contract/access";
 import { levelsAtLeast } from "../levels";
@@ -28,7 +32,11 @@ export interface MembersOptions<
   User extends string = string,
   Level extends string = string,
 > {
-  /** The membership model, named as the client names it: `"projectMember"`. */
+  /**
+   * The membership model, named as the client names it: `"projectMember"`.
+   * It needs an `id` column (keep the pair unique with `@@unique`, never a
+   * composite `@@id`), or its writes are not tracked and never revoke.
+   */
   readonly model: Model;
   /** The column holding the id of the row the membership is on: `"projectId"`. */
   readonly entry: Entry;
@@ -39,7 +47,11 @@ export interface MembersOptions<
   /**
    * Maps stored roles to access levels: `{ owner: "Admin", editor: "Moderate", viewer: "Read" }`.
    * Without it a stored role must be a level name. A role that maps to no
-   * level grants nothing.
+   * level grants nothing. Roles that map to one level are peers: with
+   * `{ owner: "Admin", admin: "Admin" }` the sharing kit lets an `admin`
+   * demote or remove the `owner`. To make an owner untouchable, give the
+   * row an owner column (`anyOf(owner("ownerId"), members(...))`, or
+   * `jsonAcl(..., { owner })`).
    */
   readonly levels?: Readonly<Record<string, AccessLevel>>;
 }
@@ -81,8 +93,13 @@ export function membershipRead(options: object, owner: (option: string) => strin
   });
 }
 
-/** The stored roles that give at least `level`. */
-function rolesAtLeast(read: MembershipRead, level: AccessLevel): string[] {
+/**
+ * The stored roles that give at least `level`: the level names from `level`
+ * up without a `levels` map, else the roles the map gives such a level. A
+ * `via` collection over the item service's own membership table counts only
+ * the links holding one (`collections/define.ts`).
+ */
+export function rolesAtLeast(read: MembershipRead, level: AccessLevel): string[] {
   const enough = new Set<string>(levelsAtLeast(level));
   if (read.levels === undefined) {
     return [...enough];
@@ -95,7 +112,9 @@ function rolesAtLeast(read: MembershipRead, level: AccessLevel): string[] {
 /**
  * The level comes from the principal's row in a membership table: one query
  * per lookup, filtered by the entry ids and the user id. Several rows for one
- * user and entry give the highest level among them.
+ * user and entry give the highest level among them. The table needs an `id`
+ * column, or no write to it is tracked and a removed member keeps what they
+ * subscribed to; `createServer` names such a table at start.
  *
  * @example
  * access: members({ model: "projectMember", entry: "projectId", user: "userId", level: "role" }),

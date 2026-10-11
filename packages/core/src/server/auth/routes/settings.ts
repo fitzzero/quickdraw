@@ -4,6 +4,7 @@
 
 import { consoleLogger, type Logger } from "../../../contract/logger";
 import {
+  clearStaleHostSession,
   cookieDomainFromEnv,
   isSecureSessionRequest,
   sessionCookieNameFor,
@@ -18,6 +19,7 @@ import {
   HOST_OAUTH_STATE_COOKIE,
   OAUTH_STATE_COOKIE,
   OAUTH_STATE_TTL_MS,
+  oauthStateKey,
   redeemedStates,
   type RedeemedStates,
 } from "./state";
@@ -56,6 +58,8 @@ export interface RouteSettings {
   readonly onRevoke: AuthRoutesOptions["onRevoke"];
   readonly logger: Logger;
   readonly redeemed: RedeemedStates;
+  /** The key the OAuth state cookie is signed with (`oauthStateKey`). */
+  readonly stateKey: Buffer;
   /**
    * Looks at the host a request to the routes arrived for: the first one
    * that is not a loopback address while `publicUrl` is logs an error, once
@@ -143,10 +147,16 @@ function cookieOf(options: AuthRoutesOptions["cookie"]): ResolvedCookie {
 /**
  * Warns, once at startup, when the routes and the transports would name the
  * session cookie differently: the transports know the cookie's domain only
- * from `COOKIE_DOMAIN`, so a `cookie.domain` that `COOKIE_DOMAIN` does not
- * match makes the routes set `session` over HTTPS where `socketAuth` and the
- * HTTP transport read only `__Host-session` (or the reverse), unless the app
- * names the cookie in all three places.
+ * from `COOKIE_DOMAIN`, unless the app names the cookie in all three places.
+ *
+ * - `cookie.domain` without `COOKIE_DOMAIN`: the routes set `session` over
+ *   HTTPS, where `socketAuth` and the HTTP transport read only
+ *   `__Host-session`.
+ * - `cookie.domain: ""` while `COOKIE_DOMAIN` is set: the routes set
+ *   `__Host-session` over HTTPS, which the transports read first; but they
+ *   also take a `session` cookie there, which the routes never set and any
+ *   site under `COOKIE_DOMAIN` can, so it signs a signed-out browser in as
+ *   whoever planted it.
  */
 function warnOnCookieDomain(cookie: ResolvedCookie, logger: Logger): void {
   const transportsSeeDomain = cookieDomainFromEnv() !== undefined;
@@ -155,10 +165,10 @@ function warnOnCookieDomain(cookie: ResolvedCookie, logger: Logger): void {
   }
   const why =
     cookie.domain === undefined
-      ? 'cookie.domain is "" while COOKIE_DOMAIN is set, so over HTTPS the routes set __Host-session where socketAuth and the HTTP transport read "session" first'
-      : 'cookie.domain is set and COOKIE_DOMAIN is not, so the routes set "session" on every request, which socketAuth and the HTTP transport read over HTTPS only under that name';
+      ? 'cookie.domain is "" while COOKIE_DOMAIN is set, so over HTTPS the routes set __Host-session, but socketAuth and the HTTP transport also take a "session" cookie there, which any site under COOKIE_DOMAIN can set for a browser that holds no __Host-session. Unset COOKIE_DOMAIN'
+      : 'cookie.domain is set and COOKIE_DOMAIN is not, so the routes set "session" on every request, which socketAuth and the HTTP transport read over HTTPS only under that name. Set COOKIE_DOMAIN to the cookie\'s domain instead';
   logger.warn(
-    `${OWNER}: ${why}. Set COOKIE_DOMAIN to the cookie's domain instead, or name the cookie in all three places: cookie.name, socketAuth's cookieName and createServer's http.cookieName.`,
+    `${OWNER}: ${why}, or name the cookie in all three places: cookie.name, socketAuth's cookieName and createServer's http.cookieName.`,
     { category: "quickdraw.auth" },
   );
 }
@@ -249,8 +259,9 @@ export function routeSettings(options: AuthRoutesOptions): RouteSettings {
   const cookie = cookieOf(options.cookie);
   const logger = options.logger ?? consoleLogger;
   const publicUrl = publicUrlOf(options.publicUrl);
+  const keys = checkSessionKeys(options, OWNER);
   const settings: RouteSettings = Object.freeze({
-    keys: checkSessionKeys(options, OWNER),
+    keys,
     origins: originAllowlist(options.allowedOrigins, OWNER),
     publicUrl,
     basePath: basePathOf(options.basePath),
@@ -261,6 +272,7 @@ export function routeSettings(options: AuthRoutesOptions): RouteSettings {
     onRevoke: options.onRevoke,
     logger,
     redeemed: redeemedStates(),
+    stateKey: oauthStateKey(keys.jwtSecret),
     watchHost: hostWatcher(publicUrl, logger),
   });
   warnOnCookieDomain(cookie, logger);
@@ -360,7 +372,7 @@ function fromPage(req: AuthRouteRequest, pageOrigin: string | undefined): Sessio
 /**
  * Sets the session cookie carrying `token`, for the cookie, the JWT and the
  * session to end together; `pageOrigin` is the page an OAuth callback
- * returns to.
+ * returns to. Clears a stale `__Host-session` that would shadow it.
  */
 export function setSession(
   res: CookieResponse,
@@ -372,9 +384,12 @@ export function setSession(
   const from = fromPage(req, pageOrigin);
   const name = sessionCookieName(settings, from);
   res.cookie(name, token, sessionCookieSettings(settings, from, name, true));
+  if (settings.cookie.name === undefined) {
+    clearStaleHostSession(res, req, name, settings.cookie.sameSite);
+  }
 }
 
-/** Clears the session cookie. */
+/** Clears the session cookie, and a stale `__Host-session` beside it. */
 export function clearSession(
   res: CookieResponse,
   settings: RouteSettings,
@@ -382,11 +397,24 @@ export function clearSession(
 ): void {
   const name = sessionCookieName(settings, req);
   res.clearCookie(name, sessionCookieSettings(settings, req, name, false));
+  if (settings.cookie.name === undefined) {
+    clearStaleHostSession(res, req, name, settings.cookie.sameSite);
+  }
+}
+
+/**
+ * Whether the state cookie is Secure: on a secure request, and whenever
+ * `publicUrl` is https, whatever the request looks like (a proxy that
+ * forwards no `X-Forwarded-Proto` must not turn it into a cookie a sibling
+ * site could plant).
+ */
+function stateSecure(settings: RouteSettings, req: AuthRouteRequest): boolean {
+  return secureFor(settings, req) || settings.publicUrl.startsWith("https:");
 }
 
 /** The state cookie's name on `req`: `__Host-qd_oauth` when it is Secure, else `qd_oauth`. */
 export function stateCookieName(settings: RouteSettings, req: AuthRouteRequest): string {
-  return secureFor(settings, req) ? HOST_OAUTH_STATE_COOKIE : OAUTH_STATE_COOKIE;
+  return stateSecure(settings, req) ? HOST_OAUTH_STATE_COOKIE : OAUTH_STATE_COOKIE;
 }
 
 /**
@@ -401,7 +429,7 @@ export function stateCookieOf(
   req: AuthRouteRequest,
   live = false,
 ): CookieSettings {
-  const secure = secureFor(settings, req);
+  const secure = stateSecure(settings, req);
   return {
     httpOnly: true,
     secure,

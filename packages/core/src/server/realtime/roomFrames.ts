@@ -6,9 +6,10 @@
 //
 // On the in-memory adapter the list comes from this process's records, sent
 // in order with the join. Behind a cluster adapter it is read from every node
-// (`fetchSockets`, asynchronously, and dropped when the socket left the room
-// before it arrived), and a user's last socket here leaving sends `left` only
-// when no node still has one of theirs in the room. A `joined` may then
+// (the other nodes answer with their records' user ids, `presenceRequests.ts`;
+// asynchronously, and dropped when the socket left the room before it
+// arrived), and a user's last socket here leaving sends `left` only when no
+// node still has one of theirs in the room. A `joined` may then
 // repeat for a user already there on another node; a client keeps a set, so a
 // repeat changes nothing. A removal (`rooms.leave(room, { userId })`) reaches
 // every node, so each sends `left` for its last socket of the user without
@@ -19,20 +20,17 @@
 
 import { SERVER_EVENTS } from "../../contract/names";
 import type { PresenceFrame } from "../../protocol/envelope";
-import { track, type Hub } from "../emit/hub";
+import { track } from "../emit/hub";
 import { ownRecord } from "../emit/subscriptions";
 import { describeError } from "../pipeline/metrics";
 import type { QuickdrawServerSocket } from "../transports/types";
-import { inRoom, usersInRoom, type PresenceRecords } from "./presence";
+import { inRoom, usersInRoom, type PresenceState } from "./presence";
 
 /** Whether a socket that left a room was its user's last one there: known now, or once the other nodes answered. */
 export type LastInRoom = boolean | Promise<boolean>;
 
-/** What the app rooms of one dispatcher share. */
-export interface RoomState {
-  readonly hub: Hub;
-  readonly records: PresenceRecords;
-}
+/** What the app rooms of one dispatcher share: its presence state. */
+export type RoomState = PresenceState;
 
 function logFailure(state: RoomState, room: string, error: unknown): void {
   state.hub.logger.error("Reading a room's presence from the cluster failed", {
@@ -61,7 +59,7 @@ export function entered(state: RoomState, socket: QuickdrawServerSocket, room: s
   }
   track(
     state.hub,
-    usersInRoom(state.hub, state.records, room).then(
+    usersInRoom(state, room).then(
       (users) => {
         // A socket that left (or was taken out) meanwhile was told it sees nobody: keep it so.
         if (socket.connected && ownRecord(socket.data.appRooms, room) !== undefined) {
@@ -110,7 +108,7 @@ export function exited(
     io.to(room).emit(SERVER_EVENTS.presence, frame);
     return true;
   }
-  const last = inRoom(state.hub, state.records, room, userId).then(
+  const last = inRoom(state, room, userId).then(
     (still) => {
       if (!still) {
         io.to(room).emit(SERVER_EVENTS.presence, frame);

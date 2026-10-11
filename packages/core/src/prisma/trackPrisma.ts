@@ -21,6 +21,7 @@ import { consoleLogger, type Logger } from "../contract/logger";
 import { quietly } from "../server/devWarnings";
 import {
   createInterestRegistry,
+  createLinkRegistry,
   modelKey,
   STORAGE_KEY,
   storageOf,
@@ -31,6 +32,7 @@ import {
 import { createWriteTracker, type WriteTracker } from "../server/uow/unitOfWork";
 import {
   delegates,
+  idOf,
   runUntracked,
   Untrackable,
   WRITE_OPERATIONS,
@@ -190,13 +192,53 @@ function createNullability(
 }
 
 /**
+ * `StorageAdapter.trackable`: whether the tracker can key `model`'s writes,
+ * that is whether its rows have an `id`. One read of one row's id per model,
+ * kept for the life of the client: Prisma refuses the select of a model
+ * without an `id` column (a composite `@@id`). Any other failure (the
+ * database down) is thrown, and asked again next time.
+ */
+function createTrackability(
+  delegate: (model: string) => Delegate,
+): (model: string) => Promise<boolean> {
+  const known = new Map<string, Promise<boolean>>();
+  const probe = async (key: string): Promise<boolean> => {
+    try {
+      const rows = await quietly(() => delegate(key).findMany({ select: { id: true }, take: 1 }));
+      const [row] = Array.isArray(rows) ? (rows as Readonly<Record<string, unknown>>[]) : [];
+      return row === undefined || idOf(row) !== undefined;
+    } catch (error) {
+      if (error instanceof Error && error.name === "PrismaClientValidationError") {
+        return false;
+      }
+      throw error;
+    }
+  };
+  return async (model) => {
+    const key = modelKey(model);
+    let answer = known.get(key);
+    if (answer === undefined) {
+      answer = probe(key);
+      known.set(key, answer);
+      answer.catch(() => {
+        known.delete(key);
+      });
+    }
+    return await answer;
+  };
+}
+
+/**
  * The adapter the framework reads through. Its reads are the framework's own
  * (access checks, subscriptions, flushes, kits), so the development checks
  * of statements leave them alone.
  */
 function createStorage(
   tracker: WriteTracker,
-  interest: ReturnType<typeof createInterestRegistry>,
+  [interest, links]: readonly [
+    ReturnType<typeof createInterestRegistry>,
+    ReturnType<typeof createLinkRegistry>,
+  ],
   delegate: (model: string) => Delegate,
 ): StorageAdapter {
   return Object.freeze({
@@ -208,8 +250,11 @@ function createStorage(
     countStatements: tracker.countStatements,
     registerInterest: interest.register,
     interestOf: interest.of,
+    registerLinks: links.register,
+    linksOf: links.of,
     inTransaction: () => tracker.transactionClient() !== undefined || tracker.inBatch(),
     nullable: createNullability(delegate),
+    trackable: createTrackability(delegate),
     unitOfWork: tracker.unitOfWork,
   });
 }
@@ -253,7 +298,14 @@ export function trackPrisma<C extends PrismaClientLike>(
   let root: ExtendedClient | undefined;
   const delegate = (model: string): Delegate =>
     delegateOf(tracker.transactionClient() ?? root, model);
-  const runtime: Runtime = { tracker, delegate, interestOf: interest.of, untracked: new Set() };
+  const links = createLinkRegistry();
+  const runtime: Runtime = {
+    tracker,
+    delegate,
+    interestOf: interest.of,
+    linksOf: links.of,
+    untracked: new Set(),
+  };
   const hooked = client.$extends({
     name: "quickdraw-tracking",
     query: { $allOperations: createHook(runtime) },
@@ -264,7 +316,7 @@ export function trackPrisma<C extends PrismaClientLike>(
     client: {
       $transaction: (arg: unknown, txOptions?: unknown) =>
         transaction(tracker, hooked, arg, txOptions),
-      [STORAGE_KEY]: createStorage(tracker, interest, delegate),
+      [STORAGE_KEY]: createStorage(tracker, [interest, links], delegate),
     },
   });
   return tracked as unknown as C;

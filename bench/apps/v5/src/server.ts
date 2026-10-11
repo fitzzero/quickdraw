@@ -1,3 +1,4 @@
+import { createConsoleLogger } from "@fitzzero/quickdraw-core";
 import { verifyJWT } from "@fitzzero/quickdraw-core/server/auth";
 import express from "express";
 import { db, prisma } from "./database";
@@ -12,7 +13,10 @@ import { taskService } from "./services/task";
  * Express app, with JWT auth and every other option at its 5.0 default
  * (console logger, JSON-only parser, no access cache, the in-process change
  * log, the socket rate limiter). The only additions are the harness's routes
- * (src/harness.ts) and the measurement in src/instrument.ts.
+ * (src/harness.ts) and the measurement in src/instrument.ts. The logger is
+ * named because 5.1's default drops `debug` under NODE_ENV=production, which
+ * the bench runs with: it keeps 5.0's one debug record per call, so a run
+ * compares with the committed 5.0 baselines.
  *
  * The rate limiter's default, 600 events per minute per socket, covers this
  * workload, which 4.1 serves without any limiter: a writer sends 120 writes a
@@ -34,6 +38,7 @@ const server = qd.createServer({
   services: [projectService, taskService],
   db,
   cors: { origin: "*" },
+  logger: createConsoleLogger({ level: "debug" }),
   onCall: metrics.onCall,
   auth: {
     authenticate: async ({ auth }) => {

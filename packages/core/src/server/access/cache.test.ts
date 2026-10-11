@@ -95,6 +95,18 @@ describe("the cache store", () => {
 describe("lookup", () => {
   const ns = namespace("rows");
 
+  it("reads nothing from the cache inside a transaction (SHARE-4)", async () => {
+    const cache = createAccessCache({ ttlMs: 1_000 });
+    cache.set(ns, "", "a", "kept");
+    const load = vi.fn((ids: readonly string[]) =>
+      Promise.resolve(new Map(ids.map((id) => [id, "fresh"]))),
+    );
+    const where = { memo: createRequestMemo(), cache, keepable: () => false };
+    expect(await lookup(where, ns, "", ["a"], load)).toEqual(new Map([["a", "fresh"]]));
+    expect(load).toHaveBeenCalledWith(["a"]);
+    expect(cache.get(ns, "", "a")).toEqual({ value: "kept" });
+  });
+
   it("loads only what the memo and the cache miss, in one batch, and memoizes in flight", async () => {
     const cache = createAccessCache({ ttlMs: 1_000 });
     cache.set(ns, "", "cached", "from the cache");
@@ -242,6 +254,27 @@ describe("keeping lookups across requests", () => {
       2,
       "Moderate",
     ]);
+  });
+
+  it("reads the database, never what it kept, inside a transaction (SHARE-4)", async () => {
+    const { dispatcher } = boardDispatcher();
+    expect(await lookupOf(dispatcher, "projectService", board.bo, board.p1)).toEqual([
+      2,
+      "Moderate",
+    ]);
+    // The untracked client: nothing evicts what was kept.
+    await h.prisma.projectMember.updateMany({
+      where: { projectId: board.p1, userId: board.bo },
+      data: { role: "Read" },
+    });
+    expect(await lookupOf(dispatcher, "projectService", board.bo, board.p1)).toEqual([
+      0,
+      "Moderate",
+    ]);
+    const inside = await h.db.$transaction(
+      async () => await dispatcher.access.levelsFor("projectService", as(board.bo), [board.p1]),
+    );
+    expect(inside.get(board.p1)).toBe("Read");
   });
 
   it("forgets what it kept once cacheMs passes", async () => {

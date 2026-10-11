@@ -4,6 +4,609 @@ All notable changes to this project will be documented in this file.
 
 ## [5.1.1] - 2026-10-11
 
+### Behavior changes for 5.1 apps
+
+- **More id-taking methods are refused when they are defined.** On a
+  service with an access policy, `defineService` now throws at startup for
+  a method whose input has `id` under `custom(...)`, `{ scope, of, id }` or
+  `{ entry, id: "<another key>" }`, unless it says `rowless: true` (a kit
+  takes `rowless: [names]`). The ways out: `{ entry: L }` (with `claims`
+  beside it for a check on the caller's claims); `rowless: true` when every
+  caller the form admits may reach any row; and `rowless: true` on a
+  hand-written create whose optional `id` is one the client made, under a
+  `scope` form. The read/write kit's `create`, `update`, `delete` and
+  `reorder` stay exempt. The codemod now writes `rowless: true` (marked)
+  where a 4.x `resolveEntryId` named another key of a payload that also has
+  `id`.
+- A method takes a new option, `claims`, and `ServiceMethod` gains
+  `claims`.
+- **An `authenticate` that `socketAuth` did not make no longer finds the
+  session cookie in `auth.token` on HTTP.** It is in
+  `request.sessionCookie`, and `auth.token` holds only a bearer token. An
+  app whose own `authenticate` accepted cookies on `/qd` reads that field
+  and checks `cookieOriginAllowed` and `liveSession`; bearer-only code now
+  ignores the cookie, so a cookie-only call is anonymous to it. An app's
+  wrapper around `socketAuth` keeps cookie sign-in.
+- `verifyJWT` logs one warning per process in development when it verifies
+  a token carrying `sid` (a session token), since it checks no session
+  store.
+- The README's MCP callers are `kind: "agent"`, and MIGRATION's
+  `trust proxy` defaults to 0 (`TRUST_PROXY`).
+- **The read/write kit's `create` checks what it writes.** A create whose
+  input carries a column the policy reads (`ownerId`, `acl`) is `FORBIDDEN`
+  unless the caller is a service-wide Admin: set it in `prepare`. A create
+  into a parent (or an anchored scope) where the caller lacks the method's
+  row level is `FORBIDDEN` under any form, `{ service: L }` grants below
+  Admin included, since anchors are asked without grants, as `update`'s
+  moves already were; an anonymous create that names an anchor is
+  `FORBIDDEN`. It costs one more engine call per anchor column it writes.
+- **An `update` or `upsert` whose data holds a nested write reads first.**
+  When its model has interested columns (a policy's, a collection's), it
+  runs one more statement and its record's `fields` lists those columns, so
+  revocation, cache eviction and collection moves follow relation-form
+  foreign keys on the written row. Every such write to a row a policy reads
+  is now an access change, whether or not the foreign key moved: it
+  re-resolves that row's subscribers (entities, collection scopes, topics,
+  streams), and behind a cluster the flush's frames wait for every node to
+  answer, as for any access change. The `nested-write` warning's text
+  changed.
+- **`createServer` names access models it cannot track.** A model a policy,
+  a membership table or a `via` junction depends on without an `id` column
+  (a composite `@@id`) logs `[quickdraw:untracked-access-model]` at error
+  level, in every environment; a strict test app fails to start.
+  `StorageAdapter` gains an optional `trackable(model)`.
+- **A kit write holding a relation key or a nested write is `VALIDATION`**,
+  for service-wide Admins too, and for a Json value whose own key is a
+  relation operation holding rows, or `delete`/`disconnect` set to `true`
+  (keep such data a level deeper), and for any `{ set: [...] }`, a scalar
+  list's included (write the list itself). A
+  `prepare` that returns one is `INTERNAL`. The admin kit shows relation
+  fields as `editable: false`, refuses writes to them, and refuses an
+  `editable` list or `fieldOverrides` entry naming one when the service is
+  defined.
+- **`share: "all"` is refused on the kit methods whose result depends on
+  who asks.** `defineService` throws for `"all"` on the read/write kit's
+  `list` and `getMany`, `search`, the sharing kit's `listShares` and
+  `listMembers`, and the admin kit's `adminList` and `adminGet`: use
+  `share: "caller"`.
+- In development, an app handler of a `share: "all"` run that reads
+  `ctx.principal`, `ctx.services` or `ctx.mcp` logs
+  `[quickdraw:shared-principal]`, and a strict test app fails that call
+  with `INTERNAL`. `DevWarningKind` gains `shared-principal`.
+- **"Not modified" answers only for a row the form checked.** The default
+  "not modified" answer now comes only when the method's form checked the
+  row its input's `id` names (an `entry` form on `id`, a `scope` form on the
+  service's own rows by `id`, `{ service: "Admin" }`), for a caller the
+  service's `Admin` bypass passes, and for a `rowless: true` method under a
+  form that checks no row (`"public"`, `"authenticated"`, `{ service: L }`).
+  Every other query runs its handler every time, more work for the same
+  data: a `scope` form on another service, `custom`, an `entry` form on
+  another key or with an `id` function (`rowless` or not), and, on a service
+  without an access policy, a `"public"`, `"authenticated"` or
+  `{ service: L }` query that does not say `rowless: true`.
+- **A self list follows its service's policy.** A `scopeAccess: "self"`
+  collection on a service with an access policy shows only the rows its
+  user may read at `Read` (a service-wide Admin with `adminBypass` still
+  sees all of their scope). A row the user loses goes out `removed`. A
+  change to the user's membership of a parent row, or a reload of their
+  grants, sends their open self lists `reset`; a membership write without
+  values resets every open self list of that service. Clients load them
+  again, and a resume after such a change reads a page. Pages and
+  `qd:col:items` of such a scope cost the policy filter's reads, and each
+  flush costs one batched lookup per self scope it sends to (per distinct
+  principal of its user there; on one server, none for a frame of removals
+  alone). A service-wide Admin who views another user's self scope reads it
+  whole, but its frames follow the owner's level. Gaps: a parent row's own
+  access columns (a project's owner or access list) reach a self list only
+  at the rows' next write or the list's next load; behind a cluster, a node
+  without the owner's socket decides for a principal that holds the owner's
+  user id only (no grants, kind, claims or app fields), so a row read only
+  through a service-wide grant goes out `removed`, and a `resolver` that
+  needs more of the principal must cope with that one; a regained row comes
+  back at its next change or the list's next load.
+- **`reorder` keeps to the rows its caller may write.** A neighbor the
+  caller cannot write at the method's row level is `NOT_FOUND`, as a
+  missing one is, and the list a move reads and renumbers is the caller's
+  writable rows of the `within` list: under a per-row policy every list is
+  per caller, and a list with no `within` or a null one is the caller's own
+  rows. The rows a move names are read through the same filter, so a policy
+  whose filter matches no row (a `resolver` without `where`) makes `reorder`
+  `FORBIDDEN` below a service-wide grant. A move under an `{ entry }` form
+  costs one batched lookup more (other forms made one already), plus the
+  write filter's reads.
+- **An unscoped search comes in id order.** `search` without `scope` no
+  longer uses the scope collection's order.
+- **A cursor too long names its row.** A `list`, `search` or
+  `listMembers` cursor that would pass 4,096 characters (a long sort value)
+  names its row instead: the next page costs one more read, and the cursor
+  is `VALIDATION` once the row has left the list. Such a cursor follows its
+  row's current sort value.
+- **A via list over the item service's members table counts only links at
+  its access.** In such a list (the junction is the table the service's
+  `members` policy reads), a link whose role maps below the collection's
+  `access` no longer makes the row a member: it is in no page, count,
+  index, `qd:col:items`, scoped search or delta, and a role change across
+  that line sends `removed` or `added`. Apps whose members all hold at
+  least the list's access see no change; a member below it (a `Public`
+  role, or a guest-like one such as `levels: { guest: "Public" }`) drops
+  out of the list. A role missing from the map counts as no level, as in
+  the policy. A role change that keeps the link counted (`Read` to
+  `Moderate`) reads nothing; one across the line reads the junction once.
+- **The read/write kit's bulk methods take their single-row level.** A
+  bulk method whose form names no level (`"authenticated"`, `"public"`,
+  `{ service }`, `custom`) now skips the rows below the row level of
+  `delete`'s form (`bulkDelete`) or `update`'s (`bulkUpdate`) when that is
+  higher than `Moderate`; it never goes below `Moderate`. A counterpart
+  form that names no row level (`{ service: L }`, `custom`) changes
+  nothing: give both the same form. The README sample's `bulkDelete` is
+  `{ entry: "Admin", id: "ids" }`, which refuses the whole call (an empty
+  `ids`, or an id with no row, is `FORBIDDEN`), and its `archive` is
+  `Moderate`.
+- **An owner column an anchored collection scopes by stays read-only.**
+  Without a service-wide Admin grant, a kit write may not set a column the
+  policy reads even when a collection is anchored by it: set it in
+  `prepare` on create.
+- **Membership columns are read-only through the kits.** A membership
+  table's entry, user and role columns that any policy reads are refused
+  in the read/write kit's `create` input and writes and in the admin kit's
+  writes without a service-wide Admin grant: use the sharing kit.
+- **Connection state recovery is refused.** `createServer({ socket: {
+connectionStateRecovery } })` throws a `TypeError` at startup, and
+  `SocketOptions` no longer accepts the key: a recovered socket skipped
+  authentication. quickdraw clients resume by revision on every reconnect.
+- **A watch or stream subscribe that loses access while it is answered is
+  refused.** A `qd:watch` or `qd:stream:sub` whose access an access change
+  took while it was authorized answers `FORBIDDEN` instead of joining. A
+  subscribe whose window overlapped an unrelated access change costs one
+  more access lookup, and joins once that lookup allows it: a stream item
+  pushed meanwhile is in its seed, not sent as a frame. A stream subscribe
+  an unsubscribe overtook answers `seed: []`, not the kept items.
+- **Subscribes re-check with the socket's current grants.** Entity and
+  collection subscribes that overlapped an access change resolve again with
+  the grants the socket holds at that moment: a grant lowered mid-subscribe
+  denies, a raised one answers at the new level.
+- **`__Host-session` is read first wherever the request carries it.** On a
+  plain HTTP request (development, an SSR hop without `X-Forwarded-Proto`),
+  the transports, `requireSession` and the auth routes read
+  `__Host-session` before `session`, and the routes, `setSessionCookie`
+  and `clearSessionCookie` clear a stale `__Host-session` when they set or
+  clear `session`. The startup warning for an empty `cookie.domain` while
+  `COOKIE_DOMAIN` is set now says why it matters: the transports take a
+  `session` cookie over HTTPS there, which any site under that domain can
+  set.
+- **The OAuth state cookie is signed.** Its format changed, so a sign-in in
+  flight during the deploy lands once on `?error=state`. It is named
+  `__Host-qd_oauth` whenever `publicUrl` is https.
+- **Development sign-ins need `NODE_ENV` `development` or `test`.**
+  `socketAuth({ devCredentials })` throws at startup, and the mock provider
+  mounts nothing (logging an error), when `NODE_ENV` is anything else,
+  unset included: set `NODE_ENV=development`. The server warns at startup
+  while `devCredentials` is on, and mounting the mock logs a warning.
+- **Sockets end when their session expires.** A socket `socketAuth`
+  authenticated is disconnected (`io server disconnect`, no automatic
+  reconnect) when its session expires; `recordSocketSession(socket,
+sessionId, expiresAt)` does the same for an app's own `authenticate`.
+  `expiresAt` is a `Date` or epoch milliseconds (a JWT's `exp` is in
+  seconds: pass `exp * 1000`), and a handshake whose recorded session
+  expired before it ended is refused `UNAUTHENTICATED`.
+- **The cookie routes check the page's Origin.** `/me`, `/logout` and
+  `/logout-all` answer 403 to a session cookie sent from a page
+  `allowedOrigins` does not list, and `/guest` to such a page whatever it
+  sends.
+- **A late collection change goes out as the row is now.** On one server
+  too, a collection delta that is not a removal is decided by its row as
+  read for the frame: a change whose flush ran after a later write moved
+  its row goes out `removed` to the scope the row left. The read takes the
+  scope's columns too.
+- **A deleted via entry reaches only its lists.** A tracked `delete` or
+  `deleteMany` of a model a `via` collection lists reads that entry's
+  junction links first (one read per junction, and one more for a `delete`
+  whose `where` has no `id`), and records them in `WriteRecord.links`, a
+  new optional field app flush sinks see. Its removal goes only to the
+  scopes it was linked to, and to none of a filtered list when it was
+  outside the list's `where`. A removal nobody can place (a `ctx.touch`
+  with `removed`) still reaches every subscribed scope, and a client
+  resuming any scope of that collection across one, subscribed on the
+  server or not, reloads the scope instead of replaying it.
+- **Sharing changes refuse users above the caller.** Under a lowered form
+  (`share: { entry: "Moderate" }` and the like), `share` replacing a level,
+  `setLevel`, `unshare`, `remove` and `setRole` answer `FORBIDDEN` for a
+  user whose current level is above the caller's; equal levels pass. Under
+  a form with no row level (`custom`, `"authenticated"`, a scope form,
+  usually with `rowless`), the caller's own level is their level on the
+  row, often none, so such callers can no longer `unshare` or `remove`
+  users who have a level; name `service` in the form for a grant to count.
+- **With `cacheMs`, access checks inside a transaction read the database.**
+  A sharing change's re-check of its caller (and any `levelsFor` inside
+  `db.$transaction`) no longer reads the access cache, so it costs its
+  statements there.
+- **The sharing kit's method descriptions changed.** They say the caps and
+  the one-user lookup; MCP tool descriptions and generated API docs show
+  them, so apps that commit docs pages regenerate them.
+- **One socket holds at most 10,000 rows, 1,000 collection scopes and
+  1,000 topic watches.** One more is `CONFLICT` (the hook's error; the
+  client retries only `RATE_LIMITED`), as a 501st stream feed already was;
+  a `qd:sub` whose new ids would pass the cap is refused whole, and a row
+  that batches running at once left no room for is answered `CONFLICT` on
+  its own. `qd:hello` announces the caps in three more
+  `limits.subscriptions` fields.
+- **The admin kit hides the grants column by its configured name.** On the
+  users service of an app whose `auth.serviceAccessSource` column is not
+  named `serviceAccess`, that column leaves `adminMeta`, rows and writes
+  unless `grants: true`, and then shows to service-wide Admins only. Kits
+  that name it in `editable`, `fieldOverrides`, a filter or a sort without
+  `grants: true` (or hide it beside `grants: true`) fail at startup, and
+  `grants: true` type-checks on any entity but fails when the dispatcher is
+  made for one with no grants field. Apps that use `serviceAccess` see no
+  change.
+- **A dispatcher made without `createServer` names the grants column
+  itself.** `createDispatcher` takes `serviceAccessSource: { model, column }`
+  (`createServer` passes its `auth.serviceAccessSource` and refuses the
+  option at the top level), and `createHttpRouter` throws when its
+  `auth.serviceAccessSource` is not its dispatcher's. An app that serves
+  HTTP or MCP from `createDispatcher` and stores grants in a column passes
+  it there, or the admin kit treats that column as an ordinary field.
+- **A channel without `requires` warns.** A channel whose contract
+  declares no `requires`, and whose service declares no `access` for it,
+  logs `[quickdraw:channel-without-requires]` when the server starts, and a
+  test app made with `strictWarnings` fails to start until the channel
+  gets a `requires` or `access: "authenticated"` (which delivers as
+  before).
+- **A scoped stream's room is a function of its scope.** A scoped stream
+  with `access: { room: "name" }` or `{ room: { prefix } }` fails at
+  `defineContract`, by type and when it runs; it takes `(scope) => room`.
+  Global streams keep both forms.
+- **Room names with the shape of a socket id are refused.** An app room
+  name of exactly 20 letters, digits, `_` or `-` (a Firestore-style id,
+  and plain names such as `general-announcement` or `tournament_finals_24`
+  too) is `VALIDATION` in `ctx.rooms.join`, `rooms.size`, `rooms.leave`
+  and presence, and refused as a literal in a contract: check literal room
+  names, and give such a name a prefix.
+- **`rooms.emit` refuses the framework's rooms.** `emit("user:…")` and
+  `emit("qd:…")` are `VALIDATION`; send to a user with `emitToUser`.
+- **Presence counts only rooms joined through `ctx.rooms.join`.** A socket
+  a raw `socket.join` put in a room is no longer counted on this process.
+- **A service name with `:` or `@` throws** at `defineContract`.
+- **The MCP HTTP routes refuse web pages unless listed.** A request
+  carrying an `Origin` header gets 403 unless
+  `createMcpHttpRouter({ allowedOrigins })` lists its origin; a page that
+  calls `/mcp/invoke` must be listed. `allowedHosts` optionally refuses
+  other `Host` names.
+- **MCP queries over HTTP share one lane per caller.** Per bearer token,
+  per user without a token, or per address when anonymous (an IPv6 address
+  by its /56): a busy agent can see `RATE_LIMITED`, and the development
+  `repeated-call` warning now counts one HTTP caller's calls together, so a
+  `strictWarnings` test app throws on more than 10 identical calls a
+  second from one caller.
+- **An MCP input with `.meta({ id })` takes its object's properties as
+  arguments**, no longer `{ input }`, and its bound keys bind (a schema
+  made from it, as `.optional()` or `.refine()` make, still takes
+  `{ input }`); a bound key in an id'd union or intersection branch, or in
+  an input without arguments, now fails `createMcpRegistry`, and a call
+  that sends a bound argument its tool does not fill is `FORBIDDEN`
+  (before, it was stripped or passed on). A wrapped input's `definitions`
+  move to the tool schema's root, and a recursive one refers to itself as
+  `#/properties/input`, so listed references resolve.
+- **MCP custom tools obey `initQuickdraw({ kinds })`**, and take `kinds` of
+  their own; custom tools served beside the services of apps that admit no
+  kind in common fail `createMcpRegistry`.
+- **A `principal` hook's `QuickdrawError` refusal logs at debug**, not as an
+  error.
+- **`setupRedisAdapter` without `keyPrefix` keys the adapter by
+  `cluster.keyPrefix`** (`"quickdraw"` by default) instead of `"socket.io"`.
+  The deploy that upgrades a cluster splits old and new nodes unless it
+  passes `keyPrefix: "socket.io"` for that deploy (docs/deploying.md,
+  "Deployments sharing a Valkey").
+- **Nodes log events from other deployments and older nodes.** An event of
+  another `cluster.keyPrefix` is answered and ignored, with one error; an
+  event without a deployment (a node of an earlier version, during a rolling
+  deploy or of a deployment that shares the Valkey and was not upgraded) is
+  applied, with one warning. `createServer` checks `cluster.keyPrefix`
+  before it starts anything, and refuses `null` as well.
+- **`cluster.keyPrefix` must be a non-empty string**, or `createServer`
+  throws.
+- **The default console logger drops `debug` in production.** A call's
+  record logs at debug with its caller's user id; pass
+  `createConsoleLogger({ level: "debug" })` as `logger` to keep it.
+- **A Prisma error is logged summarized.** `describeError`, and so every
+  log of a failed call, gives a Prisma client error as
+  `{ name, code, meta, reason?, clientVersion, stack }` (the stack's frames
+  only; `meta` keeps only the keys that name the schema or a code, and of
+  Prisma 7's `driverAdapterError` its kind, codes, constraint, column and
+  table), and the auth routes', the admin kit's and the write tracker's
+  string `error` fields as `"<class> <code>: <reason>"`: a log processor
+  keyed on `error.cause.message` of a Prisma failure finds none.
+- **The HTTP call limiter's 429 says `no-store` and `nosniff`** too.
+- **`/qd` replies say `Cache-Control: no-store`** and
+  `X-Content-Type-Options: nosniff`.
+- **`quickdraw-skills link` links into the project that installs it.** It
+  anchors on the nearest `package.json` above the working directory whose
+  `node_modules` holds the package, not on the nearest `.git`; it fails
+  (exit 1) when there is none, and refuses the home directory.
+- **A session the server ends signs the client out.** After the server's
+  disconnect (`disconnectUser`, `onRevoke`, a session that expires, a
+  flooded channel) or a connect or reconnect refused with `UNAUTHENTICATED`
+  or `FORBIDDEN`, `isKnown` is false, `userId`, `hello` and `serviceAccess`
+  are null, and quickdraw's cache is empty, data a server render
+  prefetched included; calls queued during that reconnect fail with
+  `CANCELLED`. A handshake is `UNAUTHENTICATED` whenever `authenticate`
+  fails, a session store that does not answer included, so a reconnect
+  during such an outage signs the client out too. A gate on `isKnown` alone
+  now shows its loading state there: while it is false, treat `status`
+  `"disconnected"` or `"refused"` as signed out, as the README's `AuthGate`
+  does. A client
+  disconnected for flooding a channel now looks signed out, where before
+  it was silently disconnected (Socket.IO never reconnected it; a reload
+  signs back in while the session lives). A dropped transport or a
+  `qd:rotate` keeps everything, as before.
+- **Presence across nodes is a request answered with user ids.** A node
+  asks the others with `quickdraw:presence` instead of reading their
+  sockets. During a rolling deploy from an earlier version, whose nodes
+  never answer it, a read waits `cluster.timeoutMs` once and then reads
+  every node's sockets for 30 s at a time, with a warning at most once
+  every 10 minutes.
+
+### Security
+
+- **A check on a token's claims adds to the row check (ACCESS-1,
+  ACCESS-4).** The README's, MIGRATION's and the sample app's `triage`
+  example checked a token's `scope` in a `custom` form on a method that
+  updates `input.id`. A `custom` form replaces the row check, so any token
+  holding that claim could write tasks in every tenant, and a missing id was
+  a `NOT_FOUND` existence oracle; a service-wide `Admin` grant skipped the
+  check, so an Admin user's narrowed token was not narrowed. A method now
+  takes `claims: (claims, input) => boolean` beside `access`: it adds to
+  the form, runs right after `kinds` outside the access engine, so no app
+  engine or grant skips it, and answers `UNAUTHENTICATED` without a
+  principal and `FORBIDDEN` unless it returns `true`. The example is now
+  `{ entry: "Moderate" }` plus `claims`.
+- **An id-taking method can no longer pass a check on another row
+  (ACCESS-1, ACCESS-5).** The pack H refusal of id-taking methods under a
+  form that checks no row exempted `custom` forms, and missed
+  `{ scope, of, id }` forms and `{ entry, id }` forms naming another key on
+  inputs that carry `id`: each lets everyone it admits reach any row by its
+  id. `defineService` now refuses them too, each with a message naming the
+  row it checks and the ways out.
+- **Session tokens are checked against the session store on MCP and in
+  custom auth (AUTH-1, MCP-2, CLIENT-2).** The README's `verifySession`,
+  the MCP bridge's `principal` hook and MIGRATION's server `authenticate`,
+  was `verifyJWT` alone: a signed-out, logged-out-everywhere or revoked
+  session kept working until its JWT expired (7 days), and a JWT without a
+  session forever. `bearerAuth({ sessions, jwtSecret, loadPrincipal? })`
+  (`./server/auth`) checks a bearer token against the store on every call,
+  and the examples use it (or `socketAuth`). The HTTP transport handed
+  every `authenticate` the ambient session cookie as `auth.token`, so code
+  written for bearer tokens took a cross-site page's cookie for one, past
+  the Origin rule only `socketAuth` applies; the cookie is now `auth.token`
+  only for `socketAuth`'s `authenticate`.
+- **The read/write kit's `create` checks the parents it writes into
+  (CRUD-1, ACCESS-3).** It checked no anchor, yet it was exempt from the
+  id-reach refusal as checking its row: under `"authenticated"`,
+  `"public"`, a service grant or `custom`, any caller wrote rows into
+  another tenant's project, and a scope form left a second anchored column
+  (`assigneeId`) unchecked. `create` now needs the method's row level on
+  each anchor row its new row names, after `prepare`, and takes a column the
+  policy reads only from `prepare`.
+- **Kit writes take column values only (CRUD-5, DATA-2, ADMIN-1).** A
+  relation key or a Prisma nested write reached Prisma through the kits'
+  writes: the admin kit validated `data` but wrote the raw object, and the
+  read/write kit wrote whatever a schema kept (`z.looseObject`, and ArkType
+  by default). Nested writes are not tracked and passed the column guard by
+  name, so `{ project: { update: { ownerId } } }` made a member the
+  project's owner and `{ assignee: { update: { serviceAccess } } }` rewrote
+  the caller's own grants. Every kit write now refuses them.
+- **A foreign key set through a relation revokes access (DATA-1).** A
+  write like `db.task.update({ data: { project: { connect: { id } } } })`,
+  `owner: { connect }` or `{ disconnect: true }` changed an access column,
+  but the tracker reported only the relation's name: no revocation, no cache
+  eviction, no collection move, and the old tenant or owner kept receiving
+  frames. Such a write now reads the row's access and scope columns first
+  and reports them.
+- **A membership table without an `id` is no longer silently untracked
+  (DATA-3).** A table keyed by a composite `@@id` (the `members()` doc
+  example had no `id`) was never tracked, so removing a member never
+  revoked them. `createServer` now names every such model access depends
+  on, at start; give it an `id` and keep the pair unique with `@@unique`.
+- **Revocation settles before a flush's frames (DATA-I1).** One socket's
+  failed re-resolution let the flush send its frames while other sockets
+  were still being re-resolved, so a demoted socket could receive them.
+- **`share: "all"` no longer hands one caller's rows to another
+  (ACCESS-2, CLIENT-3).** A `"all"` run's handler runs with the first
+  caller's `ctx`, and every caller gets its result, yet nothing stopped
+  `{ ...crud.handlers(...).list, share: "all" }`: a caller who owned one
+  project received another tenant's rows. The kits mark such methods and
+  `defineService` refuses `"all"` on them; the README and skills state that
+  a shared result must depend on the input only, and development warns
+  when an app's `"all"` handler reads who the caller is.
+- **"Not modified" answers only for a row the form checked (ACCESS-6).**
+  The default version source answered for `input.id`'s row whatever the
+  form checked, before the handler ran: a query under a scope form told a
+  caller outside it that a row existed and had not changed.
+- **A self list no longer shows rows its user may not read (COLL-1).** A
+  `scopeAccess: "self"` scope (the README's `assigned` example) passed on
+  the user id alone, and its pages, items and frames held every row whose
+  scope column named the user. A task still assigned to a user removed from
+  its project kept reaching them, title and all, and no access change ever
+  reached a self subscription. Its reads and frames now follow the item
+  service's policy.
+- **`reorder` no longer reaches other tenants' rows (CRUD-6).** It
+  checked only the moved row, so with a null or absent `within` a caller
+  named another tenant's rows as neighbors, read their ordinals, and made
+  renumbering rewrite every tenant's rows.
+- **An unscoped search no longer leaks a tiered order column (CRUD-4).** It
+  ordered by the scope collection's order, which may hold a column tiered
+  at the collection's access, and `nextCursor` carried that column's values.
+- **A demoted member drops out of a via list (COLL-1, via variant).** A
+  `via` collection over a membership table counted every link, so a member
+  demoted below the list's access kept the project in their list, with its
+  updates.
+- **A bulk delete no longer deletes rows `delete` refuses (CRUD-2).** The
+  README's map paired `delete: { entry: "Admin" }` with
+  `bulkDelete: "authenticated"`, which wrote at `Moderate`: a member
+  deleted Admin-only rows in bulk. Bulk methods now take their
+  counterpart's row level.
+- **A member can no longer make themself a row's owner (CRUD-3).** An
+  owner column that an anchored collection also scoped by (`assigneeId`,
+  a `jsonAcl` owner) was only checked as an anchor move, so a member set
+  it to themself and became the row's Admin, or took over a project.
+- **A member can no longer raise their own role through a kit (CRUD-7).**
+  The kits locked only the written service's policy columns, so crud on a
+  membership table set the caller's own role to `Admin`.
+- **MIGRATION no longer trusts a proxy unconditionally (CLIENT-6).** Its
+  `app.set("trust proxy", 1)` let a client without a proxy in front pick its
+  own `X-Forwarded-For`, and pass every per-IP limiter; it reads
+  `TRUST_PROXY` (0 by default), as the README's routes do.
+- **A grant lowered mid-subscribe no longer keeps its room (LIVE-1).** A
+  subscribe's race re-check resolved with the principal captured when it
+  began, so a service-wide `Admin` demoted while a `qd:sub` or `qd:col:sub`
+  ran joined the `Admin` room or the scope, and kept it.
+- **Topic watches and stream subscribes settle their races (LIVE-2,
+  RT-1).** They authorized and joined with no re-check, so a member removed
+  while subscribing kept the topic's `qd:changed` or the stream's items,
+  seed included.
+- **Connection state recovery can no longer skip authentication
+  (TRANSPORT-1).** Socket.IO's recovery skipped the auth middleware and
+  restored a socket's principal and rooms, so a revoked session or a
+  lowered grant came back for up to 2 minutes.
+- **A planted `session` cookie no longer chooses the account (AUTH-2a,
+  CLIENT-4).** A plain HTTP request read `session` before
+  `__Host-session`, so a sibling site that planted `session` signed the
+  user in as the attacker on the SSR hop, same-origin GETs,
+  `requireSession`, `/auth/me` and a polling handshake behind a TLS proxy
+  that sent no `X-Forwarded-Proto`.
+- **The OAuth state cookie cannot be planted over HTTPS (AUTH-2b).** It was
+  `qd_oauth` unless the request looked secure, so a sibling site could
+  plant one, with a state the attacker had the provider sign them in to,
+  and sign the victim's browser in as the attacker (login CSRF). It is now
+  `__Host-qd_oauth` whenever `publicUrl` is https, which no other site can
+  set; a deployment on an http `publicUrl` keeps the risk. It is also
+  signed, so its payload (state, return origin, provider, age) cannot be
+  forged.
+- **Development sign-ins no longer run outside development (AUTH-3).**
+  `devCredentials` and the mock ran whenever `NODE_ENV` was not exactly
+  `production`, so with `NODE_ENV` unset, `prod` or `staging` a raw socket
+  naming an admin's user id signed in as them from any page.
+- **A socket no longer outlives its session (AUTH-4).** Authentication ran
+  once per handshake, so a socket kept its principal after its session
+  expired.
+- **The cookie routes apply the Origin rule (AUTH-5).** `/me`, `/logout`,
+  `/logout-all` and `/guest` skipped the session cookie's Origin rule, so a
+  cross-site page with CORS help could read the user id, sign the user out
+  everywhere, or sign the browser in as a new guest.
+- **A late flush no longer sends a moved row to the scope it left
+  (COLL-2).** One server took a delta's scope from the write's own values,
+  so a unit whose flush ran behind a slow handler tail or a busy queue sent
+  a row's new values (a title, an item) to the list it had already left,
+  whose readers may not see where it went.
+- **A deleted via entry no longer tells every subscriber its id (COLL-3).**
+  Every subscribed scope of a `via` collection, and every watched topic of
+  it, got the removal of every deleted entry, and every resume buffer kept
+  it.
+- **A sharing change can no longer demote or remove someone above the
+  caller (SHARE-1).** Under a lowered form, a Moderate member could replace
+  an `Admin` entry with `share`, or demote or remove an Admin with
+  `setLevel`, `unshare`, `setRole` or `remove`.
+- **The README's `resolveUser` names exactly one user (SHARE-2).** It took
+  the first user with a display name, so whoever registered a name first
+  received every by-name share meant for another. It now finds an email by
+  `findUnique`, and a name only when exactly one user has it. Apps that
+  copied the old resolver must change theirs: the kit takes what the
+  resolver returns. Roles that map to one level are peers (SHARE-3): an
+  `admin` role may demote an `owner` role, so protect an owner with an
+  owner column.
+- **One client can no longer exhaust the server's memory with
+  subscriptions (COLL-4).** Nothing counted the collection scopes, topic
+  watches and rows one socket held, so a client subscribing to an endless
+  run of made-up scopes grew the server's memory without end.
+- **The admin kit protects a grants column of any name (ADMIN-2).** It hid
+  and Admin-gated only `serviceAccess` and `service_access`, so with
+  grants stored under another name every admin caller saw them, and a user
+  under a lowered form could write their own. That holds on a dispatcher
+  made without `createServer` too (`createDispatcher({ serviceAccessSource
+})`), which `createHttpRouter` checks.
+- **A sharing change's re-check no longer reads a stale cache (SHARE-4).**
+  With `cacheMs`, the re-check of the caller inside the change's
+  transaction read the access cache, so a caller demoted by a write the
+  tracked client did not see kept their old level for up to `cacheMs`.
+- **An open channel is named at startup (RT-3).** A channel without
+  `requires` takes every signed-in socket's message, and MIGRATION.md's
+  example relayed a cursor to the project room its payload named, so any
+  user reached any project's room. The server now warns on such channels,
+  and the example's channel requires the room a checked `joinProject`
+  joins.
+- **A scoped stream's room follows its scope (RT-4).** A name or prefix
+  room let a socket in `world:1` read scope `2`; `defineContract` refuses
+  both on a scoped stream.
+- **No app room joins a socket's own room, and `rooms.emit` sends to no
+  framework room (RT-I1).** `ctx.rooms.join(<socket id>)` joined another
+  socket's own room, presence answered with its user, `rooms.size` counted
+  it, and `rooms.emit("user:<id>")` reached any user. Those names are
+  refused (`emit` still sends to a name of a socket id's shape, which grants
+  nothing), and presence reads only the rooms `ctx.rooms.join` joined.
+- **Service names split rooms one way (LIVE-3, COLL-6).** A `:` or `@` in
+  a service name let two services share an entity, collection or stream
+  room name, which authorizes `qd:col:items` and keys the resume buffers.
+- **The README's sharing example takes a removed user out of the board
+  room (RT-6).** Its `onChange` only logged, so a user who lost access kept
+  receiving the board's events.
+- **An MCP agent bound to one task stays on it (MCP-1).** An input written
+  as a `$ref` (a Zod schema with `.meta({ id })`) was not seen as an object,
+  so its bound key was never filled and the agent named any task; a bound
+  key behind a `$ref` in a branch went unchecked; and a loose input passed a
+  stray bound key on.
+- **A web page cannot call the MCP HTTP routes from a user's browser
+  (MCP-3).** They answered any `Origin` and `Host`.
+- **One MCP HTTP caller cannot run unlimited queries (MCP-4).** Each request
+  was a lane of its own; 120 concurrent anonymous calls all ran. An IPv6
+  caller's lane is its /56, which one host commonly holds.
+- **MCP custom tools check the caller's kind (MCP-6).** An agent ran a
+  custom tool of a users-only app.
+- **A refused MCP token is no error log (MCP-7).** A hook's refusal was
+  logged as an error, with whatever its message held.
+- **Deployments sharing a Valkey stay apart, each with its own
+  `cluster.keyPrefix` (RT-2).** Pub/sub is shared across a Valkey's
+  databases, and nodes applied every server-to-server event they heard:
+  staging's reloaded grants made a production user Admin until they
+  reconnected, and its disconnects, stream items, room removals and access
+  changes acted on production too. Every event now carries its deployment,
+  and a node applies only its own's. Two deployments that keep the default
+  prefix are still one, and a node of an earlier version sends untagged
+  events, which every node applies: give each deployment its own prefix and
+  adapter key, and upgrade every deployment that shares the Valkey.
+- **No cache keeps a `/qd` or MCP reply (TRANSPORT-3).** A call's reply
+  carried no `Cache-Control`, so a shared proxy or the browser's cache could
+  keep one user's data. `/qd` and the MCP bridge's HTTP routes now say
+  `no-store` and `nosniff`.
+- **Logs hold no values a Prisma error rendered (CLIENT-5).** A Prisma
+  error's message renders the failed call: the audit's create logged an
+  email and a plaintext password. Under Prisma 7 its `meta` also carries
+  the database's own text (`driverAdapterError`), which quotes the row
+  ("Failing row contains (...)") or the value out of range. The console
+  default also logged every call's user id at debug in production.
+- **`quickdraw-skills link` stays inside the project (CLIENT-7).** Run by
+  an app's `prepare` inside a dotfiles repo in the home directory, it
+  linked its rules and skills into `~/.claude`, which every project reads.
+- **The publish workflow pins its actions by SHA (SUPPLY-1).**
+  `oven-sh/setup-bun@v2` ran by tag in the job that holds the npm
+  publishing token; renovate now keeps every action pinned by digest.
+- **`docs/deploying.md` has a production checklist (CLIENT-8,
+  TRANSPORT-2)**, including per-address connection caps at the proxy, since
+  every quickdraw limit is per socket, and Valkey as a trust boundary;
+  `bearerOrIp`'s documentation says it keys by a token nothing has checked
+  (TRANSPORT-4).
+- **A browser the server signed out shows nothing of the last user
+  (CLIENT-1).** After the server ended a session (signed out everywhere,
+  revoked, expired), the client kept its hello and its cache, so the
+  README's gate still showed the user signed in, with their data, on a
+  shared machine. The client now forgets the hello, the grants and every
+  quickdraw query, and fails the calls it buffered for a refused reconnect.
+- **Presence no longer ships every socket's handshake between nodes
+  (RT-5).** Behind a cluster adapter each join and each user's last leave
+  read every node's sockets (`fetchSockets`): their handshake headers and
+  cookies, auth and data, about 15.6 KB a socket, parsed by every node. The
+  other nodes now answer with user ids (or whether they hold a socket of the
+  user), and concurrent reads of one room or user share one request.
+
 ### Codemod
 
 - **An inline `import("./x.js")` type in a 4.x method map now resolves from

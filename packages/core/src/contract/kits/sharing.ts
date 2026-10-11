@@ -195,18 +195,21 @@ export function sharingSpecOf(method: unknown): SharingSpec | undefined {
 
 const DESCRIBE: Readonly<Record<SharingMethodName, string>> = Object.freeze({
   share:
-    "Gives a user a level on one row: Read, Moderate or Admin. A user the row is shared with already gets the new level.",
+    "Gives a user a level on one row: Read, Moderate or Admin. A user the row is shared with already gets the new level, unless theirs is above yours.",
   shareByName:
-    "Gives the user with this name or email a level on one row: Read, Moderate or Admin.",
-  unshare: "Takes a user's level on one row away. The owner's cannot be taken away.",
-  setLevel: "Changes the level of a user one row is already shared with.",
+    "Gives the user this name or email finds a level on one row: Read, Moderate or Admin. Use the email when several users may share the name.",
+  unshare:
+    "Takes a user's level on one row away. The owner's cannot be taken away, nor that of a user whose level is above yours.",
+  setLevel:
+    "Changes the level of a user one row is already shared with, unless their level is above yours.",
   listShares: "Lists the users one row is shared with, and their levels.",
   invite: "Makes a user a member of one row, with a role (the lowest role when none is given).",
   inviteByName:
-    "Makes the user with this name or email a member of one row, with a role (the lowest role when none is given).",
-  remove: "Ends a user's membership of one row. The last Admin member cannot be removed.",
+    "Makes the user this name or email finds a member of one row, with a role (the lowest role when none is given). Use the email when several users may share the name.",
+  remove:
+    "Ends a user's membership of one row. The last Admin member cannot be removed, nor a member whose level is above yours.",
   leave: "Ends the caller's own membership of one row. The last Admin member cannot leave.",
-  setRole: "Changes a member's role on one row.",
+  setRole: "Changes a member's role on one row, unless their level is above yours.",
   listMembers:
     "Lists the members of one row and their roles, a page at a time. Pass a page's nextCursor back as cursor for the next page.",
 });

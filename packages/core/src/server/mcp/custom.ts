@@ -3,14 +3,19 @@
 // (4.1 `src/server/mcp/McpRegistry.ts:13`), so apps that needed one ran a
 // bridge of their own. A custom tool fails closed like a method: unless it
 // declares `access: "public"`, an anonymous caller is refused before anything
-// runs. A custom tool that gives a Standard Schema has its arguments
-// validated before its handler runs, as a method's input is, and every
-// handler gets a caller that acts in the same session.
+// runs, and a principal of a kind the tool does not admit (its `kinds`,
+// within the app's `initQuickdraw({ kinds })`, which it admits by default)
+// is refused too (`FORBIDDEN`, the 5.1 audit's MCP-6). A custom tool that
+// gives a Standard Schema has its arguments validated before its handler
+// runs, as a method's input is, and every handler gets a caller that acts in
+// the same session.
 
 import { isStandardSchema, type StandardSchemaV1 } from "../../contract/standardSchema";
 import { QuickdrawError } from "../../protocol/errors";
+import { checkKind, narrowKinds } from "../access/kinds";
 import { NEVER_ABORTED } from "../context";
 import { parseInput } from "../pipeline/validation";
+import { runtimeOf, type AnyService } from "../service";
 import { failure, sessionCaller, type McpSession, type SessionSettings } from "./session";
 import { inputOf, toolInputOf, type ArgumentsMode, type ToolInput } from "./tools";
 import type {
@@ -27,6 +32,8 @@ export interface CustomTool {
   readonly tool: McpTool;
   /** Who may call it; `"authenticated"` unless the tool said otherwise. */
   readonly access: McpToolAccess;
+  /** The kinds of principal that may call it: its own, or the app's; `undefined` admits every kind. */
+  readonly kinds: readonly string[] | undefined;
   readonly mode: ArgumentsMode;
   /** The schema that validates the arguments, when the tool gave a Standard Schema. */
   readonly schema: StandardSchemaV1 | undefined;
@@ -61,7 +68,43 @@ function accessOf(owner: string, access: unknown, fail: Fail): McpToolAccess {
   return access;
 }
 
-function checkCustomTool(value: unknown, index: number, fail: Fail): CustomTool {
+/**
+ * The kinds every one of `services` admits: what their apps'
+ * `initQuickdraw({ kinds })` admit, in common; `undefined` admits every kind.
+ */
+function appKindsOf(services: readonly AnyService[]): readonly string[] | undefined {
+  let kinds: readonly string[] | undefined;
+  for (const service of services) {
+    const own = runtimeOf(service)?.kinds;
+    if (own !== undefined) {
+      kinds = kinds === undefined ? own : kinds.filter((kind) => own.includes(kind));
+    }
+  }
+  return kinds;
+}
+
+function kindsOf(
+  owner: string,
+  value: Readonly<Record<string, unknown>>,
+  access: McpToolAccess,
+  appKinds: readonly string[] | undefined,
+  fail: Fail,
+): readonly string[] | undefined {
+  if (value.kinds !== undefined && access === "public") {
+    fail(
+      `${owner}: a "public" tool takes no kinds of its own, since a caller of a refused kind could call it signed out; give it access "authenticated"`,
+    );
+  }
+  const above = appKinds === undefined ? undefined : { kinds: appKinds, by: "initQuickdraw" };
+  return narrowKinds(value.kinds, above, (message) => fail(`${owner}: ${message}`));
+}
+
+function checkCustomTool(
+  value: unknown,
+  index: number,
+  appKinds: readonly string[] | undefined,
+  fail: Fail,
+): CustomTool {
   if (!isRecord(value)) {
     fail(`customTools[${index}] must be { name, description, inputSchema, handler }`);
   }
@@ -80,6 +123,7 @@ function checkCustomTool(value: unknown, index: number, fail: Fail): CustomTool 
     fail(`${owner}: annotations must be an object of hints`);
   }
   const access = accessOf(owner, value.access, fail);
+  const kinds = kindsOf(owner, value, access, appKinds, fail);
   const input = argumentsOf(owner, inputSchema, fail);
   const tool: McpTool = {
     name,
@@ -90,27 +134,39 @@ function checkCustomTool(value: unknown, index: number, fail: Fail): CustomTool 
   return {
     tool: Object.freeze(tool),
     access,
+    kinds,
     mode: input.mode,
     schema: isStandardSchema(inputSchema) ? inputSchema : undefined,
     handler: handler as CustomTool["handler"],
   };
 }
 
-/** Checks the registry's `customTools` option. */
-export function checkCustomTools(value: unknown, fail: Fail): CustomTool[] {
+/** Checks the registry's `customTools` option, served beside `services`, whose apps' kinds they narrow. */
+export function checkCustomTools(
+  value: unknown,
+  fail: Fail,
+  services: readonly AnyService[] = [],
+): CustomTool[] {
   if (value === undefined) {
     return [];
   }
   if (!Array.isArray(value)) {
     fail("customTools must be an array of { name, description, inputSchema, handler }");
   }
-  return value.map((tool: unknown, index) => checkCustomTool(tool, index, fail));
+  const appKinds = appKindsOf(services);
+  if (appKinds?.length === 0 && value.length > 0) {
+    fail(
+      "customTools: the served services' apps admit no kind in common (initQuickdraw({ kinds })), so no principal could call a custom tool: serve custom tools beside the services of one app, or of apps that admit a kind in common",
+    );
+  }
+  return value.map((tool: unknown, index) => checkCustomTool(tool, index, appKinds, fail));
 }
 
 /**
  * Runs a custom tool with the arguments `args` in `session`: refuses an
  * anonymous caller unless the tool's access is `"public"`
- * (`UNAUTHENTICATED`), validates the arguments when the tool gave a Standard
+ * (`UNAUTHENTICATED`) and a principal of a kind it does not admit
+ * (`FORBIDDEN`), validates the arguments when the tool gave a Standard
  * Schema (`VALIDATION` with the issues otherwise), then runs the handler.
  * Never rejects.
  */
@@ -127,6 +183,7 @@ export async function runCustomTool(
     if (custom.access === "authenticated" && session.principal === null) {
       throw new QuickdrawError("UNAUTHENTICATED", "Authentication required");
     }
+    checkKind(custom.kinds, session.principal, `The tool "${name}"`);
     const input = inputOf(custom.mode, args);
     const parsed =
       custom.schema === undefined

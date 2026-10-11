@@ -37,7 +37,8 @@ export const teamContract = defineContract("teamService", {
       access: { room: (worldId: string) => `world:${worldId}` },
     },
     lobby: { item: z.string(), access: { room: "lobby" }, seed: 1 },
-    feed: { item: z.string(), scope: "teamId", access: { room: { prefix: "team:" } } },
+    // A global feed: a scoped stream's room is a function of its scope.
+    feed: { item: z.string(), access: { room: { prefix: "team:" } } },
   },
   channels: { cursor: { payload: z.object({ x: z.number() }), requires: { room: "lobby" } } },
 });

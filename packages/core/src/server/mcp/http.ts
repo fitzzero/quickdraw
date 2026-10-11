@@ -17,9 +17,12 @@
 // data? }` where 4.1 answered 500 and `{ error }`; `invoke` needs
 // `Content-Type: application/json`, as every HTTP transport call does; and a
 // client that goes away cancels its call. Each request is a session of its
-// own.
+// own, and its queries share the lane of its caller: its bearer token, its
+// user without a token, or its address when anonymous (`lanes.ts`). A
+// request from a web page is refused unless `allowedOrigins` lists its
+// origin, and with `allowedHosts` a request for another `Host`
+// (`httpRequest.ts`).
 
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { consoleLogger, type Logger } from "../../contract/logger";
 import {
@@ -33,8 +36,9 @@ import { describeError } from "../pipeline/metrics";
 import { unreadable } from "../transports/ack";
 import { isJsonRequest, readJsonInput, type HttpRequest } from "../transports/body";
 import type { HttpRouter } from "../transports/http";
+import { requestGate, requestOf, type AllowedOrigin, type RequestGate } from "./httpRequest";
 import type { McpRegistry } from "./registry";
-import type { McpCallOptions, McpCallResult, McpHttpRequest } from "./types";
+import type { McpCallOptions, McpCallResult } from "./types";
 
 /** Options of {@link createMcpHttpRouter}. */
 export interface McpHttpRouterOptions {
@@ -49,6 +53,22 @@ export interface McpHttpRouterOptions {
   readonly maxBodyBytes?: number;
   /** Default: the console. */
   readonly logger?: Logger;
+  /**
+   * The web pages that may call the routes, by origin: exact origins
+   * (`"https://app.example.com"`) or patterns anchored with `^` and `$`, as
+   * `socketAuth` takes them. A request whose `Origin` is not listed gets 403;
+   * a request without one (an MCP client, a script) is not a page's and
+   * passes. Default: none, so no page may call them.
+   */
+  readonly allowedOrigins?: readonly AllowedOrigin[];
+  /**
+   * The `Host` names the routes answer for (`"localhost"`, `"127.0.0.1"`,
+   * `"mcp.example.com:8443"`; an entry without a port matches any port): a
+   * request for another gets 403. Set it for a server on a developer's
+   * machine or a LAN, where a page could reach it through DNS rebinding.
+   * Default: any host.
+   */
+  readonly allowedHosts?: readonly string[];
 }
 
 /** What `invoke` answers: 4.1's `{ success, data }`, or a failure's message, code and data. */
@@ -66,6 +86,7 @@ interface Settings {
   readonly prefix: string;
   readonly maxBodyBytes: number;
   readonly logger: Logger;
+  readonly gate: RequestGate;
 }
 
 /** What an `invoke` body names: any tool by name, or a method's tool by service and method. */
@@ -110,6 +131,9 @@ function send(res: ServerResponse, status: number, body: string): number | undef
   res.statusCode = status;
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.setHeader("content-length", bytes);
+  // As on `/qd`: a caller's data is never cached, nor read as anything but JSON (TRANSPORT-3).
+  res.setHeader("cache-control", "no-store");
+  res.setHeader("x-content-type-options", "nosniff");
   res.end(body);
   return bytes;
 }
@@ -156,19 +180,6 @@ function targetOf(body: unknown): Target | undefined {
     return { kind: "method", service: body.service, method: body.method, input: body.payload };
   }
   return undefined;
-}
-
-/** The session an `invoke` request stands for, with its bearer token. */
-function requestOf(req: IncomingMessage): McpHttpRequest {
-  const header = req.headers.authorization;
-  const token = typeof header === "string" && header.startsWith("Bearer ") ? header.slice(7) : "";
-  return {
-    transport: "http",
-    sessionId: randomUUID(),
-    token: token.trim() === "" ? null : token.trim(),
-    headers: req.headers,
-    req,
-  };
 }
 
 async function invoke(settings: Settings, req: HttpRequest, res: ServerResponse): Promise<void> {
@@ -228,6 +239,7 @@ function resolveSettings(options: McpHttpRouterOptions): Settings {
     prefix: normalizePath(options.path ?? "/mcp"),
     maxBodyBytes,
     logger: options.logger ?? consoleLogger,
+    gate: requestGate(options.allowedOrigins, options.allowedHosts),
   };
 }
 
@@ -253,6 +265,16 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions): HttpRouter {
       } else {
         next();
       }
+      return;
+    }
+    const refusal = settings.gate.refusal(req);
+    if (refusal !== undefined) {
+      settings.logger.debug("An MCP HTTP request was refused", {
+        category: CATEGORY,
+        origin: req.headers.origin,
+        host: req.headers.host,
+      });
+      sendResult(settings, res, failure(new QuickdrawError("FORBIDDEN", refusal)));
       return;
     }
     if (route === "tools") {

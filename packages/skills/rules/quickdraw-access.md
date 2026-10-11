@@ -18,15 +18,15 @@ unknown level or a malformed access list denies.
 
 Every method's `{ access, handler }` names one form:
 
-| Form                              | Passes when                                                                                 |
-| --------------------------------- | ------------------------------------------------------------------------------------------- |
-| `"public"`                        | always, with or without a principal                                                         |
-| `"authenticated"`                 | a principal exists                                                                          |
-| `{ service: L }`                  | the principal's service-wide grant is at least `L`                                          |
-| `{ entry: L, id? }`               | the policy gives the principal at least `L` on the row (`id` defaults to `input.id`)        |
-| `{ service: L1, entry: L2, id? }` | either of the two                                                                           |
-| `{ scope: L, of: contract, id }`  | at least `L` on a row of another service, whose id is `input[id]` (create and list methods) |
-| `custom((ctx, input) => boolean)` | the function resolves `true` (a principal is required first)                                |
+| Form                              | Passes when                                                                                                                        |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `"public"`                        | always, with or without a principal                                                                                                |
+| `"authenticated"`                 | a principal exists                                                                                                                 |
+| `{ service: L }`                  | the principal's service-wide grant is at least `L`                                                                                 |
+| `{ entry: L, id? }`               | the policy gives the principal at least `L` on the row (`id` defaults to `input.id`)                                               |
+| `{ service: L1, entry: L2, id? }` | either of the two                                                                                                                  |
+| `{ scope: L, of: contract, id }`  | at least `L` on a row of another service, whose id is `input[id]` (create and list methods)                                        |
+| `custom((ctx, input) => boolean)` | the function resolves `true` (a principal is required first); it replaces the row check, and a service-wide `Admin` grant skips it |
 
 - Levels are `"Read" < "Moderate" < "Admin"` (`AccessLevel` also has
   `"Public"`). `id` is an input key (type-checked) or a function of the input.
@@ -69,34 +69,80 @@ export const tokenService = qd.defineService(token, {
   list, which holds for signed-in callers.
 - A service's list also refuses other kinds on `qd:sub`, `qd:col:sub`,
   `qd:watch` and `qd:stream:sub`, and its channels drop their messages.
+- Kinds separate only what the hooks label: label an MCP caller
+  `kind: "agent"` in the bridge's `principal` hook (`bearerAuth` with
+  `loadPrincipal: (userId) => ({ userId, kind: "agent" })`), or a method
+  with `kinds: ["user"]` lets it in as a user. An MCP custom tool obeys the
+  app's kinds too, and takes `kinds` of its own within them, never a kind
+  check in its handler.
 - Never check the kind in a handler (`if (ctx.principal.kind !== "user")
 throw ...`; `no-inline-auth-guard` reports it) or in a `custom` form:
   `kinds` combines with any form (`{ entry: "Moderate" }` and
   `kinds: ["user"]`), where `custom` would have to check the row by hand.
-  A check on a claim, such as a token's `scope`, stays `custom`.
+  A check on a claim, such as a token's `scope`, is `claims`, never
+  `custom` (below).
+
+## A requirement on the caller's claims
+
+A check on the caller's verified claims (`principal.claims`, a token's
+`scope`) is `claims`, beside `access` on the method:
+
+```ts
+triage: {
+  // Moderate on the task's project, from a token that may triage: claims add to the form
+  access: { entry: "Moderate" },
+  claims: (claims, input) => claims?.scope === "triage" && input.status !== "archived",
+  handler: ({ input, db }) =>
+    db.task.update({ where: { id: input.id }, data: { status: input.status } }),
+},
+```
+
+- It adds to the form: `triage` needs Moderate on the task's project and a
+  triage token. Never write it as `custom`: that form replaces the row
+  check, so any token holding the claim would write every tenant's rows,
+  and a service-wide `Admin` grant skips it.
+- It runs right after `kinds`, outside the access engine, so no grant passes
+  it, a service-wide `Admin` grant included. Without a principal the call
+  is `UNAUTHENTICATED`; when it returns anything but `true`, `FORBIDDEN`.
+- It is synchronous, and a `"public"` method takes none.
+- A token narrowed by `claims` is narrowed only on the methods that declare
+  it; elsewhere it acts with its user's grants (`kinds` keeps a kind of
+  token out).
 
 ## A method that takes a row id
 
 On a service with a policy, a method whose input has `id` reads or writes
-the row that id names. Under a form that checks no row (`"public"`,
-`"authenticated"`, `{ service: L }` below `Admin`), anyone the form admits
-reaches any row by its id, so `defineService` refuses it when the service is
-defined. Fix the form, not the error:
+the row that id names. Under a form that asks the policy nothing about that
+row, anyone the form admits reaches any row by its id, so `defineService`
+refuses it when the service is defined. Those forms are the ones that check
+no row (`"public"`, `"authenticated"`, `{ service: L }` below `Admin`),
+`custom(fn)`, `{ scope, of, id }` (a row of another service) and
+`{ entry, id }` naming another key. Fix the form, not the error:
 
 - Give it `{ entry: L }` (`"Read"` for a read, `"Moderate"` for a change),
   or `{ service: L, entry: L }` to keep a service grant: the policy decides.
 - Only when every caller the form admits may reach any row on purpose (a
-  public profile, a lookup by an id that tells nothing) say so with
-  `rowless: true` on the method, or `rowless: ["get"]` in a kit's options
-  (`crud.handlers`, `admin.handlers`, `sharing.handlers`).
-- The read/write kit's `update`, `delete`, `reorder` and `create` check the
-  row themselves and need neither.
+  public profile, a lookup by an id that tells nothing), or when `id` names
+  a row the method creates (an id the client made, under a `scope` form),
+  say so with `rowless: true` on the method, or `rowless: ["get"]` in a
+  kit's options (`crud.handlers`, `admin.handlers`, `sharing.handlers`). A
+  `rowless` query under a form that checks no row also answers "not
+  modified" for any `id`.
+- The read/write kit's `update`, `delete` and `reorder` check the row
+  themselves and need neither. `create` makes a new row and checks no row of
+  its own: it checks the anchors it writes (each `inherit` parent and
+  anchored collection's scope column, from what `prepare` returns) at the
+  method's row level, and takes a column the policy reads only from
+  `prepare` (`ownerId: ctx.principal.userId`), unless the caller holds a
+  service-wide `Admin` grant. Give it
+  `{ scope: "Moderate", of: project, id: "projectId" }`.
 - The check reads the input's keys from its JSON Schema: an `id` in any
   branch of a union counts, as does one beside a `Date` or a `Set`. An input
   without JSON Schema (a Zod 3 schema) or one that names no keys (a
-  `todoSchema` without `keys`), a bare string that is the id itself
-  and a row named by another key (`taskId`, `ids`) are not checked, so the
-  form is all yours there (`{ entry: L, id: "taskId" }` names another key).
+  `todoSchema` without `keys`), a bare string that is the id itself, a row
+  named by another key (`taskId`, `ids`) on an input without `id`, and an
+  `entry` form whose `id` is a function are not checked, so the form is all
+  yours there (`{ entry: L, id: "taskId" }` names another key).
 
 ## Service-wide grants
 
@@ -110,8 +156,9 @@ its first call. With
 tracked write to that column refreshes the user's open sockets, and an
 in-process caller loads the grants again at its next call.
 
-- A service-wide `Admin` grant passes every check on its service
-  (`adminBypass: false` on the service turns that off).
+- A service-wide `Admin` grant passes every access form on its service
+  (`adminBypass: false` on the service turns that off), though not `kinds`
+  or `claims`.
 - A grant below `Admin` counts only where the form names `service`: a `Read`
   grant does not read every row through an `entry` form.
 
@@ -153,7 +200,23 @@ compile time.
   job, alone or in `anyOf`.
 - Lookups are batched per call: checking 60 ids costs what one does.
   `createServer({ access: { cacheMs } })` keeps them across calls; tracked
-  writes to the columns and tables a policy reads evict them.
+  writes to the columns and tables a policy reads evict them. A lookup
+  inside a transaction always reads the database.
+- Membership and junction tables need an `id` column
+  (`id String @id @default(cuid())`, the pair unique by `@@unique`), never a
+  composite `@@id`: the write tracker keys rows by `id`, so such a table is
+  never tracked and a removed member is never revoked. `createServer` logs
+  `[quickdraw:untracked-access-model]` as an error for one, and a strict
+  test app fails to start. A foreign key set through a relation on the
+  written row (`task.update({ data: { project: { connect } } })`) revokes
+  like a scalar one; one set from the parent's side
+  (`project.update({ data: { tasks: { connect } } })`) is a nested write
+  whose rows are not tracked: write the foreign key on the row itself.
+- Never pass Socket.IO's `connectionStateRecovery` in `createServer({ socket })`:
+  a recovered socket comes back with its principal and rooms without
+  authenticating again, so a revoked session or a lowered grant would
+  return. `createServer` refuses it; clients resume by revision on every
+  reconnect.
 
 ## One policy, every surface
 
@@ -162,10 +225,12 @@ collection scopes (through the collection's `anchor`), the rows the kits'
 `list`, `getMany`, `search` and bulk methods return or write, streams and
 channel `requires`.
 
-- Everyone who may open a collection scope sees every item in it, stripped
-  at the collection's `access` level (default `Read`). Per-row policies and
-  field tiers do not apply inside a collection: give the item service
-  `inherit` from the anchor, or use separate scopes.
+- Everyone who may open an anchored collection scope sees every item in it,
+  stripped at the collection's `access` level (default `Read`). Per-row
+  policies and field tiers do not apply inside an anchored scope: give the
+  item service `inherit` from the anchor, or use separate scopes. A self
+  scope (`scopeAccess: "self"`) is the exception: its items follow the item
+  service's policy, so its user gets only the rows they may read.
 - A hand-written method that reads many rows authorizes the parent
   (`{ scope: "Read", of: project, id: "projectId" }`) and filters by it, or
   uses the read/write kit's `list` or a collection, which filter by policy.
@@ -194,7 +259,19 @@ channel `requires`.
 
 - Change access lists and memberships with the sharing kit
   (`sharing.contract({ mode: "acl" | "members" })`), which refuses granting
-  above the caller's own level and removing the last `Admin`.
+  above the caller's own level, changing or removing a user above it (equal
+  may; roles that map to one level are peers, so protect an owner with an
+  owner column), and removing the last `Admin`. Its `resolveUser` returns
+  exactly one user or `null`: an email with `findUnique`, a name only when
+  `findMany({ where: { name }, take: 2 })` finds one; never `findFirst` by
+  name. Without a
+  service-wide `Admin` grant, the read/write and admin kits refuse a
+  membership table's entry, user and role columns, whichever policy reads
+  them. They also refuse a column the policy reads. That holds even for a
+  column an anchored collection scopes by.
+- Give a bulk method (`bulkUpdate`, `bulkDelete`) a form with a row level,
+  or the same form as `update` or `delete`: under a form that names none,
+  it takes the counterpart's row level only from an `{ entry: L }` form.
 - Write policy columns and membership rows through the tracked `db`: the
   flush then revokes what a demoted user held (`qd:revoked`), moves them to
   their new field tier, and updates `via` collections. A write the tracked

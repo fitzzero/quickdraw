@@ -19,6 +19,9 @@
 //   created has none.
 // - `after` keeps the latest value of each column written since the row was
 //   last deleted; a deleted row has none.
+// - A row whose merged write is a `delete` carries the junction `links` its
+//   delete records read, per junction, concatenated; none unless every one
+//   of them read that junction's.
 
 import { ANY_FIELD, type WriteRecord } from "./types";
 
@@ -80,6 +83,24 @@ function created(first: WriteRecord): boolean {
   return first.op === "create" && first.mayHaveExisted !== true;
 }
 
+/** The `links` of a row merged into a delete: every delete record's, per junction each read. */
+function mergeLinks(history: History): WriteRecord["links"] {
+  const deletes = history.filter((record) => record.op === "delete");
+  const [first] = deletes;
+  if (first?.links === undefined || deletes.some((record) => record.links === undefined)) {
+    return undefined;
+  }
+  const junctions = Object.keys(first.links).filter((junction) =>
+    deletes.every((record) => record.links !== undefined && Object.hasOwn(record.links, junction)),
+  );
+  return Object.fromEntries(
+    junctions.map((junction) => [
+      junction,
+      deletes.flatMap((record) => record.links?.[junction] ?? []),
+    ]),
+  );
+}
+
 /** The row's one merged record, or `undefined` for a row the unit created and deleted again. */
 function mergeRow(history: History): WriteRecord | undefined {
   const [first] = history;
@@ -103,6 +124,7 @@ function mergeRow(history: History): WriteRecord | undefined {
           sinceLastDelete(history).map((record) => record.after),
           false,
         );
+  const links = op === "delete" ? mergeLinks(history) : undefined;
   return {
     model: first.model,
     id: first.id,
@@ -110,6 +132,7 @@ function mergeRow(history: History): WriteRecord | undefined {
     fields: mergeFields(history),
     ...(before === undefined ? {} : { before }),
     ...(after === undefined ? {} : { after }),
+    ...(links === undefined ? {} : { links }),
   };
 }
 

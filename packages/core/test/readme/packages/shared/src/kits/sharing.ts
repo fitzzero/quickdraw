@@ -16,7 +16,7 @@ export const project = defineContract("projectService", {
     }),
   },
   collections: {
-    // each user's projects: an invite adds the project, a remove or a leave takes it out
+    // each user's projects: an invite adds the project; a remove, a leave or a role below Read takes it out
     mine: {
       describe: "The projects a user is a member of.",
       scope: via({ model: "projectMember", entry: "projectId", scope: "userId" }),

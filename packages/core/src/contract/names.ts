@@ -65,6 +65,20 @@ export function reservedRoomPrefix(room: string): string | undefined {
   return RESERVED_ROOM_PREFIXES.find((prefix) => room.startsWith(prefix));
 }
 
+const SOCKET_ID = /^[\w-]{20}$/u;
+
+/**
+ * True when `room` has the shape of a Socket.IO socket id: 20 letters,
+ * digits, `_` or `-`. Socket.IO puts every socket alone in a room named by
+ * its id, 15 random bytes as base64url (the `base64id` package), so an app
+ * room of that shape could be one socket's own room: `ctx.rooms.join`,
+ * `rooms.size`, `rooms.leave` and presence refuse such names (the 5.1
+ * audit's RT-I1), and no app room has that shape.
+ */
+export function socketIdShaped(room: string): boolean {
+  return SOCKET_ID.test(room);
+}
+
 /** Events a client sends to the server (RFC 0003 section 8.2). */
 export const CLIENT_EVENTS = Object.freeze({
   /** A method call: `{ id, s, m, i, v? }`, answered by ack. */

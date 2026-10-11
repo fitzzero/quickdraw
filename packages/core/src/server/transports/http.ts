@@ -2,11 +2,16 @@
 // with the input as the JSON body, through the same pipeline and the same
 // `authenticate` as sockets, for server-side prefetch, load tests and
 // webhooks. The principal comes from the session cookie or a bearer token
-// (`httpCredentialOf`), and `authenticate` is told which one it was, so the
-// ambient cookie's `Origin` can be checked (`socketAuth` does; finding F7.1
-// of the quickdraw-chat review); the reply is the `qd:call` acknowledgement
-// shape, `{ ok: true, d }` or `{ ok: false, e }`, with the error code's HTTP
-// status (`httpStatus`). The call is cancelled when the client goes away.
+// (`httpCredentialsOf`), and `authenticate` is told which one the transport
+// chose, so the ambient cookie's `Origin` can be checked (`socketAuth` does;
+// finding F7.1 of the quickdraw-chat review). The cookie is `auth.token`
+// only for `socketAuth`'s `authenticate`, which checks that Origin and the
+// session store; every other finds it in `request.sessionCookie` alone, so
+// code written for bearer tokens never takes the ambient cookie for one
+// (the 5.1 audit's AUTH-1/CLIENT-2). The reply is the `qd:call`
+// acknowledgement shape, `{ ok: true, d }` or `{ ok: false, e }`, with the
+// error code's HTTP status (`httpStatus`). The call is cancelled when the
+// client goes away.
 //
 // The router is a plain Node request handler rather than an `express.Router`,
 // so it never imports Express: it mounts with `app.use(router)` on Express 4
@@ -25,14 +30,17 @@ import {
   createPrincipalResolver,
   isForbiddenCredential,
   isRefusal,
+  socketAuthOf,
   type ResolvePrincipal,
   type ServerAuth,
 } from "./auth";
 import {
-  httpCredentialOf,
+  httpCredentialsOf,
   isJsonRequest,
   readJsonInput,
   transportCookieNaming,
+  type HttpCredentials,
+  type HttpCredentialSource,
   type HttpRequest,
   type SessionCookieNaming,
 } from "./body";
@@ -69,7 +77,8 @@ export interface HttpTransportOptions {
    * the cookie a domain; else `"__Host-session"` on a request over HTTPS
    * (`req.secure`, `X-Forwarded-Proto: https` or an `https:` `Origin`),
    * which never reads the plain name a sibling site could plant, and
-   * `"session"` (then `"__Host-session"`) on a plain HTTP one. A name given
+   * `"session"` on a plain HTTP one, where `"__Host-session"` is read first
+   * all the same. A name given
    * here is the only one read, on any request. A name the request repeats
    * counts as no cookie.
    */
@@ -87,8 +96,14 @@ export interface HttpTransportOptions {
 /** Options of {@link createHttpRouter}. */
 export interface HttpRouterOptions<P extends Principal = Principal> extends HttpTransportOptions {
   /** The dispatcher whose methods the router serves. */
-  readonly dispatcher: Pick<Dispatcher, "call">;
-  /** Authenticates each request, with the same hooks as `createServer`'s `auth`. */
+  readonly dispatcher: Pick<Dispatcher, "call"> & Partial<Pick<Dispatcher, "serviceAccessSource">>;
+  /**
+   * Authenticates each request, with the same hooks as `createServer`'s
+   * `auth`. Its `serviceAccessSource` must be the dispatcher's own (made
+   * with `createDispatcher({ serviceAccessSource })`), or the router throws:
+   * the admin kit protects the grants column only where the dispatcher
+   * names it.
+   */
   readonly auth?: ServerAuth<P>;
   /** Default: the console. */
   readonly logger?: Logger;
@@ -103,6 +118,12 @@ export interface HttpRouterSettings {
   readonly maxBodyBytes: number;
   /** `cookieName`, and `COOKIE_DOMAIN` read when the router is made: a cookie with a domain is `session`. */
   readonly cookieNaming: SessionCookieNaming;
+  /**
+   * True when `authenticate` is `socketAuth`'s, which takes the session
+   * cookie as `auth.token` (checking its Origin and the store); every other
+   * `authenticate` gets it as `request.sessionCookie` alone.
+   */
+  readonly cookieAsToken: boolean;
   readonly rateLimit: HttpMiddleware | undefined;
 }
 
@@ -173,6 +194,9 @@ function sendResult(
   res.statusCode = status;
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.setHeader("content-length", bytes);
+  // A reply is one caller's data: no cache keeps it, and no browser reads it as anything but JSON.
+  res.setHeader("cache-control", "no-store");
+  res.setHeader("x-content-type-options", "nosniff");
   const retryAfter = retryAfterSeconds(result);
   if (retryAfter !== undefined) {
     res.setHeader("retry-after", String(retryAfter));
@@ -185,17 +209,29 @@ function failure(error: QuickdrawError): DispatchResult {
   return { ok: false, error };
 }
 
+/** The credential the transport chose: the session cookie, else the bearer token. */
+function chosenCredential(credentials: HttpCredentials): HttpCredentialSource | undefined {
+  if (credentials.cookie !== null) {
+    return "cookie";
+  }
+  return credentials.bearer === null ? undefined : "bearer";
+}
+
 async function authenticate(
   settings: HttpRouterSettings,
   req: HttpRequest,
 ): Promise<Principal | null | QuickdrawError> {
-  const credential = httpCredentialOf(req, settings.cookieNaming);
+  const credentials = httpCredentialsOf(req, settings.cookieNaming);
+  const { cookie, bearer } = credentials;
+  const token = settings.cookieAsToken ? (cookie ?? bearer) : bearer;
+  const credential = chosenCredential(credentials);
   try {
     return await settings.resolvePrincipal({
       transport: "http",
-      auth: credential === null ? {} : { token: credential.token },
+      auth: token === null ? {} : { token },
       // The session cookie is ambient: `socketAuth` checks such a call's Origin (F7.1).
-      ...(credential === null ? {} : { credential: credential.from }),
+      ...(credential === undefined ? {} : { credential }),
+      ...(cookie === null ? {} : { sessionCookie: cookie }),
       headers: req.headers,
       req,
     });
@@ -316,7 +352,7 @@ function normalizePath(path: string): string {
 /** Resolves the HTTP transport's options. */
 export function httpRouterSettings(
   options: HttpTransportOptions,
-  base: Pick<HttpRouterSettings, "call" | "resolvePrincipal" | "logger">,
+  base: Pick<HttpRouterSettings, "call" | "resolvePrincipal" | "logger" | "cookieAsToken">,
 ): HttpRouterSettings {
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 1) {
@@ -338,6 +374,25 @@ export function httpRouterSettings(
 }
 
 /**
+ * `TypeError` when the router's `auth.serviceAccessSource` is not its
+ * dispatcher's (the 5.1 audit's ADMIN-2): the admin kit hides and guards the
+ * grants column only where the dispatcher names it, so a router that names
+ * it alone would leave it an ordinary, writable field.
+ */
+function checkGrantsSource(
+  own: Dispatcher["serviceAccessSource"],
+  named: Dispatcher["serviceAccessSource"],
+): void {
+  if (named === undefined || (own?.model === named.model && own.column === named.column)) {
+    return;
+  }
+  const made = own === undefined ? "without one" : `with ${own.model}.${own.column}`;
+  throw new TypeError(
+    `createHttpRouter: auth.serviceAccessSource names ${named.model}.${named.column}, but its dispatcher was made ${made}: pass serviceAccessSource: { model: "${named.model}", column: "${named.column}" } to createDispatcher, so the admin kit there protects that column`,
+  );
+}
+
+/**
  * Creates the HTTP transport for a dispatcher: `POST /qd/{service}/{method}`
  * with a JSON body. `createServer` mounts one on the app's Express app; use
  * this to serve calls from an app without sockets, or under another path.
@@ -348,11 +403,13 @@ export function httpRouterSettings(
 export function createHttpRouter<P extends Principal = Principal>(
   options: HttpRouterOptions<P>,
 ): HttpRouter {
+  checkGrantsSource(options.dispatcher.serviceAccessSource, options.auth?.serviceAccessSource);
   return httpRouter(
     httpRouterSettings(options, {
       call: options.dispatcher.call,
       resolvePrincipal: createPrincipalResolver(options.auth),
       logger: options.logger ?? consoleLogger,
+      cookieAsToken: socketAuthOf(options.auth?.authenticate) !== undefined,
     }),
   );
 }

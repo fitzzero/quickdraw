@@ -418,12 +418,37 @@ type CheckChannels<Def> = CheckRealtimeNames<
     : Problem<RequiresProblem<Def, Name, ChannelsIn<Def>[Name]>>;
 };
 
+/**
+ * A scoped stream's `access: { room }` is a function of its scope (the 5.1
+ * audit's RT-4): a name or `{ prefix }` would let a socket in that room read
+ * every scope. As `IsScopedStream` reads it, a scope other than `"global"`
+ * makes a stream scoped.
+ */
+type StreamRoomProblem<Name, Stream> = Stream extends {
+  readonly scope: infer Scope extends string;
+  readonly access: { readonly room: infer Room };
+}
+  ? Scope extends "global"
+    ? never
+    : Room extends (...args: never[]) => unknown
+      ? never
+      : `stream "${Name & string}" is scoped: its access room is a function of the scope, (scope) => room; a name or { prefix } lets a socket in that room read every scope`
+  : never;
+
+type CheckStreams<Def> = CheckRealtimeNames<Def, StreamsIn<Def>, "stream", never> & {
+  readonly [Name in keyof StreamsIn<Def>]: [StreamRoomProblem<Name, StreamsIn<Def>[Name]>] extends [
+    never,
+  ]
+    ? unknown
+    : Problem<StreamRoomProblem<Name, StreamsIn<Def>[Name]>>;
+};
+
 type DefinitionChecks<Def> = CheckKeys<Def, keyof ContractDefinition, "contract"> & {
   readonly methods?: CheckMethods<Def>;
   readonly collections?: CheckCollections<Def>;
   readonly projections?: CheckProjections<Def>;
   readonly fields?: CheckFields<Def>;
-  readonly streams?: CheckRealtimeNames<Def, StreamsIn<Def>, "stream", never>;
+  readonly streams?: CheckStreams<Def>;
   readonly channels?: CheckChannels<Def>;
   readonly events?: CheckRealtimeNames<
     Def,

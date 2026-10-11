@@ -6,11 +6,12 @@
 // same list.
 
 import { describe, expect, it } from "vitest";
+import { crud as contractCrud, defineContract } from "../../../index";
 import { createTestApp, type TestApp } from "../../../testing/index";
 import { colSub, receiveScopes } from "../../collections/__tests__/fixture";
-import { projectService } from "../../emit/__tests__/live";
-import { nextOrdinal, ORDINAL_STEP } from "../../index";
-import { addTasks, as, defineTaskService, kitApp } from "./__tests__/fixture";
+import { projectContract, projectService, qd } from "../../emit/__tests__/live";
+import { crud, inherit, nextOrdinal, ORDINAL_STEP, resolver } from "../../index";
+import { addTasks, as, defineTaskService, kitApp, taskEntity } from "./__tests__/fixture";
 import { ordinalBetween } from "./ordinal";
 import { RENUMBER_BASE_MS, RENUMBER_MS_PER_ROW } from "./reorder";
 
@@ -137,6 +138,110 @@ describe("reorder", () => {
     await expect(
       app.as(as(board.cy)).taskService.reorder({ id: a, beforeId: b }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
+describe("a list across tenants (CRUD-6)", () => {
+  // Every top-level task is in one list: within parentTaskId, which is null for them all.
+  const tasks = defineContract("taskService", {
+    entity: taskEntity,
+    methods: {
+      ...contractCrud.contract({
+        entity: taskEntity,
+        reorder: { column: "ordinal", within: "parentTaskId" },
+      }),
+    },
+  });
+  type ReorderForm = "public" | { readonly entry: "Moderate" };
+  const serviceWith = (reorder: ReorderForm) =>
+    qd.defineService(tasks, {
+      model: "task",
+      access: inherit({ from: projectContract, via: "projectId" }),
+      methods: { ...crud.handlers(tasks, { access: { reorder } }) },
+    });
+
+  /** P1: T1 = 3, A = 1, B = 2, C = 600; P2: T2 = 0, E = 2, F = 3. */
+  async function start(reorder: ReorderForm = { entry: "Moderate" }) {
+    const board = kit.board();
+    const { prisma } = kit.harness();
+    await prisma.task.update({ where: { id: board.t1 }, data: { ordinal: 3 } });
+    const [a = "", b = "", c = ""] = await addTasks(prisma, board.p1, [1, 2, 600]);
+    const [e = "", f = ""] = await addTasks(prisma, board.p2, [2, 3]);
+    const app = await createTestApp({
+      services: [projectService, serviceWith(reorder)],
+      db: kit.harness().db,
+    });
+    kit.track(app as unknown as TestApp);
+    return { app, a, b, c, e, f };
+  }
+
+  it("refuses a neighbor the caller may not write as a missing one", async () => {
+    const board = kit.board();
+    const { app, a, b } = await start();
+    const before = await order(board.p1);
+    const stranger = app.as(as(board.ed)).taskService;
+    await expect(stranger.reorder({ id: board.t2, beforeId: a, afterId: b })).rejects.toMatchObject(
+      {
+        code: "NOT_FOUND",
+        message: "No such task in this list as beforeId",
+      },
+    );
+    await expect(stranger.reorder({ id: board.t2, afterId: "no-such-task" })).rejects.toMatchObject(
+      { code: "NOT_FOUND" },
+    );
+    expect(await order(board.p1)).toEqual(before);
+  });
+
+  it("finds the next row among the rows the caller may write", async () => {
+    const board = kit.board();
+    const { app, f } = await start();
+    // F (3) is last of ed's rows: P1's C (600) is no neighbor of it.
+    const moved = await app.as(as(board.ed)).taskService.reorder({ id: board.t2, beforeId: f });
+    expect(moved).toMatchObject({ ordinal: 3 + ORDINAL_STEP });
+  });
+
+  it.each([
+    ["an entry form", { entry: "Moderate" }],
+    ["a public form, which still writes only what the caller may write", "public"],
+  ] as const)("renumbers only the rows the caller may write: %s", async (_name, reorder) => {
+    const board = kit.board();
+    const { app, e, f } = await start(reorder);
+    const before = await order(board.p1);
+    // No gap between E (2) and F (3): the list is renumbered.
+    await app.as(as(board.ed)).taskService.reorder({ id: board.t2, beforeId: e, afterId: f });
+    expect(await order(board.p1)).toEqual(before);
+    expect((await order(board.p2)).map(([id]) => id)).toEqual([e, board.t2, f]);
+  });
+
+  it("moves nothing through a policy whose filter matches no row: a resolver without where", async () => {
+    const board = kit.board();
+    const { prisma } = kit.harness();
+    const [a = "", c = ""] = await addTasks(prisma, board.p1, [1024, 3072]);
+    const everyRow = qd.defineService(tasks, {
+      model: "task",
+      // Moderate on every row, and no filter: its lists match no row.
+      access: resolver({
+        levelsFor: (_principal, ids) => new Map(ids.map((id) => [id, "Moderate"])),
+        reads: "none",
+      }),
+      methods: { ...crud.handlers(tasks, { access: { reorder: { entry: "Moderate" } } }) },
+    });
+    const app = await createTestApp({ services: [everyRow], db: kit.harness().db });
+    kit.track(app as unknown as TestApp);
+    const before = await order(board.p1);
+    await expect(
+      app.as(as(board.bo)).taskService.reorder({ id: c, beforeId: a }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await order(board.p1)).toEqual(before);
+  });
+
+  it("still lets a member reorder their own project's rows", async () => {
+    const board = kit.board();
+    const { app, a, b, c } = await start();
+    const before = await order(board.p2);
+    await app.as(as(board.bo)).taskService.reorder({ id: c, beforeId: a, afterId: b });
+    expect((await order(board.p1)).map(([id]) => id)).toEqual([a, c, b, board.t1]);
+    expect(await order(board.p2)).toEqual(before);
   });
 });
 

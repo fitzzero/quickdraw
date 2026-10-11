@@ -32,6 +32,7 @@ import type { Server as SocketIOServer } from "socket.io";
 import type { Logger } from "../contract/logger";
 import { consoleLogger } from "../contract/logger";
 import { watchAdapterClients } from "./cluster/adapterClients";
+import { deploymentOf } from "./cluster/deployment";
 import { isModuleNotFound, loadRedisPeers } from "./redisPeers";
 import type { QuickdrawIo } from "./transports/types";
 
@@ -55,12 +56,19 @@ export interface RedisAdapterOptions {
   password?: string;
 
   /**
-   * Redis database number (default: 0)
+   * Redis database number (default: 0). It does not separate deployments:
+   * pub/sub is shared across a server's databases, so two deployments on one
+   * Valkey hear each other's events whatever their `db`; give each its own
+   * Valkey, or its own `cluster.keyPrefix` (docs/deploying.md).
    */
   db?: number;
 
   /**
-   * Key prefix for Socket.io adapter (default: 'socket.io')
+   * The adapter's key, which names its pub/sub channels. Default: the
+   * server's `cluster.keyPrefix` ("quickdraw" without one), so deployments
+   * with their own prefixes use their own channels. 5.1.0 and earlier used
+   * "socket.io": pass `keyPrefix: "socket.io"` for the deploy that moves a
+   * cluster from such nodes, so old and new nodes keep hearing each other.
    */
   keyPrefix?: string;
 
@@ -150,7 +158,8 @@ export async function setupRedisAdapter(
     options.logger?.child({ service: "RedisAdapter" }) ??
     consoleLogger.child({ service: "RedisAdapter" });
 
-  const { host = "localhost", port = 6379, password, db = 0, keyPrefix = "socket.io" } = options;
+  const { host = "localhost", port = 6379, password, db = 0 } = options;
+  const key = options.keyPrefix ?? deploymentOf(io);
 
   try {
     // Dynamically import Redis packages - these are optional peer dependencies.
@@ -183,9 +192,7 @@ export async function setupRedisAdapter(
     await Promise.all([pubClient.connect(), subClient.connect()]);
 
     // Set up the adapter
-    io.adapter(
-      createAdapter(pubClient, subClient, { key: keyPrefix }) as Parameters<typeof io.adapter>[0],
-    );
+    io.adapter(createAdapter(pubClient, subClient, { key }) as Parameters<typeof io.adapter>[0]);
     // When the subscription comes back, this node's clients catch up; a failed publish is logged.
     watchAdapterClients(io as unknown as QuickdrawIo, logger);
 

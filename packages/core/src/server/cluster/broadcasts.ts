@@ -19,6 +19,11 @@
 // Broadcasts sent unanswered stay fail-open, as a timed-out wait always was:
 // a slower node may hold a revoked socket in a room until it applies the
 // change, and that socket may get the flush's frames meanwhile.
+//
+// Every broadcast and probe carries the server's deployment
+// (`deployment.ts`). A node answers every probe, whatever its deployment: a
+// probe carries nothing, and leaving one unanswered would keep a deployment
+// that shares the channels degraded.
 
 import type { Logger } from "../../contract/logger";
 import { describeError } from "../pipeline/metrics";
@@ -26,6 +31,7 @@ import type { QuickdrawIo } from "../transports/types";
 import { answerOf, DEFAULT_CLUSTER_TIMEOUT_MS, within } from "./acks";
 import { watchAdapterClients } from "./adapterClients";
 import { clusterClientOf } from "./counter";
+import { tagged } from "./deployment";
 
 /** The server-to-server event a degraded node probes the others with; each answers it at once. */
 export const PROBE_EVENT = "quickdraw:probe";
@@ -38,9 +44,10 @@ export interface ClusterBroadcasts {
   /**
    * Broadcasts `event` with `payload` and resolves once every other node
    * answered, at most `timeoutMs`; at once, unanswered, while the publishing
-   * client is not connected or the broadcasts are degraded.
+   * client is not connected or the broadcasts are degraded. The payload
+   * goes out tagged with the server's deployment.
    */
-  broadcast(event: string, payload: unknown): Promise<void>;
+  broadcast(event: string, payload: object): Promise<void>;
   /** True while broadcasts do not wait for answers. */
   degraded(): boolean;
   /** Stops probing: the server closes. */
@@ -84,7 +91,7 @@ export function createClusterBroadcasts(options: ClusterBroadcastsOptions): Clus
     }
     probing = true;
     try {
-      await within(io.serverSideEmitWithAck(PROBE_EVENT), timeoutMs);
+      await within(io.serverSideEmitWithAck(PROBE_EVENT, tagged(io, {})), timeoutMs);
       if (down) {
         down = false;
         stopProbing();
@@ -117,13 +124,14 @@ export function createClusterBroadcasts(options: ClusterBroadcastsOptions): Clus
   };
 
   return Object.freeze({
-    async broadcast(event: string, payload: unknown): Promise<void> {
+    async broadcast(event: string, payload: object): Promise<void> {
+      const sent = tagged(io, payload);
       if (down || !publisherReady(io)) {
-        io.serverSideEmit(event, payload);
+        io.serverSideEmit(event, sent);
         return;
       }
       try {
-        await within(io.serverSideEmitWithAck(event, payload), timeoutMs);
+        await within(io.serverSideEmitWithAck(event, sent), timeoutMs);
       } catch (error) {
         degrade(error);
       }
@@ -136,7 +144,7 @@ export function createClusterBroadcasts(options: ClusterBroadcastsOptions): Clus
   });
 }
 
-/** Answers other nodes' probes on `io`: at once, as a node that is up does. */
+/** Answers other nodes' probes on `io`: at once, as a node that is up does, whatever their deployment. */
 export function answerProbes(io: QuickdrawIo): void {
   io.on(PROBE_EVENT, (...rest: unknown[]) => {
     answerOf(rest)(true);

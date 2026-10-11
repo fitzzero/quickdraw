@@ -53,6 +53,10 @@ export const taskService = qd.defineService(taskContract, {
         return { count };
       },
     },
+    joinProject: {
+      access: { scope: "Read", of: projectContract, id: "projectId" },
+      handler: ({ input, ctx }) => ctx.rooms.join(`project:${input.projectId}`),
+    },
   },
 });
 // #endregion

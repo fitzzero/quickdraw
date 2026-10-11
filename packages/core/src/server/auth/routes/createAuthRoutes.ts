@@ -29,13 +29,19 @@
 // Google credentials): a provider `google.optional` built nothing for is not
 // in it, and the mock only while it is mounted and `isMockOAuthEnabled()`.
 
-import { INTERNAL_MESSAGE } from "../../../protocol/errors";
 import { isJsonRequest } from "../../transports/body";
 import { guestRoute } from "./guest";
 import { checkRateLimits, loadLimiters, type LimitKind, type Limiters } from "./limits";
 import { mockFlow, mockServes } from "./mockFlow";
 import { callbackRoute, startRoute, type SignInFlow } from "./oauth";
-import { pathOf, refuse, sendJson, type AuthRouteRequest, type AuthRouteResponse } from "./respond";
+import {
+  failRoute,
+  pathOf,
+  refuse,
+  sendJson,
+  type AuthRouteRequest,
+  type AuthRouteResponse,
+} from "./respond";
 import { logoutAllRoute, logoutRoute, meRoute } from "./session";
 import { routeSettings, type RouteSettings } from "./settings";
 import type { AuthProvider, AuthProviderInfo, AuthRoutes, AuthRoutesOptions } from "./types";
@@ -141,7 +147,7 @@ function routeTable(
   const mounted = providers.filter((provider) => addProvider(table, settings, provider));
   if (mounted.length === 0) {
     settings.logger.warn(
-      "createAuthRoutes: no provider can sign anyone in (the mock is mounted only while ENABLE_MOCK_OAUTH is set outside production): every sign-in route answers 404",
+      "createAuthRoutes: no provider can sign anyone in (the mock is mounted only while ENABLE_MOCK_OAUTH is set and NODE_ENV is development or test): every sign-in route answers 404",
       { category: "quickdraw.auth" },
     );
   }
@@ -179,12 +185,7 @@ function dispatch(
   res: AuthRouteResponse,
 ): void {
   const fail = (error: unknown): void => {
-    settings.logger.error("An auth route failed", {
-      category: "quickdraw.auth",
-      path: pathOf(req),
-      error: error instanceof Error ? error.message : String(error),
-    });
-    refuse(res, "INTERNAL", INTERNAL_MESSAGE);
+    failRoute(settings.logger, req, res, error);
   };
   if (limiters === null) {
     refuse(res, "INTERNAL", "The auth routes' rate limiters are unavailable");

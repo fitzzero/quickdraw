@@ -797,3 +797,43 @@ describe("principal kinds", () => {
     });
   });
 });
+
+describe("a method's claims", () => {
+  test("are a check of the app principal's claims and the parsed input that returns a boolean", () => {
+    qd.defineService(task, {
+      ...rows,
+      methods: {
+        ...ok,
+        rename: {
+          access: { entry: "Moderate" },
+          claims: (claims, input) => {
+            expectTypeOf(claims).toEqualTypeOf<AppPrincipal["claims"]>();
+            expectTypeOf(input).toEqualTypeOf<{ id: string; title: string }>();
+            return claims?.scope === "triage";
+          },
+          handler: () => row,
+        },
+      },
+    });
+    qd.defineService(project, {
+      methods: {
+        get: {
+          access: "authenticated",
+          // @ts-expect-error -- a check is synchronous: a promise is not a boolean
+          claims: async () => true,
+          handler: ({ input }) => ({ id: input.id, name: "" }),
+        },
+      },
+    });
+    qd.defineService(project, {
+      methods: {
+        get: {
+          access: "authenticated",
+          // @ts-expect-error -- a check returns a boolean, not a claim
+          claims: (claims) => claims?.scope,
+          handler: ({ input }) => ({ id: input.id, name: "" }),
+        },
+      },
+    });
+  });
+});

@@ -18,11 +18,11 @@ helper on `./server`, after creating the server:
 ```ts
 import { setupRedisAdapter } from "@fitzzero/quickdraw-core/server";
 
-const server = qd.createServer({ app, services, db, auth });
+const server = qd.createServer({ app, services, db, auth, cluster: { keyPrefix: "myapp" } });
+// the adapter's key defaults to cluster.keyPrefix: its channels are this deployment's
 const redis = await setupRedisAdapter(server.io, {
   host: env.VALKEY_HOST,
   port: env.VALKEY_PORT,
-  keyPrefix: "myapp",
 });
 
 process.on("SIGTERM", async () => {
@@ -31,8 +31,9 @@ process.on("SIGTERM", async () => {
 });
 ```
 
-or pass `createAdapter(pub, sub)` from `@socket.io/redis-adapter` as
-`socket.adapter` to `createServer` (an adapter an app sets later with
+or pass `createAdapter(pub, sub, { key: "myapp" })` from
+`@socket.io/redis-adapter` as `socket.adapter` to `createServer` (its own
+default key is `"socket.io"`, so name it; an adapter an app sets later with
 `io.adapter(...)` itself misses the watch on its connections described in
 "When Valkey stops answering"). Either way the server finds the adapter's
 publishing client and keeps two kinds of keys there:
@@ -42,14 +43,15 @@ publishing client and keeps two kinds of keys there:
 | `{keyPrefix}:rev`           | The shared revision counter every node's flushes take their revision from |
 | `{keyPrefix}:seen:{userId}` | When a user's last socket on any node disconnected, kept for 30 days      |
 
-`createServer`'s `cluster` option configures them (the adapter's own
-`keyPrefix` names its pub/sub channels, not these keys):
+`createServer`'s `cluster` option configures them (the adapter's own key
+names its pub/sub channels, not these keys; `setupRedisAdapter` takes it from
+`cluster.keyPrefix` unless its own `keyPrefix` names another):
 
-| Option      | Default                               | Meaning                                                                                      |
-| ----------- | ------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `client`    | the Redis adapter's publishing client | A node-redis (4 to 6) or ioredis client for the counter and last-seen times                  |
-| `keyPrefix` | `"quickdraw"`                         | The prefix of the keys above                                                                 |
-| `timeoutMs` | 1,000                                 | How long a node waits on Valkey or on the other nodes before it goes on without them (below) |
+| Option      | Default                               | Meaning                                                                                                                                            |
+| ----------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `client`    | the Redis adapter's publishing client | A node-redis (4 to 6) or ioredis client for the counter and last-seen times                                                                        |
+| `keyPrefix` | `"quickdraw"`                         | The prefix of the keys above; also the deployment every server-to-server event carries, and `setupRedisAdapter`'s default key (a non-empty string) |
+| `timeoutMs` | 1,000                                 | How long a node waits on Valkey or on the other nodes before it goes on without them (below)                                                       |
 
 Behind another adapter (one whose client the server cannot reach, and no
 `cluster.client`), revisions stay per process and the guarantees below about
@@ -72,6 +74,48 @@ counter key was lost; configure persistence or replication for it", and a
 read made before the next flush claims its own clock. A subscribe running
 while the key is lost may miss the frames of a flush made in between until
 the row's next change.
+
+### Deployments sharing a Valkey
+
+Give each deployment (production, staging, a preview) its own Valkey, or its
+own `cluster.keyPrefix` and adapter key. Valkey's pub/sub is shared across
+its databases, so `db` separates nothing: two deployments on one Valkey whose
+adapters share channels hear each other's server-to-server events.
+Up to 5.1.0 every node applied them, whoever sent them: another deployment's
+reloaded grants reached this deployment's sockets (a user made `Admin` on
+staging was `Admin` in production until their socket reconnected), and its
+disconnects, stream items, room removals and access changes acted here too.
+
+Now every such event carries its deployment, the sender's
+`cluster.keyPrefix`, and a node applies only its own deployment's. An event
+of another deployment is answered, so that deployment never waits it out or
+goes degraded, and ignored, with one error logged. The tags have limits:
+
+- they separate deployments with different prefixes only: two deployments
+  that both keep the default prefix are one deployment to quickdraw;
+- the adapter itself still carries room broadcasts (frames, events),
+  `qd:rotate`, its remote room operations (taking sockets out of a room) and
+  `fetchSockets` (presence's fallback) to every node on its key, so two
+  deployments that share an adapter key still reach each other's sockets:
+  give each its own key;
+- a node of an earlier version sends events without a deployment, which
+  every node applies (it cannot tell a rolling deploy from another
+  deployment that was not upgraded), and applies every event it hears:
+  upgrade every deployment that shares the Valkey before relying on the
+  tags.
+
+A rolling deploy from an earlier 5.x: an event without a deployment (from a
+node not replaced yet) is applied, with one warning per node. An app that
+called `setupRedisAdapter` without `keyPrefix` used the `"socket.io"`
+channels, and now uses its `cluster.keyPrefix`'s: old and new nodes do not
+hear each other during that deploy (frames, access changes, logout
+everywhere, presence). Pass `keyPrefix: "socket.io"` to `setupRedisAdapter`
+for that deploy, and move to the new key in a deploy that replaces every
+node at once. The counter key `{keyPrefix}:rev` does not change, so
+revisions stay one order across the deploy. A node of the earlier version
+never answers a presence request: while one is up, presence waits
+`cluster.timeoutMs` once and then reads every node's sockets for 30 s at a
+time ("When a node stops answering").
 
 ## What holds across nodes
 
@@ -98,9 +142,14 @@ the row's next change.
   its row as read at flush time, after the revision was taken: a move out of a
   scope that flushes after a later move back in sends the row `updated` to the
   scope it is in again, and a delete that flushes after a later create of the
-  same id sends the row (`u`), not its removal. One server keeps its cheaper
-  rule, so there the newer write's frame can still lose to the older one's
-  until the row's next write.
+  same id sends the row (`u`), not its removal. One server decides every
+  change to a column-scoped collection that is not a removal by its row as
+  read too, so a late flush never sends a moved row to the scope it left; it
+  keeps its cheaper rule for removals, `via` lists and entity frames, so
+  there the newer write's frame can still lose to the older one's until the
+  row's next write. An entity frame that waited behind a busy flush queue
+  can also carry a row's values to a subscriber the later write's flush
+  then revokes.
 - **Reads no older than what a client holds.** A read that claims a revision
   (a subscription's rows, a collection page, `qd:col:items`, a search page, a
   row sent again after a level change) claims the counter's last revision, so
@@ -156,9 +205,15 @@ the row's next change.
   pushed around the moment of subscribing may then arrive both in the seed
   and as a frame: make such items idempotent (a tick, an id).
 - **Collections.** A removal a write cannot address to a scope (a
-  `ctx.touch(..., { removed: true })`, junction rows a cascade removed) is
-  broadcast, so every node's subscribed scopes get it, except the scope the
-  row is in again when the flushing node reads it.
+  `ctx.touch(..., { removed: true })`, junction rows a cascade removed
+  without their entry's tracked delete) is broadcast, so every node's
+  subscribed scopes get it, except the scope the row is in again when the
+  flushing node reads it; no resume buffer keeps it, and no scope of the
+  collection resumes across it, on any node. A tracked delete of a `via`
+  entry reads its links first, so it reaches only the scopes it was linked
+  to; a link another unit commits between that read and the delete is
+  removed by the delete's cascade unread, and its scope keeps the entry
+  until it is read again.
 
 ## What it costs
 
@@ -177,13 +232,30 @@ statements and bytes) and the split end-to-end suite:
   a collection are read too (one statement per service and collection of a
   flush that only removes);
 - changes go out whole: that step sends 400 bytes against 268;
+- a flush checks each self scope it names (`scopeAccess: "self"` on a
+  service with a policy) with one batched `levelsFor` for the scope's user,
+  16 scopes at a time: every such scope, since rooms are invisible, where
+  one server checks only the scopes subscribed on it, and none whose frame
+  holds removals alone. A node without the user's socket decides for a
+  principal that holds the user id only: no grants, kind, claims or app
+  fields, so a row the user reads only through a service-wide grant goes
+  out `removed`, and a `resolver` policy must cope with such a principal;
 - a flush that changes access waits for every node's answer: a few Valkey
   round trips and the slowest node's re-resolution, at most
   `cluster.timeoutMs`. The wait is in line with the node's flushes, which run
   one after another: every flush behind it waits too;
 - a collection resume (`qd:col:sub` with `since`) always reads a page, and
   "not modified" comes from `versionColumn` only: a process's change log and
-  delta buffer see its own flushes.
+  delta buffer see its own flushes;
+- presence across nodes (`users` and `count`, `isOnline` for a user with no
+  socket on the node that asks, a joining socket's list, and the `left` of
+  a user's last socket on a node) is one request to the other nodes,
+  `quickdraw:presence`, each answering with the user ids of its records (or
+  whether it holds a socket of the user). Concurrent reads of one room, or
+  of one user, share it: one request in flight, and one more for every read
+  that arrives meanwhile. Before 5.1 each read had every node send every
+  socket in the room, handshake headers and cookies included (about
+  15.6 KB a socket), to every node (the 5.1 audit's RT-5).
 
 ## When a node stops answering
 
@@ -205,6 +277,20 @@ it revoked in their rooms, so they can receive frames the change should have
 kept from them (a field above their new level, a row they lost) until that
 node applies it. Live frames are fail-open across nodes for that long; calls
 and subscription reads are always authorized on the node that serves them.
+
+Presence has its own fallback. A presence request a node does not answer
+within `cluster.timeoutMs` (a node of an earlier version, during a rolling
+deploy, never answers one) makes the asking node read every node's sockets
+(`fetchSockets`) instead, for every presence read of the next 30 s, and log
+a warning ("A node did not answer a presence request within
+cluster.timeoutMs ..."), for the first window of an episode and at most
+once every 10 minutes. The first read after each window asks again, so a
+rolling deploy costs one `cluster.timeoutMs` wait per 30 s, never a
+failure. The fallback counts what earlier versions counted: a socket a raw
+`socket.join` put in the room, and, on an adapter key another deployment
+shares, that deployment's sockets. An adapter that does not answer
+server-side events (one built on the in-memory adapter) costs the same
+wait per window.
 
 ## When Valkey stops answering
 
@@ -239,9 +325,14 @@ and subscription reads are always authorized on the node that serves them.
   counter answers, the node's revisions compare with other nodes' within the
   skew between its clock and Valkey's.
 - **Access and presence.** While the node's connection is down, its access
-  changes are broadcast without waiting (they wait in the client's queue);
-  presence across nodes waits on `fetchSockets` up to the adapter's
-  `requestsTimeout`; `lastSeen` answers from the node's own records.
+  changes are broadcast without waiting (they wait in the client's queue).
+  A presence read across nodes waits `cluster.timeoutMs` for the other
+  nodes' answers, and then, like every presence read of the next 30 s,
+  reads every node's sockets (`fetchSockets`). That read waits for Valkey:
+  the adapter asks it how many nodes there are before it arms its
+  `requestsTimeout`, so presence answers and the room frames that need
+  them come late, or not at all, until Valkey is back. `lastSeen` answers
+  from the node's own records.
 
 ## Cloud Run
 
@@ -294,6 +385,63 @@ Number(process.env.TRUST_PROXY ?? 0))`, with `TRUST_PROXY=1` behind one.
   ends TLS must send `X-Forwarded-Proto`, or the API sets a cookie the
   next request does not read.
 
+## Production checklist
+
+What every deployed process needs, whatever its size (the 5.1 audit's
+CLIENT-8 and TRANSPORT-2). Each item is a default an app inherits or a
+setting no default can make for it.
+
+- **`NODE_ENV=production`** on every deployed process, staging included. It
+  turns off the development warnings and the console logger's `debug`, makes
+  the auth routes' cookies `Secure`, and keeps the development sign-ins off:
+  the mock OAuth provider and `socketAuth({ devCredentials })` run only when
+  `NODE_ENV` is `development` or `test` (an unset `NODE_ENV` is neither).
+- **The development sign-in switches stay off.** Leave the switches an app
+  reads for them (the template's `ENABLE_MOCK_OAUTH` and
+  `ENABLE_DEV_CREDENTIALS`) unset in every deployed environment, and out of
+  committed env files: both sign anyone in as any user. The mock logs a
+  warning when it mounts, and an error when it is switched on under another
+  `NODE_ENV`; `socketAuth` throws at startup when given `devCredentials`
+  under another `NODE_ENV`.
+- **`JWT_SECRET`**: at least 32 random characters (the auth routes refuse a
+  shorter one), from the platform's secret store, one per deployment.
+  Rotating it signs everyone out.
+- **HTTPS and `wss:` only.** The proxy that ends TLS sends
+  `X-Forwarded-Proto`, `publicUrl` is an `https:` URL, and the session
+  cookie is then `__Host-session` ("Behind a proxy, in production or not").
+- **CORS for every route the web app calls.** `createServer({ cors })`
+  covers Socket.IO only. The auth routes and the app's REST routes need
+  `app.use(cors({ origin: allowedOrigins, credentials: true }))` with
+  explicit origins from the environment, never `origin: true` or `"*"` with
+  credentials. Give the same list to `createAuthRoutes`, `socketAuth` and
+  `requireSession`.
+- **MCP.** The registry's `principal` hook checks a session against the
+  store on every call (`bearerAuth`), never with `verifyJWT` alone, which a
+  signed-out session still passes. Pages that call the MCP HTTP routes are
+  listed in `allowedOrigins`; the routes have no rate limit of their own
+  (README, "MCP bridge").
+- **Logs.** The console default drops `debug` in production
+  (`createConsoleLogger({ level })` names another level), and a Prisma
+  client error is logged summarized: never with the values its message
+  renders, nor the database's own text in its `meta`, which quotes the row.
+  A logger of the app's own gets the same summaries. Errors an app's own
+  Express middleware passes to `next` are Express's to print.
+- **Connections per client.** Every quickdraw limit is per socket: 600
+  events a minute, 16 queries in flight and 64 waiting, the subscription
+  lanes, the channel buckets. Nothing caps how many sockets one address
+  opens, so cap concurrent WebSocket connections and handshakes per address
+  at the proxy or load balancer (nginx `limit_conn` and `limit_req` on
+  `/socket.io/`, Cloud Armor rate rules), and limit the HTTP transport with
+  `http: { rateLimit: createCallLimiter() }`.
+- **Valkey is a trust boundary.** Whoever can publish on the adapter's
+  channels pushes frames to every client, and forges access changes and
+  `disconnectUser`. Keep it on a private network, with a password or an ACL
+  user, and TLS: `setupRedisAdapter` takes `password`; for TLS, create
+  `rediss://` clients yourself and pass `createAdapter(pub, sub, { key })`
+  as `socket.adapter`. Give each deployment its own Valkey, or its own
+  `cluster.keyPrefix` and adapter key ("Deployments sharing a Valkey"; a
+  Valkey `db` number does not separate pub/sub).
+
 ## Gaps that remain
 
 - Frames of one row from two nodes still arrive out of revision order;
@@ -306,6 +454,13 @@ Number(process.env.TRUST_PROXY ?? 0))`, with `TRUST_PROXY=1` behind one.
   clients, even after a short drop that lost nothing.
 - A room's presence list read from the other nodes can race a `joined` or
   `left` another node sends meanwhile (this node's own joins are counted).
+- Presence asks the other nodes on every join and on every user's last
+  leave from a node: a client that joins and leaves a room in a loop costs
+  one small request per cycle, which nothing rate-limits.
+- Two deployments that both keep the default `cluster.keyPrefix` on one
+  Valkey are one deployment to quickdraw, and a shared adapter key carries
+  room broadcasts between deployments whatever their prefixes ("Deployments
+  sharing a Valkey").
 - A subscribe that sees the counter move reads every row it joined again, not
   only the ones that changed: the cluster has no shared change log.
 - Access is fail-open across nodes while a node does not answer in time

@@ -72,7 +72,7 @@ Each method's kind was chosen from its name (get, list, search, find and count r
 
 ## Access
 
-The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 4.x's `hasEntryACL` did, but for a user listed twice in a row's list (marked). "Read" without a row id was open to every signed-in user; decide whether that was meant. A method whose input has `id` under a form that checks no row ("public", say) carries `rowless: true` (marked): 5.0 refuses to define that shape on a service with an access policy without it, and it keeps the 4.x callers.
+The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 4.x's `hasEntryACL` did, but for a user listed twice in a row's list (marked). "Read" without a row id was open to every signed-in user; decide whether that was meant. A method whose input has `id` under a form that checks no row ("public", say), or that checks the row another key names (a 4.x `resolveEntryId` on another key of a payload that also has `id`), carries `rowless: true` (marked): 5.x refuses to define those shapes on a service with an access policy without it, and it keeps the 4.x callers.
 
 - [ ] `apps/api/src/services/label.ts:80` 4.x had no row-level access here (no hasEntryACL, no checkAccess): only service grants opened rows, which this empty policy keeps. Give it a real policy if rows belong to someone
 - [ ] `apps/api/src/services/label.ts:91` this method takes an id but its access "public" checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant

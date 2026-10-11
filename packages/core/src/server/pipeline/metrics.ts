@@ -6,7 +6,7 @@
 // entry carries the original error with its stack. This replaces 4.1's two
 // `info` entries per call (4.1 `src/server/ServiceRegistry.ts:331-373`).
 
-import type { Logger } from "../../contract/logger";
+import { isPrismaError, prismaSummary, type Logger } from "../../contract/logger";
 import type { MethodKind } from "../../contract/methods";
 import { QuickdrawError, type ErrorCode } from "../../protocol/errors";
 import type { DevWarnings } from "../devWarnings";
@@ -61,10 +61,21 @@ export interface RecordDetails {
   readonly userId?: string;
 }
 
-/** The parts of an error worth logging, including its stack and cause. */
+/**
+ * The parts of an error worth logging, including its stack and cause. A
+ * Prisma error is summarized: its message renders the call, values
+ * included.
+ */
 export function describeError(error: unknown, depth = 0): Record<string, unknown> {
   if (!(error instanceof Error)) {
     return { value: String(error) };
+  }
+  if (isPrismaError(error)) {
+    const summary = prismaSummary(error);
+    if (error.cause !== undefined && depth < 3) {
+      summary.cause = describeError(error.cause, depth + 1);
+    }
+    return summary;
   }
   const described: Record<string, unknown> = {
     name: error.name,

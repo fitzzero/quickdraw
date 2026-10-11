@@ -4,7 +4,13 @@ export { QUICKDRAW_VERSION } from "./version";
 // Contracts (RFC 0003 section 2). Plain data plus schemas: everything below is
 // browser-safe, with no Node built-ins, React or server code.
 export type { AccessLevel, ACE, ACL } from "./contract/access";
-export { consoleLogger, type Logger } from "./contract/logger";
+export {
+  consoleLogger,
+  createConsoleLogger,
+  type ConsoleLoggerOptions,
+  type Logger,
+  type LogLevel,
+} from "./contract/logger";
 export {
   hasJsonSchema,
   isStandardSchema,

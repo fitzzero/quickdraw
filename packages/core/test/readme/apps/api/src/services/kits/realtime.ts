@@ -15,9 +15,9 @@ export const taskService = qd.defineService(task, {
     },
   },
   channels: {
-    // relay each cursor to the board's room
+    // relay each cursor to the board's room, the one its requires matched (ctx.room)
     cursor: (payload, ctx) => {
-      ctx.rooms.emit(`board:${payload.projectId}`, task, "cursorMoved", payload);
+      ctx.rooms.emit(ctx.room, task, "cursorMoved", payload);
     },
   },
   // once per socket that leaves app rooms, in every server this service runs in, in a unit of its own

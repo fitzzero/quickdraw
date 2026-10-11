@@ -12,20 +12,24 @@
 // first page of an indexed collection a third beside them, the index; a
 // `via` scope reads its links first. The first page of a scope through an
 // adapter that answers `nullable` also asks it about each order column, once
-// per process (`StorageAdapter.nullable`).
+// per process (`StorageAdapter.nullable`). A self scope on a service with a
+// policy also keeps its rows, count and index to those the policy lets the
+// subscriber read (`selfAccess.ts`), at the cost of the policy filter's
+// reads.
 //
 // A cursor is the client's: when the read that applies it fails while the
 // count of the same scope succeeds, the cursor's values did not fit the
 // order columns, and the request is `VALIDATION`, not a server fault.
 
 import type { CollectionSnapshot, Revision } from "../../protocol/envelope";
+import type { AccessFilter } from "../access/policy";
 import type { StorageAdapter, StorageRow, StorageWhere } from "../storage";
 import { unreadable } from "../transports/ack";
 import type { BoundCollection } from "./bind";
 import { afterCursor, decodeCursor, encodeCursor, orderByOf, type CursorValues } from "./cursor";
-import type { ServiceCollection } from "./define";
+import { linkWhere, type ServiceCollection } from "./define";
 import { readIndex } from "./index";
-import { itemOf, selectWith } from "./items";
+import { itemOf, readableMembers, selectWith } from "./items";
 
 const NOT_A_CURSOR = "cursor is not a cursor of this collection";
 
@@ -75,7 +79,7 @@ export async function membersWhere(
   }
   const { model, entry, scope: column } = collection.scope;
   const links = await storage.findMany(model, {
-    where: { [column]: scope },
+    where: linkWhere(collection.scope, { [column]: scope }),
     select: { [entry]: true },
     ...(maxLinks === undefined ? {} : { orderBy: { [entry]: "asc" }, take: maxLinks }),
   });
@@ -166,19 +170,25 @@ async function readRows(
  * scope's member count, and the next page's cursor (`null` on the last
  * page); on a first page of a collection that declares `index`, its index
  * too. A request above `maxLimit` gets `maxLimit` items and `clamped`.
- * Throws `VALIDATION` for a cursor that is not one of this collection.
+ * `filter` keeps the rows, the count and the index to the rows a policy
+ * lets the subscriber read (a self scope, `selfAccess.ts`). Throws
+ * `VALIDATION` for a cursor that is not one of this collection.
  */
 export async function readPage(
   storage: StorageAdapter,
   collection: BoundCollection,
   request: PageRequest,
   rev: Revision,
+  filter?: AccessFilter,
 ): Promise<CollectionSnapshot> {
   const { limit, clamped } = pageSize(collection, request.limit);
   const { order } = collection;
   const values = request.cursor === undefined ? undefined : decodeCursor(order, request.cursor);
   const nullable = await nullableColumns(storage, collection, values);
-  const members = await membersWhere(storage, collection, request.scope);
+  const members = readableMembers(
+    filter === "none" ? undefined : await membersWhere(storage, collection, request.scope),
+    filter,
+  );
   const page = { ok: true, rev, limit, ...(clamped ? { clamped: true as const } : {}) } as const;
   const indexed = values === undefined && collection.index !== undefined;
   if (members === undefined) {

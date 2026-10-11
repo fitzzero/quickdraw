@@ -15,7 +15,8 @@
 // own policy reads, so `defineService` refuses a service whose policy has
 // none for a mode the contract uses (`policy.ts`), or that has no model. An
 // access-list method (its input names the row as `id`) given a form that
-// checks no row (`"authenticated"`, say) must be named in `rowless`.
+// asks the policy nothing about that row (`"authenticated"`, `custom`, say)
+// must be named in `rowless`.
 
 import type { AnyContract } from "../../../contract/defineContract";
 import {
@@ -26,7 +27,7 @@ import {
 } from "../../../contract/kits/sharing";
 import { accessFormProblem } from "../../access/forms";
 import type { AccessForm } from "../../access/types";
-import { checkWhenDefined, type AnyService } from "../../service";
+import { checkWhenDefined, dependsOnCaller, type AnyService } from "../../service";
 import { kitEntry, rowlessMethods } from "../rowless";
 import type { HandlerContext } from "./context";
 import { DEFAULT_ACCESS, handlerOf } from "./methods";
@@ -160,6 +161,10 @@ function handlers<C extends AnyContract, const A extends SharingAccess<C> = Empt
     const form = (access[name] as AccessForm | undefined) ?? DEFAULT_ACCESS[spec.method];
     const handler = handlerOf(spec.method, Object.freeze({ ...hooks, form }));
     checkWhenDefined(handler, (service) => serviceProblem(service, contract, spec.mode));
+    if (spec.method === "listShares" || spec.method === "listMembers") {
+      // Input-only today; marked so a run shared across principals never can leak a list.
+      dependsOnCaller(handler);
+    }
     entries[name] = kitEntry(name, form, handler, rowless);
   }
   return Object.freeze(entries) as SharingImplementations<C, A, Db>;

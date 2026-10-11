@@ -20,28 +20,37 @@
 //
 // A malformed frame is `VALIDATION`, an unknown service or collection (or a
 // service without a model that writes nothing, whose topic never changes)
-// `NOT_FOUND`. A service's topic also changes with every write to a model it
-// lists in `writes`, so a query over such a model declares `watch:
-// "service"`.
+// `NOT_FOUND`. A socket watches at most `MAX_TOPICS_PER_SOCKET` topics (the
+// 5.1 audit's COLL-4): one more is `CONFLICT`, checked before the watch is
+// authorized and again where it is recorded (`joinWatch`); a topic watched
+// already never counts again. A service's topic also changes with every
+// write to a model it lists in `writes`, so a query over such a model
+// declares `watch: "service"`.
 // `qd:unwatch { s, topic }` is checked the same way, leaves the room,
 // optionally acknowledged, and stops a watch still being authorized from
 // joining. Neither counts against the socket rate limiter
 // (`transports/middleware.ts`), and neither listener throws
 // (`emit/answer.ts`). A watch whose access the socket loses leaves its room,
-// after one last `qd:changed` (`topicRevocation.ts`).
+// after one last `qd:changed` (`topicRevocation.ts`). A watch an access
+// change overlapped is authorized again before it joins, with the socket's
+// principal as it is then, and answered `FORBIDDEN` when it lost access
+// meanwhile (`joinWatch`).
 
 import { CLIENT_EVENTS, topicRoom } from "../contract/names";
 import type { Ok } from "../protocol/envelope";
 import { QuickdrawError } from "../protocol/errors";
-import { authorizeWatch } from "./collections/access";
 import type { CollectionHub } from "./collections/bind";
 import { createTopicSink } from "./collections/changed";
 import { answerEvent, answerNow, onDisconnect } from "./emit/answer";
 import { readWatch, TopicIndex } from "./topicIndex";
-import { createTopicRevocation, targetOf } from "./topicRevocation";
+import { createTopicRevocation, joinWatch, targetOf } from "./topicRevocation";
 import type { QuickdrawServerSocket, SocketContext } from "./transports/types";
 
-/** Serves one `qd:watch`: authorizes it, then joins the topic's room unless the client unwatched meanwhile. */
+/**
+ * Serves one `qd:watch`: authorizes it, settles the races with the access
+ * changes made meanwhile, and joins the topic's room unless the client
+ * unwatched meanwhile (`joinWatch`).
+ */
 async function watchTopic(
   hub: CollectionHub,
   index: TopicIndex,
@@ -56,16 +65,7 @@ async function watchTopic(
       "Change topics follow tracked writes: pass db as trackPrisma(prisma)",
     );
   }
-  const room = topicRoom(watch.s, watch.topic);
-  const unwatches = index.begin(socket, room);
-  try {
-    const anchors = await authorizeWatch(hub, socket.data.principal, target);
-    if (socket.connected && index.unwatches(socket, room) === unwatches) {
-      index.watch(socket, { ...watch, anchors });
-    }
-  } finally {
-    index.end(socket, room);
-  }
+  await joinWatch(hub, index, socket, [watch, target]);
   return { ok: true };
 }
 

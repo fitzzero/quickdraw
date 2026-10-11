@@ -23,20 +23,27 @@
 // service must declare its `model`; `defineService` checks that when the
 // service is defined, that a method on many rows of a service without an
 // access policy has `"public"` or `{ service }` access (`access.ts`), and,
-// on a service with one, that `get` under a form that checks no row
-// (`"public"`, `"authenticated"`, `{ service }` below `Admin`) is named in
-// `rowless`, which says every caller the form admits may read any row.
+// on a service with one, that `get` under a form that asks the policy
+// nothing about the row its `id` names (`"public"`, `"authenticated"`,
+// `{ service }` below `Admin`, `custom`, `{ scope }`, `{ entry }` on another
+// key) is named in `rowless`, which says every caller the form admits may
+// read any row.
 
 import type { AnyContract } from "../../../contract/defineContract";
 import { crud as contractHalf, crudSpecOf, type CrudSpec } from "../../../contract/kits/crud";
 import { accessFormProblem } from "../../access/forms";
 import type { AccessForm } from "../../access/types";
-import { checkWhenDefined, checksRowsItself, type AnyService } from "../../service";
+import {
+  checkWhenDefined,
+  checksRowsItself,
+  dependsOnCaller,
+  type AnyService,
+} from "../../service";
 import { kitEntry, rowlessMethods } from "../rowless";
-import { everyRowProblem } from "./access";
+import { bulkFallback, everyRowProblem } from "./access";
 import type { AnyPrepare } from "./create";
 import { handlerOf } from "./methods";
-import type { CrudAccess, CrudHandlersOptions, CrudImplementations } from "./types";
+import type { CrudAccess, CrudHandlersOptions, CrudImplementations, MethodContext } from "./types";
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
@@ -135,9 +142,10 @@ const MANY_ROWS: ReadonlySet<CrudSpec["method"]> = new Set([
 /**
  * The kit's methods that check the caller's level on the row their `id`
  * names whatever their form (`checkRowWrite`), and `create`, whose `id` (when
- * its input has one) names a new row: `defineService`'s rowless check leaves
- * them alone. `get` reads the row its form lets the caller read, so a form
- * that checks no row needs `rowless`.
+ * its input has one) names a new row and which checks the anchors it writes
+ * instead (`create.ts`): `defineService`'s rowless check leaves them alone.
+ * `get` reads the row its form lets the caller read, so a form that asks the
+ * policy nothing about that row needs `rowless`.
  */
 const CHECKS_ROWS: ReadonlySet<CrudSpec["method"]> = new Set([
   "create",
@@ -145,6 +153,35 @@ const CHECKS_ROWS: ReadonlySet<CrudSpec["method"]> = new Set([
   "delete",
   "reorder",
 ]);
+
+/**
+ * The kit's methods whose result is the rows the caller's level reaches:
+ * `defineService` refuses `share: "all"` on them (`dependsOnCaller`).
+ */
+const CALLER_DEPENDENT: ReadonlySet<CrudSpec["method"]> = new Set(["list", "getMany"]);
+
+/** The single-row method whose row level each bulk method takes when its own form names none. */
+const COUNTERPARTS = { bulkDelete: "delete", bulkUpdate: "update" } as const;
+
+/**
+ * The row level `spec`'s method falls back to when its form names none: a
+ * bulk method's counterpart's, when higher than `Moderate`
+ * (`bulkFallback`; the 5.1 audit's CRUD-2: `bulkDelete` under
+ * `"authenticated"` beside `delete: { entry: "Admin" }` deleted Admin-only
+ * rows at `Moderate`), else `Moderate`.
+ */
+function bulkLevelOf(
+  kit: readonly (readonly [string, CrudSpec])[],
+  access: Readonly<Record<string, unknown>>,
+  spec: CrudSpec,
+): MethodContext["bulkLevel"] {
+  const counterpart =
+    spec.method === "bulkDelete" || spec.method === "bulkUpdate"
+      ? COUNTERPARTS[spec.method]
+      : undefined;
+  const found = kit.find(([, other]) => other.method === counterpart);
+  return bulkFallback(found === undefined ? undefined : (access[found[0]] as AccessForm));
+}
 
 const OPTION_KEYS: readonly string[] = ["access", "prepare", "rowless"];
 
@@ -184,10 +221,14 @@ function handlers<C extends AnyContract, const A extends CrudAccess<C>, Db = unk
   for (const [name, spec] of kit) {
     const form = access[name] as AccessForm;
     const projection = spec.method === "list" ? itemProjection(contract, spec) : "entity";
-    const handler = handlerOf({ spec, form, projection, prepare });
+    const bulkLevel = bulkLevelOf(kit, access, spec);
+    const handler = handlerOf({ spec, form, projection, prepare, bulkLevel });
     checkWhenDefined(handler, (service) => serviceProblem(service, contract, [name, spec], form));
     if (CHECKS_ROWS.has(spec.method)) {
       checksRowsItself(handler);
+    }
+    if (CALLER_DEPENDENT.has(spec.method)) {
+      dependsOnCaller(handler);
     }
     entries[name] = kitEntry(name, form, handler, rowless);
   }

@@ -5,7 +5,13 @@
 
 import type { Server as HttpServer } from "node:http";
 import { Server, type ServerOptions } from "socket.io";
-import { MAX_SUBSCRIBE_IDS, PROTOCOL_VERSION } from "../../protocol/version";
+import {
+  MAX_ENTITY_IDS_PER_SOCKET,
+  MAX_SCOPES_PER_SOCKET,
+  MAX_SUBSCRIBE_IDS,
+  MAX_TOPICS_PER_SOCKET,
+  PROTOCOL_VERSION,
+} from "../../protocol/version";
 import { QUICKDRAW_VERSION } from "../../version";
 import { createReplyMeter } from "./ack";
 import type { ResolvePrincipal, ServerAuth, ServiceGrants } from "./auth";
@@ -23,6 +29,7 @@ import {
   listenForGrants,
   refreshGrants,
   regrantsOf,
+  registerClusterDeployment,
   rotate,
   serveBroadcasts,
   type ClusterOptions,
@@ -41,9 +48,18 @@ export type { SocketRateLimitOptions } from "./middleware";
 export type { ClusterOptions, DisconnectUserOptions } from "./pushes";
 export type { QuickdrawIo } from "./types";
 export { resolveLegacyWire, type LegacyWireOptions } from "./legacy";
+// `createServer` checks the deployment before anything starts, within its import budget.
+export { checkKeyPrefix } from "../cluster/deployment";
 
-/** Socket.IO server options `createServer` passes through; it sets `parser` and `cors` itself. */
-export type SocketOptions = Partial<Omit<ServerOptions, "parser" | "cors">>;
+/**
+ * Socket.IO server options `createServer` passes through; it sets `parser`
+ * and `cors` itself, and refuses `connectionStateRecovery`: a recovered
+ * socket would come back with its principal and rooms without
+ * authenticating again.
+ */
+export type SocketOptions = Partial<
+  Omit<ServerOptions, "parser" | "cors" | "connectionStateRecovery">
+>;
 
 /** Socket.IO's CORS setting for the handshake and polling requests. */
 export type SocketCors = Partial<ServerOptions>["cors"];
@@ -102,6 +118,9 @@ function helloFrame(settings: SocketServerSettings): ServerHello {
       subscriptions: Object.freeze({
         maxInFlight: limits.subscriptions.maxInFlight,
         maxQueued: limits.subscriptions.maxQueued,
+        maxEntityIds: MAX_ENTITY_IDS_PER_SOCKET,
+        maxScopes: MAX_SCOPES_PER_SOCKET,
+        maxTopics: MAX_TOPICS_PER_SOCKET,
       }),
     }),
     features: Object.freeze(settings.binary ? ["binary"] : []),
@@ -119,6 +138,8 @@ export function createSocketServer(
     ...(settings.cors === undefined ? {} : { cors: settings.cors }),
     ...(meter.parser === undefined ? {} : { parser: meter.parser }),
   });
+  // Before anything sends to or hears from the other nodes: every event carries the deployment.
+  registerClusterDeployment(io, settings.cluster);
   const context: SocketContext = {
     dispatcher: settings.dispatcher,
     logger: settings.logger,
@@ -128,7 +149,7 @@ export function createSocketServer(
   const broadcasts = serveBroadcasts(io, settings.logger, settings.cluster?.timeoutMs);
   settings.live?.attach(io, probe, settings.cluster, broadcasts);
   listenForGrants(io, settings.live, settings.logger);
-  listenForDisconnects(io);
+  listenForDisconnects(io, settings.logger);
   io.use(protocolMiddleware(settings.legacyWire !== undefined, context));
   io.use(authMiddleware(settings.resolvePrincipal, context));
   // Before the connection handler: the limiter's `socket.use` middleware must

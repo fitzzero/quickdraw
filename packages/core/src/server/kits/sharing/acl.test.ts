@@ -6,6 +6,7 @@
 // changes, a list without an owner keeps its last Admin, and a malformed
 // list is reported, never overwritten. Access is in `access.test.ts`.
 
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { defineContract } from "../../../index";
 import { createTestApp, type TestApp } from "../../../testing/index";
@@ -121,6 +122,27 @@ describe("share", () => {
     await expect(owner.shareByName({ id: board.p1, level: "Read" })).rejects.toMatchObject({
       code: "VALIDATION",
     });
+  });
+
+  it("finds no one by a name two users have, and the one meant by email (SHARE-2)", async () => {
+    const { app } = await kit.start();
+    const board = kit.board();
+    const { prisma } = kit.harness();
+    // The first to register a name would win a lookup that takes the first match.
+    await prisma.user.create({ data: { name: "Ivy Chen", email: `${randomUUID()}@example.com` } });
+    const ivy = await prisma.user.create({
+      data: { name: "Ivy Chen", email: `${randomUUID()}@example.com` },
+    });
+    const owner = app.as(as(board.ada)).projectService;
+    await expect(
+      owner.shareByName({ id: board.p1, name: "Ivy Chen", level: "Admin" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect((await prisma.project.findUniqueOrThrow({ where: { id: board.p1 } })).acl).toEqual([
+      { userId: board.di, level: "Read" },
+    ]);
+    expect(
+      await owner.shareByName({ id: board.p1, email: ivy.email, level: "Read" }),
+    ).toContainEqual({ userId: ivy.id, level: "Read" });
   });
 });
 

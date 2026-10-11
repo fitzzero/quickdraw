@@ -15,7 +15,7 @@
 // it applies single pushes.
 //
 // Behind a cluster adapter a stream that keeps a seed is pushed to every
-// node instead (`serverSideEmit`, the same one publish a room broadcast
+// node of its deployment instead (`serverSideEmit`, the same one publish a room broadcast
 // costs), and each node keeps the items in its own seed and sends them to its
 // own sockets in the feed's room, in one step: a subscriber on any node gets
 // the latest items as its seed, and an item is either in the seed a
@@ -23,20 +23,13 @@
 // without a seed goes out through the adapter's room broadcast as before.
 
 import type { AnyContract } from "../../contract/defineContract";
-import { SERVER_EVENTS, streamRoom } from "../../contract/names";
-import type { StreamFrame } from "../../protocol/envelope";
 import type { Hub } from "../emit/hub";
-import type { AnyService } from "../service";
-import { StreamSeeds, streamKey } from "./seeds";
+import { StreamSeeds } from "./seeds";
 import { createStreamFeeds, type StreamFeeds } from "./streamFeeds";
+import { listenForPushes, sendItems, type Served } from "./streamPushes";
 import { scopeProblem } from "./streamTargets";
-import type { ServiceStream, StreamHandle } from "./types";
+import type { StreamHandle } from "./types";
 import { checkOutgoing, checksItems } from "./validate";
-
-interface Served {
-  readonly service: AnyService;
-  readonly stream: ServiceStream;
-}
 
 /** The stream `name` of the service the dispatcher serves for `contract`, or a `TypeError`. */
 function servedStream(hub: Hub, contract: AnyContract, name: string): Served {
@@ -76,52 +69,6 @@ function feedOf(
   return { feed: scope as string | undefined, value: stream.scoped ? args[1] : args[0] };
 }
 
-/** The server-to-server event a seeded stream's items are pushed to every node on, behind a cluster adapter. */
-export const STREAM_PUSH_EVENT = "quickdraw:stream-push";
-
-/** A push another node broadcast: `{ s, stream, scope?, items }`. */
-interface PushedItems {
-  readonly s: string;
-  readonly stream: string;
-  readonly scope?: string;
-  readonly items: readonly unknown[];
-}
-
-/**
- * Keeps `items` (already checked) in the feed's seed and sends each as a
- * frame, in order: to every node's sockets in the feed's room, or with
- * `local` (a push another node broadcast) to this node's only.
- */
-function send(
-  hub: Hub,
-  seeds: StreamSeeds,
-  served: Served,
-  feed: string | undefined,
-  items: readonly unknown[],
-  local = false,
-): void {
-  const { service, stream } = served;
-  for (const item of items) {
-    seeds.push(streamKey(service.name, stream.name), feed, item, stream.seed);
-  }
-  const { io } = hub;
-  if (io === undefined) {
-    return;
-  }
-  const replicated = local || (stream.seed > 0 && !hub.probe.local());
-  if (replicated && !local) {
-    const pushed: PushedItems = { s: service.name, stream: stream.name, items };
-    io.serverSideEmit(STREAM_PUSH_EVENT, feed === undefined ? pushed : { ...pushed, scope: feed });
-  }
-  const room = (replicated ? io.local : io).to(streamRoom(service.name, stream.name, feed));
-  const target = stream.volatile ? room.volatile : room;
-  const scope = feed ?? null;
-  for (const item of items) {
-    const frame: StreamFrame = [service.name, stream.name, scope, item];
-    target.emit(SERVER_EVENTS.stream, frame);
-  }
-}
-
 function push(hub: Hub, seeds: StreamSeeds, served: Served, args: readonly unknown[]): void {
   const { feed, value } = feedOf(served, "push", "item", args);
   const label = `${served.service.name}.${served.stream.name}`;
@@ -129,7 +76,7 @@ function push(hub: Hub, seeds: StreamSeeds, served: Served, args: readonly unkno
   const checked = checksItems(served.stream, hub.outputValidation)
     ? checkOutgoing(served.stream.item, value, `An item pushed to ${label}`)
     : value;
-  send(hub, seeds, served, feed, [checked]);
+  sendItems(hub, seeds, served, feed, [checked]);
 }
 
 function pushMany(hub: Hub, seeds: StreamSeeds, served: Served, args: readonly unknown[]): void {
@@ -139,32 +86,14 @@ function pushMany(hub: Hub, seeds: StreamSeeds, served: Served, args: readonly u
     throw new TypeError(`${label}.pushMany: pass the items as an array`);
   }
   if (!checksItems(served.stream, hub.outputValidation)) {
-    send(hub, seeds, served, feed, value);
+    sendItems(hub, seeds, served, feed, value);
     return;
   }
   // Every item is checked before any is kept or sent.
   const checked = value.map((item: unknown, index) =>
     checkOutgoing(served.stream.item, item, `Item ${String(index)} pushed to ${label}`),
   );
-  send(hub, seeds, served, feed, checked);
-}
-
-/** A push another node broadcast, read; `undefined` for anything malformed or a stream not served here. */
-function readPush(hub: Hub, value: unknown): { served: Served; pushed: PushedItems } | undefined {
-  const { s, stream, scope, items } = (value ?? {}) as Readonly<Record<string, unknown>>;
-  const service = typeof s === "string" ? hub.registry.services.get(s) : undefined;
-  const found = typeof stream === "string" ? service?.streams.get(stream) : undefined;
-  if (service === undefined || found === undefined || !Array.isArray(items)) {
-    return undefined;
-  }
-  if (found.scoped ? typeof scope !== "string" : scope !== undefined) {
-    return undefined;
-  }
-  const pushed: PushedItems = { s: service.name, stream: found.name, items: items as unknown[] };
-  return {
-    served: { service, stream: found },
-    pushed: typeof scope === "string" ? { ...pushed, scope } : pushed,
-  };
+  sendItems(hub, seeds, served, feed, checked);
 }
 
 /** One dispatcher's streams: their seeds, the handles that push to them, and their socket listeners. */
@@ -206,13 +135,7 @@ export function createStreams(hub: Hub): Streams {
     revocation: feeds.revocation,
     leftRooms: feeds.leftRooms,
     listen: () => {
-      hub.io?.on(STREAM_PUSH_EVENT, (broadcast: unknown) => {
-        const received = readPush(hub, broadcast);
-        if (received !== undefined) {
-          const { served, pushed } = received;
-          send(hub, seeds, served, pushed.scope, pushed.items, true);
-        }
-      });
+      listenForPushes(hub, seeds);
     },
   });
 }

@@ -8,7 +8,7 @@ import { z } from "zod";
 import { crud as contractCrud, defineContract, mutation, QuickdrawError } from "../../../index";
 import { projectContract, qd } from "../../emit/__tests__/live";
 import { describeTools } from "../../mcp/index";
-import { inherit, crud } from "../../index";
+import { custom, inherit, crud } from "../../index";
 import { defineTaskService, taskContract, taskEntity } from "./__tests__/fixture";
 
 const notes = defineContract("noteService", {
@@ -145,6 +145,40 @@ describe("defineService with kit handlers", () => {
   });
 });
 
+describe('share: "all" on the kit\'s methods', () => {
+  it("is refused on list and getMany, whose result depends on who asks (ACCESS-2)", () => {
+    const handlers = crud.handlers(taskContract, {
+      access: {
+        get: { entry: "Read" },
+        getMany: "authenticated",
+        list: "authenticated",
+        create: { scope: "Moderate", of: projectContract, id: "projectId" },
+        update: { entry: "Moderate" },
+        delete: { entry: "Moderate" },
+        reorder: { entry: "Moderate" },
+        bulkUpdate: "authenticated",
+        bulkDelete: "authenticated",
+      },
+    });
+    const define = (methods: object) => () =>
+      qd.defineService(taskContract, {
+        model: "task",
+        access: inherit({ from: projectContract, via: "projectId" }),
+        collections: { board: { anchor: projectContract } },
+        methods: { ...handlers, ...methods } as never,
+      });
+    const refusal = 'is a kit method whose result depends on who asks, so it cannot share: "all"';
+    expect(define({ list: { ...handlers.list, share: "all" } })).toThrow(
+      `method "list" ${refusal}`,
+    );
+    expect(define({ getMany: { ...handlers.getMany, share: "all" } })).toThrow(
+      `method "getMany" ${refusal}`,
+    );
+    expect(define({ list: { ...handlers.list, share: "caller", ttlMs: 5_000 } })).not.toThrow();
+    expect(define({ get: { ...handlers.get, share: "all" } })).not.toThrow();
+  });
+});
+
 describe("the rowless check on the kit's methods", () => {
   const writes = {
     getMany: "authenticated",
@@ -177,10 +211,12 @@ describe("the rowless check on the kit's methods", () => {
     );
     expect(define("public")).toThrow('method "get" takes a row id');
     expect(define({ service: "Read" })).toThrow('method "get" takes a row id');
+    expect(define(custom(() => true))).toThrow('rowless: ["get"]');
   });
 
   it("defines get under such a form when rowless names it, and the methods that check their row whatever the form", () => {
-    // update, delete and reorder check the row's level themselves; create's optional id names a new row
+    // update, delete and reorder check the row's level themselves; create's optional id names a new row,
+    // and it checks the anchors it writes
     expect(define({ entry: "Read" })).not.toThrow();
     const service = define("public", { rowless: ["get"] })();
     expect(service.methods.get?.rowless).toBe(true);

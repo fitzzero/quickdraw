@@ -41,15 +41,21 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   final, `null` meaning signed out), never on `isConnected` or `userId`
   alone: `userId` is `null` before the hello too, `isConnected` turns true
   before it and false while reconnecting, and `reconnecting` keeps the user.
+  While `isKnown` is false, `status` `"disconnected"` or `"refused"` means
+  signed out: the server ended the session (signed out elsewhere, revoked,
+  expired) or refused a connect for it, the hello is gone and quickdraw's
+  cache is empty; any other status is still connecting. Never keep showing
+  data the app holds itself once `isKnown` turns false.
   `hello.serverId` changes when the server restarts (or the socket lands
   on another node): compare it to tell a new server from a network blip.
 - Sign-in and out in the browser go through the auth routes kit's routes:
   `authProviders()` lists the sign-ins the API serves (render a button for
   those only, never from build-time flags), `signInUrl(provider, {
 returnTo })` is the provider button's link, `signOut()` and
-  `signOutEverywhere()` end the session (they reject when refused). Never
-  call `/auth/...` by hand; 4.x's `getOAuthUrl`, `logout` and
-  `logoutAllDevices` are gone.
+  `signOutEverywhere()` end the session (they reject when refused); then
+  call `connection.close()` and `open()` (or reload), since a socket keeps
+  its user until it connects again. Never call `/auth/...` by hand; 4.x's
+  `getOAuthUrl`, `logout` and `logoutAllDevices` are gone.
 
 ## Reading
 

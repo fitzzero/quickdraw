@@ -17,7 +17,7 @@ const MCP = "@fitzzero/quickdraw-core/server/mcp";
 const METHODS =
   "Declare methods in a contract (`defineContract(name, { methods: { name: query({ input, output }) } })`), type them with `InputOf<C, M>` and `OutputOf<C, M>`, and implement them as `{ access, handler({ input, ctx, db }) }`.";
 const CHANNELS =
-  "Declare channels in the contract (`channels: { name: { payload } }`), handle them in `qd.defineService(contract, { channels })`, and send with `qd.<service>.<channel>.useChannel()`.";
+  "Declare channels in the contract (`channels: { name: { payload, requires } }`, where `requires` names what the sender must hold, such as `{ room }`), handle them in `qd.defineService(contract, { channels })`, and send with `qd.<service>.<channel>.useChannel()`.";
 const EVENTS =
   "Declare room events in the contract (`events: { name: { payload } }`), send them with `ctx.rooms.emit(room, contract, event, payload)`, and listen with `qd.<service>.<event>.useEvent(handler)`.";
 const ADMIN_TYPES =
