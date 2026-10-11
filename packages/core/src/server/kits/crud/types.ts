@@ -60,9 +60,9 @@ export interface CrudHandlersOptions<C extends AnyContract, A, Db = unknown> {
    * row; the methods on many rows also keep only the rows the service's
    * policy gives the caller at the form's level. A bulk method whose form
    * names no level takes its single-row counterpart's row level (`delete`'s
-   * for `bulkDelete`, `update`'s for `bulkUpdate`); give
-   * `{ entry: L, id: "ids" }` to refuse the whole call instead of skipping
-   * rows.
+   * for `bulkDelete`, `update`'s for `bulkUpdate`) when it is higher than
+   * `Moderate`; give `{ entry: L, id: "ids" }` to refuse the whole call
+   * instead of skipping rows.
    */
   readonly access: A & NoInfer<NotAKitMethod<C, A>>;
   /**
@@ -111,9 +111,9 @@ export interface MethodContext {
   readonly projection: string;
   readonly prepare: AnyPrepare | undefined;
   /**
-   * The row level a bulk method needs when its own form names none: its
-   * single-row counterpart's (`delete` for `bulkDelete`, `update` for
-   * `bulkUpdate`), else `Moderate`.
+   * The row level a bulk method needs when its own form names none: the
+   * higher of `Moderate` and its single-row counterpart's (`delete` for
+   * `bulkDelete`, `update` for `bulkUpdate`; `bulkFallback`).
    */
   readonly bulkLevel: AccessLevel;
 }

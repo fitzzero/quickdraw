@@ -482,7 +482,7 @@ describe("the transaction", () => {
       log: consoleLogger,
       requestId: "r1",
       transport: "internal",
-      kit: { service, access, storage: undefined },
+      kit: { service, services: new Map(), access, storage: undefined },
     });
     const share = service.methods.share?.handler as unknown as (args: object) => Promise<unknown>;
     // The default form needs Admin; the caller holds Moderate by the time the change runs.

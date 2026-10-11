@@ -39,6 +39,19 @@ export function rowLevel(form: AccessForm, fallback: AccessLevel): AccessLevel {
   return form.entry ?? form.scope ?? fallback;
 }
 
+/**
+ * The row level a bulk method needs when its own form names none: the
+ * higher of `Moderate` and the row level of its single-row counterpart's
+ * form (`delete`'s for `bulkDelete`, `update`'s for `bulkUpdate`), so it
+ * never writes below 5.0's `Moderate`; `Moderate` without a counterpart, or
+ * when the counterpart's form names no row level (`{ service: L }`,
+ * `custom`): give both the same form then.
+ */
+export function bulkFallback(counterpart: AccessForm | undefined): AccessLevel {
+  const level = counterpart === undefined ? "Moderate" : rowLevel(counterpart, "Moderate");
+  return meetsLevel(level, "Moderate") ? level : "Moderate";
+}
+
 /** True when a method's rows are not checked against a policy: a public read, or no policy. */
 function unchecked(call: CrudCall, form: AccessForm, use: "read" | "write"): boolean {
   return call.runtime.service.access === undefined || (use === "read" && form === "public");

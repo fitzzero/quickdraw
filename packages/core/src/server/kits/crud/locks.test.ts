@@ -19,7 +19,7 @@ import { crud as contractCrud, defineContract } from "../../../index";
 import { createTestApp, type TestApp } from "../../../testing/index";
 import { projectMembers } from "../../access/__tests__/board";
 import { projectContract, projectService, qd } from "../../emit/__tests__/live";
-import { anyOf, crud, inherit, jsonAcl, owner } from "../../index";
+import { anyOf, crud, inherit, jsonAcl, members, owner, resolver } from "../../index";
 import { as, kitApp, taskEntity } from "./__tests__/fixture";
 
 const kit = kitApp();
@@ -158,6 +158,7 @@ describe("a membership table's columns (CRUD-7)", () => {
           input: z.object({ projectId: z.string(), userId: z.string(), role: z.string() }),
         },
         update: { input: z.object({ role: z.string() }).partial() },
+        bulkUpdate: { input: z.object({ role: z.string() }).partial() },
       }),
     },
   });
@@ -169,6 +170,7 @@ describe("a membership table's columns (CRUD-7)", () => {
         access: {
           create: { scope: "Moderate", of: projectContract, id: "projectId" },
           update: { entry: "Moderate" },
+          bulkUpdate: "authenticated",
         },
       }),
     },
@@ -198,6 +200,12 @@ describe("a membership table's columns (CRUD-7)", () => {
       member.create({ projectId: board.p1, userId: board.ed, role: "Admin" }),
     ).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringMatching(/membership/) });
     expect(await prisma.projectMember.count({ where: { userId: board.ed } })).toBe(0);
+    await expect(
+      member.bulkUpdate({ ids: [own.id], data: { role: "Admin" } }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringMatching(/membership/) });
+    expect((await prisma.projectMember.findUniqueOrThrow({ where: { id: own.id } })).role).toBe(
+      "Moderate",
+    );
   });
 
   it("are written by a service-wide Admin of the membership service", async () => {
@@ -220,6 +228,86 @@ describe("a membership table's columns (CRUD-7)", () => {
         expect.objectContaining({ userId: board.bo, role: "Admin" }),
         expect.objectContaining({ userId: board.ed, role: "Read" }),
       ]),
+    );
+  });
+});
+
+describe("a membership any kind of policy reads (CRUD-7)", () => {
+  const memberRow = z.object({
+    id: z.string(),
+    projectId: z.string(),
+    userId: z.string(),
+    role: z.string(),
+  });
+  const projectRow = z.object({ id: z.string(), name: z.string() });
+
+  /** A project service whose policy reads the membership table as `policy` says, and crud on that table. */
+  function servicesOver(policy: unknown) {
+    const projects = defineContract("teamService", { entity: projectRow, methods: {} });
+    const teamService = qd.defineService(projects, {
+      model: "project",
+      access: policy as never,
+      methods: {},
+    });
+    const rows = defineContract("teamMemberService", {
+      entity: memberRow,
+      methods: {
+        ...contractCrud.contract({
+          entity: memberRow,
+          update: { input: z.object({ role: z.string() }).partial() },
+        }),
+      },
+    });
+    const teamMemberService = qd.defineService(rows, {
+      model: "projectMember",
+      access: inherit({ from: projects, via: "projectId" }),
+      methods: { ...crud.handlers(rows, { access: { update: { entry: "Moderate" } } }) },
+    });
+    return [teamService, teamMemberService] as const;
+  }
+
+  it.each([
+    [
+      "a resolver's declared memberships",
+      resolver({
+        levelsFor: async (principal, ids, tools) => {
+          const read = {
+            model: "projectMember",
+            entry: "projectId",
+            user: "userId",
+            level: "role",
+          };
+          return await tools.memberships({ ...read, levels: undefined }, principal.userId, ids);
+        },
+        reads: {
+          memberships: [
+            { model: "projectMember", entry: "projectId", user: "userId", level: "role" },
+          ],
+        },
+      }),
+    ],
+    [
+      "a members policy that spells the model ProjectMember",
+      members({ model: "ProjectMember", entry: "projectId", user: "userId", level: "role" }),
+    ],
+  ])("locks the role through %s", async (_name, policy) => {
+    const board = kit.board();
+    const { prisma } = kit.harness();
+    const own = await prisma.projectMember.findUniqueOrThrow({
+      where: { projectId_userId: { projectId: board.p1, userId: board.bo } },
+    });
+    const [teamService, teamMemberService] = servicesOver(policy);
+    const app = tracked(
+      await createTestApp({ services: [teamService, teamMemberService], db: kit.harness().db }),
+    );
+    await expect(
+      app.as(as(board.bo)).teamMemberService.update({ id: own.id, role: "Admin" }),
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/"role" holds a membership in teamService's policy/),
+    });
+    expect((await prisma.projectMember.findUniqueOrThrow({ where: { id: own.id } })).role).toBe(
+      "Moderate",
     );
   });
 });

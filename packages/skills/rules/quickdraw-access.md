@@ -251,11 +251,14 @@ channel `requires`.
 
 - Change access lists and memberships with the sharing kit
   (`sharing.contract({ mode: "acl" | "members" })`), which refuses granting
-  above the caller's own level and removing the last `Admin`. The
-  read/write and admin kits refuse a membership table's entry, user and
-  role columns (any policy's), and a column the policy reads, without a
-  service-wide `Admin` grant, even when an anchored collection scopes by
-  it.
+  above the caller's own level and removing the last `Admin`. Without a
+  service-wide `Admin` grant, the read/write and admin kits refuse a
+  membership table's entry, user and role columns, whichever policy reads
+  them. They also refuse a column the policy reads. That holds even for a
+  column an anchored collection scopes by.
+- Give a bulk method (`bulkUpdate`, `bulkDelete`) a form with a row level,
+  or the same form as `update` or `delete`: under a form that names none,
+  it takes the counterpart's row level only from an `{ entry: L }` form.
 - Write policy columns and membership rows through the tracked `db`: the
   flush then revokes what a demoted user held (`qd:revoked`), moves them to
   their new field tier, and updates `via` collections. A write the tracked

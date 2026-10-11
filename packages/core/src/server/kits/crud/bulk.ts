@@ -3,9 +3,11 @@
 // in one transaction with the policy lookup that picked them. Ids the caller
 // cannot write at the method's row level, and ids with no row, are skipped,
 // even for a `"public"` method. The row level is the form's own, else the
-// single-row counterpart's (`delete`'s for `bulkDelete`, `update`'s for
-// `bulkUpdate`), else `Moderate`: a bulk delete never deletes a row `delete`
-// would refuse (the 5.1 audit's CRUD-2);
+// higher of `Moderate` and the single-row counterpart's (`delete`'s for
+// `bulkDelete`, `update`'s for `bulkUpdate`; `bulkFallback`): a bulk delete
+// never deletes a row `delete`'s `{ entry: L }` would refuse (the 5.1
+// audit's CRUD-2). A counterpart whose form names no row level
+// (`{ service: L }`, `custom`) gives none: give both the same form;
 // the result counts the rows changed. The tracked client records every row, and a flush touching more
 // rows of one collection scope than its `bulkThreshold` sends that scope one
 // `reset` instead of a delta per row. `bulkUpdate`'s data holds column

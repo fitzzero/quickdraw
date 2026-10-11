@@ -107,10 +107,13 @@ All notable changes to this project will be documented in this file.
 - **The read/write kit's bulk methods take their single-row level.** A
   bulk method whose form names no level (`"authenticated"`, `"public"`,
   `{ service }`, `custom`) now skips the rows below the row level of
-  `delete`'s form (`bulkDelete`) or `update`'s (`bulkUpdate`), not only
-  those below `Moderate`. The README sample's `bulkDelete` is
+  `delete`'s form (`bulkDelete`) or `update`'s (`bulkUpdate`) when that is
+  higher than `Moderate`; it never goes below `Moderate`. A counterpart
+  form that names no row level (`{ service: L }`, `custom`) changes
+  nothing: give both the same form. The README sample's `bulkDelete` is
   `{ entry: "Admin", id: "ids" }`, which refuses the whole call (an empty
-  `ids` is `FORBIDDEN`), and its `archive` is `Moderate`.
+  `ids`, or an id with no row, is `FORBIDDEN`), and its `archive` is
+  `Moderate`.
 - **An owner column an anchored collection scopes by stays read-only.**
   Without a service-wide Admin grant, a kit write may not set a column the
   policy reads even when a collection is anchored by it: set it in

@@ -1822,9 +1822,11 @@ export const taskService = qd.defineService(task, {
   and `bulkDelete` act on many rows, so they also keep only the rows the
   service's policy gives the caller at the form's `entry` or `scope` level
   (else `Read` for reads and `Moderate` for writes; a bulk method's form
-  that names none takes `update`'s or `delete`'s row level): a list never
-  shows a row `get` would refuse, and a bulk delete never deletes a row
-  `delete` would refuse. A service-wide `Admin` grant reaches every row,
+  that names none takes `update`'s or `delete`'s row level when it is
+  higher): a list never shows a row `get` would refuse, and a bulk delete
+  never deletes a row `delete`'s `{ entry: L }` would refuse. When the
+  single-row form names no row level (`{ service: L }`, `custom`), give the
+  bulk method the same form. A service-wide `Admin` grant reaches every row,
   and a grant a `{ service: L }` form names is a row level of the grant on
   every row (the read is not filtered, and its rows are stripped at the
   grant). A `"public"` read's rows are not filtered (a public bulk write
@@ -1844,23 +1846,27 @@ export const taskService = qd.defineService(task, {
 - `getMany({ ids })` (at most 200) leaves out ids the caller cannot read and
   ids with no row. Bulk writes skip rows the caller cannot write, run in one
   transaction and return `{ count }`; give one `{ entry: L, id: "ids" }` to
-  refuse the whole call instead of skipping rows (an empty `ids` is then
-  `FORBIDDEN`).
+  refuse the whole call instead of skipping rows (an empty `ids`, or an id
+  with no row, is then `FORBIDDEN`).
 - Writes go through the tracked client: `create` sends `added`, `update` a
   patch and `delete` `removed`, and a bulk write past a scope's
   `bulkThreshold` sends it one `reset`. A missing row is `NOT_FOUND`, a
   unique violation `CONFLICT`.
-- `update` and `bulkUpdate` (and the admin kit's writes) never let a caller
-  without a service-wide `Admin` grant set a column the policy reads (an
-  owner column, an access list), even when an anchored collection also
-  scopes by it, nor a membership table's entry, user and role columns that
-  any policy reads (change those with the sharing kit); and they move a row
+- Without a service-wide `Admin` grant, `update` and `bulkUpdate` (and the
+  admin kit's writes) never set a column the policy reads (an owner column,
+  an access list), even one an anchored collection also scopes by. They
+  never set a membership table's entry, user or role column that any policy
+  reads either: change memberships with the sharing kit. They move a row
   into another parent (an `inherit` policy's `via`, an anchored
-  collection's scope column) only when the caller's level on the new
-  parent meets the method's row level: `FORBIDDEN` otherwise. `create` takes a column the policy reads only from
-  `prepare` (`ownerId: ctx.principal.userId`), never from a caller without
-  a service-wide `Admin` grant, and writes a parent only where the caller
-  has the row level on it, after `prepare` ran.
+  collection's scope column) only when the caller's level on the new parent
+  meets the method's row level. Each refusal is `FORBIDDEN`. An `inherit`
+  `via` column stays movable, so never inherit a row's access from the
+  users' own rows (`inherit({ from: user, via: "ownerId" })`): a caller
+  would hand the row to themself.
+- `create` takes a column the policy reads, and a membership column, only
+  from `prepare` (`ownerId: ctx.principal.userId`), never from a caller
+  without a service-wide `Admin` grant. It writes a parent only where the
+  caller has the row level on it, after `prepare` ran.
 - Every kit write holds column values only, in every environment and for
   every caller, a service-wide Admin included: a key that is a relation of
   the model (one a projection selects with a nested `select`) or a value

@@ -40,7 +40,7 @@ import {
   type AnyService,
 } from "../../service";
 import { kitEntry, rowlessMethods } from "../rowless";
-import { everyRowProblem, rowLevel } from "./access";
+import { bulkFallback, everyRowProblem } from "./access";
 import type { AnyPrepare } from "./create";
 import { handlerOf } from "./methods";
 import type { CrudAccess, CrudHandlersOptions, CrudImplementations, MethodContext } from "./types";
@@ -165,7 +165,8 @@ const COUNTERPARTS = { bulkDelete: "delete", bulkUpdate: "update" } as const;
 
 /**
  * The row level `spec`'s method falls back to when its form names none: a
- * bulk method's counterpart's (the 5.1 audit's CRUD-2: `bulkDelete` under
+ * bulk method's counterpart's, when higher than `Moderate`
+ * (`bulkFallback`; the 5.1 audit's CRUD-2: `bulkDelete` under
  * `"authenticated"` beside `delete: { entry: "Admin" }` deleted Admin-only
  * rows at `Moderate`), else `Moderate`.
  */
@@ -179,7 +180,7 @@ function bulkLevelOf(
       ? COUNTERPARTS[spec.method]
       : undefined;
   const found = kit.find(([, other]) => other.method === counterpart);
-  return found === undefined ? "Moderate" : rowLevel(access[found[0]] as AccessForm, "Moderate");
+  return bulkFallback(found === undefined ? undefined : (access[found[0]] as AccessForm));
 }
 
 const OPTION_KEYS: readonly string[] = ["access", "prepare", "rowless"];

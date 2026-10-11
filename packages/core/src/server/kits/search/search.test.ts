@@ -430,7 +430,7 @@ describe("strategies", () => {
       log: consoleLogger,
       requestId: "r1",
       transport: "internal",
-      kit: { service, access, storage: kit.harness().storage },
+      kit: { service, services: new Map(), access, storage: kit.harness().storage },
     });
     const db = { task: { findMany } };
     await expect(

@@ -16,14 +16,16 @@
 // - Locked columns (`checkLockedColumns`): a column the service's policy
 //   reads (an owner column, an access list) is read-only, and on `create`
 //   comes only from the kit's `prepare`, even when an anchored collection
-//   also scopes by it: checked as an anchor move only, `assigneeId` under
-//   `anyOf(owner("assigneeId"), inherit(...))` beside an `assigned`
-//   collection anchored on users made a member the row's owner (CRUD-3).
-//   Only an `inherit` policy's `via` columns leave the locked set. A
-//   membership table's entry, user and level columns are read-only on that
-//   table whichever bound policy reads them (`members`, alone, in `anyOf`
-//   or a resolver's `reads`): crud on the table raised a member's own role
-//   (CRUD-7). They change through the sharing kit.
+//   also scopes by it. Only an `inherit` policy's `via` columns leave the
+//   locked set. A membership table's entry, user and level columns are
+//   read-only on that table whichever bound policy reads them (`members`,
+//   alone, in `anyOf` or a resolver's `reads`); they change through the
+//   sharing kit. Before 5.1, a policy column that was also an anchored
+//   collection's scope column was checked as an anchor move only
+//   (`assigneeId` under `anyOf(owner("assigneeId"), inherit(...))` beside
+//   an `assigned` collection anchored on users made a member the row's
+//   owner; the audit's CRUD-3), and crud on a membership table raised a
+//   member's own role (CRUD-7).
 // - Anchor columns (`checkAnchorColumns`): a column that places the row
 //   under an anchor row (an `inherit` policy's `via`, an anchored
 //   collection's scope column) may name only an anchor row on which the
@@ -96,8 +98,11 @@ export function membershipColumnsOf(
   services: ReadonlyMap<string, AnyService>,
   model: string,
 ): ReadonlyMap<string, string> {
-  const byModel = MEMBERSHIPS.get(services) ?? new Map<string, ReadonlyMap<string, string>>();
-  MEMBERSHIPS.set(services, byModel);
+  let byModel = MEMBERSHIPS.get(services);
+  if (byModel === undefined) {
+    byModel = new Map<string, ReadonlyMap<string, string>>();
+    MEMBERSHIPS.set(services, byModel);
+  }
   const key = modelKey(model);
   const kept = byModel.get(key);
   if (kept !== undefined) {
@@ -147,7 +152,7 @@ function membershipNamed(
   columns: readonly string[],
 ): readonly [string, string] | undefined {
   const { service, services } = runtime;
-  if (services === undefined || service.model === undefined) {
+  if (service.model === undefined) {
     return undefined;
   }
   const memberships = membershipColumnsOf(services, service.model);
