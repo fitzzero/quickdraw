@@ -615,6 +615,16 @@ describe("an HTTP call to an authenticate socketAuth did not make", () => {
     const fromElsewhere = await whoami(url, { cookie: session, origin: "http://evil.test" });
     expect(fromElsewhere.status).toBe(403);
     expect(await fromElsewhere.json()).toMatchObject({ ok: false, e: { code: "FORBIDDEN" } });
+    // With another user's bearer token beside it, the cookie still wins, under the Origin rule.
+    const other = await signIn(url, "bob@demo.local");
+    const bobBearer = { authorization: `Bearer ${other.session.slice("session=".length)}` };
+    const both = await whoami(url, { cookie: session, ...bobBearer, origin: "http://evil.test" });
+    expect(both.status).toBe(403);
+    const bothFromApp = await whoami(url, { cookie: session, ...bobBearer, origin: APP_ORIGIN });
+    expect(await bothFromApp.json()).toEqual({
+      ok: true,
+      d: { userId: userIdOf("ada@demo.local"), kind: "user" },
+    });
   });
 });
 

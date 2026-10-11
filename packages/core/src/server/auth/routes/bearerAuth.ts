@@ -42,7 +42,8 @@ export type BearerAuthenticate<P extends Principal> = (token: unknown) => Promis
  * token (anything but a non-empty string) is anonymous (`null`); a token
  * whose session was signed out, revoked or has expired, or a JWT without a
  * session, is refused with `UNAUTHENTICATED`; a live session's token is its
- * user's principal, built as `socketAuth` builds it.
+ * user's principal, built as `socketAuth` builds it. It records no socket
+ * session: for `createServer`'s `authenticate` use `socketAuth`.
  *
  * @example
  * const verifySession = bearerAuth({ sessions, jwtSecret, loadPrincipal: (userId) => ({ userId, kind: "agent" }) });

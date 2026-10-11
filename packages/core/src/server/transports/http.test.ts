@@ -34,6 +34,7 @@ import { socketAuth } from "../auth/routes/socketAuth";
 import { issueSession } from "../auth/routes/tokens";
 import { createCallLimiter } from "../express/rateLimit";
 import { transportHarness } from "./__tests__/harness";
+import { markSocketAuth } from "./auth";
 import { createProbe, probe as probeContract } from "./__tests__/probe";
 
 /** Express 5, installed as the `express5` alias; its API matches Express 4's types here. */
@@ -601,6 +602,55 @@ describe("the http option", () => {
     expect(logger.at("error").map((entry) => entry.message)).toEqual([
       "The HTTP transport failed to serve a call",
     ]);
+  });
+});
+
+describe("socketAuth's authenticate", () => {
+  it("gets the session cookie as auth.token, through createServer and createHttpRouter alike", async () => {
+    const seen: unknown[] = [];
+    const authenticate: NonNullable<ServerAuth<AppPrincipal>["authenticate"]> = (request) => {
+      if (request.transport === "http") {
+        seen.push({
+          auth: request.auth,
+          credential: request.credential,
+          sessionCookie: request.sessionCookie,
+        });
+      }
+      return null;
+    };
+    // What socketAuth marks its authenticate with.
+    markSocketAuth(authenticate, { devCredentials: false });
+    const both = { cookie: "session=alice-token", ...bearer("moderator-token") };
+    const { url } = await serve({ auth: { authenticate } });
+    await post(url, "/qd/probeService/echo", { body: '{"text":"hi"}', headers: both });
+    const dispatcher = createDispatcher({
+      services: [createProbe().service],
+      db,
+      logger: captureLogger(),
+    });
+    const httpServer = createHttpServer(
+      createHttpRouter({ dispatcher, auth: { authenticate }, logger: captureLogger() }),
+    );
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const { port } = httpServer.address() as AddressInfo;
+      await post(`http://127.0.0.1:${port}`, "/qd/probeService/echo", {
+        body: '{"text":"hi"}',
+        headers: both,
+      });
+    } finally {
+      await new Promise((resolve) => {
+        httpServer.close(resolve);
+      });
+    }
+    const handed = {
+      auth: { token: "alice-token" },
+      credential: "cookie",
+      sessionCookie: "alice-token",
+    };
+    expect(seen).toEqual([handed, handed]);
   });
 });
 

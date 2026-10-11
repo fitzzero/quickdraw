@@ -194,6 +194,7 @@ const expectations = {
       "createJWT",
       "createAuthRoutes",
       "socketAuth",
+      "bearerAuth",
       "createMemorySessionStore",
       "google",
       "discord",

@@ -192,10 +192,13 @@ export function transportCookieNaming(cookieName: string | undefined): SessionCo
 }
 
 /**
- * Where an HTTP call's token came from. `"cookie"`: the session cookie, which
- * a browser sends with a request any page makes, so whoever accepts it checks
- * the request's `Origin` (`socketAuth` does). `"bearer"`: an
- * `Authorization: Bearer` header, which a page sends only on purpose.
+ * The credential the HTTP transport chose for a call (the cookie first).
+ * `"cookie"`: the session cookie, which a browser sends with a request any
+ * page makes, so whoever accepts it checks the request's `Origin`
+ * (`socketAuth` does). `"bearer"`: an `Authorization: Bearer` header, which a
+ * page sends only on purpose. For an `authenticate` `socketAuth` did not
+ * make, `auth.token` holds the bearer token alone, even when this says
+ * `"cookie"`; the cookie is `request.sessionCookie`.
  */
 export type HttpCredentialSource = "cookie" | "bearer";
 

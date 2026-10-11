@@ -1,5 +1,5 @@
 import * as jose from "jose";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createJWT, verifyJWT } from "./jwt";
 
 // Pins createJWT/verifyJWT to their 4.1 behavior on jose 6.
@@ -17,6 +17,11 @@ describe("createJWT / verifyJWT", () => {
   });
 
   it("carries the session id as sid, and leaves it out when the token has none", async () => {
+    // verifyJWT warns, once per process, that it checks no session store.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    onTestFinished(() => {
+      warn.mockRestore();
+    });
     const withSid = await verifyJWT(
       await createJWT({ userId: "user-1", sid: "s-1" }, SECRET),
       SECRET,
