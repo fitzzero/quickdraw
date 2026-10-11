@@ -128,6 +128,12 @@ export interface AdminFields {
    * otherwise (they are hidden).
    */
   readonly grants: ReadonlySet<string>;
+  /**
+   * The fields an `editable` list (either half) or a `fieldOverrides` entry
+   * with `editable: true` names: none may be a relation of the service's
+   * model, which `admin.handlers` checks once the service is defined.
+   */
+  readonly named: ReadonlySet<string>;
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -421,5 +427,31 @@ export function adminFieldsOf(
     fields: Object.freeze(fields),
   });
   const readOnly = new Set(fields.filter((field) => !field.editable).map((field) => field.name));
-  return Object.freeze({ meta, hidden, readOnly, grants });
+  const named = new Set([
+    ...(editable ?? []),
+    ...Object.entries(overrides)
+      .filter(([, override]) => override.editable === true)
+      .map(([name]) => name),
+  ]);
+  return Object.freeze({ meta, hidden, readOnly, grants, named });
+}
+
+/**
+ * `meta` with the fields `readOnly` names shown as not editable: the
+ * relations of the service's model, which the kit never writes. `meta`
+ * itself when none of its fields is one.
+ */
+export function withReadOnlyFields(
+  meta: AdminServiceMeta,
+  readOnly: ReadonlySet<string>,
+): AdminServiceMeta {
+  if (!meta.fields.some((field) => readOnly.has(field.name) && field.editable)) {
+    return meta;
+  }
+  const fields = meta.fields.map((field) =>
+    readOnly.has(field.name) && field.editable
+      ? frozenConfig({ ...field, editable: false })
+      : field,
+  );
+  return Object.freeze({ ...meta, fields: Object.freeze(fields) });
 }

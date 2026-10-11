@@ -24,7 +24,7 @@ export function handlerOf(context: MethodContext): KitHandler {
     case "list":
       return listHandler({ spec, form, projection: context.projection });
     case "create":
-      return createHandler(context.prepare);
+      return createHandler(form, context.prepare);
     case "update":
       return updateHandler(form);
     case "delete":

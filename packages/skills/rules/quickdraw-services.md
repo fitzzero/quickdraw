@@ -217,7 +217,10 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   `admin.contract` too, so the input schemas and MCP tools name only those):
   every other field is read-only, and a write naming one is `VALIDATION`.
   Without it the kit writes every field it shows but `id` and the
-  timestamps, owner and foreign-key columns included.
+  timestamps, owner and foreign-key columns included. No kit ever writes a
+  relation field or a nested write (`{ connect }`, `{ update }`): either is
+  `VALIDATION`, whoever the caller, and `adminMeta` shows a relation field
+  (one a projection selects with a nested select) as read-only.
   On a users service, `admin.handlers(user, { grants: true })` lets the admin
   screen edit `serviceAccess` through `adminUpdate` (service-wide Admins
   only); never hand-write a `setServiceAccess` method for it. `adminMeta`

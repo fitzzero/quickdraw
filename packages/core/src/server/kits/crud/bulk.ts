@@ -63,7 +63,9 @@ export function bulkUpdateHandler(form: AccessForm): KitHandler {
     if (Object.keys(patch).length === 0) {
       return { count: 0 };
     }
-    await checkWritableColumns(call.runtime, call.principal, patch, rowLevel(form, "Moderate"));
+    await checkWritableColumns(call.runtime, call.principal, patch, rowLevel(form, "Moderate"), [
+      "data",
+    ]);
     return await writeAllowed(call, db, form, ids, (table, allowed) =>
       table.updateMany({ where: { id: { in: [...allowed] } }, data: patch }),
     );

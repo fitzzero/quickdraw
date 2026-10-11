@@ -4,9 +4,12 @@
 // (4.1 `src/server/BaseService.ts:1167-1183`).
 
 import type { AdminMethodName } from "../../../contract/kits/admin";
+import { kitRuntimeOf } from "../../context";
+import { relationKeysOf } from "../columns";
 import type { KitHandler, KitHandlerArgs } from "../crud/runtime";
 import { adminListHandler } from "./list";
 import { adminReemitHandler, adminSubscribersHandler } from "./live";
+import { withReadOnlyFields } from "./meta";
 import {
   adminCreateHandler,
   adminDeleteHandler,
@@ -30,10 +33,26 @@ const MAKERS: Readonly<
   adminReemit: adminReemitHandler,
 });
 
-/** `adminMeta`'s handler: the answer worked out when the handlers were made. */
+/**
+ * `adminMeta`'s handler: the answer worked out when the handlers were made,
+ * with the relations of the service's model (which only the service knows,
+ * from its projections) shown as not editable, once per service.
+ */
 function adminMetaHandler(context: AdminContext): KitHandler {
   const { meta } = context.fields;
-  const handler = (_args: KitHandlerArgs): Promise<typeof meta> => Promise.resolve(meta);
+  const byService = new WeakMap<object, typeof meta>();
+  const handler = (args: KitHandlerArgs): Promise<typeof meta> => {
+    const service = kitRuntimeOf(args.ctx)?.service;
+    if (service === undefined) {
+      return Promise.resolve(meta);
+    }
+    let answer = byService.get(service);
+    if (answer === undefined) {
+      answer = withReadOnlyFields(meta, relationKeysOf(service));
+      byService.set(service, answer);
+    }
+    return Promise.resolve(answer);
+  };
   return handler as KitHandler;
 }
 

@@ -12,7 +12,8 @@
 // else `Read` for reads and `Moderate` for writes. A `"public"` read's rows
 // are public; a write always needs the level, so an anonymous caller writes
 // nothing, and a write on one row needs it on that row whatever its form
-// (`checkRowWrite`). A service-wide grant at level L is a row level of L on
+// (`checkRowWrite`); `create` needs it on each anchor row its new row names
+// (`../columns.ts`). A service-wide grant at level L is a row level of L on
 // every row where the form names `service` (`grantRowLevel`): such a read is
 // unfiltered, its rows stripped at the grant. A service without a policy has
 // no row-level access: there the form is the whole check, so `defineService`

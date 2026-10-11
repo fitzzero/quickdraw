@@ -181,7 +181,8 @@ describe("the rowless check on the kit's methods", () => {
   });
 
   it("defines get under such a form when rowless names it, and the methods that check their row whatever the form", () => {
-    // update, delete and reorder check the row's level themselves; create's optional id names a new row
+    // update, delete and reorder check the row's level themselves; create's optional id names a new row,
+    // and it checks the anchors it writes
     expect(define({ entry: "Read" })).not.toThrow();
     const service = define("public", { rowless: ["get"] })();
     expect(service.methods.get?.rowless).toBe(true);

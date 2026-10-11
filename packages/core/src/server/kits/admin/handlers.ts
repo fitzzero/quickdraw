@@ -44,6 +44,7 @@ import { admin as contractHalf, adminSpecOf, type AdminSpec } from "../../../con
 import { accessFormProblem } from "../../access/forms";
 import type { AccessForm } from "../../access/types";
 import { checkWhenDefined, markGrantsEditor, type AnyService } from "../../service";
+import { relationKeysOf } from "../columns";
 import { kitEntry, rowlessMethods } from "../rowless";
 import { adminFieldsOf, type AdminFields } from "./meta";
 import { ADMIN_DEFAULT_ACCESS, handlerOf } from "./methods";
@@ -191,14 +192,28 @@ function fieldsOf(
   );
 }
 
-/** Why a service cannot run the admin kit's handlers made for `contract`. */
-function serviceProblem(service: AnyService, contract: AnyContract): string | undefined {
+/**
+ * Why a service cannot run the admin kit's handlers made for `contract`: a
+ * service of another contract, one without a model, or one where `editable`
+ * or a `fieldOverrides` entry makes a relation of the model editable (the
+ * kit writes column values only).
+ */
+function serviceProblem(
+  service: AnyService,
+  contract: AnyContract,
+  fields: AdminFields,
+): string | undefined {
   if (service.contract !== contract) {
     return `its admin kit handlers were made for another contract; pass ${service.name}'s own contract to admin.handlers`;
   }
-  return service.model === undefined
-    ? "the admin kit reads and writes the service's rows: declare its model"
-    : undefined;
+  if (service.model === undefined) {
+    return "the admin kit reads and writes the service's rows: declare its model";
+  }
+  const relations = relationKeysOf(service);
+  const relation = [...fields.named].find((name) => relations.has(name));
+  return relation === undefined
+    ? undefined
+    : `"${relation}" is a relation of ${service.name}'s model (a projection selects it with a nested select): the admin kit writes column values only; leave it out of editable and fieldOverrides`;
 }
 
 function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty, Db = unknown>(
@@ -226,7 +241,7 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty,
   for (const [name, spec] of kit) {
     const form = (access[name] as AccessForm | undefined) ?? ADMIN_DEFAULT_ACCESS;
     const handler = handlerOf({ spec, fields, form, ...hooks });
-    checkWhenDefined(handler, (service) => serviceProblem(service, contract));
+    checkWhenDefined(handler, (service) => serviceProblem(service, contract, fields));
     if (checked.grants === true) {
       // `createServer` warns when no `auth.serviceAccessSource` says where these grants live.
       markGrantsEditor(handler);

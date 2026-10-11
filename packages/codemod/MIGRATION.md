@@ -1789,7 +1789,8 @@ native client sends the token as `auth.token`.
   longer opens every row to a subscriber, and a service without a policy
   can be subscribed to only with a service-wide `Admin` grant. The kits'
   single-row writes (`update`, `delete`, `reorder`) need the row level on
-  the row, whatever their form says.
+  the row, and `create` on each parent its row is written under, whatever
+  their form says.
 - **Invalidation never cancels a read.** The coordinator keeps one read in
   flight per query; an invalidation during it runs exactly one more when it
   settles. 4.x cancelled the read and issued it again.

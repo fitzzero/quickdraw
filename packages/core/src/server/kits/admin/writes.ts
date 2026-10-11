@@ -2,8 +2,10 @@
 // before `adminCreate` and `adminUpdate` write, and the database's refusal
 // of a write's values, after. A write never sets a field the service hides,
 // one an override made read-only, `id` or a timestamp, nor a field above the
-// caller's level; and, as for every kit write, a column that decides access
-// to the row only with a service-wide `Admin` grant (`../columns.ts`).
+// caller's level; and, as for every kit write, it holds column values only
+// (never a relation or a nested write, whoever the caller), and sets a
+// column that decides access to the row only with a service-wide `Admin`
+// grant (`../columns.ts`).
 
 import { QuickdrawError } from "../../../protocol/errors";
 import { checkWritableColumns } from "../columns";
@@ -13,12 +15,13 @@ import type { AdminContext } from "./types";
 
 /**
  * `VALIDATION` for a write that names a field the kit does not write (one the
- * service hides, `id`, a timestamp, or one an override made read-only), and
- * `FORBIDDEN` for one above the caller's level, or for a column that decides
- * access to the row unless the caller holds a service-wide `Admin` grant (a
- * lowered form must not let a member make themselves the owner; an anchor
- * column may move the row only into an anchor row the caller has the row
- * level on: `../columns.ts`).
+ * service hides, `id`, a timestamp, or one an override made read-only), or
+ * that holds a relation of the model or a nested write, and `FORBIDDEN` for
+ * one above the caller's level, or for a column that decides access to the
+ * row unless the caller holds a service-wide `Admin` grant (a lowered form
+ * must not let a member make themselves the owner; an anchor column may move
+ * the row only into an anchor row the caller has the row level on:
+ * `../columns.ts`).
  */
 export async function checkWrite(
   call: AdminCall,
@@ -44,6 +47,7 @@ export async function checkWrite(
     call.principal,
     data,
     rowLevel(context.form, "Moderate"),
+    ["data"],
   );
 }
 

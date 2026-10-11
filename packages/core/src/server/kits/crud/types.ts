@@ -63,7 +63,11 @@ export interface CrudHandlersOptions<C extends AnyContract, A, Db = unknown> {
   /**
    * What `create` writes, from its parsed input: set owner or scope columns
    * from `ctx.principal`, an ordinal from `nextOrdinal`. `create` writes the
-   * input as it is without it.
+   * input as it is without it. An owner or access-list column (one the
+   * policy reads) comes only from here: the caller may not send one. The
+   * anchors of what it returns (each `inherit` parent and anchored
+   * collection's scope it sets) are checked at the method's row level, and
+   * it returns column values only, never a relation or a nested write.
    */
   readonly prepare?: [CrudCreateOf<C>] extends [never]
     ? `crud.handlers: prepare is for the kit's create, which ${C["name"]} does not have`

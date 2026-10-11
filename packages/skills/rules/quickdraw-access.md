@@ -124,8 +124,13 @@ no row (`"public"`, `"authenticated"`, `{ service: L }` below `Admin`),
   a row the method creates (an id the client made, under a `scope` form),
   say so with `rowless: true` on the method, or `rowless: ["get"]` in a
   kit's options (`crud.handlers`, `admin.handlers`, `sharing.handlers`).
-- The read/write kit's `update`, `delete`, `reorder` and `create` check the
-  row themselves and need neither.
+- The read/write kit's `update`, `delete` and `reorder` check the row
+  themselves and need neither. `create` makes a new row and checks no row of
+  its own: it checks the anchors it writes (each `inherit` parent and
+  anchored collection's scope column, from what `prepare` returns) at the
+  method's row level, and takes a column the policy reads only from
+  `prepare` (`ownerId: ctx.principal.userId`). Give it
+  `{ scope: "Moderate", of: project, id: "projectId" }`.
 - The check reads the input's keys from its JSON Schema: an `id` in any
   branch of a union counts, as does one beside a `Date` or a `Set`. An input
   without JSON Schema (a Zod 3 schema) or one that names no keys (a

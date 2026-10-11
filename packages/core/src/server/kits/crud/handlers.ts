@@ -137,9 +137,10 @@ const MANY_ROWS: ReadonlySet<CrudSpec["method"]> = new Set([
 /**
  * The kit's methods that check the caller's level on the row their `id`
  * names whatever their form (`checkRowWrite`), and `create`, whose `id` (when
- * its input has one) names a new row: `defineService`'s rowless check leaves
- * them alone. `get` reads the row its form lets the caller read, so a form
- * that asks the policy nothing about that row needs `rowless`.
+ * its input has one) names a new row and which checks the anchors it writes
+ * instead (`create.ts`): `defineService`'s rowless check leaves them alone.
+ * `get` reads the row its form lets the caller read, so a form that asks the
+ * policy nothing about that row needs `rowless`.
  */
 const CHECKS_ROWS: ReadonlySet<CrudSpec["method"]> = new Set([
   "create",

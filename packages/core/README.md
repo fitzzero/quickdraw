@@ -1768,7 +1768,12 @@ export const taskService = qd.defineService(task, {
   `get`, `update`, `delete` and `reorder` act on `input.id`, which
   `{ entry: L }` checks; a write on one row also needs the row level
   (`Moderate`, or the form's `entry`) on that row whatever its form, so
-  `update: "authenticated"` edits no row. `list`, `getMany`, `bulkUpdate`
+  `update: "authenticated"` edits no row. `create` makes a new row and
+  checks no row of its own: it needs that row level on each parent its new
+  row names (each anchor column it writes, below), whatever its form, so
+  `create: "authenticated"` writes into no project its caller cannot
+  moderate; give it `{ scope: "Moderate", of: project, id: "projectId" }`.
+  `list`, `getMany`, `bulkUpdate`
   and `bulkDelete` act on many rows, so they also keep only the rows the
   service's policy gives the caller at the form's `entry` or `scope` level
   (else `Read` for reads and `Moderate` for writes): a list never shows a
@@ -1801,7 +1806,18 @@ export const taskService = qd.defineService(task, {
   owner column, an access list), and move a row into another parent (an
   `inherit` policy's `via`, an anchored collection's scope column) only
   when the caller's level on the new parent meets the method's row level:
-  `FORBIDDEN` otherwise.
+  `FORBIDDEN` otherwise. `create` takes a column the policy reads only from
+  `prepare` (`ownerId: ctx.principal.userId`), never from the caller, and
+  writes a parent only where the caller has the row level on it, after
+  `prepare` ran.
+- Every kit write holds column values only, in every environment and for
+  every caller, a service-wide Admin included: a key that is a relation of
+  the model (one a projection selects with a nested `select`) or a value
+  that is a Prisma nested write (`{ connect }`, `{ update }`, a to-many
+  `{ set: [...] }`) is `VALIDATION`, since nested writes are not tracked
+  and would skip the checks above. A `prepare` that returns one is
+  `INTERNAL`. A Json value whose own key is a relation operation holding an
+  object or list is refused too; keep such data one level deeper.
 - `reorder({ id, beforeId?, afterId? })` puts the row between its new
   neighbors (`beforeId` comes right before it) with one write, or renumbers
   the `within` list in steps of 1,024 when no gap is left, in a transaction
@@ -2201,8 +2217,10 @@ export function AdminTasks() {
   service-wide `Admin` grant, nor are the columns the policy reads, and a
   row moves to another parent only with the row level on it (`FORBIDDEN`,
   as for the read/write kit); each value is checked by the entity schema
-  itself, and a value the database refuses is `VALIDATION`. A missing row
-  is `NOT_FOUND`.
+  itself, and a value the database refuses is `VALIDATION`. A relation of
+  the model (a key a projection selects with a nested `select`) or a nested
+  write (`{ connect }`, `{ update }`) is `VALIDATION`, for every caller: the
+  kit writes column values only. A missing row is `NOT_FOUND`.
 - `editable: ["title", "status"]` names the only fields `adminCreate` and
   `adminUpdate` write: `adminMeta` reports every other field
   `editable: false`, so a generic form leaves it read-only, and a write
@@ -2213,7 +2231,9 @@ export function AdminTasks() {
   tools made from it) name only those fields; given to both halves, the
   two lists must name the same fields. Without either list the kit writes
   what it wrote in 5.0.0: every field it shows but `id` and the timestamps,
-  less those an override made read-only.
+  less those an override made read-only. An `editable` list, or a
+  `fieldOverrides` entry with `editable: true`, that names a relation of the
+  model fails when the service is defined.
 - `adminMeta()` returns `{ serviceName, displayName, fields }`, one
   `{ name, type, label, required, editable, showInTable, sortable, filterable, enumValues?, relationService?, kind?, showInForm? }`
   per field: `type` is
@@ -2222,8 +2242,9 @@ export function AdminTasks() {
   `sortable` and `filterable` are the declared fields (`filterable` is
   optional in the `AdminFieldConfig` type, default `false`, so field
   configurations written for 4.x still type); `id` and the
-  timestamps come first and are not editable; `acl`, `serviceAccess` and
-  `service_access` are hidden.
+  timestamps come first and are not editable; a relation of the model (a
+  field a projection selects with a nested `select`) is `editable: false`;
+  `acl`, `serviceAccess` and `service_access` are hidden.
 - Grants: on a users service, `admin.handlers(user, { grants: true })`
   shows and writes the entity's `serviceAccess` (a `json` field the entity
   schema checks), so the admin screen edits grants through `adminUpdate`.

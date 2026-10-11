@@ -32,6 +32,21 @@ All notable changes to this project will be documented in this file.
   store.
 - The README's MCP callers are `kind: "agent"`, and MIGRATION's
   `trust proxy` defaults to 0 (`TRUST_PROXY`).
+- **The read/write kit's `create` checks what it writes.** A create whose
+  input carries a column the policy reads (`ownerId`, `acl`) is `FORBIDDEN`
+  unless the caller is a service-wide Admin: set it in `prepare`. A create
+  into a parent (or an anchored scope) where the caller lacks the method's
+  row level is `FORBIDDEN` under any form, `{ service: L }` grants below
+  Admin included, since anchors are asked without grants, as `update`'s
+  moves already were; an anonymous create that names an anchor is
+  `FORBIDDEN`. It costs one more engine call per anchor column it writes.
+- **A kit write holding a relation key or a nested write is `VALIDATION`**,
+  for service-wide Admins too, and for a Json value whose own key is a
+  relation operation holding rows (keep such data a level deeper). A
+  `prepare` that returns one is `INTERNAL`. The admin kit shows relation
+  fields as `editable: false`, refuses writes to them, and refuses an
+  `editable` list or `fieldOverrides` entry naming one when the service is
+  defined.
 
 ### Security
 
@@ -66,6 +81,22 @@ All notable changes to this project will be documented in this file.
   written for bearer tokens took a cross-site page's cookie for one, past
   the Origin rule only `socketAuth` applies; the cookie is now `auth.token`
   only for `socketAuth`'s `authenticate`.
+- **The read/write kit's `create` checks the parents it writes into
+  (CRUD-1, ACCESS-3).** It checked no anchor, yet it was exempt from the
+  id-reach refusal as checking its row: under `"authenticated"`,
+  `"public"`, a service grant or `custom`, any caller wrote rows into
+  another tenant's project, and a scope form left a second anchored column
+  (`assigneeId`) unchecked. `create` now needs the method's row level on
+  each anchor row its new row names, after `prepare`, and takes a column the
+  policy reads only from `prepare`.
+- **Kit writes take column values only (CRUD-5, DATA-2, ADMIN-1).** A
+  relation key or a Prisma nested write reached Prisma through the kits'
+  writes: the admin kit validated `data` but wrote the raw object, and the
+  read/write kit wrote whatever a schema kept (`z.looseObject`, and ArkType
+  by default). Nested writes are not tracked and passed the column guard by
+  name, so `{ project: { update: { ownerId } } }` made a member the
+  project's owner and `{ assignee: { update: { serviceAccess } } }` rewrote
+  the caller's own grants. Every kit write now refuses them.
 - **MIGRATION no longer trusts a proxy unconditionally (CLIENT-6).** Its
   `app.set("trust proxy", 1)` let a client without a proxy in front pick its
   own `X-Forwarded-For`, and pass every per-IP limiter; it reads

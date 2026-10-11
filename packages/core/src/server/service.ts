@@ -249,8 +249,8 @@ const rowChecked = new WeakSet<object>();
  * names without checking the caller's level on that row itself, whatever its
  * access form says: the read/write kit's `update`, `delete` and `reorder`
  * (they need the method's row level on the row) and `create` (its `id`, when
- * it has one, names a new row). `defineService`'s rowless check leaves such
- * a handler alone.
+ * it has one, names a new row; it checks the anchors it writes instead).
+ * `defineService`'s rowless check leaves such a handler alone.
  */
 export function checksRowsItself(handler: object): void {
   rowChecked.add(handler);
