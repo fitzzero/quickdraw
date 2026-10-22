@@ -1,8 +1,10 @@
 // Room hosts across nodes behind a real Valkey (host mode, RFC 0003 section
 // 12.5): every node keeps the host of every room, so a socket that joins a
 // room on another node than its host's hears `qd:host` at once, and hears
-// the room left without one when the host disconnects; a node that starts
-// after a host was set asks the others for the hosts they hold.
+// the room left without one when the host disconnects; two sockets on two
+// nodes that set themselves the host at once leave every node with the same
+// one; a node that starts after a host was set asks the others for the
+// hosts they hold.
 // `src/server/realtime/hosts.test.ts` runs here too, with the clients on
 // one node.
 
@@ -75,6 +77,32 @@ describe("room hosts across nodes", () => {
       ]);
     });
     expect(b.app.server.rooms.hostOf(WORLD)).toBe(null);
+  });
+
+  it("settle on one host on every node when two nodes set one at once, and clear it when it leaves", async () => {
+    const prefix = uniquePrefix("hosts");
+    const a = await node(prefix);
+    const b = await node(prefix);
+    const onA = await player(a, alice);
+    const onB = await player(b, bob);
+    expect(
+      await Promise.all([onA.calls.gameService.host(world), onB.calls.gameService.host(world)]),
+    ).toEqual([true, true]);
+    const hostOn = (on: ClusterNode) => on.app.server.rooms.hostOf(WORLD);
+    await vi.waitFor(() => {
+      expect(hostOn(a)).not.toBe(null);
+      expect(hostOn(b)).toBe(hostOn(a));
+      expect([onA.hosts.at(-1), onB.hosts.at(-1)]).toEqual([
+        [WORLD, hostOn(a)],
+        [WORLD, hostOn(a)],
+      ]);
+    });
+    const [host, other] = hostOn(a) === onA.id ? [onA, onB] : [onB, onA];
+    host.connection.socket.disconnect();
+    await vi.waitFor(() => {
+      expect([hostOn(a), hostOn(b)]).toEqual([null, null]);
+      expect(other.hosts.at(-1)).toEqual([WORLD, null]);
+    });
   });
 
   it("reach the sockets of a node that started after the host was set", async () => {

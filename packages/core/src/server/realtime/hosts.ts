@@ -14,12 +14,18 @@
 //
 // Behind a cluster adapter each node keeps the host of every room, so a
 // socket that joins on any node hears it at once: a change goes to the
-// other nodes as `quickdraw:room-host` (`{ room, host, was }`, tagged with
-// the deployment; a clear applies only to the host it names), and a node
-// that starts asks the others once for the hosts their own sockets hold
-// (`quickdraw:room-hosts`). A node that dies without closing leaves its
-// hosts' records on the others until the room's host is set or cleared
-// again.
+// other nodes as `quickdraw:room-host` (`{ room, host, version, was? }`,
+// tagged with the deployment), and a node that starts asks the others once
+// for the hosts their own sockets hold (`quickdraw:room-hosts`). Each
+// record has a version: a node's next host of a room takes one more than
+// every record of it the node heard, and of two records the higher version
+// wins, then the greater socket id, so two `setHost` at once on two nodes
+// settle on one host on every node. A clear applies only to the record it
+// names, and the node remembers it a while (the latest `MAX_CLEARED`), so a
+// record of that host as old reaches no node again, an answer to a
+// starting node's question included. A node that dies without closing
+// leaves its hosts' records on the others until the room's host is set or
+// cleared again.
 
 import { SERVER_EVENTS } from "../../contract/names";
 import { QuickdrawError } from "../../protocol/errors";
@@ -40,14 +46,40 @@ export const ROOM_HOSTS_EVENT = "quickdraw:room-hosts";
 
 type Run = Parameters<RoomHosts["onLeave"]>[1];
 
+/** A room's host, with the version that orders it against another node's record. */
+interface HostRecord {
+  readonly host: string;
+  readonly version: number;
+}
+
+/** The most rooms whose last cleared host a node remembers. */
+const MAX_CLEARED = 10_000;
+
 interface State {
   readonly hub: Hub;
   /** True once the server serves peer links, which host mode runs over. */
   readonly served: () => boolean;
   /** The host of every room that has one, by room: this node's record of every node's. */
-  readonly hosts: Map<string, string>;
+  readonly hosts: Map<string, HostRecord>;
+  /** The host each room had when it was last cleared, oldest first: no record of it as old applies again. */
+  readonly cleared: Map<string, HostRecord>;
   hooks: readonly HostLeaveHook[];
   run: Run | undefined;
+}
+
+/** True when `record` wins over `other`: a higher version, or the same and a greater host. */
+function wins(record: HostRecord, other: HostRecord | undefined): boolean {
+  return (
+    other === undefined ||
+    record.version > other.version ||
+    (record.version === other.version && record.host > other.host)
+  );
+}
+
+/** True when `record` names a host the room was cleared of at its version or after. */
+function stale(state: State, room: string, record: HostRecord): boolean {
+  const cleared = state.cleared.get(room);
+  return cleared?.host === record.host && cleared.version >= record.version;
 }
 
 /** Tells the room's sockets on this node who its host is. */
@@ -55,17 +87,58 @@ function tell(state: State, room: string, host: string | null): void {
   state.hub.io?.local.to(room).emit(SERVER_EVENTS.host, [room, host]);
 }
 
-/** Records the room's host (`null`: none), tells its sockets here, and the other nodes. */
-function change(state: State, room: string, host: string | null, was: string | undefined): void {
-  if (host === null) {
-    state.hosts.delete(room);
-  } else {
-    state.hosts.set(room, host);
+/** Takes in a record from here or another node, when it wins over the room's: true when it did. */
+function apply(state: State, room: string, record: HostRecord): boolean {
+  if (stale(state, room, record) || !wins(record, state.hosts.get(room))) {
+    return false;
   }
-  tell(state, room, host);
+  state.hosts.set(room, record);
+  tell(state, room, record.host);
+  return true;
+}
+
+/** Ends the room's record of `cleared`, and remembers it. */
+function forget(state: State, room: string, cleared: HostRecord): void {
+  const current = state.hosts.get(room);
+  if (current?.host === cleared.host && current.version <= cleared.version) {
+    state.hosts.delete(room);
+    tell(state, room, null);
+  }
+  const known = state.cleared.get(room);
+  if (known === undefined || wins(cleared, known)) {
+    state.cleared.delete(room);
+    state.cleared.set(room, cleared);
+    const oldest = state.cleared.size > MAX_CLEARED ? state.cleared.keys().next().value : undefined;
+    if (oldest !== undefined) {
+      state.cleared.delete(oldest);
+    }
+  }
+}
+
+/** Tells the other nodes of a change made here. */
+function publish(state: State, room: string, host: string | null, record: HostRecord): void {
   const { io } = state.hub;
   if (io !== undefined && !state.hub.probe.local()) {
-    emitToNodes(io, ROOM_HOST_EVENT, { room, host, ...(was === undefined ? {} : { was }) });
+    const was = host === null ? { was: record.host } : {};
+    emitToNodes(io, ROOM_HOST_EVENT, { room, host, version: record.version, ...was });
+  }
+}
+
+/** Makes `host` the room's host from here, after every record of the room this node heard. */
+function change(state: State, room: string, host: string): void {
+  const version =
+    Math.max(state.hosts.get(room)?.version ?? 0, state.cleared.get(room)?.version ?? 0) + 1;
+  const record = { host, version };
+  apply(state, room, record);
+  publish(state, room, host, record);
+}
+
+/** Clears the room's host from here, and tells the other nodes. */
+function clear(state: State, room: string): void {
+  const current = state.hosts.get(room);
+  if (current !== undefined) {
+    forget(state, room, current);
+    publish(state, room, null, current);
   }
 }
 
@@ -87,8 +160,8 @@ function setHost(state: State, socket: QuickdrawServerSocket, room: string): boo
   if (socket.data.principal === null) {
     throw new QuickdrawError("UNAUTHENTICATED", "Sign in to host a room");
   }
-  if (state.hosts.get(room) !== socket.id) {
-    change(state, room, socket.id, state.hosts.get(room));
+  if (state.hosts.get(room)?.host !== socket.id) {
+    change(state, room, socket.id);
   }
   return true;
 }
@@ -100,7 +173,7 @@ function hostLeft(
   room: string,
   reason: RoomLeaveReason,
 ): void {
-  change(state, room, null, socket.id);
+  clear(state, room);
   const { hooks, run } = state;
   if (run === undefined) {
     return;
@@ -128,22 +201,33 @@ function hostLeft(
   }
 }
 
+/** A record's version on the wire: a positive whole number. */
+const isVersion = (version: unknown): version is number =>
+  Number.isSafeInteger(version) && (version as number) > 0;
+
 /** A `quickdraw:room-host` payload, read: `undefined` when it is not one. */
 function readChange(
   payload: unknown,
-): { readonly room: string; readonly host: string | null; readonly was: unknown } | undefined {
-  const { room, host, was } = (payload ?? {}) as Readonly<Record<string, unknown>>;
-  return isRoomName(room) && (host === null || isSocketId(host)) ? { room, host, was } : undefined;
+):
+  | { readonly room: string; readonly host: string | null; readonly record: HostRecord }
+  | undefined {
+  const { room, host, version, was } = (payload ?? {}) as Readonly<Record<string, unknown>>;
+  if (!isRoomName(room) || !isVersion(version)) {
+    return undefined;
+  }
+  if (host === null) {
+    return isSocketId(was) ? { room, host, record: { host: was, version } } : undefined;
+  }
+  return isSocketId(host) ? { room, host, record: { host, version } } : undefined;
 }
 
-/** Takes the hosts the other nodes hold, for the rooms this node knows none of. */
+/** Takes the hosts the other nodes hold, where they win over this node's records. */
 function merge(state: State, answers: unknown): void {
   for (const answer of Array.isArray(answers) ? answers : []) {
     for (const entry of Array.isArray(answer) ? (answer as unknown[]) : []) {
-      const [room, host] = Array.isArray(entry) ? (entry as unknown[]) : [];
-      if (isRoomName(room) && isSocketId(host) && !state.hosts.has(room)) {
-        state.hosts.set(room, host);
-        tell(state, room, host);
+      const [room, host, version] = Array.isArray(entry) ? (entry as unknown[]) : [];
+      if (isRoomName(room) && isSocketId(host) && isVersion(version)) {
+        apply(state, room, { host, version });
       }
     }
   }
@@ -159,17 +243,12 @@ function listen(state: State): void {
     if (read === undefined) {
       return;
     }
-    const { room, host, was } = read;
-    if (host === null) {
-      // A clear ends the host it names, never one set since.
-      if (state.hosts.get(room) !== was) {
-        return;
-      }
-      state.hosts.delete(room);
+    if (read.host === null) {
+      // A clear ends the record it names, never one set since.
+      forget(state, read.room, read.record);
     } else {
-      state.hosts.set(room, host);
+      apply(state, read.room, read.record);
     }
-    tell(state, room, host);
   });
   onNodeEvent(
     io,
@@ -177,7 +256,11 @@ function listen(state: State): void {
     ROOM_HOSTS_EVENT,
     (_payload, answer) => {
       // The hosts this node's own sockets are: the records it is sure of.
-      answer([...state.hosts].filter(([, host]) => io.sockets.sockets.has(host)));
+      answer(
+        [...state.hosts]
+          .filter(([, record]) => io.sockets.sockets.has(record.host))
+          .map(([room, record]) => [room, record.host, record.version]),
+      );
     },
     [],
   );
@@ -194,28 +277,32 @@ function listen(state: State): void {
 
 /** Creates the room hosts of one dispatcher; `served` says whether its server serves peer links. */
 export function createRoomHosts(hub: Hub, served: () => boolean): RoomHosts {
-  const state: State = { hub, served, hosts: new Map(), hooks: [], run: undefined };
+  const state: State = {
+    hub,
+    served,
+    hosts: new Map(),
+    cleared: new Map(),
+    hooks: [],
+    run: undefined,
+  };
   return Object.freeze({
     set: (socket: QuickdrawServerSocket, room: string) => setHost(state, socket, room),
     of(room: string): string | null {
       checkRoom(room);
-      return state.hosts.get(room) ?? null;
+      return state.hosts.get(room)?.host ?? null;
     },
     clear(room: string): void {
       checkRoom(room);
-      const was = state.hosts.get(room);
-      if (was !== undefined) {
-        change(state, room, null, was);
-      }
+      clear(state, room);
     },
     joined(socket: QuickdrawServerSocket, room: string): void {
-      const host = state.hosts.get(room);
-      if (host !== undefined) {
-        socket.emit(SERVER_EVENTS.host, [room, host]);
+      const record = state.hosts.get(room);
+      if (record !== undefined) {
+        socket.emit(SERVER_EVENTS.host, [room, record.host]);
       }
     },
     left(socket: QuickdrawServerSocket, room: string, reason: RoomLeaveReason): void {
-      if (state.hosts.get(room) === socket.id) {
+      if (state.hosts.get(room)?.host === socket.id) {
         hostLeft(state, socket, room, reason);
       }
     },
