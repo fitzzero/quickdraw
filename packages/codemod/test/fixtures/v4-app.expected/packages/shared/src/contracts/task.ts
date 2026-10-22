@@ -34,8 +34,8 @@ export const taskContract = defineContract("taskService", {
     listArchivedTasks: query({ input: projectIdSchema, output: listOf("entity") }),
     // quickdraw-migrate: review [contract] mutation, chosen from its name
     createTask: mutation({ input: createTaskSchema, output: "entity" }),
-    // quickdraw-migrate: review [contract] mutation, chosen from its name; input: todoSchema, as 4.x had no schema
-    assignTask: mutation({ input: todoSchema<{ id: string; assigneeId: string | null }>({ keys: ["id", "assigneeId"] }), output: "entity" }),
+    // quickdraw-migrate: review [contract] mutation, chosen from its name
+    assignTask: mutation({ input: z.object({ id: z.string().min(1), assigneeId: z.string().nullable() }), output: "entity" }),
     // quickdraw-migrate: review [contract] mutation, chosen from its name; input: todoSchema, as 4.x had no schema
     renameTask: mutation({ input: todoSchema<{ id: string; title: string }>({ keys: ["id", "title"] }), output: "entity" }),
     // quickdraw-migrate: review [contract] query, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type

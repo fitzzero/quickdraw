@@ -46,6 +46,14 @@ already been declared`), lint found 15 more `no-redeclare` and
   after its initializer, in its constructor or anywhere else, is now module
   state like any other field: a `let` with its type, under the same `[this]`
   marker. A `readonly` one, or one nothing writes, stays a `const`.
+- **The contracts the codemod writes import only what they use.** A contract
+  imported core's `nullable` for a Zod `.nullable()` in a moved schema, and
+  `z` when only a schema helper it had moved to `contracts/helpers.ts` used
+  Zod, so every migrated app's lint and its `noUnusedLocals` typecheck
+  reported unused imports in `packages/shared/src/contracts/*.ts` (farseer's
+  migration filed it). A builder is now imported only for a call of it, and
+  each contract and the helpers file the codemod creates get the import
+  cleanup every file it rewrites gets.
 
 ## [5.1.1] - 2026-10-11
 

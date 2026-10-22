@@ -188,6 +188,40 @@ export function removeUnusedImports(file: SourceFile, only?: ReadonlySet<string>
 }
 
 /**
+ * An import whose names are all `type`-marked (`import { type A }`) becomes
+ * `import type { A }`: only the inline markers would be erased, leaving an
+ * import kept for its side effects (lint: no-import-type-side-effects).
+ */
+function typeOnlyImports(file: SourceFile): void {
+  for (const declaration of file.getImportDeclarations()) {
+    const named = declaration.getNamedImports();
+    if (
+      declaration.isTypeOnly() ||
+      declaration.getDefaultImport() !== undefined ||
+      declaration.getNamespaceImport() !== undefined ||
+      named.length === 0 ||
+      !named.every((specifier) => specifier.isTypeOnly())
+    ) {
+      continue;
+    }
+    for (const specifier of named) {
+      specifier.setIsTypeOnly(false);
+    }
+    declaration.setIsTypeOnly(true);
+  }
+}
+
+/**
+ * The import cleanup every file the codemod writes or rewrites gets: the
+ * imports it no longer uses go, and one left with only `type` names becomes
+ * `import type`. A value import stays one, whatever its names are used as.
+ */
+export function tidyImports(file: SourceFile): void {
+  removeUnusedImports(file);
+  typeOnlyImports(file);
+}
+
+/**
  * The project's file a relative module specifier of `file` names (`./x.js`,
  * `./x`, `./dir`), read from its path: an empty file is no module, so the
  * type checker resolves no import of it.

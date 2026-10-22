@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@project/db";
+import { z } from "zod";
 import type { TaskService } from "../index.js";
 import { assignTask } from "../rows.js";
 
@@ -19,10 +20,16 @@ export async function getTaskTitle(db: PrismaClient, id: string): Promise<string
 }
 
 export function registerDelegates(service: TaskService): void {
-  service.defineMethod("assignTask", "Moderate", async (payload) => {
-    const task = await assignTask(service.prisma, payload.id, payload.assigneeId);
-    return service.toTaskDto(task);
-  });
+  // An inline schema with Zod's own .nullable(), which is not the contract's nullable()
+  service.defineMethod(
+    "assignTask",
+    "Moderate",
+    async (payload) => {
+      const task = await assignTask(service.prisma, payload.id, payload.assigneeId);
+      return service.toTaskDto(task);
+    },
+    { schema: z.object({ id: z.string().min(1), assigneeId: z.string().nullable() }) },
+  );
 
   service.defineMethod("renameTask", "Moderate", async (payload) => {
     const task = await renameTask(service.prisma, payload.id, payload.title);
