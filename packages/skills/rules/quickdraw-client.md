@@ -164,9 +164,12 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   `adminMeta` wider). A screen served from metadata for every service takes
   `adminOf(qd, key)`, one shape typed by field name: never cast
   `qd[key].admin`. The kit's rows are not live: after the screen's own
-  write, `onSuccess: () => qd.invalidate(qd.task.admin.adminList)`. A
-  generic form shows the fields whose `showInForm` is not `false`; a user's
-  grants field says `kind: "grants"`: find it by that, never by its name.
+  write, read the page again (`qd.invalidate(qd.task.admin.adminList)`)
+  and put the row the write returned in the cache
+  (`qd.task.admin.adminGet.setData({ id: row.id }, row)`; `adminOf`'s
+  query members have `setData` too), never in React state. A generic form
+  shows the fields whose `showInForm` is not `false`; a user's grants field
+  says `kind: "grants"`: find it by that, never by its name.
 
 ## Server components and other runtimes
 
