@@ -2,8 +2,10 @@
 // generated client: what each write records, what it returns to the caller,
 // and how many statements it costs.
 
+import { PrismaPGlite } from "pglite-prisma-adapter";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { storageOf } from "../server/storage";
+import { PrismaClient } from "../../test/prisma/setup";
+import { storageOf, type StorageAdapter } from "../server/storage";
 import { createRecordingSink } from "../testing/recordingSink";
 import { createHarness, pauseNext, type Harness } from "./__tests__/harness";
 import { trackPrisma } from "./trackPrisma";
@@ -25,6 +27,35 @@ beforeEach(async () => {
   h.logger.warnings.length = 0;
   ({ projectId, userId } = await h.seed());
 });
+
+/** A client on the test database that logs Prisma's errors as events, and the messages it logged. */
+function loggingClient() {
+  const client = new PrismaClient({
+    adapter: new PrismaPGlite(h.database.pglite),
+    log: [{ emit: "event", level: "error" }],
+  });
+  const errors: string[] = [];
+  client.$on("error", (event) => {
+    errors.push(event.message);
+  });
+  return { client, errors };
+}
+
+/** What a collection over Task.ordinal and one over Task.parentTaskId ask, and the tracked-models check. */
+async function schemaQuestions(storage: StorageAdapter) {
+  const { nullable, trackable } = storage;
+  if (nullable === undefined || trackable === undefined) {
+    throw new Error("the adapter cannot say");
+  }
+  return await storage.countStatements(async () => [
+    await nullable("task", "ordinal"),
+    await nullable("Task", "parentTaskId"),
+    await nullable("task", "title"),
+    await nullable("task", "notes"),
+    await trackable("verificationToken"),
+    await trackable("task"),
+  ]);
+}
 
 function addTask(title: string, data: { status?: string; parentTaskId?: string } = {}) {
   return h.prisma.task.create({ data: { projectId, title, ...data } });
@@ -733,6 +764,40 @@ describe("models and registrations", () => {
       await trackable("task"),
     ]);
     expect(again).toEqual({ value: [false, true], statements: 0 });
+  });
+
+  it("answers which columns may hold null and which models have an id from the client's schema: no statement, no error logged", async () => {
+    const { client, errors } = loggingClient();
+    const storage = storageOf(trackPrisma(client.$extends({}), { development: false }));
+    if (storage === undefined) {
+      throw new Error("no storage adapter");
+    }
+    expect(await schemaQuestions(storage)).toEqual({
+      value: [false, true, false, true, false, true],
+      statements: 0,
+    });
+    expect(errors).toEqual([]);
+  });
+
+  it("asks the database as before when the client carries no schema text, with the same answers", async () => {
+    const { client, errors } = loggingClient();
+    const config = Reflect.get(client, "_engineConfig") as { inlineSchema?: string };
+    const text = config.inlineSchema;
+    config.inlineSchema = undefined;
+    let storage: StorageAdapter | undefined;
+    try {
+      storage = storageOf(trackPrisma(client, { development: false }));
+    } finally {
+      config.inlineSchema = text;
+    }
+    if (storage === undefined) {
+      throw new Error("no storage adapter");
+    }
+    const { value, statements } = await schemaQuestions(storage);
+    expect(value).toEqual([false, true, false, true, false, true]);
+    expect(statements).toBeGreaterThan(0);
+    // Prisma refuses the probes of a required column and of a model without an id, and logs them.
+    expect(errors).toContainEqual(expect.stringContaining("must not be null"));
   });
 
   it("refuses to track a client twice, or anything that is not a client", () => {

@@ -16,6 +16,11 @@
 //
 // Make it the last extension applied: an extension added after it still
 // runs outside transactions, but not on a transaction's client.
+//
+// The storage adapter's `nullable` and `trackable` read the one Prisma
+// internal used here, the schema text the client keeps
+// (`_engineConfig.inlineSchema`, `schemaText.ts`). Without it they ask the
+// database, as before: a statement Prisma refuses, which it logs as an error.
 
 import { consoleLogger, type Logger } from "../contract/logger";
 import { quietly } from "../server/devWarnings";
@@ -41,6 +46,7 @@ import {
   type Operation,
   type Runtime,
 } from "./operations";
+import { prismaSchemaOf, type PrismaSchemaFacts } from "./schemaText";
 
 /** Options of {@link trackPrisma}. */
 export interface TrackPrismaOptions {
@@ -162,16 +168,23 @@ async function transaction(
 }
 
 /**
- * `StorageAdapter.nullable`: Prisma validates a filter against the schema
- * before sending it, and refuses `{ column: null }` on a required column. The
- * answer is kept for the life of the client: one statement per optional
- * column, none for a required one.
+ * `StorageAdapter.nullable`: what the client's schema says (`Type?`), with
+ * no statement (`schemaText.ts`). A column the schema does not answer for is
+ * probed: Prisma validates a filter against the schema before sending it,
+ * and refuses `{ column: null }` on a required column (a client that logs
+ * errors prints that refusal). The probe's answer is kept for the life of the
+ * client: one statement per optional column, none for a required one.
  */
 function createNullability(
   delegate: (model: string) => Delegate,
+  schema: PrismaSchemaFacts | undefined,
 ): (model: string, column: string) => Promise<boolean> {
   const known = new Map<string, boolean>();
   return async (model, column) => {
+    const declared = schema?.nullable(model, column);
+    if (declared !== undefined) {
+      return declared;
+    }
     const key = `${modelKey(model)}\u0000${column}`;
     const kept = known.get(key);
     if (kept !== undefined) {
@@ -193,13 +206,16 @@ function createNullability(
 
 /**
  * `StorageAdapter.trackable`: whether the tracker can key `model`'s writes,
- * that is whether its rows have an `id`. One read of one row's id per model,
- * kept for the life of the client: Prisma refuses the select of a model
- * without an `id` column (a composite `@@id`). Any other failure (the
- * database down) is thrown, and asked again next time.
+ * that is whether its rows have an `id`, as the client's schema says, with no
+ * statement (`schemaText.ts`). A model the schema does not answer for is
+ * probed: one read of one row's id per model, kept for the life of the
+ * client, which Prisma refuses for a model without an `id` column (a
+ * composite `@@id`). Any other failure (the database down) is thrown, and
+ * asked again next time.
  */
 function createTrackability(
   delegate: (model: string) => Delegate,
+  schema: PrismaSchemaFacts | undefined,
 ): (model: string) => Promise<boolean> {
   const known = new Map<string, Promise<boolean>>();
   const probe = async (key: string): Promise<boolean> => {
@@ -215,6 +231,10 @@ function createTrackability(
     }
   };
   return async (model) => {
+    const declared = schema?.trackable(model);
+    if (declared !== undefined) {
+      return declared;
+    }
     const key = modelKey(model);
     let answer = known.get(key);
     if (answer === undefined) {
@@ -240,6 +260,7 @@ function createStorage(
     ReturnType<typeof createLinkRegistry>,
   ],
   delegate: (model: string) => Delegate,
+  schema: PrismaSchemaFacts | undefined,
 ): StorageAdapter {
   return Object.freeze({
     findMany: (model: string, args: FindManyArgs = {}) =>
@@ -253,8 +274,8 @@ function createStorage(
     registerLinks: links.register,
     linksOf: links.of,
     inTransaction: () => tracker.transactionClient() !== undefined || tracker.inBatch(),
-    nullable: createNullability(delegate),
-    trackable: createTrackability(delegate),
+    nullable: createNullability(delegate, schema),
+    trackable: createTrackability(delegate, schema),
     unitOfWork: tracker.unitOfWork,
   });
 }
@@ -316,7 +337,7 @@ export function trackPrisma<C extends PrismaClientLike>(
     client: {
       $transaction: (arg: unknown, txOptions?: unknown) =>
         transaction(tracker, hooked, arg, txOptions),
-      [STORAGE_KEY]: createStorage(tracker, [interest, links], delegate),
+      [STORAGE_KEY]: createStorage(tracker, [interest, links], delegate, prismaSchemaOf(client)),
     },
   });
   return tracked as unknown as C;

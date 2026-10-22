@@ -3444,10 +3444,11 @@ What it does with them:
   (ids and timestamps vary in length) without counting as a change.
 - Await, inside `run`, everything the step should cost: the replies and the
   frames it is about. Measure one step at a time.
-- A few reads happen once per process (the storage adapter asks once
-  whether an order column may hold null). When a step could be the first to
-  pay for one, run it once before measuring it, so its budget does not
-  depend on the order tests run in.
+- Whether an order column may hold null comes from the client's own schema,
+  with no statement; only a client that carries no schema text makes the
+  storage adapter ask the database, once per column and process. When a step
+  could be the first to pay for such a read, run it once before measuring it,
+  so its budget does not depend on the order tests run in.
 
 ### Development warnings
 
