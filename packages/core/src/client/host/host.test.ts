@@ -88,11 +88,18 @@ async function peerOf(runtime: Runtime, socketId: string, userId: string) {
   return { link: near, send: peerSide.send, heard, attached };
 }
 
-/** Lets every loopback message sent before now land. */
+/**
+ * Lets every loopback message sent before now land, and the answers they
+ * cause. A loopback message (`ms` 0) is a timer of the least delay, and
+ * Node runs those in the order they were set, so each turn here lets one
+ * more hop land, however late a busy machine runs the turn.
+ */
 async function landed(): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, 10);
-  });
+  for (let turn = 0; turn < 4; turn += 1) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
 }
 
 describe("a host's runtime", () => {
