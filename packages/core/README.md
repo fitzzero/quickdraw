@@ -2504,6 +2504,9 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   watch nothing, so after its own write a screen reads the page again and
   puts the row the write returned in `adminGet`'s cache with `setData` (the
   `onSuccess` above), and sees other admins' writes when it next reads.
+  Their `useQuery`, and `adminSubscribers`', defaults to `staleTime: 0`, so a
+  screen reads them again whenever it mounts (pass `staleTime` to keep a
+  result longer; `adminMeta` keeps the provider's five minutes).
 - A screen that serves every service from its metadata (the route names the
   service) takes `adminOf(qd, key)`: the same members, keyed by what the kit
   made them for and typed by field name (`AdminScreen`: rows are
