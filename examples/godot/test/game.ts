@@ -4,15 +4,23 @@
 // `moved` event to the world, a seeded `ticks` stream, and a slow query for
 // the call limits. The server runs on `createTestApp` with a short heartbeat
 // and one query at a time, so a second concurrent query is RATE_LIMITED, and
-// serves peer links between the world's players.
+// serves peer links between the world's players. The world's host (host
+// mode, `host.ts`) serves a `steer` channel and a `world` stream to its
+// players over their links; the server handles neither.
 
 import { defineContract, mutation, query, QuickdrawError } from "@fitzzero/quickdraw-core";
 import { initQuickdraw } from "@fitzzero/quickdraw-core/server";
 import { createTestApp } from "@fitzzero/quickdraw-core/testing";
 import { z } from "zod";
 
+/** The app room of world `worldId`. */
+const worldRoom = (worldId: string): string => `world:${worldId}`;
+
+/** The world's id: the scope of its host-served stream. */
+export const WORLD_ID = "main";
+
 /** The world's app room. A game has one; `move` requires the sender's socket in it. */
-export const WORLD = "world:main";
+export const WORLD = worldRoom(WORLD_ID);
 
 /** The tokens the server accepts: each is its user's id. Any other token is refused. */
 export const TOKENS: readonly string[] = ["ada", "bo"];
@@ -30,12 +38,26 @@ export const game = defineContract("gameService", {
       input: z.object({ name: z.string() }),
       output: z.object({ players: z.array(z.string()) }),
     }),
+    /** Joins the world and makes the calling socket its host. */
+    host: mutation({ input: z.object({}), output: z.boolean() }),
   },
   streams: {
     ticks: { item: z.object({ n: z.number() }), seed: 2, access: "authenticated" },
+    world: {
+      item: z.object({ tick: z.number(), by: z.string() }),
+      scope: "worldId",
+      seed: 1,
+      access: { room: worldRoom },
+      serve: "host",
+    },
   },
   channels: {
     move: { payload: z.object({ dx: z.number(), dy: z.number() }), requires: { room: WORLD } },
+    steer: {
+      payload: z.object({ worldId: z.string(), dx: z.number() }),
+      requires: { room: (steer) => worldRoom(steer.worldId) },
+      serve: "host",
+    },
   },
   events: {
     moved: { payload: z.object({ userId: z.string(), dx: z.number(), dy: z.number() }) },
@@ -73,6 +95,13 @@ export function gameService() {
         handler: async ({ ctx }) => {
           ctx.rooms.join(WORLD);
           return { players: await ctx.presence.users(WORLD) };
+        },
+      },
+      host: {
+        access: "authenticated",
+        handler: ({ ctx }) => {
+          ctx.rooms.join(WORLD);
+          return ctx.rooms.setHost(WORLD);
         },
       },
     },

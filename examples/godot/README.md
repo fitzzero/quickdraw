@@ -33,25 +33,26 @@ func _on_event(service: String, event: String, payload: Variant) -> void:
 		print(payload.userId, " moved")
 ```
 
-| Member                                            | What it does                                                                                                                                                                                                         |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `connect_to(url, options)`                        | Connects. `token` is sent as `auth.token`; `auth` adds keys; `path` (default `/socket.io`); `headers` for the handshake (a `Cookie` on desktop); `reconnect` (default on).                                           |
-| `call_method(service, method, input, version)`    | Awaits the acknowledgement: `{ok: true, d}`, `{ok: true, nm: true, v}` or `{ok: false, e: {code, message, data?}}`.                                                                                                  |
-| `start_call(...)`, `reply(id)`, `cancel_call(id)` | A call in two steps, so it can be cancelled (`qd:cancel`; the answer is `CANCELLED`). An answer `reply` has not taken yet is kept for 60 s (at most 256 of them).                                                    |
-| `send_channel(service, channel, payload)`         | Fire and forget: never acknowledged, never awaited. Returns false when dropped here (not connected, or the connection backed up).                                                                                    |
-| `subscribe_stream(service, stream, scope)`        | Awaits the seed; items then arrive as `stream_item`. Subscribed again after each reconnect. A refusal on a live connection holds no feed.                                                                            |
-| `unsubscribe_stream(service, stream, scope)`      | Leaves the feed.                                                                                                                                                                                                     |
-| `is_subscribed(service, stream, scope)`           | True while the client holds the feed (it subscribes again after each reconnect), false after a refused subscribe: ask it before `subscribe_stream` to send no second `qd:stream:sub`.                                |
-| `on_event(service, event, callback)`              | Calls `callback(payload)` for each `qd:event` of that service and name.                                                                                                                                              |
-| `off_event(service, event, callback)`             | Stops calling `callback` for that event; false when it was not registered.                                                                                                                                           |
-| `presence(room)`                                  | The users in an app room the socket is in.                                                                                                                                                                           |
-| `request(event, payload)`                         | Any other acknowledged event of the protocol (`qd:sub`, `qd:watch`, ...), paced by the hello's subscription lane.                                                                                                    |
-| `peer_link(room, to, offerer, options)`           | Opens a link to socket `to` in app room `room` (below). One side offers; when both do, the one whose socket id sorts after the other's answers. `relay`: `"auto"` (default), `"always"` or `"never"`; `ice_servers`. |
-| `reject_peer(room, from)`                         | Refuses a link `peer_requested` asked for: the peer's link closes with `"bye"`.                                                                                                                                      |
-| `socket_id`                                       | This socket's id, from the server's CONNECT: what a peer links to.                                                                                                                                                   |
-| `close()`                                         | Disconnects for good.                                                                                                                                                                                                |
-| `rng`                                             | The `RandomNumberGenerator` behind the client's random waits (reconnect backoff, the `qd:rotate` moment); seed it to repeat a run.                                                                                   |
-| `server_id`                                       | The hello's `serverId`: new each time a server starts. Another one after a reconnect means a restarted server (or another node): a game's world and ticks start over.                                                |
+| Member                                             | What it does                                                                                                                                                                                                         |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connect_to(url, options)`                         | Connects. `token` is sent as `auth.token`; `auth` adds keys; `path` (default `/socket.io`); `headers` for the handshake (a `Cookie` on desktop); `reconnect` (default on).                                           |
+| `call_method(service, method, input, version)`     | Awaits the acknowledgement: `{ok: true, d}`, `{ok: true, nm: true, v}` or `{ok: false, e: {code, message, data?}}`.                                                                                                  |
+| `start_call(...)`, `reply(id)`, `cancel_call(id)`  | A call in two steps, so it can be cancelled (`qd:cancel`; the answer is `CANCELLED`). An answer `reply` has not taken yet is kept for 60 s (at most 256 of them).                                                    |
+| `send_channel(service, channel, payload, room)`    | Fire and forget: never acknowledged, never awaited. Returns false when dropped here (not connected, or the connection backed up). With `room`, for a host-served channel: to that room's host (below).               |
+| `subscribe_stream(service, stream, scope, room)`   | Awaits the seed; items then arrive as `stream_item`. Subscribed again after each reconnect. A refusal on a live connection holds no feed. With `room`, for a host-served stream: from that room's host (below).      |
+| `unsubscribe_stream(service, stream, scope, room)` | Leaves the feed.                                                                                                                                                                                                     |
+| `is_subscribed(service, stream, scope, room)`      | True while the client holds the feed (it subscribes again after each reconnect), false after a refused subscribe: ask it before `subscribe_stream` to send no second `qd:stream:sub`.                                |
+| `on_event(service, event, callback)`               | Calls `callback(payload)` for each `qd:event` of that service and name.                                                                                                                                              |
+| `off_event(service, event, callback)`              | Stops calling `callback` for that event; false when it was not registered.                                                                                                                                           |
+| `presence(room)`                                   | The users in an app room the socket is in.                                                                                                                                                                           |
+| `host_of(room)`                                    | The socket id of the room's host (host mode, below), or `""` when it has none or this socket is not in the room.                                                                                                     |
+| `request(event, payload)`                          | Any other acknowledged event of the protocol (`qd:sub`, `qd:watch`, ...), paced by the hello's subscription lane.                                                                                                    |
+| `peer_link(room, to, offerer, options)`            | Opens a link to socket `to` in app room `room` (below). One side offers; when both do, the one whose socket id sorts after the other's answers. `relay`: `"auto"` (default), `"always"` or `"never"`; `ice_servers`. |
+| `reject_peer(room, from)`                          | Refuses a link `peer_requested` asked for: the peer's link closes with `"bye"`.                                                                                                                                      |
+| `socket_id`                                        | This socket's id, from the server's CONNECT: what a peer links to.                                                                                                                                                   |
+| `close()`                                          | Disconnects for good.                                                                                                                                                                                                |
+| `rng`                                              | The `RandomNumberGenerator` behind the client's random waits (reconnect backoff, the `qd:rotate` moment); seed it to repeat a run.                                                                                   |
+| `server_id`                                        | The hello's `serverId`: new each time a server starts. Another one after a reconnect means a restarted server (or another node): a game's world and ticks start over.                                                |
 
 Signals: `connected(hello)`, `disconnected(reason)`, `refused(code, message)`
 (`PROTOCOL_MISMATCH` or `UNAUTHENTICATED`; it does not reconnect),
@@ -60,6 +61,7 @@ moment within the window),
 `event_received(service, event, payload)`,
 `stream_item(service, stream, scope, item)`,
 `stream_seeded(service, stream, scope, seed)`, `presence_changed(room, users)`,
+`host_changed(room, host)` (the room's host, `""` when it has none),
 `revoked(frame)` (also for a held feed the server refuses after a
 reconnect: `reason` `"refused"`, with its `error`),
 `access_changed(service_access)`,
@@ -101,6 +103,42 @@ The server forwards a link's signals and relays its messages only between
 two players of the room, but what the peer sends is the peer's word: a game
 checks it as it would check any input.
 
+### Host mode
+
+A contract can let the host of an app room serve some of its channels and
+streams instead of the server (`serve: "host"`;
+[`docs/protocol-v5.md`](../../docs/protocol-v5.md), "Host mode"): a method
+makes a socket the room's host (`ctx.rooms.setHost`), and the server tells
+the room's sockets with `qd:host`. This client plays a peer: pass the room
+to `send_channel`, `subscribe_stream`, `unsubscribe_stream` and
+`is_subscribed` for a host-served member, and the client links to the
+room's host (as `peer_link` does) and sends there. The host's seeds and
+items arrive as `stream_seeded` and `stream_item`, as a server's do. The
+client holds the feed and subscribes again each time a link to the room's
+host opens: a new host, or a reconnect once the socket joined again.
+
+```gdscript
+func _on_connected(_hello: Dictionary) -> void:
+	await Quickdraw.call_method("gameService", "join", {"name": "ada"})
+	if not Quickdraw.is_subscribed("gameService", "world", "main", "world:main"):
+		await Quickdraw.subscribe_stream("gameService", "world", "main", "world:main")
+
+
+func _physics_process(_delta: float) -> void:
+	# On the link's `fast`: send the input each tick, never just once.
+	Quickdraw.send_channel("gameService", "steer", {"worldId": "main", "dx": 1}, "world:main")
+```
+
+A host-served channel's messages go on the link's `fast`, unordered and
+never retransmitted (the relay drops one the host's socket is not ready
+for), so a game sends its input as a stream of updates, not as one-off
+commands. `host_changed(room, host)` tells the game when the room's host
+changes; with `""` the room has none, and the app's own method decides who
+hosts next. The host serves from a JavaScript client (`defineHost` on
+`@fitzzero/quickdraw-core/client`); this client does not serve as a host.
+The server never sees what a host and its peers send each other: a game
+checks what a host sends as it would check any input.
+
 What it does for you, as `docs/protocol-v5.md` asks of a client:
 
 - answers the server's pings, and treats a silent server as gone;
@@ -129,7 +167,10 @@ world's app room, the `move` channel declares `requires: { room: WORLD }`
 so only a socket in the world may send on it, and its handler sends the
 `moved` event to the world and pushes to the seeded `ticks` stream. The
 server serves peer links (`peers: true`), so two players of the world can
-link. Rooms
+link. Its `steer` channel and `world` stream are host-served
+(`serve: "host"`): `host` makes the calling socket the world's host, and
+[`test/host.ts`](test/host.ts) serves them from Node with `defineHost`.
+Rooms
 are per socket: a page and a game client of one player are two sockets,
 and the one that sends must make the joining call
 ([`docs/clients.md`](../../docs/clients.md), "Rooms for games and lobbies").
@@ -141,16 +182,19 @@ and the one that sends must make the joining call
   client writes, byte for byte ([`test/frames.ts`](test/frames.ts)), to a
   real server over a raw WebSocket and checks every answer, then what the
   session does not reach: a refused protocol, the heartbeat, presence and
-  events between two players, channels never acknowledged, and a peer link
+  events between two players, channels never acknowledged, a peer link
   over the relay between two players, with its refusal from outside the
-  room.
+  room, and host mode: the world's host serving a player over a link,
+  unsubscribing and a refused subscribe included.
 - `bun run check:godot` (after `bun run build` at the root; Godot 4 as
   `godot` on the PATH, or `GODOT=/path/to/Godot_v4.7.2-stable_linux.x86_64`):
   [`test/godot.ts`](test/godot.ts) starts the game server and runs the
   client headless in Godot through [`test/smoke.gd`](test/smoke.gd), whose
-  peer link it answers as the player "bo" offering one over the relay. It
+  peer link it answers as the player "bo" offering one over the relay, and
+  whose host mode it answers with the world's host (`test/host.ts`). It
   passes when the script's checks hold and the client wrote exactly the
-  frames of `test/frames.ts`, its link's clock pings aside. CI's `godot` job runs it with the official
+  frames of `test/frames.ts`, its links' clock pings aside and a steer it
+  sent again counted once. CI's `godot` job runs it with the official
   Godot 4.7.2 build, on every push and on a pull request that touches the
   client, the wire's code or `docs/protocol-v5.md`.
 

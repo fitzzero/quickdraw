@@ -37,6 +37,9 @@ signal event_received(service: String, event: String, payload: Variant)
 signal stream_item(service: String, stream: String, scope: String, item: Variant)
 ## A stream's seed, on subscribing and on each resubscribe after a reconnect: it replaces what you held.
 signal stream_seeded(service: String, stream: String, scope: String, seed: Array)
+## The host of an app room this socket is in changed (host mode): its socket
+## id, or "" when the room has none now (or this socket left it).
+signal host_changed(room: String, host: String)
 ## Who is in an app room the socket is in, after a `qd:presence` frame.
 signal presence_changed(room: String, users: Array)
 ## The server ended a subscription (`qd:revoked`), or refused to subscribe a
@@ -159,6 +162,14 @@ var _links: Dictionary = {}  # "peer/room" -> PeerLink
 # "peer/room" -> {room, from, user_id, signals, at, chars}: signals waiting for a link
 var _pending: Dictionary = {}
 var _pending_chars := 0  # the characters every waiting peer's signals hold
+var _hosts: Dictionary = {}  # room -> its host's socket id (qd:host)
+var _host_links: Dictionary = {}  # room -> the PeerLink host mode made to the room's host
+var _host_feeds: Dictionary = {}  # room -> {"service/stream/scope": [service, stream, scope]}
+var _host_seeds: Dictionary = {}  # "room|service/stream/scope" -> a seed's chunks so far
+var _host_waiting: Dictionary = {}  # "room|service/stream/scope" -> true while awaited
+var _host_answers: Dictionary = {}  # "room|service/stream/scope" -> the answer it awaits
+var _host_retry: Dictionary = {}  # room -> the next wait before linking again, in ms
+var _host_backoff: Dictionary = {}  # room -> [host, until]: no link to host before until (ms)
 var _relay_tokens := 0.0  # the relay's bytes, for all links
 var _relay_at := 0
 
@@ -256,9 +267,18 @@ func cancel_call(id: int) -> void:
 ## Sends on a channel: fire and forget. Never acknowledged, never answered:
 ## the server drops a message over the channel's rate, failing its schema or
 ## its `requires` without a word. Returns false when the message was dropped
-## here (not connected, or the connection is backed up).
-func send_channel(service: String, channel: String, payload: Variant) -> bool:
-	if state != State.READY or _ws.get_current_outbound_buffered_amount() > BACKED_UP_BYTES:
+## here (not connected, or the connection is backed up). With `room`, the
+## channel is host-served (`serve: "host"`): the message goes to that room's
+## host over a link host mode makes, on its `fast`, and is dropped until the
+## link is open. After a link to the host closed, the next waits 1 s,
+## doubling to 15 s while links keep closing unopened.
+func send_channel(service: String, channel: String, payload: Variant, room := "") -> bool:
+	if state != State.READY:
+		return false
+	if room != "":
+		var link := _host_link(room)
+		return link != null and link._send_host("fast", [3, service, channel, payload])
+	if _ws.get_current_outbound_buffered_amount() > BACKED_UP_BYTES:
 		return false
 	_emit("qd:ch", [service, channel, payload])
 	return true
@@ -270,7 +290,14 @@ func send_channel(service: String, channel: String, payload: Variant) -> bool:
 ## refusal on a live connection ({ok: false}: FORBIDDEN, NOT_FOUND, ...)
 ## leaves the feed not held (`is_subscribed` is false); one lost with the
 ## connection is held, and subscribed again after the reconnect.
-func subscribe_stream(service: String, stream: String, scope := "") -> Dictionary:
+##
+## With `room`, the stream is host-served (`serve: "host"`): the feed is
+## subscribed over a link to that room's host, again each time a link to the
+## room's host opens (a new host, a reconnect), and its seeds and items come
+## as `stream_seeded` and `stream_item` all the same.
+func subscribe_stream(service: String, stream: String, scope := "", room := "") -> Dictionary:
+	if room != "":
+		return await _subscribe_host(room, service, stream, scope)
 	var frame := {"s": service, "stream": stream}
 	if scope != "":
 		frame["scope"] = scope
@@ -284,7 +311,14 @@ func subscribe_stream(service: String, stream: String, scope := "") -> Dictionar
 	return answer
 
 
-func unsubscribe_stream(service: String, stream: String, scope := "") -> void:
+func unsubscribe_stream(service: String, stream: String, scope := "", room := "") -> void:
+	if room != "":
+		var feeds: Dictionary = _host_feeds.get(room, {})
+		if feeds.erase(_stream_key(service, stream, scope)):
+			var link: PeerLink = _host_links.get(room)
+			if link != null:
+				link._send_host("rel", [5, service, stream, scope])
+		return
 	var frame: Variant = _streams.get(_stream_key(service, stream, scope))
 	_streams.erase(_stream_key(service, stream, scope))
 	if frame != null and state == State.READY:
@@ -296,8 +330,16 @@ func unsubscribe_stream(service: String, stream: String, scope := "") -> void:
 ## subscribe on a live connection (then false at once). The client
 ## subscribes to a held feed again after each reconnect, so a caller that
 ## asks first never sends a second `qd:stream:sub`.
-func is_subscribed(service: String, stream: String, scope := "") -> bool:
+func is_subscribed(service: String, stream: String, scope := "", room := "") -> bool:
+	if room != "":
+		return (_host_feeds.get(room, {}) as Dictionary).has(_stream_key(service, stream, scope))
 	return _streams.has(_stream_key(service, stream, scope))
+
+
+## The host of app room `room` (host mode): its socket id, as the server's
+## `qd:host` named it, or "" when the room has none or this socket is not in it.
+func host_of(room: String) -> String:
+	return _hosts.get(room, "")
 
 
 ## Calls `callback(payload)` for each `qd:event` of `service` named `event`.
@@ -441,6 +483,8 @@ func _lost(reason: String, retry: bool) -> void:
 	_pending.clear()
 	_pending_chars = 0
 	_end_links("", "disconnected")
+	for room in _hosts.keys():
+		_set_host(room, "")
 	socket_id = ""
 	if was == State.READY:
 		disconnected.emit(reason)
@@ -539,6 +583,8 @@ func _on_event(event: String, data: Variant) -> void:
 			_on_peer_signal(data)
 		"qd:relay":
 			_on_peer_relay(data)
+		"qd:host":
+			_on_host(data)
 		"qd:revoked":
 			if data.get("kind") == "stream":
 				_streams.erase(_stream_key(data.s, data.stream, data.get("scope", "")))
@@ -632,6 +678,7 @@ func _on_presence(frame: Dictionary) -> void:
 	# `users: []` comes to a socket that left the room, or was taken out: its links there end.
 	if frame.has("users") and (frame.users as Array).is_empty():
 		_end_links(room, "left")
+		_set_host(room, "")
 
 
 # --- Limits ------------------------------------------------------------------
@@ -718,6 +765,152 @@ func _forget_link(link: PeerLink) -> void:
 	var key := _peer_key(link.room, link.peer)
 	if _links.get(key) == link:
 		_links.erase(key)
+
+
+# --- Host mode ---------------------------------------------------------------
+
+
+## `qd:host [room, host]`: the room's host, or null when it has none now.
+func _on_host(frame: Variant) -> void:
+	if not (frame is Array) or (frame as Array).size() < 2 or not (frame[0] is String):
+		return
+	_set_host(frame[0], str(frame[1]) if frame[1] is String else "")
+
+
+func _set_host(room: String, host: String) -> void:
+	if _hosts.get(room, "") == host:
+		return
+	if host == "":
+		_hosts.erase(room)
+	else:
+		_hosts[room] = host
+	# A host the server names again links at once.
+	_host_retry.erase(room)
+	_host_backoff.erase(room)
+	host_changed.emit(room, host)
+	_relink_host(room)
+
+
+## Ends the link to the room's former host, and links to its host now while a feed needs it.
+func _relink_host(room: String) -> void:
+	var link: PeerLink = _host_links.get(room)
+	if link != null and link.peer != _hosts.get(room, ""):
+		_host_links.erase(room)
+		link.close()
+	if not (_host_feeds.get(room, {}) as Dictionary).is_empty():
+		_host_link(room)
+
+
+## The link to the room's host, made when none is open or being made; null
+## without a host, or while a link to it closed within the wait.
+func _host_link(room: String) -> PeerLink:
+	var link: PeerLink = _host_links.get(room)
+	if link != null and link.state != "closed":
+		return link
+	var host: String = _hosts.get(room, "")
+	if host == "" or host == socket_id or state != State.READY:
+		return null
+	var backoff: Array = _host_backoff.get(room, [])
+	if backoff.size() == 2 and backoff[0] == host and Time.get_ticks_msec() < int(backoff[1]):
+		return null
+	link = peer_link(room, host, true)
+	_host_links[room] = link
+	link.opened.connect(_on_host_link_opened.bind(room, link))
+	link.closed.connect(_on_host_link_closed.bind(room, link))
+	return link
+
+
+## A link to the room's host opened: its feeds subscribe over it.
+func _on_host_link_opened(_path: String, room: String, link: PeerLink) -> void:
+	if _host_links.get(room) != link:
+		return
+	_host_retry.erase(room)
+	_host_backoff.erase(room)
+	for feed in (_host_feeds.get(room, {}) as Dictionary).values():
+		_host_seeds.erase("%s|%s" % [room, _stream_key(feed[0], feed[1], feed[2])])
+		link._send_host("rel", [4, feed[0], feed[1], feed[2]])
+
+
+## A link to the room's host closed: the next to it waits (1 s, doubling to
+## 15 s while links keep closing unopened), so a game that sends input each
+## frame makes no link a frame when the server refuses them. While feeds
+## need one and the room has a host, it links again then.
+func _on_host_link_closed(_reason: String, room: String, link: PeerLink) -> void:
+	if _host_links.get(room) != link:
+		return
+	_host_links.erase(room)
+	var wait: int = _host_retry.get(room, 1000)
+	_host_retry[room] = mini(wait * 2, 15000)
+	_host_backoff[room] = [link.peer, Time.get_ticks_msec() + wait]
+	if (_host_feeds.get(room, {}) as Dictionary).is_empty() or _hosts.get(room, "") == "":
+		return
+	get_tree().create_timer(wait / 1000.0).timeout.connect(_retry_host.bind(room))
+
+
+func _retry_host(room: String) -> void:
+	_host_backoff.erase(room)
+	_relink_host(room)
+
+
+## Subscribes to a host-served feed and awaits its seed, or its refusal.
+func _subscribe_host(room: String, service: String, stream: String, scope: String) -> Dictionary:
+	if not _host_feeds.has(room):
+		_host_feeds[room] = {}
+	var key := _stream_key(service, stream, scope)
+	(_host_feeds[room] as Dictionary)[key] = [service, stream, scope]
+	var answer_key := "%s|%s" % [room, key]
+	_host_waiting[answer_key] = true
+	_host_answers.erase(answer_key)
+	var link := _host_link(room)
+	if link != null and link.state == "open":
+		link._send_host("rel", [4, service, stream, scope])
+	var deadline := Time.get_ticks_msec() + _call_timeout_ms()
+	while not _host_answers.has(answer_key):
+		if Time.get_ticks_msec() > deadline:
+			_host_waiting.erase(answer_key)
+			return _failure("TIMEOUT", "The room's host sent no seed")
+		await get_tree().process_frame
+	_host_waiting.erase(answer_key)
+	var answer: Dictionary = _host_answers[answer_key]
+	_host_answers.erase(answer_key)
+	return answer
+
+
+## A host's message: a chunk of a seed, an item, or a refused subscribe.
+func _on_host_message(link: PeerLink, parts: Array) -> void:
+	if _host_links.get(link.room) != link or parts.size() < 5:
+		return
+	var service := str(parts[1])
+	var stream := str(parts[2])
+	var scope := str(parts[3])
+	var feeds: Dictionary = _host_feeds.get(link.room, {})
+	var key := _stream_key(service, stream, scope)
+	if not feeds.has(key):
+		return
+	var answer_key := "%s|%s" % [link.room, key]
+	match int(parts[0]):
+		6:
+			var chunks: Array = _host_seeds.get(answer_key, [])
+			chunks.append_array(parts[4] if parts[4] is Array else [])
+			if parts.size() >= 6 and parts[5] == true:
+				_host_seeds.erase(answer_key)
+				if _host_waiting.has(answer_key):
+					_host_answers[answer_key] = {"ok": true, "seed": chunks}
+				stream_seeded.emit(service, stream, scope, chunks)
+			else:
+				_host_seeds[answer_key] = chunks
+		7:
+			stream_item.emit(service, stream, scope, parts[4])
+		8:
+			var error: Dictionary = parts[4] if parts[4] is Dictionary else {}
+			feeds.erase(key)
+			if _host_waiting.has(answer_key):
+				_host_answers[answer_key] = {"ok": false, "e": error}
+			else:
+				var ended := {"kind": "stream", "reason": "refused", "s": service, "stream": stream}
+				ended["scope"] = scope
+				ended["error"] = error
+				revoked.emit(ended)
 
 
 ## What waited for a link from `peer` in `room`: {user_id, signals}, or {} when nothing fresh did.
@@ -981,8 +1174,15 @@ class PeerLink:
 		state_changed.emit("closed", "")
 		closed.emit(reason)
 
+	## Whether Godot makes WebRTC connections here: a web export, or the webrtc
+	## GDExtension, which registers its peer connection class. Without either,
+	## Godot's WebRTCPeerConnection only prints errors.
 	func _can_direct() -> bool:
-		return _relay_mode != "always" and ClassDB.class_exists("WebRTCPeerConnection")
+		if _relay_mode == "always" or not ClassDB.class_exists("WebRTCPeerConnection"):
+			return false
+		if OS.has_feature("web"):
+			return true
+		return not ClassDB.get_inheriters_from_class("WebRTCPeerConnectionExtension").is_empty()
 
 	func _start() -> void:
 		if state == "closed":
@@ -1192,7 +1392,16 @@ class PeerLink:
 		_tokens -= 1.0
 		return true
 
-	## One link message's text: `[0, data]`, `[1, t]` (a ping) or `[2, t, u]` (its pong).
+	## Sends a host mode message (`[3, ...]` to `[5, ...]`); false when the link is not open.
+	func _send_host(label: String, message: Array) -> bool:
+		var text := JSON.stringify(message)
+		if float(text.to_utf8_buffer().size()) > _client._peer_limit("maxMessageBytes"):
+			push_error("host mode: the message is longer than the server allows")
+			return false
+		return state == "open" and _send_text(label, text)
+
+	## One link message's text: `[0, data]`, `[1, t]` (a ping), `[2, t, u]` (its
+	## pong), or host mode's (kinds 3 to 8).
 	func _receive(text: String, label: String) -> void:
 		if state == "closed":
 			return
@@ -1212,6 +1421,8 @@ class PeerLink:
 				_send_text("fast", JSON.stringify([2, parts[1], Time.get_ticks_msec()], "", true, true))
 		elif kind == 2 and parts.size() >= 3:
 			_pong(float(parts[1]), float(parts[2]))
+		elif kind >= 6 and kind <= 8:
+			_client._on_host_message(self, parts)
 
 	## A pong: the round trip and the peer's clock, taken from the fastest of the
 	## last 24 round trips, then moved toward a new one by at most 5 ms a pong.

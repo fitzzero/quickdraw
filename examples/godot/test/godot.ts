@@ -3,10 +3,12 @@
 // client headless through `smoke.gd` with Godot 4 (`GODOT`, else `godot` on
 // the PATH), sends `qd:rotate` (a window of `ROTATE_WITHIN_MS`, which the
 // script knows too) when the script asks, plays the player "bo" who offers
-// the client a peer link over the relay when it asks (`offerLink`), and
-// passes when every check of the script held and the client wrote exactly the
-// frames of `frames.ts`, the ones the Node wire test writes too, its peer
-// link's clock pings aside. It also plays a newer
+// the client a peer link over the relay when it asks (`offerLink`), starts
+// the world's host when it asks, stops its serving and then disconnects it
+// when it asks again (`host.ts`), and passes when every check of the script held and the
+// client wrote exactly the frames of `frames.ts`, the ones the Node wire
+// test writes too, its peer links' clock pings aside and its steers sent
+// again counted once. It also plays a newer
 // server, as a later revision of protocol 5 may be (docs/protocol-v5.md, "What
 // a client must do"): every `qd:hello` carries a field more, and when the
 // script asks it sends frames with elements appended and fields added.
@@ -17,8 +19,9 @@ import process from "node:process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { io as connectSocket, type Socket } from "socket.io-client";
-import { isClockFrame, sessionWith } from "./frames";
+import { isClockFrame, sessionWith, steerFrame } from "./frames";
 import { startServer, WORLD, type GameServer } from "./game";
+import { hostWorld, type WorldHost } from "./host";
 
 const PROJECT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TIMEOUT_MS = 60_000;
@@ -33,6 +36,8 @@ interface Run {
   readonly result: { readonly checks?: number; readonly failures?: readonly string[] } | undefined;
   /** The socket id of the player who offered the client a link. */
   readonly peer: string | undefined;
+  /** The socket id of the world's host. */
+  readonly host: string | undefined;
 }
 
 /** The text of a link message carrying `data`. */
@@ -108,6 +113,7 @@ function runGodot(server: GameServer): Promise<Run> {
   const sent: string[] = [];
   let result: Run["result"];
   let peer: Socket | undefined;
+  let host: WorldHost | undefined;
   createInterface({ input: child.stdout }).on("line", (line) => {
     process.stdout.write(`${line}\n`);
     if (line.startsWith(">> ")) {
@@ -125,6 +131,19 @@ function runGodot(server: GameServer): Promise<Run> {
           process.stderr.write(`check:godot: the peer link's player failed: ${String(error)}\n`);
         },
       );
+    } else if (line === "STEP host") {
+      hostWorld(server).then(
+        (served) => {
+          host = served;
+        },
+        (error: unknown) => {
+          process.stderr.write(`check:godot: the world's host failed: ${String(error)}\n`);
+        },
+      );
+    } else if (line === "STEP unserve") {
+      host?.stop();
+    } else if (line === "STEP unhost") {
+      host?.close();
     } else if (line.startsWith("RESULT ")) {
       result = JSON.parse(line.slice("RESULT ".length)) as Run["result"];
     }
@@ -134,16 +153,26 @@ function runGodot(server: GameServer): Promise<Run> {
     child.on("error", reject);
     child.on("close", (code) => {
       clearTimeout(timer);
+      // Read before disconnecting: socket.io-client clears a socket's id when it disconnects.
+      const id = peer?.id;
       peer?.disconnect();
-      resolve({ code: code ?? 1, sent, result, peer: peer?.id });
+      host?.close();
+      resolve({ code: code ?? 1, sent, result, peer: id, host: host?.socketId });
     });
   });
 }
 
-/** The frames that differ from the session (with its peer link to `peer`), by position, clock pings aside. */
-function differences(written: readonly string[], peer: string): string[] {
-  const sent = written.filter((frame) => !isClockFrame(frame));
-  const session = sessionWith(peer);
+/**
+ * The frames that differ from the session (with its peer link to `peer` and
+ * the world's host at `host`), by position, clock pings aside. A steer is
+ * on `fast`, which the relay may drop, so the script sends it again until
+ * the host answers: steers in a row count as one.
+ */
+function differences(written: readonly string[], peer: string, host: string): string[] {
+  const frames = written.filter((frame) => !isClockFrame(frame));
+  const steer = steerFrame(host);
+  const sent = frames.filter((frame, index) => frame !== steer || frames[index - 1] !== steer);
+  const session = sessionWith(peer, host);
   const length = Math.max(sent.length, session.length);
   return Array.from({ length }, (_, index) => index).flatMap((index) =>
     sent[index] === session[index]
@@ -164,14 +193,15 @@ async function main(): Promise<number> {
       ...(run.result === undefined ? ["the script printed no RESULT"] : []),
       ...(run.result?.failures ?? []).map((failure) => `check failed: ${failure}`),
       ...(run.peer === undefined ? ["the peer link's player never offered"] : []),
-      ...differences(run.sent, run.peer ?? ""),
+      ...(run.host === undefined ? ["the world's host never served"] : []),
+      ...differences(run.sent, run.peer ?? "", run.host ?? ""),
     ];
     if (problems.length > 0) {
       process.stderr.write(`${problems.map((problem) => `check:godot: ${problem}`).join("\n")}\n`);
       return 1;
     }
     process.stdout.write(
-      `check:godot: ${String(run.result?.checks)} checks held; the client wrote the ${String(sessionWith(run.peer ?? "").length)} frames of the session\n`,
+      `check:godot: ${String(run.result?.checks)} checks held; the client wrote the ${String(sessionWith(run.peer ?? "", run.host ?? "").length)} frames of the session\n`,
     );
     return 0;
   } finally {

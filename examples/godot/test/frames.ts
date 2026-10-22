@@ -5,7 +5,7 @@
 // server. Godot's `JSON.stringify` sorts keys and writes integers without a
 // decimal point; `godotJson` does the same.
 
-import { WORLD } from "./game";
+import { WORLD, WORLD_ID } from "./game";
 
 /** JSON as Godot's `JSON.stringify` writes it: compact, keys sorted at every level. */
 export function godotJson(value: unknown): string {
@@ -99,19 +99,55 @@ export function isClockFrame(frame: string): boolean {
   return /^42\["qd:relay",\["[^"]*","[^"]*","fast","\[[12],/.test(frame);
 }
 
-/** Where the peer link's frames fall in the session: before the DISCONNECT of `close()`. */
+/** The ack id of the client's signal to the world's host: the next after the peer link's. */
+export const HOST_SIGNAL_ID = PEER_SIGNAL_ID + 1;
+
+/** A host mode message (`[3, ...]` to `[5, ...]`) the client relays to the world's host at `host` on `label`. */
+export function hostFrame(
+  host: string,
+  label: "rel" | "fast",
+  message: readonly unknown[],
+): string {
+  return `42${godotJson(["qd:relay", [WORLD, host, label, godotJson(message)]])}`;
+}
+
+/**
+ * The client's steer to the world's host at `host`, on `fast`: unreliable,
+ * so `smoke.gd` sends it again until the host's item arrives.
+ */
+export function steerFrame(host: string): string {
+  return hostFrame(host, "fast", [3, "gameService", "steer", { worldId: WORLD_ID, dx: 2 }]);
+}
+
+/**
+ * The client's frames to the world's host at socket `host` (`host.ts`): it
+ * links over the relay, subscribes to the `world` stream once the link is
+ * open, steers, and unsubscribes. It sends no bye: the host disconnects.
+ */
+export function hostFrames(host: string): readonly string[] {
+  return [
+    relayHelloFrame(host, HOST_SIGNAL_ID),
+    hostFrame(host, "rel", [4, "gameService", "world", WORLD_ID]),
+    steerFrame(host),
+    hostFrame(host, "rel", [5, "gameService", "world", WORLD_ID]),
+  ];
+}
+
+/** Where the peer link's and host mode's frames fall in the session: before the DISCONNECT of `close()`. */
 const PEER_AT = 20;
 
 /**
  * The session with the link to the harness's player at socket `peer`
- * (`godot.ts`): the client answers its offer over the relay, then says hello
- * back on `rel`; the player closes the link.
+ * (`godot.ts`), where the client answers its offer over the relay, then
+ * says hello back on `rel` and the player closes the link; then host mode,
+ * with the world's host at socket `host`.
  */
-export function sessionWith(peer: string): readonly string[] {
+export function sessionWith(peer: string, host: string): readonly string[] {
   return [
     ...SESSION.slice(0, PEER_AT),
     relayHelloFrame(peer),
     relayFrame(peer, "rel", { hi: "bo" }),
+    ...hostFrames(host),
     ...SESSION.slice(PEER_AT),
   ];
 }
