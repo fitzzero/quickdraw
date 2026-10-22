@@ -11,7 +11,9 @@
 //   next query replaces one still on its way, that call is cancelled
 //   (`qd:cancel`) and the server stops it.
 // - While a newer search is on its way, the last results in the same scope
-//   stay shown.
+//   stay shown, never another user's: `useMethodQuery` asks this hook's
+//   `placeholderData` only about a query the cache still holds, and another
+//   user's hello empties it.
 // - A search kept to a scope of its collection returns that collection's
 //   items. While a `useCollection` holds the scope, they are kept in its
 //   state and shown as it holds them, so the scope's deltas (another user

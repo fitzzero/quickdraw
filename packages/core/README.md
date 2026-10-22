@@ -1621,7 +1621,9 @@ export function TaskDetail({ id }: { readonly id: string }) {
   the chat's messages open). A row-level grant with neither sends nothing
   the client could notice: remount the view, or call `refresh()`.
 - The cache follows the user: a hello naming another user removes everything
-  quickdraw cached; new credentials for the same user refetch it; new grants
+  quickdraw cached, and no `useQuery` of the client shows a placeholder made
+  from it (`placeholderData` such as `keepPreviousData`), nor `useSearch` its
+  last results; new credentials for the same user refetch it; new grants
   (`qd:access`) refetch every query.
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
