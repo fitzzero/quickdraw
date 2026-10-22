@@ -6,8 +6,9 @@
 //
 // - A signal for a link routes to it; one from a peer without a link waits
 //   (`PENDING_MS`, at most `MAX_PENDING` peers of `MAX_PENDING_SIGNALS`
-//   signals) for the app to answer with a link, and the first one is a
-//   request (`onPeerRequest`).
+//   signals and `MAX_PENDING_CHARS` characters, `MAX_PENDING_TOTAL_CHARS`
+//   for all of them) for the app to answer with a link, and the first one
+//   is a request (`onPeerRequest`).
 // - A socket that leaves an app room hears `{ room, users: [] }`: the
 //   links of that room end (`left`). A disconnect ends every link: a link
 //   lives as long as the socket it started on.
@@ -44,6 +45,12 @@ const MAX_PENDING = 64;
 
 /** Signals one waiting peer may have. */
 const MAX_PENDING_SIGNALS = 64;
+
+/** Characters the signals of one waiting peer may hold: an offer at its longest, and candidates. */
+const MAX_PENDING_CHARS = 65_536;
+
+/** Characters the signals of every waiting peer may hold together. */
+const MAX_PENDING_TOTAL_CHARS = 1_048_576;
 
 /** How long a signal waits for the server's acknowledgement. */
 const SIGNAL_TIMEOUT_MS = 10_000;
@@ -121,6 +128,19 @@ export interface PeerHub {
 interface Pending extends IncomingPeer {
   readonly signals: PeerSignal[];
   readonly at: number;
+  /** The characters its signals hold. */
+  chars: number;
+}
+
+/** The characters a signal holds, as the pending budgets count them. */
+function charsOf(sig: PeerSignal): number {
+  if (sig.sdp !== undefined) {
+    return sig.sdp.sdp.length;
+  }
+  const { ice } = sig;
+  return ice === undefined
+    ? 1
+    : ice.candidate.length + (ice.sdpMid?.length ?? 0) + (ice.usernameFragment?.length ?? 0);
 }
 
 const keyOf = (room: string, peer: string): string => `${room}\u0000${peer}`;
@@ -163,8 +183,36 @@ interface HubState {
   readonly connection: QuickdrawConnection;
   readonly links: Map<string, LinkHandle>;
   readonly pending: Map<string, Pending>;
+  /** The characters every waiting peer's signals hold. */
+  pendingChars: number;
   readonly listeners: Set<(incoming: IncomingPeer) => void>;
   readonly bytes: Bucket;
+}
+
+/** Drops what waits from a peer, and returns it. */
+function dropPending(state: HubState, key: string): Pending | undefined {
+  const entry = state.pending.get(key);
+  if (entry !== undefined) {
+    state.pending.delete(key);
+    state.pendingChars -= entry.chars;
+  }
+  return entry;
+}
+
+/** Keeps a signal for its waiting peer within the budgets; false when it was dropped. */
+function keep(state: HubState, entry: Pending, sig: PeerSignal): boolean {
+  const chars = charsOf(sig);
+  if (
+    entry.signals.length >= MAX_PENDING_SIGNALS ||
+    entry.chars + chars > MAX_PENDING_CHARS ||
+    state.pendingChars + chars > MAX_PENDING_TOTAL_CHARS
+  ) {
+    return false;
+  }
+  entry.signals.push(sig);
+  entry.chars += chars;
+  state.pendingChars += chars;
+  return true;
 }
 
 function receiveSignal(state: HubState, frame: unknown): void {
@@ -178,27 +226,26 @@ function receiveSignal(state: HubState, frame: unknown): void {
     return;
   }
   if (forward.sig.bye === true) {
-    state.pending.delete(key);
+    dropPending(state, key);
     return;
   }
   const at = now();
   for (const [old, entry] of state.pending) {
     if (at - entry.at > PENDING_MS) {
-      state.pending.delete(old);
+      dropPending(state, old);
     }
   }
   const entry = state.pending.get(key);
   if (entry !== undefined) {
-    if (entry.signals.length < MAX_PENDING_SIGNALS) {
-      entry.signals.push(forward.sig);
-    }
-    return;
-  }
-  if (state.pending.size >= MAX_PENDING) {
+    keep(state, entry, forward.sig);
     return;
   }
   const { room, from, userId } = forward;
-  state.pending.set(key, { room, from, userId, signals: [forward.sig], at });
+  const waiting: Pending = { room, from, userId, signals: [], at, chars: 0 };
+  if (state.pending.size >= MAX_PENDING || !keep(state, waiting, forward.sig)) {
+    return;
+  }
+  state.pending.set(key, waiting);
   for (const listener of [...state.listeners]) {
     try {
       listener({ room, from, userId });
@@ -249,6 +296,7 @@ function listen(state: HubState): void {
   });
   socket.on("disconnect", () => {
     state.pending.clear();
+    state.pendingChars = 0;
     for (const link of [...state.links.values()]) {
       link.disconnected();
     }
@@ -331,6 +379,7 @@ function createHub(connection: QuickdrawConnection): PeerHub {
     connection,
     links: new Map(),
     pending: new Map(),
+    pendingChars: 0,
     listeners: new Set(),
     bytes: { tokens: 0, refilledAt: now() },
   };
@@ -353,9 +402,7 @@ function createHub(connection: QuickdrawConnection): PeerHub {
       };
     },
     take(room: string, peer: string) {
-      const key = keyOf(room, peer);
-      const entry = state.pending.get(key);
-      state.pending.delete(key);
+      const entry = dropPending(state, keyOf(room, peer));
       const fresh = entry !== undefined && now() - entry.at <= PENDING_MS;
       return {
         room,
@@ -365,7 +412,7 @@ function createHub(connection: QuickdrawConnection): PeerHub {
       };
     },
     forget(room: string, peer: string): void {
-      state.pending.delete(keyOf(room, peer));
+      dropPending(state, keyOf(room, peer));
     },
     signal: (room, to, sig) => signalOf(state, room, to, sig),
     relay: (room, to, label, text, pair) => relayOf(state, [room, to, label, text], pair),

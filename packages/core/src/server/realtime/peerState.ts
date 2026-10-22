@@ -1,8 +1,13 @@
 // What a server keeps for each socket's peer links (RFC 0003 section 12.5):
-// its token buckets and the peers it signalled. A socket that sends a
-// signal (`qd:peer`) to a peer in a room engages that peer: the pair is
-// recorded, at most `MAX_PEER_LINKS` per socket, and only an engaged pair
-// may relay (`qd:relay`), each with its own bucket. Signals have a bucket of
+// its token buckets, the peers it signalled and the peers that signalled it.
+// A socket that sends a signal (`qd:peer`) to a peer in a room engages that
+// peer: the pair is recorded, at most `MAX_PEER_LINKS` per socket, with its
+// own relay bucket. A signal delivered to a socket is heard: the socket's
+// pair with its sender turns mutual, or, while the socket has not answered,
+// the sender is kept among the heard (at most `MAX_HEARD`, the oldest
+// forgotten first). Only a mutual pair may relay (`qd:relay`), so a socket
+// relays to no socket that never answered it, a made-up id included, and
+// the node it is on drops what it sends there. Signals have a bucket of
 // their own, and relayed bytes one more, shared by all of a socket's peers.
 // Messages dropped over a bucket count toward the channels' abuse guard: a
 // socket whose drops within `CHANNEL_ABUSE_WINDOW_MS` pass
@@ -29,6 +34,14 @@ export interface PeerBucket {
   refilledAt: number;
 }
 
+/** A pair the socket engaged: its relay bucket, and whether the peer signalled the socket too. */
+export interface PeerPair extends PeerBucket {
+  mutual: boolean;
+}
+
+/** Peers that signalled a socket it has not answered yet, kept at once. */
+export const MAX_HEARD = MAX_PEER_LINKS * 2;
+
 /** The messages one socket had dropped since its abuse window started. */
 interface Drops {
   windowStart: number;
@@ -42,9 +55,11 @@ export interface SocketPeers {
   /** Relayed bytes, to every peer together. */
   readonly bytes: PeerBucket;
   /** The peers the socket signalled, by room, each with the pair's relay bucket. */
-  readonly links: Map<string, Map<string, PeerBucket>>;
+  readonly links: Map<string, Map<string, PeerPair>>;
   /** How many pairs `links` holds. */
   count: number;
+  /** The peers that signalled the socket and that it has not signalled, oldest first: `[room, peer]` by key. */
+  readonly heard: Map<string, readonly [string, string]>;
   readonly signalDrops: Drops;
   readonly relayDrops: Drops;
 }
@@ -65,6 +80,7 @@ export function peersOf(socket: QuickdrawServerSocket, now = Date.now()): Socket
       bytes: bucket(PEER_RELAY_BYTES_BURST, now),
       links: new Map(),
       count: 0,
+      heard: new Map(),
       signalDrops: { windowStart: now, dropped: 0 },
       relayDrops: { windowStart: now, dropped: 0 },
     };
@@ -132,14 +148,39 @@ export function relayFlood(state: SocketPeers, now: number): boolean {
   return abusive(state.relayDrops, PEER_RELAY_RATE, now);
 }
 
-/** The pair's relay bucket, or `undefined` when the socket never signalled `peer` in `room`. */
-export function pairOf(state: SocketPeers, room: string, peer: string): PeerBucket | undefined {
+/** The pair, or `undefined` when the socket never signalled `peer` in `room`. */
+export function pairOf(state: SocketPeers, room: string, peer: string): PeerPair | undefined {
   return state.links.get(room)?.get(peer);
 }
 
+/** The key of a heard peer: a socket id holds no NUL. */
+const heardKey = (room: string, peer: string): string => `${room}\u0000${peer}`;
+
 /**
- * Records that the socket signalled `peer` in `room`. False when the pair is
- * new and the socket already signals `MAX_PEER_LINKS` peers.
+ * Records that `peer` signalled the socket in `room`: their pair turns
+ * mutual, or the peer is kept among the heard until the socket answers.
+ */
+export function hear(state: SocketPeers, room: string, peer: string): void {
+  const pair = pairOf(state, room, peer);
+  if (pair !== undefined) {
+    pair.mutual = true;
+    return;
+  }
+  const key = heardKey(room, peer);
+  state.heard.delete(key);
+  state.heard.set(key, [room, peer]);
+  if (state.heard.size > MAX_HEARD) {
+    const [oldest] = state.heard.keys();
+    if (oldest !== undefined) {
+      state.heard.delete(oldest);
+    }
+  }
+}
+
+/**
+ * Records that the socket signalled `peer` in `room`, mutual when the peer
+ * signalled it first. False when the pair is new and the socket already
+ * signals `MAX_PEER_LINKS` peers.
  */
 export function engage(state: SocketPeers, room: string, peer: string, now: number): boolean {
   if (pairOf(state, room, peer) !== undefined) {
@@ -153,13 +194,15 @@ export function engage(state: SocketPeers, room: string, peer: string, now: numb
     peers = new Map();
     state.links.set(room, peers);
   }
-  peers.set(peer, bucket(PEER_RELAY_BURST, now));
+  const mutual = state.heard.delete(heardKey(room, peer));
+  peers.set(peer, { ...bucket(PEER_RELAY_BURST, now), mutual });
   state.count += 1;
   return true;
 }
 
-/** Forgets the pair: its link ended. */
+/** Forgets the pair, and the peer among the heard: its link ended. */
 export function disengage(state: SocketPeers, room: string, peer: string): void {
+  state.heard.delete(heardKey(room, peer));
   const peers = state.links.get(room);
   if (peers?.delete(peer) === true) {
     state.count -= 1;
@@ -170,8 +213,8 @@ export function disengage(state: SocketPeers, room: string, peer: string): void 
 }
 
 /**
- * Forgets every pair in the rooms `ended` accepts (all of them by default)
- * and returns them, each `[room, peer]`.
+ * Forgets every pair and every heard peer in the rooms `ended` accepts (all
+ * of them by default) and returns them, each `[room, peer]` once.
  */
 export function disengageAll(
   state: SocketPeers,
@@ -185,6 +228,12 @@ export function disengageAll(
       }
       state.links.delete(room);
       state.count -= peers.size;
+    }
+  }
+  for (const [key, entry] of state.heard) {
+    if (ended(entry[0])) {
+      state.heard.delete(key);
+      gone.push(entry);
     }
   }
   return gone;

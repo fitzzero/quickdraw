@@ -2830,6 +2830,7 @@ with an event:
 export const matchService = qd.defineService(match, {
   methods: {
     enterMatch: {
+      // any signed-in user here: a real game checks the caller's seat in the match first
       access: "authenticated",
       handler: ({ input, ctx }) => {
         const room = `match:${input.matchId}`;
@@ -2930,7 +2931,8 @@ export function useMatchLinks(matchId: string, onMove: OnMove): (move: Move) => 
   disconnected: the server says so at once), `left` (this socket left the
   room), `disconnected` (a link lives as long as its socket: open it again
   after a reconnect), `timeout` (nothing opened within 15 s), `lost`
-  (nothing heard for 8 s), `failed`, `refused` (the server refused a
+  (nothing heard for 8 s, or a `relay: "never"` link's direct path
+  dropped), `failed`, `refused` (the server refused a
   signal) or `unsupported` (a server without `peers`).
 - The direct path comes first, over the platform's `RTCPeerConnection`
   (`peerConnection` takes another, such as react-native-webrtc's;
@@ -2946,13 +2948,13 @@ export function useMatchLinks(matchId: string, onMove: OnMove): (move: Move) => 
   its milliseconds), `offset`, `rtt`, `jitter` and `synced`.
 - The server's limits: a socket signals at most 64 peers at once
   (`CONFLICT`) and 20 signals a second (a burst of 40; `RATE_LIMITED`).
-  It relays only to a peer the socket signalled, at most 120 messages a
+  It relays only between two sockets that signalled each other, at most 120 messages a
   second to each peer (a burst of 240) and 1 MiB a second in all (a burst
   of 2 MiB), and drops the rest silently; the client keeps under these
   itself, from the hello's `limits.peers`. A socket that keeps flooding
   either is disconnected, as for channels. A socket that leaves a room, is
   taken out of it or disconnects ends its links there: the server tells
-  each peer it signalled. Behind a cluster adapter the node that holds a
+  each peer it signalled, and each that signalled it. Behind a cluster adapter the node that holds a
   socket checks it, and the relay crosses nodes.
 - What a peer sends is the peer's word: the server checks who may link,
   never what a link carries. Parse a link's messages as any input, and

@@ -27,7 +27,9 @@ export type PeerPath = "direct" | "relay";
  * - `disconnected`: this side's socket disconnected (a link lives as long
  *   as the socket it started on), or the connection was closed;
  * - `timeout`: no path opened within 15 seconds;
- * - `lost`: nothing was heard from the peer for 8 seconds;
+ * - `lost`: nothing was heard from the peer for 8 seconds, or the direct
+ *   path of a link that may not use the relay (`relay: "never"`) dropped
+ *   after it opened;
  * - `failed`: the direct path failed and the link may not use the relay
  *   (`relay: "never"`);
  * - `refused`: the server refused a signal (the peer is not in the room,

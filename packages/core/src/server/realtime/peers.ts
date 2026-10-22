@@ -13,15 +13,17 @@
 //   once, `PEER_SIGNAL_RATE` signals a second (`PEER_SIGNAL_BURST` at once).
 // - `qd:relay [room, to, label, text]`, never acknowledged, carries one link
 //   message when the data channels cannot (ICE failed, a client without
-//   WebRTC) as `[room, from, label, text]`, volatile on `fast`. Only to a
-//   peer the sender signalled in that room, both still in it, at most
-//   `PEER_RELAY_RATE` messages a second to each peer and
+//   WebRTC) as `[room, from, label, text]`, volatile on `fast`. Only
+//   between two sockets of the room that signalled each other in it, at
+//   most `PEER_RELAY_RATE` messages a second to each peer and
 //   `PEER_RELAY_BYTES_PER_SECOND` bytes to all of them. The text is never
 //   parsed. Dropped silently otherwise; a socket that keeps flooding either
 //   event is disconnected, as for channels.
 // - When a socket leaves a room (its own leave, a removal) or disconnects,
-//   each peer it signalled there gets `{ sig: { bye: true } }` from it, so a
-//   player taken out of a room loses the links the room gave it.
+//   each peer it signalled there, and each that signalled it, gets
+//   `{ sig: { bye: true } }` from it, so a player taken out of a room loses
+//   the links the room gave it, and a peer waiting for its answer hears at
+//   once that none will come.
 //
 // What travels over a direct link never reaches the server: it authorizes
 // signalling and relay by room membership, and trusts nothing a peer sends.
@@ -85,6 +87,10 @@ function signal(hub: Hub, state: SocketPeers, frame: unknown): Ok {
   const { room, to, sig } = readSignalFrame(frame, socket.id);
   const now = Date.now();
   if (!takeSignal(state, now)) {
+    if (sig.bye === true) {
+      // The pair ends here all the same; only the peer is not told.
+      disengage(state, room, to);
+    }
     throw overRate(hub, state, now);
   }
   const { principal } = socket.data;
@@ -102,6 +108,8 @@ function signal(hub: Hub, state: SocketPeers, frame: unknown): Ok {
   }
   const target = localSocket(hub, to);
   if (target === undefined ? clusterOf(hub) === undefined : !reachable(target, room)) {
+    // A pair whose peer went away without a bye frees its place.
+    disengage(state, room, to);
     throw new QuickdrawError("NOT_FOUND", `No signed-in socket ${to} is in room "${room}"`);
   }
   if (!engage(state, room, to, now)) {
@@ -121,7 +129,7 @@ function relay(hub: Hub, state: SocketPeers, frame: unknown): void {
   const pair = read === undefined ? undefined : pairOf(state, read.room, read.to);
   if (
     read === undefined ||
-    pair === undefined ||
+    pair?.mutual !== true ||
     !inRoom(state.socket, read.room) ||
     !takeRelay(state, pair, read.bytes, now)
   ) {

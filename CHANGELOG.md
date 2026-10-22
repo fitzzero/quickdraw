@@ -25,16 +25,20 @@ All notable changes to this project will be documented in this file.
   The server forwards both only between two signed-in sockets of the
   frame's room, and never reads what a link carries.
 - **Limits.** A socket signals at most 64 peers at once (`CONFLICT`) and 20
-  signals a second (a burst of 40; `RATE_LIMITED` with `retryAfterMs`).
-  The relay takes messages of at most 64 KiB (UTF-8), only to a peer the
-  socket signalled, at most 120 a second to each peer (a burst of 240) and
-  1 MiB a second in all (a burst of 2 MiB), and drops the rest silently. A
-  socket that keeps flooding either frame is disconnected, as for channels.
-  The socket rate limiter counts `qd:peer` and not `qd:relay`.
+  signals a second (a burst of 40; `RATE_LIMITED` with `retryAfterMs`). A
+  session description holds at most 16,384 characters, and each string of
+  a candidate 1,024. The relay takes messages of at most 64 KiB (UTF-8),
+  only between two sockets that signalled each other, at most 120 a second
+  to each peer (a burst of 240) and 1 MiB a second in all (a burst of
+  2 MiB), and drops the rest silently. A socket that keeps flooding either
+  frame is disconnected, as for channels. The socket rate limiter counts
+  `qd:peer` and not `qd:relay`.
 - **Leaving ends links.** A socket that leaves a room, is taken out of it
-  or disconnects ends its links there: the server sends each peer it
-  signalled a `bye`. Behind a cluster adapter the frames cross nodes, and
-  the node that holds the target socket checks it.
+  or disconnects ends its links there: the server sends a `bye` to each
+  peer it signalled and each that signalled it. A link that closes says
+  `bye` too, a refused one included, so the server frees the pair's place.
+  Behind a cluster adapter the frames cross nodes, and the node that holds
+  the target socket checks it.
 - **Testing.** `createLoopbackPeerLink({ ms, jitter, loss })` on
   `./testing` links two ends in one process, with a delay and jitter per
   message and loss on `fast` alone.

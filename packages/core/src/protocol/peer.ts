@@ -1,13 +1,13 @@
 // Reading peer link signals (RFC 0003 section 12.5), for the server that
 // forwards them and the client that applies them. A signal is copied member
-// by member, so what goes on is only what was read: a session description,
-// an ICE candidate, `relay` or `bye`, each string at most
-// `MAX_PEER_SIGNAL_LENGTH` characters. Internal: neither the package root
-// nor `./client` exports these.
+// by member, so what goes on is only what was read: a session description
+// of at most `MAX_PEER_SIGNAL_LENGTH` characters, an ICE candidate whose
+// strings hold at most `MAX_PEER_CANDIDATE_LENGTH`, `relay` or `bye`.
+// Internal: neither the package root nor `./client` exports these.
 
 import type { PeerCandidate, PeerDescription, PeerLabel, PeerSignal } from "./envelope";
 import { isRecord } from "./guards";
-import { MAX_PEER_SIGNAL_LENGTH, MAX_SCOPE_LENGTH } from "./version";
+import { MAX_PEER_CANDIDATE_LENGTH, MAX_PEER_SIGNAL_LENGTH, MAX_SCOPE_LENGTH } from "./version";
 
 /** The longest socket id a peer frame may name. Socket.IO's are 20 characters. */
 export const MAX_SOCKET_ID_LENGTH = 64;
@@ -15,6 +15,11 @@ export const MAX_SOCKET_ID_LENGTH = 64;
 /** True for a string of at most `MAX_PEER_SIGNAL_LENGTH` characters, empty included. */
 function isText(value: unknown): value is string {
   return typeof value === "string" && value.length <= MAX_PEER_SIGNAL_LENGTH;
+}
+
+/** True for a string of at most `MAX_PEER_CANDIDATE_LENGTH` characters, empty included. */
+function isCandidateText(value: unknown): value is string {
+  return typeof value === "string" && value.length <= MAX_PEER_CANDIDATE_LENGTH;
 }
 
 /** True for what may name an app room: 1 to `MAX_SCOPE_LENGTH` characters. */
@@ -49,14 +54,14 @@ function readDescription(value: unknown): PeerDescription | undefined {
 }
 
 function readCandidate(value: unknown): PeerCandidate | undefined {
-  if (!isRecord(value) || !isText(value.candidate)) {
+  if (!isRecord(value) || !isCandidateText(value.candidate)) {
     return undefined;
   }
   const { sdpMid, sdpMLineIndex, usernameFragment } = value;
   if (
-    !nullable(sdpMid, isText) ||
+    !nullable(sdpMid, isCandidateText) ||
     !nullable(sdpMLineIndex, isLineIndex) ||
-    !nullable(usernameFragment, isText)
+    !nullable(usernameFragment, isCandidateText)
   ) {
     return undefined;
   }

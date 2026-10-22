@@ -93,6 +93,9 @@ const PEER_GRACE_MS := 5000
 const PEER_FAST_BACKLOG := 32768
 ## Peers whose signals may wait for an answer, and signals each may have.
 const PEER_MAX_PENDING := 64
+## Characters the signals of one waiting peer may hold, and of all of them.
+const PEER_MAX_PENDING_CHARS := 65536
+const PEER_MAX_PENDING_TOTAL_CHARS := 1048576
 ## A server whose hello names no peer limits holds these (`limits.peers`).
 const PEER_LIMITS := {
 	"maxMessageBytes": 65536,
@@ -153,7 +156,9 @@ var _streams: Dictionary = {}  # "service/stream/scope" -> the qd:stream:sub fra
 var _rooms: Dictionary = {}  # room -> {user id: true}
 var _handlers: Dictionary = {}  # "service/event" -> [Callable]
 var _links: Dictionary = {}  # "peer/room" -> PeerLink
-var _pending: Dictionary = {}  # "peer/room" -> {room, from, user_id, signals, at}: signals waiting for a link
+# "peer/room" -> {room, from, user_id, signals, at, chars}: signals waiting for a link
+var _pending: Dictionary = {}
+var _pending_chars := 0  # the characters every waiting peer's signals hold
 var _relay_tokens := 0.0  # the relay's bytes, for all links
 var _relay_at := 0
 
@@ -366,7 +371,7 @@ func peer_link(room: String, to: String, offerer: bool, options: Dictionary = {}
 
 ## Refuses a link `peer_requested` asked for: the peer's link closes, with "bye".
 func reject_peer(room: String, from: String) -> void:
-	_pending.erase(_peer_key(room, from))
+	_drop_pending(_peer_key(room, from))
 	if state == State.READY:
 		_emit("qd:peer", {"room": room, "to": from, "sig": {"bye": true}})
 
@@ -434,6 +439,7 @@ func _lost(reason: String, retry: bool) -> void:
 	_rooms.clear()
 	# A link lives as long as the socket it started on.
 	_pending.clear()
+	_pending_chars = 0
 	_end_links("", "disconnected")
 	socket_id = ""
 	if was == State.READY:
@@ -716,17 +722,58 @@ func _forget_link(link: PeerLink) -> void:
 
 ## What waited for a link from `peer` in `room`: {user_id, signals}, or {} when nothing fresh did.
 func _take_pending(room: String, peer: String) -> Dictionary:
-	var key := _peer_key(room, peer)
-	var entry: Dictionary = _pending.get(key, {})
-	_pending.erase(key)
+	var entry := _drop_pending(_peer_key(room, peer))
 	if entry.is_empty() or Time.get_ticks_msec() - int(entry.at) > PEER_PENDING_MS:
 		return {}
 	return entry
 
 
+## Drops what waits from a peer, and returns it ({} when nothing did).
+func _drop_pending(key: String) -> Dictionary:
+	var entry: Dictionary = _pending.get(key, {})
+	if not entry.is_empty():
+		_pending.erase(key)
+		_pending_chars -= int(entry.chars)
+	return entry
+
+
+## Keeps a signal for its waiting peer within the budgets; false when it was dropped.
+func _keep_pending(entry: Dictionary, sig: Dictionary) -> bool:
+	var chars := _signal_chars(sig)
+	var signals: Array = entry.signals
+	if (
+		signals.size() >= PEER_MAX_PENDING
+		or int(entry.chars) + chars > PEER_MAX_PENDING_CHARS
+		or _pending_chars + chars > PEER_MAX_PENDING_TOTAL_CHARS
+	):
+		return false
+	signals.append(sig)
+	entry.chars = int(entry.chars) + chars
+	_pending_chars += chars
+	return true
+
+
+## The characters a signal holds, as the pending budgets count them.
+static func _signal_chars(sig: Dictionary) -> int:
+	var sdp: Variant = sig.get("sdp")
+	if sdp is Dictionary:
+		return _text_length(sdp.get("sdp"))
+	var ice: Variant = sig.get("ice")
+	if ice is Dictionary:
+		var fields: int = _text_length(ice.get("sdpMid")) + _text_length(ice.get("usernameFragment"))
+		return _text_length(ice.get("candidate")) + fields
+	return 1
+
+
+static func _text_length(value: Variant) -> int:
+	return (value as String).length() if value is String else 0
+
+
 ## Sends a link's signal and, but for a candidate or a bye, closes the link
-## as "refused" when the server refuses it.
-func _send_peer_signal(link: PeerLink, sig: Dictionary) -> void:
+## as "refused" when the server refuses it. A signal refused RATE_LIMITED is
+## sent again after the server's wait, at most three times, unless the link
+## closed meanwhile.
+func _send_peer_signal(link: PeerLink, sig: Dictionary, attempt: int = 0) -> void:
 	if state != State.READY:
 		return
 	var id := _take_id()
@@ -744,9 +791,17 @@ func _send_peer_signal(link: PeerLink, sig: Dictionary) -> void:
 	_replies.erase(id)
 	if answer.get("ok", false) or sig.has("ice") or sig.has("bye") or link.state == "closed":
 		return
-	var code := str((answer.get("e", {}) as Dictionary).get("code", ""))
-	if code != "TIMEOUT" and code != "RATE_LIMITED":
-		link._finish("refused", false)
+	var error: Dictionary = answer.get("e", {})
+	var code := str(error.get("code", ""))
+	if code == "RATE_LIMITED" and attempt < 3:
+		var data: Variant = error.get("data")
+		var wait := float(data.get("retryAfterMs", 100)) if data is Dictionary else 100.0
+		wait = clampf(wait, 1.0, float(PEER_OPEN_TIMEOUT_MS))
+		await get_tree().create_timer(wait / 1000.0).timeout
+		if link.state != "closed" and state == State.READY:
+			_send_peer_signal(link, sig, attempt + 1)
+	elif code != "TIMEOUT":
+		link._finish("refused", true)
 
 
 ## Sends a link message through the relay, within nine tenths of each rate
@@ -786,20 +841,19 @@ func _on_peer_signal(frame: Variant) -> void:
 	if link != null and link._on_signal(sig, user):
 		return
 	if (sig as Dictionary).get("bye") == true:
-		_pending.erase(key)
+		_drop_pending(key)
 		return
 	var now := Time.get_ticks_msec()
 	for old in _pending.keys():
 		if now - int(_pending[old].at) > PEER_PENDING_MS:
-			_pending.erase(old)
+			_drop_pending(old)
 	if _pending.has(key):
-		var waiting: Array = _pending[key].signals
-		if waiting.size() < PEER_MAX_PENDING:
-			waiting.append(sig)
+		_keep_pending(_pending[key], sig)
 		return
-	if _pending.size() >= PEER_MAX_PENDING:
+	var entry := {"room": room, "from": from, "user_id": user, "signals": [], "at": now, "chars": 0}
+	if _pending.size() >= PEER_MAX_PENDING or not _keep_pending(entry, sig):
 		return
-	_pending[key] = {"room": room, "from": from, "user_id": user, "signals": [sig], "at": now}
+	_pending[key] = entry
 	peer_requested.emit(room, from, user)
 
 
@@ -920,8 +974,9 @@ class PeerLink:
 		close_reason = reason
 		_close_direct()
 		_client._forget_link(self)
-		# A refused or unsupported link has no session the server would carry a bye for.
-		if from_here and _started and reason != "refused" and reason != "unsupported":
+		# Signals the server took hold a place for the pair there, a refused
+		# link's too: the bye frees it. A link that never started sent none.
+		if from_here and _started:
 			_client._send_peer_signal(self, {"bye": true})
 		state_changed.emit("closed", "")
 		closed.emit(reason)

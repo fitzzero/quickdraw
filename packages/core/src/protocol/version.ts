@@ -90,8 +90,11 @@ export const MAX_PEER_LINKS = 64;
 /** The longest peer link message, in UTF-8 bytes, on the data channel and through the relay alike. */
 export const MAX_PEER_MESSAGE_BYTES = 65_536;
 
-/** The longest string a `qd:peer` signal carries (a session description, a candidate), in characters. */
+/** The longest session description a `qd:peer` signal carries, in characters. */
 export const MAX_PEER_SIGNAL_LENGTH = 16_384;
+
+/** The longest string of a `qd:peer` candidate (`candidate`, `sdpMid`, `usernameFragment`), in characters. */
+export const MAX_PEER_CANDIDATE_LENGTH = 1024;
 
 /** Signals one socket may send per second (`qd:peer`); more are refused `RATE_LIMITED`. */
 export const PEER_SIGNAL_RATE = 20;

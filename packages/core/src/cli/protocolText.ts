@@ -191,18 +191,24 @@ offer: its peer moves to the relay on hearing it.
    \`QUICK_PING_MS\` apart as the link opens, so the clocks sync at once),
    and answer each ping with its pong at once. A side that hears nothing
    from its peer for \`WATCHDOG_MS\` closes the link.
-6. Close a link with \`{ bye: true }\`. The server sends one as well, from a
-   peer that left the room, was taken out of it or disconnected, to each
-   socket that peer signalled there. A socket that left the room itself
-   (\`qd:presence\` with \`users: []\`) closes the room's links without one.
+6. Close a link with \`{ bye: true }\`, a link the server refused a signal of
+   too: the server keeps a place for each peer a socket signalled until a
+   bye ends the pair. The server sends one as well, from a peer that left
+   the room, was taken out of it or disconnected, to each socket that peer
+   signalled there and each that signalled it. A socket that left the room
+   itself (\`qd:presence\` with \`users: []\`) closes the room's links
+   without one.
 7. A signal from a socket you have no link with asks for a link: answer it
-   within \`PENDING_MS\`, or send \`{ bye: true }\`. A second offer or a
-   second \`{ relay: true }\` from a socket you have a link with opens a new
+   within \`PENDING_MS\`, or send \`{ bye: true }\`. On the answering side, a
+   second offer, a second \`{ relay: true }\`, or an offer after
+   \`{ relay: true }\`, from the socket you have a link with opens a new
    link: you missed the bye of the last one.
 
-Keep relay messages within \`limits.peers\` of the hello: the server drops
-a message over them silently, a \`rel\` one too. A client without WebRTC
-works on the relay alone; the server never needs one.`;
+The relay carries a message only between two sockets that each signalled
+the other in that room, which every open link has. Keep relay messages
+within \`limits.peers\` of the hello: the server drops a message over them
+silently, a \`rel\` one too. A client without WebRTC works on the relay
+alone; the server never needs one.`;
 
 /** Before the table of the peer link timings. */
 export const PEER_TIMINGS_INTRO = `The timings of \`@fitzzero/quickdraw-core\`'s links, which a link with one
@@ -282,10 +288,12 @@ is disconnected (Socket.IO DISCONNECT, \`41\`, then the WebSocket closes): that
 is sustained flooding, not a burst. As after any DISCONNECT the server
 sends, a client does not reconnect on its own.
 A \`qd:peer\` over \`PEER_SIGNAL_RATE\` is refused \`RATE_LIMITED\` with
-\`retryAfterMs\`, and one to a new peer from a socket that signals
+\`retryAfterMs\` (a \`bye\` over it still ends the pair on the server, and
+its peer is not told), and one to a new peer from a socket that signals
 \`MAX_PEER_LINKS\` already \`CONFLICT\`. A \`qd:relay\` message over the relay
-rate or bytes, longer than \`MAX_PEER_MESSAGE_BYTES\`, or to a peer the socket
-did not signal in that room, is dropped silently. A socket whose refused
-signals, or dropped relay messages, within \`CHANNEL_ABUSE_WINDOW_MS\` exceed
+rate or bytes, longer than \`MAX_PEER_MESSAGE_BYTES\`, or to a peer that has
+not signalled the socket and been signalled by it in that room, is dropped
+silently. A socket whose signals refused \`RATE_LIMITED\`, or whose dropped
+relay messages, within \`CHANNEL_ABUSE_WINDOW_MS\` exceed
 \`CHANNEL_ABUSE_MULTIPLIER\` times the signal rate, or the relay rate, is
 disconnected as for channels.`;

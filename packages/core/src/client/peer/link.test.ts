@@ -417,14 +417,14 @@ describe("closing", () => {
     expect(bo.accepted[0]?.closeReason).toBe("bye");
   });
 
-  it("closes as refused when the server refuses a signal, and says no bye", async () => {
+  it("closes as refused when the server refuses a signal, and says bye, freeing the server's place", async () => {
     wire.answer = () => ({ ok: false, e: { code: "NOT_FOUND", message: "No such socket" } });
     const ada = player("ada");
     const bo = player("bo");
     const link = offer(ada, bo);
     await pass();
     expect(link.closeReason).toBe("refused");
-    expect(ada.side.socket.signals()).toEqual([{ relay: true }]);
+    expect(ada.side.socket.signals()).toEqual([{ relay: true }, { bye: true }]);
   });
 
   it("retries a signal the server rate-limited", async () => {
@@ -442,6 +442,29 @@ describe("closing", () => {
     await pass(100);
     expect(link.path).toBe("relay");
     expect(ada.side.socket.signals()).toEqual([{ relay: true }, { relay: true }]);
+  });
+
+  it("sends no signal again once the link closed, by this side or by its timeout", async () => {
+    // The socket's rate limiter may ask for up to a minute.
+    wire.answer = (_from, frame) =>
+      frame.sig.bye === true
+        ? { ok: true }
+        : {
+            ok: false,
+            e: { code: "RATE_LIMITED", message: "Slow down", data: { retryAfterMs: 60_000 } },
+          };
+    const ada = player("ada");
+    const bo = player("bo");
+    const link = offer(ada, bo);
+    await pass();
+    link.close();
+    await pass(60_000);
+    expect(ada.side.socket.signals()).toEqual([{ relay: true }, { bye: true }]);
+    const cy = player("cy");
+    const again = offer(cy, bo);
+    await pass(60_000);
+    expect(again.closeReason).toBe("timeout");
+    expect(cy.side.socket.signals()).toEqual([{ relay: true }, { bye: true }]);
   });
 
   it("closes as failed when a direct-only link's path fails", async () => {
@@ -515,6 +538,29 @@ describe("requests", () => {
     link.close();
     await pass();
     expect(() => offer(ada, bo)).not.toThrow();
+  });
+
+  it("keeps at most 64 KiB of a waiting peer's signals for the link that answers it", async () => {
+    network.mode = "never";
+    const bo = player("bo", false);
+    const from = "socket-of-ada";
+    const forward = (sig: unknown): void => {
+      bo.side.socket.receive("qd:peer", { room: ROOM, from, userId: "ada", sig });
+    };
+    forward({ sdp: { type: "offer", sdp: "o".repeat(16_000) } });
+    for (let n = 0; n < 60; n += 1) {
+      forward({
+        ice: { candidate: `${String(n).padStart(2, "0")}${"c".repeat(997)}`, sdpMid: "0" },
+      });
+    }
+    expect(bo.requests.map((request) => request.from)).toEqual([from]);
+    const link = bo.requests[0]?.accept({ peerConnection: network.factory });
+    await pass();
+    expect(link?.state).toBe("connecting");
+    // The offer and 49 candidates of 1,000 characters fit; the rest were dropped.
+    const [answerRtc] = network.made;
+    expect(answerRtc?.candidates.length).toBe(49);
+    expect(answerRtc?.candidates.at(-1)?.candidate.slice(0, 2)).toBe("48");
   });
 
   it("reject says bye, and a request nobody answers is dropped after a while", async () => {

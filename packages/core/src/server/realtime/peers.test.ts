@@ -1,10 +1,11 @@
 // Peer links on the server (RFC 0003 section 12.5): a server created with
 // `peers: true` forwards `qd:peer` signals between two signed-in sockets of
 // one app room, with the sender's user, and relays `qd:relay` link messages
-// to a peer the sender signalled, within a per-peer rate and a per-socket
-// byte budget; a socket that floods either is disconnected, and a socket
-// that leaves a room, is taken out of it or disconnects says `bye` to the
-// peers it signalled there. Without `peers`, the server serves none of it.
+// between two sockets that signalled each other, within a per-peer rate and
+// a per-socket byte budget; a socket that floods either is disconnected, and
+// a socket that leaves a room, is taken out of it or disconnects says `bye`
+// to the peers it signalled there and to those that signalled it. Without
+// `peers`, the server serves none of it.
 //
 // In the cluster projects (`bun run test:cluster`) both sockets of a test
 // sit on one node; the peered-bus tests at the end, and
@@ -38,7 +39,7 @@ import {
   type Peer,
 } from "./__tests__/peers";
 import { sendRelay } from "./peerDelivery";
-import { disengage, engage, peersOf } from "./peerState";
+import { disengage, engage, hear, MAX_HEARD, pairOf, peersOf } from "./peerState";
 
 const apps: TestApp[] = [];
 
@@ -203,6 +204,8 @@ describe("signals", () => {
       { relay: false },
       { ice: { candidate: 7 } },
       { sdp: { type: "offer", sdp: "x".repeat(16_385) } },
+      { ice: { candidate: "c".repeat(1025) } },
+      { ice: { candidate: "c", usernameFragment: "u".repeat(1025) } },
       {},
     ]) {
       expect(await a.signal(GAME, b.id, sig)).toEqual(refused("VALIDATION"));
@@ -245,6 +248,18 @@ describe("signals", () => {
     });
   });
 
+  it("end the pair here when a bye comes over the rate, though the peer is not told", async () => {
+    const app = await start();
+    const [a, b] = await linked(app);
+    const answers = await Promise.all([
+      ...Array.from({ length: PEER_SIGNAL_BURST + 5 }, () => a.signal(GAME, b.id, OFFER)),
+      a.signal(GAME, b.id, { bye: true }),
+    ]);
+    expect(answers.at(-1)).toEqual(refused("RATE_LIMITED"));
+    const aSocket = app.server.io.sockets.sockets.get(a.id);
+    expect(aSocket === undefined ? "gone" : pairOf(peersOf(aSocket), GAME, b.id)).toBeUndefined();
+  });
+
   it("disconnect a socket that keeps sending far over the rate", async () => {
     const logger = captureLogger();
     const app = await start({ logger });
@@ -265,21 +280,23 @@ describe("signals", () => {
 });
 
 describe("relay", () => {
-  it("passes a link message only to a peer the sender signalled, in order, with the sender's id", async () => {
+  it("passes a link message only between two sockets that signalled each other, in order, with the sender's id", async () => {
     const app = await start();
     const a = await player(app, alice);
     const b = await player(app, bob);
     a.relay(GAME, b.id, "rel", message("before"));
     await settle(a);
     expect(await a.signal(GAME, b.id, OFFER)).toEqual(ok);
+    // Bob has not answered: neither side's messages go anywhere yet.
+    a.relay(GAME, b.id, "rel", message("unanswered"));
+    b.relay(GAME, a.id, "rel", message("unasked"));
+    await settle(a, b);
+    expect(await b.signal(GAME, a.id, { relay: true })).toEqual(ok);
+    await settle(a, b);
     a.relay(GAME, b.id, "rel", message({ n: 1 }));
     await settle(a, b);
     // Volatile: sent while Bob's connection is not writing, or dropped.
     a.relay(GAME, b.id, "fast", message({ n: 2 }));
-    // Bob never signalled Alice: his messages go nowhere until he does.
-    b.relay(GAME, a.id, "rel", message("unasked"));
-    await settle(a, b);
-    expect(await b.signal(GAME, a.id, { relay: true })).toEqual(ok);
     b.relay(GAME, a.id, "rel", message("answered"));
     await settle(a, b);
     expect(b.relayed).toEqual<RelayForwardFrame[]>([
@@ -321,6 +338,9 @@ describe("relay", () => {
     const c = await player(app, carol);
     expect(await a.signal(GAME, b.id, OFFER)).toEqual(ok);
     expect(await a.signal(GAME, c.id, OFFER)).toEqual(ok);
+    expect(await b.signal(GAME, a.id, { relay: true })).toEqual(ok);
+    expect(await c.signal(GAME, a.id, { relay: true })).toEqual(ok);
+    await settle(a, b, c);
     const text = message("z".repeat(59_990));
     for (let n = 0; n < 20; n += 1) {
       a.relay(GAME, b.id, "rel", text);
@@ -343,6 +363,7 @@ describe("relay", () => {
       a.connection.socket.once("disconnect", resolve);
     });
     // Never signalled: every one is dropped, and past 100 times the rate within 10 s it is a flood.
+    // A socket id nobody holds, or one that never answered, is the same.
     for (let n = 0; n <= PEER_RELAY_RATE * 100; n += 1) {
       a.relay(GAME, b.id, "fast", "[1,0]");
     }
@@ -420,6 +441,43 @@ describe("ending links", () => {
     expect(a.relayed).toEqual([[GAME, b.id, "rel", message("still here")]]);
   });
 
+  it("tells the peers that signalled a socket when it disconnects, though it never answered", async () => {
+    const app = await start();
+    const a = await player(app, alice);
+    const b = await player(app, bob);
+    expect(await a.signal(GAME, b.id, OFFER)).toEqual(ok);
+    await settle(a, b);
+    b.connection.socket.disconnect();
+    await settle(a);
+    expect(a.signals).toEqual([bye(GAME, b, "bob")]);
+    // Alice's place for the pair is free again.
+    const aSocket = app.server.io.sockets.sockets.get(a.id);
+    expect(aSocket === undefined ? undefined : pairOf(peersOf(aSocket), GAME, b.id)).toBe(
+      undefined,
+    );
+  });
+
+  it("frees a pair whose peer went away without a bye when the peer is not found", async () => {
+    const app = await start();
+    const a = await player(app, alice);
+    const b = await player(app, bob);
+    expect(await a.signal(GAME, b.id, OFFER)).toEqual(ok);
+    await settle(a, b);
+    const aSocket = app.server.io.sockets.sockets.get(a.id);
+    const bSocket = app.server.io.sockets.sockets.get(b.id);
+    if (aSocket === undefined || bSocket === undefined) {
+      throw new Error("the sockets are on this node");
+    }
+    // Bob's node forgot hearing Alice (as when more peers signalled him since): he leaves with no bye.
+    peersOf(bSocket).heard.clear();
+    await b.connection.call.lobbyService.exit({ room: GAME });
+    await settle(a, b);
+    expect(a.signals).toEqual([]);
+    expect(pairOf(peersOf(aSocket), GAME, b.id)).toBeDefined();
+    expect(await a.signal(GAME, b.id, OFFER)).toEqual(refused("NOT_FOUND"));
+    expect(pairOf(peersOf(aSocket), GAME, b.id)).toBeUndefined();
+  });
+
   it("ends the pair on both sides when a socket says bye itself", async () => {
     const app = await start();
     const [a, b] = await linked(app);
@@ -437,6 +495,34 @@ describe("ending links", () => {
 
 describe("the pairs a socket holds", () => {
   const socket = { id: "s", data: { principal: alice } } as unknown as QuickdrawServerSocket;
+
+  it("turn mutual once the peer signalled too, whichever side signalled first", () => {
+    const state = peersOf({ id: "t", data: {} } as unknown as QuickdrawServerSocket, 0);
+    expect(engage(state, GAME, "offered", 0)).toBe(true);
+    expect(pairOf(state, GAME, "offered")?.mutual).toBe(false);
+    hear(state, GAME, "offered");
+    hear(state, GAME, "asking");
+    expect(engage(state, GAME, "asking", 0)).toBe(true);
+    expect([pairOf(state, GAME, "offered")?.mutual, pairOf(state, GAME, "asking")?.mutual]).toEqual(
+      [true, true],
+    );
+    expect(state.heard.size).toBe(0);
+  });
+
+  it(`keep at most ${MAX_HEARD} unanswered peers, forgetting the oldest first`, () => {
+    const state = peersOf({ id: "u", data: {} } as unknown as QuickdrawServerSocket, 0);
+    for (let n = 0; n <= MAX_HEARD; n += 1) {
+      hear(state, GAME, `peer-${n}`);
+    }
+    expect(state.heard.size).toBe(MAX_HEARD);
+    // Peer 0 was forgotten: answering it now makes a pair that is not mutual.
+    expect(engage(state, GAME, "peer-0", 0)).toBe(true);
+    expect(engage(state, GAME, "peer-1", 0)).toBe(true);
+    expect([pairOf(state, GAME, "peer-0")?.mutual, pairOf(state, GAME, "peer-1")?.mutual]).toEqual([
+      false,
+      true,
+    ]);
+  });
 
   it(`are at most ${MAX_PEER_LINKS}, and an ended one makes room`, () => {
     const state = peersOf(socket, 0);

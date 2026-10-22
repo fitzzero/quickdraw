@@ -41,7 +41,7 @@ import {
   type PeerIceServer,
   type RtcConnection,
 } from "./rtc";
-import type { PeerCloseReason, PeerLink } from "./types";
+import type { PeerLink } from "./types";
 
 /**
  * When a link uses the server's relay: `auto` when the direct path cannot
@@ -116,6 +116,8 @@ interface Run {
   relayHeard: boolean;
   openTimer: ReturnType<typeof setTimeout> | undefined;
   directTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Signals waiting out a `RATE_LIMITED` answer, cleared when the link closes. */
+  readonly retries: Set<ReturnType<typeof setTimeout>>;
   remove: () => void;
 }
 
@@ -131,7 +133,17 @@ function canDirect(run: Run): boolean {
   return run.relay !== "always" && run.factory !== undefined;
 }
 
-/** Sends a signal; a refusal closes the link, but for a candidate (one lost candidate is no loss). */
+/** How long a rate-limited signal waits before it is sent again: the server's wait, within the open timeout. */
+function retryDelay(data: unknown): number {
+  const wait = (data as { readonly retryAfterMs?: unknown } | undefined)?.retryAfterMs;
+  return typeof wait === "number" && wait > 0 ? Math.min(wait, OPEN_TIMEOUT_MS) : 100;
+}
+
+/**
+ * Sends a signal; a refusal closes the link, but for a candidate (one lost
+ * candidate is no loss). A rate-limited signal is sent again, at most three
+ * times, unless the link closed meanwhile.
+ */
 function signal(run: Run, sig: PeerSignal, attempt = 0): void {
   void run.hub.signal(run.room, run.peer, sig).then((answer) => {
     if (answer.ok || run.core.link.state === "closed" || sig.ice !== undefined) {
@@ -139,13 +151,11 @@ function signal(run: Run, sig: PeerSignal, attempt = 0): void {
     }
     const { code, data } = answer.e;
     if (code === "RATE_LIMITED" && attempt < 3) {
-      const wait = (data as { readonly retryAfterMs?: unknown } | undefined)?.retryAfterMs;
-      setTimeout(
-        () => {
-          signal(run, sig, attempt + 1);
-        },
-        typeof wait === "number" ? wait : 100,
-      );
+      const retry = setTimeout(() => {
+        run.retries.delete(retry);
+        signal(run, sig, attempt + 1);
+      }, retryDelay(data));
+      run.retries.add(retry);
     } else if (code !== "TIMEOUT") {
       run.core.fail("refused");
     }
@@ -359,12 +369,17 @@ function sendOn(run: Run, label: PeerLabel, text: string): boolean {
   return run.relaySent && run.hub.relay(run.room, run.peer, label, text, run.pair);
 }
 
-function closed(run: Run, reason: PeerCloseReason, fromHere: boolean): void {
+function closed(run: Run, fromHere: boolean): void {
   clearTimeout(run.openTimer);
+  for (const retry of run.retries) {
+    clearTimeout(retry);
+  }
+  run.retries.clear();
   closeDirect(run);
   run.remove();
-  // A refused or unsupported link has no session the server would carry a bye for.
-  if (fromHere && run.started && reason !== "refused" && reason !== "unsupported") {
+  // Signals the server took hold a place for the pair there, a refused link's
+  // too: the bye frees it. A link that never started sent none.
+  if (fromHere && run.started) {
     void run.hub.signal(run.room, run.peer, { bye: true });
   }
 }
@@ -423,8 +438,8 @@ export function createPeerLink(
       maxMessageBytes: () => hub.limits().maxMessageBytes,
       hooks: {
         send: (label, text) => sendOn(run, label, text),
-        closed: (reason, fromHere) => {
-          closed(run, reason, fromHere);
+        closed: (_reason, fromHere) => {
+          closed(run, fromHere);
         },
       },
     }),
@@ -438,6 +453,7 @@ export function createPeerLink(
     relayHeard: false,
     openTimer: undefined,
     directTimer: undefined,
+    retries: new Set(),
     remove: () => undefined,
   };
   run.remove = hub.add(run.room, run.peer, {

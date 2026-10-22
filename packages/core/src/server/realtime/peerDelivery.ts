@@ -6,8 +6,10 @@
 // `../cluster/deployment.ts`), and the node that holds the socket checks it
 // the same way before it sends.
 //
-// A `bye` ends the pair on both sides: the sender's record (`peers.ts`) and
-// the receiver's, so neither keeps a slot for a link that is over.
+// A signal delivered to a socket is heard (`peerState.ts`): it makes the
+// pair mutual, which relaying needs. A `bye` ends the pair on both sides:
+// the sender's record (`peers.ts`) and the receiver's, so neither keeps a
+// slot for a link that is over.
 
 import { SERVER_EVENTS } from "../../contract/names";
 import type { PeerForwardFrame, RelayForwardFrame } from "../../protocol/envelope";
@@ -15,7 +17,15 @@ import { emitToNodes, onNodeEvent } from "../cluster/deployment";
 import type { Hub } from "../emit/hub";
 import type { QuickdrawServerSocket } from "../transports/types";
 import { readForwardedRelay, readForwardedSignal } from "./peerFrames";
-import { disengage, disengageAll, knownPeers, reachable, type SocketPeers } from "./peerState";
+import {
+  disengage,
+  disengageAll,
+  hear,
+  knownPeers,
+  peersOf,
+  reachable,
+  type SocketPeers,
+} from "./peerState";
 
 /** The server-to-server event a signal for a socket of another node goes out on. */
 export const PEER_SIGNAL_EVENT = "quickdraw:peer";
@@ -33,10 +43,14 @@ export function clusterOf(hub: Hub): Hub["io"] {
   return hub.probe.local() ? undefined : hub.io;
 }
 
-/** Sends a signal to `target`; a `bye` also ends the target's own record of the pair. */
+/** Sends a signal to `target`, which hears it; a `bye` ends the target's own record of the pair. */
 function emitSignal(target: QuickdrawServerSocket, frame: PeerForwardFrame): void {
   target.emit(SERVER_EVENTS.peer, frame);
-  const state = frame.sig.bye === true ? knownPeers(target) : undefined;
+  if (frame.sig.bye !== true) {
+    hear(peersOf(target), frame.room, frame.from);
+    return;
+  }
+  const state = knownPeers(target);
   if (state !== undefined) {
     disengage(state, frame.room, frame.from);
   }
@@ -80,8 +94,8 @@ export function sendRelay(hub: Hub, to: string, frame: RelayForwardFrame): void 
 
 /**
  * Ends the socket's links in the rooms `ended` accepts (every room by
- * default): each peer it signalled there gets a `bye` from it, and the
- * pairs are forgotten.
+ * default): each peer it signalled there, and each that signalled it, gets
+ * a `bye` from it, and the pairs are forgotten.
  */
 export function sayGoodbye(hub: Hub, state: SocketPeers, ended?: (room: string) => boolean): void {
   const { socket } = state;

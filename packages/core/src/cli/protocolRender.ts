@@ -334,6 +334,7 @@ function limitsSection(model: ProtocolModel): string[] {
       row("CHANNEL_ABUSE_MULTIPLIER", " times the channel's rate"),
       row("MAX_SOCKET_ID_LENGTH", " characters"),
       row("MAX_PEER_SIGNAL_LENGTH", " characters"),
+      row("MAX_PEER_CANDIDATE_LENGTH", " characters"),
       row("PEER_SIGNAL_RATE", " signals a second per socket"),
       row("PEER_SIGNAL_BURST", " signals"),
       row("MAX_PEER_LINKS", " peers per socket"),

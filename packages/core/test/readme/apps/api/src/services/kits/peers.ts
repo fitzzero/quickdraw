@@ -6,6 +6,7 @@ import { qd } from "../../quickdraw";
 export const matchService = qd.defineService(match, {
   methods: {
     enterMatch: {
+      // any signed-in user here: a real game checks the caller's seat in the match first
       access: "authenticated",
       handler: ({ input, ctx }) => {
         const room = `match:${input.matchId}`;
