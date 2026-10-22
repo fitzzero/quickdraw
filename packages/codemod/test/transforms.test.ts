@@ -249,13 +249,10 @@ describe("a method object whose name its files bind already (task/methods/delega
       "async function renameTaskBody(db: PrismaClient, id: string, title: string) {",
     );
     expect(delegates()).toContain("const task = await renameTaskBody(db, input.id, input.title);");
-    expect(delegates()).toContain(
-      'import { assignTask as assignTaskImpl, countTasks as countTasksImpl } from "../rows.js";',
-    );
+    expect(delegates()).toContain('import { assignTask as assignTaskImpl } from "../rows.js";');
     expect(delegates()).toContain(
       "const task = await assignTaskImpl(db, input.id, input.assigneeId);",
     );
-    expect(delegates()).toContain("count: await countTasksImpl(db, input.projectId),");
     expect(
       delegates().match(/^export const (?:assignTask|renameTask|countTasks) = \{$/gmu),
     ).toHaveLength(3);
@@ -281,6 +278,17 @@ describe("a method object whose name its files bind already (task/methods/delega
     expect(service()).toContain(
       "export async function renameTask(db: PrismaClient, id: string, title: string): Promise<void> {",
     );
+  });
+
+  it("hoists a service's helper of a module method's name as <name>Of<Class>, where its callers import it", () => {
+    // task/service-core.ts's countTasks, which the countTasks handler called on the service
+    expect(output.get(`${task}/service-core.ts`)).toContain(
+      "export async function countTasksOfTaskServiceCore(projectId: string): Promise<number> {",
+    );
+    expect(delegates()).toContain(
+      'import { toTaskDto, countTasksOfTaskServiceCore } from "../service-core.js";',
+    );
+    expect(delegates()).toContain("count: await countTasksOfTaskServiceCore(input.projectId),");
   });
 
   it("renames a binding inside a function that would shadow an imported method object <name>Impl", () => {

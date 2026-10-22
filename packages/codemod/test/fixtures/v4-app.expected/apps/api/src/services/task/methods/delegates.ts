@@ -1,12 +1,13 @@
 import type { PrismaClient } from "@project/db";
-import { assignTask as assignTaskImpl, countTasks as countTasksImpl } from "../rows.js";
-import { toTaskDto } from "../service-core.js";
+import { assignTask as assignTaskImpl } from "../rows.js";
+import { toTaskDto, countTasksOfTaskServiceCore } from "../service-core.js";
 import type { MethodOf } from "../../../quickdraw.js";
 import type { taskContract } from "@project/shared";
 
 // Handlers that delegate to a function of their method's own name, as
 // Conveyor's method modules do: an implementation imported under it, a local
-// helper, and an exported helper the service file calls as well.
+// helper, an exported helper the service file calls as well, and the
+// service's own helper of that name.
 
 // The handler body, named after its method
 async function renameTaskBody(db: PrismaClient, id: string, title: string) {
@@ -45,7 +46,7 @@ export const getTaskTitleMethod = {
 export const countTasks = {
   // quickdraw-migrate: review [access] "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
   access: "authenticated",
-  handler: async ({ input, db }) => ({
-    count: await countTasksImpl(db, input.projectId),
+  handler: async ({ input }) => ({
+    count: await countTasksOfTaskServiceCore(input.projectId),
   }),
 } satisfies MethodOf<typeof taskContract, "countTasks">;

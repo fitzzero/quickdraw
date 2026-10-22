@@ -1,10 +1,11 @@
 import type { PrismaClient } from "@project/db";
 import type { TaskService } from "../index.js";
-import { assignTask, countTasks } from "../rows.js";
+import { assignTask } from "../rows.js";
 
 // Handlers that delegate to a function of their method's own name, as
 // Conveyor's method modules do: an implementation imported under it, a local
-// helper, and an exported helper the service file calls as well.
+// helper, an exported helper the service file calls as well, and the
+// service's own helper of that name.
 
 // The handler body, named after its method
 async function renameTask(db: PrismaClient, id: string, title: string) {
@@ -33,6 +34,6 @@ export function registerDelegates(service: TaskService): void {
   }));
 
   service.defineMethod("countTasks", "Read", async (payload) => ({
-    count: await countTasks(service.prisma, payload.projectId),
+    count: await service.countTasks(payload.projectId),
   }));
 }
