@@ -90,7 +90,7 @@ It expects the quickdraw template's layout; the options move each part:
   function `<name>Impl`, with every use; a helper the module exports, or a
   declaration of the service file, keeps its name, and the object is
   written or imported as `<name>Method` (`methods: { name: nameMethod }`).
-  A core helper hoisted under a module method's name becomes
+  A service class's member of a module method's name is hoisted as
   `<name>Of<Class>`. A `defineMethod` call tied to no service is named at
   its file and line in the contract's marker for the method map's
   unimplemented methods. A function that only calls the modules' register

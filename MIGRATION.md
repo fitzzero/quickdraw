@@ -2097,9 +2097,10 @@ becomes `{ renameTask: renameTaskImpl }`. What other files see keeps its
 name: beside a helper the module exports under the method's name, the
 method object is `<name>Method`, and where the service file declares the
 name itself (a wrapper of the method), it imports the object as
-`<name>Method` and lists it as `renameTask: renameTaskMethod`. A core helper
-hoisted under the name of a module's method becomes `<name>Of<Class>`. None
-of these is marked.
+`<name>Method` and lists it as `renameTask: renameTaskMethod`. A service
+class's member of a module method's name, which the method's handler may
+call (`service.renameTask(...)`), is hoisted as `<name>Of<Class>`. None of
+these is marked.
 
 ## Order of the migrations
 
