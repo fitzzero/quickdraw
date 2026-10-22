@@ -16,16 +16,19 @@
 // socket that joins on any node hears it at once: a change goes to the
 // other nodes as `quickdraw:room-host` (`{ room, host, version, was? }`,
 // tagged with the deployment), and a node that starts asks the others once
-// for the hosts their own sockets hold (`quickdraw:room-hosts`). Each
-// record has a version: a node's next host of a room takes one more than
-// every record of it the node heard, and of two records the higher version
-// wins, then the greater socket id, so two `setHost` at once on two nodes
-// settle on one host on every node. A clear applies only to the record it
-// names, and the node remembers it a while (the latest `MAX_CLEARED`), so a
-// record of that host as old reaches no node again, an answer to a
-// starting node's question included. A node that dies without closing
-// leaves its hosts' records on the others until the room's host is set or
-// cleared again.
+// for the hosts their own sockets hold and their clocks
+// (`quickdraw:room-hosts`). Each record has a version, a hybrid clock in
+// microseconds: the time, or one past every version the node heard when
+// that is later. Records are ordered by version, then by socket id, and a
+// clear ends every record of the room ordered at or before the one it
+// clears, whatever its host, and is remembered (the latest `MAX_CLEARED`
+// rooms). So each node holds what the latest event it heard says, a host
+// or none, whatever order the events reached it in, and two `setHost` at
+// once on two nodes leave every node with the same answer. A node that
+// turns down a record older than what it holds sends what it holds again,
+// so a node whose clock is behind, or that started late, comes round. A
+// node that dies without closing leaves its hosts' records on the others
+// until the room's host is set or cleared again.
 
 import { SERVER_EVENTS } from "../../contract/names";
 import { QuickdrawError } from "../../protocol/errors";
@@ -61,11 +64,16 @@ interface State {
   readonly served: () => boolean;
   /** The host of every room that has one, by room: this node's record of every node's. */
   readonly hosts: Map<string, HostRecord>;
-  /** The host each room had when it was last cleared, oldest first: no record of it as old applies again. */
+  /** The record each room was last cleared of, oldest first: no record ordered at or before it applies again. */
   readonly cleared: Map<string, HostRecord>;
+  /** The latest version this node took or heard, of any room: its next one is later. */
+  clock: number;
   hooks: readonly HostLeaveHook[];
   run: Run | undefined;
 }
+
+/** Microseconds per millisecond: a version is a time in microseconds, as a revision is. */
+const MICROS_PER_MS = 1000;
 
 /** True when `record` wins over `other`: a higher version, or the same and a greater host. */
 function wins(record: HostRecord, other: HostRecord | undefined): boolean {
@@ -76,10 +84,21 @@ function wins(record: HostRecord, other: HostRecord | undefined): boolean {
   );
 }
 
-/** True when `record` names a host the room was cleared of at its version or after. */
+/** True when the room was cleared of a record `record` does not win over: it is as old or older. */
 function stale(state: State, room: string, record: HostRecord): boolean {
   const cleared = state.cleared.get(room);
-  return cleared?.host === record.host && cleared.version >= record.version;
+  return cleared !== undefined && !wins(record, cleared);
+}
+
+/** Notes a version heard: this node's next one is later. */
+function observe(state: State, version: number): void {
+  state.clock = Math.max(state.clock, version);
+}
+
+/** The version of a change made here: the time in microseconds, after every version heard. */
+function nextVersion(state: State): number {
+  state.clock = Math.max(Date.now() * MICROS_PER_MS, state.clock + 1);
+  return state.clock;
 }
 
 /** Tells the room's sockets on this node who its host is. */
@@ -97,10 +116,10 @@ function apply(state: State, room: string, record: HostRecord): boolean {
   return true;
 }
 
-/** Ends the room's record of `cleared`, and remembers it. */
+/** Ends the room's record when it is ordered at or before `cleared`, and remembers the clear. */
 function forget(state: State, room: string, cleared: HostRecord): void {
   const current = state.hosts.get(room);
-  if (current?.host === cleared.host && current.version <= cleared.version) {
+  if (current !== undefined && !wins(current, cleared)) {
     state.hosts.delete(room);
     tell(state, room, null);
   }
@@ -124,13 +143,29 @@ function publish(state: State, room: string, host: string | null, record: HostRe
   }
 }
 
-/** Makes `host` the room's host from here, after every record of the room this node heard. */
+/** Makes `host` the room's host from here, ordered after every record this node heard. */
 function change(state: State, room: string, host: string): void {
-  const version =
-    Math.max(state.hosts.get(room)?.version ?? 0, state.cleared.get(room)?.version ?? 0) + 1;
-  const record = { host, version };
+  const record = { host, version: nextVersion(state) };
   apply(state, room, record);
   publish(state, room, host, record);
+}
+
+/**
+ * A record from another node lost to what this node holds of the room (its
+ * host, or the clear that ended the last one): this node sends what it holds
+ * again, so the node that took the older record comes round. A copy of what
+ * it holds changes nothing, and is not answered.
+ */
+function repair(state: State, room: string, record: HostRecord): void {
+  const current = state.hosts.get(room);
+  const cleared = state.cleared.get(room);
+  if (cleared !== undefined && wins(cleared, current)) {
+    if (wins(cleared, record)) {
+      publish(state, room, null, cleared);
+    }
+  } else if (current !== undefined && wins(current, record)) {
+    publish(state, room, current.host, current);
+  }
 }
 
 /** Clears the room's host from here, and tells the other nodes. */
@@ -221,12 +256,20 @@ function readChange(
   return isSocketId(host) ? { room, host, record: { host, version } } : undefined;
 }
 
-/** Takes the hosts the other nodes hold, where they win over this node's records. */
+/** Takes the other nodes' clocks, and the hosts they hold where they win over this node's records. */
 function merge(state: State, answers: unknown): void {
   for (const answer of Array.isArray(answers) ? answers : []) {
-    for (const entry of Array.isArray(answer) ? (answer as unknown[]) : []) {
+    const { hosts, clock } = (answer ?? {}) as {
+      readonly hosts?: unknown;
+      readonly clock?: unknown;
+    };
+    if (isVersion(clock)) {
+      observe(state, clock);
+    }
+    for (const entry of Array.isArray(hosts) ? (hosts as unknown[]) : []) {
       const [room, host, version] = Array.isArray(entry) ? (entry as unknown[]) : [];
       if (isRoomName(room) && isSocketId(host) && isVersion(version)) {
+        observe(state, version);
         apply(state, room, { host, version });
       }
     }
@@ -243,11 +286,12 @@ function listen(state: State): void {
     if (read === undefined) {
       return;
     }
+    observe(state, read.record.version);
     if (read.host === null) {
-      // A clear ends the record it names, never one set since.
+      // A clear ends the record it names, and any ordered before it; never one set since.
       forget(state, read.room, read.record);
-    } else {
-      apply(state, read.room, read.record);
+    } else if (!apply(state, read.room, read.record)) {
+      repair(state, read.room, read.record);
     }
   });
   onNodeEvent(
@@ -255,14 +299,15 @@ function listen(state: State): void {
     state.hub.logger,
     ROOM_HOSTS_EVENT,
     (_payload, answer) => {
-      // The hosts this node's own sockets are: the records it is sure of.
-      answer(
-        [...state.hosts]
+      // The hosts this node's own sockets are (the records it is sure of), and its clock.
+      answer({
+        hosts: [...state.hosts]
           .filter(([, record]) => io.sockets.sockets.has(record.host))
           .map(([room, record]) => [room, record.host, record.version]),
-      );
+        clock: state.clock,
+      });
     },
-    [],
+    { hosts: [] },
   );
   if (!state.hub.probe.local()) {
     const timeoutMs = state.hub.cluster?.timeoutMs ?? DEFAULT_CLUSTER_TIMEOUT_MS;
@@ -282,6 +327,7 @@ export function createRoomHosts(hub: Hub, served: () => boolean): RoomHosts {
     served,
     hosts: new Map(),
     cleared: new Map(),
+    clock: 0,
     hooks: [],
     run: undefined,
   };

@@ -9,7 +9,9 @@
 // neither a handler nor options.
 //
 // In the cluster projects the clients sit on node A and `app.server` is
-// node B, whose record of a room's host follows A's changes.
+// node B, whose record of a room's host follows A's changes. Fake nodes
+// (`fakeNode`) hand their server-to-server events to each other in the
+// order a test chooses, for the races a real cluster rarely shows.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostFrame } from "../../protocol/envelope";
@@ -154,6 +156,210 @@ describe("a room's host", () => {
     expect(() => hosts.set(socket as unknown as QuickdrawServerSocket, WORLD)).toThrow(
       "host mode runs over peer links",
     );
+  });
+});
+
+/** A server-to-server event a fake node sent, waiting for a test to hand it on. */
+interface Sent {
+  readonly event: string;
+  readonly payload: unknown;
+}
+
+/**
+ * A node of a fake cluster: what it sends the other nodes waits in `sent`
+ * until a test hands it on (`deliver`), its startup ask (`asked`) waits for
+ * `started`, and `told` holds the `qd:host` frames its sockets heard.
+ */
+function fakeNode() {
+  const listeners = new Map<string, (payload: unknown, ...rest: unknown[]) => void>();
+  const sockets = new Map<string, QuickdrawServerSocket>();
+  const told: unknown[] = [];
+  const sent: Sent[] = [];
+  const asked: Sent[] = [];
+  let answer: (answers: unknown[]) => void = () => undefined;
+  const io = {
+    on(event: string, listener: (payload: unknown, ...rest: unknown[]) => void) {
+      listeners.set(event, listener);
+    },
+    serverSideEmit(event: string, payload: unknown) {
+      sent.push({ event, payload });
+      return true;
+    },
+    serverSideEmitWithAck(event: string, payload: unknown) {
+      asked.push({ event, payload });
+      return new Promise<unknown[]>((resolve) => {
+        answer = resolve;
+      });
+    },
+    local: { to: () => ({ emit: (_event: string, frame: unknown) => told.push(frame) }) },
+    sockets: { sockets },
+  };
+  const hub = {
+    io,
+    probe: { local: () => false },
+    cluster: undefined,
+    logger: captureLogger(),
+    inFlight: new Set(),
+  };
+  const hosts = createRoomHosts(hub as unknown as Hub, () => true);
+  hosts.listen();
+  return {
+    hosts,
+    told,
+    sent,
+    asked,
+    /** A signed-in socket of this node, in the world. */
+    socket(id: string): QuickdrawServerSocket {
+      const data = { appRooms: { [WORLD]: true }, principal: alice };
+      const socket = { id, connected: true, data } as unknown as QuickdrawServerSocket;
+      sockets.set(id, socket);
+      return socket;
+    },
+    /** Hands this node a server-to-server event: its answer, when it gives one. */
+    hear(message: Sent): unknown {
+      let answered: unknown;
+      listeners.get(message.event)?.(message.payload, (value: unknown) => {
+        answered = value;
+      });
+      return answered;
+    },
+    /** Ends this node's startup ask with the other nodes' answers. */
+    async started(answers: unknown[]): Promise<void> {
+      answer(answers);
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+    },
+  };
+}
+
+type FakeNode = ReturnType<typeof fakeNode>;
+
+/** Hands `to` what `from` sent, in order: the first `count` events, all by default. */
+function deliver(from: FakeNode, to: FakeNode, count = from.sent.length): void {
+  for (const message of from.sent.splice(0, count)) {
+    to.hear(message);
+  }
+}
+
+/** Both nodes' hosts of the world. */
+const hostsOf = (...nodes: FakeNode[]) => nodes.map((node) => node.hosts.of(WORLD));
+
+describe("a room's host across nodes", () => {
+  const NOW = Date.parse("2026-10-22T12:00:00Z");
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("is none on both nodes when two setHost at once race and the winner leaves before the loser's record arrives", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const [a, b] = [fakeNode(), fakeNode()];
+    await Promise.all([a.started([]), b.started([])]);
+    // Two records of one version: the greater socket id wins the tie.
+    const winner = a.socket("socket-2");
+    const loser = b.socket("socket-1");
+    expect([a.hosts.set(winner, WORLD), b.hosts.set(loser, WORLD)]).toEqual([true, true]);
+    // The winner leaves before node A hears the loser's record.
+    a.hosts.left(winner, WORLD, "disconnect");
+    deliver(b, a);
+    expect(hostsOf(a)).toEqual([null]);
+    deliver(a, b);
+    expect(hostsOf(a, b)).toEqual([null, null]);
+    expect(b.told).toEqual([
+      [WORLD, loser.id],
+      [WORLD, winner.id],
+      [WORLD, null],
+    ]);
+    expect(a.told).toEqual([
+      [WORLD, winner.id],
+      [WORLD, null],
+    ]);
+    // The loser leaving node B says nothing: neither node holds it.
+    b.hosts.left(loser, WORLD, "disconnect");
+    expect([a.sent, b.sent]).toEqual([[], []]);
+  });
+
+  it("is none on both nodes when a late setHost from a node whose clock is behind loses to the room's clear", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const a = fakeNode();
+    await a.started([]);
+    const first = a.socket("socket-1");
+    a.hosts.set(first, WORLD);
+    a.hosts.left(first, WORLD, "disconnect");
+    // Node B starts with its clock 2 s behind, and sets a host before any answer.
+    a.sent.length = 0;
+    vi.setSystemTime(NOW - 2000);
+    const b = fakeNode();
+    b.hosts.set(b.socket("socket-2"), WORLD);
+    // Node A turns down a record older than the room's clear, and sends the clear again.
+    deliver(b, a);
+    expect(hostsOf(a, b)).toEqual([null, "socket-2"]);
+    expect(a.sent).toHaveLength(1);
+    deliver(a, b);
+    expect(hostsOf(a, b)).toEqual([null, null]);
+    expect(b.told.at(-1)).toEqual([WORLD, null]);
+    // What a node already holds is not answered: nothing more goes out.
+    expect([a.sent, b.sent]).toEqual([[], []]);
+    // Node B heard the clear's version: its next setHost is later, on both nodes.
+    b.hosts.set(b.socket("socket-0"), WORLD);
+    deliver(b, a);
+    expect(hostsOf(a, b)).toEqual(["socket-0", "socket-0"]);
+  });
+
+  it("is the later host on both nodes when one never heard it, once the other turns down its older record", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const [a, b] = [fakeNode(), fakeNode()];
+    await Promise.all([a.started([]), b.started([])]);
+    a.hosts.set(a.socket("socket-1"), WORLD);
+    // Node B never hears it, and its clock is behind.
+    a.sent.length = 0;
+    vi.setSystemTime(NOW - 2000);
+    b.hosts.set(b.socket("socket-2"), WORLD);
+    deliver(b, a);
+    expect(a.sent).toHaveLength(1);
+    deliver(a, b);
+    expect(hostsOf(a, b)).toEqual(["socket-1", "socket-1"]);
+    expect([a.sent, b.sent]).toEqual([[], []]);
+  });
+
+  it("takes the other nodes' clock when a node starts: its setHost wins over what they cleared before", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const a = fakeNode();
+    await a.started([]);
+    const first = a.socket("socket-1");
+    a.hosts.set(first, WORLD);
+    a.hosts.left(first, WORLD, "disconnect");
+    a.sent.length = 0;
+    vi.setSystemTime(NOW - 2000);
+    const b = fakeNode();
+    await b.started(b.asked.map((ask) => a.hear(ask)));
+    b.hosts.set(b.socket("socket-0"), WORLD);
+    deliver(b, a);
+    expect(hostsOf(a, b)).toEqual(["socket-0", "socket-0"]);
+    expect(a.sent).toEqual([]);
+  });
+
+  it("takes no host from a starting node's late answer when the room's clear arrived first", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const a = fakeNode();
+    await a.started([]);
+    const host = a.socket("socket-1");
+    a.hosts.set(host, WORLD);
+    a.sent.length = 0;
+    const c = fakeNode();
+    const answers = c.asked.map((ask) => a.hear(ask));
+    expect(answers).toEqual([{ hosts: [[WORLD, host.id, NOW * 1000]], clock: NOW * 1000 }]);
+    a.hosts.left(host, WORLD, "disconnect");
+    deliver(a, c);
+    await c.started(answers);
+    expect(hostsOf(a, c)).toEqual([null, null]);
+    expect(c.told).toEqual([]);
   });
 });
 
