@@ -1511,6 +1511,53 @@ app.use(createMcpHttpRouter({ registry: projectAgents, path: "/agents" }));
   socket or HTTP with nothing bound, so the method's access must still
   confine it to its project.
 
+An app that signs the caller in itself, such as its own MCP transport over
+`callMethod` or an in-process assistant, passes the caller as `principal`
+in the call's options, and the registry's `principal` hook is not asked:
+
+<!-- example: apps/api/src/mcp.ts#signed-in -->
+
+```ts
+import { requireSession, sessionOf } from "@fitzzero/quickdraw-core/server/auth";
+import { toToolResult } from "@fitzzero/quickdraw-core/server/mcp";
+
+// the app's own MCP route: its sessions sign the caller in, as an agent of their user
+const signedIn = requireSession(
+  { sessions, jwtSecret },
+  { loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "agent" }) },
+);
+
+app.post("/assistant/:service/:method", signedIn, (req, res) => {
+  void (async () => {
+    const result = await registry.callMethod(req.params.service, req.params.method, req.body, {
+      // no bearer token: the call's queries share its user's lane
+      request: {
+        transport: "http",
+        sessionId: crypto.randomUUID(),
+        token: null,
+        headers: req.headers,
+        req,
+      },
+      // the registry's principal hook is not asked; the user's grants load as qd.caller's do
+      principal: sessionOf<AppPrincipal>(req).principal,
+    });
+    res.json(toToolResult(result));
+  })();
+});
+```
+
+- `principal: null` calls anonymously; without the key, the hook says who
+  calls, as before. `registry.call` takes it as `callMethod` does. The
+  `context` hook, bound arguments and the call's concurrency lane see the
+  given principal, and `request` is still needed: the lane and `context`
+  read it.
+- A principal that carries no `serviceAccess` gets the grants the server's
+  `auth.loadServiceAccess` loads, at each call, as `qd.caller` gives them;
+  one that carries grants (`{}` included) keeps exactly those. The `principal`
+  hook's principal is used as the hook returns it.
+- It is an in-process option: `POST /mcp/invoke` never reads a principal
+  from its body.
+
 Two more needs are met by the options above, with nothing added:
 
 - **A tool set per kind of caller.** Make one registry per kind, each with its

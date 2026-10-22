@@ -172,6 +172,17 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   `ctx.mcp`, not by `ctx.transport`. A guard that refuses a token on a
   direct call now refuses it through `ctx.services` too. `qd.caller` and
   the other in-process callers are unchanged.
+- **The MCP registry takes a caller the app signed in.** `call` and
+  `callMethod` take `principal` in their options, so an app's own MCP
+  transport over `callMethod`, or an in-process assistant, says who the
+  call acts for, and the registry's `principal` hook is not asked (`null`
+  calls anonymously). Until now such an app had to pass the user to the
+  hook some other way, such as a `WeakMap` keyed by a request object. The
+  `context` hook, bound arguments and the concurrency lane see that
+  principal. One that carries no `serviceAccess` gets the grants
+  `auth.loadServiceAccess` loads, at each call, as `qd.caller`'s; the
+  hook's principal is still used as the hook returns it. The HTTP routes
+  never read a principal from a request.
 
 ### Testing
 

@@ -158,6 +158,23 @@ async function withLoadedGrants(principal: Principal, grants: CallerGrants): Pro
   return { ...principal, serviceAccess: serviceAccess ?? {} };
 }
 
+/**
+ * `principal` with the grants `grants` loads now, when it carries none and
+ * there is a loader; else `principal` itself (`null`, or one that carries
+ * grants, `{}` included). A failed load is `INTERNAL`, keeping the error as
+ * `cause`. The MCP registry loads a principal the app gave a call so, at
+ * each call, as an HTTP call's are loaded.
+ */
+export async function withCallerGrants(
+  principal: Principal | null,
+  grants: CallerGrants | undefined,
+): Promise<Principal | null> {
+  if (principal === null || carriesGrants(principal) || grants === undefined) {
+    return principal;
+  }
+  return await withLoadedGrants(principal, grants);
+}
+
 /** What each call of a caller runs as: the principal, or a promise of it while its grants load. */
 type PrincipalOfCall = () => Principal | null | Promise<Principal>;
 

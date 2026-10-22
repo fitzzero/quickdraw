@@ -159,6 +159,13 @@ once:
 - `requireSession(keys)` guards the app's own REST routes.
 - `bearerAuth(...)` is for a hook handed a bearer token alone: the MCP
   bridge's `principal`, an `authenticate` that reads `auth.token`.
+- An app's own MCP transport, or an in-process assistant, that signs the
+  caller in itself (with `requireSession`, say) passes that caller to the
+  registry: `registry.callMethod(service, method, input, { request, principal })`.
+  The registry's `principal` hook is not asked (`null` calls anonymously),
+  the `context` hook and bound arguments see that principal, and its grants
+  load as `qd.caller`'s do. Never take it from a request body, and never
+  smuggle the user to the hook some other way (a map keyed by the request).
 - Never `verifyJWT` alone: it checks the signature and expiry, not the
   session store.
 - A custom `authenticate` takes the session cookie only from

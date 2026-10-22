@@ -1,19 +1,21 @@
 // What a tool call runs as: the principal the registry's `principal` hook
-// maps the session or token to, the `ctx.mcp` fields its `context` hook adds,
-// and a synthetic connection id: the concurrency lane its queries share (RFC
-// 0003 section 9, step 2), as a socket's queries do. A stdio session is one
-// lane; an HTTP request's lane is its caller's (`lanes.ts`; the 5.1 audit's
-// MCP-4): its bearer token's, its user's without a token, or its address's
-// when anonymous. A hook's refusal (`QuickdrawError` `UNAUTHENTICATED` or
-// `FORBIDDEN`) is logged at debug.
+// maps the session or token to, or the one an app that signed the caller in
+// itself gives the call (`McpCallOptions.principal`, which skips the hook
+// and gets its grants loaded as `qd.caller`'s are), the `ctx.mcp` fields
+// the `context` hook adds, and a synthetic connection id: the concurrency
+// lane its queries share (RFC 0003 section 9, step 2), as a socket's
+// queries do. A stdio session is one lane; an HTTP request's lane is its
+// caller's (`lanes.ts`; the 5.1 audit's MCP-4): its bearer token's, its
+// user's without a token, or its address's when anonymous. A hook's refusal
+// (`QuickdrawError` `UNAUTHENTICATED` or `FORBIDDEN`) is logged at debug.
 
 import type { Logger } from "../../contract/logger";
 import { QuickdrawError } from "../../protocol/errors";
-import { lazyMembers, type CallOptions } from "../caller";
+import { callerGrantsOf, lazyMembers, withCallerGrants, type CallOptions } from "../caller";
 import { toQuickdrawError } from "../pipeline/errors";
 import { describeError } from "../pipeline/metrics";
 import type { DispatchRequest, DispatchResult } from "../pipeline/request";
-import { isForbiddenCredential, isRefusal, toPrincipal } from "../transports/auth";
+import { isForbiddenCredential, isPrincipal, isRefusal, toPrincipal } from "../transports/auth";
 import type { McpContext, Principal } from "../types";
 import { laneOf } from "./lanes";
 import type { McpCallOptions, McpCallResult, McpRequest } from "./types";
@@ -81,15 +83,39 @@ async function contextOf(
 }
 
 /**
- * Resolves who a call on `request` acts for and its `ctx.mcp` fields. Rejects
- * with `UNAUTHENTICATED` when the `principal` hook fails; a failing `context`
- * hook rejects with its own error.
+ * The principal an app gave a call: `null` or `undefined` for an anonymous
+ * caller. Anything else that is no principal is a `TypeError`: the app's
+ * mistake, never the caller's refusal.
+ */
+function givenPrincipal(principal: unknown): Principal | null {
+  if (principal === null || principal === undefined) {
+    return null;
+  }
+  if (!isPrincipal(principal)) {
+    throw new TypeError(
+      "An MCP call's principal must be a principal with a non-empty string userId, or null",
+    );
+  }
+  return principal;
+}
+
+/**
+ * Resolves who a call acts for and its `ctx.mcp` fields. With a `principal`
+ * key in `options` (`null` included), that principal, with the grants the
+ * dispatcher's in-process callers load when it carries none (as
+ * `qd.caller`'s, at each call; a failed load rejects with `INTERNAL`), and
+ * the registry's `principal` hook is not asked; else the hook's, rejecting
+ * with `UNAUTHENTICATED` when the hook fails. A failing `context` hook
+ * rejects with its own error.
  */
 export async function openSession(
   settings: SessionSettings,
-  request: McpRequest,
+  options: Pick<McpCallOptions, "request" | "principal">,
 ): Promise<McpSession> {
-  const principal = await principalOf(settings, request);
+  const { request } = options;
+  const principal = Object.hasOwn(options, "principal")
+    ? await withCallerGrants(givenPrincipal(options.principal), callerGrantsOf(settings.dispatcher))
+    : await principalOf(settings, request);
   const mcp = await contextOf(settings, request, principal);
   return { principal, mcp, connectionId: laneOf(request, principal) };
 }
