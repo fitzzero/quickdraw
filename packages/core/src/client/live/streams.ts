@@ -24,6 +24,11 @@
 //   feed's room.
 // - The last holder's release unsubscribes a tick later (`qd:stream:unsub`),
 //   unless the feed is held again first.
+// - A host-served stream (`serve: "host"`) is not the server's: its feed
+//   subscribes over the way to the host of the scope's room
+//   (`../host/links.ts`), with the same rules (the seed replaces what is
+//   held, items append, a refusal empties it), and again whenever a way to
+//   the room's host opens; a connect does not subscribe it.
 //
 // React-free: the live data (`liveData.ts`) makes one per connection and
 // `QueryClient`.
@@ -31,6 +36,8 @@
 import { CLIENT_EVENTS } from "../../contract/names";
 import { QuickdrawError } from "../../protocol/errors";
 import { isName } from "../../protocol/guards";
+import { hostsOf } from "../host/hosts";
+import { hostLinksOf } from "../host/links";
 import { notifyEach } from "../watch";
 import { request, type LiveHost } from "./host";
 import { createRegistry, type Registry } from "./registry";
@@ -55,6 +62,8 @@ export interface StreamTarget {
   readonly stream: string;
   /** True for a stream with one feed per scope value; false for a global stream. */
   readonly scoped: boolean;
+  /** A host-served stream's room of each scope, whose host serves the feed; absent for the server's. */
+  readonly host?: (scope: string) => string | undefined;
 }
 
 /** What a feed shows: its items, oldest first, whether its seed is still to come, and why it failed. */
@@ -118,6 +127,12 @@ interface Feed {
   /** Raised by every subscribe and by `forget`, so an older answer is ignored. */
   attempt: number;
   retry: ReturnType<typeof setTimeout> | undefined;
+  /** True for a host-served stream's feed, held over the way to its room's host. */
+  readonly hosted: boolean;
+  /** That room: the one the contract computes from the scope; `undefined` when it names none. */
+  readonly room: string | undefined;
+  /** Leaves the host's feed. */
+  release: (() => void) | undefined;
 }
 
 function capOf(feed: Feed): number {
@@ -174,8 +189,62 @@ function answered(feeds: Feeds, feed: Feed, reply: Readonly<Record<string, unkno
   setState(feeds, feed, Object.freeze({ items, isLoading: false, error: null }));
 }
 
+/** Holds a host-served feed over the way to its room's host, and settles it by what the host sends. */
+function subscribeHost(feeds: Feeds, feed: Feed): void {
+  feed.release?.();
+  feed.release = undefined;
+  feed.attempt += 1;
+  const { attempt } = feed;
+  const current = (): boolean => feed.attempt === attempt && feeds.registry.get(feed.key) === feed;
+  const { s: service, stream } = feed.frame;
+  const scope = feed.frame.scope ?? "";
+  const refused = (error: QuickdrawError): void => {
+    feed.pending = undefined;
+    setState(feeds, feed, Object.freeze({ items: [], isLoading: false, error }));
+  };
+  if (feed.room === undefined) {
+    refused(
+      new QuickdrawError(
+        "NOT_FOUND",
+        `No app room serves scope "${scope}" of ${service}.${stream}`,
+      ),
+    );
+    return;
+  }
+  feed.pending = [];
+  feed.release = hostLinksOf(feeds.host.connection).subscribe(feed.room, {
+    service,
+    stream,
+    scope,
+    seeded: (items) => {
+      if (current()) {
+        answered(feeds, feed, { seed: items });
+      }
+    },
+    item: (item) => {
+      if (current()) {
+        receive(feeds, [service, stream, scope, item]);
+      }
+    },
+    refused: (error) => {
+      if (current()) {
+        refused(new QuickdrawError(error.code, error.message));
+      }
+    },
+    lost: () => {
+      if (current()) {
+        feed.pending = [];
+      }
+    },
+  });
+}
+
 /** Sends `qd:stream:sub` for `feed` through the connection's lane, and settles the feed by its answer. */
 function subscribe(feeds: Feeds, feed: Feed): void {
+  if (feed.hosted) {
+    subscribeHost(feeds, feed);
+    return;
+  }
   const { host } = feeds;
   clearTimeout(feed.retry);
   feed.retry = undefined;
@@ -208,6 +277,12 @@ function closeFeed(feeds: Feeds, feed: Feed): void {
   const { socket } = feeds.host.connection;
   clearTimeout(feed.retry);
   feed.attempt += 1;
+  if (feed.hosted) {
+    feed.release?.();
+    feed.release = undefined;
+    setState(feeds, feed, PENDING_STREAM);
+    return;
+  }
   if (feed.sent && socket.connected) {
     socket.emit(CLIENT_EVENTS.streamUnsub, feed.frame);
   }
@@ -215,6 +290,7 @@ function closeFeed(feeds: Feeds, feed: Feed): void {
 }
 
 function openFeed(target: StreamTarget, scope: string | undefined, key: string): Feed {
+  const { host } = target;
   const frame =
     scope === undefined
       ? { s: target.service, stream: target.stream }
@@ -228,6 +304,9 @@ function openFeed(target: StreamTarget, scope: string | undefined, key: string):
     sent: false,
     attempt: 0,
     retry: undefined,
+    hosted: host !== undefined,
+    room: host?.(scope ?? ""),
+    release: undefined,
   };
 }
 
@@ -300,6 +379,8 @@ function listen(feeds: Feeds, key: string, listener: () => void): () => void {
 
 /** Creates the streams of `host`'s connection. */
 export function createStreamStore(host: LiveHost): StreamStore {
+  // Hears `qd:host` from now on, before the socket joins a room whose host serves a feed.
+  hostsOf(host.connection);
   const feeds: Feeds = {
     host,
     registry: createRegistry<Feed>((feed) => {
@@ -320,7 +401,10 @@ export function createStreamStore(host: LiveHost): StreamStore {
     },
     resume(): void {
       for (const feed of feeds.registry.held()) {
-        subscribe(feeds, feed);
+        // A host-served feed subscribes again when a way to its host opens.
+        if (!feed.hosted) {
+          subscribe(feeds, feed);
+        }
       }
     },
     forget(): void {
