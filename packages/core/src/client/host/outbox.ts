@@ -10,6 +10,7 @@
 
 import type { HostMessage, PeerLabel } from "../../protocol/envelope";
 import { encodeMessage, messageBytes } from "../peer/codec";
+import { throwLater } from "../peer/core";
 
 /** Sends a host mode message to one peer; false when it was dropped. */
 export type HostSend = (label: PeerLabel, message: HostMessage) => boolean;
@@ -40,10 +41,23 @@ export function createOutbox(send: HostSend, close: () => void): Outbox {
     queue.length = 0;
     queued = 0;
   };
+  /**
+   * Sends one waiting message: false when the link dropped it again. One
+   * that throws (the message limit fell since it waited) is dropped and
+   * reported, never left to stop the rest.
+   */
+  const sent = (message: HostMessage): boolean => {
+    try {
+      return send("rel", message);
+    } catch (error) {
+      throwLater(error);
+      return true;
+    }
+  };
   const flush = (): void => {
     timer = undefined;
     for (let next = queue[0]; next !== undefined; next = queue[0]) {
-      if (!send("rel", next.message)) {
+      if (!sent(next.message)) {
         timer = setTimeout(flush, wait);
         wait = Math.min(MAX_RETRY_MS, wait * 2);
         return;
