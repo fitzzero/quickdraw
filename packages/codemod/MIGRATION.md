@@ -1938,7 +1938,10 @@ A 5.0 server refuses a 4.x client by default (`PROTOCOL_MISMATCH`). With
 that connects without 5.0's handshake is served as a 4.x client instead:
 `socket.emit("taskService:renameTask", payload, ack)` runs through the 5.0
 pipeline, with the same validation, access and limits, and is answered in
-4.x's `ServiceResponse` shape. The shim serves request and response calls
+4.x's `ServiceResponse` shape. A refused input gets code 422 (4.x sent 400)
+and an `error` naming each problem by its path, as 4.x pages show it:
+`Invalid input for taskService.renameTask: title: Too small: expected string to have >=1 characters`,
+the first ten problems, then how many more. The shim serves request and response calls
 only, not subscriptions, collections or channels, and it logs each
 service, method and kind of caller once, so the remaining 4.x clients can
 be found.

@@ -31,6 +31,17 @@ All notable changes to this project will be documented in this file.
   shows the row `adminUpdate` or `adminCreate` returned with
   `admin.adminGet?.setData({ id: row.id }, row)`, with no new read.
 
+### Server
+
+- **The legacy shim's `VALIDATION` replies list the input's issues.** A
+  4.x client's refused input got only `Invalid input for <service>.<method>`
+  in its `error`, since a 4.x reply carries no `data`; 4.1 sent the
+  schema's own messages, and 4.x pages show the text. The `error` now
+  names each issue by its dotted path, the first 10 then `; and N more`:
+  `Invalid input for taskService.rename: title: Required; tags.0: Expected string`.
+  The code (422) and the reply's shape are unchanged, and protocol 5, HTTP
+  and MCP callers still get the issues as `data.issues`.
+
 ### Codemod
 
 - **A method object no longer collides with a binding of its name.** A
