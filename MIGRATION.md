@@ -108,15 +108,18 @@ faithfully. What it does:
   becomes the tracked `db`, and the template's `requireAuth(ctx)` guard goes
   where access already requires a principal. The access mapping is below.
   Helper methods and getters become module functions (a getter's reads call
-  it: `this.enabled` is `enabled()`); overridden 4.x hooks,
+  it: `this.enabled` is `enabled()`), and so does a field holding a function
+  (`provider = () => ...`), as a `const`, unless the service replaces it,
+  which makes it a field like the others; overridden 4.x hooks,
   `defineCollection` options and `installAdminMethods` options stay in the
   file, marked. Each field becomes a marked module binding with its
-  initializer (`const playingUsers = new Set<string>()`), and `this.x`
-  reads it; the constructor's other code, the values it gave fields
-  included, goes into an exported `setUp<Service>(...)` function that takes
-  the constructor's parameters it uses, marked: call it once where the
-  server starts, or move each part. Only the Prisma client's field goes (it
-  is `db`), and a field holding another 4.x service, whose uses are marked
+  initializer (`const playingUsers = new Set<string>()`, or `let` when the
+  service writes it after its initializer), and `this.x` reads it; the
+  constructor's other code, the values it gave fields included, goes into
+  an exported `setUp<Service>(...)` function that takes the constructor's
+  parameters it uses, marked: call it once where the server starts, or
+  move each part. Only the Prisma client's field goes (it is `db`), and a
+  field holding another 4.x service, whose uses are marked
   (`ctx.services` replaces it). A call of the 4.x base class
   (`super.unsubscribe(...)`) is dropped under a marker naming it, since
   `super` outside a class does not parse. A split service's method modules

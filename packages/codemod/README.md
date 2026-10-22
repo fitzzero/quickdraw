@@ -69,11 +69,14 @@ It expects the quickdraw template's layout; the options move each part:
   Handler bodies are kept, with `({ input, ctx, db })` for
   `(payload, ctx)`, `ctx.principal.userId` for `ctx.userId` and the tracked
   `db` for the Prisma field. Helper methods and getters become module
-  functions (a getter's reads call it). Fields become module bindings with
-  their initializers, marked, and the constructor's other code, the values
-  it gave fields included, an exported `setUp<Service>(...)` taking the
-  constructor's parameters it uses, marked; only the Prisma client's field
-  and a field holding another service go. A call of the 4.x base class
+  functions (a getter's reads call it), and a field holding a function a
+  `const` of it, unless the service replaces it: then it is a field like
+  the others. Fields become module bindings with their initializers, marked
+  (`let` for one the service writes after its initializer), and the
+  constructor's other code, the values it gave fields included, an
+  exported `setUp<Service>(...)` taking the constructor's parameters it
+  uses, marked; only the Prisma client's field and a field holding another
+  service go. A call of the 4.x base class
   (`super.x(...)`) is dropped under a marker that names it: `super` outside a
   class does not parse. A `DTO | null` mutation of one row answers
   `"entity"`, marked (a tracked write throws `NOT_FOUND` rather than

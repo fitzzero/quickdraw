@@ -1,9 +1,11 @@
 // What happens to the rest of a 4.x service class. A service object has no
 // members, so each member becomes module-level code in the class's file:
 // helper methods and getters become functions (exported when they were
-// public, since other files may call them), fields become module bindings
-// under a marker (a field's initializer kept; a field its constructor set is
-// set by the setup function), overridden 4.x hooks become functions under a
+// public, since other files may call them), a field holding a function
+// becomes a `const` of it unless the class replaces it, fields become module
+// bindings under a marker (a field's initializer kept; a field its
+// constructor set is set by the setup function; `let` for one the class
+// writes after its initializer), overridden 4.x hooks become functions under a
 // marker, `defineCollection` and `installAdminMethods` options become consts
 // under a marker, and any other constructor code, its field assignments
 // included, goes into a marked, exported setup function that takes the
@@ -26,6 +28,7 @@ import {
 } from "ts-morph";
 import {
   assignedMember,
+  isFixedFunction,
   isFunctionProperty,
   keptFields,
   localNames,
@@ -568,12 +571,12 @@ export function hoistClass(
       add(functionText(member, name, false, [note], scope, imports, setupOnly));
     } else if (Node.isPropertyDeclaration(member) && own(member.getName()) !== undefined) {
       const target = own(member.getName());
-      const init = member.getInitializer();
       if (target === undefined) {
         continue;
       }
-      if (init !== undefined && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) {
-        const value = mapped(init, scope, imports);
+      // a function field the class replaces is a field like any other: `let`, under its marker
+      if (isFixedFunction(member, service)) {
+        const value = mapped(member.getInitializerOrThrow(), scope, imports);
         add({
           text: [
             ...leadingComments(member),

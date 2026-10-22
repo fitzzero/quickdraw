@@ -37,6 +37,15 @@ already been declared`), lint found 15 more `no-redeclare` and
   anywhere in its output, whatever marker covers the line (TypeScript, which
   also sees an import beside a local declaration), and lint the output with
   `no-redeclare` and `no-shadow`, which the 5.0 lint baseline enables.
+- **A field holding a function that the service replaces is hoisted as a
+  `let`.** The codemod wrote every arrow or function-expression field
+  (`provider = () => ...`) as a `const`, so code that swapped it
+  (`this.provider = next`, now `provider = next`) did not typecheck (TS2588)
+  and threw `TypeError: Assignment to constant variable` when it ran:
+  farseer's migration hit 9 of them. A function field the class writes
+  after its initializer, in its constructor or anywhere else, is now module
+  state like any other field: a `let` with its type, under the same `[this]`
+  marker. A `readonly` one, or one nothing writes, stays a `const`.
 
 ## [5.1.1] - 2026-10-11
 
