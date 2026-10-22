@@ -5,7 +5,7 @@
 // instead of the v5 listeners: it maps each call onto the dispatcher with
 // transport `"legacy"` and answers in the 4.x `ServiceResponse` shape
 // (4.1 `src/shared/types.ts:88-90`), with the error code's HTTP status as
-// the numeric `code`.
+// the numeric `code` and a refused input's issues listed in its `error`.
 //
 // The shim is a middleware, not an `onAny` listener, because Socket.IO runs
 // `onAny` listeners before any middleware: the rate limiter, whose middleware
@@ -28,6 +28,7 @@
 // both protocols, so the shim needs no parser of its own.
 
 import { httpStatus, toWire, type ErrorCode } from "../../protocol/errors";
+import { isRecord } from "../../protocol/guards";
 import { describeError } from "../pipeline/metrics";
 import type { DispatchResult } from "../pipeline/request";
 import type { Registry } from "../registry";
@@ -45,11 +46,55 @@ export function legacyFailure(code: ErrorCode, error: string): LegacyReply {
   return { success: false, error, code: httpStatus(code) };
 }
 
-/** A dispatch result in the 4.x reply shape. An `INTERNAL` failure keeps the generic message. */
+/** How many of a refused input's issues a 4.x reply lists; the rest are counted. */
+const LISTED_ISSUES = 10;
+
+/**
+ * One input issue as a 4.x page shows it: its dotted path, `: `, then its
+ * message, or the message alone for the input itself. `undefined` for
+ * anything that is not a wire issue (a handler's own `VALIDATION` may carry
+ * any `data`).
+ */
+function issueText(issue: unknown): string | undefined {
+  if (!isRecord(issue) || typeof issue.message !== "string" || !Array.isArray(issue.path)) {
+    return undefined;
+  }
+  const path: unknown[] = issue.path;
+  if (!path.every((segment) => typeof segment === "string" || typeof segment === "number")) {
+    return undefined;
+  }
+  return path.length === 0 ? issue.message : `${path.join(".")}: ${issue.message}`;
+}
+
+/**
+ * A `VALIDATION` failure's message as a 4.x client receives it: the message,
+ * then its `data.issues` after `: `, joined by `; `, the first
+ * {@link LISTED_ISSUES} then `; and N more`. 4.1 sent the schema's own
+ * messages too (4.1 `src/server/ServiceRegistry.ts:299-303`), and 4.x pages
+ * show the text. The message alone without issues.
+ */
+function validationMessage(message: string, data: unknown): string {
+  const issues: unknown[] = isRecord(data) && Array.isArray(data.issues) ? data.issues : [];
+  const texts = issues.map(issueText).filter((text) => text !== undefined);
+  if (texts.length === 0) {
+    return message;
+  }
+  const more = texts.length - LISTED_ISSUES;
+  const listed = texts.slice(0, LISTED_ISSUES).join("; ");
+  return `${message}: ${listed}${more > 0 ? `; and ${String(more)} more` : ""}`;
+}
+
+/**
+ * A dispatch result in the 4.x reply shape. A `VALIDATION` failure lists its
+ * input's issues in the message, which 4.x replies carry no `data` for; an
+ * `INTERNAL` failure keeps the generic message.
+ */
 export function toLegacyReply(result: DispatchResult): LegacyReply {
   if (!result.ok) {
     const wire = toWire(result.error);
-    return legacyFailure(wire.code, wire.message);
+    const message =
+      wire.code === "VALIDATION" ? validationMessage(wire.message, wire.data) : wire.message;
+    return legacyFailure(wire.code, message);
   }
   return { success: true, data: result.notModified === true ? undefined : result.data };
 }
