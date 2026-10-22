@@ -11,9 +11,9 @@ import type { MethodName } from "../../contract/infer";
 import type { InferOutput, StandardSchemaV1 } from "../../contract/standardSchema";
 import type { QuickdrawError } from "../../protocol/errors";
 import type { Caller } from "../caller";
-import type { ContractOfServices, PrincipalOfServices } from "../dispatcher";
+import type { ContractOfServices, McpContextOfServices, PrincipalOfServices } from "../dispatcher";
 import type { AnyService } from "../service";
-import type { MaybePromise, McpContext, McpContextOf } from "../types";
+import type { MaybePromise } from "../types";
 
 /** The JSON Schema of a tool's arguments. MCP requires an object schema. */
 export interface McpInputSchema {
@@ -86,10 +86,8 @@ export interface McpHttpRequest {
 /** The session or request a tool call arrives on, as the registry's `principal` and `context` see it. */
 export type McpRequest = McpStdioRequest | McpHttpRequest;
 
-/** The type of `ctx.mcp` for the services of `S`: their app's `QuickdrawTypes["mcp"]`. */
-export type McpContextOfServices<S extends readonly AnyService[]> = [S[number]] extends [never]
-  ? McpContext
-  : McpContextOf<NonNullable<S[number]["~types"]>>;
+// The type of `ctx.mcp` for the services of `S`, beside the dispatcher's other `...OfServices` types.
+export type { McpContextOfServices };
 
 /** How a tool call ended: what the tool returned, or why it failed. */
 export type McpCallResult =

@@ -51,6 +51,16 @@ await app.close();
   `{ call, socket, hello, close }` once the server said hello. Pass `null`
   for an anonymous caller. Both callers are keyed by service name
   (`taskService`), where the web client uses the contract map's keys.
+- Test a guard that reads `ctx.mcp` (an agent token's scopes) or
+  `ctx.transport` in process too, never through `app.server.dispatcher.call`:
+  `app.as(agent, { transport: "mcp", mcp: { scopes: [] } })` calls as an
+  MCP tool call arrives, its `mcp` typed by the app's
+  `QuickdrawTypes["mcp"]`, and `{ mcp }` alone as a call an MCP call made
+  through `ctx.services`. `transport` takes `"internal"` (the default),
+  `"http"` or `"mcp"`; a socket's call is `app.connect`'s. Bound arguments
+  and the registry's `principal` and `context` hooks belong to the MCP
+  registry: test them through
+  `registry.callMethod(service, method, input, { request })`.
 - `app.frames(match?)` lists every frame the server sent, each with its
   `event`, `data`, `socketId`, `userId` and `at`;
   `frames.waitFor(match, timeoutMs?)` waits for one, `frames.clear()`

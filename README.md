@@ -157,6 +157,8 @@ export interface AppPrincipal extends Principal {
 export const qd = initQuickdraw<{
   db: typeof db;
   principal: AppPrincipal;
+  // what the MCP bridge's context hook gives an agent's calls, as ctx.mcp
+  mcp: { readonly scopes: readonly string[] };
   contracts: typeof contracts;
 }>();
 ```
@@ -594,6 +596,10 @@ export const taskService = qd.defineService(task, {
       // instead of the dispatcher's callTimeoutMs (30 s)
       timeoutMs: 5_000,
       handler: async ({ input, ctx, db }) => {
+        // an agent's call carries its token's scopes as ctx.mcp; a user's call has none
+        if (ctx.mcp !== undefined && !ctx.mcp.scopes.includes("tasks")) {
+          throw new QuickdrawError("FORBIDDEN", "This token may not assign tasks");
+        }
         const found = await db.task.findUnique({ where: { id: input.id } });
         if (found === null) {
           // the caller receives the code
@@ -3271,9 +3277,10 @@ it("sends a rename to the other members' boards", async () => {
 - Seed rows with the untracked client (`prisma`), or inside `qd.run` once
   an app runs: a tracked write outside any unit of work flushes on its own,
   with an `ambient-write` warning.
-- `app.as(principal)` calls in process and `app.connect(principal)` over a
-  real socket (`{ call, socket, hello, close }`); both are keyed by service
-  name. `app.frames(match?)` lists every frame the server sent, with its
+- `app.as(principal)` calls in process (with transport `"internal"`, or
+  another, below) and `app.connect(principal)` over a real socket
+  (`{ call, socket, hello, close }`); both are keyed by service name.
+  `app.frames(match?)` lists every frame the server sent, with its
   socket and user; `frames.waitFor(match)` waits for one. A query of one
   event (`EventQuery`) takes `where`, a predicate over its frames typed by
   the event (`{ event: "qd:presence", where: ({ data }) => data.joined === id }`), and
@@ -3282,6 +3289,40 @@ it("sends a rename to the other members' boards", async () => {
   event's payloads, typed by the contract, to spread beside `socketId` or
   `userId`. `emitWithAck` and `waitForEvent` send raw frames and wait for
   events.
+
+`app.as(principal, { transport, mcp })` calls in process as another
+transport would, so a guard that reads `ctx.mcp` or `ctx.transport` is
+tested like any other access. Here the handler example's `assign` (under
+Services), which refuses an agent's token without the `tasks` scope:
+
+<!-- example: apps/api/src/services/task.test.ts#token -->
+
+```ts
+it("lets an agent's token assign tasks only with the tasks scope", async () => {
+  // the handler example's assign, which reads the token's scopes from ctx.mcp
+  const app = await createTestApp({ services: [assigningService], db });
+  const agent: AppPrincipal = { ...ada, kind: "agent", serviceAccess: { taskService: "Moderate" } };
+  const input = { id: taskId, assigneeId: bo.userId };
+  // in process, as an MCP tool call arrives: transport "mcp", and the context hook's fields as ctx.mcp
+  const reader = app.as(agent, { transport: "mcp", mcp: { scopes: [] } });
+  await expect(reader.taskService.assign(input)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  const writer = app.as(agent, { transport: "mcp", mcp: { scopes: ["tasks"] } });
+  expect(await writer.taskService.assign(input)).toMatchObject({ assigneeId: bo.userId });
+  await app.close();
+});
+```
+
+- `transport` is `"internal"` (the default), `"http"` or `"mcp"`; a
+  socket's call is `app.connect`'s. `mcp` is the call's `ctx.mcp`, typed by
+  the app's `QuickdrawTypes["mcp"]`: with `transport: "mcp"` the call is an
+  MCP tool call's, and with the default transport it is a call an MCP call
+  made through `ctx.services`.
+- Bound arguments and the registry's `principal` and `context` hooks belong
+  to the MCP registry, not the dispatcher, so test them through the
+  registry: `registry.callMethod(service, method, input, { request })`
+  calls a method's tool as an agent would, with the input as the method
+  takes it, and resolves with `{ ok: true, data }` or
+  `{ ok: false, error }`.
 
 ### Access matrices
 

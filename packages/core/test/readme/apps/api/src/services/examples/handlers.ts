@@ -26,6 +26,10 @@ export const taskService = qd.defineService(task, {
       // instead of the dispatcher's callTimeoutMs (30 s)
       timeoutMs: 5_000,
       handler: async ({ input, ctx, db }) => {
+        // an agent's call carries its token's scopes as ctx.mcp; a user's call has none
+        if (ctx.mcp !== undefined && !ctx.mcp.scopes.includes("tasks")) {
+          throw new QuickdrawError("FORBIDDEN", "This token may not assign tasks");
+        }
         const found = await db.task.findUnique({ where: { id: input.id } });
         if (found === null) {
           // the caller receives the code
