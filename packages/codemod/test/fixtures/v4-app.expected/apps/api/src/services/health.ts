@@ -21,5 +21,16 @@ export const healthService = qd.defineService(healthContract, {
         return { projects, tasks };
       },
     },
+    getProjectHealth: {
+      // quickdraw-migrate: review [access] 4.x checked a row id here, but the service has no rows (no model): only the service grant could pass, as this form keeps
+      access: { service: "Admin" },
+      handler: async ({ input, db }) => {
+        const project = await db.project.findUnique({
+          where: { id: input.id },
+          select: { id: true },
+        });
+        return { ok: project !== null };
+      },
+    },
   },
 });

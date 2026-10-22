@@ -6,7 +6,7 @@
 // formatting.
 
 import { Node, type SourceFile } from "ts-morph";
-import { ensureImport, relativeSpecifier, removeUnusedImports } from "./imports";
+import { ensureImport, relativeSpecifier, tidyImports } from "./imports";
 import { applyEdits, type Edit } from "./text";
 
 /** An import a file needs after the edits. */
@@ -64,8 +64,7 @@ export class Work {
       }
       dropUnused(file, work.dropIfUnused);
       if (work.tidy || work.format) {
-        removeUnusedImports(file);
-        typeOnlyImports(file);
+        tidyImports(file);
       }
       if (work.format) {
         file.formatText({
@@ -78,30 +77,6 @@ export class Work {
       touched.push(file);
     }
     return touched;
-  }
-}
-
-/**
- * An import whose names are all `type`-marked (`import { type A }`) becomes
- * `import type { A }`: only the inline markers would be erased, leaving an
- * import kept for its side effects (lint: no-import-type-side-effects).
- */
-function typeOnlyImports(file: SourceFile): void {
-  for (const declaration of file.getImportDeclarations()) {
-    const named = declaration.getNamedImports();
-    if (
-      declaration.isTypeOnly() ||
-      declaration.getDefaultImport() !== undefined ||
-      declaration.getNamespaceImport() !== undefined ||
-      named.length === 0 ||
-      !named.every((specifier) => specifier.isTypeOnly())
-    ) {
-      continue;
-    }
-    for (const specifier of named) {
-      specifier.setIsTypeOnly(false);
-    }
-    declaration.setIsTypeOnly(true);
   }
 }
 

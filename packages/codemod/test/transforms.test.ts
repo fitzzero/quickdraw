@@ -58,10 +58,10 @@ describe("the output on the 4.1 fixture app", () => {
   it("converts every service, method and hook call, and deletes the wrapper hooks", () => {
     expect(result.stats).toEqual({
       services: 5,
-      methods: 30,
+      methods: 31,
       aggregatorsRemoved: 2,
       contracts: 5,
-      schemasMoved: 16,
+      schemasMoved: 18,
       schemasMerged: 1,
       schemasRenamed: 1,
       todoSchemas: 31,
@@ -565,7 +565,7 @@ describe("a placeholder input", () => {
       .map(([, text]) => text)
       .join("\n");
     const inputs = contracts.match(/input: todoSchema<\{ id: [^}]*\}>\([^)]*\)/gu) ?? [];
-    expect(inputs).toHaveLength(6);
+    expect(inputs).toHaveLength(5);
     for (const input of inputs) {
       expect(input).toContain('keys: ["id"');
     }
@@ -617,6 +617,60 @@ describe("an inline import() type of a 4.x method map", () => {
     );
     expect(line).toContain('output: todoSchema<import("../types/limits.js").ProjectLimits>()');
     expect(line).not.toContain('import("./limits.js")');
+  });
+});
+
+describe("the imports of the files the shared package gets", () => {
+  const created = (): [string, string][] =>
+    [...output].filter(([file]) => /^packages\/shared\/src\/contracts\/[^/]+\.ts$/u.test(file));
+
+  it("are exactly the names each contract and the helpers file use", () => {
+    expect(created().map(([file]) => file.split("/").at(-1))).toEqual([
+      ...["health.ts", "helpers.ts", "index.ts", "label.ts", "project.ts", "task.ts", "user.ts"],
+    ]);
+    for (const [file, text] of created()) {
+      const source = new Project({ useInMemoryFileSystem: true }).createSourceFile(file, text);
+      const imported = source
+        .getImportDeclarations()
+        .flatMap((declaration) => [
+          declaration.getDefaultImport(),
+          declaration.getNamespaceImport(),
+          ...declaration
+            .getNamedImports()
+            .map((specifier) => specifier.getAliasNode() ?? specifier.getNameNode()),
+        ])
+        .flatMap((name) => (name === undefined ? [] : [name.getText()]));
+      const used = new Set(
+        source
+          .getDescendantsOfKind(SyntaxKind.Identifier)
+          .filter(
+            (identifier) =>
+              identifier.getFirstAncestorByKind(SyntaxKind.ImportDeclaration) === undefined,
+          )
+          .map((identifier) => identifier.getText()),
+      );
+      expect(
+        imported.filter((name) => !used.has(name)),
+        file,
+      ).toEqual([]);
+      // a builder stays a value import: the contract calls it
+      expect(text, file).not.toMatch(/^import type \{[^}]*\} from "@fitzzero\/quickdraw-core";$/mu);
+    }
+  });
+
+  it("leave out core's nullable beside Zod's .nullable(), and a Zod import only a moved helper needed", () => {
+    const task = output.get("packages/shared/src/contracts/task.ts") ?? "";
+    expect(task).toContain("assigneeId: z.string().nullable()");
+    expect(task).toContain(
+      'import { defineContract, listOf, mutation, query, todoSchema } from "@fitzzero/quickdraw-core";',
+    );
+    // health.ts's only schema is the helper byIdSchema, whose z is helpers.ts's
+    const health = output.get("packages/shared/src/contracts/health.ts") ?? "";
+    expect(health).toContain("getProjectHealth: query({ input: byIdSchema,");
+    expect(health).not.toContain('from "zod"');
+    expect(output.get("packages/shared/src/contracts/helpers.ts")).toContain(
+      'import { z } from "zod";',
+    );
   });
 });
 

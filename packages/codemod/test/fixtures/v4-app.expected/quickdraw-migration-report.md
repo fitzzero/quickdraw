@@ -2,13 +2,13 @@
 
 Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review` markers in the code; running the codemod again rewrites it from the markers that remain. Work through the sections in order (services, contracts, access, emits, client), delete each marker once its item is done, and see the migration guide (`MIGRATION.md`, shipped in `@fitzzero/quickdraw-codemod`) for each kind of item. Then run lint (`no-v4-api` names every 4.x API left, `no-todo-schema` every placeholder) and the typecheck.
 
-151 items in 34 files.
+153 items in 35 files.
 
 | Section                                                        | Items |
 | -------------------------------------------------------------- | ----: |
 | Services                                                       |     4 |
-| Contracts                                                      |    36 |
-| Access                                                         |    13 |
+| Contracts                                                      |    37 |
+| Access                                                         |    14 |
 | Access overrides to turn into a policy                         |     4 |
 | toDto and protected fields to turn into projections and fields |     5 |
 | Collections to declare in contracts                            |     2 |
@@ -39,8 +39,9 @@ Each method's kind was chosen from its name (get, list, search, find and count r
 
 - [ ] `apps/api/src/services/project.ts:123` the contract's output is "entity" (4.x answered ProjectDTO | null): return the row, and let a missing one fail with NOT_FOUND (db.<model>.update throws it)
 - [ ] `apps/api/src/services/task/methods/update-task.ts:8` the contract's output is "entity" (4.x answered TaskDTO | null): return the row, and let a missing one fail with NOT_FOUND (db.<model>.update throws it)
-- [ ] `packages/shared/src/contracts/health.ts:10` query, since the web app reads it with useServiceQuery (its name reads as a mutation); input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
-- [ ] `packages/shared/src/contracts/health.ts:12` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/health.ts:11` query, since the web app reads it with useServiceQuery (its name reads as a mutation); input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/health.ts:13` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/health.ts:15` query, chosen from its name; output: todoSchema of the 4.x response type
 - [ ] `packages/shared/src/contracts/label.ts:12` the entity is the 4.x DTO LabelDTO: give it a real schema. Its keys are the fields subscribers receive, read from model "label": drop any that is not a column, or give it a projection select and map
 - [ ] `packages/shared/src/contracts/label.ts:15` query, chosen from its name; input: todoSchema, as 4.x had no schema
 - [ ] `packages/shared/src/contracts/label.ts:17` query, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
@@ -61,7 +62,7 @@ Each method's kind was chosen from its name (get, list, search, find and count r
 - [ ] `packages/shared/src/contracts/task.ts:31` mutation, chosen from its name
 - [ ] `packages/shared/src/contracts/task.ts:33` query, chosen from its name
 - [ ] `packages/shared/src/contracts/task.ts:35` mutation, chosen from its name
-- [ ] `packages/shared/src/contracts/task.ts:37` mutation, chosen from its name; input: todoSchema, as 4.x had no schema
+- [ ] `packages/shared/src/contracts/task.ts:37` mutation, chosen from its name
 - [ ] `packages/shared/src/contracts/task.ts:39` mutation, chosen from its name; input: todoSchema, as 4.x had no schema
 - [ ] `packages/shared/src/contracts/task.ts:41` query, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
 - [ ] `packages/shared/src/contracts/task.ts:43` query, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
@@ -78,6 +79,7 @@ Each method's kind was chosen from its name (get, list, search, find and count r
 
 The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 4.x's `hasEntryACL` did, but for a user listed twice in a row's list (marked). "Read" without a row id was open to every signed-in user; decide whether that was meant. A method whose input has `id` under a form that checks no row ("public", say), or that checks the row another key names (a 4.x `resolveEntryId` on another key of a payload that also has `id`), carries `rowless: true` (marked): 5.x refuses to define those shapes on a service with an access policy without it, and it keeps the 4.x callers.
 
+- [ ] `apps/api/src/services/health.ts:25` 4.x checked a row id here, but the service has no rows (no model): only the service grant could pass, as this form keeps
 - [ ] `apps/api/src/services/label.ts:104` 4.x had no row-level access here (no hasEntryACL, no checkAccess): only service grants opened rows, which this empty policy keeps. Give it a real policy if rows belong to someone
 - [ ] `apps/api/src/services/label.ts:115` this method takes an id but its access "public" checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant
 - [ ] `apps/api/src/services/label.ts:126` 4.x's resolveEntryId was a function, kept here: where it returns nothing, the "" makes the row check fail, so only the service grant passes (4.x then applied the plain level)
