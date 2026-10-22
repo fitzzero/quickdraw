@@ -34,7 +34,9 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   (`qd.taskService.board`); the examples here key theirs short (`qd.task`).
 - `auth` is a token (sent as `auth.token`) or handshake fields; leave it out
   for cookie sessions. Changing it reconnects, and a hello naming another
-  user empties everything quickdraw cached.
+  user empties everything quickdraw cached, the placeholder a member's
+  `useQuery` or `useSearch` would make from it (`keepPreviousData`, the
+  last results) included.
 - `useQuickdraw()` gives
   `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, refusal, isRateLimited }`.
   Gate on `isKnown` (the server's hello named the user; `userId` is then
@@ -186,9 +188,14 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   `adminMeta` wider). A screen served from metadata for every service takes
   `adminOf(qd, key)`, one shape typed by field name: never cast
   `qd[key].admin`. The kit's rows are not live: after the screen's own
-  write, `onSuccess: () => qd.invalidate(qd.task.admin.adminList)`. A
-  generic form shows the fields whose `showInForm` is not `false`; a user's
-  grants field says `kind: "grants"`: find it by that, never by its name.
+  write, read the page again (`qd.invalidate(qd.task.admin.adminList)`)
+  and put the row the write returned in the cache
+  (`qd.task.admin.adminGet.setData({ id: row.id }, row)`; `adminOf`'s
+  query members have `setData` too), never in React state. Its reads of
+  rows default to `staleTime: 0`, read again on every mount (`adminMeta`
+  stays cached): pass a `staleTime` only to keep a page longer. A generic
+  form shows the fields whose `showInForm` is not `false`; a user's grants
+  field says `kind: "grants"`: find it by that, never by its name.
 
 ## Server components and other runtimes
 

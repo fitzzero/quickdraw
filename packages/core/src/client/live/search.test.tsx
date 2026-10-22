@@ -16,6 +16,7 @@ import {
 } from "../../server/kits/search/__tests__/fixture";
 import { renderWithQuickdraw } from "../../testing/client";
 import { createQuickdrawClient } from "../createClient";
+import { useQuickdraw } from "../provider";
 import { outgoing, until } from "../__tests__/fixtures";
 
 const kit = searchApp();
@@ -225,5 +226,29 @@ describe("useSearch", () => {
     });
     expect(titlesOf(view.container)).toEqual(["Task 3"]);
     expect(app.frames({ event: "qd:c" })).toEqual([]);
+  });
+
+  it("shows the next user nothing of the last user's results across a switch of users", async () => {
+    const { app, records } = await kit.start();
+    const board = kit.board();
+    const seen: [user: string | null, shown: string][] = [];
+    function Found() {
+      const { userId } = useQuickdraw();
+      const { items } = qd.task.search.useSearch("T1", { debounceMs: 0 });
+      const shown = items.map((item) => item.title).join(",");
+      seen.push([userId, shown]);
+      return <p>{`${userId ?? "-"}: [${shown}]`}</p>;
+    }
+    const view = await renderWithQuickdraw(<Found />, { app, as: as(board.ada), client: qd });
+    await view.findByText(`${board.ada}: [T1]`);
+    const before = seen.length;
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    // Ed may not read P1: his search finds nothing, and Ada's hit never shows meanwhile.
+    await until(() => records.filter((record) => record.method === "search").length === 2);
+    await view.findByText(`${board.ed}: []`);
+    expect(seen.slice(before).filter(([, shown]) => shown.includes("T1"))).toEqual([]);
   });
 });

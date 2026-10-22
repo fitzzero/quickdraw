@@ -34,6 +34,10 @@ const contract = defineContract("probeService", {
     flags: mutation({ input: z.object({ id: z.string() }), output: z.string() }),
     move: mutation({ input: moves, output: count }),
     moveBatched: mutation({ input: moves, output: count }),
+    chunked: mutation({
+      input: z.object({ projectId: z.string(), chunks: z.number() }),
+      output: count,
+    }),
   },
 });
 
@@ -115,6 +119,21 @@ const service = qd.defineService(contract, {
             ),
           )
         ).length,
+    },
+    // One batch insert split into chunks of a fixed size, as an app bounds its statements.
+    chunked: {
+      access: "authenticated",
+      handler: async ({ input, db }) => {
+        let created = 0;
+        for (let chunk = 0; chunk < input.chunks; chunk += 1) {
+          const data = [0, 1].map((row) => ({
+            projectId: input.projectId,
+            title: `C${String(chunk)}.${String(row)}`,
+          }));
+          created += (await db.task.createMany({ data })).count;
+        }
+        return created;
+      },
     },
     // A JSON column whose keys are named like relation operations: not a nested write.
     flags: {
@@ -204,6 +223,12 @@ describe("development warnings in a running app", () => {
     expect(await probe.together({ ids: taskIds })).toBe(12);
     expect(await probe.page({ projectId })).toBe(5);
     expect(await probe.batched({ ids: taskIds })).toBe(12);
+    expect(devWarnings(logger)).toEqual([]);
+  });
+
+  it("raise nothing for a batch insert split into chunks of createMany", async () => {
+    const { logger, probe } = await start({ strictWarnings: true });
+    expect(await probe.chunked({ projectId, chunks: 12 })).toBe(24);
     expect(devWarnings(logger)).toEqual([]);
   });
 

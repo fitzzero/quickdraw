@@ -1623,7 +1623,9 @@ export function TaskDetail({ id }: { readonly id: string }) {
   the chat's messages open). A row-level grant with neither sends nothing
   the client could notice: remount the view, or call `refresh()`.
 - The cache follows the user: a hello naming another user removes everything
-  quickdraw cached; new credentials for the same user refetch it; new grants
+  quickdraw cached, and no `useQuery` of the client shows a placeholder made
+  from it (`placeholderData` such as `keepPreviousData`), nor `useSearch` its
+  last results; new credentials for the same user refetch it; new grants
   (`qd:access`) refetch every query.
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
@@ -2371,8 +2373,12 @@ export function AdminTasks() {
   const { services } = useAdminServices(qd);
   const { data } = qd.task.admin.adminList.useQuery({ page: 1, sort: { field: "title" } });
   const update = qd.task.admin.adminUpdate.useMutation({
-    // adminList is a query, not live data: read the page again after this screen's own write
-    onSuccess: () => qd.invalidate(qd.task.admin.adminList),
+    // the kit's reads are queries, not live data: after this screen's own write,
+    // read the page again and put the row the write returned in adminGet's cache
+    onSuccess: (row) => {
+      qd.invalidate(qd.task.admin.adminList);
+      qd.task.admin.adminGet.setData({ id: row.id }, row);
+    },
   });
   return (
     <table aria-label={services[0]?.displayName}>
@@ -2499,14 +2505,20 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   is not asked again until the user's grant on it changes, reconnects
   included.
 - The kit's rows are not live: `adminList` and `adminGet` are queries that
-  watch nothing, so a screen reads them again after its own writes (the
+  watch nothing, so after its own write a screen reads the page again and
+  puts the row the write returned in `adminGet`'s cache with `setData` (the
   `onSuccess` above), and sees other admins' writes when it next reads.
+  Their `useQuery`, and `adminSubscribers`', defaults to `staleTime: 0`, so a
+  screen reads them again whenever it mounts (pass `staleTime` to keep a
+  result longer; `adminMeta` keeps the provider's five minutes).
 - A screen that serves every service from its metadata (the route names the
   service) takes `adminOf(qd, key)`: the same members, keyed by what the kit
   made them for and typed by field name (`AdminScreen`: rows are
   `AdminRow`, `adminList` takes `{ page, pageSize, filter, sort: { field, direction } }`
   with names read from `adminMeta`), so no cast is needed over a union of
-  keys; a method the contract does not expose is absent.
+  keys; a method the contract does not expose is absent. Its query members
+  have `setData` too: `admin.adminGet?.setData({ id: row.id }, row)` shows
+  the row `adminUpdate` or `adminCreate` returned, with no read.
 
 ### Presence, streams and channels
 
@@ -3842,7 +3854,8 @@ Only an app's own statements are checked: the framework's reads and the
 kits' own reads are not, while the app's callbacks a kit calls (`prepare`,
 `onChange`, `resolveUser`, a search strategy) are. A statement filtered by
 an `id` list (`{ id: { in: ids } }`, one per chunk of ids) never counts
-toward `n-plus-one`. In tests, `createTestApp({ strictWarnings: true })`
+toward `n-plus-one`, and neither does a `createMany` (one per chunk of
+rows, as a large insert is split). In tests, `createTestApp({ strictWarnings: true })`
 (under vitest or jest) throws every warning raised in that app's method
 calls as a `DevWarningError` where it is raised, so the test that caused it
 fails: the call it happened in fails with `INTERNAL` and the error as its

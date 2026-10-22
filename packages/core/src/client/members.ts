@@ -10,14 +10,22 @@
 // for a promise: contracts reserve `then` and `$`-names for their methods
 // (`contract/validateContract.ts`), and the map's keys are checked here.
 // Building from own enumerable entries into fresh objects means a key such
-// as `__proto__` becomes an ordinary member, never a prototype.
+// as `__proto__` becomes an ordinary member, never a prototype. Each
+// method's target carries what its members need of the contract, such as
+// the `staleTime: 0` the admin kit's reads of rows give `useQuery`.
 //
 // React-free.
 
 import type { CollectionDef } from "../contract/collections";
 import type { AnyContract } from "../contract/defineContract";
+import { adminSpecOf, type AdminMethodName } from "../contract/kits/admin";
 import type { MethodDef, MethodKind, MethodOutput, ServiceWatch, Watch } from "../contract/methods";
 import type { ContractMap } from "../contract/infer";
+
+/** What a query's `useQuery` starts from, the caller's options spread over it. */
+export interface QueryDefaults {
+  readonly staleTime: number;
+}
 
 /** One method of one service, as a member is built for it. */
 export interface MethodTarget {
@@ -31,6 +39,26 @@ export interface MethodTarget {
   readonly watch?: Watch<string> | ServiceWatch | undefined;
   /** The collections of the method's contract, for a mutation's `addEntity`. */
   readonly collections?: Readonly<Record<string, CollectionDef>>;
+  /**
+   * What the query's `useQuery` starts from, the caller's options spread
+   * over it: `staleTime: 0` for the admin kit's reads of rows, which are
+   * not live, so a screen reads them again whenever it mounts rather than
+   * keeping the provider's five minutes. `call` and `prefetch` take none of it.
+   */
+  readonly queryDefaults?: QueryDefaults;
+}
+
+/** The admin kit's reads of rows; not `adminMeta`, whose fields change only with a deploy. */
+const ADMIN_ROW_READS: readonly AdminMethodName[] = ["adminList", "adminGet", "adminSubscribers"];
+
+const ROW_READ_DEFAULTS: QueryDefaults = Object.freeze({ staleTime: 0 });
+
+/** `definition`'s `queryDefaults`, found by what the admin kit made it for, never by its name. */
+function queryDefaultsOf(definition: MethodDef): Pick<MethodTarget, "queryDefaults"> {
+  const spec = adminSpecOf(definition);
+  return spec !== undefined && ADMIN_ROW_READS.includes(spec.method)
+    ? { queryDefaults: ROW_READ_DEFAULTS }
+    : {};
 }
 
 function isContract(value: unknown): value is AnyContract {
@@ -98,6 +126,7 @@ export function buildCaller(
           output: definition.output,
           watch: definition.watch,
           collections: contract.collections,
+          ...queryDefaultsOf(definition),
         },
         definition,
         contract,

@@ -1,7 +1,8 @@
 // The methods of a migrated service. A method registered inside its class
 // becomes an entry of `defineService`'s `methods`; one a method module
 // registered (`registerX(service)`) stays in that module as an exported,
-// typed method object, which `methods` lists by name.
+// typed method object, which `methods` lists by name: the method's own,
+// unless its files bind that already (see methodNames.ts).
 
 import type { FunctionDeclaration, Node, SourceFile } from "ts-morph";
 import { accessFor } from "../access";
@@ -14,6 +15,7 @@ import type { Hoisted } from "../receiver";
 import { infraPaths } from "./infra";
 import {
   leadingCommentText,
+  methodObjectNames,
   moduleConst,
   registerLeftoverMarker,
   startWithComments,
@@ -36,7 +38,12 @@ export interface ConvertedCalls {
 export interface ServiceBuild {
   readonly inline: string[];
   readonly modules: Map<FunctionDeclaration, string[]>;
-  readonly moduleExports: { readonly name: string; readonly file: SourceFile }[];
+  /** Each method object: its name in its module, and the name the service file imports it under. */
+  readonly moduleExports: {
+    readonly name: string;
+    readonly local: string;
+    readonly file: SourceFile;
+  }[];
   anyEntry: boolean;
 }
 
@@ -69,6 +76,7 @@ export function buildMethods(
   };
   const leafFile = plan.service.chain[0]?.getSourceFile();
   const names = plan.methods.map((method) => method.name);
+  const objects = methodObjectNames(plan);
   for (const method of plan.methods) {
     const { call } = method;
     const form = accessFor(call.level, call.levelText, {
@@ -99,11 +107,12 @@ export function buildMethods(
       }
       continue;
     }
+    const { object, local } = objects.get(method) ?? { object: method.name, local: method.name };
     const list = build.modules.get(call.register) ?? [];
-    list.push(moduleConst(plan, method, entry, form.isPublic));
+    list.push(moduleConst(plan, method, object, entry, form.isPublic));
     build.modules.set(call.register, list);
-    build.moduleExports.push({ name: method.name, file: call.register.getSourceFile() });
-    build.inline.push(`${kit}${method.name},`);
+    build.moduleExports.push({ name: object, local, file: call.register.getSourceFile() });
+    build.inline.push(`${kit}${local === method.name ? local : `${method.name}: ${local}`},`);
     addHoistedImports(work, call.register.getSourceFile(), entry.imports);
   }
   return build;

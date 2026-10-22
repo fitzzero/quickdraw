@@ -7,7 +7,7 @@
 // (Admin on P1, who may read a task's `notes`) to Cy (Read on P1) or Ed (no
 // access to P1).
 
-import { QueryClient } from "@tanstack/react-query";
+import { keepPreviousData, QueryClient } from "@tanstack/react-query";
 import { act, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -451,5 +451,143 @@ describe("new credentials awaiting their hello", () => {
     await view.findByText("get none row none items []");
     held.resolve();
     await view.findByText("get none row T1 items [T1]");
+  });
+});
+
+describe("placeholder data across a switch of users", () => {
+  async function started() {
+    const { app } = await live.start();
+    const board = live.board();
+    await live.prisma().task.update({ where: { id: board.t1 }, data: { notes: "SECRET" } });
+    return { app, board };
+  }
+
+  /**
+   * `get` with TanStack's `keepPreviousData`, its own or (`byDefault`) the
+   * one its `QueryClient` gives every query: the last result stays shown
+   * while the next one loads.
+   */
+  function KeptQuery({
+    id,
+    enabled = true,
+    byDefault = false,
+    seen,
+  }: {
+    readonly id: string;
+    readonly enabled?: boolean;
+    readonly byDefault?: boolean;
+    readonly seen: Seen;
+  }) {
+    const { userId } = useQuickdraw();
+    const { data, error, isPlaceholderData } = qd.task.get.useQuery(
+      { id },
+      byDefault ? { enabled } : { placeholderData: keepPreviousData, enabled },
+    );
+    const row = data === undefined ? "none" : `${data.title}/${String(data.notes)}`;
+    const shown = error === null ? `get ${row}${isPlaceholderData ? " kept" : ""}` : "get refused";
+    seen.push([userId, shown]);
+    return <p>{`${userId ?? "-"}: ${shown}`}</p>;
+  }
+
+  /** What the renders since `from` showed of the last user's row. */
+  const leaked = (seen: Seen, from: number): Seen =>
+    seen.slice(from).filter(([, shown]) => shown.includes("SECRET"));
+
+  it("shows the next user nothing a placeholder kept of the last user's result", async () => {
+    const { app, board } = await started();
+    const seen: Seen = [];
+    const view = await renderWithQuickdraw(<KeptQuery id={board.t1} seen={seen} />, {
+      app,
+      as: as(board.ada),
+      client: qd,
+    });
+    await view.findByText(`${board.ada}: get T1/SECRET`);
+    const before = seen.length;
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    // Ed may not read T1: the read is refused, and nothing of Ada's shows meanwhile.
+    await view.findByText(`${board.ed}: get refused`);
+    expect(shownTo(seen, board.ed)).toContain("get none");
+    expect(leaked(seen, before)).toEqual([]);
+  });
+
+  it("shows the next user nothing of it after a session the server ended, either", async () => {
+    const { app, board } = await started();
+    const seen: Seen = [];
+    const view = await renderWithQuickdraw(<KeptQuery id={board.t1} seen={seen} />, {
+      app,
+      as: as(board.ada),
+      client: qd,
+    });
+    await view.findByText(`${board.ada}: get T1/SECRET`);
+    const before = seen.length;
+    app.server.access.disconnectUser(board.ada);
+    await view.findByText("-: get none");
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    await view.findByText(`${board.ed}: get refused`);
+    expect(leaked(seen, before)).toEqual([]);
+  });
+
+  it("drops a placeholder already shown at the switch, which TanStack would keep without asking again", async () => {
+    const { app, board } = await started();
+    const seen: Seen = [];
+    const view = await renderWithQuickdraw(<KeptQuery id={board.t1} seen={seen} />, {
+      app,
+      as: as(board.ada),
+      client: qd,
+    });
+    await view.findByText(`${board.ada}: get T1/SECRET`);
+    // Another id, not read yet: Ada's T1 stays shown in its place.
+    view.rerender(<KeptQuery id={board.t2} enabled={false} seen={seen} />);
+    await view.findByText(`${board.ada}: get T1/SECRET kept`);
+    const before = seen.length;
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    await view.findByText(`${board.ed}: get none`);
+    await tick(100);
+    expect(view.getByText(`${board.ed}: get none`)).toBeTruthy();
+    expect(leaked(seen, before)).toEqual([]);
+  });
+
+  it("treats a placeholder the app's QueryClient gives every query the same way", async () => {
+    const { app, board } = await started();
+    const seen: Seen = [];
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          staleTime: 5 * 60 * 1000,
+          refetchOnWindowFocus: false,
+          retry: false,
+          placeholderData: keepPreviousData,
+        },
+      },
+    });
+    const view = await renderWithQuickdraw(<KeptQuery id={board.t1} byDefault seen={seen} />, {
+      app,
+      as: as(board.ada),
+      client: qd,
+      queryClient,
+    });
+    await view.findByText(`${board.ada}: get T1/SECRET`);
+    // The default applies to Ada's own results...
+    view.rerender(<KeptQuery id={board.t2} enabled={false} byDefault seen={seen} />);
+    await view.findByText(`${board.ada}: get T1/SECRET kept`);
+    const before = seen.length;
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    // ...and never shows them to Ed.
+    await view.findByText(`${board.ed}: get none`);
+    await tick(100);
+    expect(view.getByText(`${board.ed}: get none`)).toBeTruthy();
+    expect(leaked(seen, before)).toEqual([]);
   });
 });

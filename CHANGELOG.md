@@ -99,6 +99,122 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   `host_changed` signal, and a `room` argument on `send_channel`,
   `subscribe_stream`, `unsubscribe_stream` and `is_subscribed`.
 
+### Client
+
+- **The next user never sees the last user's result as a placeholder.**
+  TanStack keeps the query a mounted observer's placeholder is made from
+  outside the cache, which quickdraw empties on another user's hello or
+  when the server ends the session. So the first render after the next
+  user's hello could show the last user's result: an app query's
+  `placeholderData` (such as `keepPreviousData`, which could also keep it
+  shown) and `useSearch`'s last results. This is the follow-up the 5.1
+  security review recorded for CLIENT-1. A query hook now asks a
+  `placeholderData` function, the caller's or its `QueryClient`'s
+  default, only about a query the cache still holds; a placeholder given
+  as a value is shown as before.
+- **Behavior change: the admin kit's reads of rows default to
+  `staleTime: 0`.** `adminList`, `adminGet` and `adminSubscribers` took the
+  provider's five-minute `staleTime`, and their rows are not live, so an
+  admin screen showed a row written elsewhere only after five minutes or a
+  reload. Their `useQuery` now reads them again whenever a screen mounts,
+  on the typed client and on a mock client alike. A `staleTime` the caller
+  passes still wins, and `adminMeta`, `call` and `prefetch` are unchanged.
+  A screen that passed `staleTime: 0` by hand can drop it.
+- **`AdminQueryMember` gains `setData`**, typed as the typed client's: the
+  query members `adminOf(qd, key)` returns always had it at run time, but a
+  screen typed through `AdminScreen` needed a cast to call it. A row panel
+  shows the row `adminUpdate` or `adminCreate` returned with
+  `admin.adminGet?.setData({ id: row.id }, row)`, with no new read.
+
+### Server
+
+- **The legacy shim's `VALIDATION` replies list the input's issues.** A
+  4.x client's refused input got only `Invalid input for <service>.<method>`
+  in its `error`, since a 4.x reply carries no `data`; 4.1 sent the
+  schema's own messages, and 4.x pages show the text. The `error` now
+  names each issue by its dotted path, the first 10 then `; and N more`:
+  `Invalid input for taskService.rename: title: Required; tags.0: Expected string`.
+  The code (422) and the reply's shape are unchanged, and protocol 5, HTTP
+  and MCP callers still get the issues as `data.issues`.
+- **The development N+1 check no longer counts `createMany`.** A large
+  insert split into fixed-size `createMany` chunks has one shape per
+  chunk, so its tenth chunk raised `n-plus-one` (named
+  `createManyAndReturn`, the form the tracked client runs), though the
+  warning's own advice names `createMany` as the fix. A batch insert is one
+  batch in chunks, as `no-db-call-in-loop` already treated it.
+  `updateMany` and `deleteMany` filtered once per item still count.
+
+### Codemod
+
+- **A method object no longer collides with a binding of its name.** A
+  split service's method module wrote each method object under its
+  method's name (`export const renameTask = ...`), and the service file
+  imported it under that name, whatever those files bound already. On
+  Conveyor's 4.x code, 5 files did not parse (19 `Identifier ... has
+already been declared`), lint found 15 more `no-redeclare` and
+  `no-shadow` reports, and a method module imported 8 hoisted helpers
+  beside method objects of their names (TS2440, which oxlint does not
+  report): method modules kept a handler's body in a function named after
+  its method or imported the implementation under that name, a service file
+  imported the implementations too and destructured more from dynamic
+  imports, and a service class's public methods of its methods' names,
+  which the handlers called, were hoisted under those names. The codemod
+  now renames what the file owns, with every reference: in a method module,
+  a local function or binding of the method's name becomes `<name>Body`
+  and an import of it `<name> as <name>Impl`; in the service file, an
+  import of it becomes `<name> as <name>Impl`; a binding inside a function
+  that would shadow the method object becomes `<name>Impl`. What other
+  files see keeps its name: beside a helper the module exports under the
+  method's name, the method object is `<name>Method`, and a service file
+  that declares the name itself imports the object as `<name>Method` and
+  lists it as `<name>: <name>Method`. A service class member of a module
+  method's name is hoisted as `<name>Of<Class>`. No rename is marked: none
+  leaves anything to decide.
+- **An import the codemod adds is no longer dropped when the file imports
+  the same module's export under another name** (`import { x as y }`): the
+  name is added beside it.
+- **The codemod's own tests fail on a name declared twice in one scope**
+  anywhere in its output, whatever marker covers the line (TypeScript, which
+  also sees an import beside a local declaration), and lint the output with
+  `no-redeclare` and `no-shadow`, which the 5.0 lint baseline enables.
+- **A field holding a function that the service replaces is hoisted as a
+  `let`.** The codemod wrote every arrow or function-expression field
+  (`provider = () => ...`) as a `const`, so code that swapped it
+  (`this.provider = next`, now `provider = next`) did not typecheck (TS2588)
+  and threw `TypeError: Assignment to constant variable` when it ran:
+  farseer's migration hit 9 of them. A function field the class writes
+  after its initializer, in its constructor or anywhere else, is now module
+  state like any other field: a `let` with its type, under the same `[this]`
+  marker. One nothing writes after its initializer stays a `const`.
+- **The contracts the codemod writes import only what they use.** A contract
+  imported core's `nullable` for a Zod `.nullable()` in a moved schema, and
+  `z` when only a schema helper it had moved to `contracts/helpers.ts` used
+  Zod, so every migrated app's lint and its `noUnusedLocals` typecheck
+  reported unused imports in `packages/shared/src/contracts/*.ts` (farseer's
+  migration filed it). A builder is now imported only for a call of it, and
+  each contract and the helpers file the codemod creates get the import
+  cleanup every file it rewrites gets.
+- **A binding outside a service class no longer shadows a member hoisted
+  beside it.** A module function's parameter, or a local of a method
+  module's handler, named like a member the codemod hoisted where that code
+  lives (declared there, or imported) shadowed it (`no-shadow`; Conveyor's
+  `reviewCatchUp` in `task/TaskService.ts`), and a handler's local could
+  capture what the handler read through the service:
+  `const limit = service.limit` became `const limit = limit`. Such a binding
+  is now renamed `<name>Impl`, with every reference; the member keeps its
+  name.
+- **A `readonly` field its constructor writes is hoisted as a `let`.**
+  `readonly` kept a field, or a function field, a `const` even when its
+  constructor assigned it, so the setup function that carries the
+  constructor's code wrote a constant (TS2588, and a `TypeError` when it
+  ran). A field is a `const` only when nothing writes it after its
+  initializer. The codemod's own tests now fail on any write of a `const`
+  in its output, whatever marker covers the line.
+- **A function field that stays a `const` keeps its type annotation**
+  (`const slug: (name: string) => string = (name) => ...`): without it, an
+  initializer whose parameters took their types from the field's was
+  implicitly `any` (TS7006).
+
 ## [5.1.1] - 2026-10-11
 
 ### Behavior changes for 5.1 apps

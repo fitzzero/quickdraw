@@ -108,16 +108,21 @@ faithfully. What it does:
   becomes the tracked `db`, and the template's `requireAuth(ctx)` guard goes
   where access already requires a principal. The access mapping is below.
   Helper methods and getters become module functions (a getter's reads call
-  it: `this.enabled` is `enabled()`); overridden 4.x hooks,
+  it: `this.enabled` is `enabled()`), and so does a field holding a function
+  (`provider = () => ...`), as a `const`, unless the service replaces it,
+  which makes it a field like the others; overridden 4.x hooks,
   `defineCollection` options and `installAdminMethods` options stay in the
   file, marked. Each field becomes a marked module binding with its
-  initializer (`const playingUsers = new Set<string>()`), and `this.x`
-  reads it; the constructor's other code, the values it gave fields
-  included, goes into an exported `setUp<Service>(...)` function that takes
-  the constructor's parameters it uses, marked: call it once where the
-  server starts, or move each part. Only the Prisma client's field goes (it
-  is `db`), and a field holding another 4.x service, whose uses are marked
-  (`ctx.services` replaces it). A call of the 4.x base class
+  initializer (`const playingUsers = new Set<string>()`, or `let` when the
+  service writes it after its initializer), and `this.x` reads it; the
+  constructor's other code, the values it gave fields included, goes into
+  an exported `setUp<Service>(...)` function that takes the constructor's
+  parameters it uses, marked: call it once where the server starts, or
+  move each part. Only the Prisma client's field goes (it is `db`), and a
+  field holding another 4.x service, whose uses are marked
+  (`ctx.services` replaces it). A binding outside the class that would
+  shadow a member hoisted beside it (a module function's parameter of its
+  name) becomes `<name>Impl`. A call of the 4.x base class
   (`super.unsubscribe(...)`) is dropped under a marker naming it, since
   `super` outside a class does not parse. A split service's method modules
   keep their files, with typed method objects (see
@@ -125,7 +130,11 @@ faithfully. What it does:
   module's parameter is the service class or a port of it
   (`Pick<BaseService<...>, "defineMethod" | ...> & { ... }`, an interface
   extending `Pick<ChatService, ...>`, read from the source); the port type
-  is marked. A `defineMethod` call the codemod cannot tie to a service
+  is marked. Where the module or the service file binds a method's name
+  already, the codemod renames that binding, or names the method object
+  `<name>Method` when other files use the binding
+  ([Splitting large services](#splitting-large-services) lists the
+  renames). A `defineMethod` call the codemod cannot tie to a service
   keeps its file, and the contract's marker for the method map's
   unimplemented methods names it at its file and line. A function that only
   calls the modules' register functions, or other such functions (an
@@ -1929,7 +1938,10 @@ A 5.0 server refuses a 4.x client by default (`PROTOCOL_MISMATCH`). With
 that connects without 5.0's handshake is served as a 4.x client instead:
 `socket.emit("taskService:renameTask", payload, ack)` runs through the 5.0
 pipeline, with the same validation, access and limits, and is answered in
-4.x's `ServiceResponse` shape. The shim serves request and response calls
+4.x's `ServiceResponse` shape. A refused input gets code 422 (4.x sent 400)
+and an `error` naming each problem by its path, as 4.x pages show it:
+`Invalid input for taskService.renameTask: title: Too small: expected string to have >=1 characters`,
+the first ten problems, then how many more. The shim serves request and response calls
 only, not subscriptions, collections or channels, and it logs each
 service, method and kind of caller once, so the remaining 4.x clients can
 be found.
@@ -2080,6 +2092,23 @@ export const taskService = qd.defineService(taskContract, {
   },
 });
 ```
+
+Each method object takes its method's name, so `methods` lists it
+shorthand. A 4.x file can bind that name already, and two of a name in one
+scope do not parse, so the codemod renames what the file owns, with every
+use: in a method module, a function or variable of the method's name (a
+handler's body kept beside it) becomes `<name>Body`, and an import of it
+`<name> as <name>Impl`; in the service file, an import of it becomes
+`<name> as <name>Impl`; and a binding inside a function that would shadow
+the method object (`const { renameTask } = await import("./rows.js")`)
+becomes `{ renameTask: renameTaskImpl }`. What other files see keeps its
+name: beside a helper the module exports under the method's name, the
+method object is `<name>Method`, and where the service file declares the
+name itself (a wrapper of the method), it imports the object as
+`<name>Method` and lists it as `renameTask: renameTaskMethod`. A service
+class's member of a module method's name, which the method's handler may
+call (`service.renameTask(...)`), is hoisted as `<name>Of<Class>`. None of
+these is marked.
 
 ## Order of the migrations
 

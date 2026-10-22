@@ -377,6 +377,20 @@ describe("the client", () => {
     adminOf(both, "plain");
   });
 
+  test("an admin screen writes the row a write returned into the cache with setData", () => {
+    const screen = adminOf(client, "taskService");
+    const row: AdminRow = { id: "t1", title: "Renamed" };
+    expectTypeOf(screen.adminGet?.setData({ id: "t1" }, row)).toEqualTypeOf<AdminRow | undefined>();
+    screen.adminGet?.setData({ id: "t1" }, (cached) =>
+      cached === undefined ? undefined : { ...cached, title: "Renamed" },
+    );
+    screen.adminList.setData(undefined, (page) => page);
+    // @ts-expect-error a row has an id
+    screen.adminGet?.setData({ id: "t1" }, { title: "Renamed" });
+    // @ts-expect-error adminMeta caches the service's metadata, not a row
+    screen.adminMeta.setData(undefined, row);
+  });
+
   test("a mock client has the same admin member, with stubs", () => {
     const mock = createMockClient({ taskService: task, plain });
     mock.taskService.admin.adminMeta.mockResolvedValue({

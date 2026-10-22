@@ -69,11 +69,15 @@ It expects the quickdraw template's layout; the options move each part:
   Handler bodies are kept, with `({ input, ctx, db })` for
   `(payload, ctx)`, `ctx.principal.userId` for `ctx.userId` and the tracked
   `db` for the Prisma field. Helper methods and getters become module
-  functions (a getter's reads call it). Fields become module bindings with
-  their initializers, marked, and the constructor's other code, the values
-  it gave fields included, an exported `setUp<Service>(...)` taking the
-  constructor's parameters it uses, marked; only the Prisma client's field
-  and a field holding another service go. A call of the 4.x base class
+  functions (a getter's reads call it), and a field holding a function a
+  `const` of it, unless the service replaces it: then it is a field like
+  the others. Fields become module bindings with their initializers, marked
+  (`let` for one the service writes after its initializer), and the
+  constructor's other code, the values it gave fields included, an
+  exported `setUp<Service>(...)` taking the constructor's parameters it
+  uses, marked; only the Prisma client's field and a field holding another
+  service go. A binding outside the class that would shadow a member
+  hoisted beside it becomes `<name>Impl`. A call of the 4.x base class
   (`super.x(...)`) is dropped under a marker that names it: `super` outside a
   class does not parse. A `DTO | null` mutation of one row answers
   `"entity"`, marked (a tracked write throws `NOT_FOUND` rather than
@@ -83,11 +87,18 @@ It expects the quickdraw template's layout; the options move each part:
   whether their parameter is the class or a port of it, read from the
   source: `Pick`, `Omit`, `Partial`, `Readonly` or `Required` of the class
   or of `BaseService<...>` over its method map, through type aliases,
-  interfaces, type parameters and intersections. The port type is marked. A
-  `defineMethod` call tied to no service is named at its file and line in
-  the contract's marker for the method map's unimplemented methods. A
-  function that only calls the modules' register functions, or other such
-  functions (an aggregator, such as
+  interfaces, type parameters and intersections. The port type is marked.
+  Each method object takes its method's name: where its module or the
+  service file binds the name already, a local helper becomes
+  `<name>Body`, an import `<name> as <name>Impl` and a binding inside a
+  function `<name>Impl`, with every use; a helper the module exports, or a
+  declaration of the service file, keeps its name, and the object is
+  written or imported as `<name>Method` (`methods: { name: nameMethod }`).
+  A service class's member of a module method's name is hoisted as
+  `<name>Of<Class>`. A `defineMethod` call tied to no service is named at
+  its file and line in the contract's marker for the method map's
+  unimplemented methods. A function that only calls the modules' register
+  functions, or other such functions (an aggregator, such as
   `defineQueryMethods(service) { defineGetTarget(service); ... }`), is
   removed with its calls, and so is a file it leaves empty that nothing
   imports; the summary counts the removed aggregators. One that does more

@@ -4,6 +4,7 @@
 // Every marker below says what to check.
 
 import { defineContract, mutation, query, todoSchema } from "@fitzzero/quickdraw-core";
+import { byIdSchema } from "./helpers.js";
 
 export const healthContract = defineContract("healthService", {
   methods: {
@@ -11,5 +12,7 @@ export const healthContract = defineContract("healthService", {
     ping: query({ input: todoSchema<Record<string, never>>(), output: todoSchema<{ ok: true; at: string }>() }),
     // quickdraw-migrate: review [contract] mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
     stats: mutation({ input: todoSchema<Record<string, never>>(), output: todoSchema<{ projects: number; tasks: number }>() }),
+    // quickdraw-migrate: review [contract] query, chosen from its name; output: todoSchema of the 4.x response type
+    getProjectHealth: query({ input: byIdSchema, output: todoSchema<{ ok: boolean }>() }),
   },
 });

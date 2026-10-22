@@ -6,10 +6,12 @@
 // (4.1 `src/client/testing.tsx:24-41`), which tested a fake transport.
 //
 // - A query member's `useQuery` is TanStack's own `useQuery`, on the mock's
-//   `QueryClient` (retries off), fetching from the method's stub; `call`
-//   and `prefetch` answer from the stub too. A mutation's `useMutation` is
-//   TanStack's `useMutation` over the stub. Optimistic layers are not shown:
-//   the test sets the rows a component reads.
+//   `QueryClient` (retries off, results kept fresh), fetching from the
+//   method's stub; the admin kit's reads of rows default to `staleTime: 0`
+//   as on the typed client, so they ask their stub again on every mount.
+//   `call` and `prefetch` answer from the stub too. A mutation's
+//   `useMutation` is TanStack's `useMutation` over the stub. Optimistic
+//   layers are not shown: the test sets the rows a component reads.
 // - Every method's member carries its stub (`mockResolvedValue`,
 //   `mockRejectedValue`, `mockImplementation`, `mockReset`, `calls`). A
 //   search kit method's `useSearch` asks its stub at once, with no debounce
@@ -154,11 +156,19 @@ function mockQueryMember(
 ): object {
   const stub = context.stub(target);
   const key = (input?: unknown): MethodQueryKey => methodKey(target.service, target.method, input);
+  const defaults = target.queryDefaults;
   const member = withStub(
     {
       ...search(stub.invoke),
+      // The caller's options over the method's defaults, as on the typed client.
       useQuery: (input?: unknown, options?: MethodQueryOptions<unknown>) =>
-        useMockQuery(context.queryClient, stub, key(input), input, options),
+        useMockQuery(
+          context.queryClient,
+          stub,
+          key(input),
+          input,
+          defaults === undefined ? options : { ...defaults, ...options },
+        ),
       call: (input?: unknown): Promise<unknown> => stub.invoke(input),
       key,
       setData: (input: unknown, updater: Updater<unknown, unknown>): unknown =>

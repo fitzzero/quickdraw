@@ -19,6 +19,22 @@ export function isFunctionProperty(property: PropertyDeclaration): boolean {
   return init !== undefined && (Node.isArrowFunction(init) || Node.isFunctionExpression(init));
 }
 
+/**
+ * Whether a function field stays one function for good, hoisted as a `const`:
+ * nothing writes it after its initializer. One the class replaces
+ * (`this.provider = next`, its constructor included, which may write even a
+ * `readonly` one) is module state, a `let` like any other field.
+ */
+export function isFixedFunction(property: PropertyDeclaration, service: ServiceModel): boolean {
+  return isFunctionProperty(property) && !reassigned(service, property.getName());
+}
+
+/** A field's type annotation as it follows the name of its binding (`: T`), or nothing. */
+export function typeAnnotation(property: PropertyDeclaration): string {
+  const type = property.getTypeNode()?.getText();
+  return type === undefined ? "" : `: ${type}`;
+}
+
 /** Whether a field holds another 4.x service (`chatService: ChatService | undefined`). */
 function holdsService(property: PropertyDeclaration): boolean {
   const declaration = property.getType().getNonNullableType().getSymbol()?.getDeclarations()[0];
