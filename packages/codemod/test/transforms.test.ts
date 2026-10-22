@@ -320,6 +320,23 @@ describe("a 4.x service class's members (label.ts)", () => {
     expect(label()).not.toMatch(/this\.(?:renamed|onChange|room)\b/u);
   });
 
+  it("writes a function field the class replaces as a marked let, and keeps a fixed one a const", () => {
+    // setNamer replaces namer: module state, like any field the class writes after its initializer
+    expect(label()).toMatch(
+      /\[this\] 4\.x instance field namer of LabelService: now module state[^\n]*\nlet namer: LabelNamer = \(projectId\) => `label-\$\{projectId\}`;/u,
+    );
+    expect(label()).toContain(
+      "export function setNamer(next: LabelNamer): void {\n  namer = next;",
+    );
+    // a readonly one, and one nothing writes, stay unmarked consts
+    expect(label()).toContain(
+      "// How a name is tidied, for good\nconst tidy = (name: string): string => name.trim();",
+    );
+    expect(label()).toContain(
+      "// How a name becomes a key, which nothing swaps\nconst slug = (name: string): string => name.toLowerCase();",
+    );
+  });
+
   it("keeps the constructor's assignments in a setup function that takes the parameters they use", () => {
     expect(label()).toContain(
       "export function setUpLabelService(options: { onChange?: LabelListener } = {}): void {\n  onChange = options.onChange;",

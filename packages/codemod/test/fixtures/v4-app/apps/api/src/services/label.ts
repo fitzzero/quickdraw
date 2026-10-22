@@ -6,6 +6,9 @@ import { z } from "zod";
 /** Called with a label's id whenever one is renamed or created. */
 export type LabelListener = (labelId: string) => void;
 
+/** Names a new label of a project. */
+export type LabelNamer = (projectId: string) => string;
+
 /** Labels have no row-level access: only service grants open them. */
 export class LabelService extends BaseService<
   Label,
@@ -21,6 +24,12 @@ export class LabelService extends BaseService<
   private readonly onChange: LabelListener | undefined;
   /** The room every label editor joins. */
   public readonly room: string;
+  // How a new label is named, which a test swaps (setNamer), as farseer's services swapped their providers
+  private namer: LabelNamer = (projectId) => `label-${projectId}`;
+  // How a name is tidied, for good
+  private readonly tidy = (name: string): string => name.trim();
+  // How a name becomes a key, which nothing swaps
+  private slug = (name: string): string => name.toLowerCase();
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -90,6 +99,17 @@ export class LabelService extends BaseService<
   public roomStats(): { room: string; sockets: number } {
     const room = this.room;
     return { room, sockets: this.subscribers.get("all")?.size ?? 0 };
+  }
+
+  /** Swaps how new labels are named, for a test. */
+  public setNamer(next: LabelNamer): void {
+    this.namer = next;
+  }
+
+  /** A new label's tidied name in a project, and its key. */
+  public draftName(projectId: string): { name: string; key: string } {
+    const name = this.tidy(this.namer(projectId));
+    return { name, key: this.slug(name) };
   }
 
   // The base class does the leaving; this only tells the listener

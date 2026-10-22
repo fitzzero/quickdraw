@@ -19,6 +19,19 @@ export function isFunctionProperty(property: PropertyDeclaration): boolean {
   return init !== undefined && (Node.isArrowFunction(init) || Node.isFunctionExpression(init));
 }
 
+/**
+ * Whether a function field stays one function for good, hoisted as a `const`:
+ * it is `readonly`, or nothing writes it after its initializer. One the class
+ * replaces (`this.provider = next`, its constructor included) is module state,
+ * a `let` like any other field.
+ */
+export function isFixedFunction(property: PropertyDeclaration, service: ServiceModel): boolean {
+  return (
+    isFunctionProperty(property) &&
+    (property.isReadonly() || !reassigned(service, property.getName()))
+  );
+}
+
 /** Whether a field holds another 4.x service (`chatService: ChatService | undefined`). */
 function holdsService(property: PropertyDeclaration): boolean {
   const declaration = property.getType().getNonNullableType().getSymbol()?.getDeclarations()[0];
