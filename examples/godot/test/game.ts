@@ -3,7 +3,8 @@
 // player joins (an app room), a `move` channel that requires it, a typed
 // `moved` event to the world, a seeded `ticks` stream, and a slow query for
 // the call limits. The server runs on `createTestApp` with a short heartbeat
-// and one query at a time, so a second concurrent query is RATE_LIMITED.
+// and one query at a time, so a second concurrent query is RATE_LIMITED, and
+// serves peer links between the world's players.
 
 import { defineContract, mutation, query, QuickdrawError } from "@fitzzero/quickdraw-core";
 import { initQuickdraw } from "@fitzzero/quickdraw-core/server";
@@ -104,13 +105,14 @@ function authenticate({
   throw new QuickdrawError("UNAUTHENTICATED", "Unknown token");
 }
 
-/** Starts the game server on a free port: a heartbeat every 300 ms, one query at a time. */
+/** Starts the game server on a free port: a heartbeat every 300 ms, one query at a time, peer links. */
 export async function startServer() {
   return await createTestApp({
     services: [gameService()],
     auth: { authenticate },
     limits: { maxInFlightQueries: 1, maxQueuedQueries: 0, retryAfterMs: 300 },
     socket: { pingInterval: 300, pingTimeout: 1000 },
+    peers: true,
   });
 }
 

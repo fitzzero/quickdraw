@@ -46,6 +46,9 @@ func _on_event(service: String, event: String, payload: Variant) -> void:
 | `off_event(service, event, callback)`             | Stops calling `callback` for that event; false when it was not registered.                                                                                                            |
 | `presence(room)`                                  | The users in an app room the socket is in.                                                                                                                                            |
 | `request(event, payload)`                         | Any other acknowledged event of the protocol (`qd:sub`, `qd:watch`, ...), paced by the hello's subscription lane.                                                                     |
+| `peer_link(room, to, offerer, options)`           | Opens a link to socket `to` in app room `room` (below). Exactly one side offers. `relay`: `"auto"` (default), `"always"` or `"never"`; `ice_servers`.                                 |
+| `reject_peer(room, from)`                         | Refuses a link `peer_requested` asked for: the peer's link closes with `"bye"`.                                                                                                       |
+| `socket_id`                                       | This socket's id, from the server's CONNECT: what a peer links to.                                                                                                                    |
 | `close()`                                         | Disconnects for good.                                                                                                                                                                 |
 | `rng`                                             | The `RandomNumberGenerator` behind the client's random waits (reconnect backoff, the `qd:rotate` moment); seed it to repeat a run.                                                    |
 | `server_id`                                       | The hello's `serverId`: new each time a server starts. Another one after a reconnect means a restarted server (or another node): a game's world and ticks start over.                 |
@@ -59,9 +62,44 @@ moment within the window),
 `stream_seeded(service, stream, scope, seed)`, `presence_changed(room, users)`,
 `revoked(frame)` (also for a held feed the server refuses after a
 reconnect: `reason` `"refused"`, with its `error`),
-`access_changed(service_access)`, and
+`access_changed(service_access)`,
+`peer_requested(room, from, user_id)` (a socket of a room this one is in
+signalled it with no link: answer with `peer_link(room, from, false)` within
+15 s, or `reject_peer`), and
 `frame_received(event, data)` for the frames it does not route (`qd:e`,
 `qd:c`, `qd:changed`). `trace = true` prints every frame.
+
+### Peer links
+
+On a server created with `peers: true` (its hello lists `"peer"`), two
+players of one app room can link: WebRTC data channels where Godot has them
+(a web export, or a native build with the
+[webrtc GDExtension](https://github.com/godotengine/webrtc-native)), and the
+server's relay otherwise, with the same messages either way
+([`docs/protocol-v5.md`](../../docs/protocol-v5.md), "Peer links"). A headless
+or native build without the extension runs every link on the relay; so does
+a link whose direct path fails. A link lives as long as the socket it started
+on: open it again in `connected`.
+
+```gdscript
+func _on_peer_requested(room: String, from: String, user_id: String) -> void:
+	var link: QuickdrawClient.PeerLink = Quickdraw.peer_link(room, from, false)
+	link.message.connect(func(label: String, data: Variant) -> void: print(user_id, ": ", data))
+	link.opened.connect(func(_path: String) -> void: link.send("rel", {"hello": user_id}))
+```
+
+A `PeerLink` has `send(label, data)` (`"rel"`, ordered and reliable, or
+`"fast"`, unordered and never retransmitted; `data` any JSON value; false
+when dropped), `close()`, `state` (`"connecting"`, `"open"`, `"closed"`),
+`path` (`"direct"` or `"relay"`), `close_reason`, `room`, `peer` (the peer's
+socket id), `user_id` (the peer's user, as the server named it), `sent`,
+`received` and `dropped`, and a clock read from pings on `fast`:
+`clock_now()` (the peer's clock in its milliseconds), `clock_offset`, `rtt`,
+`jitter` and `synced`. Its signals are `opened(path)`,
+`message(label, data)`, `state_changed(state, path)` and `closed(reason)`.
+The server forwards a link's signals and relays its messages only between
+two players of the room, but what the peer sends is the peer's word: a game
+checks it as it would check any input.
 
 What it does for you, as `docs/protocol-v5.md` asks of a client:
 
@@ -89,7 +127,9 @@ with `int(...)`.
 against, written as a game would: `join` puts the calling socket in the
 world's app room, the `move` channel declares `requires: { room: WORLD }`
 so only a socket in the world may send on it, and its handler sends the
-`moved` event to the world and pushes to the seeded `ticks` stream. Rooms
+`moved` event to the world and pushes to the seeded `ticks` stream. The
+server serves peer links (`peers: true`), so two players of the world can
+link. Rooms
 are per socket: a page and a game client of one player are two sockets,
 and the one that sends must make the joining call
 ([`docs/clients.md`](../../docs/clients.md), "Rooms for games and lobbies").
@@ -101,13 +141,16 @@ and the one that sends must make the joining call
   client writes, byte for byte ([`test/frames.ts`](test/frames.ts)), to a
   real server over a raw WebSocket and checks every answer, then what the
   session does not reach: a refused protocol, the heartbeat, presence and
-  events between two players, channels never acknowledged.
+  events between two players, channels never acknowledged, and a peer link
+  over the relay between two players, with its refusal from outside the
+  room.
 - `bun run check:godot` (after `bun run build` at the root; Godot 4 as
   `godot` on the PATH, or `GODOT=/path/to/Godot_v4.7.2-stable_linux.x86_64`):
   [`test/godot.ts`](test/godot.ts) starts the game server and runs the
-  client headless in Godot through [`test/smoke.gd`](test/smoke.gd). It
+  client headless in Godot through [`test/smoke.gd`](test/smoke.gd), whose
+  peer link it answers as the player "bo" offering one over the relay. It
   passes when the script's checks hold and the client wrote exactly the
-  frames of `test/frames.ts`. CI's `godot` job runs it with the official
+  frames of `test/frames.ts`, its link's clock pings aside. CI's `godot` job runs it with the official
   Godot 4.7.2 build, on every push and on a pull request that touches the
   client, the wire's code or `docs/protocol-v5.md`.
 

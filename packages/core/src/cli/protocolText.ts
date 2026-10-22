@@ -148,6 +148,61 @@ export const CLIENT_RULES = `## What a client must do
   working against a newer server. The server reads what a client sends the
   same way. Any other change takes a new \`protocol\` number.`;
 
+/** How two clients link: signals, the two paths, link messages, pings, and the end of a link. */
+export const PEER_LINKS = `## Peer links
+
+On a server whose \`qd:hello\` lists \`"peer"\` in \`features\`, two
+signed-in sockets of one app room can open a link: WebRTC data channels
+between the two clients or, when those cannot form, the server's relay,
+carrying the same messages either way. The server signals and relays: it
+never terminates WebRTC and never reads what a link carries. A link belongs
+to its room and its two sockets, and ends when either leaves the room or
+disconnects: open it again after a reconnect.
+
+A client learns a peer's socket id from the app (a method's answer, an
+event) or from a signal it receives (\`from\`). Exactly one side offers.
+
+1. The offerer sends \`{ sdp }\` with its offer, then \`{ ice }\` for each of
+   its candidates, each as \`qd:peer\` to the other socket; the answerer
+   sends \`{ sdp }\` with its answer and its own candidates. A candidate may
+   arrive before the description it follows: keep it until that
+   description is applied.
+2. Both sides make the same two data channels, negotiated with fixed ids,
+   so neither waits for \`ondatachannel\`: \`rel\` (id 0, ordered and
+   reliable) and \`fast\` (id 1, unordered, \`maxRetransmits\` 0). The link
+   is open on the direct path once both channels are open. A data channel
+   message is one \`PeerMessage\` as UTF-8 JSON text.
+3. A side that cannot use WebRTC (a headless or native client without it),
+   whose direct path did not open within \`DIRECT_TIMEOUT_MS\`, or whose
+   direct path failed, sends \`{ relay: true }\`, once a link. A side that
+   hears it moves to the relay too and says \`{ relay: true }\` back, unless
+   it said it already. The link is open on the relay once a side has said
+   it and heard it. Through the relay a \`PeerMessage\` travels as the
+   \`text\` of \`qd:relay\`, sent volatile on \`fast\`.
+4. Read link messages from both paths all along: the peer may move to the
+   relay before you hear it say so. A link that opens on no path within
+   \`OPEN_TIMEOUT_MS\` is over.
+5. Once open, ping on \`fast\` every \`PING_MS\` (\`QUICK_PINGS\` times
+   \`QUICK_PING_MS\` apart as the link opens, so the clocks sync at once),
+   and answer each ping with its pong at once. A side that hears nothing
+   from its peer for \`WATCHDOG_MS\` closes the link.
+6. Close a link with \`{ bye: true }\`. The server sends one as well, from a
+   peer that left the room, was taken out of it or disconnected, to each
+   socket that peer signalled there. A socket that left the room itself
+   (\`qd:presence\` with \`users: []\`) closes the room's links without one.
+7. A signal from a socket you have no link with asks for a link: answer it
+   within \`PENDING_MS\`, or send \`{ bye: true }\`. A second offer or a
+   second \`{ relay: true }\` from a socket you have a link with opens a new
+   link: you missed the bye of the last one.
+
+Keep relay messages within \`limits.peers\` of the hello: the server drops
+a message over them silently, a \`rel\` one too. A client without WebRTC
+works on the relay alone; the server never needs one.`;
+
+/** Before the table of the peer link timings. */
+export const PEER_TIMINGS_INTRO = `The timings of \`@fitzzero/quickdraw-core\`'s links, which a link with one
+must keep to:`;
+
 /** What the type parameters of the frame types stand for. */
 export const TYPE_PARAMETERS = `Keys are short: \`s\` a service's name, \`m\` a method's, \`c\` a collection's,
 \`i\` an input, \`d\` data, \`e\` an error, \`v\` a version, \`rev\` a revision,
@@ -193,7 +248,9 @@ so read them from the hello. The limits below are fixed, and no option
 changes them. Every 5.0 server holds them, except the per-socket caps of rows,
 scopes and topics (\`MAX_ENTITY_IDS_PER_SOCKET\`, \`MAX_SCOPES_PER_SOCKET\`,
 \`MAX_TOPICS_PER_SOCKET\`): a server that holds them announces them in
-\`qd:hello\`, and servers up to 5.1.0 hold none of them.`;
+\`qd:hello\`, and servers up to 5.1.0 hold none of them. The peer link limits
+(\`MAX_PEER_LINKS\` to \`PEER_RELAY_BYTES_BURST\`) hold on a server that serves
+peer links, which announces them in \`limits.peers\`.`;
 
 /** Before the table of defaults. */
 export const DEFAULTS_INTRO = `These are defaults. An app changes the socket rate limiter with
@@ -218,4 +275,12 @@ A socket whose \`qd:ch\` messages dropped for one channel's rate within
 \`CHANNEL_ABUSE_WINDOW_MS\` exceed \`CHANNEL_ABUSE_MULTIPLIER\` times that rate
 is disconnected (Socket.IO DISCONNECT, \`41\`, then the WebSocket closes): that
 is sustained flooding, not a burst. As after any DISCONNECT the server
-sends, a client does not reconnect on its own.`;
+sends, a client does not reconnect on its own.
+A \`qd:peer\` over \`PEER_SIGNAL_RATE\` is refused \`RATE_LIMITED\` with
+\`retryAfterMs\`, and one to a new peer from a socket that signals
+\`MAX_PEER_LINKS\` already \`CONFLICT\`. A \`qd:relay\` message over the relay
+rate or bytes, longer than \`MAX_PEER_MESSAGE_BYTES\`, or to a peer the socket
+did not signal in that room, is dropped silently. A socket whose refused
+signals, or dropped relay messages, within \`CHANNEL_ABUSE_WINDOW_MS\` exceed
+\`CHANNEL_ABUSE_MULTIPLIER\` times the signal rate, or the relay rate, is
+disconnected as for channels.`;

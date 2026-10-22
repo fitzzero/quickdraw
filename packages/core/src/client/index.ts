@@ -126,6 +126,27 @@ export {
 } from "./live/streams";
 export type { EventBus, EventHandler } from "./live/events";
 export type { PresenceStore } from "./live/presence";
+// Peer links between two sockets of an app room, without React (RFC 0003
+// section 12.5): WebRTC data channels, or the server's relay when those
+// cannot form.
+export {
+  createPeerLink,
+  DEFAULT_ICE_SERVERS,
+  onPeerRequest,
+  type PeerClock,
+  type PeerCloseReason,
+  type PeerConnectionConfig,
+  type PeerIceServer,
+  type PeerLabel,
+  type PeerLink,
+  type PeerLinkEvents,
+  type PeerLinkOptions,
+  type PeerLinkState,
+  type PeerLinkStats,
+  type PeerPath,
+  type PeerRequest,
+  type RelayMode,
+} from "./peer/index";
 
 // The typed client and its provider.
 export { createQuickdrawClient } from "./createClient";

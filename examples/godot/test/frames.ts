@@ -1,9 +1,11 @@
 // The frames the GDScript client writes in the checked session
-// (`smoke.gd`), byte for byte, pongs aside. The Godot check (`godot.ts`)
-// compares what the client wrote with this list; the Node wire test
-// (`wire.test.ts`) writes these same strings to the real server. Godot's
-// `JSON.stringify` sorts keys and writes integers without a decimal point;
-// `godotJson` does the same.
+// (`smoke.gd`), byte for byte, pongs and peer link clock pings aside. The
+// Godot check (`godot.ts`) compares what the client wrote with this list; the
+// Node wire test (`wire.test.ts`) writes these same strings to the real
+// server. Godot's `JSON.stringify` sorts keys and writes integers without a
+// decimal point; `godotJson` does the same.
+
+import { WORLD } from "./game";
 
 /** JSON as Godot's `JSON.stringify` writes it: compact, keys sorted at every level. */
 export function godotJson(value: unknown): string {
@@ -78,3 +80,38 @@ export const SESSION: readonly string[] = [
   "41",
   connectFrame("nobody"),
 ];
+
+/** The ack id of the client's peer signal in the session: the next after `nowhereFrame(12)`. */
+export const PEER_SIGNAL_ID = 13;
+
+/** The client's `qd:peer` to `peer`: it runs the link over the relay. */
+export function relayHelloFrame(peer: string, id = PEER_SIGNAL_ID): string {
+  return `42${String(id)}${godotJson(["qd:peer", { room: WORLD, to: peer, sig: { relay: true } }])}`;
+}
+
+/** A link message `[0, data]` the client relays to `peer` on `label`. */
+export function relayFrame(peer: string, label: "rel" | "fast", data: unknown): string {
+  return `42${godotJson(["qd:relay", [WORLD, peer, label, godotJson([0, data])]])}`;
+}
+
+/** True for a peer link's clock ping or pong: timed, so never compared. */
+export function isClockFrame(frame: string): boolean {
+  return /^42\["qd:relay",\["[^"]*","[^"]*","fast","\[[12],/.test(frame);
+}
+
+/** Where the peer link's frames fall in the session: before the DISCONNECT of `close()`. */
+const PEER_AT = 20;
+
+/**
+ * The session with the link to the harness's player at socket `peer`
+ * (`godot.ts`): the client answers its offer over the relay, then says hello
+ * back on `rel`; the player closes the link.
+ */
+export function sessionWith(peer: string): readonly string[] {
+  return [
+    ...SESSION.slice(0, PEER_AT),
+    relayHelloFrame(peer),
+    relayFrame(peer, "rel", { hi: "bo" }),
+    ...SESSION.slice(PEER_AT),
+  ];
+}

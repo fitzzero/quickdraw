@@ -1,0 +1,298 @@
+// What every peer link does whatever carries it (RFC 0003 section 12.5): its
+// state and events, its stats, the clock pings and the watchdog. Once open,
+// a link pings on `fast` (`QUICK_PINGS` pings `QUICK_PING_MS` apart, then
+// one every `PING_MS`) and answers the peer's pings, so the two clocks sync
+// and each side hears the other at least that often: a link that hears
+// nothing for `WATCHDOG_MS` closes as `lost`. `createPeerLink` drives a core
+// from signals and paths (`link.ts`); the loopback double of `./testing`
+// drives two from an in-process pair.
+//
+// React-free.
+
+import type { PeerLabel } from "../../protocol/envelope";
+import { createClock, type ClockState, type PeerClock } from "./clock";
+import { decodeMessage, encodeMessage, messageBytes } from "./codec";
+import type {
+  PeerCloseReason,
+  PeerLink,
+  PeerLinkEvents,
+  PeerLinkState,
+  PeerLinkStats,
+  PeerPath,
+} from "./types";
+
+/** Clock pings a link sends `QUICK_PING_MS` apart as it opens, so its clock syncs at once. */
+export const QUICK_PINGS = 6;
+
+/** The time between the clock pings a link sends as it opens. */
+export const QUICK_PING_MS = 80;
+
+/** The time between the clock pings of an open link, after its first ones. */
+export const PING_MS = 500;
+
+/** A link that hears nothing from its peer for this long closes as `lost`. */
+export const WATCHDOG_MS = 8000;
+
+/** What carries a core's messages, and what the core tells its owner. */
+export interface CoreHooks {
+  /** Sends one message's text on `label`; false when it was dropped. */
+  send(label: PeerLabel, text: string): boolean;
+  /**
+   * The link closed, once: take its paths down. `fromHere` when this side
+   * closed it (`close()`, the watchdog, `fail`), so the peer must be told.
+   */
+  closed(reason: PeerCloseReason, fromHere: boolean): void;
+}
+
+/** What a core is made from. */
+export interface CoreOptions {
+  readonly room: string;
+  readonly peer: string;
+  readonly hooks: CoreHooks;
+  /** The longest message's text, in UTF-8 bytes: the server's `limits.peers.maxMessageBytes`. */
+  readonly maxMessageBytes: () => number;
+  /** This side's clock, in milliseconds. Default `performance.now()`. */
+  readonly now?: () => number;
+}
+
+/** A link, and how its owner drives it. */
+export interface LinkCore {
+  readonly link: PeerLink;
+  /** A message from the peer, on `label`, from either path. */
+  receive(data: unknown, label: PeerLabel): void;
+  /** A path carries the link: it opens, or moves to that path. */
+  carry(path: PeerPath): void;
+  /** The link ended from outside (the peer's bye, the socket's disconnect): nothing is sent. */
+  end(reason: PeerCloseReason): void;
+  /** This side ends the link for `reason` (a timeout, a failed path): the owner tells the peer. */
+  fail(reason: PeerCloseReason): void;
+  /** The peer's user, as the server named it in the peer's first signal. */
+  identify(userId: string): void;
+}
+
+/** Throws `error` on its own, after the caller went on: one failing listener stops no other. */
+export function throwLater(error: unknown): void {
+  queueMicrotask(() => {
+    throw error;
+  });
+}
+
+type Listeners = { readonly [E in keyof PeerLinkEvents]: Set<PeerLinkEvents[E]> };
+
+/** The state one core keeps. */
+interface Core {
+  readonly options: CoreOptions;
+  readonly now: () => number;
+  readonly clock: ClockState;
+  readonly listeners: Listeners;
+  state: PeerLinkState;
+  path: PeerPath | undefined;
+  closeReason: PeerCloseReason | undefined;
+  userId: string | undefined;
+  lastHeard: number;
+  pingsLeft: number;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  readonly stats: { sent: number; received: number; dropped: number };
+}
+
+/** Calls each listener of `event`; one that throws is reported apart, and the others still run. */
+function emit<E extends keyof PeerLinkEvents>(
+  core: Core,
+  event: E,
+  ...args: Parameters<PeerLinkEvents[E]>
+): void {
+  for (const listener of [...core.listeners[event]]) {
+    try {
+      (listener as (...values: Parameters<PeerLinkEvents[E]>) => void)(...args);
+    } catch (error) {
+      throwLater(error);
+    }
+  }
+}
+
+function finish(core: Core, reason: PeerCloseReason, fromHere: boolean): void {
+  if (core.state === "closed") {
+    return;
+  }
+  core.state = "closed";
+  core.path = undefined;
+  core.closeReason = reason;
+  clearTimeout(core.timer);
+  core.options.hooks.closed(reason, fromHere);
+  emit(core, "state", "closed", undefined);
+  emit(core, "close", reason);
+  for (const set of Object.values(core.listeners) as Set<unknown>[]) {
+    set.clear();
+  }
+}
+
+/** A ping, then the next one: the watchdog's beat too. */
+function tick(core: Core): void {
+  core.timer = undefined;
+  if (core.state !== "open") {
+    return;
+  }
+  if (core.now() - core.lastHeard > WATCHDOG_MS) {
+    finish(core, "lost", true);
+    return;
+  }
+  core.options.hooks.send("fast", encodeMessage([1, core.now()]));
+  core.pingsLeft = Math.max(0, core.pingsLeft - 1);
+  core.timer = setTimeout(
+    () => {
+      tick(core);
+    },
+    core.pingsLeft > 0 ? QUICK_PING_MS : PING_MS,
+  );
+}
+
+function send(core: Core, label: PeerLabel, data: unknown): boolean {
+  if (label !== "rel" && label !== "fast") {
+    throw new TypeError(`PeerLink.send: label must be "rel" or "fast", not ${String(label)}`);
+  }
+  const text = encodeMessage([0, data]);
+  const bytes = messageBytes(text);
+  const max = core.options.maxMessageBytes();
+  if (bytes > max) {
+    throw new RangeError(
+      `PeerLink.send: a message holds at most ${max} bytes as JSON; this one has ${bytes}: split it`,
+    );
+  }
+  const sent = core.state === "open" && core.options.hooks.send(label, text);
+  if (sent) {
+    core.stats.sent += 1;
+  } else {
+    core.stats.dropped += 1;
+  }
+  return sent;
+}
+
+function receive(core: Core, data: unknown, label: PeerLabel): void {
+  const message = core.state === "closed" ? undefined : decodeMessage(data);
+  if (message === undefined) {
+    return;
+  }
+  core.lastHeard = core.now();
+  if (message[0] === 0) {
+    core.stats.received += 1;
+    emit(core, "message", message[1], label);
+  } else if (message[0] === 1) {
+    if (core.state === "open") {
+      core.options.hooks.send("fast", encodeMessage([2, message[1], core.now()]));
+    }
+  } else {
+    core.clock.pong(message[1], message[2], core.now());
+  }
+}
+
+function carry(core: Core, path: PeerPath): void {
+  if (core.state === "closed" || (core.state === "open" && core.path === path)) {
+    return;
+  }
+  const opening = core.state === "connecting";
+  core.state = "open";
+  core.path = path;
+  if (opening) {
+    core.lastHeard = core.now();
+    core.pingsLeft = QUICK_PINGS;
+    emit(core, "open", path);
+  }
+  emit(core, "state", "open", path);
+  if (opening && core.state === "open") {
+    tick(core);
+  }
+}
+
+/** The clock as a link shows it: read-only. */
+function clockView(clock: PeerClock): PeerClock {
+  return Object.freeze({
+    now: () => clock.now(),
+    get offset() {
+      return clock.offset;
+    },
+    get rtt() {
+      return clock.rtt;
+    },
+    get jitter() {
+      return clock.jitter;
+    },
+    get synced() {
+      return clock.synced;
+    },
+  });
+}
+
+/** The link the app holds. */
+function linkOf(core: Core): PeerLink {
+  const { listeners } = core;
+  return Object.freeze({
+    room: core.options.room,
+    peer: core.options.peer,
+    get userId() {
+      return core.userId;
+    },
+    get state() {
+      return core.state;
+    },
+    get path() {
+      return core.path;
+    },
+    get closeReason() {
+      return core.closeReason;
+    },
+    send: (label: PeerLabel, data: unknown) => send(core, label, data),
+    on<E extends keyof PeerLinkEvents>(event: E, listener: PeerLinkEvents[E]): () => void {
+      if (!(event in listeners)) {
+        throw new TypeError(`PeerLink.on: no event "${String(event)}"`);
+      }
+      listeners[event].add(listener);
+      return () => {
+        listeners[event].delete(listener);
+      };
+    },
+    clock: clockView(core.clock),
+    get stats(): PeerLinkStats {
+      return Object.freeze({ ...core.stats });
+    },
+    close: () => {
+      finish(core, "closed", true);
+    },
+  });
+}
+
+/** Creates a link's core, connecting. */
+export function createLinkCore(options: CoreOptions): LinkCore {
+  const now = options.now ?? (() => performance.now());
+  const core: Core = {
+    options,
+    now,
+    clock: createClock(now),
+    listeners: { message: new Set(), open: new Set(), state: new Set(), close: new Set() },
+    state: "connecting",
+    path: undefined,
+    closeReason: undefined,
+    userId: undefined,
+    lastHeard: 0,
+    pingsLeft: 0,
+    timer: undefined,
+    stats: { sent: 0, received: 0, dropped: 0 },
+  };
+  return {
+    link: linkOf(core),
+    receive: (data, label) => {
+      receive(core, data, label);
+    },
+    carry: (path) => {
+      carry(core, path);
+    },
+    end: (reason) => {
+      finish(core, reason, false);
+    },
+    fail: (reason) => {
+      finish(core, reason, true);
+    },
+    identify: (userId) => {
+      core.userId ??= userId;
+    },
+  };
+}

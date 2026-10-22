@@ -2,8 +2,9 @@ extends SceneTree
 ## Drives the client (the "Quickdraw" autoload) through one session against
 ## the game server at QD_URL (test/game.ts), writing the frames of
 ## test/frames.ts in order. Prints every frame with QD_TRACE=1, "STEP rotate"
-## when the harness should send qd:rotate, and a last line "RESULT {json}";
-## exits 0 when every check held. Run it with `bun run check:godot`.
+## when the harness should send qd:rotate, "STEP peer" when its player should
+## offer a peer link, and a last line "RESULT {json}"; exits 0 when every
+## check held. Run it with `bun run check:godot`.
 
 ## The window of the harness's qd:rotate (test/godot.ts sends the same), and
 ## the part of it the seeded client's moment falls in.
@@ -69,6 +70,8 @@ func _run() -> void:
 	print("STEP rotate")
 	await _rotating(client)
 	await _reconnected(client)
+	await _peer(client)
+	client.close()
 	await _unclaimed(client)
 	await _refused(url, client.trace)
 	print("RESULT ", JSON.stringify({"checks": checks, "failures": failures}))
@@ -184,7 +187,32 @@ func _reconnected(client) -> void:
 	var refused: Dictionary = await client.subscribe_stream("gameService", "nowhere")
 	check(not refused.ok and refused.e.code == "NOT_FOUND", "a stream the service lacks is refused")
 	check(not client.is_subscribed("gameService", "nowhere") and client.is_subscribed("gameService", "ticks"), "a refused subscribe holds no feed")
-	client.close()
+
+
+## A peer link with the harness's player "bo", who joins the world and offers
+## one on "STEP peer" (test/godot.ts). Neither side has WebRTC, so the link
+## runs on the relay: bo says hello on rel, the client says hello back, and bo
+## closes the link.
+func _peer(client) -> void:
+	var asked: Array = []
+	var on_request := func(room: String, from: String, user: String) -> void: asked.append([room, from, user])
+	client.peer_requested.connect(on_request)
+	check(client.socket_id != "", "the client knows its socket id")
+	print("STEP peer")
+	check(await until(func() -> bool: return asked.size() == 1), "a peer's signal asks for a link")
+	check(asked[0][0] == "world:main" and asked[0][2] == "bo", "naming its room and its user")
+	var link = client.peer_link(asked[0][0], asked[0][1], false)
+	var heard: Array = []
+	var reasons: Array = []
+	link.message.connect(func(label: String, data: Variant) -> void: heard.append([label, data]))
+	link.closed.connect(func(reason: String) -> void: reasons.append(reason))
+	check(await until(func() -> bool: return heard.size() == 1), "the peer's message arrives over the link")
+	check(link.path == "relay" and link.user_id == "bo", "which runs on the relay, naming the peer's user")
+	check(heard[0][0] == "rel" and heard[0][1].hi == "ada", "on rel, as its JSON value")
+	check(link.send("rel", {"hi": "bo"}), "a message to the peer goes")
+	check(await until(func() -> bool: return reasons.size() == 1), "the peer closes the link")
+	check(reasons[0] == "bye" and link.state == "closed", "and the link closes with its bye")
+	client.peer_requested.disconnect(on_request)
 
 
 ## Answers nobody takes with `reply` are capped, the oldest dropped first;

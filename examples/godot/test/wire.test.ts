@@ -3,11 +3,20 @@
 // session `smoke.gd` runs in Godot, written as the same bytes (`frames.ts`),
 // with every answer the server sends asserted in turn; then what that
 // session does not reach: a refused protocol, the heartbeat, presence and
-// events between two players, and channel messages that are never
-// acknowledged. `bun run check:godot` runs the GDScript client itself.
+// events between two players, channel messages that are never
+// acknowledged, and a peer link over the relay. `bun run check:godot` runs
+// the GDScript client itself.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { connectFrame, godotJson, SESSION } from "./frames";
+import {
+  connectFrame,
+  godotJson,
+  isClockFrame,
+  PEER_SIGNAL_ID,
+  relayFrame,
+  relayHelloFrame,
+  SESSION,
+} from "./frames";
 import { startServer, WORLD, type GameServer } from "./game";
 
 const servers: GameServer[] = [];
@@ -141,8 +150,11 @@ function payloadOf(frame: string): unknown {
   return frame.startsWith("43") ? array[0] : array[1];
 }
 
-/** Opens a socket and connects with `token` (`frames.ts`), up to `qd:hello`. */
-async function connect(server: GameServer, token: string): Promise<{ wire: Wire; hello: unknown }> {
+/** Opens a socket and connects with `token` (`frames.ts`), up to `qd:hello`; `sid` is the socket's id. */
+async function connect(
+  server: GameServer,
+  token: string,
+): Promise<{ wire: Wire; hello: unknown; sid: string }> {
   const wire = await Wire.open(server);
   expect(JSON.parse((await wire.next((frame) => frame.startsWith("0"))).slice(1))).toEqual({
     sid: expect.any(String),
@@ -152,8 +164,10 @@ async function connect(server: GameServer, token: string): Promise<{ wire: Wire;
     maxPayload: 1_000_000,
   });
   wire.send(connectFrame(token));
-  expect(await wire.next((frame) => frame.startsWith("40"))).toMatch(/^40\{"sid":"[\w-]+"\}$/);
-  return { wire, hello: payloadOf(await wire.next(isEvent("qd:hello"))) };
+  const connected = await wire.next((frame) => frame.startsWith("40"));
+  expect(connected).toMatch(/^40\{"sid":"[\w-]+"\}$/);
+  const { sid } = JSON.parse(connected.slice(2)) as { readonly sid: string };
+  return { wire, hello: payloadOf(await wire.next(isEvent("qd:hello"))), sid };
 }
 
 /** Sends a session frame that asks for an acknowledgement, and resolves with the reply. */
@@ -188,8 +202,16 @@ describe("the GDScript client's session, frame by frame", () => {
           maxScopes: 1000,
           maxTopics: 1000,
         },
+        peers: {
+          maxLinks: 64,
+          maxMessageBytes: 65536,
+          relayRate: 120,
+          relayBurst: 240,
+          relayBytesPerSecond: 1048576,
+          relayBytesBurst: 2097152,
+        },
       },
-      features: [],
+      features: ["peer"],
       userId: "ada",
       serviceAccess: {},
     });
@@ -362,5 +384,80 @@ describe("the wire beyond the session", () => {
     await wire.next(moved(1));
     expect(await ask(wire, SESSION[1] ?? "")).toMatchObject({ ok: true });
     expect(wire.frames.filter(isAck(77))).toEqual([]);
+  });
+
+  it("links two players over the relay, as the client answers a peer that offers one", async () => {
+    const server = await start();
+    const ada = await connect(server, "ada");
+    await ask(ada.wire, SESSION[5] ?? "");
+    const bo = await connect(server, "bo");
+    const join = `420${godotJson(["qd:call", { id: 0, s: "gameService", m: "join", i: { name: "bo" } }])}`;
+    await ask(bo.wire, join);
+    // Bo, without WebRTC, offers a link over the relay; the client hears a request with his user.
+    const offer = `421${godotJson(["qd:peer", { room: WORLD, to: ada.sid, sig: { relay: true } }])}`;
+    expect(await ask(bo.wire, offer)).toEqual({ ok: true });
+    expect(payloadOf(await ada.wire.next(isEvent("qd:peer")))).toEqual({
+      room: WORLD,
+      from: bo.sid,
+      userId: "bo",
+      sig: { relay: true },
+    });
+    // The client answers with the frame `peer_link` writes, then relays its messages.
+    expect(await ask(ada.wire, relayHelloFrame(bo.sid))).toEqual({ ok: true });
+    expect(relayHelloFrame(bo.sid)).toMatch(new RegExp(`^42${String(PEER_SIGNAL_ID)}\\[`));
+    expect(payloadOf(await bo.wire.next(isEvent("qd:peer")))).toEqual({
+      room: WORLD,
+      from: ada.sid,
+      userId: "ada",
+      sig: { relay: true },
+    });
+    ada.wire.send(relayFrame(bo.sid, "rel", { hi: "bo" }));
+    expect(payloadOf(await bo.wire.next(isEvent("qd:relay")))).toEqual([
+      WORLD,
+      ada.sid,
+      "rel",
+      '[0,{"hi":"bo"}]',
+    ]);
+    const ping = `42${godotJson(["qd:relay", [WORLD, bo.sid, "fast", "[1,1234]"]])}`;
+    expect([isClockFrame(ping), isClockFrame(relayFrame(bo.sid, "fast", 1))]).toEqual([
+      true,
+      false,
+    ]);
+    ada.wire.send(ping);
+    expect(payloadOf(await bo.wire.next(isEvent("qd:relay")))).toEqual([
+      WORLD,
+      ada.sid,
+      "fast",
+      "[1,1234]",
+    ]);
+    // Bo leaves: the server tells the client bye for him.
+    bo.wire.close();
+    expect(payloadOf(await ada.wire.next(isEvent("qd:peer")))).toEqual({
+      room: WORLD,
+      from: bo.sid,
+      userId: "bo",
+      sig: { bye: true },
+    });
+  });
+
+  it("refuses a peer signal from outside the room, and relays nothing there", async () => {
+    const server = await start();
+    const ada = await connect(server, "ada");
+    await ask(ada.wire, SESSION[5] ?? "");
+    const bo = await connect(server, "bo");
+    expect(
+      await ask(
+        bo.wire,
+        `421${godotJson(["qd:peer", { room: WORLD, to: ada.sid, sig: { relay: true } }])}`,
+      ),
+    ).toMatchObject({
+      ok: false,
+      e: { code: "FORBIDDEN" },
+    });
+    bo.wire.send(`42${godotJson(["qd:relay", [WORLD, ada.sid, "rel", "[0,1]"]])}`);
+    expect(await ask(ada.wire, SESSION[1] ?? "")).toMatchObject({ ok: true });
+    expect(
+      ada.wire.frames.filter((frame) => isEvent("qd:peer")(frame) || isEvent("qd:relay")(frame)),
+    ).toEqual([]);
   });
 });

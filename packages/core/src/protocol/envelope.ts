@@ -466,6 +466,13 @@ export type RelayForwardFrame = readonly [
   text: string,
 ];
 
+/**
+ * A peer link message: the JSON text of one data channel message or of a
+ * relayed `text`, alike on both paths. A receiver ignores a message whose
+ * first element it does not know, and elements after the ones it reads.
+ */
+export type PeerMessage = PeerData | PeerPing | PeerPong;
+
 /** A link message carrying the app's `data`, any JSON value. */
 export type PeerData = readonly [kind: 0, data: unknown];
 
@@ -474,13 +481,6 @@ export type PeerPing = readonly [kind: 1, t: number];
 
 /** The pong of a ping: `t` as the ping carried it, `u` the answerer's clock as it answered. Sent on `fast`. */
 export type PeerPong = readonly [kind: 2, t: number, u: number];
-
-/**
- * A peer link message: the JSON text of one data channel message or of a
- * relayed `text`, alike on both paths. A receiver ignores a message whose
- * first element it does not know, and elements after the ones it reads.
- */
-export type PeerMessage = PeerData | PeerPing | PeerPong;
 
 // ---------------------------------------------------------------------------
 // Connection-level frames (sections 4.4, 7.2 and 8.3)
