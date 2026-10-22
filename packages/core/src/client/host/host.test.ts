@@ -25,6 +25,7 @@ import { call } from "../call";
 import { createQuickdrawConnection, type QuickdrawConnection } from "../connection";
 import { until } from "../__tests__/fixtures";
 import { controlOf } from "../peer/core";
+import { onPeerRequest } from "../peer/link";
 import { defineHost, type HostChannelContext } from "./host";
 import { hostOf } from "./hosts";
 import { hostLinksOf, type HostFeed } from "./links";
@@ -305,18 +306,64 @@ describe("a host and its peers against a server", () => {
     expect(bo.seeds).toEqual([[snapshot(0)]]);
     host.stream("world").push(WORLD_ID, snapshot(1));
     await until(() => bo.items.length === 1);
-    expect(hostLinksOf(peer).send(WORLD, "gameService", "move", { ...world, dx: -1, dy: 0 })).toBe(
-      true,
-    );
-    await until(() => moves.length === 1);
+    // `fast` is unreliable: the relay drops a message the host's socket is
+    // not ready for, so the peer moves again until the host has a move.
+    await vi.waitFor(async () => {
+      expect(
+        hostLinksOf(peer).send(WORLD, "gameService", "move", { ...world, dx: -1, dy: 0 }),
+      ).toBe(true);
+      await until(() => moves.length > 0, 200);
+    });
     expect(moves[0]?.[1].peer).toEqual({ socketId: peer.socket.id, userId: "bob" });
     // The host's own client is one of its peers too, in process.
     expect(
       hostLinksOf(hostConnection).send(WORLD, "gameService", "move", { ...world, dx: 1, dy: 1 }),
     ).toBe(true);
-    expect(moves[1]?.[1].peer).toEqual({ socketId: hostConnection.socket.id, userId: "alice" });
+    expect(moves.at(-1)?.[1].peer).toEqual({ socketId: hostConnection.socket.id, userId: "alice" });
     host.close();
     await until(() => host.peers.length === 0);
+  });
+
+  it("makes no link a send while the host's links keep closing: the next waits", async () => {
+    const app = (await createTestApp({
+      services: [defineGameService()],
+      peers: true,
+    })) as unknown as TestApp;
+    apps.push(app);
+    const hostConnection = await player(app, alice);
+    await call(hostConnection, {
+      service: "gameService",
+      method: "host",
+      input: world,
+      kind: "mutation",
+    });
+    // The host's client refuses every link, as a host at its links' cap would be refused.
+    onPeerRequest(hostConnection, (request) => {
+      request.reject();
+    });
+    const peer = await player(app, bob);
+    await until(() => hostOf(peer, WORLD) === hostConnection.socket.id);
+    const offers = () =>
+      app
+        .frames({ event: "qd:peer", socketId: hostConnection.socket.id })
+        .filter((frame) => (frame.data as { readonly sig?: { relay?: true } }).sig?.relay === true);
+    const move = () =>
+      hostLinksOf(peer).send(WORLD, "gameService", "move", { ...world, dx: 1, dy: 0 });
+    // A game sends its input every frame: one link, then a wait of 1 s after it closed.
+    for (let frame = 0; frame < 20; frame += 1) {
+      expect(move()).toBe(false);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 16);
+      });
+    }
+    expect(offers()).toHaveLength(1);
+    await vi.waitFor(
+      () => {
+        move();
+        expect(offers()).toHaveLength(2);
+      },
+      { timeout: 3000, interval: 50 },
+    );
   });
 
   it("lets a peer hear that the room's host is gone", async () => {

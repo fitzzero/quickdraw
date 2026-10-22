@@ -3,7 +3,9 @@
 // (`createPeerLink`, `offerer: true`) is made when a host-served channel's
 // message or a host-served stream's feed first needs one, and again when
 // the room gets another host or the link closed while a feed still needs
-// it (after a wait that doubles from 1 s to 15 s). When the host is this
+// it. After a link closes, the next to the same host waits (1 s, doubling
+// to 15 s while links keep closing unopened): a game that sends input each
+// frame makes no link a frame when the server refuses them. When the host is this
 // connection's own socket and it serves the room (`defineHost(...).serve`),
 // the way is in process: the host hears this client as one of its peers.
 //
@@ -66,6 +68,8 @@ interface RoomState {
   readonly feeds: Map<string, { readonly feed: HostFeed; chunks: unknown[] | undefined }>;
   retry: ReturnType<typeof setTimeout> | undefined;
   retryMs: number;
+  /** After a link closed: no link to `host` opens before `until` (`Date.now()`). */
+  backoff: { readonly host: string; readonly until: number } | undefined;
 }
 
 interface LinksState {
@@ -106,6 +110,7 @@ function subscribeOn(way: Way, feed: HostFeed): void {
 function opened(state: RoomState, way: Way): void {
   state.way = way;
   state.retryMs = RETRY_MS;
+  state.backoff = undefined;
   for (const entry of state.feeds.values()) {
     entry.chunks = undefined;
     subscribeOn(way, entry.feed);
@@ -178,15 +183,21 @@ function connectLink(links: LinksState, state: RoomState, host: string): void {
   link.on("close", () => {
     if (state.pending === way.close) {
       disconnect(state);
-      retryLater(links, state);
+      retryLater(links, state, host);
     }
   });
 }
 
-/** Opens a way to the room's host, unless one to it is open or being made. */
+/**
+ * Opens a way to the room's host, unless one to it is open or being made,
+ * or a link to it closed within the wait.
+ */
 function connect(links: LinksState, state: RoomState): void {
   const host = links.directory.of(state.room);
   if (host === undefined || (state.host === host && state.pending !== undefined)) {
+    return;
+  }
+  if (state.backoff?.host === host && Date.now() < state.backoff.until) {
     return;
   }
   if (state.pending !== undefined) {
@@ -204,17 +215,23 @@ function connect(links: LinksState, state: RoomState): void {
   connectLink(links, state, host);
 }
 
-/** A closed link with feeds still to serve: tries again later, while the room has a host. */
-function retryLater(links: LinksState, state: RoomState): void {
+/**
+ * A link to `host` closed: the next to it waits, and doubles the wait after
+ * it. With feeds still to serve, links again then, while the room has a host.
+ */
+function retryLater(links: LinksState, state: RoomState, host: string): void {
+  const wait = state.retryMs;
+  state.backoff = { host, until: Date.now() + wait };
+  state.retryMs = Math.min(MAX_RETRY_MS, wait * 2);
   if (state.feeds.size === 0 || links.directory.of(state.room) === undefined) {
     return;
   }
   clearTimeout(state.retry);
   state.retry = setTimeout(() => {
     state.retry = undefined;
+    state.backoff = undefined;
     connect(links, state);
-  }, state.retryMs);
-  state.retryMs = Math.min(MAX_RETRY_MS, state.retryMs * 2);
+  }, wait);
 }
 
 function roomOf(links: LinksState, room: string): RoomState {
@@ -228,6 +245,7 @@ function roomOf(links: LinksState, room: string): RoomState {
       feeds: new Map(),
       retry: undefined,
       retryMs: RETRY_MS,
+      backoff: undefined,
     };
     links.rooms.set(room, state);
   }
@@ -248,7 +266,13 @@ function createLinks(connection: QuickdrawConnection): LinksState & HostLinks {
     }
     if (host === null) {
       disconnect(state);
-    } else if (state.feeds.size > 0) {
+      return;
+    }
+    // The server named the room's host again (another host, or this socket
+    // joined again): its first link opens at once.
+    state.backoff = undefined;
+    state.retryMs = RETRY_MS;
+    if (state.feeds.size > 0) {
       connect(links, state);
     }
   });
