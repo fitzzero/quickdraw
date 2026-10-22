@@ -3,9 +3,10 @@
 // messages, and a stand-in WebRTC network (`__tests__/fakeRtc.ts`) connects,
 // fails or never connects the direct path. Covered: the direct path with
 // its two pre-negotiated channels, the fallback to the relay (ICE failed,
-// nothing open in time, a path that dropped after it opened, a side without
-// WebRTC), every way a link closes, the limits `send` keeps, the requests of
-// peers without a link, and the clock. `peer.test.ts` runs links against a
+// nothing open in time, a path that dropped after it opened, a channel that
+// closed with no bye, a side without WebRTC), every way a link closes (on
+// the direct path, the bye before the channels close), the limits `send`
+// keeps, the requests of peers without a link, and the clock. `peer.test.ts` runs links against a
 // real server.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,7 @@ import { MAX_PEER_MESSAGE_BYTES } from "../../protocol/version";
 import { PING_MS, QUICK_PINGS, WATCHDOG_MS } from "./core";
 import { DEFAULT_PEER_LIMITS, PENDING_MS } from "./hub";
 import {
+  BYE_WAIT_MS,
   createPeerLink,
   DEFAULT_ICE_SERVERS,
   DIRECT_TIMEOUT_MS,
@@ -318,6 +320,44 @@ describe("the relay", () => {
     expect(network.made).toEqual([]);
   });
 
+  it("is used when the path's channels cannot be made, and the connection is closed", async () => {
+    const ada = player("ada");
+    const bo = player("bo", { peerConnection: network.factory });
+    const link = offer(ada, bo, {
+      peerConnection: (configuration) => {
+        const rtc = network.factory(configuration);
+        rtc.createDataChannel = () => {
+          throw new Error("NotSupportedError: no data channels here");
+        };
+        return rtc;
+      },
+    });
+    await pass();
+    expect([link.path, bo.accepted[0]?.path]).toEqual(["relay", "relay"]);
+    expect(network.made.map((rtc) => rtc.closed)).toEqual([true]);
+  });
+
+  it(`is used when a channel of the open path closed and no bye came within ${String(BYE_WAIT_MS)} ms`, async () => {
+    const ada = player("ada");
+    const bo = player("bo", { peerConnection: network.factory });
+    const link = offer(ada, bo, { peerConnection: network.factory });
+    await pass();
+    const answer = bo.accepted[0] as PeerLink;
+    // The path drops under both sides, their channels closing, and neither closed its link.
+    network.made[0]?.close();
+    await pass(BYE_WAIT_MS - 100);
+    expect([link.state, answer.state]).toEqual(["open", "open"]);
+    expect([...ada.side.socket.signals(), ...bo.side.socket.signals()]).not.toContainEqual({
+      relay: true,
+    });
+    await pass(200);
+    expect([link.path, answer.path]).toEqual(["relay", "relay"]);
+    const heard = record(answer);
+    link.send("rel", "over the relay");
+    await pass();
+    expect(heard.messages).toEqual([["over the relay", "rel"]]);
+  });
+
   it("is used when the answering side has no WebRTC", async () => {
     const ada = player("ada");
     const bo = player("bo");
@@ -365,6 +405,41 @@ describe("closing", () => {
     // Bo's side sent no bye of its own: it was told.
     expect(bo.side.socket.signals()).not.toContainEqual({ bye: true });
     expect(link.send("rel", "late")).toBe(false);
+  });
+
+  it("closes a link open on the direct path with the bye first: the peer neither moves to the relay nor asks anew", async () => {
+    const ada = player("ada");
+    const bo = player("bo", { peerConnection: network.factory });
+    const link = offer(ada, bo, { peerConnection: network.factory });
+    await pass();
+    const answer = bo.accepted[0] as PeerLink;
+    expect([link.path, answer.path]).toEqual(["direct", "direct"]);
+    link.close();
+    // Ada's connection stays up until the server answered her bye.
+    expect(network.made.map((rtc) => rtc.closed)).toEqual([false, false]);
+    await pass(BYE_WAIT_MS * 2);
+    expect([link.closeReason, answer.closeReason]).toEqual(["closed", "bye"]);
+    expect(network.made.map((rtc) => rtc.closed)).toEqual([true, true]);
+    expect(bo.side.socket.signals()).not.toContainEqual({ relay: true });
+    expect(ada.requests).toEqual([]);
+  });
+
+  it(`waits ${String(BYE_WAIT_MS)} ms for the bye of a peer whose channels closed first`, async () => {
+    const ada = player("ada");
+    const bo = player("bo", { peerConnection: network.factory });
+    const link = offer(ada, bo, { peerConnection: network.factory });
+    await pass();
+    const answer = bo.accepted[0] as PeerLink;
+    // Ada's connection closes before her link does, as a client that closes the path first.
+    network.made[0]?.close();
+    await pass(BYE_WAIT_MS / 2);
+    link.close();
+    await pass(BYE_WAIT_MS * 2);
+    expect([link.closeReason, answer.closeReason]).toEqual(["closed", "bye"]);
+    expect([...ada.side.socket.signals(), ...bo.side.socket.signals()]).not.toContainEqual({
+      relay: true,
+    });
+    expect([ada.requests.length, bo.requests.length]).toEqual([0, 1]);
   });
 
   it("closes as left when this socket leaves the room, and as disconnected when it drops", async () => {

@@ -6,8 +6,9 @@
 // answer, and each its ICE candidates as they come; a candidate that arrives
 // before the remote description is set waits for it. The path opens once
 // both channels are open, and fails when ICE fails, when it stays
-// disconnected for `DISCONNECTED_GRACE_MS`, when a channel closes, or when a
-// step of the negotiation throws. A `fast` message is dropped, never
+// disconnected for `DISCONNECTED_GRACE_MS`, when a channel closes (which it
+// tells apart: the peer closing its link closes its channels too), or when
+// a step of the negotiation throws. A `fast` message is dropped, never
 // queued, while its channel holds more than `FAST_BACKLOG_BYTES` unsent: an
 // unreliable channel's buffer still grows under congestion.
 //
@@ -93,8 +94,12 @@ export interface DirectEvents {
   signal(sig: PeerSignal): void;
   /** Both channels opened. */
   opened(): void;
-  /** The path failed, before or after it opened; it is closed already. */
-  failed(): void;
+  /**
+   * The path failed, before or after it opened; it is closed already.
+   * `closed` when a channel closed, as it does when the peer closes its
+   * link: the peer's bye may be on its way.
+   */
+  failed(closed: boolean): void;
   /** A message arrived on a channel. */
   message(data: unknown, label: PeerLabel): void;
 }
@@ -154,10 +159,10 @@ function shut(state: DirectState): void {
   state.rtc.close();
 }
 
-function fail(state: DirectState): void {
+function fail(state: DirectState, closed = false): void {
   if (!state.closed) {
     shut(state);
-    state.events.failed();
+    state.events.failed(closed);
   }
 }
 
@@ -205,7 +210,7 @@ function watch(state: DirectState): void {
       }
     };
     channel.onclose = () => {
-      fail(state);
+      fail(state, true);
     };
     channel.onmessage = (event) => {
       events.message(event.data, label);

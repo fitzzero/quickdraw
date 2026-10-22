@@ -92,6 +92,9 @@ const PEER_WATCHDOG_MS := 8000
 const PEER_PENDING_MS := 15000
 ## ICE may stay disconnected this long before the direct path counts as failed.
 const PEER_GRACE_MS := 5000
+## A direct path whose channel closed waits this long for the peer's bye
+## before it gives way: the peer closing its link closes its channels too.
+const PEER_BYE_WAIT_MS := 2000
 ## A `fast` message is dropped while its data channel holds more than this unsent.
 const PEER_FAST_BACKLOG := 32768
 ## Peers whose signals may wait for an answer, and signals each may have.
@@ -970,6 +973,13 @@ static func _text_length(value: Variant) -> int:
 	return (value as String).length() if value is String else 0
 
 
+## Says bye on `link`, then closes `pc`, its direct path, once the server answered.
+func _bye_then_close(link: PeerLink, pc) -> void:
+	await _send_peer_signal(link, {"bye": true})
+	if pc != null:
+		pc.close()
+
+
 ## Sends a link's signal and, but for a candidate or a bye, closes the link
 ## as "refused" when the server refuses it. A signal refused RATE_LIMITED is
 ## sent again after the server's wait, at most three times, unless the link
@@ -1124,6 +1134,7 @@ class PeerLink:
 	var _open_by := 0
 	var _direct_by := 0
 	var _grace_by := 0
+	var _bye_by := 0
 	var _next_ping := 0
 	var _pings_left := 0
 	var _last_heard := 0
@@ -1173,12 +1184,17 @@ class PeerLink:
 		state = "closed"
 		path = ""
 		close_reason = reason
-		_close_direct()
+		_bye_by = 0
 		_client._forget_link(self)
 		# Signals the server took hold a place for the pair there, a refused
 		# link's too: the bye frees it. A link that never started sent none.
+		# The direct path closes once the server answered the bye, so the peer
+		# hears the bye first and does not take its channels closing for a
+		# lost path.
 		if from_here and _started:
-			_client._send_peer_signal(self, {"bye": true})
+			_client._bye_then_close(self, _pc)
+			_pc = null
+		_close_direct()
 		state_changed.emit("closed", "")
 		closed.emit(reason)
 
@@ -1351,6 +1367,7 @@ class PeerLink:
 
 	## Moves to the relay, saying so once; it carries the link once both said it.
 	func _move_to_relay() -> void:
+		_bye_by = 0
 		if _relay_mode == "never":
 			_finish("failed", true)
 			return
@@ -1472,6 +1489,10 @@ class PeerLink:
 		if _direct_by > 0 and now >= _direct_by and not _direct_open:
 			_direct_by = 0
 			_direct_failed()
+		if _bye_by > 0 and now >= _bye_by:
+			_bye_by = 0
+			if _pc == null:
+				_direct_failed()
 		if state != "open":
 			return
 		if now - _last_heard > QuickdrawClient.PEER_WATCHDOG_MS:
@@ -1505,7 +1526,9 @@ class PeerLink:
 			_direct_by = 0
 			_carry("direct")
 		elif _direct_open and not both_open:
-			_direct_failed()
+			# A channel closed: the peer may have closed its link, and its bye ends this one.
+			_close_direct()
+			_bye_by = now + QuickdrawClient.PEER_BYE_WAIT_MS
 			return
 		for label in ["rel", "fast"]:
 			while _pc != null:

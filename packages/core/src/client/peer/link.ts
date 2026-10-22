@@ -14,12 +14,16 @@
 //   unless `relay` is `"never"`: this side says `{ relay: true }`, the peer
 //   moves too and says it back, and the relay carries the link once both
 //   said it. A link open on the direct path moves at once: each side reads
-//   both paths all along;
+//   both paths all along. A path whose channel closed waits `BYE_WAIT_MS`
+//   first: a peer that closes its link closes its channels too, and its bye
+//   comes through the server, often after; a `{ relay: true }` sent then
+//   would reach the peer as a new link's request;
 // - nothing open within `OPEN_TIMEOUT_MS`: `timeout`.
 //
-// Closing from this side signals `bye`, on which the peer's link closes; a
-// link the peer, the server or the socket ended (`bye`, `left`,
-// `disconnected`) sends nothing.
+// Closing from this side signals `bye`, on which the peer's link closes, and
+// takes the direct path down once the server answered it, so the peer
+// hears the bye before its channels close; a link the peer, the server or
+// the socket ended (`bye`, `left`, `disconnected`) sends nothing.
 //
 // React-free.
 
@@ -90,6 +94,9 @@ export const OPEN_TIMEOUT_MS = 15_000;
 /** A direct path not open within this long gives way to the relay. */
 export const DIRECT_TIMEOUT_MS = 5000;
 
+/** A direct path whose channel closed waits this long for the peer's bye before it gives way. */
+export const BYE_WAIT_MS = 2000;
+
 type Factory = (configuration: PeerConnectionConfig) => unknown;
 
 /** What one link keeps besides its core. */
@@ -116,6 +123,8 @@ interface Run {
   relayHeard: boolean;
   openTimer: ReturnType<typeof setTimeout> | undefined;
   directTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Waits for the peer's bye after the direct path's channel closed. */
+  byeTimer: ReturnType<typeof setTimeout> | undefined;
   /** Signals waiting out a `RATE_LIMITED` answer, cleared when the link closes. */
   readonly retries: Set<ReturnType<typeof setTimeout>>;
   remove: () => void;
@@ -162,14 +171,24 @@ function signal(run: Run, sig: PeerSignal, attempt = 0): void {
   });
 }
 
-function closeDirect(run: Run): void {
+/** Takes the direct path off the link, and closes it once `after` settled (at once without). */
+function closeDirect(run: Run, after?: Promise<unknown>): void {
   clearTimeout(run.directTimer);
-  run.direct?.close();
+  const { direct } = run;
   run.direct = undefined;
+  if (after === undefined) {
+    direct?.close();
+  } else {
+    const close = (): void => {
+      direct?.close();
+    };
+    void after.then(close, close);
+  }
 }
 
 /** Moves the link to the relay, saying so once; it carries the link once both sides said it. */
 function moveToRelay(run: Run): void {
+  clearTimeout(run.byeTimer);
   if (run.relay === "never") {
     run.core.fail("failed");
     return;
@@ -192,32 +211,66 @@ function directFailed(run: Run): void {
   }
 }
 
-/** Starts the direct path, or `undefined` when the factory throws. */
+/**
+ * The direct path's channel closed: the peer may have closed its link, and
+ * its bye ends this one. Without one within `BYE_WAIT_MS` the path failed,
+ * unless another was made meanwhile.
+ */
+function awaitBye(run: Run): void {
+  clearTimeout(run.byeTimer);
+  run.byeTimer = setTimeout(() => {
+    run.byeTimer = undefined;
+    if (run.direct === undefined) {
+      directFailed(run);
+    }
+  }, BYE_WAIT_MS);
+}
+
+/** Closes a connection whose direct path could not be made; one that throws is unusable already. */
+function discard(rtc: RtcConnection | undefined): void {
+  try {
+    rtc?.close();
+  } catch {
+    // Nothing more to take down.
+  }
+}
+
+/** Starts the direct path, or `undefined` when the factory or the path's channels throw. */
 function openDirect(run: Run, factory: Factory): DirectPath | undefined {
-  let rtc: RtcConnection;
+  let rtc: RtcConnection | undefined;
+  let direct: DirectPath;
   try {
     rtc = factory({ iceServers: run.iceServers }) as RtcConnection;
+    direct = createDirectPath(rtc, {
+      signal: (sig) => {
+        if (run.direct === direct) {
+          signal(run, sig);
+        }
+      },
+      opened: () => {
+        clearTimeout(run.directTimer);
+        run.core.carry("direct");
+      },
+      failed: (channelClosed) => {
+        if (run.direct !== direct) {
+          return;
+        }
+        run.direct = undefined;
+        if (channelClosed) {
+          clearTimeout(run.directTimer);
+          awaitBye(run);
+        } else {
+          directFailed(run);
+        }
+      },
+      message: (data, label) => {
+        run.core.receive(data, label);
+      },
+    });
   } catch {
+    discard(rtc);
     return undefined;
   }
-  const direct = createDirectPath(rtc, {
-    signal: (sig) => {
-      signal(run, sig);
-    },
-    opened: () => {
-      clearTimeout(run.directTimer);
-      run.core.carry("direct");
-    },
-    failed: () => {
-      if (run.direct === direct) {
-        run.direct = undefined;
-        directFailed(run);
-      }
-    },
-    message: (data, label) => {
-      run.core.receive(data, label);
-    },
-  });
   run.direct = direct;
   for (const ice of run.early.splice(0)) {
     direct.candidate(ice);
@@ -371,17 +424,19 @@ function sendOn(run: Run, label: PeerLabel, text: string): boolean {
 
 function closed(run: Run, fromHere: boolean): void {
   clearTimeout(run.openTimer);
+  clearTimeout(run.byeTimer);
   for (const retry of run.retries) {
     clearTimeout(retry);
   }
   run.retries.clear();
-  closeDirect(run);
   run.remove();
   // Signals the server took hold a place for the pair there, a refused link's
-  // too: the bye frees it. A link that never started sent none.
-  if (fromHere && run.started) {
-    void run.hub.signal(run.room, run.peer, { bye: true });
-  }
+  // too: the bye frees it. A link that never started sent none. The direct
+  // path closes once the server answered the bye, so the peer hears the bye
+  // first and does not take its channels closing for a lost path.
+  const bye =
+    fromHere && run.started ? run.hub.signal(run.room, run.peer, { bye: true }) : undefined;
+  closeDirect(run, bye);
 }
 
 const RELAY_MODES: readonly string[] = ["auto", "always", "never"];
@@ -453,6 +508,7 @@ export function createPeerLink(
     relayHeard: false,
     openTimer: undefined,
     directTimer: undefined,
+    byeTimer: undefined,
     retries: new Set(),
     remove: () => undefined,
   };
