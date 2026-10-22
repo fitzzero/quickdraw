@@ -148,6 +148,166 @@ export const CLIENT_RULES = `## What a client must do
   working against a newer server. The server reads what a client sends the
   same way. Any other change takes a new \`protocol\` number.`;
 
+/** How two clients link: signals, the two paths, link messages, pings, and the end of a link. */
+export const PEER_LINKS = `## Peer links
+
+On a server whose \`qd:hello\` lists \`"peer"\` in \`features\`, two
+signed-in sockets of one app room can open a link: WebRTC data channels
+between the two clients or, when those cannot form, the server's relay,
+carrying the same messages either way. The server signals and relays: it
+never terminates WebRTC and never reads what a link carries. A link belongs
+to its room and its two sockets, and ends when either leaves the room or
+disconnects: open it again after a reconnect.
+
+A client learns a peer's socket id from the app (a method's answer, an
+event) or from a signal it receives (\`from\`). One side offers. When both
+do (each learned of the other at once), the side whose socket id sorts
+after the other's, compared as ASCII, answers instead: it drops its own
+offer and answers the peer's. The other side ignores the offer it heard and
+waits for that answer. A side that said \`{ relay: true }\` ignores an
+offer: its peer moves to the relay on hearing it.
+
+1. The offerer sends \`{ sdp }\` with its offer, then \`{ ice }\` for each of
+   its candidates, each as \`qd:peer\` to the other socket; the answerer
+   sends \`{ sdp }\` with its answer and its own candidates. A candidate may
+   arrive before the description it follows: keep it until that
+   description is applied.
+2. Both sides make the same two data channels, negotiated with fixed ids,
+   so neither waits for \`ondatachannel\`: \`rel\` (id 0, ordered and
+   reliable) and \`fast\` (id 1, unordered, \`maxRetransmits\` 0). The link
+   is open on the direct path once both channels are open. A data channel
+   message is one \`PeerMessage\` as UTF-8 JSON text.
+3. A side that cannot use WebRTC (a headless or native client without it),
+   whose direct path did not open within \`DIRECT_TIMEOUT_MS\`, or whose
+   direct path failed, sends \`{ relay: true }\`, once a link. A side that
+   hears it moves to the relay too and says \`{ relay: true }\` back, unless
+   it said it already. The link is open on the relay once a side has said
+   it and heard it. Through the relay a \`PeerMessage\` travels as the
+   \`text\` of \`qd:relay\`. On \`fast\`, drop one rather than queue it
+   while your connection is backed up; the server drops one while the
+   receiver's is (\`PEER_RELAY_FAST_BACKLOG\` relay messages waiting). A
+   side whose direct path lost a data channel (it closed, rather than ICE
+   failing) waits \`BYE_WAIT_MS\` for the peer's bye before it says
+   \`{ relay: true }\`: a peer that closes its link closes its data
+   channels too, and a \`{ relay: true }\` it hears after that asks it for
+   a new link.
+4. Read link messages from both paths all along: the peer may move to the
+   relay before you hear it say so. A link that opens on no path within
+   \`OPEN_TIMEOUT_MS\` is over.
+5. Once open, ping on \`fast\` every \`PING_MS\` (\`QUICK_PINGS\` times
+   \`QUICK_PING_MS\` apart as the link opens, so the clocks sync at once),
+   and answer each ping with its pong at once. A side that hears nothing
+   from its peer for \`WATCHDOG_MS\` closes the link.
+6. Close a link with \`{ bye: true }\`, a link the server refused a signal of
+   too: the server keeps a place for each peer a socket signalled until a
+   bye ends the pair. A bye always ends it: the socket rate limiter never
+   counts one, and past \`PEER_SIGNAL_RATE\` the server ends the pair
+   without telling the peer. On the direct path, send the bye before you
+   close the data channels and the connection
+   (\`@fitzzero/quickdraw-core\` closes them once the server answered the
+   bye), so the peer hears the bye first. The server sends one as well,
+   from a peer that left the room, was taken out of it or disconnected, to
+   each socket that peer signalled there and each that signalled it (of
+   those it never answered, the latest twice \`MAX_PEER_LINKS\`). A
+   socket that left the room itself (\`qd:presence\` with \`users: []\`)
+   closes the room's links without one.
+7. A signal from a socket you have no link with asks for a link: answer it
+   within \`PENDING_MS\`, or send \`{ bye: true }\`. On the answering side, a
+   second offer, a second \`{ relay: true }\`, or an offer after
+   \`{ relay: true }\`, from the socket you have a link with opens a new
+   link: you missed the bye of the last one.
+
+The relay carries a message only between two sockets that each signalled
+the other in that room, which every open link has. Keep relay messages
+within \`limits.peers\` of the hello: the server drops a message over them
+silently, a \`rel\` one too. A client without WebRTC works on the relay
+alone; the server never needs one.`;
+
+/** Host mode: what a peer and a room's host send each other, and what each must do. */
+export const HOST_MODE = `## Host mode
+
+A contract may declare a channel or a stream \`serve: "host"\`: the host of
+an app room serves it over peer links, and the server never handles it. A
+method of the app makes a socket the room's host. The server sends
+\`qd:host\` (\`HostFrame\`, \`[room, host]\`) to the room's sockets each time
+its host changes, and to a socket that joins a room with a host, before or
+after its \`qd:presence\` (behind a cluster adapter the presence list may
+come later). \`host\` is \`null\` once the room has none: its host left
+the room, was taken out of it or disconnected, or a method cleared it. The
+server never picks the next host; the app does. A host-served channel
+declares \`requires.room\`, and a host-served stream a scope and
+\`access.room\`: the room whose host serves a message or a feed.
+
+A peer, any other socket of the room:
+
+1. Opens a link to the room's host, as the offerer, when a host-served
+   channel's message or feed first needs one. It opens one again when
+   \`qd:host\` names another host, and after a link closed while a feed
+   still needs one. After a link to the host closed, the next to that host
+   waits \`HOST_LINK_RETRY_MS\`, doubling up to \`HOST_LINK_MAX_RETRY_MS\`
+   while links keep closing unopened: a peer that sends input every frame
+   must not signal the host every frame. A host that \`qd:host\` names
+   again is linked at once.
+2. Sends a host-served channel's message as \`HostChannelMessage\` on
+   \`fast\`, and drops it while no link to the host is open. \`fast\` is
+   never retransmitted, and a backed-up connection drops it: send input as
+   a stream of updates, not as one-off commands.
+3. Subscribes to a host-served stream's feed with \`HostSubscribe\` on
+   \`rel\` each time a link to the room's host opens, and leaves it with
+   \`HostUnsubscribe\`. The seed arrives as \`HostSeed\` chunks: join their
+   items (keep the latest \`MAX_SEED_ITEMS\` at most, as a host may send
+   more) until the one whose \`last\` is true, then replace what the feed
+   held. Each \`HostItem\` appends. A \`HostRefusal\` refuses the
+   subscribe, with its error: the host sends nothing for that feed.
+4. Never sends \`qd:ch\` or \`qd:stream:sub\` for a host-served member: the
+   server drops the first and refuses the second with \`VALIDATION\`.
+
+The host:
+
+1. Answers the links of the room's peers. It never offers one. It ignores
+   a message whose service, channel or stream name, or scope, is longer
+   than \`MAX_SCOPE_LENGTH\` characters, so an answer that names them back
+   always fits a message.
+2. Checks each \`HostChannelMessage\` as the server checks \`qd:ch\`: the
+   channel is host-served, the payload passes the channel's schema, its
+   \`requires.room\` is the host's room, and the message is within the
+   peer's bucket for the channel (\`ratePerSecond\`, default
+   \`CHANNEL_DEFAULT_RATE\`; \`burst\`, default twice the rate). It drops a
+   message that fails, without a word, and closes the link of a peer whose
+   drops within \`CHANNEL_ABUSE_WINDOW_MS\` pass \`CHANNEL_ABUSE_MULTIPLIER\`
+   times the rate.
+3. Answers \`HostSubscribe\` with the feed's seed (\`HostSeed\`, in chunks
+   that each fit \`limits.peers.maxMessageBytes\`), whole or not at all, or
+   with \`HostRefusal\`: \`NOT_FOUND\` for a service or a stream it does not
+   serve, \`FORBIDDEN\` for a scope whose room is not the host's room,
+   \`RATE_LIMITED\` past \`MAX_HOST_FEEDS\` subscribes at once from one
+   peer and then \`HOST_SUBSCRIBE_RATE\` a second (the link of a peer whose
+   refusals pass \`CHANNEL_ABUSE_MULTIPLIER\` times that rate within
+   \`CHANNEL_ABUSE_WINDOW_MS\` closes), \`INTERNAL\` for a seed with an
+   item too large for a chunk of its own, and another code when it cannot
+   serve the feed (\`CONFLICT\` past \`MAX_HOST_FEEDS\` feeds of one peer).
+4. Sends each item pushed to a feed to the feed's subscribers as
+   \`HostItem\`: on \`fast\` for a volatile stream, else on \`rel\`.
+5. Keeps what it sends on \`rel\` in order, and sends again what the link
+   drops (over the relay, once the relay's budget is spent), so a seed is
+   never cut short. A peer that cannot keep up loses its link, and links
+   and subscribes again.
+6. May serve several services in one room over the same links: each
+   message goes to the service it names.
+
+The server forwards a link's signals and relays its messages, but it never
+reads what a host and its peers send each other. A host trusts a peer's
+messages no more than the server would, and a service trusts nothing a
+host reports without checking it.`;
+
+/** Before the table of host mode's timings and limits. */
+export const HOST_LIMITS_INTRO = `The timings and limits of \`@fitzzero/quickdraw-core\`'s peers and hosts,
+which a peer or a host with one keeps to:`;
+
+/** Before the table of the peer link timings. */
+export const PEER_TIMINGS_INTRO = `The timings of \`@fitzzero/quickdraw-core\`'s links, which a link with one
+must keep to:`;
+
 /** What the type parameters of the frame types stand for. */
 export const TYPE_PARAMETERS = `Keys are short: \`s\` a service's name, \`m\` a method's, \`c\` a collection's,
 \`i\` an input, \`d\` data, \`e\` an error, \`v\` a version, \`rev\` a revision,
@@ -193,7 +353,9 @@ so read them from the hello. The limits below are fixed, and no option
 changes them. Every 5.0 server holds them, except the per-socket caps of rows,
 scopes and topics (\`MAX_ENTITY_IDS_PER_SOCKET\`, \`MAX_SCOPES_PER_SOCKET\`,
 \`MAX_TOPICS_PER_SOCKET\`): a server that holds them announces them in
-\`qd:hello\`, and servers up to 5.1.0 hold none of them.`;
+\`qd:hello\`, and servers up to 5.1.0 hold none of them. The peer link limits
+(\`MAX_PEER_LINKS\` to \`PEER_RELAY_BYTES_BURST\`) hold on a server that serves
+peer links, which announces them in \`limits.peers\`.`;
 
 /** Before the table of defaults. */
 export const DEFAULTS_INTRO = `These are defaults. An app changes the socket rate limiter with
@@ -218,4 +380,14 @@ A socket whose \`qd:ch\` messages dropped for one channel's rate within
 \`CHANNEL_ABUSE_WINDOW_MS\` exceed \`CHANNEL_ABUSE_MULTIPLIER\` times that rate
 is disconnected (Socket.IO DISCONNECT, \`41\`, then the WebSocket closes): that
 is sustained flooding, not a burst. As after any DISCONNECT the server
-sends, a client does not reconnect on its own.`;
+sends, a client does not reconnect on its own.
+A \`qd:peer\` over \`PEER_SIGNAL_RATE\` is refused \`RATE_LIMITED\` with
+\`retryAfterMs\` (a \`bye\` over it still ends the pair on the server, and
+its peer is not told), and one to a new peer from a socket that signals
+\`MAX_PEER_LINKS\` already \`CONFLICT\`. A \`qd:relay\` message over the relay
+rate or bytes, longer than \`MAX_PEER_MESSAGE_BYTES\`, or to a peer that has
+not signalled the socket and been signalled by it in that room, is dropped
+silently. A socket whose signals refused \`RATE_LIMITED\`, or whose dropped
+relay messages, within \`CHANNEL_ABUSE_WINDOW_MS\` exceed
+\`CHANNEL_ABUSE_MULTIPLIER\` times the signal rate, or the relay rate, is
+disconnected as for channels.`;

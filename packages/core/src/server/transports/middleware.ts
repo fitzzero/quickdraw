@@ -158,11 +158,14 @@ export type SocketRateLimitOptions = Omit<RateLimitOptions, "logger" | "ackPaylo
  * limiter; collection subscriptions, which a page sends once per list it
  * mounts and again to page through it, and item loads, which a board holding
  * a scope's index sends per window of up to 200 ids; topic watches, which a
- * page sends once per watching query it mounts; and stream subscriptions,
- * which a page sends once per feed it shows (RFC 0003 section 3). The ones
- * that read or authorize (`qd:sub`, `qd:col:sub`, `qd:col:items`,
+ * page sends once per watching query it mounts; stream subscriptions,
+ * which a page sends once per feed it shows (RFC 0003 section 3); and peer
+ * link relay messages, which a game sends at its tick rate and which carry
+ * their own per-peer and per-socket buckets (`realtime/peerState.ts`). The
+ * ones that read or authorize (`qd:sub`, `qd:col:sub`, `qd:col:items`,
  * `qd:watch`, `qd:stream:sub`) run in each socket's lane of subscription
- * work instead (`emit/lane.ts`, `limits.subscriptions`).
+ * work instead (`emit/lane.ts`, `limits.subscriptions`). Peer signals
+ * (`qd:peer`) are counted, besides their own bucket, but a bye (`isPeerBye`).
  */
 const UNLIMITED_EVENTS: readonly string[] = [
   CLIENT_EVENTS.channel,
@@ -176,7 +179,19 @@ const UNLIMITED_EVENTS: readonly string[] = [
   CLIENT_EVENTS.unwatch,
   CLIENT_EVENTS.streamSub,
   CLIENT_EVENTS.streamUnsub,
+  CLIENT_EVENTS.relay,
 ];
+
+/**
+ * A peer link's bye (`qd:peer` whose `sig` is `{ bye: true }`), which the
+ * limiter passes uncounted: it only ends what the server holds for the pair,
+ * so refusing it would keep the pair's place, and the peer signals' own
+ * bucket still holds it (past it the pair ends, untold).
+ */
+function isPeerBye(eventName: string, args: readonly unknown[]): boolean {
+  const frame = args[0] as { readonly sig?: { readonly bye?: unknown } } | null | undefined;
+  return eventName === CLIENT_EVENTS.peer && frame?.sig?.bye === true;
+}
 
 function rateLimited(retryAfterMs: number): Failure {
   return {
@@ -222,9 +237,11 @@ export function applySocketRateLimit(
   options: SocketRateLimitOptions,
   context: SocketLimitContext,
 ): void {
+  const { skip } = options;
   const limiter = createRateLimiter({
     ...options,
     excludeEvents: [...UNLIMITED_EVENTS, ...(options.excludeEvents ?? [])],
+    skip: (eventName, args) => isPeerBye(eventName, args) || skip?.(eventName, args) === true,
   });
   const notice = options.onRateLimitExceeded ?? noticeForLegacyClients(limiter, options);
   applyRateLimitMiddleware(io, limiter, {

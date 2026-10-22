@@ -356,3 +356,64 @@ describe("the client", () => {
     >();
   });
 });
+
+describe("host mode", () => {
+  const hosted = defineContract("hostedService", {
+    channels: {
+      move: {
+        payload: z.object({ worldId: z.string(), dx: z.number() }),
+        requires: { room: (move) => `world:${move.worldId}` },
+        serve: "host",
+      },
+      chat: {
+        payload: z.object({ worldId: z.string(), text: z.string() }),
+        requires: { room: (chat) => `world:${chat.worldId}` },
+      },
+    },
+    streams: {
+      world: {
+        item: z.object({ tick: z.number() }),
+        scope: "worldId",
+        access: { room: (worldId) => `world:${worldId}` },
+        serve: "host",
+      },
+      scores: { item: z.number(), access: "authenticated" },
+    },
+  });
+
+  test("a host-served channel takes no handler, and a host-served stream no options", () => {
+    qd.defineService(hosted, { methods: {}, channels: { chat: () => undefined } });
+    qd.defineService(hosted, {
+      methods: {},
+      // @ts-expect-error -- the room's host handles move: the server takes no handler for it
+      channels: { chat: () => undefined, move: () => undefined },
+    });
+    qd.defineService(hosted, {
+      methods: {},
+      channels: { chat: () => undefined },
+      // @ts-expect-error -- the room's host pushes world and keeps its seed
+      streams: { world: { seed: () => [] } },
+    });
+  });
+
+  test("a service of host-served channels alone needs no channels option, and hears its hosts leave", () => {
+    const hostOnly = defineContract("hostOnlyService", {
+      channels: {
+        move: {
+          payload: z.object({ worldId: z.string() }),
+          requires: { room: (move) => `world:${move.worldId}` },
+          serve: "host",
+        },
+      },
+    });
+    qd.defineService(hostOnly, {
+      methods: {},
+      onHostLeave: (leave, ctx) => {
+        expectTypeOf(leave.room).toEqualTypeOf<string>();
+        expectTypeOf(leave.principal).toEqualTypeOf<AppPrincipal | null>();
+        expectTypeOf(leave.reason).toEqualTypeOf<"leave" | "removed" | "disconnect">();
+        expectTypeOf(ctx.log).not.toBeAny();
+      },
+    });
+  });
+});

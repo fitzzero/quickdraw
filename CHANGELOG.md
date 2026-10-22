@@ -4,6 +4,110 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Peer links
+
+- **Two players of an app room can link their clients.** On a server
+  created with `createServer({ peers: true })` (off by default: its hello
+  then lists `"peer"` in `features` and the limits in `limits.peers`),
+  `createPeerLink(connection, { room, to, offerer })` on `./client` opens
+  WebRTC data channels to socket `to`: `rel`, ordered and reliable, and
+  `fast`, unordered and never resent. When those cannot form (ICE failed,
+  nothing open within 5 s, no WebRTC as in Node, `relay: "always"`), the
+  server relays the same messages. `onPeerRequest(connection, listener)`
+  answers a peer that links to this socket. A link has `send`, `on`,
+  `close`, `state`, `path`, `closeReason`, `stats` and a `clock` synced
+  from pings on `fast`. It works without React.
+- **Two new frames.** `qd:peer { room, to, sig }` carries a link's signals
+  (a description, a candidate, `relay`, `bye`), acknowledged when asked;
+  the receiver gets `{ room, from, userId, sig }`, with the sender's user
+  as the server knows it. `qd:relay [room, to, label, text]` carries a
+  link message through the server, never acknowledged; one on `fast` is
+  dropped while the sender's or the receiver's connection is backed up.
+  The server forwards both only between two signed-in sockets of the
+  frame's room, and never reads what a link carries.
+- **Limits.** A socket signals at most 64 peers at once (`CONFLICT`) and 20
+  signals a second (a burst of 40; `RATE_LIMITED` with `retryAfterMs`). A
+  session description holds at most 16,384 characters, and each string of
+  a candidate 1,024. The relay takes messages of at most 64 KiB (UTF-8),
+  only between two sockets that signalled each other, at most 120 a second
+  to each peer (a burst of 240) and 1 MiB a second in all (a burst of
+  2 MiB), and drops the rest silently. A socket that keeps flooding either
+  frame is disconnected, as for channels. The socket rate limiter counts
+  `qd:peer`, but a `bye`, and not `qd:relay`; `createRateLimiter` takes a
+  `skip(eventName, args)` option for that, which `createServer`'s
+  `rateLimit` takes too.
+- **Leaving ends links.** A socket that leaves a room, is taken out of it
+  or disconnects ends its links there: the server sends a `bye` to each
+  peer it signalled and each that signalled it. A link that closes says
+  `bye` too, a refused one included, so the server frees the pair's place.
+  On the direct path it says `bye` before its data channels close, and a
+  side whose data channel closed waits 2 s for the peer's `bye` before it
+  moves to the relay, so a closed link never comes back as a request.
+  Behind a cluster adapter the frames cross nodes, and the node that holds
+  the target socket checks it.
+- **Testing.** `createLoopbackPeerLink({ ms, jitter, loss })` on
+  `./testing` links two ends in one process, with a delay and jitter per
+  message and loss on `fast` alone; closing one end closes the other after
+  the `rel` messages sent ahead of it.
+- **Godot.** The GDScript reference client gains `peer_link`,
+  `reject_peer`, the `peer_requested` signal and `socket_id`: WebRTC where
+  Godot has it (a web export, or the webrtc GDExtension), the relay
+  otherwise. `docs/protocol-v5.md` describes the frames, the link messages
+  and the timings for other clients.
+
+### Host mode
+
+- **A room's host can serve a contract's channels and streams.** A channel
+  or stream declared `serve: "host"` is served by the host of its app
+  room, one player's client, over peer links: the server needs
+  `peers: true` (`createServer` throws without it) and never handles it.
+  A host-served channel declares `requires: { room }`; a host-served
+  stream declares a scope and `access: { room: (scope) => room }`, and its
+  `seed: n` is how many items the host keeps per scope. `defineService`
+  refuses a handler for a host-served channel and options for a
+  host-served stream. The server drops a `qd:ch` to one (with a
+  development warning), refuses a `qd:stream:sub` to one (`VALIDATION`),
+  and `qd.stream(...).push` throws for one.
+- **The server says who hosts.** `ctx.rooms.setHost(room)` makes the
+  calling socket the room's host (it must be in the room: `FORBIDDEN`);
+  `hostOf(room)` and `clearHost(room)` sit on `ctx.rooms`, `qd.rooms` and
+  `server.rooms`. A new frame, `qd:host [room, host | null]`, goes to the
+  room's sockets on each change and to a socket that joins a room with a
+  host. When the host leaves the room, is taken out of it or disconnects,
+  the room has none, and `onHostLeave({ room, socketId, principal, reason })`
+  (on `defineService` and `createServer`) runs once. The server never
+  picks the next host. Behind a cluster adapter each node knows each
+  room's host, and every node holds the same one when two nodes set it at
+  once, whatever order the changes reach them in.
+- **The host's client.** `defineHost(contract, { channels, streams })` on
+  `./client` takes a handler per host-served channel and an optional seed
+  per host-served stream; `serve(connection, { room })` answers the links
+  of the room's players and returns a `Host` with
+  `stream(name).push(scope, item)`, `peers` and `close()`. It checks each
+  message as the server checks a channel's (schema, room, a bucket per
+  player and channel) and ends the link of a player who floods. It takes
+  500 subscribes at once from a player and then 50 a second (those to a
+  service it does not serve included), sends a seed
+  whole or refuses it, and sends again, in order, what the relay drops on
+  `rel`. One connection serves several contracts in a room, one `serve`
+  each.
+- **Players change nothing.** `useChannel` and `useStream` of a
+  host-served member reach the room's host over a link, made on first use
+  and again for a new host or after a reconnect; the feed's seed replaces
+  what it held, and a feed the host refused `RATE_LIMITED` asks again a
+  second or so later. After a link to the host closed, the next waits 1 s,
+  doubling to 15 s while links keep closing unopened. `hostOf(connection,
+room)` and `onHostChange(connection, listener)` on `./client` say who
+  hosts.
+- **The wire.** Host mode adds link messages beside the app's own: a
+  channel message (kind 3, on `fast`), subscribe and unsubscribe (4 and
+  5), a seed in chunks (6), an item (7, on `fast` for a volatile stream)
+  and a refused subscribe (8). `docs/protocol-v5.md` describes them and
+  what a peer and a host must do.
+- **Godot.** The GDScript client plays a player: `host_of(room)`, the
+  `host_changed` signal, and a `room` argument on `send_channel`,
+  `subscribe_stream`, `unsubscribe_stream` and `is_subscribed`.
+
 ### Client
 
 - **The next user never sees the last user's result as a placeholder.**

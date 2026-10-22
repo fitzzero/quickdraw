@@ -440,12 +440,12 @@ describe("a socket whose session expires (AUTH-4)", () => {
         sessions,
         jwtSecret: SECRET,
         allowedOrigins: [APP_ORIGIN],
-        // The session runs out while the principal loads.
+        // The session runs out while the principal loads: the clock (Date
+        // alone) moves past its expiry, so a slow test machine cannot let it
+        // run out before the session is read.
         loadPrincipal: async (userId): Promise<AppPrincipal> => {
-          await new Promise((resolve) => {
-            setTimeout(resolve, 1100);
-          });
-          return { userId, kind: "user" };
+          vi.setSystemTime(Date.now() + 2 * 60_000);
+          return await Promise.resolve({ userId, kind: "user" as const });
         },
       }),
     });
@@ -454,9 +454,13 @@ describe("a socket whose session expires (AUTH-4)", () => {
       { sessions, jwtSecret: SECRET },
       "victim",
       { provider: "test" },
-      1000,
+      60_000,
     );
-    expect(await connect(url, {}, { ...v5Auth(null), token })).toEqual(REFUSED);
+    try {
+      expect(await connect(url, {}, { ...v5Auth(null), token })).toEqual(REFUSED);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(logger.at("debug").map((entry) => entry.message)).toContain(
       "Refused a socket whose session expired during its handshake",
     );

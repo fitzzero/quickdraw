@@ -128,7 +128,8 @@ and `dev`. Two more jobs are path-gated on pull requests (a `*-changes` job
 decides; on pushes they always run, and a skipped one counts as passed): the
 `godot` job runs `check:godot` with the official Godot build when a pull
 request touches `examples/godot`, core's protocol, realtime, transport or
-testing code, `docs/protocol-v5.md`, the dependencies or the workflow; the
+testing code, its client's peer links or host mode (`src/client/peer`,
+`src/client/host`), `docs/protocol-v5.md`, the dependencies or the workflow; the
 `cluster` job runs `test:cluster` behind a Valkey service when it touches
 core's sources or tests, its vitest config or manifest, the lockfile, the
 root `package.json` or `tsconfig.base.json`, or the workflow.

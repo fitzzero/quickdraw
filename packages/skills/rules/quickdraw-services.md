@@ -301,6 +301,32 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 - A game loop asks `qd.rooms.size(room)` (this node's sockets, spectators
   included, synchronous) at its tick rate, never Socket.IO's adapter;
   `ctx.socketId` names the calling socket in a method.
+- Peer links: `createServer({ peers: true })` lets two clients of an app
+  room link directly (`createPeerLink` on the client). The server forwards
+  their signals and relays their messages only between signed-in sockets
+  of the room, and ends a player's links when they leave it or
+  `rooms.leave(room, { userId })` takes them out. Tell players each other's
+  socket ids with an event or a method's answer (`ctx.socketId`). The
+  server never sees what a link carries: a method that records what a
+  client reports from a link (a score, a winner) checks it as untrusted
+  input, and its contract's `describe` says so.
+- Host mode: a channel or stream declared `serve: "host"` is served by the
+  room's host, one player's client (`defineHost` on the client), over peer
+  links; the server needs `peers: true` and never handles it. A
+  host-served channel declares `requires: { room }` and a host-served
+  stream a scope and `access: { room: (scope) => room }`. Give a
+  host-served channel no handler and a host-served stream no options or
+  seed: `defineService` refuses them. Pick the host in a method,
+  `ctx.rooms.setHost(room)` for the calling socket (after a check of the
+  app's own: a seat, a role), never by election; read it with
+  `ctx.rooms.hostOf(room)`, clear it with `clearHost(room)`, and decide
+  what follows in `onHostLeave({ room, socketId, principal, reason })`.
+  The server never sees what a host and its players send each other: what
+  a host reports to a method (a result, a score) is one player's word,
+  checked as untrusted input, and the contract's `describe` says so. The
+  service's `kinds` does not reach host-served members: any signed-in
+  socket of the room can link to the host, so guard the method that joins
+  the room.
 - Events: `events: { moved: { payload } }`, sent with
   `ctx.rooms.emit(room, task, "moved", payload)` to an app room
   (`ctx.rooms.join(room)` in a method puts the caller's socket in one), and

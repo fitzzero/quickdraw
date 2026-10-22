@@ -385,6 +385,172 @@ export interface PresenceFrame {
 }
 
 // ---------------------------------------------------------------------------
+// Peer links (section 12.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * A peer link's two channels: `rel`, ordered and reliable, and `fast`,
+ * unordered and never retransmitted (dropped where a connection is backed up).
+ */
+export type PeerLabel = "rel" | "fast";
+
+/** A WebRTC session description, as `RTCSessionDescription.toJSON()` writes it. */
+export interface PeerDescription {
+  readonly type: "offer" | "answer";
+  readonly sdp: string;
+}
+
+/** A WebRTC ICE candidate, as `RTCIceCandidate.toJSON()` writes it. */
+export interface PeerCandidate {
+  readonly candidate: string;
+  readonly sdpMid?: string | null;
+  readonly sdpMLineIndex?: number | null;
+  readonly usernameFragment?: string | null;
+}
+
+/**
+ * What one `qd:peer` frame says about a link, in exactly one member: the
+ * offerer's `offer` or the answerer's `answer` (`sdp`), one ICE candidate
+ * (`ice`), that the sender sends the link's messages through the relay
+ * from now on (`relay`), or that the link is over (`bye`): the sender
+ * closed it or, when the server sends it, left the room or disconnected.
+ */
+export interface PeerSignal {
+  readonly sdp?: PeerDescription;
+  readonly ice?: PeerCandidate;
+  readonly relay?: true;
+  readonly bye?: true;
+}
+
+/**
+ * `qd:peer`, from a client: a signal for socket `to` (another socket's id)
+ * about the link the two have in app room `room`, which both must be in.
+ * Acknowledged when asked: `Ok`, or `UNAUTHENTICATED`, `FORBIDDEN` (the
+ * sender is not in the room), `NOT_FOUND` (no signed-in socket `to` is in
+ * the room; behind a cluster adapter a socket on another node is not
+ * checked before the signal goes), `CONFLICT` (the sender already signals
+ * `limits.peers.maxLinks` peers), `RATE_LIMITED` or `VALIDATION`.
+ */
+export interface PeerSignalFrame {
+  readonly room: string;
+  readonly to: string;
+  readonly sig: PeerSignal;
+}
+
+/**
+ * `qd:peer`, from the server: a signal from socket `from` about the link in
+ * app room `room`. `userId` is the sender's user, as the server knows it.
+ */
+export interface PeerForwardFrame {
+  readonly room: string;
+  readonly from: string;
+  readonly userId: string;
+  readonly sig: PeerSignal;
+}
+
+/**
+ * `qd:relay`, from a client, never acknowledged: a link message for socket
+ * `to` in app room `room`. `text` is a `PeerMessage` as JSON, at most
+ * `limits.peers.maxMessageBytes`. The two sockets must have signalled each
+ * other in that room; a message over the rate or the byte budget of
+ * `limits.peers`, or to a socket that left the room, is dropped, and so is
+ * one on `fast` while the receiving socket's connection is backed up
+ * (`PEER_RELAY_FAST_BACKLOG`). A later revision may append elements after
+ * `text`.
+ */
+export type RelayFrame = readonly [room: string, to: string, label: PeerLabel, text: string];
+
+/** `qd:relay`, from the server: a link message from socket `from` in app room `room`. */
+export type RelayForwardFrame = readonly [
+  room: string,
+  from: string,
+  label: PeerLabel,
+  text: string,
+];
+
+/**
+ * A peer link message: the JSON text of one data channel message or of a
+ * relayed `text`, alike on both paths. A receiver ignores a message whose
+ * first element it does not know, and elements after the ones it reads.
+ */
+export type PeerMessage = PeerData | PeerPing | PeerPong | HostMessage;
+
+/** A link message carrying the app's `data`, any JSON value. */
+export type PeerData = readonly [kind: 0, data: unknown];
+
+/** A clock ping: `t` is the sender's clock in milliseconds. Sent on `fast`. */
+export type PeerPing = readonly [kind: 1, t: number];
+
+/** The pong of a ping: `t` as the ping carried it, `u` the answerer's clock as it answered. Sent on `fast`. */
+export type PeerPong = readonly [kind: 2, t: number, u: number];
+
+/**
+ * A host mode message (section 12.5): what a peer and its room's host send
+ * each other over their link, kept apart from the app's own messages.
+ */
+export type HostMessage =
+  | HostChannelMessage
+  | HostSubscribe
+  | HostUnsubscribe
+  | HostSeed
+  | HostItem
+  | HostRefusal;
+
+/** A message on a host-served channel, from a peer to the host of the channel's room. Sent on `fast`. */
+export type HostChannelMessage = readonly [
+  kind: 3,
+  service: string,
+  channel: string,
+  payload: unknown,
+];
+
+/** Subscribes to a feed of a host-served stream, from a peer to the host of its room. Sent on `rel`. */
+export type HostSubscribe = readonly [kind: 4, service: string, stream: string, scope: string];
+
+/** Leaves a feed of a host-served stream. Sent on `rel`. */
+export type HostUnsubscribe = readonly [kind: 5, service: string, stream: string, scope: string];
+
+/**
+ * The seed of a feed a peer subscribed to, from the host: the latest items
+ * it kept (or computed), oldest first, in chunks that each fit the message
+ * limit; `last` is true on the last chunk. Sent on `rel`.
+ */
+export type HostSeed = readonly [
+  kind: 6,
+  service: string,
+  stream: string,
+  scope: string,
+  items: readonly unknown[],
+  last: boolean,
+];
+
+/** An item pushed to a feed, from the host: on `fast` for a volatile stream, else on `rel`. */
+export type HostItem = readonly [
+  kind: 7,
+  service: string,
+  stream: string,
+  scope: string,
+  item: unknown,
+];
+
+/** A subscribe the host refused (`NOT_FOUND`, `FORBIDDEN`, ...), from the host. Sent on `rel`. */
+export type HostRefusal = readonly [
+  kind: 8,
+  service: string,
+  stream: string,
+  scope: string,
+  error: WireError,
+];
+
+/**
+ * `qd:host`, from the server: the host of app room `room` (the socket that
+ * serves its host-served channels and streams), or `null` when it has none.
+ * Sent to the room's sockets on every change, and to a socket that joins a
+ * room with a host.
+ */
+export type HostFrame = readonly [room: string, host: string | null];
+
+// ---------------------------------------------------------------------------
 // Connection-level frames (sections 4.4, 7.2 and 8.3)
 // ---------------------------------------------------------------------------
 
@@ -451,6 +617,8 @@ interface ClientListeners {
   streamSub: (frame: StreamSubscribe, ack: Ack<StreamSubscribeReply>) => void;
   streamUnsub: (frame: StreamSubscribe, ack?: Ack<Ok | Failure>) => void;
   channel: (frame: ChannelFrame) => void;
+  peer: (frame: PeerSignalFrame, ack?: Ack<Ok | Failure>) => void;
+  relay: (frame: RelayFrame) => void;
 }
 
 /** The listener of each server event, by its key in `SERVER_EVENTS`. */
@@ -465,6 +633,9 @@ interface ServerListeners {
   presence: (frame: PresenceFrame) => void;
   rotate: (frame: RotateFrame) => void;
   access: (frame: AccessFrame) => void;
+  peer: (frame: PeerForwardFrame) => void;
+  relay: (frame: RelayForwardFrame) => void;
+  host: (frame: HostFrame) => void;
 }
 
 /**

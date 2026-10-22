@@ -2,13 +2,17 @@
 // the protocol's sources generate, the same on every run; `--check` passes
 // on the committed file and fails once `envelope.ts` changes; the document
 // names every event, error code and frame type the sources declare, and
-// every limit with its value; and the prose names only types that exist.
+// every limit with its value, host mode's too; and the prose names only
+// types that exist.
 
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { DEFAULT_BACKOFF_MS } from "../client/backoff";
+import { HOST_LINK_MAX_RETRY_MS, HOST_LINK_RETRY_MS, MAX_SEED_ITEMS } from "../client/host/links";
+import { HOST_SUBSCRIBE_RATE, MAX_HOST_FEEDS } from "../client/host/runtime";
+import { BYE_WAIT_MS } from "../client/peer/link";
 import { CLIENT_EVENTS, SERVER_EVENTS } from "../contract/names";
 import { CHANNEL_DEFAULT_RATE } from "../contract/realtime";
 import { ERROR_CODES, httpStatus } from "../protocol/errors";
@@ -151,6 +155,23 @@ describe("quickdraw-protocol", () => {
       "exceed `CHANNEL_ABUSE_MULTIPLIER` times that rate is disconnected (Socket.IO DISCONNECT, `41`",
     );
     expect(flat).not.toContain("These hold for every server");
+  });
+
+  it("names host mode's timings and limits and the peer links' bye wait with the values the code holds", () => {
+    const text = generateProtocol(paths.packageDir);
+    const start = text.indexOf("## Host mode");
+    const host = text.slice(start, text.indexOf("\n## ", start));
+    const hostRows = {
+      HOST_LINK_RETRY_MS,
+      HOST_LINK_MAX_RETRY_MS,
+      MAX_SEED_ITEMS,
+      MAX_HOST_FEEDS,
+      HOST_SUBSCRIBE_RATE,
+    };
+    for (const [name, value] of Object.entries(hostRows)) {
+      expect(host, name).toMatch(new RegExp(`^\\| \`${name}\` +\\| ${String(value)} `, "m"));
+    }
+    expect(text).toMatch(new RegExp(`^\\| \`BYE_WAIT_MS\` +\\| ${String(BYE_WAIT_MS)} ms `, "m"));
   });
 
   it("documents every frame type an event reaches, with its fields", () => {

@@ -182,6 +182,22 @@ export type ChannelName<C extends AnyContract> = keyof C["channels"] & string;
 /** The names of a contract's typed room events. */
 export type EventName<C extends AnyContract> = keyof C["events"] & string;
 
+/** The names of a contract's channels the room's host handles (`serve: "host"`). */
+export type HostChannelName<C extends AnyContract> = {
+  readonly [K in ChannelName<C>]: C["channels"][K] extends { readonly serve: "host" } ? K : never;
+}[ChannelName<C>];
+
+/** The names of a contract's channels the server handles. */
+export type ServerChannelName<C extends AnyContract> = Exclude<ChannelName<C>, HostChannelName<C>>;
+
+/** The names of a contract's streams the room's host pushes (`serve: "host"`). */
+export type HostStreamName<C extends AnyContract> = {
+  readonly [K in StreamName<C>]: C["streams"][K] extends { readonly serve: "host" } ? K : never;
+}[StreamName<C>];
+
+/** The names of a contract's streams the server pushes. */
+export type ServerStreamName<C extends AnyContract> = Exclude<StreamName<C>, HostStreamName<C>>;
+
 /** The item type of a stream: what `push` takes and subscribers receive. */
 export type StreamItemOf<C extends AnyContract, K extends StreamName<C>> = InferOutput<
   C["streams"][K]["item"]
