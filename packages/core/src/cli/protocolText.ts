@@ -183,7 +183,9 @@ offer: its peer moves to the relay on hearing it.
    hears it moves to the relay too and says \`{ relay: true }\` back, unless
    it said it already. The link is open on the relay once a side has said
    it and heard it. Through the relay a \`PeerMessage\` travels as the
-   \`text\` of \`qd:relay\`, sent volatile on \`fast\`.
+   \`text\` of \`qd:relay\`. On \`fast\`, drop one rather than queue it
+   while your connection is backed up; the server drops one while the
+   receiver's is (\`PEER_RELAY_FAST_BACKLOG\` relay messages waiting).
 4. Read link messages from both paths all along: the peer may move to the
    relay before you hear it say so. A link that opens on no path within
    \`OPEN_TIMEOUT_MS\` is over.
@@ -217,8 +219,9 @@ A contract may declare a channel or a stream \`serve: "host"\`: the host of
 an app room serves it over peer links, and the server never handles it. A
 method of the app makes a socket the room's host. The server sends
 \`qd:host\` (\`HostFrame\`, \`[room, host]\`) to the room's sockets each time
-its host changes, and to a socket that joins a room with a host, after its
-\`qd:presence\`. \`host\` is \`null\` once the room has none: its host left
+its host changes, and to a socket that joins a room with a host, before or
+after its \`qd:presence\` (behind a cluster adapter the presence list may
+come later). \`host\` is \`null\` once the room has none: its host left
 the room, was taken out of it or disconnected, or a method cleared it. The
 server never picks the next host; the app does. A host-served channel
 declares \`requires.room\`, and a host-served stream a scope and
@@ -235,14 +238,15 @@ A peer, any other socket of the room:
    host that \`qd:host\` names again is linked at once.
 2. Sends a host-served channel's message as \`HostChannelMessage\` on
    \`fast\`, and drops it while no link to the host is open. \`fast\` is
-   never retransmitted, and the relay sends it volatile: send input as a
-   stream of updates, not as one-off commands.
+   never retransmitted, and a backed-up connection drops it: send input as
+   a stream of updates, not as one-off commands.
 3. Subscribes to a host-served stream's feed with \`HostSubscribe\` on
    \`rel\` each time a link to the room's host opens, and leaves it with
    \`HostUnsubscribe\`. The seed arrives as \`HostSeed\` chunks: join their
-   items until the one whose \`last\` is true, then replace what the feed
-   held. Each \`HostItem\` appends. A \`HostRefusal\` refuses the subscribe,
-   with its error: the host sends nothing for that feed.
+   items (keep the latest 10,000 at most, as a host may send more) until
+   the one whose \`last\` is true, then replace what the feed held. Each
+   \`HostItem\` appends. A \`HostRefusal\` refuses the subscribe, with its
+   error: the host sends nothing for that feed.
 4. Never sends \`qd:ch\` or \`qd:stream:sub\` for a host-served member: the
    server drops the first and refuses the second with \`VALIDATION\`.
 
@@ -258,12 +262,22 @@ The host:
    drops within \`CHANNEL_ABUSE_WINDOW_MS\` pass \`CHANNEL_ABUSE_MULTIPLIER\`
    times the rate.
 3. Answers \`HostSubscribe\` with the feed's seed (\`HostSeed\`, in chunks
-   that each fit \`limits.peers.maxMessageBytes\`), or with \`HostRefusal\`:
-   \`NOT_FOUND\` for a stream that is not host-served, \`FORBIDDEN\` for a
-   scope whose room is not the host's room, and another code when it cannot
+   that each fit \`limits.peers.maxMessageBytes\`), whole or not at all, or
+   with \`HostRefusal\`: \`NOT_FOUND\` for a service or a stream it does not
+   serve, \`FORBIDDEN\` for a scope whose room is not the host's room,
+   \`RATE_LIMITED\` past 500 subscribes at once from one peer and then 50 a
+   second (the link of a peer whose refusals pass 100 times that rate
+   within \`CHANNEL_ABUSE_WINDOW_MS\` closes), \`INTERNAL\` for a seed with an
+   item too large for a chunk of its own, and another code when it cannot
    serve the feed (\`CONFLICT\` past the feeds it lets one peer hold).
 4. Sends each item pushed to a feed to the feed's subscribers as
    \`HostItem\`: on \`fast\` for a volatile stream, else on \`rel\`.
+5. Keeps what it sends on \`rel\` in order, and sends again what the link
+   drops (over the relay, once the relay's budget is spent), so a seed is
+   never cut short. A peer that cannot keep up loses its link, and links
+   and subscribes again.
+6. May serve several services in one room over the same links: each
+   message goes to the service it names.
 
 The server forwards a link's signals and relays its messages, but it never
 reads what a host and its peers send each other. A host trusts a peer's

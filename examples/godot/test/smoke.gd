@@ -238,8 +238,8 @@ func _host(client) -> void:
 	var sub: Dictionary = await client.subscribe_stream("gameService", "world", "main", "world:main")
 	check(sub.ok and (sub.seed as Array).size() == 1 and int(sub.seed[0].tick) == 0, "the host's seed arrives over a link to it")
 	check(client.is_subscribed("gameService", "world", "main", "world:main") and not client.is_subscribed("gameService", "world", "main"), "is_subscribed knows the host's feed")
-	# `fast` is unreliable: the relay drops a message the host's socket is not
-	# ready for, so the client steers again until the host's item arrives.
+	# `fast` is unreliable, never resent: the client steers again until the
+	# host's item arrives, as a game sends its input each frame.
 	var before := items.size()
 	var sent := 0
 	for attempt in 10:

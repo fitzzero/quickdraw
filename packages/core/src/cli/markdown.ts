@@ -67,3 +67,16 @@ export function section(
   }
   return lines;
 }
+
+/** A member's `describe`, as the paragraph that opens its section, or nothing. */
+export function described(text: string | undefined): string[] {
+  return text === undefined ? [] : [paragraph(text)];
+}
+
+/** A table of a member's options: the rows that hold a value. */
+export function optionTable(rows: readonly (readonly [string, string | undefined])[]): string[] {
+  return table(
+    ["Option", "Value"],
+    rows.filter((row): row is readonly [string, string] => row[1] !== undefined),
+  );
+}

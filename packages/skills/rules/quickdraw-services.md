@@ -312,7 +312,10 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   what follows in `onHostLeave({ room, socketId, principal, reason })`.
   The server never sees what a host and its players send each other: what
   a host reports to a method (a result, a score) is one player's word,
-  checked as untrusted input, and the contract's `describe` says so.
+  checked as untrusted input, and the contract's `describe` says so. The
+  service's `kinds` does not reach host-served members: any signed-in
+  socket of the room can link to the host, so guard the method that joins
+  the room.
 - Events: `events: { moved: { payload } }`, sent with
   `ctx.rooms.emit(room, task, "moved", payload)` to an app room
   (`ctx.rooms.join(room)` in a method puts the caller's socket in one), and

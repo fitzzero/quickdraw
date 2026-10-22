@@ -99,6 +99,8 @@ const PEER_MAX_PENDING := 64
 ## Characters the signals of one waiting peer may hold, and of all of them.
 const PEER_MAX_PENDING_CHARS := 65536
 const PEER_MAX_PENDING_TOTAL_CHARS := 1048576
+## The items a host's seed in chunks may hold; past them the latest are kept.
+const MAX_SEED_ITEMS := 10000
 ## A server whose hello names no peer limits holds these (`limits.peers`).
 const PEER_LIMITS := {
 	"maxMessageBytes": 65536,
@@ -802,7 +804,8 @@ func _relink_host(room: String) -> void:
 
 
 ## The link to the room's host, made when none is open or being made; null
-## without a host, or while a link to it closed within the wait.
+## without a host, while a link to it closed within the wait, or while the
+## game holds a link of its own to the host in the room.
 func _host_link(room: String) -> PeerLink:
 	var link: PeerLink = _host_links.get(room)
 	if link != null and link.state != "closed":
@@ -812,6 +815,9 @@ func _host_link(room: String) -> PeerLink:
 		return null
 	var backoff: Array = _host_backoff.get(room, [])
 	if backoff.size() == 2 and backoff[0] == host and Time.get_ticks_msec() < int(backoff[1]):
+		return null
+	if _links.has(_peer_key(room, host)):
+		# A link the game opened itself to the host, in this room: host mode leaves it alone.
 		return null
 	link = peer_link(room, host, true)
 	_host_links[room] = link
@@ -892,6 +898,8 @@ func _on_host_message(link: PeerLink, parts: Array) -> void:
 		6:
 			var chunks: Array = _host_seeds.get(answer_key, [])
 			chunks.append_array(parts[4] if parts[4] is Array else [])
+			if chunks.size() > MAX_SEED_ITEMS:
+				chunks = chunks.slice(chunks.size() - MAX_SEED_ITEMS)
 			if parts.size() >= 6 and parts[5] == true:
 				_host_seeds.erase(answer_key)
 				if _host_waiting.has(answer_key):

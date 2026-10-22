@@ -11,6 +11,7 @@
 // sit on one node; the peered-bus tests at the end, and
 // `test/cluster/peers.test.ts` behind Valkey, put them on two.
 
+import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
 import { inCluster } from "../../../test/cluster/mode";
 import type { PeerForwardFrame, RelayForwardFrame } from "../../protocol/envelope";
@@ -20,6 +21,7 @@ import {
   PEER_RELAY_BURST,
   PEER_RELAY_BYTES_BURST,
   PEER_RELAY_BYTES_PER_SECOND,
+  PEER_RELAY_FAST_BACKLOG,
   PEER_RELAY_RATE,
   PEER_SIGNAL_BURST,
 } from "../../protocol/version";
@@ -373,28 +375,31 @@ describe("relay", () => {
     ]);
   });
 
-  it("sends fast messages volatile and rel ones reliably", () => {
-    const sent: (readonly [string, boolean])[] = [];
+  it("drops a fast message only while the target's connection is backed up, never a rel one", () => {
+    const sent: string[] = [];
+    const conn = new EventEmitter();
     const target = {
       connected: true,
       data: { protocol: 5, principal: bob, appRooms: { [GAME]: true } },
-      get volatile() {
-        return {
-          emit: (event: string) => sent.push([event, true]),
-        };
-      },
-      emit: (event: string) => sent.push([event, false]),
+      conn,
+      emit: (_event: string, frame: RelayForwardFrame) => sent.push(frame[3]),
     };
     const hub = {
       io: { sockets: { sockets: new Map([["target", target]]) } },
       probe: { local: () => true },
     } as unknown as Hub;
-    sendRelay(hub, "target", [GAME, "source", "fast", message(1)]);
-    sendRelay(hub, "target", [GAME, "source", "rel", message(2)]);
+    // Two at once both go: the count only grows while nothing drains.
+    for (let n = 0; n <= PEER_RELAY_FAST_BACKLOG; n += 1) {
+      sendRelay(hub, "target", [GAME, "source", "fast", message(n)]);
+    }
+    sendRelay(hub, "target", [GAME, "source", "rel", message("rel")]);
     expect(sent).toEqual([
-      ["qd:relay", true],
-      ["qd:relay", false],
+      ...Array.from({ length: PEER_RELAY_FAST_BACKLOG }, (_, n) => message(n)),
+      message("rel"),
     ]);
+    conn.emit("drain");
+    sendRelay(hub, "target", [GAME, "source", "fast", message("after")]);
+    expect(sent.at(-1)).toBe(message("after"));
   });
 });
 

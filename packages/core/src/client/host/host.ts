@@ -8,7 +8,10 @@
 // (`runtime.ts`), answers a subscribe with the feed's seed, and sends what
 // `host.stream(name).push(scope, item)` pushes to the feed's subscribers.
 // This client's own channels and feeds of the room reach it in process
-// (`links.ts`).
+// (`links.ts`). One connection may serve several contracts in one room, one
+// `serve` each: they share the room's links, and each message goes to the
+// contract of its service; a subscribe to a service none of them is
+// refused (`NOT_FOUND`).
 //
 // The server never sees what a host and its peers send each other: a host
 // trusts its peers' messages no more than the server would, and a service
@@ -27,9 +30,7 @@ import { isHostServed } from "../../contract/realtime";
 import { isRoomName } from "../../protocol/peer";
 import { MAX_PEER_MESSAGE_BYTES } from "../../protocol/version";
 import type { QuickdrawConnection } from "../connection";
-import { controlOf } from "../peer/core";
-import { onPeerRequest, type PeerRequest } from "../peer/link";
-import { registerLocalHost } from "./links";
+import { serving, type RoomServing } from "./serving";
 import {
   createHostRuntime,
   type AnyHostImplementation,
@@ -139,48 +140,16 @@ function serve<C extends AnyContract>(
   if (!isRoomName(room)) {
     throw new TypeError("serve: room must name an app room, of 1 to 256 characters");
   }
+  const service = contract.name;
   const runtime = createHostRuntime(
     contract,
     implementation,
     room,
     () => connection.getState().hello?.limits.peers?.maxMessageBytes ?? MAX_PEER_MESSAGE_BYTES,
   );
-  const links = new Set<ReturnType<PeerRequest["accept"]>>();
+  const served: RoomServing = serving(connection, room);
+  served.add(service, runtime);
   let closed = false;
-  const attach = (request: PeerRequest): void => {
-    let link;
-    try {
-      link = request.accept();
-    } catch {
-      // A link the app opened itself to that peer, in this room.
-      return;
-    }
-    const control = controlOf(link);
-    if (control === undefined) {
-      return;
-    }
-    links.add(link);
-    const peer: HostPeer = { socketId: request.from, userId: request.userId };
-    const attached = runtime.attach(peer, control.send, () => {
-      link.close();
-    });
-    const off = control.on((message) => {
-      attached.receive(message);
-    });
-    link.on("close", () => {
-      off();
-      attached.detach();
-      links.delete(link);
-    });
-  };
-  const stopRequests = onPeerRequest(connection, (request) => {
-    if (!closed && request.room === room) {
-      attach(request);
-    }
-  });
-  const unregister = registerLocalHost(connection, room, (peer, send) =>
-    runtime.attach(peer, send, () => undefined),
-  );
   return Object.freeze({
     room,
     get peers(): readonly HostPeer[] {
@@ -193,16 +162,10 @@ function serve<C extends AnyContract>(
         },
       }),
     close(): void {
-      if (closed) {
-        return;
+      if (!closed) {
+        closed = true;
+        served.remove(service, runtime);
       }
-      closed = true;
-      stopRequests();
-      unregister();
-      for (const link of [...links]) {
-        link.close();
-      }
-      runtime.close();
     },
   }) as Host<C>;
 }

@@ -3,7 +3,8 @@
 // room, and `useStream` holds a host-served stream's feed over the same
 // link, with the host's seed and then its pushes; after a reconnect (a new
 // socket, joined again by `useJoin`) the link is made again and the feed's
-// new seed replaces what it showed. The host is a client without React.
+// new seed replaces what it showed, and so after the app closes its
+// connection and opens it again. The host is a client without React.
 
 import { act, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -120,5 +121,31 @@ describe("host mode from React", () => {
       host.push(3);
     });
     await view.findByText("ticks 2,3");
+  });
+
+  it("shows the host's world again after the app closes its connection and opens it", async () => {
+    const app = (await createTestApp({
+      services: [defineGameService()],
+      peers: true,
+    })) as unknown as TestApp;
+    apps.push(app);
+    const host = await hostWorld(app);
+    const view = await renderWithQuickdraw(<Player />, { app, client: qd, as: bob });
+    await view.findByText("ticks 0");
+    act(() => {
+      view.connection.close();
+    });
+    act(() => {
+      host.push(1);
+    });
+    act(() => {
+      view.connection.open();
+    });
+    // The new socket joins again, links to the host, and its seed is the current tick.
+    await view.findByText("ticks 1");
+    act(() => {
+      host.push(2);
+    });
+    await view.findByText("ticks 1,2");
   });
 });

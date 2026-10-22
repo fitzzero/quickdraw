@@ -13,14 +13,6 @@ import {
 import type { AnyContract } from "../contract/defineContract";
 import type { MethodDef, MethodOutput } from "../contract/methods";
 import { defaultToolName } from "../contract/toolName";
-import {
-  CHANNEL_DEFAULT_RATE,
-  isScopedStream,
-  type ChannelDef,
-  type EventDef,
-  type StreamAccess,
-  type StreamDef,
-} from "../contract/realtime";
 import { isStandardSchema, type StandardSchemaV1 } from "../contract/standardSchema";
 import {
   accessFormText,
@@ -30,12 +22,14 @@ import {
   type ServiceDoc,
 } from "./access";
 import { dependencyGraph, dependsOnSection, type ServiceDependencies } from "./dependencies";
-import { code, list, paragraph, section, table } from "./markdown";
+import { code, described, list, optionTable, section, table } from "./markdown";
+import { channelSection, eventSection, streamSection } from "./realtimeText";
 import {
   jsonSchemaOf,
   NO_JSON_SCHEMA,
   schemaFields,
   schemaText,
+  typeOf,
   type SchemaField,
 } from "./schemaText";
 
@@ -66,11 +60,6 @@ function acceptsUndefined(schema: StandardSchemaV1): boolean {
   } catch {
     return false;
   }
-}
-
-function typeOf(schema: unknown, mode: "input" | "output"): string {
-  const json = jsonSchemaOf(schema, mode);
-  return json === undefined ? NO_JSON_SCHEMA : schemaText(json);
 }
 
 /** A field table: name, type, and the optional columns that hold something. */
@@ -168,11 +157,6 @@ function kindLine(method: MethodDef): string {
   return `A query that watches the ${code(method.watch.collection)} collection: a cached result is fetched again when the scope its input names changes.`;
 }
 
-/** A member's `describe`, as the paragraph that opens its section, or nothing. */
-function described(text: string | undefined): string[] {
-  return text === undefined ? [] : [paragraph(text)];
-}
-
 /**
  * Who may call a method by the kind of principal, with `--services`, when its
  * service or the app limits it: the kinds, and for a `"public"` method the
@@ -267,13 +251,6 @@ function whereText(where: CollectionDef["where"]): string | undefined {
     .join(", ");
 }
 
-function optionTable(rows: readonly (readonly [string, string | undefined])[]): string[] {
-  return table(
-    ["Option", "Value"],
-    rows.filter((row): row is readonly [string, string] => row[1] !== undefined),
-  );
-}
-
 function collectionSection(
   name: string,
   collection: CollectionDef,
@@ -318,121 +295,6 @@ function collectionsSection(contract: AnyContract, access: AccessInfo | undefine
     "",
     ...entries.flatMap(([name, collection]) => collectionSection(name, collection, access)),
   ];
-}
-
-function accessText(access: StreamAccess | undefined): string {
-  if (access === undefined) {
-    return "none: closed to every client";
-  }
-  if (typeof access === "string") {
-    return code(JSON.stringify(access));
-  }
-  if (access.room !== undefined) {
-    const { room } = access;
-    if (typeof room === "string") {
-      return code(`{ room: "${room}" }`);
-    }
-    return typeof room === "function"
-      ? code("{ room: (scope) => ... }")
-      : code(`{ room: { prefix: "${room.prefix}" } }`);
-  }
-  if (access.scope !== undefined) {
-    return code(`{ scope: "${access.scope}", of: ${access.of.name} }`);
-  }
-  const parts = [
-    access.service === undefined ? undefined : `service: "${access.service}"`,
-    access.entry === undefined ? undefined : `entry: "${access.entry}"`,
-  ].filter((part) => part !== undefined);
-  return code(`{ ${parts.join(", ")} }`);
-}
-
-/**
- * What a subscriber starts from (finding F6.8 of the quickdraw-chat
- * migration): the contract's `seed`, or a seed the service computes, which
- * only a page made with `--services` (`known`) can tell from none.
- */
-function seedText(seed: number | undefined, computed: boolean, known: boolean): string {
-  if (computed) {
-    return "computed by the service when a socket subscribes";
-  }
-  if (seed === undefined) {
-    return known ? "none (default)" : "none in the contract; the service may compute one";
-  }
-  if (seed === 0) {
-    return "none";
-  }
-  return seed === 1 ? "the latest item" : `the latest ${seed} items`;
-}
-
-function streamSection(name: string, stream: StreamDef, access: AccessInfo | undefined): string[] {
-  const scoped = isScopedStream(stream);
-  const served = access?.service?.streams.get(name);
-  return section(`### ${code(name)}`, [
-    ...described(stream.describe),
-    optionTable([
-      ["Item", code(typeOf(stream.item, "output"))],
-      ["Scope", scoped ? `one feed per ${code(stream.scope ?? "")}` : "one global feed"],
-      ["Seed", seedText(stream.seed, served?.computedSeed === true, served !== undefined)],
-      ["Volatile", stream.volatile === true ? "yes" : "no"],
-      ["Access", accessText(stream.access)],
-      [
-        "Checked",
-        served === undefined
-          ? undefined
-          : served.validate === "development"
-            ? `in development only (${code('validate: "development"')})`
-            : "always",
-      ],
-    ]),
-  ]);
-}
-
-function requiresText(requires: ChannelDef["requires"]): string | undefined {
-  if (requires === undefined) {
-    return undefined;
-  }
-  const selector = (value: unknown): string =>
-    typeof value === "string" ? code(value) : "a function of the payload";
-  if (requires.room !== undefined) {
-    return typeof requires.room === "string"
-      ? `the sending socket in the app room ${code(requires.room)}`
-      : "the sending socket in the app room a function of the payload names";
-  }
-  return requires.collection === undefined
-    ? `a subscription to the row ${selector(requires.entity)} names`
-    : `a subscription to the ${code(requires.collection)} scope ${selector(requires.scope)} names`;
-}
-
-function channelSection(
-  name: string,
-  channel: ChannelDef,
-  access: AccessInfo | undefined,
-): string[] {
-  const rate = channel.ratePerSecond ?? CHANNEL_DEFAULT_RATE;
-  const served = access?.service?.channels.has(name) === true;
-  return section(`### ${code(name)}`, [
-    ...described(channel.describe),
-    optionTable([
-      ["Payload", code(typeOf(channel.payload, "input"))],
-      [
-        "Rate",
-        `${rate} a second per socket${channel.ratePerSecond === undefined ? " (default)" : ""}`,
-      ],
-      [
-        "Burst",
-        channel.burst === undefined ? `${Math.max(1, 2 * rate)} (default)` : String(channel.burst),
-      ],
-      ["Requires", requiresText(channel.requires)],
-      ["Access", served ? accessFormText(access?.service?.channels.get(name)) : undefined],
-    ]),
-  ]);
-}
-
-function eventSection(name: string, event: EventDef): string[] {
-  return section(`### ${code(name)}`, [
-    ...described(event.describe),
-    optionTable([["Payload", code(typeOf(event.payload, "output"))]]),
-  ]);
 }
 
 function membersSection<Def>(
@@ -510,13 +372,13 @@ export function renderService(contract: AnyContract, access?: AccessInfo): strin
       "## Streams",
       "Feeds of items the server appends; a subscriber starts from the stream's seed.",
       contract.streams,
-      (name, stream: StreamDef) => streamSection(name, stream, access),
+      (name, stream) => streamSection(name, stream, access?.service),
     ),
     ...membersSection(
       "## Channels",
       "Fire-and-forget messages from clients, dropped over the rate.",
       contract.channels,
-      (name, channel: ChannelDef) => channelSection(name, channel, access),
+      (name, channel) => channelSection(name, channel, access?.service),
     ),
     ...membersSection(
       "## Events",

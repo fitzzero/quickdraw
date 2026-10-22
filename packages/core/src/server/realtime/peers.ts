@@ -13,7 +13,7 @@
 //   once, `PEER_SIGNAL_RATE` signals a second (`PEER_SIGNAL_BURST` at once).
 // - `qd:relay [room, to, label, text]`, never acknowledged, carries one link
 //   message when the data channels cannot (ICE failed, a client without
-//   WebRTC) as `[room, from, label, text]`, volatile on `fast`. Only
+//   WebRTC) as `[room, from, label, text]`, dropped on `fast` while the receiver's connection is backed up (`peerDelivery.ts`). Only
 //   between two sockets of the room that signalled each other in it, at
 //   most `PEER_RELAY_RATE` messages a second to each peer and
 //   `PEER_RELAY_BYTES_PER_SECOND` bytes to all of them. The text is never

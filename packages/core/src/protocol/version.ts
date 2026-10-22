@@ -114,6 +114,9 @@ export const PEER_RELAY_BYTES_PER_SECOND = 1_048_576;
 /** Relay bytes one socket may send at once, after a pause. */
 export const PEER_RELAY_BYTES_BURST = 2_097_152;
 
+/** Relay messages waiting for a socket's connection past which the relay drops a `fast` one to it. */
+export const PEER_RELAY_FAST_BACKLOG = 64;
+
 /**
  * Each socket's lane of subscription events (`qd:sub`, `qd:col:sub`,
  * `qd:col:items`, `qd:watch`; RFC 0003 section 8.2), and how much one

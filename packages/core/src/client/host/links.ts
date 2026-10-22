@@ -52,6 +52,9 @@ export type LocalHost = (peer: HostPeer, send: HostSend) => AttachedPeer;
 const RETRY_MS = 1000;
 const MAX_RETRY_MS = 15_000;
 
+/** The items a seed in chunks may hold: the most a feed shows (`STREAM_MAX_ITEMS`), the latest kept. */
+const MAX_SEED_ITEMS = 10_000;
+
 interface Way {
   readonly send: HostSend;
   readonly close: () => void;
@@ -91,7 +94,7 @@ function onMessage(state: RoomState, message: HostMessage): void {
     return;
   }
   if (message[0] === 6) {
-    const chunks = [...(entry.chunks ?? []), ...message[4]];
+    const chunks = [...(entry.chunks ?? []), ...message[4]].slice(-MAX_SEED_ITEMS);
     entry.chunks = message[5] ? undefined : chunks;
     if (message[5]) {
       entry.feed.seeded(chunks);

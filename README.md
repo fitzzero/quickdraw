@@ -3152,19 +3152,28 @@ export function useArenaHost(arenaId: string): void {
   returns a `Host` with `stream(name).push(scope, item)` (checked against
   the stream's schema), `peers` and `close()`. The host checks each message
   as the server checks a channel's: its schema, its room, and a bucket per
-  player and channel; it ends the link of a player who floods. The host's
-  own `useChannel` and `useStream` for its room reach it in process.
+  player and channel; it ends the link of a player who floods. A player
+  subscribes at most 500 times at once and then 50 times a second
+  (`RATE_LIMITED`). A seed goes whole or not at all: one with an item too
+  large for a message of its own is refused (`INTERNAL`), and what the
+  relay drops on `rel` is sent again, in order. The host's own
+  `useChannel` and `useStream` for its room reach it in process. One
+  connection serves several contracts in a room, one `serve` each, over
+  the same links; serving one contract twice in a room throws.
 - `hostOf(connection, room)` and `onHostChange(connection, listener)`
   (from `./client`) say who hosts a room the socket is in. A player's feed
   subscribes again each time a link to the room's host opens (a new host,
   a reconnect), and its seed replaces what it showed. A channel message is
-  dropped while no link is open, and goes on the link's `fast`, which the
-  relay may drop too: send input every frame. After a link to the host
+  dropped while no link is open, and goes on the link's `fast`, never
+  resent: send input every frame. After a link to the host
   closed, the next waits 1 s, doubling to 15 s while links keep closing
   unopened.
 - The server never sees what a host and its players send each other. A
   host is one player's client: trust what it reports no more than any
   client's word, and check on the server whatever a service keeps of it.
+  A service's `kinds` does not reach its host-served members either: the
+  host knows each player's user, not its kind, so any signed-in socket of
+  the room can link to it. Guard who joins the room.
 
 ### Auth routes kit
 

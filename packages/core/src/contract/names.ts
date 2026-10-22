@@ -107,7 +107,7 @@ export const CLIENT_EVENTS = Object.freeze({
   channel: "qd:ch",
   /** A peer link's signal to another socket of an app room: `{ room, to, sig }`. */
   peer: "qd:peer",
-  /** A peer link's message for the server to relay: `[room, to, label, text]`, volatile for `fast`. */
+  /** A peer link's message for the server to relay: `[room, to, label, text]`, dropped on `fast` when backed up. */
   relay: "qd:relay",
 } as const);
 

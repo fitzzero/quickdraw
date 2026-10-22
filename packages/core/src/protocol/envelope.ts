@@ -390,7 +390,7 @@ export interface PresenceFrame {
 
 /**
  * A peer link's two channels: `rel`, ordered and reliable, and `fast`,
- * unordered and never retransmitted (volatile through the relay).
+ * unordered and never retransmitted (dropped where a connection is backed up).
  */
 export type PeerLabel = "rel" | "fast";
 
@@ -450,11 +450,13 @@ export interface PeerForwardFrame {
 
 /**
  * `qd:relay`, from a client, never acknowledged: a link message for socket
- * `to` in app room `room`, sent volatile on `fast`. `text` is a
- * `PeerMessage` as JSON, at most `limits.peers.maxMessageBytes`. The two
- * sockets must have signalled each other in that room; a message over the
- * rate or the byte budget of `limits.peers`, or to a socket that left the
- * room, is dropped. A later revision may append elements after `text`.
+ * `to` in app room `room`. `text` is a `PeerMessage` as JSON, at most
+ * `limits.peers.maxMessageBytes`. The two sockets must have signalled each
+ * other in that room; a message over the rate or the byte budget of
+ * `limits.peers`, or to a socket that left the room, is dropped, and so is
+ * one on `fast` while the receiving socket's connection is backed up
+ * (`PEER_RELAY_FAST_BACKLOG`). A later revision may append elements after
+ * `text`.
  */
 export type RelayFrame = readonly [room: string, to: string, label: PeerLabel, text: string];
 

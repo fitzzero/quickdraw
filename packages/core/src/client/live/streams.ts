@@ -401,8 +401,9 @@ export function createStreamStore(host: LiveHost): StreamStore {
     },
     resume(): void {
       for (const feed of feeds.registry.held()) {
-        // A host-served feed subscribes again when a way to its host opens.
-        if (!feed.hosted) {
+        // A host-served feed keeps its hold across a reconnect, and subscribes
+        // again when a way to its host opens; after `stop` it holds none.
+        if (!feed.hosted || feed.release === undefined) {
           subscribe(feeds, feed);
         }
       }
@@ -419,6 +420,10 @@ export function createStreamStore(host: LiveHost): StreamStore {
         feed.retry = undefined;
         feed.attempt += 1;
         feed.pending = undefined;
+        if (feed.hosted) {
+          feed.release?.();
+          feed.release = undefined;
+        }
       }
     },
   });

@@ -165,7 +165,7 @@ function runGodot(server: GameServer): Promise<Run> {
 /**
  * The frames that differ from the session (with its peer link to `peer` and
  * the world's host at `host`), by position, clock pings aside. A steer is
- * on `fast`, which the relay may drop, so the script sends it again until
+ * on `fast`, which is never resent, so the script sends it again until
  * the host answers: steers in a row count as one.
  */
 function differences(written: readonly string[], peer: string, host: string): string[] {

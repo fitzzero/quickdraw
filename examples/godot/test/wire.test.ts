@@ -202,8 +202,7 @@ async function hostMessage(wire: Wire, kind: number): Promise<ReturnType<typeof 
 
 /**
  * Sends `steer` until the host served `count` steers: `fast` is unreliable,
- * and the relay drops a message on it that the host's socket is not ready
- * for, as when two arrive at once.
+ * never resent, and dropped wherever a connection is backed up.
  */
 async function steerUntil(
   wire: Wire,

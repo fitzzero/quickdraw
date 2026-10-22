@@ -8,7 +8,9 @@
 // peer against a real server, over the relay (Node has no WebRTC), and the
 // host's own client in process.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { z } from "zod";
+import { defineContract } from "../../index";
 import type { HostMessage, PeerLabel } from "../../protocol/envelope";
 import { MAX_PEER_MESSAGE_BYTES } from "../../protocol/version";
 import { alice, bob } from "../../server/__tests__/fixtures";
@@ -17,6 +19,7 @@ import {
   gameContract,
   WORLD,
   WORLD_ID,
+  worldRoom,
 } from "../../server/realtime/__tests__/hostGame";
 import { createTestApp, type TestApp } from "../../testing/index";
 import { createLoopbackPeerLink } from "../../testing/peer";
@@ -231,6 +234,129 @@ describe("a host's runtime", () => {
   });
 });
 
+describe("a host's runtime, one message at a time", () => {
+  /** A peer attached straight to `runtime`: what it was sent, and whether its link was closed. */
+  function direct(runtime: Runtime, sendOk: () => boolean = () => true) {
+    const sent: [PeerLabel, HostMessage][] = [];
+    let closed = 0;
+    const attached = runtime.attach(
+      { socketId: "socket-bo", userId: "bo" },
+      (label, message) => {
+        if (!sendOk()) {
+          return false;
+        }
+        sent.push([label, message]);
+        return true;
+      },
+      () => {
+        closed += 1;
+      },
+    );
+    return { attached, sent, closed: () => closed };
+  }
+
+  /** Runs `act`, collecting what it throws later (`throwLater`) instead of failing the run. */
+  function thrownLater(act: () => void): unknown[] {
+    const errors: unknown[] = [];
+    const microtask = vi.spyOn(globalThis, "queueMicrotask").mockImplementation((task) => {
+      try {
+        task();
+      } catch (error) {
+        errors.push(error);
+      }
+    });
+    try {
+      act();
+    } finally {
+      microtask.mockRestore();
+    }
+    return errors;
+  }
+
+  it("refuses a seed whose item fits no message alone, and sends none of it", () => {
+    const big = { tick: 1, players: ["x".repeat(300)] };
+    const { runtime } = hosting({ streams: { world: { seed: () => [snapshot(0), big] } } }, 200);
+    const bo = direct(runtime);
+    const errors = thrownLater(() => {
+      bo.attached.receive([4, "gameService", "world", WORLD_ID]);
+    });
+    expect(bo.sent).toEqual([
+      [
+        "rel",
+        [
+          8,
+          "gameService",
+          "world",
+          WORLD_ID,
+          { code: "INTERNAL", message: "The feed's seed holds an item over the message limit" },
+        ],
+      ],
+    ]);
+    expect(errors).toEqual([expect.any(RangeError)]);
+    runtime.push("world", WORLD_ID, snapshot(1));
+    expect(bo.sent).toHaveLength(1);
+  });
+
+  it("sends again, in order, what the link drops on rel, and closes a peer that cannot keep up", () => {
+    vi.useFakeTimers();
+    try {
+      let open = false;
+      const { runtime } = hosting();
+      const bo = direct(runtime, () => open);
+      bo.attached.receive([4, "gameService", "world", WORLD_ID]);
+      // A volatile stream's item goes on `fast`, as the link takes it: dropped, never sent again.
+      runtime.push("world", WORLD_ID, snapshot(1));
+      bo.attached.receive([4, "gameService", "ticks", WORLD_ID]);
+      expect(bo.sent).toEqual([]);
+      open = true;
+      vi.advanceTimersByTime(1000);
+      expect(bo.sent.map(([label, message]) => [label, message[0], message[2]])).toEqual([
+        ["rel", 6, "world"],
+        ["rel", 8, "ticks"],
+      ]);
+      open = false;
+      const large = { tick: 2, players: ["x".repeat(30_000)] };
+      let subscribes = 0;
+      for (; bo.closed() === 0 && subscribes < 300; subscribes += 1) {
+        runtime.push("world", WORLD_ID, large);
+        bo.attached.receive([4, "gameService", "world", WORLD_ID]);
+      }
+      // About 60 KB a seed: past 8 MiB waiting, the link closes.
+      expect([bo.closed(), subscribes < 300]).toEqual([1, true]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses a peer's subscribes past 500 at once and then 50 a second, and ends a flood of them", () => {
+    // A stopped clock: no token comes back while the loops run, however long they take.
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const { runtime } = hosting();
+    const bo = direct(runtime);
+    for (let n = 0; n < 501; n += 1) {
+      bo.attached.receive([4, "gameService", "world", WORLD_ID]);
+    }
+    expect(bo.sent.at(-1)).toEqual([
+      "rel",
+      [
+        8,
+        "gameService",
+        "world",
+        WORLD_ID,
+        { code: "RATE_LIMITED", message: "A peer subscribes at most 50 times a second" },
+      ],
+    ]);
+    expect(bo.closed()).toBe(0);
+    for (let n = 0; n < 5_000; n += 1) {
+      bo.attached.receive([4, "gameService", "world", WORLD_ID]);
+    }
+    expect(bo.closed()).toBe(1);
+  });
+});
+
 describe("defineHost", () => {
   it("refuses an implementation that does not match the contract's host-served members", () => {
     expect(() => defineHost(gameContract, { channels: {} } as never)).toThrow(
@@ -281,20 +407,43 @@ describe("a host and its peers against a server", () => {
     return connection;
   }
 
-  function feed(): HostFeed & { readonly seeds: unknown[][]; readonly items: unknown[] } {
+  function feed(service = "gameService"): HostFeed & {
+    readonly seeds: unknown[][];
+    readonly items: unknown[];
+    readonly errors: unknown[];
+  } {
     const seeds: unknown[][] = [];
     const items: unknown[] = [];
+    const errors: unknown[] = [];
     return {
-      service: "gameService",
+      service,
       stream: "world",
       scope: WORLD_ID,
       seeds,
       items,
+      errors,
       seeded: (seed) => seeds.push([...seed]),
       item: (item) => items.push(item),
-      refused: () => undefined,
+      refused: (error) => errors.push(error),
       lost: () => undefined,
     };
+  }
+
+  /** A server for the game, with a socket of `principal` the world's host. */
+  async function hostedWorld(principal: Principal = alice) {
+    const app = (await createTestApp({
+      services: [defineGameService()],
+      peers: true,
+    })) as unknown as TestApp;
+    apps.push(app);
+    const hostConnection = await player(app, principal);
+    await call(hostConnection, {
+      service: "gameService",
+      method: "host",
+      input: world,
+      kind: "mutation",
+    });
+    return { app, hostConnection };
   }
 
   it("carries a peer's moves to the host, named by the server, and the host's world to the peer", async () => {
@@ -324,8 +473,8 @@ describe("a host and its peers against a server", () => {
     expect(bo.seeds).toEqual([[snapshot(0)]]);
     host.stream("world").push(WORLD_ID, snapshot(1));
     await until(() => bo.items.length === 1);
-    // `fast` is unreliable: the relay drops a message the host's socket is
-    // not ready for, so the peer moves again until the host has a move.
+    // `fast` is unreliable, never resent: the peer moves again until the
+    // host has a move, as a game sends its input each frame.
     await vi.waitFor(async () => {
       expect(
         hostLinksOf(peer).send(WORLD, "gameService", "move", { ...world, dx: -1, dy: 0 }),
@@ -382,6 +531,80 @@ describe("a host and its peers against a server", () => {
       },
       { timeout: 3000, interval: 50 },
     );
+  });
+
+  it("serves two contracts in one room over the same links, and refuses a service it does not serve", async () => {
+    const { app, hostConnection } = await hostedWorld();
+    const chatContract = defineContract("chatService", {
+      channels: {
+        say: {
+          payload: z.object({ worldId: z.string(), text: z.string() }),
+          requires: { room: (say) => worldRoom(say.worldId) },
+          serve: "host",
+        },
+      },
+    });
+    const moves: unknown[] = [];
+    const said: [unknown, string][] = [];
+    const game = defineHost(gameContract, {
+      channels: { move: (move) => moves.push(move) },
+      streams: { world: { seed: () => [snapshot(0)] } },
+    }).serve(hostConnection, { room: WORLD });
+    const chatHost = defineHost(chatContract, {
+      channels: { say: (say, { peer }) => said.push([say, peer.userId]) },
+    });
+    chatHost.serve(hostConnection, { room: WORLD });
+    expect(() => chatHost.serve(hostConnection, { room: WORLD })).toThrow(
+      'serve: this connection serves chatService in room "1" already; close that Host first'.replace(
+        '"1"',
+        `"${WORLD}"`,
+      ),
+    );
+    const peer = await player(app, bob);
+    await until(() => hostOf(peer, WORLD) === hostConnection.socket.id);
+    const bo = feed();
+    const nobody = feed("nobodyService");
+    hostLinksOf(peer).subscribe(WORLD, bo);
+    hostLinksOf(peer).subscribe(WORLD, nobody);
+    await until(() => bo.seeds.length === 1 && nobody.errors.length === 1);
+    expect(nobody.errors).toEqual([
+      { code: "NOT_FOUND", message: `The host of ${WORLD} serves no service "nobodyService"` },
+    ]);
+    // `fast` may drop a message on the relay: send each again until the host has it.
+    await vi.waitFor(async () => {
+      hostLinksOf(peer).send(WORLD, "chatService", "say", { ...world, text: "hi" });
+      hostLinksOf(peer).send(WORLD, "gameService", "move", { ...world, dx: 1, dy: 0 });
+      await until(() => said.length > 0 && moves.length > 0, 200);
+    });
+    expect(said[0]).toEqual([{ ...world, text: "hi" }, "bob"]);
+    // Closing one contract's host leaves the other serving over the same link.
+    game.close();
+    const before = said.length;
+    await vi.waitFor(async () => {
+      hostLinksOf(peer).send(WORLD, "chatService", "say", { ...world, text: "still here" });
+      await until(() => said.length > before, 200);
+    });
+  });
+
+  it("follows the room to its next host: links again, and the new host's seed replaces the old", async () => {
+    const { app, hostConnection } = await hostedWorld();
+    defineHost(gameContract, {
+      channels: { move: () => undefined },
+      streams: { world: { seed: () => [snapshot(1)] } },
+    }).serve(hostConnection, { room: WORLD });
+    const peer = await player(app, bob);
+    await until(() => hostOf(peer, WORLD) === hostConnection.socket.id);
+    const bo = feed();
+    hostLinksOf(peer).subscribe(WORLD, bo);
+    await until(() => bo.seeds.length === 1);
+    const next = await player(app, { userId: "cy", serviceAccess: {} } as Principal);
+    defineHost(gameContract, {
+      channels: { move: () => undefined },
+      streams: { world: { seed: () => [snapshot(2)] } },
+    }).serve(next, { room: WORLD });
+    await call(next, { service: "gameService", method: "host", input: world, kind: "mutation" });
+    await until(() => bo.seeds.length === 2);
+    expect(bo.seeds).toEqual([[snapshot(1)], [snapshot(2)]]);
   });
 
   it("lets a peer hear that the room's host is gone", async () => {

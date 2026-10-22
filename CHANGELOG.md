@@ -21,7 +21,8 @@ All notable changes to this project will be documented in this file.
   (a description, a candidate, `relay`, `bye`), acknowledged when asked;
   the receiver gets `{ room, from, userId, sig }`, with the sender's user
   as the server knows it. `qd:relay [room, to, label, text]` carries a
-  link message through the server, volatile on `fast`, never acknowledged.
+  link message through the server, never acknowledged; one on `fast` is
+  dropped while the sender's or the receiver's connection is backed up.
   The server forwards both only between two signed-in sockets of the
   frame's room, and never reads what a link carries.
 - **Limits.** A socket signals at most 64 peers at once (`CONFLICT`) and 20
@@ -77,7 +78,11 @@ All notable changes to this project will be documented in this file.
   of the room's players and returns a `Host` with
   `stream(name).push(scope, item)`, `peers` and `close()`. It checks each
   message as the server checks a channel's (schema, room, a bucket per
-  player and channel) and ends the link of a player who floods.
+  player and channel) and ends the link of a player who floods. It takes
+  500 subscribes at once from a player and then 50 a second, sends a seed
+  whole or refuses it, and sends again, in order, what the relay drops on
+  `rel`. One connection serves several contracts in a room, one `serve`
+  each.
 - **Players change nothing.** `useChannel` and `useStream` of a
   host-served member reach the room's host over a link, made on first use
   and again for a new host or after a reconnect; the feed's seed replaces

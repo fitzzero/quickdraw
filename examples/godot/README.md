@@ -130,9 +130,8 @@ func _physics_process(_delta: float) -> void:
 ```
 
 A host-served channel's messages go on the link's `fast`, unordered and
-never retransmitted (the relay drops one the host's socket is not ready
-for), so a game sends its input as a stream of updates, not as one-off
-commands. `host_changed(room, host)` tells the game when the room's host
+never retransmitted (dropped wherever a connection is backed up), so a game
+sends its input as a stream of updates, not as one-off commands. `host_changed(room, host)` tells the game when the room's host
 changes; with `""` the room has none, and the app's own method decides who
 hosts next. The host serves from a JavaScript client (`defineHost` on
 `@fitzzero/quickdraw-core/client`); this client does not serve as a host.

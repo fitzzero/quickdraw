@@ -203,22 +203,22 @@ acknowledgement is sent with an ack id, and its reply arrives as the ACK's
 one argument; "when asked" means the server acknowledges it only when the
 client sends an ack id.
 
-| Event             | Payload                  | Acknowledgement             | Meaning                                                                                        |
-| ----------------- | ------------------------ | --------------------------- | ---------------------------------------------------------------------------------------------- |
-| `qd:call`         | `CallEnvelope`           | `CallReply`                 | A method call: `{ id, s, m, i, v? }`, answered by ack.                                         |
-| `qd:cancel`       | `CancelFrame`            | none                        | Cancels an in-flight call: `{ id }`.                                                           |
-| `qd:sub`          | `EntitySubscribe`        | `EntitySubscribeReply`      | Subscribes to entities by id, with the revisions held.                                         |
-| `qd:unsub`        | `EntityUnsubscribe`      | `Ok \| Failure`, when asked | Unsubscribes from entities.                                                                    |
-| `qd:col:sub`      | `CollectionSubscribe`    | `CollectionSubscribeReply`  | Subscribes to a collection scope, or resumes it from a revision.                               |
-| `qd:col:unsub`    | `CollectionScopeRef`     | `Ok \| Failure`, when asked | Unsubscribes from a collection scope.                                                          |
-| `qd:col:items`    | `CollectionItemsRequest` | `CollectionItemsReply`      | Loads collection items by id.                                                                  |
-| `qd:watch`        | `WatchFrame`             | `Ok \| Failure`             | Joins a watched topic: `{ s, topic }`.                                                         |
-| `qd:unwatch`      | `WatchFrame`             | `Ok \| Failure`, when asked | Leaves a watched topic.                                                                        |
-| `qd:stream:sub`   | `StreamSubscribe`        | `StreamSubscribeReply`      | Subscribes to a stream and receives its seed.                                                  |
-| `qd:stream:unsub` | `StreamSubscribe`        | `Ok \| Failure`, when asked | Unsubscribes from a stream.                                                                    |
-| `qd:ch`           | `ChannelFrame`           | none                        | A fire-and-forget channel message, sent volatile: `[s, channel, payload]`.                     |
-| `qd:peer`         | `PeerSignalFrame`        | `Ok \| Failure`, when asked | A peer link's signal to another socket of an app room: `{ room, to, sig }`.                    |
-| `qd:relay`        | `RelayFrame`             | none                        | A peer link's message for the server to relay: `[room, to, label, text]`, volatile for `fast`. |
+| Event             | Payload                  | Acknowledgement             | Meaning                                                                                                     |
+| ----------------- | ------------------------ | --------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `qd:call`         | `CallEnvelope`           | `CallReply`                 | A method call: `{ id, s, m, i, v? }`, answered by ack.                                                      |
+| `qd:cancel`       | `CancelFrame`            | none                        | Cancels an in-flight call: `{ id }`.                                                                        |
+| `qd:sub`          | `EntitySubscribe`        | `EntitySubscribeReply`      | Subscribes to entities by id, with the revisions held.                                                      |
+| `qd:unsub`        | `EntityUnsubscribe`      | `Ok \| Failure`, when asked | Unsubscribes from entities.                                                                                 |
+| `qd:col:sub`      | `CollectionSubscribe`    | `CollectionSubscribeReply`  | Subscribes to a collection scope, or resumes it from a revision.                                            |
+| `qd:col:unsub`    | `CollectionScopeRef`     | `Ok \| Failure`, when asked | Unsubscribes from a collection scope.                                                                       |
+| `qd:col:items`    | `CollectionItemsRequest` | `CollectionItemsReply`      | Loads collection items by id.                                                                               |
+| `qd:watch`        | `WatchFrame`             | `Ok \| Failure`             | Joins a watched topic: `{ s, topic }`.                                                                      |
+| `qd:unwatch`      | `WatchFrame`             | `Ok \| Failure`, when asked | Leaves a watched topic.                                                                                     |
+| `qd:stream:sub`   | `StreamSubscribe`        | `StreamSubscribeReply`      | Subscribes to a stream and receives its seed.                                                               |
+| `qd:stream:unsub` | `StreamSubscribe`        | `Ok \| Failure`, when asked | Unsubscribes from a stream.                                                                                 |
+| `qd:ch`           | `ChannelFrame`           | none                        | A fire-and-forget channel message, sent volatile: `[s, channel, payload]`.                                  |
+| `qd:peer`         | `PeerSignalFrame`        | `Ok \| Failure`, when asked | A peer link's signal to another socket of an app room: `{ room, to, sig }`.                                 |
+| `qd:relay`        | `RelayFrame`             | none                        | A peer link's message for the server to relay: `[room, to, label, text]`, dropped on `fast` when backed up. |
 
 ## Server to client
 
@@ -325,7 +325,9 @@ offer: its peer moves to the relay on hearing it.
    hears it moves to the relay too and says `{ relay: true }` back, unless
    it said it already. The link is open on the relay once a side has said
    it and heard it. Through the relay a `PeerMessage` travels as the
-   `text` of `qd:relay`, sent volatile on `fast`.
+   `text` of `qd:relay`. On `fast`, drop one rather than queue it
+   while your connection is backed up; the server drops one while the
+   receiver's is (`PEER_RELAY_FAST_BACKLOG` relay messages waiting).
 4. Read link messages from both paths all along: the peer may move to the
    relay before you hear it say so. A link that opens on no path within
    `OPEN_TIMEOUT_MS` is over.
@@ -371,8 +373,9 @@ A contract may declare a channel or a stream `serve: "host"`: the host of
 an app room serves it over peer links, and the server never handles it. A
 method of the app makes a socket the room's host. The server sends
 `qd:host` (`HostFrame`, `[room, host]`) to the room's sockets each time
-its host changes, and to a socket that joins a room with a host, after its
-`qd:presence`. `host` is `null` once the room has none: its host left
+its host changes, and to a socket that joins a room with a host, before or
+after its `qd:presence` (behind a cluster adapter the presence list may
+come later). `host` is `null` once the room has none: its host left
 the room, was taken out of it or disconnected, or a method cleared it. The
 server never picks the next host; the app does. A host-served channel
 declares `requires.room`, and a host-served stream a scope and
@@ -389,14 +392,15 @@ A peer, any other socket of the room:
    host that `qd:host` names again is linked at once.
 2. Sends a host-served channel's message as `HostChannelMessage` on
    `fast`, and drops it while no link to the host is open. `fast` is
-   never retransmitted, and the relay sends it volatile: send input as a
-   stream of updates, not as one-off commands.
+   never retransmitted, and a backed-up connection drops it: send input as
+   a stream of updates, not as one-off commands.
 3. Subscribes to a host-served stream's feed with `HostSubscribe` on
    `rel` each time a link to the room's host opens, and leaves it with
    `HostUnsubscribe`. The seed arrives as `HostSeed` chunks: join their
-   items until the one whose `last` is true, then replace what the feed
-   held. Each `HostItem` appends. A `HostRefusal` refuses the subscribe,
-   with its error: the host sends nothing for that feed.
+   items (keep the latest 10,000 at most, as a host may send more) until
+   the one whose `last` is true, then replace what the feed held. Each
+   `HostItem` appends. A `HostRefusal` refuses the subscribe, with its
+   error: the host sends nothing for that feed.
 4. Never sends `qd:ch` or `qd:stream:sub` for a host-served member: the
    server drops the first and refuses the second with `VALIDATION`.
 
@@ -412,12 +416,22 @@ The host:
    drops within `CHANNEL_ABUSE_WINDOW_MS` pass `CHANNEL_ABUSE_MULTIPLIER`
    times the rate.
 3. Answers `HostSubscribe` with the feed's seed (`HostSeed`, in chunks
-   that each fit `limits.peers.maxMessageBytes`), or with `HostRefusal`:
-   `NOT_FOUND` for a stream that is not host-served, `FORBIDDEN` for a
-   scope whose room is not the host's room, and another code when it cannot
+   that each fit `limits.peers.maxMessageBytes`), whole or not at all, or
+   with `HostRefusal`: `NOT_FOUND` for a service or a stream it does not
+   serve, `FORBIDDEN` for a scope whose room is not the host's room,
+   `RATE_LIMITED` past 500 subscribes at once from one peer and then 50 a
+   second (the link of a peer whose refusals pass 100 times that rate
+   within `CHANNEL_ABUSE_WINDOW_MS` closes), `INTERNAL` for a seed with an
+   item too large for a chunk of its own, and another code when it cannot
    serve the feed (`CONFLICT` past the feeds it lets one peer hold).
 4. Sends each item pushed to a feed to the feed's subscribers as
    `HostItem`: on `fast` for a volatile stream, else on `rel`.
+5. Keeps what it sends on `rel` in order, and sends again what the link
+   drops (over the relay, once the relay's budget is spent), so a seed is
+   never cut short. A peer that cannot keep up loses its link, and links
+   and subscribes again.
+6. May serve several services in one room over the same links: each
+   message goes to the service it names.
 
 The server forwards a link's signals and relays its messages, but it never
 reads what a host and its peers send each other. A host trusts a peer's
@@ -885,7 +899,7 @@ room are dropped until a joining call lets it back. Exactly one of
 #### `PeerLabel`
 
 A peer link's two channels: `rel`, ordered and reliable, and `fast`,
-unordered and never retransmitted (volatile through the relay).
+unordered and never retransmitted (dropped where a connection is backed up).
 
 `"rel" | "fast"`.
 
@@ -955,11 +969,13 @@ app room `room`. `userId` is the sender's user, as the server knows it.
 #### `RelayFrame`
 
 `qd:relay`, from a client, never acknowledged: a link message for socket
-`to` in app room `room`, sent volatile on `fast`. `text` is a
-`PeerMessage` as JSON, at most `limits.peers.maxMessageBytes`. The two
-sockets must have signalled each other in that room; a message over the
-rate or the byte budget of `limits.peers`, or to a socket that left the
-room, is dropped. A later revision may append elements after `text`.
+`to` in app room `room`. `text` is a `PeerMessage` as JSON, at most
+`limits.peers.maxMessageBytes`. The two sockets must have signalled each
+other in that room; a message over the rate or the byte budget of
+`limits.peers`, or to a socket that left the room, is dropped, and so is
+one on `fast` while the receiving socket's connection is backed up
+(`PEER_RELAY_FAST_BACKLOG`). A later revision may append elements after
+`text`.
 
 A JSON array:
 
@@ -1282,6 +1298,7 @@ peer links, which announces them in `limits.peers`.
 | `PEER_RELAY_BURST`            | 240 messages                              | Relay messages one socket may send to one peer at once, after a pause.                                    |
 | `PEER_RELAY_BYTES_PER_SECOND` | 1048576 bytes a second per socket         | Relay bytes one socket may send per second, to all its peers together; more are dropped.                  |
 | `PEER_RELAY_BYTES_BURST`      | 2097152 bytes                             | Relay bytes one socket may send at once, after a pause.                                                   |
+| `PEER_RELAY_FAST_BACKLOG`     | 64 relay messages waiting                 | Relay messages waiting for a socket's connection past which the relay drops a `fast` one to it.           |
 
 These are defaults. An app changes the socket rate limiter with
 `createServer({ rateLimit })` and a channel's rate with its contract's
