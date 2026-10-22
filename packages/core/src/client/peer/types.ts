@@ -29,7 +29,7 @@ export type PeerPath = "direct" | "relay";
  * - `timeout`: no path opened within 15 seconds;
  * - `lost`: nothing was heard from the peer for 8 seconds;
  * - `failed`: the direct path failed and the link may not use the relay
- *   (`relay: "never"`), or both sides offered;
+ *   (`relay: "never"`);
  * - `refused`: the server refused a signal (the peer is not in the room,
  *   this socket signals too many peers, ...);
  * - `unsupported`: the server serves no peer links (its hello lists no

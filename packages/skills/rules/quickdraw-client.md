@@ -157,6 +157,18 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   the user's say). Never join from a plain `useQuery` or a
   mount effect: a reconnect leaves the socket out of the room while the
   cached answer still looks fine. Without React, `connection.onHello`.
+- Peer links: on a server created with `peers: true`,
+  `createPeerLink(connection, { room, to, offerer })` (in React,
+  `useQuickdraw().connection`) links two sockets of an app room over
+  WebRTC data channels, or over the server's relay when those cannot form.
+  The peer's socket id comes from the app (an event carrying
+  `ctx.socketId`, a method's answer); `onPeerRequest(connection, listener)`
+  answers a peer that linked first. Send input at a tick rate on `fast`
+  (unordered, never resent) and state on `rel` (ordered, reliable). A link
+  dies with its socket: open it again on every connection, as `useJoin`
+  joins again. What a peer sends is the peer's word, never checked by the
+  server: parse each message with its schema as untrusted input. Never
+  send `qd:peer` or `qd:relay` by hand (`no-raw-socket`).
 - Admin screens: `qd.task.admin.adminList.useQuery(input)` and the other
   admin kit members; `useAdminServices(qd)` lists the services whose
   `adminMeta` answers the user, asking only those the hello's grants allow

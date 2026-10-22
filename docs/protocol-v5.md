@@ -301,7 +301,12 @@ to its room and its two sockets, and ends when either leaves the room or
 disconnects: open it again after a reconnect.
 
 A client learns a peer's socket id from the app (a method's answer, an
-event) or from a signal it receives (`from`). Exactly one side offers.
+event) or from a signal it receives (`from`). One side offers. When both
+do (each learned of the other at once), the side whose socket id sorts
+after the other's, compared as ASCII, answers instead: it drops its own
+offer and answers the peer's. The other side ignores the offer it heard and
+waits for that answer. A side that said `{ relay: true }` ignores an
+offer: its peer moves to the relay on hearing it.
 
 1. The offerer sends `{ sdp }` with its offer, then `{ ice }` for each of
    its candidates, each as `qd:peer` to the other socket; the answerer

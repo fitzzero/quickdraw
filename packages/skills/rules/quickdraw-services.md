@@ -290,6 +290,15 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 - A game loop asks `qd.rooms.size(room)` (this node's sockets, spectators
   included, synchronous) at its tick rate, never Socket.IO's adapter;
   `ctx.socketId` names the calling socket in a method.
+- Peer links: `createServer({ peers: true })` lets two clients of an app
+  room link directly (`createPeerLink` on the client). The server forwards
+  their signals and relays their messages only between signed-in sockets
+  of the room, and ends a player's links when they leave it or
+  `rooms.leave(room, { userId })` takes them out. Tell players each other's
+  socket ids with an event or a method's answer (`ctx.socketId`). The
+  server never sees what a link carries: a method that records what a
+  client reports from a link (a score, a winner) checks it as untrusted
+  input, and its contract's `describe` says so.
 - Events: `events: { moved: { payload } }`, sent with
   `ctx.rooms.emit(room, task, "moved", payload)` to an app room
   (`ctx.rooms.join(room)` in a method puts the caller's socket in one), and

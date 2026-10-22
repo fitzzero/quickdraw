@@ -93,6 +93,51 @@ function offer(from: Side, to: Side, options: Partial<PeerLinkOptions> = {}): Pe
   });
 }
 
+describe("both sides offering", () => {
+  it("opens one link: the side whose socket id sorts after the other's answers", async () => {
+    const ada = player("ada", false);
+    const bo = player("bo", false);
+    const first = offer(ada, bo, { peerConnection: network.factory });
+    const second = offer(bo, ada, { peerConnection: network.factory });
+    await pass();
+    expect([first.state, first.path, second.state, second.path]).toEqual([
+      "open",
+      "direct",
+      "open",
+      "direct",
+    ]);
+    // Bo's socket id sorts after Ada's: his offer's connection closed, and he answered.
+    const [adaRtc, boOffer, boAnswer] = network.made;
+    expect([adaRtc?.closed, boOffer?.closed, boAnswer?.closed]).toEqual([false, true, false]);
+    expect(
+      bo.side.socket
+        .signals()
+        .map((sig) => sig.sdp?.type)
+        .filter(Boolean),
+    ).toEqual(["offer", "answer"]);
+    const heard = record(second);
+    first.send("rel", "one link");
+    await pass();
+    expect(heard.messages).toEqual([["one link", "rel"]]);
+    expect([ada.requests, bo.requests]).toEqual([[], []]);
+  });
+
+  it("moves to the relay when the side that cannot go direct offered too", async () => {
+    const ada = player("ada", false);
+    const bo = player("bo", false);
+    const direct = offer(ada, bo, { peerConnection: network.factory });
+    const relayed = offer(bo, ada, { relay: "always" });
+    await pass();
+    expect([direct.state, direct.path, relayed.state, relayed.path]).toEqual([
+      "open",
+      "relay",
+      "open",
+      "relay",
+    ]);
+    expect(network.made.map((rtc) => rtc.closed)).toEqual([true]);
+  });
+});
+
 describe("the direct path", () => {
   it("opens over two pre-negotiated channels, and carries rel and fast both ways", async () => {
     const ada = player("ada");
@@ -399,13 +444,7 @@ describe("closing", () => {
     expect(ada.side.socket.signals()).toEqual([{ relay: true }, { relay: true }]);
   });
 
-  it("closes as failed when both sides offer, or a direct-only link's path fails", async () => {
-    const ada = player("ada", false);
-    const bo = player("bo", false);
-    const first = offer(ada, bo, { peerConnection: network.factory });
-    const second = offer(bo, ada, { peerConnection: network.factory });
-    await pass();
-    expect([first.closeReason, second.closeReason]).toEqual(["failed", "failed"]);
+  it("closes as failed when a direct-only link's path fails", async () => {
     network.mode = "fail";
     const cy = player("cy");
     const di = player("di", { peerConnection: network.factory, relay: "never" });

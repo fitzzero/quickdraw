@@ -1248,6 +1248,8 @@ over three transports (design: sections 3, 8 and 10):
   events per minute per socket; channels, cancels and subscription events not
   counted); configure it with `rateLimit`, or turn it off with
   `rateLimit: false`. There is no default CORS origin: pass `cors`.
+  `peers: true` serves peer links between the clients of an app room
+  ([Peer links](#peer-links)).
   Socket.IO's connection state recovery is refused: `createServer` throws
   for `socket: { connectionStateRecovery }`, since a recovered socket would
   come back with its principal and rooms without authenticating again, so a
@@ -2807,6 +2809,157 @@ export function hasAudience(projectId: string): boolean {
   decided by asking every node once the socket left, so two sockets of one
   user leaving two nodes at the same moment may both see the other (a
   removal never misses: each node reports its own last socket).
+
+### Peer links
+
+Two players of one app room can link their clients: WebRTC data channels
+between them, or the server's relay when those cannot form (a browser
+behind a symmetric NAT, Node, a headless game client), with the same
+messages either way (design: section 12.5). A server opts in with
+`createServer({ peers: true })`: it forwards the signals that set a link
+up and relays its messages, only between two signed-in sockets of the
+room, and never reads what a link carries. A link has two channels: `rel`,
+ordered and reliable (state, chat), and `fast`, unordered and never resent
+(input, positions). The app tells players each other's socket ids, here
+with an event:
+
+<!-- example: apps/api/src/services/kits/peers.ts#service -->
+
+```ts
+// on a server created with peers: true, which forwards the links' signals and relays their messages
+export const matchService = qd.defineService(match, {
+  methods: {
+    enterMatch: {
+      access: "authenticated",
+      handler: ({ input, ctx }) => {
+        const room = `match:${input.matchId}`;
+        const joined = ctx.rooms.join(room);
+        if (joined && ctx.socketId !== undefined) {
+          // the socket's own id, which a peer links to
+          ctx.rooms.emit(room, match, "playerJoined", {
+            matchId: input.matchId,
+            userId: ctx.principal.userId,
+            socketId: ctx.socketId,
+          });
+        }
+        return joined;
+      },
+    },
+  },
+});
+```
+
+<!-- example: apps/web/src/components/kits/MatchLinks.tsx#hook -->
+
+```tsx
+function track(links: Map<string, PeerLink>, link: PeerLink, onMove: { current: OnMove }): void {
+  links.set(link.peer, link);
+  link.on("message", (data) => {
+    // a peer's message is its word, never checked by the server: parse it as any input
+    const move = moveSchema.safeParse(data);
+    // userId: the peer's user, as the server named it (known once the link is open)
+    if (move.success && link.userId !== undefined) {
+      onMove.current(link.userId, move.data);
+    }
+  });
+  link.on("close", () => links.delete(link.peer));
+}
+
+// each player of a match linked to every other: send a move to all of them, hear theirs
+export function useMatchLinks(matchId: string, onMove: OnMove): (move: Move) => void {
+  const { connection } = useQuickdraw();
+  const room = `match:${matchId}`;
+  const [links] = useState(() => new Map<string, PeerLink>());
+  const heard = useRef(onMove);
+  useEffect(() => {
+    heard.current = onMove;
+  });
+  // on every connection: a link lives as long as its socket, and a reconnect is a new socket
+  useJoin(qd.match.enterMatch, { matchId });
+  // a player who joins later: this side offers (when both offer, the link settles who answers)
+  qd.match.playerJoined.useEvent((player) => {
+    const self = connection.socket.id;
+    if (player.matchId === matchId && player.socketId !== self && !links.has(player.socketId)) {
+      track(links, createPeerLink(connection, { room, to: player.socketId, offerer: true }), heard);
+    }
+  });
+  // the players here before: they offer, this side answers
+  useEffect(
+    () =>
+      onPeerRequest(connection, (request) => {
+        if (request.room === room) {
+          track(links, request.accept(), heard);
+        }
+      }),
+    [connection, room, links],
+  );
+  useEffect(
+    () => () => {
+      for (const link of links.values()) {
+        link.close();
+      }
+    },
+    [connection, room, links],
+  );
+  // direct when WebRTC connects, the server's relay when it cannot; fast: unordered, never resent
+  return (move) => {
+    for (const link of links.values()) {
+      link.send("fast", move);
+    }
+  };
+}
+```
+
+- `createPeerLink(connection, { room, to, offerer })` (from `./client`,
+  React-free) opens a link to socket `to` in app room `room`. One side
+  offers; when both do (each heard of the other at once), the side whose
+  socket id sorts after the other's answers instead.
+  `onPeerRequest(connection, listener)` hears a socket of the room that
+  signals this one with no link yet (`{ room, from, userId }`):
+  `request.accept(options?)` answers with a link, `request.reject()`
+  refuses it, and a request nobody answers is dropped after 15 s.
+- A link has `state` (`connecting`, `open`, `closed`), `path` (`direct` or
+  `relay`), `peer` and `userId` (the peer's socket and user, as the server
+  named them), `on("open" | "message" | "state" | "close", listener)` and
+  `close()`, which tells the peer. `send(label, data)` takes any JSON value
+  of at most 64 KiB as UTF-8 JSON (a `RangeError` above) and returns false
+  when it dropped it: the link is not open, `fast` is backed up, or the
+  relay's rate is spent (`stats` counts what was sent, received and
+  dropped). `closeReason` says why it closed: `closed` (this side), `bye`
+  (the peer closed it, or left the room, was taken out of it or
+  disconnected: the server says so at once), `left` (this socket left the
+  room), `disconnected` (a link lives as long as its socket: open it again
+  after a reconnect), `timeout` (nothing opened within 15 s), `lost`
+  (nothing heard for 8 s), `failed`, `refused` (the server refused a
+  signal) or `unsupported` (a server without `peers`).
+- The direct path comes first, over the platform's `RTCPeerConnection`
+  (`peerConnection` takes another, such as react-native-webrtc's;
+  `iceServers` defaults to Google's and Cloudflare's public STUN servers,
+  with no TURN). The relay takes over when ICE fails, when the direct path
+  does not open within 5 s or drops after it opened (`rel` messages in
+  flight on it may be lost: the link emits `state`, so the app can
+  resync), and at once on a side without WebRTC or with
+  `relay: "always"`; `relay: "never"` closes the link instead. A link never
+  moves back from the relay.
+- `link.clock` reads the peer's clock from pings on `fast` (six quick ones
+  as the link opens, then one every 500 ms): `now()` (the peer's clock, in
+  its milliseconds), `offset`, `rtt`, `jitter` and `synced`.
+- The server's limits: a socket signals at most 64 peers at once
+  (`CONFLICT`) and 20 signals a second (a burst of 40; `RATE_LIMITED`).
+  It relays only to a peer the socket signalled, at most 120 messages a
+  second to each peer (a burst of 240) and 1 MiB a second in all (a burst
+  of 2 MiB), and drops the rest silently; the client keeps under these
+  itself, from the hello's `limits.peers`. A socket that keeps flooding
+  either is disconnected, as for channels. A socket that leaves a room, is
+  taken out of it or disconnects ends its links there: the server tells
+  each peer it signalled. Behind a cluster adapter the node that holds a
+  socket checks it, and the relay crosses nodes.
+- What a peer sends is the peer's word: the server checks who may link,
+  never what a link carries. Parse a link's messages as any input, and
+  check on the server whatever a client reports there.
+- Tests: `createLoopbackPeerLink({ ms, jitter, loss })` (from `./testing`)
+  links two ends in one process, with a delay and jitter per message and
+  loss on `fast` alone.
 
 ### Auth routes kit
 

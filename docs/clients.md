@@ -137,3 +137,18 @@ The server side of a game needs no handler to reach the room:
   send `playerLeft`. A socket that reconnects after `qd:rotate` is a new
   socket; the old one's disconnect is the player's last only when they had
   no other.
+
+Two players of a room can also link their clients
+([README: Peer links](../README.md#peer-links); the wire in
+[`protocol-v5.md`](protocol-v5.md), "Peer links"). On a server created with
+`peers: true`, `createPeerLink(connection, { room, to, offerer })` opens
+WebRTC data channels between the two clients, or uses the server's relay
+when those cannot form, with the same messages either way: `rel`, ordered
+and reliable, and `fast`, unordered and never resent, for input at a tick
+rate the server never handles. The server signals and relays only between
+two signed-in sockets of the room, and ends a player's links when they
+leave it, are taken out of it or disconnect. It never reads what a link
+carries: a game treats each message as untrusted input, and checks on the
+server whatever a client reports there. A link is the socket's, as a room
+is: open it again after every reconnect. The GDScript client has the same
+links (`peer_link`), on the relay where Godot has no WebRTC.

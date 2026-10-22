@@ -1,8 +1,10 @@
 // `createPeerLink(connection, options)` (RFC 0003 section 12.5): a link to
 // another socket of an app room, `options.to`, whose id the app learned (a
-// method's answer, `onPeerRequest`, the room's host). Exactly one side
-// offers. The link starts once the connection has a hello naming the
-// `"peer"` feature (`unsupported` otherwise), then:
+// method's answer, `onPeerRequest`, the room's host). One side offers;
+// when both do (each learned of the other at once), the side whose socket
+// id sorts after the other's answers instead. The link starts once the
+// connection has a hello naming the `"peer"` feature (`unsupported`
+// otherwise), then:
 //
 // - the offerer tries the direct path (`rtc.ts`) when the platform has
 //   WebRTC and `relay` is not `"always"`, and says `{ relay: true }`
@@ -54,7 +56,10 @@ export interface PeerLinkOptions {
   readonly room: string;
   /** The peer's socket id. */
   readonly to: string;
-  /** Whether this side makes the offer. Exactly one side of a link does. */
+  /**
+   * Whether this side makes the offer. One side of a link does; when both
+   * do, the side whose socket id sorts after the other's answers instead.
+   */
   readonly offerer: boolean;
   /**
    * STUN and TURN servers. Default Google's and Cloudflare's public STUN
@@ -92,7 +97,8 @@ interface Run {
   readonly hub: PeerHub;
   readonly room: string;
   readonly peer: string;
-  readonly offerer: boolean;
+  /** This side offers; it stops when both offered and it yields. */
+  offerer: boolean;
   readonly relay: RelayMode;
   readonly factory: Factory | undefined;
   readonly iceServers: PeerIceServer[];
@@ -216,6 +222,18 @@ function openDirect(run: Run, factory: Factory): DirectPath | undefined {
   return direct;
 }
 
+/**
+ * Whether this side, an offerer the peer sent an offer, answers it instead:
+ * both sides offered, each having learned of the other at once, and the
+ * side whose socket id sorts after the other's yields. The other ignores
+ * the offer and waits for the answer. A side that said `{ relay: true }`
+ * yields to nothing: the peer moves to the relay when it hears it.
+ */
+function yields(run: Run): boolean {
+  const self = run.hub.connection.socket.id;
+  return !run.relaySent && self !== undefined && self > run.peer;
+}
+
 /** The peer's session description: an answer to the offer, or an offer to answer. */
 function described(run: Run, sdp: PeerDescription): void {
   if (sdp.type === "answer") {
@@ -225,9 +243,12 @@ function described(run: Run, sdp: PeerDescription): void {
     return;
   }
   if (run.offerer) {
-    // Both sides offered: exactly one of them must.
-    run.core.fail("failed");
-    return;
+    if (!yields(run)) {
+      return;
+    }
+    closeDirect(run);
+    run.offerer = false;
+    run.heardOffer = true;
   }
   if (run.relaySent || run.direct !== undefined) {
     return;
@@ -359,7 +380,7 @@ function checkOptions(options: PeerLinkOptions): void {
   }
   if (typeof options.offerer !== "boolean") {
     throw new TypeError(
-      "createPeerLink: offerer must be true on one side of a link, false on the other",
+      "createPeerLink: offerer must be true on the side that offers, false on the other",
     );
   }
   if (options.relay !== undefined && !RELAY_MODES.includes(options.relay)) {

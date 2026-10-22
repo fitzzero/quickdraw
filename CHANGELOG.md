@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Peer links
+
+- **Two players of an app room can link their clients.** On a server
+  created with `createServer({ peers: true })` (off by default: its hello
+  then lists `"peer"` in `features` and the limits in `limits.peers`),
+  `createPeerLink(connection, { room, to, offerer })` on `./client` opens
+  WebRTC data channels to socket `to`: `rel`, ordered and reliable, and
+  `fast`, unordered and never resent. When those cannot form (ICE failed,
+  nothing open within 5 s, no WebRTC as in Node, `relay: "always"`), the
+  server relays the same messages. `onPeerRequest(connection, listener)`
+  answers a peer that links to this socket. A link has `send`, `on`,
+  `close`, `state`, `path`, `closeReason`, `stats` and a `clock` synced
+  from pings on `fast`. It works without React.
+- **Two new frames.** `qd:peer { room, to, sig }` carries a link's signals
+  (a description, a candidate, `relay`, `bye`), acknowledged when asked;
+  the receiver gets `{ room, from, userId, sig }`, with the sender's user
+  as the server knows it. `qd:relay [room, to, label, text]` carries a
+  link message through the server, volatile on `fast`, never acknowledged.
+  The server forwards both only between two signed-in sockets of the
+  frame's room, and never reads what a link carries.
+- **Limits.** A socket signals at most 64 peers at once (`CONFLICT`) and 20
+  signals a second (a burst of 40; `RATE_LIMITED` with `retryAfterMs`).
+  The relay takes messages of at most 64 KiB (UTF-8), only to a peer the
+  socket signalled, at most 120 a second to each peer (a burst of 240) and
+  1 MiB a second in all (a burst of 2 MiB), and drops the rest silently. A
+  socket that keeps flooding either frame is disconnected, as for channels.
+  The socket rate limiter counts `qd:peer` and not `qd:relay`.
+- **Leaving ends links.** A socket that leaves a room, is taken out of it
+  or disconnects ends its links there: the server sends each peer it
+  signalled a `bye`. Behind a cluster adapter the frames cross nodes, and
+  the node that holds the target socket checks it.
+- **Testing.** `createLoopbackPeerLink({ ms, jitter, loss })` on
+  `./testing` links two ends in one process, with a delay and jitter per
+  message and loss on `fast` alone.
+- **Godot.** The GDScript reference client gains `peer_link`,
+  `reject_peer`, the `peer_requested` signal and `socket_id`: WebRTC where
+  Godot has it (a web export, or the webrtc GDExtension), the relay
+  otherwise. `docs/protocol-v5.md` describes the frames, the link messages
+  and the timings for other clients.
+
 ## [5.1.1] - 2026-10-11
 
 ### Behavior changes for 5.1 apps

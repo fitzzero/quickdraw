@@ -340,8 +340,9 @@ func request(event: String, payload: Variant) -> Dictionary:
 
 
 ## Opens a link to socket `to` in app room `room`: both sockets in the room,
-## on a server created with `peers: true`. Exactly one side offers
-## (`offerer`). Options: `relay` ("auto": when WebRTC cannot connect;
+## on a server created with `peers: true`. One side offers (`offerer`);
+## when both do, the side whose socket id sorts after the other's answers
+## instead. Options: `relay` ("auto": when WebRTC cannot connect;
 ## "always"; "never"), `ice_servers` (default DEFAULT_ICE_SERVERS). The link
 ## uses WebRTC data channels where Godot has them (a web export, or the
 ## webrtc GDExtension) and the server's relay otherwise. Connect its signals
@@ -1059,6 +1060,13 @@ class PeerLink:
 			_add_candidate(sig.ice)
 		return true
 
+	## Whether this side, an offerer the peer sent an offer, answers it
+	## instead: both sides offered, and the side whose socket id sorts after
+	## the other's yields; the other ignores the offer. A side that said
+	## relay yields to nothing: the peer moves to the relay on hearing it.
+	func _yields() -> bool:
+		return not _relay_sent and _client.socket_id > peer
+
 	func _described(sdp: Dictionary) -> void:
 		var text := str(sdp.get("sdp", ""))
 		if sdp.get("type") == "answer":
@@ -1066,9 +1074,11 @@ class PeerLink:
 				_apply_remote("answer", text)
 			return
 		if offerer:
-			# Both sides offered: exactly one must.
-			_finish("failed", true)
-			return
+			if not _yields():
+				return
+			_close_direct()
+			offerer = false
+			_heard_offer = true
 		if _relay_sent or _pc != null:
 			return
 		if _can_direct() and _open_direct(Time.get_ticks_msec()):
