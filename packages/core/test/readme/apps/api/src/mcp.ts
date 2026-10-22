@@ -1,9 +1,10 @@
 // The README's MCP bridge examples.
 
 import { z } from "zod";
-import { verifySession } from "./auth";
+import { jwtSecret, sessions, verifySession } from "./auth";
 import { verifyAgentToken } from "./auth/agents";
 import { app, server } from "./index";
+import type { AppPrincipal } from "./quickdraw";
 import { projectService } from "./services/project";
 import { taskService } from "./services/task";
 
@@ -65,4 +66,33 @@ const projectAgents = createMcpRegistry({
 
 // beside the first registry, at a path of its own: GET /agents/tools, POST /agents/invoke
 app.use(createMcpHttpRouter({ registry: projectAgents, path: "/agents" }));
+// #endregion
+
+// #region signed-in
+import { requireSession, sessionOf } from "@fitzzero/quickdraw-core/server/auth";
+import { toToolResult } from "@fitzzero/quickdraw-core/server/mcp";
+
+// the app's own MCP route: its sessions sign the caller in, as an agent of their user
+const signedIn = requireSession(
+  { sessions, jwtSecret },
+  { loadPrincipal: (userId): AppPrincipal => ({ userId, kind: "agent" }) },
+);
+
+app.post("/assistant/:service/:method", signedIn, (req, res) => {
+  void (async () => {
+    const result = await registry.callMethod(req.params.service, req.params.method, req.body, {
+      // no bearer token: the call's queries share its user's lane
+      request: {
+        transport: "http",
+        sessionId: crypto.randomUUID(),
+        token: null,
+        headers: req.headers,
+        req,
+      },
+      // the registry's principal hook is not asked; the user's grants load as qd.caller's do
+      principal: sessionOf<AppPrincipal>(req).principal,
+    });
+    res.json(toToolResult(result));
+  })();
+});
 // #endregion

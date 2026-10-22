@@ -6,11 +6,13 @@
 // argument named. Here a method's tool call goes through the dispatcher with
 // transport `"mcp"`, so validation and access checks apply as for a socket
 // call, and its queries share a concurrency lane per caller (`session.ts`);
-// the transport says who is calling through `principal`, and `context` adds
-// the session's own fields to the handler's `ctx.mcp`. `bind` fills chosen
-// arguments from that principal instead of the agent, so an agent bound to
-// one task cannot name another in its calls, and a call that sends a bound
-// argument its tool does not fill is refused (`FORBIDDEN`).
+// the transport says who is calling through `principal` (or an app that
+// signed the caller in itself says it in the call's options, and the hook is
+// not asked), and `context` adds the session's own fields to the handler's
+// `ctx.mcp`. `bind` fills chosen arguments from that principal instead of
+// the agent, so an agent bound to one task cannot name another in its calls,
+// and a call that sends a bound argument its tool does not fill is refused
+// (`FORBIDDEN`).
 
 import { consoleLogger, type Logger } from "../../contract/logger";
 import { QuickdrawError } from "../../protocol/errors";
@@ -66,7 +68,9 @@ export interface McpRegistryOptions<
    * Without it every call is anonymous. An HTTP request's queries share the
    * lane of its bearer token: a hook that authenticates by anything else (a
    * cookie, an API key header) must refuse a request whose bearer token it
-   * does not verify, or a caller makes a lane per made-up token.
+   * does not verify, or a caller makes a lane per made-up token. A call
+   * whose options give `principal` (an app that signed the caller in
+   * itself) is not asked about.
    */
   readonly principal?: (
     request: McpRequest,
@@ -120,16 +124,18 @@ export interface McpRegistry {
   has(name: string): boolean;
   /**
    * Calls the tool `name` with the client's `args` in the session of
-   * `options.request`. Resolves with the tool's value or its failure (an
-   * unknown name is `NOT_FOUND`), after `options.respond` was given it.
-   * Never rejects.
+   * `options.request`, as `options.principal` when it is given. Resolves
+   * with the tool's value or its failure (an unknown name is `NOT_FOUND`),
+   * after `options.respond` was given it. Never rejects.
    */
   call(name: string, args: unknown, options: McpCallOptions): Promise<McpCallResult>;
   /**
    * Calls a method's tool by its service and method name with the method's
    * `input` as it is, without the tool's argument mapping: the shape 4.1's
-   * HTTP route took. Bound arguments are filled as for `call`. A method that
-   * is not a tool is `NOT_FOUND`.
+   * HTTP route took. Bound arguments are filled as for `call`, and
+   * `options.principal` says who calls as for `call`: an app's own MCP
+   * transport over it passes the caller it signed in. A method that is not
+   * a tool is `NOT_FOUND`.
    */
   callMethod(
     service: string,
@@ -265,7 +271,10 @@ function resolveRegistry(options: McpRegistryOptions<readonly AnyService[]>): Re
   };
 }
 
-/** Runs `run` in the session of `options.request`, or fails the call when the session cannot open. */
+/**
+ * Runs `run` in the session of `options.request`, as `options.principal`
+ * when it is given, or fails the call when the session cannot open.
+ */
 async function inSession(
   settings: RegistrySettings,
   name: string,
@@ -274,7 +283,7 @@ async function inSession(
 ): Promise<McpCallResult> {
   let session: McpSession;
   try {
-    session = await openSession(settings, options.request);
+    session = await openSession(settings, options);
   } catch (error) {
     return settle(settings, options, failure(settings, error, name));
   }
