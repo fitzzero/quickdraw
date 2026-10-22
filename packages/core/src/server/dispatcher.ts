@@ -18,7 +18,7 @@ import {
 } from "./pipeline/settings";
 import { createRegistry, type Registry } from "./registry";
 import { servedProblem, type AnyService, type ServedContext, type Service } from "./service";
-import type { DbOf, Principal, PrincipalOf } from "./types";
+import type { DbOf, McpContext, McpContextOf, Principal, PrincipalOf } from "./types";
 
 export type { Presence, ServerRooms, Service, StreamHandle };
 
@@ -38,6 +38,11 @@ export type PrincipalOfServices<S extends readonly AnyService[]> = [S[number]] e
 export type ContractOfServices<S extends readonly AnyService[]> = [S[number]] extends [never]
   ? AnyContract
   : S[number]["contract"];
+
+/** The type of `ctx.mcp` for the services of `S`: their app's `QuickdrawTypes["mcp"]`. */
+export type McpContextOfServices<S extends readonly AnyService[]> = [S[number]] extends [never]
+  ? McpContext
+  : McpContextOf<TypesOf<S>>;
 
 /**
  * The options `createDispatcher` and `createServer` share: the services and

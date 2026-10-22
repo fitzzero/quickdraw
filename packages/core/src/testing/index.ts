@@ -7,6 +7,7 @@ export {
   createTestApp,
   type TestApp,
   type TestAppOptions,
+  type TestCallerOptions,
   type TestConnection,
 } from "./createTestApp";
 export {

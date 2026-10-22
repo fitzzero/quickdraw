@@ -12,6 +12,7 @@ import { prisma } from "@project/db";
 import { beforeEach, expect, it } from "vitest";
 import { db } from "../db";
 import type { AppPrincipal } from "../quickdraw";
+import { taskService as assigningService } from "./examples/handlers";
 import { projectService } from "./project";
 import { taskService } from "./task";
 
@@ -54,6 +55,21 @@ it("sends a rename to the other members' boards", async () => {
   await call.taskService.get({ id: taskId });
   await app.as(ada).taskService.rename({ id: taskId, title: "Ship it" }); // in process
   await app.frames.waitFor({ event: "qd:e", userId: bo.userId }); // the entity frame bo receives
+  await app.close();
+});
+// #endregion
+
+// #region token
+it("lets an agent's token assign tasks only with the tasks scope", async () => {
+  // the handler example's assign, which reads the token's scopes from ctx.mcp
+  const app = await createTestApp({ services: [assigningService], db });
+  const agent: AppPrincipal = { ...ada, kind: "agent", serviceAccess: { taskService: "Moderate" } };
+  const input = { id: taskId, assigneeId: bo.userId };
+  // in process, as an MCP tool call arrives: transport "mcp", and the context hook's fields as ctx.mcp
+  const reader = app.as(agent, { transport: "mcp", mcp: { scopes: [] } });
+  await expect(reader.taskService.assign(input)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  const writer = app.as(agent, { transport: "mcp", mcp: { scopes: ["tasks"] } });
+  expect(await writer.taskService.assign(input)).toMatchObject({ assigneeId: bo.userId });
   await app.close();
 });
 // #endregion

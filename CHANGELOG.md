@@ -69,6 +69,19 @@ All notable changes to this project will be documented in this file.
   direct call now refuses it through `ctx.services` too. `qd.caller` and
   the other in-process callers are unchanged.
 
+### Testing
+
+- **`app.as(principal, { transport, mcp })` calls in process as another
+  transport would.** `app.as(principal)` always called with transport
+  `"internal"` and no `ctx.mcp`, so a test of a guard that reads either
+  had to build dispatcher requests by hand. `transport` takes `"internal"`
+  (the default), `"http"` or `"mcp"`, and `mcp` is the call's `ctx.mcp`,
+  typed by the app's `QuickdrawTypes["mcp"]` (`TestCallerOptions` on
+  `./testing`). A socket's transport is a `TypeError`: `app.connect` calls
+  over a real socket. Each call is still dispatched and recorded once, so
+  budgets count it as before. Bound arguments and the MCP registry's hooks
+  are tested through `registry.callMethod`.
+
 ### Codemod
 
 - **A method object no longer collides with a binding of its name.** A

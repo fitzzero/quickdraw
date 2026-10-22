@@ -2,11 +2,12 @@
 // recorder (`frames.ts`): strict development warnings when asked, the
 // counters `expectBudget` measures a step with (`budget.ts`: the calls'
 // completion records, the tracked client's statements, the bytes written to
-// sockets), and an in-process caller that reports its replies' size.
+// sockets), and an in-process caller that reports its replies' size and can
+// call as another transport, with a `ctx.mcp`.
 
 import { consoleLogger, type Logger } from "../contract/logger";
 import { utf8ByteLength } from "../protocol/utf8";
-import { createCaller } from "../server/caller";
+import { createCaller, type CallerSettings } from "../server/caller";
 import { STRICT_WARNINGS } from "../server/devWarnings";
 import type { CallRecord } from "../server/pipeline/metrics";
 import { toCallReply, type DispatchRequest, type DispatchResult } from "../server/pipeline/request";
@@ -115,14 +116,30 @@ function replySize(result: DispatchResult): number | undefined {
   }
 }
 
+/** How the calls of a {@link measuredCaller} arrive. */
+export interface MeasuredCallerSettings {
+  /** The transport each call arrives as. Default `"internal"`. */
+  readonly transport?: DispatchRequest["transport"];
+  /** The `ctx.mcp` each call carries. */
+  readonly mcp?: CallerSettings["mcp"];
+}
+
 /**
  * An in-process caller acting as `principal`, through `call`, whose calls
  * report their reply's size (as JSON) in their completion records, as a
- * transport's do.
+ * transport's do, and arrive as `settings.transport` with `settings.mcp`.
+ * One wrapper sets both on each request, so each call is dispatched, and
+ * recorded for `expectBudget`, once.
  */
 export function measuredCaller(
   call: (request: DispatchRequest) => Promise<DispatchResult>,
   principal: Parameters<typeof createCaller>[1],
+  settings: MeasuredCallerSettings = {},
 ): object {
-  return createCaller(() => (request) => call({ ...request, respond: replySize }), principal);
+  const transport = settings.transport ?? "internal";
+  return createCaller(
+    () => (request) => call({ ...request, transport, respond: replySize }),
+    principal,
+    settings.mcp === undefined ? {} : { mcp: settings.mcp },
+  );
 }
