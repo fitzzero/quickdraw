@@ -4,7 +4,7 @@
 // services whose `adminMeta` answers the user, by display name; a mock
 // client does the same from its stubs.
 
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ADMIN_METHODS, type AdminServiceMeta } from "../index";
 import { projectContract, projectService } from "../server/emit/__tests__/live";
@@ -104,6 +104,49 @@ describe("adminOf", () => {
       client: qd,
     });
     await view.findByText(/^\d+ rows$/);
+  });
+
+  it("shows the row a write returned once setData put it in adminGet's cache, with no new read", async () => {
+    const records: CallRecord[] = [];
+    const app = await createTestApp({
+      services: [projectService, defineTaskService({})],
+      db: kit.harness().db,
+      onCall: (record) => records.push(record),
+    });
+    kit.track(app as unknown as TestApp);
+    const { adminGet, adminUpdate } = adminOf(qd, "task");
+    if (adminGet === undefined || adminUpdate === undefined) {
+      throw new Error("the fixture's contract exposes adminGet and adminUpdate");
+    }
+    const RowPanel = ({ id }: { readonly id: string }) => {
+      const { data: row } = adminGet.useQuery({ id });
+      const update = adminUpdate.useMutation({
+        // The kit's reads are not live: the panel shows the row the write returned.
+        onSuccess: (written) => {
+          adminGet.setData({ id: written.id }, written);
+        },
+      });
+      return (
+        <>
+          <p>{typeof row?.title === "string" ? `title ${row.title}` : "loading"}</p>
+          <button type="button" onClick={() => update.mutate({ id, data: { title: "Renamed" } })}>
+            rename
+          </button>
+        </>
+      );
+    };
+    const view = await renderWithQuickdraw(<RowPanel id={kit.board().t1} />, {
+      app,
+      as: serviceAdmin(kit.board().ed),
+      client: qd,
+    });
+    await view.findByText("title T1");
+    fireEvent.click(view.getByText("rename"));
+    await view.findByText("title Renamed");
+    expect(records.map((record) => [record.method, record.outcome])).toEqual([
+      ["adminGet", "ok"],
+      ["adminUpdate", "ok"],
+    ]);
   });
 });
 

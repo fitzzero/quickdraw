@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Client
+
+- **`AdminQueryMember` gains `setData`**, typed as the typed client's: the
+  query members `adminOf(qd, key)` returns always had it at run time, but a
+  screen typed through `AdminScreen` needed a cast to call it. A row panel
+  shows the row `adminUpdate` or `adminCreate` returned with
+  `admin.adminGet?.setData({ id: row.id }, row)`, with no new read.
+
 ### Codemod
 
 - **A method object no longer collides with a binding of its name.** A
