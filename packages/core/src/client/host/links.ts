@@ -220,20 +220,23 @@ function connect(links: LinksState, state: RoomState): void {
 
 /**
  * A link to `host` closed: the next to it waits, and doubles the wait after
- * it. With feeds still to serve, links again then, while the room has a host.
+ * it. With feeds to serve then (a feed held during the wait included), links
+ * again, while the room has a host.
  */
 function retryLater(links: LinksState, state: RoomState, host: string): void {
   const wait = state.retryMs;
   state.backoff = { host, until: Date.now() + wait };
   state.retryMs = Math.min(MAX_RETRY_MS, wait * 2);
-  if (state.feeds.size === 0 || links.directory.of(state.room) === undefined) {
+  if (links.directory.of(state.room) === undefined) {
     return;
   }
   clearTimeout(state.retry);
   state.retry = setTimeout(() => {
     state.retry = undefined;
     state.backoff = undefined;
-    connect(links, state);
+    if (state.feeds.size > 0) {
+      connect(links, state);
+    }
   }, wait);
 }
 
@@ -291,9 +294,11 @@ function createLinks(connection: QuickdrawConnection): LinksState & HostLinks {
       const key = feedKey(feed.service, feed.stream, feed.scope);
       const entry = { feed, chunks: undefined };
       state.feeds.set(key, entry);
+      const { way } = state;
       connect(links, state);
-      if (state.way !== undefined) {
-        subscribeOn(state.way, feed);
+      // A way `connect` opened (the in-process one) subscribed every feed already.
+      if (way !== undefined && state.way === way) {
+        subscribeOn(way, feed);
       }
       return () => {
         if (state.feeds.get(key) === entry) {

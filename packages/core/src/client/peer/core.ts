@@ -261,7 +261,7 @@ function linkOf(core: Core): PeerLink {
     },
     send: (label: PeerLabel, data: unknown) => send(core, label, data),
     on<E extends keyof PeerLinkEvents>(event: E, listener: PeerLinkEvents[E]): () => void {
-      if (!(event in listeners)) {
+      if (!Object.hasOwn(listeners, event)) {
         throw new TypeError(`PeerLink.on: no event "${String(event)}"`);
       }
       listeners[event].add(listener);

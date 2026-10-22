@@ -232,17 +232,21 @@ function chunksOf(
   const chunks: unknown[][] = [[]];
   let size = overhead;
   for (const item of items) {
-    const bytes = messageBytes(JSON.stringify(item) ?? "null") + 1;
+    // The first item of a chunk takes no comma, as `push` measures it alone.
+    const bytes = messageBytes(JSON.stringify(item) ?? "null");
     if (overhead + bytes > max) {
       return undefined;
     }
     const chunk = chunks.at(-1) ?? [];
-    if (chunk.length > 0 && size + bytes > max) {
+    if (chunk.length === 0) {
+      chunk.push(item);
+      size += bytes;
+    } else if (size + 1 + bytes > max) {
       chunks.push([item]);
       size = overhead + bytes;
     } else {
       chunk.push(item);
-      size += bytes;
+      size += 1 + bytes;
     }
   }
   return chunks;

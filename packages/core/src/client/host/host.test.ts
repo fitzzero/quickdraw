@@ -206,6 +206,25 @@ describe("a host's runtime", () => {
     }
   });
 
+  it("seeds an item that push took at the message limit, in a chunk of its own", async () => {
+    const { runtime } = hosting({}, 200);
+    const fits = (pad: string) => ({ tick: 1, players: [pad] });
+    const alone = (item: unknown) =>
+      new TextEncoder().encode(JSON.stringify([6, "gameService", "world", WORLD_ID, [item], false]))
+        .length;
+    const pad = "x".repeat(200 - alone(fits("")));
+    expect(alone(fits(pad))).toBe(200);
+    runtime.push("world", WORLD_ID, snapshot(0));
+    runtime.push("world", WORLD_ID, fits(pad));
+    const bo = await peerOf(runtime, "socket-bo", "bo");
+    bo.send("rel", [4, "gameService", "world", WORLD_ID]);
+    await landed();
+    expect(bo.heard.map(([message]) => [message[0], message[4], message[5]])).toEqual([
+      [6, [snapshot(0)], false],
+      [6, [fits(pad)], true],
+    ]);
+  });
+
   it("refuses a subscribe to another room's scope or to a stream it does not serve", async () => {
     const { runtime } = hosting();
     const bo = await peerOf(runtime, "socket-bo", "bo");
@@ -527,6 +546,36 @@ describe("a host and its peers against a server", () => {
     await vi.waitFor(
       () => {
         move();
+        expect(offers()).toHaveLength(2);
+      },
+      { timeout: 3000, interval: 50 },
+    );
+  });
+
+  it("links again for a feed held while the next link waits, with no message sent", async () => {
+    const { app, hostConnection } = await hostedWorld();
+    // The host's client refuses every link.
+    onPeerRequest(hostConnection, (request) => {
+      request.reject();
+    });
+    const peer = await player(app, bob);
+    await until(() => hostOf(peer, WORLD) === hostConnection.socket.id);
+    const offers = () =>
+      app
+        .frames({ event: "qd:peer", socketId: hostConnection.socket.id })
+        .filter((frame) => (frame.data as { readonly sig?: { relay?: true } }).sig?.relay === true);
+    // A message makes the first link, with no feed held; the host refuses it.
+    hostLinksOf(peer).send(WORLD, "gameService", "move", { ...world, dx: 1, dy: 0 });
+    await app.frames.waitFor({ event: "qd:peer", socketId: peer.socket.id });
+    await until(() => offers().length === 1);
+    // The peer's link hears the host's bye and closes.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+    // A feed held during the wait links again once the wait is over.
+    hostLinksOf(peer).subscribe(WORLD, feed());
+    await vi.waitFor(
+      () => {
         expect(offers()).toHaveLength(2);
       },
       { timeout: 3000, interval: 50 },
