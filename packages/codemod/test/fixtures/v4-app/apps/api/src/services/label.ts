@@ -28,16 +28,21 @@ export class LabelService extends BaseService<
   private namer: LabelNamer = (projectId) => `label-${projectId}`;
   // How a name is tidied, for good
   private readonly tidy = (name: string): string => name.trim();
-  // How a name becomes a key, which nothing swaps
-  private slug = (name: string): string => name.toLowerCase();
+  // How a name becomes a key, typed by its field, which nothing swaps
+  private slug: (name: string) => string = (name) => name.toLowerCase();
+  // How many labels a project may have: a default the constructor's options may change
+  private readonly limit: number = 100;
 
   constructor(
     private readonly prisma: PrismaClient,
-    options: { onChange?: LabelListener } = {},
+    options: { onChange?: LabelListener; limit?: number } = {},
   ) {
     super({ serviceName: "labelService" });
     this.setDelegate(prisma.label);
     this.onChange = options.onChange;
+    if (options.limit !== undefined) {
+      this.limit = options.limit;
+    }
     this.room = this.getRoomName("all");
 
     this.defineMethod("getLabel", "Read", async (payload) => {
@@ -112,6 +117,11 @@ export class LabelService extends BaseService<
     return { name, key: this.slug(name) };
   }
 
+  /** Whether a project with `count` labels may get another. */
+  public canAddLabel(count: number): boolean {
+    return count < this.limit;
+  }
+
   // The base class does the leaving; this only tells the listener
   public override unsubscribeSocket(socket: QuickdrawSocket): void {
     super.unsubscribeSocket(socket);
@@ -136,4 +146,9 @@ export class LabelService extends BaseService<
   public async removeLabel(id: string): Promise<boolean> {
     return await this.delete(id);
   }
+}
+
+/** Tells a listener a label changed, if there is one: a parameter of a field's name, outside the class. */
+export function notifyLabel(onChange: LabelListener | undefined, labelId: string): void {
+  onChange?.(labelId);
 }

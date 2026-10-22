@@ -5,7 +5,11 @@
 // a register function named after its method is no clash (the run replaces
 // it), a handler's local of the method's name is renamed like any binding
 // that would shadow the object, and an import the module re-exports keeps
-// its name while the object takes `<name>Method`.
+// its name while the object takes `<name>Method`. Hoisted members get the
+// same care: a binding below module scope where a member lands (a module
+// function's parameter beside the member's import, a handler's local of the
+// member it reads through the service) is renamed, the member keeping its
+// name.
 
 import { describe, expect, it } from "vitest";
 import { Project } from "ts-morph";
@@ -191,16 +195,22 @@ export class TaskService extends TaskServiceCore {
 `,
 };
 
-describe("a split service whose files bind its method objects' names", () => {
+/** A project of the shared types and `files` (paths under the api's src), migrated in memory. */
+function migrated(files: Record<string, string>): Project {
   const project = new Project({
     useInMemoryFileSystem: true,
     compilerOptions: { strict: true, paths: { "@project/shared": [`${SHARED}/index.ts`] } },
   });
   project.createSourceFile(`${SHARED}/index.ts`, SHARED_TYPES);
-  for (const [path, text] of Object.entries(SERVICE)) {
+  for (const [path, text] of Object.entries(files)) {
     project.createSourceFile(`${API}/${path}`, text);
   }
   migrate(createContext(project, LAYOUT));
+  return project;
+}
+
+describe("a split service whose files bind its method objects' names", () => {
+  const project = migrated(SERVICE);
   const text = (path: string): string =>
     project.getSourceFileOrThrow(`${API}/services/task/${path}`).getFullText();
 
@@ -241,5 +251,78 @@ describe("a split service whose files bind its method objects' names", () => {
     expect(rename).toContain("id: await renameTask(input.id, input.title),");
     expect(text("index.ts")).toContain('import { renameTaskMethod } from "./methods/rename";');
     expect(text("index.ts")).toMatch(/^ {4}renameTask: renameTaskMethod,$/mu);
+  });
+});
+
+/** A split service whose files outside its classes bind the name of a field its code reads. */
+const MEMBERS = {
+  "services/task/service-core.ts": `
+import { BaseRpcService } from "@fitzzero/quickdraw-core/server";
+import type { TaskServiceMethods } from "@project/shared";
+
+export abstract class TaskServiceCore extends BaseRpcService<TaskServiceMethods> {
+  public limit = 100;
+
+  constructor() {
+    super({ serviceName: "taskService" });
+  }
+}
+`,
+  "services/task/methods/count.ts": `
+import type { TaskService } from "../index";
+
+export function registerCount(service: TaskService): void {
+  service.defineMethod("countTasks", "Read", async (payload) => {
+    const limit = service.limit;
+    return { count: Math.min(payload.projectId.length, limit) };
+  });
+}
+`,
+  "services/task/index.ts": `
+import { TaskServiceCore } from "./service-core";
+import { registerCount } from "./methods/count";
+
+export class TaskService extends TaskServiceCore {
+  constructor() {
+    super();
+    registerCount(this);
+  }
+
+  public underLimit(count: number): boolean {
+    return count < this.limit;
+  }
+}
+
+export function clamp(count: number, limit: number): number {
+  return Math.min(count, limit);
+}
+`,
+};
+
+describe("a hoisted field whose name code outside its class binds below module scope", () => {
+  const project = migrated(MEMBERS);
+  const text = (path: string): string =>
+    project.getSourceFileOrThrow(`${API}/services/task/${path}`).getFullText();
+
+  it("keeps its name, and nothing is declared twice or read before it is", () => {
+    expect(text("service-core.ts")).toMatch(/^export const limit = 100;$/mu);
+    const clashes = project
+      .getPreEmitDiagnostics()
+      .filter((diagnostic) => [2300, 2440, 2448, 2451].includes(diagnostic.getCode()));
+    expect(clashes.map((diagnostic) => diagnostic.getMessageText())).toEqual([]);
+  });
+
+  it("renames a parameter of a module function beside its import <name>Impl (Conveyor's reviewCatchUp)", () => {
+    expect(text("index.ts")).toContain('import { limit } from "./service-core";');
+    expect(text("index.ts")).toContain("return count < limit;");
+    expect(text("index.ts")).toContain(
+      "export function clamp(count: number, limitImpl: number): number {\n  return Math.min(count, limitImpl);",
+    );
+  });
+
+  it("renames a handler's local that would capture what it read through the service", () => {
+    expect(text("methods/count.ts")).toContain(
+      "const limitImpl = limit;\n    return { count: Math.min(input.projectId.length, limitImpl) };",
+    );
   });
 });

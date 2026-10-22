@@ -333,13 +333,35 @@ describe("a 4.x service class's members (label.ts)", () => {
       "// How a name is tidied, for good\nconst tidy = (name: string): string => name.trim();",
     );
     expect(label()).toContain(
-      "// How a name becomes a key, which nothing swaps\nconst slug = (name: string): string => name.toLowerCase();",
+      "// How a name becomes a key, typed by its field, which nothing swaps\nconst slug: (name: string) => string = (name) => name.toLowerCase();",
     );
+  });
+
+  it("keeps a function field's type on its const, which its untyped parameters rely on", () => {
+    expect(label()).toContain(
+      "const slug: (name: string) => string = (name) => name.toLowerCase();",
+    );
+  });
+
+  it("writes a readonly field its constructor overwrites as a marked let, which the setup function sets", () => {
+    expect(label()).toMatch(
+      /\[this\] 4\.x instance field limit of LabelService: now module state[^\n]*\nlet limit: number = 100;/u,
+    );
+    expect(label()).toContain(
+      "  if (options.limit !== undefined) {\n    limit = options.limit;\n  }",
+    );
+  });
+
+  it("renames a binding outside the class that would shadow a hoisted field <name>Impl, the field keeping its name", () => {
+    expect(label()).toContain(
+      "export function notifyLabel(onChangeImpl: LabelListener | undefined, labelId: string): void {\n  onChangeImpl?.(labelId);",
+    );
+    expect(label()).toMatch(/^let onChange: LabelListener \| undefined;$/mu);
   });
 
   it("keeps the constructor's assignments in a setup function that takes the parameters they use", () => {
     expect(label()).toContain(
-      "export function setUpLabelService(options: { onChange?: LabelListener } = {}): void {\n  onChange = options.onChange;",
+      "export function setUpLabelService(options: { onChange?: LabelListener; limit?: number } = {}): void {\n  onChange = options.onChange;",
     );
   });
 

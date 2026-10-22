@@ -76,7 +76,8 @@ It expects the quickdraw template's layout; the options move each part:
   constructor's other code, the values it gave fields included, an
   exported `setUp<Service>(...)` taking the constructor's parameters it
   uses, marked; only the Prisma client's field and a field holding another
-  service go. A call of the 4.x base class
+  service go. A binding outside the class that would shadow a member
+  hoisted beside it becomes `<name>Impl`. A call of the 4.x base class
   (`super.x(...)`) is dropped under a marker that names it: `super` outside a
   class does not parse. A `DTO | null` mutation of one row answers
   `"entity"`, marked (a tracked write throws `NOT_FOUND` rather than

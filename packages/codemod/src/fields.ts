@@ -21,15 +21,18 @@ export function isFunctionProperty(property: PropertyDeclaration): boolean {
 
 /**
  * Whether a function field stays one function for good, hoisted as a `const`:
- * it is `readonly`, or nothing writes it after its initializer. One the class
- * replaces (`this.provider = next`, its constructor included) is module state,
- * a `let` like any other field.
+ * nothing writes it after its initializer. One the class replaces
+ * (`this.provider = next`, its constructor included, which may write even a
+ * `readonly` one) is module state, a `let` like any other field.
  */
 export function isFixedFunction(property: PropertyDeclaration, service: ServiceModel): boolean {
-  return (
-    isFunctionProperty(property) &&
-    (property.isReadonly() || !reassigned(service, property.getName()))
-  );
+  return isFunctionProperty(property) && !reassigned(service, property.getName());
+}
+
+/** A field's type annotation as it follows the name of its binding (`: T`), or nothing. */
+export function typeAnnotation(property: PropertyDeclaration): string {
+  const type = property.getTypeNode()?.getText();
+  return type === undefined ? "" : `: ${type}`;
 }
 
 /** Whether a field holds another 4.x service (`chatService: ChatService | undefined`). */

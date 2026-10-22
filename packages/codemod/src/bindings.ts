@@ -7,7 +7,7 @@
 // same name in another scope keeps its own.
 
 import { type Identifier, Node, type SourceFile, type Statement, SyntaxKind } from "ts-morph";
-import type { Edit } from "./text";
+import { applyEdits, type Edit } from "./text";
 
 /** Whether `identifier` declares a binding (a variable, a parameter, an import, a function or class). */
 export function declaresBinding(identifier: Identifier): boolean {
@@ -257,4 +257,56 @@ export function renameEdits(declaration: Identifier, to: string): Edit[] {
       end: identifier.getEnd(),
       text: renamedText(identifier, to),
     }));
+}
+
+/**
+ * Renames of bindings, each to a name free in its file, computed on the files
+ * as they are and written into them together by `apply`.
+ */
+export class Renames {
+  readonly edits = new Map<SourceFile, Edit[]>();
+  private readonly taken = new Map<SourceFile, Set<string>>();
+  private readonly renamed = new Set<Identifier>();
+  private readonly nested = new Map<SourceFile, Map<string, Identifier[]>>();
+
+  /** The bindings of `name` below the module scope of `file`, read once per file: no file changes before `apply`. */
+  nestedIn(file: SourceFile, name: string): Identifier[] {
+    const byName = this.nested.get(file) ?? nestedBindings(file);
+    this.nested.set(file, byName);
+    return byName.get(name) ?? [];
+  }
+
+  /** The names no rename may take in `file`, `names` added: the run writes them there, or a rename took them. */
+  reserve(file: SourceFile, names: readonly string[] = []): Set<string> {
+    const taken = this.taken.get(file) ?? new Set<string>();
+    this.taken.set(file, taken);
+    for (const name of names) {
+      taken.add(name);
+    }
+    return taken;
+  }
+
+  /** Renames the binding `binding` declares (once) to `base`, or the first free name after it. */
+  rename(binding: Identifier, base: string): void {
+    if (this.renamed.has(binding)) {
+      return;
+    }
+    this.renamed.add(binding);
+    const file = binding.getSourceFile();
+    const taken = this.reserve(file);
+    const to = freeName(file, base, taken);
+    taken.add(to);
+    const edits = renameEdits(binding, to);
+    if (edits.length > 0) {
+      this.edits.set(file, [...(this.edits.get(file) ?? []), ...edits]);
+    }
+  }
+
+  /** Writes the renames into their files; whether there were any. */
+  apply(): boolean {
+    for (const [file, edits] of this.edits) {
+      file.replaceWithText(applyEdits(file.getFullText(), 0, edits));
+    }
+    return this.edits.size > 0;
+  }
 }

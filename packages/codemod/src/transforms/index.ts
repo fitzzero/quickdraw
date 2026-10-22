@@ -5,6 +5,7 @@ export { deleteWrappers, migrateClient, queriedMethods } from "./client";
 export { writeContracts } from "./contracts";
 export { writeClientInfra, writeServerInfra } from "./infra";
 export { markLeftovers } from "./leftovers";
+export { freeMemberNames } from "./memberNames";
 export { freeMethodNames } from "./methodNames";
 export { rewriteReferences } from "./references";
 export { markTestClasses, migrateServices } from "./services";

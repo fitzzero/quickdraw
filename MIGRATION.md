@@ -120,7 +120,9 @@ faithfully. What it does:
   parameters it uses, marked: call it once where the server starts, or
   move each part. Only the Prisma client's field goes (it is `db`), and a
   field holding another 4.x service, whose uses are marked
-  (`ctx.services` replaces it). A call of the 4.x base class
+  (`ctx.services` replaces it). A binding outside the class that would
+  shadow a member hoisted beside it (a module function's parameter of its
+  name) becomes `<name>Impl`. A call of the 4.x base class
   (`super.unsubscribe(...)`) is dropped under a marker naming it, since
   `super` outside a class does not parse. A split service's method modules
   keep their files, with typed method objects (see
