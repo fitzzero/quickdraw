@@ -23,7 +23,8 @@ function renamed(
   pick: "module" | "nested" = "module",
 ): string {
   const file = new Project({ useInMemoryFileSystem: true }).createSourceFile("/m.ts", text);
-  const [binding] = pick === "module" ? moduleBindings(file, name) : nestedBindings(file, name);
+  const [binding] =
+    pick === "module" ? moduleBindings(file, name) : (nestedBindings(file).get(name) ?? []);
   if (binding === undefined) {
     throw new Error(`no binding of ${name}`);
   }
@@ -86,9 +87,11 @@ describe("renameEdits", () => {
       "",
     ].join("\n");
     const file = new Project({ useInMemoryFileSystem: true }).createSourceFile("/m.ts", text);
-    expect(nestedBindings(file, "count").map((binding) => binding.getStartLineNumber())).toEqual([
-      3, 6,
-    ]);
+    expect(
+      nestedBindings(file)
+        .get("count")
+        ?.map((binding) => binding.getStartLineNumber()),
+    ).toEqual([3, 6]);
     expect(renamed(text, "count", "countImpl", "nested")).toContain(
       "  const countImpl = 1;\n  return countImpl;\n",
     );

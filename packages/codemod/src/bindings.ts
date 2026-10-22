@@ -132,22 +132,27 @@ function bindsAtRuntime(identifier: Identifier): boolean {
 }
 
 /**
- * The identifiers that bind `name` below module scope, where they shadow a
- * binding of the module: a function's parameter or local, a destructured
- * name, a nested function or class.
+ * The identifiers that bind a name below module scope, where they shadow a
+ * binding of the module (a function's parameter or local, a destructured
+ * name, a nested function or class), by name: one walk of the file.
  */
-export function nestedBindings(file: SourceFile, name: string): Identifier[] {
-  const topLevel = new Set(moduleBindings(file, name));
-  return file
-    .getDescendantsOfKind(SyntaxKind.Identifier)
-    .filter(
-      (identifier) =>
-        identifier.getText() === name &&
-        !topLevel.has(identifier) &&
-        declaresBinding(identifier) &&
-        !isImportBinding(identifier) &&
-        bindsAtRuntime(identifier),
-    );
+export function nestedBindings(file: SourceFile): Map<string, Identifier[]> {
+  const topLevel = new Set(
+    file.getStatements().flatMap((statement) => statementBindings(statement)),
+  );
+  const byName = new Map<string, Identifier[]>();
+  for (const identifier of file.getDescendantsOfKind(SyntaxKind.Identifier)) {
+    if (
+      !topLevel.has(identifier) &&
+      declaresBinding(identifier) &&
+      !isImportBinding(identifier) &&
+      bindsAtRuntime(identifier)
+    ) {
+      const name = identifier.getText();
+      byName.set(name, [...(byName.get(name) ?? []), identifier]);
+    }
+  }
+  return byName;
 }
 
 /** The local names `export { name }`, `export default name` and `export = name` export. */

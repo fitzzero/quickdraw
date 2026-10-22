@@ -41,6 +41,14 @@ class Renames {
   readonly edits = new Map<SourceFile, Edit[]>();
   private readonly taken = new Map<SourceFile, Set<string>>();
   private readonly renamed = new Set<Identifier>();
+  private readonly nested = new Map<SourceFile, Map<string, Identifier[]>>();
+
+  /** The bindings of `name` below the module scope of `file`, read once per file: no file changes before `apply`. */
+  nestedIn(file: SourceFile, name: string): Identifier[] {
+    const byName = this.nested.get(file) ?? nestedBindings(file);
+    this.nested.set(file, byName);
+    return byName.get(name) ?? [];
+  }
 
   /** The names no rename may take in `file`, `names` added: the run writes them there, or a rename took them. */
   reserve(file: SourceFile, names: readonly string[] = []): Set<string> {
@@ -109,7 +117,7 @@ function freeInModule(
   for (const binding of bindings) {
     renames.rename(binding, `${name}${isImportBinding(binding) ? "Impl" : "Body"}`);
   }
-  for (const local of nestedBindings(file, name)) {
+  for (const local of renames.nestedIn(file, name)) {
     renames.rename(local, `${name}Impl`);
   }
   return true;
@@ -128,7 +136,7 @@ function freeInServiceFile(file: SourceFile, name: string, renames: Renames): vo
   for (const binding of bindings) {
     renames.rename(binding, `${name}Impl`);
   }
-  for (const local of nestedBindings(file, name)) {
+  for (const local of renames.nestedIn(file, name)) {
     renames.rename(local, `${name}Impl`);
   }
 }
