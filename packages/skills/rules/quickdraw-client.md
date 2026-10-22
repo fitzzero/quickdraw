@@ -34,7 +34,9 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   (`qd.taskService.board`); the examples here key theirs short (`qd.task`).
 - `auth` is a token (sent as `auth.token`) or handshake fields; leave it out
   for cookie sessions. Changing it reconnects, and a hello naming another
-  user empties everything quickdraw cached.
+  user empties everything quickdraw cached, the placeholder a member's
+  `useQuery` or `useSearch` would make from it (`keepPreviousData`, the
+  last results) included.
 - `useQuickdraw()` gives
   `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, refusal, isRateLimited }`.
   Gate on `isKnown` (the server's hello named the user; `userId` is then

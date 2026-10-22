@@ -12,7 +12,10 @@
 //   same credentials), the server's hello has named the user, and queries
 //   are not backing off after `RATE_LIMITED`, besides its own `enabled`;
 //   after another user's hello, or once the server ended the session, it
-//   renders again over the emptied cache (`session.ts`);
+//   renders again over the emptied cache (`session.ts`), with no
+//   placeholder made from a result read before (`placeholderData`, the
+//   caller's or its `QueryClient`'s default, is asked only about a query
+//   the cache still holds: `queryHooks.ts`);
 // - passes TanStack's abort signal to the call, so unmounting the last
 //   component that reads it, or `cancelQueries`, sends `qd:cancel`;
 // - sends the cached result's version and keeps the cached result when the
@@ -44,6 +47,7 @@ import type { MethodTarget } from "./members";
 import { fetchMethodQuery } from "./query";
 import {
   hiddenResult,
+  placeholderOption,
   readAfterJoin,
   topicOf,
   watchedModelsOf,
@@ -123,6 +127,7 @@ export function useMethodQuery<Output, Data = Output, Input = unknown>(
     enabled: live ? (enabled ?? true) : false,
     retry: retry ?? shouldRetry,
     structuralSharing: shareKeepingVersion(structuralSharing),
+    placeholderData: placeholderOption(queryClient, queryKey, options),
     ...(shown === undefined ? {} : { select: shown }),
   });
   // While new credentials await their hello, what is cached may be the last user's.
