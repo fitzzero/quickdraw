@@ -45,7 +45,7 @@ already been declared`), lint found 15 more `no-redeclare` and
   farseer's migration hit 9 of them. A function field the class writes
   after its initializer, in its constructor or anywhere else, is now module
   state like any other field: a `let` with its type, under the same `[this]`
-  marker. A `readonly` one, or one nothing writes, stays a `const`.
+  marker. One nothing writes after its initializer stays a `const`.
 - **The contracts the codemod writes import only what they use.** A contract
   imported core's `nullable` for a Zod `.nullable()` in a moved schema, and
   `z` when only a schema helper it had moved to `contracts/helpers.ts` used
@@ -54,6 +54,26 @@ already been declared`), lint found 15 more `no-redeclare` and
   migration filed it). A builder is now imported only for a call of it, and
   each contract and the helpers file the codemod creates get the import
   cleanup every file it rewrites gets.
+- **A binding outside a service class no longer shadows a member hoisted
+  beside it.** A module function's parameter, or a local of a method
+  module's handler, named like a member the codemod hoisted where that code
+  lives (declared there, or imported) shadowed it (`no-shadow`; Conveyor's
+  `reviewCatchUp` in `task/TaskService.ts`), and a handler's local could
+  capture what the handler read through the service:
+  `const limit = service.limit` became `const limit = limit`. Such a binding
+  is now renamed `<name>Impl`, with every reference; the member keeps its
+  name.
+- **A `readonly` field its constructor writes is hoisted as a `let`.**
+  `readonly` kept a field, or a function field, a `const` even when its
+  constructor assigned it, so the setup function that carries the
+  constructor's code wrote a constant (TS2588, and a `TypeError` when it
+  ran). A field is a `const` only when nothing writes it after its
+  initializer. The codemod's own tests now fail on any write of a `const`
+  in its output, whatever marker covers the line.
+- **A function field that stays a `const` keeps its type annotation**
+  (`const slug: (name: string) => string = (name) => ...`): without it, an
+  initializer whose parameters took their types from the field's was
+  implicitly `any` (TS7006).
 
 ## [5.1.1] - 2026-10-11
 

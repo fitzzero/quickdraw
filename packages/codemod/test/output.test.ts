@@ -1,9 +1,10 @@
 // What the codemod writes is 5.0 code: on the fixture app's output, every
 // file parses (oxlint, whose parser also refuses `super` outside a class),
 // declares each name once in a scope (TypeScript, which also sees an import
-// and a local declaration of one name, where oxlint does not) and has no
-// local shadowing a binding of its module (oxlint's no-redeclare and
-// no-shadow, which the 5.0 lint baseline enables), no review marker trails
+// and a local declaration of one name, where oxlint does not), writes no
+// binding it declared `const`, and has no local shadowing a binding of its
+// module (oxlint's no-redeclare and no-shadow, which the 5.0 lint baseline
+// enables), whatever review marker covers the line; no review marker trails
 // code on its line, and the TypeScript compiler (against the built
 // @fitzzero/quickdraw-core) and the 5.0 lint rules (@fitzzero/quickdraw-lint's
 // base config) report problems only on what a review marker covers, apart
@@ -93,6 +94,9 @@ const BINDING = new Set([2300, 2304, 2305, 2307, 2393, 2440, 2451, 2552, 2724, 6
  */
 const REDECLARED = new Set([2300, 2393, 2395, 2440, 2451]);
 
+/** The code of the diagnostic that says code assigns a `const` (TS2588), which throws when it runs. */
+const CONST_WRITE = 2588;
+
 /** Diagnostics on lines no review marker covers (or that use todoSchema). */
 function uncovered<T extends { file: string; line: number }>(
   diagnostics: readonly T[],
@@ -120,10 +124,13 @@ describe("the output", () => {
     expect(unparsed).toEqual([]);
   });
 
-  it("declares each name once in a scope, and no local shadows a binding of its module", () => {
+  it("declares each name once in a scope, writes no const, and no local shadows a binding of its module", () => {
     // oxlint does not report an import beside a local declaration of its name; TypeScript does
-    const redeclared = typecheck(root, {}).filter((diagnostic) => REDECLARED.has(diagnostic.code));
+    const diagnostics = typecheck(root, {});
+    const redeclared = diagnostics.filter((diagnostic) => REDECLARED.has(diagnostic.code));
     expect(redeclared).toEqual([]);
+    // nor a write of a const, which a setup function's marker would cover
+    expect(diagnostics.filter((diagnostic) => diagnostic.code === CONST_WRITE)).toEqual([]);
     const rules = { "no-redeclare": "error", "no-shadow": "error" };
     writeFileSync(join(root, "bindings.json"), JSON.stringify({ plugins: [], rules }));
     const clashes = lint(root, "bindings.json").filter((diagnostic) =>

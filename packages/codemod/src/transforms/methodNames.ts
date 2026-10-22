@@ -23,67 +23,15 @@
 // the object as `<name>Method`, listing it as `<name>: <name>Method`. No
 // rename asks anything of a person, so none is marked.
 
-import type { Identifier, Node, SourceFile } from "ts-morph";
+import type { Node, SourceFile } from "ts-morph";
 import {
   exportedNames,
-  freeName,
   isExportedBinding,
   isImportBinding,
   moduleBindings,
-  nestedBindings,
-  renameEdits,
+  type Renames,
 } from "../bindings";
 import type { ServiceModel } from "../model";
-import { applyEdits, type Edit } from "../text";
-
-/** Renames of one run's bindings, each to a name free in its file. */
-class Renames {
-  readonly edits = new Map<SourceFile, Edit[]>();
-  private readonly taken = new Map<SourceFile, Set<string>>();
-  private readonly renamed = new Set<Identifier>();
-  private readonly nested = new Map<SourceFile, Map<string, Identifier[]>>();
-
-  /** The bindings of `name` below the module scope of `file`, read once per file: no file changes before `apply`. */
-  nestedIn(file: SourceFile, name: string): Identifier[] {
-    const byName = this.nested.get(file) ?? nestedBindings(file);
-    this.nested.set(file, byName);
-    return byName.get(name) ?? [];
-  }
-
-  /** The names no rename may take in `file`, `names` added: the run writes them there, or a rename took them. */
-  reserve(file: SourceFile, names: readonly string[] = []): Set<string> {
-    const taken = this.taken.get(file) ?? new Set<string>();
-    this.taken.set(file, taken);
-    for (const name of names) {
-      taken.add(name);
-    }
-    return taken;
-  }
-
-  /** Renames the binding `binding` declares (once) to `base`, or the first free name after it. */
-  rename(binding: Identifier, base: string): void {
-    if (this.renamed.has(binding)) {
-      return;
-    }
-    this.renamed.add(binding);
-    const file = binding.getSourceFile();
-    const taken = this.reserve(file);
-    const to = freeName(file, base, taken);
-    taken.add(to);
-    const edits = renameEdits(binding, to);
-    if (edits.length > 0) {
-      this.edits.set(file, [...(this.edits.get(file) ?? []), ...edits]);
-    }
-  }
-
-  /** Writes the renames into their files; whether there were any. */
-  apply(): boolean {
-    for (const [file, edits] of this.edits) {
-      file.replaceWithText(applyEdits(file.getFullText(), 0, edits));
-    }
-    return this.edits.size > 0;
-  }
-}
 
 /** The names of a service's methods that method modules register, by module: one call per name, the one `planService` keeps. */
 function moduleMethods(service: ServiceModel): Map<SourceFile, string[]> {
@@ -142,13 +90,10 @@ function freeInServiceFile(file: SourceFile, name: string, renames: Renames): vo
 }
 
 /**
- * Renames what binds a method object's name in its method module and in its
- * service file (see the top of this file), in the project's files. Whether it
- * renamed anything: a renamed file is parsed again, so the services must be
- * read again.
+ * Adds to `renames` what binds a method object's name in its method module
+ * and in its service file (see the top of this file).
  */
-export function freeMethodNames(services: readonly ServiceModel[]): boolean {
-  const renames = new Renames();
+export function freeMethodNames(services: readonly ServiceModel[], renames: Renames): void {
   for (const service of services) {
     const registers = new Set<Node>(service.methods.flatMap((method) => method.register ?? []));
     const modules = moduleMethods(service);
@@ -165,5 +110,4 @@ export function freeMethodNames(services: readonly ServiceModel[]): boolean {
       }
     }
   }
-  return renames.apply();
 }

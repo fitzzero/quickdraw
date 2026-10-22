@@ -34,6 +34,7 @@ import {
   localNames,
   reassigned,
   setByConstructor,
+  typeAnnotation,
 } from "./fields";
 import { HOOK_NOTES } from "./hookNotes";
 import { type Category, MarkerSet, markerAnchor, markerText } from "./markers";
@@ -498,8 +499,8 @@ function fieldText(
   const name = field.getName();
   const init = field.getInitializer();
   const value = init === undefined ? undefined : mapped(init, scope, imports);
-  const type = field.getTypeNode()?.getText();
-  const fixed = value !== undefined && (field.isReadonly() || !reassigned(service, name));
+  // a `readonly` field its constructor writes is not fixed: the setup function writes it
+  const fixed = value !== undefined && !reassigned(service, name);
   const where =
     value === undefined && setByConstructor(service, name)
       ? `, set by its constructor: now a module binding ${setupName(service)}(...) sets`
@@ -512,7 +513,7 @@ function fieldText(
     target.exported ? "export " : "",
     fixed ? "const " : "let ",
     target.name,
-    type === undefined ? "" : `: ${type}`,
+    typeAnnotation(field),
     value === undefined ? "" : ` = ${value.text}`,
     ";",
   ].join("");
@@ -581,7 +582,7 @@ export function hoistClass(
           text: [
             ...leadingComments(member),
             ...value.outer,
-            `${target.exported ? "export " : ""}const ${target.name} = ${value.text};`,
+            `${target.exported ? "export " : ""}const ${target.name}${typeAnnotation(member)} = ${value.text};`,
           ].join("\n"),
           usesDb: value.usesDb,
         });

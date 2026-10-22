@@ -30,12 +30,19 @@ let namer: LabelNamer = (projectId) => `label-${projectId}`;
 // How a name is tidied, for good
 const tidy = (name: string): string => name.trim();
 
-// How a name becomes a key, which nothing swaps
-const slug = (name: string): string => name.toLowerCase();
+// How a name becomes a key, typed by its field, which nothing swaps
+const slug: (name: string) => string = (name) => name.toLowerCase();
+
+// How many labels a project may have: a default the constructor's options may change
+// quickdraw-migrate: review [this] 4.x instance field limit of LabelService: now module state, one value for the whole process (a service object has no instance); keep it if that is right, else move it where it belongs
+let limit: number = 100;
 
 // quickdraw-migrate: review [this] 4.x constructor code of LabelService, its fields' values included: a service object has no constructor; call setUpLabelService(...) once where the server starts (or move each part to module scope or a job), then delete this function
-export function setUpLabelService(options: { onChange?: LabelListener } = {}): void {
+export function setUpLabelService(options: { onChange?: LabelListener; limit?: number } = {}): void {
   onChange = options.onChange;
+  if (options.limit !== undefined) {
+    limit = options.limit;
+  }
   // quickdraw-migrate: review [this] this.getRoomName was 4.x service-instance state: a service object has none. Import what it held, pass it in, or call another service with ctx.services
   roomOfLabelService = this.getRoomName("all");
 }
@@ -67,6 +74,11 @@ export function setNamer(next: LabelNamer): void {
 export function draftName(projectId: string): { name: string; key: string } {
   const name = tidy(namer(projectId));
   return { name, key: slug(name) };
+}
+
+/** Whether a project with `count` labels may get another. */
+export function canAddLabel(count: number): boolean {
+  return count < limit;
 }
 
 // The base class does the leaving; this only tells the listener
@@ -155,3 +167,8 @@ export const labelService = qd.defineService(labelContract, {
     },
   },
 });
+
+/** Tells a listener a label changed, if there is one: a parameter of a field's name, outside the class. */
+export function notifyLabel(onChangeImpl: LabelListener | undefined, labelId: string): void {
+  onChangeImpl?.(labelId);
+}
