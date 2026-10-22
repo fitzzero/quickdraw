@@ -6,7 +6,8 @@
 // to `jitter` milliseconds; a `fast` message is lost with probability
 // `loss`; `rel` messages always arrive, in the order they were sent. Both
 // ends open a microtask after they are made; closing one closes the other,
-// with `bye`, once a message would have reached it.
+// with `bye`, once a message would have reached it and never before the
+// `rel` messages sent ahead of the close, as a link's bye on its own path.
 
 import { createLinkCore, type LinkCore } from "../client/peer/core";
 import type { PeerLink, PeerPath } from "../client/peer/types";
@@ -48,6 +49,8 @@ const DEFAULT_ENDS: readonly [LoopbackEnd, LoopbackEnd] = [
 interface Way {
   to: LinkCore | undefined;
   relAt: number;
+  /** What runs once the last `rel` message sent this way landed; `undefined` once it did. */
+  afterRel: (() => void)[] | undefined;
 }
 
 function check(value: number, name: string, max = Number.POSITIVE_INFINITY): number {
@@ -78,8 +81,8 @@ export function createLoopbackPeerLink(
   const random = options.random ?? Math.random;
   const room = options.room ?? "loopback";
   const [endA, endB] = options.ends ?? DEFAULT_ENDS;
-  const toB: Way = { to: undefined, relAt: 0 };
-  const toA: Way = { to: undefined, relAt: 0 };
+  const toB: Way = { to: undefined, relAt: 0, afterRel: undefined };
+  const toA: Way = { to: undefined, relAt: 0, afterRel: undefined };
 
   const deliver = (way: Way, label: PeerLabel, text: string): boolean => {
     if (label === "fast" && random() < loss) {
@@ -88,9 +91,19 @@ export function createLoopbackPeerLink(
     const due = performance.now() + ms + random() * jitter;
     // `rel` keeps its order: never before the message sent ahead of it.
     const at = label === "rel" ? (way.relAt = Math.max(way.relAt, due)) : due;
+    const after: (() => void)[] = [];
+    if (label === "rel") {
+      way.afterRel = after;
+    }
     setTimeout(
       () => {
         way.to?.receive(text, label);
+        if (way.afterRel === after) {
+          way.afterRel = undefined;
+        }
+        for (const run of after) {
+          run();
+        }
       },
       Math.max(0, at - performance.now()),
     );
@@ -108,8 +121,15 @@ export function createLoopbackPeerLink(
           back.to = undefined;
           if (fromHere) {
             const peer = out.to;
-            setTimeout(() => {
+            const bye = (): void => {
               peer?.end("bye");
+            };
+            setTimeout(() => {
+              if (out.afterRel === undefined) {
+                bye();
+              } else {
+                out.afterRel.push(bye);
+              }
             }, ms);
           }
         },

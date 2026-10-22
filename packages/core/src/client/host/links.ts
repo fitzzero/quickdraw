@@ -3,9 +3,10 @@
 // (`createPeerLink`, `offerer: true`) is made when a host-served channel's
 // message or a host-served stream's feed first needs one, and again when
 // the room gets another host or the link closed while a feed still needs
-// it. After a link closes, the next to the same host waits (1 s, doubling
-// to 15 s while links keep closing unopened): a game that sends input each
-// frame makes no link a frame when the server refuses them. When the host is this
+// it. After a link closes, the next to the same host waits
+// (`HOST_LINK_RETRY_MS`, doubling up to `HOST_LINK_MAX_RETRY_MS` while links
+// keep closing unopened): a game that sends input each frame makes no link
+// a frame when the server refuses them. When the host is this
 // connection's own socket and it serves the room (`defineHost(...).serve`),
 // the way is in process: the host hears this client as one of its peers.
 //
@@ -49,11 +50,17 @@ export interface HostLinks {
 /** How a room's host served by this connection takes this client as a peer, in process. */
 export type LocalHost = (peer: HostPeer, send: HostSend) => AttachedPeer;
 
-const RETRY_MS = 1000;
-const MAX_RETRY_MS = 15_000;
+/**
+ * After a link to a room's host closed, the next to that host waits this
+ * long, doubling while links keep closing unopened.
+ */
+export const HOST_LINK_RETRY_MS = 1000;
 
-/** The items a seed in chunks may hold: the most a feed shows (`STREAM_MAX_ITEMS`), the latest kept. */
-const MAX_SEED_ITEMS = 10_000;
+/** The longest wait before the next link to a room's host. */
+export const HOST_LINK_MAX_RETRY_MS = 15_000;
+
+/** The items a peer keeps of a seed in chunks, the latest: as many as a feed shows. */
+export const MAX_SEED_ITEMS = 10_000;
 
 interface Way {
   readonly send: HostSend;
@@ -112,7 +119,7 @@ function subscribeOn(way: Way, feed: HostFeed): void {
 
 function opened(state: RoomState, way: Way): void {
   state.way = way;
-  state.retryMs = RETRY_MS;
+  state.retryMs = HOST_LINK_RETRY_MS;
   state.backoff = undefined;
   for (const entry of state.feeds.values()) {
     entry.chunks = undefined;
@@ -226,7 +233,7 @@ function connect(links: LinksState, state: RoomState): void {
 function retryLater(links: LinksState, state: RoomState, host: string): void {
   const wait = state.retryMs;
   state.backoff = { host, until: Date.now() + wait };
-  state.retryMs = Math.min(MAX_RETRY_MS, wait * 2);
+  state.retryMs = Math.min(HOST_LINK_MAX_RETRY_MS, wait * 2);
   if (links.directory.of(state.room) === undefined) {
     return;
   }
@@ -250,7 +257,7 @@ function roomOf(links: LinksState, room: string): RoomState {
       pending: undefined,
       feeds: new Map(),
       retry: undefined,
-      retryMs: RETRY_MS,
+      retryMs: HOST_LINK_RETRY_MS,
       backoff: undefined,
     };
     links.rooms.set(room, state);
@@ -277,7 +284,7 @@ function createLinks(connection: QuickdrawConnection): LinksState & HostLinks {
     // The server named the room's host again (another host, or this socket
     // joined again): its first link opens at once.
     state.backoff = undefined;
-    state.retryMs = RETRY_MS;
+    state.retryMs = HOST_LINK_RETRY_MS;
     if (state.feeds.size > 0) {
       connect(links, state);
     }

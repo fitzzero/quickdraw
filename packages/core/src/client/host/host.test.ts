@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { z } from "zod";
 import { defineContract } from "../../index";
 import type { HostMessage, PeerLabel } from "../../protocol/envelope";
-import { MAX_PEER_MESSAGE_BYTES } from "../../protocol/version";
+import { MAX_PEER_MESSAGE_BYTES, MAX_SCOPE_LENGTH } from "../../protocol/version";
 import { alice, bob } from "../../server/__tests__/fixtures";
 import {
   defineGameService,
@@ -239,6 +239,20 @@ describe("a host's runtime", () => {
     ]);
   });
 
+  it("ignores a message whose service, member or scope is longer than MAX_SCOPE_LENGTH characters", async () => {
+    const { runtime } = hosting();
+    const bo = await peerOf(runtime, "socket-bo", "bo");
+    const long = "x".repeat(MAX_SCOPE_LENGTH + 1);
+    bo.send("rel", [4, "gameService", "world", long]);
+    bo.send("rel", [4, long, "world", WORLD_ID]);
+    bo.send("rel", [4, "gameService", long, WORLD_ID]);
+    await landed();
+    expect(bo.heard).toEqual([]);
+    bo.send("rel", [4, "gameService", "world", WORLD_ID]);
+    await landed();
+    expect(bo.heard.map(([message]) => message[0])).toEqual([6]);
+  });
+
   it("checks a pushed item against the stream's schema and the message limit", () => {
     const { runtime } = hosting({}, 120);
     expect(() => {
@@ -371,6 +385,40 @@ describe("a host's runtime, one message at a time", () => {
     expect(bo.closed()).toBe(0);
     for (let n = 0; n < 5_000; n += 1) {
       bo.attached.receive([4, "gameService", "world", WORLD_ID]);
+    }
+    expect(bo.closed()).toBe(1);
+  });
+
+  it("refuses a subscribe to a service the room's host does not serve within the same bucket, and ends a flood of them", () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const { runtime } = hosting();
+    const bo = direct(runtime);
+    const unserved = [4, "nobodyService", "world", WORLD_ID] as const;
+    bo.attached.unserved(unserved);
+    expect(bo.sent).toEqual([
+      [
+        "rel",
+        [
+          8,
+          "nobodyService",
+          "world",
+          WORLD_ID,
+          { code: "NOT_FOUND", message: `The host of ${WORLD} serves no service "nobodyService"` },
+        ],
+      ],
+    ]);
+    for (let n = 0; n < 500; n += 1) {
+      bo.attached.unserved(unserved);
+    }
+    expect(bo.sent.at(-1)?.[1][4]).toEqual({
+      code: "RATE_LIMITED",
+      message: "A peer subscribes at most 50 times a second",
+    });
+    for (let n = 0; n < 5_000 && bo.closed() === 0; n += 1) {
+      bo.attached.unserved(unserved);
     }
     expect(bo.closed()).toBe(1);
   });

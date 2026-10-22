@@ -2952,7 +2952,9 @@ export function useMatchLinks(matchId: string, onMove: OnMove): (move: Move) => 
   with no TURN). The relay takes over when ICE fails, when the direct path
   does not open within 5 s or drops after it opened (`rel` messages in
   flight on it may be lost: the link emits `state`, so the app can
-  resync), and at once on a side without WebRTC or with
+  resync; when a data channel closes, the link first waits 2 s for the
+  peer's bye, since a peer that closes its link closes its channels too),
+  and at once on a side without WebRTC or with
   `relay: "always"`; `relay: "never"` closes the link instead. A link never
   moves back from the relay.
 - `link.clock` reads the peer's clock from pings on `fast` (six quick ones

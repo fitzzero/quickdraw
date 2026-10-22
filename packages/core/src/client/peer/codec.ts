@@ -4,9 +4,11 @@
 // `[0, data]` carries the app's data, `[1, t]` is a clock ping and
 // `[2, t, u]` its pong (`clock.ts`); kinds 3 to 8 are host mode's
 // (`HostMessage`: a channel message, a subscribe and an unsubscribe, a
-// seed's chunk, an item, a refused subscribe). A message whose kind this
-// client does not know, whose members are not what its kind says, or that
-// is not JSON, is ignored.
+// seed's chunk, an item, a refused subscribe), whose service, member and
+// scope are each 1 to `MAX_SCOPE_LENGTH` characters, so an answer that names
+// them back always fits a message. A message whose kind this client does
+// not know, whose members are not what its kind says, or that is not JSON,
+// is ignored.
 //
 // React-free.
 
@@ -14,6 +16,7 @@ import type { HostMessage, PeerMessage } from "../../protocol/envelope";
 import type { WireError } from "../../protocol/errors";
 import { isName, isRecord } from "../../protocol/guards";
 import { utf8ByteLength } from "../../protocol/utf8";
+import { MAX_SCOPE_LENGTH } from "../../protocol/version";
 
 /** The text a link message travels as. */
 export function encodeMessage(message: PeerMessage): string {
@@ -41,16 +44,21 @@ function isTime(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+/** A service's, a member's or a scope's name in a host mode message: 1 to `MAX_SCOPE_LENGTH` characters. */
+function isHostName(value: unknown): value is string {
+  return isName(value) && value.length <= MAX_SCOPE_LENGTH;
+}
+
 /** A host mode message's members after its kind, read: `undefined` when they are not its kind's. */
 function readHostMessage(value: readonly unknown[]): HostMessage | undefined {
   const [kind, service, name, third, fourth, fifth] = value;
-  if (!isName(service) || !isName(name)) {
+  if (!isHostName(service) || !isHostName(name)) {
     return undefined;
   }
   if (kind === 3) {
     return value.length >= 4 ? [3, service, name, third] : undefined;
   }
-  if (!isName(third)) {
+  if (!isHostName(third)) {
     return undefined;
   }
   switch (kind) {

@@ -1,7 +1,8 @@
 // The loopback peer link of `./testing` (RFC 0003 section 12.5): two ends in
 // one process that open together, lose `fast` messages at the rate asked
 // and never `rel` ones, keep `rel` in order under jitter, sync their
-// clocks, and close each other with `bye`.
+// clocks, and close each other with `bye`, after the `rel` messages sent
+// ahead of it.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLoopbackPeerLink } from "./peer";
@@ -100,6 +101,24 @@ describe("createLoopbackPeerLink", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(reasons).toEqual(["bye"]);
     expect(b.send("rel", 1)).toBe(false);
+  });
+
+  it("closes the other end only after the rel messages sent ahead of the close landed", async () => {
+    const [a, b] = createLoopbackPeerLink({ ms: 10, jitter: 40, random: seeded(11) });
+    await Promise.resolve();
+    const heard: unknown[] = [];
+    b.on("message", (data) => heard.push(data));
+    const reasons: string[] = [];
+    b.on("close", (reason) => reasons.push(reason));
+    for (let n = 0; n < 20; n += 1) {
+      a.send("rel", n);
+    }
+    a.close();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(reasons).toEqual([]);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(heard).toEqual(Array.from({ length: 20 }, (_, n) => n));
+    expect(reasons).toEqual(["bye"]);
   });
 
   it("refuses options out of range", () => {

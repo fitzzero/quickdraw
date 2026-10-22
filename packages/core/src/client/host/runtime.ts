@@ -9,16 +9,19 @@
 //   valid for the channel's schema (synchronously: a schema that validates
 //   asynchronously drops every message, reported once), for this host's
 //   room by the channel's `requires: { room }`. Then the handler runs with
-//   `{ peer, room }`. A peer whose drops for one channel within 10 s pass
-//   100 times its rate loses its link, as a socket is disconnected.
+//   `{ peer, room }`. A peer whose drops for one channel within
+//   `ABUSE_WINDOW_MS` pass `ABUSE_MULTIPLIER` times its rate loses its link,
+//   as a socket is disconnected.
 // - `[4, service, stream, scope]`: a host-served stream whose room for the
 //   scope is this host's room; the answer is the seed (`[6]`, in chunks
 //   that each fit the message limit): the implementation's `seed(scope)`,
-//   or the latest `seed` items pushed. A peer holds at most 500 feeds, and
-//   subscribes at most `SUBSCRIBE_RATE` times a second after a burst of 500
-//   (`RATE_LIMITED`; a flood of them, as for a channel, ends its link). A
-//   seed whose items do not each fit a message alone is refused
-//   (`INTERNAL`), never sent in part. Anything else is refused (`[8]`).
+//   or the latest `seed` items pushed. A peer holds at most `MAX_HOST_FEEDS`
+//   feeds, and subscribes at most `HOST_SUBSCRIBE_RATE` times a second after
+//   a burst of as many (`RATE_LIMITED`; a flood of them, as for a channel,
+//   ends its link), its subscribes to a service none of the room's runtimes
+//   serves included (`unserved`, which `serving.ts` calls). A seed whose
+//   items do not each fit a message alone is refused (`INTERNAL`), never
+//   sent in part. Anything else is refused (`[8]`).
 // - `[5, service, stream, scope]` leaves the feed.
 //
 // `push(stream, scope, item)` checks the item against the stream's schema
@@ -32,7 +35,7 @@
 import type { AnyContract } from "../../contract/defineContract";
 import { CHANNEL_DEFAULT_RATE, isHostServed, type StreamDef } from "../../contract/realtime";
 import { validateNow } from "../../contract/validateNow";
-import type { HostMessage } from "../../protocol/envelope";
+import type { HostMessage, HostSubscribe } from "../../protocol/envelope";
 import type { ErrorCode } from "../../protocol/errors";
 import { encodeMessage, messageBytes } from "../peer/codec";
 import { throwLater } from "../peer/core";
@@ -69,10 +72,19 @@ export interface AttachedPeer {
   detach(): void;
 }
 
+/** A peer as one runtime holds it: it also refuses for the room's other services. */
+export interface RuntimePeer extends AttachedPeer {
+  /**
+   * Refuses a subscribe to a service no runtime of the room serves
+   * (`NOT_FOUND`), within the peer's subscribe bucket and through its way out.
+   */
+  unserved(message: HostSubscribe): void;
+}
+
 /** One room's host, whatever carries its peers' messages. */
 export interface HostRuntime {
   /** Attaches a peer; `close` ends its link (a flood). */
-  attach(peer: HostPeer, send: HostSend, close: () => void): AttachedPeer;
+  attach(peer: HostPeer, send: HostSend, close: () => void): RuntimePeer;
   readonly peers: readonly HostPeer[];
   push(stream: string, scope: string, item: unknown): void;
   close(): void;
@@ -90,11 +102,11 @@ export const ABUSE_WINDOW_MS = 10_000;
  */
 export const ABUSE_MULTIPLIER = 100;
 
-/** The feeds one peer may hold: as many subscribes at once. */
-const MAX_FEEDS = 500;
+/** The feeds one peer may hold of a host, and the subscribes it may send it at once. */
+export const MAX_HOST_FEEDS = 500;
 
-/** The subscribes a second a peer may send after a burst of `MAX_FEEDS`. */
-const SUBSCRIBE_RATE = 50;
+/** The subscribes a second a peer may send a host after a burst of `MAX_HOST_FEEDS`. */
+export const HOST_SUBSCRIBE_RATE = 50;
 
 /** The scopes whose latest items a stream keeps. */
 const MAX_KEPT_SCOPES = 10_000;
@@ -252,23 +264,46 @@ function chunksOf(
   return chunks;
 }
 
-/** Takes one of the peer's subscribe tokens: `undefined` when it has one, else whether it floods. */
-function overSubscribes(from: PeerState): boolean | undefined {
-  return overRate(from.subscribes, SUBSCRIBE_RATE, MAX_FEEDS, Date.now());
+type Refuse = (code: ErrorCode, message: string) => void;
+
+/** Refuses the peer's subscribe to `service`'s `name` for `scope`, through its way out. */
+function refusal(from: PeerState, service: string, name: string, scope: string): Refuse {
+  return (code, message) => {
+    from.out.send("rel", [8, service, name, scope, { code, message }]);
+  };
+}
+
+/**
+ * Takes one of the peer's subscribe tokens: true when it had one. Past them
+ * the subscribe is refused (`RATE_LIMITED`), and a flood of them ends the
+ * peer's link.
+ */
+function admits(from: PeerState, refuse: Refuse): boolean {
+  const flood = overRate(from.subscribes, HOST_SUBSCRIBE_RATE, MAX_HOST_FEEDS, Date.now());
+  if (flood === undefined) {
+    return true;
+  }
+  if (flood) {
+    from.close();
+  } else {
+    refuse("RATE_LIMITED", `A peer subscribes at most ${HOST_SUBSCRIBE_RATE} times a second`);
+  }
+  return false;
+}
+
+/** A subscribe to a service no runtime of the room serves: refused, within the peer's bucket. */
+function onUnserved(state: State, from: PeerState, message: HostSubscribe): void {
+  const [, service, name, scope] = message;
+  const refuse = refusal(from, service, name, scope);
+  if (!state.closed && state.peers.has(from) && admits(from, refuse)) {
+    refuse("NOT_FOUND", `The host of ${state.room} serves no service "${service}"`);
+  }
 }
 
 function onSubscribe(state: State, from: PeerState, name: string, scope: string): void {
   const service = state.contract.name;
-  const refuse = (code: ErrorCode, message: string): void => {
-    from.out.send("rel", [8, service, name, scope, { code, message }]);
-  };
-  const flood = overSubscribes(from);
-  if (flood !== undefined) {
-    if (flood) {
-      from.close();
-    } else {
-      refuse("RATE_LIMITED", `A peer subscribes at most ${SUBSCRIBE_RATE} times a second`);
-    }
+  const refuse = refusal(from, service, name, scope);
+  if (!admits(from, refuse)) {
     return;
   }
   const def = own(state.contract.streams, name);
@@ -281,8 +316,8 @@ function onSubscribe(state: State, from: PeerState, name: string, scope: string)
     return;
   }
   const key = feedKey(name, scope);
-  if (!from.feeds.has(key) && from.feeds.size >= MAX_FEEDS) {
-    refuse("CONFLICT", `A peer may hold at most ${MAX_FEEDS} feeds of a host`);
+  if (!from.feeds.has(key) && from.feeds.size >= MAX_HOST_FEEDS) {
+    refuse("CONFLICT", `A peer may hold at most ${MAX_HOST_FEEDS} feeds of a host`);
     return;
   }
   let chunks: unknown[][] | undefined;
@@ -401,20 +436,23 @@ export function createHostRuntime(
     closed: false,
   };
   return Object.freeze({
-    attach(peer: HostPeer, send: HostSend, close: () => void): AttachedPeer {
+    attach(peer: HostPeer, send: HostSend, close: () => void): RuntimePeer {
       const now = Date.now();
       const from: PeerState = {
         peer,
         out: createOutbox(send, close),
         close,
         buckets: new Map(),
-        subscribes: { tokens: MAX_FEEDS, refilledAt: now, windowStart: now, dropped: 0 },
+        subscribes: { tokens: MAX_HOST_FEEDS, refilledAt: now, windowStart: now, dropped: 0 },
         feeds: new Set(),
       };
       state.peers.add(from);
       return {
         receive: (message: HostMessage) => {
           receive(state, from, message);
+        },
+        unserved: (message: HostSubscribe) => {
+          onUnserved(state, from, message);
         },
         detach: () => {
           for (const key of [...from.feeds]) {

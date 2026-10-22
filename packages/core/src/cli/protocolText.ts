@@ -185,7 +185,12 @@ offer: its peer moves to the relay on hearing it.
    it and heard it. Through the relay a \`PeerMessage\` travels as the
    \`text\` of \`qd:relay\`. On \`fast\`, drop one rather than queue it
    while your connection is backed up; the server drops one while the
-   receiver's is (\`PEER_RELAY_FAST_BACKLOG\` relay messages waiting).
+   receiver's is (\`PEER_RELAY_FAST_BACKLOG\` relay messages waiting). A
+   side whose direct path lost a data channel (it closed, rather than ICE
+   failing) waits \`BYE_WAIT_MS\` for the peer's bye before it says
+   \`{ relay: true }\`: a peer that closes its link closes its data
+   channels too, and a \`{ relay: true }\` it hears after that asks it for
+   a new link.
 4. Read link messages from both paths all along: the peer may move to the
    relay before you hear it say so. A link that opens on no path within
    \`OPEN_TIMEOUT_MS\` is over.
@@ -195,11 +200,17 @@ offer: its peer moves to the relay on hearing it.
    from its peer for \`WATCHDOG_MS\` closes the link.
 6. Close a link with \`{ bye: true }\`, a link the server refused a signal of
    too: the server keeps a place for each peer a socket signalled until a
-   bye ends the pair. The server sends one as well, from a peer that left
-   the room, was taken out of it or disconnected, to each socket that peer
-   signalled there and each that signalled it. A socket that left the room
-   itself (\`qd:presence\` with \`users: []\`) closes the room's links
-   without one.
+   bye ends the pair. A bye always ends it: the socket rate limiter never
+   counts one, and past \`PEER_SIGNAL_RATE\` the server ends the pair
+   without telling the peer. On the direct path, send the bye before you
+   close the data channels and the connection
+   (\`@fitzzero/quickdraw-core\` closes them once the server answered the
+   bye), so the peer hears the bye first. The server sends one as well,
+   from a peer that left the room, was taken out of it or disconnected, to
+   each socket that peer signalled there and each that signalled it (of
+   those it never answered, the latest twice \`MAX_PEER_LINKS\`). A
+   socket that left the room itself (\`qd:presence\` with \`users: []\`)
+   closes the room's links without one.
 7. A signal from a socket you have no link with asks for a link: answer it
    within \`PENDING_MS\`, or send \`{ bye: true }\`. On the answering side, a
    second offer, a second \`{ relay: true }\`, or an offer after
@@ -233,9 +244,10 @@ A peer, any other socket of the room:
    channel's message or feed first needs one. It opens one again when
    \`qd:host\` names another host, and after a link closed while a feed
    still needs one. After a link to the host closed, the next to that host
-   waits 1 s, doubling to 15 s while links keep closing unopened: a peer
-   that sends input every frame must not signal the host every frame. A
-   host that \`qd:host\` names again is linked at once.
+   waits \`HOST_LINK_RETRY_MS\`, doubling up to \`HOST_LINK_MAX_RETRY_MS\`
+   while links keep closing unopened: a peer that sends input every frame
+   must not signal the host every frame. A host that \`qd:host\` names
+   again is linked at once.
 2. Sends a host-served channel's message as \`HostChannelMessage\` on
    \`fast\`, and drops it while no link to the host is open. \`fast\` is
    never retransmitted, and a backed-up connection drops it: send input as
@@ -243,16 +255,19 @@ A peer, any other socket of the room:
 3. Subscribes to a host-served stream's feed with \`HostSubscribe\` on
    \`rel\` each time a link to the room's host opens, and leaves it with
    \`HostUnsubscribe\`. The seed arrives as \`HostSeed\` chunks: join their
-   items (keep the latest 10,000 at most, as a host may send more) until
-   the one whose \`last\` is true, then replace what the feed held. Each
-   \`HostItem\` appends. A \`HostRefusal\` refuses the subscribe, with its
-   error: the host sends nothing for that feed.
+   items (keep the latest \`MAX_SEED_ITEMS\` at most, as a host may send
+   more) until the one whose \`last\` is true, then replace what the feed
+   held. Each \`HostItem\` appends. A \`HostRefusal\` refuses the
+   subscribe, with its error: the host sends nothing for that feed.
 4. Never sends \`qd:ch\` or \`qd:stream:sub\` for a host-served member: the
    server drops the first and refuses the second with \`VALIDATION\`.
 
 The host:
 
-1. Answers the links of the room's peers. It never offers one.
+1. Answers the links of the room's peers. It never offers one. It ignores
+   a message whose service, channel or stream name, or scope, is longer
+   than \`MAX_SCOPE_LENGTH\` characters, so an answer that names them back
+   always fits a message.
 2. Checks each \`HostChannelMessage\` as the server checks \`qd:ch\`: the
    channel is host-served, the payload passes the channel's schema, its
    \`requires.room\` is the host's room, and the message is within the
@@ -265,11 +280,12 @@ The host:
    that each fit \`limits.peers.maxMessageBytes\`), whole or not at all, or
    with \`HostRefusal\`: \`NOT_FOUND\` for a service or a stream it does not
    serve, \`FORBIDDEN\` for a scope whose room is not the host's room,
-   \`RATE_LIMITED\` past 500 subscribes at once from one peer and then 50 a
-   second (the link of a peer whose refusals pass 100 times that rate
-   within \`CHANNEL_ABUSE_WINDOW_MS\` closes), \`INTERNAL\` for a seed with an
+   \`RATE_LIMITED\` past \`MAX_HOST_FEEDS\` subscribes at once from one
+   peer and then \`HOST_SUBSCRIBE_RATE\` a second (the link of a peer whose
+   refusals pass \`CHANNEL_ABUSE_MULTIPLIER\` times that rate within
+   \`CHANNEL_ABUSE_WINDOW_MS\` closes), \`INTERNAL\` for a seed with an
    item too large for a chunk of its own, and another code when it cannot
-   serve the feed (\`CONFLICT\` past the feeds it lets one peer hold).
+   serve the feed (\`CONFLICT\` past \`MAX_HOST_FEEDS\` feeds of one peer).
 4. Sends each item pushed to a feed to the feed's subscribers as
    \`HostItem\`: on \`fast\` for a volatile stream, else on \`rel\`.
 5. Keeps what it sends on \`rel\` in order, and sends again what the link
@@ -283,6 +299,10 @@ The server forwards a link's signals and relays its messages, but it never
 reads what a host and its peers send each other. A host trusts a peer's
 messages no more than the server would, and a service trusts nothing a
 host reports without checking it.`;
+
+/** Before the table of host mode's timings and limits. */
+export const HOST_LIMITS_INTRO = `The timings and limits of \`@fitzzero/quickdraw-core\`'s peers and hosts,
+which a peer or a host with one keeps to:`;
 
 /** Before the table of the peer link timings. */
 export const PEER_TIMINGS_INTRO = `The timings of \`@fitzzero/quickdraw-core\`'s links, which a link with one

@@ -14,6 +14,7 @@ import {
   ERRORS_INTRO,
   EXAMPLE,
   HANDSHAKE_INTRO,
+  HOST_LIMITS_INTRO,
   HOST_MODE,
   INTRO,
   JSON_ONLY,
@@ -308,12 +309,27 @@ function peerLinksSection(model: ProtocolModel): string[] {
     paragraph(PEER_TIMINGS_INTRO),
     table(CONSTANT_HEADER, [
       row("DIRECT_TIMEOUT_MS", " ms"),
+      row("BYE_WAIT_MS", " ms"),
       row("OPEN_TIMEOUT_MS", " ms"),
       row("QUICK_PINGS", " pings"),
       row("QUICK_PING_MS", " ms"),
       row("PING_MS", " ms"),
       row("WATCHDOG_MS", " ms"),
       row("PENDING_MS", " ms"),
+    ]),
+  ]);
+}
+
+function hostModeSection(model: ProtocolModel): string[] {
+  const row = (name: string, unit: string): string[] => constantRow(model, name, unit);
+  return section(HOST_MODE, [
+    paragraph(HOST_LIMITS_INTRO),
+    table(CONSTANT_HEADER, [
+      row("HOST_LINK_RETRY_MS", " ms"),
+      row("HOST_LINK_MAX_RETRY_MS", " ms"),
+      row("MAX_SEED_ITEMS", " items"),
+      row("MAX_HOST_FEEDS", " feeds per peer"),
+      row("HOST_SUBSCRIBE_RATE", " subscribes a second per peer"),
     ]),
   ]);
 }
@@ -353,7 +369,7 @@ function limitsSection(model: ProtocolModel): string[] {
       row("DEFAULT_BACKOFF_MS", " ms"),
     ]),
     paragraph(LIMITS_OUTCOMES),
-    `The socket rate limiter never counts ${model.unlimited.map(code).join(", ")}.`,
+    `The socket rate limiter never counts ${model.unlimited.map(code).join(", ")}, nor a \`qd:peer\` whose \`sig\` is \`{ bye: true }\`.`,
   ]);
 }
 
@@ -376,7 +392,7 @@ export function renderProtocol(model: ProtocolModel): string {
     ...eventsSection("## Server to client", SERVER_EVENTS_INTRO, model.serverEvents, model),
     ...section(CLIENT_RULES, []),
     ...peerLinksSection(model),
-    ...section(HOST_MODE, []),
+    ...hostModeSection(model),
     ...typesSection(model),
     ...errorsSection(model),
     ...namesSection(model),

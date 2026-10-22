@@ -5,8 +5,10 @@
 // host's own client in process (`registerLocalHost`). Each peer, either
 // way, is attached to every runtime, and each of its messages goes to the
 // runtime of the message's service; a subscribe to a service no runtime
-// serves is refused (`NOT_FOUND`), so a peer's feed never waits on it. The
-// last runtime's removal stops it all: the links close, and no request is
+// serves is refused (`NOT_FOUND`) by one that does, within the peer's
+// subscribe bucket there and through its way out, so a peer's feed never
+// waits on it and a peer cannot flood the host with them. The last
+// runtime's removal stops it all: the links close, and no request is
 // answered.
 //
 // React-free.
@@ -17,7 +19,7 @@ import { controlOf } from "../peer/core";
 import { onPeerRequest, type PeerRequest } from "../peer/link";
 import type { PeerLink } from "../peer/types";
 import { registerLocalHost } from "./links";
-import type { AttachedPeer, HostPeer, HostRuntime, HostSend } from "./runtime";
+import type { AttachedPeer, HostPeer, HostRuntime, HostSend, RuntimePeer } from "./runtime";
 
 /** One connection's serving of one room. */
 export interface RoomServing {
@@ -32,7 +34,7 @@ interface Attachment {
   readonly peer: HostPeer;
   readonly send: HostSend;
   readonly close: () => void;
-  readonly attached: Map<string, AttachedPeer>;
+  readonly attached: Map<string, RuntimePeer>;
 }
 
 interface State {
@@ -53,16 +55,12 @@ function attachAll(state: State, at: Attachment): void {
 }
 
 /** A message from a peer: to the runtime of its service, or a subscribe refused. */
-function deliver(state: State, at: Attachment, message: HostMessage): void {
+function deliver(at: Attachment, message: HostMessage): void {
   const attached = at.attached.get(message[1]);
   if (attached !== undefined) {
     attached.receive(message);
   } else if (message[0] === 4) {
-    const error = {
-      code: "NOT_FOUND",
-      message: `The host of ${state.room} serves no service "${message[1]}"`,
-    } as const;
-    at.send("rel", [8, message[1], message[2], message[3], error]);
+    at.attached.values().next().value?.unserved(message);
   }
 }
 
@@ -73,7 +71,7 @@ function join(state: State, peer: HostPeer, send: HostSend, close: () => void): 
   attachAll(state, at);
   return {
     receive: (message) => {
-      deliver(state, at, message);
+      deliver(at, message);
     },
     detach: () => {
       for (const attached of at.attached.values()) {

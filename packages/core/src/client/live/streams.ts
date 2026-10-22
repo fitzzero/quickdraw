@@ -27,8 +27,11 @@
 // - A host-served stream (`serve: "host"`) is not the server's: its feed
 //   subscribes over the way to the host of the scope's room
 //   (`../host/links.ts`), with the same rules (the seed replaces what is
-//   held, items append, a refusal empties it), and again whenever a way to
-//   the room's host opens; a connect does not subscribe it.
+//   held, items append, a refusal empties it, `RATE_LIMITED` asks again a
+//   little later, `HOST_RETRY_MS` and up to half again, still loading, and
+//   a scope the server would refuse is refused here, `VALIDATION`), and
+//   again whenever a way to the room's host opens; a connect does not
+//   subscribe it.
 //
 // React-free: the live data (`liveData.ts`) makes one per connection and
 // `QueryClient`.
@@ -36,6 +39,7 @@
 import { CLIENT_EVENTS } from "../../contract/names";
 import { QuickdrawError } from "../../protocol/errors";
 import { isName } from "../../protocol/guards";
+import { MAX_SCOPE_LENGTH } from "../../protocol/version";
 import { hostsOf } from "../host/hosts";
 import { hostLinksOf } from "../host/links";
 import { notifyEach } from "../watch";
@@ -189,8 +193,17 @@ function answered(feeds: Feeds, feed: Feed, reply: Readonly<Record<string, unkno
   setState(feeds, feed, Object.freeze({ items, isLoading: false, error: null }));
 }
 
+/**
+ * A host-served feed the host refused `RATE_LIMITED` asks again after this
+ * long and up to half again, at random, so the feeds it refused at once do
+ * not all ask again at once.
+ */
+export const HOST_RETRY_MS = 1000;
+
 /** Holds a host-served feed over the way to its room's host, and settles it by what the host sends. */
 function subscribeHost(feeds: Feeds, feed: Feed): void {
+  clearTimeout(feed.retry);
+  feed.retry = undefined;
   feed.release?.();
   feed.release = undefined;
   feed.attempt += 1;
@@ -202,6 +215,15 @@ function subscribeHost(feeds: Feeds, feed: Feed): void {
     feed.pending = undefined;
     setState(feeds, feed, Object.freeze({ items: [], isLoading: false, error }));
   };
+  if (!isName(scope) || scope.length > MAX_SCOPE_LENGTH) {
+    refused(
+      new QuickdrawError(
+        "VALIDATION",
+        `${service}.${stream} is scoped: its scope is a string of 1 to ${MAX_SCOPE_LENGTH} characters`,
+      ),
+    );
+    return;
+  }
   if (feed.room === undefined) {
     refused(
       new QuickdrawError(
@@ -227,7 +249,17 @@ function subscribeHost(feeds: Feeds, feed: Feed): void {
       }
     },
     refused: (error) => {
-      if (current()) {
+      if (!current()) {
+        return;
+      }
+      if (error.code === "RATE_LIMITED") {
+        feed.retry = setTimeout(
+          () => {
+            subscribeHost(feeds, feed);
+          },
+          HOST_RETRY_MS * (1 + Math.random() / 2),
+        );
+      } else {
         refused(new QuickdrawError(error.code, error.message));
       }
     },

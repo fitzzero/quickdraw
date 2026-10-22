@@ -5,9 +5,14 @@
 // own relay bucket. A signal delivered to a socket is heard: the socket's
 // pair with its sender turns mutual, or, while the socket has not answered,
 // the sender is kept among the heard (at most `MAX_HEARD`, the oldest
-// forgotten first). Only a mutual pair may relay (`qd:relay`), so a socket
-// relays to no socket that never answered it, a made-up id included, and
-// the node it is on drops what it sends there. Signals have a bucket of
+// forgotten first). A forgotten sender gets no bye when the socket leaves
+// (its link waits out its open timeout), and its pair turns mutual only
+// once it signals again after the socket answered: only a socket that
+// leaves twice `MAX_PEER_LINKS` signals unanswered meets either. Only a
+// mutual pair may relay (`qd:relay`), so a socket relays to no socket that
+// never answered it, a made-up id included, and the node it is on drops
+// what it sends there; the target's node drops it too once the target left
+// the room, before the bye ended the pair. Signals have a bucket of
 // their own, and relayed bytes one more, shared by all of a socket's peers.
 // Messages dropped over a bucket count toward the channels' abuse guard: a
 // socket whose drops within `CHANNEL_ABUSE_WINDOW_MS` pass

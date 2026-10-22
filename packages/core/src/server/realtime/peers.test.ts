@@ -53,15 +53,17 @@ interface StartOptions {
   readonly peers?: boolean;
   readonly logger?: ReturnType<typeof captureLogger>;
   readonly bus?: ReturnType<typeof peeredCluster>;
+  readonly rateLimit?: { readonly maxRequests: number };
 }
 
 async function start(options: StartOptions = {}) {
-  const { bus, logger } = options;
+  const { bus, logger, rateLimit } = options;
   const app = await createTestApp({
     services: [defineLobbyService()],
     peers: options.peers ?? true,
     ...(logger === undefined ? {} : { logger }),
     ...(bus === undefined ? {} : { socket: { adapter: bus.adapter } }),
+    ...(rateLimit === undefined ? {} : { rateLimit }),
   });
   apps.push(app as unknown as TestApp);
   bus?.servers.push(app.server.io);
@@ -258,6 +260,28 @@ describe("signals", () => {
       a.signal(GAME, b.id, { bye: true }),
     ]);
     expect(answers.at(-1)).toEqual(refused("RATE_LIMITED"));
+    const aSocket = app.server.io.sockets.sockets.get(a.id);
+    expect(aSocket === undefined ? "gone" : pairOf(peersOf(aSocket), GAME, b.id)).toBeUndefined();
+  });
+
+  it("say bye past the socket rate limiter, uncounted: the pair ends and the peer hears it", async () => {
+    const app = await start({ rateLimit: { maxRequests: 4 } });
+    const [a, b] = await linked(app);
+    let answer = await a.signal(GAME, b.id, OFFER);
+    for (let n = 0; n < 10 && answer.ok; n += 1) {
+      answer = await a.signal(GAME, b.id, OFFER);
+    }
+    expect(answer).toEqual({
+      ok: false,
+      e: {
+        code: "RATE_LIMITED",
+        message: "Rate limit exceeded",
+        data: expect.anything() as object,
+      },
+    });
+    expect(await a.signal(GAME, b.id, { bye: true })).toEqual(ok);
+    await settle(a, b);
+    expect(b.signals.at(-1)).toEqual(bye(GAME, a, "alice"));
     const aSocket = app.server.io.sockets.sockets.get(a.id);
     expect(aSocket === undefined ? "gone" : pairOf(peersOf(aSocket), GAME, b.id)).toBeUndefined();
   });
@@ -565,6 +589,25 @@ describe("behind a cluster adapter", () => {
     expect(a.relayed).toEqual([[GAME, b.id, "fast", message("back")]]);
     b.connection.socket.disconnect();
     await expect.poll(() => a.signals.at(-1)).toEqual(bye(GAME, b, "bob"));
+  });
+
+  it("drops a relay message on the target's node once the target left the room, the pair still mutual", async () => {
+    const { first, second } = await twoNodes();
+    const a = await player(first, alice);
+    const b = await player(second, bob);
+    expect(await a.signal(GAME, b.id, OFFER)).toEqual(ok);
+    expect(await b.signal(GAME, a.id, { relay: true })).toEqual(ok);
+    await settle(a, b);
+    await b.connection.call.lobbyService.exit({ room: GAME });
+    await expect.poll(() => a.signals.at(-1)).toEqual(bye(GAME, b, "bob"));
+    // The pair as node A holds it while B's bye has not reached it yet.
+    const aSocket = first.server.io.sockets.sockets.get(a.id) as QuickdrawServerSocket;
+    engage(peersOf(aSocket), GAME, b.id, Date.now());
+    hear(peersOf(aSocket), GAME, b.id);
+    expect(pairOf(peersOf(aSocket), GAME, b.id)?.mutual).toBe(true);
+    a.relay(GAME, b.id, "rel", message("too late"));
+    await settle(a, b);
+    expect(b.relayed).toEqual([]);
   });
 
   it("delivers nothing to a socket of another node that is not in the room", async () => {

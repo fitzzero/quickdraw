@@ -33,16 +33,22 @@ All notable changes to this project will be documented in this file.
   to each peer (a burst of 240) and 1 MiB a second in all (a burst of
   2 MiB), and drops the rest silently. A socket that keeps flooding either
   frame is disconnected, as for channels. The socket rate limiter counts
-  `qd:peer` and not `qd:relay`.
+  `qd:peer`, but a `bye`, and not `qd:relay`; `createRateLimiter` takes a
+  `skip(eventName, args)` option for that, which `createServer`'s
+  `rateLimit` takes too.
 - **Leaving ends links.** A socket that leaves a room, is taken out of it
   or disconnects ends its links there: the server sends a `bye` to each
   peer it signalled and each that signalled it. A link that closes says
   `bye` too, a refused one included, so the server frees the pair's place.
+  On the direct path it says `bye` before its data channels close, and a
+  side whose data channel closed waits 2 s for the peer's `bye` before it
+  moves to the relay, so a closed link never comes back as a request.
   Behind a cluster adapter the frames cross nodes, and the node that holds
   the target socket checks it.
 - **Testing.** `createLoopbackPeerLink({ ms, jitter, loss })` on
   `./testing` links two ends in one process, with a delay and jitter per
-  message and loss on `fast` alone.
+  message and loss on `fast` alone; closing one end closes the other after
+  the `rel` messages sent ahead of it.
 - **Godot.** The GDScript reference client gains `peer_link`,
   `reject_peer`, the `peer_requested` signal and `socket_id`: WebRTC where
   Godot has it (a web export, or the webrtc GDExtension), the relay
@@ -71,7 +77,8 @@ All notable changes to this project will be documented in this file.
   the room has none, and `onHostLeave({ room, socketId, principal, reason })`
   (on `defineService` and `createServer`) runs once. The server never
   picks the next host. Behind a cluster adapter each node knows each
-  room's host.
+  room's host, and every node holds the same one when two nodes set it at
+  once, whatever order the changes reach them in.
 - **The host's client.** `defineHost(contract, { channels, streams })` on
   `./client` takes a handler per host-served channel and an optional seed
   per host-served stream; `serve(connection, { room })` answers the links
@@ -79,14 +86,16 @@ All notable changes to this project will be documented in this file.
   `stream(name).push(scope, item)`, `peers` and `close()`. It checks each
   message as the server checks a channel's (schema, room, a bucket per
   player and channel) and ends the link of a player who floods. It takes
-  500 subscribes at once from a player and then 50 a second, sends a seed
+  500 subscribes at once from a player and then 50 a second (those to a
+  service it does not serve included), sends a seed
   whole or refuses it, and sends again, in order, what the relay drops on
   `rel`. One connection serves several contracts in a room, one `serve`
   each.
 - **Players change nothing.** `useChannel` and `useStream` of a
   host-served member reach the room's host over a link, made on first use
   and again for a new host or after a reconnect; the feed's seed replaces
-  what it held. After a link to the host closed, the next waits 1 s,
+  what it held, and a feed the host refused `RATE_LIMITED` asks again a
+  second or so later. After a link to the host closed, the next waits 1 s,
   doubling to 15 s while links keep closing unopened. `hostOf(connection,
 room)` and `onHostChange(connection, listener)` on `./client` say who
   hosts.

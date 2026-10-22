@@ -51,6 +51,14 @@ export interface RateLimitOptions {
   excludePrefixes?: string[];
 
   /**
+   * Passes an event uncounted when it returns true, given the event's name
+   * and arguments. `createServer`'s socket limiter passes a peer link's bye
+   * (`qd:peer` whose `sig` is `{ bye: true }`), which only ends what the
+   * server holds for the pair and has its own bucket.
+   */
+  skip?: (eventName: string, args: readonly unknown[]) => boolean;
+
+  /**
    * Custom key generator for grouping requests.
    * Default uses socket.id.
    */
@@ -119,7 +127,10 @@ export interface RateLimiter {
    * Configuration options.
    */
   options: Required<
-    Pick<RateLimitOptions, "windowMs" | "maxRequests" | "excludeEvents" | "excludePrefixes">
+    Pick<
+      RateLimitOptions,
+      "windowMs" | "maxRequests" | "excludeEvents" | "excludePrefixes" | "skip"
+    >
   >;
 }
 
@@ -149,6 +160,7 @@ export function createRateLimiter(options: RateLimitOptions = {}): RateLimiter {
     maxRequests = DEFAULT_MAX_REQUESTS,
     excludeEvents = [],
     excludePrefixes = [],
+    skip = () => false,
   } = options;
 
   const entries = new Map<string, RateLimitEntry>();
@@ -221,6 +233,7 @@ export function createRateLimiter(options: RateLimitOptions = {}): RateLimiter {
       maxRequests,
       excludeEvents,
       excludePrefixes,
+      skip,
     },
   };
 }
@@ -278,7 +291,7 @@ export function applyRateLimitMiddleware(
       code: 429,
     }));
 
-  const { excludeEvents, excludePrefixes } = rateLimiter.options;
+  const { excludeEvents, excludePrefixes, skip } = rateLimiter.options;
 
   io.on("connection", (socket) => {
     // Use Socket.io's built-in middleware for incoming packets
@@ -304,6 +317,11 @@ export function applyRateLimitMiddleware(
 
       // Skip internal Socket.io events
       if (eventName.startsWith("$")) {
+        next();
+        return;
+      }
+
+      if (skip(eventName, args)) {
         next();
         return;
       }
