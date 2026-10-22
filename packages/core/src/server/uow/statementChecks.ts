@@ -106,6 +106,17 @@ function readsIdList(statement: Statement): boolean {
   return isRecord(id) && Array.isArray(id.in);
 }
 
+/**
+ * A batch insert writes many rows in one statement by definition, so a loop
+ * of them is one batch split into chunks (of a fixed size, as an app bounds
+ * Prisma's plan cache), never a statement per item. The tracked client runs
+ * an app's `createMany` as `createManyAndReturn` (`prisma/operations.ts`),
+ * and an untracked model's as it is. The lint rule `no-db-call-in-loop`
+ * makes the same exception. `updateMany` and `deleteMany` still count: run
+ * once per item, filtered by it, they are an N+1.
+ */
+const BATCH_INSERTS: ReadonlySet<string> = new Set(["createMany", "createManyAndReturn"]);
+
 function nPlusOne(
   statement: Statement,
   keys: readonly string[],
@@ -137,8 +148,9 @@ function unboundedRead(statement: Statement): Omit<DevWarning, "service" | "meth
  * at an unbounded read. Statements batched in an array-form `$transaction`
  * are sent together, which is the fix for an N+1, so they are not counted;
  * neither are updates and deletes by id inside an interactive transaction,
- * the form per-row writes take when each row's data differs, nor statements
- * filtered by an `id` list (one per chunk of ids).
+ * the form per-row writes take when each row's data differs, statements
+ * filtered by an `id` list (one per chunk of ids), nor batch inserts
+ * (`createMany`: one per chunk of rows).
  */
 export function createStatementChecks(raise: RaiseWarning): StatementCheck {
   const shapes = new Map<string, number>();
@@ -146,7 +158,12 @@ export function createStatementChecks(raise: RaiseWarning): StatementCheck {
     if (isUnboundedRead(statement)) {
       raise(unboundedRead(statement));
     }
-    if (place === "batch" || isRowWriteInTransaction(statement, place) || readsIdList(statement)) {
+    if (
+      place === "batch" ||
+      BATCH_INSERTS.has(statement.operation) ||
+      isRowWriteInTransaction(statement, place) ||
+      readsIdList(statement)
+    ) {
       return;
     }
     const keys = whereKeys(statement);
