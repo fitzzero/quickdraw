@@ -2,13 +2,13 @@
 
 Written by `@fitzzero/quickdraw-codemod` from the `// quickdraw-migrate: review` markers in the code; running the codemod again rewrites it from the markers that remain. Work through the sections in order (services, contracts, access, emits, client), delete each marker once its item is done, and see the migration guide (`MIGRATION.md`, shipped in `@fitzzero/quickdraw-codemod`) for each kind of item. Then run lint (`no-v4-api` names every 4.x API left, `no-todo-schema` every placeholder) and the typecheck.
 
-145 items in 33 files.
+150 items in 34 files.
 
 | Section                                                        | Items |
 | -------------------------------------------------------------- | ----: |
 | Services                                                       |     4 |
-| Contracts                                                      |    32 |
-| Access                                                         |    12 |
+| Contracts                                                      |    36 |
+| Access                                                         |    13 |
 | Access overrides to turn into a policy                         |     4 |
 | toDto and protected fields to turn into projections and fields |     5 |
 | Collections to declare in contracts                            |     2 |
@@ -61,10 +61,14 @@ Each method's kind was chosen from its name (get, list, search, find and count r
 - [ ] `packages/shared/src/contracts/task.ts:31` mutation, chosen from its name
 - [ ] `packages/shared/src/contracts/task.ts:33` query, chosen from its name
 - [ ] `packages/shared/src/contracts/task.ts:35` mutation, chosen from its name
-- [ ] `packages/shared/src/contracts/task.ts:37` query, chosen from its name; output: todoSchema of the 4.x response type
-- [ ] `packages/shared/src/contracts/task.ts:39` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
-- [ ] `packages/shared/src/contracts/task.ts:41` mutation, chosen from its name; output: "entity", where 4.x answered TaskDTO | null (null for a missing row, which a tracked write answers with NOT_FOUND instead); only an exact "entity" output is optimistic by default. Use nullable("entity") if the handler still answers null; its schema's byTaskIdSchema (apps/api/src/services/task/methods/update-task.ts) is byTaskIdSchemaOfUpdateTask here, since the contract has another byTaskIdSchema
-- [ ] `packages/shared/src/contracts/task.ts:43` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/task.ts:37` mutation, chosen from its name; input: todoSchema, as 4.x had no schema
+- [ ] `packages/shared/src/contracts/task.ts:39` mutation, chosen from its name; input: todoSchema, as 4.x had no schema
+- [ ] `packages/shared/src/contracts/task.ts:41` query, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/task.ts:43` query, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/task.ts:45` query, chosen from its name; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/task.ts:47` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+- [ ] `packages/shared/src/contracts/task.ts:49` mutation, chosen from its name; output: "entity", where 4.x answered TaskDTO | null (null for a missing row, which a tracked write answers with NOT_FOUND instead); only an exact "entity" output is optimistic by default. Use nullable("entity") if the handler still answers null; its schema's byTaskIdSchema (apps/api/src/services/task/methods/update-task.ts) is byTaskIdSchemaOfUpdateTask here, since the contract has another byTaskIdSchema
+- [ ] `packages/shared/src/contracts/task.ts:51` mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
 - [ ] `packages/shared/src/contracts/user.ts:17` the entity is the 4.x DTO UserDTO: give it a real schema. Its keys are the fields subscribers receive, read from model "user": drop any that is not a column, or give it a projection select and map
 - [ ] `packages/shared/src/contracts/user.ts:20` query, chosen from its name
 - [ ] `packages/shared/src/contracts/user.ts:22` mutation, chosen from its name; output: todoSchema of the 4.x response type
@@ -83,6 +87,7 @@ The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 
 - [ ] `apps/api/src/services/project.ts:100` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/project.ts:131` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/task/methods/create-task.ts:9` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
+- [ ] `apps/api/src/services/task/methods/delegates.ts:47` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/task/methods/queries.ts:6` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/user.ts:40` "Read" with no row id let every signed-in user call this in 4.x, and "authenticated" keeps that; narrow it ({ service: "Read" }, { entry: "Read", id } or a scope form) if that was not meant
 - [ ] `apps/api/src/services/user.ts:75` this method takes an id but its access "public" checks no row, which 4.x allowed and 5.0 refuses unless the method says rowless: true, written here: every caller the form admits reaches any row by its id. Narrow it ({ entry: "Read" }, or { service: L, entry: L }) unless that is meant
@@ -91,7 +96,7 @@ The forms admit exactly the callers 4.x admitted, and `jsonAcl("acl")` the rows 
 
 4.x decided row access in overridden methods; 5.0 decides it in the service's `access` policy, for every surface at once.
 
-- [ ] `apps/api/src/services/task/index.ts:12` 4.x decided row access in checkEntryACL (now functions in this file): port them to a policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver). Until then this policy grants no row, so only service grants pass
+- [ ] `apps/api/src/services/task/index.ts:15` 4.x decided row access in checkEntryACL (now functions in this file): port them to a policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver). Until then this policy grants no row, so only service grants pass
 - [ ] `apps/api/src/services/task/service-core.ts:22` 4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver), then delete this function
 - [ ] `apps/api/src/services/user.ts:20` 4.x access override: port it to the service's access policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver), then delete this function
 - [ ] `apps/api/src/services/user.ts:36` 4.x decided row access in checkAccess (now functions in this file): port them to a policy (owner, jsonAcl, members, inherit, everyone, anyOf or resolver). Until then this policy grants no row, so only service grants pass
@@ -102,7 +107,7 @@ Subscribers receive the contract's projections, built from rows, with field leve
 
 - [ ] `apps/api/src/services/project.ts:50` 4.x toDto: subscribers now receive the contract entity's keys, projected from the row (dates as ISO strings); fold computed fields into a projection's select and map, then delete this function
 - [ ] `apps/api/src/services/project.ts:62` protected fields: declare them in the contract's fields with the level that may read each one (fields: { email: "Admin" }), then delete this function
-- [ ] `apps/api/src/services/task/service-core.ts:58` 4.x toDto: subscribers now receive the contract entity's keys, projected from the row (dates as ISO strings); fold computed fields into a projection's select and map, then delete this function
+- [ ] `apps/api/src/services/task/service-core.ts:63` 4.x toDto: subscribers now receive the contract entity's keys, projected from the row (dates as ISO strings); fold computed fields into a projection's select and map, then delete this function
 - [ ] `apps/api/src/services/user.ts:9` 4.x toDto: subscribers now receive the contract entity's keys, projected from the row (dates as ISO strings); fold computed fields into a projection's select and map, then delete this function
 - [ ] `apps/api/src/services/user.ts:29` protected fields: declare them in the contract's fields with the level that may read each one (fields: { email: "Admin" }), then delete this function
 
@@ -164,9 +169,9 @@ Methods of a kit method's shape (`get`, `list`, `create`, `getTask`, ...): the k
 - [ ] `apps/api/src/services/project.ts:98` createProject has the shape of the read/write kit's create, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/project.ts:112` getProject has the shape of the read/write kit's get, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/project.ts:156` deleteProject has the shape of the read/write kit's delete, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
-- [ ] `apps/api/src/services/task/index.ts:17` createTask has the shape of the read/write kit's create, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
-- [ ] `apps/api/src/services/task/index.ts:19` listTasks has the shape of the read/write kit's list, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
-- [ ] `apps/api/src/services/task/index.ts:22` updateTask has the shape of the read/write kit's update, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/task/index.ts:20` createTask has the shape of the read/write kit's create, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/task/index.ts:26` listTasks has the shape of the read/write kit's list, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
+- [ ] `apps/api/src/services/task/index.ts:29` updateTask has the shape of the read/write kit's update, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 - [ ] `apps/api/src/services/user.ts:48` updateUser has the shape of the read/write kit's update, which checks access on every row it touches, pages and stays live: replace it with crud.handlers (crud.contract in the contract), or keep it with a "// quickdraw: hand-written because <reason>" comment above it (lint: prefer-kit)
 
 ## Service instance state and the 4.x context

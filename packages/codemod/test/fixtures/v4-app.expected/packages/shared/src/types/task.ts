@@ -56,4 +56,20 @@ export interface TaskServiceMethods {
     payload: { projectId: string };
     response: TaskDTO[];
   };
+  assignTask: {
+    payload: { id: string; assigneeId: string | null };
+    response: TaskDTO;
+  };
+  renameTask: {
+    payload: { id: string; title: string };
+    response: TaskDTO;
+  };
+  getTaskTitle: {
+    payload: { id: string };
+    response: { title: string | null };
+  };
+  countTasks: {
+    payload: { projectId: string };
+    response: { count: number };
+  };
 }

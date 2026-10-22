@@ -27,6 +27,7 @@ import {
   ts,
 } from "ts-morph";
 import type { Work } from "../apply";
+import { bindsName, freeName } from "../bindings";
 import type { RunContext } from "../context";
 import { type Category, MarkerSet } from "../markers";
 import type { ServicePlan } from "../plan";
@@ -40,42 +41,6 @@ interface FileScope {
   readonly markers: MarkerSet;
   /** `server`, or `client` in the web app. */
   readonly category: Category;
-}
-
-/** Whether `identifier` declares a binding (a variable, a parameter, an import, a function or class). */
-function declaresBinding(identifier: Identifier): boolean {
-  const parent = identifier.getParent();
-  if (
-    Node.isVariableDeclaration(parent) ||
-    Node.isParameterDeclaration(parent) ||
-    Node.isBindingElement(parent) ||
-    Node.isFunctionDeclaration(parent) ||
-    Node.isClassDeclaration(parent) ||
-    Node.isEnumDeclaration(parent)
-  ) {
-    return parent.getNameNode() === identifier;
-  }
-  if (Node.isImportSpecifier(parent)) {
-    return (parent.getAliasNode() ?? parent.getNameNode()) === identifier;
-  }
-  return Node.isImportClause(parent) || Node.isNamespaceImport(parent);
-}
-
-/** Whether the file binds `name` anywhere. */
-function bindsName(file: SourceFile, name: string): boolean {
-  return file
-    .getDescendantsOfKind(SyntaxKind.Identifier)
-    .some((identifier) => identifier.getText() === name && declaresBinding(identifier));
-}
-
-/** `base`, or `base2`, `base3`... the first the file does not use. */
-function freeName(file: SourceFile, base: string): string {
-  const used = new Set(file.getDescendantsOfKind(SyntaxKind.Identifier).map((id) => id.getText()));
-  let name = base;
-  for (let index = 2; used.has(name); index += 1) {
-    name = `${base}${String(index)}`;
-  }
-  return name;
 }
 
 /** The file a relative module specifier names, when the project holds it. */

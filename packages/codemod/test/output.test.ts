@@ -1,12 +1,16 @@
 // What the codemod writes is 5.0 code: on the fixture app's output, every
 // file parses (oxlint, whose parser also refuses `super` outside a class),
-// no review marker trails code on its line, and the TypeScript compiler
-// (against the built @fitzzero/quickdraw-core) and the 5.0 lint rules
-// (@fitzzero/quickdraw-lint's base config) report problems only on what a
-// review marker covers, apart from a name or module that does not bind in a
-// contract, which no marker excuses. The input, for contrast, is genuine 4.1
-// code: it typechecks against the published @fitzzero/quickdraw-core 4.1.0,
-// and the 5.0 rules report it.
+// declares each name once in a scope (TypeScript, which also sees an import
+// and a local declaration of one name, where oxlint does not) and has no
+// local shadowing a binding of its module (oxlint's no-redeclare and
+// no-shadow, which the 5.0 lint baseline enables), no review marker trails
+// code on its line, and the TypeScript compiler (against the built
+// @fitzzero/quickdraw-core) and the 5.0 lint rules (@fitzzero/quickdraw-lint's
+// base config) report problems only on what a review marker covers, apart
+// from a name or module that does not bind in a contract, which no marker
+// excuses. The input, for contrast, is genuine 4.1 code: it typechecks
+// against the published @fitzzero/quickdraw-core 4.1.0, and the 5.0 rules
+// report it.
 
 import { cpSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -82,6 +86,13 @@ function typecheck(
  */
 const BINDING = new Set([2300, 2304, 2305, 2307, 2393, 2440, 2451, 2552, 2724, 6133, 6192, 6196]);
 
+/**
+ * The codes of the diagnostics that say a scope declares a name twice
+ * (duplicate identifier, function implementation or declaration, an import
+ * beside a local declaration): no file of the output may hold one.
+ */
+const REDECLARED = new Set([2300, 2393, 2395, 2440, 2451]);
+
 /** Diagnostics on lines no review marker covers (or that use todoSchema). */
 function uncovered<T extends { file: string; line: number }>(
   diagnostics: readonly T[],
@@ -107,6 +118,18 @@ describe("the output", () => {
     writeFileSync(join(root, "parse-only.json"), JSON.stringify({ plugins: [], categories: {} }));
     const unparsed = lint(root, "parse-only.json").filter((diagnostic) => diagnostic.rule === "");
     expect(unparsed).toEqual([]);
+  });
+
+  it("declares each name once in a scope, and no local shadows a binding of its module", () => {
+    // oxlint does not report an import beside a local declaration of its name; TypeScript does
+    const redeclared = typecheck(root, {}).filter((diagnostic) => REDECLARED.has(diagnostic.code));
+    expect(redeclared).toEqual([]);
+    const rules = { "no-redeclare": "error", "no-shadow": "error" };
+    writeFileSync(join(root, "bindings.json"), JSON.stringify({ plugins: [], rules }));
+    const clashes = lint(root, "bindings.json").filter((diagnostic) =>
+      ["eslint(no-redeclare)", "eslint(no-shadow)"].includes(diagnostic.rule),
+    );
+    expect(clashes).toEqual([]);
   });
 
   it("puts every review marker on a line of its own, never after code", () => {

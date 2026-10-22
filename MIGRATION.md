@@ -125,7 +125,11 @@ faithfully. What it does:
   module's parameter is the service class or a port of it
   (`Pick<BaseService<...>, "defineMethod" | ...> & { ... }`, an interface
   extending `Pick<ChatService, ...>`, read from the source); the port type
-  is marked. A `defineMethod` call the codemod cannot tie to a service
+  is marked. Where the module or the service file binds a method's name
+  already, the codemod renames that binding, or names the method object
+  `<name>Method` when other files use the binding
+  ([Splitting large services](#splitting-large-services) lists the
+  renames). A `defineMethod` call the codemod cannot tie to a service
   keeps its file, and the contract's marker for the method map's
   unimplemented methods names it at its file and line. A function that only
   calls the modules' register functions, or other such functions (an
@@ -2080,6 +2084,23 @@ export const taskService = qd.defineService(taskContract, {
   },
 });
 ```
+
+Each method object takes its method's name, so `methods` lists it
+shorthand. A 4.x file can bind that name already, and two of a name in one
+scope do not parse, so the codemod renames what the file owns, with every
+use: in a method module, a function or variable of the method's name (a
+handler's body kept beside it) becomes `<name>Body`, and an import of it
+`<name> as <name>Impl`; in the service file, an import of it becomes
+`<name> as <name>Impl`; and a binding inside a function that would shadow
+the method object (`const { renameTask } = await import("./rows.js")`)
+becomes `{ renameTask: renameTaskImpl }`. What other files see keeps its
+name: beside a helper the module exports under the method's name, the
+method object is `<name>Method`, and where the service file declares the
+name itself (a wrapper of the method), it imports the object as
+`<name>Method` and lists it as `renameTask: renameTaskMethod`. A service
+class's member of a module method's name, which the method's handler may
+call (`service.renameTask(...)`), is hoisted as `<name>Of<Class>`. None of
+these is marked.
 
 ## Order of the migrations
 

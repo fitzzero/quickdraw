@@ -73,6 +73,11 @@ export abstract class TaskServiceCore extends BaseService<
     return { id: task.id, title: task.title, status: task.status, ordinal: task.ordinal };
   }
 
+  // A helper of a method's name, which that method's handler calls on the service
+  public async countTasks(projectId: string): Promise<number> {
+    return await this.prisma.task.count({ where: { projectId } });
+  }
+
   protected override toDto(task: Task): TaskDTO {
     return this.toTaskDto(task);
   }

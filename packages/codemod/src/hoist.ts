@@ -151,7 +151,11 @@ export function setupOnlyMethods(service: ServiceModel): Set<string> {
   return only;
 }
 
-/** The module-level names each member of the chain is hoisted to. */
+/**
+ * The module-level names each member of the chain is hoisted to. A name a
+ * method module's method object takes is taken: the module, and the service
+ * file that lists the object, import hoisted members beside it.
+ */
 export function hoistedNames(
   service: ServiceModel,
   setupOnly: ReadonlySet<string>,
@@ -162,6 +166,7 @@ export function hoistedNames(
     const file = cls.getSourceFile();
     const taken = new Set([
       ...locals,
+      ...service.methods.flatMap((method) => (method.register === undefined ? [] : [method.name])),
       ...file
         .getImportDeclarations()
         .flatMap((declaration) =>

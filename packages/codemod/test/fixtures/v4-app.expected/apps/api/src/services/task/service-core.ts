@@ -55,6 +55,11 @@ export function toCard(task: Task): TaskCard {
   return { id: task.id, title: task.title, status: task.status, ordinal: task.ordinal };
 }
 
+// A helper of a method's name, which that method's handler calls on the service
+export async function countTasksOfTaskServiceCore(projectId: string): Promise<number> {
+  return await db.task.count({ where: { projectId } });
+}
+
 // quickdraw-migrate: review [projection] 4.x toDto: subscribers now receive the contract entity's keys, projected from the row (dates as ISO strings); fold computed fields into a projection's select and map, then delete this function
 function toDto(task: Task): TaskDTO {
   return toTaskDto(task);

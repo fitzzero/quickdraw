@@ -83,11 +83,18 @@ It expects the quickdraw template's layout; the options move each part:
   whether their parameter is the class or a port of it, read from the
   source: `Pick`, `Omit`, `Partial`, `Readonly` or `Required` of the class
   or of `BaseService<...>` over its method map, through type aliases,
-  interfaces, type parameters and intersections. The port type is marked. A
-  `defineMethod` call tied to no service is named at its file and line in
-  the contract's marker for the method map's unimplemented methods. A
-  function that only calls the modules' register functions, or other such
-  functions (an aggregator, such as
+  interfaces, type parameters and intersections. The port type is marked.
+  Each method object takes its method's name: where its module or the
+  service file binds the name already, a local helper becomes
+  `<name>Body`, an import `<name> as <name>Impl` and a binding inside a
+  function `<name>Impl`, with every use; a helper the module exports, or a
+  declaration of the service file, keeps its name, and the object is
+  written or imported as `<name>Method` (`methods: { name: nameMethod }`).
+  A service class's member of a module method's name is hoisted as
+  `<name>Of<Class>`. A `defineMethod` call tied to no service is named at
+  its file and line in the contract's marker for the method map's
+  unimplemented methods. A function that only calls the modules' register
+  functions, or other such functions (an aggregator, such as
   `defineQueryMethods(service) { defineGetTarget(service); ... }`), is
   removed with its calls, and so is a file it leaves empty that nothing
   imports; the summary counts the removed aggregators. One that does more
