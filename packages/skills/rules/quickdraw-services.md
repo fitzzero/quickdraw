@@ -111,6 +111,10 @@ export const taskService = qd.defineService(task, {
   and is cancelled with `ctx.signal`; it is typed by the app's `contracts`
   (`initQuickdraw<{ ...; contracts }>()`). Never write another service's
   model directly to skip its access checks.
+- A call through `ctx.services` carries this call's `ctx.mcp`, nested calls
+  too, so in an MCP call the method it reaches sees the token's fields. Its
+  `ctx.transport` is `"internal"`: tell a token's call apart by `ctx.mcp`,
+  never by `ctx.transport === "mcp"`.
 
 ## REST routes call the services
 

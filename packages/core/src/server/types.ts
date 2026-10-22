@@ -34,7 +34,8 @@ export interface Principal {
  * - `context`: the fields `initQuickdraw({ context })` adds to every handler's `ctx`.
  * - `contracts`: the app's contracts (`{ task, project }`), which type `qd.caller`.
  * - `mcp`: the fields the MCP bridge's `context` option gives calls that
- *   arrive over MCP, which handlers read as `ctx.mcp` (token scopes, for example).
+ *   arrive over MCP, and the calls they make through `ctx.services`, which
+ *   handlers read as `ctx.mcp` (token scopes, for example).
  *
  * @example
  * export const qd = initQuickdraw<{ db: AppPrisma; principal: AppPrincipal }>();

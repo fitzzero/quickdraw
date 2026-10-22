@@ -34,10 +34,10 @@ export interface TouchOptions {
  * `ctx.services`: in-process callers for the app's services (RFC 0003
  * sections 3 and 10), by service name: `ctx.services.projectService.get(input)`.
  * A call runs the whole pipeline (input check, access, handler, output
- * check) as the calling principal with transport `"internal"`, its writes
- * join the calling method's unit of work (one flush for both), and it is
- * cancelled with `ctx.signal`. Typed by the `contracts` of the app's types,
- * like `qd.caller`; untyped without them.
+ * check) as the calling principal with transport `"internal"` and the
+ * calling method's `ctx.mcp`, its writes join the calling method's unit of
+ * work (one flush for both), and it is cancelled with `ctx.signal`. Typed by
+ * the `contracts` of the app's types, like `qd.caller`; untyped without them.
  */
 export type ContextServices<T extends QuickdrawTypes = QuickdrawTypes> = CallerFor<T>;
 
@@ -76,7 +76,10 @@ export interface BaseContext<P = Principal, M = McpContext> {
   /**
    * The fields the MCP bridge's `context` option produced for this call, such
    * as the scopes of the agent's token; typed by `QuickdrawTypes["mcp"]`.
-   * `undefined` unless the call arrived over MCP.
+   * `undefined` unless the call arrived over MCP or was made through the
+   * `ctx.services` of a call that has it (nested calls too), which passes
+   * the same object on. Such a call's `transport` is `"internal"`: to tell a
+   * token's call apart, read `ctx.mcp`, not `ctx.transport`.
    */
   readonly mcp?: M;
   /**
@@ -92,8 +95,9 @@ export interface BaseContext<P = Principal, M = McpContext> {
     options?: TouchOptions,
   ): void;
   /**
-   * In-process callers for the app's services, as this call's principal:
-   * `await ctx.services.projectService.get({ id })`. See {@link ContextServices}.
+   * In-process callers for the app's services, as this call's principal and
+   * with its `ctx.mcp`: `await ctx.services.projectService.get({ id })`. See
+   * {@link ContextServices}.
    */
   readonly services: ContextServices;
   /**
@@ -323,16 +327,19 @@ const NO_PRESENCE: Presence = Object.freeze({
 
 /**
  * `ctx.services` for a signal: callers acting as `principal` through
- * `dispatch`, every call cancelled with the signal.
+ * `dispatch`, every call cancelled with the signal and carrying `mcp`, the
+ * calling call's `ctx.mcp`. The inner call's `ctx` is built from its
+ * request, so its own `ctx.services` passes the same object on again.
  */
 function servicesOf(
   dispatch: Dispatch | undefined,
   principal: Principal | null,
+  mcp: McpContext | undefined,
 ): ((signal: AbortSignal) => ContextServices) | undefined {
   if (dispatch === undefined) {
     return undefined;
   }
-  return (signal) => createCaller(() => dispatch, principal, { signal }) as ContextServices;
+  return (signal) => createCaller(() => dispatch, principal, { signal, mcp }) as ContextServices;
 }
 
 /**
@@ -341,7 +348,7 @@ function servicesOf(
  */
 export function createContext(fields: ContextFields, extend?: ContextExtender): AnyContext {
   const { kit, dispatch, ...own } = fields;
-  const services = servicesOf(dispatch, own.principal);
+  const services = servicesOf(dispatch, own.principal, own.mcp);
   const base: AnyContext = Object.freeze({
     ...own,
     touch: own.touch ?? untracked,

@@ -129,8 +129,9 @@ export function contextFor(
     touch: settings.touch,
     rooms: realtime.roomsFor(request.transport, request.connectionId, target.method.share),
     presence: realtime.presence,
-    // `ctx.services` calls the app's services as this principal through this
-    // dispatcher; their units of work join this call's, so their writes flush with it.
+    // `ctx.services` calls the app's services as this principal, with this
+    // call's `ctx.mcp`, through this dispatcher; their units of work join
+    // this call's, so their writes flush with it.
     dispatch,
     kit: {
       service: target.service,

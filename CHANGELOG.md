@@ -57,6 +57,17 @@ All notable changes to this project will be documented in this file.
   from the schema text the generated client carries
   (`_engineConfig.inlineSchema`), with no statement, and probes only for
   what that text does not answer, as before.
+- **Behavior change: calls through `ctx.services` carry the calling MCP
+  call's `ctx.mcp`.** A method an MCP call reached through `ctx.services`
+  saw no `ctx.mcp`, so a guard that tells a token's call apart by it read
+  the inner call as a session's and let it through, and a frozen tool
+  surface delegating through `ctx.services`, as the README advises, lost
+  the token's fields. Every call made through an MCP call's
+  `ctx.services`, nested ones included, now sees the same `ctx.mcp`, and
+  its `ctx.transport` stays `"internal"`: tell a token's call apart by
+  `ctx.mcp`, not by `ctx.transport`. A guard that refuses a token on a
+  direct call now refuses it through `ctx.services` too. `qd.caller` and
+  the other in-process callers are unchanged.
 
 ### Codemod
 
