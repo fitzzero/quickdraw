@@ -1,6 +1,8 @@
 // What the codemod writes is 5.0 code: on the fixture app's output, every
 // file parses (oxlint, whose parser also refuses `super` outside a class),
-// no review marker trails code on its line, and the TypeScript compiler
+// binds each name once in a scope with no local shadowing a binding of its
+// module (oxlint's no-redeclare and no-shadow, which the 5.0 lint baseline
+// enables), no review marker trails code on its line, and the TypeScript compiler
 // (against the built @fitzzero/quickdraw-core) and the 5.0 lint rules
 // (@fitzzero/quickdraw-lint's base config) report problems only on what a
 // review marker covers, apart from a name or module that does not bind in a
@@ -107,6 +109,15 @@ describe("the output", () => {
     writeFileSync(join(root, "parse-only.json"), JSON.stringify({ plugins: [], categories: {} }));
     const unparsed = lint(root, "parse-only.json").filter((diagnostic) => diagnostic.rule === "");
     expect(unparsed).toEqual([]);
+  });
+
+  it("binds each name once in a scope, and no local shadows a binding of its module", () => {
+    const rules = { "no-redeclare": "error", "no-shadow": "error" };
+    writeFileSync(join(root, "bindings.json"), JSON.stringify({ plugins: [], rules }));
+    const clashes = lint(root, "bindings.json").filter((diagnostic) =>
+      ["eslint(no-redeclare)", "eslint(no-shadow)"].includes(diagnostic.rule),
+    );
+    expect(clashes).toEqual([]);
   });
 
   it("puts every review marker on a line of its own, never after code", () => {

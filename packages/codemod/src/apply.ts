@@ -15,6 +15,8 @@ export interface NeededImport {
   /** A package name, or an absolute file path for a relative import. */
   readonly from: string;
   readonly typeOnly?: boolean;
+  /** The local name, when it is not `name`: `import { name as alias }`. */
+  readonly alias?: string;
 }
 
 /** What to do to one file. */
@@ -54,7 +56,10 @@ export class Work {
           ? relativeSpecifier(file.getFilePath(), needed.from, withJs(file))
           : needed.from;
         if (needed.from !== file.getFilePath()) {
-          ensureImport(file, source, needed.name, { typeOnly: needed.typeOnly === true });
+          ensureImport(file, source, needed.name, {
+            typeOnly: needed.typeOnly === true,
+            alias: needed.alias,
+          });
         }
       }
       dropUnused(file, work.dropIfUnused);

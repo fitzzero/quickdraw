@@ -92,7 +92,11 @@ function migrateService(
     leafWork.imports.push({ name: "db", from: paths.db });
   }
   for (const exported of build.moduleExports) {
-    leafWork.imports.push({ name: exported.name, from: exported.file.getFilePath() });
+    leafWork.imports.push({
+      name: exported.name,
+      from: exported.file.getFilePath(),
+      ...(exported.local === exported.name ? {} : { alias: exported.local }),
+    });
   }
   convertModules(ctx, plan, build, work, converted);
   dropMovedSchemas(plan, work);

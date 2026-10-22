@@ -62,14 +62,18 @@ export function usesJsExtension(project: Project, dir: string): boolean {
   return withJs > without;
 }
 
-/** Adds `name` to the file's import from `module`, creating the import when needed. */
+/**
+ * Adds `name` to the file's import from `module` (as `options.alias`, when
+ * given), creating the import when needed.
+ */
 export function ensureImport(
   file: SourceFile,
   module: string,
   name: string,
-  options: { readonly typeOnly?: boolean } = {},
+  options: { readonly typeOnly?: boolean; readonly alias?: string | undefined } = {},
 ): void {
   const typeOnly = options.typeOnly === true;
+  const local = options.alias ?? name;
   const bound = file
     .getImportDeclarations()
     .some(
@@ -78,13 +82,16 @@ export function ensureImport(
         declaration
           .getNamedImports()
           .some(
-            (specifier) => (specifier.getAliasNode() ?? specifier.getNameNode()).getText() === name,
+            (specifier) =>
+              (specifier.getAliasNode() ?? specifier.getNameNode()).getText() === local,
           ),
     );
   if (bound) {
     // Already imported, as a value or a type (`import { type X }` included).
     return;
   }
+  // `{ name as other }` binds another name: `name` is added beside it.
+  const specifier = options.alias === undefined ? name : { name, alias: options.alias };
   const existing = file
     .getImportDeclarations()
     .find(
@@ -94,15 +101,13 @@ export function ensureImport(
         declaration.isTypeOnly() === typeOnly,
     );
   if (existing !== undefined) {
-    if (!existing.getNamedImports().some((specifier) => specifier.getName() === name)) {
-      existing.addNamedImport(name);
-    }
+    existing.addNamedImport(specifier);
     return;
   }
   const index = file.getImportDeclarations().length;
   file.insertImportDeclaration(index, {
     moduleSpecifier: module,
-    namedImports: [name],
+    namedImports: [specifier],
     isTypeOnly: typeOnly,
   });
 }

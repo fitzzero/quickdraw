@@ -8,7 +8,9 @@
 // fields, getters, constructor and overrides survive as marked module code,
 // an inline import() type names its module from the contract file, moved
 // schemas of one name are merged or renamed and an aliased one is written by
-// its declared name, and a second run changes nothing.
+// its declared name, a method object whose name its module or service file
+// binds already gets that name free (or another name, beside an exported
+// binding), and a second run changes nothing.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -56,13 +58,13 @@ describe("the output on the 4.1 fixture app", () => {
   it("converts every service, method and hook call, and deletes the wrapper hooks", () => {
     expect(result.stats).toEqual({
       services: 5,
-      methods: 26,
+      methods: 30,
       aggregatorsRemoved: 2,
       contracts: 5,
       schemasMoved: 16,
       schemasMerged: 1,
       schemasRenamed: 1,
-      todoSchemas: 25,
+      todoSchemas: 31,
       clientCalls: 8,
       wrappersDeleted: 3,
     });
@@ -156,7 +158,7 @@ describe("aggregators, the functions that call method modules' register function
       /^export const listTasks = [^]*^export const reindexProject = /mu,
     );
     // no code left calls a function the run removed, nor the aggregator it kept
-    expect(declared).toHaveLength(9);
+    expect(declared).toHaveLength(10);
     const call = new RegExp(`\\b(?:${declared.join("|")})\\(`, "u");
     const calls = [...output].flatMap(([file, text]) =>
       text
@@ -234,6 +236,59 @@ describe("aggregators, the functions that call method modules' register function
     );
     expect(create).toMatch(/^ {2}if \(process\.env\.NODE_ENV !== "production"\) \{ ?\}\n/mu);
     expect(create).not.toContain("registerArchive(");
+  });
+});
+
+describe("a method object whose name its files bind already (task/methods/delegates.ts, task/index.ts)", () => {
+  const task = "apps/api/src/services/task";
+  const delegates = (): string => output.get(`${task}/methods/delegates.ts`) ?? "";
+  const service = (): string => output.get(`${task}/index.ts`) ?? "";
+
+  it("renames what the method module owns of the name: a local helper <name>Body, an import <name>Impl", () => {
+    expect(delegates()).toContain(
+      "async function renameTaskBody(db: PrismaClient, id: string, title: string) {",
+    );
+    expect(delegates()).toContain("const task = await renameTaskBody(db, input.id, input.title);");
+    expect(delegates()).toContain(
+      'import { assignTask as assignTaskImpl, countTasks as countTasksImpl } from "../rows.js";',
+    );
+    expect(delegates()).toContain(
+      "const task = await assignTaskImpl(db, input.id, input.assigneeId);",
+    );
+    expect(delegates()).toContain("count: await countTasksImpl(db, input.projectId),");
+    expect(
+      delegates().match(/^export const (?:assignTask|renameTask|countTasks) = \{$/gmu),
+    ).toHaveLength(3);
+    // and an exported helper keeps its name, for the files that import it: the object takes another
+    expect(delegates()).toContain(
+      "export async function getTaskTitle(db: PrismaClient, id: string)",
+    );
+    expect(delegates()).toContain("export const getTaskTitleMethod = {");
+    expect(delegates()).toContain("title: await getTaskTitle(db, input.id),");
+    expect(service()).toMatch(/^ {4}getTaskTitle: getTaskTitleMethod,$/mu);
+    expect(service()).toContain("return (await getTaskTitle(db, id)) ?? id;");
+  });
+
+  it("aliases the service file's import of an implementation under a method's name <name>Impl", () => {
+    expect(service()).toContain('import { assignTask as assignTaskImpl } from "./rows.js";');
+    expect(service()).toContain("await assignTaskImpl(db, id, userId);");
+    expect(service()).toMatch(/^ {4}assignTask,$/mu);
+  });
+
+  it("imports the method object as <name>Method where the service file declares the name itself", () => {
+    expect(service()).toContain("renameTask as renameTaskMethod");
+    expect(service()).toMatch(/^ {4}renameTask: renameTaskMethod,$/mu);
+    expect(service()).toContain(
+      "export async function renameTask(db: PrismaClient, id: string, title: string): Promise<void> {",
+    );
+  });
+
+  it("renames a binding inside a function that would shadow an imported method object <name>Impl", () => {
+    expect(service()).toContain(
+      'const { countTasks: countTasksImpl } = await import("./rows.js");',
+    );
+    expect(service()).toContain("return await countTasksImpl(db, projectId);");
+    expect(service()).toMatch(/^ {4}countTasks,$/mu);
   });
 });
 
@@ -485,7 +540,7 @@ describe("a placeholder input", () => {
       .map(([, text]) => text)
       .join("\n");
     const inputs = contracts.match(/input: todoSchema<\{ id: [^}]*\}>\([^)]*\)/gu) ?? [];
-    expect(inputs).toHaveLength(3);
+    expect(inputs).toHaveLength(6);
     for (const input of inputs) {
       expect(input).toContain('keys: ["id"');
     }
