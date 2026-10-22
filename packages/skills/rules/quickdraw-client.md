@@ -169,6 +169,16 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   joins again. What a peer sends is the peer's word, never checked by the
   server: parse each message with its schema as untrusted input. Never
   send `qd:peer` or `qd:relay` by hand (`no-raw-socket`).
+- Host mode: a player's `useStream` and `useChannel` of a host-served
+  member (`serve: "host"`) reach the room's host over a link, with no
+  change in the app; a channel's messages go on `fast`, so send input
+  every frame, never once. The host's client serves the members with
+  `defineHost(contract, { channels, streams }).serve(connection, { room })`
+  while `hostOf(connection, room)` is its own socket's id
+  (`onHostChange(connection, listener)` hears it change), and calls
+  `close()` when it is not. A host checks what players send it against the
+  contract, but each message stays that player's word, and what the host
+  sends is the host's word.
 - Admin screens: `qd.task.admin.adminList.useQuery(input)` and the other
   admin kit members; `useAdminServices(qd)` lists the services whose
   `adminMeta` answers the user, asking only those the hello's grants allow

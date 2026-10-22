@@ -2948,20 +2948,223 @@ export function useMatchLinks(matchId: string, onMove: OnMove): (move: Move) => 
   its milliseconds), `offset`, `rtt`, `jitter` and `synced`.
 - The server's limits: a socket signals at most 64 peers at once
   (`CONFLICT`) and 20 signals a second (a burst of 40; `RATE_LIMITED`).
-  It relays only between two sockets that signalled each other, at most 120 messages a
-  second to each peer (a burst of 240) and 1 MiB a second in all (a burst
-  of 2 MiB), and drops the rest silently; the client keeps under these
-  itself, from the hello's `limits.peers`. A socket that keeps flooding
-  either is disconnected, as for channels. A socket that leaves a room, is
-  taken out of it or disconnects ends its links there: the server tells
-  each peer it signalled, and each that signalled it. Behind a cluster adapter the node that holds a
-  socket checks it, and the relay crosses nodes.
+  It relays only between two sockets that signalled each other, at most
+  120 messages a second to each peer (a burst of 240) and 1 MiB a second
+  in all (a burst of 2 MiB), and drops the rest silently; the client keeps
+  under these itself, from the hello's `limits.peers`. A socket that keeps
+  flooding either is disconnected, as for channels. A socket that leaves a
+  room, is taken out of it or disconnects ends its links there: the server
+  tells each peer it signalled, and each that signalled it. Behind a
+  cluster adapter the node that holds a socket checks it, and the relay
+  crosses nodes.
 - What a peer sends is the peer's word: the server checks who may link,
   never what a link carries. Parse a link's messages as any input, and
   check on the server whatever a client reports there.
 - Tests: `createLoopbackPeerLink({ ms, jitter, loss })` (from `./testing`)
   links two ends in one process, with a delay and jitter per message and
   loss on `fast` alone.
+
+### Host mode
+
+One player's client can run a room's authoritative simulation as the
+room's host (design: section 12.5). A contract declares the channels and
+streams the host serves (`serve: "host"`): a player's messages and feeds
+of them go to the room's host over the player's link, and never reach the
+server. The server only says who hosts: a method makes the calling socket
+the room's host (`ctx.rooms.setHost(room)`), and each socket of the room
+hears it (`qd:host`). Host mode runs over peer links, so the server needs
+`peers: true` (`createServer` throws without it):
+
+<!-- example: packages/shared/src/kits/host.ts#contract -->
+
+```ts
+export const arena = defineContract("arenaService", {
+  describe: "Arenas whose simulation one player's client runs, as the arena's host.",
+  methods: {
+    enterArena: mutation({
+      input: z.object({ arenaId: z.string() }),
+      output: z.boolean(),
+      describe: "Joins the caller's socket to an arena's room.",
+    }),
+    hostArena: mutation({
+      input: z.object({ arenaId: z.string() }),
+      output: z.boolean(),
+      describe: "Makes the caller's socket the arena's host, while it has none.",
+    }),
+  },
+  channels: {
+    // a player's input: to the arena's host over the player's link, never to the server
+    steer: {
+      payload: z.object({
+        arenaId: z.string(),
+        dx: z.number().min(-1).max(1),
+        dy: z.number().min(-1).max(1),
+      }),
+      ratePerSecond: 30,
+      requires: { room: (steer) => arenaRoom(steer.arenaId) },
+      serve: "host",
+    },
+  },
+  streams: {
+    // the host's world, to each player of the arena: the latest snapshot seeds a newcomer
+    world: {
+      item: snapshotSchema,
+      scope: "arenaId",
+      seed: 1,
+      volatile: true,
+      access: { room: arenaRoom },
+      serve: "host",
+    },
+  },
+});
+```
+
+<!-- example: apps/api/src/services/kits/host.ts#service -->
+
+```ts
+// on a server created with peers: true, as host mode runs over peer links
+export const arenaService = qd.defineService(arena, {
+  methods: {
+    enterArena: {
+      access: "authenticated",
+      handler: ({ input, ctx }) => ctx.rooms.join(arenaRoom(input.arenaId)),
+    },
+    hostArena: {
+      // the app picks the host, never the server: here the first player who asks
+      access: "authenticated",
+      handler: ({ input, ctx }) => {
+        const room = arenaRoom(input.arenaId);
+        return ctx.rooms.hostOf(room) === null && ctx.rooms.setHost(room);
+      },
+    },
+  },
+  // no handler for steer and no options for world: the arena's host serves both
+});
+```
+
+A player reads and sends as with a server's stream and channel:
+
+<!-- example: apps/web/src/components/kits/ArenaHost.tsx#player -->
+
+```tsx
+// a player reads the world and sends input as with any stream and channel: both reach the host
+export function useArena(arenaId: string) {
+  useJoin(qd.arena.enterArena, { arenaId });
+  const { items } = qd.arena.world.useStream(arenaId);
+  const { send } = qd.arena.steer.useChannel();
+  return {
+    world: items.at(-1),
+    // on the link's fast: never resent, so send input every frame, not once
+    steer: (dx: number, dy: number) => send({ arenaId, dx, dy }),
+  };
+}
+```
+
+The host's client serves the contract's host-served members with
+`defineHost`, while the server names its socket the room's host:
+
+<!-- example: apps/web/src/components/kits/ArenaHost.tsx#host -->
+
+```tsx
+// the arenas this client simulates as their host: each player's position, by user
+const arenas = new Map<string, { tick: number; players: Map<string, { x: number; y: number }> }>();
+
+// a peer's input arrives checked against the contract (schema, room, rate), but it is still
+// that player's word: the simulation applies it as it would any input
+const arenaHost = defineHost(arena, {
+  channels: {
+    steer: (steer, { peer }) => {
+      const players = arenas.get(steer.arenaId)?.players;
+      const at = players?.get(peer.userId) ?? { x: 0, y: 0 };
+      players?.set(peer.userId, { x: at.x + steer.dx, y: at.y + steer.dy });
+    },
+  },
+});
+
+// serves the arena while the server names this socket its host (qd:host), and stops when not
+export function useArenaHost(arenaId: string): void {
+  const { connection } = useQuickdraw();
+  useEffect(() => {
+    const room = arenaRoom(arenaId);
+    let host: Host<typeof arena> | undefined;
+    const settle = (): void => {
+      const hosting = hostOf(connection, room) === connection.socket.id;
+      if (hosting && host === undefined) {
+        arenas.set(arenaId, { tick: 0, players: new Map() });
+        host = arenaHost.serve(connection, { room });
+      } else if (!hosting && host !== undefined) {
+        host.close();
+        host = undefined;
+      }
+    };
+    const stop = onHostChange(connection, (changed) => {
+      if (changed === room) {
+        settle();
+      }
+    });
+    settle();
+    // the host's loop: twenty snapshots a second to every player of the arena
+    const loop = setInterval(() => {
+      const state = arenas.get(arenaId);
+      if (host !== undefined && state !== undefined) {
+        state.tick += 1;
+        host.stream("world").push(arenaId, {
+          tick: state.tick,
+          players: Object.fromEntries(state.players),
+        });
+      }
+    }, 50);
+    return () => {
+      stop();
+      clearInterval(loop);
+      host?.close();
+    };
+  }, [connection, arenaId]);
+}
+```
+
+- A host-served channel declares `requires: { room }`, the room whose
+  host takes its messages (a name, a function of the payload, or
+  `{ prefix }`); a host-served stream declares a scope and
+  `access: { room: (scope) => room }`, and its `seed: n` is how many items
+  the host keeps per scope for a newcomer. The service gives a host-served
+  channel no handler and a host-served stream no options (`defineService`
+  refuses them). The server drops a `qd:ch` to one (with a development
+  warning), refuses a `qd:stream:sub` to one (`VALIDATION`), and
+  `qd.stream(...).push` throws for one.
+- `ctx.rooms.setHost(room)` makes the calling socket the room's host and
+  returns true (false for a call without a socket); the socket must be in
+  the room (`FORBIDDEN`). A new `setHost` replaces the host. `hostOf(room)`
+  (on `ctx.rooms`, `qd.rooms` and `server.rooms`) returns the host's
+  socket id or `null`, and `clearHost(room)` clears it.
+- When the host leaves the room, is taken out of it or disconnects, the
+  room has no host: its sockets hear `qd:host` with `null`, and
+  `onHostLeave({ room, socketId, principal, reason })` (the service's and
+  `createServer`'s) runs once. The server never picks the next host; the
+  app does, as `hostArena` above lets the next player who asks. Behind a
+  cluster adapter each node knows each room's host.
+- `defineHost(contract, { channels, streams })` (from `./client`,
+  React-free) takes one handler per host-served channel, whose `ctx` is
+  `{ peer: { socketId, userId }, room }` (the user as the server named
+  it), and `streams.<name>.seed(scope)` to compute a newcomer's seed
+  (default: the latest items pushed, as many as the contract's `seed`).
+  `serve(connection, { room })` answers the links of the room's players and
+  returns a `Host` with `stream(name).push(scope, item)` (checked against
+  the stream's schema), `peers` and `close()`. The host checks each message
+  as the server checks a channel's: its schema, its room, and a bucket per
+  player and channel; it ends the link of a player who floods. The host's
+  own `useChannel` and `useStream` for its room reach it in process.
+- `hostOf(connection, room)` and `onHostChange(connection, listener)`
+  (from `./client`) say who hosts a room the socket is in. A player's feed
+  subscribes again each time a link to the room's host opens (a new host,
+  a reconnect), and its seed replaces what it showed. A channel message is
+  dropped while no link is open, and goes on the link's `fast`, which the
+  relay may drop too: send input every frame. After a link to the host
+  closed, the next waits 1 s, doubling to 15 s while links keep closing
+  unopened.
+- The server never sees what a host and its players send each other. A
+  host is one player's client: trust what it reports no more than any
+  client's word, and check on the server whatever a service keeps of it.
 
 ### Auth routes kit
 

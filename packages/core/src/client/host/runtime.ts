@@ -73,11 +73,17 @@ export interface HostRuntime {
   close(): void;
 }
 
-/** A host-served channel's drops within this long are counted toward a flood. */
-const ABUSE_WINDOW_MS = 10_000;
+/**
+ * A host-served channel's drops within this long are counted toward a
+ * flood: the server's `CHANNEL_ABUSE_WINDOW_MS`.
+ */
+export const ABUSE_WINDOW_MS = 10_000;
 
-/** A peer whose drops within the window pass this many times the channel's rate loses its link. */
-const ABUSE_MULTIPLIER = 100;
+/**
+ * A peer whose drops within the window pass this many times the channel's
+ * rate loses its link: the server's `CHANNEL_ABUSE_MULTIPLIER`.
+ */
+export const ABUSE_MULTIPLIER = 100;
 
 /** The feeds one peer may hold. */
 const MAX_FEEDS = 500;

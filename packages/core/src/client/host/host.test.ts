@@ -21,6 +21,7 @@ import {
 import { createTestApp, type TestApp } from "../../testing/index";
 import { createLoopbackPeerLink } from "../../testing/peer";
 import type { Principal } from "../../server/index";
+import { CHANNEL_ABUSE_MULTIPLIER, CHANNEL_ABUSE_WINDOW_MS } from "../../server/realtime/channels";
 import { call } from "../call";
 import { createQuickdrawConnection, type QuickdrawConnection } from "../connection";
 import { until } from "../__tests__/fixtures";
@@ -29,7 +30,12 @@ import { onPeerRequest } from "../peer/link";
 import { defineHost, type HostChannelContext } from "./host";
 import { hostOf } from "./hosts";
 import { hostLinksOf, type HostFeed } from "./links";
-import { createHostRuntime, type AnyHostImplementation } from "./runtime";
+import {
+  ABUSE_MULTIPLIER,
+  ABUSE_WINDOW_MS,
+  createHostRuntime,
+  type AnyHostImplementation,
+} from "./runtime";
 
 const world = { worldId: WORLD_ID };
 
@@ -124,6 +130,11 @@ describe("a host's runtime", () => {
     }
     await until(() => bo.link.state === "closed");
     expect(bo.link.closeReason).toBe("bye");
+    // The server's own flood rule for `qd:ch`.
+    expect([ABUSE_WINDOW_MS, ABUSE_MULTIPLIER]).toEqual([
+      CHANNEL_ABUSE_WINDOW_MS,
+      CHANNEL_ABUSE_MULTIPLIER,
+    ]);
   });
 
   it("answers a subscribe with the seed, and sends pushed items to subscribers alone, on fast for a volatile stream", async () => {

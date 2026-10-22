@@ -48,6 +48,52 @@ All notable changes to this project will be documented in this file.
   otherwise. `docs/protocol-v5.md` describes the frames, the link messages
   and the timings for other clients.
 
+### Host mode
+
+- **A room's host can serve a contract's channels and streams.** A channel
+  or stream declared `serve: "host"` is served by the host of its app
+  room, one player's client, over peer links: the server needs
+  `peers: true` (`createServer` throws without it) and never handles it.
+  A host-served channel declares `requires: { room }`; a host-served
+  stream declares a scope and `access: { room: (scope) => room }`, and its
+  `seed: n` is how many items the host keeps per scope. `defineService`
+  refuses a handler for a host-served channel and options for a
+  host-served stream. The server drops a `qd:ch` to one (with a
+  development warning), refuses a `qd:stream:sub` to one (`VALIDATION`),
+  and `qd.stream(...).push` throws for one.
+- **The server says who hosts.** `ctx.rooms.setHost(room)` makes the
+  calling socket the room's host (it must be in the room: `FORBIDDEN`);
+  `hostOf(room)` and `clearHost(room)` sit on `ctx.rooms`, `qd.rooms` and
+  `server.rooms`. A new frame, `qd:host [room, host | null]`, goes to the
+  room's sockets on each change and to a socket that joins a room with a
+  host. When the host leaves the room, is taken out of it or disconnects,
+  the room has none, and `onHostLeave({ room, socketId, principal, reason })`
+  (on `defineService` and `createServer`) runs once. The server never
+  picks the next host. Behind a cluster adapter each node knows each
+  room's host.
+- **The host's client.** `defineHost(contract, { channels, streams })` on
+  `./client` takes a handler per host-served channel and an optional seed
+  per host-served stream; `serve(connection, { room })` answers the links
+  of the room's players and returns a `Host` with
+  `stream(name).push(scope, item)`, `peers` and `close()`. It checks each
+  message as the server checks a channel's (schema, room, a bucket per
+  player and channel) and ends the link of a player who floods.
+- **Players change nothing.** `useChannel` and `useStream` of a
+  host-served member reach the room's host over a link, made on first use
+  and again for a new host or after a reconnect; the feed's seed replaces
+  what it held. After a link to the host closed, the next waits 1 s,
+  doubling to 15 s while links keep closing unopened. `hostOf(connection,
+room)` and `onHostChange(connection, listener)` on `./client` say who
+  hosts.
+- **The wire.** Host mode adds link messages beside the app's own: a
+  channel message (kind 3, on `fast`), subscribe and unsubscribe (4 and
+  5), a seed in chunks (6), an item (7, on `fast` for a volatile stream)
+  and a refused subscribe (8). `docs/protocol-v5.md` describes them and
+  what a peer and a host must do.
+- **Godot.** The GDScript client plays a player: `host_of(room)`, the
+  `host_changed` signal, and a `room` argument on `send_channel`,
+  `subscribe_stream`, `unsubscribe_stream` and `is_subscribed`.
+
 ## [5.1.1] - 2026-10-11
 
 ### Behavior changes for 5.1 apps

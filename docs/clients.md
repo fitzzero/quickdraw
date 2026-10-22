@@ -152,3 +152,16 @@ carries: a game treats each message as untrusted input, and checks on the
 server whatever a client reports there. A link is the socket's, as a room
 is: open it again after every reconnect. The GDScript client has the same
 links (`peer_link`), on the relay where Godot has no WebRTC.
+
+A room's host can serve a contract's channels and streams itself
+([README: Host mode](../README.md#host-mode); the wire in
+[`protocol-v5.md`](protocol-v5.md), "Host mode"). A channel or stream
+declared `serve: "host"` never reaches the server: a method makes a socket
+the room's host (`ctx.rooms.setHost(room)`), the server tells the room's
+sockets who it is (`qd:host`) and runs `onHostLeave` when it leaves, and
+the host's client serves the members with `defineHost(contract,
+{ channels, streams }).serve(connection, { room })`. A player's
+`useChannel` and `useStream` reach the room's host over a link with no
+change in the app; the GDScript client takes the room as one more argument
+of `send_channel` and `subscribe_stream`. The server never sees that
+traffic: what a host reports is one player's word.

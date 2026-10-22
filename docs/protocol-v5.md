@@ -239,6 +239,7 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
 | `qd:access`   | `AccessFrame`       | The user's service grants changed.                                                               |
 | `qd:peer`     | `PeerForwardFrame`  | A peer link's signal from another socket of an app room: `{ room, from, userId, sig }`.          |
 | `qd:relay`    | `RelayForwardFrame` | A peer link's message the server relays: `[room, from, label, text]`.                            |
+| `qd:host`     | `HostFrame`         | An app room's host (host mode): `[room, host]`, the host's socket id or `null`.                  |
 
 ## What a client must do
 
@@ -363,6 +364,65 @@ must keep to:
 | `PING_MS`           | 500 ms   | The time between the clock pings of an open link, after its first ones.                 |
 | `WATCHDOG_MS`       | 8000 ms  | A link that hears nothing from its peer for this long closes as `lost`.                 |
 | `PENDING_MS`        | 15000 ms | How long signals from a peer without a link wait for the app to answer.                 |
+
+## Host mode
+
+A contract may declare a channel or a stream `serve: "host"`: the host of
+an app room serves it over peer links, and the server never handles it. A
+method of the app makes a socket the room's host. The server sends
+`qd:host` (`HostFrame`, `[room, host]`) to the room's sockets each time
+its host changes, and to a socket that joins a room with a host, after its
+`qd:presence`. `host` is `null` once the room has none: its host left
+the room, was taken out of it or disconnected, or a method cleared it. The
+server never picks the next host; the app does. A host-served channel
+declares `requires.room`, and a host-served stream a scope and
+`access.room`: the room whose host serves a message or a feed.
+
+A peer, any other socket of the room:
+
+1. Opens a link to the room's host, as the offerer, when a host-served
+   channel's message or feed first needs one. It opens one again when
+   `qd:host` names another host, and after a link closed while a feed
+   still needs one. After a link to the host closed, the next to that host
+   waits 1 s, doubling to 15 s while links keep closing unopened: a peer
+   that sends input every frame must not signal the host every frame. A
+   host that `qd:host` names again is linked at once.
+2. Sends a host-served channel's message as `HostChannelMessage` on
+   `fast`, and drops it while no link to the host is open. `fast` is
+   never retransmitted, and the relay sends it volatile: send input as a
+   stream of updates, not as one-off commands.
+3. Subscribes to a host-served stream's feed with `HostSubscribe` on
+   `rel` each time a link to the room's host opens, and leaves it with
+   `HostUnsubscribe`. The seed arrives as `HostSeed` chunks: join their
+   items until the one whose `last` is true, then replace what the feed
+   held. Each `HostItem` appends. A `HostRefusal` refuses the subscribe,
+   with its error: the host sends nothing for that feed.
+4. Never sends `qd:ch` or `qd:stream:sub` for a host-served member: the
+   server drops the first and refuses the second with `VALIDATION`.
+
+The host:
+
+1. Answers the links of the room's peers. It never offers one.
+2. Checks each `HostChannelMessage` as the server checks `qd:ch`: the
+   channel is host-served, the payload passes the channel's schema, its
+   `requires.room` is the host's room, and the message is within the
+   peer's bucket for the channel (`ratePerSecond`, default
+   `CHANNEL_DEFAULT_RATE`; `burst`, default twice the rate). It drops a
+   message that fails, without a word, and closes the link of a peer whose
+   drops within `CHANNEL_ABUSE_WINDOW_MS` pass `CHANNEL_ABUSE_MULTIPLIER`
+   times the rate.
+3. Answers `HostSubscribe` with the feed's seed (`HostSeed`, in chunks
+   that each fit `limits.peers.maxMessageBytes`), or with `HostRefusal`:
+   `NOT_FOUND` for a stream that is not host-served, `FORBIDDEN` for a
+   scope whose room is not the host's room, and another code when it cannot
+   serve the feed (`CONFLICT` past the feeds it lets one peer hold).
+4. Sends each item pushed to a feed to the feed's subscribers as
+   `HostItem`: on `fast` for a volatile stream, else on `rel`.
+
+The server forwards a link's signals and relays its messages, but it never
+reads what a host and its peers send each other. A host trusts a peer's
+messages no more than the server would, and a service trusts nothing a
+host reports without checking it.
 
 ## Frame types
 
@@ -896,10 +956,10 @@ app room `room`. `userId` is the sender's user, as the server knows it.
 
 `qd:relay`, from a client, never acknowledged: a link message for socket
 `to` in app room `room`, sent volatile on `fast`. `text` is a
-`PeerMessage` as JSON, at most `limits.peers.maxMessageBytes`. The sender
-must have signalled `to` in that room first; a message over the rate or
-the byte budget of `limits.peers`, or to a socket that left the room, is
-dropped. A later revision may append elements after `text`.
+`PeerMessage` as JSON, at most `limits.peers.maxMessageBytes`. The two
+sockets must have signalled each other in that room; a message over the
+rate or the byte budget of `limits.peers`, or to a socket that left the
+room, is dropped. A later revision may append elements after `text`.
 
 A JSON array:
 
@@ -929,7 +989,7 @@ A peer link message: the JSON text of one data channel message or of a
 relayed `text`, alike on both paths. A receiver ignores a message whose
 first element it does not know, and elements after the ones it reads.
 
-One of `PeerData`, `PeerPing`, `PeerPong`.
+One of `PeerData`, `PeerPing`, `PeerPong`, `HostMessage`.
 
 #### `PeerData`
 
@@ -964,6 +1024,111 @@ A JSON array:
 | 0        | `kind` | `2`      |
 | 1        | `t`    | `number` |
 | 2        | `u`    | `number` |
+
+#### `HostMessage`
+
+A host mode message (section 12.5): what a peer and its room's host send
+each other over their link, kept apart from the app's own messages.
+
+One of `HostChannelMessage`, `HostSubscribe`, `HostUnsubscribe`, `HostSeed`, `HostItem`, `HostRefusal`.
+
+#### `HostChannelMessage`
+
+A message on a host-served channel, from a peer to the host of the channel's room. Sent on `fast`.
+
+A JSON array:
+
+| Position | Name      | Type      |
+| -------- | --------- | --------- |
+| 0        | `kind`    | `3`       |
+| 1        | `service` | `string`  |
+| 2        | `channel` | `string`  |
+| 3        | `payload` | `unknown` |
+
+#### `HostSubscribe`
+
+Subscribes to a feed of a host-served stream, from a peer to the host of its room. Sent on `rel`.
+
+A JSON array:
+
+| Position | Name      | Type     |
+| -------- | --------- | -------- |
+| 0        | `kind`    | `4`      |
+| 1        | `service` | `string` |
+| 2        | `stream`  | `string` |
+| 3        | `scope`   | `string` |
+
+#### `HostUnsubscribe`
+
+Leaves a feed of a host-served stream. Sent on `rel`.
+
+A JSON array:
+
+| Position | Name      | Type     |
+| -------- | --------- | -------- |
+| 0        | `kind`    | `5`      |
+| 1        | `service` | `string` |
+| 2        | `stream`  | `string` |
+| 3        | `scope`   | `string` |
+
+#### `HostSeed`
+
+The seed of a feed a peer subscribed to, from the host: the latest items
+it kept (or computed), oldest first, in chunks that each fit the message
+limit; `last` is true on the last chunk. Sent on `rel`.
+
+A JSON array:
+
+| Position | Name      | Type        |
+| -------- | --------- | ----------- |
+| 0        | `kind`    | `6`         |
+| 1        | `service` | `string`    |
+| 2        | `stream`  | `string`    |
+| 3        | `scope`   | `string`    |
+| 4        | `items`   | `unknown[]` |
+| 5        | `last`    | `boolean`   |
+
+#### `HostItem`
+
+An item pushed to a feed, from the host: on `fast` for a volatile stream, else on `rel`.
+
+A JSON array:
+
+| Position | Name      | Type      |
+| -------- | --------- | --------- |
+| 0        | `kind`    | `7`       |
+| 1        | `service` | `string`  |
+| 2        | `stream`  | `string`  |
+| 3        | `scope`   | `string`  |
+| 4        | `item`    | `unknown` |
+
+#### `HostRefusal`
+
+A subscribe the host refused (`NOT_FOUND`, `FORBIDDEN`, ...), from the host. Sent on `rel`.
+
+A JSON array:
+
+| Position | Name      | Type        |
+| -------- | --------- | ----------- |
+| 0        | `kind`    | `8`         |
+| 1        | `service` | `string`    |
+| 2        | `stream`  | `string`    |
+| 3        | `scope`   | `string`    |
+| 4        | `error`   | `WireError` |
+
+#### `HostFrame`
+
+`qd:host`, from the server: the host of app room `room` (the socket that
+serves its host-served channels and streams), or `null` when it has none.
+Sent to the room's sockets on every change, and to a socket that joins a
+room with a host.
+
+A JSON array:
+
+| Position | Name   | Type             |
+| -------- | ------ | ---------------- |
+| 0        | `room` | `string`         |
+| 1        | `host` | `string \| null` |
 
 ### Connection-level frames
 
