@@ -2,12 +2,14 @@
 // with the TypeScript parser rather than imported: the frame types and their
 // doc comments in `protocol/envelope.ts` (normative, RFC 0003 section 8), the
 // handshake in `protocol/version.ts`, the error codes in `protocol/errors.ts`,
-// the event, room and topic names in `contract/names.ts`, and the limits and
+// the event, room and topic names in `contract/names.ts`, the limits and
 // defaults a server announces or applies (the dispatcher's, the socket rate
-// limiter's, `qd:col:items`', the channels' and the stream feeds'). The
-// document says what the source text says,
-// so `--check` fails on any change to it. This module turns declarations
-// into fields and shapes; `protocolModel.ts` assembles the document's model.
+// limiter's, `qd:col:items`', the channels' and the stream feeds'), and the
+// timings of the client's peer links (`client/peer/`) and the limits of its
+// host mode (`client/host/`), which a peer written in another language keeps
+// to. The document says what the source text says, so `--check` fails on any
+// change to it. This module turns declarations into fields and shapes;
+// `protocolModel.ts` assembles the document's model.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -28,6 +30,12 @@ export const PROTOCOL_SOURCES = Object.freeze({
   realtime: "src/contract/realtime.ts",
   channels: "src/server/realtime/channels.ts",
   streams: "src/server/realtime/streamSubscribe.ts",
+  peer: "src/protocol/peer.ts",
+  peerCore: "src/client/peer/core.ts",
+  peerLink: "src/client/peer/link.ts",
+  peerHub: "src/client/peer/hub.ts",
+  hostLinks: "src/client/host/links.ts",
+  hostRuntime: "src/client/host/runtime.ts",
 });
 
 export type SourceName = keyof typeof PROTOCOL_SOURCES;

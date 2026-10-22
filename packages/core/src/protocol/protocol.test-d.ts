@@ -35,7 +35,16 @@ import {
   type ErrorCode,
   type HelloFrame,
   type HelloLimits,
+  type HelloPeerLimits,
   type HelloSubscriptionLimits,
+  type HostFrame,
+  type HostMessage,
+  type PeerForwardFrame,
+  type PeerMessage,
+  type PeerSignal,
+  type PeerSignalFrame,
+  type RelayForwardFrame,
+  type RelayFrame,
   type ProtocolMismatch,
   type QdHandshake,
   type ServerEventName,
@@ -198,6 +207,52 @@ describe("live data frames", () => {
   });
 });
 
+describe("peer link frames", () => {
+  test("qd:peer carries one signal to a socket of a room, and comes back naming its sender", () => {
+    expectTypeOf<PeerSignalFrame>().toEqualTypeOf<{
+      readonly room: string;
+      readonly to: string;
+      readonly sig: PeerSignal;
+    }>();
+    expectTypeOf<PeerForwardFrame["userId"]>().toEqualTypeOf<string>();
+    const offer: PeerSignal = { sdp: { type: "offer", sdp: "v=0" } };
+    const candidate: PeerSignal = { ice: { candidate: "candidate:1", sdpMid: null } };
+    const relay: PeerSignal = { relay: true };
+    expectTypeOf([offer, candidate, relay]).toEqualTypeOf<PeerSignal[]>();
+    // @ts-expect-error a description is an offer or an answer
+    const pranswer: PeerSignal = { sdp: { type: "pranswer", sdp: "v=0" } };
+    // @ts-expect-error relay is said, never unsaid
+    const unsaid: PeerSignal = { relay: false };
+    expectTypeOf([pranswer, unsaid]).toEqualTypeOf<PeerSignal[]>();
+  });
+
+  test("qd:relay is positional, and its text is a link message's JSON", () => {
+    expectTypeOf<RelayFrame>().toEqualTypeOf<
+      readonly [room: string, to: string, label: "rel" | "fast", text: string]
+    >();
+    expectTypeOf<RelayForwardFrame[1]>().toEqualTypeOf<string>();
+    expectTypeOf<Exclude<PeerMessage, HostMessage>>().toEqualTypeOf<
+      | readonly [kind: 0, data: unknown]
+      | readonly [kind: 1, t: number]
+      | readonly [kind: 2, t: number, u: number]
+    >();
+    expectTypeOf<HostMessage[0]>().toEqualTypeOf<3 | 4 | 5 | 6 | 7 | 8>();
+    expectTypeOf<HostFrame>().toEqualTypeOf<readonly [room: string, host: string | null]>();
+  });
+
+  test("a hello announces the peer limits only on a server that serves peer links", () => {
+    expectTypeOf<HelloLimits["peers"]>().toEqualTypeOf<HelloPeerLimits | undefined>();
+    expectTypeOf<keyof HelloPeerLimits>().toEqualTypeOf<
+      | "maxLinks"
+      | "maxMessageBytes"
+      | "relayRate"
+      | "relayBurst"
+      | "relayBytesPerSecond"
+      | "relayBytesBurst"
+    >();
+  });
+});
+
 describe("event maps", () => {
   test("are keyed by exactly the names in CLIENT_EVENTS and SERVER_EVENTS", () => {
     expectTypeOf<keyof ClientToServerEvents>().toEqualTypeOf<ClientEventName>();
@@ -225,6 +280,15 @@ describe("event maps", () => {
       socket.on("qd:ch", (frame) => {
         expectTypeOf(frame).toEqualTypeOf<ChannelFrame>();
       });
+      socket.on("qd:peer", (frame, ack) => {
+        expectTypeOf(frame).toEqualTypeOf<PeerSignalFrame>();
+        ack?.({ ok: true });
+        socket.emit("qd:peer", { room: frame.room, from: socket.id, userId: "u1", sig: frame.sig });
+      });
+      socket.on("qd:relay", (frame) => {
+        expectTypeOf(frame).toEqualTypeOf<RelayFrame>();
+        socket.volatile.emit("qd:relay", [frame[0], socket.id, frame[2], frame[3]]);
+      });
       socket.emit("qd:hello", hello);
       // @ts-expect-error not a protocol v5 event
       socket.emit("qd:nope", {});
@@ -241,6 +305,12 @@ describe("event maps", () => {
     socket.emit("qd:cancel", { id: "1" });
     socket.on("qd:e", (frame) => {
       expectTypeOf(frame).toEqualTypeOf<EntityFrame>();
+    });
+    socket.emit("qd:relay", ["game:1", "socket-2", "fast", "[1,0]"]);
+    // @ts-expect-error a link has two channels: rel and fast
+    socket.emit("qd:relay", ["game:1", "socket-2", "slow", "[1,0]"]);
+    socket.on("qd:peer", (frame) => {
+      expectTypeOf(frame).toEqualTypeOf<PeerForwardFrame>();
     });
   });
 });

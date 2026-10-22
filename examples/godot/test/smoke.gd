@@ -2,8 +2,11 @@ extends SceneTree
 ## Drives the client (the "Quickdraw" autoload) through one session against
 ## the game server at QD_URL (test/game.ts), writing the frames of
 ## test/frames.ts in order. Prints every frame with QD_TRACE=1, "STEP rotate"
-## when the harness should send qd:rotate, and a last line "RESULT {json}";
-## exits 0 when every check held. Run it with `bun run check:godot`.
+## when the harness should send qd:rotate, "STEP peer" when its player should
+## offer a peer link, "STEP host", "STEP unserve" and "STEP unhost" when it
+## should start the world's host, stop its serving and disconnect it, and a
+## last line "RESULT {json}"; exits 0 when every check held. Run it with
+## `bun run check:godot`.
 
 ## The window of the harness's qd:rotate (test/godot.ts sends the same), and
 ## the part of it the seeded client's moment falls in.
@@ -69,6 +72,9 @@ func _run() -> void:
 	print("STEP rotate")
 	await _rotating(client)
 	await _reconnected(client)
+	await _peer(client)
+	await _host(client)
+	client.close()
 	await _unclaimed(client)
 	await _refused(url, client.trace)
 	print("RESULT ", JSON.stringify({"checks": checks, "failures": failures}))
@@ -184,7 +190,80 @@ func _reconnected(client) -> void:
 	var refused: Dictionary = await client.subscribe_stream("gameService", "nowhere")
 	check(not refused.ok and refused.e.code == "NOT_FOUND", "a stream the service lacks is refused")
 	check(not client.is_subscribed("gameService", "nowhere") and client.is_subscribed("gameService", "ticks"), "a refused subscribe holds no feed")
-	client.close()
+
+
+## A peer link with the harness's player "bo", who joins the world and offers
+## one on "STEP peer" (test/godot.ts). Neither side has WebRTC, so the link
+## runs on the relay: bo says hello on rel, the client says hello back, and bo
+## closes the link.
+func _peer(client) -> void:
+	var asked: Array = []
+	var on_request := func(room: String, from: String, user: String) -> void: asked.append([room, from, user])
+	client.peer_requested.connect(on_request)
+	check(client.socket_id != "", "the client knows its socket id")
+	print("STEP peer")
+	check(await until(func() -> bool: return asked.size() == 1), "a peer's signal asks for a link")
+	check(asked[0][0] == "world:main" and asked[0][2] == "bo", "naming its room and its user")
+	var link = client.peer_link(asked[0][0], asked[0][1], false)
+	var heard: Array = []
+	var reasons: Array = []
+	link.message.connect(func(label: String, data: Variant) -> void: heard.append([label, data]))
+	link.closed.connect(func(reason: String) -> void: reasons.append(reason))
+	check(await until(func() -> bool: return heard.size() == 1), "the peer's message arrives over the link")
+	check(link.path == "relay" and link.user_id == "bo", "which runs on the relay, naming the peer's user")
+	check(heard[0][0] == "rel" and heard[0][1].hi == "ada", "on rel, as its JSON value")
+	check(link.send("rel", {"hi": "bo"}), "a message to the peer goes")
+	check(await until(func() -> bool: return reasons.size() == 1), "the peer closes the link")
+	check(reasons[0] == "bye" and link.state == "closed", "and the link closes with its bye")
+	client.peer_requested.disconnect(on_request)
+
+
+## Host mode with the world's host, a Node client of bo's the harness starts
+## on "STEP host" (test/host.ts): the client hears qd:host, subscribes to the
+## host-served `world` stream over a link to the host (on the relay, as
+## neither side has WebRTC), steers on the host-served `steer` channel and
+## hears the host's item for it, then unsubscribes. On "STEP unserve" the
+## host closes its links but stays the world's host: the client's steers are
+## dropped, and it makes no link while the wait after a closed link runs. On
+## "STEP unhost" the harness disconnects the host, and the world has none.
+func _host(client) -> void:
+	var hosts: Array = []
+	var on_host := func(room: String, host: String) -> void: hosts.append([room, host])
+	client.host_changed.connect(on_host)
+	check(client.host_of("world:main") == "", "the world has no host yet")
+	print("STEP host")
+	check(await until(func() -> bool: return hosts.size() == 1), "qd:host names the world's host")
+	var host: String = hosts[0][1] if hosts.size() == 1 else ""
+	check(hosts.size() == 1 and hosts[0][0] == "world:main" and host != "" and client.host_of("world:main") == host, "host_of knows it")
+	var sub: Dictionary = await client.subscribe_stream("gameService", "world", "main", "world:main")
+	check(sub.ok and (sub.seed as Array).size() == 1 and int(sub.seed[0].tick) == 0, "the host's seed arrives over a link to it")
+	check(client.is_subscribed("gameService", "world", "main", "world:main") and not client.is_subscribed("gameService", "world", "main"), "is_subscribed knows the host's feed")
+	# `fast` is unreliable, never resent: the client steers again until the
+	# host's item arrives, as a game sends its input each frame.
+	var before := items.size()
+	var sent := 0
+	for attempt in 10:
+		if client.send_channel("gameService", "steer", {"worldId": "main", "dx": 2}, "world:main"):
+			sent += 1
+		if await until(func() -> bool: return items.size() > before, 300):
+			break
+	check(sent > 0, "a steer goes to the host")
+	check(items.size() > before, "the host's item for it arrives")
+	check(items.size() > before and int(items[before].tick) == 1 and items[before].by == "ada", "as stream_item, naming who steered")
+	client.unsubscribe_stream("gameService", "world", "main", "world:main")
+	check(not client.is_subscribed("gameService", "world", "main", "world:main"), "unsubscribing drops the feed")
+	print("STEP unserve")
+	check(await until(func() -> bool: return not client._host_links.has("world:main")), "the host closes the link")
+	var refused := 0
+	for frame in 10:
+		if not client.send_channel("gameService", "steer", {"worldId": "main", "dx": 3}, "world:main"):
+			refused += 1
+		await process_frame
+	check(refused == 10 and not client._host_links.has("world:main"), "steers then are dropped, with no new link")
+	print("STEP unhost")
+	check(await until(func() -> bool: return hosts.size() == 2), "the world's host leaves")
+	check(hosts.size() == 2 and hosts[1] == ["world:main", ""] and client.host_of("world:main") == "", "and qd:host says it has none")
+	client.host_changed.disconnect(on_host)
 
 
 ## Answers nobody takes with `reply` are capped, the oldest dropped first;

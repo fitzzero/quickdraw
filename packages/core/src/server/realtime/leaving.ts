@@ -28,9 +28,10 @@ import { track, type Hub } from "../emit/hub";
 import { emptyRecords, ownRecord } from "../emit/subscriptions";
 import { describeError } from "../pipeline/metrics";
 import type { QuickdrawServerSocket } from "../transports/types";
+import { createRoomHosts } from "./hosts";
 import { exited, type LastInRoom, type RoomState } from "./roomFrames";
 import { checkRoom } from "./roomNames";
-import type { RoomLeave, RoomLeaveHandler, RoomLeaveReason, RoomLeft } from "./types";
+import type { RoomHosts, RoomLeave, RoomLeaveHandler, RoomLeaveReason, RoomLeft } from "./types";
 
 /** The server-to-server event `rooms.leave(room, { userId })` is broadcast on behind a cluster adapter. */
 export const ROOM_LEAVE_EVENT = "quickdraw:room-leave";
@@ -54,6 +55,20 @@ export interface LeavingState extends RoomState {
   listener: RoomLeaveListener | undefined;
   /** Hears a socket that left an app room and is still connected, before the hooks do. */
   readonly left?: ((socket: QuickdrawServerSocket) => void) | undefined;
+  /** The rooms' hosts (host mode): a host that leaves its room leaves it without one. */
+  readonly hosts: RoomHosts;
+}
+
+/**
+ * The leaving state of one dispatcher's app rooms, with their hosts, whom
+ * `served` (whether the server serves peer links) lets a method set.
+ */
+export function leavingState(
+  base: RoomState,
+  left: ((socket: QuickdrawServerSocket) => void) | undefined,
+  served: () => boolean,
+): LeavingState {
+  return { ...base, listener: undefined, left, hosts: createRoomHosts(base.hub, served) };
 }
 
 /**
@@ -137,6 +152,7 @@ export function leaveRoom(
     state.left?.(socket);
   }
   const last = exited(state, socket, room, socket.connected, reason === "removed");
+  state.hosts.left(socket, room, reason);
   heard(state, socket, reason, [[room, last]]);
   return true;
 }
@@ -146,6 +162,9 @@ export function leaveAll(state: LeavingState, socket: QuickdrawServerSocket): vo
   const left = Object.keys(socket.data.appRooms ?? {}).map(
     (room) => [room, exited(state, socket, room, false)] as const,
   );
+  for (const [room] of left) {
+    state.hosts.left(socket, room, "disconnect");
+  }
   socket.data.appRooms = emptyRecords();
   heard(state, socket, "disconnect", left);
 }

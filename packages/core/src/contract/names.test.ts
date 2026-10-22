@@ -54,11 +54,18 @@ describe("room names", () => {
 });
 
 describe("event names", () => {
-  it("lists every protocol v5 event once, under the qd: prefix", () => {
-    const names = [...Object.values(CLIENT_EVENTS), ...Object.values(SERVER_EVENTS)];
-    expect(names).toHaveLength(22);
-    expect(new Set(names).size).toBe(names.length);
-    expect(names.every((name) => name.startsWith("qd:"))).toBe(true);
+  it("lists every protocol v5 event once per direction, under the qd: prefix", () => {
+    const sent = Object.values(CLIENT_EVENTS);
+    const received = Object.values(SERVER_EVENTS);
+    expect([...sent, ...received]).toHaveLength(27);
+    expect(new Set(sent).size).toBe(sent.length);
+    expect(new Set(received).size).toBe(received.length);
+    // Only the peer link's events go both ways: the server forwards each under its own name.
+    expect(sent.filter((name) => (received as readonly string[]).includes(name))).toEqual([
+      "qd:peer",
+      "qd:relay",
+    ]);
+    expect([...sent, ...received].every((name) => name.startsWith("qd:"))).toBe(true);
   });
 
   it("matches RFC 0003 section 8", () => {
@@ -69,6 +76,8 @@ describe("event names", () => {
     expect(SERVER_EVENTS.collection).toBe("qd:c");
     expect(SERVER_EVENTS.presence).toBe("qd:presence");
     expect(CLIENT_EVENTS.streamSub).toBe("qd:stream:sub");
+    expect([CLIENT_EVENTS.peer, CLIENT_EVENTS.relay]).toEqual(["qd:peer", "qd:relay"]);
+    expect([SERVER_EVENTS.peer, SERVER_EVENTS.relay]).toEqual(["qd:peer", "qd:relay"]);
     expect(Object.isFrozen(CLIENT_EVENTS) && Object.isFrozen(SERVER_EVENTS)).toBe(true);
   });
 });

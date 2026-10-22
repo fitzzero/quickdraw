@@ -335,3 +335,9 @@ export function schemaFields(schema: JsonSchema): readonly SchemaField[] | undef
     notes: isRecord(value) ? schemaNotes(value) : "",
   }));
 }
+
+/** The type text of a schema, as a page shows it: its JSON Schema as text, or what stands for none. */
+export function typeOf(schema: unknown, mode: "input" | "output"): string {
+  const json = jsonSchemaOf(schema, mode);
+  return json === undefined ? NO_JSON_SCHEMA : schemaText(json);
+}

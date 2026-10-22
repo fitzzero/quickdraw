@@ -1258,6 +1258,8 @@ over three transports (design: sections 3, 8 and 10):
   events per minute per socket; channels, cancels and subscription events not
   counted); configure it with `rateLimit`, or turn it off with
   `rateLimit: false`. There is no default CORS origin: pass `cors`.
+  `peers: true` serves peer links between the clients of an app room
+  ([Peer links](#peer-links)).
   Socket.IO's connection state recovery is refused: `createServer` throws
   for `socket: { connectionStateRecovery }`, since a recovered socket would
   come back with its principal and rooms without authenticating again, so a
@@ -2831,6 +2833,373 @@ export function hasAudience(projectId: string): boolean {
   decided by asking every node once the socket left, so two sockets of one
   user leaving two nodes at the same moment may both see the other (a
   removal never misses: each node reports its own last socket).
+
+### Peer links
+
+Two players of one app room can link their clients: WebRTC data channels
+between them, or the server's relay when those cannot form (a browser
+behind a symmetric NAT, Node, a headless game client), with the same
+messages either way (design: section 12.5). A server opts in with
+`createServer({ peers: true })`: it forwards the signals that set a link
+up and relays its messages, only between two signed-in sockets of the
+room, and never reads what a link carries. A link has two channels: `rel`,
+ordered and reliable (state, chat), and `fast`, unordered and never resent
+(input, positions). The app tells players each other's socket ids, here
+with an event:
+
+<!-- example: apps/api/src/services/kits/peers.ts#service -->
+
+```ts
+// on a server created with peers: true, which forwards the links' signals and relays their messages
+export const matchService = qd.defineService(match, {
+  methods: {
+    enterMatch: {
+      // any signed-in user here: a real game checks the caller's seat in the match first
+      access: "authenticated",
+      handler: ({ input, ctx }) => {
+        const room = `match:${input.matchId}`;
+        const joined = ctx.rooms.join(room);
+        if (joined && ctx.socketId !== undefined) {
+          // the socket's own id, which a peer links to
+          ctx.rooms.emit(room, match, "playerJoined", {
+            matchId: input.matchId,
+            userId: ctx.principal.userId,
+            socketId: ctx.socketId,
+          });
+        }
+        return joined;
+      },
+    },
+  },
+});
+```
+
+<!-- example: apps/web/src/components/kits/MatchLinks.tsx#hook -->
+
+```tsx
+function track(links: Map<string, PeerLink>, link: PeerLink, onMove: { current: OnMove }): void {
+  links.set(link.peer, link);
+  link.on("message", (data) => {
+    // a peer's message is its word, never checked by the server: parse it as any input
+    const move = moveSchema.safeParse(data);
+    // userId: the peer's user, as the server named it (known once the link is open)
+    if (move.success && link.userId !== undefined) {
+      onMove.current(link.userId, move.data);
+    }
+  });
+  link.on("close", () => links.delete(link.peer));
+}
+
+// each player of a match linked to every other: send a move to all of them, hear theirs
+export function useMatchLinks(matchId: string, onMove: OnMove): (move: Move) => void {
+  const { connection } = useQuickdraw();
+  const room = `match:${matchId}`;
+  const [links] = useState(() => new Map<string, PeerLink>());
+  const heard = useRef(onMove);
+  useEffect(() => {
+    heard.current = onMove;
+  });
+  // on every connection: a link lives as long as its socket, and a reconnect is a new socket
+  useJoin(qd.match.enterMatch, { matchId });
+  // a player who joins later: this side offers (when both offer, the link settles who answers)
+  qd.match.playerJoined.useEvent((player) => {
+    const self = connection.socket.id;
+    if (player.matchId === matchId && player.socketId !== self && !links.has(player.socketId)) {
+      track(links, createPeerLink(connection, { room, to: player.socketId, offerer: true }), heard);
+    }
+  });
+  // the players here before: they offer, this side answers
+  useEffect(
+    () =>
+      onPeerRequest(connection, (request) => {
+        if (request.room === room) {
+          track(links, request.accept(), heard);
+        }
+      }),
+    [connection, room, links],
+  );
+  useEffect(
+    () => () => {
+      for (const link of links.values()) {
+        link.close();
+      }
+    },
+    [connection, room, links],
+  );
+  // direct when WebRTC connects, the server's relay when it cannot; fast: unordered, never resent
+  return (move) => {
+    for (const link of links.values()) {
+      link.send("fast", move);
+    }
+  };
+}
+```
+
+- `createPeerLink(connection, { room, to, offerer })` (from `./client`,
+  React-free) opens a link to socket `to` in app room `room`. One side
+  offers; when both do (each heard of the other at once), the side whose
+  socket id sorts after the other's answers instead.
+  `onPeerRequest(connection, listener)` hears a socket of the room that
+  signals this one with no link yet (`{ room, from, userId }`):
+  `request.accept(options?)` answers with a link, `request.reject()`
+  refuses it, and a request nobody answers is dropped after 15 s.
+- A link has `state` (`connecting`, `open`, `closed`), `path` (`direct` or
+  `relay`), `peer` and `userId` (the peer's socket and user, as the server
+  named them), `on("open" | "message" | "state" | "close", listener)` and
+  `close()`, which tells the peer. `send(label, data)` takes any JSON value
+  of at most 64 KiB as UTF-8 JSON (a `RangeError` above) and returns false
+  when it dropped it: the link is not open, `fast` is backed up, or the
+  relay's rate is spent (`stats` counts what was sent, received and
+  dropped). `closeReason` says why it closed: `closed` (this side), `bye`
+  (the peer closed it, or left the room, was taken out of it or
+  disconnected: the server says so at once), `left` (this socket left the
+  room), `disconnected` (a link lives as long as its socket: open it again
+  after a reconnect), `timeout` (nothing opened within 15 s), `lost`
+  (nothing heard for 8 s, or a `relay: "never"` link's direct path
+  dropped), `failed`, `refused` (the server refused a
+  signal) or `unsupported` (a server without `peers`).
+- The direct path comes first, over the platform's `RTCPeerConnection`
+  (`peerConnection` takes another, such as react-native-webrtc's;
+  `iceServers` defaults to Google's and Cloudflare's public STUN servers,
+  with no TURN). The relay takes over when ICE fails, when the direct path
+  does not open within 5 s or drops after it opened (`rel` messages in
+  flight on it may be lost: the link emits `state`, so the app can
+  resync; when a data channel closes, the link first waits 2 s for the
+  peer's bye, since a peer that closes its link closes its channels too),
+  and at once on a side without WebRTC or with
+  `relay: "always"`; `relay: "never"` closes the link instead. A link never
+  moves back from the relay.
+- `link.clock` reads the peer's clock from pings on `fast` (six quick ones
+  as the link opens, then one every 500 ms): `now()` (the peer's clock, in
+  its milliseconds), `offset`, `rtt`, `jitter` and `synced`.
+- The server's limits: a socket signals at most 64 peers at once
+  (`CONFLICT`) and 20 signals a second (a burst of 40; `RATE_LIMITED`).
+  It relays only between two sockets that signalled each other, at most
+  120 messages a second to each peer (a burst of 240) and 1 MiB a second
+  in all (a burst of 2 MiB), and drops the rest silently; the client keeps
+  under these itself, from the hello's `limits.peers`. A socket that keeps
+  flooding either is disconnected, as for channels. A socket that leaves a
+  room, is taken out of it or disconnects ends its links there: the server
+  tells each peer it signalled, and each that signalled it. Behind a
+  cluster adapter the node that holds a socket checks it, and the relay
+  crosses nodes.
+- What a peer sends is the peer's word: the server checks who may link,
+  never what a link carries. Parse a link's messages as any input, and
+  check on the server whatever a client reports there.
+- Tests: `createLoopbackPeerLink({ ms, jitter, loss })` (from `./testing`)
+  links two ends in one process, with a delay and jitter per message and
+  loss on `fast` alone.
+
+### Host mode
+
+One player's client can run a room's authoritative simulation as the
+room's host (design: section 12.5). A contract declares the channels and
+streams the host serves (`serve: "host"`): a player's messages and feeds
+of them go to the room's host over the player's link, and never reach the
+server. The server only says who hosts: a method makes the calling socket
+the room's host (`ctx.rooms.setHost(room)`), and each socket of the room
+hears it (`qd:host`). Host mode runs over peer links, so the server needs
+`peers: true` (`createServer` throws without it):
+
+<!-- example: packages/shared/src/kits/host.ts#contract -->
+
+```ts
+export const arena = defineContract("arenaService", {
+  describe: "Arenas whose simulation one player's client runs, as the arena's host.",
+  methods: {
+    enterArena: mutation({
+      input: z.object({ arenaId: z.string() }),
+      output: z.boolean(),
+      describe: "Joins the caller's socket to an arena's room.",
+    }),
+    hostArena: mutation({
+      input: z.object({ arenaId: z.string() }),
+      output: z.boolean(),
+      describe: "Makes the caller's socket the arena's host, while it has none.",
+    }),
+  },
+  channels: {
+    // a player's input: to the arena's host over the player's link, never to the server
+    steer: {
+      payload: z.object({
+        arenaId: z.string(),
+        dx: z.number().min(-1).max(1),
+        dy: z.number().min(-1).max(1),
+      }),
+      ratePerSecond: 30,
+      requires: { room: (steer) => arenaRoom(steer.arenaId) },
+      serve: "host",
+    },
+  },
+  streams: {
+    // the host's world, to each player of the arena: the latest snapshot seeds a newcomer
+    world: {
+      item: snapshotSchema,
+      scope: "arenaId",
+      seed: 1,
+      volatile: true,
+      access: { room: arenaRoom },
+      serve: "host",
+    },
+  },
+});
+```
+
+<!-- example: apps/api/src/services/kits/host.ts#service -->
+
+```ts
+// on a server created with peers: true, as host mode runs over peer links
+export const arenaService = qd.defineService(arena, {
+  methods: {
+    enterArena: {
+      access: "authenticated",
+      handler: ({ input, ctx }) => ctx.rooms.join(arenaRoom(input.arenaId)),
+    },
+    hostArena: {
+      // the app picks the host, never the server: here the first player who asks
+      access: "authenticated",
+      handler: ({ input, ctx }) => {
+        const room = arenaRoom(input.arenaId);
+        return ctx.rooms.hostOf(room) === null && ctx.rooms.setHost(room);
+      },
+    },
+  },
+  // no handler for steer and no options for world: the arena's host serves both
+});
+```
+
+A player reads and sends as with a server's stream and channel:
+
+<!-- example: apps/web/src/components/kits/ArenaHost.tsx#player -->
+
+```tsx
+// a player reads the world and sends input as with any stream and channel: both reach the host
+export function useArena(arenaId: string) {
+  useJoin(qd.arena.enterArena, { arenaId });
+  const { items } = qd.arena.world.useStream(arenaId);
+  const { send } = qd.arena.steer.useChannel();
+  return {
+    world: items.at(-1),
+    // on the link's fast: never resent, so send input every frame, not once
+    steer: (dx: number, dy: number) => send({ arenaId, dx, dy }),
+  };
+}
+```
+
+The host's client serves the contract's host-served members with
+`defineHost`, while the server names its socket the room's host:
+
+<!-- example: apps/web/src/components/kits/ArenaHost.tsx#host -->
+
+```tsx
+// the arenas this client simulates as their host: each player's position, by user
+const arenas = new Map<string, { tick: number; players: Map<string, { x: number; y: number }> }>();
+
+// a peer's input arrives checked against the contract (schema, room, rate), but it is still
+// that player's word: the simulation applies it as it would any input
+const arenaHost = defineHost(arena, {
+  channels: {
+    steer: (steer, { peer }) => {
+      const players = arenas.get(steer.arenaId)?.players;
+      const at = players?.get(peer.userId) ?? { x: 0, y: 0 };
+      players?.set(peer.userId, { x: at.x + steer.dx, y: at.y + steer.dy });
+    },
+  },
+});
+
+// serves the arena while the server names this socket its host (qd:host), and stops when not
+export function useArenaHost(arenaId: string): void {
+  const { connection } = useQuickdraw();
+  useEffect(() => {
+    const room = arenaRoom(arenaId);
+    let host: Host<typeof arena> | undefined;
+    const settle = (): void => {
+      const hosting = hostOf(connection, room) === connection.socket.id;
+      if (hosting && host === undefined) {
+        arenas.set(arenaId, { tick: 0, players: new Map() });
+        host = arenaHost.serve(connection, { room });
+      } else if (!hosting && host !== undefined) {
+        host.close();
+        host = undefined;
+      }
+    };
+    const stop = onHostChange(connection, (changed) => {
+      if (changed === room) {
+        settle();
+      }
+    });
+    settle();
+    // the host's loop: twenty snapshots a second to every player of the arena
+    const loop = setInterval(() => {
+      const state = arenas.get(arenaId);
+      if (host !== undefined && state !== undefined) {
+        state.tick += 1;
+        host.stream("world").push(arenaId, {
+          tick: state.tick,
+          players: Object.fromEntries(state.players),
+        });
+      }
+    }, 50);
+    return () => {
+      stop();
+      clearInterval(loop);
+      host?.close();
+    };
+  }, [connection, arenaId]);
+}
+```
+
+- A host-served channel declares `requires: { room }`, the room whose
+  host takes its messages (a name, a function of the payload, or
+  `{ prefix }`); a host-served stream declares a scope and
+  `access: { room: (scope) => room }`, and its `seed: n` is how many items
+  the host keeps per scope for a newcomer. The service gives a host-served
+  channel no handler and a host-served stream no options (`defineService`
+  refuses them). The server drops a `qd:ch` to one (with a development
+  warning), refuses a `qd:stream:sub` to one (`VALIDATION`), and
+  `qd.stream(...).push` throws for one.
+- `ctx.rooms.setHost(room)` makes the calling socket the room's host and
+  returns true (false for a call without a socket); the socket must be in
+  the room (`FORBIDDEN`). A new `setHost` replaces the host. `hostOf(room)`
+  (on `ctx.rooms`, `qd.rooms` and `server.rooms`) returns the host's
+  socket id or `null`, and `clearHost(room)` clears it.
+- When the host leaves the room, is taken out of it or disconnects, the
+  room has no host: its sockets hear `qd:host` with `null`, and
+  `onHostLeave({ room, socketId, principal, reason })` (the service's and
+  `createServer`'s) runs once. The server never picks the next host; the
+  app does, as `hostArena` above lets the next player who asks. Behind a
+  cluster adapter each node knows each room's host.
+- `defineHost(contract, { channels, streams })` (from `./client`,
+  React-free) takes one handler per host-served channel, whose `ctx` is
+  `{ peer: { socketId, userId }, room }` (the user as the server named
+  it), and `streams.<name>.seed(scope)` to compute a newcomer's seed
+  (default: the latest items pushed, as many as the contract's `seed`).
+  `serve(connection, { room })` answers the links of the room's players and
+  returns a `Host` with `stream(name).push(scope, item)` (checked against
+  the stream's schema), `peers` and `close()`. The host checks each message
+  as the server checks a channel's: its schema, its room, and a bucket per
+  player and channel; it ends the link of a player who floods. A player
+  subscribes at most 500 times at once and then 50 times a second
+  (`RATE_LIMITED`). A seed goes whole or not at all: one with an item too
+  large for a message of its own is refused (`INTERNAL`), and what the
+  relay drops on `rel` is sent again, in order. The host's own
+  `useChannel` and `useStream` for its room reach it in process. One
+  connection serves several contracts in a room, one `serve` each, over
+  the same links; serving one contract twice in a room throws.
+- `hostOf(connection, room)` and `onHostChange(connection, listener)`
+  (from `./client`) say who hosts a room the socket is in. A player's feed
+  subscribes again each time a link to the room's host opens (a new host,
+  a reconnect), and its seed replaces what it showed. A channel message is
+  dropped while no link is open, and goes on the link's `fast`, never
+  resent: send input every frame. After a link to the host
+  closed, the next waits 1 s, doubling to 15 s while links keep closing
+  unopened.
+- The server never sees what a host and its players send each other. A
+  host is one player's client: trust what it reports no more than any
+  client's word, and check on the server whatever a service keeps of it.
+  A service's `kinds` does not reach its host-served members either: the
+  host knows each player's user, not its kind, so any signed-in socket of
+  the room can link to it. Guard who joins the room.
 
 ### Auth routes kit
 

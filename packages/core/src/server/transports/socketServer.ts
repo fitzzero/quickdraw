@@ -7,10 +7,17 @@ import type { Server as HttpServer } from "node:http";
 import { Server, type ServerOptions } from "socket.io";
 import {
   MAX_ENTITY_IDS_PER_SOCKET,
+  MAX_PEER_LINKS,
+  MAX_PEER_MESSAGE_BYTES,
   MAX_SCOPES_PER_SOCKET,
   MAX_SUBSCRIBE_IDS,
   MAX_TOPICS_PER_SOCKET,
+  PEER_RELAY_BURST,
+  PEER_RELAY_BYTES_BURST,
+  PEER_RELAY_BYTES_PER_SECOND,
+  PEER_RELAY_RATE,
   PROTOCOL_VERSION,
+  type HelloPeerLimits,
 } from "../../protocol/version";
 import { QUICKDRAW_VERSION } from "../../version";
 import { createReplyMeter } from "./ack";
@@ -81,6 +88,8 @@ export interface SocketServerSettings extends Omit<SocketContext, "meter"> {
   readonly cluster?: ClusterOptions;
   /** The dispatcher's loop watch, which counts the rate limiter's refusals too. */
   readonly loops?: SocketLimitContext["loops"];
+  /** Whether the server serves peer links (`createServer`'s `peers`): its hello says so. */
+  readonly peers?: boolean;
 }
 
 /** The Socket.IO side of a quickdraw server. */
@@ -100,6 +109,24 @@ export interface SocketServer {
   disconnectUser(userId: string, options?: DisconnectUserOptions): number;
   /** Stops what runs in the background (a degraded node's probes): the server closes. */
   stop(): void;
+}
+
+/** What `qd:hello` announces of peer links, on a server that serves them. */
+const PEER_LIMITS: HelloPeerLimits = Object.freeze({
+  maxLinks: MAX_PEER_LINKS,
+  maxMessageBytes: MAX_PEER_MESSAGE_BYTES,
+  relayRate: PEER_RELAY_RATE,
+  relayBurst: PEER_RELAY_BURST,
+  relayBytesPerSecond: PEER_RELAY_BYTES_PER_SECOND,
+  relayBytesBurst: PEER_RELAY_BYTES_BURST,
+});
+
+/** The optional features a server announces: `binary` and `peer`, when on. */
+function featuresOf(settings: SocketServerSettings): readonly string[] {
+  return Object.freeze([
+    ...(settings.binary ? ["binary"] : []),
+    ...(settings.peers === true ? ["peer"] : []),
+  ]);
 }
 
 /** The part of `qd:hello` every socket of the server shares; `onConnection` adds the principal's. */
@@ -122,8 +149,9 @@ function helloFrame(settings: SocketServerSettings): ServerHello {
         maxScopes: MAX_SCOPES_PER_SOCKET,
         maxTopics: MAX_TOPICS_PER_SOCKET,
       }),
+      ...(settings.peers === true ? { peers: PEER_LIMITS } : {}),
     }),
-    features: Object.freeze(settings.binary ? ["binary"] : []),
+    features: featuresOf(settings),
   });
 }
 

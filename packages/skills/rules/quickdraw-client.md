@@ -159,6 +159,28 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   the user's say). Never join from a plain `useQuery` or a
   mount effect: a reconnect leaves the socket out of the room while the
   cached answer still looks fine. Without React, `connection.onHello`.
+- Peer links: on a server created with `peers: true`,
+  `createPeerLink(connection, { room, to, offerer })` (in React,
+  `useQuickdraw().connection`) links two sockets of an app room over
+  WebRTC data channels, or over the server's relay when those cannot form.
+  The peer's socket id comes from the app (an event carrying
+  `ctx.socketId`, a method's answer); `onPeerRequest(connection, listener)`
+  answers a peer that linked first. Send input at a tick rate on `fast`
+  (unordered, never resent) and state on `rel` (ordered, reliable). A link
+  dies with its socket: open it again on every connection, as `useJoin`
+  joins again. What a peer sends is the peer's word, never checked by the
+  server: parse each message with its schema as untrusted input. Never
+  send `qd:peer` or `qd:relay` by hand (`no-raw-socket`).
+- Host mode: a player's `useStream` and `useChannel` of a host-served
+  member (`serve: "host"`) reach the room's host over a link, with no
+  change in the app; a channel's messages go on `fast`, so send input
+  every frame, never once. The host's client serves the members with
+  `defineHost(contract, { channels, streams }).serve(connection, { room })`
+  while `hostOf(connection, room)` is its own socket's id
+  (`onHostChange(connection, listener)` hears it change), and calls
+  `close()` when it is not. A host checks what players send it against the
+  contract, but each message stays that player's word, and what the host
+  sends is the host's word.
 - Admin screens: `qd.task.admin.adminList.useQuery(input)` and the other
   admin kit members; `useAdminServices(qd)` lists the services whose
   `adminMeta` answers the user, asking only those the hello's grants allow

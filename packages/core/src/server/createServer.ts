@@ -23,7 +23,13 @@ import {
   type DispatcherBaseOptions,
   type PrincipalOfServices,
 } from "./dispatcher";
-import { liveOf, type RoomLeaveHandler, type RoomLeaveHook } from "./emit/live";
+import {
+  liveOf,
+  type HostLeaveHandler,
+  type HostLeaveHook,
+  type RoomLeaveHandler,
+  type RoomLeaveHook,
+} from "./emit/live";
 import {
   closer,
   prepareWatchdog,
@@ -57,6 +63,8 @@ import {
   type SocketCors,
   type SocketOptions,
   type SocketRateLimitOptions,
+  type SocketServer,
+  type SocketServerSettings,
 } from "./transports/socketServer";
 import type { Principal } from "./types";
 
@@ -117,8 +125,9 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
    * their own per-socket token buckets), `qd:cancel`, the entity and
    * collection subscription events (`qd:sub`, `qd:unsub`, `qd:col:sub`,
    * `qd:col:unsub`, `qd:col:items`), the topic watches (`qd:watch`,
-   * `qd:unwatch`) and the stream subscriptions (`qd:stream:sub`,
-   * `qd:stream:unsub`) are never counted; the ones that read run in a
+   * `qd:unwatch`), the stream subscriptions (`qd:stream:sub`,
+   * `qd:stream:unsub`) and peer link relay messages (`qd:relay`, which keep
+   * their own buckets) are never counted; the ones that read run in a
    * per-socket lane instead (`limits.subscriptions`: 8 at once, 64 waiting,
    * then `RATE_LIMITED`).
    */
@@ -184,6 +193,26 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
    * },
    */
   readonly onRoomLeave?: RoomLeaveHandler<P>;
+  /**
+   * Called once when the host of an app room leaves it (host mode): its own
+   * leave, a removal or a disconnect. Every service's own `onHostLeave` runs
+   * beside it, as for `onRoomLeave`. The room has no host until a method
+   * sets one again.
+   */
+  readonly onHostLeave?: HostLeaveHandler<P>;
+  /**
+   * Serve peer links (RFC 0003 section 12.5): two sockets of one app room
+   * open WebRTC data channels between them (`createPeerLink` on the
+   * client), the server forwarding their signals (`qd:peer`) and relaying
+   * their messages (`qd:relay`) when no direct path forms. It authorizes
+   * both by room membership and never sees what a direct link carries, so a
+   * service trusts nothing a peer reports. `qd:hello` then lists `"peer"` in
+   * `features` and the relay's limits in `limits.peers`. Default `false`:
+   * clients open no links, and the server forwards nothing between them.
+   * Host mode (a contract's `serve: "host"` channels and streams) runs over
+   * peer links: a server whose services declare any needs `peers: true`.
+   */
+  readonly peers?: boolean;
 }
 
 /**
@@ -306,10 +335,15 @@ function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void 
   if (timeout !== undefined && !(Number.isSafeInteger(timeout) && timeout >= 0)) {
     throw new TypeError("createServer: shutdownTimeoutMs must be a whole number of milliseconds");
   }
-  if (options.onRoomLeave !== undefined && typeof options.onRoomLeave !== "function") {
-    throw new TypeError(
-      "createServer: onRoomLeave must be a function of the leave and a run context",
-    );
+  if (options.peers !== undefined && typeof options.peers !== "boolean") {
+    throw new TypeError("createServer: peers must be true or false");
+  }
+  for (const hook of ["onRoomLeave", "onHostLeave"] as const) {
+    if (options[hook] !== undefined && typeof options[hook] !== "function") {
+      throw new TypeError(
+        `createServer: ${hook} must be a function of the leave and a run context`,
+      );
+    }
   }
   // Socket.IO turns recovery on for any truthy value, `{}` included.
   const socket = options.socket as Readonly<Record<string, unknown>> | undefined;
@@ -321,27 +355,57 @@ function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void 
 }
 
 /**
- * Runs every service's `onRoomLeave` and the server's own for every socket
- * that leaves app rooms, each in a detached unit of work of the dispatcher
- * of its own; what one throws is logged, and the others still run.
+ * Host mode runs over peer links: a service whose contract has a channel or
+ * a stream the room's host serves needs a server created with `peers: true`.
+ */
+function checkHostMode(services: readonly AnyService[], peers: boolean): void {
+  for (const service of peers ? [] : services) {
+    const { channels, streams } = service.contract;
+    const hosted = [
+      ...Object.entries(channels).map(([name, def]) => [`channel "${name}"`, def] as const),
+      ...Object.entries(streams).map(([name, def]) => [`stream "${name}"`, def] as const),
+    ].find(([, def]) => (def as { readonly serve?: unknown }).serve === "host");
+    if (hosted !== undefined) {
+      throw new TypeError(
+        `createServer: ${service.name}'s ${hosted[0]} is served by the room's host (serve: "host"), which runs over peer links; create the server with peers: true`,
+      );
+    }
+  }
+}
+
+/**
+ * Runs every service's `onRoomLeave` and `onHostLeave` and the server's own
+ * for every socket that leaves app rooms and every host that leaves its
+ * room, each in a detached unit of work of the dispatcher of its own; what
+ * one throws is logged, and the others still run.
  */
 function listenForLeaves<P extends Principal>(
   dispatcher: Dispatcher,
-  handler: RoomLeaveHandler<P> | undefined,
+  handlers: { readonly room?: RoomLeaveHandler<P>; readonly host?: HostLeaveHandler<P> },
 ): void {
   const services = [...dispatcher.registry.services.values()];
-  const hooks: RoomLeaveHook[] = services.flatMap((service) =>
+  const rooms: RoomLeaveHook[] = services.flatMap((service) =>
     service.onRoomLeave === undefined
       ? []
       : [{ owner: service.name, handler: service.onRoomLeave }],
   );
-  if (handler !== undefined) {
-    hooks.push({ owner: "createServer", handler: handler as RoomLeaveHandler });
-  }
-  liveOf(dispatcher)?.realtime.onRoomLeave(
-    hooks,
-    async (fn) => await dispatcher.run(fn, { detached: true }),
+  const hosts: HostLeaveHook[] = services.flatMap((service) =>
+    service.onHostLeave === undefined
+      ? []
+      : [{ owner: service.name, handler: service.onHostLeave }],
   );
+  if (handlers.room !== undefined) {
+    rooms.push({ owner: "createServer", handler: handlers.room as RoomLeaveHandler });
+  }
+  if (handlers.host !== undefined) {
+    hosts.push({ owner: "createServer", handler: handlers.host as HostLeaveHandler });
+  }
+  const run = async (fn: Parameters<typeof dispatcher.run>[0]): Promise<void> => {
+    await dispatcher.run(fn, { detached: true });
+  };
+  const realtime = liveOf(dispatcher)?.realtime;
+  realtime?.onRoomLeave(rooms, run);
+  realtime?.onHostLeave(hosts, run);
 }
 
 /** The HTTP transport, mounted on `app` when there is one. */
@@ -357,6 +421,36 @@ function mountRouter<P extends Principal>(
   const router = httpRouter(httpRouterSettings(options.http ?? {}, { ...base, cookieAsToken }));
   options.app?.use(router);
   return router;
+}
+
+/**
+ * The Socket.IO side of the server, on `httpServer`: the dispatcher's live
+ * data and, with `peers: true`, its peer links, which hear the other nodes
+ * once the server is attached.
+ */
+function serveSockets<P extends Principal>(
+  options: ServerOnlyOptions<P>,
+  created: object,
+  httpServer: HttpServer,
+  base: Pick<SocketServerSettings, "dispatcher" | "logger" | "resolvePrincipal" | "legacyWire">,
+): SocketServer {
+  const live = liveOf(created);
+  const peers = options.peers === true ? live?.peers : undefined;
+  const sockets = createSocketServer(httpServer, {
+    ...base,
+    loadServiceAccess: options.auth?.loadServiceAccess,
+    binary: options.binary === true,
+    cors: options.cors,
+    socket: options.socket,
+    rateLimit: options.rateLimit ?? {},
+    extensions: peers === undefined ? [] : [peers.extension],
+    live,
+    loops: loopsOf(created),
+    cluster: options.cluster,
+    peers: peers !== undefined,
+  });
+  peers?.listen();
+  return sockets;
 }
 
 function notFound(_req: IncomingMessage, res: ServerResponse): void {
@@ -430,6 +524,7 @@ export function createServer<const S extends readonly AnyService[]>(
   options: ServerOptions<S>,
 ): QuickdrawServer<S> {
   checkOptions(options);
+  checkHostMode(options.services, options.peers === true);
   const legacyWire = resolveLegacyWire(options.legacyWire, options.services);
   const logger = options.logger ?? consoleLogger;
   warnOnAuth(options.services, options.auth, logger);
@@ -443,24 +538,15 @@ export function createServer<const S extends readonly AnyService[]>(
   const { dispatcher } = calls;
   // In the background: a test app awaits them (`startupChecksOf`).
   startStartupChecks(dispatcher, options, logger);
-  listenForLeaves(created as Dispatcher, options.onRoomLeave);
+  listenForLeaves(created as Dispatcher, { room: options.onRoomLeave, host: options.onHostLeave });
   const resolvePrincipal = createPrincipalResolver(options.auth);
   const router = mountRouter(options, { call: dispatcher.call, resolvePrincipal, logger });
   const httpServer = options.httpServer ?? createHttpServer(options.app ?? router ?? notFound);
-  const sockets = createSocketServer(httpServer, {
+  const sockets = serveSockets(options, created, httpServer, {
     dispatcher,
     logger,
     resolvePrincipal,
-    loadServiceAccess: options.auth?.loadServiceAccess,
-    binary: options.binary === true,
     legacyWire,
-    cors: options.cors,
-    socket: options.socket,
-    rateLimit: options.rateLimit ?? {},
-    extensions: [],
-    live: liveOf(created),
-    loops: loopsOf(created),
-    cluster: options.cluster,
   });
   refresh = (userId) => sockets.refresh(userId);
   // In-process callers (`dispatcher.caller`, `qd.caller`) load a principal's grants as the

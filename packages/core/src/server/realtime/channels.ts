@@ -71,6 +71,30 @@ export interface ChannelDeps {
   readonly presence: Presence;
   /** Channels already warned about for an asynchronous schema. */
   readonly warned: WeakSet<ServiceChannel>;
+  /** Host-served channels already warned about for a `qd:ch` the server received (`service\0channel`). */
+  readonly hostWarned: Set<string>;
+}
+
+/**
+ * A `qd:ch` to a channel the room's host serves (`serve: "host"`): a
+ * client sent it to the server instead of over its link to the host. The
+ * message is dropped; outside production the server warns once per channel.
+ */
+function warnHostServed(deps: ChannelDeps, service: unknown, name: unknown): void {
+  if (typeof service !== "string" || typeof name !== "string") {
+    return;
+  }
+  const channels = deps.hub.registry.services.get(service)?.contract.channels;
+  const def = channels !== undefined && Object.hasOwn(channels, name) ? channels[name] : undefined;
+  const key = `${service}\u0000${name}`;
+  if (def?.serve !== "host" || deps.hostWarned.has(key) || process.env.NODE_ENV === "production") {
+    return;
+  }
+  deps.hostWarned.add(key);
+  deps.hub.logger.warn(
+    `Channel ${service}.${name} is served by the room's host (serve: "host"), but a client sent it to the server: the server drops it; send it over the link to the host of its room (useChannel does)`,
+    { category: "quickdraw.channel" },
+  );
 }
 
 /** Takes one token, refilling first; false when the bucket is empty. */
@@ -279,6 +303,7 @@ function receive(deps: ChannelDeps, state: SocketChannels, frame: unknown): void
       ? deps.hub.registry.services.get(service)?.channels.get(name)
       : undefined;
   if (channel === undefined) {
+    warnHostServed(deps, service, name);
     return;
   }
   const now = Date.now();

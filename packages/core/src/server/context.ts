@@ -315,6 +315,9 @@ const NO_ROOMS: ContextRooms = Object.freeze({
   emit: untracked,
   emitToUser: untracked,
   size: () => 0,
+  setHost: () => false,
+  hostOf: () => null,
+  clearHost: () => undefined,
 });
 
 /** The `ctx.presence` of a context no dispatcher built: no server, so nobody is online. */
