@@ -3,7 +3,10 @@
 // types come from the contracts: a method takes what a client would pass
 // (`InputOf`) and resolves with what a client would receive (`OutputOf`).
 // A failed call rejects with its `QuickdrawError`; an `INTERNAL` one keeps
-// the original error as `cause`.
+// the original error as `cause`. The callers of a call's `ctx.services` pass
+// its `ctx.mcp` on, so a method an MCP call reaches through them sees the
+// same fields; `qd.caller` and the other in-process callers act outside any
+// MCP call and pass none.
 //
 // A caller through a server's dispatcher (`qd.caller`, `server.dispatcher.caller`)
 // gives a principal that carries no `serviceAccess` the grants the server's
@@ -21,7 +24,7 @@ import { INTERNAL_MESSAGE, QuickdrawError } from "../protocol/errors";
 import type { Dispatch } from "./pipeline/pipeline";
 import type { DispatchRequest } from "./pipeline/request";
 import type { ServerAuth } from "./transports/auth";
-import type { Principal, QuickdrawTypes } from "./types";
+import type { McpContext, Principal, QuickdrawTypes } from "./types";
 
 /** Options of one in-process call. */
 export interface CallOptions {
@@ -90,6 +93,12 @@ export interface CallerSettings {
   readonly signal?: AbortSignal;
   /** Where to load a principal's grants from, asked at each call; `undefined` loads none. */
   readonly grants?: () => CallerGrants | undefined;
+  /**
+   * The `ctx.mcp` every call carries: `ctx.services` passes the calling
+   * method's, that very object, so a guard that reads it holds in the
+   * methods it reaches. Each call's transport stays `"internal"`.
+   */
+  readonly mcp?: McpContext;
 }
 
 type MethodFunction = (input?: unknown, options?: CallOptions) => Promise<unknown>;
@@ -205,7 +214,8 @@ function principalOfCalls(
  * works once one does. Every call is also cancelled with `settings.signal`,
  * when given (`ctx.services` passes the calling method's `ctx.signal`). With
  * `settings.grants`, a principal that carries no grants calls with the ones
- * it loads (see the top of this file).
+ * it loads (see the top of this file). With `settings.mcp`, every call
+ * carries it as its `ctx.mcp`.
  */
 export function createCaller(
   resolve: () => Dispatch,
@@ -213,6 +223,7 @@ export function createCaller(
   settings: CallerSettings = {},
 ): object {
   const principalOfCall = principalOfCalls(principal, settings.grants);
+  const { mcp } = settings;
   return lazyMembers((service) =>
     lazyMembers<MethodFunction>((method) => async (input, options) => {
       const runAs = principalOfCall();
@@ -224,6 +235,7 @@ export function createCaller(
         principal: runAs instanceof Promise ? await runAs : runAs,
         transport: "internal",
         signal: bothSignals(settings.signal, options?.signal),
+        ...(mcp === undefined ? {} : { mcp }),
       });
     }),
   );

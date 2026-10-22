@@ -619,8 +619,12 @@ export const taskService = qd.defineService(task, {
   Each call runs the whole pipeline with transport `"internal"` (input
   check, access, handler, output check), so access is checked on the inner
   call too; its writes join the calling method's unit of work, so both
-  flush together once; and it is cancelled with `ctx.signal`. It is typed
-  by the `contracts` of `initQuickdraw`'s types, as `qd.caller` is.
+  flush together once; and it is cancelled with `ctx.signal`. It carries
+  the calling method's `ctx.mcp` as well: every call an MCP call makes
+  through `ctx.services`, nested ones included, sees the MCP call's fields
+  with transport `"internal"`, so tell a token's call apart by `ctx.mcp`,
+  never by `ctx.transport`. It is typed by the `contracts` of
+  `initQuickdraw`'s types, as `qd.caller` is.
 - `share: "caller"` runs identical concurrent calls of one principal once,
   `share: "all"` across principals; `ttlMs` keeps a shared result. A
   `"all"` run's handler sees the first caller's `ctx` and every caller gets
@@ -1512,7 +1516,9 @@ Two more needs are met by the options above, with nothing added:
   that must never change, give that surface a contract of its own: its
   methods' inputs and `describe` texts are the frozen shapes, its handlers
   call the app's services through `ctx.services`, and a registry with
-  `name: (_service, method) => method` serves it. The bridge never reshapes a
+  `name: (_service, method) => method` serves it. Those calls carry the
+  tool call's `ctx.mcp`, so a guard that reads it in a method they reach
+  holds as it does on that method's own tool. The bridge never reshapes a
   tool's arguments on the way in: such a tool would be invisible to the API
   docs and to lint, which read the contracts.
 
