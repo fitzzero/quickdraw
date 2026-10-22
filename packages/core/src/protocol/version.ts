@@ -84,6 +84,33 @@ export const MAX_TOPICS_PER_SOCKET = 1_000;
 /** The longest collection scope value or change topic a frame may name, in characters. */
 export const MAX_SCOPE_LENGTH = 256;
 
+/** The most peers one socket may signal at once (`qd:peer`), as `qd:hello` announces it. */
+export const MAX_PEER_LINKS = 64;
+
+/** The longest peer link message, in UTF-8 bytes, on the data channel and through the relay alike. */
+export const MAX_PEER_MESSAGE_BYTES = 65_536;
+
+/** The longest string a `qd:peer` signal carries (a session description, a candidate), in characters. */
+export const MAX_PEER_SIGNAL_LENGTH = 16_384;
+
+/** Signals one socket may send per second (`qd:peer`); more are refused `RATE_LIMITED`. */
+export const PEER_SIGNAL_RATE = 20;
+
+/** Signals one socket may send at once, after a pause. */
+export const PEER_SIGNAL_BURST = 40;
+
+/** Relay messages one socket may send to one peer per second (`qd:relay`); more are dropped. */
+export const PEER_RELAY_RATE = 120;
+
+/** Relay messages one socket may send to one peer at once, after a pause. */
+export const PEER_RELAY_BURST = 240;
+
+/** Relay bytes one socket may send per second, to all its peers together; more are dropped. */
+export const PEER_RELAY_BYTES_PER_SECOND = 1_048_576;
+
+/** Relay bytes one socket may send at once, after a pause. */
+export const PEER_RELAY_BYTES_BURST = 2_097_152;
+
 /**
  * Each socket's lane of subscription events (`qd:sub`, `qd:col:sub`,
  * `qd:col:items`, `qd:watch`; RFC 0003 section 8.2), and how much one
@@ -102,6 +129,26 @@ export interface HelloSubscriptionLimits {
   readonly maxTopics?: number;
 }
 
+/**
+ * What one socket may signal and relay over peer links (RFC 0003 section
+ * 12.5), as `qd:hello` announces it. A client keeps its relay messages
+ * within these, so a `rel` message is never dropped for its rate.
+ */
+export interface HelloPeerLimits {
+  /** Peers one socket may signal at once; a signal to one more is `CONFLICT`. */
+  readonly maxLinks: number;
+  /** The longest link message, in UTF-8 bytes, on the data channel and through the relay alike. */
+  readonly maxMessageBytes: number;
+  /** Relay messages one socket may send to one peer per second; more are dropped. */
+  readonly relayRate: number;
+  /** Relay messages one socket may send to one peer at once, after a pause. */
+  readonly relayBurst: number;
+  /** Relay bytes one socket may send per second, to all its peers together; more are dropped. */
+  readonly relayBytesPerSecond: number;
+  /** Relay bytes one socket may send at once, after a pause. */
+  readonly relayBytesBurst: number;
+}
+
 /** The limits a server announces in `qd:hello`, so a client can stay inside them. */
 export interface HelloLimits {
   /** Queries one socket may have running at once; more wait in a queue (RFC 0003 section 9). */
@@ -118,6 +165,8 @@ export interface HelloLimits {
   readonly callTimeoutMs: number;
   /** The socket's lane of subscription events. */
   readonly subscriptions: HelloSubscriptionLimits;
+  /** What peer links may signal and relay. Absent from a server that serves no peer links, whose `features` lacks `"peer"`. */
+  readonly peers?: HelloPeerLimits;
 }
 
 /**
@@ -139,7 +188,12 @@ export interface HelloFrame {
   readonly serverId: string;
   /** What a client must stay within. */
   readonly limits: HelloLimits;
-  /** Names of optional server features that are on. Informational only. */
+  /**
+   * Names of optional server features that are on: `"binary"` (the stock
+   * parser, `createServer({ binary: true })`) and `"peer"` (peer links,
+   * `createServer({ peers: true })`). Informational: a client that finds no
+   * `"peer"` opens no peer link.
+   */
   readonly features: readonly string[];
   /** The user the socket acts for, or `null` when it is anonymous. */
   readonly userId: string | null;

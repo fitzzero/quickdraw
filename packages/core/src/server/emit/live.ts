@@ -19,6 +19,7 @@ import {
   type ServerRooms,
   type StreamHandle,
 } from "../realtime/realtime";
+import { createPeerLinks, type PeerLinks } from "../realtime/peers";
 import { createTopics } from "../topics";
 import { createEntitySinks } from "./entitySink";
 import { entitySubscriptions } from "./extension";
@@ -58,6 +59,8 @@ export interface Live {
   readonly legacyExtension: Realtime["legacyExtension"];
   /** Presence, streams, channels and typed room events: `ctx.rooms`, `ctx.presence`, `qd.stream`. */
   readonly realtime: Realtime;
+  /** Peer links' signalling and relay: served only by a server created with `peers: true`. */
+  readonly peers: PeerLinks;
   /** The revisions flushes take and reads claim: the process's clock, or a cluster's shared counter. */
   readonly revisions: Hub["revisions"];
   /**
@@ -95,7 +98,8 @@ export function createLive(options: HubOptions): Live {
   const collections = createLiveCollections(hub);
   const topics = createTopics(collections.hub);
   const sinks = createEntitySinks(hub);
-  const realtime = createRealtime(hub);
+  const peers = createPeerLinks(hub);
+  const realtime = createRealtime(hub, peers.left);
   const revocation = createRevocation(hub, [
     collections.revocation,
     topics.revocation,
@@ -117,6 +121,7 @@ export function createLive(options: HubOptions): Live {
     },
     legacyExtension: realtime.legacyExtension,
     realtime,
+    peers,
     revisions: hub.revisions,
     attach(
       io: NonNullable<Hub["io"]>,

@@ -57,6 +57,8 @@ import {
   type SocketCors,
   type SocketOptions,
   type SocketRateLimitOptions,
+  type SocketServer,
+  type SocketServerSettings,
 } from "./transports/socketServer";
 import type { Principal } from "./types";
 
@@ -117,8 +119,9 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
    * their own per-socket token buckets), `qd:cancel`, the entity and
    * collection subscription events (`qd:sub`, `qd:unsub`, `qd:col:sub`,
    * `qd:col:unsub`, `qd:col:items`), the topic watches (`qd:watch`,
-   * `qd:unwatch`) and the stream subscriptions (`qd:stream:sub`,
-   * `qd:stream:unsub`) are never counted; the ones that read run in a
+   * `qd:unwatch`), the stream subscriptions (`qd:stream:sub`,
+   * `qd:stream:unsub`) and peer link relay messages (`qd:relay`, which keep
+   * their own buckets) are never counted; the ones that read run in a
    * per-socket lane instead (`limits.subscriptions`: 8 at once, 64 waiting,
    * then `RATE_LIMITED`).
    */
@@ -184,6 +187,17 @@ export interface ServerOnlyOptions<P extends Principal = Principal> {
    * },
    */
   readonly onRoomLeave?: RoomLeaveHandler<P>;
+  /**
+   * Serve peer links (RFC 0003 section 12.5): two sockets of one app room
+   * open WebRTC data channels between them (`createPeerLink` on the
+   * client), the server forwarding their signals (`qd:peer`) and relaying
+   * their messages (`qd:relay`) when no direct path forms. It authorizes
+   * both by room membership and never sees what a direct link carries, so a
+   * service trusts nothing a peer reports. `qd:hello` then lists `"peer"` in
+   * `features` and the relay's limits in `limits.peers`. Default `false`:
+   * clients open no links, and the server forwards nothing between them.
+   */
+  readonly peers?: boolean;
 }
 
 /**
@@ -306,6 +320,9 @@ function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void 
   if (timeout !== undefined && !(Number.isSafeInteger(timeout) && timeout >= 0)) {
     throw new TypeError("createServer: shutdownTimeoutMs must be a whole number of milliseconds");
   }
+  if (options.peers !== undefined && typeof options.peers !== "boolean") {
+    throw new TypeError("createServer: peers must be true or false");
+  }
   if (options.onRoomLeave !== undefined && typeof options.onRoomLeave !== "function") {
     throw new TypeError(
       "createServer: onRoomLeave must be a function of the leave and a run context",
@@ -357,6 +374,36 @@ function mountRouter<P extends Principal>(
   const router = httpRouter(httpRouterSettings(options.http ?? {}, { ...base, cookieAsToken }));
   options.app?.use(router);
   return router;
+}
+
+/**
+ * The Socket.IO side of the server, on `httpServer`: the dispatcher's live
+ * data and, with `peers: true`, its peer links, which hear the other nodes
+ * once the server is attached.
+ */
+function serveSockets<P extends Principal>(
+  options: ServerOnlyOptions<P>,
+  created: object,
+  httpServer: HttpServer,
+  base: Pick<SocketServerSettings, "dispatcher" | "logger" | "resolvePrincipal" | "legacyWire">,
+): SocketServer {
+  const live = liveOf(created);
+  const peers = options.peers === true ? live?.peers : undefined;
+  const sockets = createSocketServer(httpServer, {
+    ...base,
+    loadServiceAccess: options.auth?.loadServiceAccess,
+    binary: options.binary === true,
+    cors: options.cors,
+    socket: options.socket,
+    rateLimit: options.rateLimit ?? {},
+    extensions: peers === undefined ? [] : [peers.extension],
+    live,
+    loops: loopsOf(created),
+    cluster: options.cluster,
+    peers: peers !== undefined,
+  });
+  peers?.listen();
+  return sockets;
 }
 
 function notFound(_req: IncomingMessage, res: ServerResponse): void {
@@ -447,20 +494,11 @@ export function createServer<const S extends readonly AnyService[]>(
   const resolvePrincipal = createPrincipalResolver(options.auth);
   const router = mountRouter(options, { call: dispatcher.call, resolvePrincipal, logger });
   const httpServer = options.httpServer ?? createHttpServer(options.app ?? router ?? notFound);
-  const sockets = createSocketServer(httpServer, {
+  const sockets = serveSockets(options, created, httpServer, {
     dispatcher,
     logger,
     resolvePrincipal,
-    loadServiceAccess: options.auth?.loadServiceAccess,
-    binary: options.binary === true,
     legacyWire,
-    cors: options.cors,
-    socket: options.socket,
-    rateLimit: options.rateLimit ?? {},
-    extensions: [],
-    live: liveOf(created),
-    loops: loopsOf(created),
-    cluster: options.cluster,
   });
   refresh = (userId) => sockets.refresh(userId);
   // In-process callers (`dispatcher.caller`, `qd.caller`) load a principal's grants as the

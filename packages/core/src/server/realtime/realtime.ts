@@ -73,12 +73,19 @@ export interface Realtime {
   listen(): void;
 }
 
-/** Creates the realtime half of a dispatcher's live data, on its hub. */
-export function createRealtime(hub: Hub): Realtime {
+/**
+ * Creates the realtime half of a dispatcher's live data, on its hub. `left`
+ * hears each socket that left an app room and is still connected, after
+ * the streams open to the room were checked again (the peer links).
+ */
+export function createRealtime(hub: Hub, left?: (socket: QuickdrawServerSocket) => void): Realtime {
   const state = createPresenceState(hub);
   const presence = createPresence(state);
   const streams = createStreams(hub);
-  const rooms = createRooms(state, streams.leftRooms);
+  const rooms = createRooms(state, (socket) => {
+    streams.leftRooms(socket);
+    left?.(socket);
+  });
   const channels = channelMessages({ hub, rooms, presence, warned: new WeakSet() });
   return Object.freeze({
     extension(socket: QuickdrawServerSocket, context: SocketContext): void {

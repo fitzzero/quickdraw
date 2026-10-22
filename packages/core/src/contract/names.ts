@@ -105,6 +105,10 @@ export const CLIENT_EVENTS = Object.freeze({
   streamUnsub: "qd:stream:unsub",
   /** A fire-and-forget channel message, sent volatile: `[s, channel, payload]`. */
   channel: "qd:ch",
+  /** A peer link's signal to another socket of an app room: `{ room, to, sig }`. */
+  peer: "qd:peer",
+  /** A peer link's message for the server to relay: `[room, to, label, text]`, volatile for `fast`. */
+  relay: "qd:relay",
 } as const);
 
 /** Events the server sends to a client (RFC 0003 section 8.3). */
@@ -129,6 +133,10 @@ export const SERVER_EVENTS = Object.freeze({
   rotate: "qd:rotate",
   /** The user's service grants changed. */
   access: "qd:access",
+  /** A peer link's signal from another socket of an app room: `{ room, from, userId, sig }`. */
+  peer: "qd:peer",
+  /** A peer link's message the server relays: `[room, from, label, text]`. */
+  relay: "qd:relay",
 } as const);
 
 /** The name of an event a client sends. */
