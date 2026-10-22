@@ -48,6 +48,15 @@ All notable changes to this project will be documented in this file.
   warning's own advice names `createMany` as the fix. A batch insert is one
   batch in chunks, as `no-db-call-in-loop` already treated it.
   `updateMany` and `deleteMany` filtered once per item still count.
+- **Opening a live list no longer logs `prisma:error` lines.** Whether an
+  order column may hold null, and whether a model has an `id` the tracker
+  can key (the access check at startup), came from probes Prisma refuses:
+  `count({ where: { column: null } })` on a required column and a select of
+  `id` on a model without one, which a client created with
+  `log: ["error"]` printed as database errors. `trackPrisma` now reads both
+  from the schema text the generated client carries
+  (`_engineConfig.inlineSchema`), with no statement, and probes only for
+  what that text does not answer, as before.
 
 ### Codemod
 
