@@ -167,9 +167,11 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   write, read the page again (`qd.invalidate(qd.task.admin.adminList)`)
   and put the row the write returned in the cache
   (`qd.task.admin.adminGet.setData({ id: row.id }, row)`; `adminOf`'s
-  query members have `setData` too), never in React state. A generic form
-  shows the fields whose `showInForm` is not `false`; a user's grants field
-  says `kind: "grants"`: find it by that, never by its name.
+  query members have `setData` too), never in React state. Its reads of
+  rows default to `staleTime: 0`, read again on every mount (`adminMeta`
+  stays cached): pass a `staleTime` only to keep a page longer. A generic
+  form shows the fields whose `showInForm` is not `false`; a user's grants
+  field says `kind: "grants"`: find it by that, never by its name.
 
 ## Server components and other runtimes
 

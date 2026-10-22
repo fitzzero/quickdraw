@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### Client
 
+- **Behavior change: the admin kit's reads of rows default to
+  `staleTime: 0`.** `adminList`, `adminGet` and `adminSubscribers` took the
+  provider's five-minute `staleTime`, and their rows are not live, so an
+  admin screen showed a row written elsewhere only after five minutes or a
+  reload. Their `useQuery` now reads them again whenever a screen mounts,
+  on the typed client and on a mock client alike. A `staleTime` the caller
+  passes still wins, and `adminMeta`, `call` and `prefetch` are unchanged.
+  A screen that passed `staleTime: 0` by hand can drop it.
 - **`AdminQueryMember` gains `setData`**, typed as the typed client's: the
   query members `adminOf(qd, key)` returns always had it at run time, but a
   screen typed through `AdminScreen` needed a cast to call it. A row panel
