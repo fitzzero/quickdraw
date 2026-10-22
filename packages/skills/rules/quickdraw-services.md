@@ -322,8 +322,10 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 
 Bound every `findMany` with `take`; batch per-item reads with `in:` filters;
 filter in `where`, not after loading. Write many rows in one statement when
-they all get the same data (`updateMany`, `createMany`). When each row's
-data differs, loop over the rows inside an interactive
+they all get the same data (`updateMany`, `createMany`); a large insert may
+go in fixed-size `createMany` chunks, which neither `no-db-call-in-loop` nor
+the N+1 warning counts. When each row's data differs, loop over the rows
+inside an interactive
 `db.$transaction(async (tx) => ...)` and await one `tx.task.update(...)` by
 id per row, not an array-form `$transaction([...])`, which cannot read a
 moved row inside its batch. A projection's relation count selects the

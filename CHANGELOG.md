@@ -41,6 +41,13 @@ All notable changes to this project will be documented in this file.
   `Invalid input for taskService.rename: title: Required; tags.0: Expected string`.
   The code (422) and the reply's shape are unchanged, and protocol 5, HTTP
   and MCP callers still get the issues as `data.issues`.
+- **The development N+1 check no longer counts `createMany`.** A large
+  insert split into fixed-size `createMany` chunks has one shape per
+  chunk, so its tenth chunk raised `n-plus-one` (named
+  `createManyAndReturn`, the form the tracked client runs), though the
+  warning's own advice names `createMany` as the fix. A batch insert is one
+  batch in chunks, as `no-db-call-in-loop` already treated it.
+  `updateMany` and `deleteMany` filtered once per item still count.
 
 ### Codemod
 

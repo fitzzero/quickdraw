@@ -3487,7 +3487,8 @@ Only an app's own statements are checked: the framework's reads and the
 kits' own reads are not, while the app's callbacks a kit calls (`prepare`,
 `onChange`, `resolveUser`, a search strategy) are. A statement filtered by
 an `id` list (`{ id: { in: ids } }`, one per chunk of ids) never counts
-toward `n-plus-one`. In tests, `createTestApp({ strictWarnings: true })`
+toward `n-plus-one`, and neither does a `createMany` (one per chunk of
+rows, as a large insert is split). In tests, `createTestApp({ strictWarnings: true })`
 (under vitest or jest) throws every warning raised in that app's method
 calls as a `DevWarningError` where it is raised, so the test that caused it
 fails: the call it happened in fails with `INTERNAL` and the error as its
