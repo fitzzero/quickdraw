@@ -10,6 +10,7 @@ import type { AnyContract } from "../../contract/defineContract";
 import { reservedRoomPrefix, socketIdShaped } from "../../contract/names";
 import {
   CHANNEL_DEFAULT_RATE,
+  isHostServed,
   isScopedStream,
   type ChannelDef,
   type PayloadSelector,
@@ -153,7 +154,8 @@ export function compileChannels(
   kinds: readonly string[] | undefined,
   fail: Fail,
 ): ReadonlyMap<string, ServiceChannel> {
-  const declared = Object.entries(contract.channels);
+  // The room's host handles a host-served channel: the server takes no handler for it.
+  const declared = Object.entries(contract.channels).filter(([, def]) => !isHostServed(def));
   if (value === undefined && declared.length === 0) {
     return new Map();
   }
@@ -170,6 +172,11 @@ export function compileChannels(
     const def = Object.hasOwn(contract.channels, name) ? contract.channels[name] : undefined;
     if (def === undefined) {
       fail(`"${name}" is not a channel of the contract`);
+    }
+    if (isHostServed(def)) {
+      fail(
+        `channel "${name}" is served by the room's host (serve: "host"): its messages never reach the server, so it takes no handler`,
+      );
     }
     channels.set(name, checkChannel(contract.name, name, def, entry, admitted, fail));
   }
@@ -265,6 +272,11 @@ function checkStream(
   options: unknown,
   fail: Fail,
 ): ServiceStream {
+  if (isHostServed(def) && options !== undefined) {
+    fail(
+      `streams.${name}: the stream is served by the room's host (serve: "host"), whose client pushes its items and keeps its seed: the server takes no options for it`,
+    );
+  }
   const access = engineForm(def.access);
   if (typeof access === "object" && "entry" in access && !needs.hasPolicy) {
     fail(
@@ -285,6 +297,7 @@ function checkStream(
     volatile: def.volatile === true,
     access,
     room: roomAccess(def.access),
+    host: isHostServed(def),
   });
 }
 

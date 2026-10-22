@@ -11,6 +11,8 @@ import type {
   EventName,
   EventPayloadOf,
   IsScopedStream,
+  ServerChannelName,
+  ServerStreamName,
   StreamItemOf,
   StreamName,
 } from "../../contract/infer";
@@ -18,6 +20,7 @@ import type { Logger } from "../../contract/logger";
 import type { StandardSchemaV1 } from "../../contract/standardSchema";
 import type { AccessForm } from "../access/types";
 import type { RunContext } from "../context";
+import type { QuickdrawServerSocket } from "../transports/types";
 import type { Principal, PrincipalOf, QuickdrawTypes } from "../types";
 
 /**
@@ -111,6 +114,19 @@ export interface ServerRooms {
    * it is 0.
    */
   size(room: string): number;
+  /**
+   * The host of app room `room` (host mode, RFC 0003 section 12.5): the id
+   * of the socket that serves the room's host-served channels and streams,
+   * or `null` when it has none. This node's record, which every node of a
+   * cluster keeps. Room names are checked as `join` checks them.
+   */
+  hostOf(room: string): string | null;
+  /**
+   * Leaves app room `room` without a host, on every node: its sockets hear
+   * `qd:host [room, null]`. Nothing happens for a room without one, and
+   * `onHostLeave` does not run (the host did not leave).
+   */
+  clearHost(room: string): void;
 }
 
 /**
@@ -135,6 +151,20 @@ export interface ContextRooms extends ServerRooms {
   join(room: string): boolean;
   /** Takes the calling socket out of an app room; `false` when it was not in it, or the call has no socket. */
   leave(room: string): boolean;
+  /**
+   * Makes the calling socket the host of app room `room` (host mode, RFC
+   * 0003 section 12.5): the room's sockets hear `qd:host [room, socketId]`
+   * on every node, and so does every socket that joins it later, until the
+   * host leaves the room (`onHostLeave` runs), another socket is made its
+   * host, or `clearHost` runs. Its peers then send the room's host-served
+   * channels to it and subscribe to its host-served streams over peer links.
+   * Returns `false`, doing nothing, for a call that did not arrive over a
+   * socket. The socket must be in the room (`FORBIDDEN`) and signed in
+   * (`UNAUTHENTICATED`), and the server must serve peer links
+   * (`createServer({ peers: true })`, else `INTERNAL`). Room names are
+   * checked as `join` checks them.
+   */
+  setHost(room: string): boolean;
   /** See {@link ServerRooms.leave}: every socket of the user, on every node, from any call. */
   leave(room: string, target: RoomTarget): Promise<void>;
 }
@@ -185,6 +215,57 @@ export type RoomLeaveHandler<P = Principal> = (
   leave: RoomLeave<P>,
   ctx: RunContext,
 ) => void | PromiseLike<void>;
+
+/** The host of an app room left it (host mode): what `onHostLeave` hears. */
+export interface HostLeave<P = Principal> {
+  readonly room: string;
+  /** The host socket that left. */
+  readonly socketId: string;
+  /** Its principal. */
+  readonly principal: P | null;
+  /** Its own leave, a removal, or a disconnect. */
+  readonly reason: RoomLeaveReason;
+}
+
+/**
+ * `onHostLeave` (a service's, beside `onRoomLeave`, and `createServer`'s):
+ * called once when the host of an app room leaves it, is taken out of it or
+ * disconnects, on the node that held it, after the room heard
+ * `qd:host [room, null]`, in a unit of work of its own. The room has no
+ * host until a method sets one again: the app decides what follows (another
+ * host, the end of the game).
+ */
+export type HostLeaveHandler<P = Principal> = (
+  leave: HostLeave<P>,
+  ctx: RunContext,
+) => void | PromiseLike<void>;
+
+/** One `onHostLeave` hook, and whose it is for the logs: a service's name, or `"createServer"`. */
+export interface HostLeaveHook {
+  readonly owner: string;
+  readonly handler: HostLeaveHandler;
+}
+
+/** The hosts of one dispatcher's app rooms (`hosts.ts`). */
+export interface RoomHosts {
+  /** `ctx.rooms.setHost(room)` for the calling socket. */
+  set(socket: QuickdrawServerSocket, room: string): boolean;
+  /** `rooms.hostOf(room)`. */
+  of(room: string): string | null;
+  /** `rooms.clearHost(room)`. */
+  clear(room: string): void;
+  /** A socket joined `room`: it hears the room's host, if it has one. */
+  joined(socket: QuickdrawServerSocket, room: string): void;
+  /** A socket left `room`, or disconnected from it: the room has no host now if it was the host. */
+  left(socket: QuickdrawServerSocket, room: string, reason: RoomLeaveReason): void;
+  /** Runs `hooks` for every host that leaves its room from now on, each through `run`. */
+  onLeave(
+    hooks: readonly HostLeaveHook[],
+    run: (fn: (ctx: RunContext) => Promise<void>) => Promise<void>,
+  ): void;
+  /** Listens for the other nodes' changes, answers their requests, and asks them once for theirs. */
+  listen(): void;
+}
 
 /** The arguments of a stream's `push`: `(scope, item)` for a scoped stream, `(item)` for a global one. */
 export type StreamPushArgs<C extends AnyContract, K extends StreamName<C>> =
@@ -287,7 +368,7 @@ export type StreamValidation = "always" | "development";
  * subset): a seed computed at subscribe time, and when items are checked.
  */
 export type StreamOptions<T extends QuickdrawTypes, C extends AnyContract> = {
-  readonly [K in StreamName<C>]?: StreamImplementation<T, C, K>;
+  readonly [K in ServerStreamName<C>]?: StreamImplementation<T, C, K>;
 };
 
 /** A stream's `seed` function as the subscribe path calls it, whatever its declared types. */
@@ -358,9 +439,12 @@ export type ChannelRoomOf<
   ? string
   : undefined;
 
-/** `defineService`'s `channels`: one implementation per channel of the contract. */
+/**
+ * `defineService`'s `channels`: one implementation per channel of the
+ * contract the server handles (a host-served one takes none).
+ */
 export type ChannelOptions<T extends QuickdrawTypes, C extends AnyContract> = {
-  readonly [K in ChannelName<C>]: ChannelImplementation<
+  readonly [K in ServerChannelName<C>]: ChannelImplementation<
     T,
     ChannelPayloadOf<C, K>,
     ChannelRoomOf<C, K>
@@ -368,7 +452,7 @@ export type ChannelOptions<T extends QuickdrawTypes, C extends AnyContract> = {
 };
 
 /** `{ channels }` is required when the contract declares channels: every message needs a handler. */
-export type ChannelsRequired<C extends AnyContract> = [ChannelName<C>] extends [never]
+export type ChannelsRequired<C extends AnyContract> = [ServerChannelName<C>] extends [never]
   ? unknown
   : { readonly channels: unknown };
 
@@ -462,6 +546,8 @@ export interface ServiceStream {
   readonly access: AccessForm | undefined;
   /** The contract's `access: { room }`: the app room a subscriber's socket must be in. */
   readonly room: StreamRoomAccess | undefined;
+  /** True for a stream the room's host pushes (`serve: "host"`): the server neither pushes nor subscribes it. */
+  readonly host: boolean;
 }
 
 /** A stream's `access: { room }`, compiled: the app room a subscriber's socket must be in. */

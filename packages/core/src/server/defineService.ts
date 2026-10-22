@@ -50,6 +50,7 @@ import type { HandlerArgs, HandlerContext } from "./context";
 import type {
   ChannelOptions,
   ChannelsRequired,
+  HostLeaveHandler,
   RoomLeaveHandler,
   StreamOptions,
 } from "./realtime/types";
@@ -366,6 +367,20 @@ export interface ServiceDefinition<
    * },
    */
   readonly onRoomLeave?: RoomLeaveHandler<PrincipalOf<T>>;
+  /**
+   * Called once when the host of an app room leaves it (host mode, RFC 0003
+   * section 12.5): its own leave, a removal, or a disconnect, with the room,
+   * the host's socket and principal and the reason. The room has no host
+   * then, and its sockets heard `qd:host [room, null]`; the app decides
+   * what follows (another host, the game's end). Run as `onRoomLeave` is,
+   * beside `createServer`'s own, in a unit of work of its own.
+   *
+   * @example
+   * onHostLeave: ({ room }) => {
+   *   qd.rooms.emit(room, game, "hostLeft", { room });
+   * },
+   */
+  readonly onHostLeave?: HostLeaveHandler<PrincipalOf<T>>;
   /**
    * Whether a service-wide `Admin` grant passes every access check of this
    * service (RFC 0003 section 4.1). Default `true`.

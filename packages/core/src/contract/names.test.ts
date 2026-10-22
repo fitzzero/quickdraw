@@ -57,7 +57,7 @@ describe("event names", () => {
   it("lists every protocol v5 event once per direction, under the qd: prefix", () => {
     const sent = Object.values(CLIENT_EVENTS);
     const received = Object.values(SERVER_EVENTS);
-    expect([...sent, ...received]).toHaveLength(26);
+    expect([...sent, ...received]).toHaveLength(27);
     expect(new Set(sent).size).toBe(sent.length);
     expect(new Set(received).size).toBe(received.length);
     // Only the peer link's events go both ways: the server forwards each under its own name.

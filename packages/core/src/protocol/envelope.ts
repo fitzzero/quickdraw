@@ -451,10 +451,10 @@ export interface PeerForwardFrame {
 /**
  * `qd:relay`, from a client, never acknowledged: a link message for socket
  * `to` in app room `room`, sent volatile on `fast`. `text` is a
- * `PeerMessage` as JSON, at most `limits.peers.maxMessageBytes`. The sender
- * must have signalled `to` in that room first; a message over the rate or
- * the byte budget of `limits.peers`, or to a socket that left the room, is
- * dropped. A later revision may append elements after `text`.
+ * `PeerMessage` as JSON, at most `limits.peers.maxMessageBytes`. The two
+ * sockets must have signalled each other in that room; a message over the
+ * rate or the byte budget of `limits.peers`, or to a socket that left the
+ * room, is dropped. A later revision may append elements after `text`.
  */
 export type RelayFrame = readonly [room: string, to: string, label: PeerLabel, text: string];
 
@@ -471,7 +471,7 @@ export type RelayForwardFrame = readonly [
  * relayed `text`, alike on both paths. A receiver ignores a message whose
  * first element it does not know, and elements after the ones it reads.
  */
-export type PeerMessage = PeerData | PeerPing | PeerPong;
+export type PeerMessage = PeerData | PeerPing | PeerPong | HostMessage;
 
 /** A link message carrying the app's `data`, any JSON value. */
 export type PeerData = readonly [kind: 0, data: unknown];
@@ -481,6 +481,72 @@ export type PeerPing = readonly [kind: 1, t: number];
 
 /** The pong of a ping: `t` as the ping carried it, `u` the answerer's clock as it answered. Sent on `fast`. */
 export type PeerPong = readonly [kind: 2, t: number, u: number];
+
+/**
+ * A host mode message (section 12.5): what a peer and its room's host send
+ * each other over their link, kept apart from the app's own messages.
+ */
+export type HostMessage =
+  | HostChannelMessage
+  | HostSubscribe
+  | HostUnsubscribe
+  | HostSeed
+  | HostItem
+  | HostRefusal;
+
+/** A message on a host-served channel, from a peer to the host of the channel's room. Sent on `fast`. */
+export type HostChannelMessage = readonly [
+  kind: 3,
+  service: string,
+  channel: string,
+  payload: unknown,
+];
+
+/** Subscribes to a feed of a host-served stream, from a peer to the host of its room. Sent on `rel`. */
+export type HostSubscribe = readonly [kind: 4, service: string, stream: string, scope: string];
+
+/** Leaves a feed of a host-served stream. Sent on `rel`. */
+export type HostUnsubscribe = readonly [kind: 5, service: string, stream: string, scope: string];
+
+/**
+ * The seed of a feed a peer subscribed to, from the host: the latest items
+ * it kept (or computed), oldest first, in chunks that each fit the message
+ * limit; `last` is true on the last chunk. Sent on `rel`.
+ */
+export type HostSeed = readonly [
+  kind: 6,
+  service: string,
+  stream: string,
+  scope: string,
+  items: readonly unknown[],
+  last: boolean,
+];
+
+/** An item pushed to a feed, from the host: on `fast` for a volatile stream, else on `rel`. */
+export type HostItem = readonly [
+  kind: 7,
+  service: string,
+  stream: string,
+  scope: string,
+  item: unknown,
+];
+
+/** A subscribe the host refused (`NOT_FOUND`, `FORBIDDEN`, ...), from the host. Sent on `rel`. */
+export type HostRefusal = readonly [
+  kind: 8,
+  service: string,
+  stream: string,
+  scope: string,
+  error: WireError,
+];
+
+/**
+ * `qd:host`, from the server: the host of app room `room` (the socket that
+ * serves its host-served channels and streams), or `null` when it has none.
+ * Sent to the room's sockets on every change, and to a socket that joins a
+ * room with a host.
+ */
+export type HostFrame = readonly [room: string, host: string | null];
 
 // ---------------------------------------------------------------------------
 // Connection-level frames (sections 4.4, 7.2 and 8.3)
@@ -567,6 +633,7 @@ interface ServerListeners {
   access: (frame: AccessFrame) => void;
   peer: (frame: PeerForwardFrame) => void;
   relay: (frame: RelayForwardFrame) => void;
+  host: (frame: HostFrame) => void;
 }
 
 /**

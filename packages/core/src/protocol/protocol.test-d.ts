@@ -37,6 +37,8 @@ import {
   type HelloLimits,
   type HelloPeerLimits,
   type HelloSubscriptionLimits,
+  type HostFrame,
+  type HostMessage,
   type PeerForwardFrame,
   type PeerMessage,
   type PeerSignal,
@@ -229,11 +231,13 @@ describe("peer link frames", () => {
       readonly [room: string, to: string, label: "rel" | "fast", text: string]
     >();
     expectTypeOf<RelayForwardFrame[1]>().toEqualTypeOf<string>();
-    expectTypeOf<PeerMessage>().toEqualTypeOf<
+    expectTypeOf<Exclude<PeerMessage, HostMessage>>().toEqualTypeOf<
       | readonly [kind: 0, data: unknown]
       | readonly [kind: 1, t: number]
       | readonly [kind: 2, t: number, u: number]
     >();
+    expectTypeOf<HostMessage[0]>().toEqualTypeOf<3 | 4 | 5 | 6 | 7 | 8>();
+    expectTypeOf<HostFrame>().toEqualTypeOf<readonly [room: string, host: string | null]>();
   });
 
   test("a hello announces the peer limits only on a server that serves peer links", () => {

@@ -5,11 +5,13 @@
 // and each side hears the other at least that often: a link that hears
 // nothing for `WATCHDOG_MS` closes as `lost`. `createPeerLink` drives a core
 // from signals and paths (`link.ts`); the loopback double of `./testing`
-// drives two from an in-process pair.
+// drives two from an in-process pair. Host mode's messages travel beside the
+// app's, apart from them: `controlOf(link)` sends and hears them, and a
+// link's `send` and `message` event never do.
 //
 // React-free.
 
-import type { PeerLabel } from "../../protocol/envelope";
+import type { HostMessage, PeerLabel } from "../../protocol/envelope";
 import { createClock, type ClockState, type PeerClock } from "./clock";
 import { decodeMessage, encodeMessage, messageBytes } from "./codec";
 import type {
@@ -93,6 +95,8 @@ interface Core {
   pingsLeft: number;
   timer: ReturnType<typeof setTimeout> | undefined;
   readonly stats: { sent: number; received: number; dropped: number };
+  /** Who hears host mode's messages (`controlOf`). */
+  readonly control: Set<(message: HostMessage, label: PeerLabel) => void>;
 }
 
 /** Calls each listener of `event`; one that throws is reported apart, and the others still run. */
@@ -124,6 +128,7 @@ function finish(core: Core, reason: PeerCloseReason, fromHere: boolean): void {
   for (const set of Object.values(core.listeners) as Set<unknown>[]) {
     set.clear();
   }
+  core.control.clear();
 }
 
 /** A ping, then the next one: the watchdog's beat too. */
@@ -146,18 +151,24 @@ function tick(core: Core): void {
   );
 }
 
-function send(core: Core, label: PeerLabel, data: unknown): boolean {
-  if (label !== "rel" && label !== "fast") {
-    throw new TypeError(`PeerLink.send: label must be "rel" or "fast", not ${String(label)}`);
-  }
-  const text = encodeMessage([0, data]);
+/** A message's text, checked against the size limit: a `RangeError` over it. */
+function textOf(core: Core, message: Parameters<typeof encodeMessage>[0], what: string): string {
+  const text = encodeMessage(message);
   const bytes = messageBytes(text);
   const max = core.options.maxMessageBytes();
   if (bytes > max) {
     throw new RangeError(
-      `PeerLink.send: a message holds at most ${max} bytes as JSON; this one has ${bytes}: split it`,
+      `${what}: a message holds at most ${max} bytes as JSON; this one has ${bytes}: split it`,
     );
   }
+  return text;
+}
+
+function send(core: Core, label: PeerLabel, data: unknown): boolean {
+  if (label !== "rel" && label !== "fast") {
+    throw new TypeError(`PeerLink.send: label must be "rel" or "fast", not ${String(label)}`);
+  }
+  const text = textOf(core, [0, data], "PeerLink.send");
   const sent = core.state === "open" && core.options.hooks.send(label, text);
   if (sent) {
     core.stats.sent += 1;
@@ -180,8 +191,16 @@ function receive(core: Core, data: unknown, label: PeerLabel): void {
     if (core.state === "open") {
       core.options.hooks.send("fast", encodeMessage([2, message[1], core.now()]));
     }
-  } else {
+  } else if (message[0] === 2) {
     core.clock.pong(message[1], message[2], core.now());
+  } else {
+    for (const listener of [...core.control]) {
+      try {
+        listener(message, label);
+      } catch (error) {
+        throwLater(error);
+      }
+    }
   }
 }
 
@@ -261,6 +280,40 @@ function linkOf(core: Core): PeerLink {
 }
 
 /** Creates a link's core, connecting. */
+const CORES = new WeakMap<PeerLink, Core>();
+
+/** What host mode reaches of a link: its own messages, kept apart from the app's. */
+export interface LinkControl {
+  /**
+   * Sends a host mode message; false when the link is not open or its path
+   * dropped it. A `RangeError` for one over the message limit.
+   */
+  send(label: PeerLabel, message: HostMessage): boolean;
+  /** Calls `listener` for each host mode message from the peer; returns its removal. */
+  on(listener: (message: HostMessage, label: PeerLabel) => void): () => void;
+}
+
+/** The host mode side of a link made by `createPeerLink` or the loopback double; `undefined` for any other object. */
+export function controlOf(link: PeerLink): LinkControl | undefined {
+  const core = CORES.get(link);
+  if (core === undefined) {
+    return undefined;
+  }
+  return {
+    send: (label, message) =>
+      core.state === "open" && core.options.hooks.send(label, textOf(core, message, "host mode")),
+    on(listener) {
+      if (core.state === "closed") {
+        return () => undefined;
+      }
+      core.control.add(listener);
+      return () => {
+        core.control.delete(listener);
+      };
+    },
+  };
+}
+
 export function createLinkCore(options: CoreOptions): LinkCore {
   const now = options.now ?? (() => performance.now());
   const core: Core = {
@@ -276,9 +329,12 @@ export function createLinkCore(options: CoreOptions): LinkCore {
     pingsLeft: 0,
     timer: undefined,
     stats: { sent: 0, received: 0, dropped: 0 },
+    control: new Set(),
   };
+  const link = linkOf(core);
+  CORES.set(link, core);
   return {
-    link: linkOf(core),
+    link,
     receive: (data, label) => {
       receive(core, data, label);
     },

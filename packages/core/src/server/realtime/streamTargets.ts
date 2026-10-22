@@ -72,6 +72,12 @@ export function streamTarget(hub: Hub, value: unknown, event: string): StreamTar
   if (stream === undefined) {
     throw new QuickdrawError("NOT_FOUND", `${frame.s} has no stream "${frame.stream}"`);
   }
+  if (stream.host) {
+    throw unreadable(
+      `${frame.s}.${frame.stream} is served by the room's host: subscribe over the link to the host of its room`,
+      ["stream"],
+    );
+  }
   const problem = scopeProblem(stream, frame.scope);
   if (problem !== undefined) {
     throw unreadable(problem, ["scope"]);

@@ -31,6 +31,7 @@ const STREAM_KEYS: ReadonlySet<string> = new Set([
   "seed",
   "volatile",
   "access",
+  "serve",
   "describe",
 ]);
 const CHANNEL_KEYS: ReadonlySet<string> = new Set([
@@ -38,6 +39,7 @@ const CHANNEL_KEYS: ReadonlySet<string> = new Set([
   "ratePerSecond",
   "burst",
   "requires",
+  "serve",
   "describe",
 ]);
 const EVENT_KEYS: ReadonlySet<string> = new Set(["payload", "describe"]);
@@ -199,7 +201,36 @@ function checkStream(name: string, value: unknown, fail: Fail): StreamDef {
       fail(`${owner}: entry and scope access check the scope's row, so the stream needs a scope`);
     }
   }
+  const { access } = stream;
+  const roomOfScope = isRecord(access) && typeof access.room === "function";
+  checkServe(
+    owner,
+    stream,
+    isScopedStream(stream as Pick<StreamDef, "scope">) && roomOfScope
+      ? undefined
+      : "it has a scope, and access { room: (scope) => room }, the room whose host serves each scope",
+    fail,
+  );
   return Object.freeze({ ...stream }) as unknown as StreamDef;
+}
+
+/**
+ * Checks `serve`: `"server"` or `"host"`. A host-served member fails with
+ * `needs`, what it lacks, unless that is `undefined`.
+ */
+function checkServe(
+  owner: string,
+  member: UnknownRecord,
+  needs: string | undefined,
+  fail: Fail,
+): void {
+  const { serve } = member;
+  if (serve !== undefined && serve !== "server" && serve !== "host") {
+    fail(`${owner}: serve must be "server" or "host"`);
+  }
+  if (serve === "host" && needs !== undefined) {
+    fail(`${owner} is served by the room's host (serve: "host"): ${needs}`);
+  }
 }
 
 function isSelector(value: unknown): boolean {
@@ -299,6 +330,15 @@ function checkChannel(name: string, value: unknown, scope: RealtimeScope, fail: 
     fail(`${owner}: burst must be a number of messages, at least 1`);
   }
   checkRequires(owner, channel.requires, scope, fail);
+  const { requires } = channel;
+  checkServe(
+    owner,
+    channel,
+    isRecord(requires) && requires.room !== undefined
+      ? undefined
+      : "it requires { room }, the room whose host handles its messages",
+    fail,
+  );
   return Object.freeze({ ...channel }) as unknown as ChannelDef;
 }
 

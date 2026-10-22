@@ -89,6 +89,8 @@ export type {
   ChannelOptions,
   ChannelRoomOf,
   ChannelsRequired,
+  HostLeave,
+  HostLeaveHandler,
   Presence,
   RoomLeave,
   RoomLeaveHandler,

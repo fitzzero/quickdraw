@@ -21,6 +21,7 @@ import {
   leaveAll,
   leaveListener,
   leaveRoom,
+  leavingState,
   listenForRemovals,
   removeUser,
   type DetachedRun,
@@ -30,7 +31,7 @@ import {
 import { markSeen, MAX_APP_ROOMS } from "./presence";
 import { entered, type RoomState } from "./roomFrames";
 import { checkRoom } from "./roomNames";
-import type { ContextRooms, RoomTarget, ServerRooms } from "./types";
+import type { ContextRooms, RoomHosts, RoomTarget, ServerRooms } from "./types";
 
 export { ROOM_LEAVE_EVENT, type DetachedRun, type RoomLeaveHook } from "./leaving";
 
@@ -52,6 +53,7 @@ function join(state: LeavingState, socket: QuickdrawServerSocket, room: string):
   joined[room] = true;
   void socket.join(room);
   entered(state, socket, room);
+  state.hosts.joined(socket, room);
   return true;
 }
 
@@ -80,7 +82,12 @@ export interface Rooms {
    * detached unit of work of its own.
    */
   onLeave(hooks: readonly RoomLeaveHook[], run: DetachedRun): void;
-  /** Takes this node's sockets out of rooms other nodes' `leave(room, { userId })` name. */
+  /** The rooms' hosts (host mode). */
+  readonly hosts: RoomHosts;
+  /**
+   * Takes this node's sockets out of rooms other nodes' `leave(room, {
+   * userId })` name, and keeps this node's record of every room's host.
+   */
   listen(): void;
 }
 
@@ -101,27 +108,46 @@ function leaveOf(
 /**
  * Creates the rooms of one dispatcher, and their typed events (`events.ts`).
  * `left` hears each socket that left an app room and is still connected
- * (the streams open to a room's sockets check it again).
+ * (the streams open to a room's sockets check it again); `served` says
+ * whether the server serves peer links, which a room's host needs.
  */
 export function createRooms(
   base: RoomState,
   left?: (socket: QuickdrawServerSocket) => void,
+  served: () => boolean = () => false,
 ): Rooms {
-  const state: LeavingState = { ...base, listener: undefined, left };
+  const state: LeavingState = leavingState(base, left, served);
   const events = createRoomEvents(state.hub);
   const removal = (room: string, target: RoomTarget): Promise<void> =>
     removeUser(state, room, target);
   const size = (room: string): number => sizeOf(state, room);
-  const server: ServerRooms = Object.freeze({ ...events, leave: removal, size });
+  const { hosts } = state;
+  const hostOf = (room: string): string | null => hosts.of(room);
+  const clearHost = (room: string): void => {
+    hosts.clear(room);
+  };
+  const server: ServerRooms = Object.freeze({
+    ...events,
+    leave: removal,
+    size,
+    hostOf,
+    clearHost,
+  });
   const bySocket = new WeakMap<QuickdrawServerSocket, ContextRooms>();
   const detached: ContextRooms = Object.freeze({
     ...events,
     size,
+    hostOf,
+    clearHost,
     join: (room: string) => {
       checkRoom(room);
       return false;
     },
     leave: leaveOf(() => false, removal),
+    setHost: (room: string) => {
+      checkRoom(room);
+      return false;
+    },
   });
   return Object.freeze({
     of(socket: QuickdrawServerSocket): ContextRooms {
@@ -130,8 +156,11 @@ export function createRooms(
         rooms = Object.freeze({
           ...events,
           size,
+          hostOf,
+          clearHost,
           join: (room: string) => join(state, socket, room),
           leave: leaveOf((room) => leaveRoom(state, socket, room, "leave"), removal),
+          setHost: (room: string) => hosts.set(socket, room),
         });
         bySocket.set(socket, rooms);
       }
@@ -153,8 +182,10 @@ export function createRooms(
     onLeave(hooks: readonly RoomLeaveHook[], run: DetachedRun): void {
       state.listener = hooks.length === 0 ? undefined : leaveListener(hooks, run, state.hub.logger);
     },
+    hosts,
     listen(): void {
       listenForRemovals(state);
+      hosts.listen();
     },
   });
 }
@@ -176,6 +207,7 @@ export function unjoinable(rooms: ContextRooms, share: string): ContextRooms {
   return Object.freeze({
     ...rooms,
     join: () => refuse("join"),
+    setHost: () => refuse("setHost"),
     leave: ((room: string, target?: RoomTarget) =>
       target === undefined ? refuse("leave") : rooms.leave(room, target)) as ContextRooms["leave"],
   });

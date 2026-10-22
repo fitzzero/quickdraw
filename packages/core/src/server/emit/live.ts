@@ -11,6 +11,9 @@ import type { AnyContract } from "../../contract/defineContract";
 import { createLiveCollections } from "../collections/live";
 import {
   createRealtime,
+  type HostLeave,
+  type HostLeaveHandler,
+  type HostLeaveHook,
   type Presence,
   type Realtime,
   type RoomLeave,
@@ -27,7 +30,17 @@ import { createHub, drain, type AdapterProbe, type Hub, type HubOptions } from "
 import { createRevocation, listenForChanges } from "./revocation";
 import { createVersionSource } from "./versions";
 
-export type { Presence, RoomLeave, RoomLeaveHandler, RoomLeaveHook, ServerRooms, StreamHandle };
+export type {
+  HostLeave,
+  HostLeaveHandler,
+  HostLeaveHook,
+  Presence,
+  RoomLeave,
+  RoomLeaveHandler,
+  RoomLeaveHook,
+  ServerRooms,
+  StreamHandle,
+};
 export type { ChangeLogOptions } from "./changeLog";
 
 type Sinks = ReturnType<typeof createEntitySinks>;
@@ -99,7 +112,7 @@ export function createLive(options: HubOptions): Live {
   const topics = createTopics(collections.hub);
   const sinks = createEntitySinks(hub);
   const peers = createPeerLinks(hub);
-  const realtime = createRealtime(hub, peers.left);
+  const realtime = createRealtime(hub, peers);
   const revocation = createRevocation(hub, [
     collections.revocation,
     topics.revocation,

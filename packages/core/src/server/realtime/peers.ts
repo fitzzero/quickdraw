@@ -149,10 +149,13 @@ export interface PeerLinks {
   listen(): void;
   /** The socket left an app room and is still connected: its links in rooms it left end. */
   left(socket: QuickdrawServerSocket): void;
+  /** True once the server serves peer links (`listen` ran), which a room's host needs. */
+  served(): boolean;
 }
 
 /** Creates the peer links of the dispatcher whose hub this is. */
 export function createPeerLinks(hub: Hub): PeerLinks {
+  let served = false;
   return Object.freeze({
     extension(socket: QuickdrawServerSocket, context: SocketContext): void {
       socket.on(CLIENT_EVENTS.peer, (frame: unknown, ack: unknown) => {
@@ -180,8 +183,10 @@ export function createPeerLinks(hub: Hub): PeerLinks {
       });
     },
     listen: () => {
+      served = true;
       listenForPeers(hub);
     },
+    served: () => served,
     left(socket: QuickdrawServerSocket): void {
       const state = knownPeers(socket);
       if (state !== undefined) {

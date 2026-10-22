@@ -46,6 +46,11 @@ function servedStream(hub: Hub, contract: AnyContract, name: string): Served {
   if (stream === undefined) {
     throw new TypeError(`stream: ${service.name} has no stream "${String(name)}"`);
   }
+  if (stream.host) {
+    throw new TypeError(
+      `stream: ${service.name}.${stream.name} is served by the room's host (serve: "host"): its host's client pushes it, with defineHost; the server cannot`,
+    );
+  }
   return { service, stream };
 }
 

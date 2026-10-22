@@ -137,6 +137,8 @@ export const SERVER_EVENTS = Object.freeze({
   peer: "qd:peer",
   /** A peer link's message the server relays: `[room, from, label, text]`. */
   relay: "qd:relay",
+  /** An app room's host (host mode): `[room, host]`, the host's socket id or `null`. */
+  host: "qd:host",
 } as const);
 
 /** The name of an event a client sends. */
