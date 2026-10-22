@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Codemod
+
+- **A method object no longer collides with a binding of its name.** A
+  split service's method module wrote each method object under its
+  method's name (`export const renameTask = ...`), and the service file
+  imported it under that name, whatever those files bound already.
+  Conveyor's method modules kept a handler's body in a function named
+  after its method or imported the implementation under that name, and its
+  service files imported the implementations too, declared wrappers of the
+  methods' names and destructured them from dynamic imports: 5 files did
+  not parse (19 `Identifier ... has already been declared`), and lint found
+  15 more `no-redeclare` and `no-shadow` reports. The codemod now renames
+  what the file owns, with every reference: in a method module, a local
+  function or binding of the method's name becomes `<name>Body` and an
+  import of it `<name> as <name>Impl`; in the service file, an import of it
+  becomes `<name> as <name>Impl`; a binding inside a function that would
+  shadow the method object becomes `<name>Impl`. What other files see keeps
+  its name: beside a helper the module exports under the method's name, the
+  method object is `<name>Method`, and a service file that declares the
+  name itself imports the object as `<name>Method` and lists it as
+  `<name>: <name>Method`. A service class member hoisted under the name of
+  a module's method becomes `<name>Of<Class>`. No rename is marked: none
+  leaves anything to decide.
+- **An import the codemod adds is no longer dropped when the file imports
+  the same module's export under another name** (`import { x as y }`): the
+  name is added beside it.
+- **The codemod's own tests lint its output with `no-redeclare` and
+  `no-shadow`**, which the 5.0 lint baseline enables, as well as checking
+  that every file parses.
+
 ## [5.1.1] - 2026-10-11
 
 ### Behavior changes for 5.1 apps
