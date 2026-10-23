@@ -13,6 +13,10 @@
 //    It calls the `$transaction` of the client from step 1, so the
 //    transaction's client carries the hook. Transactions are found through
 //    that wrapper and `AsyncLocalStorage`, never through Prisma internals.
+//    The transaction's client is handed to its callback behind a proxy whose
+//    `$transaction` takes the same path (`nestable`): on Prisma 7 a
+//    transaction begun on it is nested, a savepoint, and its writes join the
+//    transaction around it only once the savepoint is released.
 //
 // Make it the last extension applied: an extension added after it still
 // runs outside transactions, but not on a transaction's client.
@@ -144,10 +148,41 @@ function createHook(runtime: Runtime) {
   };
 }
 
-/** `$transaction`, in both forms, inside a transaction frame of the tracker. */
+/**
+ * An interactive transaction's client as its callback gets it: Prisma's own,
+ * except that its `$transaction` (Prisma 7 runs one as a nested transaction,
+ * a savepoint of this one) goes through {@link transaction} too. Its writes
+ * then join this transaction only once the savepoint is released, and are
+ * dropped when it rolls back while this one goes on to commit; the client
+ * the nested callback gets is wrapped the same way. A client without
+ * `$transaction` is handed on as it is.
+ */
+function nestable(tracker: WriteTracker, client: unknown): unknown {
+  if (
+    (typeof client !== "object" && typeof client !== "function") ||
+    client === null ||
+    typeof Reflect.get(client, "$transaction") !== "function"
+  ) {
+    return client;
+  }
+  const own = client as ExtendedClient;
+  return new Proxy(own, {
+    get(target, property) {
+      return property === "$transaction"
+        ? (arg: unknown, options?: unknown) => transaction(tracker, own, arg, options)
+        : Reflect.get(target, property);
+    },
+  });
+}
+
+/**
+ * `$transaction`, in both forms, inside a transaction frame of the tracker,
+ * opened on `base`: the hooked client, or for a nested transaction the client
+ * of the transaction around it.
+ */
 async function transaction(
   tracker: WriteTracker,
-  hooked: ExtendedClient,
+  base: ExtendedClient,
   arg: unknown,
   options: unknown,
 ): Promise<unknown> {
@@ -155,11 +190,11 @@ async function transaction(
   const frame = tracker.openTransaction(interactive ? "interactive" : "batch");
   try {
     const result = interactive
-      ? await hooked.$transaction((client: unknown) => {
+      ? await base.$transaction((client: unknown) => {
           frame.setClient(client);
-          return frame.run(() => (arg as (client: unknown) => unknown)(client));
+          return frame.run(() => (arg as (client: unknown) => unknown)(nestable(tracker, client)));
         }, options)
-      : await frame.run(() => hooked.$transaction(arg, options));
+      : await frame.run(() => base.$transaction(arg, options));
     frame.commit();
     return result;
   } catch (error) {
@@ -294,7 +329,12 @@ function createStorage(
  * `db: Tracked<Db>` (or `TrackedTransaction<Db>`, which a transaction's `tx`
  * is too) and the compiler refuses the untracked client there.
  *
- * Prefer interactive transactions (`db.$transaction(async (tx) => ...)`). An
+ * Prefer interactive transactions (`db.$transaction(async (tx) => ...)`). One
+ * nested in it (`tx.$transaction(async (inner) => ...)`, a savepoint) is
+ * tracked the same way: its writes join the transaction around it when it
+ * commits, and are dropped when it rolls back, whatever the transaction
+ * around it does next. Write through `tx` inside one: a write through `db`
+ * there runs outside the transaction, yet is recorded with it. An
  * array-form `db.$transaction([...])` has no transaction client, so the rows
  * a `deleteMany` or `updateMany` there reads first (and an `update`'s old
  * values) are read on the root client, outside the batch: rows the batch's

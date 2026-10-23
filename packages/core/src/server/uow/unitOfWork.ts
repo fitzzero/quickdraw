@@ -10,7 +10,10 @@
 // - a transaction's frame buffers its writes separately, and they join the
 //   enclosing buffer only when the transaction commits; a rollback discards
 //   them; an interactive transaction's frame also holds its transaction
-//   client, so the adapter's own reads see the transaction's writes;
+//   client, so the adapter's own reads see the transaction's writes; a
+//   transaction nested in another (a savepoint) has a frame of its own
+//   inside the other's, so its writes join that one's buffer only when it
+//   commits, and its rollback discards them while the other goes on;
 // - a unit begun inside another open frame (an in-process call made from a
 //   handler, `qd.run` inside a transaction) joins it: its writes go where
 //   the enclosing frame's go, and its own flush does nothing; a detached

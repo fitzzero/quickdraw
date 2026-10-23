@@ -215,6 +215,13 @@ writes made through `db`, after the response is sent:
 - Nested writes (`data: { labels: { create: [...] } }`) are not tracked:
   write each model through its own delegate, inside an interactive
   `db.$transaction(async (tx) => ...)` when they must commit together.
+- Inside `db.$transaction(async (tx) => ...)`, write through `tx`, and
+  nest through `tx.$transaction(async (inner) => ...)`: a savepoint, whose
+  writes are sent only if it and the transaction around it commit (a
+  rolled-back savepoint's are dropped, even when the outer one catches and
+  commits). A write through `db` there runs outside the transaction, yet is
+  recorded with it: when the transaction rolls back, its frames are dropped
+  though its row stays.
 - Raw SQL writes and database cascades are not seen: record them with
   `ctx.touch("task", ids)` (`{ removed: true }` for deleted rows); `qd.run`
   passes `fn` the same `touch`. Before deleting a row whose dependents the
