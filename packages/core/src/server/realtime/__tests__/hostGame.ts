@@ -57,7 +57,8 @@ export const gameContract = defineContract("gameService", {
   },
 });
 
-const qd = initQuickdraw<{ principal: AppPrincipal }>();
+/** The instance the game's service is defined with: `qd.stream` reaches the test app created last. */
+export const qd = initQuickdraw<{ principal: AppPrincipal }>();
 
 /** The game's service; `onHostLeave` hears its worlds' hosts leave. */
 export function defineGameService(onHostLeave?: HostLeaveHandler) {

@@ -21,7 +21,7 @@ import type { Hub } from "../emit/hub";
 import type { QuickdrawServerSocket } from "../transports/types";
 import { compileChannels, compileStreams } from "./define";
 import { frames, refused, settle } from "./__tests__/fixture";
-import { defineGameService, gameContract, WORLD, WORLD_ID } from "./__tests__/hostGame";
+import { defineGameService, gameContract, qd, WORLD, WORLD_ID } from "./__tests__/hostGame";
 import { createRoomHosts } from "./hosts";
 import type { HostLeave } from "./types";
 
@@ -403,8 +403,8 @@ describe("host-served members on the server", () => {
     expect(() =>
       app.server.stream(gameContract, "world").push(WORLD_ID, { tick: 1, players: [] }),
     ).toThrow(`stream: gameService.world is served by the room's host (serve: "host")`);
-    // its subscribers are the host's, over peer links the server never reads
-    expect(() => app.server.stream(gameContract, "world").subscribers(WORLD_ID)).toThrow(
+    // its subscribers are the host's, over peer links the server never reads: a job's count rejects
+    await expect(qd.stream(gameContract, "world").subscribers(WORLD_ID)).rejects.toThrow(
       `stream: gameService.world is served by the room's host (serve: "host")`,
     );
   });
