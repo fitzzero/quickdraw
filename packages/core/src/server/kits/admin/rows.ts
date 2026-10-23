@@ -10,6 +10,15 @@
 // `CONFLICT`, and a value the database refuses `VALIDATION`. A write never
 // sets a field the service hides, one an override made read-only, `id` or a
 // timestamp (the contract half refuses the last two before the call runs).
+//
+// With a hook (`prepare`, `onWrite` or `onCommitted`) a write runs in a
+// transaction, which reads the row before it: `prepare` first, which may add
+// column values to the write and write other rows through the transaction's
+// tracked client (the rows a database cascade would delete unseen), then the
+// write, then `onWrite`. Statements: one per write without a hook; with one,
+// a read of the row before an `adminUpdate`, and before an `adminDelete`
+// that `prepare` hears (one that only `onWrite` or `onCommitted` hears reads
+// it as it deletes), plus the hooks' own.
 
 import type { IdInput } from "../../../contract/kits/crudSchemas";
 import type { AdminCreateQuery, AdminUpdateQuery } from "../../../contract/kits/adminSchemas";
@@ -18,8 +27,8 @@ import type { KitHandler, KitHandlerArgs, ModelDelegate } from "../crud/runtime"
 import { kitRuntimeOf } from "../../context";
 import { inKitTransaction } from "../transactions";
 import { adminCall, rowOut, rowWhole, tableOf, type AdminCall } from "./runtime";
-import type { AdminContext, AdminWrite } from "./types";
-import { checkWrite, writeRefusal } from "./writes";
+import type { AdminContext, AdminPrepare, AdminPrepareCall, AdminWrite } from "./types";
+import { checkWrite, prepareWrite, writeRefusal } from "./writes";
 import { errorText } from "../../../contract/logger";
 
 async function readRow(call: AdminCall, id: string): Promise<unknown> {
@@ -27,11 +36,27 @@ async function readRow(call: AdminCall, id: string): Promise<unknown> {
   return rowOut(call, requireRow(row, `No such ${call.model}`));
 }
 
-/** One write, as a handler makes it: on `table`, reading the row before it when `before` is asked for. */
-type Perform = (
-  table: ModelDelegate,
-  before: boolean,
-) => Promise<{
+/** The column values a write sets. */
+type Data = Readonly<Record<string, unknown>>;
+
+/** One write, as its handler names it: the method, the row, and the caller's checked data. */
+type WriteCall =
+  | { readonly method: "adminCreate"; readonly data: Data }
+  | { readonly method: "adminUpdate"; readonly id: string; readonly data: Data }
+  | { readonly method: "adminDelete"; readonly id: string };
+
+/** What a handler's write is given. */
+interface WriteArgs {
+  /** The model's delegate: on the dispatcher's client, or on the hooks' transaction. */
+  readonly table: ModelDelegate;
+  /** What `adminCreate` and `adminUpdate` set: the caller's data, with `prepare`'s columns over it. */
+  readonly values: Data;
+  /** True when the write returns the row before it: an `adminDelete` a hook hears, its row not read first. */
+  readonly before: boolean;
+}
+
+/** One write, as a handler makes it. */
+type Perform = (args: WriteArgs) => Promise<{
   readonly id: string;
   readonly before?: object | null;
   readonly after: object | null;
@@ -67,49 +92,97 @@ function committed(context: AdminContext, args: KitHandlerArgs, write: AdminWrit
 }
 
 /**
- * Runs one write of `method`: alone without a hook, else in a transaction
- * with `onWrite` after it, which hears the row before (read in the
- * transaction) and after, every field; a throw undoes the write. Once it
- * committed, `onCommitted` hears the same (`committed`). The database's
- * refusal of the values is `VALIDATION` either way.
+ * The row before an `adminUpdate`, or before an `adminDelete` that
+ * `prepare` hears, read in the write's transaction (`NOT_FOUND` when there
+ * is none, before any hook runs); `undefined` for an `adminCreate`, and for
+ * an `adminDelete` only `onWrite` or `onCommitted` hears, which reads it as
+ * it deletes.
+ */
+async function rowBefore(
+  context: AdminContext,
+  call: AdminCall,
+  table: ModelDelegate,
+  write: WriteCall,
+): Promise<object | undefined> {
+  const readsAsItDeletes = write.method === "adminDelete" && context.prepare === undefined;
+  if (write.method === "adminCreate" || readsAsItDeletes) {
+    return undefined;
+  }
+  const row = await table.findUnique({ where: { id: write.id }, select: call.projection.select });
+  return requireRow(row, `No such ${call.model}`);
+}
+
+/** What `prepare` hears of a write: a frozen copy of the caller's data, so it changes nothing in place. */
+function prepareCall(write: WriteCall, before: unknown): AdminPrepareCall {
+  if (write.method === "adminCreate") {
+    return Object.freeze({ method: write.method, data: Object.freeze({ ...write.data }) });
+  }
+  if (write.method === "adminUpdate") {
+    const data = Object.freeze({ ...write.data });
+    return Object.freeze({ method: write.method, id: write.id, data, before });
+  }
+  return Object.freeze({ method: write.method, id: write.id, before });
+}
+
+/**
+ * Runs one write: alone without a hook, else in a transaction that reads the
+ * row before it (`rowBefore`), runs `prepare` (whose column values the write
+ * sets over the caller's: `prepareWrite`), makes the write and runs
+ * `onWrite`, which hears the row before and after, every field; a throw in
+ * any of them undoes it all. Once it committed, `onCommitted` hears the same
+ * (`committed`). The database's refusal of the values is `VALIDATION` either
+ * way.
  */
 async function written(
   context: AdminContext,
   call: AdminCall,
   args: KitHandlerArgs,
-  method: AdminWrite["method"],
+  write: WriteCall,
   perform: Perform,
 ): Promise<unknown> {
-  const { onWrite, onCommitted } = context;
-  const attempt = async (table: ModelDelegate, before: boolean) => {
+  const { prepare, onWrite, onCommitted } = context;
+  const data = write.method === "adminDelete" ? {} : write.data;
+  const attempt = async (table: ModelDelegate, values: Data, before: boolean) => {
     try {
-      return await perform(table, before);
+      return await perform({ table, values, before });
     } catch (error) {
       throw writeRefusal(error);
     }
   };
-  if (onWrite === undefined && onCommitted === undefined) {
-    return (await attempt(call.table, false)).reply;
+  if (prepare === undefined && onWrite === undefined && onCommitted === undefined) {
+    return (await attempt(call.table, data, false)).reply;
   }
-  let write: AdminWrite | undefined;
+  const ctx = args.ctx as Parameters<AdminPrepare>[1];
+  let heard: AdminWrite | undefined;
   const reply = await inKitTransaction(
     args.db,
     async (tx) => {
-      const done = await attempt(tableOf(tx, call.model), method !== "adminCreate");
+      const table = tableOf(tx, call.model);
       const whole = (row: object | null | undefined) => (row ? rowWhole(call, row) : null);
-      write = {
-        method,
+      const first = await rowBefore(context, call, table, write);
+      const before = first === undefined ? undefined : whole(first);
+      const values =
+        prepare === undefined
+          ? data
+          : await prepareWrite(call, prepare, prepareCall(write, before), ctx, tx);
+      const done = await attempt(
+        table,
+        values,
+        write.method === "adminDelete" && first === undefined,
+      );
+      heard = {
+        method: write.method,
         id: done.id,
-        ...(method === "adminCreate" ? {} : { before: whole(done.before) }),
+        ...(write.method === "adminCreate" ? {} : { before: before ?? whole(done.before) }),
         after: whole(done.after),
       };
-      await onWrite?.(write, args.ctx as Parameters<typeof onWrite>[1], tx);
+      await onWrite?.(heard, ctx, tx);
       return done.reply;
     },
-    { owner: "The admin kit's writes with onWrite or onCommitted" },
+    { owner: "The admin kit's writes with prepare, onWrite or onCommitted" },
   );
-  if (write !== undefined) {
-    committed(context, args, write);
+  if (heard !== undefined) {
+    committed(context, args, heard);
   }
   return reply;
 }
@@ -134,15 +207,20 @@ export function adminCreateHandler(context: AdminContext): KitHandler {
     const call = adminCall(args.ctx, args.db, context.fieldsFor);
     const { data } = args.input as AdminCreateQuery;
     await checkWrite(call, context, data);
-    return await written(context, call, args, "adminCreate", async (table) => {
-      const after = await table.create({ data, select: call.projection.select });
+    const { select } = call.projection;
+    const write = { method: "adminCreate", data } as const;
+    return await written(context, call, args, write, async ({ table, values }) => {
+      const after = await table.create({ data: values, select });
       return { id: idOf(after), after, reply: rowOut(call, after) };
     });
   };
   return handler as KitHandler;
 }
 
-/** The `adminUpdate` handler. A call that changes nothing reads the row instead of writing it. */
+/**
+ * The `adminUpdate` handler. A call that changes nothing reads the row
+ * instead of writing it, and runs no hook.
+ */
 export function adminUpdateHandler(context: AdminContext): KitHandler {
   const handler = async (args: KitHandlerArgs): Promise<unknown> => {
     const call = adminCall(args.ctx, args.db, context.fieldsFor);
@@ -152,10 +230,10 @@ export function adminUpdateHandler(context: AdminContext): KitHandler {
       return await readRow(call, id);
     }
     const { select } = call.projection;
-    return await written(context, call, args, "adminUpdate", async (table, withBefore) => {
-      const before = withBefore ? await table.findUnique({ where: { id }, select }) : undefined;
-      const after = await table.update({ where: { id }, data, select });
-      return { id, before, after, reply: rowOut(call, after) };
+    const write = { method: "adminUpdate", id, data } as const;
+    return await written(context, call, args, write, async ({ table, values }) => {
+      const after = await table.update({ where: { id }, data: values, select });
+      return { id, after, reply: rowOut(call, after) };
     });
   };
   return handler as KitHandler;
@@ -166,10 +244,11 @@ export function adminDeleteHandler(context: AdminContext): KitHandler {
   const handler = async (args: KitHandlerArgs): Promise<unknown> => {
     const call = adminCall(args.ctx, args.db, context.fieldsFor);
     const { id } = args.input as IdInput;
-    return await written(context, call, args, "adminDelete", async (table, withBefore) => {
-      const select = withBefore ? call.projection.select : { id: true };
-      const before = await table.delete({ where: { id }, select });
-      return { id, ...(withBefore ? { before } : {}), after: null, reply: null };
+    const write = { method: "adminDelete", id } as const;
+    return await written(context, call, args, write, async ({ table, before }) => {
+      const select = before ? call.projection.select : { id: true };
+      const row = await table.delete({ where: { id }, select });
+      return { id, ...(before ? { before: row } : {}), after: null, reply: null };
     });
   };
   return handler as KitHandler;

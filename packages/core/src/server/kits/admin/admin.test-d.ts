@@ -17,6 +17,7 @@ import {
   admin as adminContract,
   defineContract,
   query,
+  type AdminData,
   type AdminFieldConfig,
   type AdminPage,
   type AdminServiceMeta,
@@ -237,6 +238,67 @@ describe("admin.handlers", () => {
         expectTypeOf(write.before).toEqualTypeOf<TaskRow | undefined>();
         expectTypeOf(ctx.principal).toEqualTypeOf<Principal>();
       },
+    });
+  });
+
+  test("prepare hears the write it runs before, narrowed by its method, with db as annotated", () => {
+    qd.defineService(task, {
+      model: "task",
+      access: inherit({ from: project, via: "projectId" }),
+      methods: {
+        ...admin.handlers(task, {
+          prepare: async (call, ctx, db: Db) => {
+            expectTypeOf(call.method).toEqualTypeOf<
+              "adminCreate" | "adminUpdate" | "adminDelete"
+            >();
+            expectTypeOf(ctx.principal).toEqualTypeOf<Principal>();
+            if (call.method === "adminCreate") {
+              expectTypeOf(call.data).toEqualTypeOf<AdminData<TaskRow>>();
+              expectTypeOf(call.data.title).toEqualTypeOf<string | undefined>();
+              // @ts-expect-error a create has no row before it
+              expectTypeOf(call.before);
+              return { ordinal: 1 };
+            }
+            if (call.method === "adminUpdate") {
+              expectTypeOf(call.before).toEqualTypeOf<TaskRow>();
+              const row = await db.task.findUnique({ where: { id: call.id } });
+              return { ordinal: row.ordinal + 1 };
+            }
+            expectTypeOf(call).toEqualTypeOf<{
+              readonly method: "adminDelete";
+              readonly id: string;
+              readonly before: TaskRow;
+            }>();
+            // @ts-expect-error a delete carries no data
+            expectTypeOf(call.data);
+            return undefined;
+          },
+        }),
+        get: {
+          access: { entry: "Read" },
+          handler: ({ input, db }) => db.task.findUnique({ where: { id: input.id } }),
+        },
+      },
+    });
+    qd.defineService(task, {
+      model: "task",
+      access: inherit({ from: project, via: "projectId" }),
+      // @ts-expect-error -- prepare's db is not the app's client
+      methods: {
+        ...admin.handlers(task, {
+          prepare: (_call, _ctx, db: { readonly other: true }) => ({ other: db.other }),
+        }),
+        get: { access: { entry: "Read" }, handler: () => Promise.resolve(null as never) },
+      },
+    });
+    admin.handlers(task, {
+      prepare: (_call, _ctx, db) => {
+        expectTypeOf(db).toEqualTypeOf<unknown>();
+      },
+    });
+    admin.handlers(task, {
+      // @ts-expect-error prepare returns column values, or nothing
+      prepare: () => "columns",
     });
   });
 

@@ -10,11 +10,42 @@ import type { AnyContract } from "../../../contract/defineContract";
 import type { EntityOf, MethodName, OutputOf, ParsedInputOf } from "../../../contract/infer";
 import type { AdminMethodsOf, AdminSpec } from "../../../contract/kits/admin";
 import type { AdminFieldConfig } from "../../../contract/kits/adminFields";
-import type { AdminNeverWritable } from "../../../contract/kits/adminSchemas";
+import type { AdminData, AdminNeverWritable } from "../../../contract/kits/adminSchemas";
 import type { AccessFor, AccessForm } from "../../access/types";
+import type { MaybePromise } from "../../types";
 import type { KitHandler } from "../crud/runtime";
 import type { KitContext } from "../crud/types";
 import type { AdminFields } from "./meta";
+
+/**
+ * A write the admin kit is about to make, as `prepare` hears it: `data` is
+ * the caller's data, checked; `before` is the row before the write, every
+ * field, read in the write's transaction (as `onWrite` hears it).
+ */
+export type AdminPrepareCall<Row = unknown> =
+  | { readonly method: "adminCreate"; readonly data: AdminData<Row> }
+  | {
+      readonly method: "adminUpdate";
+      readonly id: string;
+      readonly data: AdminData<Row>;
+      readonly before: Row;
+    }
+  | { readonly method: "adminDelete"; readonly id: string; readonly before: Row };
+
+/**
+ * `admin.handlers`' `prepare`: runs before each write the kit makes, inside
+ * one transaction with it, after the caller's access and data were checked,
+ * with that transaction's tracked client as `db` (the app's client type
+ * `Db`, when `db` is annotated): its own writes commit with the edit, and a
+ * throw undoes them and the edit and fails the call. Before `adminCreate`
+ * and `adminUpdate` it may return column values, merged over the caller's
+ * data; what it returns before `adminDelete` is ignored.
+ */
+export type AdminPrepare<Row = unknown, Db = unknown> = (
+  call: AdminPrepareCall<Row>,
+  ctx: KitContext,
+  db: Db,
+) => MaybePromise<Readonly<Record<string, unknown>> | void>;
 
 /** A write the admin kit made, as `onWrite` hears it. */
 export interface AdminWrite<Row = unknown> {
@@ -70,6 +101,8 @@ export interface AdminContext {
   readonly fieldsFor: (grantsColumn: string | undefined) => AdminFields;
   /** The method's access form: a write's row level comes from it. */
   readonly form: AccessForm;
+  /** The app's hook before each write, if it gave one. */
+  readonly prepare: AdminPrepare | undefined;
   /** The app's hook after each write, if it gave one. */
   readonly onWrite: AdminOnWrite | undefined;
   /** The app's hook once each write committed, if it gave one. */
@@ -120,7 +153,7 @@ type NotAnAdminMethod<C extends AnyContract, A> = [Exclude<keyof A, AdminMethods
   ? unknown
   : `admin.handlers: ${Exclude<keyof A, AdminMethodsOf<C>> & string} is not a method admin.contract made for ${C["name"]}`;
 
-/** The options of `admin.handlers(contract, options)`. `Db` comes from an annotated `onWrite` `db`. */
+/** The options of `admin.handlers(contract, options)`. `Db` comes from an annotated `db` of `prepare` or `onWrite`. */
 export interface AdminHandlersOptions<C extends AnyContract, A, Db = unknown> {
   /**
    * Forms that replace the kit's default, `{ service: "Admin" }`, per method.
@@ -181,13 +214,44 @@ export interface AdminHandlersOptions<C extends AnyContract, A, Db = unknown> {
    */
   readonly rowless?: readonly AdminMethodsOf<C>[];
   /**
+   * Runs before each write `adminCreate`, `adminUpdate` or `adminDelete`
+   * makes, in one transaction with it and `onWrite`, once the caller's
+   * access and data were checked: `{ method: "adminCreate", data }`,
+   * `{ method: "adminUpdate", id, data, before }` or
+   * `{ method: "adminDelete", id, before }` (`data` the caller's, `before`
+   * the row, every field), the call's `ctx`, and the transaction's tracked
+   * client as `db`. A throw fails the call and undoes everything.
+   *
+   * Before `adminCreate` and `adminUpdate` it may return column values,
+   * merged over the caller's data and written: a column the server computes
+   * (a hash, a slug), even one the caller may not write (hidden, not
+   * editable, above the caller's level), but never `id`, a timestamp, a
+   * relation or a nested write (`VALIDATION`). Returning nothing, or
+   * `undefined` for a key, keeps the caller's data. What it returns before
+   * `adminDelete` is ignored.
+   *
+   * Its writes through `db` are tracked like any other: before a delete,
+   * delete or clear there the rows the database would delete or clear with
+   * the row (a cascade, `SET NULL`), which the tracked client never sees,
+   * so the rows and lists open on them are told.
+   *
+   * @example
+   * prepare: async (call, ctx, db: PrismaClient) => {
+   *   if (call.method === "adminDelete") {
+   *     // the database deletes a project's tasks with it: delete them first, tracked
+   *     await db.task.deleteMany({ where: { projectId: call.id } });
+   *   }
+   * },
+   */
+  readonly prepare?: AdminPrepare<EntityOf<C>, Db>;
+  /**
    * Runs after each write `adminCreate`, `adminUpdate` or `adminDelete`
    * makes, in one transaction with it: `{ method, id, before?, after }` and
    * the call's `ctx`, with the transaction's tracked client as `db`. A
    * throw undoes the write and fails the call. For what an admin edit must
    * set off (a game reloading its tunables, an audit row) without wrapping
-   * the kit's handlers. Without it the kit opens no transaction and reads
-   * no `before`.
+   * the kit's handlers. Without it, `prepare` or `onCommitted`, the kit
+   * opens no transaction and reads no `before`.
    *
    * @example
    * onWrite: ({ method, after }) => {
