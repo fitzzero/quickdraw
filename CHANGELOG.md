@@ -198,12 +198,16 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   the `QueryClient`'s `placeholderData` default (`keepPreviousData` in
   `defaultOptions.queries`, or `setQueryDefaults(["qd"], ...)`). TanStack
   makes that placeholder from the last entry the hook's observer showed,
-  which the cache session never empties, so a hook whose id or scope
-  changed showed the last one's row or items, with `isLoading: false`, until
-  the new one answered: another row of the same user's, or, for a hook keyed
-  by the user, the last user's row at their access tier after a switch of
-  users or a session the server ended. The entry's query now gives
-  `placeholderData: undefined`, which no default overrides. `useEntities`
+  which the cache session never empties. So until a new id or scope
+  answered, `useEntity` and `useCollection` showed the last one's row or
+  items, with `isLoading: false`, and `useSearch` showed its results through
+  the last scope's state (an item that state held, as it held it; one it
+  had removed, not at all): another row or scope of the same user's, or, for
+  a hook keyed by the user, the last user's, at their access tier, after a
+  switch of users or a session the server ended. The entry's query now
+  gives `placeholderData: undefined`, which no default overrides, so a
+  re-keyed `useEntity` or `useCollection` shows `isLoading` and no data
+  until its answer, under a `keepPreviousData` default too. `useEntities`
   was never affected: each id has an observer of its own.
 - **`useJoin` shows `data` only to the user who joined.** What the last
   join returned stayed shown while new credentials awaited their hello, was
@@ -214,6 +218,24 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   them. A reconnect with the same credentials keeps the hello, so `data`
   stays through it as before; new credentials hide it until their hello,
   and the same user's shows again while the join runs.
+- **A mounted mutation hook shows a call only to the user it ran as.** A
+  member's `useMutation` returned TanStack's state as it was, and TanStack
+  keeps it on the hook's observer, outside the cache the session empties: a
+  component that stayed mounted while the user changed showed the next user
+  the last user's `data`, `error`, `variables` and status, while the next
+  user's hello was awaited and after it, a call in flight at the switch
+  included (its `isPending`, then the error its dropped socket gave it).
+  The hook now records who each call runs as when it is issued (the user
+  the hello names, `null` for anonymous; with no hello held, the user the
+  next hello names, unless the call settles first), and shows its state
+  only while the connection's hello names that user, else an idle result.
+  A reconnect with the same credentials keeps the hello, so a finished
+  call stays shown through it; new credentials hide it until their hello,
+  which shows it again if it names the same user. `throwOnError` throws
+  only an error the hook shows. The call itself still settles, and
+  `onSuccess`, `onError` and `onSettled` still run, for the user who made
+  it: the observer is not reset, which would drop the callbacks a
+  `mutate(variables, options)` gave a call still in flight.
 - **An app's own hook reads in the provider's first commit.**
   `QuickdrawProvider` bound the typed client to its connection, and opened
   the connection, in passive effects, which React runs after its

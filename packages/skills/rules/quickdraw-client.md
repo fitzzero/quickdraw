@@ -38,7 +38,8 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   `useQuery` or `useSearch` would make from it (`keepPreviousData`, the
   last results) included. Live entries never take a placeholder, whatever
   the `QueryClient`'s defaults: `useEntity` and `useCollection` show nothing
-  of another row, scope or user while a new one loads.
+  of another row, scope or user while a new one loads. A mounted
+  `useMutation` shows none of the last user's calls.
 - `useQuickdraw()` gives
   `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, refusal, isRateLimited }`.
   Gate on `isKnown` (the server's hello named the user; `userId` is then
@@ -128,6 +129,11 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   (`useCollection().checking` names it until the scope's next load says),
   and only that id lets the load find it and makes `retry()` safe, since
   the second call fails `CONFLICT` instead of writing twice.
+- A mutation's result (`data`, `error`, `variables`, status) shows only
+  while the server's hello names the user the call ran as: a component that
+  stays mounted while the user changes shows the next user none of the last
+  user's calls, and none while new credentials await their hello. Its
+  callbacks still run for the user who made it.
 - Never refetch or invalidate after a mutation by hand: the frames update
   live rows and collections, and watched queries refetch themselves. For
   anything else use `qd.invalidate(qd.task.stats, input?)`, never
