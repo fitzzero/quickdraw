@@ -73,7 +73,7 @@ interface Held {
   readonly label: PeerLabel;
   readonly seq: number;
   readonly deliver: LagDeliver;
-  /** When it is due, by the queue's `now`. */
+  /** When it is due, by `performance.now()`, the clock the timers keep. */
   readonly at: number;
   /** Due: its time came, or the time of a `rel` message held after it did. */
   ready: boolean;
@@ -84,7 +84,6 @@ interface Held {
 interface Queue {
   lag: PeerLinkLag | null;
   random: () => number;
-  readonly now: () => number;
   /** The held `rel` messages, in order. */
   readonly rel: Held[];
   /** The held `fast` messages, in the order they were pushed. */
@@ -165,13 +164,13 @@ function due(queue: Queue, item: Held): void {
 }
 
 /**
- * Hands the message on once its time came, by the queue's `now`: a timer
+ * Hands the message on once its time came, by `performance.now()`: a timer
  * may fire a little early by the event loop's clock.
  */
 function arm(queue: Queue, item: Held): void {
   item.timer = setTimeout(
     () => {
-      if (item.at > queue.now()) {
+      if (item.at > performance.now()) {
         arm(queue, item);
       } else if (item.label === "rel") {
         due(queue, item);
@@ -179,7 +178,7 @@ function arm(queue: Queue, item: Held): void {
         deliverFast(queue, item);
       }
     },
-    Math.max(0, Math.ceil(item.at - queue.now())),
+    Math.max(0, Math.ceil(item.at - performance.now())),
   );
 }
 
@@ -226,7 +225,7 @@ function push(queue: Queue, label: PeerLabel, deliver: LagDeliver): boolean {
   if (lag !== null && label === "fast" && queue.random() < lag.loss) {
     return false;
   }
-  let at = queue.now();
+  let at = performance.now();
   if (lag !== null) {
     at += lag.ms + queue.random() * lag.jitter;
   }
@@ -258,19 +257,14 @@ function close(queue: Queue): void {
   queue.flushing = undefined;
 }
 
-/**
- * A queue that holds messages for `lag` (`null`: none), drawing jitter and
- * loss from `random` and reading the time from `now`.
- */
+/** A queue that holds messages for `lag` (`null`: none), drawing jitter and loss from `random`. */
 export function createLagQueue(
   lag: PeerLinkLag | null,
   random: () => number = Math.random,
-  now: () => number = () => performance.now(),
 ): LagQueue {
   const queue: Queue = {
     lag,
     random,
-    now,
     rel: [],
     fast: new Set(),
     seq: 0,

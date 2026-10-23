@@ -422,8 +422,8 @@ export function createLinkCore(options: CoreOptions): LinkCore {
     stats: { sent: 0, received: 0, dropped: 0, simulatedLoss: 0 },
     control: new Set(),
     lag: null,
-    outgoing: createLagQueue(null, Math.random, now),
-    incoming: createLagQueue(null, Math.random, now),
+    outgoing: createLagQueue(null),
+    incoming: createLagQueue(null),
   };
   const link = linkOf(core);
   CORES.set(link, core);

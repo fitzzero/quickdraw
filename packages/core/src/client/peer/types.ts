@@ -147,8 +147,9 @@ export interface PeerLink {
    * path refuses as it comes due goes again a little later. The clock's
    * pings wait too, so `clock.rtt` reads the lagged round trip. A new lag
    * leaves what is held on its time; `null` (or all zeros) ends it, and
-   * what is held goes on the next task, in order. Throws a `TypeError` for
-   * a part out of range. Does nothing once the link is closed.
+   * what is held goes on the next task, in order. A link that closes drops
+   * what it holds. Throws a `TypeError` for a part out of range. Does
+   * nothing once the link is closed.
    */
   setLag(lag: PeerLinkLagOptions | null): void;
   /** The lag `setLag` set; `null` for none. */
