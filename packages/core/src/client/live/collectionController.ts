@@ -31,10 +31,10 @@
 // - A scope whose load was refused stays refused until a connect, or until
 //   the hub learns the user's access may have changed and refreshes it
 //   (`collections.ts`; finding F8.4 of the quickdraw-chat migration).
-// - Each new state tells the overlay store what it means for the items
-//   optimistic updates added to the scope (`settleAdditions`): one whose
-//   server id the state holds, or a delta named, or that a load sent after
-//   its call's reply answered without, ends.
+// - Each new state tells the overlays (`host.ts`) what it means for the
+//   items optimistic updates added to the scope (`settleAdditions`): one
+//   whose server id the state holds, or a delta named, or that a load sent
+//   after its call's reply answered without, ends.
 // - Requests go through the connection's lane. `RATE_LIMITED` waits out the
 //   subscription backoff; a request without an answer is sent again after
 //   5 s while the socket is up; with the socket down, the next connect
@@ -48,7 +48,7 @@ import { CLIENT_EVENTS } from "../../contract/names";
 import type { CollectionFrame, Revision, RevokeReason } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
 import { collectionKey, type CollectionQueryKey } from "../keys";
-import { settleAdditions, type ScopeEvidence } from "../optimistic";
+import type { ScopeEvidence } from "../additions";
 import {
   endWaits,
   isPage,
@@ -159,13 +159,13 @@ function holder(state: CollectionState): (id: string) => boolean {
   return (id) => state.revById.has(id) || state.byId.has(id);
 }
 
-/** Tells the overlay store what the scope's state `state` means for the items added to it. */
+/** Tells the overlays what the scope's state `state` means for the items added to it. */
 function tellAdditions(
   p: Pipeline,
   state: CollectionState,
   evidence: Omit<ScopeEvidence, "holds"> = {},
 ): void {
-  settleAdditions(p.host.queryClient, p.target.service, p.target.collection, p.scope, {
+  p.host.overlays.settle(p.target.service, p.target.collection, p.scope, {
     ...evidence,
     holds: holder(state),
   });

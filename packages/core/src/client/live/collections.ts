@@ -22,7 +22,6 @@ import {
   type CollectionTarget,
   type ResumeReason,
 } from "./collectionController";
-import { storeOf } from "../optimistic";
 import type { CollectionEntry } from "./collectionLoads";
 import { isRevision, readEntry, type LiveHost } from "./host";
 import { createRegistry } from "./registry";
@@ -133,7 +132,7 @@ function createOutcomeChecks(
   host: LiveHost,
   ask: (service: string, collection: string, scope: string) => void,
 ): { start(): void; stop(): void } {
-  const store = storeOf(host.queryClient);
+  const store = host.overlays;
   let unsubscribe: (() => void) | undefined;
   let queued = false;
   const check = (): void => {
@@ -163,6 +162,7 @@ function createOutcomeChecks(
 export function createCollectionHub(host: LiveHost): CollectionHub {
   const registry = createRegistry<CollectionController>((controller) => {
     controller.dispose();
+    host.cache.release(controller.key);
     if (registry.held().length === 0) {
       checks.stop();
       outcomes.stop();

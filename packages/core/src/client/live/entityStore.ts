@@ -266,6 +266,7 @@ export function createEntityStore(host: LiveHost): EntityStore {
       state.wanted.get(row.service)?.delete(row.id);
       add(state.leaving, row.service, row.id);
       schedule(state);
+      state.host.cache.release(entityKey(row.service, row.id));
       if (state.registry.held().length === 0) {
         stopRetries(state);
       }

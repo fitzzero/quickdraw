@@ -1,9 +1,10 @@
 "use client";
 
-// What the live-data hooks share: the provider's live data, the overlays of
-// optimistic mutations for one service, and the user the connection acts for.
+// What the live-data hooks share: the provider's live data, the query that
+// observes an entry of it, the overlays of optimistic mutations for one
+// service, and the user the connection acts for.
 
-import type { QueryClient } from "@tanstack/react-query";
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { useMemo, useSyncExternalStore } from "react";
 import type { QuickdrawConnection } from "../connection";
 import { serverStateOf, useAwaitingHello, useHello, useQuickdrawContext } from "../context";
@@ -38,6 +39,27 @@ export function useLiveData(hook: string): {
   useHello(connection);
   const awaiting = useAwaitingHello(connection, queryClient);
   return { connection, queryClient, live: liveDataOf(connection, queryClient), awaiting };
+}
+
+/** What a hook observes its entry with: a query that is never fetched, never stale, never shared structurally. */
+export interface EntryQueryOptions<T> {
+  readonly queryKey: QueryKey;
+  readonly queryFn: () => T | null;
+  readonly enabled: false;
+  readonly staleTime: number;
+  readonly structuralSharing: false;
+}
+
+/** The options of the query a hook observes the entry under `queryKey` with. */
+export function entryQuery<T>(queryKey: QueryKey): EntryQueryOptions<T> {
+  return {
+    queryKey,
+    // Never called: the query is disabled, and only the stores write the entry.
+    queryFn: () => null,
+    enabled: false,
+    staleTime: Number.POSITIVE_INFINITY,
+    structuralSharing: false,
+  };
 }
 
 const noOverlays = (): OverlayView => NO_OVERLAYS;
