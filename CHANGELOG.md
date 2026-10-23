@@ -164,14 +164,14 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   as a placeholder.** TanStack keeps the query a mounted observer's
   placeholder is made from outside the cache, which quickdraw empties on
   another user's hello or when the server ends the session. So the first
-  render after the next user's hello could show the last user's result: an
-  app query's `placeholderData` (such as `keepPreviousData`, which could
-  also keep it shown) and `useSearch`'s last results. This is the follow-up
-  the 5.1 security review recorded for CLIENT-1. A query hook now asks a
-  `placeholderData` function, the caller's or its `QueryClient`'s default,
-  only about a query the cache still holds; a placeholder given as a value
-  is shown as before. An app's own TanStack hook over a member's `key` and
-  `call` is not covered yet.
+  render after the next user's hello could show the last user's result:
+  the `placeholderData` of a member's `useQuery` (such as
+  `keepPreviousData`, which could also keep it shown) and `useSearch`'s
+  last results. This is the follow-up the 5.1 security review recorded for
+  CLIENT-1. A member's `useQuery` now asks a `placeholderData` function,
+  the caller's or its `QueryClient`'s default, only about a query the cache
+  still holds; a placeholder given as a value is shown as before. An app's
+  own TanStack hook over a member's `key` and `call` is not covered yet.
 - **Behavior change: the admin kit's reads of rows default to
   `staleTime: 0`.** `adminList`, `adminGet` and `adminSubscribers` took the
   provider's five-minute `staleTime`, and their rows are not live, so an
@@ -325,10 +325,13 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   `PrismaClient` handed on to such a parameter, an app's own untracked test
   client, and a fake (`{} as unknown as PrismaClient`,
   `mockDeep<PrismaClient>()`). Nothing changes at run time. Type such
-  parameters `Db` (or `Tracked<PrismaClient>`), and test clients and fakes
-  as `Db` (`mockDeep<Db>()`). A `db` declared `PrismaClient` (a lazy
-  `Proxy`, say) carries no mark either: declare it `Tracked<PrismaClient>`
-  to pass it to a `TrackedTransaction` helper.
+  parameters `Db` (or `Tracked<PrismaClient>`) and fakes as `Db`
+  (`mockDeep<Db>()`, `{} as unknown as Db`). An app's own untracked test
+  client is no `Db`: pass the tracked one, or cast it (`prisma as Db`)
+  where its writes need reach no subscriber. A `db` declared
+  `PrismaClient` (a lazy `Proxy`, say) carries no mark either: declare it
+  `Tracked<PrismaClient>` to pass it to a `Tracked` or
+  `TrackedTransaction` helper.
 - **A job can count a stream's subscribers.**
   `await qd.stream(contract, name).subscribers(scope)` (`subscribers()` for
   a global stream; also on `server.stream` and `dispatcher.stream`)
