@@ -283,7 +283,7 @@ function merge(state: State, answers: unknown): void {
 }
 
 /** The room hosts of each server, by its Socket.IO server, for `seedRoomHosts`. */
-const SEEDED = new WeakMap<object, State>();
+const HOSTS_BY_IO = new WeakMap<object, State>();
 
 /** A client that answers PING. */
 interface Pinging {
@@ -394,7 +394,7 @@ function listen(state: State): void {
     },
     { hosts: [] },
   );
-  SEEDED.set(io, state);
+  HOSTS_BY_IO.set(io, state);
   seed(state);
 }
 
@@ -405,7 +405,7 @@ function listen(state: State): void {
  * for a server still on its in-memory adapter, or one without room hosts.
  */
 export function seedRoomHosts(io: object): void {
-  const state = SEEDED.get(io);
+  const state = HOSTS_BY_IO.get(io);
   if (state !== undefined) {
     seed(state);
   }

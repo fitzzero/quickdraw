@@ -37,8 +37,8 @@ default key is `"socket.io"`, so name it; an adapter an app sets later with
 `io.adapter(...)` itself misses the watch on its connections described in
 "When Valkey stops answering", and the room hosts the other nodes held
 when the node started: "Room hosts" in "What holds across nodes"). Either
-way the server finds the adapter's
-publishing client and keeps two kinds of keys there:
+way the server finds the adapter's publishing client and keeps two kinds of
+keys there:
 
 | Key                         | What                                                                      |
 | --------------------------- | ------------------------------------------------------------------------- |
