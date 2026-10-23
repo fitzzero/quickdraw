@@ -25,6 +25,7 @@ export type {
   AffectsOption,
   CollectionOption,
   CollectionOptions,
+  CollectionRequires,
   CollectionsRequired,
   HandlerOutputOf,
   HandlerRow,
@@ -68,6 +69,7 @@ export type {
 export type {
   AnyContext,
   BaseContext,
+  ContextAccess,
   ContextRooms,
   ContextServices,
   HandlerArgs,
@@ -89,6 +91,8 @@ export type {
   ChannelOptions,
   ChannelRoomOf,
   ChannelsRequired,
+  HostLeave,
+  HostLeaveHandler,
   Presence,
   RoomLeave,
   RoomLeaveHandler,
@@ -105,6 +109,7 @@ export type {
   StreamPushManyArgs,
   StreamSeed,
   StreamSeedContext,
+  StreamSubscribersArgs,
   StreamSubscriptions,
   StreamValidation,
 } from "./realtime/types";
@@ -265,6 +270,8 @@ export type {
   AdminOnCommitted,
   AdminOnWrite,
   AdminOutputOf,
+  AdminPrepare,
+  AdminPrepareCall,
   AdminWrite,
 } from "./kits/admin/types";
 

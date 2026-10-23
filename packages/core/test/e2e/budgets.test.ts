@@ -20,7 +20,6 @@ import { z } from "zod";
 import { defineContract, via } from "../../src/index";
 import { qd } from "../../src/server/emit/__tests__/live";
 import { inherit } from "../../src/server/index";
-import { storageOf } from "../../src/server/storage";
 import { emitWithAck, expectBudget } from "../../src/testing/index";
 import { inCluster } from "../cluster/mode";
 import { as, e2eApp, projectContract } from "../fixtures/app";
@@ -115,16 +114,12 @@ async function seedTasks(projectId: string, count: number): Promise<string[]> {
 }
 
 /**
- * Starts the app with the one-off reads a process makes once behind it (the
- * storage adapter asks once whether an order column may hold null), so a
- * budget does not depend on which test ran first.
+ * Starts the app. Nothing is read ahead: whether an order column may hold
+ * null comes from the client's schema text, with no statement, so a budget
+ * that opens a collection does not depend on which test ran first.
  */
 async function start(options?: Parameters<typeof e2e.start>[0]) {
-  const started = await e2e.start(options);
-  await started.write(async (db) => {
-    await storageOf(db)?.nullable?.("task", "ordinal");
-  });
-  return started;
+  return await e2e.start(options);
 }
 
 describe("the fixture app's budgets", () => {

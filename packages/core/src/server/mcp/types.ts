@@ -11,9 +11,9 @@ import type { MethodName } from "../../contract/infer";
 import type { InferOutput, StandardSchemaV1 } from "../../contract/standardSchema";
 import type { QuickdrawError } from "../../protocol/errors";
 import type { Caller } from "../caller";
-import type { ContractOfServices, PrincipalOfServices } from "../dispatcher";
+import type { ContractOfServices, McpContextOfServices, PrincipalOfServices } from "../dispatcher";
 import type { AnyService } from "../service";
-import type { MaybePromise, McpContext, McpContextOf } from "../types";
+import type { MaybePromise, Principal } from "../types";
 
 /** The JSON Schema of a tool's arguments. MCP requires an object schema. */
 export interface McpInputSchema {
@@ -86,10 +86,8 @@ export interface McpHttpRequest {
 /** The session or request a tool call arrives on, as the registry's `principal` and `context` see it. */
 export type McpRequest = McpStdioRequest | McpHttpRequest;
 
-/** The type of `ctx.mcp` for the services of `S`: their app's `QuickdrawTypes["mcp"]`. */
-export type McpContextOfServices<S extends readonly AnyService[]> = [S[number]] extends [never]
-  ? McpContext
-  : McpContextOf<NonNullable<S[number]["~types"]>>;
+// The type of `ctx.mcp` for the services of `S`, beside the dispatcher's other `...OfServices` types.
+export type { McpContextOfServices };
 
 /** How a tool call ended: what the tool returned, or why it failed. */
 export type McpCallResult =
@@ -115,6 +113,18 @@ export interface McpToolResult {
 export interface McpCallOptions {
   /** The session or request the call arrived on. */
   readonly request: McpRequest;
+  /**
+   * Who the call acts for, when the app signed the caller in itself (its own
+   * MCP transport over `callMethod`, an in-process assistant): the
+   * registry's `principal` hook is not asked. `null` calls anonymously, and
+   * so does `undefined`: the hook is asked only when the key is absent. The
+   * `context` hook, bound arguments and the call's concurrency lane see this
+   * principal. One that carries no `serviceAccess` gets the grants the
+   * server's `auth.loadServiceAccess` loads, at each call, as `qd.caller`
+   * gives them; one that carries grants (`{}` included) keeps them. An
+   * in-process option: the HTTP routes never read it from a request.
+   */
+  readonly principal?: Principal | null;
   /** Cancels the call. Only queries stop early; a mutation runs to its end. */
   readonly signal?: AbortSignal;
   /**
@@ -147,8 +157,9 @@ export interface McpToolCall<
    */
   readonly arguments: Args;
   /**
-   * Who the call acts for, from the registry's `principal`. `null` only for
-   * an anonymous caller of a tool with `access: "public"`.
+   * Who the call acts for, from the registry's `principal` hook or the
+   * call's own `principal` option. `null` only for an anonymous caller of a
+   * tool with `access: "public"`.
    */
   readonly principal: PrincipalOfServices<S> | null;
   /** The fields the registry's `context` produced for the call, if any. */

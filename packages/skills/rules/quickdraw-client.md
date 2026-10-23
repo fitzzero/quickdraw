@@ -34,7 +34,9 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   (`qd.taskService.board`); the examples here key theirs short (`qd.task`).
 - `auth` is a token (sent as `auth.token`) or handshake fields; leave it out
   for cookie sessions. Changing it reconnects, and a hello naming another
-  user empties everything quickdraw cached.
+  user empties everything quickdraw cached, the placeholder a member's
+  `useQuery` or `useSearch` would make from it (`keepPreviousData`, the
+  last results) included.
 - `useQuickdraw()` gives
   `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, refusal, isRateLimited }`.
   Gate on `isKnown` (the server's hello named the user; `userId` is then
@@ -45,7 +47,14 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   signed out: the server ended the session (signed out elsewhere, revoked,
   expired) or refused a connect for it, the hello is gone and quickdraw's
   cache is empty; any other status is still connecting. Never keep showing
-  data the app holds itself once `isKnown` turns false.
+  data the app holds itself once `isKnown` turns false. A server that could
+  not check the credentials (its session store down: the handshake is
+  refused `INTERNAL`) signs nobody out: the connection keeps the user and
+  the cache, stays `connecting` (`reconnecting` once it had connected) and
+  connects again by itself, so never treat that as a sign-out. On the
+  server, `authenticate` refuses credentials only by throwing
+  `QuickdrawError("UNAUTHENTICATED")` (or `"FORBIDDEN"`); anything else it
+  throws is an outage.
   `hello.serverId` changes when the server restarts (or the socket lands
   on another node): compare it to tell a new server from a network blip.
 - Sign-in and out in the browser go through the auth routes kit's routes:
@@ -157,6 +166,35 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   the user's say). Never join from a plain `useQuery` or a
   mount effect: a reconnect leaves the socket out of the room while the
   cached answer still looks fine. Without React, `connection.onHello`.
+- Peer links: on a server created with `peers: true`,
+  `createPeerLink(connection, { room, to, offerer })` (in React,
+  `useQuickdraw().connection`) links two sockets of an app room over
+  WebRTC data channels, or over the server's relay when those cannot form.
+  The peer's socket id comes from the app (an event carrying
+  `ctx.socketId`, a method's answer); `onPeerRequest(connection, listener)`
+  answers a peer that linked first. Send input at a tick rate on `fast`
+  (unordered, never resent) and state on `rel` (ordered, reliable). A link
+  dies with its socket: open it again on every connection, as `useJoin`
+  joins again. What a peer sends is the peer's word, never checked by the
+  server: parse each message with its schema as untrusted input. Never
+  send `qd:peer` or `qd:relay` by hand (`no-raw-socket`). To play over a
+  bad network in a browser test or a bench, `link.setLag({ ms, jitter,
+loss })` lags the link's own messages both ways on its real path (`rel`
+  never lost, `stats.simulatedLoss` for the rest); never a proxy or a
+  hand-made delay around `send`.
+- Host mode: a player's `useStream` and `useChannel` of a host-served
+  member (`serve: "host"`) reach the room's host over a link, with no
+  change in the app; a channel's messages go on `fast`, so send input
+  every frame, never once. The host's client serves the members with
+  `defineHost(contract, { channels, streams }).serve(connection, { room })`
+  while `hostOf(connection, room)` is its own socket's id
+  (`onHostChange(connection, listener)` hears it change), and calls
+  `close()` when it is not. A host checks what players send it against the
+  contract, but each message stays that player's word, and what the host
+  sends is the host's word. Each of `host.peers` (and a handler's
+  `ctx.peer`) has `link`: read a player's round trip from
+  `link.clock.rtt`, and give the host's own play its players' lag with
+  `setLag` on the host's own entry, whose link is in process.
 - Admin screens: `qd.task.admin.adminList.useQuery(input)` and the other
   admin kit members; `useAdminServices(qd)` lists the services whose
   `adminMeta` answers the user, asking only those the hello's grants allow
@@ -164,9 +202,14 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   `adminMeta` wider). A screen served from metadata for every service takes
   `adminOf(qd, key)`, one shape typed by field name: never cast
   `qd[key].admin`. The kit's rows are not live: after the screen's own
-  write, `onSuccess: () => qd.invalidate(qd.task.admin.adminList)`. A
-  generic form shows the fields whose `showInForm` is not `false`; a user's
-  grants field says `kind: "grants"`: find it by that, never by its name.
+  write, read the page again (`qd.invalidate(qd.task.admin.adminList)`)
+  and put the row the write returned in the cache
+  (`qd.task.admin.adminGet.setData({ id: row.id }, row)`; `adminOf`'s
+  query members have `setData` too), never in React state. Its reads of
+  rows default to `staleTime: 0`, read again on every mount (`adminMeta`
+  stays cached): pass a `staleTime` only to keep a page longer. A generic
+  form shows the fields whose `showInForm` is not `false`; a user's grants
+  field says `kind: "grants"`: find it by that, never by its name.
 
 ## Server components and other runtimes
 
@@ -177,10 +220,13 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   `caller.task.get.prefetch(queryClient, input)` fills the keys the hooks
   read, for `dehydrate` and `HydrationBoundary`.
 - React Native uses the same client and provider (no DOM is needed).
-  React-free code (a Node script, a worker) makes a connection with
+  React-free code (a Node script, a CLI, a worker) imports
+  `@fitzzero/quickdraw-core/client/core`, which needs neither React nor
+  TanStack Query installed: it makes a connection with
   `createQuickdrawConnection({ url, auth })`, calls `open()`, and calls
-  `callData(connection, { service: "taskService", method: "get", input })`
-  from `./client`; `liveDataOf(connection, queryClient)` holds live rows.
+  `callData(connection, { service: "taskService", method: "get", input })`.
+  `./client` re-exports the same functions. Live rows need a TanStack
+  `QueryClient`: `liveDataOf(connection, queryClient)` from `./client`.
 - A client in another language (a Godot game, a native app) speaks the wire
   itself: `docs/protocol-v5.md` in the quickdraw repository is the
   specification, `examples/godot` a GDScript client written from it, and

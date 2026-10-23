@@ -302,6 +302,26 @@ function raw(
   });
 }
 
+describe("a principal in the request body", () => {
+  it("is never read: the registry's principal hook says who calls, in both shapes", async () => {
+    const { router } = routes();
+    const url = await listen(router);
+    const mallory = { userId: "mallory", kind: "user", serviceAccess: { taskService: "Admin" } };
+    const tool = { name: "taskService_whoami", arguments: {}, principal: mallory };
+    const method = { service: "taskService", method: "whoami", principal: mallory };
+    for (const body of [tool, method]) {
+      expect(await invoke(url, body)).toMatchObject({
+        status: 200,
+        body: { success: true, data: { userId: null } },
+      });
+      expect(await invoke(url, body, { token: "reader-token" })).toMatchObject({
+        status: 200,
+        body: { success: true, data: { userId: "alice", kind: "agent" } },
+      });
+    }
+  });
+});
+
 describe("a request from a web page (MCP-3)", () => {
   const search = { name: "noteService_search", arguments: { input: "x" } };
   const refused = { status: 403, body: { success: false, code: "FORBIDDEN" } };

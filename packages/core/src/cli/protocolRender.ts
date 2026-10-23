@@ -14,12 +14,16 @@ import {
   ERRORS_INTRO,
   EXAMPLE,
   HANDSHAKE_INTRO,
+  HOST_LIMITS_INTRO,
+  HOST_MODE,
   INTRO,
   JSON_ONLY,
   LIMITS_INTRO,
   LIMITS_OUTCOMES,
   NAMES_INTRO,
   PACKETS,
+  PEER_LINKS,
+  PEER_TIMINGS_INTRO,
   SERVER_EVENTS_INTRO,
   TRANSPORT,
   TYPE_PARAMETERS,
@@ -114,21 +118,39 @@ function typeSection(
   return section(`${level} ${code(type.name)}`, [...doc, ...blocks]);
 }
 
+/** The hello's limit types, and the prefix of their fields in `DEFAULT_LIMITS`. */
+const LIMIT_TYPES: Readonly<Record<string, string | undefined>> = {
+  HelloLimits: "",
+  HelloSubscriptionLimits: "subscriptions.",
+  HelloPeerLimits: "peers.",
+};
+
+/** The fixed values the hello announces among its limits, by field, and the constant each is. */
+const FIXED_LIMITS: Readonly<Record<string, string>> = {
+  maxSubscribeIds: "MAX_SUBSCRIBE_IDS",
+  maxEntityIds: "MAX_ENTITY_IDS_PER_SOCKET",
+  maxScopes: "MAX_SCOPES_PER_SOCKET",
+  maxTopics: "MAX_TOPICS_PER_SOCKET",
+  maxLinks: "MAX_PEER_LINKS",
+  maxMessageBytes: "MAX_PEER_MESSAGE_BYTES",
+  relayRate: "PEER_RELAY_RATE",
+  relayBurst: "PEER_RELAY_BURST",
+  relayBytesPerSecond: "PEER_RELAY_BYTES_PER_SECOND",
+  relayBytesBurst: "PEER_RELAY_BYTES_BURST",
+};
+
 /** The default a server announces for a field of the hello's limits, from `DEFAULT_LIMITS`. */
 function limitDefault(model: ProtocolModel, type: string): ((field: Field) => string) | undefined {
-  const prefix =
-    type === "HelloLimits" ? "" : type === "HelloSubscriptionLimits" ? "subscriptions." : undefined;
+  const prefix = LIMIT_TYPES[type];
   if (prefix === undefined) {
     return undefined;
   }
-  // `maxSubscribeIds` and the per-socket caps are fixed, not dispatcher limits.
-  const fixed: Readonly<Record<string, string | undefined>> = {
-    maxSubscribeIds: model.constants.get("MAX_SUBSCRIBE_IDS")?.value,
-    maxEntityIds: model.constants.get("MAX_ENTITY_IDS_PER_SOCKET")?.value,
-    maxScopes: model.constants.get("MAX_SCOPES_PER_SOCKET")?.value,
-    maxTopics: model.constants.get("MAX_TOPICS_PER_SOCKET")?.value,
+  // `maxSubscribeIds`, the per-socket caps and the peer limits are fixed, not dispatcher limits.
+  const fixed = (name: string): string | undefined => {
+    const constant = FIXED_LIMITS[name];
+    return constant === undefined ? undefined : model.constants.get(constant)?.value;
   };
-  return (field) => model.defaults.get(`${prefix}${field.name}`) ?? fixed[field.name] ?? "";
+  return (field) => model.defaults.get(`${prefix}${field.name}`) ?? fixed(field.name) ?? "";
 }
 
 function handshakeSection(model: ProtocolModel): string[] {
@@ -191,7 +213,14 @@ function shapeText(shape: Shape): string {
   }
 }
 
-/** The types the events reach, directly or through other types. */
+/** The names of the model's types `doc` writes as code: `PeerMessage` in a relayed `text`'s. */
+function named(doc: string, model: ProtocolModel): string[] {
+  return [...doc.matchAll(/`([A-Z]\w*)`/g)]
+    .map(([, name = ""]) => name)
+    .filter((name) => model.types.has(name));
+}
+
+/** The types the events reach, directly, through other types, or named in their docs. */
 function reachable(model: ProtocolModel): ReadonlySet<string> {
   const events = [...model.clientEvents, ...model.serverEvents];
   const queue = events.flatMap((event) =>
@@ -202,7 +231,7 @@ function reachable(model: ProtocolModel): ReadonlySet<string> {
     const type = model.types.get(name);
     if (type !== undefined && !seen.has(name)) {
       seen.add(name);
-      queue.push(...mentioned(shapeText(type.shape), model));
+      queue.push(...mentioned(shapeText(type.shape), model), ...named(type.doc, model));
     }
   }
   return seen;
@@ -263,17 +292,51 @@ function namesSection(model: ProtocolModel): string[] {
   ]);
 }
 
+/** A row of a table of constants: its name, its value with `unit`, and its doc. */
+function constantRow(model: ProtocolModel, name: string, unit: string): string[] {
+  const found = model.constants.get(name);
+  if (found === undefined) {
+    throw new Error(`quickdraw-protocol: no protocol source declares ${name}, which it documents`);
+  }
+  return [code(name), `${found.value}${unit}`, found.doc];
+}
+
+const CONSTANT_HEADER = ["Constant", "Value", "Meaning"];
+
+function peerLinksSection(model: ProtocolModel): string[] {
+  const row = (name: string, unit: string): string[] => constantRow(model, name, unit);
+  return section(PEER_LINKS, [
+    paragraph(PEER_TIMINGS_INTRO),
+    table(CONSTANT_HEADER, [
+      row("DIRECT_TIMEOUT_MS", " ms"),
+      row("BYE_WAIT_MS", " ms"),
+      row("OPEN_TIMEOUT_MS", " ms"),
+      row("QUICK_PINGS", " pings"),
+      row("QUICK_PING_MS", " ms"),
+      row("PING_MS", " ms"),
+      row("WATCHDOG_MS", " ms"),
+      row("PENDING_MS", " ms"),
+    ]),
+  ]);
+}
+
+function hostModeSection(model: ProtocolModel): string[] {
+  const row = (name: string, unit: string): string[] => constantRow(model, name, unit);
+  return section(HOST_MODE, [
+    paragraph(HOST_LIMITS_INTRO),
+    table(CONSTANT_HEADER, [
+      row("HOST_LINK_RETRY_MS", " ms"),
+      row("HOST_LINK_MAX_RETRY_MS", " ms"),
+      row("MAX_SEED_ITEMS", " items"),
+      row("MAX_HOST_FEEDS", " feeds per peer"),
+      row("HOST_SUBSCRIBE_RATE", " subscribes a second per peer"),
+    ]),
+  ]);
+}
+
 function limitsSection(model: ProtocolModel): string[] {
-  const row = (name: string, unit: string): string[] => {
-    const found = model.constants.get(name);
-    if (found === undefined) {
-      throw new Error(
-        `quickdraw-protocol: no protocol source declares ${name}, which it documents`,
-      );
-    }
-    return [code(name), `${found.value}${unit}`, found.doc];
-  };
-  const header = ["Constant", "Value", "Meaning"];
+  const row = (name: string, unit: string): string[] => constantRow(model, name, unit);
+  const header = CONSTANT_HEADER;
   return section("## Limits", [
     paragraph(LIMITS_INTRO),
     table(header, [
@@ -286,6 +349,18 @@ function limitsSection(model: ProtocolModel): string[] {
       row("MAX_STREAMS_PER_SOCKET", " feeds"),
       row("CHANNEL_ABUSE_WINDOW_MS", " ms"),
       row("CHANNEL_ABUSE_MULTIPLIER", " times the channel's rate"),
+      row("MAX_SOCKET_ID_LENGTH", " characters"),
+      row("MAX_PEER_SIGNAL_LENGTH", " characters"),
+      row("MAX_PEER_CANDIDATE_LENGTH", " characters"),
+      row("PEER_SIGNAL_RATE", " signals a second per socket"),
+      row("PEER_SIGNAL_BURST", " signals"),
+      row("MAX_PEER_LINKS", " peers per socket"),
+      row("MAX_PEER_MESSAGE_BYTES", " bytes"),
+      row("PEER_RELAY_RATE", " messages a second per socket and peer"),
+      row("PEER_RELAY_BURST", " messages"),
+      row("PEER_RELAY_BYTES_PER_SECOND", " bytes a second per socket"),
+      row("PEER_RELAY_BYTES_BURST", " bytes"),
+      row("PEER_RELAY_FAST_BACKLOG", " relay messages waiting"),
     ]),
     paragraph(DEFAULTS_INTRO),
     table(header, [
@@ -294,7 +369,7 @@ function limitsSection(model: ProtocolModel): string[] {
       row("DEFAULT_BACKOFF_MS", " ms"),
     ]),
     paragraph(LIMITS_OUTCOMES),
-    `The socket rate limiter never counts ${model.unlimited.map(code).join(", ")}.`,
+    `The socket rate limiter never counts ${model.unlimited.map(code).join(", ")}, nor a \`qd:peer\` whose \`sig\` is \`{ bye: true }\`.`,
   ]);
 }
 
@@ -316,6 +391,8 @@ export function renderProtocol(model: ProtocolModel): string {
     ...eventsSection("## Client to server", CLIENT_EVENTS_INTRO, model.clientEvents, model),
     ...eventsSection("## Server to client", SERVER_EVENTS_INTRO, model.serverEvents, model),
     ...section(CLIENT_RULES, []),
+    ...peerLinksSection(model),
+    ...hostModeSection(model),
     ...typesSection(model),
     ...errorsSection(model),
     ...namesSection(model),

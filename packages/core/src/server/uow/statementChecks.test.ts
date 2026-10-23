@@ -126,6 +126,36 @@ describe("statement checks", () => {
     expect(raised.map((warning) => warning.kind)).toEqual(["n-plus-one"]);
   });
 
+  it("count no batch insert: a loop of createMany is one batch in chunks", () => {
+    const { check, raised } = checks();
+    const insert = (operation: string): Statement => ({
+      model: "task",
+      operation,
+      args: { data: [{ title: "a" }, { title: "b" }] },
+    });
+    // The tracked client runs createMany as createManyAndReturn; an untracked model's runs as it is.
+    for (let index = 0; index < 12; index += 1) {
+      check(insert("createManyAndReturn"), "unit");
+      check(insert("createMany"), "unit");
+    }
+    expect(raised).toEqual([]);
+  });
+
+  it("still count a write filtered per item, and one create per item", () => {
+    const { check, raised } = checks();
+    for (let index = 0; index < 12; index += 1) {
+      check(
+        { model: "task", operation: "deleteMany", args: { where: { parentTaskId: `t${index}` } } },
+        "unit",
+      );
+      check({ model: "task", operation: "create", args: { data: { title: `T${index}` } } }, "unit");
+    }
+    expect(raised.map((warning) => warning.message.split(" ran ")[0])).toEqual([
+      "task.deleteMany by parentTaskId",
+      "task.create",
+    ]);
+  });
+
   it("know an unbounded read: findMany with neither take nor ids to read", () => {
     const read = (args: Statement["args"]): Statement => ({
       model: "task",

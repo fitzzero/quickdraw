@@ -55,18 +55,37 @@ export function isProtocolMismatch(value: unknown): value is ProtocolMismatch {
 }
 
 /**
- * The `data` of the error a server refuses a connection with when
- * authenticating it failed: the app's `authenticate` threw, so the
- * credentials are bad or could not be checked. A client tells it apart from
- * {@link ProtocolMismatch} by `code`; reconnecting needs other credentials.
+ * The `data` of the error a server refuses a connection with when it refused
+ * the credentials: the app's `authenticate` threw a `QuickdrawError` with
+ * code `UNAUTHENTICATED` (or `FORBIDDEN`), or the session it recorded
+ * expired during the handshake. A client tells it apart from
+ * {@link ProtocolMismatch} by `code`; reconnecting needs other credentials,
+ * so the user is signed out. A server that could not check the credentials
+ * refuses with {@link AuthenticationUnavailable} instead.
  */
 export interface AuthenticationRefused {
   readonly code: "UNAUTHENTICATED";
 }
 
-/** True when a `connect_error`'s `data` says authenticating the connection failed. */
+/** True when a `connect_error`'s `data` says the server refused the connection's credentials. */
 export function isAuthenticationRefused(value: unknown): value is AuthenticationRefused {
   return isRecord(value) && value.code === "UNAUTHENTICATED";
+}
+
+/**
+ * The `data` of the error a server refuses a connection with when it could
+ * not authenticate it: the app's `authenticate` (or `loadServiceAccess`)
+ * failed with anything but a refusal, its session store or database down,
+ * say. The credentials may well be good, so a client keeps the user it had
+ * and connects again later, backing off as after a lost connection.
+ */
+export interface AuthenticationUnavailable {
+  readonly code: "INTERNAL";
+}
+
+/** True when a `connect_error`'s `data` says the server could not authenticate the connection. */
+export function isAuthenticationUnavailable(value: unknown): value is AuthenticationUnavailable {
+  return isRecord(value) && value.code === "INTERNAL";
 }
 
 /** The most ids one `qd:sub` may name (RFC 0003 section 6), as `qd:hello` announces it. */
@@ -83,6 +102,39 @@ export const MAX_TOPICS_PER_SOCKET = 1_000;
 
 /** The longest collection scope value or change topic a frame may name, in characters. */
 export const MAX_SCOPE_LENGTH = 256;
+
+/** The most peers one socket may signal at once (`qd:peer`), as `qd:hello` announces it. */
+export const MAX_PEER_LINKS = 64;
+
+/** The longest peer link message, in UTF-8 bytes, on the data channel and through the relay alike. */
+export const MAX_PEER_MESSAGE_BYTES = 65_536;
+
+/** The longest session description a `qd:peer` signal carries, in characters. */
+export const MAX_PEER_SIGNAL_LENGTH = 16_384;
+
+/** The longest string of a `qd:peer` candidate (`candidate`, `sdpMid`, `usernameFragment`), in characters. */
+export const MAX_PEER_CANDIDATE_LENGTH = 1024;
+
+/** Signals one socket may send per second (`qd:peer`); more are refused `RATE_LIMITED`. */
+export const PEER_SIGNAL_RATE = 20;
+
+/** Signals one socket may send at once, after a pause. */
+export const PEER_SIGNAL_BURST = 40;
+
+/** Relay messages one socket may send to one peer per second (`qd:relay`); more are dropped. */
+export const PEER_RELAY_RATE = 120;
+
+/** Relay messages one socket may send to one peer at once, after a pause. */
+export const PEER_RELAY_BURST = 240;
+
+/** Relay bytes one socket may send per second, to all its peers together; more are dropped. */
+export const PEER_RELAY_BYTES_PER_SECOND = 1_048_576;
+
+/** Relay bytes one socket may send at once, after a pause. */
+export const PEER_RELAY_BYTES_BURST = 2_097_152;
+
+/** Relay messages waiting for a socket's connection past which the relay drops a `fast` one to it. */
+export const PEER_RELAY_FAST_BACKLOG = 64;
 
 /**
  * Each socket's lane of subscription events (`qd:sub`, `qd:col:sub`,
@@ -102,6 +154,26 @@ export interface HelloSubscriptionLimits {
   readonly maxTopics?: number;
 }
 
+/**
+ * What one socket may signal and relay over peer links (RFC 0003 section
+ * 12.5), as `qd:hello` announces it. A client keeps its relay messages
+ * within these, so a `rel` message is never dropped for its rate.
+ */
+export interface HelloPeerLimits {
+  /** Peers one socket may signal at once; a signal to one more is `CONFLICT`. */
+  readonly maxLinks: number;
+  /** The longest link message, in UTF-8 bytes, on the data channel and through the relay alike. */
+  readonly maxMessageBytes: number;
+  /** Relay messages one socket may send to one peer per second; more are dropped. */
+  readonly relayRate: number;
+  /** Relay messages one socket may send to one peer at once, after a pause. */
+  readonly relayBurst: number;
+  /** Relay bytes one socket may send per second, to all its peers together; more are dropped. */
+  readonly relayBytesPerSecond: number;
+  /** Relay bytes one socket may send at once, after a pause. */
+  readonly relayBytesBurst: number;
+}
+
 /** The limits a server announces in `qd:hello`, so a client can stay inside them. */
 export interface HelloLimits {
   /** Queries one socket may have running at once; more wait in a queue (RFC 0003 section 9). */
@@ -118,6 +190,8 @@ export interface HelloLimits {
   readonly callTimeoutMs: number;
   /** The socket's lane of subscription events. */
   readonly subscriptions: HelloSubscriptionLimits;
+  /** What peer links may signal and relay. Absent from a server that serves no peer links, whose `features` lacks `"peer"`. */
+  readonly peers?: HelloPeerLimits;
 }
 
 /**
@@ -139,7 +213,12 @@ export interface HelloFrame {
   readonly serverId: string;
   /** What a client must stay within. */
   readonly limits: HelloLimits;
-  /** Names of optional server features that are on. Informational only. */
+  /**
+   * Names of optional server features that are on: `"binary"` (the stock
+   * parser, `createServer({ binary: true })`) and `"peer"` (peer links,
+   * `createServer({ peers: true })`). Informational: a client that finds no
+   * `"peer"` opens no peer link.
+   */
   readonly features: readonly string[];
   /** The user the socket acts for, or `null` when it is anonymous. */
   readonly userId: string | null;

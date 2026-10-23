@@ -26,6 +26,7 @@ import {
   owner,
   resolver,
 } from "../server/index";
+import { gameContract } from "../server/realtime/__tests__/hostGame";
 import * as accessApp from "./__tests__/accessApp";
 import { accessFormText, policyText, servicesOf } from "./access";
 import {
@@ -249,6 +250,15 @@ describe("quickdraw-docs", () => {
     expect(page).toContain("the sending socket in the app room a function of the payload names");
     expect(page).toContain("Shown in lists");
     expect(page.startsWith(`${GENERATED_MARKER}\n\n# chatService\n`)).toBe(true);
+    expect(page).not.toContain("Served by");
+  });
+
+  it("says which streams and channels the room's host serves, and what its seed is", () => {
+    const page = generateDocs([gameContract]).get("gameService.md") ?? "";
+    const served =
+      'the room\'s host (`serve: "host"`), over peer links: the server never handles it';
+    expect(page.split(served)).toHaveLength(3);
+    expect(page).toContain("the latest 2 items the host kept, or the host's own");
   });
 
   it("leads with each describe, and names every method's default MCP tool", () => {

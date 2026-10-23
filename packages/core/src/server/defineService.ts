@@ -17,8 +17,8 @@
 //   `share`, and a method with `custom` access cannot `share: "all"`; at run
 //   time neither can a kit method whose result depends on who asks, and in
 //   development an app's `"all"` handler that reads `ctx.principal`,
-//   `ctx.services` or `ctx.mcp` warns `shared-principal`: a result shared
-//   across principals depends on the input only;
+//   `ctx.services`, `ctx.mcp` or `ctx.access` warns `shared-principal`: a
+//   result shared across principals depends on the input only;
 // - `kinds`, on a method and on the service, names kinds of the app's
 //   principal (`PrincipalKindOf`); that each narrows the list above it, and
 //   that a `"public"` method declares none, is checked at run time;
@@ -50,6 +50,7 @@ import type { HandlerArgs, HandlerContext } from "./context";
 import type {
   ChannelOptions,
   ChannelsRequired,
+  HostLeaveHandler,
   RoomLeaveHandler,
   StreamOptions,
 } from "./realtime/types";
@@ -143,7 +144,7 @@ type ShareOptions<A> =
        * handler runs with the first caller's `ctx`, and every caller gets its
        * result, so a `"all"` result must depend on the input only: its
        * handler reads nothing of the caller (in development, reading
-       * `ctx.principal`, `ctx.services` or `ctx.mcp` warns
+       * `ctx.principal`, `ctx.services`, `ctx.mcp` or `ctx.access` warns
        * `[quickdraw:shared-principal]`, and a strict test app fails the
        * call). `"all"` is not allowed with `custom` access, nor on the kit
        * methods whose result depends on who asks (the read/write kit's
@@ -305,9 +306,10 @@ export interface ServiceDefinition<
    * How each collection of the contract authorizes its scopes (RFC 0003
    * section 7.1): `{ anchor: contract }`, the contract whose rows the scope
    * values are ids of, or `{ scopeAccess: "self" }` for a scope that is the
-   * subscriber's user id; plus `bulkThreshold`. Required when the contract
-   * declares collections. Needs `model`. A self scope's items still follow
-   * the service's `access` policy, when it has one.
+   * subscriber's user id; plus `requires: { service: L }`, a service-wide
+   * grant every subscriber needs besides, and `bulkThreshold`. Required
+   * when the contract declares collections. Needs `model`. A self scope's
+   * items still follow the service's `access` policy, when it has one.
    */
   readonly collections?: CollectionOptions<C>;
   /**
@@ -366,6 +368,20 @@ export interface ServiceDefinition<
    * },
    */
   readonly onRoomLeave?: RoomLeaveHandler<PrincipalOf<T>>;
+  /**
+   * Called once when the host of an app room leaves it (host mode, RFC 0003
+   * section 12.5): its own leave, a removal, or a disconnect, with the room,
+   * the host's socket and principal and the reason. The room has no host
+   * then, and its sockets heard `qd:host [room, null]`; the app decides
+   * what follows (another host, the game's end). Run as `onRoomLeave` is,
+   * beside `createServer`'s own, in a unit of work of its own.
+   *
+   * @example
+   * onHostLeave: ({ room }) => {
+   *   qd.rooms.emit(room, game, "hostLeft", { room });
+   * },
+   */
+  readonly onHostLeave?: HostLeaveHandler<PrincipalOf<T>>;
   /**
    * Whether a service-wide `Admin` grant passes every access check of this
    * service (RFC 0003 section 4.1). Default `true`.

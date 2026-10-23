@@ -6,10 +6,11 @@ import { defineConfig } from "tsup";
 // esbuild keeps an entry point's directives, so the `"use client"` that opens
 // `src/client/index.ts` also opens `dist/client/index.js`; `tsup`'s rollup
 // `treeshake` pass would strip it, so it stays off. The directive of any other
-// module is dropped when it is bundled, which is why `./utils` (no directive)
-// may share chunks with `./client`, and `./testing/client` and
-// `./testing/mock` (test helpers, no directive) too: the mock's provider
-// fills the very context `./client`'s hooks read, so they must share it.
+// module is dropped when it is bundled, which is why `./utils` and
+// `./client/core` (no directive) may share chunks with `./client`, and
+// `./testing/client` and `./testing/mock` (test helpers, no directive) too:
+// the mock's provider fills the very context `./client`'s hooks read, so
+// they must share it.
 // `scripts/dist-smoke.mjs` checks the built output.
 export default defineConfig({
   entry: {
@@ -20,6 +21,10 @@ export default defineConfig({
     "server/mcp/index": "src/server/mcp/index.ts",
     "server/otel": "src/server/observability/otel.ts",
     "client/index": "src/client/index.ts",
+    // React-free: nothing it reaches imports React or TanStack Query, and
+    // splitting puts the modules that do in chunks it never imports
+    // (dist-smoke checks its code and declarations).
+    "client/core": "src/client/core.ts",
     "utils/index": "src/utils/index.ts",
     parser: "src/protocol/parser.ts",
     "prisma/index": "src/prisma/index.ts",

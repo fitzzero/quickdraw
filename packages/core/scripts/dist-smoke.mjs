@@ -8,11 +8,21 @@
 //
 // - each export provides its known symbols, and the root export's declarations
 //   provide every public type;
+// - the root export and `./prisma` share the one declaration of the tracked
+//   client's mark (`Tracked`'s unique symbol), so a client typed by one is
+//   the other's too;
 // - the root export is browser-safe: its whole import graph is the package's
 //   own files, with no Node built-in and no dependency; so is `./utils`, the
 //   isomorphic entry React server components import;
 // - `./client` opens with the "use client" directive and no other export does
 //   (`./utils` in particular), and re-exports `./utils`;
+// - `./client/core`, the client without React for scripts, CLIs and workers:
+//   its code and its declarations import neither React nor TanStack Query,
+//   through every chunk they reach, it exports none of `./client`'s layers
+//   that need them, `./client` re-exports it (the same functions), and it
+//   runs: scripts/client-core-smoke.mjs, in a process whose module hooks
+//   refuse React and TanStack Query, calls a built server through it over a
+//   v5 socket and over HTTP;
 // - every source module is emitted into exactly one output file (entries share
 //   chunks; with `splitting` off each entry would carry its own copy);
 // - no dependency is bundled (every source path is the package's own);
@@ -111,6 +121,7 @@ const expectations = {
       "isQdHandshake",
       "isProtocolMismatch",
       "isAuthenticationRefused",
+      "isAuthenticationUnavailable",
       "isCallEnvelope",
       "isCancel",
       "crud",
@@ -266,6 +277,40 @@ const expectations = {
       "feedKey",
     ],
     client: true,
+  },
+  "./client/core": {
+    symbols: [
+      "createQuickdrawConnection",
+      "call",
+      "callData",
+      "isNotModified",
+      "isUnknownOutcome",
+      "shouldRetry",
+      "reloadOncePerSession",
+      "newId",
+      "DEFAULT_BACKOFF_MS",
+      "DEFAULT_SUBSCRIPTION_LANE",
+      "getAuthToken",
+      "setAuthToken",
+      "clearAuthToken",
+      "authProviders",
+      "signInUrl",
+      "signOut",
+      "signOutEverywhere",
+      "createPeerLink",
+      "onPeerRequest",
+      "DEFAULT_ICE_SERVERS",
+      "defineHost",
+      "hostOf",
+      "onHostChange",
+      "createServerCaller",
+      "methodKey",
+      "entityKey",
+      "collectionKey",
+      "formatCurrency",
+      "parseJWTPayload",
+    ],
+    client: false,
   },
   "./utils": {
     symbols: [
@@ -492,6 +537,9 @@ const rootTypes = [
   "SubscriberLevel",
   "AdminSubscribers",
   "KitSchema",
+  // prisma/tracked.ts: the tracked client's type, for shared packages without Prisma
+  "Tracked",
+  "TrackedTransaction",
   // protocol/errors.ts
   "ErrorCode",
   "WireError",
@@ -503,6 +551,7 @@ const rootTypes = [
   "HandshakeAuth",
   "ProtocolMismatch",
   "AuthenticationRefused",
+  "AuthenticationUnavailable",
   "HelloLimits",
   "HelloFrame",
   // protocol/envelope.ts
@@ -609,14 +658,36 @@ const missingTypes = rootTypes.filter((name) => !declaredNames.has(name));
 assert.deepEqual(missingTypes, [], `${pkg.exports["."].types} does not export these types`);
 console.log(`ok ${pkg.name} declares ${rootTypes.length} public types`);
 
+// `Tracked<C>` marks a client with a unique symbol: a second declaration of
+// it (each entry's declarations carrying their own) would make the root
+// export's `Tracked` and `./prisma`'s two types that refuse each other.
+const markDeclarations = readdirSync(distDir, { recursive: true })
+  .map(String)
+  .filter((file) => file.endsWith(".d.ts"))
+  .filter((file) =>
+    readFileSync(join(distDir, file), "utf8").includes("declare const TRACKED: unique symbol"),
+  );
+assert.equal(
+  markDeclarations.length,
+  1,
+  `the tracked client's mark is declared in ${markDeclarations.length} files (${markDeclarations.join(", ")}); the root export and ./prisma must share one`,
+);
+console.log(`ok the root export and ./prisma share one Tracked, from ${markDeclarations[0]}`);
+
 // Browser code imports the root export, so its import graph may hold only the
 // package's own files: no Node built-in, no dependency, no server module.
 const IMPORT_SPECIFIER = /\bfrom\s*["']([^"']+)["']|\bimport\s*\(?\s*["']([^"']+)["']/g;
 
-/** The files an export's import graph holds, and what it imports from outside the package. */
-function importGraph(exportPath) {
+/**
+ * The files an export's import graph holds, static and dynamic imports alike,
+ * and what it imports from outside the package: of its code, or with `types`
+ * of its declarations, whose imports name the code's files (`./chunk.js`
+ * declared in `./chunk.d.ts`).
+ */
+function importGraph(exportPath, { types = false } = {}) {
   const files = new Set();
-  const pending = [join(packageDir, pkg.exports[exportPath].import)];
+  const target = pkg.exports[exportPath];
+  const pending = [join(packageDir, types ? target.types : target.import)];
   const externals = [];
   while (pending.length > 0) {
     const file = pending.pop();
@@ -627,7 +698,8 @@ function importGraph(exportPath) {
     for (const match of readFileSync(file, "utf8").matchAll(IMPORT_SPECIFIER)) {
       const imported = match[1] ?? match[2];
       if (imported.startsWith("./") || imported.startsWith("../")) {
-        pending.push(resolve(dirname(file), imported));
+        const next = resolve(dirname(file), imported);
+        pending.push(types ? next.replace(/\.js$/, ".d.ts") : next);
       } else {
         externals.push(`${relative(packageDir, file)} imports ${imported}`);
       }
@@ -658,6 +730,43 @@ for (const [name, value] of Object.entries(utilsEntry)) {
 console.log(
   `ok ${pkg.name}/utils imports only its own ${utilsGraph.files.size} files, and ./client re-exports it`,
 );
+
+// Node scripts, CLIs and workers import ./client/core where neither React nor
+// TanStack Query is installed: it carries no "use client" (checked above),
+// and neither its code nor its declarations import them, through any chunk.
+// The layers of ./client that need a QueryClient stay out of it, and ./client
+// re-exports it, the same functions, so a connection made with either entry
+// is one the other's code knows.
+const REACT_OR_TANSTACK = /^(react|react-dom)(\/|$)|^@tanstack\//;
+for (const types of [false, true]) {
+  const graph = importGraph("./client/core", { types });
+  const forbidden = graph.externals.filter((line) =>
+    REACT_OR_TANSTACK.test(line.split(" imports ")[1]),
+  );
+  assert.deepEqual(
+    forbidden,
+    [],
+    `./client/core's ${types ? "declarations" : "code"} must not import React or TanStack Query`,
+  );
+  console.log(
+    `ok ${pkg.name}/client/core's ${types ? "declarations" : "code"} (${graph.files.size} files) import neither React nor TanStack Query`,
+  );
+}
+const coreEntry = await import(`${pkg.name}/client/core`);
+for (const [name, value] of Object.entries(coreEntry)) {
+  assert.equal(clientEntry[name], value, `./client must re-export ${name} from ./client/core`);
+}
+for (const name of [
+  "createQuickdrawClient",
+  "QuickdrawProvider",
+  "createInvalidationCoordinator",
+  "overlaysOf",
+  "sessionOf",
+  "liveDataOf",
+]) {
+  assert.equal(coreEntry[name], undefined, `./client/core must not export ${name}`);
+}
+console.log(`ok ./client re-exports ${pkg.name}/client/core, which leaves out the React layers`);
 
 const sourceMaps = readdirSync(distDir, { recursive: true })
   .map(String)
@@ -1508,3 +1617,11 @@ export const contracts = { echo: defineContract("echoService", { methods: { echo
 console.log(
   `ok ${pkg.name}'s quickdraw-docs bin documents a contracts module and passes its own --check`,
 );
+
+// ./client/core at run time, where React and TanStack Query cannot load: its
+// own process, since the module hook that refuses them stays for good.
+const coreSmoke = spawnSync(process.execPath, [join(packageDir, "scripts/client-core-smoke.mjs")], {
+  encoding: "utf8",
+});
+assert.equal(coreSmoke.status, 0, `${coreSmoke.stdout}${coreSmoke.stderr}`);
+process.stdout.write(coreSmoke.stdout);

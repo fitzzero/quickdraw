@@ -4,6 +4,7 @@
     "paths": {
       "@fitzzero/quickdraw-core": ["../../src/index.ts"],
       "@fitzzero/quickdraw-core/client": ["../../src/client/index.ts"],
+      "@fitzzero/quickdraw-core/client/core": ["../../src/client/core.ts"],
       "@fitzzero/quickdraw-core/prisma": ["../../src/prisma/index.ts"],
       "@fitzzero/quickdraw-core/server": ["../../src/server/index.ts"],
       "@fitzzero/quickdraw-core/server/auth": ["../../src/server/auth/index.ts"],

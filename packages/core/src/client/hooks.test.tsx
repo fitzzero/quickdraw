@@ -1,14 +1,16 @@
 // The provider and the typed client's hooks rendered against a real server
 // (RFC 0003 sections 11, 11.1 and 11.2): queries and mutations, waiting for
 // the connection and for a backoff, `qd:cancel` on unmount, not-modified
-// refetches, retries, strict mode, new credentials and `useQuickdraw`.
+// refetches, retries, strict mode, new credentials and `useQuickdraw`, and
+// the README's AuthGate through a server that cannot authenticate a
+// reconnect (never the sign-in) and one that refuses it (the sign-in).
 
 import { QueryClient } from "@tanstack/react-query";
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
 import { describe, expect, it } from "vitest";
 import { QuickdrawError } from "../index";
-import { tick } from "../server/__tests__/fixtures";
+import { captureLogger, tick } from "../server/__tests__/fixtures";
 import type { ConnectionAuth, QuickdrawConnection } from "./connection";
 import { QuickdrawContext } from "./context";
 import { createInvalidationCoordinator, type InvalidationCoordinator } from "./coordinator";
@@ -221,17 +223,19 @@ describe("useQuery", () => {
 
   it("retries once after INTERNAL and never after TIMEOUT", async () => {
     const { app, records, probe: probeService } = await harness.start();
-    const wrapper = wrapperFor({ url: app.url, timeoutMs: 100 });
+    // The default time limit: on a loaded machine an answer can take longer than a short one,
+    // and the TIMEOUT it would end in is never retried.
     const internal = renderHook(
       () => qd.probe.fail.useQuery({ code: "INTERNAL" }, { retryDelay: 10 }),
-      { wrapper },
+      { wrapper: wrapperFor({ url: app.url }) },
     );
     await waitFor(() => expect(internal.result.current.isError).toBe(true));
     expect(internal.result.current.failureCount).toBe(2);
     expect(internal.result.current.error).toBeInstanceOf(QuickdrawError);
     expect(records.filter((record) => record.method === "fail")).toHaveLength(2);
+    // A query runs once the connection is up, so only the server's wait counts toward the 100 ms.
     const timedOut = renderHook(() => qd.probe.wait.useQuery({ key: "slow" }, { retryDelay: 10 }), {
-      wrapper,
+      wrapper: wrapperFor({ url: app.url, timeoutMs: 100 }),
     });
     await waitFor(() => expect(timedOut.result.current.isError).toBe(true));
     expect(timedOut.result.current.error).toMatchObject({ code: "TIMEOUT" });
@@ -393,5 +397,110 @@ describe("QuickdrawProvider", () => {
     expect(() => renderHook(() => qd.counter.read.useQuery({ name: "a" }))).toThrow(
       "counterService.read.useQuery must be rendered inside a <QuickdrawProvider>",
     );
+  });
+});
+
+describe("the README's AuthGate while the server cannot authenticate", () => {
+  type Gated = "sign in" | "connecting" | "reconnecting" | "app";
+
+  /** What the README's AuthGate shows (test/readme/apps/web/src/components/AuthGate.tsx). */
+  function gateOf(status: QuickdrawStatus): Gated {
+    if (!status.isKnown) {
+      return status.status === "disconnected" || status.status === "refused"
+        ? "sign in"
+        : "connecting";
+    }
+    if (status.userId === null) {
+      return "sign in";
+    }
+    return status.reconnecting ? "reconnecting" : "app";
+  }
+
+  /** The gate, recording what each committed render shows. */
+  function Gate({ shown }: { readonly shown: Gated[] }) {
+    const gated = gateOf(useQuickdraw());
+    React.useLayoutEffect(() => {
+      shown.push(gated);
+    });
+    return gated === "app" || gated === "reconnecting" ? (
+      <>
+        <p>{gated}</p>
+        <Echo />
+      </>
+    ) : (
+      <p>{gated}</p>
+    );
+  }
+
+  /**
+   * The gate rendered against a server whose next `fail(times)` handshakes
+   * are refused with what `failure` throws; `shown` records the gate.
+   */
+  async function failingServer(failure: () => Error, shown: Gated[]) {
+    let failures = 0;
+    let handshakes = 0;
+    const { app } = await harness.start({
+      auth: {
+        authenticate: (request) => {
+          handshakes += 1;
+          if (failures > 0) {
+            failures -= 1;
+            throw failure();
+          }
+          return testAuth.authenticate?.(request);
+        },
+      },
+      logger: captureLogger(),
+    });
+    render(
+      <QuickdrawProvider
+        client={qd}
+        url={app.url}
+        auth={{ principal: alice }}
+        transports={["websocket"]}
+        socketOptions={{ reconnectionDelay: 60, reconnectionDelayMax: 120 }}
+      >
+        <Gate shown={shown} />
+      </QuickdrawProvider>,
+    );
+    await screen.findByText("user alice");
+    return {
+      fail(times: number): void {
+        failures = times;
+      },
+      handshakes: () => handshakes,
+      /** Drops every socket's transport, as a network blip does: the client reconnects. */
+      drop(): void {
+        for (const socket of app.server.io.sockets.sockets.values()) {
+          socket.conn.close();
+        }
+      },
+    };
+  }
+
+  it("never shows the sign-in, and keeps the page, while reconnects are refused with INTERNAL", async () => {
+    const shown: Gated[] = [];
+    const server = await failingServer(() => new Error("the session store is down"), shown);
+    const before = server.handshakes();
+    server.fail(2);
+    server.drop();
+    await until(() => server.handshakes() === before + 3);
+    await screen.findByText("app");
+    expect(screen.getByText("user alice")).toBeTruthy();
+    expect(shown).toContain("reconnecting");
+    expect(shown).not.toContain("sign in");
+    // what the page showed stayed through the outage: the cache was kept
+    expect(shown.slice(shown.indexOf("app"))).not.toContain("connecting");
+  });
+
+  it("shows the sign-in once a reconnect is refused for the session (CLIENT-1)", async () => {
+    const server = await failingServer(
+      () => new QuickdrawError("UNAUTHENTICATED", "The session was revoked"),
+      [],
+    );
+    server.fail(1);
+    server.drop();
+    await screen.findByText("sign in");
+    expect(screen.queryByText("user alice")).toBeNull();
   });
 });

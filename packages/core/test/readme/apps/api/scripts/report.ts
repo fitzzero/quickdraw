@@ -1,7 +1,7 @@
 // The README's example of a client without React (a script, a worker).
 
 // #region script
-import { callData, createQuickdrawConnection } from "@fitzzero/quickdraw-core/client";
+import { callData, createQuickdrawConnection } from "@fitzzero/quickdraw-core/client/core";
 
 const connection = createQuickdrawConnection({
   url: "http://localhost:4000",

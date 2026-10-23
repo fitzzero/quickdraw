@@ -13,9 +13,11 @@
 // - No answer within the time limit rejects with `TIMEOUT`. It is never
 //   retried here: the server may still be running the call.
 // - A connection that drops before the answer, or is not open at all,
-//   rejects with `INTERNAL`. A call made while the socket reconnects waits in
-//   Socket.IO's send buffer, within its time limit; new credentials meanwhile
-//   fail it with `CANCELLED` instead of sending it as them (`connection.ts`).
+//   rejects with `INTERNAL`. A call made while the socket reconnects, or
+//   while the connection waits to connect again after the server could not
+//   authenticate it (`mayConnect`), waits in Socket.IO's send buffer, within
+//   its time limit; new credentials meanwhile fail it with `CANCELLED`
+//   instead of sending it as them (`connection.ts`).
 // - A `TIMEOUT`, and the `INTERNAL` of a call whose connection dropped after
 //   it was sent, leave its outcome unknown: the server may have run it, and
 //   may still be running it. `isUnknownOutcome` tells them from refusals, so
@@ -38,7 +40,12 @@ import type {
 import { QuickdrawError, fromWire } from "../protocol/errors";
 import { isRecord } from "../protocol/guards";
 import { retryAfterOf } from "./backoff";
-import { isTimeLimit, type QuickdrawConnection, type QuickdrawSocket } from "./connection";
+import {
+  isTimeLimit,
+  mayConnect,
+  type QuickdrawConnection,
+  type QuickdrawSocket,
+} from "./connection";
 import { notifyEach } from "./watch";
 
 /**
@@ -126,8 +133,7 @@ function refusedBeforeSending(
   if (signal?.aborted === true) {
     return cancelledError();
   }
-  const { socket } = connection;
-  if (!socket.connected && !socket.active) {
+  if (!connection.socket.connected && !mayConnect(connection)) {
     return internalError("Not connected to the server");
   }
   const remaining = connection.backoffRemaining(kind);

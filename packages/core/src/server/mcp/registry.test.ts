@@ -1,22 +1,28 @@
 // The MCP registry (RFC 0003 section 10): every method's tool call goes
 // through the dispatcher with transport "mcp", so validation, access checks
 // and the per-session concurrency cap apply as on a socket; the principal and
-// `ctx.mcp` come from the registry's hooks; `bind` fills chosen arguments
-// from the principal; custom tools sit beside the generated ones.
+// `ctx.mcp` come from the registry's hooks (or the principal from the call's
+// options, when the app signed the caller in itself), and the calls a method
+// makes through `ctx.services` carry the same `ctx.mcp`; `bind` fills chosen
+// arguments from the principal; custom tools sit beside the generated ones.
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { z as z3 } from "zod3";
-import { defineContract, mutation, query, QuickdrawError } from "../../index";
-import { createDispatcher, initQuickdraw } from "../index";
+import { defineContract, mutation, query, QuickdrawError, type AccessLevel } from "../../index";
+import { createTestApp } from "../../testing/index";
+import { alice, captureLogger, db } from "../__tests__/fixtures";
+import { createDispatcher, initQuickdraw, type CallRecord } from "../index";
+import { createProbe } from "../transports/__tests__/probe";
 import {
   agentAuth,
   bindSetup,
   createServices,
   qd,
   setup,
+  task,
   TOKENS,
   type AgentMcp,
   type AgentPrincipal,
@@ -25,6 +31,7 @@ import {
   createMcpRegistry,
   describeTools,
   toToolResult,
+  type McpCallOptions,
   type McpCallResult,
   type McpRequest,
   type McpStdioRequest,
@@ -340,6 +347,292 @@ describe("sessions", () => {
     expect(respond).toHaveBeenLastCalledWith(unknown);
     expect(registry.has("noteService_search")).toBe(true);
     expect(registry.has("nope")).toBe(false);
+  });
+});
+
+describe("calls through ctx.services", () => {
+  // `relayService.start` calls `hopService.next`, which calls `hopService.last`,
+  // each handler keeping the ctx it saw; `relayService.rename` calls the task
+  // service's `rename`, whose access refuses an MCP call without tasks:write.
+  const relay = defineContract("relayService", {
+    methods: {
+      start: query({ input: z.undefined(), output: z.string() }),
+      rename: mutation({
+        input: z.object({ id: z.string(), title: z.string() }),
+        output: z.string(),
+      }),
+    },
+  });
+  const hop = defineContract("hopService", {
+    methods: {
+      next: query({ input: z.undefined(), output: z.string() }),
+      last: query({ input: z.undefined(), output: z.string() }),
+    },
+  });
+  const app = initQuickdraw<{
+    principal: AgentPrincipal;
+    mcp: AgentMcp;
+    contracts: { relay: typeof relay; hop: typeof hop; task: typeof task };
+  }>();
+  const chain = ["start", "next", "last"] as const;
+
+  /** A registry serving the relay service for `token`, over a dispatcher that serves the whole chain. */
+  function relaySetup(token: string) {
+    const seen = new Map<string, { readonly transport: string; readonly mcp?: AgentMcp }>();
+    const relayService = app.defineService(relay, {
+      methods: {
+        start: {
+          access: "authenticated",
+          handler: async ({ ctx }) => {
+            seen.set("start", ctx);
+            return await ctx.services.hopService.next();
+          },
+        },
+        rename: {
+          access: "authenticated",
+          handler: async ({ input, ctx }) => (await ctx.services.taskService.rename(input)).title,
+        },
+      },
+    });
+    const hopService = app.defineService(hop, {
+      methods: {
+        next: {
+          access: "authenticated",
+          handler: async ({ ctx }) => {
+            seen.set("next", ctx);
+            return await ctx.services.hopService.last();
+          },
+        },
+        last: {
+          access: "authenticated",
+          handler: ({ ctx }) => {
+            seen.set("last", ctx);
+            return "done";
+          },
+        },
+      },
+    });
+    const logger = captureLogger();
+    const records: CallRecord[] = [];
+    const dispatcher = createDispatcher({
+      services: [relayService, hopService, createServices().taskService],
+      logger,
+      onCall: (record) => records.push(record),
+    });
+    const auth = agentAuth(() => token);
+    // Every object the registry's `context` made, to tell the very one apart from a copy.
+    const contexts: AgentMcp[] = [];
+    const registry = createMcpRegistry({
+      services: [relayService],
+      dispatcher,
+      logger,
+      principal: auth.principal,
+      context: (request) => {
+        const fields = auth.context(request);
+        contexts.push(fields);
+        return fields;
+      },
+    });
+    const viaSocket = (method: string, input: unknown) =>
+      dispatcher.call({
+        service: "relayService",
+        method,
+        input,
+        principal: TOKENS[token]?.principal ?? null,
+        transport: "socket",
+        connectionId: "c1",
+      });
+    const outcomes = () =>
+      records.map(
+        (record) => `${record.service}.${record.method} ${record.transport} ${record.outcome}`,
+      );
+    return { registry, seen, contexts, viaSocket, outcomes };
+  }
+
+  it("carry the MCP call's ctx.mcp, the very object, to the methods they reach, nested calls too, over transport internal", async () => {
+    const { registry, seen, contexts, outcomes } = relaySetup("reader-token");
+    expect(await registry.call("relayService_start", {}, { request: stdio() })).toEqual({
+      ok: true,
+      data: "done",
+    });
+    expect(contexts).toEqual([{ scopes: ["tasks:read"] }]);
+    expect(chain.map((method) => seen.get(method)?.transport)).toEqual([
+      "mcp",
+      "internal",
+      "internal",
+    ]);
+    for (const method of chain) {
+      expect(seen.get(method)?.mcp).toBe(contexts[0]);
+    }
+    expect(outcomes()).toEqual([
+      "hopService.last internal ok",
+      "hopService.next internal ok",
+      "relayService.start mcp ok",
+    ]);
+  });
+
+  it("carry none from a call without ctx.mcp, such as a socket call", async () => {
+    const { seen, viaSocket } = relaySetup("reader-token");
+    expect(await viaSocket("start", undefined)).toMatchObject({ ok: true, data: "done" });
+    expect(chain.map((method) => seen.get(method)?.transport)).toEqual([
+      "socket",
+      "internal",
+      "internal",
+    ]);
+    for (const method of chain) {
+      expect(seen.get(method)).not.toHaveProperty("mcp");
+    }
+  });
+
+  it("keep a guard that reads ctx.mcp in the method they reach: a reader's token cannot rename through another service", async () => {
+    const input = { id: "t1", title: "Ship it" };
+    const reader = relaySetup("reader-token");
+    const refused = await reader.registry.call("relayService_rename", input, { request: stdio() });
+    expect(errorOf(refused).code).toBe("FORBIDDEN");
+    expect(reader.outcomes()).toEqual([
+      "taskService.rename internal FORBIDDEN",
+      "relayService.rename mcp FORBIDDEN",
+    ]);
+    const writer = relaySetup("writer-token");
+    expect(await writer.registry.call("relayService_rename", input, { request: stdio() })).toEqual({
+      ok: true,
+      data: "Ship it",
+    });
+    // The same principal over a socket carries no ctx.mcp, and the guard lets it in, as before.
+    expect(await reader.viaSocket("rename", input)).toMatchObject({ ok: true, data: "Ship it" });
+  });
+});
+
+describe("a principal the app signed in", () => {
+  const bob: AgentPrincipal = { userId: "bob", kind: "user" };
+
+  it("is who the call acts for, through callMethod and tools/call alike, and the principal hook is not asked", async () => {
+    const principal = vi.fn(() => TOKENS["writer-token"]?.principal ?? null);
+    const { registry } = setup({ principal });
+    const options = { request: stdio(), principal: bob };
+    expect(await registry.callMethod("taskService", "whoami", undefined, options)).toMatchObject({
+      ok: true,
+      data: { userId: "bob", kind: "user", transport: "mcp" },
+    });
+    expect(await registry.call("taskService_whoami", {}, options)).toMatchObject({
+      ok: true,
+      data: { userId: "bob", kind: "user" },
+    });
+    // null calls anonymously: a public method runs, any other is refused.
+    const anonymous = { request: stdio(), principal: null };
+    expect(await registry.call("taskService_whoami", {}, anonymous)).toMatchObject({
+      ok: true,
+      data: { userId: null },
+    });
+    expect(errorOf(await registry.call("taskService_get", { id: "t1" }, anonymous)).code).toBe(
+      "UNAUTHENTICATED",
+    );
+    expect(principal).not.toHaveBeenCalled();
+    // Without the key, the hook says who calls, as before.
+    expect(await registry.call("taskService_whoami", {}, { request: stdio() })).toMatchObject({
+      ok: true,
+      data: { userId: "alice" },
+    });
+    expect(principal).toHaveBeenCalledOnce();
+  });
+
+  it("is the principal the context hook receives", async () => {
+    const context = vi.fn((_request: McpRequest, who: AgentPrincipal | null) => ({
+      scopes: [who?.userId ?? "nobody"],
+    }));
+    const { registry } = setup({ context });
+    expect(
+      await registry.call("taskService_whoami", {}, { request: stdio("s7"), principal: bob }),
+    ).toMatchObject({ ok: true, data: { userId: "bob", scopes: ["bob"] } });
+    expect(context).toHaveBeenCalledExactlyOnceWith(stdio("s7"), bob);
+  });
+
+  it("fills bound arguments, and called anonymously (null or undefined) a bound tool answers UNAUTHENTICATED", async () => {
+    const principal = vi.fn(() => TOKENS["task-token"]?.principal ?? null);
+    const { registry } = bindSetup({ principal });
+    const carol: AgentPrincipal = { userId: "carol", kind: "agent", claims: { taskId: "t9" } };
+    expect(
+      await registry.call(
+        "messageService_post",
+        { message: "hi" },
+        { request: stdio(), principal: carol },
+      ),
+    ).toEqual({ ok: true, data: { taskId: "t9", message: "hi", by: "carol" } });
+    for (const anonymous of [null, undefined]) {
+      const refused = await registry.call(
+        "messageService_post",
+        { message: "hi" },
+        { request: stdio(), principal: anonymous },
+      );
+      expect(errorOf(refused)).toMatchObject({
+        code: "UNAUTHENTICATED",
+        message: "Authentication required",
+      });
+    }
+    expect(principal).not.toHaveBeenCalled();
+  });
+
+  it("fails the call with INTERNAL when it is no principal, and the hook is not asked", async () => {
+    const principal = vi.fn(() => null);
+    const { registry, logger } = setup({ principal });
+    const odd = await registry.call(
+      "taskService_whoami",
+      {},
+      { request: stdio(), principal: { userId: "" } as AgentPrincipal },
+    );
+    expect(errorOf(odd)).toMatchObject({ code: "INTERNAL", message: "Internal error" });
+    expect(logger.at("error")[0]?.message).toBe('The MCP tool "taskService_whoami" failed');
+    expect(principal).not.toHaveBeenCalled();
+  });
+
+  it("gets the grants the server loads when it carries none, at each call, as qd.caller's; the hook's principal is used as the hook returns it", async () => {
+    const stored: Record<string, Record<string, AccessLevel>> = {
+      alice: { probeService: "Moderate" },
+    };
+    const probe = createProbe();
+    const app = await createTestApp({
+      services: [probe.service],
+      db,
+      auth: {
+        loadServiceAccess: (userId) => {
+          if (userId === "broken") {
+            throw new Error("the grants store is down");
+          }
+          return stored[userId] ?? null;
+        },
+      },
+    });
+    try {
+      // alice carries no grants
+      const hook = vi.fn(() => alice);
+      const registry = createMcpRegistry({
+        services: [probe.service],
+        dispatcher: app.server.dispatcher,
+        principal: hook,
+        logger: captureLogger(),
+      });
+      const moderate = (options: Partial<McpCallOptions>) =>
+        registry.callMethod(
+          "probeService",
+          "moderate",
+          { value: 2 },
+          { request: stdio(), ...options },
+        );
+      expect(await moderate({ principal: { userId: "alice" } })).toEqual({ ok: true, data: 4 });
+      // A principal that carries grants keeps exactly those, even none.
+      const none = await moderate({ principal: { userId: "alice", serviceAccess: {} } });
+      expect(errorOf(none).code).toBe("FORBIDDEN");
+      // Loaded again at each call, as an HTTP call's are; a failed load is INTERNAL.
+      stored.alice = {};
+      expect(errorOf(await moderate({ principal: { userId: "alice" } })).code).toBe("FORBIDDEN");
+      expect(errorOf(await moderate({ principal: { userId: "broken" } })).code).toBe("INTERNAL");
+      // The hook's principal is used as the hook returns it: the registry loads no grants for it.
+      stored.alice = { probeService: "Moderate" };
+      expect(errorOf(await moderate({})).code).toBe("FORBIDDEN");
+      expect(hook).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+    }
   });
 });
 

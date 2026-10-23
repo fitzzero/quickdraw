@@ -1,6 +1,6 @@
 // The contract of taskService, written by @fitzzero/quickdraw-codemod from
 // TaskServiceMethods and the defineMethod calls of TaskService
-// (apps/api/src/services/task/methods/archive.ts, apps/api/src/services/task/methods/create-task.ts, apps/api/src/services/task/methods/queries.ts, apps/api/src/services/task/methods/update-task.ts).
+// (apps/api/src/services/task/methods/archive.ts, apps/api/src/services/task/methods/create-task.ts, apps/api/src/services/task/methods/delegates.ts, apps/api/src/services/task/methods/queries.ts, apps/api/src/services/task/methods/update-task.ts).
 // Every marker below says what to check.
 
 import { defineContract, listOf, mutation, query, todoSchema } from "@fitzzero/quickdraw-core";
@@ -34,6 +34,14 @@ export const taskContract = defineContract("taskService", {
     listArchivedTasks: query({ input: projectIdSchema, output: listOf("entity") }),
     // quickdraw-migrate: review [contract] mutation, chosen from its name
     createTask: mutation({ input: createTaskSchema, output: "entity" }),
+    // quickdraw-migrate: review [contract] mutation, chosen from its name
+    assignTask: mutation({ input: z.object({ id: z.string().min(1), assigneeId: z.string().nullable() }), output: "entity" }),
+    // quickdraw-migrate: review [contract] mutation, chosen from its name; input: todoSchema, as 4.x had no schema
+    renameTask: mutation({ input: todoSchema<{ id: string; title: string }>({ keys: ["id", "title"] }), output: "entity" }),
+    // quickdraw-migrate: review [contract] query, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+    getTaskTitle: query({ input: todoSchema<{ id: string }>({ keys: ["id"] }), output: todoSchema<{ title: string | null }>() }),
+    // quickdraw-migrate: review [contract] query, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type
+    countTasks: query({ input: todoSchema<{ projectId: string }>({ keys: ["projectId"] }), output: todoSchema<{ count: number }>() }),
     // quickdraw-migrate: review [contract] query, chosen from its name; output: todoSchema of the 4.x response type
     listTasks: query({ input: projectIdSchema, output: todoSchema<TaskCard[]>() }),
     // quickdraw-migrate: review [contract] mutation, chosen from its name; input: todoSchema, as 4.x had no schema; output: todoSchema of the 4.x response type

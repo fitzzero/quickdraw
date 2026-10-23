@@ -176,8 +176,8 @@ export function splitApp<S extends readonly AnyService[]>(
     url: reader.url,
     server,
     frames: reader.frames,
-    as: (principal: Parameters<TestApp<S>["as"]>[0]) =>
-      barrierCaller(writer.as(principal), barrier) as ReturnType<TestApp<S>["as"]>,
+    as: (principal: Parameters<TestApp<S>["as"]>[0], options?: Parameters<TestApp<S>["as"]>[1]) =>
+      barrierCaller(writer.as(principal, options), barrier) as ReturnType<TestApp<S>["as"]>,
     connect: reader.connect,
     close,
   });

@@ -1,9 +1,11 @@
 // What happens to the rest of a 4.x service class. A service object has no
 // members, so each member becomes module-level code in the class's file:
 // helper methods and getters become functions (exported when they were
-// public, since other files may call them), fields become module bindings
-// under a marker (a field's initializer kept; a field its constructor set is
-// set by the setup function), overridden 4.x hooks become functions under a
+// public, since other files may call them), a field holding a function
+// becomes a `const` of it unless the class replaces it, fields become module
+// bindings under a marker (a field's initializer kept; a field its
+// constructor set is set by the setup function; `let` for one the class
+// writes after its initializer), overridden 4.x hooks become functions under a
 // marker, `defineCollection` and `installAdminMethods` options become consts
 // under a marker, and any other constructor code, its field assignments
 // included, goes into a marked, exported setup function that takes the
@@ -26,11 +28,13 @@ import {
 } from "ts-morph";
 import {
   assignedMember,
+  isFixedFunction,
   isFunctionProperty,
   keptFields,
   localNames,
   reassigned,
   setByConstructor,
+  typeAnnotation,
 } from "./fields";
 import { HOOK_NOTES } from "./hookNotes";
 import { type Category, MarkerSet, markerAnchor, markerText } from "./markers";
@@ -151,7 +155,11 @@ export function setupOnlyMethods(service: ServiceModel): Set<string> {
   return only;
 }
 
-/** The module-level names each member of the chain is hoisted to. */
+/**
+ * The module-level names each member of the chain is hoisted to. A name a
+ * method module's method object takes is taken: the module, and the service
+ * file that lists the object, import hoisted members beside it.
+ */
 export function hoistedNames(
   service: ServiceModel,
   setupOnly: ReadonlySet<string>,
@@ -162,6 +170,7 @@ export function hoistedNames(
     const file = cls.getSourceFile();
     const taken = new Set([
       ...locals,
+      ...service.methods.flatMap((method) => (method.register === undefined ? [] : [method.name])),
       ...file
         .getImportDeclarations()
         .flatMap((declaration) =>
@@ -490,8 +499,8 @@ function fieldText(
   const name = field.getName();
   const init = field.getInitializer();
   const value = init === undefined ? undefined : mapped(init, scope, imports);
-  const type = field.getTypeNode()?.getText();
-  const fixed = value !== undefined && (field.isReadonly() || !reassigned(service, name));
+  // a `readonly` field its constructor writes is not fixed: the setup function writes it
+  const fixed = value !== undefined && !reassigned(service, name);
   const where =
     value === undefined && setByConstructor(service, name)
       ? `, set by its constructor: now a module binding ${setupName(service)}(...) sets`
@@ -504,7 +513,7 @@ function fieldText(
     target.exported ? "export " : "",
     fixed ? "const " : "let ",
     target.name,
-    type === undefined ? "" : `: ${type}`,
+    typeAnnotation(field),
     value === undefined ? "" : ` = ${value.text}`,
     ";",
   ].join("");
@@ -563,17 +572,17 @@ export function hoistClass(
       add(functionText(member, name, false, [note], scope, imports, setupOnly));
     } else if (Node.isPropertyDeclaration(member) && own(member.getName()) !== undefined) {
       const target = own(member.getName());
-      const init = member.getInitializer();
       if (target === undefined) {
         continue;
       }
-      if (init !== undefined && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) {
-        const value = mapped(init, scope, imports);
+      // a function field the class replaces is a field like any other: `let`, under its marker
+      if (isFixedFunction(member, service)) {
+        const value = mapped(member.getInitializerOrThrow(), scope, imports);
         add({
           text: [
             ...leadingComments(member),
             ...value.outer,
-            `${target.exported ? "export " : ""}const ${target.name} = ${value.text};`,
+            `${target.exported ? "export " : ""}const ${target.name}${typeAnnotation(member)} = ${value.text};`,
           ].join("\n"),
           usesDb: value.usesDb,
         });

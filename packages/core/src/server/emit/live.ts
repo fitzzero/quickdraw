@@ -11,6 +11,9 @@ import type { AnyContract } from "../../contract/defineContract";
 import { createLiveCollections } from "../collections/live";
 import {
   createRealtime,
+  type HostLeave,
+  type HostLeaveHandler,
+  type HostLeaveHook,
   type Presence,
   type Realtime,
   type RoomLeave,
@@ -19,6 +22,7 @@ import {
   type ServerRooms,
   type StreamHandle,
 } from "../realtime/realtime";
+import { createPeerLinks, type PeerLinks } from "../realtime/peers";
 import { createTopics } from "../topics";
 import { createEntitySinks } from "./entitySink";
 import { entitySubscriptions } from "./extension";
@@ -26,7 +30,17 @@ import { createHub, drain, type AdapterProbe, type Hub, type HubOptions } from "
 import { createRevocation, listenForChanges } from "./revocation";
 import { createVersionSource } from "./versions";
 
-export type { Presence, RoomLeave, RoomLeaveHandler, RoomLeaveHook, ServerRooms, StreamHandle };
+export type {
+  HostLeave,
+  HostLeaveHandler,
+  HostLeaveHook,
+  Presence,
+  RoomLeave,
+  RoomLeaveHandler,
+  RoomLeaveHook,
+  ServerRooms,
+  StreamHandle,
+};
 export type { ChangeLogOptions } from "./changeLog";
 
 type Sinks = ReturnType<typeof createEntitySinks>;
@@ -58,6 +72,8 @@ export interface Live {
   readonly legacyExtension: Realtime["legacyExtension"];
   /** Presence, streams, channels and typed room events: `ctx.rooms`, `ctx.presence`, `qd.stream`. */
   readonly realtime: Realtime;
+  /** Peer links' signalling and relay: served only by a server created with `peers: true`. */
+  readonly peers: PeerLinks;
   /** The revisions flushes take and reads claim: the process's clock, or a cluster's shared counter. */
   readonly revisions: Hub["revisions"];
   /**
@@ -95,7 +111,8 @@ export function createLive(options: HubOptions): Live {
   const collections = createLiveCollections(hub);
   const topics = createTopics(collections.hub);
   const sinks = createEntitySinks(hub);
-  const realtime = createRealtime(hub);
+  const peers = createPeerLinks(hub);
+  const realtime = createRealtime(hub, peers);
   const revocation = createRevocation(hub, [
     collections.revocation,
     topics.revocation,
@@ -117,6 +134,7 @@ export function createLive(options: HubOptions): Live {
     },
     legacyExtension: realtime.legacyExtension,
     realtime,
+    peers,
     revisions: hub.revisions,
     attach(
       io: NonNullable<Hub["io"]>,

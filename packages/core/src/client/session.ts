@@ -22,7 +22,9 @@
 //   nobody: the hooks show nothing of what was cached, and the live data
 //   loads from scratch once a hello names a user again. The session listens
 //   to the socket's own events for this, so new credentials (`setAuth`),
-//   which also clear the hello, still await the hello to decide.
+//   which also clear the hello, still await the hello to decide. A connect
+//   or reconnect refused `INTERNAL` (the server could not check the
+//   credentials) does not end the session: the cache stays.
 //
 // The hooks and the live stores read nothing before the hello on the current
 // credentials has arrived (`context.ts`, `query.ts`, `live/host.ts`), so no

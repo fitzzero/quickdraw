@@ -11,4 +11,8 @@ export interface HealthServiceMethods {
     payload: Record<string, never>;
     response: { projects: number; tasks: number };
   };
+  getProjectHealth: {
+    payload: { id: string };
+    response: { ok: boolean };
+  };
 }

@@ -6,7 +6,9 @@
 // contract half marked them with, never by their names; they are the same
 // members as `qd.<service>.<method>`, gathered for admin screens. A contract
 // without the kit has no `admin` member (the name is reserved, so no method
-// or collection takes it).
+// or collection takes it). The kit's reads of rows are not live, so their
+// `useQuery` defaults to `staleTime: 0` (`MethodTarget.queryDefaults`,
+// `members.ts`): a screen reads them again whenever it mounts.
 //
 // `useAdminServices(qd)` lists the client's services an admin screen can
 // show: those whose contract has the kit's `adminMeta` and whose `adminMeta`

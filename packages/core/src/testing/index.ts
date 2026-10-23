@@ -7,6 +7,7 @@ export {
   createTestApp,
   type TestApp,
   type TestAppOptions,
+  type TestCallerOptions,
   type TestConnection,
 } from "./createTestApp";
 export {
@@ -20,6 +21,7 @@ export {
   type ServerFrameOf,
 } from "./frames";
 export { emitWithAck, waitForEvent } from "./socket";
+export { createLoopbackPeerLink, type LoopbackEnd, type LoopbackOptions } from "./peer";
 export { createRecordingSink, type RecordedFlush, type RecordingSink } from "./recordingSink";
 export {
   BUDGET_GROWTH_ENV,

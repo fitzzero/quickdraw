@@ -1,7 +1,8 @@
 // `createTestApp` (RFC 0003 section 13): the app's real server on a free
 // port, with an `authenticate` that trusts the principal a test connects as
 // (its grants loaded by `auth.loadServiceAccess` when it carries none, for
-// sockets and `as(principal)` alike),
+// sockets and `as(principal)` alike), an in-process caller that can also
+// call as an HTTP or MCP call would (`as(principal, { transport, mcp })`),
 // and a recorder of every frame the server sends (`frames.ts`). Its
 // dispatcher becomes the current one of the `initQuickdraw` instance that
 // defined the services, so `qd.stream`, `qd.presence` and `qd.run` reach
@@ -24,7 +25,11 @@ import {
   type QuickdrawServer,
   type ServerOptions,
 } from "../server/createServer";
-import type { ContractOfServices, PrincipalOfServices } from "../server/dispatcher";
+import type {
+  ContractOfServices,
+  McpContextOfServices,
+  PrincipalOfServices,
+} from "../server/dispatcher";
 import { runtimeOf, type AnyService } from "../server/service";
 import { isPrincipal, type ServerAuth } from "../server/transports/auth";
 import { recordFrames, type FrameRecorder } from "./frames";
@@ -34,6 +39,7 @@ import {
   meterServer,
   quietLogger,
   type InstrumentedOptions,
+  type MeasuredCallerSettings,
 } from "./instrument";
 import { connectV5, socketCaller, type ClientSocket } from "./socket";
 
@@ -83,6 +89,51 @@ function withGrants(call: Call, load: ServerAuth["loadServiceAccess"]): Call {
 export type TestAppOptions<S extends readonly AnyService[]> = ServerOptions<S> &
   Pick<InstrumentedOptions, "strictWarnings">;
 
+/**
+ * How `app.as(principal, options)` calls: as which transport, and with which
+ * `ctx.mcp`, so a guard that reads either is tested in process. `M` is the
+ * type of `ctx.mcp`: the app's `QuickdrawTypes["mcp"]`, or `McpContext` when
+ * it declares none.
+ */
+export interface TestCallerOptions<M> {
+  /**
+   * The transport the calls arrive as, which handlers read as
+   * `ctx.transport`: `"internal"` (the default), `"http"` or `"mcp"`. The
+   * calls have no connection, so no concurrency lane caps them. A socket's
+   * call is `app.connect`'s, over a real socket.
+   */
+  readonly transport?: "internal" | "http" | "mcp";
+  /**
+   * The calls' `ctx.mcp`: the fields the MCP bridge's `context` hook would
+   * give them, typed by the app's `QuickdrawTypes["mcp"]`. With
+   * `transport: "mcp"` they are an MCP tool call's; with the default
+   * transport, the calls an MCP call makes through `ctx.services`. Bound
+   * arguments and the registry's `principal` and `context` hooks belong to
+   * the MCP registry: test those through `registry.callMethod`.
+   */
+  readonly mcp?: M;
+}
+
+const IN_PROCESS_TRANSPORTS: ReadonlySet<unknown> = new Set(["internal", "http", "mcp"]);
+
+/** `options`, checked: a socket's transport, or `mcp` that is not an object, is a `TypeError`. */
+function checkCallerOptions(
+  options: TestCallerOptions<unknown> | undefined,
+): MeasuredCallerSettings {
+  if (options === undefined) {
+    return {};
+  }
+  if (options.transport !== undefined && !IN_PROCESS_TRANSPORTS.has(options.transport)) {
+    throw new TypeError(
+      `app.as: transport is "internal", "http" or "mcp", not ${JSON.stringify(options.transport)}; a socket's call is app.connect's`,
+    );
+  }
+  if (options.mcp !== undefined && (typeof options.mcp !== "object" || options.mcp === null)) {
+    throw new TypeError("app.as: mcp must be an object, the fields of ctx.mcp");
+  }
+  return options as MeasuredCallerSettings;
+}
+
 /** A socket connected to the test app. */
 export interface TestConnection<S extends readonly AnyService[] = readonly AnyService[]> {
   /** The raw Socket.IO client socket, for frames `call` does not cover. */
@@ -117,9 +168,15 @@ export interface TestApp<S extends readonly AnyService[] = readonly AnyService[]
    * carries no `serviceAccess` gets its grants from the server's
    * `auth.loadServiceAccess` at every call, as an HTTP call's and a
    * socket's principal do, so in-process and socket calls authorize alike;
-   * one that carries grants (even `{}`) keeps them.
+   * one that carries grants (even `{}`) keeps them. Its calls arrive with
+   * transport `"internal"` and no `ctx.mcp`, unless `options` names others:
+   * `app.as(agent, { transport: "mcp", mcp: { scopes: [] } })` calls as an
+   * MCP tool call would.
    */
-  as(principal: PrincipalOfServices<S> | null): Caller<ContractOfServices<S>>;
+  as(
+    principal: PrincipalOfServices<S> | null,
+    options?: TestCallerOptions<McpContextOfServices<S>>,
+  ): Caller<ContractOfServices<S>>;
   /**
    * Connects a real v5 socket acting as `principal` (`null` for anonymous);
    * resolves once the server said hello, rejects when it refused the socket.
@@ -190,10 +247,11 @@ export async function createTestApp<const S extends readonly AnyService[]>(
     url,
     server,
     frames,
-    as: (principal) =>
+    as: (principal, callerOptions) =>
       measuredCaller(
         withGrants(server.dispatcher.call, options.auth?.loadServiceAccess),
         principal,
+        checkCallerOptions(callerOptions),
       ) as Caller<ContractOfServices<S>>,
     async connect(principal) {
       const { socket, hello } = await connectV5(

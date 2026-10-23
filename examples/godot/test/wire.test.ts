@@ -3,19 +3,36 @@
 // session `smoke.gd` runs in Godot, written as the same bytes (`frames.ts`),
 // with every answer the server sends asserted in turn; then what that
 // session does not reach: a refused protocol, the heartbeat, presence and
-// events between two players, and channel messages that are never
-// acknowledged. `bun run check:godot` runs the GDScript client itself.
+// events between two players, channel messages that are never
+// acknowledged, a peer link over the relay, and host mode: the world's host
+// (`host.ts`) serving a player over a link. `bun run check:godot` runs the
+// GDScript client itself.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { connectFrame, godotJson, SESSION } from "./frames";
-import { startServer, WORLD, type GameServer } from "./game";
+import {
+  connectFrame,
+  godotJson,
+  hostFrame,
+  hostFrames,
+  isClockFrame,
+  PEER_SIGNAL_ID,
+  relayFrame,
+  relayHelloFrame,
+  SESSION,
+} from "./frames";
+import { startServer, WORLD, WORLD_ID, type GameServer } from "./game";
+import { hostWorld, type WorldHost } from "./host";
 
 const servers: GameServer[] = [];
 const sockets: Wire[] = [];
+const hosts: WorldHost[] = [];
 
 afterEach(async () => {
   for (const wire of sockets.splice(0)) {
     wire.close();
+  }
+  for (const host of hosts.splice(0)) {
+    host.close();
   }
   await Promise.all(servers.splice(0).map(async (server) => await server.close()));
 });
@@ -141,8 +158,11 @@ function payloadOf(frame: string): unknown {
   return frame.startsWith("43") ? array[0] : array[1];
 }
 
-/** Opens a socket and connects with `token` (`frames.ts`), up to `qd:hello`. */
-async function connect(server: GameServer, token: string): Promise<{ wire: Wire; hello: unknown }> {
+/** Opens a socket and connects with `token` (`frames.ts`), up to `qd:hello`; `sid` is the socket's id. */
+async function connect(
+  server: GameServer,
+  token: string,
+): Promise<{ wire: Wire; hello: unknown; sid: string }> {
   const wire = await Wire.open(server);
   expect(JSON.parse((await wire.next((frame) => frame.startsWith("0"))).slice(1))).toEqual({
     sid: expect.any(String),
@@ -152,8 +172,10 @@ async function connect(server: GameServer, token: string): Promise<{ wire: Wire;
     maxPayload: 1_000_000,
   });
   wire.send(connectFrame(token));
-  expect(await wire.next((frame) => frame.startsWith("40"))).toMatch(/^40\{"sid":"[\w-]+"\}$/);
-  return { wire, hello: payloadOf(await wire.next(isEvent("qd:hello"))) };
+  const connected = await wire.next((frame) => frame.startsWith("40"));
+  expect(connected).toMatch(/^40\{"sid":"[\w-]+"\}$/);
+  const { sid } = JSON.parse(connected.slice(2)) as { readonly sid: string };
+  return { wire, hello: payloadOf(await wire.next(isEvent("qd:hello"))), sid };
 }
 
 /** Sends a session frame that asks for an acknowledgement, and resolves with the reply. */
@@ -161,6 +183,42 @@ async function ask(wire: Wire, frame: string): Promise<unknown> {
   wire.send(frame);
   const id = Number(/^42(\d+)\[/.exec(frame)?.[1]);
   return payloadOf(await wire.next(isAck(id)));
+}
+
+/** The host mode message a `qd:relay` frame carries: its label and its parsed text, or undefined. */
+function hostMessageOf(frame: string): { label: string; message: readonly unknown[] } | undefined {
+  if (!isEvent("qd:relay")(frame) || isClockFrame(frame)) {
+    return undefined;
+  }
+  const [, , label = "", text = ""] = payloadOf(frame) as readonly string[];
+  const message = JSON.parse(text) as readonly unknown[];
+  return typeof message[0] === "number" && message[0] >= 3 ? { label, message } : undefined;
+}
+
+/** The next host mode message of kind `kind` relayed to `wire`. */
+async function hostMessage(wire: Wire, kind: number): Promise<ReturnType<typeof hostMessageOf>> {
+  return hostMessageOf(await wire.next((frame) => hostMessageOf(frame)?.message[0] === kind));
+}
+
+/**
+ * Sends `steer` until the host served `count` steers: `fast` is unreliable,
+ * never resent, and dropped wherever a connection is backed up.
+ */
+async function steerUntil(
+  wire: Wire,
+  steer: string,
+  host: WorldHost,
+  count: number,
+): Promise<void> {
+  for (let attempt = 0; attempt < 20 && host.steers.length < count; attempt += 1) {
+    wire.send(steer);
+    for (let wait = 0; wait < 10 && host.steers.length < count; wait += 1) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
+    }
+  }
+  expect(host.steers.length).toBeGreaterThanOrEqual(count);
 }
 
 const moved = (dx: number) => (frame: string) =>
@@ -188,8 +246,16 @@ describe("the GDScript client's session, frame by frame", () => {
           maxScopes: 1000,
           maxTopics: 1000,
         },
+        peers: {
+          maxLinks: 64,
+          maxMessageBytes: 65536,
+          relayRate: 120,
+          relayBurst: 240,
+          relayBytesPerSecond: 1048576,
+          relayBytesBurst: 2097152,
+        },
       },
-      features: [],
+      features: ["peer"],
       userId: "ada",
       serviceAccess: {},
     });
@@ -299,6 +365,25 @@ describe("the GDScript client's session, frame by frame", () => {
       '44{"message":"Authentication failed","data":{"code":"UNAUTHENTICATED"}}',
     );
   });
+
+  it("refuses a handshake it could not authenticate with INTERNAL, then signs the next one in", async () => {
+    const server = await start();
+    const first = await Wire.open(server);
+    await first.next((frame) => frame.startsWith("0"));
+    first.send(SESSION[22] ?? "");
+    expect(await first.next((frame) => frame.startsWith("44"))).toBe(
+      '44{"message":"Authentication failed","data":{"code":"INTERNAL"}}',
+    );
+    // The client connects again on a new WebSocket, after its backoff, with the same token.
+    const again = await Wire.open(server);
+    await again.next((frame) => frame.startsWith("0"));
+    again.send(SESSION[23] ?? "");
+    expect(await again.next((frame) => frame.startsWith("40"))).toMatch(/^40\{"sid":"[\w-]+"\}$/);
+    expect(payloadOf(await again.next(isEvent("qd:hello")))).toMatchObject({ userId: "flaky" });
+    again.send(SESSION[24] ?? "");
+    again.close();
+    await expect.poll(() => server.server.io.sockets.sockets.size).toBe(0);
+  });
 });
 
 describe("the wire beyond the session", () => {
@@ -362,5 +447,144 @@ describe("the wire beyond the session", () => {
     await wire.next(moved(1));
     expect(await ask(wire, SESSION[1] ?? "")).toMatchObject({ ok: true });
     expect(wire.frames.filter(isAck(77))).toEqual([]);
+  });
+
+  it("links two players over the relay, as the client answers a peer that offers one", async () => {
+    const server = await start();
+    const ada = await connect(server, "ada");
+    await ask(ada.wire, SESSION[5] ?? "");
+    const bo = await connect(server, "bo");
+    const join = `420${godotJson(["qd:call", { id: 0, s: "gameService", m: "join", i: { name: "bo" } }])}`;
+    await ask(bo.wire, join);
+    // Bo, without WebRTC, offers a link over the relay; the client hears a request with his user.
+    const offer = `421${godotJson(["qd:peer", { room: WORLD, to: ada.sid, sig: { relay: true } }])}`;
+    expect(await ask(bo.wire, offer)).toEqual({ ok: true });
+    expect(payloadOf(await ada.wire.next(isEvent("qd:peer")))).toEqual({
+      room: WORLD,
+      from: bo.sid,
+      userId: "bo",
+      sig: { relay: true },
+    });
+    // The client answers with the frame `peer_link` writes, then relays its messages.
+    expect(await ask(ada.wire, relayHelloFrame(bo.sid))).toEqual({ ok: true });
+    expect(relayHelloFrame(bo.sid)).toMatch(new RegExp(`^42${String(PEER_SIGNAL_ID)}\\[`));
+    expect(payloadOf(await bo.wire.next(isEvent("qd:peer")))).toEqual({
+      room: WORLD,
+      from: ada.sid,
+      userId: "ada",
+      sig: { relay: true },
+    });
+    ada.wire.send(relayFrame(bo.sid, "rel", { hi: "bo" }));
+    expect(payloadOf(await bo.wire.next(isEvent("qd:relay")))).toEqual([
+      WORLD,
+      ada.sid,
+      "rel",
+      '[0,{"hi":"bo"}]',
+    ]);
+    const ping = `42${godotJson(["qd:relay", [WORLD, bo.sid, "fast", "[1,1234]"]])}`;
+    expect([isClockFrame(ping), isClockFrame(relayFrame(bo.sid, "fast", 1))]).toEqual([
+      true,
+      false,
+    ]);
+    ada.wire.send(ping);
+    expect(payloadOf(await bo.wire.next(isEvent("qd:relay")))).toEqual([
+      WORLD,
+      ada.sid,
+      "fast",
+      "[1,1234]",
+    ]);
+    // Bo leaves: the server tells the client bye for him.
+    bo.wire.close();
+    expect(payloadOf(await ada.wire.next(isEvent("qd:peer")))).toEqual({
+      room: WORLD,
+      from: bo.sid,
+      userId: "bo",
+      sig: { bye: true },
+    });
+  });
+
+  it("refuses a peer signal from outside the room, and relays nothing there", async () => {
+    const server = await start();
+    const ada = await connect(server, "ada");
+    await ask(ada.wire, SESSION[5] ?? "");
+    const bo = await connect(server, "bo");
+    expect(
+      await ask(
+        bo.wire,
+        `421${godotJson(["qd:peer", { room: WORLD, to: ada.sid, sig: { relay: true } }])}`,
+      ),
+    ).toMatchObject({
+      ok: false,
+      e: { code: "FORBIDDEN" },
+    });
+    bo.wire.send(`42${godotJson(["qd:relay", [WORLD, ada.sid, "rel", "[0,1]"]])}`);
+    expect(await ask(ada.wire, SESSION[1] ?? "")).toMatchObject({ ok: true });
+    expect(
+      ada.wire.frames.filter((frame) => isEvent("qd:peer")(frame) || isEvent("qd:relay")(frame)),
+    ).toEqual([]);
+  });
+
+  it("serves a player from the world's host, as the client links to it, subscribes, steers and unsubscribes", async () => {
+    const server = await start();
+    const ada = await connect(server, "ada");
+    await ask(ada.wire, SESSION[5] ?? "");
+    const host = await hostWorld(server);
+    hosts.push(host);
+    expect(payloadOf(await ada.wire.next(isEvent("qd:host")))).toEqual([WORLD, host.socketId]);
+    // The client offers the host a link over the relay, with the frames of `hostFrames`; the host answers.
+    const [hello = "", subscribe = "", steer = "", unsubscribe = ""] = hostFrames(host.socketId);
+    expect(await ask(ada.wire, hello)).toEqual({ ok: true });
+    expect(payloadOf(await ada.wire.next(isEvent("qd:peer")))).toEqual({
+      room: WORLD,
+      from: host.socketId,
+      userId: "bo",
+      sig: { relay: true },
+    });
+    ada.wire.send(subscribe);
+    expect(await hostMessage(ada.wire, 6)).toEqual({
+      label: "rel",
+      message: [6, "gameService", "world", WORLD_ID, [{ tick: 0, by: "" }], true],
+    });
+    await steerUntil(ada.wire, steer, host, 1);
+    expect(await hostMessage(ada.wire, 7)).toEqual({
+      label: "rel",
+      message: [7, "gameService", "world", WORLD_ID, { tick: 1, by: "ada" }],
+    });
+    expect(host.steers[0]).toEqual([{ worldId: WORLD_ID, dx: 2 }, "ada"]);
+    // Unsubscribed, the client hears no item for its next steer. The link
+    // keeps the order of `rel`: the host refused the subscribe that follows
+    // the unsubscribe after it, and the seed of a new one comes after the steer.
+    ada.wire.send(unsubscribe);
+    ada.wire.send(hostFrame(host.socketId, "rel", [4, "gameService", "world", "elsewhere"]));
+    expect(await hostMessage(ada.wire, 8)).toEqual({
+      label: "rel",
+      message: [
+        8,
+        "gameService",
+        "world",
+        "elsewhere",
+        {
+          code: "FORBIDDEN",
+          message: 'The feed of scope "elsewhere" is served by the host of another room',
+        },
+      ],
+    });
+    const mark = ada.wire.frames.length;
+    const steered = host.steers.length;
+    await steerUntil(ada.wire, steer, host, steered + 1);
+    ada.wire.send(subscribe);
+    expect(await hostMessage(ada.wire, 6)).toEqual({
+      label: "rel",
+      message: [6, "gameService", "world", WORLD_ID, [{ tick: host.steers.length, by: "" }], true],
+    });
+    expect(
+      ada.wire.frames.slice(mark).filter((frame) => hostMessageOf(frame) !== undefined),
+    ).toEqual([]);
+    // The host disconnects: the server says bye for it, then that the world has no host.
+    host.close();
+    expect(payloadOf(await ada.wire.next(isEvent("qd:host")))).toEqual([WORLD, null]);
+    expect(ada.wire.frames.filter(isEvent("qd:peer")).map(payloadOf)).toEqual([
+      { room: WORLD, from: host.socketId, userId: "bo", sig: { bye: true } },
+    ]);
   });
 });

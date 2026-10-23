@@ -70,7 +70,9 @@ export interface DispatchRequest {
   readonly v?: Version;
   /**
    * The fields the MCP bridge's `context` option produced for this call,
-   * which the handler reads as `ctx.mcp`. Only the MCP transport sets it.
+   * which the handler reads as `ctx.mcp`. The MCP transport sets it, and a
+   * call's `ctx.services` passes its own on to the calls it makes, whose
+   * transport is `"internal"`.
    */
   readonly mcp?: McpContext;
   /**

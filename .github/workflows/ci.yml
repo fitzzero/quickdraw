@@ -218,7 +218,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          paths='^(examples/godot/|packages/core/src/(protocol|server/realtime|server/transports|testing)/|packages/core/package\.json|docs/protocol-v5\.md|bun\.lock|package\.json|\.github/workflows/ci\.yml)'
+          paths='^(examples/godot/|packages/core/src/(protocol|server/realtime|server/transports|testing|client/peer|client/host)/|packages/core/package\.json|docs/protocol-v5\.md|bun\.lock|package\.json|\.github/workflows/ci\.yml)'
           if [ "$EVENT" != "pull_request" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "$BASE" HEAD | grep -qE "$paths"; then

@@ -643,6 +643,48 @@ describe("streams, channels and events (RFC 0003 section 12.5)", () => {
     );
   });
 
+  it("takes serve: the server, or the room's host of a channel with a room and of a scoped stream with a room function", () => {
+    const hosted = defineContract("gameService", {
+      channels: {
+        move: {
+          payload: cursor,
+          requires: { room: (move) => `world:${move.docId}` },
+          serve: "host",
+        },
+        chat: { payload: cursor, requires: { room: "world" }, serve: "server" },
+      },
+      streams: {
+        world: {
+          item: idInput,
+          scope: "worldId",
+          access: { room: (worldId) => `world:${worldId}` },
+          serve: "host",
+        },
+      },
+    });
+    expect([hosted.channels.move.serve, hosted.channels.chat.serve]).toEqual(["host", "server"]);
+    expect(hosted.streams.world.serve).toBe("host");
+    const channel = (value: Record<string, unknown>) => () =>
+      define("s", { channels: { cursor: { payload: cursor, ...value } } });
+    expect(channel({ requires: { room: "world" }, serve: "peer" })).toThrow(
+      'channel "cursor": serve must be "server" or "host"',
+    );
+    expect(channel({ serve: "host" })).toThrow(
+      `channel "cursor" is served by the room's host (serve: "host"): it requires { room }, the room whose host handles its messages`,
+    );
+    const stream = (value: Record<string, unknown>) => () =>
+      define("s", { streams: { world: { item: idInput, ...value } } });
+    for (const value of [
+      { serve: "host" },
+      { serve: "host", access: { room: "world" } },
+      { serve: "host", scope: "worldId", access: "authenticated" },
+    ]) {
+      expect(stream(value)).toThrow(
+        `stream "world" is served by the room's host (serve: "host"): it has a scope, and access { room: (scope) => room }`,
+      );
+    }
+  });
+
   it("takes an app room's name, a function of the payload or { prefix } as requires.room", () => {
     const rooms = defineContract("roomService", {
       channels: {

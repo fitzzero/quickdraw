@@ -47,10 +47,12 @@ function queryMember(
   extra: Readonly<Record<string, unknown>>,
 ): object {
   const key = (input?: unknown): MethodQueryKey => methodKey(target.service, target.method, input);
+  const defaults = target.queryDefaults;
   const member = Object.freeze({
     ...extra,
+    // The caller's options over the method's defaults (the admin kit's reads of rows: `staleTime: 0`).
     useQuery: (input?: unknown, options?: MethodQueryOptions<unknown>) =>
-      useMethodQuery(target, input, options),
+      useMethodQuery(target, input, defaults === undefined ? options : { ...defaults, ...options }),
     call: async (input?: unknown, options?: QueryCallOptions): Promise<unknown> =>
       await callData(connectionOf(binding, target, "call"), {
         ...target,

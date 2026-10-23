@@ -6,7 +6,8 @@
 // sit beside the methods and collections, which share their namespace.
 
 import type { AnyContract } from "../../contract/defineContract";
-import { isScopedStream } from "../../contract/realtime";
+import { isHostServed, isScopedStream } from "../../contract/realtime";
+import { streamRoomOf } from "../host/rooms";
 import type { StreamTarget } from "./streams";
 import { useChannel } from "./useChannel";
 import { useEvent, type UseEventOptions } from "./useEvent";
@@ -29,13 +30,17 @@ function streamMember(target: StreamTarget): object {
 /** The stream, channel and event members of one contract's service, keyed as they sit on `qd.<service>`. */
 export function realtimeMembers(contract: AnyContract): [string, object][] {
   const service = contract.name;
-  const streams = Object.entries(contract.streams).map(([stream, def]): [string, object] => [
-    stream,
-    streamMember(Object.freeze({ service, stream, scoped: isScopedStream(def) })),
-  ]);
-  const channels = Object.keys(contract.channels).map((channel): [string, object] => [
+  const streams = Object.entries(contract.streams).map(([stream, def]): [string, object] => {
+    // A host-served stream's feed is served by the host of the scope's room.
+    const host = isHostServed(def) ? { host: (scope: string) => streamRoomOf(def, scope) } : {};
+    return [
+      stream,
+      streamMember(Object.freeze({ service, stream, scoped: isScopedStream(def), ...host })),
+    ];
+  });
+  const channels = Object.entries(contract.channels).map(([channel, def]): [string, object] => [
     channel,
-    Object.freeze({ useChannel: () => useChannel(service, channel) }),
+    Object.freeze({ useChannel: () => useChannel(service, channel, def) }),
   ]);
   const events = Object.keys(contract.events).map((event): [string, object] => [
     event,

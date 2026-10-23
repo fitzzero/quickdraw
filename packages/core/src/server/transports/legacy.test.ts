@@ -6,7 +6,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { defineContract, mutation, query, type EventFrame } from "../../index";
+import { defineContract, mutation, query, QuickdrawError, type EventFrame } from "../../index";
 import {
   alice,
   bob,
@@ -35,7 +35,9 @@ import {
   v5Auth,
   type ClientSocket,
 } from "./__tests__/harness";
+import type { DispatchResult } from "../pipeline/request";
 import { createProbe } from "./__tests__/probe";
+import { toLegacyReply } from "./legacy";
 
 const harness = transportHarness();
 
@@ -116,6 +118,20 @@ async function connectLegacy(url: string, principal: AppPrincipal | null = alice
   return { socket: opened.socket, authInfo: await authInfo };
 }
 
+/** A method whose input nests, so a refusal names each problem by its path. */
+const tagContract = defineContract("tagService", {
+  methods: {
+    tag: mutation({
+      input: z.object({ title: z.string().min(1), tags: z.array(z.string()) }),
+      output: z.object({ title: z.string() }),
+    }),
+  },
+});
+
+const tagService = qd.defineService(tagContract, {
+  methods: { tag: { access: "authenticated", handler: ({ input }) => ({ title: input.title }) } },
+});
+
 describe("the legacy shim", () => {
   it("serves a 4.x call with the 4.x reply shape, through the dispatcher", async () => {
     const { url, records } = await serve();
@@ -144,7 +160,13 @@ describe("the legacy shim", () => {
     const { socket } = await connectLegacy(url);
     const anonymous = await connectLegacy(url, null);
     const failures: [ClientSocket, string, unknown, number, string][] = [
-      [socket, "taskService:rename", { id: 1 }, 422, "Invalid input for taskService.rename"],
+      [
+        socket,
+        "taskService:rename",
+        { id: 1 },
+        422,
+        "Invalid input for taskService.rename: id: Invalid input: expected string, received number; title: Invalid input: expected string, received undefined",
+      ],
       [anonymous.socket, "probeService:wait", { key: "k" }, 401, "Authentication required"],
       [socket, "probeService:moderate", { value: 1 }, 403, "Insufficient permissions"],
       [socket, "probeService:fail", { code: "CONFLICT" }, 409, "Failed with CONFLICT"],
@@ -161,6 +183,29 @@ describe("the legacy shim", () => {
         new ServiceCallError(error, code),
       );
     }
+  });
+
+  it("lists a refused input's issues in the error, each by its path, as 4.x pages show it", async () => {
+    const records: CallRecord[] = [];
+    const { url } = await harness.start({
+      services: [tagService],
+      db,
+      logger: captureLogger(),
+      auth: trustingAuth,
+      legacyWire: true,
+      onCall: (record) => records.push(record),
+    });
+    const { socket } = await connectLegacy(url);
+    const reply = await rawLegacyCall(socket, "tagService:tag", { title: "", tags: ["a", 1] });
+    expect(reply).toEqual({
+      success: false,
+      error:
+        "Invalid input for tagService.tag: title: Too small: expected string to have >=1 characters; tags.1: Invalid input: expected string, received number",
+      code: 422,
+    } satisfies ServiceResponse);
+    expect(records.map((record) => [record.method, record.outcome])).toEqual([
+      ["tag", "VALIDATION"],
+    ]);
   });
 
   it("calls a method without a payload, the way 4.x emits one", async () => {
@@ -571,5 +616,98 @@ describe("the legacy shim's service-name aliases", () => {
         }),
       ).toThrow(message);
     }
+  });
+});
+
+describe("toLegacyReply", () => {
+  /** A refused input of `taskService.rename`, with `data` as its error carries it. */
+  const refused = (data?: unknown): DispatchResult => ({
+    ok: false,
+    error: new QuickdrawError("VALIDATION", "Invalid input for taskService.rename", data),
+  });
+
+  it("lists a VALIDATION refusal's issues after its message: each dotted path, then its message", () => {
+    const issues = [
+      { path: ["title"], message: "Required" },
+      { path: ["tags", 0], message: "Expected string" },
+    ];
+    expect(toLegacyReply(refused({ issues }))).toEqual({
+      success: false,
+      error: "Invalid input for taskService.rename: title: Required; tags.0: Expected string",
+      code: 422,
+    });
+    // An issue of the input itself is its message alone.
+    expect(toLegacyReply(refused({ issues: [{ path: [], message: "Expected object" }] }))).toEqual({
+      success: false,
+      error: "Invalid input for taskService.rename: Expected object",
+      code: 422,
+    });
+  });
+
+  it("lists the first 10 issues, then counts the rest", () => {
+    const issues = Array.from({ length: 12 }, (_, index) => ({
+      path: ["tags", index],
+      message: "Expected string",
+    }));
+    const listed = Array.from(
+      { length: 10 },
+      (_, index) => `tags.${String(index)}: Expected string`,
+    );
+    expect(toLegacyReply(refused({ issues }))).toEqual({
+      success: false,
+      error: `Invalid input for taskService.rename: ${listed.join("; ")}; and 2 more`,
+      code: 422,
+    });
+  });
+
+  it("keeps the bare message without issues, and never throws on data that holds none", () => {
+    const malformed = [
+      null,
+      1,
+      { message: "No path" },
+      { path: ["title"], message: 2 },
+      { path: [{ key: "title" }], message: "An object in the path" },
+      { path: [Symbol("title")], message: "A symbol in the path" },
+    ];
+    for (const data of [
+      undefined,
+      null,
+      "issues",
+      [],
+      { issues: [] },
+      { issues: "title" },
+      { issues: malformed },
+    ]) {
+      expect(toLegacyReply(refused(data))).toEqual({
+        success: false,
+        error: "Invalid input for taskService.rename",
+        code: 422,
+      });
+    }
+    // Among issues that are not, those that are still show.
+    expect(
+      toLegacyReply(refused({ issues: [...malformed, { path: ["id"], message: "Required" }] })),
+    ).toEqual({
+      success: false,
+      error: "Invalid input for taskService.rename: id: Required",
+      code: 422,
+    });
+  });
+
+  it("keeps every other code's message, and INTERNAL's generic one", () => {
+    const data = { issues: [{ path: ["id"], message: "Required" }] };
+    expect(
+      toLegacyReply({ ok: false, error: new QuickdrawError("NOT_FOUND", "No task t9", data) }),
+    ).toEqual({ success: false, error: "No task t9", code: 404 });
+    expect(
+      toLegacyReply({
+        ok: false,
+        error: new QuickdrawError("INTERNAL", "The database said no", data),
+      }),
+    ).toEqual({ success: false, error: "Internal error", code: 500 });
+    expect(toLegacyReply({ ok: true, data: { id: "t1" } })).toEqual({
+      success: true,
+      data: { id: "t1" },
+    });
   });
 });

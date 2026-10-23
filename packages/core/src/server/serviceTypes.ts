@@ -10,6 +10,7 @@
 // the service's `project` option is built from the row its `select` reads
 // instead: its handlers return what `map` takes.
 
+import type { AccessLevel } from "../contract/access";
 import type { AnyContract } from "../contract/defineContract";
 import type {
   CollectionName,
@@ -129,6 +130,15 @@ export type HandlerOutputOf<
 > = HandlerResult<C, MethodOf<C, M>["output"], Proj>;
 
 /**
+ * A service-wide grant a collection's subscribers need besides the anchor or
+ * self check: `{ service: L }`, the caller's grant on the collection's own
+ * service at least `L`, as a method's `{ service: L }` form counts it.
+ */
+export interface CollectionRequires {
+  readonly service: AccessLevel;
+}
+
+/**
  * How one collection's scopes are authorized (RFC 0003 section 7.1), in
  * `defineService`'s `collections` option.
  *
@@ -141,8 +151,14 @@ export type HandlerOutputOf<
  *   On a service with an access policy its items still follow that policy:
  *   only the rows its user may read at `Read`, and a row the user loses goes
  *   out `removed`.
+ * - `requires: { service: L }`, beside either: the subscriber also needs a
+ *   service-wide grant of at least `L` on this service, as the service's
+ *   methods under `{ service: L }` do (`{ scopeAccess: "self", requires:
+ *   { service: "Read" } }`: the user's own rows, for holders of the Read
+ *   grant). Without it the scope is `FORBIDDEN`, and a socket whose grants
+ *   reload below it leaves the scope (`qd:revoked`, reason `"access"`).
  *
- * A service-wide `Admin` grant on this service passes either check, as it
+ * A service-wide `Admin` grant on this service passes every check, as it
  * passes every check of the service. `bulkThreshold` (default 200) is how
  * many changed rows of one scope one flush may send as deltas; past it the
  * scope gets one `reset` and its clients load it again.
@@ -151,11 +167,13 @@ export type CollectionOption =
   | {
       readonly anchor: AnyContract;
       readonly scopeAccess?: undefined;
+      readonly requires?: CollectionRequires;
       readonly bulkThreshold?: number;
     }
   | {
       readonly scopeAccess: "self";
       readonly anchor?: undefined;
+      readonly requires?: CollectionRequires;
       readonly bulkThreshold?: number;
     };
 

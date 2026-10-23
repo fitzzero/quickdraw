@@ -118,6 +118,18 @@ run("no-nested-write", {
       ],
     },
     {
+      name: "a parameter typed Tracked is the tracked client, whatever its name",
+      filename: SERVICE,
+      code: `
+        export async function addLabelled(prisma: Tracked<PrismaClient>, projectId: string) {
+          await prisma.task.create({ data: { projectId, title, labels: { create: [{ name: "bug" }] } } });
+        }
+      `,
+      errors: [
+        { messageId: "nestedWrite", data: { field: "labels", operation: "create", model: "task" } },
+      ],
+    },
+    {
       name: "set given rows is a relation set, and tx is the tracked client too",
       filename: SERVICE,
       code: `

@@ -1,7 +1,15 @@
 // `createTestApp` and the socket helpers of `./testing`.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { QuickdrawError, type CallReply, type HelloFrame } from "../index";
+import { z } from "zod";
+import {
+  defineContract,
+  mutation,
+  query,
+  QuickdrawError,
+  type CallReply,
+  type HelloFrame,
+} from "../index";
 import {
   alice,
   captureLogger,
@@ -11,11 +19,50 @@ import {
   task,
   taskDefaults,
   taskRow,
+  type AppPrincipal,
 } from "../server/__tests__/fixtures";
+import { initQuickdraw, type CallRecord } from "../server/index";
 import { createProbe } from "../server/transports/__tests__/probe";
 import { createTestApp, emitWithAck, waitForEvent, type TestApp } from "./index";
 
 const apps: TestApp[] = [];
+
+/** What the app below declares as `ctx.mcp`: the scopes of an agent's token. */
+interface TokenFields {
+  readonly scopes: readonly string[];
+}
+
+const tokens = initQuickdraw<{ principal: AppPrincipal; mcp: TokenFields }>();
+
+const how = defineContract("howService", {
+  methods: {
+    called: query({
+      input: z.undefined(),
+      output: z.object({ transport: z.string(), mcp: z.unknown() }),
+    }),
+    write: mutation({ input: z.undefined(), output: z.string() }),
+  },
+});
+
+/** Answers how it was called, and guards `write` on the token's scopes. */
+const howService = tokens.defineService(how, {
+  methods: {
+    called: {
+      access: "public",
+      handler: ({ ctx }) => ({ transport: ctx.transport, mcp: ctx.mcp }),
+    },
+    write: {
+      access: "authenticated",
+      handler: ({ ctx }) => {
+        // An agent's token needs the write scope; a session's call carries no ctx.mcp.
+        if (ctx.mcp !== undefined && !ctx.mcp.scopes.includes("write")) {
+          throw new QuickdrawError("FORBIDDEN", "This token may not write");
+        }
+        return "written";
+      },
+    },
+  },
+});
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map(async (app) => await app.close()));
@@ -117,6 +164,67 @@ describe("createTestApp", () => {
     });
     const carried = granted(alice, { probeService: "Moderate" });
     expect(await app.as(carried).probeService.moderate({ value: 3 })).toBe(6);
+  });
+
+  it("calls in process as the transport and with the ctx.mcp a test names, internal and none by default", async () => {
+    const records: CallRecord[] = [];
+    const app = await createTestApp({
+      services: [howService],
+      onCall: (record) => records.push(record),
+    });
+    apps.push(app as unknown as TestApp);
+    expect(await app.as(alice).howService.called()).toEqual({
+      transport: "internal",
+      mcp: undefined,
+    });
+    expect(
+      await app.as(alice, { transport: "mcp", mcp: { scopes: ["read"] } }).howService.called(),
+    ).toEqual({ transport: "mcp", mcp: { scopes: ["read"] } });
+    // ctx.mcp over the default transport: what a call an MCP call makes through ctx.services sees.
+    expect(await app.as(alice, { mcp: { scopes: [] } }).howService.called()).toEqual({
+      transport: "internal",
+      mcp: { scopes: [] },
+    });
+    expect(await app.as(null, { transport: "http" }).howService.called()).toEqual({
+      transport: "http",
+      mcp: undefined,
+    });
+    // One completion record per call, as the transport it named, its reply measured: what a budget counts.
+    expect(records.map((record) => [record.transport, record.bytes > 0])).toEqual([
+      ["internal", true],
+      ["mcp", true],
+      ["internal", true],
+      ["http", true],
+    ]);
+  });
+
+  it("tests a token guard as an MCP tool call reaches it", async () => {
+    const app = await createTestApp({ services: [howService] });
+    apps.push(app as unknown as TestApp);
+    const agent: AppPrincipal = { userId: "alice", kind: "agent" };
+    const reader = app.as(agent, { transport: "mcp", mcp: { scopes: ["read"] } });
+    await expect(reader.howService.write()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "This token may not write",
+    });
+    const writer = app.as(agent, { transport: "mcp", mcp: { scopes: ["read", "write"] } });
+    expect(await writer.howService.write()).toBe("written");
+    // A session's call carries no ctx.mcp, and the guard lets it in.
+    expect(await app.as(alice).howService.write()).toBe("written");
+  });
+
+  it("refuses a socket's transport, which app.connect calls over a real socket, and mcp that is no object", async () => {
+    const app = await createTestApp({ services: [howService] });
+    apps.push(app as unknown as TestApp);
+    expect(() => app.as(alice, { transport: "socket" } as never)).toThrow(
+      new TypeError(
+        `app.as: transport is "internal", "http" or "mcp", not "socket"; a socket's call is app.connect's`,
+      ),
+    );
+    expect(() => app.as(alice, { transport: "legacy" } as never)).toThrow(TypeError);
+    expect(() => app.as(alice, { mcp: "token" } as never)).toThrow(
+      new TypeError("app.as: mcp must be an object, the fields of ctx.mcp"),
+    );
   });
 
   it("disconnects its sockets and closes the server on close()", async () => {

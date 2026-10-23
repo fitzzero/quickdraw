@@ -72,10 +72,11 @@ then lists as `"binary"`.
 
 The client sends `HandshakeAuth` as the CONNECT packet's `auth`. The
 server answers with `qd:hello` (`HelloFrame`), or refuses the connection
-with CONNECT_ERROR, whose `data` is `ProtocolMismatch` or
-`AuthenticationRefused`. How `token` is checked is the app's: the server's
-`authenticate` reads the whole `auth` object, and a browser's cookies reach
-it too.
+with CONNECT_ERROR, whose `data` is `ProtocolMismatch`,
+`AuthenticationRefused` (the credentials were refused) or
+`AuthenticationUnavailable` (the server could not check them). How `token`
+is checked is the app's: the server's `authenticate` reads the whole `auth`
+object, and a browser's cookies reach it too.
 
 A 5.0 server speaks protocol `5` and refuses a client that names any other.
 
@@ -109,14 +110,29 @@ speaks another protocol, or none. It is not an `ErrorCode`: no call failed.
 
 ### `AuthenticationRefused`
 
-The `data` of the error a server refuses a connection with when
-authenticating it failed: the app's `authenticate` threw, so the
-credentials are bad or could not be checked. A client tells it apart from
-`ProtocolMismatch` by `code`; reconnecting needs other credentials.
+The `data` of the error a server refuses a connection with when it refused
+the credentials: the app's `authenticate` threw a `QuickdrawError` with
+code `UNAUTHENTICATED` (or `FORBIDDEN`), or the session it recorded
+expired during the handshake. A client tells it apart from
+`ProtocolMismatch` by `code`; reconnecting needs other credentials,
+so the user is signed out. A server that could not check the credentials
+refuses with `AuthenticationUnavailable` instead.
 
 | Field  | Type                |
 | ------ | ------------------- |
 | `code` | `"UNAUTHENTICATED"` |
+
+### `AuthenticationUnavailable`
+
+The `data` of the error a server refuses a connection with when it could
+not authenticate it: the app's `authenticate` (or `loadServiceAccess`)
+failed with anything but a refusal, its session store or database down,
+say. The credentials may well be good, so a client keeps the user it had
+and connects again later, backing off as after a lost connection.
+
+| Field  | Type         |
+| ------ | ------------ |
+| `code` | `"INTERNAL"` |
 
 ### `HelloSubscriptionLimits`
 
@@ -132,6 +148,21 @@ socket may hold at once, as `qd:hello` announces them.
 | `maxScopes?`    | `number` | 1000    | Collection scopes one socket may hold at once; one more is `CONFLICT`. Absent from servers up to 5.1.0, which have no such cap.            |
 | `maxTopics?`    | `number` | 1000    | Change topics one socket may watch at once; one more is `CONFLICT`. Absent from servers up to 5.1.0, which have no such cap.               |
 
+### `HelloPeerLimits`
+
+What one socket may signal and relay over peer links (RFC 0003 section
+12.5), as `qd:hello` announces it. A client keeps its relay messages
+within these, so a `rel` message is never dropped for its rate.
+
+| Field                 | Type     | Default | Meaning                                                                                    |
+| --------------------- | -------- | ------- | ------------------------------------------------------------------------------------------ |
+| `maxLinks`            | `number` | 64      | Peers one socket may signal at once; a signal to one more is `CONFLICT`.                   |
+| `maxMessageBytes`     | `number` | 65536   | The longest link message, in UTF-8 bytes, on the data channel and through the relay alike. |
+| `relayRate`           | `number` | 120     | Relay messages one socket may send to one peer per second; more are dropped.               |
+| `relayBurst`          | `number` | 240     | Relay messages one socket may send to one peer at once, after a pause.                     |
+| `relayBytesPerSecond` | `number` | 1048576 | Relay bytes one socket may send per second, to all its peers together; more are dropped.   |
+| `relayBytesBurst`     | `number` | 2097152 | Relay bytes one socket may send at once, after a pause.                                    |
+
 ### `HelloLimits`
 
 The limits a server announces in `qd:hello`, so a client can stay inside them.
@@ -143,6 +174,7 @@ The limits a server announces in `qd:hello`, so a client can stay inside them.
 | `maxSubscribeIds`    | `number`                  | 500     | Ids one `qd:sub` may name (RFC 0003 section 6).                                                                                                                                                            |
 | `callTimeoutMs`      | `number`                  | 30000   | A call's default time limit in milliseconds, after which it fails with `TIMEOUT`. A v5 client waits this long plus 2 s for an answer, so a slow call ends with the server's `TIMEOUT` rather than its own. |
 | `subscriptions`      | `HelloSubscriptionLimits` |         | The socket's lane of subscription events.                                                                                                                                                                  |
+| `peers?`             | `HelloPeerLimits`         |         | What peer links may signal and relay. Absent from a server that serves no peer links, whose `features` lacks `"peer"`.                                                                                     |
 
 ### `HelloFrame`
 
@@ -156,7 +188,7 @@ socket acts for, so a client knows its user without another call.
 | `server`        | `string`                      | The server package's version.                                                                                                                                                                                                                                        |
 | `serverId`      | `string`                      | This server's id: random, new each time a server starts. A client that reconnects to the same id came back after a blip, to another id to a restarted server (a game's world and clock start over) or, behind a cluster, to another node, each of which has its own. |
 | `limits`        | `HelloLimits`                 | What a client must stay within.                                                                                                                                                                                                                                      |
-| `features`      | `string[]`                    | Names of optional server features that are on. Informational only.                                                                                                                                                                                                   |
+| `features`      | `string[]`                    | Names of optional server features that are on: `"binary"` (the stock parser, `createServer({ binary: true })`) and `"peer"` (peer links, `createServer({ peers: true })`). Informational: a client that finds no `"peer"` opens no peer link.                        |
 | `userId`        | `string \| null`              | The user the socket acts for, or `null` when it is anonymous.                                                                                                                                                                                                        |
 | `serviceAccess` | `Record<string, AccessLevel>` | The principal's service-wide grants when the socket connected, by service name: `{ taskService: "Admin" }`. Empty for an anonymous socket or a principal without grants. Later changes arrive as `qd:access`.                                                        |
 
@@ -187,38 +219,43 @@ acknowledgement is sent with an ack id, and its reply arrives as the ACK's
 one argument; "when asked" means the server acknowledges it only when the
 client sends an ack id.
 
-| Event             | Payload                  | Acknowledgement             | Meaning                                                                    |
-| ----------------- | ------------------------ | --------------------------- | -------------------------------------------------------------------------- |
-| `qd:call`         | `CallEnvelope`           | `CallReply`                 | A method call: `{ id, s, m, i, v? }`, answered by ack.                     |
-| `qd:cancel`       | `CancelFrame`            | none                        | Cancels an in-flight call: `{ id }`.                                       |
-| `qd:sub`          | `EntitySubscribe`        | `EntitySubscribeReply`      | Subscribes to entities by id, with the revisions held.                     |
-| `qd:unsub`        | `EntityUnsubscribe`      | `Ok \| Failure`, when asked | Unsubscribes from entities.                                                |
-| `qd:col:sub`      | `CollectionSubscribe`    | `CollectionSubscribeReply`  | Subscribes to a collection scope, or resumes it from a revision.           |
-| `qd:col:unsub`    | `CollectionScopeRef`     | `Ok \| Failure`, when asked | Unsubscribes from a collection scope.                                      |
-| `qd:col:items`    | `CollectionItemsRequest` | `CollectionItemsReply`      | Loads collection items by id.                                              |
-| `qd:watch`        | `WatchFrame`             | `Ok \| Failure`             | Joins a watched topic: `{ s, topic }`.                                     |
-| `qd:unwatch`      | `WatchFrame`             | `Ok \| Failure`, when asked | Leaves a watched topic.                                                    |
-| `qd:stream:sub`   | `StreamSubscribe`        | `StreamSubscribeReply`      | Subscribes to a stream and receives its seed.                              |
-| `qd:stream:unsub` | `StreamSubscribe`        | `Ok \| Failure`, when asked | Unsubscribes from a stream.                                                |
-| `qd:ch`           | `ChannelFrame`           | none                        | A fire-and-forget channel message, sent volatile: `[s, channel, payload]`. |
+| Event             | Payload                  | Acknowledgement             | Meaning                                                                                                     |
+| ----------------- | ------------------------ | --------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `qd:call`         | `CallEnvelope`           | `CallReply`                 | A method call: `{ id, s, m, i, v? }`, answered by ack.                                                      |
+| `qd:cancel`       | `CancelFrame`            | none                        | Cancels an in-flight call: `{ id }`.                                                                        |
+| `qd:sub`          | `EntitySubscribe`        | `EntitySubscribeReply`      | Subscribes to entities by id, with the revisions held.                                                      |
+| `qd:unsub`        | `EntityUnsubscribe`      | `Ok \| Failure`, when asked | Unsubscribes from entities.                                                                                 |
+| `qd:col:sub`      | `CollectionSubscribe`    | `CollectionSubscribeReply`  | Subscribes to a collection scope, or resumes it from a revision.                                            |
+| `qd:col:unsub`    | `CollectionScopeRef`     | `Ok \| Failure`, when asked | Unsubscribes from a collection scope.                                                                       |
+| `qd:col:items`    | `CollectionItemsRequest` | `CollectionItemsReply`      | Loads collection items by id.                                                                               |
+| `qd:watch`        | `WatchFrame`             | `Ok \| Failure`             | Joins a watched topic: `{ s, topic }`.                                                                      |
+| `qd:unwatch`      | `WatchFrame`             | `Ok \| Failure`, when asked | Leaves a watched topic.                                                                                     |
+| `qd:stream:sub`   | `StreamSubscribe`        | `StreamSubscribeReply`      | Subscribes to a stream and receives its seed.                                                               |
+| `qd:stream:unsub` | `StreamSubscribe`        | `Ok \| Failure`, when asked | Unsubscribes from a stream.                                                                                 |
+| `qd:ch`           | `ChannelFrame`           | none                        | A fire-and-forget channel message, sent volatile: `[s, channel, payload]`.                                  |
+| `qd:peer`         | `PeerSignalFrame`        | `Ok \| Failure`, when asked | A peer link's signal to another socket of an app room: `{ room, to, sig }`.                                 |
+| `qd:relay`        | `RelayFrame`             | none                        | A peer link's message for the server to relay: `[room, to, label, text]`, dropped on `fast` when backed up. |
 
 ## Server to client
 
 The server never asks for an acknowledgement. A client listens for each event
 once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
 
-| Event         | Payload           | Meaning                                                                                          |
-| ------------- | ----------------- | ------------------------------------------------------------------------------------------------ |
-| `qd:hello`    | `HelloFrame`      | The handshake reply: `{ protocol, server, limits, features, userId, serviceAccess }`.            |
-| `qd:e`        | `EntityFrame`     | Entity frames: full update, patch or removal.                                                    |
-| `qd:c`        | `CollectionFrame` | Collection deltas, batched per flush.                                                            |
-| `qd:changed`  | `ChangedFrame`    | A watched topic changed; the client invalidates its queries.                                     |
-| `qd:revoked`  | `RevokedFrame`    | Access to a subscription was revoked.                                                            |
-| `qd:stream`   | `StreamFrame`     | Stream items.                                                                                    |
-| `qd:event`    | `EventFrame`      | Typed custom room events declared in a contract's `events`.                                      |
-| `qd:presence` | `PresenceFrame`   | Who is in an app room the socket is in: the list on joining, then each user who joins or leaves. |
-| `qd:rotate`   | `RotateFrame`     | Reconnect within a jitter window.                                                                |
-| `qd:access`   | `AccessFrame`     | The user's service grants changed.                                                               |
+| Event         | Payload             | Meaning                                                                                          |
+| ------------- | ------------------- | ------------------------------------------------------------------------------------------------ |
+| `qd:hello`    | `HelloFrame`        | The handshake reply: `{ protocol, server, limits, features, userId, serviceAccess }`.            |
+| `qd:e`        | `EntityFrame`       | Entity frames: full update, patch or removal.                                                    |
+| `qd:c`        | `CollectionFrame`   | Collection deltas, batched per flush.                                                            |
+| `qd:changed`  | `ChangedFrame`      | A watched topic changed; the client invalidates its queries.                                     |
+| `qd:revoked`  | `RevokedFrame`      | Access to a subscription was revoked.                                                            |
+| `qd:stream`   | `StreamFrame`       | Stream items.                                                                                    |
+| `qd:event`    | `EventFrame`        | Typed custom room events declared in a contract's `events`.                                      |
+| `qd:presence` | `PresenceFrame`     | Who is in an app room the socket is in: the list on joining, then each user who joins or leaves. |
+| `qd:rotate`   | `RotateFrame`       | Reconnect within a jitter window.                                                                |
+| `qd:access`   | `AccessFrame`       | The user's service grants changed.                                                               |
+| `qd:peer`     | `PeerForwardFrame`  | A peer link's signal from another socket of an app room: `{ room, from, userId, sig }`.          |
+| `qd:relay`    | `RelayForwardFrame` | A peer link's message the server relays: `[room, from, label, text]`.                            |
+| `qd:host`     | `HostFrame`         | An app room's host (host mode): `[room, host]`, the host's socket id or `null`.                  |
 
 ## What a client must do
 
@@ -259,9 +296,14 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
   connected until then: calls are still answered on that socket. At that
   moment, disconnect and reconnect with a fresh handshake, so the server's
   clients come back spread over the window.
-- When the handshake is refused, reconnecting with the same client and
-  credentials is refused again: `PROTOCOL_MISMATCH` needs a client that
-  speaks the server's protocol, `UNAUTHENTICATED` other credentials.
+- When the handshake is refused with `PROTOCOL_MISMATCH` or
+  `UNAUTHENTICATED`, reconnecting with the same client and credentials is
+  refused again: `PROTOCOL_MISMATCH` needs a client that speaks the
+  server's protocol, `UNAUTHENTICATED` other credentials (sign the user
+  out). `INTERNAL` says the server could not check the credentials (its
+  session store was down, say): keep the user and connect again later,
+  backing off as after a lost connection (a second or so at first, doubling
+  to some seconds, with jitter), so a short outage signs nobody out.
 - Ignore what you do not know, in every frame: an object field you do not
   read, and an array element after the last one you read (`qd:event`,
   `qd:stream`). Protocol 5 grows only that way: a later revision may add
@@ -269,6 +311,181 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
   retype or reorder them, so a client that reads only what it knows keeps
   working against a newer server. The server reads what a client sends the
   same way. Any other change takes a new `protocol` number.
+
+## Peer links
+
+On a server whose `qd:hello` lists `"peer"` in `features`, two
+signed-in sockets of one app room can open a link: WebRTC data channels
+between the two clients or, when those cannot form, the server's relay,
+carrying the same messages either way. The server signals and relays: it
+never terminates WebRTC and never reads what a link carries. A link belongs
+to its room and its two sockets, and ends when either leaves the room or
+disconnects: open it again after a reconnect.
+
+A client learns a peer's socket id from the app (a method's answer, an
+event) or from a signal it receives (`from`). One side offers. When both
+do (each learned of the other at once), the side whose socket id sorts
+after the other's, compared as ASCII, answers instead: it drops its own
+offer and answers the peer's. The other side ignores the offer it heard and
+waits for that answer. A side that said `{ relay: true }` ignores an
+offer: its peer moves to the relay on hearing it.
+
+1. The offerer sends `{ sdp }` with its offer, then `{ ice }` for each of
+   its candidates, each as `qd:peer` to the other socket; the answerer
+   sends `{ sdp }` with its answer and its own candidates. A candidate may
+   arrive before the description it follows: keep it until that
+   description is applied.
+2. Both sides make the same two data channels, negotiated with fixed ids,
+   so neither waits for `ondatachannel`: `rel` (id 0, ordered and
+   reliable) and `fast` (id 1, unordered, `maxRetransmits` 0). The link
+   is open on the direct path once both channels are open. A data channel
+   message is one `PeerMessage` as UTF-8 JSON text.
+3. A side that cannot use WebRTC (a headless or native client without it),
+   whose direct path did not open within `DIRECT_TIMEOUT_MS`, or whose
+   direct path failed, sends `{ relay: true }`, once a link. A side that
+   hears it moves to the relay too and says `{ relay: true }` back, unless
+   it said it already. The link is open on the relay once a side has said
+   it and heard it. Through the relay a `PeerMessage` travels as the
+   `text` of `qd:relay`. On `fast`, drop one rather than queue it
+   while your connection is backed up; the server drops one while the
+   receiver's is (`PEER_RELAY_FAST_BACKLOG` relay messages waiting). A
+   side whose direct path lost a data channel (it closed, rather than ICE
+   failing) waits `BYE_WAIT_MS` for the peer's bye before it says
+   `{ relay: true }`: a peer that closes its link closes its data
+   channels too, and a `{ relay: true }` it hears after that asks it for
+   a new link.
+4. Read link messages from both paths all along: the peer may move to the
+   relay before you hear it say so. A link that opens on no path within
+   `OPEN_TIMEOUT_MS` is over.
+5. Once open, ping on `fast` every `PING_MS` (`QUICK_PINGS` times
+   `QUICK_PING_MS` apart as the link opens, so the clocks sync at once),
+   and answer each ping with its pong at once. A side that hears nothing
+   from its peer for `WATCHDOG_MS` closes the link.
+6. Close a link with `{ bye: true }`, a link the server refused a signal of
+   too: the server keeps a place for each peer a socket signalled until a
+   bye ends the pair. A bye always ends it: the socket rate limiter never
+   counts one, and past `PEER_SIGNAL_RATE` the server ends the pair
+   without telling the peer. On the direct path, send the bye before you
+   close the data channels and the connection
+   (`@fitzzero/quickdraw-core` closes them once the server answered the
+   bye), so the peer hears the bye first. The server sends one as well,
+   from a peer that left the room, was taken out of it or disconnected, to
+   each socket that peer signalled there and each that signalled it (of
+   those it never answered, the latest twice `MAX_PEER_LINKS`). A
+   socket that left the room itself (`qd:presence` with `users: []`)
+   closes the room's links without one.
+7. A signal from a socket you have no link with asks for a link: answer it
+   within `PENDING_MS`, or send `{ bye: true }`. On the answering side, a
+   second offer, a second `{ relay: true }`, or an offer after
+   `{ relay: true }`, from the socket you have a link with opens a new
+   link: you missed the bye of the last one.
+
+The relay carries a message only between two sockets that each signalled
+the other in that room, which every open link has. Keep relay messages
+within `limits.peers` of the hello: the server drops a message over them
+silently, a `rel` one too. A client without WebRTC works on the relay
+alone; the server never needs one.
+
+The timings of `@fitzzero/quickdraw-core`'s links, which a link with one
+must keep to:
+
+| Constant            | Value    | Meaning                                                                                    |
+| ------------------- | -------- | ------------------------------------------------------------------------------------------ |
+| `DIRECT_TIMEOUT_MS` | 5000 ms  | A direct path not open within this long gives way to the relay.                            |
+| `BYE_WAIT_MS`       | 2000 ms  | A direct path whose channel closed waits this long for the peer's bye before it gives way. |
+| `OPEN_TIMEOUT_MS`   | 15000 ms | A link that opens on no path within this long closes as `timeout`.                         |
+| `QUICK_PINGS`       | 6 pings  | Clock pings a link sends `QUICK_PING_MS` apart as it opens, so its clock syncs at once.    |
+| `QUICK_PING_MS`     | 80 ms    | The time between the clock pings a link sends as it opens.                                 |
+| `PING_MS`           | 500 ms   | The time between the clock pings of an open link, after its first ones.                    |
+| `WATCHDOG_MS`       | 8000 ms  | A link that hears nothing from its peer for this long closes as `lost`.                    |
+| `PENDING_MS`        | 15000 ms | How long signals from a peer without a link wait for the app to answer.                    |
+
+## Host mode
+
+A contract may declare a channel or a stream `serve: "host"`: the host of
+an app room serves it over peer links, and the server never handles it. A
+method of the app makes a socket the room's host. The server sends
+`qd:host` (`HostFrame`, `[room, host]`) to the room's sockets each time
+its host changes, and to a socket that joins a room with a host, before or
+after its `qd:presence` (behind a cluster adapter the presence list may
+come later). `host` is `null` once the room has none: its host left
+the room, was taken out of it or disconnected, or a method cleared it. The
+server never picks the next host; the app does. A host-served channel
+declares `requires.room`, and a host-served stream a scope and
+`access.room`: the room whose host serves a message or a feed.
+
+A peer, any other socket of the room:
+
+1. Opens a link to the room's host, as the offerer, when a host-served
+   channel's message or feed first needs one. It opens one again when
+   `qd:host` names another host, and after a link closed while a feed
+   still needs one. After a link to the host closed, the next to that host
+   waits `HOST_LINK_RETRY_MS`, doubling up to `HOST_LINK_MAX_RETRY_MS`
+   while links keep closing unopened: a peer that sends input every frame
+   must not signal the host every frame. A host that `qd:host` names
+   again is linked at once.
+2. Sends a host-served channel's message as `HostChannelMessage` on
+   `fast`, and drops it while no link to the host is open. `fast` is
+   never retransmitted, and a backed-up connection drops it: send input as
+   a stream of updates, not as one-off commands.
+3. Subscribes to a host-served stream's feed with `HostSubscribe` on
+   `rel` each time a link to the room's host opens, and leaves it with
+   `HostUnsubscribe`. The seed arrives as `HostSeed` chunks: join their
+   items (keep the latest `MAX_SEED_ITEMS` at most, as a host may send
+   more) until the one whose `last` is true, then replace what the feed
+   held. Each `HostItem` appends. A `HostRefusal` refuses the
+   subscribe, with its error: the host sends nothing for that feed.
+4. Never sends `qd:ch` or `qd:stream:sub` for a host-served member: the
+   server drops the first and refuses the second with `VALIDATION`.
+
+The host:
+
+1. Answers the links of the room's peers. It never offers one. It ignores
+   a message whose service, channel or stream name, or scope, is longer
+   than `MAX_SCOPE_LENGTH` characters, so an answer that names them back
+   always fits a message.
+2. Checks each `HostChannelMessage` as the server checks `qd:ch`: the
+   channel is host-served, the payload passes the channel's schema, its
+   `requires.room` is the host's room, and the message is within the
+   peer's bucket for the channel (`ratePerSecond`, default
+   `CHANNEL_DEFAULT_RATE`; `burst`, default twice the rate). It drops a
+   message that fails, without a word, and closes the link of a peer whose
+   drops within `CHANNEL_ABUSE_WINDOW_MS` pass `CHANNEL_ABUSE_MULTIPLIER`
+   times the rate.
+3. Answers `HostSubscribe` with the feed's seed (`HostSeed`, in chunks
+   that each fit `limits.peers.maxMessageBytes`), whole or not at all, or
+   with `HostRefusal`: `NOT_FOUND` for a service or a stream it does not
+   serve, `FORBIDDEN` for a scope whose room is not the host's room,
+   `RATE_LIMITED` past `MAX_HOST_FEEDS` subscribes at once from one
+   peer and then `HOST_SUBSCRIBE_RATE` a second (the link of a peer whose
+   refusals pass `CHANNEL_ABUSE_MULTIPLIER` times that rate within
+   `CHANNEL_ABUSE_WINDOW_MS` closes), `INTERNAL` for a seed with an
+   item too large for a chunk of its own, and another code when it cannot
+   serve the feed (`CONFLICT` past `MAX_HOST_FEEDS` feeds of one peer).
+4. Sends each item pushed to a feed to the feed's subscribers as
+   `HostItem`: on `fast` for a volatile stream, else on `rel`.
+5. Keeps what it sends on `rel` in order, and sends again what the link
+   drops (over the relay, once the relay's budget is spent), so a seed is
+   never cut short. A peer that cannot keep up loses its link, and links
+   and subscribes again.
+6. May serve several services in one room over the same links: each
+   message goes to the service it names.
+
+The server forwards a link's signals and relays its messages, but it never
+reads what a host and its peers send each other. A host trusts a peer's
+messages no more than the server would, and a service trusts nothing a
+host reports without checking it.
+
+The timings and limits of `@fitzzero/quickdraw-core`'s peers and hosts,
+which a peer or a host with one keeps to:
+
+| Constant                 | Value                           | Meaning                                                                                                                  |
+| ------------------------ | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `HOST_LINK_RETRY_MS`     | 1000 ms                         | After a link to a room's host closed, the next to that host waits this long, doubling while links keep closing unopened. |
+| `HOST_LINK_MAX_RETRY_MS` | 15000 ms                        | The longest wait before the next link to a room's host.                                                                  |
+| `MAX_SEED_ITEMS`         | 10000 items                     | The items a peer keeps of a seed in chunks, the latest: as many as a feed shows.                                         |
+| `MAX_HOST_FEEDS`         | 500 feeds per peer              | The feeds one peer may hold of a host, and the subscribes it may send it at once.                                        |
+| `HOST_SUBSCRIBE_RATE`    | 50 subscribes a second per peer | The subscribes a second a peer may send a host after a burst of `MAX_HOST_FEEDS`.                                        |
 
 ## Frame types
 
@@ -726,6 +943,258 @@ room are dropped until a joining call lets it back. Exactly one of
 | `joined?` | `string`   | A user who joined the room.                                             |
 | `left?`   | `string`   | A user who left the room: their last socket in it left or disconnected. |
 
+### Peer links
+
+#### `PeerLabel`
+
+A peer link's two channels: `rel`, ordered and reliable, and `fast`,
+unordered and never retransmitted (dropped where a connection is backed up).
+
+`"rel" | "fast"`.
+
+#### `PeerDescription`
+
+A WebRTC session description, as `RTCSessionDescription.toJSON()` writes it.
+
+| Field  | Type                  |
+| ------ | --------------------- |
+| `type` | `"offer" \| "answer"` |
+| `sdp`  | `string`              |
+
+#### `PeerCandidate`
+
+A WebRTC ICE candidate, as `RTCIceCandidate.toJSON()` writes it.
+
+| Field               | Type             |
+| ------------------- | ---------------- |
+| `candidate`         | `string`         |
+| `sdpMid?`           | `string \| null` |
+| `sdpMLineIndex?`    | `number \| null` |
+| `usernameFragment?` | `string \| null` |
+
+#### `PeerSignal`
+
+What one `qd:peer` frame says about a link, in exactly one member: the
+offerer's `offer` or the answerer's `answer` (`sdp`), one ICE candidate
+(`ice`), that the sender sends the link's messages through the relay
+from now on (`relay`), or that the link is over (`bye`): the sender
+closed it or, when the server sends it, left the room or disconnected.
+
+| Field    | Type              |
+| -------- | ----------------- |
+| `sdp?`   | `PeerDescription` |
+| `ice?`   | `PeerCandidate`   |
+| `relay?` | `true`            |
+| `bye?`   | `true`            |
+
+#### `PeerSignalFrame`
+
+`qd:peer`, from a client: a signal for socket `to` (another socket's id)
+about the link the two have in app room `room`, which both must be in.
+Acknowledged when asked: `Ok`, or `UNAUTHENTICATED`, `FORBIDDEN` (the
+sender is not in the room), `NOT_FOUND` (no signed-in socket `to` is in
+the room; behind a cluster adapter a socket on another node is not
+checked before the signal goes), `CONFLICT` (the sender already signals
+`limits.peers.maxLinks` peers), `RATE_LIMITED` or `VALIDATION`.
+
+| Field  | Type         |
+| ------ | ------------ |
+| `room` | `string`     |
+| `to`   | `string`     |
+| `sig`  | `PeerSignal` |
+
+#### `PeerForwardFrame`
+
+`qd:peer`, from the server: a signal from socket `from` about the link in
+app room `room`. `userId` is the sender's user, as the server knows it.
+
+| Field    | Type         |
+| -------- | ------------ |
+| `room`   | `string`     |
+| `from`   | `string`     |
+| `userId` | `string`     |
+| `sig`    | `PeerSignal` |
+
+#### `RelayFrame`
+
+`qd:relay`, from a client, never acknowledged: a link message for socket
+`to` in app room `room`. `text` is a `PeerMessage` as JSON, at most
+`limits.peers.maxMessageBytes`. The two sockets must have signalled each
+other in that room; a message over the rate or the byte budget of
+`limits.peers`, or to a socket that left the room, is dropped, and so is
+one on `fast` while the receiving socket's connection is backed up
+(`PEER_RELAY_FAST_BACKLOG`). A later revision may append elements after
+`text`.
+
+A JSON array:
+
+| Position | Name    | Type        |
+| -------- | ------- | ----------- |
+| 0        | `room`  | `string`    |
+| 1        | `to`    | `string`    |
+| 2        | `label` | `PeerLabel` |
+| 3        | `text`  | `string`    |
+
+#### `RelayForwardFrame`
+
+`qd:relay`, from the server: a link message from socket `from` in app room `room`.
+
+A JSON array:
+
+| Position | Name    | Type        |
+| -------- | ------- | ----------- |
+| 0        | `room`  | `string`    |
+| 1        | `from`  | `string`    |
+| 2        | `label` | `PeerLabel` |
+| 3        | `text`  | `string`    |
+
+#### `PeerMessage`
+
+A peer link message: the JSON text of one data channel message or of a
+relayed `text`, alike on both paths. A receiver ignores a message whose
+first element it does not know, and elements after the ones it reads.
+
+One of `PeerData`, `PeerPing`, `PeerPong`, `HostMessage`.
+
+#### `PeerData`
+
+A link message carrying the app's `data`, any JSON value.
+
+A JSON array:
+
+| Position | Name   | Type      |
+| -------- | ------ | --------- |
+| 0        | `kind` | `0`       |
+| 1        | `data` | `unknown` |
+
+#### `PeerPing`
+
+A clock ping: `t` is the sender's clock in milliseconds. Sent on `fast`.
+
+A JSON array:
+
+| Position | Name   | Type     |
+| -------- | ------ | -------- |
+| 0        | `kind` | `1`      |
+| 1        | `t`    | `number` |
+
+#### `PeerPong`
+
+The pong of a ping: `t` as the ping carried it, `u` the answerer's clock as it answered. Sent on `fast`.
+
+A JSON array:
+
+| Position | Name   | Type     |
+| -------- | ------ | -------- |
+| 0        | `kind` | `2`      |
+| 1        | `t`    | `number` |
+| 2        | `u`    | `number` |
+
+#### `HostMessage`
+
+A host mode message (section 12.5): what a peer and its room's host send
+each other over their link, kept apart from the app's own messages.
+
+One of `HostChannelMessage`, `HostSubscribe`, `HostUnsubscribe`, `HostSeed`, `HostItem`, `HostRefusal`.
+
+#### `HostChannelMessage`
+
+A message on a host-served channel, from a peer to the host of the channel's room. Sent on `fast`.
+
+A JSON array:
+
+| Position | Name      | Type      |
+| -------- | --------- | --------- |
+| 0        | `kind`    | `3`       |
+| 1        | `service` | `string`  |
+| 2        | `channel` | `string`  |
+| 3        | `payload` | `unknown` |
+
+#### `HostSubscribe`
+
+Subscribes to a feed of a host-served stream, from a peer to the host of its room. Sent on `rel`.
+
+A JSON array:
+
+| Position | Name      | Type     |
+| -------- | --------- | -------- |
+| 0        | `kind`    | `4`      |
+| 1        | `service` | `string` |
+| 2        | `stream`  | `string` |
+| 3        | `scope`   | `string` |
+
+#### `HostUnsubscribe`
+
+Leaves a feed of a host-served stream. Sent on `rel`.
+
+A JSON array:
+
+| Position | Name      | Type     |
+| -------- | --------- | -------- |
+| 0        | `kind`    | `5`      |
+| 1        | `service` | `string` |
+| 2        | `stream`  | `string` |
+| 3        | `scope`   | `string` |
+
+#### `HostSeed`
+
+The seed of a feed a peer subscribed to, from the host: the latest items
+it kept (or computed), oldest first, in chunks that each fit the message
+limit; `last` is true on the last chunk. Sent on `rel`.
+
+A JSON array:
+
+| Position | Name      | Type        |
+| -------- | --------- | ----------- |
+| 0        | `kind`    | `6`         |
+| 1        | `service` | `string`    |
+| 2        | `stream`  | `string`    |
+| 3        | `scope`   | `string`    |
+| 4        | `items`   | `unknown[]` |
+| 5        | `last`    | `boolean`   |
+
+#### `HostItem`
+
+An item pushed to a feed, from the host: on `fast` for a volatile stream, else on `rel`.
+
+A JSON array:
+
+| Position | Name      | Type      |
+| -------- | --------- | --------- |
+| 0        | `kind`    | `7`       |
+| 1        | `service` | `string`  |
+| 2        | `stream`  | `string`  |
+| 3        | `scope`   | `string`  |
+| 4        | `item`    | `unknown` |
+
+#### `HostRefusal`
+
+A subscribe the host refused (`NOT_FOUND`, `FORBIDDEN`, ...), from the host. Sent on `rel`.
+
+A JSON array:
+
+| Position | Name      | Type        |
+| -------- | --------- | ----------- |
+| 0        | `kind`    | `8`         |
+| 1        | `service` | `string`    |
+| 2        | `stream`  | `string`    |
+| 3        | `scope`   | `string`    |
+| 4        | `error`   | `WireError` |
+
+#### `HostFrame`
+
+`qd:host`, from the server: the host of app room `room` (the socket that
+serves its host-served channels and streams), or `null` when it has none.
+Sent to the room's sockets on every change, and to a socket that joins a
+room with a host.
+
+A JSON array:
+
+| Position | Name   | Type             |
+| -------- | ------ | ---------------- |
+| 0        | `room` | `string`         |
+| 1        | `host` | `string \| null` |
+
 ### Connection-level frames
 
 #### `RevokeReason`
@@ -852,19 +1321,33 @@ so read them from the hello. The limits below are fixed, and no option
 changes them. Every 5.0 server holds them, except the per-socket caps of rows,
 scopes and topics (`MAX_ENTITY_IDS_PER_SOCKET`, `MAX_SCOPES_PER_SOCKET`,
 `MAX_TOPICS_PER_SOCKET`): a server that holds them announces them in
-`qd:hello`, and servers up to 5.1.0 hold none of them.
+`qd:hello`, and servers up to 5.1.0 hold none of them. The peer link limits
+(`MAX_PEER_LINKS` to `PEER_RELAY_BYTES_BURST`) hold on a server that serves
+peer links, which announces them in `limits.peers`.
 
-| Constant                    | Value                        | Meaning                                                                                                   |
-| --------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `MAX_SUBSCRIBE_IDS`         | 500 ids                      | The most ids one `qd:sub` may name (RFC 0003 section 6), as `qd:hello` announces it.                      |
-| `MAX_ITEM_IDS`              | 200 ids                      | The most ids one `qd:col:items` may name.                                                                 |
-| `MAX_SCOPE_LENGTH`          | 256 characters               | The longest collection scope value or change topic a frame may name, in characters.                       |
-| `MAX_ENTITY_IDS_PER_SOCKET` | 10000 ids                    | The most rows one socket may hold entity subscriptions to at once, as `qd:hello` announces it.            |
-| `MAX_SCOPES_PER_SOCKET`     | 1000 scopes                  | The most collection scopes one socket may hold at once, as `qd:hello` announces it.                       |
-| `MAX_TOPICS_PER_SOCKET`     | 1000 topics                  | The most change topics one socket may watch at once, as `qd:hello` announces it.                          |
-| `MAX_STREAMS_PER_SOCKET`    | 500 feeds                    | The most stream feeds one socket may subscribe to at once.                                                |
-| `CHANNEL_ABUSE_WINDOW_MS`   | 10000 ms                     | How long the abuse guard counts a socket's messages dropped for one channel's rate before it starts over. |
-| `CHANNEL_ABUSE_MULTIPLIER`  | 100 times the channel's rate | A socket is disconnected once its drops within the window exceed this many times the channel's rate.      |
+| Constant                      | Value                                     | Meaning                                                                                                   |
+| ----------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `MAX_SUBSCRIBE_IDS`           | 500 ids                                   | The most ids one `qd:sub` may name (RFC 0003 section 6), as `qd:hello` announces it.                      |
+| `MAX_ITEM_IDS`                | 200 ids                                   | The most ids one `qd:col:items` may name.                                                                 |
+| `MAX_SCOPE_LENGTH`            | 256 characters                            | The longest collection scope value or change topic a frame may name, in characters.                       |
+| `MAX_ENTITY_IDS_PER_SOCKET`   | 10000 ids                                 | The most rows one socket may hold entity subscriptions to at once, as `qd:hello` announces it.            |
+| `MAX_SCOPES_PER_SOCKET`       | 1000 scopes                               | The most collection scopes one socket may hold at once, as `qd:hello` announces it.                       |
+| `MAX_TOPICS_PER_SOCKET`       | 1000 topics                               | The most change topics one socket may watch at once, as `qd:hello` announces it.                          |
+| `MAX_STREAMS_PER_SOCKET`      | 500 feeds                                 | The most stream feeds one socket may subscribe to at once.                                                |
+| `CHANNEL_ABUSE_WINDOW_MS`     | 10000 ms                                  | How long the abuse guard counts a socket's messages dropped for one channel's rate before it starts over. |
+| `CHANNEL_ABUSE_MULTIPLIER`    | 100 times the channel's rate              | A socket is disconnected once its drops within the window exceed this many times the channel's rate.      |
+| `MAX_SOCKET_ID_LENGTH`        | 64 characters                             | The longest socket id a peer frame may name. Socket.IO's are 20 characters.                               |
+| `MAX_PEER_SIGNAL_LENGTH`      | 16384 characters                          | The longest session description a `qd:peer` signal carries, in characters.                                |
+| `MAX_PEER_CANDIDATE_LENGTH`   | 1024 characters                           | The longest string of a `qd:peer` candidate (`candidate`, `sdpMid`, `usernameFragment`), in characters.   |
+| `PEER_SIGNAL_RATE`            | 20 signals a second per socket            | Signals one socket may send per second (`qd:peer`); more are refused `RATE_LIMITED`.                      |
+| `PEER_SIGNAL_BURST`           | 40 signals                                | Signals one socket may send at once, after a pause.                                                       |
+| `MAX_PEER_LINKS`              | 64 peers per socket                       | The most peers one socket may signal at once (`qd:peer`), as `qd:hello` announces it.                     |
+| `MAX_PEER_MESSAGE_BYTES`      | 65536 bytes                               | The longest peer link message, in UTF-8 bytes, on the data channel and through the relay alike.           |
+| `PEER_RELAY_RATE`             | 120 messages a second per socket and peer | Relay messages one socket may send to one peer per second (`qd:relay`); more are dropped.                 |
+| `PEER_RELAY_BURST`            | 240 messages                              | Relay messages one socket may send to one peer at once, after a pause.                                    |
+| `PEER_RELAY_BYTES_PER_SECOND` | 1048576 bytes a second per socket         | Relay bytes one socket may send per second, to all its peers together; more are dropped.                  |
+| `PEER_RELAY_BYTES_BURST`      | 2097152 bytes                             | Relay bytes one socket may send at once, after a pause.                                                   |
+| `PEER_RELAY_FAST_BACKLOG`     | 64 relay messages waiting                 | Relay messages waiting for a socket's connection past which the relay drops a `fast` one to it.           |
 
 These are defaults. An app changes the socket rate limiter with
 `createServer({ rateLimit })` and a channel's rate with its contract's
@@ -894,5 +1377,15 @@ A socket whose `qd:ch` messages dropped for one channel's rate within
 is disconnected (Socket.IO DISCONNECT, `41`, then the WebSocket closes): that
 is sustained flooding, not a burst. As after any DISCONNECT the server
 sends, a client does not reconnect on its own.
+A `qd:peer` over `PEER_SIGNAL_RATE` is refused `RATE_LIMITED` with
+`retryAfterMs` (a `bye` over it still ends the pair on the server, and
+its peer is not told), and one to a new peer from a socket that signals
+`MAX_PEER_LINKS` already `CONFLICT`. A `qd:relay` message over the relay
+rate or bytes, longer than `MAX_PEER_MESSAGE_BYTES`, or to a peer that has
+not signalled the socket and been signalled by it in that room, is dropped
+silently. A socket whose signals refused `RATE_LIMITED`, or whose dropped
+relay messages, within `CHANNEL_ABUSE_WINDOW_MS` exceed
+`CHANNEL_ABUSE_MULTIPLIER` times the signal rate, or the relay rate, is
+disconnected as for channels.
 
-The socket rate limiter never counts `qd:ch`, `qd:cancel`, `qd:sub`, `qd:unsub`, `qd:col:sub`, `qd:col:unsub`, `qd:col:items`, `qd:watch`, `qd:unwatch`, `qd:stream:sub`, `qd:stream:unsub`.
+The socket rate limiter never counts `qd:ch`, `qd:cancel`, `qd:sub`, `qd:unsub`, `qd:col:sub`, `qd:col:unsub`, `qd:col:items`, `qd:watch`, `qd:unwatch`, `qd:stream:sub`, `qd:stream:unsub`, `qd:relay`, nor a `qd:peer` whose `sig` is `{ bye: true }`.

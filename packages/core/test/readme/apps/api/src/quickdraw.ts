@@ -11,5 +11,7 @@ export interface AppPrincipal extends Principal {
 export const qd = initQuickdraw<{
   db: typeof db;
   principal: AppPrincipal;
+  // what the MCP bridge's context hook gives an agent's calls, as ctx.mcp
+  mcp: { readonly scopes: readonly string[] };
   contracts: typeof contracts;
 }>();

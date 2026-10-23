@@ -17,6 +17,7 @@ import {
   admin as adminContract,
   defineContract,
   query,
+  type AdminData,
   type AdminFieldConfig,
   type AdminPage,
   type AdminServiceMeta,
@@ -26,7 +27,14 @@ import {
   type ParsedInputOf,
 } from "../../../index";
 import { createMockClient } from "../../../testing/client";
-import { admin, custom, inherit, initQuickdraw, type Principal } from "../../index";
+import {
+  admin,
+  custom,
+  inherit,
+  initQuickdraw,
+  type ContextAccess,
+  type Principal,
+} from "../../index";
 
 const taskRow = z.object({
   id: z.string(),
@@ -240,6 +248,69 @@ describe("admin.handlers", () => {
     });
   });
 
+  test("prepare hears the write it runs before, narrowed by its method, with db as annotated", () => {
+    qd.defineService(task, {
+      model: "task",
+      access: inherit({ from: project, via: "projectId" }),
+      methods: {
+        ...admin.handlers(task, {
+          prepare: async (call, ctx, db: Db) => {
+            expectTypeOf(call.method).toEqualTypeOf<
+              "adminCreate" | "adminUpdate" | "adminDelete"
+            >();
+            expectTypeOf(ctx.principal).toEqualTypeOf<Principal>();
+            // A kit's callbacks and custom forms ask about other rows too.
+            expectTypeOf(ctx.access).toEqualTypeOf<ContextAccess>();
+            if (call.method === "adminCreate") {
+              expectTypeOf(call.data).toEqualTypeOf<AdminData<TaskRow>>();
+              expectTypeOf(call.data.title).toEqualTypeOf<string | undefined>();
+              // @ts-expect-error a create has no row before it
+              expectTypeOf(call.before);
+              return { ordinal: 1 };
+            }
+            if (call.method === "adminUpdate") {
+              expectTypeOf(call.before).toEqualTypeOf<TaskRow>();
+              const row = await db.task.findUnique({ where: { id: call.id } });
+              return { ordinal: row.ordinal + 1 };
+            }
+            expectTypeOf(call).toEqualTypeOf<{
+              readonly method: "adminDelete";
+              readonly id: string;
+              readonly before: TaskRow;
+            }>();
+            // @ts-expect-error a delete carries no data
+            expectTypeOf(call.data);
+            return undefined;
+          },
+        }),
+        get: {
+          access: { entry: "Read" },
+          handler: ({ input, db }) => db.task.findUnique({ where: { id: input.id } }),
+        },
+      },
+    });
+    qd.defineService(task, {
+      model: "task",
+      access: inherit({ from: project, via: "projectId" }),
+      // @ts-expect-error -- prepare's db is not the app's client
+      methods: {
+        ...admin.handlers(task, {
+          prepare: (_call, _ctx, db: { readonly other: true }) => ({ other: db.other }),
+        }),
+        get: { access: { entry: "Read" }, handler: () => Promise.resolve(null as never) },
+      },
+    });
+    admin.handlers(task, {
+      prepare: (_call, _ctx, db) => {
+        expectTypeOf(db).toEqualTypeOf<unknown>();
+      },
+    });
+    admin.handlers(task, {
+      // @ts-expect-error prepare returns column values, or nothing
+      prepare: () => "columns",
+    });
+  });
+
   test("access replaces a method's form, typed by that method's input", () => {
     const made = admin.handlers(task, {
       access: {
@@ -375,6 +446,20 @@ describe("the client", () => {
     screen.adminUpdate?.useMutation().mutate({ id: "n1", data: { body: "x" } });
     // @ts-expect-error a key without the admin kit
     adminOf(both, "plain");
+  });
+
+  test("an admin screen writes the row a write returned into the cache with setData", () => {
+    const screen = adminOf(client, "taskService");
+    const row: AdminRow = { id: "t1", title: "Renamed" };
+    expectTypeOf(screen.adminGet?.setData({ id: "t1" }, row)).toEqualTypeOf<AdminRow | undefined>();
+    screen.adminGet?.setData({ id: "t1" }, (cached) =>
+      cached === undefined ? undefined : { ...cached, title: "Renamed" },
+    );
+    screen.adminList.setData(undefined, (page) => page);
+    // @ts-expect-error a row has an id
+    screen.adminGet?.setData({ id: "t1" }, { title: "Renamed" });
+    // @ts-expect-error adminMeta caches the service's metadata, not a row
+    screen.adminMeta.setData(undefined, row);
   });
 
   test("a mock client has the same admin member, with stubs", () => {

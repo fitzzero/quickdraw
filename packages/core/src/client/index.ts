@@ -10,60 +10,19 @@
 // helpers from `@fitzzero/quickdraw-core/utils`, which this entry re-exports
 // for client code.
 //
-// The layers: `createQuickdrawConnection`, `call`, the invalidation
-// coordinator and the overlay store are plain TypeScript, with no React and
-// no DOM, for React Native and Node clients; the provider and the typed
-// client's hooks sit on top.
+// The layers, none of which needs the DOM:
+// - `./client/core`: the connection, calls, the auth helpers, peer links and
+//   host mode, with ./utils; no React and no TanStack, for Node scripts,
+//   CLIs and workers, which import that entry instead of this one;
+// - the invalidation coordinator, the overlay store, the cache session and
+//   live data, still without React but on a TanStack `QueryClient`, for
+//   React Native and Node clients that keep one;
+// - the provider and the typed client's hooks, on top.
 
-// Isomorphic helpers, the HTTP server caller and the cache keys (also on ./utils).
-export * from "../utils";
-
-// The auth routes kit's browser side (sign in, sign out) and bearer-token
-// storage, which reads localStorage where there is one.
-export {
-  clearAuthToken,
-  getAuthToken,
-  setAuthToken,
-  authProviders,
-  signInUrl,
-  signOut,
-  signOutEverywhere,
-  type AuthProviderInfo,
-  type AuthRoutesTarget,
-  type SignInUrlOptions,
-} from "./auth";
-
-// The connection and calls, without React.
-export {
-  createQuickdrawConnection,
-  type ConnectionAuth,
-  type ConnectionRefusal,
-  type ConnectionState,
-  type ConnectionStatus,
-  type QuickdrawConnection,
-  type QuickdrawConnectionOptions,
-  type QuickdrawSocket,
-  type SocketClientOptions,
-} from "./connection";
-export { DEFAULT_BACKOFF_MS, type BackoffKind, type BackoffWindows } from "./backoff";
-export {
-  call,
-  callData,
-  isNotModified,
-  isUnknownOutcome,
-  shouldRetry,
-  type CallRequest,
-  type CallResult,
-} from "./call";
-export { reloadOncePerSession } from "./reload";
-export { newId } from "./newId";
-export type { JoinWait, TopicWatch } from "./watch";
-export {
-  DEFAULT_SUBSCRIPTION_LANE,
-  type LaneCallback,
-  type SubscriptionEvent,
-  type SubscriptionLane,
-} from "./lane";
+// The client without React or TanStack (also on ./client/core), the same
+// functions: the connection, calls, auth helpers, peer links, host mode and
+// everything on ./utils.
+export * from "./core";
 
 // Invalidation and optimistic overlays, without React.
 export {

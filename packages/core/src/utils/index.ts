@@ -45,6 +45,7 @@ export {
 } from "../client/keys";
 export {
   createServerCaller,
+  type QueryClientLike,
   type ServerCallOptions,
   type ServerCaller,
   type ServerCallerHeaders,

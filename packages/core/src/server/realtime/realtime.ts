@@ -10,11 +10,14 @@ import { onDisconnect } from "../emit/answer";
 import type { Hub } from "../emit/hub";
 import type { QuickdrawServerSocket, SocketContext } from "../transports/types";
 import { channelMessages } from "./channels";
-import { createPresence, createPresenceState } from "./presence";
+import { createPresence, createPresenceState, socketsInRoom } from "./presence";
 import { createRooms, unjoinable, type DetachedRun, type RoomLeaveHook } from "./rooms";
 import { createStreams, type Streams } from "./streams";
 import type {
   ContextRooms,
+  HostLeave,
+  HostLeaveHandler,
+  HostLeaveHook,
   Presence,
   RoomLeave,
   RoomLeaveHandler,
@@ -24,6 +27,9 @@ import type {
 
 export type {
   DetachedRun,
+  HostLeave,
+  HostLeaveHandler,
+  HostLeaveHook,
   Presence,
   RoomLeave,
   RoomLeaveHandler,
@@ -52,6 +58,8 @@ export interface Realtime {
    * and `createServer`'s.
    */
   onRoomLeave(hooks: readonly RoomLeaveHook[], run: DetachedRun): void;
+  /** Runs `hooks` (every service's `onHostLeave` and the server's) for every host that leaves its room. */
+  onHostLeave(hooks: readonly HostLeaveHook[], run: DetachedRun): void;
   /**
    * The `ctx.rooms` of a call: its socket's for a call over a socket (v5 or
    * the 4.x legacy shim), else one that joins nothing. For a method that shares its runs (`share`),
@@ -73,13 +81,38 @@ export interface Realtime {
   listen(): void;
 }
 
-/** Creates the realtime half of a dispatcher's live data, on its hub. */
-export function createRealtime(hub: Hub): Realtime {
+/** What the realtime half hears from the peer links of its dispatcher. */
+export interface RealtimePeers {
+  /** A socket left an app room and is still connected: its links there end. */
+  left(socket: QuickdrawServerSocket): void;
+  /** True once the server serves peer links, which a room's host needs. */
+  served(): boolean;
+}
+
+/**
+ * Creates the realtime half of a dispatcher's live data, on its hub. The
+ * peer links hear each socket that left an app room and is still
+ * connected, after the streams open to the room were checked again.
+ */
+export function createRealtime(hub: Hub, peers?: RealtimePeers): Realtime {
   const state = createPresenceState(hub);
   const presence = createPresence(state);
-  const streams = createStreams(hub);
-  const rooms = createRooms(state, streams.leftRooms);
-  const channels = channelMessages({ hub, rooms, presence, warned: new WeakSet() });
+  const streams = createStreams(hub, (room) => socketsInRoom(state, room));
+  const rooms = createRooms(
+    state,
+    (socket) => {
+      streams.leftRooms(socket);
+      peers?.left(socket);
+    },
+    () => peers?.served() ?? false,
+  );
+  const channels = channelMessages({
+    hub,
+    rooms,
+    presence,
+    warned: new WeakSet(),
+    hostWarned: new Set(),
+  });
   return Object.freeze({
     extension(socket: QuickdrawServerSocket, context: SocketContext): void {
       channels(socket);
@@ -97,6 +130,9 @@ export function createRealtime(hub: Hub): Realtime {
     rooms: rooms.server,
     onRoomLeave: (hooks: readonly RoomLeaveHook[], run: DetachedRun) => {
       rooms.onLeave(hooks, run);
+    },
+    onHostLeave: (hooks: readonly HostLeaveHook[], run: DetachedRun) => {
+      rooms.hosts.onLeave(hooks, run);
     },
     roomsFor(transport: string, connectionId: string | undefined, share?: string): ContextRooms {
       const socket =

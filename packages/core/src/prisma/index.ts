@@ -4,6 +4,7 @@
 // storage adapter the tracked client carries.
 
 export { trackPrisma, type PrismaClientLike, type TrackPrismaOptions } from "./trackPrisma";
+export type { Tracked, TrackedTransaction } from "./tracked";
 export { findNestedWrites, type NestedWrite } from "./nested";
 export {
   storageOf,

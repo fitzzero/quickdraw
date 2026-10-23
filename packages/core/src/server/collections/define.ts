@@ -4,8 +4,10 @@
 // The service adds what a contract cannot carry, because access policies live
 // on the server: the contract whose rows the scope values are ids of
 // (`anchor`), or `scopeAccess: "self"` for a scope whose value is the
-// subscriber's own user id; and the `bulkThreshold` past which one flush's
-// changes to a scope go out as a single `reset`. Every collection of the
+// subscriber's own user id; a service-wide grant every subscriber needs
+// besides (`requires: { service: L }`, as a method's `{ service: L }` form);
+// and the `bulkThreshold` past which one flush's changes to a scope go out
+// as a single `reset`. Every collection of the
 // contract needs one or the other, so a scope nobody could authorize fails
 // when the service is defined rather than when a client subscribes. A
 // `"self"` scope is stripped at `Read` and may not declare a higher
@@ -22,7 +24,7 @@
 // 4.1 `src/server/collections.ts:36-72`), so the framework could not know
 // which writes move a row and read the whole row before every update.
 
-import type { AccessLevel } from "../../contract/access";
+import { isAccessLevel, type AccessLevel } from "../../contract/access";
 import {
   DEFAULT_COLLECTION_LIMIT,
   DEFAULT_COLLECTION_MAX_LIMIT,
@@ -132,6 +134,12 @@ export interface ServiceCollection {
   readonly access: AccessLevel;
   /** The contract of the rows scope values are ids of; `undefined` for a `"self"` scope. */
   readonly anchor: AnyContract | undefined;
+  /**
+   * The service-wide grant on the collection's service every subscriber needs
+   * besides the anchor or self check (`requires: { service: L }`);
+   * `undefined` for none.
+   */
+  readonly requires: { readonly service: AccessLevel } | undefined;
   /** More changed rows than this for one scope in one flush go out as one `reset`. */
   readonly bulkThreshold: number;
   /**
@@ -141,7 +149,12 @@ export interface ServiceCollection {
   readonly index: readonly string[] | undefined;
 }
 
-const OPTION_KEYS: ReadonlySet<string> = new Set(["anchor", "scopeAccess", "bulkThreshold"]);
+const OPTION_KEYS: ReadonlySet<string> = new Set([
+  "anchor",
+  "scopeAccess",
+  "requires",
+  "bulkThreshold",
+]);
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -158,7 +171,27 @@ function isContract(value: unknown): value is AnyContract {
 
 interface CheckedOption {
   readonly anchor: AnyContract | undefined;
+  readonly requires: ServiceCollection["requires"];
   readonly bulkThreshold: number;
+}
+
+/** `requires`, checked: `{ service: L }` with an access level, or nothing. */
+function checkRequires(
+  owner: string,
+  requires: unknown,
+  fail: Fail,
+): ServiceCollection["requires"] {
+  if (requires === undefined) {
+    return undefined;
+  }
+  const valid =
+    isRecord(requires) && Object.keys(requires).length === 1 && isAccessLevel(requires.service);
+  if (!valid) {
+    fail(
+      `${owner}: requires must be { service: level }, the service-wide grant every subscriber needs, as { service: "Read" }`,
+    );
+  }
+  return Object.freeze({ service: requires.service as AccessLevel });
 }
 
 /** One entry of the service's `collections` option, checked. */
@@ -169,10 +202,10 @@ function checkOption(owner: string, option: unknown, fail: Fail): CheckedOption 
   const unknownKey = Object.keys(option).find((key) => !OPTION_KEYS.has(key));
   if (unknownKey !== undefined) {
     fail(
-      `${owner} has an unknown option "${unknownKey}"; the options are anchor, scopeAccess and bulkThreshold`,
+      `${owner} has an unknown option "${unknownKey}"; the options are anchor, scopeAccess, requires and bulkThreshold`,
     );
   }
-  const { anchor, scopeAccess, bulkThreshold = DEFAULT_BULK_THRESHOLD } = option;
+  const { anchor, scopeAccess, requires, bulkThreshold = DEFAULT_BULK_THRESHOLD } = option;
   if ((anchor === undefined) === (scopeAccess === undefined)) {
     fail(
       `${owner} needs exactly one of anchor (the contract whose rows its scope values are ids of) and scopeAccess: "self"`,
@@ -193,7 +226,11 @@ function checkOption(owner: string, option: unknown, fail: Fail): CheckedOption 
   ) {
     fail(`${owner}: bulkThreshold must be a positive whole number`);
   }
-  return { anchor: anchor as AnyContract | undefined, bulkThreshold };
+  return {
+    anchor: anchor as AnyContract | undefined,
+    requires: checkRequires(owner, requires, fail),
+    bulkThreshold,
+  };
 }
 
 /**
@@ -384,7 +421,7 @@ function compileOne(
       `collection "${name}" needs its scope's access: collections: { ${name}: { anchor: contract } }, or { scopeAccess: "self" } for a scope that is the subscriber's user id`,
     );
   }
-  const { anchor, bulkThreshold } = checkOption(`collections.${name}`, option, fail);
+  const { anchor, requires, bulkThreshold } = checkOption(`collections.${name}`, option, fail);
   const item = projections.get(def.item);
   if (item === undefined) {
     fail(`collection "${name}": item "${def.item}" is not a projection of the contract`);
@@ -401,6 +438,7 @@ function compileOne(
     maxLimit: def.maxLimit ?? DEFAULT_COLLECTION_MAX_LIMIT,
     access,
     anchor,
+    requires,
     bulkThreshold,
     index: checkIndex(name, def, item, access, fail),
   });

@@ -9,13 +9,16 @@
 // is written through the names its declarations take there
 // (`schemaNames.ts`): same-named locals of different method modules are
 // merged when they are the same code, renamed when not, and an aliased
-// schema is written by its declared name.
+// schema is written by its declared name. Each file it creates imports what
+// it uses: the import cleanup every file the codemod rewrites gets
+// (`tidyImports`) runs on it too, and a builder is imported for a call of it
+// alone, never for a method of its name (Zod's `.nullable()`).
 
 import { join } from "node:path";
 import { Node, SyntaxKind, type SourceFile, type TypeNode } from "ts-morph";
 import { regionMarkers } from "../carveOuts";
 import type { RunContext } from "../context";
-import { rebasedSpecifier, relativeSpecifier } from "../imports";
+import { rebasedSpecifier, relativeSpecifier, tidyImports } from "../imports";
 import { repoPath } from "../layout";
 import { markerText } from "../markers";
 import { nameDeclarations, renderCode } from "../schemaNames";
@@ -89,6 +92,14 @@ function methodLine(method: MethodPlan): string {
   ].join("\n");
 }
 
+/**
+ * Whether `code` calls `name` itself (`name(...)`, `name<T>(...)`): not a
+ * method of that name (Zod's `.nullable()`), nor a name ending in it.
+ */
+function callsBuilder(code: string, name: string): boolean {
+  return new RegExp(`(?<![\\w$.])${name}[(<]`, "u").test(code);
+}
+
 function builders(plan: ServicePlan): string[] {
   const code = [
     plan.entity?.code ?? "",
@@ -96,7 +107,7 @@ function builders(plan: ServicePlan): string[] {
   ].join("\n");
   const used = ["defineContract"];
   for (const name of ["listOf", "nullable", "todoSchema"]) {
-    if (code.includes(`${name}(`) || code.includes(`${name}<`)) {
+    if (callsBuilder(code, name)) {
       used.push(name);
     }
   }
@@ -296,6 +307,18 @@ function createFile(ctx: RunContext, path: string, text: string): SourceFile | u
 }
 
 /**
+ * Leaves a created contract or helpers file importing what it uses, then
+ * formats it. Its imports are written for every schema it gets: the Zod
+ * import a moved helper needs goes with the helper to helpers.ts.
+ */
+function finish(file: SourceFile | undefined): void {
+  if (file !== undefined) {
+    tidyImports(file);
+    file.formatText({ indentSize: 2, convertTabsToSpaces: true });
+  }
+}
+
+/**
  * Two helpers of one name from different files cannot share helpers.ts: the
  * methods whose schemas need either keep their schema in the api package.
  */
@@ -396,7 +419,7 @@ function writeHelpers(ctx: RunContext, plans: readonly ServicePlan[]): Set<strin
       .join("\n\n"),
     "",
   ].join("\n");
-  createFile(ctx, join(ctx.layout.shared.src, "contracts", "helpers.ts"), text);
+  finish(createFile(ctx, join(ctx.layout.shared.src, "contracts", "helpers.ts"), text));
   return names;
 }
 
@@ -493,8 +516,7 @@ export function writeContracts(ctx: RunContext, plans: readonly ServicePlan[]): 
   }
   const helpers = writeHelpers(ctx, fresh);
   for (const plan of fresh) {
-    const file = createFile(ctx, plan.contractFile, contractText(ctx, plan, helpers));
-    file?.formatText({ indentSize: 2, convertTabsToSpaces: true });
+    finish(createFile(ctx, plan.contractFile, contractText(ctx, plan, helpers)));
     if (noneImplemented(plan)) {
       ctx.warnings.push(noneImplementedWarning(ctx, plan));
     }

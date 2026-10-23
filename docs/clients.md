@@ -25,11 +25,16 @@ what to do and what not to.
 
 ## 2. The React-free connection
 
-`createQuickdrawConnection({ url, auth })` from the same entry, with
-`call` and `callData` for calls and `liveDataOf(connection, queryClient)` for
-live rows and collections: the same handshake, backoff and reconnect as the
-hooks, without React. A React server component calls over HTTP instead,
-with `createServerCaller(contracts, { url, headers })` from
+`createQuickdrawConnection({ url, auth })` from
+`@fitzzero/quickdraw-core/client/core`, with `call` and `callData` for
+calls: the same handshake, backoff and reconnect as the hooks. That entry
+imports neither React nor TanStack Query, in its code or its types, so a
+Node script, a CLI or a worker installs only `socket.io-client`; it also
+holds peer links, host mode and the auth helpers, and `./client` re-exports
+all of it. Live rows and collections take a TanStack `QueryClient`:
+`liveDataOf(connection, queryClient)` from `./client`, still without React.
+A React server component calls over HTTP instead, with
+`createServerCaller(contracts, { url, headers })` from
 `@fitzzero/quickdraw-core/utils`. The README's "Server components and other
 runtimes" section shows both.
 
@@ -137,3 +142,33 @@ The server side of a game needs no handler to reach the room:
   send `playerLeft`. A socket that reconnects after `qd:rotate` is a new
   socket; the old one's disconnect is the player's last only when they had
   no other.
+
+Two players of a room can also link their clients
+([README: Peer links](../README.md#peer-links); the wire in
+[`protocol-v5.md`](protocol-v5.md), "Peer links"). On a server created with
+`peers: true`, `createPeerLink(connection, { room, to, offerer })` opens
+WebRTC data channels between the two clients, or uses the server's relay
+when those cannot form, with the same messages either way: `rel`, ordered
+and reliable, and `fast`, unordered and never resent, for input at a tick
+rate the server never handles. The server signals and relays only between
+two signed-in sockets of the room, and ends a player's links when they
+leave it, are taken out of it or disconnect. It never reads what a link
+carries: a game treats each message as untrusted input, and checks on the
+server whatever a client reports there. A link is the socket's, as a room
+is: open it again after every reconnect. A test or a bench plays a link
+over a bad network on its real path with `link.setLag({ ms, jitter, loss })`,
+which the server never sees. The GDScript client has the same links
+(`peer_link`, with `set_lag`), on the relay where Godot has no WebRTC.
+
+A room's host can serve a contract's channels and streams itself
+([README: Host mode](../README.md#host-mode); the wire in
+[`protocol-v5.md`](protocol-v5.md), "Host mode"). A channel or stream
+declared `serve: "host"` never reaches the server: a method makes a socket
+the room's host (`ctx.rooms.setHost(room)`), the server tells the room's
+sockets who it is (`qd:host`) and runs `onHostLeave` when it leaves, and
+the host's client serves the members with `defineHost(contract,
+{ channels, streams }).serve(connection, { room })`. A player's
+`useChannel` and `useStream` reach the room's host over a link with no
+change in the app; the GDScript client takes the room as one more argument
+of `send_channel` and `subscribe_stream`. The server never sees that
+traffic: what a host reports is one player's word.

@@ -280,6 +280,11 @@ export {
   type ServerEventName,
 } from "./contract/names";
 
+// The tracked client's type (RFC 0003 section 5.2), types only, so a shared
+// package types a helper that writes without importing Prisma or the server.
+// `trackPrisma`, which returns one, is on ./prisma.
+export type { Tracked, TrackedTransaction } from "./prisma/tracked";
+
 // Protocol v5 (RFC 0003 section 8), also browser-safe. The JSON-only Socket.IO
 // parser imports `socket.io-parser`, so it is the separate `./parser` export.
 export {
@@ -299,12 +304,15 @@ export {
   PROTOCOL_MISMATCH,
   PROTOCOL_VERSION,
   isAuthenticationRefused,
+  isAuthenticationUnavailable,
   isProtocolMismatch,
   isQdHandshake,
   type AuthenticationRefused,
+  type AuthenticationUnavailable,
   type HandshakeAuth,
   type HelloFrame,
   type HelloLimits,
+  type HelloPeerLimits,
   type HelloSubscriptionLimits,
   type ProtocolMismatch,
   type QdHandshake,
@@ -344,7 +352,27 @@ export {
   type EventFrame,
   type Failure,
   type Ok,
+  type PeerCandidate,
+  type PeerData,
+  type PeerDescription,
+  type PeerForwardFrame,
+  type PeerLabel,
+  type PeerMessage,
+  type PeerPing,
+  type PeerPong,
+  type PeerSignal,
+  type PeerSignalFrame,
   type PresenceFrame,
+  type RelayForwardFrame,
+  type HostChannelMessage,
+  type HostFrame,
+  type HostItem,
+  type HostMessage,
+  type HostRefusal,
+  type HostSeed,
+  type HostSubscribe,
+  type HostUnsubscribe,
+  type RelayFrame,
   type Revision,
   type RevokedFrame,
   type RevokeReason,

@@ -8,7 +8,12 @@
 // screen needed a cast (finding F3.7). `adminOf(qd, key)` gives one shape
 // for every service instead: the same members, typed by field name.
 
-import type { QueryClient, UseMutationResult, UseQueryResult } from "@tanstack/react-query";
+import type {
+  QueryClient,
+  Updater,
+  UseMutationResult,
+  UseQueryResult,
+} from "@tanstack/react-query";
 import type { SortDirection } from "../contract/collections";
 import type { AdminMethodName, AdminServiceMeta } from "../contract/kits/admin";
 import type { AdminPage, AdminSubscribers } from "../contract/kits/adminSchemas";
@@ -46,6 +51,18 @@ export interface AdminQueryMember<Input, Output> {
   call(input: Input, options?: QueryCallOptions): Promise<Output>;
   key(input: Input): MethodQueryKey<Input>;
   prefetch(queryClient: QueryClient, input: Input): Promise<void>;
+  /**
+   * Writes the cached result for `input`, as the typed client's `setData`
+   * does: `updater` is the new result, or a function of the cached one
+   * (`undefined` when nothing is cached; returning `undefined` writes
+   * nothing), and it returns what the cache then holds. The admin kit's
+   * reads are not live, so this is how a screen shows the row a write
+   * returned: `admin.adminGet?.setData({ id: row.id }, row)`.
+   */
+  setData(
+    input: Input,
+    updater: Updater<Output | undefined, Output | undefined>,
+  ): Output | undefined;
 }
 
 /** A mutation member of an admin screen: the typed client's, typed by field name. */

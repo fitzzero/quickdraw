@@ -1,37 +1,13 @@
 // Synchronous schema checks for the realtime paths (RFC 0003 section 12.5):
-// a channel message, a pushed stream item and an emitted event are checked
-// where they happen, with no promise per message. A Standard Schema may
-// validate asynchronously (an async refinement); such a schema cannot be
-// used on these paths, and `validateNow` says so instead of awaiting it.
+// `validateNow` (`contract/validateNow.ts`, which a room's host uses too),
+// and what the server checks of what it sends.
 
-import type { StandardSchemaV1, ValidationIssue } from "../../contract/standardSchema";
+import type { StandardSchemaV1 } from "../../contract/standardSchema";
+import { validateNow } from "../../contract/validateNow";
 import { QuickdrawError } from "../../protocol/errors";
 import { toWireIssues } from "../pipeline/validation";
 
-/** What a synchronous check found: the parsed value, the issues, or that the schema is asynchronous. */
-export type SyncValidation =
-  | { readonly value: unknown; readonly issues?: undefined }
-  | { readonly issues: readonly ValidationIssue[] }
-  | "async";
-
-function isThenable(value: unknown): value is PromiseLike<unknown> {
-  return (
-    (typeof value === "object" || typeof value === "function") &&
-    value !== null &&
-    typeof (value as { then?: unknown }).then === "function"
-  );
-}
-
-/** Validates `value` against `schema` without awaiting: `"async"` when the schema answers with a promise. */
-export function validateNow(schema: StandardSchemaV1, value: unknown): SyncValidation {
-  const result = schema["~standard"].validate(value);
-  if (isThenable(result)) {
-    // Not awaited: keep a rejection from going unhandled.
-    Promise.resolve(result).catch(() => undefined);
-    return "async";
-  }
-  return result.issues === undefined ? { value: result.value } : { issues: result.issues };
-}
+export { validateNow, type SyncValidation } from "../../contract/validateNow";
 
 /**
  * Whether a stream's items are checked: always, unless it declared

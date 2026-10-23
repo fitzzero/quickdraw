@@ -2,6 +2,491 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Peer links
+
+- **Two players of an app room can link their clients.** On a server
+  created with `createServer({ peers: true })` (off by default: its hello
+  then lists `"peer"` in `features` and the limits in `limits.peers`),
+  `createPeerLink(connection, { room, to, offerer })` on `./client` opens
+  WebRTC data channels to socket `to`: `rel`, ordered and reliable, and
+  `fast`, unordered and never resent. When those cannot form (ICE failed,
+  nothing open within 5 s, no WebRTC as in Node, `relay: "always"`), the
+  server relays the same messages. `onPeerRequest(connection, listener)`
+  answers a peer that links to this socket. A link has `send`, `on`,
+  `close`, `state`, `path`, `closeReason`, `stats` and a `clock` synced
+  from pings on `fast`. It works without React.
+- **Two new frames.** `qd:peer { room, to, sig }` carries a link's signals
+  (a description, a candidate, `relay`, `bye`), acknowledged when asked;
+  the receiver gets `{ room, from, userId, sig }`, with the sender's user
+  as the server knows it. `qd:relay [room, to, label, text]` carries a
+  link message through the server, never acknowledged; one on `fast` is
+  dropped while the sender's or the receiver's connection is backed up.
+  The server forwards both only between two signed-in sockets of the
+  frame's room, and never reads what a link carries.
+- **Limits.** A socket signals at most 64 peers at once (`CONFLICT`) and 20
+  signals a second (a burst of 40; `RATE_LIMITED` with `retryAfterMs`). A
+  session description holds at most 16,384 characters, and each string of
+  a candidate 1,024. The relay takes messages of at most 64 KiB (UTF-8),
+  only between two sockets that signalled each other, at most 120 a second
+  to each peer (a burst of 240) and 1 MiB a second in all (a burst of
+  2 MiB), and drops the rest silently. A socket that keeps flooding either
+  frame is disconnected, as for channels. The socket rate limiter counts
+  `qd:peer`, but a `bye`, and not `qd:relay`; `createRateLimiter` takes a
+  `skip(eventName, args)` option for that, which `createServer`'s
+  `rateLimit` takes too.
+- **Leaving ends links.** A socket that leaves a room, is taken out of it
+  or disconnects ends its links there: the server sends a `bye` to each
+  peer it signalled and each that signalled it. A link that closes says
+  `bye` too, a refused one included, so the server frees the pair's place.
+  On the direct path it says `bye` before its data channels close, and a
+  side whose data channel closed waits 2 s for the peer's `bye` before it
+  moves to the relay, so a closed link never comes back as a request.
+  Behind a cluster adapter the frames cross nodes, and the node that holds
+  the target socket checks it.
+- **Testing.** `createLoopbackPeerLink({ ms, jitter, loss })` on
+  `./testing` links two ends in one process, with a delay and jitter per
+  message and loss on `fast` alone; closing one end closes the other after
+  the `rel` messages sent ahead of it.
+- **A link can play over a bad network.** `link.setLag({ ms, jitter, loss })`
+  holds every message of a real link, both ways and on either path, `ms`
+  plus up to `jitter` milliseconds, and loses a `fast` one with
+  probability `loss` (`stats.simulatedLoss` counts the app's, never
+  `dropped`), so a browser test or a bench plays on the real WebRTC path.
+  `rel` messages are never lost and keep their order. The clock's pings
+  wait too, so `clock.rtt` reads the lagged round trip. `setLag(null)`
+  ends it, and what is held goes on the next task, in order; `link.lag`
+  reads it, and `random` takes a seeded generator. Nothing on the wire
+  changes. The loopback double's delay, jitter and loss run on the same
+  code, behind its unchanged options.
+- **Godot.** The GDScript reference client gains `peer_link`,
+  `reject_peer`, the `peer_requested` signal and `socket_id`: WebRTC where
+  Godot has it (a web export, or the webrtc GDExtension), the relay
+  otherwise. `docs/protocol-v5.md` describes the frames, the link messages
+  and the timings for other clients. Its links take
+  `set_lag(ms, jitter, loss)` too, drained each frame.
+- **An app loads the peer-link code only when it needs it.** Every typed
+  client reaches host mode, but not the peer links (WebRTC, the relay,
+  the lag simulator): host mode loads them as a chunk of their own once
+  the server's hello announces peer links (`createServer({ peers: true })`)
+  or at the first link to a room's host, so an open tab holds them before
+  a redeploy removes the chunk. With a bundler that splits dynamic imports
+  by module, an app whose server serves no peer links never downloads
+  them: that keeps about 6 KB gzipped out of a typical app's startup
+  bundle (`createQuickdrawClient`, `createQuickdrawConnection`,
+  `QuickdrawProvider`) with Vite (rollup or rolldown), and 4.5 KB with
+  webpack. esbuild's own code splitting keeps them at startup, since
+  `./client` re-exports `createPeerLink`, and costs about 1.4 KB more. An
+  app that imports `createPeerLink` or `defineHost` loads them at
+  startup.
+
+### Host mode
+
+- **A room's host can serve a contract's channels and streams.** A channel
+  or stream declared `serve: "host"` is served by the host of its app
+  room, one player's client, over peer links: the server needs
+  `peers: true` (`createServer` throws without it) and never handles it.
+  A host-served channel declares `requires: { room }`; a host-served
+  stream declares a scope and `access: { room: (scope) => room }`, and its
+  `seed: n` is how many items the host keeps per scope. `defineService`
+  refuses a handler for a host-served channel and options for a
+  host-served stream. The server drops a `qd:ch` to one (with a
+  development warning), refuses a `qd:stream:sub` to one (`VALIDATION`),
+  and `qd.stream(...).push` throws for one.
+- **The server says who hosts.** `ctx.rooms.setHost(room)` makes the
+  calling socket the room's host (it must be in the room: `FORBIDDEN`);
+  `hostOf(room)` and `clearHost(room)` sit on `ctx.rooms`, `qd.rooms` and
+  `server.rooms`. A new frame, `qd:host [room, host | null]`, goes to the
+  room's sockets on each change and to a socket that joins a room with a
+  host. When the host leaves the room, is taken out of it or disconnects,
+  the room has none, and `onHostLeave({ room, socketId, principal, reason })`
+  (on `defineService` and `createServer`) runs once. The server never
+  picks the next host. Behind a cluster adapter each node knows each
+  room's host, and every node holds the same one when two nodes set it at
+  once, whatever order the changes reach them in. A node that starts
+  after a host was set asks the other nodes for theirs, whether its
+  adapter came as `socket.adapter` or from `setupRedisAdapter`, once the
+  adapter can count it among the nodes it waits for.
+- **The host's client.** `defineHost(contract, { channels, streams })` on
+  `./client` takes a handler per host-served channel and an optional seed
+  per host-served stream; `serve(connection, { room })` answers the links
+  of the room's players and returns a `Host` with
+  `stream(name).push(scope, item)`, `peers` and `close()`. It checks each
+  message as the server checks a channel's (schema, room, a bucket per
+  player and channel) and ends the link of a player who floods. It takes
+  500 subscribes at once from a player and then 50 a second (those to a
+  service it does not serve included), sends a seed
+  whole or refuses it, and sends again, in order, what the relay drops on
+  `rel`. One connection serves several contracts in a room, one `serve`
+  each.
+- **A host knows each peer's link.** Each of `host.peers`, and the
+  `ctx.peer` of a host-served channel's handler, carries `link`, the
+  host's end of that player's link: its `clock.rtt` is the player's round
+  trip, and its `setLag` lags that player. The host's own client reaches
+  its host over an in-process link now, so it is one of `peers` with a
+  link too, and a host can give its own play its players' lag.
+- **Players change nothing.** `useChannel` and `useStream` of a
+  host-served member reach the room's host over a link, made on first use
+  and again for a new host or after a reconnect; the feed's seed replaces
+  what it held, and a feed the host refused `RATE_LIMITED` asks again a
+  second or so later. After a link to the host closed, the next waits 1 s,
+  doubling to 15 s while links keep closing unopened. `hostOf(connection,
+room)` and `onHostChange(connection, listener)` on `./client` say who
+  hosts.
+- **The wire.** Host mode adds link messages beside the app's own: a
+  channel message (kind 3, on `fast`), subscribe and unsubscribe (4 and
+  5), a seed in chunks (6), an item (7, on `fast` for a volatile stream)
+  and a refused subscribe (8). `docs/protocol-v5.md` describes them and
+  what a peer and a host must do.
+- **Godot.** The GDScript client plays a player: `host_of(room)`, the
+  `host_changed` signal, and a `room` argument on `send_channel`,
+  `subscribe_stream`, `unsubscribe_stream` and `is_subscribed`.
+
+### Client
+
+- **`./client/core`: the client without React, for scripts, CLIs and
+  workers.** `./client` opens with `"use client"` and imports React and
+  TanStack Query when it loads, so a Node process that only opens a
+  connection and calls `callData` had to install both.
+  `@fitzzero/quickdraw-core/client/core` exports the connection
+  (`createQuickdrawConnection`), `call`, `callData` and their helpers,
+  `newId`, the backoff and the subscription lane, the auth routes' browser
+  side and token storage, `reloadOncePerSession`, peer links
+  (`createPeerLink`, `onPeerRequest`), host mode (`defineHost`, `hostOf`,
+  `onHostChange`) and everything on `./utils`, with no `"use client"`.
+  Nothing it reaches imports React or TanStack Query, in its code or in
+  its types, so it needs only `socket.io-client`. `./client` re-exports
+  it, the same functions, and keeps every name. The invalidation
+  coordinator, the overlay store, the cache session and live data take a
+  TanStack `QueryClient`, so they stay on `./client`.
+- **`createServerCaller`'s `prefetch` takes a `QueryClientLike`**: the part
+  of a TanStack `QueryClient` it calls (`prefetchQuery`), which any
+  `QueryClient` is, so `./utils` names TanStack Query nowhere, in its types
+  either. `QueryClientLike` is on `./utils` and both client entries.
+- **A member's `useQuery` and `useSearch` never show the last user's result
+  as a placeholder.** TanStack keeps the query a mounted observer's
+  placeholder is made from outside the cache, which quickdraw empties on
+  another user's hello or when the server ends the session. So the first
+  render after the next user's hello could show the last user's result:
+  the `placeholderData` of a member's `useQuery` (such as
+  `keepPreviousData`, which could also keep it shown) and `useSearch`'s
+  last results. This is the follow-up the 5.1 security review recorded for
+  CLIENT-1. A member's `useQuery` now asks a `placeholderData` function,
+  the caller's or its `QueryClient`'s default, only about a query the cache
+  still holds; a placeholder given as a value is shown as before. An app's
+  own TanStack hook over a member's `key` and `call` is not covered yet.
+- **Behavior change: the admin kit's reads of rows default to
+  `staleTime: 0`.** `adminList`, `adminGet` and `adminSubscribers` took the
+  provider's five-minute `staleTime`, and their rows are not live, so an
+  admin screen showed a row written elsewhere only after five minutes or a
+  reload. Their `useQuery` now reads them again whenever a screen mounts,
+  on the typed client and on a mock client alike. A `staleTime` the caller
+  passes still wins, and `adminMeta`, `call` and `prefetch` are unchanged.
+  A screen that passed `staleTime: 0` by hand can drop it.
+- **`AdminQueryMember` gains `setData`**, typed as the typed client's: the
+  query members `adminOf(qd, key)` returns always had it at run time, but a
+  screen typed through `AdminScreen` needed a cast to call it. A row panel
+  shows the row `adminUpdate` or `adminCreate` returned with
+  `admin.adminGet?.setData({ id: row.id }, row)`, with no new read.
+- **Behavior change: a server that cannot check the credentials signs
+  nobody out.** A connect or reconnect the server refuses with `INTERNAL`
+  (below: its `authenticate` failed with anything but a refusal, its
+  session store down, say) keeps the hello, the grants and the cache, and
+  is `status: "connecting"` (`reconnecting: true` after a connect on these
+  credentials), so the README's `AuthGate` keeps the page, with
+  "Reconnecting…" (or "Connecting…" before a first connect), rather than
+  the sign-in. Socket.IO never retries a refused handshake, so the
+  connection connects again itself, after Socket.IO's own reconnection
+  delays (the manager's `reconnectionDelay`, doubling to
+  `reconnectionDelayMax`, with `randomizationFactor`'s jitter), as often as
+  its `reconnectionAttempts` allow. Calls and reads made meanwhile wait in
+  the send buffer, as while Socket.IO reconnects. With Socket.IO's
+  reconnection off, or its attempts spent, the connection is `refused`
+  with `refusal: { code: "INTERNAL" }`, and still keeps the user.
+  `UNAUTHENTICATED`, `FORBIDDEN` and the server's disconnect still sign out
+  (CLIENT-1). The GDScript reference client connects again after an
+  `INTERNAL` refusal the same way, with its backoff, and does not emit
+  `refused` for it.
+
+### Server
+
+- **The legacy shim's `VALIDATION` replies list the input's issues.** A
+  4.x client's refused input got only `Invalid input for <service>.<method>`
+  in its `error`, since a 4.x reply carries no `data`; 4.1 sent the
+  schema's own messages, and 4.x pages show the text. The `error` now
+  names each issue by its dotted path, the first 10 then `; and N more`:
+  `Invalid input for taskService.rename: title: Required; tags.0: Expected string`.
+  The code (422) and the reply's shape are unchanged, and protocol 5, HTTP
+  and MCP callers still get the issues as `data.issues`.
+- **The development N+1 check no longer counts `createMany`.** A large
+  insert split into fixed-size `createMany` chunks has one shape per
+  chunk, so its tenth chunk raised `n-plus-one` (named
+  `createManyAndReturn`, the form the tracked client runs), though the
+  warning's own advice names `createMany` as the fix. A batch insert is one
+  batch in chunks, as `no-db-call-in-loop` already treated it.
+  `updateMany` and `deleteMany` filtered once per item still count.
+- **Opening a live list no longer logs `prisma:error` lines.** Whether an
+  order column may hold null, and whether a model has an `id` the tracker
+  can key (the access check at startup), came from probes Prisma refuses:
+  `count({ where: { column: null } })` on a required column and a select of
+  `id` on a model without one, which a client created with
+  `log: ["error"]` printed as database errors. `trackPrisma` now reads both
+  from the schema text the generated client carries
+  (`_engineConfig.inlineSchema`), with no statement, and probes only for
+  what that text does not answer, as before.
+- **Behavior change: calls through `ctx.services` carry the calling MCP
+  call's `ctx.mcp`.** A method an MCP call reached through `ctx.services`
+  saw no `ctx.mcp`, so a guard that tells a token's call apart by it read
+  the inner call as a session's and let it through, and a frozen tool
+  surface delegating through `ctx.services`, as the README advises, lost
+  the token's fields. Every call made through an MCP call's
+  `ctx.services`, nested ones included, now sees the same `ctx.mcp`, and
+  its `ctx.transport` stays `"internal"`: tell a token's call apart by
+  `ctx.mcp`, not by `ctx.transport`. A guard that refuses a token on a
+  direct call now refuses it through `ctx.services` too. `qd.caller` and
+  the other in-process callers are unchanged.
+- **The MCP registry takes a caller the app signed in.** `call` and
+  `callMethod` take `principal` in their options, so an app's own MCP
+  transport over `callMethod`, or an in-process assistant, says who the
+  call acts for, and the registry's `principal` hook is not asked (`null`
+  calls anonymously). Until now such an app had to pass the user to the
+  hook some other way, such as a `WeakMap` keyed by a request object. The
+  `context` hook, bound arguments and the concurrency lane see that
+  principal. One that carries no `serviceAccess` gets the grants
+  `auth.loadServiceAccess` loads, at each call, as `qd.caller`'s; the
+  hook's principal is still used as the hook returns it. The HTTP routes
+  never read a principal from a request.
+- **The admin kit runs `prepare` before each write.**
+  `admin.handlers(contract, { prepare })` calls `prepare(call, ctx, db)`
+  before `adminCreate`, `adminUpdate` and `adminDelete`, once the caller's
+  access and data were checked, in one transaction with the write and
+  `onWrite`: `call` is `{ method: "adminCreate", data }`,
+  `{ method: "adminUpdate", id, data, before }` or
+  `{ method: "adminDelete", id, before }`, `db` is the transaction's
+  tracked client, and a throw undoes its writes and the write. Before a
+  create or an update it may return column values, written over the
+  caller's data, hidden and read-only fields included, so a column the
+  server computes (a content hash) need not be an editable field of the
+  entity; `id`, a timestamp, a relation or a nested write is `VALIDATION`,
+  and an anchor column it sets (an `inherit` parent, an anchored
+  collection's scope) needs the method's row level on the row it names, as
+  for the read/write kit's `prepare` (`FORBIDDEN`): a lowered form never
+  moves a row into a parent its caller cannot reach. What it returns before
+  a delete is ignored. The tracked client never sees
+  what the database deletes or clears with a row (`onDelete: Cascade`,
+  `SetNull`), so those rows stayed in the lists and entities open on them:
+  delete or clear them through `db` in `prepare`, and their subscribers are
+  told. An `adminDelete` with `prepare` reads the row first, one statement
+  more. `AdminPrepare` and `AdminPrepareCall` are on `./server`.
+- **`ctx.access` asks the caller's level on any row.**
+  `ctx.access.levelsFor(service, ids)`, `can(service, id, level)` and
+  `where(service, level)` are `dispatcher.access`'s `levelsFor` and
+  `accessWhere` bound to the call's principal, with the grants the call
+  runs with; `service` is a contract or a service name. A `custom` form can
+  now check a row no declared form names (a parent the input names, or a
+  key that is optional), so the check moves out of the handler and into the
+  form:
+  `custom(async (ctx, input) => input.projectId === undefined || (await ctx.access.can(project, input.projectId, "Read")))`.
+  A list such a form lets through without its key follows the row policy
+  only when its handler filters it: add `ctx.access.where(service, "Read")`
+  to the query with `AND`, as the README's and the access rule's example
+  does. `ctx.access` counts levels as `{ entry }` does: a service-wide
+  `Admin` reaches every row, and anyone else has no level on a row that is
+  not found. An anonymous caller has none anywhere: an empty map, `false`,
+  `"none"`. Every method call's `ctx` has it, MCP and `ctx.services` calls
+  included, and so does the `ctx` the kits pass to their forms and
+  callbacks; a context no dispatcher built throws `INTERNAL` on its use,
+  and `qd` has none. Reading it in a `share: "all"` handler warns
+  `shared-principal`. An app field named `access` from
+  `initQuickdraw({ context })` is now shadowed by the framework's.
+  `ContextAccess` is on `./server`.
+- **A collection can require a service grant.** `collections: { mine:
+{ scopeAccess: "self", requires: { service: "Read" } } }` in
+  `defineService` gives a list the grant its methods ask for: besides the
+  anchor or self check, every subscriber needs a service-wide grant of at
+  least `L` on the collection's service, as a method's `{ service: L }`
+  form counts it, and a service-wide `Admin` passes. Without it,
+  `qd:col:sub` (cursor pages included), the scope's change topic and a
+  search kept to the scope are `FORBIDDEN`, as for an anchor refusal. The
+  grant comes from the socket's principal: when the user's grants reload
+  below it, on any node, their sockets leave the scope with `qd:revoked`
+  (`reason: "access"`) and get nothing more of it. A reload of a user's
+  grants now resets their self lists after re-authorizing them, so a list
+  being revoked gets no `reset` first. A self list whose methods ask for
+  no grant takes no `requires`, and collections without it are unchanged.
+  `CollectionRequires` is on `./server`.
+- **A self list resumed after a reload of its user's grants reads a
+  page.** The reload raised the resume floor of the user's self lists
+  only to the current revision, and only after it authorized their other
+  scopes again, so a client whose page was at that revision (nothing
+  written since), or that resumed while the reload ran, replayed the
+  buffer and kept the rows the user lost, until each row's next write. The
+  floor now goes one past the current revision, before that
+  authorization; a change to the user's membership of a parent row raises
+  it one past too.
+- **Breaking for types: `trackPrisma` returns `Tracked<C>`, a type the
+  untracked client is not.** The tracked client had the client's own type,
+  so nothing told it from the untracked one: a helper that writes could be
+  handed the untracked client, whose writes reach no subscriber, and lint
+  could judge a write only by its receiver's name. `Tracked<C>` is `C` with
+  a mark, a type only, with nothing at run time: still a `C` wherever one
+  is asked for, while the untracked client is no `Tracked<C>`. A helper
+  typed `client: Tracked<PrismaClient>` takes the tracked client and
+  refuses the untracked one at compile time.
+  `TrackedTransaction<PrismaClient>` is the type of `tx` in
+  `db.$transaction(async (tx) => ...)`, a nested one's too, and takes both
+  `tx` and `db`, as does a kit callback's `db` (the admin kit's `prepare`,
+  say) annotated with it. `$transaction`'s array form and options, the
+  model delegates, what `$extends` added, a handler's `db` and
+  `initQuickdraw<{ db: typeof db }>` are unchanged. Both types are on
+  `./prisma` and on the root export, for a shared package without Prisma.
+  On upgrade, a value typed `PrismaClient` no longer goes where
+  `typeof db` (a `Db` alias of it), `Tracked<PrismaClient>` or
+  `ReturnType<typeof trackPrisma>` is asked for. So these stop compiling
+  (TS2345 or TS2322, "Property '[TRACKED]' is missing"): a parameter typed
+  `PrismaClient` handed on to such a parameter, an app's own untracked test
+  client, and a fake (`{} as unknown as PrismaClient`,
+  `mockDeep<PrismaClient>()`). Nothing changes at run time. Type such
+  parameters `Db` (or `Tracked<PrismaClient>`) and fakes as `Db`
+  (`mockDeep<Db>()`, `{} as unknown as Db`). An app's own untracked test
+  client is no `Db`: pass the tracked one, or cast it (`prisma as Db`)
+  where its writes need reach no subscriber. A `db` declared
+  `PrismaClient` (a lazy `Proxy`, say) carries no mark either: declare it
+  `Tracked<PrismaClient>` to pass it to a `Tracked` or
+  `TrackedTransaction` helper.
+- **A job can count a stream's subscribers.**
+  `await qd.stream(contract, name).subscribers(scope)` (`subscribers()` for
+  a global stream; also on `server.stream` and `dispatcher.stream`)
+  resolves with how many sockets subscribe to that feed on every node,
+  anonymous ones included, so a job skips the work nobody watches: a price
+  poll pushes only the instruments someone has open. Until now a job read
+  Socket.IO's adapter rooms itself, which hold one node's sockets.
+  Behind a cluster adapter the other nodes answer one request with a count
+  each (presence's event, with a new `{ sockets }` request), so no socket
+  is serialized. An answer that does not arrive within `cluster.timeoutMs`
+  counts as 0, warned at most once every 10 minutes, and so does a node of
+  an earlier version. A scope that does not fit rejects with a
+  `TypeError`, and a host-served stream's handle refuses it, as it refuses
+  `push`. `StreamSubscribersArgs` is on `./server`.
+- **Behavior change: a handshake the server cannot authenticate is
+  refused `INTERNAL`, not `UNAUTHENTICATED`.** The socket transport refused every
+  failure of `authenticate` and `loadServiceAccess` with
+  `{ code: "UNAUTHENTICATED" }`, an outage of the session store or the
+  database included, and since 5.1 the client takes that code as the end of
+  the session, so a database blip during a mass reconnect signed every
+  reconnecting user out. Now only a refusal `authenticate` makes on
+  purpose, a `QuickdrawError` with code `UNAUTHENTICATED` or `FORBIDDEN`
+  (logged at debug; `FORBIDDEN` was logged at error), and a session that
+  expired during the handshake are refused `UNAUTHENTICATED`. Anything
+  else is refused `{ code: "INTERNAL" }`, logged at error as before, with
+  the same "Authentication failed" message: `AuthenticationUnavailable`,
+  with `isAuthenticationUnavailable`, on the root export, and in
+  `docs/protocol-v5.md`. `socketAuth` refuses what it refused before
+  (its `TypeError` for a `loadPrincipal` that returns another user's
+  principal, an app's bug, is now `INTERNAL`). An `authenticate` that
+  throws a plain `Error` for bad credentials should throw
+  `QuickdrawError("UNAUTHENTICATED")` instead, or quickdraw's client keeps
+  retrying it. HTTP calls are answered as before.
+
+### Testing
+
+- **`app.as(principal, { transport, mcp })` calls in process as another
+  transport would.** `app.as(principal)` always called with transport
+  `"internal"` and no `ctx.mcp`, so a test of a guard that reads either
+  had to build dispatcher requests by hand. `transport` takes `"internal"`
+  (the default), `"http"` or `"mcp"`, and `mcp` is the call's `ctx.mcp`,
+  typed by the app's `QuickdrawTypes["mcp"]` (`TestCallerOptions` on
+  `./testing`). A socket's transport is a `TypeError`: `app.connect` calls
+  over a real socket. Each call is still dispatched and recorded once, so
+  budgets count it as before. Bound arguments and the MCP registry's hooks
+  are tested through `registry.callMethod`.
+
+### Lint
+
+- **The write rules read a tracked client's type.** `no-untracked-write`
+  reported every write through a client named `prisma`, so a helper whose
+  `prisma` parameter every caller filled with the tracked `db` was refused
+  (farseer's 5.0 migration), and renaming the parameter `db` silenced the
+  rule even for a caller passing the untracked client. A parameter or
+  variable declared `Tracked<...>` or `TrackedTransaction<...>` (qualified,
+  a union of only those, or an intersection with one) is now the tracked
+  client whatever its name: `no-untracked-write` leaves its writes alone,
+  and `no-nested-write` and `no-foreign-write` check them as `db`'s. A name
+  in `clients` declared without such a type is still reported, and the
+  rule's message says how to type a parameter given the tracked client.
+
+### Codemod
+
+- **A method object no longer collides with a binding of its name.** A
+  split service's method module wrote each method object under its
+  method's name (`export const renameTask = ...`), and the service file
+  imported it under that name, whatever those files bound already. On
+  Conveyor's 4.x code, 5 files did not parse (19 `Identifier ... has
+already been declared`), lint found 15 more `no-redeclare` and
+  `no-shadow` reports, and a method module imported 8 hoisted helpers
+  beside method objects of their names (TS2440, which oxlint does not
+  report): method modules kept a handler's body in a function named after
+  its method or imported the implementation under that name, a service file
+  imported the implementations too and destructured more from dynamic
+  imports, and a service class's public methods of its methods' names,
+  which the handlers called, were hoisted under those names. The codemod
+  now renames what the file owns, with every reference: in a method module,
+  a local function or binding of the method's name becomes `<name>Body`
+  and an import of it `<name> as <name>Impl`; in the service file, an
+  import of it becomes `<name> as <name>Impl`; a binding inside a function
+  that would shadow the method object becomes `<name>Impl`. What other
+  files see keeps its name: beside a helper the module exports under the
+  method's name, the method object is `<name>Method`, and a service file
+  that declares the name itself imports the object as `<name>Method` and
+  lists it as `<name>: <name>Method`. A service class member of a module
+  method's name is hoisted as `<name>Of<Class>`. No rename is marked: none
+  leaves anything to decide.
+- **An import the codemod adds is no longer dropped when the file imports
+  the same module's export under another name** (`import { x as y }`): the
+  name is added beside it.
+- **The codemod's own tests fail on a name declared twice in one scope**
+  anywhere in its output, whatever marker covers the line (TypeScript, which
+  also sees an import beside a local declaration), and lint the output with
+  `no-redeclare` and `no-shadow`, which the 5.0 lint baseline enables.
+- **A field holding a function that the service replaces is hoisted as a
+  `let`.** The codemod wrote every arrow or function-expression field
+  (`provider = () => ...`) as a `const`, so code that swapped it
+  (`this.provider = next`, now `provider = next`) did not typecheck (TS2588)
+  and threw `TypeError: Assignment to constant variable` when it ran:
+  farseer's migration hit 9 of them. A function field the class writes
+  after its initializer, in its constructor or anywhere else, is now module
+  state like any other field: a `let` with its type, under the same `[this]`
+  marker. One nothing writes after its initializer stays a `const`.
+- **The contracts the codemod writes import only what they use.** A contract
+  imported core's `nullable` for a Zod `.nullable()` in a moved schema, and
+  `z` when only a schema helper it had moved to `contracts/helpers.ts` used
+  Zod, so every migrated app's lint and its `noUnusedLocals` typecheck
+  reported unused imports in `packages/shared/src/contracts/*.ts` (farseer's
+  migration filed it). A builder is now imported only for a call of it, and
+  each contract and the helpers file the codemod creates get the import
+  cleanup every file it rewrites gets.
+- **A binding outside a service class no longer shadows a member hoisted
+  beside it.** A module function's parameter, or a local of a method
+  module's handler, named like a member the codemod hoisted where that code
+  lives (declared there, or imported) shadowed it (`no-shadow`; Conveyor's
+  `reviewCatchUp` in `task/TaskService.ts`), and a handler's local could
+  capture what the handler read through the service:
+  `const limit = service.limit` became `const limit = limit`. Such a binding
+  is now renamed `<name>Impl`, with every reference; the member keeps its
+  name.
+- **A `readonly` field its constructor writes is hoisted as a `let`.**
+  `readonly` kept a field, or a function field, a `const` even when its
+  constructor assigned it, so the setup function that carries the
+  constructor's code wrote a constant (TS2588, and a `TypeError` when it
+  ran). A field is a `const` only when nothing writes it after its
+  initializer. The codemod's own tests now fail on any write of a `const`
+  in its output, whatever marker covers the line.
+- **A function field that stays a `const` keeps its type annotation**
+  (`const slug: (name: string) => string = (name) => ...`): without it, an
+  initializer whose parameters took their types from the field's was
+  implicitly `any` (TS7006).
+
 ## [5.1.1] - 2026-10-11
 
 ### Behavior changes for 5.1 apps

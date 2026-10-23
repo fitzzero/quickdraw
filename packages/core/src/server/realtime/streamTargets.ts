@@ -72,6 +72,12 @@ export function streamTarget(hub: Hub, value: unknown, event: string): StreamTar
   if (stream === undefined) {
     throw new QuickdrawError("NOT_FOUND", `${frame.s} has no stream "${frame.stream}"`);
   }
+  if (stream.host) {
+    throw unreadable(
+      `${frame.s}.${frame.stream} is served by the room's host: subscribe over the link to the host of its room`,
+      ["stream"],
+    );
+  }
   const problem = scopeProblem(stream, frame.scope);
   if (problem !== undefined) {
     throw unreadable(problem, ["scope"]);
@@ -142,6 +148,8 @@ export async function authorizeStream(
     log: hub.logger,
     requestId: crypto.randomUUID(),
     transport: "socket",
+    // A custom form may ask about a row its scope names, as a method's does.
+    access: hub.policies,
   });
   const input = { scope: target.scope };
   await hub.access.authorize(form, {

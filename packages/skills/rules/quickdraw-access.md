@@ -109,6 +109,53 @@ triage: {
   it; elsewhere it acts with its user's grants (`kinds` keeps a kind of
   token out).
 
+## A row the form cannot name
+
+A check of the caller's level on a row no declared form names (a parent
+the input names, a key that is optional) is a `custom` form that asks
+`ctx.access`: never a check in the handler, and never a module that holds
+the dispatcher.
+
+```ts
+assigned: {
+  // Read on the project the input names, asked through ctx.access; none named, the caller's
+  // own that they may still read
+  access: custom(
+    async (ctx, input) =>
+      input.projectId === undefined || (await ctx.access.can(project, input.projectId, "Read")),
+  ),
+  handler: async ({ input, ctx, db }) => {
+    const readable = await ctx.access.where(task, "Read");
+    if (readable === "none") return [];
+    return db.task.findMany({
+      where: { AND: [{ assigneeId: ctx.principal.userId, projectId: input.projectId }, readable] },
+      take: 100,
+    });
+  },
+},
+```
+
+- `ctx.access.can(service, id, level)`, `levelsFor(service, ids)` and
+  `where(service, level)` count levels as `{ entry }` does, for
+  `ctx.principal` with the grants the call runs with: never load the user's
+  grants again. `service` is a contract or a service name.
+- A list the form lets through without its key still follows the row
+  policy: add `ctx.access.where(service, "Read")` to its `findMany` with
+  `AND` (`"none"` lists nothing). Never spread it into `where`: the filter
+  and the input share a column (`inherit`'s `projectId`), so whichever
+  comes last replaces the other. The filter's widens the keyed list to
+  every project the caller reads; the input's `undefined` drops the policy
+  from the list without a key.
+- Prefer a declared form when one says it: `{ entry: L }` for the method's
+  own row, `{ scope: L, of, id }` for a parent whose key is always there.
+  A `ctx.access` form counts a service-wide `Admin` grant on the service it
+  asks (the parent's); `{ scope, of }` counts only one on the method's own
+  service. `custom` replaces the row check and a
+  service-wide `Admin` grant skips it, so a method whose input has `id`
+  still needs `rowless: true` beside it (below).
+- An anonymous caller has no level anywhere (`false`, an empty map,
+  `"none"`). `qd` has no `access`: a job asks `server.dispatcher.access`.
+
 ## A method that takes a row id
 
 On a service with a policy, a method whose input has `id` reads or writes
@@ -231,6 +278,12 @@ channel `requires`.
   item service `inherit` from the anchor, or use separate scopes. A self
   scope (`scopeAccess: "self"`) is the exception: its items follow the item
   service's policy, so its user gets only the rows they may read.
+- A list whose methods need a service-wide grant (`{ service: "Read" }`)
+  needs it too: `requires: { service: "Read" }` beside its `anchor` or
+  `scopeAccess`, in `defineService`'s `collections`. Both checks apply (a
+  service-wide `Admin` passes either), a scope without the grant is
+  `FORBIDDEN`, and a reload of the user's grants below it revokes the scope
+  on their sockets. Without it a self list opens for any signed-in user.
 - A hand-written method that reads many rows authorizes the parent
   (`{ scope: "Read", of: project, id: "projectId" }`) and filters by it, or
   uses the read/write kit's `list` or a collection, which filter by policy.

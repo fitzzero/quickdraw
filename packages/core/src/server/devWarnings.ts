@@ -34,8 +34,8 @@
 // |                      | `createServer` at start, logged as an error in every environment,  |                          |
 // |                      | and a strict test app fails to start                                |                          |
 // | `shared-principal`   | the handler of a `share: "all"` run (an app's, not a kit's) read   | the member               |
-// |                      | `ctx.principal`, `ctx.services` or `ctx.mcp`: the run has the      | (`principal`, `services`,|
-// |                      | first caller's, and every caller gets its result                   | `mcp`)                   |
+// |                      | `ctx.principal`, `ctx.services`, `ctx.mcp` or `ctx.access`: the    | (`principal`, `services`,|
+// |                      | run has the first caller's, and every caller gets its result       | `mcp`, `access`)         |
 // | `channel-without-    | a channel's contract declares no `requires` and its service no     | the channel              |
 // | requires`            | `access`, so every signed-in user may send it                      |                          |
 // |                      | (`realtime/channelWarnings.ts`); raised when a dispatcher is made, |                          |

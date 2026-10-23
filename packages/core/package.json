@@ -53,6 +53,10 @@
       "types": "./dist/client/index.d.ts",
       "import": "./dist/client/index.js"
     },
+    "./client/core": {
+      "types": "./dist/client/core.d.ts",
+      "import": "./dist/client/core.js"
+    },
     "./utils": {
       "types": "./dist/utils/index.d.ts",
       "import": "./dist/utils/index.js"

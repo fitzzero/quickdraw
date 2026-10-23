@@ -77,6 +77,19 @@ export type StreamAccess =
       readonly of?: undefined;
     };
 
+/**
+ * Who serves a channel or a stream: the server, or the host of the app room
+ * it names (host mode, RFC 0003 section 12.5), a client the app chose with
+ * `ctx.rooms.setHost`, over its peer links.
+ */
+export type RealtimeServe = "server" | "host";
+
+// `serve` is typed `RealtimeServe | (string & {})`, not `RealtimeServe`: a
+// literal union there stops TypeScript inferring a contract whose
+// channel's `requires.room` is a function with an unannotated parameter.
+// Editors still offer the two values, and `defineContract` refuses any
+// other.
+
 /** A server-to-client stream of append-only items (RFC 0003 section 12.5). */
 export interface StreamDef<Item extends StandardSchemaV1 = StandardSchemaV1> {
   /** One item's schema. Pushed items are checked against it before they are sent. */
@@ -95,6 +108,14 @@ export interface StreamDef<Item extends StandardSchemaV1 = StandardSchemaV1> {
   readonly volatile?: boolean;
   /** Who may subscribe. Without it the stream is closed. */
   readonly access?: StreamAccess;
+  /**
+   * Who pushes the items: `"server"`, the default, or `"host"`, the host of
+   * the room `access: { room }` computes from the scope. The host's client
+   * pushes them over its peer links, keeping the latest `seed` per scope for
+   * a peer that subscribes later, and the server never sees them. A
+   * host-served stream has a scope and `access: { room: (scope) => room }`.
+   */
+  readonly serve?: RealtimeServe | (string & Record<never, never>);
   /** What the stream carries, in a sentence or two, for the generated docs. */
   readonly describe?: string;
 }
@@ -176,6 +197,14 @@ export interface ChannelDef<Payload extends StandardSchemaV1 = StandardSchemaV1>
    * `access` (`"authenticated"` when any signed-in user may send it).
    */
   readonly requires?: ChannelRequires;
+  /**
+   * Who handles a message: `"server"`, the default, or `"host"`, the host of
+   * the room `requires: { room }` names. The sender's client sends it over
+   * its peer link to that host, whose client checks it as the server checks
+   * a channel message; the server never sees it. A host-served channel
+   * requires a room and takes no server handler.
+   */
+  readonly serve?: RealtimeServe | (string & Record<never, never>);
   /** What a message says, in a sentence or two, for the generated docs. */
   readonly describe?: string;
 }
@@ -185,6 +214,11 @@ export interface EventDef<Payload extends StandardSchemaV1 = StandardSchemaV1> {
   readonly payload: Payload;
   /** What the event announces, in a sentence or two, for the generated docs. */
   readonly describe?: string;
+}
+
+/** True for a channel or a stream the room's host serves (`serve: "host"`). */
+export function isHostServed(def: { readonly serve?: unknown }): boolean {
+  return def.serve === "host";
 }
 
 /** True when a stream has one feed per scope value; false for a global stream. */

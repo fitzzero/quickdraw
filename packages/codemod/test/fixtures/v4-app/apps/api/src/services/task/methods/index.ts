@@ -1,6 +1,7 @@
 import type { TaskService } from "../index.js";
 import { registerArchive } from "./archive.js";
 import { registerCreateTask } from "./create-task.js";
+import { registerDelegates } from "./delegates.js";
 import { defineTaskQueries } from "./queries.js";
 import { defineEditMethods } from "./update-task.js";
 
@@ -13,4 +14,6 @@ export function defineTaskMethods(service: TaskService): void {
   // two more such functions: one beside its modules, one that also logs
   defineTaskQueries(service);
   defineEditMethods(service);
+  // and a module whose handlers call functions of their methods' names
+  registerDelegates(service);
 }

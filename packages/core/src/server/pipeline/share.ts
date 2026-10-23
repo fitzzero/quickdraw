@@ -130,7 +130,10 @@ export function stableStringify(value: unknown): string | undefined {
 export interface ShareCaller {
   readonly principal: Principal | null;
   readonly transport: Transport;
-  /** The call's `ctx.mcp`, when the MCP bridge set one. */
+  /**
+   * The call's `ctx.mcp`, when the MCP bridge set one: for a call through
+   * `ctx.services`, the calling call's.
+   */
   readonly mcp: McpContext | undefined;
 }
 

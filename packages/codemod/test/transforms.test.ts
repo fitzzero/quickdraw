@@ -8,7 +8,9 @@
 // fields, getters, constructor and overrides survive as marked module code,
 // an inline import() type names its module from the contract file, moved
 // schemas of one name are merged or renamed and an aliased one is written by
-// its declared name, and a second run changes nothing.
+// its declared name, a method object whose name its module or service file
+// binds already gets that name free (or another name, beside an exported
+// binding), and a second run changes nothing.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -56,13 +58,13 @@ describe("the output on the 4.1 fixture app", () => {
   it("converts every service, method and hook call, and deletes the wrapper hooks", () => {
     expect(result.stats).toEqual({
       services: 5,
-      methods: 26,
+      methods: 31,
       aggregatorsRemoved: 2,
       contracts: 5,
-      schemasMoved: 16,
+      schemasMoved: 18,
       schemasMerged: 1,
       schemasRenamed: 1,
-      todoSchemas: 25,
+      todoSchemas: 31,
       clientCalls: 8,
       wrappersDeleted: 3,
     });
@@ -156,7 +158,7 @@ describe("aggregators, the functions that call method modules' register function
       /^export const listTasks = [^]*^export const reindexProject = /mu,
     );
     // no code left calls a function the run removed, nor the aggregator it kept
-    expect(declared).toHaveLength(9);
+    expect(declared).toHaveLength(10);
     const call = new RegExp(`\\b(?:${declared.join("|")})\\(`, "u");
     const calls = [...output].flatMap(([file, text]) =>
       text
@@ -237,6 +239,67 @@ describe("aggregators, the functions that call method modules' register function
   });
 });
 
+describe("a method object whose name its files bind already (task/methods/delegates.ts, task/index.ts)", () => {
+  const task = "apps/api/src/services/task";
+  const delegates = (): string => output.get(`${task}/methods/delegates.ts`) ?? "";
+  const service = (): string => output.get(`${task}/index.ts`) ?? "";
+
+  it("renames what the method module owns of the name: a local helper <name>Body, an import <name>Impl", () => {
+    expect(delegates()).toContain(
+      "async function renameTaskBody(db: PrismaClient, id: string, title: string) {",
+    );
+    expect(delegates()).toContain("const task = await renameTaskBody(db, input.id, input.title);");
+    expect(delegates()).toContain('import { assignTask as assignTaskImpl } from "../rows.js";');
+    expect(delegates()).toContain(
+      "const task = await assignTaskImpl(db, input.id, input.assigneeId);",
+    );
+    expect(
+      delegates().match(/^export const (?:assignTask|renameTask|countTasks) = \{$/gmu),
+    ).toHaveLength(3);
+    // and an exported helper keeps its name, for the files that import it: the object takes another
+    expect(delegates()).toContain(
+      "export async function getTaskTitle(db: PrismaClient, id: string)",
+    );
+    expect(delegates()).toContain("export const getTaskTitleMethod = {");
+    expect(delegates()).toContain("title: await getTaskTitle(db, input.id),");
+    expect(service()).toMatch(/^ {4}getTaskTitle: getTaskTitleMethod,$/mu);
+    expect(service()).toContain("return (await getTaskTitle(db, id)) ?? id;");
+  });
+
+  it("aliases the service file's import of an implementation under a method's name <name>Impl", () => {
+    expect(service()).toContain('import { assignTask as assignTaskImpl } from "./rows.js";');
+    expect(service()).toContain("await assignTaskImpl(db, id, userId);");
+    expect(service()).toMatch(/^ {4}assignTask,$/mu);
+  });
+
+  it("imports the method object as <name>Method where the service file declares the name itself", () => {
+    expect(service()).toContain("renameTask as renameTaskMethod");
+    expect(service()).toMatch(/^ {4}renameTask: renameTaskMethod,$/mu);
+    expect(service()).toContain(
+      "export async function renameTask(db: PrismaClient, id: string, title: string): Promise<void> {",
+    );
+  });
+
+  it("hoists a service's helper of a module method's name as <name>Of<Class>, where its callers import it", () => {
+    // task/service-core.ts's countTasks, which the countTasks handler called on the service
+    expect(output.get(`${task}/service-core.ts`)).toContain(
+      "export async function countTasksOfTaskServiceCore(projectId: string): Promise<number> {",
+    );
+    expect(delegates()).toContain(
+      'import { toTaskDto, countTasksOfTaskServiceCore } from "../service-core.js";',
+    );
+    expect(delegates()).toContain("count: await countTasksOfTaskServiceCore(input.projectId),");
+  });
+
+  it("renames a binding inside a function that would shadow an imported method object <name>Impl", () => {
+    expect(service()).toContain(
+      'const { countTasks: countTasksImpl } = await import("./rows.js");',
+    );
+    expect(service()).toContain("return await countTasksImpl(db, projectId);");
+    expect(service()).toMatch(/^ {4}countTasks,$/mu);
+  });
+});
+
 describe("a 4.x service class's members (label.ts)", () => {
   const label = (): string => output.get("apps/api/src/services/label.ts") ?? "";
 
@@ -257,9 +320,48 @@ describe("a 4.x service class's members (label.ts)", () => {
     expect(label()).not.toMatch(/this\.(?:renamed|onChange|room)\b/u);
   });
 
+  it("writes a function field the class replaces as a marked let, and keeps a fixed one a const", () => {
+    // setNamer replaces namer: module state, like any field the class writes after its initializer
+    expect(label()).toMatch(
+      /\[this\] 4\.x instance field namer of LabelService: now module state[^\n]*\nlet namer: LabelNamer = \(projectId\) => `label-\$\{projectId\}`;/u,
+    );
+    expect(label()).toContain(
+      "export function setNamer(next: LabelNamer): void {\n  namer = next;",
+    );
+    // a readonly one, and one nothing writes, stay unmarked consts
+    expect(label()).toContain(
+      "// How a name is tidied, for good\nconst tidy = (name: string): string => name.trim();",
+    );
+    expect(label()).toContain(
+      "// How a name becomes a key, typed by its field, which nothing swaps\nconst slug: (name: string) => string = (name) => name.toLowerCase();",
+    );
+  });
+
+  it("keeps a function field's type on its const, which its untyped parameters rely on", () => {
+    expect(label()).toContain(
+      "const slug: (name: string) => string = (name) => name.toLowerCase();",
+    );
+  });
+
+  it("writes a readonly field its constructor overwrites as a marked let, which the setup function sets", () => {
+    expect(label()).toMatch(
+      /\[this\] 4\.x instance field limit of LabelService: now module state[^\n]*\nlet limit: number = 100;/u,
+    );
+    expect(label()).toContain(
+      "  if (options.limit !== undefined) {\n    limit = options.limit;\n  }",
+    );
+  });
+
+  it("renames a binding outside the class that would shadow a hoisted field <name>Impl, the field keeping its name", () => {
+    expect(label()).toContain(
+      "export function notifyLabel(onChangeImpl: LabelListener | undefined, labelId: string): void {\n  onChangeImpl?.(labelId);",
+    );
+    expect(label()).toMatch(/^let onChange: LabelListener \| undefined;$/mu);
+  });
+
   it("keeps the constructor's assignments in a setup function that takes the parameters they use", () => {
     expect(label()).toContain(
-      "export function setUpLabelService(options: { onChange?: LabelListener } = {}): void {\n  onChange = options.onChange;",
+      "export function setUpLabelService(options: { onChange?: LabelListener; limit?: number } = {}): void {\n  onChange = options.onChange;",
     );
   });
 
@@ -485,7 +587,7 @@ describe("a placeholder input", () => {
       .map(([, text]) => text)
       .join("\n");
     const inputs = contracts.match(/input: todoSchema<\{ id: [^}]*\}>\([^)]*\)/gu) ?? [];
-    expect(inputs).toHaveLength(3);
+    expect(inputs).toHaveLength(5);
     for (const input of inputs) {
       expect(input).toContain('keys: ["id"');
     }
@@ -537,6 +639,60 @@ describe("an inline import() type of a 4.x method map", () => {
     );
     expect(line).toContain('output: todoSchema<import("../types/limits.js").ProjectLimits>()');
     expect(line).not.toContain('import("./limits.js")');
+  });
+});
+
+describe("the imports of the files the shared package gets", () => {
+  const created = (): [string, string][] =>
+    [...output].filter(([file]) => /^packages\/shared\/src\/contracts\/[^/]+\.ts$/u.test(file));
+
+  it("are exactly the names each contract and the helpers file use", () => {
+    expect(created().map(([file]) => file.split("/").at(-1))).toEqual([
+      ...["health.ts", "helpers.ts", "index.ts", "label.ts", "project.ts", "task.ts", "user.ts"],
+    ]);
+    for (const [file, text] of created()) {
+      const source = new Project({ useInMemoryFileSystem: true }).createSourceFile(file, text);
+      const imported = source
+        .getImportDeclarations()
+        .flatMap((declaration) => [
+          declaration.getDefaultImport(),
+          declaration.getNamespaceImport(),
+          ...declaration
+            .getNamedImports()
+            .map((specifier) => specifier.getAliasNode() ?? specifier.getNameNode()),
+        ])
+        .flatMap((name) => (name === undefined ? [] : [name.getText()]));
+      const used = new Set(
+        source
+          .getDescendantsOfKind(SyntaxKind.Identifier)
+          .filter(
+            (identifier) =>
+              identifier.getFirstAncestorByKind(SyntaxKind.ImportDeclaration) === undefined,
+          )
+          .map((identifier) => identifier.getText()),
+      );
+      expect(
+        imported.filter((name) => !used.has(name)),
+        file,
+      ).toEqual([]);
+      // a builder stays a value import: the contract calls it
+      expect(text, file).not.toMatch(/^import type \{[^}]*\} from "@fitzzero\/quickdraw-core";$/mu);
+    }
+  });
+
+  it("leave out core's nullable beside Zod's .nullable(), and a Zod import only a moved helper needed", () => {
+    const task = output.get("packages/shared/src/contracts/task.ts") ?? "";
+    expect(task).toContain("assigneeId: z.string().nullable()");
+    expect(task).toContain(
+      'import { defineContract, listOf, mutation, query, todoSchema } from "@fitzzero/quickdraw-core";',
+    );
+    // health.ts's only schema is the helper byIdSchema, whose z is helpers.ts's
+    const health = output.get("packages/shared/src/contracts/health.ts") ?? "";
+    expect(health).toContain("getProjectHealth: query({ input: byIdSchema,");
+    expect(health).not.toContain('from "zod"');
+    expect(output.get("packages/shared/src/contracts/helpers.ts")).toContain(
+      'import { z } from "zod";',
+    );
   });
 });
 

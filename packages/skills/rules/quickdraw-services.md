@@ -86,8 +86,8 @@ export const taskService = qd.defineService(task, {
 - `share: "all"` runs one handler for every caller, with the first caller's
   `ctx`, and gives every caller its result: use it only for a result that
   depends on the input alone. Its handler reads nothing of the caller
-  (`ctx.principal`, `ctx.services`, `ctx.mcp`, or a context field made from
-  them); in development a read of one of the first three warns
+  (`ctx.principal`, `ctx.services`, `ctx.mcp`, `ctx.access`, or a context
+  field made from them); in development a read of one of the first four warns
   `[quickdraw:shared-principal]`. It is refused with `custom` access and on
   the kit methods whose result depends on the caller (the read/write kit's
   `list` and `getMany`, `search`, the sharing kit's `listShares` and
@@ -111,6 +111,10 @@ export const taskService = qd.defineService(task, {
   and is cancelled with `ctx.signal`; it is typed by the app's `contracts`
   (`initQuickdraw<{ ...; contracts }>()`). Never write another service's
   model directly to skip its access checks.
+- A call through `ctx.services` carries this call's `ctx.mcp`, nested calls
+  too, so in an MCP call the method it reaches sees the token's fields. Its
+  `ctx.transport` is `"internal"`: tell a token's call apart by `ctx.mcp`,
+  never by `ctx.transport === "mcp"`.
 
 ## REST routes call the services
 
@@ -155,12 +159,25 @@ once:
 - `requireSession(keys)` guards the app's own REST routes.
 - `bearerAuth(...)` is for a hook handed a bearer token alone: the MCP
   bridge's `principal`, an `authenticate` that reads `auth.token`.
+- An app's own MCP transport, or an in-process assistant, that signs the
+  caller in itself (with `requireSession`, say) passes that caller to the
+  registry: `registry.callMethod(service, method, input, { request, principal })`.
+  The registry's `principal` hook is not asked (`null` calls anonymously),
+  the `context` hook and bound arguments see that principal, and its grants
+  load as `qd.caller`'s do. Never take it from a request body, and never
+  smuggle the user to the hook some other way (a map keyed by the request).
 - Never `verifyJWT` alone: it checks the signature and expiry, not the
   session store.
 - A custom `authenticate` takes the session cookie only from
   `request.sessionCookie` (HTTP), after `cookieOriginAllowed(request,
 allowedOrigins)`, and checks it with `liveSession`; `auth.token` holds
   only a bearer token for it.
+- `authenticate` refuses credentials only by throwing
+  `QuickdrawError("UNAUTHENTICATED")` (or `"FORBIDDEN"`). Anything else it
+  or `loadServiceAccess` throws is an outage (the store or the database
+  down): a socket's handshake is refused `INTERNAL`, and the client keeps
+  the user and connects again by itself. Never throw a plain `Error` for
+  bad credentials, which the client would retry for ever.
 
 ## Writes are tracked; frames are derived
 
@@ -172,6 +189,16 @@ writes made through `db`, after the response is sent:
   wrap the work in `qd.run(async (ctx) => ...)`, which flushes before it
   returns; a boot-time seed may run it before `createServer` too (its writes
   then reach no subscriber). Never write through the untracked client.
+- A helper that writes takes the tracked client by its type:
+  `client: Tracked<PrismaClient>`, or `TrackedTransaction<PrismaClient>`
+  when it may run inside `db.$transaction(async (tx) => ...)` (`tx` is
+  one, and so is `db`). `trackPrisma` returns a `Tracked<PrismaClient>`;
+  the untracked client is none, so passing it is a type error. Both types
+  are on `@fitzzero/quickdraw-core/prisma` and the root export. Never type
+  such a parameter `PrismaClient`, which the untracked client is too;
+  `no-untracked-write` reads the type, whatever the parameter's name. A
+  `db` declared `PrismaClient` (a lazy `Proxy`, say) carries no mark:
+  declare it `Tracked<PrismaClient>` to pass it to such a helper.
 - Background work a handler starts and does not await (a push sent after
   the reply) runs in `qd.run(fn, { detached: true })`: a unit of its own,
   flushed when `fn` settles. Without `detached` it joins the handler's unit,
@@ -184,7 +211,10 @@ writes made through `db`, after the response is sent:
   `db.$transaction(async (tx) => ...)` when they must commit together.
 - Raw SQL writes and database cascades are not seen: record them with
   `ctx.touch("task", ids)` (`{ removed: true }` for deleted rows); `qd.run`
-  passes `fn` the same `touch`.
+  passes `fn` the same `touch`. Before deleting a row whose dependents the
+  database deletes or clears (`onDelete: Cascade`, `SetNull`), delete or
+  clear them through `db` first, in the same transaction, so the lists
+  holding them are told; for the admin kit, in its `prepare`.
 - A write to one row that changes how another service's row looks (a
   parent's counts) declares `affects: [{ service: task, id: "parentTaskId" }]`.
 
@@ -196,7 +226,11 @@ in `id`), and optionally `where`, `limit`, `maxLimit`, `index` (small fields
 sent for the whole scope), `views` (`(row, who) => boolean` over index rows)
 and `access`. The service says who may open a scope: `{ anchor: project }`
 (the level on the row the scope value names) or `{ scopeAccess: "self" }`
-(the subscriber's own user id). Everyone in an anchored scope sees every
+(the subscriber's own user id), plus `requires: { service: "Read" }` when
+the list must need the service-wide grant its methods ask for
+(`{ scopeAccess: "self", requires: { service: "Read" } }`: the user's own
+rows, for holders of the Read grant); both checks then apply, and a socket
+whose grants reload below it leaves the scope. Everyone in an anchored scope sees every
 item, so derive the item service's access from the anchor (`inherit`); a
 self scope's items follow the item service's policy, so its user gets only
 the rows they may read. A `via` scope over the item service's own `members`
@@ -250,12 +284,23 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   `onCommitted`, which runs once it committed, in a unit of its own (a
   game applying an edited definition to its running simulation, so a
   rolled-back edit is never applied); never wrap the kit's handlers.
+  What must happen before an edit goes in `prepare(call, ctx, db)`, in
+  the same transaction: a column the server computes (a content hash) is
+  returned from it and written over the caller's data, even a hidden or
+  read-only one (never `id`, a timestamp or a relation; a parent it sets
+  needs the caller's row level on it, as in the read/write kit), so it
+  need not be an editable field of the entity; and before an `adminDelete`
+  it deletes or clears through `db` the rows the database would cascade,
+  so their subscribers and lists are told.
 
 ## Realtime
 
 - Streams: `streams: { logs: { item, scope: "taskId", seed: 50, access } }`;
   push with `qd.stream(task, "logs").push(taskId, item)`, and several items
-  at once with `pushMany(taskId, items)`, never `push` in a loop. When the
+  at once with `pushMany(taskId, items)`, never `push` in a loop. A job that
+  skips feeds nobody watches asks
+  `await qd.stream(task, "logs").subscribers(taskId)` (the sockets on every
+  node), never Socket.IO's adapter rooms, which hold one node's. When the
   items are deltas (a game's ticks), give the service a computed seed,
   `streams: { world: { seed: (worldId, ctx) => [snapshotOf(worldId)] } }`,
   never a bootstrap call beside the stream; `validate: "development"` there
@@ -290,6 +335,38 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 - A game loop asks `qd.rooms.size(room)` (this node's sockets, spectators
   included, synchronous) at its tick rate, never Socket.IO's adapter;
   `ctx.socketId` names the calling socket in a method.
+- Peer links: `createServer({ peers: true })` lets two clients of an app
+  room link directly (`createPeerLink` on the client). The server forwards
+  their signals and relays their messages only between signed-in sockets
+  of the room, and ends a player's links when they leave it or
+  `rooms.leave(room, { userId })` takes them out. Tell players each other's
+  socket ids with an event or a method's answer (`ctx.socketId`). The
+  server never sees what a link carries: a method that records what a
+  client reports from a link (a score, a winner) checks it as untrusted
+  input, and its contract's `describe` says so.
+- Host mode: a channel or stream declared `serve: "host"` is served by the
+  room's host, one player's client (`defineHost` on the client), over peer
+  links; the server needs `peers: true` and never handles it. A
+  host-served channel declares `requires: { room }` and a host-served
+  stream a scope and `access: { room: (scope) => room }`. Give a
+  host-served channel no handler and a host-served stream no options or
+  seed: `defineService` refuses them. Pick the host in a method,
+  `ctx.rooms.setHost(room)` for the calling socket (after a check of the
+  app's own: a seat, a role), never by election; read it with
+  `ctx.rooms.hostOf(room)`, clear it with `clearHost(room)`, and decide
+  what follows in `onHostLeave({ room, socketId, principal, reason })`.
+  Behind a cluster adapter, a node that dies without closing its sockets
+  leaves the hosts it held recorded on the other nodes until each room's
+  host is set or cleared again, and no `onHostLeave` runs for them. So
+  when the app picks a host only while `hostOf(room)` is `null`, also let
+  a player take over a host that stops answering: a method that calls
+  `setHost(room)` or `clearHost(room)` after a timeout of the app's own.
+  The server never sees what a host and its players send each other: what
+  a host reports to a method (a result, a score) is one player's word,
+  checked as untrusted input, and the contract's `describe` says so. The
+  service's `kinds` does not reach host-served members: any signed-in
+  socket of the room can link to the host, so guard the method that joins
+  the room.
 - Events: `events: { moved: { payload } }`, sent with
   `ctx.rooms.emit(room, task, "moved", payload)` to an app room
   (`ctx.rooms.join(room)` in a method puts the caller's socket in one), and
@@ -322,8 +399,10 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 
 Bound every `findMany` with `take`; batch per-item reads with `in:` filters;
 filter in `where`, not after loading. Write many rows in one statement when
-they all get the same data (`updateMany`, `createMany`). When each row's
-data differs, loop over the rows inside an interactive
+they all get the same data (`updateMany`, `createMany`); a large insert may
+go in fixed-size `createMany` chunks, which neither `no-db-call-in-loop` nor
+the N+1 warning counts. When each row's data differs, loop over the rows
+inside an interactive
 `db.$transaction(async (tx) => ...)` and await one `tx.task.update(...)` by
 id per row, not an array-form `$transaction([...])`, which cannot read a
 moved row inside its batch. A projection's relation count selects the

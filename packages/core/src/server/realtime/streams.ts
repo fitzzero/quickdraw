@@ -21,8 +21,14 @@
 // the latest items as its seed, and an item is either in the seed a
 // subscriber gets or sent to it after, never both and never neither. A stream
 // without a seed goes out through the adapter's room broadcast as before.
+//
+// `subscribers(scope)` (`subscribers()`) counts the sockets in the feed's
+// room on every node, anonymous ones included, so a job can skip the work
+// nobody watches: the dispatcher's realtime counts them (`socketsInRoom`),
+// with one request to the other nodes behind a cluster adapter.
 
 import type { AnyContract } from "../../contract/defineContract";
+import { streamRoom } from "../../contract/names";
 import type { Hub } from "../emit/hub";
 import { StreamSeeds } from "./seeds";
 import { createStreamFeeds, type StreamFeeds } from "./streamFeeds";
@@ -45,6 +51,11 @@ function servedStream(hub: Hub, contract: AnyContract, name: string): Served {
   const stream = typeof name === "string" ? service.streams.get(name) : undefined;
   if (stream === undefined) {
     throw new TypeError(`stream: ${service.name} has no stream "${String(name)}"`);
+  }
+  if (stream.host) {
+    throw new TypeError(
+      `stream: ${service.name}.${stream.name} is served by the room's host (serve: "host"): its host's client pushes it, with defineHost; the server cannot`,
+    );
   }
   return { service, stream };
 }
@@ -96,6 +107,26 @@ function pushMany(hub: Hub, seeds: StreamSeeds, served: Served, args: readonly u
   sendItems(hub, seeds, served, feed, checked);
 }
 
+/** Counts the sockets in a room on every node: `socketsInRoom` of the dispatcher's presence. */
+export type CountSockets = (room: string) => Promise<number>;
+
+/** `subscribers(scope)` or `subscribers()`: the sockets in the feed's room, on every node. */
+async function subscribers(
+  served: Served,
+  count: CountSockets,
+  args: readonly unknown[],
+): Promise<number> {
+  const { service, stream } = served;
+  // The one argument is the scope, which a global stream does not take.
+  const scope = args[0];
+  const problem = scopeProblem(stream, scope);
+  if (problem !== undefined || args.length !== (stream.scoped ? 1 : 0)) {
+    const usage = stream.scoped ? "pass (scope)" : "pass no argument";
+    throw new TypeError(`${service.name}.${stream.name}.subscribers: ${problem ?? usage}`);
+  }
+  return await count(streamRoom(service.name, stream.name, scope as string | undefined));
+}
+
 /** One dispatcher's streams: their seeds, the handles that push to them, and their socket listeners. */
 export interface Streams {
   /**
@@ -115,8 +146,8 @@ export interface Streams {
 
 type Feeds = StreamFeeds;
 
-/** Creates the streams of the dispatcher whose hub this is. */
-export function createStreams(hub: Hub): Streams {
+/** Creates the streams of the dispatcher whose hub this is; `count` counts a feed's subscribers. */
+export function createStreams(hub: Hub, count: CountSockets): Streams {
   const seeds = new StreamSeeds();
   const feeds = createStreamFeeds(hub, seeds);
   return Object.freeze({
@@ -129,6 +160,7 @@ export function createStreams(hub: Hub): Streams {
         pushMany: (...args: unknown[]) => {
           pushMany(hub, seeds, served, args);
         },
+        subscribers: (...args: unknown[]) => subscribers(served, count, args),
       }) as StreamHandle<AnyContract, string>;
     },
     extension: feeds.extension,

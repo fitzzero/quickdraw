@@ -64,12 +64,18 @@ Each package's export map lives in its own `package.json`. Core's has `.`
 (contracts, kits' contract halves, errors, protocol types; browser-safe and
 dependency-free), `./server`, `./server/auth`, `./server/express`,
 `./server/mcp`, `./server/otel`, `./prisma`, `./client` (opens with
-`"use client"`), `./utils` (isomorphic: `createServerCaller`, cache keys,
-formatting), `./parser` (the JSON-only Socket.IO parser, kept out of the
-root), `./testing`, `./testing/client` and `./testing/prisma`, with one tsup
-entry per export and shared chunks (`splitting`), plus the `quickdraw-docs`
-bin (`src/cli/`). `packages/core/scripts/dist-smoke.mjs` checks the built
-output, including the `"use client"` that must open `dist/client/index.js`.
+`"use client"`), `./client/core` (the client without React or TanStack:
+the connection, calls, auth helpers, peer links and host mode, plus
+`./utils`; `./client` re-exports it), `./utils` (isomorphic:
+`createServerCaller`, cache keys, formatting), `./parser` (the JSON-only
+Socket.IO parser, kept out of the root), `./testing`, `./testing/client`,
+`./testing/mock` and `./testing/prisma`, with one tsup entry per export and
+shared chunks (`splitting`), plus the `quickdraw-docs` bin (`src/cli/`).
+`packages/core/scripts/dist-smoke.mjs` checks the built output, including
+the `"use client"` that must open `dist/client/index.js`, and that
+`./client/core` reaches no React or TanStack Query in its code or its
+declarations (it also runs `scripts/client-core-smoke.mjs`, which calls a
+built server through it with both refused).
 Tests sit next to sources (`*.test.ts(x)`) and are typechecked. Core's vitest
 config has three projects: `node` (`*.test.ts`), `dom` (`*.test.tsx`, jsdom)
 and `types` (`*.test-d.ts`).
@@ -128,7 +134,8 @@ and `dev`. Two more jobs are path-gated on pull requests (a `*-changes` job
 decides; on pushes they always run, and a skipped one counts as passed): the
 `godot` job runs `check:godot` with the official Godot build when a pull
 request touches `examples/godot`, core's protocol, realtime, transport or
-testing code, `docs/protocol-v5.md`, the dependencies or the workflow; the
+testing code, its client's peer links or host mode (`src/client/peer`,
+`src/client/host`), `docs/protocol-v5.md`, the dependencies or the workflow; the
 `cluster` job runs `test:cluster` behind a Valkey service when it touches
 core's sources or tests, its vitest config or manifest, the lockfile, the
 root `package.json` or `tsconfig.base.json`, or the workflow.

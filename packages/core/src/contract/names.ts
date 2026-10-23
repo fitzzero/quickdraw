@@ -45,6 +45,12 @@ export function streamRoom(service: string, stream: string, scope?: string): str
   return scope === undefined ? `qd:s:${service}:${stream}` : `qd:s:${service}:${stream}:${scope}`;
 }
 
+/**
+ * The prefix every room {@link streamRoom} names starts with. The builder
+ * spells it out, since docs/protocol-v5.md is generated from its template.
+ */
+export const STREAM_ROOM_PREFIX = "qd:s:";
+
 /** The room every authenticated socket of a user joins: `user:{userId}`, as in 4.1. */
 export function userRoom(userId: string): string {
   return `user:${userId}`;
@@ -105,6 +111,10 @@ export const CLIENT_EVENTS = Object.freeze({
   streamUnsub: "qd:stream:unsub",
   /** A fire-and-forget channel message, sent volatile: `[s, channel, payload]`. */
   channel: "qd:ch",
+  /** A peer link's signal to another socket of an app room: `{ room, to, sig }`. */
+  peer: "qd:peer",
+  /** A peer link's message for the server to relay: `[room, to, label, text]`, dropped on `fast` when backed up. */
+  relay: "qd:relay",
 } as const);
 
 /** Events the server sends to a client (RFC 0003 section 8.3). */
@@ -129,6 +139,12 @@ export const SERVER_EVENTS = Object.freeze({
   rotate: "qd:rotate",
   /** The user's service grants changed. */
   access: "qd:access",
+  /** A peer link's signal from another socket of an app room: `{ room, from, userId, sig }`. */
+  peer: "qd:peer",
+  /** A peer link's message the server relays: `[room, from, label, text]`. */
+  relay: "qd:relay",
+  /** An app room's host (host mode): `[room, host]`, the host's socket id or `null`. */
+  host: "qd:host",
 } as const);
 
 /** The name of an event a client sends. */

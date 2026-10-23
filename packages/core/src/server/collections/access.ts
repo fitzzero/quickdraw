@@ -8,7 +8,11 @@
 // missing anchor row has no level, so it is `FORBIDDEN` unless the grant
 // passes. A `"self"` scope passes when it is the principal's own user id;
 // it has no anchors, and on a service with a policy its items follow that
-// policy for its user (`selfAccess.ts`).
+// policy for its user (`selfAccess.ts`). A collection that `requires: {
+// service: L }` also needs the principal's service-wide grant on its own
+// service at least `L`, as a method's `{ service: L }` form counts it,
+// before either: from the socket's principal, never a read, so a reload of
+// the user's grants authorizes their scopes again (`revocation.ts`).
 // 4.1 asked each collection's `checkScopeAccess` (4.1 `src/server/collections.ts:45-49`).
 //
 // A change topic (RFC 0003 section 11.3) is watched on the same terms: a
@@ -48,14 +52,17 @@ export interface ScopeRule {
   readonly anchor: string | undefined;
   /** The level a subscriber needs on the scope's anchor row. */
   readonly access: AccessLevel;
+  /** The service-wide grant on `service` a subscriber needs besides; none without it. */
+  readonly requires?: { readonly service: AccessLevel } | undefined;
 }
 
 /**
  * The scopes of `scopes` the principal may subscribe to under `rule`, each
  * with the rows its access is derived from (its anchors): the anchor row and
  * its `inherit` parents, none for a `"self"` scope, whose items follow the
- * item service's policy instead (`selfAccess.ts`). One engine call; a lookup
- * that fails rejects.
+ * item service's policy instead (`selfAccess.ts`). None at all below the
+ * service-wide grant the rule `requires`. One engine call, none without the
+ * grant; a lookup that fails rejects.
  */
 export async function allowedScopes(
   policies: Pick<PolicyEngine, "resolve">,
@@ -67,10 +74,14 @@ export async function allowedScopes(
   const { anchor, service } = rule;
   const anchorRow = (scope: string): readonly string[] =>
     anchor === undefined ? [] : [anchorKey(anchor, scope)];
-  if (service.adminBypass && serviceGrant(principal, service.name) === "Admin") {
+  const grant = serviceGrant(principal, service.name);
+  if (service.adminBypass && grant === "Admin") {
     for (const scope of scopes) {
       allowed.set(scope, anchorRow(scope));
     }
+    return allowed;
+  }
+  if (rule.requires !== undefined && !meetsLevel(grant, rule.requires.service)) {
     return allowed;
   }
   if (anchor === undefined) {
@@ -123,6 +134,7 @@ export async function authorizeScopes(
     service: collection.service,
     anchor: collection.anchorService?.name,
     access: collection.access,
+    requires: collection.requires,
   };
   return await allowedScopes(hub.policies, rule, principal, scopes);
 }

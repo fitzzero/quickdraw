@@ -3,10 +3,17 @@
 // The parts of `qd.<service>.<method>.useQuery` beyond TanStack's own
 // (RFC 0003 sections 11.3 and 11.4): joining the change topic the query
 // watches (and holding its read until the join is answered), showing the
-// overlays of optimistic mutations over the rows it returns, and showing
-// nothing while new credentials await their hello.
+// overlays of optimistic mutations over the rows it returns, showing
+// nothing while new credentials await their hello, and never a placeholder
+// made from a result another user's session left in the observer.
 
-import { hashKey, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
+import {
+  hashKey,
+  type Query,
+  type QueryClient,
+  type QueryKey,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { collectionTopic, SERVICE_TOPIC } from "../contract/names";
 import type { QuickdrawConnection } from "./connection";
@@ -205,6 +212,59 @@ export function useOverlaySelect<Output, Data>(
       return select === undefined ? (shown as unknown as Data) : select(shown);
     };
   }, [shape, view, select]);
+}
+
+/** A `placeholderData` function as TanStack calls it, whatever the query's types. */
+type PlaceholderFunction = (previousData: unknown, previousQuery: Query | undefined) => unknown;
+
+/**
+ * `placeholderData` made to take a placeholder only from a query the cache
+ * still holds. TanStack asks a placeholder function about the last query
+ * that held data, which the observer keeps outside the cache: after another
+ * user's hello, or the end of the session, emptied the cache
+ * (`./session.ts`), that query and its data are the last user's, and give
+ * no placeholder. A new function on each call: TanStack shows the
+ * placeholder it last made again, without asking, while the option stays
+ * the same function, which would keep one whose query left the cache. A
+ * value passes as it is: it is the app's own, never a result that was read.
+ */
+function placeholderFromCache<Placeholder>(
+  queryClient: QueryClient,
+  placeholderData: Placeholder,
+): Placeholder {
+  if (typeof placeholderData !== "function") {
+    return placeholderData;
+  }
+  // TanStack types the function by the query's data, which a placeholder only passes on.
+  const asked = placeholderData as unknown as PlaceholderFunction;
+  const fromCache: PlaceholderFunction = (previousData, previousQuery) =>
+    previousQuery === undefined ||
+    queryClient.getQueryCache().get(previousQuery.queryHash) === previousQuery
+      ? asked(previousData, previousQuery)
+      : undefined;
+  return fromCache as unknown as Placeholder;
+}
+
+/**
+ * The `placeholderData` a query hook gives TanStack, on every render: the
+ * caller's, or else what TanStack would take from `queryClient`'s defaults
+ * for `queryKey` (an app's own `QueryClient` may give every query
+ * `keepPreviousData`), taking a placeholder only from a query the cache
+ * still holds (`placeholderFromCache`).
+ */
+export function placeholderOption<Placeholder>(
+  queryClient: QueryClient,
+  queryKey: QueryKey,
+  options: { readonly placeholderData?: Placeholder },
+): Placeholder | undefined {
+  const keyDefaults = queryClient.getQueryDefaults(queryKey);
+  const given =
+    "placeholderData" in options
+      ? options.placeholderData
+      : ((Object.hasOwn(keyDefaults, "placeholderData")
+          ? keyDefaults.placeholderData
+          : queryClient.getDefaultOptions().queries?.placeholderData) as Placeholder | undefined);
+  return placeholderFromCache(queryClient, given);
 }
 
 /**
