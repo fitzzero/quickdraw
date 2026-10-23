@@ -2,7 +2,7 @@
 // a session, and reading a token back only while its session is live.
 
 import * as jose from "jose";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readVerifiedJWT } from "../jwt";
 import { createMemorySessionStore, type SessionStore } from "./sessions";
 import { DEFAULT_SESSION_TTL_MS, issueSession, liveSession } from "./tokens";
@@ -42,10 +42,30 @@ describe("issueSession and liveSession", () => {
     expect(session.expiresAt.getTime() - Date.now()).toBeGreaterThan(DEFAULT_SESSION_TTL_MS - 5000);
     const payload = await readVerifiedJWT(token, SECRET);
     expect(payload).toMatchObject({ userId: "ada", sid: session.id });
-    expect((payload?.exp ?? 0) - (payload?.iat ?? 0)).toBe(DEFAULT_SESSION_TTL_MS / 1000);
+    // At the session's expiry, rounded up to the whole second a JWT counts in.
+    expect(payload?.exp).toBe(Math.ceil(session.expiresAt.getTime() / 1000));
     expect(await liveSession(keys, token)).toBe(session);
     await sessions.revoke(session.id);
     expect(await liveSession(keys, token)).toBeNull();
+  });
+
+  it("signs a token that lasts as long as its session, however late in a second it was issued", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      // 3 ms before a whole second: a token counted from that second ended 3 ms later.
+      const issuedAt = Date.parse("2026-10-23T12:00:00.997Z");
+      vi.setSystemTime(issuedAt);
+      const keys = { sessions: createMemorySessionStore(), jwtSecret: SECRET };
+      const { session, token } = await issueSession(keys, "ada", { provider: "mock" }, 1000);
+      expect(session.expiresAt.getTime()).toBe(issuedAt + 1000);
+      vi.setSystemTime(issuedAt + 999);
+      expect(await liveSession(keys, token)).toBe(session);
+      // The session's expiry ends it, not the token's.
+      vi.setSystemTime(issuedAt + 1000);
+      expect(await liveSession(keys, token)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses a store that does not return the session it created, and a short lifetime", async () => {
