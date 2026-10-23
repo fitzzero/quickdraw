@@ -8,17 +8,12 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { captureLogger, deferred, type Deferred } from "../__tests__/fixtures";
+import { ADAPTER_MARGIN_MS, CLUSTER_ADAPTER_TIMEOUT_MS, requestDeadlineOf } from "../cluster/acks";
 import { registerDeployment } from "../cluster/deployment";
 import type { Hub } from "../emit/hub";
 import type { QuickdrawIo } from "../transports/types";
 import { PresenceRecords, usersInRoom } from "./presence";
-import {
-  ADAPTER_MARGIN_MS,
-  createPresenceRequests,
-  PRESENCE_EVENT,
-  PRESENCE_WARN_EVERY_MS,
-  requestDeadlineOf,
-} from "./presenceRequests";
+import { createPresenceRequests, PRESENCE_EVENT, PRESENCE_WARN_EVERY_MS } from "./presenceRequests";
 
 /** What Socket.IO rejects an answered event with on the adapter's own timeout: the answers that came. */
 function timedOut(responses: unknown[]): Error {
@@ -151,6 +146,26 @@ describe("presence requests", () => {
       Object.assign(io.sockets.adapter, { requestsTimeout: unusable });
       expect(requestDeadlineOf(hub, server)).toBe(50);
     }
+  });
+
+  it("wait the fixed 5 s of socket.io-adapter's cluster adapter, which exposes no request timeout", () => {
+    const { io, hub } = fakeServer();
+    const server = io as unknown as QuickdrawIo;
+    // The hooks a ClusterAdapter asks of every subclass, and its own publishAndReturnOffset.
+    const hooks = {
+      doPublish: () => Promise.resolve("offset"),
+      doPublishResponse: () => Promise.resolve(),
+      publishAndReturnOffset: () => Promise.resolve("offset"),
+    };
+    Object.assign(io.sockets.adapter, hooks);
+    expect(requestDeadlineOf(hub, server)).toBe(CLUSTER_ADAPTER_TIMEOUT_MS + ADAPTER_MARGIN_MS);
+    // A request timeout it does expose comes first.
+    Object.assign(io.sockets.adapter, { requestsTimeout: 800 });
+    expect(requestDeadlineOf(hub, server)).toBe(800 + ADAPTER_MARGIN_MS);
+    // Half of the hooks is no cluster adapter.
+    const { io: other, hub: otherHub } = fakeServer();
+    Object.assign(other.sockets.adapter, { doPublish: hooks.doPublish });
+    expect(requestDeadlineOf(otherHub, other as unknown as QuickdrawIo)).toBe(50);
   });
 
   it("count the answers that came when a node did not answer in time, warn how many, and read no node's sockets", async () => {

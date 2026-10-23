@@ -14,13 +14,14 @@
 // order a test chooses, for the races a real cluster rarely shows, and show
 // when a node asks the others for the hosts they hold.
 
+import { Server } from "socket.io";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostFrame } from "../../protocol/envelope";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
 import { alice, bob, captureLogger, deferred, type AppPrincipal } from "../__tests__/fixtures";
 import type { Hub } from "../emit/hub";
 import { peeredCluster } from "../transports/__tests__/harness";
-import type { QuickdrawServerSocket } from "../transports/types";
+import type { QuickdrawIo, QuickdrawServerSocket } from "../transports/types";
 import { compileChannels, compileStreams } from "./define";
 import { frames, refused, settle } from "./__tests__/fixture";
 import { defineGameService, gameContract, qd, WORLD, WORLD_ID } from "./__tests__/hostGame";
@@ -402,6 +403,33 @@ describe("a node that starts after a room's host was set", () => {
     await vi.waitFor(() => {
       expect(late.server.rooms.hostOf(WORLD)).toBe(host.id);
     });
+  });
+
+  it("learns the answering node's host from its first ask while another node never answers", async () => {
+    // An adapter that hands over the answers that came when its request timeout passes, as Redis's does.
+    const bus = peeredCluster({ requestsTimeout: 100 });
+    const boot = async () => {
+      const app = await createTestApp({
+        services: [defineGameService()],
+        peers: true,
+        socket: { adapter: bus.adapter },
+        // A second ask would come only 10 s later: the host must come from the first.
+        cluster: { timeoutMs: 10_000 },
+      });
+      apps.push(app as unknown as TestApp);
+      return app;
+    };
+    const a = await boot();
+    bus.servers.push(a.server.io);
+    const host = await player(a, alice);
+    await host.connection.call.gameService.host(world);
+    // A node of an earlier version hears the bus and never answers.
+    bus.servers.push(new Server() as unknown as QuickdrawIo);
+    const late = await boot();
+    bus.servers.push(late.server.io);
+    await vi.waitFor(() => {
+      expect(late.server.rooms.hostOf(WORLD)).toBe(host.id);
+    }, 2000);
   });
 
   it("asks once its adapter's subscribing connection answered a PING, and once only", async () => {

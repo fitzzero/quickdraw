@@ -219,17 +219,27 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   too: a count fell to this node's own sockets, and presence read every
   node's sockets for 30 s. That read threw after the adapter's timeout
   while a node stayed frozen; a frozen node no longer makes presence
-  throw. Both now wait for the adapter's own request timeout (the Redis
-  adapter's `requestsTimeout`) plus 250 ms, or `cluster.timeoutMs` for an
-  adapter that exposes none, and count the answers that came. They warn
+  throw. Both now wait for the adapter's own request timeout plus 250 ms,
+  and count the answers that came. That timeout is the Redis adapter's
+  `requestsTimeout`, or the fixed 5 s of socket.io-adapter's cluster
+  adapters (the sharded Redis, streams, Postgres and Mongo adapters), which
+  expose none; any other adapter waits `cluster.timeoutMs`. They warn
   how many nodes answered, at most once every 10 minutes. quickdraw never
   changes an adapter the app built: with the Redis adapter's default
   `requestsTimeout` of 5,000 ms, a read in a degraded cluster takes about
   5.25 s instead of 1 s, so lower it for faster answers. During a rolling
   deploy from 5.1.0 or earlier, whose nodes never answer a presence
   request, the users on those nodes are missing from presence while old
-  and new nodes overlap; behind an adapter without a `requestsTimeout`
-  (socket.io-adapter's cluster adapters), every other node's users are.
+  and new nodes overlap; behind an adapter with no request timeout to wait
+  for (neither a `requestsTimeout` nor a cluster adapter's 5 s), every other
+  node's users are.
+- **A starting node takes the room hosts of the nodes that answered when
+  one node is silent.** Its ask for the other nodes' hosts (host mode
+  behind a cluster adapter) waited `cluster.timeoutMs` and dropped every
+  answer when one node did not answer in time. With three or more nodes and
+  one silent, it learned no host: behind the Redis adapter it never asks
+  again, and behind other adapters only `cluster.timeoutMs` later. It now
+  waits as presence does and keeps the answers that came.
 - **`setupRedisAdapter` gives the adapter it builds the server's
   `cluster.timeoutMs` as its `requestsTimeout`** (1,000 ms by default,
   where the Redis adapter's own default is 5,000), so that node's presence

@@ -18,7 +18,7 @@ import type { Principal } from "../../src/server/index";
 import { setupRedisAdapter, type RedisAdapterResult } from "../../src/server/redis";
 import type * as Testing from "../../src/testing/createTestApp";
 import { startNode, stopNodes, type ClusterNode, type CreateTestApp } from "./nodes";
-import { uniquePrefix, VALKEY_URL } from "./valkey";
+import { closeClient, uniquePrefix, VALKEY_URL, valkeyClient } from "./valkey";
 
 // The single-server `createTestApp`: these tests boot each node themselves.
 const { createTestApp } = await vi.importActual<typeof Testing>("../../src/testing/createTestApp");
@@ -45,12 +45,12 @@ type Game = {
   };
 };
 
-/** One more node of the cluster `prefix` names. */
-async function node(prefix: string): Promise<ClusterNode> {
+/** One more node of the cluster `prefix` names, its adapter's request timeout `requestsTimeout` when given. */
+async function node(prefix: string, requestsTimeout?: number): Promise<ClusterNode> {
   const started = await startNode(
     createTestApp as CreateTestApp,
     { services: [defineGameService()], peers: true },
-    { prefix },
+    { prefix, ...(requestsTimeout === undefined ? {} : { requestsTimeout }) },
   );
   running.push(started);
   return started;
@@ -143,6 +143,29 @@ describe("room hosts across nodes", () => {
     const peer = await player(late, bob);
     await settle(peer.connection);
     expect(peer.hosts).toEqual([[WORLD, host.id]]);
+  });
+
+  it("reach the sockets of a late node while a third node is frozen: its one ask keeps the answers that came", async () => {
+    const prefix = uniquePrefix("hosts");
+    const a = await node(prefix);
+    const host = await player(a, alice);
+    await host.calls.gameService.host(world);
+    // Subscribed to the adapter's requests, so counted among the nodes, and answering none.
+    const ghost = valkeyClient();
+    try {
+      await ghost.connect();
+      await ghost.subscribe(`${prefix}-request#/#`, () => undefined);
+      // Its adapter hands over the answers that came after 300 ms; it asks once, after its PING.
+      const late = await node(prefix, 300);
+      await vi.waitFor(() => {
+        expect(late.app.server.rooms.hostOf(WORLD)).toBe(host.id);
+      }, 2000);
+      const peer = await player(late, bob);
+      await settle(peer.connection);
+      expect(peer.hosts).toEqual([[WORLD, host.id]]);
+    } finally {
+      await closeClient(ghost);
+    }
   });
 
   it("reach the sockets of a node wired with setupRedisAdapter after the host was set", async () => {
