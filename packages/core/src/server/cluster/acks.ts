@@ -6,9 +6,88 @@
 // still holds what it revoked. Socket.IO hands the listener the
 // acknowledgement as the event's last argument when the sender asked for
 // answers (`serverSideEmitWithAck`).
+//
+// Socket.IO hands a request's answers over together: on the last one, or on
+// the adapter's own request timeout, which passes the ones that came on the
+// error (`answersOf`). A request that keeps what came (presence, a stream's
+// subscriber count, a starting node's room hosts) waits that long plus
+// `ADAPTER_MARGIN_MS` (`requestDeadlineOf`): the Redis adapter's
+// `requestsTimeout`, or the fixed 5 s of socket.io-adapter's cluster adapter;
+// any other adapter `cluster.timeoutMs`. quickdraw reads the adapter and
+// never writes to one the app built.
+
+import type { QuickdrawIo } from "../transports/types";
 
 /** How long a node waits on the rest of the cluster by default: `cluster.timeoutMs`. */
 export const DEFAULT_CLUSTER_TIMEOUT_MS = 1000;
+
+/** How long past an adapter's own request timeout a request waits for the answers it hands over then. */
+export const ADAPTER_MARGIN_MS = 250;
+
+/**
+ * The request timeout of socket.io-adapter's cluster adapter
+ * (`ClusterAdapter`, `ClusterAdapterWithHeartbeat`), which it does not
+ * expose: a fixed 5 s, after which it hands over the answers that came.
+ */
+export const CLUSTER_ADAPTER_TIMEOUT_MS = 5000;
+
+/** The longest delay a timer honors (2^31 - 1 ms). */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * True for an adapter built on socket.io-adapter's cluster adapter (the
+ * sharded Redis, Redis streams, Postgres and Mongo adapters): it has the two
+ * publishing hooks that class asks of every subclass, and the class's own
+ * `publishAndReturnOffset`. Read off the adapter, so it holds for whichever
+ * copy of socket.io-adapter built it, where `instanceof` would hold for one.
+ */
+export function isClusterAdapter(adapter: object): boolean {
+  const hooks = adapter as {
+    readonly doPublish?: unknown;
+    readonly doPublishResponse?: unknown;
+    readonly publishAndReturnOffset?: unknown;
+  };
+  return (
+    typeof hooks.doPublish === "function" &&
+    typeof hooks.doPublishResponse === "function" &&
+    typeof hooks.publishAndReturnOffset === "function"
+  );
+}
+
+/**
+ * How long a request to the other nodes waits to keep the answers that
+ * came: the adapter's own request timeout plus `ADAPTER_MARGIN_MS` (the Redis
+ * adapter's `requestsTimeout`, or socket.io-adapter's cluster adapter's fixed
+ * 5 s), else `cluster.timeoutMs`.
+ */
+export function requestDeadlineOf(
+  hub: { readonly cluster?: { readonly timeoutMs?: number } | undefined },
+  io: QuickdrawIo,
+): number {
+  const adapter = (io.sockets as { readonly adapter?: unknown }).adapter;
+  if (typeof adapter === "object" && adapter !== null) {
+    const own = (adapter as { readonly requestsTimeout?: unknown }).requestsTimeout;
+    if (
+      typeof own === "number" &&
+      Number.isFinite(own) &&
+      own > 0 &&
+      own + ADAPTER_MARGIN_MS <= MAX_TIMER_MS
+    ) {
+      return own + ADAPTER_MARGIN_MS;
+    }
+    if (isClusterAdapter(adapter)) {
+      return CLUSTER_ADAPTER_TIMEOUT_MS + ADAPTER_MARGIN_MS;
+    }
+  }
+  return hub.cluster?.timeoutMs ?? DEFAULT_CLUSTER_TIMEOUT_MS;
+}
+
+/** The answers a request did get before the adapter's own timeout: Socket.IO passes them on the error. */
+export function answersOf(error: unknown): unknown {
+  return typeof error === "object" && error !== null
+    ? (error as { readonly responses?: unknown }).responses
+    : undefined;
+}
 
 /** Each server's `cluster.timeoutMs`, by its Socket.IO server, for `setupRedisAdapter`. */
 const TIMEOUTS = new WeakMap<object, number>();

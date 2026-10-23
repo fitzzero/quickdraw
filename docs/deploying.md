@@ -118,9 +118,10 @@ revisions stay one order across the deploy. A node of a version before
 5.1.1 never answers a presence request: while one is up, a presence read
 across nodes waits for its deadline and counts the other nodes' answers, so
 that node's users are missing from presence until it is replaced ("When a
-node stops answering"). Behind an adapter without a `requestsTimeout` (the
-cluster adapters there), no other node's users are counted either while it
-is up. A node of a version without a stream's subscriber
+node stops answering"). Behind an adapter that has no request timeout to
+wait for (neither a `requestsTimeout` nor socket.io-adapter's cluster
+adapter's fixed 5 s), no other node's users are counted either while it is
+up. A node of a version without a stream's subscriber
 count answers that request `null`, or not at all: its sockets count as 0
 until it is replaced.
 
@@ -218,9 +219,10 @@ until it is replaced.
   nodes it waits for when asked, so the node asks once the adapter's
   subscribing connection answered a PING sent after its subscriptions; with
   an adapter that has no such client it asks again `cluster.timeoutMs` after
-  the first answer. A node that dies without closing its sockets leaves the
-  hosts it held recorded on the others until each room's host is set or
-  cleared again.
+  the first answer. While one node does not answer, the node takes the
+  hosts of the nodes that did ("When a node stops answering"). A node that
+  dies without closing its sockets leaves the hosts it held recorded on the
+  others until each room's host is set or cleared again.
 - **Collections.** A removal a write cannot address to a scope (a
   `ctx.touch(..., { removed: true })`, junction rows a cascade removed
   without their entry's tracked delete) is broadcast, so every node's
@@ -299,13 +301,13 @@ kept from them (a field above their new level, a row they lost) until that
 node applies it. Live frames are fail-open across nodes for that long; calls
 and subscription reads are always authorized on the node that serves them.
 
-Presence reads and a stream's subscriber count keep the answers that came.
-Socket.IO hands a request's answers over together: while one node does not
-answer, the other nodes' answers arrive only with the adapter's own request
-timeout, which hands over those that came. So such a request waits for that
-timeout (the Redis adapter's `requestsTimeout`) plus 250 ms, and counts
-what came: the silent node's users and sockets are missing, the other
-nodes' are not, and nothing throws.
+Presence reads, a stream's subscriber count and a starting node's ask for
+the room hosts keep the answers that came. Socket.IO hands a request's
+answers over together: while one node does not answer, the other nodes'
+answers arrive only with the adapter's own request timeout, which hands
+over those that came. So such a request waits for that timeout plus
+250 ms, and counts what came: the silent node's users, sockets and hosts
+are missing, the other nodes' are not, and nothing throws.
 
 - `setupRedisAdapter` builds its adapter with `requestsTimeout` set to
   `cluster.timeoutMs` (its `requestsTimeout` option sets another), so a read
@@ -316,11 +318,13 @@ nodes' are not, and nothing throws.
   (`createAdapter(pub, sub, { key, requestsTimeout: 1000 })`) for faster
   answers in a degraded cluster. It also bounds the app's own
   `fetchSockets`.
-- An adapter that exposes no `requestsTimeout` (one built on
-  socket.io-adapter's cluster adapter: the sharded Redis, streams, Postgres
-  and Mongo adapters, which time requests out after 5 s on their own) is
-  waited `cluster.timeoutMs`, and a request that one node leaves unanswered
-  then counts no other node's answers.
+- An adapter built on socket.io-adapter's cluster adapter (the sharded
+  Redis, streams, Postgres and Mongo adapters) exposes no `requestsTimeout`:
+  it times requests out after a fixed 5 s and hands over what came then, so
+  such a read takes about 5.25 s.
+- Any other adapter with no `requestsTimeout` is waited `cluster.timeoutMs`,
+  and a request that one node leaves unanswered then counts no other
+  node's answers.
 
 Each logs a warning saying how many nodes answered ("A node did not answer
 a presence request in time: 1 other node answered ...", and the same for "a

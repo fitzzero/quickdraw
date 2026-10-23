@@ -23,23 +23,26 @@
 // its own: so the ask goes once the adapter's subscribing connection
 // answered a PING sent after its subscriptions (one connection's commands
 // run in order), and with an adapter that has no such client it goes again
-// `cluster.timeoutMs` after the first answer. Each record has a version, a
-// hybrid clock in microseconds: the time, or one past every version the
-// node heard when that is later. Records are ordered by version, then by
-// socket id, and a clear ends every record of the room ordered at or
-// before the one it clears, whatever its host, and is remembered (the
-// latest `MAX_CLEARED` rooms). So each node holds what the latest event it
-// heard says, a host or none, whatever order the events reached it in, and
-// two `setHost` at once on two nodes leave every node with the same
-// answer. A node that turns down a record older than what it holds sends
-// what it holds again, so a node whose clock is behind, or that started
-// late, comes round. A node that dies without closing leaves its hosts'
-// records on the others until the room's host is set or cleared again.
+// `cluster.timeoutMs` after the first answer. Each ask waits as presence's
+// requests do (`requestDeadlineOf`) and keeps the answers that came, so one
+// silent node among several withholds only its own hosts. Each record has a
+// version, a hybrid clock in microseconds: the time, or one past every
+// version the node heard when that is later. Records are ordered by
+// version, then by socket id, and a clear ends every record of the room
+// ordered at or before the one it clears, whatever its host, and is
+// remembered (the latest `MAX_CLEARED` rooms). So each node holds what the
+// latest event it heard says, a host or none, whatever order the events
+// reached it in, and two `setHost` at once on two nodes leave every node
+// with the same answer. A node that turns down a record older than what it
+// holds sends what it holds again, so a node whose clock is behind, or that
+// started late, comes round. A node that dies without closing leaves its
+// hosts' records on the others until the room's host is set or cleared
+// again.
 
 import { SERVER_EVENTS } from "../../contract/names";
 import { QuickdrawError } from "../../protocol/errors";
 import { isRoomName, isSocketId } from "../../protocol/peer";
-import { DEFAULT_CLUSTER_TIMEOUT_MS, within } from "../cluster/acks";
+import { answersOf, DEFAULT_CLUSTER_TIMEOUT_MS, requestDeadlineOf, within } from "../cluster/acks";
 import { emitToNodes, onNodeEvent, tagged } from "../cluster/deployment";
 import { track, type Hub } from "../emit/hub";
 import { describeError } from "../pipeline/metrics";
@@ -311,15 +314,24 @@ function subscriberOf(io: QuickdrawIo): Pinging | undefined {
   return typeof ping === "function" && !cluster ? (client as Pinging) : undefined;
 }
 
-/** Asks the other nodes for the hosts their own sockets are, and their clocks, within `cluster.timeoutMs`. */
-async function ask(state: State, io: QuickdrawIo, timeoutMs: number): Promise<void> {
+/**
+ * Asks the other nodes for the hosts their own sockets are, and their
+ * clocks, and takes whatever came: every answer, or, when a node did not
+ * answer in time, those the adapter handed over at its own timeout
+ * (`requestDeadlineOf`, as presence waits).
+ */
+async function ask(state: State, io: QuickdrawIo): Promise<void> {
   try {
     merge(
       state,
-      await within(io.serverSideEmitWithAck(ROOM_HOSTS_EVENT, tagged(io, {})), timeoutMs),
+      await within(
+        io.serverSideEmitWithAck(ROOM_HOSTS_EVENT, tagged(io, {})),
+        requestDeadlineOf(state.hub, io),
+      ),
     );
-  } catch {
-    // No answer in time: what the other nodes hold reaches this node with their next changes.
+  } catch (error) {
+    // The silent node's hosts reach this node with their next changes.
+    merge(state, answersOf(error));
   }
 }
 
@@ -344,9 +356,9 @@ function seed(state: State): void {
   }
   const timeoutMs = state.hub.cluster?.timeoutMs ?? DEFAULT_CLUSTER_TIMEOUT_MS;
   const twice = async (): Promise<void> => {
-    await ask(state, io, timeoutMs);
+    await ask(state, io);
     await pause(timeoutMs);
-    await ask(state, io, timeoutMs);
+    await ask(state, io);
   };
   const subscriber = subscriberOf(io);
   if (subscriber === undefined) {
@@ -357,7 +369,7 @@ function seed(state: State): void {
     Promise.resolve().then(() => subscriber.ping()),
     timeoutMs,
   ).then(async () => {
-    await ask(state, io, timeoutMs);
+    await ask(state, io);
   }, twice);
 }
 

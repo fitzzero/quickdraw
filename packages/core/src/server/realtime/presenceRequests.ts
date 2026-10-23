@@ -22,12 +22,14 @@
 // Socket.IO hands a request's answers over together: while one node does
 // not answer, the others' come only with the adapter's own request timeout,
 // which hands over the answers that arrived. So a request waits for that
-// timeout (`requestsTimeout`, the Redis adapter's, which `setupRedisAdapter`
-// sets to `cluster.timeoutMs`) plus `ADAPTER_MARGIN_MS`, never changing an
-// adapter the app built, and counts the answers that came: a silent node's
-// users and sockets are missing, the other nodes' are not. With an adapter
-// that exposes no such timeout it waits `cluster.timeoutMs`, and a request
-// one node leaves unanswered counts nothing from the others. Either way it
+// timeout plus `ADAPTER_MARGIN_MS` (`requestDeadlineOf` in
+// `../cluster/acks.ts`: the Redis adapter's `requestsTimeout`, which
+// `setupRedisAdapter` sets to `cluster.timeoutMs`, or the fixed 5 s of
+// socket.io-adapter's cluster adapter), never changing an adapter the app
+// built, and counts the answers that came: a silent node's users and
+// sockets are missing, the other nodes' are not. With any other adapter it
+// waits `cluster.timeoutMs`, and a request one node leaves unanswered counts
+// nothing from the others. Either way it
 // warns how many nodes answered, at most once every 10 minutes for
 // presence and once for counts, and never throws: a job that counts to skip
 // work counts again on its next round. A node of a version before 5.1.1
@@ -37,7 +39,7 @@
 // the adapter's timeout while a node stayed frozen).
 
 import { STREAM_ROOM_PREFIX, userRoom } from "../../contract/names";
-import { DEFAULT_CLUSTER_TIMEOUT_MS, within } from "../cluster/acks";
+import { answersOf, requestDeadlineOf, within } from "../cluster/acks";
 import { onNodeEvent, tagged } from "../cluster/deployment";
 import type { Hub } from "../emit/hub";
 import type { QuickdrawIo } from "../transports/types";
@@ -45,9 +47,6 @@ import type { PresenceRecords } from "./presence";
 
 /** The server-to-server event one node asks the others for a room's users or a user's sockets on. */
 export const PRESENCE_EVENT = "quickdraw:presence";
-
-/** How long past the adapter's own request timeout a request waits for the answers it hands over then. */
-export const ADAPTER_MARGIN_MS = 250;
 
 /** How long after one warning that a node did not answer the next one may be logged, per kind. */
 export const PRESENCE_WARN_EVERY_MS = 10 * 60_000;
@@ -136,13 +135,6 @@ function countOf(answers: unknown): number {
   return total;
 }
 
-/** The answers a timed-out request did get: Socket.IO hands them over on the adapter's own timeout. */
-function answersOf(error: unknown): unknown {
-  return typeof error === "object" && error !== null
-    ? (error as { readonly responses?: unknown }).responses
-    : undefined;
-}
-
 /** Answers the other nodes' presence requests, from this node's app-room records and its sockets. */
 function answerRequests(hub: Hub, records: PresenceRecords): void {
   const { io } = hub;
@@ -168,32 +160,6 @@ function answerRequests(hub: Hub, records: PresenceRecords): void {
     },
     null,
   );
-}
-
-/** The longest delay a timer honors (2^31 - 1 ms). */
-const MAX_TIMER_MS = 2_147_483_647;
-
-/**
- * How long a request to the other nodes waits: the adapter's own request
- * timeout plus `ADAPTER_MARGIN_MS` when it exposes one (the Redis adapter's
- * `requestsTimeout`), so the answers that came arrive with that timeout;
- * else `cluster.timeoutMs`.
- */
-export function requestDeadlineOf(hub: Hub, io: QuickdrawIo): number {
-  const adapter = (io.sockets as { readonly adapter?: unknown }).adapter;
-  const own =
-    typeof adapter === "object" && adapter !== null
-      ? (adapter as { readonly requestsTimeout?: unknown }).requestsTimeout
-      : undefined;
-  if (
-    typeof own === "number" &&
-    Number.isFinite(own) &&
-    own > 0 &&
-    own + ADAPTER_MARGIN_MS <= MAX_TIMER_MS
-  ) {
-    return own + ADAPTER_MARGIN_MS;
-  }
-  return hub.cluster?.timeoutMs ?? DEFAULT_CLUSTER_TIMEOUT_MS;
 }
 
 /** The other nodes' answers to one request: all of them, or those that came before its deadline. */
