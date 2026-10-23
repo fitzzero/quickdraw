@@ -171,6 +171,15 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   screen typed through `AdminScreen` needed a cast to call it. A row panel
   shows the row `adminUpdate` or `adminCreate` returned with
   `admin.adminGet?.setData({ id: row.id }, row)`, with no new read.
+- **The peer-link code loads only when an app needs it.** `useChannel` and
+  `useStream` reach host mode for every contract, but not the peer-link
+  code (WebRTC, the relay and the lag simulator, about 7 KB gzipped): it
+  loads as a chunk of its own once the server's hello announces peer
+  links (`createServer({ peers: true })`), or at the first link to a
+  room's host. So an app whose server serves no peer links never
+  downloads it, and an open tab holds it before a redeploy removes the
+  chunk. An app that imports `createPeerLink` or `defineHost` keeps it in
+  its main bundle.
 
 ### Server
 

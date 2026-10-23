@@ -11,6 +11,14 @@
 // the way is an in-process link (`local.ts`): the host hears this client as
 // one of its peers, over a link like theirs.
 //
+// Neither link's code is imported here, so an app that never links to a
+// host never downloads it (WebRTC, the relay, the lag simulator): the
+// serving hands in the in-process link's maker with its host
+// (`registerLocalHost`), and `../peer/link` loads on demand, once the
+// server announces peer links (`hello.limits.peers`) or at the first link,
+// whichever comes first. A tab then holds it before a redeploy removes
+// the chunk it was built with.
+//
 // A channel's message sent while no way is open is dropped, as a channel
 // message is when the connection is backed up. A feed subscribes (`[4]`)
 // each time a way opens; its seed (`[6]`, in chunks) replaces what it held,
@@ -24,10 +32,10 @@ import type { WireError } from "../../protocol/errors";
 import { MAX_PEER_MESSAGE_BYTES } from "../../protocol/version";
 import type { QuickdrawConnection } from "../connection";
 import { controlOf } from "../peer/core";
-import { createPeerLink } from "../peer/link";
+import type { createPeerLink } from "../peer/link";
 import type { PeerLink } from "../peer/types";
 import { hostsOf, type HostDirectory } from "./hosts";
-import { createLocalLink } from "./local";
+import type { createLocalLink } from "./local";
 import type { HostSend } from "./runtime";
 
 /** One feed of a host-served stream, as the stream store holds it. */
@@ -74,6 +82,12 @@ interface Way {
   readonly close: () => void;
 }
 
+/** A room's host this connection serves, and the maker of its in-process link (`createLocalLink`). */
+interface LocalServing {
+  readonly host: LocalHost;
+  readonly createLink: typeof createLocalLink;
+}
+
 interface RoomState {
   readonly room: string;
   /** The host the way below goes to. */
@@ -93,7 +107,45 @@ interface LinksState {
   readonly connection: QuickdrawConnection;
   readonly directory: HostDirectory;
   readonly rooms: Map<string, RoomState>;
-  readonly locals: Map<string, LocalHost>;
+  readonly locals: Map<string, LocalServing>;
+}
+
+/** `createPeerLink`, loading or loaded: `undefined` before the first load and after a failed one. */
+let peerLinks: Promise<typeof createPeerLink> | undefined;
+
+/** Loads `../peer/link` once, for every connection; a failed load is tried again by the next caller. */
+function loadPeerLinks(): Promise<typeof createPeerLink> {
+  peerLinks ??= import("../peer/link").then(
+    (module) => module.createPeerLink,
+    (error: unknown) => {
+      peerLinks = undefined;
+      throw error;
+    },
+  );
+  return peerLinks;
+}
+
+/**
+ * Starts loading `../peer/link` once `connection`'s server announces peer
+ * links (`hello.limits.peers`, from `createServer({ peers: true })`); a
+ * server without them never has it loaded. A failed load waits for the
+ * first link, which tries again.
+ */
+function loadWhenAnnounced(connection: QuickdrawConnection): void {
+  const announced = (): boolean => connection.getState().hello?.limits.peers !== undefined;
+  const load = (): void => {
+    loadPeerLinks().catch(() => undefined);
+  };
+  if (announced()) {
+    load();
+    return;
+  }
+  const stop = connection.subscribe(() => {
+    if (announced()) {
+      stop();
+      load();
+    }
+  });
 }
 
 const feedKey = (service: string, stream: string, scope: string): string =>
@@ -186,28 +238,59 @@ function takeLink(links: LinksState, state: RoomState, host: string, link: PeerL
 }
 
 /** The in-process link to a host this connection serves, open at once. */
-function connectLocal(links: LinksState, state: RoomState, local: LocalHost, self: string): void {
+function connectLocal(
+  links: LinksState,
+  state: RoomState,
+  local: LocalServing,
+  self: string,
+): void {
   const { connection } = links;
   const userId = connection.getState().hello?.userId ?? "";
-  const [near, far] = createLocalLink(
+  const [near, far] = local.createLink(
     state.room,
     self,
     userId,
     () => connection.getState().hello?.limits.peers?.maxMessageBytes ?? MAX_PEER_MESSAGE_BYTES,
   );
-  local(far);
+  local.host(far);
   takeLink(links, state, self, near);
 }
 
+/**
+ * A link to the room's host at `host`, once `../peer/link` has loaded: the
+ * way is pending meanwhile, so `connect` makes no other. A load the room
+ * no longer waits for (its way ended, or its host changed) is dropped, and
+ * a load that failed is a link that closed: the next waits.
+ */
 function connectLink(links: LinksState, state: RoomState, host: string): void {
-  let link;
-  try {
-    link = createPeerLink(links.connection, { room: state.room, to: host, offerer: true });
-  } catch {
-    // A link the app opened itself to the host, in this room: host mode leaves it alone.
-    return;
-  }
-  takeLink(links, state, host, link);
+  const loading = (): void => undefined;
+  state.pending = loading;
+  void loadPeerLinks().then(
+    (createPeerLink) => {
+      if (state.pending !== loading) {
+        return;
+      }
+      state.pending = undefined;
+      if (links.directory.of(state.room) !== host) {
+        disconnect(state);
+        return;
+      }
+      let link;
+      try {
+        link = createPeerLink(links.connection, { room: state.room, to: host, offerer: true });
+      } catch {
+        // A link the app opened itself to the host, in this room: host mode leaves it alone.
+        return;
+      }
+      takeLink(links, state, host, link);
+    },
+    () => {
+      if (state.pending === loading) {
+        disconnect(state);
+        retryLater(links, state, host);
+      }
+    },
+  );
 }
 
 /**
@@ -284,6 +367,7 @@ function createLinks(connection: QuickdrawConnection): LinksState & HostLinks {
     rooms: new Map(),
     locals: new Map(),
   };
+  loadWhenAnnounced(connection);
   links.directory.listen((room, host) => {
     const state = links.rooms.get(room);
     if (state === undefined) {
@@ -347,15 +431,18 @@ export function hostLinksOf(connection: QuickdrawConnection): HostLinks {
 
 /**
  * Registers the host this connection serves for `room`, so this client's
- * own channels and feeds of the room reach it in process; returns its
- * removal.
+ * own channels and feeds of the room reach it in process, over the link
+ * `createLink` makes (`createLocalLink`: the serving hands it in, so a
+ * client that serves no room never loads it); returns its removal.
  */
 export function registerLocalHost(
   connection: QuickdrawConnection,
   room: string,
-  local: LocalHost,
+  host: LocalHost,
+  createLink: typeof createLocalLink,
 ): () => void {
   const links = linksStateOf(connection);
+  const local: LocalServing = { host, createLink };
   links.locals.set(room, local);
   const state = links.rooms.get(room);
   if (state !== undefined && state.feeds.size > 0) {
