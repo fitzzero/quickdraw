@@ -6,8 +6,9 @@
 // disconnect leaves every room) forgets it; the app joins again, through its
 // method, once reconnected.
 //
-// React-free: the live data (`liveData.ts`) makes one per connection and
-// `QueryClient`, before the socket connects, so no frame is missed.
+// React-free and TanStack-free: the live data has one per connection and
+// cache (`stores.ts`), made before the socket connects, so no frame is
+// missed.
 
 import { isName, isRecord } from "../../protocol/guards";
 import { notifyEach } from "../watch";

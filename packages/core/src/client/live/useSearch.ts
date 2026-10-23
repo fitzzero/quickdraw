@@ -26,8 +26,7 @@ import type { SearchPage } from "../../contract/kits/searchSchemas";
 import { useMethodQuery } from "../hooks";
 import { collectionKey } from "../keys";
 import type { CollectionEntry } from "./collectionLoads";
-import { entryQuery } from "./host";
-import { useLiveData, useOverlayView } from "./liveHooks";
+import { entryQuery, useLiveData, useOverlayView } from "./liveHooks";
 import { searchCall, shownResults, type SearchCall, type SearchTarget } from "./searchResults";
 import type { UseSearchOptions, UseSearchResult } from "./searchTypes";
 

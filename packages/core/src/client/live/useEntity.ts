@@ -20,8 +20,7 @@ import type { QuickdrawError } from "../../protocol/errors";
 import { entityKey } from "../keys";
 import type { OverlayView } from "../optimistic";
 import { EMPTY_ENTITY, type EntityEntry } from "./entities";
-import { entryQuery } from "./host";
-import { useLiveData, useOverlayView } from "./liveHooks";
+import { entryQuery, useLiveData, useOverlayView } from "./liveHooks";
 
 /** Options of `useEntity` and `useEntities`. */
 export interface UseEntityOptions {

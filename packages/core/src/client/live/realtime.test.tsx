@@ -16,6 +16,7 @@ import { createMockClient, renderWithQuickdraw } from "../../testing/client";
 import { createTestApp, type TestApp } from "../../testing/index";
 import { outgoing } from "../__tests__/fixtures";
 import { createQuickdrawClient } from "../createClient";
+import { useQuickdraw } from "../provider";
 import { usePresence } from "./usePresence";
 
 const server = initQuickdraw<{ principal: Principal }>();
@@ -216,6 +217,48 @@ describe("useStream", () => {
       setTimeout(resolve, 50);
     });
     view.getByText("refused FORBIDDEN []");
+  });
+
+  it("shows the next user on the connection none of the last user's items", async () => {
+    const app = await createTestApp({
+      services: [roomService],
+      auth: { loadServiceAccess: () => ({}) },
+    });
+    apps.push(app as unknown as TestApp);
+    const secret = app.server.stream(room, "secret");
+    const shown: (readonly [string | null, string])[] = [];
+    function Feed() {
+      const { userId } = useQuickdraw();
+      const { items, isLoading, error } = qd.room.secret.useStream();
+      let text = isLoading ? "loading" : `secrets [${items.join(",")}]`;
+      if (error !== null) {
+        text = `refused ${error.code} [${items.join(",")}]`;
+      }
+      shown.push([userId, text]);
+      return <p>{text}</p>;
+    }
+    const view = await renderWithQuickdraw(<p>start</p>, {
+      app,
+      as: { userId: "ada", serviceAccess: { roomService: "Admin" } },
+      client: qd,
+    });
+    await view.findByText("start");
+    // Mounted after the provider's first commit, so the provider made the cache session before
+    // the live data asked for it: one session, whose hello for Bo makes the feed forget Ada's items.
+    view.rerender(<Feed />);
+    await view.findByText("secrets []");
+    secret.push("ada-only");
+    await view.findByText("secrets [ada-only]");
+    await act(async () => {
+      view.connection.setAuth({ principal: { userId: "bo" } });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+    await view.findByText("refused FORBIDDEN []");
+    const toBo = shown.filter(([userId]) => userId === "bo").map(([, text]) => text);
+    expect(toBo).toContain("refused FORBIDDEN []");
+    expect(toBo.filter((text) => text.includes("ada-only"))).toEqual([]);
   });
 
   it("subscribes again after a reconnect, showing the seed it missed", async () => {

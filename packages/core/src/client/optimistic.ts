@@ -746,12 +746,13 @@ export function resetOverlays(queryClient: QueryClient): void {
 
 /**
  * The state of scope `scope` of `collection` of `service` changed in the
- * cache of `queryClient` (`live/collectionController.ts`): its finished
- * additions end when that state accounts for them, because it holds the id
- * their reply named (the server's own copy is shown now), a delta just
- * applied named it, or the load just applied was sent after their call's
- * reply (`readAt`) and so would hold it if it were a member. Additions of
- * calls in flight stay.
+ * cache of `queryClient`: its finished additions end when that state
+ * accounts for them, because it holds the id their reply named (the
+ * server's own copy is shown now), a delta just applied named it, or the
+ * load just applied was sent after their call's reply (`readAt`) and so
+ * would hold it if it were a member. Additions of calls in flight stay. The
+ * live data's collection controllers settle a scope the same way, through
+ * their host's overlays (`live/host.ts`).
  */
 export function settleAdditions(
   queryClient: QueryClient,
