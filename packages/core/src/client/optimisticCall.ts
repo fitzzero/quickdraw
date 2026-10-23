@@ -26,6 +26,9 @@ import {
   type StoreInternals,
 } from "./optimistic";
 
+// For the mutation hook (`mutation.ts`), which holds lint's ten imports.
+export type { OptimisticCache, OptimisticUpdate } from "./optimistic";
+
 /** A row as an update finds its input: any object with a string `id`. */
 function isRow(value: unknown): value is AddedRow {
   return isRecord(value) && typeof value.id === "string";

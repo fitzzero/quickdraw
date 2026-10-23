@@ -1804,6 +1804,22 @@ export function TaskDetail({ id }: { readonly id: string }) {
   `optimistic: (input, cache) => ...` writes its own layers with
   `patchEntity`, `removeEntity` and `patchItem`, and adds rows with
   `addItem` and `addEntity` (below).
+- A mutation hook shows a call (its `data`, `error`, `variables` and
+  status) only while the server's hello names the user the call ran as. A
+  component that stays mounted while the user changes shows the next user
+  none of the last user's calls, finished or in flight, and none while new
+  credentials await their hello; the same user's shows again once their
+  hello arrives, and stays through a reconnect. `throwOnError` throws only
+  such an error. The call still settles, and its callbacks still run, for
+  the user who made it. A call made while no hello is held (before the
+  first, while new credentials await theirs, after the server ended the
+  session) runs as the user the next hello names, and shows idle
+  (`isPending` false) until then; one that fails before any hello (no
+  socket to send it on) is never shown nor thrown, so handle such failures
+  in `onError`. Under an `AuthGate` (children render only while `isKnown`)
+  such calls do not arise. A call that itself switches the user (an
+  anonymous sign-in or sign-up, then `setAuth`) hides its result once the
+  new hello arrives: act on it in `onSuccess`.
 - Live rows and collections need no refetching: frames keep them current,
   and after a reconnect they resume by revision. A query whose result
   follows writes declares `watch` in its contract; the coordinator fetches
@@ -1839,7 +1855,8 @@ export function TaskDetail({ id }: { readonly id: string }) {
   (`qd:access`) refetch every query. Live entries never take a placeholder,
   whatever `placeholderData` default the `QueryClient` sets: `useEntity`,
   `useCollection` and a search's held scope show nothing of another row,
-  scope or user while a new id, scope or user loads.
+  scope or user while a new id, scope or user loads. A mounted mutation
+  hook shows the next user none of the last user's calls (above).
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
   kind of work.
