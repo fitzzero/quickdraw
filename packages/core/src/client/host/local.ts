@@ -5,7 +5,9 @@
 // lists its own client among its peers with a link like theirs: `setLag` on
 // it gives the host's own play the lag its peers have. Both ends open at
 // once, on the `direct` path, each naming this socket and its user; closing
-// one closes the other, with `bye`.
+// one closes the other, with `bye`. Neither has a watchdog: both ends ping
+// on this tab's timers, so a hidden tab's throttled timers would close the
+// link as `lost`, which an in-process link never is.
 //
 // React-free.
 
@@ -28,6 +30,7 @@ export function createLocalLink(
       room,
       peer: socketId,
       maxMessageBytes,
+      watchdog: false,
       hooks: {
         send: (label, text) => {
           other()?.receive(text, label);

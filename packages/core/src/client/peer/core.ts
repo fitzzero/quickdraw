@@ -60,6 +60,12 @@ export interface CoreOptions {
   readonly maxMessageBytes: () => number;
   /** This side's clock, in milliseconds. Default `performance.now()`. */
   readonly now?: () => number;
+  /**
+   * False for a link that cannot be lost (in process): it never closes as
+   * `lost`, since its pings run on this side's timers alone, which a hidden
+   * tab throttles. Default true.
+   */
+  readonly watchdog?: boolean;
 }
 
 /** A link, and how its owner drives it. */
@@ -150,7 +156,7 @@ function tick(core: Core): void {
   if (core.state !== "open") {
     return;
   }
-  if (core.now() - core.lastHeard > WATCHDOG_MS) {
+  if (core.options.watchdog !== false && core.now() - core.lastHeard > WATCHDOG_MS) {
     finish(core, "lost", true);
     return;
   }
