@@ -1811,7 +1811,15 @@ export function TaskDetail({ id }: { readonly id: string }) {
   credentials await their hello; the same user's shows again once their
   hello arrives, and stays through a reconnect. `throwOnError` throws only
   such an error. The call still settles, and its callbacks still run, for
-  the user who made it.
+  the user who made it. A call made while no hello is held (before the
+  first, while new credentials await theirs, after the server ended the
+  session) runs as the user the next hello names, and shows idle
+  (`isPending` false) until then; one that fails before any hello (no
+  socket to send it on) is never shown nor thrown, so handle such failures
+  in `onError`. Under an `AuthGate` (children render only while `isKnown`)
+  such calls do not arise. A call that itself switches the user (an
+  anonymous sign-in or sign-up, then `setAuth`) hides its result once the
+  new hello arrives: act on it in `onSuccess`.
 - Live rows and collections need no refetching: frames keep them current,
   and after a reconnect they resume by revision. A query whose result
   follows writes declares `watch` in its contract; the coordinator fetches

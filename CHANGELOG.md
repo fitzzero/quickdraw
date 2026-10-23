@@ -236,6 +236,16 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   `onSuccess`, `onError` and `onSettled` still run, for the user who made
   it: the observer is not reset, which would drop the callbacks a
   `mutate(variables, options)` gave a call still in flight.
+  **Behavior change:** a call made while no hello is held (before the
+  first, while new credentials await theirs, after the server ended the
+  session) shows idle, with `isPending` false, until the next hello names
+  its user; one that fails before any hello (no socket to send it on) is
+  never shown nor thrown, where it showed `error` (`INTERNAL`) and threw to
+  a boundary before. Handle such failures in `onError`; behind the README's
+  `AuthGate`, whose children render only while `isKnown`, such calls do not
+  arise. A mutation that switches the user itself (an anonymous sign-in or
+  sign-up, then `setAuth`) hides its `data` and `isSuccess` once the new
+  hello arrives: act on its result in `onSuccess`.
 - **An app's own hook reads in the provider's first commit.**
   `QuickdrawProvider` bound the typed client to its connection, and opened
   the connection, in passive effects, which React runs after its

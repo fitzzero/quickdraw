@@ -133,7 +133,13 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   while the server's hello names the user the call ran as: a component that
   stays mounted while the user changes shows the next user none of the last
   user's calls, and none while new credentials await their hello. Its
-  callbacks still run for the user who made it.
+  callbacks still run for the user who made it. A call made while no hello
+  is held shows idle until the next hello names its user, and one that
+  fails before any hello is never shown nor thrown: handle that in
+  `onError` (behind an `isKnown` gate it cannot happen).
+- A mutation that switches the user itself (an anonymous sign-in or
+  sign-up, then `setAuth`) hides its `data` and `isSuccess` once the new
+  hello arrives: act on its result in `onSuccess`, not in render.
 - Never refetch or invalidate after a mutation by hand: the frames update
   live rows and collections, and watched queries refetch themselves. For
   anything else use `qd.invalidate(qd.task.stats, input?)`, never
