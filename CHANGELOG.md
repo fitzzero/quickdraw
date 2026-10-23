@@ -557,6 +557,18 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   An adapter with savepoints of its own keeps them, and every other member
   of the factory is its own. Core's own test database uses the same
   function.
+- **A mock client's stub counts one call for a mount right after its
+  answer is set.** A new answer (`mockResolvedValue`, `mockRejectedValue`,
+  `mockImplementation`, `mockReset`) refetched the method's cached queries
+  a few microtasks later, and by then a component rendered just after the
+  answer was set had read it already: the refetch asked the stub a second
+  time, so `calls` counted 2 for one mount (a test had to wait a macrotask
+  before rendering). The queries to refetch are now the ones cached when
+  the answer is set, each holding a result, or a read in flight, of an
+  older answer; a query cached later reads the new answer with its own
+  first fetch. A new answer still refetches each of those once, and a
+  query rendered while its stub had no answer still shows the answer when
+  it comes.
 
 ### Lint
 

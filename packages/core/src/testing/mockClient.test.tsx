@@ -73,6 +73,45 @@ describe("createMockClient", () => {
     expect(qd.task.get.calls).toEqual([{ id: "t1" }, { id: "t1" }, { id: "t1" }, { id: "t1" }]);
   });
 
+  it.each(["mockResolvedValue", "mockImplementation", "mockRejectedValue"] as const)(
+    "asks its stub once on a mount right after %s, and once more for a new answer",
+    async (setter) => {
+      const qd = createMockClient({ task });
+      function Title() {
+        const { data, error } = qd.task.get.useQuery({ id: "t1" });
+        if (error !== null) {
+          return <p>{`refused ${error.code}`}</p>;
+        }
+        return <p>{data === undefined ? "loading" : `title ${data.title}`}</p>;
+      }
+      /** Lets every refetch an answer set off land, so a late one is counted. */
+      const settled = () =>
+        act(async () => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+          });
+        });
+      if (setter === "mockResolvedValue") {
+        qd.task.get.mockResolvedValue(cardOf("t1", "First"));
+      } else if (setter === "mockImplementation") {
+        qd.task.get.mockImplementation(({ id }) => cardOf(id, "First"));
+      } else {
+        qd.task.get.mockRejectedValue(new QuickdrawError("FORBIDDEN", "Not yours"));
+      }
+      render(<Title />);
+      await screen.findByText(setter === "mockRejectedValue" ? "refused FORBIDDEN" : "title First");
+      await settled();
+      expect(qd.task.get.calls).toEqual([{ id: "t1" }]);
+      // A new answer refetches the result of the old one, once.
+      act(() => {
+        qd.task.get.mockResolvedValue(cardOf("t1", "Second"));
+      });
+      await screen.findByText("title Second");
+      await settled();
+      expect(qd.task.get.calls).toEqual([{ id: "t1" }, { id: "t1" }]);
+    },
+  );
+
   it("answers call and prefetch from the stub, and keys results as the real client does", async () => {
     const qd = createMockClient({ task });
     qd.task.get.mockResolvedValue(cardOf("t1", "First"));
