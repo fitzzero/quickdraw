@@ -147,17 +147,18 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   of a TanStack `QueryClient` it calls (`prefetchQuery`), which any
   `QueryClient` is, so `./utils` names TanStack Query nowhere, in its types
   either. `QueryClientLike` is on `./utils` and both client entries.
-- **The next user never sees the last user's result as a placeholder.**
-  TanStack keeps the query a mounted observer's placeholder is made from
-  outside the cache, which quickdraw empties on another user's hello or
-  when the server ends the session. So the first render after the next
-  user's hello could show the last user's result: an app query's
-  `placeholderData` (such as `keepPreviousData`, which could also keep it
-  shown) and `useSearch`'s last results. This is the follow-up the 5.1
-  security review recorded for CLIENT-1. A query hook now asks a
-  `placeholderData` function, the caller's or its `QueryClient`'s
-  default, only about a query the cache still holds; a placeholder given
-  as a value is shown as before.
+- **A member's `useQuery` and `useSearch` never show the last user's result
+  as a placeholder.** TanStack keeps the query a mounted observer's
+  placeholder is made from outside the cache, which quickdraw empties on
+  another user's hello or when the server ends the session. So the first
+  render after the next user's hello could show the last user's result: an
+  app query's `placeholderData` (such as `keepPreviousData`, which could
+  also keep it shown) and `useSearch`'s last results. This is the follow-up
+  the 5.1 security review recorded for CLIENT-1. A query hook now asks a
+  `placeholderData` function, the caller's or its `QueryClient`'s default,
+  only about a query the cache still holds; a placeholder given as a value
+  is shown as before. An app's own TanStack hook over a member's `key` and
+  `call` is not covered yet.
 - **Behavior change: the admin kit's reads of rows default to
   `staleTime: 0`.** `adminList`, `adminGet` and `adminSubscribers` took the
   provider's five-minute `staleTime`, and their rows are not live, so an
