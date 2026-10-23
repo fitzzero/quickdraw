@@ -101,7 +101,10 @@ export const playerService = qd.defineService(playerContract, {
   access: inherit({ from: teamContract, via: "teamId" }),
   adminBypass: false,
   writes: ["score", "teamMember"],
-  collections: { byTeam: { anchor: teamContract }, mine: { scopeAccess: "self" } },
+  collections: {
+    byTeam: { anchor: teamContract },
+    mine: { scopeAccess: "self", requires: { service: "Read" } },
+  },
   methods: {
     get: { access: { entry: "Read" }, handler: nothing },
     join: { access: { scope: "Moderate", of: teamContract, id: "teamId" }, handler: nothing },

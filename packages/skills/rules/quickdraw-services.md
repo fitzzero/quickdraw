@@ -210,7 +210,11 @@ in `id`), and optionally `where`, `limit`, `maxLimit`, `index` (small fields
 sent for the whole scope), `views` (`(row, who) => boolean` over index rows)
 and `access`. The service says who may open a scope: `{ anchor: project }`
 (the level on the row the scope value names) or `{ scopeAccess: "self" }`
-(the subscriber's own user id). Everyone in an anchored scope sees every
+(the subscriber's own user id), plus `requires: { service: "Read" }` when
+the list must need the service-wide grant its methods ask for
+(`{ scopeAccess: "self", requires: { service: "Read" } }`: the user's own
+rows, for holders of the Read grant); both checks then apply, and a socket
+whose grants reload below it leaves the scope. Everyone in an anchored scope sees every
 item, so derive the item service's access from the anchor (`inherit`); a
 self scope's items follow the item service's policy, so its user gets only
 the rows they may read. A `via` scope over the item service's own `members`

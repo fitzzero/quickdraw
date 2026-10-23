@@ -123,7 +123,23 @@ describe("a service's collections option", () => {
       { ...anchored, open: { anchor: projectContract, bulkThreshold: 0 } },
       "bulkThreshold must be a positive whole number",
     );
-    refuses({ ...anchored, open: { anchor: projectContract, by: 1 } }, 'unknown option "by"');
+    refuses(
+      { ...anchored, open: { anchor: projectContract, by: 1 } },
+      'unknown option "by"; the options are anchor, scopeAccess, requires and bulkThreshold',
+    );
+    for (const requires of ["Read", { service: "Owner" }, { level: "Read" }, {}, null]) {
+      refuses(
+        { ...anchored, open: { anchor: projectContract, requires } },
+        'collections.open: requires must be { service: level }, the service-wide grant every subscriber needs, as { service: "Read" }',
+      );
+    }
+    refuses(
+      {
+        ...anchored,
+        open: { anchor: projectContract, requires: { service: "Read", entry: "Read" } },
+      },
+      "requires must be { service: level }",
+    );
     refuses([], "collections must map each collection");
   });
 
@@ -155,6 +171,20 @@ describe("a service's collections option", () => {
       anchor: undefined,
       bulkThreshold: 200,
     });
+    expect(service.collections.get("open")?.requires).toBeUndefined();
+  });
+
+  it("records the service grant an entry requires, anchored or self", () => {
+    const service = defineLoosely({
+      collections: {
+        ...anchored,
+        open: { anchor: projectContract, requires: { service: "Moderate" } },
+        byLabel: { scopeAccess: "self", requires: { service: "Read" } },
+      },
+    });
+    expect(service.collections.get("open")?.requires).toEqual({ service: "Moderate" });
+    expect(service.collections.get("byLabel")?.requires).toEqual({ service: "Read" });
+    expect(Object.isFrozen(service.collections.get("open")?.requires)).toBe(true);
   });
 });
 
