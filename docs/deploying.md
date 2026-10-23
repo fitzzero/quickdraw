@@ -118,7 +118,9 @@ revisions stay one order across the deploy. A node of a version before
 5.1.1 never answers a presence request: while one is up, a presence read
 across nodes waits for its deadline and counts the other nodes' answers, so
 that node's users are missing from presence until it is replaced ("When a
-node stops answering"). A node of a version without a stream's subscriber
+node stops answering"). Behind an adapter without a `requestsTimeout` (the
+cluster adapters there), no other node's users are counted either while it
+is up. A node of a version without a stream's subscriber
 count answers that request `null`, or not at all: its sockets count as 0
 until it is replaced.
 

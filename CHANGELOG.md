@@ -228,7 +228,8 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   5.25 s instead of 1 s, so lower it for faster answers. During a rolling
   deploy from 5.1.0 or earlier, whose nodes never answer a presence
   request, the users on those nodes are missing from presence while old
-  and new nodes overlap.
+  and new nodes overlap; behind an adapter without a `requestsTimeout`
+  (socket.io-adapter's cluster adapters), every other node's users are.
 - **`setupRedisAdapter` gives the adapter it builds the server's
   `cluster.timeoutMs` as its `requestsTimeout`** (1,000 ms by default,
   where the Redis adapter's own default is 5,000), so that node's presence
