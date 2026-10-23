@@ -205,6 +205,24 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   delete or clear them through `db` in `prepare`, and their subscribers are
   told. An `adminDelete` with `prepare` reads the row first, one statement
   more. `AdminPrepare` and `AdminPrepareCall` are on `./server`.
+- **`ctx.access` asks the caller's level on any row.**
+  `ctx.access.levelsFor(service, ids)`, `can(service, id, level)` and
+  `where(service, level)` are `dispatcher.access`'s `levelsFor` and
+  `accessWhere` bound to the call's principal, with the grants the call
+  runs with; `service` is a contract or a service name. A `custom` form can
+  now check a row no declared form names (a parent the input names, or a
+  key that is optional), so the check moves out of the handler and into the
+  form:
+  `custom(async (ctx, input) => input.projectId === undefined || (await ctx.access.can(project, input.projectId, "Read")))`.
+  It counts levels as `{ entry }` does: a service-wide `Admin` reaches every
+  row, and anyone else has no level on a row that is not found. An anonymous
+  caller has none anywhere: an empty map, `false`, `"none"`. Every method
+  call's `ctx` has it, MCP and `ctx.services` calls included, and so does
+  the `ctx` the kits pass to their forms and callbacks; a context no
+  dispatcher built throws `INTERNAL` on its use, and `qd` has none. Reading
+  it in a `share: "all"` handler warns `shared-principal`. An app field
+  named `access` from `initQuickdraw({ context })` is now shadowed by the
+  framework's. `ContextAccess` is on `./server`.
 
 ### Testing
 

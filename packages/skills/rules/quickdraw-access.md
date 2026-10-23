@@ -109,6 +109,40 @@ triage: {
   it; elsewhere it acts with its user's grants (`kinds` keeps a kind of
   token out).
 
+## A row the form cannot name
+
+A check of the caller's level on a row no declared form names (a parent
+the input names, a key that is optional) is a `custom` form that asks
+`ctx.access`: never a check in the handler, and never a module that holds
+the dispatcher.
+
+```ts
+assigned: {
+  // Read on the project the input names, asked through ctx.access; none named, the caller's own
+  access: custom(
+    async (ctx, input) =>
+      input.projectId === undefined || (await ctx.access.can(project, input.projectId, "Read")),
+  ),
+  handler: ({ input, ctx, db }) =>
+    db.task.findMany({
+      where: { assigneeId: ctx.principal.userId, projectId: input.projectId },
+      take: 100,
+    }),
+},
+```
+
+- `ctx.access.can(service, id, level)`, `levelsFor(service, ids)` and
+  `where(service, level)` count levels as `{ entry }` does, for
+  `ctx.principal` with the grants the call runs with: never load the user's
+  grants again. `service` is a contract or a service name.
+- Prefer a declared form when one says it: `{ entry: L }` for the method's
+  own row, `{ scope: L, of, id }` for a parent whose key is always there.
+  `custom` replaces the row check and a service-wide `Admin` grant skips
+  it, so a method whose input has `id` still needs `rowless: true` beside
+  it (below).
+- An anonymous caller has no level anywhere (`false`, an empty map,
+  `"none"`). `qd` has no `access`: a job asks `server.dispatcher.access`.
+
 ## A method that takes a row id
 
 On a service with a policy, a method whose input has `id` reads or writes
