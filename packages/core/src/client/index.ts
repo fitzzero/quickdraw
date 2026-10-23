@@ -140,6 +140,8 @@ export {
   type PeerLabel,
   type PeerLink,
   type PeerLinkEvents,
+  type PeerLinkLag,
+  type PeerLinkLagOptions,
   type PeerLinkOptions,
   type PeerLinkState,
   type PeerLinkStats,

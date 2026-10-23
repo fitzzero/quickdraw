@@ -1106,10 +1106,17 @@ class PeerLink:
 	## "direct" or "relay" while open, else "".
 	var path := ""
 	var close_reason := ""
-	## App messages sent, received, and dropped by `send`.
+	## App messages a path took (under a lag, each as it goes), received, and
+	## dropped by `send`; and the "fast" ones the lag lost, both ways.
 	var sent := 0
 	var received := 0
 	var dropped := 0
+	var simulated_loss := 0
+	## The lag `set_lag` set: how long each message waits, each way, up to how
+	## many milliseconds more at random, and the share of "fast" ones lost.
+	var lag_ms := 0.0
+	var lag_jitter := 0.0
+	var lag_loss := 0.0
 	## The peer's clock minus this one's, the smoothed round trip and its
 	## variation, in milliseconds; `synced` once enough pongs arrived.
 	var clock_offset := 0.0
@@ -1142,6 +1149,9 @@ class PeerLink:
 	var _pongs := 0
 	var _tokens := 0.0
 	var _tokens_at := 0
+	var _out_held: Array = []  # [due, label, text, app], in order, held for the lag
+	var _in_held: Array = []  # [due, label, parts], in order, held for the lag
+	var _out_blocked := false  # a held "rel" message its path refused waits
 
 	func _init(client, link_room: String, to: String, is_offerer: bool, options: Dictionary) -> void:
 		_client = client
@@ -1163,12 +1173,33 @@ class PeerLink:
 			push_error("PeerLink.send: the message is longer than the server allows; split it")
 			dropped += 1
 			return false
-		var ok := state == "open" and _send_text(label, text)
-		if ok:
-			sent += 1
-		else:
+		if state != "open":
 			dropped += 1
-		return ok
+			return false
+		return _transmit(label, text, true)
+
+	## Simulates a bad network on this link, both ways and on either path:
+	## each message waits `ms` plus up to `jitter` milliseconds (the client
+	## hands it on in the first frame after), and a "fast" one is lost with
+	## probability `loss`, from 0 to 1 (`simulated_loss` counts the app's;
+	## jitter and loss draw from the client's `rng`). "rel" messages are never
+	## lost and keep their order; one the relay refuses as it comes due goes
+	## again on a later frame, and `send` on "rel" returns false meanwhile.
+	## The clock's pings wait too, so `rtt` reads the lagged round trip.
+	## `set_lag(0)` ends it: what is held goes on the next frame, in order.
+	func set_lag(ms: float, jitter := 0.0, loss := 0.0) -> void:
+		if ms < 0.0 or jitter < 0.0 or loss < 0.0 or loss > 1.0:
+			push_error("PeerLink.set_lag: ms and jitter are from 0, loss from 0 to 1")
+			return
+		if state == "closed":
+			return
+		lag_ms = ms
+		lag_jitter = jitter
+		lag_loss = loss
+		if ms == 0.0 and jitter == 0.0 and loss == 0.0:
+			var now := float(Time.get_ticks_msec())
+			for entry in _out_held + _in_held:
+				entry[0] = minf(float(entry[0]), now)
 
 	## The peer's clock now, in its milliseconds: `Time.get_ticks_msec()` plus `clock_offset`.
 	func clock_now() -> float:
@@ -1185,6 +1216,8 @@ class PeerLink:
 		path = ""
 		close_reason = reason
 		_bye_by = 0
+		_out_held.clear()
+		_in_held.clear()
 		_client._forget_link(self)
 		# Signals the server took hold a place for the pair there, a refused
 		# link's too: the bye frees it. A link that never started sent none.
@@ -1423,10 +1456,83 @@ class PeerLink:
 		if float(text.to_utf8_buffer().size()) > _client._peer_limit("maxMessageBytes"):
 			push_error("host mode: the message is longer than the server allows")
 			return false
-		return state == "open" and _send_text(label, text)
+		return state == "open" and _transmit(label, text, false)
+
+	## Sends one message's text on `label`, on the path at once, or once the
+	## lag held it (which may lose a "fast" one). False when it was dropped:
+	## the path refused it, or a held "rel" message waits for the path. An app
+	## message (`app`) counts in `sent`, `dropped` and `simulated_loss`.
+	func _transmit(label: String, text: String, app: bool) -> bool:
+		if _out_held.is_empty() and lag_ms == 0.0 and lag_jitter == 0.0 and lag_loss == 0.0:
+			var ok := _send_text(label, text)
+			if app:
+				if ok:
+					sent += 1
+				else:
+					dropped += 1
+			return ok
+		if label == "rel" and _out_blocked:
+			if app:
+				dropped += 1
+			return false
+		if label == "fast" and lag_loss > 0.0 and _client.rng.randf() < lag_loss:
+			if app:
+				simulated_loss += 1
+			return true
+		_out_held.append([_due(label, _out_held), label, text, app])
+		return true
+
+	## When a message held now is due: `lag_ms` plus up to `lag_jitter` from
+	## now, and a "rel" one no sooner than the "rel" one held ahead of it.
+	func _due(label: String, held: Array) -> float:
+		var due := float(Time.get_ticks_msec()) + lag_ms
+		if lag_jitter > 0.0:
+			due += _client.rng.randf() * lag_jitter
+		if label == "rel":
+			for index in range(held.size() - 1, -1, -1):
+				if held[index][1] == "rel":
+					return maxf(due, float(held[index][0]))
+		return due
+
+	## Hands on the held messages that are due, in order: a "rel" one never
+	## before the one held ahead of it, nor past one the path refused, which
+	## goes again on a later frame.
+	func _drain(now: int) -> void:
+		_out_blocked = false
+		var rel_waits := false
+		var index := 0
+		while index < _out_held.size():
+			var entry: Array = _out_held[index]
+			var due: bool = float(entry[0]) <= float(now)
+			if not due or (entry[1] == "rel" and rel_waits):
+				rel_waits = rel_waits or entry[1] == "rel"
+				index += 1
+				continue
+			var ok := state == "open" and _send_text(entry[1], entry[2])
+			if entry[1] == "rel" and not ok:
+				rel_waits = true
+				_out_blocked = true
+				index += 1
+				continue
+			_out_held.remove_at(index)
+			if entry[3]:
+				if ok:
+					sent += 1
+				else:
+					dropped += 1
+		rel_waits = false
+		index = 0
+		while index < _in_held.size() and state != "closed":
+			var entry: Array = _in_held[index]
+			if float(entry[0]) > float(now) or (entry[1] == "rel" and rel_waits):
+				rel_waits = rel_waits or entry[1] == "rel"
+				index += 1
+				continue
+			_in_held.remove_at(index)
+			_hear(entry[2], entry[1])
 
 	## One link message's text: `[0, data]`, `[1, t]` (a ping), `[2, t, u]` (its
-	## pong), or host mode's (kinds 3 to 8).
+	## pong), or host mode's (kinds 3 to 8), heard at once or once the lag held it.
 	func _receive(text: String, label: String) -> void:
 		if state == "closed":
 			return
@@ -1437,13 +1543,24 @@ class PeerLink:
 		var kind: Variant = parts[0]
 		if not (kind is float or kind is int):
 			return
+		if _in_held.is_empty() and lag_ms == 0.0 and lag_jitter == 0.0 and lag_loss == 0.0:
+			_hear(parts, label)
+			return
+		if label == "fast" and lag_loss > 0.0 and _client.rng.randf() < lag_loss:
+			if kind == 0:
+				simulated_loss += 1
+			return
+		_in_held.append([_due(label, _in_held), label, parts])
+
+	func _hear(parts: Array, label: String) -> void:
+		var kind: Variant = parts[0]
 		_last_heard = Time.get_ticks_msec()
 		if kind == 0:
 			received += 1
 			message.emit(label, parts[1])
 		elif kind == 1:
 			if state == "open":
-				_send_text("fast", JSON.stringify([2, parts[1], Time.get_ticks_msec()], "", true, true))
+				_transmit("fast", JSON.stringify([2, parts[1], Time.get_ticks_msec()], "", true, true), false)
 		elif kind == 2 and parts.size() >= 3:
 			_pong(float(parts[1]), float(parts[2]))
 		elif kind >= 6 and kind <= 8:
@@ -1481,6 +1598,9 @@ class PeerLink:
 	func _poll(now: int) -> void:
 		if state == "closed":
 			return
+		_drain(now)
+		if state == "closed":
+			return
 		if _pc != null:
 			_poll_direct(now)
 		if state == "connecting" and now >= _open_by and _started:
@@ -1499,7 +1619,7 @@ class PeerLink:
 			_finish("lost", true)
 			return
 		if now >= _next_ping:
-			_send_text("fast", JSON.stringify([1, now]))
+			_transmit("fast", JSON.stringify([1, now]), false)
 			_pings_left = maxi(0, _pings_left - 1)
 			var quick := _pings_left > 0
 			var wait := QuickdrawClient.PEER_QUICK_PING_MS if quick else QuickdrawClient.PEER_PING_MS

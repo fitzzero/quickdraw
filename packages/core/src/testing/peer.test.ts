@@ -1,8 +1,8 @@
 // The loopback peer link of `./testing` (RFC 0003 section 12.5): two ends in
 // one process that open together, lose `fast` messages at the rate asked
 // and never `rel` ones, keep `rel` in order under jitter, sync their
-// clocks, and close each other with `bye`, after the `rel` messages sent
-// ahead of it.
+// clocks, close each other with `bye`, after the `rel` messages sent ahead
+// of it, and take an end's `setLag` on top of the channel's own delay.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLoopbackPeerLink } from "./peer";
@@ -65,7 +65,8 @@ describe("createLoopbackPeerLink", () => {
     expect(rel).toEqual(Array.from({ length: 200 }, (_, n) => n));
     expect(fast.length).toBeGreaterThan(100);
     expect(fast.length).toBeLessThan(180);
-    expect(a.stats).toEqual({ sent: 400, received: 0, dropped: 0 });
+    // The channel's own losses were sent: the ends' `setLag` lost none.
+    expect(a.stats).toEqual({ sent: 400, received: 0, dropped: 0, simulatedLoss: 0 });
     expect(b.stats.received).toBe(received.length);
   });
 
@@ -119,6 +120,23 @@ describe("createLoopbackPeerLink", () => {
     await vi.advanceTimersByTimeAsync(50);
     expect(heard).toEqual(Array.from({ length: 20 }, (_, n) => n));
     expect(reasons).toEqual(["bye"]);
+  });
+
+  it("adds an end's setLag to the channel's delay, both ways", async () => {
+    const [a, b] = createLoopbackPeerLink({ ms: 10 });
+    await Promise.resolve();
+    a.setLag({ ms: 30 });
+    const atB: unknown[] = [];
+    const atA: unknown[] = [];
+    b.on("message", (data) => atB.push(data));
+    a.on("message", (data) => atA.push(data));
+    a.send("rel", "to b");
+    b.send("rel", "to a");
+    await vi.advanceTimersByTimeAsync(39);
+    expect([atB, atA]).toEqual([[], []]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect([atB, atA]).toEqual([["to b"], ["to a"]]);
+    expect([a.lag, b.lag]).toEqual([{ ms: 30, jitter: 0, loss: 0 }, null]);
   });
 
   it("refuses options out of range", () => {

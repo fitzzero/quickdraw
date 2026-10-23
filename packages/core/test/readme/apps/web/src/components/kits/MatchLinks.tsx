@@ -73,3 +73,20 @@ export function useMatchLinks(matchId: string, onMove: OnMove): (move: Move) => 
   };
 }
 // #endregion
+
+// #region lag
+// a browser test or a bench plays the match over a bad network, on the links' real paths: each
+// holds every message 150 ms plus up to 40 ms more, each way, and loses 5% of fast ones
+export function playOverBadNetwork(links: readonly PeerLink[]): () => void {
+  for (const link of links) {
+    link.setLag({ ms: 150, jitter: 40, loss: 0.05 });
+  }
+  // rel messages are never lost and keep their order; clock.rtt now reads about 300 ms more
+  return () => {
+    for (const link of links) {
+      // what the lag holds goes on the next task, in order
+      link.setLag(null);
+    }
+  };
+}
+// #endregion

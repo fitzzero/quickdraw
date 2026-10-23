@@ -105,7 +105,10 @@ describe("host mode from React", () => {
     });
     expect(host.moves[0]).toEqual([
       { ...world, dx: 1, dy: 0 },
-      { peer: { socketId: view.connection.socket.id, userId: "bob" }, room: WORLD },
+      {
+        peer: expect.objectContaining({ socketId: view.connection.socket.id, userId: "bob" }),
+        room: WORLD,
+      },
     ]);
     await view.disconnect();
     act(() => {

@@ -170,7 +170,11 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   dies with its socket: open it again on every connection, as `useJoin`
   joins again. What a peer sends is the peer's word, never checked by the
   server: parse each message with its schema as untrusted input. Never
-  send `qd:peer` or `qd:relay` by hand (`no-raw-socket`).
+  send `qd:peer` or `qd:relay` by hand (`no-raw-socket`). To play over a
+  bad network in a browser test or a bench, `link.setLag({ ms, jitter,
+loss })` lags the link's own messages both ways on its real path (`rel`
+  never lost, `stats.simulatedLoss` for the rest); never a proxy or a
+  hand-made delay around `send`.
 - Host mode: a player's `useStream` and `useChannel` of a host-served
   member (`serve: "host"`) reach the room's host over a link, with no
   change in the app; a channel's messages go on `fast`, so send input
@@ -180,7 +184,10 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   (`onHostChange(connection, listener)` hears it change), and calls
   `close()` when it is not. A host checks what players send it against the
   contract, but each message stays that player's word, and what the host
-  sends is the host's word.
+  sends is the host's word. Each of `host.peers` (and a handler's
+  `ctx.peer`) has `link`: read a player's round trip from
+  `link.clock.rtt`, and give the host's own play its players' lag with
+  `setLag` on the host's own entry, whose link is in process.
 - Admin screens: `qd.task.admin.adminList.useQuery(input)` and the other
   admin kit members; `useAdminServices(qd)` lists the services whose
   `adminMeta` answers the user, asking only those the hello's grants allow
