@@ -33,7 +33,7 @@ import { createMemorySessionStore } from "../auth/routes/sessions";
 import { socketAuth } from "../auth/routes/socketAuth";
 import { issueSession } from "../auth/routes/tokens";
 import { createCallLimiter } from "../express/rateLimit";
-import { transportHarness } from "./__tests__/harness";
+import { transportHarness, v5Auth } from "./__tests__/harness";
 import { markSocketAuth } from "./auth";
 import { createProbe, probe as probeContract } from "./__tests__/probe";
 
@@ -57,6 +57,9 @@ const tokenAuth: ServerAuth<AppPrincipal> = {
         : request.auth.token;
     if (token === "broken") {
       throw new Error("the session store is down");
+    }
+    if (token === "revoked") {
+      throw new QuickdrawError("UNAUTHENTICATED", "The session was revoked");
     }
     return typeof token === "string" ? TOKENS[token] : null;
   },
@@ -356,17 +359,34 @@ describe("credentials", () => {
     ]);
   });
 
-  it("answers 401 when authenticate throws", async () => {
+  it("answers 401 to a refusal, and 500 when authenticate fails otherwise (its store down)", async () => {
     const { url, logger } = await serve();
-    expect(
-      await post(url, "/qd/probeService/echo", { body: '{"text":"x"}', headers: bearer("broken") }),
-    ).toMatchObject({
+    const echo = (token: string) =>
+      post(url, "/qd/probeService/echo", { body: '{"text":"x"}', headers: bearer(token) });
+    expect(await echo("revoked")).toMatchObject({
       status: 401,
       body: { ok: false, e: { code: "UNAUTHENTICATED", message: "Authentication failed" } },
+    });
+    // A refusal on purpose is the caller's doing: logged at debug.
+    expect(logger.at("error")).toEqual([]);
+    // Anything else is the server's failure, as a socket's handshake takes it: the credentials
+    // may well be good, so the call is not answered as if they were not.
+    expect(await echo("broken")).toMatchObject({
+      status: 500,
+      body: { ok: false, e: { code: "INTERNAL", message: "Internal error" } },
     });
     expect(logger.at("error").map((entry) => entry.message)).toEqual([
       "HTTP authentication failed",
     ]);
+    // The typed HTTP caller rejects with each code, as a socket's client tells them apart.
+    const caller = (token: string) =>
+      createServerCaller({ probe: probeContract }, { url, headers: bearer(token) });
+    await expect(caller("revoked").probe.echo.call({ text: "x" })).rejects.toMatchObject({
+      code: "UNAUTHENTICATED",
+    });
+    await expect(caller("broken").probe.echo.call({ text: "x" })).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
   });
 
   it("tells authenticate where the token came from, and answers its FORBIDDEN as it is", async () => {
@@ -393,6 +413,91 @@ describe("credentials", () => {
     expect(seen).toEqual(["cookie", "bearer", undefined]);
     // A refusal on purpose is the caller's doing: logged at debug.
     expect(logger.at("error")).toEqual([]);
+  });
+});
+
+describe("the authenticate-threw development warning", () => {
+  const THREW = "[quickdraw:authenticate-threw]";
+  const threw = (logger: ReturnType<typeof captureLogger>) =>
+    logger.at("warn").filter((entry) => entry.message.startsWith(THREW));
+
+  /** An `authenticate` for either transport, failing as its token says. */
+  const failing: ServerAuth<AppPrincipal> = {
+    authenticate: ({ auth }) => {
+      switch (auth.token) {
+        case "broken":
+          throw new TypeError("the session store is down");
+        case "revoked":
+          throw new QuickdrawError("UNAUTHENTICATED", "The session was revoked");
+        case "elsewhere":
+          throw new QuickdrawError("FORBIDDEN", "Not from this page");
+        case "down":
+          throw new QuickdrawError("INTERNAL", "The session store is down");
+        default:
+          return null;
+      }
+    },
+  };
+
+  it("is logged once per server, from either transport, when authenticate throws anything but a QuickdrawError", async () => {
+    const { url, logger } = await serve({ auth: failing });
+    for (const attempt of [1, 2]) {
+      expect(
+        await post(url, "/qd/probeService/echo", {
+          body: '{"text":"x"}',
+          headers: bearer("broken"),
+        }),
+        `call ${String(attempt)}`,
+      ).toMatchObject({ status: 500 });
+    }
+    await expect(
+      harness.open(url, { ...v5Auth(null), token: "broken" }).connected,
+    ).rejects.toMatchObject({ data: { code: "INTERNAL" } });
+    expect(threw(logger)).toEqual([
+      {
+        level: "warn",
+        message: expect.stringContaining(
+          "authenticate threw something other than a QuickdrawError (TypeError)",
+        ) as string,
+        meta: { category: "quickdraw.dev", warning: "authenticate-threw", thrown: "TypeError" },
+      },
+    ]);
+    // It names the fix: refuse with a QuickdrawError, or let the caller in anonymously.
+    expect(threw(logger)[0]?.message).toContain('throw new QuickdrawError("UNAUTHENTICATED", ...)');
+    expect(threw(logger)[0]?.message).toContain("return null");
+  });
+
+  it("is never logged for a QuickdrawError, whatever its code", async () => {
+    const { url, logger } = await serve({ auth: failing });
+    const echo = (token: string) =>
+      post(url, "/qd/probeService/echo", { body: '{"text":"x"}', headers: bearer(token) });
+    expect(await echo("revoked")).toMatchObject({ status: 401 });
+    expect(await echo("elsewhere")).toMatchObject({ status: 403 });
+    // An app's own INTERNAL says the server failed, on purpose: answered as one, unwarned.
+    expect(await echo("down")).toMatchObject({ status: 500, body: { e: { code: "INTERNAL" } } });
+    await expect(
+      harness.open(url, { ...v5Auth(null), token: "revoked" }).connected,
+    ).rejects.toMatchObject({ data: { code: "UNAUTHENTICATED" } });
+    expect(threw(logger)).toEqual([]);
+  });
+
+  it("is off in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const { url, logger } = await serve({ auth: failing });
+      expect(
+        await post(url, "/qd/probeService/echo", {
+          body: '{"text":"x"}',
+          headers: bearer("broken"),
+        }),
+      ).toMatchObject({ status: 500 });
+      expect(threw(logger)).toEqual([]);
+      expect(logger.at("error").map((entry) => entry.message)).toEqual([
+        "HTTP authentication failed",
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
@@ -688,9 +793,8 @@ describe("createHttpRouter", () => {
       db,
       logger: captureLogger(),
     });
-    const httpServer = createHttpServer(
-      createHttpRouter({ dispatcher, auth: tokenAuth, logger: captureLogger() }),
-    );
+    const logger = captureLogger();
+    const httpServer = createHttpServer(createHttpRouter({ dispatcher, auth: tokenAuth, logger }));
     await new Promise<void>((resolve) => {
       httpServer.listen(0, "127.0.0.1", resolve);
     });
@@ -704,6 +808,21 @@ describe("createHttpRouter", () => {
       expect(
         await post(url, "/qd/taskService/rename", { body: '{"id":"t1","title":"x"}' }),
       ).toMatchObject({ status: 401 });
+      // Its authenticate failing without a refusal: INTERNAL, and warned about once, on its own logger.
+      for (const attempt of [1, 2]) {
+        expect(
+          await post(url, "/qd/taskService/get", {
+            body: '{"id":"t1"}',
+            headers: bearer("broken"),
+          }),
+          `call ${String(attempt)}`,
+        ).toMatchObject({ status: 500, body: { e: { code: "INTERNAL" } } });
+      }
+      expect(
+        logger
+          .at("warn")
+          .filter((entry) => entry.message.startsWith("[quickdraw:authenticate-threw]")),
+      ).toHaveLength(1);
     } finally {
       await new Promise((resolve) => {
         httpServer.close(resolve);

@@ -173,11 +173,17 @@ once:
 allowedOrigins)`, and checks it with `liveSession`; `auth.token` holds
   only a bearer token for it.
 - `authenticate` refuses credentials only by throwing
-  `QuickdrawError("UNAUTHENTICATED")` (or `"FORBIDDEN"`). Anything else it
-  or `loadServiceAccess` throws is an outage (the store or the database
+  `QuickdrawError("UNAUTHENTICATED")` (or `"FORBIDDEN"`), and lets an
+  anonymous caller in by returning `null`. Anything else it or
+  `loadServiceAccess` throws is an outage (the store or the database
   down): a socket's handshake is refused `INTERNAL`, and the client keeps
-  the user and connects again by itself. Never throw a plain `Error` for
-  bad credentials, which the client would retry for ever.
+  the user and connects again by itself, and an HTTP call is answered
+  `INTERNAL` (500). Never throw a plain `Error` for bad credentials, which
+  the client would retry for ever: the server warns
+  `[quickdraw:authenticate-threw]` in development, and lint's
+  `no-plain-error-refusal` reports one thrown in an `authenticate` (or
+  `socketAuth`'s `loadPrincipal`, which refuses by returning `null`)
+  written where the server is made.
 
 ## Writes are tracked; frames are derived
 

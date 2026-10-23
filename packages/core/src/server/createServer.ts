@@ -539,7 +539,9 @@ export function createServer<const S extends readonly AnyService[]>(
   // In the background: a test app awaits them (`startupChecksOf`).
   startStartupChecks(dispatcher, options, logger);
   listenForLeaves(created as Dispatcher, { room: options.onRoomLeave, host: options.onHostLeave });
-  const resolvePrincipal = createPrincipalResolver(options.auth);
+  // Both transports' `authenticate`, which warns once in development when it throws anything
+  // but a QuickdrawError (`authenticate-threw`).
+  const resolvePrincipal = createPrincipalResolver(options.auth, logger);
   const router = mountRouter(options, { call: dispatcher.call, resolvePrincipal, logger });
   const httpServer = options.httpServer ?? createHttpServer(options.app ?? router ?? notFound);
   const sockets = serveSockets(options, created, httpServer, {

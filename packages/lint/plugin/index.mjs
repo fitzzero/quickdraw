@@ -16,6 +16,7 @@ import noLoadThenFilter from "./rules/no-load-then-filter.mjs";
 import noManualEmit from "./rules/no-manual-emit.mjs";
 import noManualRefetch from "./rules/no-manual-refetch.mjs";
 import noNestedWrite from "./rules/no-nested-write.mjs";
+import noPlainErrorRefusal from "./rules/no-plain-error-refusal.mjs";
 import noPrismaInRoutes from "./rules/no-prisma-in-routes.mjs";
 import noRawButtonStrings from "./rules/no-raw-button-strings.mjs";
 import noRawSocket from "./rules/no-raw-socket.mjs";
@@ -40,6 +41,7 @@ const rules = {
   // Frames and access
   "no-manual-emit": noManualEmit,
   "no-inline-auth-guard": noInlineAuthGuard,
+  "no-plain-error-refusal": noPlainErrorRefusal,
   // Performance
   "no-unbounded-read": noUnboundedRead,
   "no-db-call-in-loop": noDbCallInLoop,
