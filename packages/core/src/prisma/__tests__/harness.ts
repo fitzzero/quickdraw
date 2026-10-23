@@ -11,6 +11,7 @@ import type { Logger } from "../../contract/logger";
 import { storageOf, type StorageAdapter } from "../../server/storage";
 import type { WriteRecord } from "../../server/uow/types";
 import { createRecordingSink } from "../../testing/recordingSink";
+import type { Tracked } from "../tracked";
 import { trackPrisma } from "../trackPrisma";
 
 /** The interested columns the tests register: scope, parent and membership columns. */
@@ -97,7 +98,7 @@ export interface Harness {
   /** Untracked: for setup and assertions. */
   readonly prisma: PrismaClient;
   /** Tracked, with {@link INTEREST}. */
-  readonly db: PrismaClient;
+  readonly db: Tracked<PrismaClient>;
   readonly storage: StorageAdapter;
   readonly logger: CapturingLogger;
   /** Runs `fn` in a unit of work of the tracked client and flushes it. */

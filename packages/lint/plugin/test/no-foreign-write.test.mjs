@@ -189,5 +189,30 @@ run("no-foreign-write", {
         },
       ],
     },
+    {
+      name: "through a variable typed with a tracked client's type, whatever its name",
+      filename: SERVICE,
+      code: `
+        qd.defineService(task, {
+          model: "task",
+          methods: {
+            assign: {
+              access: { entry: "Moderate" },
+              handler: async ({ input, db }) => {
+                const client: TrackedTransaction<typeof db> = db;
+                await client.user.update({ where: { id: input.userId }, data: { load: { increment: 1 } } });
+                return client.task.update({ where: { id: input.id }, data: { assigneeId: input.userId } });
+              },
+            },
+          },
+        });
+      `,
+      errors: [
+        {
+          messageId: "foreignWrite",
+          data: { client: "client", model: "user", method: "update", own: '"task"' },
+        },
+      ],
+    },
   ],
 });

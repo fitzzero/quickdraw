@@ -95,6 +95,53 @@ run("no-untracked-write", {
         await prisma.user.create({ data: { email: "ada@example.com" } });
       `,
     },
+    {
+      name: "writers whose parameter is named prisma but typed Tracked write through the tracked client (farseer's harness writers)",
+      filename: JOB,
+      code: `
+        import type { Tracked, TrackedTransaction } from "@fitzzero/quickdraw-core";
+        import type { PrismaClient } from "@project/db";
+
+        export async function addTask(prisma: Tracked<PrismaClient>, projectId: string) {
+          return await prisma.task.create({ data: { projectId, title: "Write the plan" } });
+        }
+
+        export async function closeTasks(prisma: TrackedTransaction<PrismaClient>, ids: string[]) {
+          await prisma.task.updateMany({ where: { id: { in: ids } }, data: { status: "done" } });
+        }
+      `,
+    },
+    {
+      name: "a variable typed with a qualified Tracked",
+      filename: SERVICE,
+      code: `
+        import type * as quickdraw from "@fitzzero/quickdraw-core";
+        import { db } from "../db";
+
+        const prisma: quickdraw.Tracked<typeof db> = db;
+        export const archive = (id: string) => prisma.task.delete({ where: { id } });
+      `,
+    },
+    {
+      name: "a parameter with a default, typed as either tracked type",
+      filename: ROUTE,
+      code: `
+        import { db } from "../db";
+
+        export function rename(id: string, title: string, prisma: Tracked<Db> | TrackedTransaction<Db> = db) {
+          return prisma.task.update({ where: { id }, data: { title } });
+        }
+      `,
+    },
+    {
+      name: "a parameter named db with no type is judged by its name, as before",
+      filename: SERVICE,
+      code: `
+        export function archive(db, id) {
+          return db.task.update({ where: { id }, data: { archived: true } });
+        }
+      `,
+    },
   ],
   invalid: [
     {
@@ -136,7 +183,7 @@ run("no-untracked-write", {
       errors: [
         {
           message:
-            "`prisma.invoice.update()` writes through the untracked client, so subscribers never see this change. Write through the handler's `db` argument, or through the tracked client inside `qd.run(() => ...)`.",
+            "`prisma.invoice.update()` writes through the untracked client, so subscribers never see this change. Write through the handler's `db` argument, or through the tracked client inside `qd.run(() => ...)`. A parameter or variable given the tracked client says so with its type, whatever its name: `Tracked<Db>`.",
         },
       ],
     },
@@ -172,6 +219,64 @@ run("no-untracked-write", {
         rawDb.task.delete({ where: { id } });
       `,
       errors: [{ messageId: "importClient" }, { messageId: "untrackedWrite" }],
+    },
+    {
+      name: "a parameter named prisma with the untracked client's type, or none, is judged by its name",
+      filename: JOB,
+      code: `
+        import type { PrismaClient } from "@project/db";
+
+        export async function addTask(prisma: PrismaClient, projectId: string) {
+          await prisma.task.create({ data: { projectId, title: "Write the plan" } });
+        }
+
+        export async function removeTask(prisma, id) {
+          await prisma.task.delete({ where: { id } });
+        }
+      `,
+      errors: [
+        {
+          messageId: "untrackedWrite",
+          data: { client: "prisma", model: "task", method: "create" },
+        },
+        {
+          messageId: "untrackedWrite",
+          data: { client: "prisma", model: "task", method: "delete" },
+        },
+      ],
+    },
+    {
+      name: "a union that admits the untracked client's type is not tracked",
+      filename: SERVICE,
+      code: `
+        export function rename(prisma: Tracked<Db> | PrismaClient, id: string) {
+          return prisma.task.update({ where: { id }, data: { title: "Renamed" } });
+        }
+      `,
+      errors: [{ messageId: "untrackedWrite" }],
+    },
+    {
+      name: "a tracked parameter covers its own binding, not another one of the same name",
+      filename: JOB,
+      code: `
+        import { prisma } from "@project/db";
+
+        function addTask(prisma: Tracked<Db>, projectId: string) {
+          return prisma.task.create({ data: { projectId, title: "Write the plan" } });
+        }
+
+        export async function sweep(projectId: string) {
+          await addTask(prisma, projectId);
+          await prisma.task.deleteMany({ where: { projectId, status: "done" } });
+        }
+      `,
+      errors: [
+        { messageId: "importClient", data: { name: "prisma", source: "@project/db" } },
+        {
+          messageId: "untrackedWrite",
+          data: { client: "prisma", model: "task", method: "deleteMany" },
+        },
+      ],
     },
   ],
 });

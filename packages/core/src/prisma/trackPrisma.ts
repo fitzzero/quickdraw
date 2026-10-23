@@ -47,6 +47,7 @@ import {
   type Runtime,
 } from "./operations";
 import { prismaSchemaOf, type PrismaSchemaFacts } from "./schemaText";
+import type { Tracked } from "./tracked";
 
 /** Options of {@link trackPrisma}. */
 export interface TrackPrismaOptions {
@@ -288,6 +289,11 @@ function createStorage(
  * Nested writes, raw SQL and database cascades are not seen; record those
  * with `ctx.touch`.
  *
+ * The result is a `Tracked<C>` (`tracked.ts`): still a `C`, but the
+ * untracked client is no `Tracked<C>`, so a helper that writes takes
+ * `db: Tracked<Db>` (or `TrackedTransaction<Db>`, which a transaction's `tx`
+ * is too) and the compiler refuses the untracked client there.
+ *
  * Prefer interactive transactions (`db.$transaction(async (tx) => ...)`). An
  * array-form `db.$transaction([...])` has no transaction client, so the rows
  * a `deleteMany` or `updateMany` there reads first (and an `update`'s old
@@ -303,7 +309,7 @@ function createStorage(
 export function trackPrisma<C extends PrismaClientLike>(
   client: C,
   options: TrackPrismaOptions = {},
-): C {
+): Tracked<C> {
   if (!isClient(client)) {
     throw new TypeError("trackPrisma: client must be a Prisma client");
   }
@@ -340,5 +346,6 @@ export function trackPrisma<C extends PrismaClientLike>(
       [STORAGE_KEY]: createStorage(tracker, [interest, links], delegate, prismaSchemaOf(client)),
     },
   });
-  return tracked as unknown as C;
+  // `Tracked<C>` is a type: the client carries no mark at run time.
+  return tracked as unknown as Tracked<C>;
 }

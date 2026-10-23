@@ -29,3 +29,29 @@ export async function spreadOrdinals(projectId: string): Promise<void> {
   });
 }
 // #endregion
+
+// #region helper
+import type { TrackedTransaction } from "@fitzzero/quickdraw-core/prisma";
+import type { PrismaClient } from "@project/db";
+
+// takes the tracked client, or a transaction's: passing the untracked `prisma` is a type error
+export async function reopenStale(
+  client: TrackedTransaction<PrismaClient>,
+  projectId: string,
+): Promise<number> {
+  const { count } = await client.task.updateMany({
+    where: { projectId, status: "stale" },
+    data: { status: "open" },
+  });
+  return count;
+}
+
+export async function restoreProject(projectId: string): Promise<number> {
+  return await qd.run(() =>
+    db.$transaction(async (tx) => {
+      await tx.project.update({ where: { id: projectId }, data: { archived: false } });
+      return await reopenStale(tx, projectId);
+    }),
+  );
+}
+// #endregion

@@ -1,9 +1,10 @@
 // A service writes its own model and the models it lists in `writes`
 // (RFC 0003 sections 3 and 14). This rule reads both from the
 // `defineService(contract, { model, writes })` call a write sits in, so it
-// needs no map of owners: a write to any other model through `db` (or `tx`)
-// is reported. A write outside a `defineService` call, or in one whose
-// `model` or `writes` is not written out literally, is not checked.
+// needs no map of owners: a write to any other model through `db` (or `tx`,
+// or a parameter or variable declared with a tracked client's type,
+// `Tracked<Db>`) is reported. A write outside a `defineService` call, or in
+// one whose `model` or `writes` is not written out literally, is not checked.
 
 import { getProperty, hasSpread, isDefineService, staticString, unwrap } from "../lib/ast.mjs";
 import { CLIENTS_OPTION, TRACKED_CLIENTS, WRITE_METHODS, modelCall } from "../lib/prisma.mjs";
@@ -87,7 +88,7 @@ export default {
     const cache = new WeakMap();
     return {
       CallExpression(node) {
-        const call = modelCall(node, clients);
+        const call = modelCall(node, clients, context);
         if (call === undefined || !WRITE_METHODS.has(call.method)) {
           return;
         }

@@ -183,6 +183,14 @@ writes made through `db`, after the response is sent:
   wrap the work in `qd.run(async (ctx) => ...)`, which flushes before it
   returns; a boot-time seed may run it before `createServer` too (its writes
   then reach no subscriber). Never write through the untracked client.
+- A helper that writes takes the tracked client by its type:
+  `client: Tracked<PrismaClient>`, or `TrackedTransaction<PrismaClient>`
+  when it may run inside `db.$transaction(async (tx) => ...)` (`tx` is
+  one, and so is `db`). `trackPrisma` returns a `Tracked<PrismaClient>`;
+  the untracked client is none, so passing it is a type error. Both types
+  are on `@fitzzero/quickdraw-core/prisma` and the root export. Never type
+  such a parameter `PrismaClient`, which the untracked client is too;
+  `no-untracked-write` reads the type, whatever the parameter's name.
 - Background work a handler starts and does not await (a push sent after
   the reply) runs in `qd.run(fn, { detached: true })`: a unit of its own,
   flushed when `fn` settles. Without `detached` it joins the handler's unit,
