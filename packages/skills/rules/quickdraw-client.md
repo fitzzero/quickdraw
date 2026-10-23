@@ -47,7 +47,14 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   signed out: the server ended the session (signed out elsewhere, revoked,
   expired) or refused a connect for it, the hello is gone and quickdraw's
   cache is empty; any other status is still connecting. Never keep showing
-  data the app holds itself once `isKnown` turns false.
+  data the app holds itself once `isKnown` turns false. A server that could
+  not check the credentials (its session store down: the handshake is
+  refused `INTERNAL`) signs nobody out: the connection keeps the user and
+  the cache, stays `connecting` (`reconnecting` once it had connected) and
+  connects again by itself, so never treat that as a sign-out. On the
+  server, `authenticate` refuses credentials only by throwing
+  `QuickdrawError("UNAUTHENTICATED")` (or `"FORBIDDEN"`); anything else it
+  throws is an outage.
   `hello.serverId` changes when the server restarts (or the socket lands
   on another node): compare it to tell a new server from a network blip.
 - Sign-in and out in the browser go through the auth routes kit's routes:

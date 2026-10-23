@@ -171,6 +171,25 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   screen typed through `AdminScreen` needed a cast to call it. A row panel
   shows the row `adminUpdate` or `adminCreate` returned with
   `admin.adminGet?.setData({ id: row.id }, row)`, with no new read.
+- **Behavior change: a server that cannot check the credentials signs
+  nobody out.** A connect or reconnect the server refuses with `INTERNAL`
+  (below: its `authenticate` failed with anything but a refusal, its
+  session store down, say) keeps the hello, the grants and the cache, and
+  is `status: "connecting"` (`reconnecting: true` after a connect on these
+  credentials), so the README's `AuthGate` keeps the page, with
+  "Reconnecting…" (or "Connecting…" before a first connect), rather than
+  the sign-in. Socket.IO never retries a refused handshake, so the
+  connection connects again itself, after Socket.IO's own reconnection
+  delays (the manager's `reconnectionDelay`, doubling to
+  `reconnectionDelayMax`, with `randomizationFactor`'s jitter), as often as
+  its `reconnectionAttempts` allow. Calls and reads made meanwhile wait in
+  the send buffer, as while Socket.IO reconnects. With Socket.IO's
+  reconnection off, or its attempts spent, the connection is `refused`
+  with `refusal: { code: "INTERNAL" }`, and still keeps the user.
+  `UNAUTHENTICATED`, `FORBIDDEN` and the server's disconnect still sign out
+  (CLIENT-1). The GDScript reference client connects again after an
+  `INTERNAL` refusal the same way, with its backoff, and does not emit
+  `refused` for it.
 
 ### Server
 
@@ -304,6 +323,25 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   an earlier version. A scope that does not fit rejects with a
   `TypeError`, and a host-served stream's handle refuses it, as it refuses
   `push`. `StreamSubscribersArgs` is on `./server`.
+- **Behavior change: a handshake the server cannot authenticate is
+  refused `INTERNAL`, not `UNAUTHENTICATED`.** The socket transport refused every
+  failure of `authenticate` and `loadServiceAccess` with
+  `{ code: "UNAUTHENTICATED" }`, an outage of the session store or the
+  database included, and since 5.1 the client takes that code as the end of
+  the session, so a database blip during a mass reconnect signed every
+  reconnecting user out. Now only a refusal `authenticate` makes on
+  purpose, a `QuickdrawError` with code `UNAUTHENTICATED` or `FORBIDDEN`
+  (logged at debug; `FORBIDDEN` was logged at error), and a session that
+  expired during the handshake are refused `UNAUTHENTICATED`. Anything
+  else is refused `{ code: "INTERNAL" }`, logged at error as before, with
+  the same "Authentication failed" message: `AuthenticationUnavailable`,
+  with `isAuthenticationUnavailable`, on the root export, and in
+  `docs/protocol-v5.md`. `socketAuth` refuses what it refused before
+  (its `TypeError` for a `loadPrincipal` that returns another user's
+  principal, an app's bug, is now `INTERNAL`). An `authenticate` that
+  throws a plain `Error` for bad credentials should throw
+  `QuickdrawError("UNAUTHENTICATED")` instead, or quickdraw's client keeps
+  retrying it. HTTP calls are answered as before.
 
 ### Testing
 

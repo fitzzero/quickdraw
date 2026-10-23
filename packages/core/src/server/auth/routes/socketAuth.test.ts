@@ -630,11 +630,14 @@ describe("loadPrincipal", () => {
     const bob = await signIn(url, "bob@demo.local");
     expect(await connect(url, { cookie: bob.session, origin: APP_ORIGIN })).toEqual(REFUSED);
     expect(logger.at("error")).toEqual([]);
-    // Another user's principal is the app's bug: refused, and logged at error.
+    // Another user's principal is the app's bug, not the credentials' fault: refused
+    // INTERNAL (a client keeps the user and connects again later), and logged at error.
     const { token } = await issueSession({ sessions, jwtSecret: SECRET }, "eve", {
       provider: "test",
     });
-    expect(await connect(url, {}, { ...v5Auth(null), token })).toEqual(REFUSED);
+    expect(await connect(url, {}, { ...v5Auth(null), token })).toEqual({
+      refused: { code: "INTERNAL" },
+    });
     expect(logger.at("error").map((entry) => entry.meta?.error)).toEqual([
       expect.objectContaining({
         message: "socketAuth: loadPrincipal must return the principal of the session's user",

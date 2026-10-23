@@ -137,9 +137,14 @@ export const CLIENT_RULES = `## What a client must do
   connected until then: calls are still answered on that socket. At that
   moment, disconnect and reconnect with a fresh handshake, so the server's
   clients come back spread over the window.
-- When the handshake is refused, reconnecting with the same client and
-  credentials is refused again: \`PROTOCOL_MISMATCH\` needs a client that
-  speaks the server's protocol, \`UNAUTHENTICATED\` other credentials.
+- When the handshake is refused with \`PROTOCOL_MISMATCH\` or
+  \`UNAUTHENTICATED\`, reconnecting with the same client and credentials is
+  refused again: \`PROTOCOL_MISMATCH\` needs a client that speaks the
+  server's protocol, \`UNAUTHENTICATED\` other credentials (sign the user
+  out). \`INTERNAL\` says the server could not check the credentials (its
+  session store was down, say): keep the user and connect again later,
+  backing off as after a lost connection (a second or so at first, doubling
+  to some seconds, with jitter), so a short outage signs nobody out.
 - Ignore what you do not know, in every frame: an object field you do not
   read, and an array element after the last one you read (\`qd:event\`,
   \`qd:stream\`). Protocol 5 grows only that way: a later revision may add
@@ -319,10 +324,11 @@ channel's or an event's payload. A field marked \`?\` may be absent.`;
 /** Before the handshake's types. */
 export const HANDSHAKE_INTRO = `The client sends \`HandshakeAuth\` as the CONNECT packet's \`auth\`. The
 server answers with \`qd:hello\` (\`HelloFrame\`), or refuses the connection
-with CONNECT_ERROR, whose \`data\` is \`ProtocolMismatch\` or
-\`AuthenticationRefused\`. How \`token\` is checked is the app's: the server's
-\`authenticate\` reads the whole \`auth\` object, and a browser's cookies reach
-it too.`;
+with CONNECT_ERROR, whose \`data\` is \`ProtocolMismatch\`,
+\`AuthenticationRefused\` (the credentials were refused) or
+\`AuthenticationUnavailable\` (the server could not check them). How \`token\`
+is checked is the app's: the server's \`authenticate\` reads the whole \`auth\`
+object, and a browser's cookies reach it too.`;
 
 /** Before the client events. */
 export const CLIENT_EVENTS_INTRO = `Each event's payload is the one argument after its name. An event with an

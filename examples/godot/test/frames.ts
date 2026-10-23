@@ -5,7 +5,7 @@
 // server. Godot's `JSON.stringify` sorts keys and writes integers without a
 // decimal point; `godotJson` does the same.
 
-import { WORLD, WORLD_ID } from "./game";
+import { FLAKY_TOKEN, WORLD, WORLD_ID } from "./game";
 
 /** JSON as Godot's `JSON.stringify` writes it: compact, keys sorted at every level. */
 export function godotJson(value: unknown): string {
@@ -54,7 +54,9 @@ export function nowhereFrame(id: number): string {
  * Socket.IO DISCONNECT at that moment, then the new socket's handshake, its
  * stream resubscription, a move before joining again (dropped), the join and
  * a move, a subscribe to a stream the service lacks (refused, so not held);
- * DISCONNECT on `close()`; and a client with a token the server refuses.
+ * DISCONNECT on `close()`; a client with a token the server refuses; and a
+ * client whose first handshake the server could not authenticate (refused
+ * `INTERNAL`): it connects again by itself, signs in, and closes.
  */
 export const SESSION: readonly string[] = [
   connectFrame("ada"),
@@ -79,6 +81,9 @@ export const SESSION: readonly string[] = [
   nowhereFrame(12),
   "41",
   connectFrame("nobody"),
+  connectFrame(FLAKY_TOKEN),
+  connectFrame(FLAKY_TOKEN),
+  "41",
 ];
 
 /** The ack id of the client's peer signal in the session: the next after `nowhereFrame(12)`. */

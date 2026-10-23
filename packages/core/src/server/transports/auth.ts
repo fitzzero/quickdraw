@@ -84,11 +84,15 @@ export type AuthenticateResult<P extends Principal> =
 export interface ServerAuth<P extends Principal = Principal> {
   /**
    * Says who is calling. Throwing refuses the socket connection ("Authentication
-   * failed", with `{ code: "UNAUTHENTICATED" }` as the `connect_error` data) or
-   * answers the HTTP call with `UNAUTHENTICATED`; returning nothing lets the
-   * caller in anonymously, so only `"public"` methods pass. Throw a
-   * `QuickdrawError("UNAUTHENTICATED", ...)` for a refusal that is the
-   * caller's doing (it logs at debug; anything else thrown logs at error).
+   * failed") or answers the HTTP call with `UNAUTHENTICATED`; returning
+   * nothing lets the caller in anonymously, so only `"public"` methods pass.
+   * Throw a `QuickdrawError("UNAUTHENTICATED", ...)` (or `"FORBIDDEN"`) for a
+   * refusal that is the caller's doing: it logs at debug, and a socket's
+   * `connect_error` data is `{ code: "UNAUTHENTICATED" }`, which signs a
+   * client out. Anything else thrown is the server's failure (its session
+   * store down, say): it logs at error, and the data is `{ code: "INTERNAL" }`,
+   * which a client retries, keeping the user, so never throw a plain `Error`
+   * for bad credentials.
    * On an HTTP call a thrown `QuickdrawError("FORBIDDEN", ...)` is answered
    * as it is, with 403 (logged at debug): a credential the request may not
    * use from where it came, as `socketAuth` answers a session cookie sent
@@ -195,17 +199,21 @@ export function socketAuthOf(authenticate: unknown): SocketAuthInfo | undefined 
 /**
  * True for a refusal `authenticate` made on purpose, by throwing a
  * `QuickdrawError` with code `UNAUTHENTICATED` (a revoked session, a socket
- * from a page the cookie may not be used from). The transports log those at
- * debug, as the client's doing, and every other failure at error.
+ * from a page the cookie may not be used from). The transports log those,
+ * and `isForbiddenCredential`'s, at debug, as the client's doing, and every
+ * other failure at error; the socket transport refuses another failure's
+ * handshake with `INTERNAL`, since the credentials may well be good.
  */
 export function isRefusal(error: unknown): boolean {
   return error instanceof QuickdrawError && error.code === "UNAUTHENTICATED";
 }
 
 /**
- * True for an HTTP call's refusal that `authenticate` made on purpose and
- * the transport answers as it is: a `QuickdrawError` with code `FORBIDDEN`
- * (a session cookie sent from a page `socketAuth` does not allow).
+ * True for a refusal that `authenticate` made on purpose with code
+ * `FORBIDDEN`, a `QuickdrawError` (a session cookie sent from a page
+ * `socketAuth` does not allow): the HTTP transport answers it as it is, and
+ * the socket transport refuses the handshake as it refuses an
+ * `UNAUTHENTICATED` one.
  */
 export function isForbiddenCredential(error: unknown): error is QuickdrawError {
   return error instanceof QuickdrawError && error.code === "FORBIDDEN";

@@ -30,6 +30,9 @@ signal connected(hello: Dictionary)
 ## The socket closed. The client reconnects unless `close()` or the server ended it.
 signal disconnected(reason: String)
 ## The handshake was refused (`PROTOCOL_MISMATCH`, `UNAUTHENTICATED`): no reconnect.
+## A handshake the server could not authenticate (`INTERNAL`: its session store
+## was down, say) is no refusal: the client connects again with backoff, as
+## after a lost connection, and keeps its user.
 signal refused(code: String, message: String)
 ## A typed room event (`qd:event`).
 signal event_received(service: String, event: String, payload: Variant)
@@ -568,8 +571,12 @@ func _on_ack(id: int, answer: Variant) -> void:
 func _on_refused(body: Variant) -> void:
 	var data: Dictionary = body.get("data", {}) if body is Dictionary else {}
 	var message: String = body.get("message", "") if body is Dictionary else ""
-	_reconnect = false
 	_ws.close()
+	if str(data.get("code", "")) == "INTERNAL":
+		# The server could not check the credentials; they may well be good.
+		_lost("authentication unavailable", true)
+		return
+	_reconnect = false
 	_lost("refused", false)
 	refused.emit(str(data.get("code", "")), message)
 
