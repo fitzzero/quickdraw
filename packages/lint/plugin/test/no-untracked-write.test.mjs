@@ -126,10 +126,109 @@ run("no-untracked-write", {
       name: "a parameter with a default, typed as either tracked type",
       filename: ROUTE,
       code: `
+        import type { Tracked, TrackedTransaction } from "@fitzzero/quickdraw-core/prisma";
         import { db } from "../db";
 
         export function rename(id: string, title: string, prisma: Tracked<Db> | TrackedTransaction<Db> = db) {
           return prisma.task.update({ where: { id }, data: { title } });
+        }
+      `,
+    },
+    {
+      name: "quickdraw's types under an alias, from either module, and through this file's alias of one",
+      filename: JOB,
+      code: `
+        import type { Tracked as TrackedClient } from "@fitzzero/quickdraw-core/prisma";
+        import type { TrackedTransaction as InTransaction } from "@fitzzero/quickdraw-core";
+        import type { PrismaClient } from "@project/db";
+
+        type TrackedDb = TrackedClient<PrismaClient>;
+
+        export async function addTask(prisma: TrackedClient<PrismaClient>, projectId: string) {
+          return await prisma.task.create({ data: { projectId, title: "Write the plan" } });
+        }
+
+        export async function closeTasks(prisma: InTransaction<PrismaClient>, ids: string[]) {
+          await prisma.task.updateMany({ where: { id: { in: ids } }, data: { status: "done" } });
+        }
+
+        export async function dropTask(prisma: TrackedDb, id: string) {
+          await prisma.task.delete({ where: { id } });
+        }
+      `,
+    },
+    {
+      name: "a destructured parameter whose pattern's type gives it a tracked type, nested and with a default",
+      filename: JOB,
+      code: `
+        import type { Tracked, TrackedTransaction } from "@fitzzero/quickdraw-core/prisma";
+        import type { PrismaClient } from "@project/db";
+        import { db } from "../db";
+
+        export async function addTask({ prisma, projectId }: { prisma: Tracked<PrismaClient>; projectId: string }) {
+          return await prisma.task.create({ data: { projectId, title: "Write the plan" } });
+        }
+
+        export async function sweep({
+          deps: { prisma = db },
+        }: {
+          deps: { prisma: TrackedTransaction<PrismaClient> };
+        }) {
+          await prisma.task.deleteMany({ where: { status: "done" } });
+        }
+      `,
+    },
+    {
+      name: "a destructured parameter typed with this file's interface or type alias",
+      filename: SERVICE,
+      code: `
+        import type { Tracked, TrackedTransaction } from "@fitzzero/quickdraw-core/prisma";
+        import type { PrismaClient } from "@project/db";
+
+        interface WriterDeps {
+          prisma: Tracked<PrismaClient>;
+        }
+        export type InTransaction = { prisma: TrackedTransaction<PrismaClient> } & { projectId: string };
+
+        export const addLabel = async ({ prisma }: WriterDeps, name: string) =>
+          prisma.label.create({ data: { name } });
+
+        export const closeTasks = async ({ prisma, projectId }: InTransaction) =>
+          prisma.task.updateMany({ where: { projectId }, data: { status: "done" } });
+      `,
+    },
+    {
+      name: "a class member declared with a tracked type: a property, a private one, or a constructor's parameter property",
+      filename: JOB,
+      code: `
+        import type { Tracked } from "@fitzzero/quickdraw-core/prisma";
+        import type { PrismaClient } from "@project/db";
+
+        export class TaskWriter {
+          private readonly prisma: Tracked<PrismaClient>;
+          #audit: Tracked<PrismaClient>;
+
+          constructor(prisma: Tracked<PrismaClient>) {
+            this.prisma = prisma;
+            this.#audit = prisma;
+          }
+
+          async add(projectId: string) {
+            await this.prisma.task.create({ data: { projectId, title: "Write the plan" } });
+            await this.#audit.auditLog.create({ data: { projectId } });
+          }
+
+          archive = async (id: string) => {
+            await this.prisma.task.update({ where: { id }, data: { archived: true } });
+          };
+        }
+
+        export class LabelWriter {
+          constructor(private readonly prisma: Tracked<PrismaClient>) {}
+
+          async add(name: string) {
+            await this.prisma.label.create({ data: { name } });
+          }
         }
       `,
     },
@@ -183,7 +282,7 @@ run("no-untracked-write", {
       errors: [
         {
           message:
-            "`prisma.invoice.update()` writes through the untracked client, so subscribers never see this change. Write through the handler's `db` argument, or through the tracked client inside `qd.run(() => ...)`. A parameter or variable given the tracked client says so with its type, whatever its name: `Tracked<Db>`.",
+            "`prisma.invoice.update()` writes through the untracked client, so subscribers never see this change. Write through the handler's `db` argument, or through the tracked client inside `qd.run(() => ...)`. A parameter, variable or class member given the tracked client says so with its type, whatever its name: `Tracked<Db>`, imported from `@fitzzero/quickdraw-core/prisma`.",
         },
       ],
     },
@@ -246,9 +345,112 @@ run("no-untracked-write", {
       ],
     },
     {
+      name: "a Tracked of the app's own, or imported from another module, is not quickdraw's",
+      filename: JOB,
+      code: `
+        import type { Tracked as Mine } from "../tracked";
+        import type * as helpers from "./helpers";
+
+        type Tracked<C> = C;
+
+        export function rename(prisma: Tracked<Db>, id: string) {
+          return prisma.task.update({ where: { id }, data: { title: "Renamed" } });
+        }
+
+        export function archive(prisma: Mine<Db>, id: string) {
+          return prisma.task.update({ where: { id }, data: { archived: true } });
+        }
+
+        export function drop(prisma: helpers.Tracked<Db>, id: string) {
+          return prisma.task.delete({ where: { id } });
+        }
+      `,
+      errors: [
+        {
+          messageId: "untrackedWrite",
+          data: { client: "prisma", model: "task", method: "update" },
+        },
+        {
+          messageId: "untrackedWrite",
+          data: { client: "prisma", model: "task", method: "update" },
+        },
+        {
+          messageId: "untrackedWrite",
+          data: { client: "prisma", model: "task", method: "delete" },
+        },
+      ],
+    },
+    {
+      name: "a destructured binding its pattern's type does not type tracked, or types with a type of another file",
+      filename: JOB,
+      code: `
+        import type { Tracked } from "@fitzzero/quickdraw-core/prisma";
+        import type { WriterDeps } from "./deps";
+
+        export async function addTask({ prisma }: { db: Tracked<Db>; prisma: PrismaClient }) {
+          await prisma.task.create({ data: { title: "Write the plan" } });
+        }
+
+        export async function addLabel({ prisma }: WriterDeps) {
+          await prisma.label.create({ data: { name: "bug" } });
+        }
+      `,
+      errors: [
+        {
+          messageId: "untrackedWrite",
+          data: { client: "prisma", model: "task", method: "create" },
+        },
+        {
+          messageId: "untrackedWrite",
+          data: { client: "prisma", model: "label", method: "create" },
+        },
+      ],
+    },
+    {
+      name: "a member with no tracked type in its class, and this in a plain function, are the untracked client",
+      filename: JOB,
+      code: `
+        import type { Tracked } from "@fitzzero/quickdraw-core/prisma";
+
+        export class Typed {
+          prisma: Tracked<Db>;
+        }
+
+        export class Untyped {
+          prisma = makeClient();
+
+          async add() {
+            await this.prisma.task.create({ data: { title: "Write the plan" } });
+          }
+        }
+
+        export class Later {
+          private readonly prisma: Tracked<Db>;
+
+          schedule() {
+            setTimeout(function () {
+              this.prisma.task.deleteMany({ where: { status: "done" } });
+            });
+          }
+        }
+      `,
+      errors: [
+        {
+          messageId: "untrackedWrite",
+          data: { client: "prisma", model: "task", method: "create" },
+        },
+        {
+          messageId: "untrackedWrite",
+          data: { client: "prisma", model: "task", method: "deleteMany" },
+        },
+      ],
+    },
+    {
       name: "a union that admits the untracked client's type is not tracked",
       filename: SERVICE,
       code: `
+        import type { Tracked } from "@fitzzero/quickdraw-core/prisma";
+
         export function rename(prisma: Tracked<Db> | PrismaClient, id: string) {
           return prisma.task.update({ where: { id }, data: { title: "Renamed" } });
         }
@@ -259,6 +461,7 @@ run("no-untracked-write", {
       name: "a tracked parameter covers its own binding, not another one of the same name",
       filename: JOB,
       code: `
+        import type { Tracked } from "@fitzzero/quickdraw-core/prisma";
         import { prisma } from "@project/db";
 
         function addTask(prisma: Tracked<Db>, projectId: string) {

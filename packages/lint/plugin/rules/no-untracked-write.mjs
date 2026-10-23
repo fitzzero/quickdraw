@@ -4,9 +4,12 @@
 // This rule keeps the untracked Prisma client out of services, jobs and
 // routes: importing it from the app's database package, and writing through
 // a client named `prisma`. Reads through it are left alone, and so is a
-// write through a parameter or variable declared with a tracked client's
-// type (`prisma: Tracked<Db>`), whatever its name: the compiler refuses the
-// untracked client there.
+// write through a binding or class member declared with quickdraw's tracked
+// client type (`prisma: Tracked<Db>`, `{ prisma }: { prisma: Tracked<Db> }`,
+// `private readonly prisma: Tracked<Db>`), whatever its name: the compiler
+// refuses the untracked client there. The type counts when the file imports
+// it from `@fitzzero/quickdraw-core` or `@fitzzero/quickdraw-core/prisma`,
+// under any name; an app's own type named `Tracked` does not.
 
 import { FILE_OPTIONS, SERVER_FILES, TEST_FILES, inScope, matchesAny } from "../lib/files.mjs";
 import { WRITE_METHODS, declaredTracked, modelCall } from "../lib/prisma.mjs";
@@ -35,7 +38,7 @@ export default {
       untrackedWrite:
         "`{{ client }}.{{ model }}.{{ method }}()` writes through the untracked client, so subscribers never see this change. " +
         "Write through the handler's `db` argument, or through the tracked client inside `qd.run(() => ...)`. " +
-        "A parameter or variable given the tracked client says so with its type, whatever its name: `Tracked<Db>`.",
+        "A parameter, variable or class member given the tracked client says so with its type, whatever its name: `Tracked<Db>`, imported from `@fitzzero/quickdraw-core/prisma`.",
     },
     schema: [
       {

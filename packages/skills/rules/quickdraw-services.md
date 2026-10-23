@@ -202,7 +202,11 @@ writes made through `db`, after the response is sent:
   the untracked client is none, so passing it is a type error. Both types
   are on `@fitzzero/quickdraw-core/prisma` and the root export. Never type
   such a parameter `PrismaClient`, which the untracked client is too;
-  `no-untracked-write` reads the type, whatever the parameter's name. A
+  `no-untracked-write` reads the type, whatever the parameter's name, on a
+  destructured binding (`{ db }: { db: Tracked<PrismaClient> }`) and a
+  class member (`private readonly prisma: Tracked<PrismaClient>`) as well.
+  Import the type from quickdraw itself: lint does not read an alias of
+  your own, nor a re-export from your own module. A
   `db` declared `PrismaClient` (a lazy `Proxy`, say) carries no mark:
   declare it `Tracked<PrismaClient>` to pass it to such a helper.
 - Background work a handler starts and does not await (a push sent after

@@ -193,6 +193,8 @@ run("no-foreign-write", {
       name: "through a variable typed with a tracked client's type, whatever its name",
       filename: SERVICE,
       code: `
+        import type { TrackedTransaction } from "@fitzzero/quickdraw-core/prisma";
+
         qd.defineService(task, {
           model: "task",
           methods: {

@@ -3,6 +3,17 @@ import { SERVICE, run } from "./tester.mjs";
 run("no-nested-write", {
   valid: [
     {
+      name: "a client typed with an app's own Tracked is not the tracked client (no-untracked-write's to judge)",
+      filename: SERVICE,
+      code: `
+        type Tracked<C> = C;
+
+        export async function addLabelled(prisma: Tracked<PrismaClient>, projectId: string) {
+          await prisma.task.create({ data: { projectId, labels: { create: [{ name: "bug" }] } } });
+        }
+      `,
+    },
+    {
       name: "plain writes (the e2e fixture app's handlers)",
       filename: SERVICE,
       code: `
@@ -48,6 +59,36 @@ run("no-nested-write", {
     },
   ],
   invalid: [
+    {
+      name: "a class member typed Tracked, a private one, and a destructured binding are the tracked client too",
+      filename: SERVICE,
+      code: `
+        import type { Tracked } from "@fitzzero/quickdraw-core";
+
+        export class Labeller {
+          #db: Tracked<PrismaClient>;
+          constructor(private readonly prisma: Tracked<PrismaClient>) {
+            this.#db = prisma;
+          }
+          async add(projectId: string) {
+            await this.prisma.task.create({ data: { projectId, labels: { create: [{ name: "bug" }] } } });
+            await this.#db.task.create({ data: { projectId, labels: { connect: [{ id: "l1" }] } } });
+          }
+        }
+
+        export async function addLabelled({ client }: { client: Tracked<PrismaClient> }) {
+          await client.task.create({ data: { title, labels: { create: [{ name: "bug" }] } } });
+        }
+      `,
+      errors: [
+        { messageId: "nestedWrite", data: { field: "labels", operation: "create", model: "task" } },
+        {
+          messageId: "nestedWrite",
+          data: { field: "labels", operation: "connect", model: "task" },
+        },
+        { messageId: "nestedWrite", data: { field: "labels", operation: "create", model: "task" } },
+      ],
+    },
     {
       name: "a nested create",
       filename: SERVICE,
@@ -121,6 +162,8 @@ run("no-nested-write", {
       name: "a parameter typed Tracked is the tracked client, whatever its name",
       filename: SERVICE,
       code: `
+        import type { Tracked } from "@fitzzero/quickdraw-core/prisma";
+
         export async function addLabelled(prisma: Tracked<PrismaClient>, projectId: string) {
           await prisma.task.create({ data: { projectId, title, labels: { create: [{ name: "bug" }] } } });
         }
