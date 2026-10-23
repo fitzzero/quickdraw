@@ -241,6 +241,20 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   it in a `share: "all"` handler warns `shared-principal`. An app field
   named `access` from `initQuickdraw({ context })` is now shadowed by the
   framework's. `ContextAccess` is on `./server`.
+- **A collection can require a service grant.** `collections: { mine:
+{ scopeAccess: "self", requires: { service: "Read" } } }` in
+  `defineService` gives a list the grant its methods ask for: besides the
+  anchor or self check, every subscriber needs a service-wide grant of at
+  least `L` on the collection's service, as a method's `{ service: L }`
+  form counts it, and a service-wide `Admin` passes. Without it,
+  `qd:col:sub` (cursor pages included), the scope's change topic and a
+  search kept to the scope are `FORBIDDEN`, as for an anchor refusal. The
+  grant comes from the socket's principal: when the user's grants reload
+  below it, on any node, their sockets leave the scope with `qd:revoked`
+  (`reason: "access"`) and get nothing more of it. A reload of a user's
+  grants now resets their self lists after re-authorizing them, so a list
+  being revoked gets no `reset` first. Collections without `requires` are
+  unchanged. `CollectionRequires` is on `./server`.
 
 ### Testing
 

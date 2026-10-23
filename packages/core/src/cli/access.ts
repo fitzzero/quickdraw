@@ -34,6 +34,8 @@ export interface CollectionAccessDoc {
   readonly level: unknown;
   /** The contract of the rows scope values are ids of; `undefined` for a `"self"` scope. */
   readonly anchor: unknown;
+  /** The service-wide grant a subscriber needs besides (`requires: { service }`); `undefined` for none. */
+  readonly requires?: unknown;
 }
 
 /** What the docs read of one stream of a defined service. */
@@ -148,6 +150,7 @@ export function serviceDocOf(value: unknown): ServiceDoc | undefined {
     collections: mapEach(collections, (collection) => ({
       level: collection.access,
       anchor: collection.anchor,
+      requires: collection.requires,
     })),
     channels: mapEach(channels, (channel) => channel.access),
     streams: mapEach(streams, (stream) => ({
@@ -292,8 +295,14 @@ export function watchAccessText(watch: unknown): string {
 
 /** Who may open a scope of a collection. */
 export function collectionAccessText(collection: CollectionAccessDoc): string {
-  if (collection.anchor === undefined) {
-    return `the subscriber's own user id (${code('scopeAccess: "self"')})`;
-  }
-  return `${String(collection.level)} or more on the ${code(serviceName(collection.anchor))} row the scope names`;
+  const scope =
+    collection.anchor === undefined
+      ? `the subscriber's own user id (${code('scopeAccess: "self"')})`
+      : `${String(collection.level)} or more on the ${code(serviceName(collection.anchor))} row the scope names`;
+  const { requires } = collection;
+  const level =
+    isRecord(requires) && typeof requires.service === "string" ? requires.service : undefined;
+  return level === undefined
+    ? scope
+    : `${scope}, and a service-wide grant of ${level} or more (${code(`requires: { service: "${level}" }`)})`;
 }
