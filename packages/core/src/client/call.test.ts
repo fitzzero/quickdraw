@@ -5,8 +5,9 @@
 
 import { describe, expect, it } from "vitest";
 import { ERROR_CODES, QuickdrawError } from "../index";
+import { deferred } from "../server/__tests__/fixtures";
 import { call, callData, isNotModified, isUnknownOutcome, shouldRetry } from "./call";
-import { clientHarness, outgoing, until, whenStatus } from "./__tests__/fixtures";
+import { clientHarness, outgoing, testAuth, until, whenStatus } from "./__tests__/fixtures";
 
 const harness = clientHarness();
 
@@ -130,6 +131,8 @@ describe("call", () => {
     expect(shouldRetry(0, error)).toBe(false);
     // The server may still run it: its outcome is unknown.
     expect(isUnknownOutcome(error)).toBe(true);
+    // On a loaded machine the time limit can pass before the server has read the call.
+    await until(() => probe.gates.has("slow"));
     probe.gates.get("slow")?.resolve("late");
     await until(() => records.length === 1);
     expect(records.map((record) => [record.method, record.outcome])).toEqual([["wait", "ok"]]);
@@ -174,7 +177,16 @@ describe("call", () => {
   });
 
   it("knows the outcome of a call that timed out unsent, and of a refusal", async () => {
-    const { app, records } = await harness.start();
+    // The server holds the handshake until released: a connection made within 1 ms would send the call.
+    const handshake = deferred();
+    const { app, records } = await harness.start({
+      auth: {
+        authenticate: async (request) => {
+          await handshake.promise;
+          return await testAuth.authenticate?.(request);
+        },
+      },
+    });
     const connection = harness.connection(app.url);
     connection.open();
     // In Socket.IO's send buffer until its time runs out, then dropped from it, unsent.
@@ -183,6 +195,7 @@ describe("call", () => {
     );
     expect(unsent).toMatchObject({ code: "INTERNAL" });
     expect(isUnknownOutcome(unsent)).toBe(false);
+    handshake.resolve();
     await whenStatus(connection, "connected");
     const refused = await failure(
       call(connection, { service: "probeService", method: "fail", input: { code: "CONFLICT" } }),

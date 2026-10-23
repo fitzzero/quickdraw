@@ -223,17 +223,19 @@ describe("useQuery", () => {
 
   it("retries once after INTERNAL and never after TIMEOUT", async () => {
     const { app, records, probe: probeService } = await harness.start();
-    const wrapper = wrapperFor({ url: app.url, timeoutMs: 100 });
+    // The default time limit: on a loaded machine an answer can take longer than a short one,
+    // and the TIMEOUT it would end in is never retried.
     const internal = renderHook(
       () => qd.probe.fail.useQuery({ code: "INTERNAL" }, { retryDelay: 10 }),
-      { wrapper },
+      { wrapper: wrapperFor({ url: app.url }) },
     );
     await waitFor(() => expect(internal.result.current.isError).toBe(true));
     expect(internal.result.current.failureCount).toBe(2);
     expect(internal.result.current.error).toBeInstanceOf(QuickdrawError);
     expect(records.filter((record) => record.method === "fail")).toHaveLength(2);
+    // A query runs once the connection is up, so only the server's wait counts toward the 100 ms.
     const timedOut = renderHook(() => qd.probe.wait.useQuery({ key: "slow" }, { retryDelay: 10 }), {
-      wrapper,
+      wrapper: wrapperFor({ url: app.url, timeoutMs: 100 }),
     });
     await waitFor(() => expect(timedOut.result.current.isError).toBe(true));
     expect(timedOut.result.current.error).toMatchObject({ code: "TIMEOUT" });
