@@ -13,8 +13,10 @@
 // React-free and dependency-free (it uses the global `fetch`), so the
 // isomorphic `./utils` entry exports it: a module that begins with
 // "use client", as `./client` does, cannot be called from a server component.
+// `prefetch` takes the part of a `QueryClient` it calls (`QueryClientLike`),
+// so neither `./utils` nor `./client/core`, which re-exports it, names
+// TanStack in its types either.
 
-import type { QueryClient } from "@tanstack/react-query";
 import type { AnyContract } from "../contract/defineContract";
 import type { ContractMap, InputOf, KindOf, MethodName, OutputOf } from "../contract/infer";
 import { QuickdrawError, fromWire } from "../protocol/errors";
@@ -41,6 +43,18 @@ export interface ServerCallerOptions {
   readonly fetch?: typeof fetch;
 }
 
+/**
+ * The part of a TanStack `QueryClient` that `prefetch` calls, which any
+ * `QueryClient` is: `prefetchQuery` with the method's key and a function
+ * that calls it.
+ */
+export interface QueryClientLike {
+  prefetchQuery(options: {
+    readonly queryKey: MethodQueryKey;
+    readonly queryFn: (context: { readonly signal: AbortSignal }) => Promise<unknown>;
+  }): Promise<void>;
+}
+
 /** Options of one HTTP call. */
 export interface ServerCallOptions {
   /** Aborting it cancels the request; the call rejects with `CANCELLED`. */
@@ -59,7 +73,7 @@ export interface ServerQuery<C extends AnyContract, M extends MethodName<C>> {
   /** The key the query's result is cached under, the one the client's hooks read. */
   key(...args: InputArgs<C, M, []>): MethodQueryKey<InputOf<C, M>>;
   /** Calls the query into `queryClient`, as `queryClient.prefetchQuery` does: it never rejects. */
-  prefetch(queryClient: QueryClient, ...args: InputArgs<C, M, []>): Promise<void>;
+  prefetch(queryClient: QueryClientLike, ...args: InputArgs<C, M, []>): Promise<void>;
 }
 
 /** A mutation of the server caller. */
@@ -171,7 +185,7 @@ function memberOf(settings: Settings, target: MethodTarget): object {
   return Object.freeze({
     call: callMethod,
     key,
-    prefetch: (queryClient: QueryClient, input?: unknown): Promise<void> =>
+    prefetch: (queryClient: QueryClientLike, input?: unknown): Promise<void> =>
       queryClient.prefetchQuery({
         queryKey: key(input),
         queryFn: ({ signal }) => post(settings, target, input, signal),

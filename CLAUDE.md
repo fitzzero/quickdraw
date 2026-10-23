@@ -64,12 +64,18 @@ Each package's export map lives in its own `package.json`. Core's has `.`
 (contracts, kits' contract halves, errors, protocol types; browser-safe and
 dependency-free), `./server`, `./server/auth`, `./server/express`,
 `./server/mcp`, `./server/otel`, `./prisma`, `./client` (opens with
-`"use client"`), `./utils` (isomorphic: `createServerCaller`, cache keys,
-formatting), `./parser` (the JSON-only Socket.IO parser, kept out of the
-root), `./testing`, `./testing/client` and `./testing/prisma`, with one tsup
-entry per export and shared chunks (`splitting`), plus the `quickdraw-docs`
-bin (`src/cli/`). `packages/core/scripts/dist-smoke.mjs` checks the built
-output, including the `"use client"` that must open `dist/client/index.js`.
+`"use client"`), `./client/core` (the client without React or TanStack:
+the connection, calls, auth helpers, peer links and host mode, plus
+`./utils`; `./client` re-exports it), `./utils` (isomorphic:
+`createServerCaller`, cache keys, formatting), `./parser` (the JSON-only
+Socket.IO parser, kept out of the root), `./testing`, `./testing/client`,
+`./testing/mock` and `./testing/prisma`, with one tsup entry per export and
+shared chunks (`splitting`), plus the `quickdraw-docs` bin (`src/cli/`).
+`packages/core/scripts/dist-smoke.mjs` checks the built output, including
+the `"use client"` that must open `dist/client/index.js`, and that
+`./client/core` reaches no React or TanStack Query in its code or its
+declarations (it also runs `scripts/client-core-smoke.mjs`, which calls a
+built server through it with both refused).
 Tests sit next to sources (`*.test.ts(x)`) and are typechecked. Core's vitest
 config has three projects: `node` (`*.test.ts`), `dom` (`*.test.tsx`, jsdom)
 and `types` (`*.test-d.ts`).

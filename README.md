@@ -48,6 +48,7 @@ entries you import need.
 | `./server/otel`                         | `@opentelemetry/api`                                                    |
 | `./prisma`                              | `@prisma/client` 7                                                      |
 | `./client`                              | `socket.io-client`, `@tanstack/react-query` 5, `react` 19               |
+| `./client/core`                         | `socket.io-client`                                                      |
 | `./utils`, `./parser`                   | nothing more                                                            |
 | `./testing`                             | `socket.io`, `socket.io-client`                                         |
 | `./testing/client`                      | the `./client` peers, and `@testing-library/react`                      |
@@ -1915,13 +1916,18 @@ export async function TasksPage({ projectId, cookie }: { projectId: string; cook
 }
 ```
 
-A script, a worker or a React Native module without hooks uses the
-connection directly:
+A script, a CLI or a worker uses the connection directly, from
+`@fitzzero/quickdraw-core/client/core`: the client without React, for a
+process that installs neither React nor TanStack Query. It holds the
+connection, `call` and `callData`, `newId`, the auth helpers, peer links,
+host mode and everything on `./utils`. Nothing it imports, in its code or
+its types, is React or TanStack, and it carries no `"use client"`.
+`./client` re-exports all of it, the same functions:
 
 <!-- example: apps/api/scripts/report.ts#script -->
 
 ```ts
-import { callData, createQuickdrawConnection } from "@fitzzero/quickdraw-core/client";
+import { callData, createQuickdrawConnection } from "@fitzzero/quickdraw-core/client/core";
 
 const connection = createQuickdrawConnection({
   url: "http://localhost:4000",
@@ -1938,9 +1944,11 @@ process.stdout.write(`${String(count)} tasks\n`);
 connection.close();
 ```
 
-`liveDataOf(connection, queryClient)` holds live rows and collections for
-such code, and `createInvalidationCoordinator(queryClient)` invalidates as
-the hooks do.
+Live rows and collections take a TanStack `QueryClient`, so they are on
+`./client` only, still without React: `liveDataOf(connection, queryClient)`
+holds them for code without hooks (a React Native module, a Node client
+that keeps a `QueryClient`), and `createInvalidationCoordinator(queryClient)`
+invalidates as the hooks do.
 
 A client in another language (a Godot game, a native app) speaks the wire
 itself: [`docs/protocol-v5.md`](docs/protocol-v5.md) is its specification,
@@ -3116,8 +3124,8 @@ export function useMatchLinks(matchId: string, onMove: OnMove): (move: Move) => 
 }
 ```
 
-- `createPeerLink(connection, { room, to, offerer })` (from `./client`,
-  React-free) opens a link to socket `to` in app room `room`. One side
+- `createPeerLink(connection, { room, to, offerer })` (from `./client`, or
+  `./client/core` without React) opens a link to socket `to` in app room `room`. One side
   offers; when both do (each heard of the other at once), the side whose
   socket id sorts after the other's answers instead.
   `onPeerRequest(connection, listener)` hears a socket of the room that
@@ -3386,8 +3394,8 @@ export function useArenaHost(arenaId: string): void {
   `createServer`'s) runs once. The server never picks the next host; the
   app does, as `hostArena` above lets the next player who asks. Behind a
   cluster adapter each node knows each room's host.
-- `defineHost(contract, { channels, streams })` (from `./client`,
-  React-free) takes one handler per host-served channel, whose `ctx` is
+- `defineHost(contract, { channels, streams })` (from `./client`, or
+  `./client/core` without React) takes one handler per host-served channel, whose `ctx` is
   `{ peer: { socketId, userId, link }, room }` (the user as the server
   named it, and the host's end of the player's link), and
   `streams.<name>.seed(scope)` to compute a newcomer's seed
@@ -4476,6 +4484,7 @@ bunx @fitzzero/quickdraw-codemod v5 .
 | `./server/otel`    | `otelOnCall`                                                                                                                                                                                                                                                                 |
 | `./prisma`         | `trackPrisma`, `storageOf`, the types `Tracked` and `TrackedTransaction`                                                                                                                                                                                                     |
 | `./client`         | `createQuickdrawClient`, `QuickdrawProvider`, `useQuickdraw`, `usePresence`, `useAdminServices`, `createQuickdrawConnection`, `call`, `callData`, `liveDataOf`, the coordinator; everything in `./utils`                                                                     |
+| `./client/core`    | the client without React or TanStack: `createQuickdrawConnection`, `call`, `callData`, `newId`, the auth helpers, `createPeerLink`, `defineHost`; everything in `./utils`                                                                                                    |
 | `./utils`          | `createServerCaller`, cache keys (`methodKey`, `entityKey`, `collectionKey`), formatting, navigation, `parseJWTPayload`                                                                                                                                                      |
 | `./parser`         | the JSON-only Socket.IO parser                                                                                                                                                                                                                                               |
 | `./testing`        | `createTestApp`, `describeAccessMatrix`, `snapshotAccessMatrix`, `expectBudget`, `createRecordingSink`, `DevWarningError`                                                                                                                                                    |
