@@ -39,20 +39,27 @@ import type { HostMessage, HostSubscribe } from "../../protocol/envelope";
 import type { ErrorCode } from "../../protocol/errors";
 import { encodeMessage, messageBytes } from "../peer/codec";
 import { throwLater } from "../peer/core";
+import type { PeerLink } from "../peer/types";
 import { createOutbox, type HostSend, type Outbox } from "./outbox";
 import { channelRoomOf, streamRoomOf } from "./rooms";
 
 export type { HostSend } from "./outbox";
 
-/** A peer of a host: its socket and its user, as the server named them. */
+/** A peer of a host: its socket and its user, as the server named them, and its link. */
 export interface HostPeer {
   readonly socketId: string;
   readonly userId: string;
+  /**
+   * The host's end of the peer's link: its `clock` (the peer's round trip,
+   * `rtt`) and `setLag`, which lags the peer's messages both ways. The
+   * host's own client has one too, in process.
+   */
+  readonly link: PeerLink;
 }
 
 /** What a host-served channel's handler receives beside the payload. */
 export interface HostChannelContext {
-  /** Who sent it: the user the server named for the peer's socket. */
+  /** Who sent it: the user the server named for the peer's socket, and the peer's link. */
   readonly peer: HostPeer;
   /** The host's room. */
   readonly room: string;

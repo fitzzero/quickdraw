@@ -21,6 +21,8 @@ export type {
   PeerLabel,
   PeerLink,
   PeerLinkEvents,
+  PeerLinkLag,
+  PeerLinkLagOptions,
   PeerLinkState,
   PeerLinkStats,
   PeerPath,

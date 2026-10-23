@@ -6,7 +6,8 @@
 // sends pushed items to the feed's subscribers alone; `defineHost` refuses
 // an implementation that does not match the contract. Then a host and a
 // peer against a real server, over the relay (Node has no WebRTC), and the
-// host's own client in process.
+// host's own client over its in-process link, which `setLag` lags as a
+// peer's.
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { z } from "zod";
@@ -79,7 +80,7 @@ async function peerOf(runtime: Runtime, socketId: string, userId: string) {
   if (hostSide === undefined || peerSide === undefined) {
     throw new Error("a loopback link has a control side");
   }
-  const attached = runtime.attach({ socketId, userId }, hostSide.send, () => {
+  const attached = runtime.attach({ socketId, userId, link: far }, hostSide.send, () => {
     far.close();
   });
   hostSide.on((message) => {
@@ -88,7 +89,7 @@ async function peerOf(runtime: Runtime, socketId: string, userId: string) {
   const heard: [HostMessage, PeerLabel][] = [];
   peerSide.on((message, label) => heard.push([message, label]));
   await until(() => near.state === "open" && far.state === "open");
-  return { link: near, send: peerSide.send, heard, attached };
+  return { link: near, hostEnd: far, send: peerSide.send, heard, attached };
 }
 
 /**
@@ -119,7 +120,7 @@ describe("a host's runtime", () => {
     expect(moves).toEqual([
       [
         { ...world, dx: 1, dy: 0 },
-        { peer: { socketId: "socket-bo", userId: "bo" }, room: WORLD },
+        { peer: { socketId: "socket-bo", userId: "bo", link: bo.hostEnd }, room: WORLD },
       ],
     ]);
   });
@@ -272,8 +273,11 @@ describe("a host's runtime, one message at a time", () => {
   function direct(runtime: Runtime, sendOk: () => boolean = () => true) {
     const sent: [PeerLabel, HostMessage][] = [];
     let closed = 0;
+    // The runtime never reads a peer's link: a closed one stands in.
+    const [link] = createLoopbackPeerLink();
+    link.close();
     const attached = runtime.attach(
-      { socketId: "socket-bo", userId: "bo" },
+      { socketId: "socket-bo", userId: "bo", link },
       (label, message) => {
         if (!sendOk()) {
           return false;
@@ -548,14 +552,67 @@ describe("a host and its peers against a server", () => {
       ).toBe(true);
       await until(() => moves.length > 0, 200);
     });
-    expect(moves[0]?.[1].peer).toEqual({ socketId: peer.socket.id, userId: "bob" });
-    // The host's own client is one of its peers too, in process.
+    // With the host's end of the peer's link.
+    const sender = moves[0]?.[1].peer;
+    expect(sender).toMatchObject({ socketId: peer.socket.id, userId: "bob" });
+    expect([sender?.link.peer, sender?.link.userId, sender?.link.path]).toEqual([
+      peer.socket.id,
+      "bob",
+      "relay",
+    ]);
+    // The host's own client is one of its peers too, over an in-process link.
     expect(
       hostLinksOf(hostConnection).send(WORLD, "gameService", "move", { ...world, dx: 1, dy: 1 }),
     ).toBe(true);
-    expect(moves.at(-1)?.[1].peer).toEqual({ socketId: hostConnection.socket.id, userId: "alice" });
+    const own = moves.at(-1)?.[1].peer;
+    expect(own).toMatchObject({ socketId: hostConnection.socket.id, userId: "alice" });
+    expect([own?.link.peer, own?.link.state, own?.link.path]).toEqual([
+      hostConnection.socket.id,
+      "open",
+      "direct",
+    ]);
+    expect(host.peers.map((each) => each.link)).toEqual([sender?.link, own?.link]);
     host.close();
     await until(() => host.peers.length === 0);
+    expect(own?.link.closeReason).toBe("bye");
+  });
+
+  it("lags its own client's play as setLag on that client's link asks, both ways", async () => {
+    const { hostConnection } = await hostedWorld();
+    const moves: unknown[] = [];
+    const host = defineHost(gameContract, {
+      channels: { move: (move) => moves.push(move) },
+      streams: { world: { seed: () => [snapshot(0)] } },
+    }).serve(hostConnection, { room: WORLD });
+    await until(() => hostOf(hostConnection, WORLD) === hostConnection.socket.id);
+    const own = feed();
+    const links = hostLinksOf(hostConnection);
+    links.subscribe(WORLD, own);
+    // In process, and at once without a lag.
+    expect(own.seeds).toEqual([[snapshot(0)]]);
+    const [self] = host.peers;
+    if (self === undefined) {
+      throw new Error("the host's own client is one of its peers");
+    }
+    expect(self.socketId).toBe(hostConnection.socket.id);
+    self.link.setLag({ ms: 60 });
+    expect(self.link.lag).toEqual({ ms: 60, jitter: 0, loss: 0 });
+    const sentAt = performance.now();
+    expect(links.send(WORLD, "gameService", "move", { ...world, dx: 1, dy: 0 })).toBe(true);
+    host.stream("world").push(WORLD_ID, snapshot(1));
+    expect([moves, own.items]).toEqual([[], []]);
+    await until(() => moves.length === 1 && own.items.length === 1);
+    expect(performance.now() - sentAt).toBeGreaterThanOrEqual(60);
+    expect(own.items).toEqual([snapshot(1)]);
+    // What it held (the clock's pings too) goes on the next task; the next goes at once.
+    self.link.setLag(null);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(self.link.lag).toBe(null);
+    expect(links.send(WORLD, "gameService", "move", { ...world, dx: -1, dy: 0 })).toBe(true);
+    expect(moves).toHaveLength(2);
+    host.close();
   });
 
   it("makes no link a send while the host's links keep closing: the next waits", async () => {

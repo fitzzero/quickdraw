@@ -5,9 +5,10 @@
 // nothing sent. `../host/host.test.ts` runs feeds against a real server.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { HostMessage, PeerLabel } from "../../protocol/envelope";
+import type { HostMessage } from "../../protocol/envelope";
 import { MAX_SCOPE_LENGTH } from "../../protocol/version";
 import { registerLocalHost } from "../host/links";
+import { controlOf, type LinkControl } from "../peer/core";
 import { fakeConnection, testQueryClient } from "./__tests__/fakeSocket";
 import { liveDataOf } from "./liveData";
 import { feedKey, HOST_RETRY_MS, type StreamTarget } from "./streams";
@@ -25,25 +26,22 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** A connection whose socket hosts `ROOM` in process: what its host hears, and how it answers. */
+/** A connection whose socket hosts `ROOM`, over its in-process link: what its host hears, and how it answers. */
 function hosted() {
   const fake = fakeConnection();
   (fake.connection.socket as { id?: string }).id = "socket-ada";
   const live = liveDataOf(fake.connection, testQueryClient());
   const heard: HostMessage[] = [];
-  let answer: ((label: PeerLabel, message: HostMessage) => boolean) | undefined;
-  registerLocalHost(fake.connection, ROOM, (_peer, send) => {
-    answer = send;
-    return {
-      receive: (message) => {
-        heard.push(message);
-      },
-      detach: () => undefined,
-    };
+  let host: LinkControl | undefined;
+  registerLocalHost(fake.connection, ROOM, (link) => {
+    host = controlOf(link);
+    host?.on((message) => {
+      heard.push(message);
+    });
   });
   fake.deliver("qd:host", [ROOM, "socket-ada"]);
   const send = (message: HostMessage): void => {
-    answer?.("rel", message);
+    host?.send("rel", message);
   };
   return { live, heard, send };
 }
