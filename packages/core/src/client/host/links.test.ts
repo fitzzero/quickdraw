@@ -111,18 +111,16 @@ async function until(done: () => boolean): Promise<void> {
 describe("the peer links of host mode", () => {
   it("load once the server announces them, and never while it does not", async () => {
     const { fake, links } = await connected();
+    // A hello as the server sent it: one without limits announces nothing.
+    const quiet = fakeConnection();
+    quiet.setState({ hello: {} as HelloFrame });
     links.hostLinksOf(fake.connection);
+    links.hostLinksOf(quiet.connection);
     await loaded();
     expect(peers.loads).toBe(0);
     fake.setState({ hello: announcing(fake.connection.getState().hello) });
     await loaded();
     expect([peers.loads, peers.made]).toEqual([1, []]);
-    // A hello as the server sent it: one without limits announces nothing.
-    const quiet = await connected();
-    quiet.fake.setState({ hello: {} as HelloFrame });
-    quiet.links.hostLinksOf(quiet.fake.connection);
-    await loaded();
-    expect(peers.loads).toBe(1);
   });
 
   it("take a failed load as a link that closed: the next waits, then loads again", async () => {

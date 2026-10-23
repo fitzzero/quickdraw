@@ -73,12 +73,13 @@ All notable changes to this project will be documented in this file.
   or at the first link to a room's host, so an open tab holds them before
   a redeploy removes the chunk. With a bundler that splits dynamic imports
   by module, an app whose server serves no peer links never downloads
-  them: a typical app's startup bundle (`createQuickdrawClient`,
-  `createQuickdrawConnection`, `QuickdrawProvider`) is about 6 KB gzipped
-  smaller with Vite (rollup or rolldown) and 4.5 KB with webpack. esbuild's
-  own code splitting keeps them at startup, since `./client` re-exports
-  `createPeerLink`, and costs about 1.4 KB more. An app that imports
-  `createPeerLink` or `defineHost` loads them at startup.
+  them: that keeps about 6 KB gzipped out of a typical app's startup
+  bundle (`createQuickdrawClient`, `createQuickdrawConnection`,
+  `QuickdrawProvider`) with Vite (rollup or rolldown), and 4.5 KB with
+  webpack. esbuild's own code splitting keeps them at startup, since
+  `./client` re-exports `createPeerLink`, and costs about 1.4 KB more. An
+  app that imports `createPeerLink` or `defineHost` loads them at
+  startup.
 
 ### Host mode
 
