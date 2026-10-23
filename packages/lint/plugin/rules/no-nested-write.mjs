@@ -7,7 +7,8 @@
 // JSON column) is not one, while any other expression may be rows; `delete`
 // and `disconnect` also take `true` (a to-one relation), not `false`; `set`
 // counts only when it is given objects (a relation), not a scalar or a scalar
-// list.
+// list. The tracked client is `db` or `tx`, or a parameter or variable
+// declared with a tracked client's type (`prisma: Tracked<Db>`).
 
 import { getProperty, keyName, unwrap } from "../lib/ast.mjs";
 import { CLIENTS_OPTION, TRACKED_CLIENTS, modelCall } from "../lib/prisma.mjs";
@@ -118,7 +119,7 @@ export default {
     const clients = context.options[0]?.clients ?? TRACKED_CLIENTS;
     return {
       CallExpression(node) {
-        const call = modelCall(node, clients);
+        const call = modelCall(node, clients, context);
         const argument = call?.args[0] === undefined ? undefined : unwrap(call.args[0]);
         if (argument?.type !== "ObjectExpression") {
           return;

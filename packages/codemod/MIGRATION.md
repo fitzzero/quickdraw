@@ -640,6 +640,16 @@ writes (`project: { connect: ... }`), raw SQL and database cascades are not
 tracked: write the foreign key itself, or record the rows with
 `ctx.touch(model, ids)`. Jobs and scripts wrap their writes in `qd.run(fn)`.
 
+A helper that writes through a client it takes as a parameter
+(`prisma: PrismaClient`, which the service filled with `this.prisma`) now
+gets the tracked `db`, or a transaction's `tx`. `trackPrisma` returns
+`Tracked<PrismaClient>`, a `PrismaClient` the untracked client is not:
+type the parameter `Tracked<PrismaClient>`, or
+`TrackedTransaction<PrismaClient>` when the helper also runs inside
+`db.$transaction` (both from `@fitzzero/quickdraw-core/prisma`), and
+passing the untracked client is a type error. `no-untracked-write` reads
+that type, so the parameter may keep its name.
+
 ### `emitUpdate`, `emitCollection*` and `notifyCollections` are gone
 
 Frames and deltas are derived from tracked writes, so a hand emit sends

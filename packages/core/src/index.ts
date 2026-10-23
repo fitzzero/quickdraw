@@ -280,6 +280,11 @@ export {
   type ServerEventName,
 } from "./contract/names";
 
+// The tracked client's type (RFC 0003 section 5.2), types only, so a shared
+// package types a helper that writes without importing Prisma or the server.
+// `trackPrisma`, which returns one, is on ./prisma.
+export type { Tracked, TrackedTransaction } from "./prisma/tracked";
+
 // Protocol v5 (RFC 0003 section 8), also browser-safe. The JSON-only Socket.IO
 // parser imports `socket.io-parser`, so it is the separate `./parser` export.
 export {

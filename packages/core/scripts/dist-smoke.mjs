@@ -8,6 +8,9 @@
 //
 // - each export provides its known symbols, and the root export's declarations
 //   provide every public type;
+// - the root export and `./prisma` share the one declaration of the tracked
+//   client's mark (`Tracked`'s unique symbol), so a client typed by one is
+//   the other's too;
 // - the root export is browser-safe: its whole import graph is the package's
 //   own files, with no Node built-in and no dependency; so is `./utils`, the
 //   isomorphic entry React server components import;
@@ -492,6 +495,9 @@ const rootTypes = [
   "SubscriberLevel",
   "AdminSubscribers",
   "KitSchema",
+  // prisma/tracked.ts: the tracked client's type, for shared packages without Prisma
+  "Tracked",
+  "TrackedTransaction",
   // protocol/errors.ts
   "ErrorCode",
   "WireError",
@@ -608,6 +614,22 @@ const declaredNames = new Set(
 const missingTypes = rootTypes.filter((name) => !declaredNames.has(name));
 assert.deepEqual(missingTypes, [], `${pkg.exports["."].types} does not export these types`);
 console.log(`ok ${pkg.name} declares ${rootTypes.length} public types`);
+
+// `Tracked<C>` marks a client with a unique symbol: a second declaration of
+// it (each entry's declarations carrying their own) would make the root
+// export's `Tracked` and `./prisma`'s two types that refuse each other.
+const markDeclarations = readdirSync(distDir, { recursive: true })
+  .map(String)
+  .filter((file) => file.endsWith(".d.ts"))
+  .filter((file) =>
+    readFileSync(join(distDir, file), "utf8").includes("declare const TRACKED: unique symbol"),
+  );
+assert.equal(
+  markDeclarations.length,
+  1,
+  `the tracked client's mark is declared in ${markDeclarations.length} files (${markDeclarations.join(", ")}); the root export and ./prisma must share one`,
+);
+console.log(`ok the root export and ./prisma share one Tracked, from ${markDeclarations[0]}`);
 
 // Browser code imports the root export, so its import graph may hold only the
 // package's own files: no Node built-in, no dependency, no server module.

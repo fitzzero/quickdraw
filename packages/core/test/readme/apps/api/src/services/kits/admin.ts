@@ -23,13 +23,14 @@ export const taskService = qd.defineService(task, {
 // #endregion
 
 // #region prepare
+import type { TrackedTransaction } from "@fitzzero/quickdraw-core/prisma";
 import { nextOrdinal } from "@fitzzero/quickdraw-core/server";
 import type { PrismaClient } from "@project/db";
 
 export const taskAdmin = admin.handlers(task, {
   editable: ["projectId", "title", "status"],
   // runs before each write, in its transaction: `db` is that transaction's tracked client
-  prepare: async (call, _ctx, db: PrismaClient) => {
+  prepare: async (call, _ctx, db: TrackedTransaction<PrismaClient>) => {
     if (call.method === "adminCreate" && call.data.projectId !== undefined) {
       // written over the caller's data, a read-only column too: the new task goes last
       return { ordinal: await nextOrdinal(db, "task", { projectId: call.data.projectId }) };
