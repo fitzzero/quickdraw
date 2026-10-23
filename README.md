@@ -2223,6 +2223,7 @@ their variants):
 
 ```tsx
 export function TaskPages({ projectId }: { readonly projectId: string }) {
+  const queryClient = useQueryClient();
   const filter = { projectId };
   // the list's own key (plus a suffix: pages are not one list result) and call,
   // so qd.invalidate(qd.task.list) refetches these pages too
@@ -2232,6 +2233,9 @@ export function TaskPages({ projectId }: { readonly projectId: string }) {
       qd.task.list.call({ filter, cursor: pageParam, limit: 50 }, { signal }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
+    // the last project's pages stay shown while the next one's load, but never another user's:
+    // placeholderFromSession, called on every render, drops what a switch of users left
+    placeholderData: placeholderFromSession(queryClient, keepPreviousData),
   });
   const cards = pages.data?.pages.flatMap((page) => page.items) ?? [];
   return (
@@ -2250,6 +2254,17 @@ export function TaskPages({ projectId }: { readonly projectId: string }) {
   );
 }
 ```
+
+A mounted TanStack hook keeps the last query that held data and makes its
+placeholder from it, and after a switch of users that query is the last
+user's: a member's `useQuery` and `useSearch` drop it themselves, and a hook
+of the app's own does so when its `placeholderData` goes through
+`placeholderFromSession(queryClient, placeholderData)` from `./client`,
+called on every render (TanStack reuses a placeholder without asking while
+the option is the same function), as above. Until the hello on new
+credentials arrives, the cache also still holds the last user's results,
+which a member's hooks hide and a hook of the app's own does not: render it
+only while `isKnown`, as `AuthGate` above does.
 
 ### Search kit
 

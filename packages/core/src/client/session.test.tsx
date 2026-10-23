@@ -7,7 +7,12 @@
 // (Admin on P1, who may read a task's `notes`) to Cy (Read on P1) or Ed (no
 // access to P1).
 
-import { keepPreviousData, QueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  QueryClient,
+  useInfiniteQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { act, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -21,6 +26,7 @@ import { overlaysOf } from "./optimistic";
 import { mutateOptimistically } from "./optimisticCall";
 import { QuickdrawProvider, useQuickdraw } from "./provider";
 import { renderWithQuickdraw } from "../testing/client";
+import { placeholderFromSession } from "./index";
 import { sessionOf } from "./session";
 import { outgoing, until } from "./__tests__/fixtures";
 import { callsOf, framesOf } from "./__tests__/live";
@@ -588,6 +594,111 @@ describe("placeholder data across a switch of users", () => {
     await view.findByText(`${board.ed}: get none`);
     await tick(100);
     expect(view.getByText(`${board.ed}: get none`)).toBeTruthy();
+    expect(leaked(seen, before)).toEqual([]);
+  });
+});
+
+describe("placeholder data of an app's own TanStack hook across a switch of users", () => {
+  async function started() {
+    const { app } = await live.start();
+    const board = live.board();
+    await live.prisma().task.update({ where: { id: board.t1 }, data: { notes: "SECRET" } });
+    return { app, board };
+  }
+
+  /**
+   * An app's own `useInfiniteQuery` over `get`'s key and call (one page per
+   * read), with TanStack's `keepPreviousData`, given through
+   * `placeholderFromSession` on every render when `guarded`. It reads, and
+   * shows its pages, only while the hello on the current credentials named
+   * the user (`isKnown`): until then the cache still holds the last user's
+   * results, which a hook of the app's own does not hide.
+   */
+  function KeptPages({
+    id,
+    guarded,
+    enabled = true,
+    seen,
+  }: {
+    readonly id: string;
+    readonly guarded: boolean;
+    readonly enabled?: boolean;
+    readonly seen: Seen;
+  }) {
+    const { userId, isKnown } = useQuickdraw();
+    const queryClient = useQueryClient();
+    const pages = useInfiniteQuery({
+      queryKey: [...qd.task.get.key({ id }), "pages"],
+      queryFn: ({ signal }) => qd.task.get.call({ id }, { signal }),
+      initialPageParam: 0,
+      getNextPageParam: () => undefined,
+      placeholderData: guarded
+        ? placeholderFromSession(queryClient, keepPreviousData)
+        : keepPreviousData,
+      enabled: isKnown && enabled,
+      retry: false,
+    });
+    const rows = pages.data?.pages.map((row) => `${row.title}/${String(row.notes)}`) ?? [];
+    const kept = pages.isPlaceholderData ? " kept" : "";
+    const result = pages.error === null ? `pages [${rows.join(", ")}]${kept}` : "pages refused";
+    const shown = isKnown ? result : "waiting";
+    seen.push([userId, shown]);
+    return <p>{`${userId ?? "-"}: ${shown}`}</p>;
+  }
+
+  /** What the renders since `from` showed of the last user's row. */
+  const leaked = (seen: Seen, from: number): Seen =>
+    seen.slice(from).filter(([, shown]) => shown.includes("SECRET"));
+
+  /** Ada reads T1, then the provider switches to Ed, who may not read it; returns what was seen since. */
+  async function switchFromAdaToEd(guarded: boolean) {
+    const { app, board } = await started();
+    const seen: Seen = [];
+    const view = await renderWithQuickdraw(
+      <KeptPages id={board.t1} guarded={guarded} seen={seen} />,
+      { app, as: as(board.ada), client: qd },
+    );
+    await view.findByText(`${board.ada}: pages [T1/SECRET]`);
+    const before = seen.length;
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    await view.findByText(`${board.ed}: pages refused`);
+    return { board, leaked: leaked(seen, before), ed: shownTo(seen, board.ed) };
+  }
+
+  it("shows the next user none of the last user's pages through placeholderFromSession", async () => {
+    const { leaked: shown, ed } = await switchFromAdaToEd(true);
+    expect(shown).toEqual([]);
+    expect(ed).toContain("pages []");
+  });
+
+  it("shows them to the next user as a placeholder without it, as TanStack keeps them", async () => {
+    const { board, leaked: shown } = await switchFromAdaToEd(false);
+    expect(shown).toContainEqual([board.ed, "pages [T1/SECRET] kept"]);
+  });
+
+  it("drops a placeholder already shown at the switch, since it is asked again on every render", async () => {
+    const { app, board } = await started();
+    const seen: Seen = [];
+    const view = await renderWithQuickdraw(<KeptPages id={board.t1} guarded seen={seen} />, {
+      app,
+      as: as(board.ada),
+      client: qd,
+    });
+    await view.findByText(`${board.ada}: pages [T1/SECRET]`);
+    // Another id, not read yet: Ada's T1 page stays shown in its place.
+    view.rerender(<KeptPages id={board.t2} guarded enabled={false} seen={seen} />);
+    await view.findByText(`${board.ada}: pages [T1/SECRET] kept`);
+    const before = seen.length;
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    await view.findByText(`${board.ed}: pages []`);
+    await tick(100);
+    expect(view.getByText(`${board.ed}: pages []`)).toBeTruthy();
     expect(leaked(seen, before)).toEqual([]);
   });
 });

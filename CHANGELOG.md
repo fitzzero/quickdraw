@@ -175,7 +175,24 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   CLIENT-1. A member's `useQuery` now asks a `placeholderData` function,
   the caller's or its `QueryClient`'s default, only about a query the cache
   still holds; a placeholder given as a value is shown as before. An app's
-  own TanStack hook over a member's `key` and `call` is not covered yet.
+  own TanStack hook over a member's `key` and `call` takes the same guard
+  through `placeholderFromSession` (below).
+- **`placeholderFromSession` guards an app's own TanStack hook against the
+  last user's placeholder.** A hook an app writes over a member's `key` and
+  `call` (`useInfiniteQuery`, `useQueries`), the form the client rule
+  documents and `no-untyped-client` allows, gave TanStack its
+  `placeholderData` as it was: with `keepPreviousData`, the first render
+  after the next user's hello showed the last user's pages as its
+  placeholder. `placeholderFromSession(queryClient, placeholderData)` on
+  `./client` is the guard a member's `useQuery` uses: it asks a
+  `placeholderData` function only about a query the cache still holds, and
+  passes a value as it is. Call it on every render, in the component:
+  `placeholderData: placeholderFromSession(queryClient, keepPreviousData)`;
+  TanStack reuses a placeholder without asking while the option is the same
+  function. Such a hook also shows what the cache still holds while new
+  credentials await their hello, which a member's hooks hide: show its data
+  only while `isKnown`. It is not on `./client/core`, which names no
+  TanStack type.
 - **Behavior change: the admin kit's reads of rows default to
   `staleTime: 0`.** `adminList`, `adminGet` and `adminSubscribers` took the
   provider's five-minute `staleTime`, and their rows are not live, so an

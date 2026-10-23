@@ -1,11 +1,13 @@
 // `placeholderOption` (`queryHooks.ts`): the `placeholderData` a query hook
 // gives TanStack takes a placeholder only from a query the cache still
 // holds, so a result another user's session left in a mounted observer never
-// shows again. The switch of users itself is rendered in `session.test.tsx`
-// and `live/search.test.tsx`.
+// shows again; `placeholderFromSession`, which it wraps, is the same guard
+// for an app's own TanStack hook. The switch of users itself is rendered in
+// `session.test.tsx` and `live/search.test.tsx`.
 
 import { keepPreviousData, QueryClient, type Query } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
+import { placeholderFromSession } from "./index";
 import { placeholderOption } from "./queryHooks";
 
 /** A placeholder function as TanStack calls it. */
@@ -58,5 +60,23 @@ describe("placeholderOption", () => {
     // A default set for the key wins over the cache's, as TanStack merges them.
     queryClient.setQueryDefaults(["qd", "taskService"], { placeholderData: { items: [] } });
     expect(placeholderOption(queryClient, key, {})).toEqual({ items: [] });
+  });
+});
+
+describe("placeholderFromSession, on ./client for an app's own hooks", () => {
+  it("asks the app's function only about a query the cache holds, and is a new function on every call", () => {
+    const { queryClient, query } = adasResult();
+    const ask = vi.fn(keepPreviousData);
+    const placeholder = placeholderFromSession(queryClient, ask) as Asked;
+    expect(placeholder({ title: "Ada's" }, query)).toEqual({ title: "Ada's" });
+    queryClient.removeQueries({ queryKey: ["qd"] });
+    expect(placeholder({ title: "Ada's" }, query)).toBeUndefined();
+    expect(ask).toHaveBeenCalledTimes(1);
+    // TanStack reuses a placeholder without asking while the option is the same function.
+    expect(placeholderFromSession(queryClient, ask)).not.toBe(placeholder);
+    // A value, or none, passes as it is.
+    const empty = { pages: [], pageParams: [] };
+    expect(placeholderFromSession(queryClient, empty)).toBe(empty);
+    expect(placeholderFromSession(queryClient, undefined)).toBeUndefined();
   });
 });

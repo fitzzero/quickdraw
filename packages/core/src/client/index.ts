@@ -45,6 +45,9 @@ export {
   type RefusedAddition,
 } from "./optimistic";
 export { refetchOnAccessChanges, sessionOf, type CacheSession, type HelloChange } from "./session";
+// The `placeholderData` of an app's own TanStack hook over a member's `key` and `call`: never a
+// result another user's session left (a member's `useQuery` and `useSearch` guard their own).
+export { placeholderFromSession } from "./queryHooks";
 
 // Live entities and collections, without React: the state the hooks show
 // (cached under `entityKey` and `collectionKey`), the pure merge functions
