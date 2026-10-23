@@ -318,6 +318,8 @@ describe("a resume of a self list after a reload of its user's grants", () => {
         setTimeout(resolve, 5);
       });
     }
+    // Still connected, the socket would get the reload's reset, which raises the floor too.
+    expect(app.server.io.sockets.sockets.has(id)).toBe(false);
   }
 
   /**
@@ -359,7 +361,10 @@ describe("a resume of a self list after a reload of its user's grants", () => {
 
   it("reads a page when something was written since, and the reload is over", async () => {
     const { app, since } = await demoted();
-    await write(app, (db) => db.task.create({ data: { projectId: board.p2, title: "Elsewhere" } }));
+    // Into ed's list, not cy's: her scope's floor stays where it was.
+    await write(app, (db) =>
+      db.task.create({ data: { projectId: board.p2, title: "Elsewhere", assigneeId: board.ed } }),
+    );
     await app.server.access.refresh(board.cy);
     const answer = await resume(app, since);
     expect(answer).not.toHaveProperty("resumed");
