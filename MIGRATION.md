@@ -854,16 +854,22 @@ export const taskService = qd.defineService(task, {
         db.task.update({ where: { id: input.id }, data: { status: input.status } }),
     },
     assigned: {
-      // Read on the project the input names, asked through ctx.access; none named, the caller's own
+      // Read on the project the input names, asked through ctx.access; none named, the caller's
+      // own that they may still read
       access: custom(
         async (ctx, input) =>
           input.projectId === undefined || (await ctx.access.can(project, input.projectId, "Read")),
       ),
-      handler: ({ input, ctx, db }) =>
-        db.task.findMany({
-          where: { assigneeId: ctx.principal.userId, projectId: input.projectId },
+      handler: async ({ input, ctx, db }) => {
+        const readable = await ctx.access.where(task, "Read");
+        if (readable === "none") return [];
+        return db.task.findMany({
+          where: {
+            AND: [{ assigneeId: ctx.principal.userId, projectId: input.projectId }, readable],
+          },
           take: 100,
-        }),
+        });
+      },
     },
   },
 });

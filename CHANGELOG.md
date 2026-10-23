@@ -274,6 +274,14 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   grants now resets their self lists after re-authorizing them, so a list
   being revoked gets no `reset` first. Collections without `requires` are
   unchanged. `CollectionRequires` is on `./server`.
+- **The `ctx.access` example lists only the rows its caller may read.**
+  Called without a project, the `assigned` method of the README and the
+  access rule listed every task assigned to the caller, in projects they
+  had left too. Its handler now adds `ctx.access.where(task, "Read")` to
+  the query with `AND`, as any list a `custom` form lets through without
+  its key must. The README's collections example no longer gives its self
+  list `requires`, a grant its methods do not ask for, so a member without
+  a service grant opens it.
 - **`trackPrisma` returns `Tracked<C>`, a type the untracked client is
   not.** The tracked client had the client's own type, so nothing told it
   from the untracked one: a helper that writes could be handed the

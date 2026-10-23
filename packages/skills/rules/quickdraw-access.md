@@ -118,16 +118,20 @@ the dispatcher.
 
 ```ts
 assigned: {
-  // Read on the project the input names, asked through ctx.access; none named, the caller's own
+  // Read on the project the input names, asked through ctx.access; none named, the caller's
+  // own that they may still read
   access: custom(
     async (ctx, input) =>
       input.projectId === undefined || (await ctx.access.can(project, input.projectId, "Read")),
   ),
-  handler: ({ input, ctx, db }) =>
-    db.task.findMany({
-      where: { assigneeId: ctx.principal.userId, projectId: input.projectId },
+  handler: async ({ input, ctx, db }) => {
+    const readable = await ctx.access.where(task, "Read");
+    if (readable === "none") return [];
+    return db.task.findMany({
+      where: { AND: [{ assigneeId: ctx.principal.userId, projectId: input.projectId }, readable] },
       take: 100,
-    }),
+    });
+  },
 },
 ```
 
@@ -135,11 +139,18 @@ assigned: {
   `where(service, level)` count levels as `{ entry }` does, for
   `ctx.principal` with the grants the call runs with: never load the user's
   grants again. `service` is a contract or a service name.
+- A list the form lets through without its key still follows the row
+  policy: add `ctx.access.where(service, "Read")` to its `findMany` with
+  `AND` (`"none"` lists nothing). Never spread it into `where`: a filter on
+  the same column (`inherit`'s `projectId`) replaces the input's, and the
+  keyed list widens to every row the caller reads.
 - Prefer a declared form when one says it: `{ entry: L }` for the method's
   own row, `{ scope: L, of, id }` for a parent whose key is always there.
-  `custom` replaces the row check and a service-wide `Admin` grant skips
-  it, so a method whose input has `id` still needs `rowless: true` beside
-  it (below).
+  A `ctx.access` form counts a service-wide `Admin` grant on the service it
+  asks (the parent's), which `{ scope, of }` does not: it counts only one
+  on the method's own service. `custom` replaces the row check and a
+  service-wide `Admin` grant skips it, so a method whose input has `id`
+  still needs `rowless: true` beside it (below).
 - An anonymous caller has no level anywhere (`false`, an empty map,
   `"none"`). `qd` has no `access`: a job asks `server.dispatcher.access`.
 
