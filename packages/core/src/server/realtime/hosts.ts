@@ -15,20 +15,26 @@
 // Behind a cluster adapter each node keeps the host of every room, so a
 // socket that joins on any node hears it at once: a change goes to the
 // other nodes as `quickdraw:room-host` (`{ room, host, version, was? }`,
-// tagged with the deployment), and a node that starts asks the others once
-// for the hosts their own sockets hold and their clocks
-// (`quickdraw:room-hosts`). Each record has a version, a hybrid clock in
-// microseconds: the time, or one past every version the node heard when
-// that is later. Records are ordered by version, then by socket id, and a
-// clear ends every record of the room ordered at or before the one it
-// clears, whatever its host, and is remembered (the latest `MAX_CLEARED`
-// rooms). So each node holds what the latest event it heard says, a host
-// or none, whatever order the events reached it in, and two `setHost` at
-// once on two nodes leave every node with the same answer. A node that
-// turns down a record older than what it holds sends what it holds again,
-// so a node whose clock is behind, or that started late, comes round. A
-// node that dies without closing leaves its hosts' records on the others
-// until the room's host is set or cleared again.
+// tagged with the deployment), and a node asks the others for the hosts
+// their own sockets hold and their clocks (`quickdraw:room-hosts`) when it
+// starts behind a cluster adapter, or once `setupRedisAdapter` set one
+// (`seedRoomHosts`). The Redis adapter waits for as many answers as it
+// counts subscribers when asked, and right after it subscribed it can miss
+// its own: so the ask goes once the adapter's subscribing connection
+// answered a PING sent after its subscriptions (one connection's commands
+// run in order), and with an adapter that has no such client it goes again
+// `cluster.timeoutMs` after the first answer. Each record has a version, a
+// hybrid clock in microseconds: the time, or one past every version the
+// node heard when that is later. Records are ordered by version, then by
+// socket id, and a clear ends every record of the room ordered at or
+// before the one it clears, whatever its host, and is remembered (the
+// latest `MAX_CLEARED` rooms). So each node holds what the latest event it
+// heard says, a host or none, whatever order the events reached it in, and
+// two `setHost` at once on two nodes leave every node with the same
+// answer. A node that turns down a record older than what it holds sends
+// what it holds again, so a node whose clock is behind, or that started
+// late, comes round. A node that dies without closing leaves its hosts'
+// records on the others until the room's host is set or cleared again.
 
 import { SERVER_EVENTS } from "../../contract/names";
 import { QuickdrawError } from "../../protocol/errors";
@@ -37,7 +43,7 @@ import { DEFAULT_CLUSTER_TIMEOUT_MS, within } from "../cluster/acks";
 import { emitToNodes, onNodeEvent, tagged } from "../cluster/deployment";
 import { track, type Hub } from "../emit/hub";
 import { describeError } from "../pipeline/metrics";
-import type { QuickdrawServerSocket } from "../transports/types";
+import type { QuickdrawIo, QuickdrawServerSocket } from "../transports/types";
 import { checkRoom } from "./roomNames";
 import type { HostLeave, HostLeaveHook, RoomHosts, RoomLeaveReason } from "./types";
 
@@ -276,6 +282,85 @@ function merge(state: State, answers: unknown): void {
   }
 }
 
+/** The room hosts of each server, by its Socket.IO server, for `seedRoomHosts`. */
+const HOSTS_BY_IO = new WeakMap<object, State>();
+
+/** A client that answers PING. */
+interface Pinging {
+  ping(): unknown;
+}
+
+/**
+ * The subscribing client of `io`'s Socket.IO Redis adapter, when its PING
+ * goes on the connection that holds the adapter's subscriptions, after them.
+ * None for another adapter, or a cluster client (ioredis's `Cluster`,
+ * node-redis's `createCluster`), which may send it to another node.
+ */
+function subscriberOf(io: QuickdrawIo): Pinging | undefined {
+  const adapter = io.sockets.adapter as unknown as { readonly subClient?: unknown } | undefined;
+  const client = adapter?.subClient;
+  if (typeof client !== "object" || client === null) {
+    return undefined;
+  }
+  const { ping, isCluster, masters } = client as {
+    readonly ping?: unknown;
+    readonly isCluster?: unknown;
+    readonly masters?: unknown;
+  };
+  const cluster = isCluster === true || Array.isArray(masters);
+  return typeof ping === "function" && !cluster ? (client as Pinging) : undefined;
+}
+
+/** Asks the other nodes for the hosts their own sockets are, and their clocks, within `cluster.timeoutMs`. */
+async function ask(state: State, io: QuickdrawIo, timeoutMs: number): Promise<void> {
+  try {
+    merge(
+      state,
+      await within(io.serverSideEmitWithAck(ROOM_HOSTS_EVENT, tagged(io, {})), timeoutMs),
+    );
+  } catch {
+    // No answer in time: what the other nodes hold reaches this node with their next changes.
+  }
+}
+
+/** Resolves after `ms`, without holding the process open. */
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
+/**
+ * Asks the other nodes for their hosts once this node's adapter can count it
+ * (the top of this file): after its subscribing connection answered a PING,
+ * or, with an adapter that cannot say, at once and again `cluster.timeoutMs`
+ * after the first answer. Nothing on a server still on its in-memory adapter.
+ */
+function seed(state: State): void {
+  const { io } = state.hub;
+  if (io === undefined || state.hub.probe.local()) {
+    return;
+  }
+  const timeoutMs = state.hub.cluster?.timeoutMs ?? DEFAULT_CLUSTER_TIMEOUT_MS;
+  const twice = async (): Promise<void> => {
+    await ask(state, io, timeoutMs);
+    await pause(timeoutMs);
+    await ask(state, io, timeoutMs);
+  };
+  const subscriber = subscriberOf(io);
+  if (subscriber === undefined) {
+    void twice();
+    return;
+  }
+  void within(
+    Promise.resolve().then(() => subscriber.ping()),
+    timeoutMs,
+  ).then(async () => {
+    await ask(state, io, timeoutMs);
+  }, twice);
+}
+
 function listen(state: State): void {
   const { io } = state.hub;
   if (io === undefined) {
@@ -309,14 +394,20 @@ function listen(state: State): void {
     },
     { hosts: [] },
   );
-  if (!state.hub.probe.local()) {
-    const timeoutMs = state.hub.cluster?.timeoutMs ?? DEFAULT_CLUSTER_TIMEOUT_MS;
-    within(io.serverSideEmitWithAck(ROOM_HOSTS_EVENT, tagged(io, {})), timeoutMs).then(
-      (answers) => {
-        merge(state, answers);
-      },
-      () => undefined,
-    );
+  HOSTS_BY_IO.set(io, state);
+  seed(state);
+}
+
+/**
+ * Asks the other nodes for the hosts they hold, for the server whose
+ * Socket.IO server is `io`, now that it runs a cluster adapter it did not
+ * start with: `setupRedisAdapter` calls it once it set the adapter. Nothing
+ * for a server still on its in-memory adapter, or one without room hosts.
+ */
+export function seedRoomHosts(io: object): void {
+  const state = HOSTS_BY_IO.get(io);
+  if (state !== undefined) {
+    seed(state);
   }
 }
 

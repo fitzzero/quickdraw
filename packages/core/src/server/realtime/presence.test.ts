@@ -83,6 +83,22 @@ async function node(
   return { app, fetched, warnings };
 }
 
+/**
+ * What each presence request a spy on `serverSideEmitWithAck` saw resolves
+ * with, in order: a node asks the others for their room hosts on the same
+ * method (`hosts.ts`), once it starts and again a little later.
+ */
+function presenceAnswers(asks: {
+  readonly mock: {
+    readonly calls: readonly (readonly unknown[])[];
+    readonly results: readonly { readonly value: unknown }[];
+  };
+}): unknown[] {
+  return asks.mock.calls.flatMap((call, index) =>
+    call[0] === PRESENCE_EVENT ? [asks.mock.results[index]?.value] : [],
+  );
+}
+
 /** In the cluster projects, a spy on `fetchSockets` of each of the app's two nodes; elsewhere none. */
 async function fetchSocketsOfNodes(app: App) {
   if (!inCluster()) {
@@ -414,7 +430,7 @@ describe("behind a cluster adapter", () => {
     const asks = vi.spyOn(b.app.server.io, "serverSideEmitWithAck");
     expect((await b.app.server.presence.users("lobby")).sort()).toEqual(both);
     expect(asks).toHaveBeenCalledWith(PRESENCE_EVENT, { room: "lobby", deployment: "quickdraw" });
-    await expect(asks.mock.results[0]?.value).resolves.toEqual([[board.ada]]);
+    await expect(presenceAnswers(asks)[0]).resolves.toEqual([[board.ada]]);
     expect(await b.app.server.presence.count("lobby")).toBe(2);
     expect(await a.app.server.presence.isOnline(board.cy)).toBe(true);
     expect(await a.app.server.presence.isOnline(board.bo)).toBe(false);
@@ -434,7 +450,7 @@ describe("behind a cluster adapter", () => {
         deployment: "quickdraw",
       });
     });
-    await asksA.mock.results[0]?.value;
+    await presenceAnswers(asksA)[0];
     await settle(ada.connection);
     expect(ada.presence.filter((frame) => frame.left !== undefined)).toEqual([]);
     await cy.connection.call.taskService.exit({ room: "lobby" });
@@ -460,7 +476,7 @@ describe("behind a cluster adapter", () => {
     bus.servers.push(new Server() as unknown as QuickdrawIo);
     const asks = vi.spyOn(a.app.server.io, "serverSideEmitWithAck");
     expect(await a.app.server.presence.users("lobby")).toEqual([board.ada]);
-    expect(asks).toHaveBeenCalledTimes(1);
+    expect(presenceAnswers(asks)).toHaveLength(1);
     expect(a.fetched).toHaveBeenCalledTimes(1);
     expect(a.warnings()).toEqual([
       expect.stringContaining("did not answer a presence request within cluster.timeoutMs"),
@@ -468,7 +484,7 @@ describe("behind a cluster adapter", () => {
     // Within the 30 s that follow a read asks no node: it reads every node's sockets at once.
     expect(await a.app.server.presence.count("lobby")).toBe(1);
     expect(await a.app.server.presence.isOnline(board.cy)).toBe(false);
-    expect(asks).toHaveBeenCalledTimes(1);
+    expect(presenceAnswers(asks)).toHaveLength(1);
     expect(a.fetched).toHaveBeenCalledTimes(3);
     expect(a.warnings()).toHaveLength(1);
   });
