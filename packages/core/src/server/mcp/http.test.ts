@@ -259,6 +259,47 @@ describe("requests the routes refuse", () => {
   });
 });
 
+describe("a principal hook that cannot check the token (an outage)", () => {
+  it("answers 500 INTERNAL, logged once as an error, where a token it refuses answers 401", async () => {
+    let storeDown = false;
+    const tokens = agentAuth((request) => (request.transport === "http" ? request.token : null));
+    const fixture = setup({
+      ...tokens,
+      principal: (request) => {
+        if (storeDown) {
+          throw new Error("the token store is down");
+        }
+        return tokens.principal(request);
+      },
+    });
+    const url = await listen(
+      createMcpHttpRouter({ registry: fixture.registry, logger: fixture.logger }),
+    );
+    const call = { name: "taskService_whoami", arguments: {} };
+    expect(await invoke(url, call, { token: "stolen-token" })).toEqual({
+      status: 401,
+      body: { success: false, error: "Authentication failed", code: "UNAUTHENTICATED" },
+    });
+    storeDown = true;
+    // A good token the hook could not check: the agent is not told to drop it.
+    expect(await invoke(url, call, { token: "writer-token" })).toEqual({
+      status: 500,
+      body: { success: false, error: "Internal error", code: "INTERNAL" },
+    });
+    expect(
+      await invoke(url, { service: "taskService", method: "whoami" }, { token: "writer-token" }),
+    ).toMatchObject({ status: 500, body: { code: "INTERNAL" } });
+    expect(fixture.logger.at("debug").map((entry) => entry.message)).toEqual([
+      "MCP authentication failed",
+    ]);
+    expect(fixture.logger.at("error").map((entry) => entry.message)).toEqual([
+      "MCP authentication failed",
+      "MCP authentication failed",
+    ]);
+    expect(fixture.records).toEqual([]);
+  });
+});
+
 /** A raw request, whose Host and Origin headers are sent as given (fetch may drop or rewrite them). */
 function raw(
   url: string,

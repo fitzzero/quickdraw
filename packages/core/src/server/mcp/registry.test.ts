@@ -284,7 +284,7 @@ describe("sessions", () => {
     expect(seen).toEqual([stdio("s9")]);
   });
 
-  it("answers UNAUTHENTICATED when principal fails, and lets an anonymous caller call public methods only", async () => {
+  it("answers UNAUTHENTICATED when principal refuses, and lets an anonymous caller call public methods only", async () => {
     const { registry, logger } = setup(agentAuth(() => "stolen-token"));
     const refused = await registry.call("taskService_list", {}, { request: stdio() });
     expect(errorOf(refused)).toMatchObject({
@@ -295,17 +295,18 @@ describe("sessions", () => {
     expect(logger.at("error")).toEqual([]);
     expect(logger.at("debug").map((entry) => entry.message)).toContain("MCP authentication failed");
     expect(JSON.stringify(logger.entries)).not.toContain("stolen-token");
-    // A hook that breaks is still an error.
-    const broken = setup({
+    // A FORBIDDEN refusal is a refusal too, answered UNAUTHENTICATED as before.
+    const forbidden = setup({
       principal: () => {
-        throw new Error("the token store is down");
+        throw new QuickdrawError("FORBIDDEN", "Not from this host");
       },
     });
-    const down = await broken.registry.call("taskService_list", {}, { request: stdio() });
-    expect(errorOf(down).code).toBe("UNAUTHENTICATED");
-    expect(broken.logger.at("error").map((entry) => entry.message)).toEqual([
-      "MCP authentication failed",
-    ]);
+    const elsewhere = await forbidden.registry.call("taskService_list", {}, { request: stdio() });
+    expect(errorOf(elsewhere)).toMatchObject({
+      code: "UNAUTHENTICATED",
+      message: "Authentication failed",
+    });
+    expect(forbidden.logger.at("error")).toEqual([]);
     const anonymous = setup({ principal: () => null, context: undefined }).registry;
     expect(await anonymous.call("taskService_whoami", {}, { request: stdio() })).toMatchObject({
       ok: true,
@@ -313,6 +314,59 @@ describe("sessions", () => {
     });
     const get = await anonymous.call("taskService_get", { id: "t1" }, { request: stdio() });
     expect(errorOf(get).code).toBe("UNAUTHENTICATED");
+  });
+
+  it("answers INTERNAL when principal fails any other way, an outage: the token may well be good", async () => {
+    const context = vi.fn(() => ({ scopes: [] }));
+    const respond = vi.fn();
+    const broken = setup({
+      principal: () => {
+        throw new Error("the token store is down");
+      },
+      context,
+    });
+    const down = await broken.registry.call("taskService_list", {}, { request: stdio(), respond });
+    expect(errorOf(down)).toMatchObject({ code: "INTERNAL", message: "Internal error" });
+    // What a stdio client sees: a tool error carrying INTERNAL, never UNAUTHENTICATED.
+    expect(toToolResult(down)).toEqual({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ code: "INTERNAL", message: "Internal error" }, null, 2),
+        },
+      ],
+      isError: true,
+    });
+    expect(respond).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(down);
+    // Logged once at error, with what the hook threw, and not again as a failed tool.
+    expect(broken.logger.at("error")).toEqual([
+      expect.objectContaining({
+        message: "MCP authentication failed",
+        meta: expect.objectContaining({
+          transport: "stdio",
+          error: expect.objectContaining({ message: "the token store is down" }),
+        }),
+      }),
+    ]);
+    expect(context).not.toHaveBeenCalled();
+    expect(broken.records).toEqual([]);
+    // A QuickdrawError of another code, and a principal of the wrong shape, are the app's too.
+    const other = setup({
+      principal: () => {
+        throw new QuickdrawError("NOT_FOUND", "No such token row");
+      },
+    });
+    const missing = await other.registry.call("taskService_list", {}, { request: stdio() });
+    expect(errorOf(missing).code).toBe("INTERNAL");
+    const malformed = setup({ principal: () => ({ userId: "" }) as AgentPrincipal });
+    const odd = await malformed.registry.call("taskService_list", {}, { request: stdio() });
+    expect(errorOf(odd).code).toBe("INTERNAL");
+    for (const { logger } of [other, malformed]) {
+      expect(logger.at("error").map((entry) => entry.message)).toEqual([
+        "MCP authentication failed",
+      ]);
+    }
   });
 
   it("fails a call with INTERNAL when context throws or returns something other than fields", async () => {
