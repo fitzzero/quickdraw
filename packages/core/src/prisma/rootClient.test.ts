@@ -104,7 +104,7 @@ describe("the root client inside a transaction's callback", () => {
     expect(ops(writes)).toEqual(["create t2", "create b1"]);
   });
 
-  it("leaves a transaction that commits as it was, its own writes and the root client's", async () => {
+  it("leaves a transaction that commits as it was: its client's createMany and updateMany run in it", async () => {
     const { writes } = await h.inUnit(() =>
       h.db.$transaction(async (tx) => {
         await tx.task.create({ data: { id: "a", projectId, title: "a" } });
@@ -117,5 +117,55 @@ describe("the root client inside a transaction's callback", () => {
     expect(await rows()).toEqual(["a:done", "c:doing"]);
     expect(ops(writes)).toEqual(["create a", "create c"]);
     expect(writes[1]?.after).toMatchObject({ status: "doing" });
+  });
+});
+
+describe("a transaction's client wherever it runs", () => {
+  it("writes to its own transaction from inside a root array-form batch, so a rollback drops the frame", async () => {
+    // Prisma runs an operation made on `tx` in `tx`'s transaction even when a batch holds it,
+    // since the hook awaits it there: it is the transaction's, not the batch's.
+    const { writes } = await h.inUnit(async () => {
+      await expect(
+        h.db.$transaction(async (tx) => {
+          await h.db.$transaction([tx.task.create({ data: { id: "x", projectId, title: "x" } })]);
+          throw new Error(UNDONE);
+        }),
+      ).rejects.toThrow(UNDONE);
+    });
+    expect(await rows()).toEqual([]);
+    expect(writes).toEqual([]);
+  });
+
+  it("refuses work once its transaction ended, as Prisma does, rather than running it on the root client", async () => {
+    let stale: Parameters<Parameters<typeof h.db.$transaction>[0]>[0] | undefined;
+    await h.db.$transaction(async (tx) => {
+      stale = tx;
+    });
+    await h.prisma.task.create({ data: { id: "old", projectId, title: "old" } });
+    const { writes } = await h.inUnit(async () => {
+      await expect(
+        stale?.task.createMany({ data: [{ id: "s", projectId, title: "s" }] }),
+      ).rejects.toThrow();
+      await expect(
+        stale?.task.updateMany({ where: { id: "old" }, data: { status: "stale" } }),
+      ).rejects.toThrow();
+    });
+    expect(await rows()).toEqual(["old:open"]);
+    expect(writes).toEqual([]);
+  });
+
+  it("flushes the root client's operation in its nested array-form batch, which commits on its own", async () => {
+    // Prisma runs `tx.$transaction([...])` as a batch of its own: the root client's operation in it
+    // commits with that batch, whatever `tx`'s transaction then does.
+    const { writes } = await h.inUnit(async () => {
+      await expect(
+        h.db.$transaction(async (tx) => {
+          await tx.$transaction([h.db.task.create({ data: { id: "r", projectId, title: "r" } })]);
+          throw new Error(UNDONE);
+        }, ENDS),
+      ).rejects.toThrow();
+    });
+    expect(await rows()).toEqual(["r:open"]);
+    expect(ops(writes)).toEqual(["create r"]);
   });
 });

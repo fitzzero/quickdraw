@@ -108,18 +108,30 @@ export interface Delegate {
 }
 
 /**
- * What every operation handler shares. A tracked client has two: one for
- * the operations of its root client, one for those of its transactions'
- * clients (`trackPrisma.ts`), which differ in where the hook's own queries
- * run and where the writes are recorded.
+ * What every operation handler shares. A tracked client has one for the
+ * operations of its root client, and one for each interactive transaction
+ * begun on it, its savepoints included (`trackPrisma.ts`), which differ in
+ * where the hook's own queries run and where the writes are recorded.
  */
 export interface Runtime {
   readonly tracker: WriteTracker;
   /**
+   * False for a transaction's client once its transaction ended: the hook
+   * then runs an operation as written, untracked, and Prisma refuses it.
+   */
+  live(): boolean;
+  /**
+   * True for an array-form batch's own operation: it runs in the batch, so
+   * it cannot be replaced by another, and a read made first runs outside
+   * the batch. Never for a transaction client's, which runs in its
+   * transaction even when a batch holds it.
+   */
+  inBatch(): boolean;
+  /**
    * The model's delegate for the hook's own queries: on the root client for
    * the root client's operations, which run outside every transaction even
-   * inside one's callback; on the open interactive transaction's client for
-   * a transaction client's (the root client's outside any).
+   * inside one's callback; on the innermost open savepoint's client, else the
+   * transaction's own, for a transaction client's, wherever it is used.
    */
   delegate(model: string): Delegate;
   /** Records the writes of an operation where it ran (`WriteTracker.record`). */
@@ -319,7 +331,7 @@ async function runWidened(op: Operation): Promise<{ result: unknown; rows: Row[]
  * the batch's earlier statements changed.
  */
 function warnBatchRead(op: Operation): void {
-  if (!op.runtime.tracker.inBatch()) {
+  if (!op.runtime.inBatch()) {
     return;
   }
   op.runtime.tracker.warn({
@@ -462,7 +474,7 @@ async function upsertWithoutUpdate(op: Operation): Promise<unknown> {
 }
 
 async function upsert(op: Operation): Promise<unknown> {
-  if (writesNothing(op.args.update) && !op.runtime.tracker.inBatch()) {
+  if (writesNothing(op.args.update) && !op.runtime.inBatch()) {
     return upsertWithoutUpdate(op);
   }
   warnNested(op, op.args.create);
@@ -618,14 +630,14 @@ async function rewrite(
 }
 
 function createMany(op: Operation): Promise<unknown> {
-  if (op.runtime.tracker.inBatch()) {
+  if (op.runtime.inBatch()) {
     return createManyInBatch(op);
   }
   return rewrite(op, (delegate, args) => delegate.createManyAndReturn(args));
 }
 
 function updateMany(op: Operation): Promise<unknown> {
-  if (op.runtime.tracker.inBatch()) {
+  if (op.runtime.inBatch()) {
     return updateManyInBatch(op);
   }
   if (writesNothing(op.args.data)) {
@@ -676,7 +688,7 @@ export const WRITE_OPERATIONS: Readonly<Record<string, (op: Operation) => Promis
  * counts every other operation itself.
  */
 export function delegates(runtime: Runtime, operation: string, args: Args | undefined): boolean {
-  if (runtime.tracker.inBatch()) {
+  if (runtime.inBatch()) {
     return false;
   }
   switch (operation) {

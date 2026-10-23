@@ -222,8 +222,11 @@ writes made through `db`, after the response is sent:
   commits). Work on `db` there (a write, or a `db.$transaction` of its own)
   runs outside the transaction and commits on its own, and its frames are
   sent whatever the transaction does: write through `tx` what must commit
-  or roll back with it. On PGlite, with one connection, such work waits for
-  the transaction to end.
+  or roll back with it. `tx` writes to its own transaction wherever it is
+  used, and is refused once that transaction ended; never keep it past its
+  callback. On PGlite, with one connection, work on `db` inside a callback
+  waits for the transaction to end. A `ctx.touch` in the callback joins the
+  transaction: touch a root `db.$executeRaw` after the callback.
 - Raw SQL writes and database cascades are not seen: record them with
   `ctx.touch("task", ids)` (`{ removed: true }` for deleted rows); `qd.run`
   passes `fn` the same `touch`. Before deleting a row whose dependents the
