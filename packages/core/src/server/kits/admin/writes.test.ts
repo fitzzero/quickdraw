@@ -3,15 +3,38 @@
 // client, so an admin update sends the same frames as any other update of
 // the row (the kit sends none itself); `id`, the timestamps and hidden
 // fields are never written; `adminSubscribers` counts the sockets in a row's
-// tier rooms and `adminReemit` sends the row to them again.
+// tier rooms and `adminReemit` sends the row to them again. `prepare` runs
+// before each write, in its transaction: the columns it returns are written
+// over the caller's data, and its tracked writes (the rows a database
+// cascade would delete unseen) reach the lists open on them.
 
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import type { PrismaClient } from "../../../../test/prisma/setup";
+import type { EntityOf } from "../../../contract/infer";
+import { defineContract } from "../../../index";
 import { QuickdrawError } from "../../../protocol/errors";
-import type { RecordedFrame } from "../../../testing/index";
+import {
+  createTestApp,
+  emitWithAck,
+  type RecordedFrame,
+  type TestApp,
+} from "../../../testing/index";
+import { projectMembers } from "../../access/__tests__/board";
 import { colSub } from "../../collections/__tests__/fixture";
-import { sub } from "../../emit/__tests__/live";
+import { qd, sub } from "../../emit/__tests__/live";
 import { captureLogger, deferred } from "../../__tests__/fixtures";
-import { admin as adminKit, type AdminOnCommitted, type AdminOnWrite } from "../../index";
+import {
+  admin as adminKit,
+  anyOf,
+  inherit,
+  jsonAcl,
+  type AdminOnCommitted,
+  type AdminOnWrite,
+  type AdminPrepare,
+  type AdminPrepareCall,
+} from "../../index";
 import { adminApp, as, ENTITY_KEYS, serviceAdmin, taskContract } from "./__tests__/fixture";
 
 const kit = adminApp();
@@ -484,5 +507,295 @@ describe("onCommitted (finding F6.5)", () => {
     expect(() =>
       adminKit.handlers(taskContract, { onCommitted: 1 as unknown as AdminOnCommitted }),
     ).toThrow("admin.handlers: onCommitted must be a function of (write, ctx)");
+  });
+});
+
+type TaskRow = EntityOf<typeof taskContract>;
+
+/** A column the server computes from what the caller sent: a short content hash. */
+function digest(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+
+describe("prepare", () => {
+  it("adminCreate writes the columns it returns over the caller's data, one the caller may not write included", async () => {
+    const calls: AdminPrepareCall<TaskRow>[] = [];
+    const { app } = await kit.start({
+      editable: ["projectId", "title", "status"],
+      prepare: (call) => {
+        calls.push(call);
+        expect(Object.isFrozen(call)).toBe(true);
+        if (call.method !== "adminCreate") {
+          return undefined;
+        }
+        expect(Object.isFrozen(call.data)).toBe(true);
+        // notes is not editable, and status the caller's: the server sets both; undefined keeps a value
+        return { notes: digest(call.data.title ?? ""), status: "doing", title: undefined };
+      },
+    });
+    const board = kit.board();
+    const admin = app.as(serviceAdmin(board.ed)).taskService;
+    const created = await admin.adminCreate({
+      data: { projectId: board.p1, title: "Made", status: "open" },
+    });
+    expect(calls).toEqual([
+      { method: "adminCreate", data: { projectId: board.p1, title: "Made", status: "open" } },
+    ]);
+    expect(created).toMatchObject({ title: "Made", status: "doing", notes: digest("Made") });
+    expect(
+      await kit.harness().prisma.task.findUniqueOrThrow({ where: { id: created.id } }),
+    ).toMatchObject({ title: "Made", status: "doing", notes: digest("Made") });
+    // The caller still may not send it.
+    await expect(
+      loose(app).adminCreate({ data: { projectId: board.p1, title: "Mine", notes: "x" } }),
+    ).rejects.toMatchObject({
+      code: "VALIDATION",
+      data: { issues: [{ path: ["data", "notes"], message: '"notes" is not editable' }] },
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("adminUpdate hears the row before it, and writes its columns, a hidden field's included", async () => {
+    const calls: AdminPrepareCall<TaskRow>[] = [];
+    const { app } = await kit.start({
+      hiddenFields: ["notes"],
+      prepare: (call) => {
+        calls.push(call);
+        return call.method === "adminUpdate"
+          ? { notes: `${call.before.title} -> ${call.data.title ?? call.before.title}` }
+          : undefined;
+      },
+    });
+    const board = kit.board();
+    const admin = app.as(serviceAdmin(board.ed)).taskService;
+    const updated = await admin.adminUpdate({ id: board.t1, data: { title: "Renamed" } });
+    expect(updated).toMatchObject({ id: board.t1, title: "Renamed" });
+    // A hidden field is written, never returned.
+    expect(updated).not.toHaveProperty("notes");
+    expect(calls).toEqual([
+      {
+        method: "adminUpdate",
+        id: board.t1,
+        data: { title: "Renamed" },
+        before: expect.objectContaining({ id: board.t1, title: "T1", notes: null }),
+      },
+    ]);
+    // The row before is every field, as onWrite hears it.
+    const [call] = calls;
+    expect(Object.keys(call?.method === "adminUpdate" ? call.before : {}).sort()).toEqual(
+      [...ENTITY_KEYS].sort(),
+    );
+    expect(
+      await kit.harness().prisma.task.findUniqueOrThrow({ where: { id: board.t1 } }),
+    ).toMatchObject({ title: "Renamed", notes: "T1 -> Renamed" });
+    // An update that changes nothing writes nothing and runs no hook; a missing row is NOT_FOUND first.
+    expect(await admin.adminUpdate({ id: board.t1, data: {} })).toMatchObject({ title: "Renamed" });
+    await expect(admin.adminUpdate({ id: "missing", data: { title: "x" } })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("refuses an id, a timestamp or a nested write it returns, and anything but column values", async () => {
+    let returned: unknown;
+    const { app } = await kit.start({ prepare: () => returned as never });
+    const board = kit.board();
+    const update = () =>
+      app
+        .as(serviceAdmin(board.ed))
+        .taskService.adminUpdate({ id: board.t1, data: { title: "Renamed" } });
+    const refused = async (value: unknown, path: readonly string[]) => {
+      returned = value;
+      await expect(update()).rejects.toMatchObject({
+        code: "VALIDATION",
+        message: "The admin kit's prepare for taskService returned data the kit does not write",
+        data: { issues: [expect.objectContaining({ path })] },
+      });
+    };
+    await refused({ id: "another" }, ["data", "id"]);
+    await refused({ createdAt: new Date() }, ["data", "createdAt"]);
+    await refused({ updatedAt: new Date() }, ["data", "updatedAt"]);
+    await refused({ project: { connect: { id: board.p2 } } }, ["data", "project"]);
+    for (const value of ["not columns", [{ title: "x" }], null]) {
+      returned = value;
+      await expect(update()).rejects.toMatchObject({ code: "INTERNAL" });
+    }
+    const { prisma } = kit.harness();
+    expect(await prisma.task.findUniqueOrThrow({ where: { id: board.t1 } })).toMatchObject({
+      id: board.t1,
+      title: "T1",
+      projectId: board.p1,
+    });
+    // A key given undefined sets nothing.
+    returned = { id: undefined, notes: "Kept" };
+    expect(await update()).toMatchObject({ id: board.t1, title: "Renamed", notes: "Kept" });
+  });
+
+  it("moves a row only into a parent the caller has the method's row level on, as crud's prepare", async () => {
+    let target: string | undefined;
+    const { app } = await kit.start({
+      // a lowered form: a project's moderators edit its tasks
+      access: { adminUpdate: { entry: "Moderate" } },
+      prepare: (call) =>
+        call.method === "adminUpdate" && target !== undefined ? { projectId: target } : undefined,
+    });
+    const board = kit.board();
+    const { prisma } = kit.harness();
+    // bo moderates P1, T1's project, and P3; he has nothing on P2.
+    const p3 = await prisma.project.create({ data: { name: "P3", ownerId: board.ada } });
+    await prisma.projectMember.create({
+      data: { projectId: p3.id, userId: board.bo, role: "Moderate" },
+    });
+    const bo = app.as(as(board.bo)).taskService;
+    target = board.p2;
+    await expect(bo.adminUpdate({ id: board.t1, data: { title: "Moved" } })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message:
+        'Moving a row of taskService by "projectId" needs Moderate on the projectService row it moves into',
+    });
+    expect(await prisma.task.findUniqueOrThrow({ where: { id: board.t1 } })).toMatchObject({
+      title: "T1",
+      projectId: board.p1,
+    });
+    target = p3.id;
+    expect(await bo.adminUpdate({ id: board.t1, data: { title: "Moved" } })).toMatchObject({
+      title: "Moved",
+      projectId: p3.id,
+    });
+    // A service-wide Admin passes, whatever the parent.
+    target = board.p2;
+    expect(
+      await app
+        .as(serviceAdmin(board.cy))
+        .taskService.adminUpdate({ id: board.t1, data: { title: "Moved again" } }),
+    ).toMatchObject({ title: "Moved again", projectId: board.p2 });
+  });
+
+  it("is refused when it is not a function", () => {
+    expect(() =>
+      adminKit.handlers(taskContract, { prepare: "later" as unknown as AdminPrepare }),
+    ).toThrow("admin.handlers: prepare must be a function of (call, ctx, db)");
+  });
+});
+
+const projectRow = z.object({ id: z.string(), name: z.string(), ownerId: z.string() });
+
+/** Projects an admin deletes, under the live-data tests' project policy. */
+const adminProjects = defineContract("projectService", {
+  entity: projectRow,
+  methods: { ...adminKit.contract({ entity: projectRow, expose: ["adminDelete"] }) },
+});
+
+/** Each user's own list of the tasks assigned to them: a self scope, which no project anchors. */
+const assignedTasks = defineContract("taskService", {
+  entity: z.object({
+    id: z.string(),
+    projectId: z.string(),
+    title: z.string(),
+    assigneeId: z.string().nullable(),
+  }),
+  collections: { mine: { scope: "assigneeId", item: "entity", order: [["id", "asc"]] } },
+});
+
+type ProjectPrepare = AdminPrepare<z.output<typeof projectRow>, PrismaClient>;
+
+/**
+ * An app whose project admins delete projects, with `prepare` when given;
+ * T1 is assigned to cy, whose own list holds it. Deleting P1 deletes T1 by
+ * the database's cascade, which no tracked write sees.
+ */
+async function cascadeApp(prepare?: ProjectPrepare) {
+  const projectService = qd.defineService(adminProjects, {
+    model: "project",
+    access: anyOf(jsonAcl("acl", { owner: "ownerId" }), projectMembers),
+    methods: { ...adminKit.handlers(adminProjects, prepare === undefined ? {} : { prepare }) },
+  });
+  const taskService = qd.defineService(assignedTasks, {
+    model: "task",
+    access: inherit({ from: adminProjects, via: "projectId" }),
+    collections: { mine: { scopeAccess: "self" } },
+    methods: {},
+  });
+  const board = kit.board();
+  const { prisma, db } = kit.harness();
+  await prisma.task.update({ where: { id: board.t1 }, data: { assigneeId: board.cy } });
+  const app = await createTestApp({ services: [projectService, taskService], db });
+  kit.track(app as unknown as TestApp);
+  const connection = await app.connect(as(board.cy));
+  expect(
+    await emitWithAck(connection.socket, "qd:col:sub", {
+      s: "taskService",
+      c: "mine",
+      scope: board.cy,
+    }),
+  ).toMatchObject({ ok: true, items: [{ id: board.t1 }] });
+  app.frames.clear();
+  return {
+    remove: (id: string) =>
+      app.as(as(board.ed, { projectService: "Admin" })).projectService.adminDelete({ id }),
+    /** The list frames cy got, once every frame sent before now has arrived. */
+    listFrames: async () => {
+      await emitWithAck(connection.socket, "qd:col:unsub", { s: "none", c: "none", scope: "none" });
+      return app
+        .frames((frame) => frame.userId === board.cy && frame.event === "qd:c")
+        .map(({ data }) => data);
+    },
+  };
+}
+
+describe("prepare before adminDelete", () => {
+  it("is needed: a database cascade alone leaves an open list of the rows it deleted stale", async () => {
+    const board = kit.board();
+    const { remove, listFrames } = await cascadeApp();
+    expect(await remove(board.p1)).toBeNull();
+    expect(await kit.harness().prisma.task.count({ where: { id: board.t1 } })).toBe(0);
+    expect(await listFrames()).toEqual([]);
+  });
+
+  it("records the dependents it deletes through db, so the list gets their removal", async () => {
+    const board = kit.board();
+    const calls: AdminPrepareCall<z.output<typeof projectRow>>[] = [];
+    const { remove, listFrames } = await cascadeApp(async (call, _ctx, db) => {
+      calls.push(call);
+      if (call.method === "adminDelete") {
+        await db.task.deleteMany({ where: { projectId: call.id } });
+      }
+      // What it returns before a delete is ignored, an id included.
+      return { id: "ignored" };
+    });
+    expect(await remove(board.p1)).toBeNull();
+    expect(calls).toEqual([
+      {
+        method: "adminDelete",
+        id: board.p1,
+        before: { id: board.p1, name: "P1", ownerId: board.ada },
+      },
+    ]);
+    expect(await listFrames()).toEqual([
+      {
+        s: "taskService",
+        c: "mine",
+        scope: board.cy,
+        rev: expect.any(Number),
+        deltas: [{ t: "removed", id: board.t1 }],
+      },
+    ]);
+    const { prisma } = kit.harness();
+    expect(await prisma.project.count({ where: { id: board.p1 } })).toBe(0);
+  });
+
+  it("undoes its writes and the delete, and tells no list, when it throws", async () => {
+    const board = kit.board();
+    const { remove, listFrames } = await cascadeApp(async (call, _ctx, db) => {
+      if (call.method === "adminDelete") {
+        await db.task.deleteMany({ where: { projectId: call.id } });
+      }
+      throw new QuickdrawError("CONFLICT", "Not now");
+    });
+    await expect(remove(board.p1)).rejects.toMatchObject({ code: "CONFLICT" });
+    const { prisma } = kit.harness();
+    expect(await prisma.project.count({ where: { id: board.p1 } })).toBe(1);
+    expect(await prisma.task.count({ where: { id: board.t1 } })).toBe(1);
+    expect(await listFrames()).toEqual([]);
   });
 });

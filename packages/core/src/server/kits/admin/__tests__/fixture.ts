@@ -23,7 +23,14 @@ import { createHarness, type Harness } from "../../../../prisma/__tests__/harnes
 import { createTestApp, type TestApp } from "../../../../testing/index";
 import { as, seedBoard, type Board } from "../../../access/__tests__/board";
 import { projectContract, projectService, qd } from "../../../emit/__tests__/live";
-import { admin, crud, inherit, type AdminOnCommitted, type AdminOnWrite } from "../../../index";
+import {
+  admin,
+  crud,
+  inherit,
+  type AdminOnCommitted,
+  type AdminOnWrite,
+  type AdminPrepare,
+} from "../../../index";
 import type { EntityOf } from "../../../../contract/infer";
 import type { Logger } from "../../../../contract/logger";
 
@@ -87,14 +94,18 @@ export const taskContract = defineContract("taskService", {
 
 /** Options of {@link defineTaskService}. */
 export interface TaskServiceOptions {
+  /** A form that lowers the admin kit's default for `adminUpdate`. */
+  readonly access?: { readonly adminUpdate: { readonly entry: "Moderate" } };
   /** The admin kit's `hiddenFields`. */
   readonly hiddenFields?: readonly ("notes" | "details" | "assigneeId" | "pinned")[];
   /** The admin kit's `displayName`. */
   readonly displayName?: string;
   /** The admin kit's `editable`: the only fields it writes. */
-  readonly editable?: readonly ("title" | "status" | "notes" | "assigneeId")[];
+  readonly editable?: readonly ("projectId" | "title" | "status" | "notes" | "assigneeId")[];
   /** The service's `adminBypass`; default `true`. */
   readonly adminBypass?: boolean;
+  /** The admin kit's `prepare`. */
+  readonly prepare?: AdminPrepare<EntityOf<typeof taskContract>, PrismaClient>;
   /** The admin kit's `onWrite`. */
   readonly onWrite?: AdminOnWrite<EntityOf<typeof taskContract>, PrismaClient>;
   /** The admin kit's `onCommitted`. */
@@ -115,9 +126,11 @@ export function defineTaskService(options: TaskServiceOptions = {}) {
         access: { get: { entry: "Read" }, update: { entry: "Moderate" } },
       }),
       ...admin.handlers(taskContract, {
+        ...(options.access === undefined ? {} : { access: options.access }),
         ...(options.hiddenFields === undefined ? {} : { hiddenFields: options.hiddenFields }),
         ...(options.displayName === undefined ? {} : { displayName: options.displayName }),
         ...(options.editable === undefined ? {} : { editable: options.editable }),
+        ...(options.prepare === undefined ? {} : { prepare: options.prepare }),
         ...(options.onWrite === undefined ? {} : { onWrite: options.onWrite }),
         ...(options.onCommitted === undefined ? {} : { onCommitted: options.onCommitted }),
       }),

@@ -5,9 +5,9 @@
 // `{ project: { update: { ownerId } } }` took over the task's project, and
 // `{ assignee: { update: { serviceAccess } } }` rewrote the caller's own
 // grants. A relation key or a nested-write value is now `VALIDATION`, under
-// the default form and a lowered one alike; `adminMeta` shows relation
-// fields as read-only, and an `editable` list naming one fails when the
-// service is defined.
+// the default form and a lowered one alike, and so is one the app's
+// `prepare` returns; `adminMeta` shows relation fields as read-only, and an
+// `editable` list naming one fails when the service is defined.
 //
 //            owner   access list    members
 //   P1       ada     di: Read       bo: Moderate, cy: Read
@@ -20,7 +20,7 @@ import { admin as adminContract, defineContract } from "../../../index";
 import { createTestApp, type TestApp } from "../../../testing/index";
 import type { Principal } from "../../types";
 import { projectContract, projectService, qd } from "../../emit/__tests__/live";
-import { admin, inherit } from "../../index";
+import { admin, inherit, type AdminPrepare } from "../../index";
 import { adminApp, as, serviceAdmin } from "./__tests__/fixture";
 
 const kit = adminApp();
@@ -39,8 +39,12 @@ const relContract = defineContract("taskService", {
   methods: { ...adminContract.contract({ entity: relTask }) },
 });
 
-/** The task service whose entity shows its project and assignee, under the kit's default forms or a lowered update. */
-function defineRelTasks(lowered: boolean, editable?: readonly string[]) {
+/**
+ * The task service whose entity shows its project and assignee, under the
+ * kit's default forms or a lowered update, with `editable` and `prepare` when
+ * given.
+ */
+function defineRelTasks(lowered: boolean, editable?: readonly string[], prepare?: AdminPrepare) {
   return qd.defineService(relContract, {
     model: "task",
     access: inherit({ from: projectContract, via: "projectId" }),
@@ -60,6 +64,7 @@ function defineRelTasks(lowered: boolean, editable?: readonly string[]) {
       ...admin.handlers(relContract, {
         ...(lowered ? { access: { adminUpdate: { entry: "Moderate" } } } : {}),
         ...(editable === undefined ? {} : { editable }),
+        ...(prepare === undefined ? {} : { prepare }),
       } as never),
     },
   });
@@ -149,6 +154,35 @@ describe("an admin write that holds a relation or a nested write", () => {
     expect(
       (await prisma.user.findUniqueOrThrow({ where: { id: board.bo } })).serviceAccess,
     ).toBeNull();
+  });
+
+  it("is refused when prepare returns it, though prepare may write fields the caller may not", async () => {
+    const board = kit.board();
+    const { prisma } = kit.harness();
+    let returned: Readonly<Record<string, unknown>> = {};
+    const app = await createTestApp({
+      services: [projectService, defineRelTasks(false, ["title"], () => returned)],
+      db: kit.harness().db,
+    });
+    kit.track(app as unknown as TestApp);
+    const bo = (app.as(serviceAdmin(board.bo)) as unknown as { readonly taskService: RelCalls })
+      .taskService;
+    const update = () => bo.adminUpdate({ id: board.t1, data: { title: "Renamed" } });
+    for (const value of [
+      { project: { name: "Taken" } },
+      { assignee: { connect: { id: board.bo } } },
+    ]) {
+      returned = value;
+      await expect(update()).rejects.toMatchObject(refused);
+    }
+    expect(await prisma.task.findUniqueOrThrow({ where: { id: board.t1 } })).toMatchObject({
+      title: "T1",
+      assigneeId: null,
+    });
+    expect((await prisma.project.findUniqueOrThrow({ where: { id: board.p1 } })).name).toBe("P1");
+    // A column the caller may not write (only title is editable) is the server's to set.
+    returned = { assigneeId: board.bo };
+    expect(await update()).toMatchObject({ title: "Renamed", assigneeId: board.bo });
   });
 
   it("refuses an editable list that names a relation when the service is defined", () => {

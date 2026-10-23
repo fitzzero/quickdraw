@@ -267,6 +267,8 @@ export type {
   AdminOnCommitted,
   AdminOnWrite,
   AdminOutputOf,
+  AdminPrepare,
+  AdminPrepareCall,
   AdminWrite,
 } from "./kits/admin/types";
 

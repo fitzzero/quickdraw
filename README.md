@@ -943,7 +943,9 @@ export async function markStale(before: Date): Promise<number> {
   database cascades. A foreign key a nested write sets on the written row
   (`project: { connect }`, `parent: { disconnect: true }`) is seen: such an
   `update` or `upsert` reads the row's interested columns first, one more
-  statement. Record raw SQL with
+  statement. Before deleting a row, delete or clear through `db` the rows
+  a cascade would take with it (for the admin kit's `adminDelete`, in its
+  `prepare`). Record raw SQL with
   `ctx.touch("task", ids)`, or `{ removed: true }` for deleted rows. A job
   gets the same `touch` from `qd.run`, whose `fn` receives
   `{ touch, log, principal: null }`:
@@ -2544,10 +2546,60 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   unit of work of its own: the reply does not wait for it, its writes flush
   on their own, and a throw is logged, the write standing. Apply an edit to
   what runs in memory (a game's simulation) there, so an edit that rolled
-  back is never applied. Without either hook the kit opens no transaction.
-  Each handler `admin.handlers` returns resolves with its method's output
-  type (`AdminOutputOf<C, M>`), so a wrapper reads the row and returns it
-  with no cast.
+  back is never applied. Without a hook (these two or `prepare`, below) the
+  kit opens no transaction. Each handler `admin.handlers` returns resolves
+  with its method's output type (`AdminOutputOf<C, M>`), so a wrapper reads
+  the row and returns it with no cast.
+- `admin.handlers(contract, { prepare })` runs `prepare(call, ctx, db)`
+  before each `adminCreate`, `adminUpdate` and `adminDelete`, once the
+  caller's access and data were checked, in one transaction with the write
+  and `onWrite` (`db` is the transaction's tracked client; a throw undoes
+  its writes and the write, and fails the call). `call` is
+  `{ method: "adminCreate", data }`, `{ method: "adminUpdate", id, data, before }`
+  or `{ method: "adminDelete", id, before }`: `data` is the caller's, and
+  `before` the row, every field, as `onWrite` hears it. Before a create or
+  an update it may return column values, written over the caller's data:
+  a column the server computes (a hash, a slug, the next ordinal), even one
+  the caller may not write (hidden, not editable, above their level), but
+  never `id`, a timestamp, a relation or a nested write (`VALIDATION`). An
+  anchor column it sets (a parent's id, an anchored collection's scope)
+  needs the method's row level on the row it names, as the caller's data
+  and the read/write kit's `prepare` do (`FORBIDDEN`), so a lowered form
+  never moves a row into a parent its caller cannot reach. Returning
+  nothing, or `undefined` for a key, keeps the caller's data, and what it
+  returns before a delete is ignored. The tracked client never sees
+  what the database deletes or clears with a row (`onDelete: Cascade`,
+  `SetNull`), so those rows stay in the lists and entities open on them;
+  delete or clear them through `db` in `prepare`, and their subscribers are
+  told. `prepare` shares the write's transaction, and so its time limit
+  (Prisma's default is 5 seconds; a client's `transactionOptions` sets
+  another):
+
+<!-- example: apps/api/src/services/kits/admin.ts#prepare -->
+
+```ts
+import { nextOrdinal } from "@fitzzero/quickdraw-core/server";
+import type { PrismaClient } from "@project/db";
+
+export const taskAdmin = admin.handlers(task, {
+  editable: ["projectId", "title", "status"],
+  // runs before each write, in its transaction: `db` is that transaction's tracked client
+  prepare: async (call, _ctx, db: PrismaClient) => {
+    if (call.method === "adminCreate" && call.data.projectId !== undefined) {
+      // written over the caller's data, a read-only column too: the new task goes last
+      return { ordinal: await nextOrdinal(db, "task", { projectId: call.data.projectId }) };
+    }
+    if (call.method === "adminDelete") {
+      // the database deletes the task's label links and clears its subtasks' parent,
+      // unseen: do both here, tracked, so the rows and lists open on them are told
+      await db.taskLabel.deleteMany({ where: { taskId: call.id } });
+      await db.task.updateMany({ where: { parentTaskId: call.id }, data: { parentTaskId: null } });
+    }
+    return undefined;
+  },
+});
+```
+
 - `adminSubscribers({ id })` counts the sockets subscribed to a row per
   access level (`{ id, count, levels, complete }`; behind a Redis adapter
   the counts are this server's and `complete` is `false`), and
