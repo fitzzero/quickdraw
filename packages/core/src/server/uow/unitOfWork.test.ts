@@ -143,6 +143,93 @@ describe("a tracked unit of work", () => {
     expect(sink.writes()).toEqual([write("t1", "create")]);
   });
 
+  it("records the root client's writes past open transactions, and a client's into its own", async () => {
+    const tracker = createWriteTracker({ development: false });
+    const sink = createRecordingSink();
+    const unit = tracker.unitOfWork.begin(scope(sink));
+    await unit.run(async () => {
+      const outer = tracker.openTransaction("interactive");
+      outer.setClient("tx");
+      await outer.run(async () => {
+        outer.record([write("in", "create")]);
+        // The root client's write, made in the callback: durable at once.
+        tracker.record([write("root", "create")], "root");
+        // A transaction begun on the root client commits on its own; a savepoint joins `outer`.
+        const own = tracker.openTransaction("interactive");
+        await own.run(() => {
+          own.record([write("own", "create")]);
+          // `outer`'s client, used in `own`'s callback: still `outer`'s write.
+          outer.record([write("outer in own", "create")]);
+        });
+        own.commit();
+        const savepoint = outer.nest();
+        await savepoint.run(() => savepoint.record([write("savepoint", "create")]));
+        savepoint.commit();
+        // A root array-form batch: the root client's operations in it are its own.
+        const batch = tracker.openTransaction("batch");
+        await batch.run(() => {
+          tracker.record([write("batch", "create")], "root");
+          outer.record([write("outer in batch", "create")]);
+        });
+        batch.commit();
+      });
+      outer.rollback();
+    });
+    await unit.flush();
+    expect(sink.writes()).toEqual([
+      write("root", "create"),
+      write("own", "create"),
+      write("batch", "create"),
+    ]);
+  });
+
+  it("flushes the root client's writes first, then a committed transaction's and its savepoint's", async () => {
+    const tracker = createWriteTracker({ development: false });
+    const sink = createRecordingSink();
+    const unit = tracker.unitOfWork.begin(scope(sink));
+    await unit.run(async () => {
+      tracker.record([write("before", "create")]);
+      const outer = tracker.openTransaction("interactive");
+      outer.setClient("tx");
+      await outer.run(async () => {
+        outer.record([write("in", "create")]);
+        tracker.record([write("root", "create")], "root");
+        const savepoint = outer.nest();
+        await savepoint.run(() => {
+          savepoint.record([write("savepoint", "create")]);
+          tracker.record([write("root in savepoint", "create")], "root");
+        });
+        savepoint.commit();
+      });
+      outer.commit();
+    });
+    await unit.flush();
+    expect(sink.writes().map((record) => record.id)).toEqual([
+      "before",
+      "root",
+      "root in savepoint",
+      "in",
+      "savepoint",
+    ]);
+  });
+
+  it("sends a write recorded after its transaction settled where the commit sent it, or nowhere", async () => {
+    const tracker = createWriteTracker({ development: false });
+    const sink = createRecordingSink();
+    const unit = tracker.unitOfWork.begin(scope(sink));
+    await unit.run(async () => {
+      const committed = tracker.openTransaction("interactive");
+      await committed.run(() => committed.record([write("a", "create")]));
+      committed.commit();
+      committed.record([write("late", "create")]);
+      const rolledBack = tracker.openTransaction("interactive");
+      rolledBack.rollback();
+      rolledBack.record([write("lost", "create")]);
+    });
+    await unit.flush();
+    expect(sink.writes().map((record) => record.id)).toEqual(["a", "late"]);
+  });
+
   it("knows an array-form transaction from an interactive one", async () => {
     const tracker = createWriteTracker({ development: false });
     const batch = tracker.openTransaction("batch");

@@ -41,8 +41,11 @@
 // deletes are not seen.
 // When a `select` (or `omit`) would hide the `id` or an interested column,
 // the hook adds it and strips it from the result again, so the caller gets
-// exactly what it asked for. Reads go through the open interactive
-// transaction's client, so they see its uncommitted rows. A `deleteMany`
+// exactly what it asked for. The hook's own reads, and the `...AndReturn`
+// form a `createMany` or `updateMany` runs as, go through the client the
+// operation came from: an interactive transaction's (`Runtime.delegate`),
+// so they see its uncommitted rows, or the root client's, whose work runs
+// outside every transaction even inside one's callback. A `deleteMany`
 // with a `limit` deletes exactly the rows its read found.
 //
 // Inside an array-form `$transaction([...])` an operation cannot be replaced
@@ -81,6 +84,7 @@
 
 import { quietly } from "../server/devWarnings";
 import type { LinkInterest } from "../server/storage";
+import type { Statement } from "../server/uow/statementChecks";
 import type { WriteRecord } from "../server/uow/types";
 import type { WriteTracker } from "../server/uow/unitOfWork";
 import { readLinks, withLinks, type Links } from "./links";
@@ -103,11 +107,37 @@ export interface Delegate {
   updateManyAndReturn(args: Args): Promise<Row[]>;
 }
 
-/** What every operation handler shares. */
+/**
+ * What every operation handler shares. A tracked client has one for the
+ * operations of its root client, and one for each interactive transaction
+ * begun on it, its savepoints included (`trackPrisma.ts`), which differ in
+ * where the hook's own queries run and where the writes are recorded.
+ */
 export interface Runtime {
   readonly tracker: WriteTracker;
-  /** The model's delegate on the open interactive transaction's client, or else the root client's. */
+  /**
+   * False for a transaction's client once its transaction ended: the hook
+   * then runs an operation as written, untracked, and Prisma refuses it.
+   */
+  live(): boolean;
+  /**
+   * True for an array-form batch's own operation: it runs in the batch, so
+   * it cannot be replaced by another, and a read made first runs outside
+   * the batch. Never for a transaction client's, which runs in its
+   * transaction even when a batch holds it.
+   */
+  inBatch(): boolean;
+  /**
+   * The model's delegate for the hook's own queries: on the root client for
+   * the root client's operations, which run outside every transaction even
+   * inside one's callback; on the innermost open savepoint's client, else the
+   * transaction's own, for a transaction client's, wherever it is used.
+   */
   delegate(model: string): Delegate;
+  /** Records the writes of an operation where it ran (`WriteTracker.record`). */
+  record(writes: readonly WriteRecord[]): void;
+  /** Hands a statement to the development checks, where it ran (`WriteTracker.observe`). */
+  observe(statement: Statement): void;
   interestOf(model: string): readonly string[];
   /** The junctions whose links a delete of `model` reads first (`registerLinks`). */
   linksOf(model: string): readonly LinkInterest[];
@@ -214,7 +244,7 @@ export function writesNothing(data: unknown): boolean {
 /** Counts a statement the hook runs past itself (`op.query`), and hands it to the development checks. */
 function countOwn(op: Operation, operation: string, args: Args): void {
   op.runtime.tracker.countStatement();
-  op.runtime.tracker.observe({ model: op.model, operation, args });
+  op.runtime.observe({ model: op.model, operation, args });
 }
 
 /**
@@ -301,7 +331,7 @@ async function runWidened(op: Operation): Promise<{ result: unknown; rows: Row[]
  * the batch's earlier statements changed.
  */
 function warnBatchRead(op: Operation): void {
-  if (!op.runtime.tracker.inBatch()) {
+  if (!op.runtime.inBatch()) {
     return;
   }
   op.runtime.tracker.warn({
@@ -313,8 +343,9 @@ function warnBatchRead(op: Operation): void {
 }
 
 /**
- * Reads `columns` of the rows `where` matches, by id, through the transaction
- * when one is open. The read is the tracker's own, not the app's, so the
+ * Reads `columns` of the rows `where` matches, by id, through the client the
+ * operation came from (`Runtime.delegate`): its transaction's, when it is a
+ * transaction client's. The read is the tracker's own, not the app's, so the
  * development checks of statements leave it alone.
  */
 async function readBefore(
@@ -387,7 +418,7 @@ function writesOf(
 }
 
 function record(op: Operation, writes: readonly WriteRecord[]): void {
-  op.runtime.tracker.record(writes);
+  op.runtime.record(writes);
 }
 
 async function create(op: Operation): Promise<unknown> {
@@ -443,7 +474,7 @@ async function upsertWithoutUpdate(op: Operation): Promise<unknown> {
 }
 
 async function upsert(op: Operation): Promise<unknown> {
-  if (writesNothing(op.args.update) && !op.runtime.tracker.inBatch()) {
+  if (writesNothing(op.args.update) && !op.runtime.inBatch()) {
     return upsertWithoutUpdate(op);
   }
   warnNested(op, op.args.create);
@@ -577,8 +608,9 @@ async function updateManyInBatch(op: Operation): Promise<unknown> {
 
 /**
  * `createMany` and `updateMany` outside a batch: the `...AndReturn` form,
- * through the transaction's client when one is open, which the hook then
- * records like any other call of it.
+ * through the client the operation came from (`Runtime.delegate`), so a
+ * root client's write inside a transaction's callback stays outside the
+ * transaction, which the hook then records like any other call of it.
  */
 async function rewrite(
   op: Operation,
@@ -598,14 +630,14 @@ async function rewrite(
 }
 
 function createMany(op: Operation): Promise<unknown> {
-  if (op.runtime.tracker.inBatch()) {
+  if (op.runtime.inBatch()) {
     return createManyInBatch(op);
   }
   return rewrite(op, (delegate, args) => delegate.createManyAndReturn(args));
 }
 
 function updateMany(op: Operation): Promise<unknown> {
-  if (op.runtime.tracker.inBatch()) {
+  if (op.runtime.inBatch()) {
     return updateManyInBatch(op);
   }
   if (writesNothing(op.args.data)) {
@@ -656,7 +688,7 @@ export const WRITE_OPERATIONS: Readonly<Record<string, (op: Operation) => Promis
  * counts every other operation itself.
  */
 export function delegates(runtime: Runtime, operation: string, args: Args | undefined): boolean {
-  if (runtime.tracker.inBatch()) {
+  if (runtime.inBatch()) {
     return false;
   }
   switch (operation) {

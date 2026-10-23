@@ -468,6 +468,40 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   `$transaction`, either form: a nested transaction's writes join the one
   around it when the savepoint is released, and are dropped when it rolls
   back. The callback's client is otherwise Prisma's.
+- **Behavior change: each client's work is tracked in the transaction it
+  runs in.** A write through `db` inside `db.$transaction(async (tx) => ...)`
+  runs on a connection of its own and commits at once, and a
+  `db.$transaction` begun there commits on its own, but the tracker
+  recorded both into the transaction's frame: when the transaction rolled
+  back, their frames were dropped though their rows stayed. Worse, the
+  hook ran a root `createMany` or `updateMany` there as its `...AndReturn`
+  form through the transaction's client, which moved the write into the
+  transaction, so it rolled back with it, and read a root `update`'s,
+  `upsert`'s or `deleteMany`'s rows through it too (a real PostgreSQL
+  showed a root `deleteMany` recorded as deleting a row the transaction
+  created and then committed, so neither was sent). And a transaction's
+  client used elsewhere wrote to whatever transaction was active there:
+  inside a transaction of its own begun in the callback, or in an
+  array-form batch, which then sent frames for writes its rollback undid;
+  a `createMany` on it ran in the inner transaction; and once its
+  transaction ended, its `createMany` and `updateMany` ran on the root
+  client instead of being refused. Each interactive transaction now begins
+  on a client of its own, with the hook over that transaction's runtime,
+  so the hook tells every transaction's client, and its savepoints', from
+  the root client's and from each other's. The root client's reads and
+  writes go through the root client, and its writes skip every open
+  transaction frame for the unit's, as do those of a transaction begun on
+  it (an array-form batch too, which Prisma runs as one of its own even
+  on `tx`), unless the batch runs them. A transaction's client reads and
+  writes in its own transaction wherever it is used, and once that ended,
+  its work runs as written, which Prisma refuses. In development, the
+  root client's statements inside a callback count toward the N+1 checks
+  as a unit's, no longer as the transaction's by-id writes. On PGlite,
+  which has one connection, root work inside a callback waits for the
+  transaction to end, now a root `createMany`, `updateMany` and an
+  `upsert` with an empty `update` (whose existence read used to run in the
+  transaction) too: a test that makes one there runs into the
+  transaction's timeout; write it through `tx`.
 
 ### Testing
 
