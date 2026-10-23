@@ -289,6 +289,14 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   being revoked gets no `reset` first. A self list whose methods ask for
   no grant takes no `requires`, and collections without it are unchanged.
   `CollectionRequires` is on `./server`.
+- **A self list resumed after a change to its user's access reads a
+  page.** A reload of the user's grants, or a change to their membership
+  of a parent row, raised the resume floor of their self lists only to the
+  current revision, so a client whose page was at it (nothing written
+  since) replayed the buffer and kept the rows the user lost, until each
+  row's next write. The floor now goes one past it, and a reload raises it
+  before it authorizes the user's other scopes again, so a resume while
+  that runs reads a page too.
 - **Breaking for types: `trackPrisma` returns `Tracked<C>`, a type the
   untracked client is not.** The tracked client had the client's own type,
   so nothing told it from the untracked one: a helper that writes could be
