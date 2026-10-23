@@ -402,6 +402,33 @@ describe("onWrite", () => {
       adminKit.handlers(taskContract, { onWrite: "later" as unknown as AdminOnWrite }),
     ).toThrow("admin.handlers: onWrite must be a function of (write, ctx, db)");
   });
+
+  it("gets the development checks a handler's statements get: twelve rows written one by one are an N+1", async () => {
+    const { app } = await kit.start({
+      strictWarnings: true,
+      // A row per follower, written one by one: twelve statements of one shape.
+      onWrite: async (_write, _ctx, db) => {
+        for (let index = 0; index < 12; index += 1) {
+          await db.task.create({
+            data: { projectId: kit.board().p1, title: `Follow-up ${String(index)}` },
+          });
+        }
+      },
+    });
+    const board = kit.board();
+    const error: unknown = await app
+      .as(serviceAdmin(board.ed))
+      .taskService.adminUpdate({ id: board.t1, data: { title: "Followed" } })
+      .catch((reason: unknown) => reason);
+    expect(error).toMatchObject({
+      code: "INTERNAL",
+      cause: { warning: { kind: "n-plus-one", service: "taskService", method: "adminUpdate" } },
+    });
+    // The warning failed the call: the edit and the hook's rows were undone.
+    const prisma = kit.harness().prisma;
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: board.t1 } })).title).toBe("T1");
+    expect(await prisma.task.count({ where: { title: { startsWith: "Follow-up" } } })).toBe(0);
+  });
 });
 
 describe("onCommitted (finding F6.5)", () => {
@@ -797,5 +824,83 @@ describe("prepare before adminDelete", () => {
     expect(await prisma.project.count({ where: { id: board.p1 } })).toBe(1);
     expect(await prisma.task.count({ where: { id: board.t1 } })).toBe(1);
     expect(await listFrames()).toEqual([]);
+  });
+});
+
+describe("transaction (the hooks' time limits)", () => {
+  /** A `prepare` that takes `ms` before the write, as a large cascade does. */
+  const slowPrepare =
+    (ms: number): AdminPrepare =>
+    async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, ms);
+      });
+    };
+
+  /** Ed's update of T1's title through an app whose kit has `transaction`. */
+  async function slowUpdate(transaction: {
+    readonly timeoutMs?: number;
+    readonly maxWaitMs?: number;
+  }) {
+    const { app } = await kit.start({ prepare: slowPrepare(300), transaction });
+    const board = kit.board();
+    return await app
+      .as(serviceAdmin(board.ed))
+      .taskService.adminUpdate({ id: board.t1, data: { title: "Slow" } })
+      .catch((reason: unknown) => reason);
+  }
+
+  it("reach the database client: a prepare that runs past timeoutMs fails the write, undone", async () => {
+    // Prisma's P2028: the transaction expired before the write ran in it.
+    expect(await slowUpdate({ timeoutMs: 50 })).toMatchObject({
+      code: "INTERNAL",
+      cause: { code: "P2028" },
+    });
+    const row = await kit
+      .harness()
+      .prisma.task.findUniqueOrThrow({ where: { id: kit.board().t1 } });
+    expect(row.title).toBe("T1");
+  });
+
+  it("let a longer one commit the same write", async () => {
+    expect(await slowUpdate({ timeoutMs: 10_000, maxWaitMs: 10_000 })).toMatchObject({
+      title: "Slow",
+    });
+  });
+
+  it("are refused unless they are positive numbers of milliseconds a timer honors, given with a hook", () => {
+    const limit = (key: string) =>
+      `admin.handlers: transaction.${key} must be a positive number of milliseconds, at most 2147483647`;
+    const refused: [unknown, string][] = [
+      [{ timeoutMs: 0 }, limit("timeoutMs")],
+      [{ timeoutMs: -5 }, limit("timeoutMs")],
+      [{ timeoutMs: Number.POSITIVE_INFINITY }, limit("timeoutMs")],
+      [{ timeoutMs: 2 ** 31 }, limit("timeoutMs")],
+      [{ timeoutMs: "30000" }, limit("timeoutMs")],
+      [{ maxWaitMs: Number.NaN }, limit("maxWaitMs")],
+      [
+        { timeout: 30_000 },
+        'admin.handlers: transaction has an unknown key "timeout"; it takes timeoutMs and maxWaitMs',
+      ],
+      [30_000, "admin.handlers: transaction must be { timeoutMs?, maxWaitMs? }"],
+    ];
+    for (const [transaction, message] of refused) {
+      expect(() =>
+        adminKit.handlers(taskContract, {
+          onWrite: () => undefined,
+          transaction: transaction as { timeoutMs?: number },
+        }),
+      ).toThrow(message);
+    }
+    // Without a hook the kit opens no transaction: the limits would limit nothing.
+    expect(() => adminKit.handlers(taskContract, { transaction: { timeoutMs: 30_000 } })).toThrow(
+      "admin.handlers: transaction sets the time limits of the transaction the kit writes in with prepare, onWrite or onCommitted; give one of them, or leave transaction out",
+    );
+    expect(() =>
+      adminKit.handlers(taskContract, {
+        onWrite: () => undefined,
+        transaction: { timeoutMs: 30_000, maxWaitMs: 2.5 },
+      }),
+    ).not.toThrow();
   });
 });

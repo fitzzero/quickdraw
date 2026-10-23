@@ -322,7 +322,11 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   needs the caller's row level on it, as in the read/write kit), so it
   need not be an editable field of the entity; and before an `adminDelete`
   it deletes or clears through `db` the rows the database would cascade,
-  so their subscribers and lists are told.
+  so their subscribers and lists are told. A cascade too large for
+  Prisma's five-second transaction (a user's delete clearing their rows in
+  every service) gets `transaction: { timeoutMs }` beside `prepare`, never
+  a hand-written delete method. The statements of `prepare` and `onWrite`
+  get the development checks a handler's do.
 
 ## Realtime
 

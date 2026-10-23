@@ -23,6 +23,7 @@ import {
   checkColumnValues,
   checkLockedColumns,
   columnValueIssues,
+  isPlainObject,
 } from "../columns";
 import { rowLevel } from "./access";
 import { crudCall, projectionOf, type KitHandler, type KitHandlerArgs } from "./runtime";
@@ -43,15 +44,6 @@ export type AnyPrepare = (
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** A plain object: what a write's data must be, so no key hides on a prototype. */
-function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const prototype: unknown = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
 }
 
 /** The `create` handler, for a method whose access form is `form`. */

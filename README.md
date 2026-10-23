@@ -2712,7 +2712,9 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   transaction's tracked client; a throw undoes the write and fails the
   call): what an admin edit must set off, such as a game reloading its
   tunables, without wrapping the kit's handlers. The rows are the entity,
-  every field. `onCommitted({ method, id, before?, after }, ctx)` runs once
+  every field. Its statements get the development checks a handler's get
+  (a loop of writes in it is an `n-plus-one`), as `prepare`'s do.
+  `onCommitted({ method, id, before?, after }, ctx)` runs once
   the write has committed (after `onWrite`'s transaction), in a detached
   unit of work of its own: the reply does not wait for it, its writes flush
   on their own, and a throw is logged, the write standing. Apply an edit to
@@ -2742,9 +2744,15 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   what the database deletes or clears with a row (`onDelete: Cascade`,
   `SetNull`), so those rows stay in the lists and entities open on them;
   delete or clear them through `db` in `prepare`, and their subscribers are
-  told. `prepare` shares the write's transaction, and so its time limit
-  (Prisma's default is 5 seconds; a client's `transactionOptions` sets
-  another):
+  told. `prepare` shares the write's transaction, and so its time limit,
+  Prisma's 5 seconds by default: for a large cascade, such as a user's
+  delete clearing their rows in every service, give that transaction
+  another with `admin.handlers(contract, { transaction: { timeoutMs: 30_000 } })`
+  (`maxWaitMs`, how long it may wait to start, is Prisma's 2 seconds by
+  default; a client's `transactionOptions` changes both for every
+  transaction). A write that runs past it is undone and fails `INTERNAL`.
+  The limits are positive numbers of milliseconds, and `transaction` is
+  refused without a hook, which opens no transaction:
 
 <!-- example: apps/api/src/services/kits/admin.ts#prepare -->
 
@@ -4270,7 +4278,7 @@ model, the field of a nested write, or the member a shared run read), under
 `category: "quickdraw.dev"`.
 Only an app's own statements are checked: the framework's reads and the
 kits' own reads are not, while the app's callbacks a kit calls (`prepare`,
-`onChange`, `resolveUser`, a search strategy) are. A statement filtered by
+`onWrite`, `onChange`, `resolveUser`, a search strategy) are. A statement filtered by
 an `id` list (`{ id: { in: ids } }`, one per chunk of ids) never counts
 toward `n-plus-one`, and neither does a `createMany` (one per chunk of
 rows, as a large insert is split). In tests, `createTestApp({ strictWarnings: true })`
