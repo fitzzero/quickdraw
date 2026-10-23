@@ -248,6 +248,7 @@ const expectations = {
       "RECONNECT_JITTER_MS",
       "overlaysOf",
       "sessionOf",
+      "placeholderFromSession",
       "DEFAULT_SUBSCRIPTION_LANE",
       "liveDataOf",
       "emptyCollection",
@@ -767,6 +768,7 @@ for (const name of [
   "createInvalidationCoordinator",
   "overlaysOf",
   "sessionOf",
+  "placeholderFromSession",
   "liveDataOf",
 ]) {
   assert.equal(coreEntry[name], undefined, `./client/core must not export ${name}`);

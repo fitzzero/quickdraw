@@ -239,7 +239,11 @@ loss })` lags the link's own messages both ways on its real path (`rel`
   hook the typed client has none of (infinite scroll over `list` with
   `useInfiniteQuery`, `useSuspenseQuery`, `useQueries`, `queryOptions`), key
   it with the member's `key(input)` (a suffix may follow it) and fetch with
-  its `call(input)`.
+  its `call(input)`. Unlike a member's hooks, such a hook would show the
+  last user's results after a switch of users: give it a `placeholderData`
+  only through `placeholderFromSession(queryClient, placeholderData)` from
+  `./client`, called on every render, and show its data only while
+  `isKnown`.
 - Do not copy server data into React state to keep it current: read it from
   the hooks, which share one cache.
 - The lint rules `no-raw-socket`, `no-untyped-client`, `no-manual-refetch`
