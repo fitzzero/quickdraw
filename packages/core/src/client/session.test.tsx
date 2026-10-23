@@ -629,6 +629,156 @@ describe("placeholder data across a switch of users", () => {
   });
 });
 
+describe("live entries under a placeholderData default", () => {
+  async function started() {
+    const { app } = await live.start();
+    const board = live.board();
+    await live.prisma().task.update({ where: { id: board.t1 }, data: { notes: "SECRET" } });
+    return { app, board };
+  }
+
+  /** A `QueryClient` whose every query keeps its last data as a placeholder while the next loads. */
+  const keeping = (): QueryClient =>
+    new QueryClient({
+      defaultOptions: { queries: { placeholderData: keepPreviousData, retry: false } },
+    });
+
+  /** A row as a render shows it: `title/notes`, `none`, or the error's code. */
+  const rowText = (
+    row: { readonly title: string; readonly notes?: string | null } | undefined,
+    error: { readonly code: string } | null,
+  ): string => {
+    if (error !== null) {
+      return `refused ${error.code}`;
+    }
+    return row === undefined ? "none" : `${row.title}/${String(row.notes)}`;
+  };
+
+  /**
+   * `useEntity` of the row `rowOf` names for the user the connection acts for: the key changes
+   * in the render that shows a new hello, as a header showing the signed-in user's row does.
+   */
+  function UserRow({
+    rowOf,
+    seen,
+  }: {
+    readonly rowOf: (userId: string | null) => string | null;
+    readonly seen: Seen;
+  }) {
+    const { userId } = useQuickdraw();
+    const id = rowOf(userId);
+    const { data, error, isLoading } = qd.task.useEntity(id);
+    const shown = `row ${id ?? "-"} ${rowText(data, error)}${isLoading ? " loading" : ""}`;
+    seen.push([userId, shown]);
+    return <p>{`${userId ?? "-"}: ${shown}`}</p>;
+  }
+
+  /** What the renders for `user` showed of the last user's row. */
+  const leaked = (seen: Seen, user: string): string[] =>
+    shownTo(seen, user).filter((shown) => shown.includes("T1/") || shown.includes("SECRET"));
+
+  it("shows the next user none of the last user's row when its key changes with the hello", async () => {
+    const { app, board } = await started();
+    const seen: Seen = [];
+    const rowOf = (userId: string | null): string | null =>
+      userId === board.ada ? board.t1 : userId === board.ed ? board.t2 : null;
+    const view = await renderWithQuickdraw(<UserRow rowOf={rowOf} seen={seen} />, {
+      app,
+      as: as(board.ada),
+      client: qd,
+      queryClient: keeping(),
+    });
+    await view.findByText(`${board.ada}: row ${board.t1} T1/SECRET`);
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    await view.findByText(new RegExp(`^${board.ed}: row ${board.t2} T2/`));
+    expect(leaked(seen, board.ed), JSON.stringify(shownTo(seen, board.ed))).toEqual([]);
+  });
+
+  it("shows the next user none of it after a session the server ended, either", async () => {
+    const { app, board } = await started();
+    const seen: Seen = [];
+    const rowOf = (userId: string | null): string | null =>
+      userId === board.ada ? board.t1 : userId === board.ed ? board.t2 : null;
+    const view = await renderWithQuickdraw(<UserRow rowOf={rowOf} seen={seen} />, {
+      app,
+      as: as(board.ada),
+      client: qd,
+      queryClient: keeping(),
+    });
+    await view.findByText(`${board.ada}: row ${board.t1} T1/SECRET`);
+    app.server.access.disconnectUser(board.ada);
+    await view.findByText("-: row - none");
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    await view.findByText(new RegExp(`^${board.ed}: row ${board.t2} T2/`));
+    expect(leaked(seen, board.ed), JSON.stringify(shownTo(seen, board.ed))).toEqual([]);
+  });
+
+  it("shows the next user none of the last user's scope when its key changes with the hello", async () => {
+    const { app, board } = await started();
+    const seen: Seen = [];
+    function UserScope() {
+      const { userId } = useQuickdraw();
+      const scope = userId === board.ada ? board.p1 : userId === board.ed ? board.p2 : null;
+      const { items, error, isLoading } = qd.task.byProject.useCollection(scope);
+      const titles = error === null ? items.map((item) => item.title).join(",") : error.code;
+      const shown = `scope ${scope ?? "-"} [${titles}]${isLoading ? " loading" : ""}`;
+      seen.push([userId, shown]);
+      return <p>{`${userId ?? "-"}: ${shown}`}</p>;
+    }
+    const view = await renderWithQuickdraw(<UserScope />, {
+      app,
+      as: as(board.ada),
+      client: qd,
+      queryClient: keeping(),
+    });
+    await view.findByText(`${board.ada}: scope ${board.p1} [T1]`);
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    await view.findByText(`${board.ed}: scope ${board.p2} [T2]`);
+    const toEd = shownTo(seen, board.ed);
+    expect(
+      toEd.filter((shown) => shown.includes("T1")),
+      JSON.stringify(toEd),
+    ).toEqual([]);
+  });
+
+  it("shows no other row under a new id of the same user's, and loads it", async () => {
+    const { app, board } = await started();
+    const t3 = await live.prisma().task.create({ data: { projectId: board.p1, title: "T3" } });
+    const seen: Seen = [];
+    function Row({ id }: { readonly id: string }) {
+      const { userId } = useQuickdraw();
+      const { data, error, isLoading } = qd.task.useEntity(id);
+      const shown = `row ${id} ${rowText(data, error)}${isLoading ? " loading" : ""}`;
+      seen.push([userId, shown]);
+      return <p>{shown}</p>;
+    }
+    const view = await renderWithQuickdraw(<Row id={board.t1} />, {
+      app,
+      as: as(board.ada),
+      client: qd,
+      queryClient: keeping(),
+    });
+    await view.findByText(`row ${board.t1} T1/SECRET`);
+    view.rerender(<Row id={t3.id} />);
+    await view.findByText(new RegExp(`^row ${t3.id} T3/`));
+    const asT3 = shownTo(seen, board.ada).filter((shown) => shown.startsWith(`row ${t3.id} `));
+    expect(asT3[0], JSON.stringify(asT3)).toBe(`row ${t3.id} none loading`);
+    expect(
+      asT3.filter((shown) => shown.includes("T1/")),
+      JSON.stringify(asT3),
+    ).toEqual([]);
+  });
+});
+
 describe("placeholder data of an app's own TanStack hook across a switch of users", () => {
   async function started() {
     const { app } = await live.start();

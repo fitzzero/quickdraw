@@ -36,7 +36,9 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   for cookie sessions. Changing it reconnects, and a hello naming another
   user empties everything quickdraw cached, the placeholder a member's
   `useQuery` or `useSearch` would make from it (`keepPreviousData`, the
-  last results) included.
+  last results) included. Live entries never take a placeholder, whatever
+  the `QueryClient`'s defaults: `useEntity` and `useCollection` show nothing
+  of another row, scope or user while a new one loads.
 - `useQuickdraw()` gives
   `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, refusal, isRateLimited }`.
   Gate on `isKnown` (the server's hello named the user; `userId` is then
@@ -162,10 +164,11 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
 - Joining a room: `useJoin(qd.task.enterBoard, { projectId })` runs the
   joining call on every connection (a reconnect is a new socket in no room)
   and when the input changes, never on a re-render, with `status`,
-  `isJoined`, `data`, `error` and `retry()` (a refused join, tried again on
-  the user's say). Never join from a plain `useQuery` or a
-  mount effect: a reconnect leaves the socket out of the room while the
-  cached answer still looks fine. Without React, `connection.onHello`.
+  `isJoined`, `data` (the join's answer, shown only to the user it ran as),
+  `error` and `retry()` (a refused join, tried again on the user's say).
+  Never join from a plain `useQuery` or a mount effect: a reconnect leaves
+  the socket out of the room while the cached answer still looks fine.
+  Without React, `connection.onHello`.
 - Peer links: on a server created with `peers: true`,
   `createPeerLink(connection, { room, to, offerer })` (in React,
   `useQuickdraw().connection`) links two sockets of an app room over

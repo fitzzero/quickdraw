@@ -12,6 +12,7 @@ import { createMockClient, renderWithQuickdraw } from "../testing/client";
 import { createTestApp, type TestApp } from "../testing/index";
 import { createQuickdrawClient } from "./createClient";
 import { useJoin, type JoinMember } from "./join";
+import { useQuickdraw } from "./provider";
 
 const server = initQuickdraw<{ principal: Principal }>();
 const roomInput = z.object({ room: z.string() });
@@ -240,6 +241,140 @@ describe("useJoin", () => {
     });
     await within(view.container).findByText('joined {"room":"r1","n":2}');
     expect(joined).toEqual([{ room: "r1", n: 2 }]);
+  });
+
+  /** A mock whose `enter` answers when the test says, and what each render of a join showed. */
+  function heldJoins() {
+    const mock = createMockClient({ lobby }, { session: { userId: "ada" } });
+    const calls: {
+      readonly resolve: (value: { room: string; n: number }) => void;
+      readonly reject: (error: unknown) => void;
+    }[] = [];
+    mock.lobby.enter.mockImplementation(
+      () =>
+        new Promise((resolve, reject) => {
+          calls.push({ resolve, reject });
+        }),
+    );
+    const renders: string[] = [];
+    function Watched() {
+      const { userId } = useQuickdraw();
+      const join = useJoin(mock.lobby.enter, { room: "r1" });
+      const data = join.data === undefined ? "-" : JSON.stringify(join.data);
+      const shown = `${userId ?? "-"} ${join.status} ${data} ${join.error?.code ?? "ok"}`;
+      renders.push(shown);
+      return <p>{shown}</p>;
+    }
+    const view = render(<Watched />, { wrapper: mock.$Provider });
+    const last = async (prefix: string): Promise<void> => {
+      await waitFor(() => {
+        expect(renders.at(-1)?.startsWith(prefix), JSON.stringify(renders)).toBe(true);
+      });
+    };
+    return { mock, calls, renders, shown: within(view.container), last };
+  }
+
+  it("shows what a join returned to no other user: not while their hello is awaited, nor after", async () => {
+    const { mock, calls, renders, shown, last } = heldJoins();
+    await waitFor(() => {
+      expect(calls).toHaveLength(1);
+    });
+    act(() => {
+      calls[0]?.resolve({ room: "r1", n: 1 });
+    });
+    await shown.findByText('ada joined {"room":"r1","n":1} ok');
+    // New credentials: the hello is gone until the server names the next user.
+    const switched = renders.length;
+    act(() => {
+      mock.$session({ userId: "bo", isKnown: false, isConnected: false });
+    });
+    await last("- idle ");
+    const waiting = renders.slice(switched);
+    expect(
+      waiting.filter((text) => text.includes('"n":1')),
+      JSON.stringify(waiting),
+    ).toEqual([]);
+    // Bo's hello joins again, and the server refuses Bo.
+    act(() => {
+      mock.$session({ userId: "bo" });
+    });
+    await waitFor(() => {
+      expect(calls).toHaveLength(2);
+    });
+    act(() => {
+      calls[1]?.reject(new QuickdrawError("FORBIDDEN", "Bo may not enter"));
+    });
+    await last("bo error ");
+    const toBo = renders.slice(switched).filter((text) => text.startsWith("bo "));
+    expect(
+      toBo.filter((text) => text.includes('"n":1')),
+      JSON.stringify(toBo),
+    ).toEqual([]);
+    expect(toBo.at(-1)).toBe("bo error - FORBIDDEN");
+  });
+
+  it("shows the same user's answer again once their new credentials' hello names them", async () => {
+    const { mock, calls, renders, shown, last } = heldJoins();
+    await waitFor(() => {
+      expect(calls).toHaveLength(1);
+    });
+    act(() => {
+      calls[0]?.resolve({ room: "r1", n: 1 });
+    });
+    await shown.findByText('ada joined {"room":"r1","n":1} ok');
+    // A refreshed token: nobody is known until the hello, which names Ada again.
+    const refreshed = renders.length;
+    act(() => {
+      mock.$session({ userId: "ada", isKnown: false, isConnected: false });
+    });
+    await last("- idle ");
+    const waiting = renders.slice(refreshed);
+    expect(
+      waiting.filter((text) => text.includes('"n":1')),
+      JSON.stringify(waiting),
+    ).toEqual([]);
+    act(() => {
+      mock.$session({ userId: "ada" });
+    });
+    await shown.findByText('ada joining {"room":"r1","n":1} ok');
+    act(() => {
+      calls[1]?.resolve({ room: "r1", n: 2 });
+    });
+    await shown.findByText('ada joined {"room":"r1","n":2} ok');
+  });
+
+  it("shows the next user none of the last user's answer, even while it joins nothing", async () => {
+    const mock = createMockClient({ lobby }, { session: { userId: "ada" } });
+    mock.lobby.enter.mockResolvedValue({ room: "r1", n: 1 });
+    const renders: string[] = [];
+    function Gated({ enabled }: { readonly enabled: boolean }) {
+      const { userId } = useQuickdraw();
+      const join = useJoin(mock.lobby.enter, { room: "r1" }, { enabled });
+      const data = join.data === undefined ? "-" : JSON.stringify(join.data);
+      const shown = `${userId ?? "-"} ${join.status} ${data}`;
+      renders.push(shown);
+      return <p>{shown}</p>;
+    }
+    const view = render(<Gated enabled />, { wrapper: mock.$Provider });
+    const shown = within(view.container);
+    await shown.findByText('ada joined {"room":"r1","n":1}');
+    // Disabled, it joins no more, and keeps the answer for the user it ran as.
+    view.rerender(<Gated enabled={false} />);
+    await shown.findByText('ada idle {"room":"r1","n":1}');
+    const switched = renders.length;
+    act(() => {
+      mock.$session({ userId: "bo", isKnown: false, isConnected: false });
+    });
+    act(() => {
+      mock.$session({ userId: "bo" });
+    });
+    await shown.findByText(/^bo idle /);
+    const toBo = renders.slice(switched).filter((text) => text.startsWith("bo "));
+    expect(
+      toBo.filter((text) => text.includes('"n":1')),
+      JSON.stringify(toBo),
+    ).toEqual([]);
+    expect(mock.lobby.enter.calls).toHaveLength(1);
   });
 
   it("runs a mock client's member under its provider, once per known session", async () => {

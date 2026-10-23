@@ -193,6 +193,27 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   credentials await their hello, which a member's hooks hide: show its data
   only while `isKnown`. It is not on `./client/core`, which names no
   TanStack type.
+- **Live entries never take a placeholder.** `useEntity`, `useCollection`
+  and `useSearch`'s held scope observe their entry with a query that took
+  the `QueryClient`'s `placeholderData` default (`keepPreviousData` in
+  `defaultOptions.queries`, or `setQueryDefaults(["qd"], ...)`). TanStack
+  makes that placeholder from the last entry the hook's observer showed,
+  which the cache session never empties, so a hook whose id or scope
+  changed showed the last one's row or items, with `isLoading: false`, until
+  the new one answered: another row of the same user's, or, for a hook keyed
+  by the user, the last user's row at their access tier after a switch of
+  users or a session the server ended. The entry's query now gives
+  `placeholderData: undefined`, which no default overrides. `useEntities`
+  was never affected: each id has an observer of its own.
+- **`useJoin` shows `data` only to the user who joined.** What the last
+  join returned stayed shown while new credentials awaited their hello, was
+  carried into the next user's `joining` state, and stayed beside that
+  user's refusal (`error`) for good. A join now keeps the user its hello
+  named (`null`, anonymous, counts as a user), carries the last `data` only
+  for that same user, and shows it only while the connection's hello names
+  them. A reconnect with the same credentials keeps the hello, so `data`
+  stays through it as before; new credentials hide it until their hello,
+  and the same user's shows again while the join runs.
 - **An app's own hook reads in the provider's first commit.**
   `QuickdrawProvider` bound the typed client to its connection, and opened
   the connection, in passive effects, which React runs after its
