@@ -3,19 +3,24 @@
 // `INTERNAL`: the server's own failure (its session store down, say), which
 // the quickdraw client retries, keeping the user and what it cached. So
 // credentials refused with a plain `Error` never sign the user out: the
-// client retries them for ever. This rule reports a throw of a built-in
-// error (`new Error(...)`, `TypeError(...)`, with or without `new`) in a
-// function given as `auth.authenticate` to `createServer` (`qd.createServer`
-// too) or `createHttpRouter`, or as `loadPrincipal` to `socketAuth`, which
-// passes on what that throws: the function written there, or the one this
-// file declares under the name given (a `function`, or a `const`), and an
-// `auth` or options object written there or held by a `const` of this file.
+// client retries them for ever. The MCP registry answers its `principal`
+// hook the same way: a plain `Error` thrown for a bad token is answered
+// `INTERNAL`, so the agent is never told its token is refused. This rule
+// reports a throw of a built-in error (`new Error(...)`, `TypeError(...)`,
+// with or without `new`) in a function given as `auth.authenticate` to
+// `createServer` (`qd.createServer` too) or `createHttpRouter`, as
+// `loadPrincipal` to `socketAuth`, which passes on what that throws, or as
+// `principal` to `createMcpRegistry`: the function written there, or the one
+// this file declares under the name given (a `function`, or a `const`), and
+// an `auth` or options object written there or held by a `const` of this
+// file.
 //
 // A throw inside a nested function, a `try` block with a `catch`, or a
 // `catch` clause (a failure handled there, or passed on as the server's own)
 // is left alone, and so is an error class of the app's, which the rule
 // cannot see into. A function from another module is not seen either; the
-// server warns at runtime for those (`[quickdraw:authenticate-threw]`).
+// server warns at runtime for those (`[quickdraw:authenticate-threw]`, and
+// `[quickdraw:mcp-principal-threw]` for a registry's hook).
 
 import { getProperty, isFunction, memberName, resolveVariable, unwrap, walk } from "../lib/ast.mjs";
 import { FILE_OPTIONS, TEST_FILES, inScope } from "../lib/files.mjs";
@@ -125,6 +130,10 @@ function checkedFunction(context, call) {
     const fn = functionOf(context, options, "loadPrincipal");
     return fn === undefined ? undefined : [fn, "loadPrincipal"];
   }
+  if (name === "createMcpRegistry") {
+    const fn = functionOf(context, options, "principal");
+    return fn === undefined ? undefined : [fn, "principal"];
+  }
   return undefined;
 }
 
@@ -134,7 +143,7 @@ export default {
     type: "problem",
     docs: {
       description:
-        'Disallow refusing credentials with a plain `Error` in `authenticate` or `socketAuth`\'s `loadPrincipal`, which reads as an outage the client retries for ever: throw `QuickdrawError("UNAUTHENTICATED")`.',
+        "Disallow refusing credentials with a plain `Error` in `authenticate`, `socketAuth`'s `loadPrincipal` or an MCP registry's `principal` hook, which reads as an outage the client retries for ever: throw `QuickdrawError(\"UNAUTHENTICATED\")`.",
     },
     messages: {
       authenticate:
@@ -145,6 +154,10 @@ export default {
         "`loadPrincipal` throws a plain error here, which `socketAuth` passes on as the server's own failure: " +
         "a socket's handshake is refused `INTERNAL` and the client keeps the user and connects again, for ever if the session's user is gone, and an HTTP call is answered `INTERNAL`. " +
         'To refuse the session\'s user, return `null` (or `throw new QuickdrawError("UNAUTHENTICATED", ...)`), which signs the client out.',
+      principal:
+        "The MCP registry's `principal` hook throws a plain error here, which the registry takes for the server's own failure (its token store down, say): " +
+        "the call is answered `INTERNAL` (500 over HTTP), so the agent is never told its token is refused, and may keep sending it. " +
+        'To refuse the token, `throw new QuickdrawError("UNAUTHENTICATED", ...)`; to let the caller in anonymously, return `null`.',
     },
     schema: [
       {

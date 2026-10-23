@@ -188,9 +188,11 @@ allowedOrigins)`, and checks it with `liveSession`; `auth.token` holds
   `QuickdrawError("UNAUTHENTICATED")` (or `"FORBIDDEN"`) fails the call
   `UNAUTHENTICATED` (401 over HTTP), and anything else it throws is an
   outage, answered `INTERNAL` (500), never a refused token. `bearerAuth`
-  refuses that way. Never throw a plain `Error` there for a bad token: the
-  agent would get `INTERNAL`, and neither the development warning nor the
-  lint rule looks at this hook.
+  refuses that way. Never throw a plain `Error` there for a bad token, which
+  the agent would get as `INTERNAL`: the registry warns
+  `[quickdraw:mcp-principal-threw]` in development, and
+  `no-plain-error-refusal` reports one thrown in a hook written where the
+  registry is made.
 
 ## Writes are tracked; frames are derived
 

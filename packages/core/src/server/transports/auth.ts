@@ -251,12 +251,41 @@ export function toPrincipal(result: unknown): Principal | null {
 }
 
 /**
- * The development warning for an `authenticate` that threw `error`, anything
+ * `hook`, warning once when it throws anything but a `QuickdrawError`, which
+ * the server takes for its own failure, so a refusal made that way never
+ * reaches the caller as one: `warning(thrown)` says so, `thrown` being the
+ * error's name. What `hook` throws is thrown on. The warning goes to
+ * `logger` through a sink of its own, while `NODE_ENV` is not
+ * `"production"`, and is never thrown, even in a strict test app (whose
+ * method calls throw their warnings): a handshake, a request or an MCP
+ * session is not a call yet. `authenticate` is asked through it
+ * (`authenticate-threw`), and so is the MCP registry's `principal` hook
+ * (`mcp-principal-threw`).
+ */
+export function warnPlainThrows<Args extends unknown[], R>(
+  hook: (...args: Args) => R | PromiseLike<R>,
+  logger: Logger,
+  warning: (thrown: string) => DevWarning,
+): (...args: Args) => Promise<R> {
+  const warnings = createDevWarnings({ logger });
+  return async (...args) => {
+    try {
+      return await hook(...args);
+    } catch (error) {
+      if (!(error instanceof QuickdrawError)) {
+        warnings.warn(warning(error instanceof Error ? error.name : typeof error));
+      }
+      throw error;
+    }
+  };
+}
+
+/**
+ * The development warning for an `authenticate` that threw `thrown`, anything
  * but a `QuickdrawError`: the transports take it for the server's failure, so
  * a refusal made that way never signs a client out (it retries for ever).
  */
-function threwWarning(error: unknown): DevWarning {
-  const thrown = error instanceof Error ? error.name : typeof error;
+function threwWarning(thrown: string): DevWarning {
   return {
     kind: "authenticate-threw",
     message:
@@ -273,32 +302,23 @@ function threwWarning(error: unknown): DevWarning {
  * makes one for both, `createHttpRouter` its own). While `NODE_ENV` is not
  * `"production"`, an `authenticate` that throws anything but a
  * `QuickdrawError` is warned about to `logger` (`authenticate-threw`), once
- * per resolver. The warning goes through a sink of the resolver's own, which
- * never throws it, even in a strict test app (whose method calls throw their
- * warnings): a handshake or a request is not a call yet.
+ * per resolver, through {@link warnPlainThrows}: never thrown, even in a
+ * strict test app.
  */
 export function createPrincipalResolver<P extends Principal>(
   auth: ServerAuth<P> | undefined,
   logger: Logger,
 ): ResolvePrincipal {
-  const authenticate = auth?.authenticate;
+  const authenticate =
+    auth?.authenticate === undefined
+      ? undefined
+      : warnPlainThrows(auth.authenticate, logger, threwWarning);
   const loadServiceAccess = auth?.loadServiceAccess;
-  const warnings = createDevWarnings({ logger });
-  const asked = async (request: AuthenticateRequest): Promise<unknown> => {
-    try {
-      return await authenticate?.(request);
-    } catch (error) {
-      if (!(error instanceof QuickdrawError)) {
-        warnings.warn(threwWarning(error));
-      }
-      throw error;
-    }
-  };
   return async (request) => {
     if (authenticate === undefined) {
       return null;
     }
-    const principal = toPrincipal(await asked(request));
+    const principal = toPrincipal(await authenticate(request));
     const carried = principal?.serviceAccess;
     if (principal === null || (carried !== undefined && carried !== null)) {
       return principal;

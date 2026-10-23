@@ -44,6 +44,10 @@
 // |                      | which both transports take for the server's failure (`INTERNAL`),  |                          |
 // |                      | so a refusal made that way never signs a client out                |                          |
 // |                      | (`transports/auth.ts`); outside any call, so never strict           |                          |
+// | `mcp-principal-      | an MCP registry's `principal` hook threw anything but a            | none (once per registry) |
+// | threw`               | `QuickdrawError`, which the bridge answers `INTERNAL`, so an agent |                          |
+// |                      | whose token it refused that way is told the server failed          |                          |
+// |                      | (`mcp/session.ts`); outside any call, so never strict               |                          |
 //
 // `nested-write`, `ambient-write`, `batch-read` and `batch-create-many` are
 // the write tracker's (`uow/unitOfWork.ts`), raised exactly where they were
@@ -79,7 +83,8 @@ export type DevWarningKind =
   | "untracked-access-model"
   | "shared-principal"
   | "channel-without-requires"
-  | "authenticate-threw";
+  | "authenticate-threw"
+  | "mcp-principal-threw";
 
 /** One development warning. */
 export interface DevWarning {
