@@ -183,6 +183,24 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   `auth.loadServiceAccess` loads, at each call, as `qd.caller`'s; the
   hook's principal is still used as the hook returns it. The HTTP routes
   never read a principal from a request.
+- **The admin kit runs `prepare` before each write.**
+  `admin.handlers(contract, { prepare })` calls `prepare(call, ctx, db)`
+  before `adminCreate`, `adminUpdate` and `adminDelete`, once the caller's
+  access and data were checked, in one transaction with the write and
+  `onWrite`: `call` is `{ method: "adminCreate", data }`,
+  `{ method: "adminUpdate", id, data, before }` or
+  `{ method: "adminDelete", id, before }`, `db` is the transaction's
+  tracked client, and a throw undoes its writes and the write. Before a
+  create or an update it may return column values, written over the
+  caller's data, hidden and read-only fields included, so a column the
+  server computes (a content hash) need not be an editable field of the
+  entity; `id`, a timestamp, a relation or a nested write is `VALIDATION`.
+  What it returns before a delete is ignored. The tracked client never sees
+  what the database deletes or clears with a row (`onDelete: Cascade`,
+  `SetNull`), so those rows stayed in the lists and entities open on them:
+  delete or clear them through `db` in `prepare`, and their subscribers are
+  told. An `adminDelete` with `prepare` reads the row first, one statement
+  more. `AdminPrepare` and `AdminPrepareCall` are on `./server`.
 
 ### Testing
 

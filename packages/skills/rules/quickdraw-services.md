@@ -195,7 +195,10 @@ writes made through `db`, after the response is sent:
   `db.$transaction(async (tx) => ...)` when they must commit together.
 - Raw SQL writes and database cascades are not seen: record them with
   `ctx.touch("task", ids)` (`{ removed: true }` for deleted rows); `qd.run`
-  passes `fn` the same `touch`.
+  passes `fn` the same `touch`. Before deleting a row whose dependents the
+  database deletes or clears (`onDelete: Cascade`, `SetNull`), delete or
+  clear them through `db` first, in the same transaction, so the lists
+  holding them are told; for the admin kit, in its `prepare`.
 - A write to one row that changes how another service's row looks (a
   parent's counts) declares `affects: [{ service: task, id: "parentTaskId" }]`.
 
@@ -261,6 +264,13 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   `onCommitted`, which runs once it committed, in a unit of its own (a
   game applying an edited definition to its running simulation, so a
   rolled-back edit is never applied); never wrap the kit's handlers.
+  What must happen before an edit goes in `prepare(call, ctx, db)`, in
+  the same transaction: a column the server computes (a content hash) is
+  returned from it and written over the caller's data, even a hidden or
+  read-only one (never `id`, a timestamp or a relation), so it need not be
+  an editable field of the entity; and before an `adminDelete` it deletes
+  or clears through `db` the rows the database would cascade, so their
+  subscribers and lists are told.
 
 ## Realtime
 
