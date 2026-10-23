@@ -211,6 +211,13 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
 
 ### Server
 
+- **A session's token expires with its session, never before.**
+  `issueSession` signed the token's `exp` as a span from the current whole
+  second, so the token ended up to 999 ms before its session, and a 1 s
+  session's token could expire milliseconds after it was issued. It now
+  signs the session's `expiresAt`, rounded up to the second;
+  `createJWT` takes that time in seconds since the epoch as well as a
+  span.
 - **The legacy shim's `VALIDATION` replies list the input's issues.** A
   4.x client's refused input got only `Invalid input for <service>.<method>`
   in its `error`, since a 4.x reply carries no `data`; 4.1 sent the

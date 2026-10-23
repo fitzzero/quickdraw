@@ -20,12 +20,14 @@ const DEFAULT_EXPIRATION = "7d";
  *
  * @param payload - The payload to encode in the JWT
  * @param secret - The secret key for signing
- * @param expiresIn - Expiration time (default: 7 days)
+ * @param expiresIn - When it expires: a time span from now, as jose reads
+ *   one ("7d", "1h"; default 7 days), counted from the current whole second,
+ *   or the time itself, in seconds since the epoch
  */
 export async function createJWT(
   payload: Omit<JWTPayload, "exp" | "iat">,
   secret: string,
-  expiresIn: string = DEFAULT_EXPIRATION,
+  expiresIn: string | number = DEFAULT_EXPIRATION,
 ): Promise<string> {
   const secretKey = new TextEncoder().encode(secret);
 
