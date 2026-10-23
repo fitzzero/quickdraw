@@ -631,6 +631,46 @@ describe("prepare", () => {
     expect(await update()).toMatchObject({ id: board.t1, title: "Renamed", notes: "Kept" });
   });
 
+  it("moves a row only into a parent the caller has the method's row level on, as crud's prepare", async () => {
+    let target: string | undefined;
+    const { app } = await kit.start({
+      // a lowered form: a project's moderators edit its tasks
+      access: { adminUpdate: { entry: "Moderate" } },
+      prepare: (call) =>
+        call.method === "adminUpdate" && target !== undefined ? { projectId: target } : undefined,
+    });
+    const board = kit.board();
+    const { prisma } = kit.harness();
+    // bo moderates P1, T1's project, and P3; he has nothing on P2.
+    const p3 = await prisma.project.create({ data: { name: "P3", ownerId: board.ada } });
+    await prisma.projectMember.create({
+      data: { projectId: p3.id, userId: board.bo, role: "Moderate" },
+    });
+    const bo = app.as(as(board.bo)).taskService;
+    target = board.p2;
+    await expect(bo.adminUpdate({ id: board.t1, data: { title: "Moved" } })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message:
+        'Moving a row of taskService by "projectId" needs Moderate on the projectService row it moves into',
+    });
+    expect(await prisma.task.findUniqueOrThrow({ where: { id: board.t1 } })).toMatchObject({
+      title: "T1",
+      projectId: board.p1,
+    });
+    target = p3.id;
+    expect(await bo.adminUpdate({ id: board.t1, data: { title: "Moved" } })).toMatchObject({
+      title: "Moved",
+      projectId: p3.id,
+    });
+    // A service-wide Admin passes, whatever the parent.
+    target = board.p2;
+    expect(
+      await app
+        .as(serviceAdmin(board.cy))
+        .taskService.adminUpdate({ id: board.t1, data: { title: "Moved again" } }),
+    ).toMatchObject({ title: "Moved again", projectId: board.p2 });
+  });
+
   it("is refused when it is not a function", () => {
     expect(() =>
       adminKit.handlers(taskContract, { prepare: "later" as unknown as AdminPrepare }),

@@ -267,10 +267,11 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   What must happen before an edit goes in `prepare(call, ctx, db)`, in
   the same transaction: a column the server computes (a content hash) is
   returned from it and written over the caller's data, even a hidden or
-  read-only one (never `id`, a timestamp or a relation), so it need not be
-  an editable field of the entity; and before an `adminDelete` it deletes
-  or clears through `db` the rows the database would cascade, so their
-  subscribers and lists are told.
+  read-only one (never `id`, a timestamp or a relation; a parent it sets
+  needs the caller's row level on it, as in the read/write kit), so it
+  need not be an editable field of the entity; and before an `adminDelete`
+  it deletes or clears through `db` the rows the database would cascade,
+  so their subscribers and lists are told.
 
 ## Realtime
 

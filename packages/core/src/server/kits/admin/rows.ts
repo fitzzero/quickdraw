@@ -126,8 +126,8 @@ function prepareCall(write: WriteCall, before: unknown): AdminPrepareCall {
 
 /**
  * Runs one write: alone without a hook, else in a transaction that reads the
- * row before it (`rowBefore`), runs `prepare` (whose column values the write
- * sets over the caller's: `prepareWrite`), makes the write and runs
+ * row before it (`rowBefore`), runs `prepare` when given (whose column values
+ * the write sets over the caller's: `prepareWrite`), makes the write and runs
  * `onWrite`, which hears the row before and after, every field; a throw in
  * any of them undoes it all. Once it committed, `onCommitted` hears the same
  * (`committed`). The database's refusal of the values is `VALIDATION` either
@@ -161,10 +161,7 @@ async function written(
       const whole = (row: object | null | undefined) => (row ? rowWhole(call, row) : null);
       const first = await rowBefore(context, call, table, write);
       const before = first === undefined ? undefined : whole(first);
-      const values =
-        prepare === undefined
-          ? data
-          : await prepareWrite(call, prepare, prepareCall(write, before), ctx, tx);
+      const values = await prepareWrite(call, context, prepareCall(write, before), ctx, tx);
       const done = await attempt(
         table,
         values,

@@ -2561,9 +2561,13 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   an update it may return column values, written over the caller's data:
   a column the server computes (a hash, a slug, the next ordinal), even one
   the caller may not write (hidden, not editable, above their level), but
-  never `id`, a timestamp, a relation or a nested write (`VALIDATION`).
-  Returning nothing, or `undefined` for a key, keeps the caller's data, and
-  what it returns before a delete is ignored. The tracked client never sees
+  never `id`, a timestamp, a relation or a nested write (`VALIDATION`). An
+  anchor column it sets (a parent's id, an anchored collection's scope)
+  needs the method's row level on the row it names, as the caller's data
+  and the read/write kit's `prepare` do (`FORBIDDEN`), so a lowered form
+  never moves a row into a parent its caller cannot reach. Returning
+  nothing, or `undefined` for a key, keeps the caller's data, and what it
+  returns before a delete is ignored. The tracked client never sees
   what the database deletes or clears with a row (`onDelete: Cascade`,
   `SetNull`), so those rows stay in the lists and entities open on them;
   delete or clear them through `db` in `prepare`, and their subscribers are

@@ -94,6 +94,8 @@ export const taskContract = defineContract("taskService", {
 
 /** Options of {@link defineTaskService}. */
 export interface TaskServiceOptions {
+  /** A form that lowers the admin kit's default for `adminUpdate`. */
+  readonly access?: { readonly adminUpdate: { readonly entry: "Moderate" } };
   /** The admin kit's `hiddenFields`. */
   readonly hiddenFields?: readonly ("notes" | "details" | "assigneeId" | "pinned")[];
   /** The admin kit's `displayName`. */
@@ -124,6 +126,7 @@ export function defineTaskService(options: TaskServiceOptions = {}) {
         access: { get: { entry: "Read" }, update: { entry: "Moderate" } },
       }),
       ...admin.handlers(taskContract, {
+        ...(options.access === undefined ? {} : { access: options.access }),
         ...(options.hiddenFields === undefined ? {} : { hiddenFields: options.hiddenFields }),
         ...(options.displayName === undefined ? {} : { displayName: options.displayName }),
         ...(options.editable === undefined ? {} : { editable: options.editable }),

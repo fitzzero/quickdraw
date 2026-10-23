@@ -39,7 +39,8 @@ export type AdminPrepareCall<Row = unknown> =
  * `Db`, when `db` is annotated): its own writes commit with the edit, and a
  * throw undoes them and the edit and fails the call. Before `adminCreate`
  * and `adminUpdate` it may return column values, merged over the caller's
- * data; what it returns before `adminDelete` is ignored.
+ * data (each anchor column among them checked at the method's row level);
+ * what it returns before `adminDelete` is ignored.
  */
 export type AdminPrepare<Row = unknown, Db = unknown> = (
   call: AdminPrepareCall<Row>,
@@ -225,10 +226,14 @@ export interface AdminHandlersOptions<C extends AnyContract, A, Db = unknown> {
    * Before `adminCreate` and `adminUpdate` it may return column values,
    * merged over the caller's data and written: a column the server computes
    * (a hash, a slug), even one the caller may not write (hidden, not
-   * editable, above the caller's level), but never `id`, a timestamp, a
-   * relation or a nested write (`VALIDATION`). Returning nothing, or
-   * `undefined` for a key, keeps the caller's data. What it returns before
-   * `adminDelete` is ignored.
+   * editable, above the caller's level, an owner column the policy reads),
+   * but never `id`, a timestamp, a relation or a nested write (`VALIDATION`).
+   * An anchor column it sets (an `inherit` parent, an anchored collection's
+   * scope) must name a row on which the caller has the method's row level
+   * (`FORBIDDEN`), as for the caller's data and the read/write kit's
+   * `prepare`: a lowered form never moves a row into a parent its caller
+   * cannot reach. Returning nothing, or `undefined` for a key, keeps the
+   * caller's data. What it returns before `adminDelete` is ignored.
    *
    * Its writes through `db` are tracked like any other: before a delete,
    * delete or clear there the rows the database would delete or clear with

@@ -8,16 +8,26 @@
 // grant (`../columns.ts`).
 //
 // The app's `prepare` runs before the write and may add column values to it
-// (`prepareWrite`). Those are the server's own, so only the checks that hold
-// whoever writes apply to them: never `id` or a timestamp, and column values
-// only. The checks of what the caller may write (hidden fields, those that
-// are not editable, those above the caller's level, the columns the policy
-// reads, an anchor's row level) do not.
+// (`prepareWrite`). Those are the server's own, so the checks of which fields
+// the caller may name do not apply to them: a hidden field, one that is not
+// editable, one above the caller's level and a column the policy reads (an
+// owner or an access list, which comes only from `prepare` in the read/write
+// kit too) may be set there. The checks that hold whoever writes do: never
+// `id` or a timestamp, column values only, and each anchor column it sets (an
+// `inherit` parent, an anchored collection's scope) names a row on which the
+// caller has the method's row level, as for the read/write kit's `prepare`
+// (5.1.1: no form, however lowered, moves a row into a parent the caller
+// cannot reach at that level).
 
 import { ADMIN_NEVER_WRITABLE, writtenData } from "../../../contract/kits/adminFields";
 import { QuickdrawError } from "../../../protocol/errors";
 import { checked } from "../../devWarnings";
-import { checkWritableColumns, columnValueIssues, isPlainObject } from "../columns";
+import {
+  checkAnchorColumns,
+  checkWritableColumns,
+  columnValueIssues,
+  isPlainObject,
+} from "../columns";
 import { rowLevel } from "../crud/access";
 import { checkSeen, type AdminCall } from "./runtime";
 import type { AdminContext, AdminPrepare, AdminPrepareCall } from "./types";
@@ -78,28 +88,31 @@ function preparedIssues(call: AdminCall, columns: Data): ReturnType<typeof colum
 }
 
 /**
- * Runs the app's `prepare` before a write, in its transaction (`db`), and
- * returns what the write sets: the caller's data with the column values
- * `prepare` returned over it, those it gave `undefined` left out. Returning
- * nothing keeps the caller's data, and an `adminDelete` sets nothing,
- * whatever it returns. `INTERNAL` for a return that is not an object of
- * column values; `VALIDATION` for one naming `id` or a timestamp, or
- * holding a relation or a nested write. `prepare` is the app's code, so its
- * statements are checked like a handler's.
+ * Runs the app's `prepare`, when it gave one, before a write, in the write's
+ * transaction (`db`), and returns what the write sets: the caller's data
+ * with the column values `prepare` returned over it, those it gave
+ * `undefined` left out. Returning nothing keeps the caller's data, and an
+ * `adminDelete` sets nothing, whatever it returns. `INTERNAL` for a return
+ * that is not an object of column values; `VALIDATION` for one naming `id`
+ * or a timestamp, or holding a relation or a nested write; `FORBIDDEN` for
+ * an anchor column it sets to a row the caller lacks the method's row level
+ * on (one engine call per anchor column it sets). `prepare` is the app's
+ * code, so its statements are checked like a handler's.
  */
 export async function prepareWrite(
   call: AdminCall,
-  prepare: AdminPrepare,
+  context: AdminContext,
   write: AdminPrepareCall,
   ctx: Parameters<AdminPrepare>[1],
   db: unknown,
 ): Promise<Data> {
-  const returned: unknown = await checked(() => prepare(write, ctx, db));
-  if (write.method === "adminDelete") {
-    return {};
+  const { prepare } = context;
+  const data = write.method === "adminDelete" ? {} : (write.data as Data);
+  if (prepare === undefined) {
+    return data;
   }
-  const data = write.data as Data;
-  if (returned === undefined) {
+  const returned: unknown = await checked(() => prepare(write, ctx, db));
+  if (write.method === "adminDelete" || returned === undefined) {
     return data;
   }
   const { name } = call.runtime.service;
@@ -118,6 +131,11 @@ export async function prepareWrite(
       { issues },
     );
   }
+  // Each parent it names, at the method's row level, as for the read/write kit's prepare.
+  const level = rowLevel(context.form, "Moderate");
+  await checkAnchorColumns(call.runtime, call.principal, columns, level, {
+    creating: write.method === "adminCreate",
+  });
   return { ...data, ...columns };
 }
 

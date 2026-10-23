@@ -194,8 +194,12 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   create or an update it may return column values, written over the
   caller's data, hidden and read-only fields included, so a column the
   server computes (a content hash) need not be an editable field of the
-  entity; `id`, a timestamp, a relation or a nested write is `VALIDATION`.
-  What it returns before a delete is ignored. The tracked client never sees
+  entity; `id`, a timestamp, a relation or a nested write is `VALIDATION`,
+  and an anchor column it sets (an `inherit` parent, an anchored
+  collection's scope) needs the method's row level on the row it names, as
+  for the read/write kit's `prepare` (`FORBIDDEN`): a lowered form never
+  moves a row into a parent its caller cannot reach. What it returns before
+  a delete is ignored. The tracked client never sees
   what the database deletes or clears with a row (`onDelete: Cascade`,
   `SetNull`), so those rows stayed in the lists and entities open on them:
   delete or clear them through `db` in `prepare`, and their subscribers are
