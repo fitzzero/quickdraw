@@ -767,16 +767,22 @@ export const taskService = qd.defineService(task, {
         db.task.update({ where: { id: input.id }, data: { status: input.status } }),
     },
     assigned: {
-      // Read on the project the input names, asked through ctx.access; none named, the caller's own
+      // Read on the project the input names, asked through ctx.access; none named, the caller's
+      // own that they may still read
       access: custom(
         async (ctx, input) =>
           input.projectId === undefined || (await ctx.access.can(project, input.projectId, "Read")),
       ),
-      handler: ({ input, ctx, db }) =>
-        db.task.findMany({
-          where: { assigneeId: ctx.principal.userId, projectId: input.projectId },
+      handler: async ({ input, ctx, db }) => {
+        const readable = await ctx.access.where(task, "Read");
+        if (readable === "none") return [];
+        return db.task.findMany({
+          where: {
+            AND: [{ assigneeId: ctx.principal.userId, projectId: input.projectId }, readable],
+          },
           take: 100,
-        }),
+        });
+      },
     },
   },
 });
@@ -888,11 +894,19 @@ export const taskService = qd.defineService(task, {
   loaded); `service` is a contract or a service name. A form can then check
   a row no `{ entry }` or `{ scope }` form names: a parent the input
   names, or a key that is optional, as in `assigned` above, which passes
-  without a project and needs Read on one it names. It counts levels as
+  without a project and needs Read on one it names. Its handler adds
+  `where(task, "Read")` to its query with `AND`, so a list without a
+  project still follows the row policy. Never spread the filter into
+  `where`: it and the input both set `projectId`, and whichever comes last
+  wins, widening a list with a project or dropping the policy from one
+  without. `ctx.access` counts levels as
   `{ entry }` does: a service-wide `Admin` grant reaches every row (with
   `adminBypass`), a row that is not found gives anyone else no level
   (`can` is `false`), and an anonymous caller has none anywhere (an empty
-  map, `false`, `"none"`). A `custom` form is still no row check of the
+  map, `false`, `"none"`). So a form that asks it about a parent counts a
+  service-wide `Admin` grant on the parent's service, which
+  `{ scope, of }` does not: prefer `{ scope: L, of, id }` when the input
+  always names the parent. A `custom` form is still no row check of the
   method's own `id`: a method whose input has one needs `rowless: true`
   beside it (above). Every method call has it, MCP and `ctx.services` calls
   included, and so do the `ctx` the kits pass to their forms and callbacks;
@@ -1224,9 +1238,8 @@ export const taskService = qd.defineService(task, {
   collections: {
     // Read on the project opens its scope
     byProject: { anchor: projectContract },
-    // a user opens only the scope that is their id, with the service's Read grant, as its
-    // methods ask for it; its items still follow access above
-    assigned: { scopeAccess: "self", requires: { service: "Read" } },
+    // a user opens only the scope that is their id; its items still follow access above
+    assigned: { scopeAccess: "self" },
   },
   // opens the service topic to Read grants; closed without it
   watchAccess: { service: "Read" },
@@ -1263,15 +1276,18 @@ export const taskService = qd.defineService(task, {
   resumes the list after such a change reads a page. A change to a parent
   row's own access columns (a project's owner or access list) reaches the
   list only at the rows' next write or the list's next load.
-- `requires: { service: L }`, beside `anchor` or `scopeAccess` (`assigned`
-  above), also asks for a service-wide grant of at least `L` on the
-  collection's service, as its methods under `{ service: L }` do: both
-  checks must pass, and a service-wide `Admin` passes either. Without the
-  grant, `qd:col:sub` (cursor pages included), the scope's change topic and
-  a search kept to the scope are `FORBIDDEN`. The grant comes from the
-  socket's principal, never a read: when the user's grants reload below it
-  (`server.access.refresh`, a tracked write of the grants column, on any
-  node), each of their sockets leaves the scope with `qd:revoked`
+- `requires: { service: L }`, beside `anchor` or `scopeAccess`, also asks
+  for a service-wide grant of at least `L` on the collection's service, as
+  its methods under `{ service: L }` do: both checks must pass, and a
+  service-wide `Admin` passes either. It is for a list whose methods need
+  the grant, `mine: { scopeAccess: "self", requires: { service: "Read" } }`
+  beside methods under `{ service: "Read" }`; a list whose rows its users
+  read by their level on each row (`assigned` above) takes none. Without
+  the grant, `qd:col:sub` (cursor pages included), the scope's change
+  topic and a search kept to the scope are `FORBIDDEN`. The grant comes
+  from the socket's principal, never a read: when the user's grants reload
+  below it (`server.access.refresh`, a tracked write of the grants column,
+  on any node), each of their sockets leaves the scope with `qd:revoked`
   (`reason: "access"`) and gets nothing more of it. A collection without
   `requires` is unchanged.
 - Items are visible to everyone in an anchored scope: no per-row policy or
@@ -3426,7 +3442,14 @@ export function useArenaHost(arenaId: string): void {
   `onHostLeave({ room, socketId, principal, reason })` (the service's and
   `createServer`'s) runs once. The server never picks the next host; the
   app does, as `hostArena` above lets the next player who asks. Behind a
-  cluster adapter each node knows each room's host.
+  cluster adapter each node knows each room's host. A node that dies
+  without closing its sockets leaves the hosts it held recorded on the
+  other nodes until each room's host is set or cleared again, and no
+  `onHostLeave` runs for them. So an app that picks a host only while
+  `hostOf(room)` is `null`, as `hostArena` does, also needs a way for a
+  player to take over a host that stops answering: a method that calls
+  `ctx.rooms.setHost(room)` or `clearHost(room)` after a timeout of the
+  app's own.
 - `defineHost(contract, { channels, streams })` (from `./client`, or
   `./client/core` without React) takes one handler per host-served channel, whose `ctx` is
   `{ peer: { socketId, userId, link }, room }` (the user as the server

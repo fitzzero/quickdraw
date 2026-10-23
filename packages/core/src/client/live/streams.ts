@@ -40,7 +40,6 @@ import { CLIENT_EVENTS } from "../../contract/names";
 import { QuickdrawError } from "../../protocol/errors";
 import { isName } from "../../protocol/guards";
 import { MAX_SCOPE_LENGTH } from "../../protocol/version";
-import { hostsOf } from "../host/hosts";
 import { hostLinksOf } from "../host/links";
 import { notifyEach } from "../watch";
 import { request, type LiveHost } from "./host";
@@ -411,8 +410,9 @@ function listen(feeds: Feeds, key: string, listener: () => void): () => void {
 
 /** Creates the streams of `host`'s connection. */
 export function createStreamStore(host: LiveHost): StreamStore {
-  // Hears `qd:host` from now on, before the socket joins a room whose host serves a feed.
-  hostsOf(host.connection);
+  // Hears `qd:host` from now on, before the socket joins a room whose host serves a feed, and
+  // loads the peer links once the server announces them, before a feed or a channel needs one.
+  hostLinksOf(host.connection);
   const feeds: Feeds = {
     host,
     registry: createRegistry<Feed>((feed) => {

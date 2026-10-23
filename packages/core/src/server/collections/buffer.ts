@@ -25,7 +25,11 @@
 //   checks an unchanged scope now and then keeps resuming it;
 // - a flush that changed a collection nobody here subscribes to, in scopes
 //   it would have had to read to name: past every revision taken so far, for
-//   every scope of that collection (`skipAll`).
+//   every scope of that collection (`skipAll`);
+// - an access change that re-checks a self scope (`selfRecheck.ts`): past
+//   every revision taken so far, for the user's scope (`reset`) or every
+//   scope of the collection (`skipAll`); a reload of the user's grants does
+//   it before it authorizes their scopes again.
 //
 // Deltas of one frame share its revision, and frames are kept in the order
 // they went out, so a resume replays them in that order and never sorts.
@@ -86,7 +90,7 @@ export interface DeltaBuffer {
   skip(key: string, rev: Revision): void;
   /** A flush changed scopes of the group it did not name: no resume of any from before now. */
   skipAll(group: string): void;
-  /** The scope was reset (or closed) at `rev`: no resume from before it. */
+  /** The scope was reset (or closed) at `rev`: no resume from it or before it. */
   reset(key: string, rev: Revision): void;
   /**
    * The deltas after `since`, in the order they went out, when every change

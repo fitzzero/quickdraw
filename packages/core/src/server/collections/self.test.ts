@@ -15,7 +15,7 @@ import { z } from "zod";
 import { inCluster } from "../../../test/cluster/mode";
 import type { PrismaClient } from "../../../test/prisma/setup";
 import { defineContract, via, type CollectionFrame } from "../../index";
-import { createHarness, type Harness } from "../../prisma/__tests__/harness";
+import { createHarness, pauseNext, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
 import { as, projectMembers, seedBoard, type Board } from "../access/__tests__/board";
 import { projectService, qd } from "../emit/__tests__/live";
@@ -301,6 +301,109 @@ describe("access changes and a self scope", () => {
     await plain.scopes.settle();
     expect(deltasOf(plain.scopes.frames, "mine")).toEqual([{ t: "removed", id: board.t1 }]);
     expect(deltasOf(granted.scopes.frames, "mine")).toEqual([{ t: "removed", id: board.t1 }]);
+  });
+});
+
+describe("a resume of a self list after a reload of its user's grants", () => {
+  /** The ids a `qd:col:sub` answer's page holds, sorted. */
+  const idsOf = (answer: Record<string, unknown>) =>
+    ((answer.items ?? []) as { readonly id: string }[]).map((item) => item.id).sort();
+
+  /** Closes `connection` and waits until the server has handled its disconnect. */
+  async function close(app: App, connection: Awaited<ReturnType<App["connect"]>>): Promise<void> {
+    const id = connection.socket.id ?? "";
+    connection.close();
+    for (let attempt = 0; attempt < 200 && app.server.io.sockets.sockets.has(id); attempt += 1) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 5);
+      });
+    }
+    // Still connected, the socket would get the reload's reset, which raises the floor too.
+    expect(app.server.io.sockets.sockets.has(id)).toBe(false);
+  }
+
+  /**
+   * cy, a service-wide Admin of the tasks, reads her list whole on a tab that
+   * then goes offline: T1 in P1, where she is a member, and T2 in P2, where
+   * she has no level. Then her grant is lowered, for a reload to load. With
+   * `anchored`, another tab of hers stays open on P1's board, which the
+   * reload authorizes again.
+   */
+  async function demoted(options: { readonly anchored?: boolean } = {}) {
+    await h.prisma.task.updateMany({ data: { assigneeId: board.cy } });
+    const grants = new Map<string, ServiceGrants>([[board.cy, { taskService: "Admin" }]]);
+    const app = await start({ loadServiceAccess: (userId) => grants.get(userId) ?? {} });
+    if (options.anchored === true) {
+      const open = await connect(app, as(board.cy));
+      expect(await colSub(open.connection, "byProject", board.p1)).toMatchObject({ ok: true });
+    }
+    const offline = await connect(app, as(board.cy));
+    const page = await colSub(offline.connection, "mine", board.cy);
+    expect(idsOf(page)).toEqual([board.t1, board.t2].sort());
+    await close(app, offline.connection);
+    grants.set(board.cy, {});
+    return { app, since: page.rev as number };
+  }
+
+  /** cy's list resumed from `since` on a new socket, as the offline tab comes back. */
+  async function resume(app: App, since: number) {
+    const back = await connect(app, as(board.cy));
+    return await colSub(back.connection, "mine", board.cy, { since });
+  }
+
+  it("reads a page when nothing was written since the list's page", async () => {
+    const { app, since } = await demoted();
+    await app.server.access.refresh(board.cy);
+    const answer = await resume(app, since);
+    expect(answer).not.toHaveProperty("resumed");
+    expect(answer).toMatchObject({ ok: true, items: [{ id: board.t1 }] });
+  });
+
+  it("reads a page when something was written since, and the reload is over", async () => {
+    const { app, since } = await demoted();
+    // Into ed's list, not cy's: her scope's floor stays where it was.
+    await write(app, (db) =>
+      db.task.create({ data: { projectId: board.p2, title: "Elsewhere", assigneeId: board.ed } }),
+    );
+    await app.server.access.refresh(board.cy);
+    const answer = await resume(app, since);
+    expect(answer).not.toHaveProperty("resumed");
+    expect(answer).toMatchObject({ ok: true, items: [{ id: board.t1 }] });
+  });
+
+  // Behind a cluster a resume always reads a page, and the reload's reads run on another node.
+  it.skipIf(inCluster())(
+    "reads a page when the list resumes while the reload authorizes the user's scopes again",
+    async () => {
+      const { app, since } = await demoted({ anchored: true });
+      const pause = pauseNext(h.database, /^\s*SELECT\b[\s\S]*FROM\s+"public"\."Project/iu);
+      try {
+        const reloading = app.server.access.refresh(board.cy);
+        await pause.reached;
+        const answer = await resume(app, since);
+        pause.release();
+        await reloading;
+        expect(answer).not.toHaveProperty("resumed");
+        expect(answer).toMatchObject({ ok: true, items: [{ id: board.t1 }] });
+      } finally {
+        pause.restore();
+      }
+    },
+  );
+
+  it("still revokes, and never resets, another user's list a demoted Admin held", async () => {
+    await h.prisma.task.updateMany({ data: { assigneeId: board.cy } });
+    const grants = new Map<string, ServiceGrants>([[board.ed, { taskService: "Admin" }]]);
+    const app = await start({ loadServiceAccess: (userId) => grants.get(userId) ?? {} });
+    const ed = await connect(app, as(board.ed));
+    expect(await colSub(ed.connection, "mine", board.cy)).toMatchObject({ ok: true });
+    grants.set(board.ed, {});
+    await app.server.access.refresh(board.ed);
+    await ed.scopes.settle();
+    expect(ed.scopes.revoked).toEqual([
+      { kind: "collection", reason: "access", s: "taskService", c: "mine", scope: board.cy },
+    ]);
+    expect(ed.scopes.frames.filter((frame) => frame.c === "mine")).toEqual([]);
   });
 });
 

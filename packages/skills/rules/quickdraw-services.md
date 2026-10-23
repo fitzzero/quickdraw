@@ -196,7 +196,9 @@ writes made through `db`, after the response is sent:
   the untracked client is none, so passing it is a type error. Both types
   are on `@fitzzero/quickdraw-core/prisma` and the root export. Never type
   such a parameter `PrismaClient`, which the untracked client is too;
-  `no-untracked-write` reads the type, whatever the parameter's name.
+  `no-untracked-write` reads the type, whatever the parameter's name. A
+  `db` declared `PrismaClient` (a lazy `Proxy`, say) carries no mark:
+  declare it `Tracked<PrismaClient>` to pass it to such a helper.
 - Background work a handler starts and does not await (a push sent after
   the reply) runs in `qd.run(fn, { detached: true })`: a unit of its own,
   flushed when `fn` settles. Without `detached` it joins the handler's unit,
@@ -353,6 +355,12 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   app's own: a seat, a role), never by election; read it with
   `ctx.rooms.hostOf(room)`, clear it with `clearHost(room)`, and decide
   what follows in `onHostLeave({ room, socketId, principal, reason })`.
+  Behind a cluster adapter, a node that dies without closing its sockets
+  leaves the hosts it held recorded on the other nodes until each room's
+  host is set or cleared again, and no `onHostLeave` runs for them. So
+  when the app picks a host only while `hostOf(room)` is `null`, also let
+  a player take over a host that stops answering: a method that calls
+  `setHost(room)` or `clearHost(room)` after a timeout of the app's own.
   The server never sees what a host and its players send each other: what
   a host reports to a method (a result, a score) is one player's word,
   checked as untrusted input, and the contract's `describe` says so. The
