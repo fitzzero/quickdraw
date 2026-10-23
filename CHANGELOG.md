@@ -49,11 +49,23 @@ All notable changes to this project will be documented in this file.
   `./testing` links two ends in one process, with a delay and jitter per
   message and loss on `fast` alone; closing one end closes the other after
   the `rel` messages sent ahead of it.
+- **A link can play over a bad network.** `link.setLag({ ms, jitter, loss })`
+  holds every message of a real link, both ways and on either path, `ms`
+  plus up to `jitter` milliseconds, and loses a `fast` one with
+  probability `loss` (`stats.simulatedLoss` counts the app's, never
+  `dropped`), so a browser test or a bench plays on the real WebRTC path.
+  `rel` messages are never lost and keep their order. The clock's pings
+  wait too, so `clock.rtt` reads the lagged round trip. `setLag(null)`
+  ends it, and what is held goes on the next task, in order; `link.lag`
+  reads it, and `random` takes a seeded generator. Nothing on the wire
+  changes. The loopback double's delay, jitter and loss run on the same
+  code, behind its unchanged options.
 - **Godot.** The GDScript reference client gains `peer_link`,
   `reject_peer`, the `peer_requested` signal and `socket_id`: WebRTC where
   Godot has it (a web export, or the webrtc GDExtension), the relay
   otherwise. `docs/protocol-v5.md` describes the frames, the link messages
-  and the timings for other clients.
+  and the timings for other clients. Its links take
+  `set_lag(ms, jitter, loss)` too, drained each frame.
 
 ### Host mode
 
@@ -91,6 +103,12 @@ All notable changes to this project will be documented in this file.
   whole or refuses it, and sends again, in order, what the relay drops on
   `rel`. One connection serves several contracts in a room, one `serve`
   each.
+- **A host knows each peer's link.** Each of `host.peers`, and the
+  `ctx.peer` of a host-served channel's handler, carries `link`, the
+  host's end of that player's link: its `clock.rtt` is the player's round
+  trip, and its `setLag` lags that player. The host's own client reaches
+  its host over an in-process link now, so it is one of `peers` with a
+  link too, and a host can give its own play its players' lag.
 - **Players change nothing.** `useChannel` and `useStream` of a
   host-served member reach the room's host over a link, made on first use
   and again for a new host or after a reconnect; the feed's seed replaces

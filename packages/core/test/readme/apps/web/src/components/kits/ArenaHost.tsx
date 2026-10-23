@@ -85,3 +85,17 @@ export function useArenaHost(arenaId: string): void {
   }, [connection, arenaId]);
 }
 // #endregion
+
+// #region fair
+// the host's own play goes through an in-process link, one of host.peers: lag it to the median
+// player's one-way delay, at most 100 ms, so the host plays over a link as laggy as its players'
+export function matchPlayersLag(host: Host<typeof arena>, self: string | undefined): void {
+  const oneWay = host.peers
+    .filter((peer) => peer.socketId !== self)
+    .map((peer) => peer.link.clock.rtt / 2)
+    .sort((a, b) => a - b);
+  const median = oneWay[Math.floor(oneWay.length / 2)] ?? 0;
+  // call it now and then, as the players' round trips change: what is held keeps its time
+  host.peers.find((peer) => peer.socketId === self)?.link.setLag({ ms: Math.min(100, median) });
+}
+// #endregion
