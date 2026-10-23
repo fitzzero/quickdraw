@@ -188,7 +188,9 @@ Turn it on for service suites. `authenticate-threw` (the app's
 `authenticate` threw anything but a `QuickdrawError`) comes from a
 handshake or an HTTP request, before any call, so it is logged, never
 thrown, strict or not: refuse with `QuickdrawError("UNAUTHENTICATED")`
-instead, unless the test means an outage.
+instead, unless the test means an outage. `mcp-principal-threw` (an MCP
+registry's `principal` hook did the same) is logged, never thrown, in the
+same way, even from a registry over a strict test app's dispatcher.
 `createRecordingSink()` passed as `flushSink` records what each flush wrote.
 
 ## Components

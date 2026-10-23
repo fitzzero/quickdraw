@@ -3,6 +3,9 @@ import { run } from "./tester.mjs";
 /** The server's entry, where the template creates its server. */
 const SERVER = "apps/api/src/server.ts";
 
+/** Where the template serves its services as MCP tools. */
+const MCP = "apps/api/src/mcp.ts";
+
 run("no-plain-error-refusal", {
   valid: [
     {
@@ -103,6 +106,58 @@ run("no-plain-error-refusal", {
       filename: "apps/api/src/__tests__/server.test.ts",
       code: `
         const app = qd.createServer({ app: express(), auth: { authenticate: () => { throw new Error("down"); } } });
+      `,
+    },
+    {
+      name: "an MCP principal hook refusing with QuickdrawError, one from another module, and the registry's other hooks",
+      filename: MCP,
+      code: `
+        import { verifyAgent } from "./auth/agents";
+        export const registry = createMcpRegistry({
+          services,
+          dispatcher: server.dispatcher,
+          principal: async (request) => {
+            if (request.transport !== "http" || request.token === null) return null;
+            const agent = await agents.find(request.token);
+            if (agent === null) throw new QuickdrawError("UNAUTHENTICATED", "Unknown agent token");
+            return { userId: agent.userId, kind: "agent" };
+          },
+          context: () => {
+            throw new Error("scopes are not stored yet");
+          },
+          bind: { projectId: () => { throw new Error("no project"); } },
+        });
+        export const imported = createMcpRegistry({ services, dispatcher, principal: verifyAgent });
+      `,
+    },
+    {
+      name: "an MCP principal hook's throws that are caught, nested, or of the app's own error class",
+      filename: MCP,
+      code: `
+        createMcpRegistry({
+          services,
+          dispatcher,
+          principal: async (request) => {
+            const parse = (token) => {
+              if (token.length > 512) throw new Error("too long");
+              return token;
+            };
+            try {
+              return await verifyAgent(parse(request.token));
+            } catch (error) {
+              if (error instanceof QuickdrawError) throw error;
+              throw new Error("The token store failed", { cause: error });
+            }
+          },
+        });
+        createMcpRegistry({ services, dispatcher, principal: () => { throw new AgentTokenError("expired"); } });
+      `,
+    },
+    {
+      name: "a test that makes an MCP principal hook fail on purpose",
+      filename: "apps/api/src/__tests__/mcp.test.ts",
+      code: `
+        const registry = createMcpRegistry({ services, dispatcher, principal: () => { throw new Error("down"); } });
       `,
     },
   ],
@@ -208,6 +263,52 @@ run("no-plain-error-refusal", {
             'To refuse the session\'s user, return `null` (or `throw new QuickdrawError("UNAUTHENTICATED", ...)`), which signs the client out.',
         },
       ],
+    },
+    {
+      name: "an MCP principal hook written in createMcpRegistry",
+      filename: MCP,
+      code: `
+        export const registry = createMcpRegistry({
+          services,
+          dispatcher: server.dispatcher,
+          principal: async (request) => {
+            if (request.transport !== "http" || request.token === null) return null;
+            const agent = await agents.find(request.token);
+            if (agent === null) throw new Error("Unknown agent token");
+            return { userId: agent.userId, kind: "agent" };
+          },
+        });
+      `,
+      errors: [
+        {
+          message:
+            "The MCP registry's `principal` hook throws a plain error here, which the registry takes for the server's own failure (its token store down, say): " +
+            "the call is answered `INTERNAL` (500 over HTTP), so the agent is never told its token is refused, and may keep sending it. " +
+            'To refuse the token, `throw new QuickdrawError("UNAUTHENTICATED", ...)`; to let the caller in anonymously, return `null`.',
+        },
+      ],
+    },
+    {
+      name: "a principal hook declared in this file and given through an options const to a namespace's createMcpRegistry, and a method",
+      filename: MCP,
+      code: `
+        import * as mcp from "@fitzzero/quickdraw-core/server/mcp";
+        function principal(request) {
+          if (request.transport === "http" && request.token === null) throw new TypeError("No token");
+          return verifyAgent(request.token);
+        }
+        const options = { services, dispatcher, principal };
+        export const registry = mcp.createMcpRegistry(options);
+        export const readers = createMcpRegistry({
+          services,
+          dispatcher,
+          principal(request) {
+            if (!request.token) throw Error("No token");
+            return verifyAgent(request.token);
+          },
+        });
+      `,
+      errors: [{ messageId: "principal" }, { messageId: "principal" }],
     },
   ],
 });

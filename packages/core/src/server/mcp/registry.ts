@@ -25,6 +25,7 @@ import {
   failure,
   fromDispatch,
   openSession,
+  principalHookOf,
   sessionRequest,
   settle,
   type McpSession,
@@ -68,7 +69,11 @@ export interface McpRegistryOptions<
    * failure (its token store down, say), as it is from `authenticate` on a
    * socket or over HTTP: the call fails with `INTERNAL` (500 over HTTP),
    * logged as an error, so an agent is never told that a token the hook
-   * could not check is refused. Without it every call is anonymous. An HTTP
+   * could not check is refused. So never throw a plain `Error` for a bad
+   * token: in development the registry warns once when the hook throws
+   * anything but a `QuickdrawError` (`[quickdraw:mcp-principal-threw]`), and
+   * lint's `no-plain-error-refusal` reports one thrown in a hook written
+   * where the registry is made. Without it every call is anonymous. An HTTP
    * request's queries share the lane of its bearer token: a hook that
    * authenticates by anything else (a cookie, an API key header) must refuse
    * a request whose bearer token it does not verify, or a caller makes a
@@ -263,11 +268,13 @@ function resolveRegistry(options: McpRegistryOptions<readonly AnyService[]>): Re
     })),
     fail,
   );
+  const logger = options.logger ?? consoleLogger;
   return {
     dispatcher: options.dispatcher,
-    principal: options.principal,
+    // Warns once per registry, in development, when the hook throws anything but a QuickdrawError.
+    principal: principalHookOf(options.principal, logger),
     context: options.context as SessionSettings["context"],
-    logger: options.logger ?? consoleLogger,
+    logger,
     entries: new Map(entries.map((entry) => [entry.tool.name, entry])),
     methods: new Map(methodTools.map((tool) => [methodKey(tool.service, tool.method), tool])),
     binders,

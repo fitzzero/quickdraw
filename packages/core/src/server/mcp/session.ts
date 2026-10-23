@@ -11,7 +11,9 @@
 // fails the call `UNAUTHENTICATED`; anything else it throws is the app's
 // failure (its token store down, say), logged at error and failing the call
 // `INTERNAL`, as the socket and HTTP transports answer an `authenticate`
-// that throws it.
+// that throws it. In development a hook that throws anything but a
+// `QuickdrawError` is warned about once per registry (`mcp-principal-threw`),
+// as `authenticate` is (`authenticate-threw`).
 
 import type { Logger } from "../../contract/logger";
 import { INTERNAL_MESSAGE, QuickdrawError } from "../../protocol/errors";
@@ -19,7 +21,13 @@ import { callerGrantsOf, lazyMembers, withCallerGrants, type CallOptions } from 
 import { toQuickdrawError } from "../pipeline/errors";
 import { describeError } from "../pipeline/metrics";
 import type { DispatchRequest, DispatchResult } from "../pipeline/request";
-import { isForbiddenCredential, isPrincipal, isRefusal, toPrincipal } from "../transports/auth";
+import {
+  isForbiddenCredential,
+  isPrincipal,
+  isRefusal,
+  toPrincipal,
+  warnPlainThrows,
+} from "../transports/auth";
 import type { McpContext, Principal } from "../types";
 import { laneOf } from "./lanes";
 import type { McpCallOptions, McpCallResult, McpRequest } from "./types";
@@ -46,6 +54,31 @@ export interface SessionSettings {
 }
 
 const CATEGORY = "quickdraw.mcp";
+
+/**
+ * The registry's `principal` hook as the bridge calls it: `hook`, warning
+ * once per registry while `NODE_ENV` is not `"production"`, never strict
+ * (`mcp-principal-threw`), when it throws anything but a `QuickdrawError`,
+ * which {@link principalOf} answers `INTERNAL`, so an agent whose token it
+ * refused that way is told the server failed instead. A principal of the
+ * wrong shape is not warned about: the hook returned it, it did not throw.
+ */
+export function principalHookOf(
+  hook: PrincipalHook | undefined,
+  logger: Logger,
+): PrincipalHook | undefined {
+  if (hook === undefined) {
+    return undefined;
+  }
+  return warnPlainThrows(hook, logger, (thrown) => ({
+    kind: "mcp-principal-threw",
+    message:
+      `the MCP registry's principal hook threw something other than a QuickdrawError (${thrown}), which the bridge takes for the server's own failure, as when its token store is down: ` +
+      "the call is answered INTERNAL (500 over HTTP), so the agent is never told its token is refused, and may keep sending it. " +
+      'To refuse the token, throw new QuickdrawError("UNAUTHENTICATED", ...), as bearerAuth does, or return null to let the caller in anonymously',
+    meta: { thrown },
+  }));
+}
 
 /**
  * The principal the registry's `principal` hook maps `request` to or, when

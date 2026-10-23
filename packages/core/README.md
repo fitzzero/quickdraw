@@ -1597,7 +1597,11 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   answered `INTERNAL` (500 over HTTP) and logged as an error, so an agent
   is never told that a token the hook could not check is refused. A hook
   that refuses with a plain `Error` therefore never tells the agent its
-  token is bad; `bearerAuth` refuses with a `QuickdrawError`.
+  token is bad: in development the registry warns once when its hook
+  throws anything but a `QuickdrawError`
+  (`[quickdraw:mcp-principal-threw]`), and lint's `no-plain-error-refusal`
+  reports one thrown in a hook written where the registry is made.
+  `bearerAuth` refuses with a `QuickdrawError`.
 
 `bind` fills chosen arguments from who is calling instead of from the agent,
 so an agent bound to one project cannot name another in its calls. Here an
@@ -4215,11 +4219,12 @@ What it does with them:
 
 While `NODE_ENV` is not `"production"`, a running app warns about the slow
 and untracked patterns lint cannot see, as they happen. Every warning has
-one format and names the method call it happened in (two exceptions:
+one format and names the method call it happened in (except for three:
 `untracked-access-model` is checked as the server starts and logged as an
 error under `category: "quickdraw.access"`, in every environment, at each
-start, and `authenticate-threw` comes from a handshake or an HTTP request,
-before any call):
+start, and `authenticate-threw` and `mcp-principal-threw` come from a
+handshake, an HTTP request or an MCP tool call's session, before any
+method's call):
 
 ```text
 [quickdraw:n-plus-one] taskService.board: task.findUnique by id ran 10 times in one call, once per item (N+1); ...
@@ -4241,6 +4246,7 @@ before any call):
 | `shared-principal`         | the handler of a `share: "all"` run (an app's, not a kit's) read `ctx.principal`, `ctx.services`, `ctx.mcp` or `ctx.access`: the run has the first caller's, and every caller gets its result                             |
 | `channel-without-requires` | a channel's contract declares no `requires` and its service no `access`, so every signed-in user may send it; raised when the server is made                                                                              |
 | `authenticate-threw`       | the server's `authenticate` threw anything but a `QuickdrawError`, which both transports take for the server's failure (`INTERNAL`), so a refusal made that way never signs a client out; once per server                 |
+| `mcp-principal-threw`      | an MCP registry's `principal` hook threw anything but a `QuickdrawError`, which the bridge answers `INTERNAL`, so an agent whose token it refused that way is told the server failed; once per registry                   |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked

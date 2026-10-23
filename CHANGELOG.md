@@ -472,6 +472,19 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   to refuse a token should throw `QuickdrawError("UNAUTHENTICATED")`
   instead, as `bearerAuth` does, or the agent is told the server failed
   rather than that its token is bad.
+- **A development warning names an MCP `principal` hook that throws a
+  plain error.** Since the change above, a plain `Error` thrown there for
+  a bad token reads as an outage, and the agent is never told its token is
+  refused. While `NODE_ENV` is not `"production"`, the registry now logs
+  `[quickdraw:mcp-principal-threw]` once (per registry, under
+  `category: "quickdraw.dev"`) when its `principal` hook throws anything
+  but a `QuickdrawError`, naming the fix: throw
+  `QuickdrawError("UNAUTHENTICATED")` to refuse, or return `null` for an
+  anonymous caller. It is a kind of its own beside `authenticate-threw`,
+  for another hook whose caller gets another answer, and like that one it
+  is never thrown, even from a registry over a strict test app's
+  dispatcher. A principal of the wrong shape, or a `QuickdrawError` of any
+  code, is not warned about.
 - **A nested transaction that rolls back sends none of its writes.**
   Prisma 7 runs `tx.$transaction(async (inner) => ...)` inside an
   interactive transaction as a savepoint of it, but `trackPrisma` opened no
@@ -576,13 +589,13 @@ readonly prisma: Tracked<Db>`, a private `#db`, or a constructor's
 - **`no-plain-error-refusal`** reports a plain error thrown to refuse
   credentials: `throw new Error(...)` (or another built-in error, with or
   without `new`) in a function given as `auth.authenticate` to
-  `createServer` (`qd.createServer`) or `createHttpRouter`, or as
-  `loadPrincipal` to `socketAuth`, written there or declared in the same
-  file. A throw inside a nested function, a `try` with a `catch` or a
-  `catch` clause is left alone, and so is an error class of the app's. An
-  `authenticate` imported from another module is not seen; the warning
-  above covers it. A warning in the base config, so an upgrade never
-  breaks lint.
+  `createServer` (`qd.createServer`) or `createHttpRouter`, as
+  `loadPrincipal` to `socketAuth`, or as `principal` to
+  `createMcpRegistry`, written there or declared in the same file. A throw
+  inside a nested function, a `try` with a `catch` or a `catch` clause is
+  left alone, and so is an error class of the app's. A function imported
+  from another module is not seen; the warnings above cover it. A warning
+  in the base config, so an upgrade never breaks lint.
 
 ### Codemod
 
