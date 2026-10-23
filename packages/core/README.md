@@ -948,6 +948,16 @@ tracked client as `db`; the server finds the rest on it.
   `update` that moves a row or changes who may see it reads first, are read
   outside the batch, and rows its earlier statements changed may be missed
   (a development warning names the model and operation).
+- A transaction nested in an interactive one,
+  `tx.$transaction(async (inner) => ...)`, runs as a savepoint of it
+  (Prisma 7) and is tracked the same way: its writes join the transaction
+  around it when the savepoint is released, and are dropped when it rolls
+  back, even when the transaction around it catches the error and commits.
+  Inside a transaction's callback, write through its client (`tx`,
+  `inner`): a write through `db` there, or a `db.$transaction` of its own,
+  runs outside the transaction, on a connection of its own, yet is recorded
+  with it, so when the transaction rolls back its frames are dropped though
+  its rows stay.
 - Write many rows in one statement when every row gets the same data
   (`updateMany`, `createMany`). When each row's data differs (moving tasks
   to different projects, say), write each row by id inside an interactive

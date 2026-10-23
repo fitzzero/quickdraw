@@ -456,6 +456,18 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   anonymous caller. It comes before any call, so a strict test app logs it
   rather than throwing it. A `QuickdrawError` of any code is never warned
   about; `socketAuth` refuses with one.
+- **A nested transaction that rolls back sends none of its writes.**
+  Prisma 7 runs `tx.$transaction(async (inner) => ...)` inside an
+  interactive transaction as a savepoint of it, but `trackPrisma` opened no
+  frame for it: its writes went straight into the outer transaction's, so
+  when the savepoint rolled back and the outer transaction caught the error
+  and committed, subscribers still got the rows it created and the values
+  it set (a real PostgreSQL showed both: a create that never happened, and
+  an update's `after` with a status the database never kept). The
+  transaction client a callback gets now opens a frame of its own for
+  `$transaction`, either form: a nested transaction's writes join the one
+  around it when the savepoint is released, and are dropped when it rolls
+  back. The callback's client is otherwise Prisma's.
 
 ### Testing
 
