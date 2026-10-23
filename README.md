@@ -943,7 +943,9 @@ export async function markStale(before: Date): Promise<number> {
   database cascades. A foreign key a nested write sets on the written row
   (`project: { connect }`, `parent: { disconnect: true }`) is seen: such an
   `update` or `upsert` reads the row's interested columns first, one more
-  statement. Record raw SQL with
+  statement. Before deleting a row, delete or clear through `db` the rows
+  a cascade would take with it (for the admin kit's `adminDelete`, in its
+  `prepare`). Record raw SQL with
   `ctx.touch("task", ids)`, or `{ removed: true }` for deleted rows. A job
   gets the same `touch` from `qd.run`, whose `fn` receives
   `{ touch, log, principal: null }`:
@@ -2544,10 +2546,60 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   unit of work of its own: the reply does not wait for it, its writes flush
   on their own, and a throw is logged, the write standing. Apply an edit to
   what runs in memory (a game's simulation) there, so an edit that rolled
-  back is never applied. Without either hook the kit opens no transaction.
-  Each handler `admin.handlers` returns resolves with its method's output
-  type (`AdminOutputOf<C, M>`), so a wrapper reads the row and returns it
-  with no cast.
+  back is never applied. Without a hook (these two or `prepare`, below) the
+  kit opens no transaction. Each handler `admin.handlers` returns resolves
+  with its method's output type (`AdminOutputOf<C, M>`), so a wrapper reads
+  the row and returns it with no cast.
+- `admin.handlers(contract, { prepare })` runs `prepare(call, ctx, db)`
+  before each `adminCreate`, `adminUpdate` and `adminDelete`, once the
+  caller's access and data were checked, in one transaction with the write
+  and `onWrite` (`db` is the transaction's tracked client; a throw undoes
+  its writes and the write, and fails the call). `call` is
+  `{ method: "adminCreate", data }`, `{ method: "adminUpdate", id, data, before }`
+  or `{ method: "adminDelete", id, before }`: `data` is the caller's, and
+  `before` the row, every field, as `onWrite` hears it. Before a create or
+  an update it may return column values, written over the caller's data:
+  a column the server computes (a hash, a slug, the next ordinal), even one
+  the caller may not write (hidden, not editable, above their level), but
+  never `id`, a timestamp, a relation or a nested write (`VALIDATION`). An
+  anchor column it sets (a parent's id, an anchored collection's scope)
+  needs the method's row level on the row it names, as the caller's data
+  and the read/write kit's `prepare` do (`FORBIDDEN`), so a lowered form
+  never moves a row into a parent its caller cannot reach. Returning
+  nothing, or `undefined` for a key, keeps the caller's data, and what it
+  returns before a delete is ignored. The tracked client never sees
+  what the database deletes or clears with a row (`onDelete: Cascade`,
+  `SetNull`), so those rows stay in the lists and entities open on them;
+  delete or clear them through `db` in `prepare`, and their subscribers are
+  told. `prepare` shares the write's transaction, and so its time limit
+  (Prisma's default is 5 seconds; a client's `transactionOptions` sets
+  another):
+
+<!-- example: apps/api/src/services/kits/admin.ts#prepare -->
+
+```ts
+import { nextOrdinal } from "@fitzzero/quickdraw-core/server";
+import type { PrismaClient } from "@project/db";
+
+export const taskAdmin = admin.handlers(task, {
+  editable: ["projectId", "title", "status"],
+  // runs before each write, in its transaction: `db` is that transaction's tracked client
+  prepare: async (call, _ctx, db: PrismaClient) => {
+    if (call.method === "adminCreate" && call.data.projectId !== undefined) {
+      // written over the caller's data, a read-only column too: the new task goes last
+      return { ordinal: await nextOrdinal(db, "task", { projectId: call.data.projectId }) };
+    }
+    if (call.method === "adminDelete") {
+      // the database deletes the task's label links and clears its subtasks' parent,
+      // unseen: do both here, tracked, so the rows and lists open on them are told
+      await db.taskLabel.deleteMany({ where: { taskId: call.id } });
+      await db.task.updateMany({ where: { parentTaskId: call.id }, data: { parentTaskId: null } });
+    }
+    return undefined;
+  },
+});
+```
+
 - `adminSubscribers({ id })` counts the sockets subscribed to a row per
   access level (`{ id, count, levels, complete }`; behind a Redis adapter
   the counts are this server's and `complete` is `false`), and
@@ -3035,7 +3087,43 @@ export function useMatchLinks(matchId: string, onMove: OnMove): (move: Move) => 
   check on the server whatever a client reports there.
 - Tests: `createLoopbackPeerLink({ ms, jitter, loss })` (from `./testing`)
   links two ends in one process, with a delay and jitter per message and
-  loss on `fast` alone.
+  loss on `fast` alone; its ends take `setLag` too.
+
+A browser test, a bench or a host plays a link over a bad network on its
+real path, direct or relay, with `setLag`:
+
+<!-- example: apps/web/src/components/kits/MatchLinks.tsx#lag -->
+
+```tsx
+// a browser test or a bench plays the match over a bad network, on the links' real paths: each
+// holds every message 150 ms plus up to 40 ms more, each way, and loses 5% of fast ones
+export function playOverBadNetwork(links: readonly PeerLink[]): () => void {
+  for (const link of links) {
+    link.setLag({ ms: 150, jitter: 40, loss: 0.05 });
+  }
+  // rel messages are never lost and keep their order; clock.rtt now reads about 300 ms more
+  return () => {
+    for (const link of links) {
+      // what the lag holds goes on the next task, in order
+      link.setLag(null);
+    }
+  };
+}
+```
+
+- `link.setLag({ ms, jitter, loss })` holds every message of the link,
+  both ways, `ms` plus up to `jitter` milliseconds, and loses a `fast` one
+  with probability `loss`, from 0 to 1: `stats.simulatedLoss` counts the
+  app's, and `dropped` still counts only what the link dropped. `rel`
+  messages are never lost and keep their order; a held one its path
+  refuses as it comes due (the relay's rate spent) goes again a little
+  later, and `send` on `rel` returns false meanwhile. `send` returns true
+  for a message it holds, and `stats.sent` counts it once a path took it.
+  The clock's pings and host mode's messages wait too, so `link.clock.rtt`
+  reads the lagged round trip. A new lag leaves what is held on its time;
+  `setLag(null)` (or all zeros) ends it, and what is held goes on the next
+  task, in order. `link.lag` reads it, and `random` takes a seeded
+  generator, so a run repeats. The server never sees the lag.
 
 ### Host mode
 
@@ -3218,8 +3306,9 @@ export function useArenaHost(arenaId: string): void {
   cluster adapter each node knows each room's host.
 - `defineHost(contract, { channels, streams })` (from `./client`,
   React-free) takes one handler per host-served channel, whose `ctx` is
-  `{ peer: { socketId, userId }, room }` (the user as the server named
-  it), and `streams.<name>.seed(scope)` to compute a newcomer's seed
+  `{ peer: { socketId, userId, link }, room }` (the user as the server
+  named it, and the host's end of the player's link), and
+  `streams.<name>.seed(scope)` to compute a newcomer's seed
   (default: the latest items pushed, as many as the contract's `seed`).
   `serve(connection, { room })` answers the links of the room's players and
   returns a `Host` with `stream(name).push(scope, item)` (checked against
@@ -3230,7 +3319,8 @@ export function useArenaHost(arenaId: string): void {
   (`RATE_LIMITED`). A seed goes whole or not at all: one with an item too
   large for a message of its own is refused (`INTERNAL`), and what the
   relay drops on `rel` is sent again, in order. The host's own
-  `useChannel` and `useStream` for its room reach it in process. One
+  `useChannel` and `useStream` for its room reach it over an in-process
+  link, so the host's own client is one of its `peers` too. One
   connection serves several contracts in a room, one `serve` each, over
   the same links; serving one contract twice in a room throws.
 - `hostOf(connection, room)` and `onHostChange(connection, listener)`
@@ -3247,6 +3337,28 @@ export function useArenaHost(arenaId: string): void {
   A service's `kinds` does not reach its host-served members either: the
   host knows each player's user, not its kind, so any signed-in socket of
   the room can link to it. Guard who joins the room.
+
+Each of a host's `peers` comes with `link`, the host's end of that
+player's link: `link.clock.rtt` is the player's round trip, and
+`link.setLag(...)` lags that player's messages both ways. The host's own
+client is one of them, over its in-process link, so a host can play over
+a link as laggy as its players':
+
+<!-- example: apps/web/src/components/kits/ArenaHost.tsx#fair -->
+
+```tsx
+// the host's own play goes through an in-process link, one of host.peers: lag it to the median
+// player's one-way delay, at most 100 ms, so the host plays over a link as laggy as its players'
+export function matchPlayersLag(host: Host<typeof arena>, self: string | undefined): void {
+  const oneWay = host.peers
+    .filter((peer) => peer.socketId !== self)
+    .map((peer) => peer.link.clock.rtt / 2)
+    .sort((a, b) => a - b);
+  const median = oneWay[Math.floor(oneWay.length / 2)] ?? 0;
+  // call it now and then, as the players' round trips change: what is held keeps its time
+  host.peers.find((peer) => peer.socketId === self)?.link.setLag({ ms: Math.min(100, median) });
+}
+```
 
 ### Auth routes kit
 

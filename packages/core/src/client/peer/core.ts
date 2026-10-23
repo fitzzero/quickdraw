@@ -5,19 +5,24 @@
 // and each side hears the other at least that often: a link that hears
 // nothing for `WATCHDOG_MS` closes as `lost`. `createPeerLink` drives a core
 // from signals and paths (`link.ts`); the loopback double of `./testing`
-// drives two from an in-process pair. Host mode's messages travel beside the
+// drives two from an in-process pair, and host mode's in-process link
+// (`../host/local.ts`) two more. Host mode's messages travel beside the
 // app's, apart from them: `controlOf(link)` sends and hears them, and a
-// link's `send` and `message` event never do.
+// link's `send` and `message` event never do. `setLag` holds every message
+// on its way out and in (`lag.ts`), the pings and host mode's included.
 //
 // React-free.
 
-import type { HostMessage, PeerLabel } from "../../protocol/envelope";
+import type { HostMessage, PeerLabel, PeerMessage } from "../../protocol/envelope";
 import { createClock, type ClockState, type PeerClock } from "./clock";
 import { decodeMessage, encodeMessage, messageBytes } from "./codec";
+import { checkLag, createLagQueue, type LagQueue } from "./lag";
 import type {
   PeerCloseReason,
   PeerLink,
   PeerLinkEvents,
+  PeerLinkLag,
+  PeerLinkLagOptions,
   PeerLinkState,
   PeerLinkStats,
   PeerPath,
@@ -55,6 +60,12 @@ export interface CoreOptions {
   readonly maxMessageBytes: () => number;
   /** This side's clock, in milliseconds. Default `performance.now()`. */
   readonly now?: () => number;
+  /**
+   * False for a link that cannot be lost (in process): it never closes as
+   * `lost`, since its pings run on this side's timers alone, which a hidden
+   * tab throttles. Default true.
+   */
+  readonly watchdog?: boolean;
 }
 
 /** A link, and how its owner drives it. */
@@ -94,9 +105,15 @@ interface Core {
   lastHeard: number;
   pingsLeft: number;
   timer: ReturnType<typeof setTimeout> | undefined;
-  readonly stats: { sent: number; received: number; dropped: number };
+  readonly stats: { sent: number; received: number; dropped: number; simulatedLoss: number };
   /** Who hears host mode's messages (`controlOf`). */
   readonly control: Set<(message: HostMessage, label: PeerLabel) => void>;
+  /** The lag `setLag` set; `null` for none. */
+  lag: PeerLinkLag | null;
+  /** This side's messages on their way out, held for the lag. */
+  readonly outgoing: LagQueue;
+  /** The peer's messages on their way in, held for the lag. */
+  readonly incoming: LagQueue;
 }
 
 /** Calls each listener of `event`; one that throws is reported apart, and the others still run. */
@@ -122,6 +139,8 @@ function finish(core: Core, reason: PeerCloseReason, fromHere: boolean): void {
   core.path = undefined;
   core.closeReason = reason;
   clearTimeout(core.timer);
+  core.outgoing.close();
+  core.incoming.close();
   core.options.hooks.closed(reason, fromHere);
   emit(core, "state", "closed", undefined);
   emit(core, "close", reason);
@@ -137,11 +156,11 @@ function tick(core: Core): void {
   if (core.state !== "open") {
     return;
   }
-  if (core.now() - core.lastHeard > WATCHDOG_MS) {
+  if (core.options.watchdog !== false && core.now() - core.lastHeard > WATCHDOG_MS) {
     finish(core, "lost", true);
     return;
   }
-  core.options.hooks.send("fast", encodeMessage([1, core.now()]));
+  transmit(core, "fast", encodeMessage([1, core.now()]), false);
   core.pingsLeft = Math.max(0, core.pingsLeft - 1);
   core.timer = setTimeout(
     () => {
@@ -164,23 +183,64 @@ function textOf(core: Core, message: Parameters<typeof encodeMessage>[0], what: 
   return text;
 }
 
+/**
+ * Sends one message's text on `label`, on the path at once, or once the lag
+ * held it (which may lose a `fast` one). False when it was dropped: the path
+ * refused it, or a held `rel` message waits for the path. An app message
+ * (`app`) counts in `stats`: `sent` once a path took it, `dropped` for one
+ * dropped, `simulatedLoss` for one the lag lost.
+ */
+function transmit(core: Core, label: PeerLabel, text: string, app: boolean): boolean {
+  const { stats, outgoing } = core;
+  const put = (): boolean => {
+    const sent = core.state === "open" && core.options.hooks.send(label, text);
+    if (app && sent) {
+      stats.sent += 1;
+    }
+    return sent;
+  };
+  if (outgoing.idle) {
+    const sent = put();
+    if (app && !sent) {
+      stats.dropped += 1;
+    }
+    return sent;
+  }
+  if (label === "rel" && outgoing.blocked) {
+    if (app) {
+      stats.dropped += 1;
+    }
+    return false;
+  }
+  const held = outgoing.push(label, () => {
+    const sent = put();
+    // A `rel` message the path refused waits and goes again: not dropped.
+    if (app && !sent && label === "fast") {
+      stats.dropped += 1;
+    }
+    return sent;
+  });
+  if (app && !held) {
+    stats.simulatedLoss += 1;
+  }
+  return true;
+}
+
 function send(core: Core, label: PeerLabel, data: unknown): boolean {
   if (label !== "rel" && label !== "fast") {
     throw new TypeError(`PeerLink.send: label must be "rel" or "fast", not ${String(label)}`);
   }
   const text = textOf(core, [0, data], "PeerLink.send");
-  const sent = core.state === "open" && core.options.hooks.send(label, text);
-  if (sent) {
-    core.stats.sent += 1;
-  } else {
+  if (core.state !== "open") {
     core.stats.dropped += 1;
+    return false;
   }
-  return sent;
+  return transmit(core, label, text, true);
 }
 
-function receive(core: Core, data: unknown, label: PeerLabel): void {
-  const message = core.state === "closed" ? undefined : decodeMessage(data);
-  if (message === undefined) {
+/** A message from the peer, once the lag held it (at once without one). */
+function hear(core: Core, message: PeerMessage, label: PeerLabel): void {
+  if (core.state === "closed") {
     return;
   }
   core.lastHeard = core.now();
@@ -189,7 +249,7 @@ function receive(core: Core, data: unknown, label: PeerLabel): void {
     emit(core, "message", message[1], label);
   } else if (message[0] === 1) {
     if (core.state === "open") {
-      core.options.hooks.send("fast", encodeMessage([2, message[1], core.now()]));
+      transmit(core, "fast", encodeMessage([2, message[1], core.now()]), false);
     }
   } else if (message[0] === 2) {
     core.clock.pong(message[1], message[2], core.now());
@@ -202,6 +262,37 @@ function receive(core: Core, data: unknown, label: PeerLabel): void {
       }
     }
   }
+}
+
+function receive(core: Core, data: unknown, label: PeerLabel): void {
+  const message = core.state === "closed" ? undefined : decodeMessage(data);
+  if (message === undefined) {
+    return;
+  }
+  if (core.incoming.idle) {
+    hear(core, message, label);
+    return;
+  }
+  const held = core.incoming.push(label, () => {
+    hear(core, message, label);
+  });
+  if (!held && message[0] === 0) {
+    core.stats.simulatedLoss += 1;
+  }
+}
+
+function setLag(core: Core, options: PeerLinkLagOptions | null): void {
+  if (options !== null && typeof options !== "object") {
+    throw new TypeError("PeerLink.setLag: pass { ms, jitter, loss }, or null for none");
+  }
+  const lag = options === null ? null : checkLag(options, "PeerLink.setLag");
+  if (core.state === "closed") {
+    return;
+  }
+  core.lag = lag === null || (lag.ms === 0 && lag.jitter === 0 && lag.loss === 0) ? null : lag;
+  const random = options?.random ?? Math.random;
+  core.outgoing.set(core.lag, random);
+  core.incoming.set(core.lag, random);
 }
 
 function carry(core: Core, path: PeerPath): void {
@@ -273,6 +364,12 @@ function linkOf(core: Core): PeerLink {
     get stats(): PeerLinkStats {
       return Object.freeze({ ...core.stats });
     },
+    setLag: (options: PeerLinkLagOptions | null) => {
+      setLag(core, options);
+    },
+    get lag() {
+      return core.lag;
+    },
     close: () => {
       finish(core, "closed", true);
     },
@@ -301,7 +398,7 @@ export function controlOf(link: PeerLink): LinkControl | undefined {
   }
   return {
     send: (label, message) =>
-      core.state === "open" && core.options.hooks.send(label, textOf(core, message, "host mode")),
+      core.state === "open" && transmit(core, label, textOf(core, message, "host mode"), false),
     on(listener) {
       if (core.state === "closed") {
         return () => undefined;
@@ -328,8 +425,11 @@ export function createLinkCore(options: CoreOptions): LinkCore {
     lastHeard: 0,
     pingsLeft: 0,
     timer: undefined,
-    stats: { sent: 0, received: 0, dropped: 0 },
+    stats: { sent: 0, received: 0, dropped: 0, simulatedLoss: 0 },
     control: new Set(),
+    lag: null,
+    outgoing: createLagQueue(null),
+    incoming: createLagQueue(null),
   };
   const link = linkOf(core);
   CORES.set(link, core);

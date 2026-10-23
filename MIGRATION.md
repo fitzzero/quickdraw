@@ -1041,6 +1041,19 @@ export const taskService = qd.defineService(task, {
 });
 ```
 
+4.x's admin writes wrote whatever the caller sent: a column such as a
+content hash was listed in the admin `schema` for the screen to send, or an
+override of `adminCreate` or `adminUpdate` set it, and an override of
+`adminDelete` deleted a row's dependents first. 5.0's writes take only the
+entity's editable fields, and the kit is not subclassed: compute such a
+column in `admin.handlers(contract, { prepare })`, which runs before each
+write in its transaction and returns columns written over the caller's
+data, hidden and read-only ones included, so the column need not be an
+editable field of the entity. Delete or clear a row's dependents there
+too, through its `db`, before `adminDelete` (the README's admin kit section
+shows both): the database's own cascade is never seen, so the lists holding
+those rows would not be told.
+
 ### `ServiceRegistry` and `createQuickdrawServer` become `qd.createServer`
 
 `qd.createServer({ app, services, db, auth })` attaches to the app's own

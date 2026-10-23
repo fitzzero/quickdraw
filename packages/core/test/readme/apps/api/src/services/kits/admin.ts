@@ -21,3 +21,26 @@ export const taskService = qd.defineService(task, {
   },
 });
 // #endregion
+
+// #region prepare
+import { nextOrdinal } from "@fitzzero/quickdraw-core/server";
+import type { PrismaClient } from "@project/db";
+
+export const taskAdmin = admin.handlers(task, {
+  editable: ["projectId", "title", "status"],
+  // runs before each write, in its transaction: `db` is that transaction's tracked client
+  prepare: async (call, _ctx, db: PrismaClient) => {
+    if (call.method === "adminCreate" && call.data.projectId !== undefined) {
+      // written over the caller's data, a read-only column too: the new task goes last
+      return { ordinal: await nextOrdinal(db, "task", { projectId: call.data.projectId }) };
+    }
+    if (call.method === "adminDelete") {
+      // the database deletes the task's label links and clears its subtasks' parent,
+      // unseen: do both here, tracked, so the rows and lists open on them are told
+      await db.taskLabel.deleteMany({ where: { taskId: call.id } });
+      await db.task.updateMany({ where: { parentTaskId: call.id }, data: { parentTaskId: null } });
+    }
+    return undefined;
+  },
+});
+// #endregion

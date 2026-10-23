@@ -267,7 +267,8 @@ export interface ColumnValueIssue {
   readonly message: string;
 }
 
-function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
+/** A plain object (no class instance, no array): what a write's data must be, so no key hides on a prototype. */
+export function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }

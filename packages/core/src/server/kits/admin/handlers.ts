@@ -1,6 +1,6 @@
 // `admin.handlers(contract, { access?, displayName?, hiddenFields?,
-// editable?, fieldOverrides?, rowless?, grants?, onWrite?, onCommitted? })`
-// (RFC 0003 section 12.4):
+// editable?, fieldOverrides?, rowless?, grants?, prepare?, onWrite?,
+// onCommitted? })` (RFC 0003 section 12.4):
 // the admin kit's server half.
 // It finds the methods `admin.contract` made in the contract and returns an
 // implementation of each, to spread into `defineService`'s `methods`:
@@ -41,10 +41,13 @@
 // never on a call, and so does `grants: true` on an entity without a grants
 // field.
 //
-// `onWrite` runs in one transaction with each write, before it commits;
-// `onCommitted` (finding F6.5) once it has, in a detached unit of work, a
-// throw logged: what must wait until an edit is durable (a game applying an
-// edited definition) goes there (`rows.ts`).
+// `prepare` runs in one transaction with each write, before it: it may add
+// column values the write sets, and its tracked writes record what a
+// database cascade would delete unseen. `onWrite` runs in the same
+// transaction, after the write, before it commits; `onCommitted` (finding
+// F6.5) once it has, in a detached unit of work, a throw logged: what must
+// wait until an edit is durable (a game applying an edited definition) goes
+// there (`rows.ts`).
 
 import type { AnyContract } from "../../../contract/defineContract";
 import { admin as contractHalf, adminSpecOf, type AdminSpec } from "../../../contract/kits/admin";
@@ -69,6 +72,7 @@ import type {
   AdminImplementations,
   AdminOnCommitted,
   AdminOnWrite,
+  AdminPrepare,
 } from "./types";
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -83,6 +87,7 @@ const OPTION_KEYS: readonly string[] = [
   "fieldOverrides",
   "rowless",
   "grants",
+  "prepare",
   "onWrite",
   "onCommitted",
 ];
@@ -129,7 +134,7 @@ function checkOptions(options: unknown): UnknownRecord {
   }
   if (!isRecord(options)) {
     fail(
-      "options must be { access?, displayName?, hiddenFields?, editable?, fieldOverrides?, rowless?, grants?, onWrite?, onCommitted? }",
+      "options must be { access?, displayName?, hiddenFields?, editable?, fieldOverrides?, rowless?, grants?, prepare?, onWrite?, onCommitted? }",
     );
   }
   const unknownKey = Object.keys(options).find((key) => !OPTION_KEYS.includes(key));
@@ -288,7 +293,10 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty,
   const fieldsFor = fieldsByColumn(contract, kit, checked);
   // Without a grants column now, so an option that names no field still fails here.
   const fields = fieldsFor(undefined);
-  const { onWrite, onCommitted } = checked;
+  const { prepare, onWrite, onCommitted } = checked;
+  if (prepare !== undefined && typeof prepare !== "function") {
+    fail("prepare must be a function of (call, ctx, db)");
+  }
   if (onWrite !== undefined && typeof onWrite !== "function") {
     fail("onWrite must be a function of (write, ctx, db)");
   }
@@ -296,6 +304,7 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty,
     fail("onCommitted must be a function of (write, ctx)");
   }
   const hooks = {
+    prepare: prepare as AdminPrepare | undefined,
     onWrite: onWrite as AdminOnWrite | undefined,
     onCommitted: onCommitted as AdminOnCommitted | undefined,
   };
@@ -322,9 +331,10 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty,
 
 /**
  * The admin kit: `admin.handlers(contract, { access?, displayName?,
- * hiddenFields?, editable?, fieldOverrides?, rowless?, grants? })` implements the
- * methods `admin.contract` made in `contract`, each open to a service-wide
- * `Admin` grant unless `access` gives another form. `admin.contract` is here
- * too, for server code; a shared package imports it from the root export.
+ * hiddenFields?, editable?, fieldOverrides?, rowless?, grants?, prepare?,
+ * onWrite?, onCommitted? })` implements the methods `admin.contract` made in
+ * `contract`, each open to a service-wide `Admin` grant unless `access` gives
+ * another form. `admin.contract` is here too, for server code; a shared
+ * package imports it from the root export.
  */
 export const admin = Object.freeze({ contract: contractHalf.contract, handlers });

@@ -8,7 +8,8 @@
 // keep closing unopened): a game that sends input each frame makes no link
 // a frame when the server refuses them. When the host is this
 // connection's own socket and it serves the room (`defineHost(...).serve`),
-// the way is in process: the host hears this client as one of its peers.
+// the way is an in-process link (`local.ts`): the host hears this client as
+// one of its peers, over a link like theirs.
 //
 // A channel's message sent while no way is open is dropped, as a channel
 // message is when the connection is backed up. A feed subscribes (`[4]`)
@@ -18,13 +19,16 @@
 //
 // React-free.
 
-import type { HostMessage, PeerLabel } from "../../protocol/envelope";
+import type { HostMessage } from "../../protocol/envelope";
 import type { WireError } from "../../protocol/errors";
+import { MAX_PEER_MESSAGE_BYTES } from "../../protocol/version";
 import type { QuickdrawConnection } from "../connection";
 import { controlOf } from "../peer/core";
 import { createPeerLink } from "../peer/link";
+import type { PeerLink } from "../peer/types";
 import { hostsOf, type HostDirectory } from "./hosts";
-import type { AttachedPeer, HostPeer, HostSend } from "./runtime";
+import { createLocalLink } from "./local";
+import type { HostSend } from "./runtime";
 
 /** One feed of a host-served stream, as the stream store holds it. */
 export interface HostFeed {
@@ -47,8 +51,11 @@ export interface HostLinks {
   subscribe(room: string, feed: HostFeed): () => void;
 }
 
-/** How a room's host served by this connection takes this client as a peer, in process. */
-export type LocalHost = (peer: HostPeer, send: HostSend) => AttachedPeer;
+/**
+ * How a room's host served by this connection takes this client as a peer:
+ * the host's end of their in-process link, open.
+ */
+export type LocalHost = (link: PeerLink) => void;
 
 /**
  * After a link to a room's host closed, the next to that host waits this
@@ -142,35 +149,11 @@ function disconnect(state: RoomState): void {
   }
 }
 
-/** The in-process way to a host this connection serves. */
-function connectLocal(links: LinksState, state: RoomState, local: LocalHost, self: string): void {
-  const userId = links.connection.getState().hello?.userId ?? "";
-  const attached = local({ socketId: self, userId }, (_label: PeerLabel, message: HostMessage) => {
-    onMessage(state, message);
-    return true;
-  });
-  state.pending = () => {
-    attached.detach();
-  };
-  opened(state, {
-    send: (_label, message) => {
-      attached.receive(message);
-      return true;
-    },
-    close: () => {
-      attached.detach();
-    },
-  });
-}
-
-function connectLink(links: LinksState, state: RoomState, host: string): void {
-  let link;
-  try {
-    link = createPeerLink(links.connection, { room: state.room, to: host, offerer: true });
-  } catch {
-    // A link the app opened itself to the host, in this room: host mode leaves it alone.
-    return;
-  }
+/**
+ * Takes `link` to the room's host at `host` as the room's way: open, it
+ * subscribes the feeds; closed, the next link waits.
+ */
+function takeLink(links: LinksState, state: RoomState, host: string, link: PeerLink): void {
   const control = controlOf(link);
   if (control === undefined) {
     return;
@@ -185,17 +168,46 @@ function connectLink(links: LinksState, state: RoomState, host: string): void {
   control.on((message) => {
     onMessage(state, message);
   });
-  link.on("open", () => {
+  const open = (): void => {
     if (state.pending === way.close) {
       opened(state, way);
     }
-  });
+  };
+  link.on("open", open);
   link.on("close", () => {
     if (state.pending === way.close) {
       disconnect(state);
       retryLater(links, state, host);
     }
   });
+  if (link.state === "open") {
+    open();
+  }
+}
+
+/** The in-process link to a host this connection serves, open at once. */
+function connectLocal(links: LinksState, state: RoomState, local: LocalHost, self: string): void {
+  const { connection } = links;
+  const userId = connection.getState().hello?.userId ?? "";
+  const [near, far] = createLocalLink(
+    state.room,
+    self,
+    userId,
+    () => connection.getState().hello?.limits.peers?.maxMessageBytes ?? MAX_PEER_MESSAGE_BYTES,
+  );
+  local(far);
+  takeLink(links, state, self, near);
+}
+
+function connectLink(links: LinksState, state: RoomState, host: string): void {
+  let link;
+  try {
+    link = createPeerLink(links.connection, { room: state.room, to: host, offerer: true });
+  } catch {
+    // A link the app opened itself to the host, in this room: host mode leaves it alone.
+    return;
+  }
+  takeLink(links, state, host, link);
 }
 
 /**
@@ -303,7 +315,7 @@ function createLinks(connection: QuickdrawConnection): LinksState & HostLinks {
       state.feeds.set(key, entry);
       const { way } = state;
       connect(links, state);
-      // A way `connect` opened (the in-process one) subscribed every feed already.
+      // A way `connect` opened (the in-process link) subscribed every feed already.
       if (way !== undefined && state.way === way) {
         subscribeOn(way, feed);
       }
