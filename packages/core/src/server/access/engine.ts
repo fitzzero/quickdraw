@@ -31,6 +31,7 @@ import { bindPolicies } from "./bindings";
 import { createAccessCache } from "./cache";
 import {
   createChangeSink,
+  createWriteEvictor,
   forgetAccess,
   type AccessChangeListener,
   type Forgotten,
@@ -42,10 +43,15 @@ export interface AccessOptions {
   /**
    * Keep the database reads of access policies (row columns and membership
    * levels) across requests for this long, in milliseconds. Tracked writes to
-   * the columns and models the policies read evict what they change; writes
-   * the tracked client cannot see (raw SQL without `ctx.touch`, database
-   * cascades, other processes) are seen only once the time passes. Default:
-   * off, every request reads afresh (lookups are always memoized within one).
+   * the columns and models the policies read evict what they change as soon
+   * as the write is durable (a transaction's at its commit, a rolled-back
+   * one never), so a check later in the same call sees it, as does any other
+   * request in this process; the other nodes of a cluster evict when the
+   * write's flush broadcasts its access change, after the call. Writes the
+   * tracked client cannot see (raw SQL without `ctx.touch`, database
+   * cascades, processes outside the cluster) are seen only once the time
+   * passes. Default: off, every request reads afresh (lookups are always
+   * memoized within one).
    */
   readonly cacheMs?: number;
 }
@@ -80,6 +86,10 @@ export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
     storage: options.storage,
     cache: cacheMs === undefined ? undefined : createAccessCache({ ttlMs: cacheMs }),
   };
+  // With a cache, each tracked write evicts what it changes once it is durable, not only at its
+  // flush (`changes.ts`); `close` stops that, for a client that outlives this dispatcher.
+  const evictor = createWriteEvictor(bindings, state.cache);
+  const stop = evictor === undefined ? undefined : options.storage?.onWrite(evictor);
   const listeners = new Set<AccessChangeListener>();
   return Object.freeze({
     ...createAccessApi(state),
@@ -97,5 +107,8 @@ export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
     rows: createRowAccess(state),
     sink: createChangeSink(bindings, state.cache, listeners, options.logger),
     forget: (forgotten: Forgotten) => forgetAccess(bindings, state.cache, forgotten),
+    close: () => {
+      stop?.();
+    },
   });
 }

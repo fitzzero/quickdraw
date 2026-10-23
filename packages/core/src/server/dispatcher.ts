@@ -319,9 +319,13 @@ export function createDispatcher<const S extends readonly AnyService[]>(
   // `createServer` attaches its Socket.IO server to the dispatcher's live data.
   registerLive(dispatcher, settings.live);
   LOOPS.set(dispatcher, settings.loops);
-  if (typeof detach === "function") {
-    DETACHES.set(dispatcher, detach);
-  }
+  DETACHES.set(dispatcher, () => {
+    // The access cache stops hearing the client's writes, which other dispatchers go on making.
+    settings.policies.close();
+    if (typeof detach === "function") {
+      detach();
+    }
+  });
   return dispatcher;
 }
 
@@ -340,7 +344,9 @@ export function loopsOf(dispatcher: object): PipelineSettings["loops"] | undefin
 /**
  * Detaches `dispatcher` from its tracked database client: ambient writes
  * and the warnings outside calls go back to the dispatcher attached before
- * it (or nowhere). A server's `close()` calls it once the server stopped.
+ * it (or nowhere), and its access cache (`cacheMs`) stops hearing the
+ * client's writes (`PolicyEngine.close`). A server's `close()` calls it once
+ * the server stopped.
  */
 export function detachDispatcher(dispatcher: object): void {
   DETACHES.get(dispatcher)?.();

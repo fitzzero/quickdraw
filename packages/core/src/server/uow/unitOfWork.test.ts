@@ -432,4 +432,35 @@ describe("statement counts and write listeners", () => {
     tracker.record([write("t5")]);
     expect(heard).toEqual(["t1", "t2", "t4"]);
   });
+
+  it("log a listener that throws, and still record each write and tell the other listeners", async () => {
+    // The access cache's write evictor listens here, inside the tracked client's write.
+    const tracker = createWriteTracker({ development: false });
+    const errors: unknown[] = [];
+    const logger: Logger = {
+      ...captureLogger(),
+      error: (message, meta) => {
+        errors.push({ message, meta });
+      },
+    };
+    tracker.unitOfWork.attach?.(createRecordingSink(), logger);
+    tracker.onWrite(() => {
+      throw new Error("listener broke");
+    });
+    const heard: string[] = [];
+    tracker.onWrite((heardWrite) => heard.push(heardWrite.id));
+    const sink = createRecordingSink();
+    const unit = tracker.unitOfWork.begin(scope(sink));
+    await unit.run(() => {
+      tracker.record([write("t1"), write("t2")]);
+    });
+    await unit.flush();
+    expect(heard).toEqual(["t1", "t2"]);
+    expect(sink.writes().map((flushed) => flushed.id)).toEqual(["t1", "t2"]);
+    const logged = { category: "quickdraw.writes", error: "listener broke" };
+    expect(errors).toEqual([
+      { message: "An onWrite listener threw", meta: logged },
+      { message: "An onWrite listener threw", meta: logged },
+    ]);
+  });
 });

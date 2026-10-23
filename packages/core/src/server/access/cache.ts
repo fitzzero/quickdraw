@@ -11,10 +11,11 @@
 //   even concurrent ones, share one query. It lives for one engine call: an
 //   authorization, or one `levelsFor` / `accessWhere` of the dispatcher.
 // - The cross-request cache holds settled values until `cacheMs` passes or a
-//   tracked write evicts them (`changes.ts`). Only the database reads are
-//   kept (row columns and membership levels), never a level computed from
-//   them, so a change to a parent row needs no cascade: the child's level is
-//   recomputed from the parent's freshly read values.
+//   tracked write evicts them: once the write is durable, and again at its
+//   unit's flush (`changes.ts`). Only the database reads are kept (row
+//   columns and membership levels), never a level computed from them, so a
+//   change to a parent row needs no cascade: the child's level is recomputed
+//   from the parent's freshly read values.
 // - A lookup is kept across requests only when no eviction of its namespace
 //   happened while it ran (the namespace's generation is unchanged), and
 //   only when it did not read inside a transaction, whose uncommitted rows

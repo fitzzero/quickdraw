@@ -247,8 +247,11 @@ compile time.
   job, alone or in `anyOf`.
 - Lookups are batched per call: checking 60 ids costs what one does.
   `createServer({ access: { cacheMs } })` keeps them across calls; tracked
-  writes to the columns and tables a policy reads evict them. A lookup
-  inside a transaction always reads the database.
+  writes to the columns and tables a policy reads evict them as soon as the
+  write is durable (a transaction's at its commit), so a check later in the
+  same call (`ctx.access`, a `ctx.services` call) sees the call's own write.
+  Other nodes of a cluster evict when the write's flush broadcasts it. A
+  lookup inside a transaction always reads the database.
 - Membership and junction tables need an `id` column
   (`id String @id @default(cuid())`, the pair unique by `@@unique`), never a
   composite `@@id`: the write tracker keys rows by `id`, so such a table is
