@@ -191,6 +191,43 @@ function answerRequests(hub: Hub, records: PresenceRecords): void {
   );
 }
 
+/**
+ * Asks the other nodes how many of their sockets are in a stream room; an
+ * answer that does not arrive within `cluster.timeoutMs` counts as 0, and is
+ * warned at most once every 10 minutes by the clock `now`.
+ */
+function createCount(hub: Hub, now: () => number): (room: string) => Promise<number> {
+  let warnedAt: number | undefined;
+  const timedOut = (): void => {
+    const at = now();
+    if (warnedAt === undefined || at - warnedAt >= PRESENCE_WARN_EVERY_MS) {
+      warnedAt = at;
+      hub.logger.warn(
+        "A node did not answer a stream's subscriber count within cluster.timeoutMs (a node of an earlier quickdraw version during a rolling deploy, a node that stopped answering, or an adapter that does not answer server-side events): the sockets of the nodes whose answers did not arrive counted as 0",
+        { category: "quickdraw.presence" },
+      );
+    }
+  };
+  return async (room) => {
+    const { io } = hub;
+    if (io === undefined) {
+      return 0;
+    }
+    const timeoutMs = hub.cluster?.timeoutMs ?? DEFAULT_CLUSTER_TIMEOUT_MS;
+    try {
+      return countOf(
+        await within(
+          io.serverSideEmitWithAck(PRESENCE_EVENT, tagged(io, { sockets: room })),
+          timeoutMs,
+        ),
+      );
+    } catch (error) {
+      timedOut();
+      return countOf(answersOf(error));
+    }
+  };
+}
+
 /** Creates the presence requests of the dispatcher whose hub this is; `now` is the clock the fallback window reads. */
 export function createPresenceRequests(
   hub: Hub,
@@ -214,38 +251,7 @@ export function createPresenceRequests(
     }
   };
 
-  let countWarnedAt: number | undefined;
-  /** Warns that a count's answers did not all arrive in time, at most once every 10 minutes. */
-  const countTimedOut = (): void => {
-    const at = now();
-    if (countWarnedAt === undefined || at - countWarnedAt >= PRESENCE_WARN_EVERY_MS) {
-      countWarnedAt = at;
-      hub.logger.warn(
-        "A node did not answer a stream's subscriber count within cluster.timeoutMs (a node of an earlier quickdraw version during a rolling deploy, a node that stopped answering, or an adapter that does not answer server-side events): the sockets of the nodes whose answers did not arrive counted as 0",
-        { category: "quickdraw.presence" },
-      );
-    }
-  };
-
-  /** Asks the other nodes how many of their sockets are in stream room `room`. */
-  const count = async (room: string): Promise<number> => {
-    const { io } = hub;
-    if (io === undefined) {
-      return 0;
-    }
-    const timeoutMs = hub.cluster?.timeoutMs ?? DEFAULT_CLUSTER_TIMEOUT_MS;
-    try {
-      return countOf(
-        await within(
-          io.serverSideEmitWithAck(PRESENCE_EVENT, tagged(io, { sockets: room })),
-          timeoutMs,
-        ),
-      );
-    } catch (error) {
-      countTimedOut();
-      return countOf(answersOf(error));
-    }
-  };
+  const count = createCount(hub, now);
 
   /** Asks the other nodes, or reads their sockets during a fallback window or once nobody answered. */
   const ask = async <T>(

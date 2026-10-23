@@ -36,18 +36,20 @@ export function collectionTopic(collection: string, scope: string): string {
   return `${collection}:${scope}`;
 }
 
-/** The prefix every room {@link streamRoom} names starts with: `qd:s:`. */
-export const STREAM_ROOM_PREFIX = "qd:s:";
-
 /**
  * The room of a stream's feed (RFC 0003 section 12.5):
  * `qd:s:{service}:{stream}:{scope}` for one scope of a scoped stream, and
  * `qd:s:{service}:{stream}` for a global stream. Stream names hold no colon.
  */
 export function streamRoom(service: string, stream: string, scope?: string): string {
-  const room = `${STREAM_ROOM_PREFIX}${service}:${stream}`;
-  return scope === undefined ? room : `${room}:${scope}`;
+  return scope === undefined ? `qd:s:${service}:${stream}` : `qd:s:${service}:${stream}:${scope}`;
 }
+
+/**
+ * The prefix every room {@link streamRoom} names starts with. The builder
+ * spells it out, since docs/protocol-v5.md is generated from its template.
+ */
+export const STREAM_ROOM_PREFIX = "qd:s:";
 
 /** The room every authenticated socket of a user joins: `user:{userId}`, as in 4.1. */
 export function userRoom(userId: string): string {
