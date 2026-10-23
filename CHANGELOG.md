@@ -211,6 +211,30 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
 
 ### Server
 
+- **Behavior change: a count across nodes keeps the answers that came
+  when one node is silent, and presence no longer falls back to
+  `fetchSockets`.** Socket.IO hands a request's answers over together.
+  While one node did not answer, `qd.stream(...).subscribers()` and
+  presence (`users`, `count`, `isOnline`) lost every other node's answer
+  too: a count fell to this node's own sockets, and presence read every
+  node's sockets for 30 s. That read threw after the adapter's timeout
+  while a node stayed frozen; a frozen node no longer makes presence
+  throw. Both now wait for the adapter's own request timeout (the Redis
+  adapter's `requestsTimeout`) plus 250 ms, or `cluster.timeoutMs` for an
+  adapter that exposes none, and count the answers that came. They warn
+  how many nodes answered, at most once every 10 minutes. quickdraw never
+  changes an adapter the app built: with the Redis adapter's default
+  `requestsTimeout` of 5,000 ms, a read in a degraded cluster takes about
+  5.25 s instead of 1 s, so lower it for faster answers. During a rolling
+  deploy from 5.1.0 or earlier, whose nodes never answer a presence
+  request, the users on those nodes are missing from presence while old
+  and new nodes overlap.
+- **`setupRedisAdapter` gives the adapter it builds the server's
+  `cluster.timeoutMs` as its `requestsTimeout`** (1,000 ms by default,
+  where the Redis adapter's own default is 5,000), so that node's presence
+  reads and counts answer that soon in a degraded cluster. Its new
+  `requestsTimeout` option sets another value. The value also bounds the
+  app's own `fetchSockets` through that adapter.
 - **A session's token expires with its session, never before.**
   `issueSession` signed the token's `exp` as a span from the current whole
   second, so the token ended up to 999 ms before its session, and a 1 s

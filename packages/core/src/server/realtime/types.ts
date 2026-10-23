@@ -308,10 +308,13 @@ export interface StreamHandle<C extends AnyContract, K extends StreamName<C>> {
    * included: a job skips the work nobody watches. These are the sockets in
    * the feed's room, the ones a push reaches: a subscribe counts from when it
    * joins the feed, once it is authorized. Behind a cluster adapter the
-   * other nodes answer one request with a count each: an answer that does
-   * not arrive within `cluster.timeoutMs` counts as 0, and so does a node
-   * of an earlier version, which does not know the request. A host-served stream (`serve: "host"`) has no feed on
-   * the server, so, as for `push`, its handle refuses this with a
+   * other nodes answer one request with a count each: a node that does not
+   * answer in time counts as 0, and so does a node of an earlier version,
+   * which does not know the request, while the other nodes' answers count.
+   * "In time" is the adapter's own request timeout (`requestsTimeout`, which
+   * `setupRedisAdapter` sets to `cluster.timeoutMs`) when it has one, else
+   * `cluster.timeoutMs`. A host-served stream (`serve: "host"`) has no feed
+   * on the server, so, as for `push`, its handle refuses this with a
    * `TypeError`: only the host's client knows who subscribes.
    */
   subscribers(...args: StreamSubscribersArgs<C, K>): Promise<number>;

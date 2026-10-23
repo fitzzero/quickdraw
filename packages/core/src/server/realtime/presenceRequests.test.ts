@@ -2,20 +2,31 @@
 // against a server that stands in for Socket.IO behind the Redis adapter:
 // requests are coalesced per key without handing a caller an answer read
 // before it asked, only ids count, a node answers from its app-room records
-// alone, and a request nobody answered falls back to every node's sockets
-// for 30 s. Two real servers on one bus are `presence.test.ts`'s.
+// alone, and a request a node did not answer in time counts the answers the
+// adapter handed over, warns how many came, and reads no node's sockets.
+// Two real servers on one bus are `presence.test.ts`'s.
 
 import { describe, expect, it, vi } from "vitest";
 import { captureLogger, deferred, type Deferred } from "../__tests__/fixtures";
 import { registerDeployment } from "../cluster/deployment";
 import type { Hub } from "../emit/hub";
+import type { QuickdrawIo } from "../transports/types";
 import { PresenceRecords, usersInRoom } from "./presence";
 import {
+  ADAPTER_MARGIN_MS,
   createPresenceRequests,
   PRESENCE_EVENT,
-  PRESENCE_FALLBACK_MS,
   PRESENCE_WARN_EVERY_MS,
+  requestDeadlineOf,
 } from "./presenceRequests";
+
+/** What Socket.IO rejects an answered event with on the adapter's own timeout: the answers that came. */
+function timedOut(responses: unknown[]): Error {
+  return Object.assign(
+    new Error(`timeout reached: only ${responses.length} responses received out of 2`),
+    { responses },
+  );
+}
 
 /** A server whose answers the test gives, one request at a time. */
 function fakeServer() {
@@ -130,32 +141,52 @@ describe("presence requests", () => {
     expect((await users).sort()).toEqual(["ada", "here", "late"]);
   });
 
-  it("read every node's sockets for 30 s after a request nobody answered, warning once an episode", async () => {
+  it("wait the adapter's own request timeout and a margin when it has one, else cluster.timeoutMs", () => {
+    const { io, hub } = fakeServer();
+    const server = io as unknown as QuickdrawIo;
+    expect(requestDeadlineOf(hub, server)).toBe(50);
+    Object.assign(io.sockets.adapter, { requestsTimeout: 5000 });
+    expect(requestDeadlineOf(hub, server)).toBe(5000 + ADAPTER_MARGIN_MS);
+    for (const unusable of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31, "5000"]) {
+      Object.assign(io.sockets.adapter, { requestsTimeout: unusable });
+      expect(requestDeadlineOf(hub, server)).toBe(50);
+    }
+  });
+
+  it("count the answers that came when a node did not answer in time, warn how many, and read no node's sockets", async () => {
     const { hub, asked, fetched, logger } = fakeServer();
     let clock = 1_000;
     const requests = createPresenceRequests(hub, new PresenceRecords(), () => clock);
-    // Nobody answers: the request times out (50 ms), and the sockets are read instead.
-    expect(await requests.users("lobby")).toEqual(["far"]);
-    expect(asked).toHaveLength(1);
-    expect(fetched).toEqual(["lobby"]);
-    expect(logger.at("warn").map(({ message }) => message)).toEqual([
-      expect.stringContaining("did not answer a presence request within cluster.timeoutMs"),
-    ]);
-    // Within the window: no request at all.
-    clock += PRESENCE_FALLBACK_MS - 1;
-    expect(await requests.online("cy")).toBe(true);
-    expect(asked).toHaveLength(1);
-    expect(fetched).toEqual(["lobby", "user:cy"]);
-    // Past it: the nodes are asked again.
-    clock += 1;
+    const warnings = () => logger.at("warn").map(({ message }) => message);
+    // One node answered, one did not: the adapter's own timeout hands over the answer that came.
     const users = requests.users("lobby");
-    expect(asked).toHaveLength(2);
-    asked[1]?.resolve([["ada"]]);
+    asked[0]?.reject(timedOut([["ada"]]));
     expect(await users).toEqual(["ada"]);
-    expect(logger.at("warn")).toHaveLength(1);
-    // Ten minutes after the first warning, a window opens with another.
+    expect(warnings()).toEqual([
+      expect.stringContaining("did not answer a presence request in time: 1 other node answered"),
+    ]);
+    expect(logger.at("warn")[0]?.meta).toMatchObject({
+      answered: 1,
+      reason: "timeout reached: only 1 responses received out of 2",
+    });
+    // No answer before the deadline (cluster.timeoutMs, without an adapter timeout): none of theirs.
+    expect(await requests.online("cy")).toBe(false);
+    expect(asked).toHaveLength(2);
+    expect(warnings()).toHaveLength(1);
+    // A stream's count warns on its own.
+    const count = requests.sockets("qd:stream:feed");
+    asked[2]?.reject(timedOut([2, null]));
+    expect(await count).toBe(2);
+    expect(warnings()[1]).toContain(
+      "did not answer a stream's subscriber count in time: 2 other nodes answered",
+    );
+    // Ten minutes after the first warning, another.
     clock += PRESENCE_WARN_EVERY_MS;
-    expect(await requests.users("lobby")).toEqual(["far"]);
-    expect(logger.at("warn")).toHaveLength(2);
+    const later = requests.users("lobby");
+    asked[3]?.reject(timedOut([]));
+    expect(await later).toEqual([]);
+    expect(warnings()).toHaveLength(3);
+    expect(warnings()[2]).toContain("0 other nodes answered");
+    expect(fetched).toEqual([]);
   });
 });

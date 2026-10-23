@@ -33,6 +33,7 @@
 import type { Server as SocketIOServer } from "socket.io";
 import type { Logger } from "../contract/logger";
 import { consoleLogger } from "../contract/logger";
+import { clusterTimeoutOf } from "./cluster/acks";
 import { watchAdapterClients } from "./cluster/adapterClients";
 import { deploymentOf } from "./cluster/deployment";
 import { seedRoomHosts } from "./realtime/hosts";
@@ -74,6 +75,17 @@ export interface RedisAdapterOptions {
    * cluster from such nodes, so old and new nodes keep hearing each other.
    */
   keyPrefix?: string;
+
+  /**
+   * How long the adapter waits for the other nodes to answer a request
+   * (`fetchSockets`, an answered server-to-server event) before it hands
+   * over the answers that came, in milliseconds. Default: the server's
+   * `cluster.timeoutMs` (1,000 without one), so a presence read or a
+   * stream's subscriber count that a node leaves unanswered still counts
+   * the other nodes' answers that soon (docs/deploying.md). The Redis
+   * adapter's own default is 5,000.
+   */
+  requestsTimeout?: number;
 
   /**
    * Logger instance
@@ -163,6 +175,16 @@ export async function setupRedisAdapter(
 
   const { host = "localhost", port = 6379, password, db = 0 } = options;
   const key = options.keyPrefix ?? deploymentOf(io);
+  const requestsTimeout = options.requestsTimeout ?? clusterTimeoutOf(io);
+  if (
+    typeof requestsTimeout !== "number" ||
+    !Number.isFinite(requestsTimeout) ||
+    requestsTimeout <= 0
+  ) {
+    throw new TypeError(
+      "setupRedisAdapter: requestsTimeout must be a number of milliseconds above 0",
+    );
+  }
 
   try {
     // Dynamically import Redis packages - these are optional peer dependencies.
@@ -171,7 +193,7 @@ export async function setupRedisAdapter(
     const createAdapter = peers.createAdapter as (
       pubClient: RedisClient,
       subClient: RedisClient,
-      opts?: { key?: string },
+      opts?: { key?: string; requestsTimeout?: number },
     ) => unknown;
 
     const createClient = peers.createClient as (opts: {
@@ -195,7 +217,11 @@ export async function setupRedisAdapter(
     await Promise.all([pubClient.connect(), subClient.connect()]);
 
     // Set up the adapter
-    io.adapter(createAdapter(pubClient, subClient, { key }) as Parameters<typeof io.adapter>[0]);
+    io.adapter(
+      createAdapter(pubClient, subClient, { key, requestsTimeout }) as Parameters<
+        typeof io.adapter
+      >[0],
+    );
     // When the subscription comes back, this node's clients catch up; a failed publish is logged.
     watchAdapterClients(io as unknown as QuickdrawIo, logger);
     // The server started on its in-memory adapter: it asks for the room hosts the other nodes hold now.
