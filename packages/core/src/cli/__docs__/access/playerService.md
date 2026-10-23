@@ -83,10 +83,10 @@ Live lists of the service's rows, one per scope value.
 
 ### `mine`
 
-| Option    | Value                                                               |
-| --------- | ------------------------------------------------------------------- |
-| Scope     | `userId` of the `teamMember` rows whose `playerId` is the item's id |
-| Item      | `entity`                                                            |
-| Order     | `id` asc                                                            |
-| Access    | the subscriber's own user id (`scopeAccess: "self"`)                |
-| Page size | 100, at most 500                                                    |
+| Option    | Value                                                                                                                            |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Scope     | `userId` of the `teamMember` rows whose `playerId` is the item's id                                                              |
+| Item      | `entity`                                                                                                                         |
+| Order     | `id` asc                                                                                                                         |
+| Access    | the subscriber's own user id (`scopeAccess: "self"`), and a service-wide grant of Read or more (`requires: { service: "Read" }`) |
+| Page size | 100, at most 500                                                                                                                 |

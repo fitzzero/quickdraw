@@ -612,6 +612,25 @@ describe("collections", () => {
       methods: {},
     });
   });
+
+  test("may require a service-wide grant, beside an anchor or a self scope", () => {
+    qd.defineService(listed, {
+      model: "task",
+      collections: { byProject: { anchor: project, requires: { service: "Moderate" } } },
+      methods: {},
+    });
+    qd.defineService(listed, {
+      model: "task",
+      collections: { byProject: { scopeAccess: "self", requires: { service: "Read" } } },
+      methods: {},
+    });
+    qd.defineService(listed, {
+      model: "task",
+      // @ts-expect-error -- a grant is an access level
+      collections: { byProject: { anchor: project, requires: { service: "Owner" } } },
+      methods: {},
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

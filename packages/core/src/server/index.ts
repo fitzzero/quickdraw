@@ -25,6 +25,7 @@ export type {
   AffectsOption,
   CollectionOption,
   CollectionOptions,
+  CollectionRequires,
   CollectionsRequired,
   HandlerOutputOf,
   HandlerRow,

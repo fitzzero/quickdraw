@@ -12,7 +12,9 @@
 //   closes that scope next with `reason: "anchor-deleted"`;
 // - a lookup that fails denies, as everywhere else.
 //
-// A changed `serviceAccess` re-authorizes every scope of the user's sockets.
+// A changed `serviceAccess` re-authorizes every scope of the user's sockets
+// (a collection that `requires` a grant above the new one is revoked so),
+// before the user's self scopes are reset, so a revoked one gets no reset.
 // A self scope has no anchors, since its user may always open it; when its
 // items follow its service's policy, the same changes re-check them
 // (`selfRecheck.ts`: a lost row is `removed`, or the scope resets, and a
@@ -125,7 +127,12 @@ export function createScopeRevocation(hub: CollectionHub): RevocationHook {
       const found = new Map(
         sockets.map((socket) => [socket, hub.collections.scopes.entries(socket)]),
       );
-      await settleAll([reauthorizeAll(hub, found), resetSelf(hub, sockets, userId)]);
+      try {
+        await reauthorizeAll(hub, found);
+      } finally {
+        // The self scopes still held: one the new grants no longer reach left its room above.
+        await resetSelf(hub, sockets, userId);
+      }
     },
   } satisfies RevocationHook);
 }

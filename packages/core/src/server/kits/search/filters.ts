@@ -110,6 +110,7 @@ async function authorizeScope(
     service: runtime.service,
     anchor: collection.anchor?.name,
     access: collection.access,
+    requires: collection.requires,
   };
   const allowed = await allowedScopes(runtime.access, rule, principal, [scope]);
   if (!allowed.has(scope)) {
