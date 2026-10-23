@@ -4345,7 +4345,10 @@ afterEach(() => mock.$reset()); // forget it all (automatic when the runner has 
 
 Each method member has `mockResolvedValue`, `mockRejectedValue`,
 `mockImplementation`, `mockReset` and `calls`; streams have `mockItems`,
-channels `sent` and events `mockEmit`. Everything set is forgotten after
+channels `sent` and events `mockEmit`. A new answer refetches, once, the
+method's results cached when it is set; a component rendered after it reads
+the new answer with its own first fetch, so `calls` counts one call per
+mount. Everything set is forgotten after
 each test only when the test runner has a global `afterEach` (vitest with
 `globals: true`, or jest), where the mock registers its own reset
 (`resetAfterEach: false` opts out); otherwise call `mock.$reset()` in an

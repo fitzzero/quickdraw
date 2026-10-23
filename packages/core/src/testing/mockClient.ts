@@ -13,9 +13,12 @@
 //   `useMutation` is TanStack's `useMutation` over the stub. Optimistic
 //   layers are not shown: the test sets the rows a component reads.
 // - Every method's member carries its stub (`mockResolvedValue`,
-//   `mockRejectedValue`, `mockImplementation`, `mockReset`, `calls`). A
-//   search kit method's `useSearch` asks its stub at once, with no debounce
-//   and no collection cache (`mockSearch.ts`).
+//   `mockRejectedValue`, `mockImplementation`, `mockReset`, `calls`). A new
+//   answer refetches the method's queries cached when it is set, once each;
+//   a query cached later reads it with its own first fetch, so `calls`
+//   counts one call per mount (`refetchWithNewAnswer`). A search kit
+//   method's `useSearch` asks its stub at once, with no debounce and no
+//   collection cache (`mockSearch.ts`).
 // - `useEntity`, `useEntities` and `useCollection` show what the test sets
 //   with `mockRow`, `mockRemoved`, `mockError` and `mockScope`
 //   (`mockLive.ts`).
@@ -35,6 +38,7 @@ import {
   QueryClient,
   useMutation,
   useQuery,
+  type Query,
   type QueryKey,
   type Updater,
 } from "@tanstack/react-query";
@@ -221,14 +225,24 @@ function createMockQueryClient(): QueryClient {
 }
 
 /**
- * Fetches the cached results of a query again with its new answer. Reads
- * still waiting on the old one are cancelled first: TanStack keeps a read
- * in flight for a query that has no data yet, and an unanswered read never
- * ends.
+ * Fetches again, with a new answer, the queries of `queryKey` cached when the
+ * answer is set: each holds a result of an older answer, or a read of one in
+ * flight. Which ones is decided at once, as the answer is set: a query
+ * cached afterwards (a component rendered right after the test sets the
+ * answer) reads the new answer with its own first fetch, and refetching it
+ * too, a few microtasks later, would ask the stub twice. Reads still waiting
+ * on the old answer are cancelled first: TanStack keeps a read in flight for
+ * a query that has no data yet, and an unanswered read never ends.
  */
 async function refetchWithNewAnswer(queryClient: QueryClient, queryKey: QueryKey): Promise<void> {
-  await queryClient.cancelQueries({ queryKey });
-  await queryClient.invalidateQueries({ queryKey });
+  // Before the first await, so this runs as the answer is set.
+  const older = new Set(queryClient.getQueryCache().findAll({ queryKey }));
+  if (older.size === 0) {
+    return;
+  }
+  const filters = { queryKey, predicate: (query: Query): boolean => older.has(query) };
+  await queryClient.cancelQueries(filters);
+  await queryClient.invalidateQueries(filters);
 }
 
 /** A new stub per method, fetching a query's cached results again when its answer changes. */
