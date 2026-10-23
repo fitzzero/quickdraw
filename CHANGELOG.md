@@ -393,6 +393,26 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   `shared-principal`. An app field named `access` from
   `initQuickdraw({ context })` is now shadowed by the framework's.
   `ContextAccess` is on `./server`.
+- **With `cacheMs`, a check later in the same call sees the call's own
+  access writes.** A tracked write evicted the cached access lookups it
+  changed only when its call's unit of work flushed, after the response. Until
+  then, checks on that node still saw a membership, owner or access list the
+  write had already changed: `ctx.access` and a `ctx.services` call later in
+  the same handler, and every other request, for as long as the writing call
+  ran on (a handler past its timeout, a long `qd.run` job). The cache now
+  evicts as soon as the write is durable: a write outside a transaction at
+  once, a transaction's writes at its commit (a savepoint's when the
+  transaction around it commits), and a rolled-back write never, which leaves
+  the cache as it was. A write made through another dispatcher on the same
+  tracked client evicts too. The flush still evicts again, and revocation
+  and `onAccessChanged` still happen at the flush. Servers behind a cluster
+  adapter still evict when the flush's access change reaches them, and a job
+  on a bare `createDispatcher` still broadcasts nothing, so its writes reach
+  the servers' caches only after `cacheMs`. `cacheMs` now needs the storage
+  adapter's `onWrite` (`trackPrisma`'s has it): an adapter without one is a
+  `TypeError` from `createDispatcher`, and one that cannot report writes can
+  pass `onWrite: () => () => {}` to evict only at the flush. Apps without
+  `cacheMs` are unchanged.
 - **A collection can require a service grant.** `collections: { mine:
 { scopeAccess: "self", requires: { service: "Read" } } }` in
   `defineService` gives a list the grant its methods ask for: besides the

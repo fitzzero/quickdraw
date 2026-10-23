@@ -59,6 +59,12 @@ interface StartOptions {
   readonly rateLimit?: { readonly maxRequests: number };
   /** Keep policy lookups across requests this long. */
   readonly cacheMs?: number;
+  /**
+   * The node hears none of the shared client's writes (`storage.onWrite`),
+   * as a node in a process of its own would not: with `cacheMs`, only the
+   * cluster's broadcast tells it what another node's writes changed.
+   */
+  readonly ownProcess?: boolean;
 }
 
 async function start(options: StartOptions = {}) {
@@ -66,7 +72,10 @@ async function start(options: StartOptions = {}) {
   const app = await createTestApp({
     services: [projectService, defineTaskService(), cardService],
     db: h.db,
-    storage: recorded.storage,
+    storage:
+      options.ownProcess === true
+        ? { ...recorded.storage, onWrite: () => () => undefined }
+        : recorded.storage,
     ...(options.cacheMs === undefined ? {} : { access: { cacheMs: options.cacheMs } }),
     ...(options.adapter === undefined ? {} : { socket: { adapter: options.adapter } }),
     ...(options.loadServiceAccess === undefined
@@ -655,7 +664,8 @@ describe("behind a cluster adapter", () => {
   it("revokes on every node with cacheMs: a node forgets what another node's change names first", async () => {
     const cluster = peeredCluster();
     const writer = await start({ adapter: cluster.adapter, cacheMs: 60_000 });
-    const holder = await start({ adapter: cluster.adapter, cacheMs: 60_000 });
+    // Both nodes share this process's tracked client: the holder must not hear the writer's write.
+    const holder = await start({ adapter: cluster.adapter, cacheMs: 60_000, ownProcess: true });
     cluster.servers.push(writer.app.server.io, holder.app.server.io);
     const member = await connect(holder.app, as(board.bo));
     // The subscribe and this call leave the member's level in the holder's cache.
