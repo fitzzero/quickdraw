@@ -3432,7 +3432,14 @@ export function useArenaHost(arenaId: string): void {
   `onHostLeave({ room, socketId, principal, reason })` (the service's and
   `createServer`'s) runs once. The server never picks the next host; the
   app does, as `hostArena` above lets the next player who asks. Behind a
-  cluster adapter each node knows each room's host.
+  cluster adapter each node knows each room's host. A node that dies
+  without closing its sockets leaves the hosts it held recorded on the
+  other nodes until each room's host is set or cleared again, and no
+  `onHostLeave` runs for them. So an app that picks a host only while
+  `hostOf(room)` is `null`, as `hostArena` does, also needs a way for a
+  player to take over a host that stops answering: a method that calls
+  `ctx.rooms.setHost(room)` or `clearHost(room)` after a timeout of the
+  app's own.
 - `defineHost(contract, { channels, streams })` (from `./client`, or
   `./client/core` without React) takes one handler per host-served channel, whose `ctx` is
   `{ peer: { socketId, userId, link }, room }` (the user as the server
