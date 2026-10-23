@@ -68,6 +68,7 @@ export type {
 export type {
   AnyContext,
   BaseContext,
+  ContextAccess,
   ContextRooms,
   ContextServices,
   HandlerArgs,

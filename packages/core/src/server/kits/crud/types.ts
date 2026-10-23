@@ -27,10 +27,14 @@ export type CrudKindOf<C extends AnyContract, M extends MethodName<C>> = C["meth
   ? Extract<Kind, CrudMethodName>
   : never;
 
-/** What a `custom` access check of a kit method reads from `ctx`. */
+/**
+ * What a `custom` access check of a kit method, and the app's callbacks a
+ * kit calls (`prepare`, `onWrite`, `onChange`, ...), read from `ctx`:
+ * `ctx.access` asks the caller's level on another row.
+ */
 export type KitContext = Pick<
   BaseContext<Principal>,
-  "principal" | "signal" | "log" | "requestId" | "transport"
+  "principal" | "signal" | "log" | "requestId" | "transport" | "access"
 >;
 
 /** One access form per kit method of `C`: what `crud.handlers`' `access` must give. */

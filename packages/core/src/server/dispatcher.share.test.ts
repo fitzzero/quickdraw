@@ -449,14 +449,14 @@ describe('a share: "all" handler that reads the caller (shared-principal)', () =
     );
   });
 
-  it("names ctx.services and ctx.mcp as the members it read", async () => {
+  it("names ctx.services, ctx.mcp and ctx.access as the members it read", async () => {
     const reads =
-      (member: "services" | "mcp"): AnyHandler =>
+      (member: "services" | "mcp" | "access"): AnyHandler =>
       ({ ctx }) => {
         void ctx[member];
         return [{ id: "x", title: "" }];
       };
-    for (const member of ["services", "mcp"] as const) {
+    for (const member of ["services", "mcp", "access"] as const) {
       const { call, logger } = setup([serviceWith(reads(member))]);
       expect(await call(list)).toMatchObject({ ok: true });
       expect(sharedWarnings(logger)).toEqual([

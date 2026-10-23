@@ -27,7 +27,14 @@ import {
   type ParsedInputOf,
 } from "../../../index";
 import { createMockClient } from "../../../testing/client";
-import { admin, custom, inherit, initQuickdraw, type Principal } from "../../index";
+import {
+  admin,
+  custom,
+  inherit,
+  initQuickdraw,
+  type ContextAccess,
+  type Principal,
+} from "../../index";
 
 const taskRow = z.object({
   id: z.string(),
@@ -252,6 +259,8 @@ describe("admin.handlers", () => {
               "adminCreate" | "adminUpdate" | "adminDelete"
             >();
             expectTypeOf(ctx.principal).toEqualTypeOf<Principal>();
+            // A kit's callbacks and custom forms ask about other rows too.
+            expectTypeOf(ctx.access).toEqualTypeOf<ContextAccess>();
             if (call.method === "adminCreate") {
               expectTypeOf(call.data).toEqualTypeOf<AdminData<TaskRow>>();
               expectTypeOf(call.data.title).toEqualTypeOf<string | undefined>();
