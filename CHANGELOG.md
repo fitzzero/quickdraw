@@ -128,6 +128,25 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
 
 ### Client
 
+- **`./client/core`: the client without React, for scripts, CLIs and
+  workers.** `./client` opens with `"use client"` and imports React and
+  TanStack Query when it loads, so a Node process that only opens a
+  connection and calls `callData` had to install both.
+  `@fitzzero/quickdraw-core/client/core` exports the connection
+  (`createQuickdrawConnection`), `call`, `callData` and their helpers,
+  `newId`, the backoff and the subscription lane, the auth routes' browser
+  side and token storage, `reloadOncePerSession`, peer links
+  (`createPeerLink`, `onPeerRequest`), host mode (`defineHost`, `hostOf`,
+  `onHostChange`) and everything on `./utils`, with no `"use client"`.
+  Nothing it reaches imports React or TanStack Query, in its code or in
+  its types, so it needs only `socket.io-client`. `./client` re-exports
+  it, the same functions, and keeps every name. The invalidation
+  coordinator, the overlay store, the cache session and live data take a
+  TanStack `QueryClient`, so they stay on `./client`.
+- **`createServerCaller`'s `prefetch` takes a `QueryClientLike`**: the part
+  of a TanStack `QueryClient` it calls (`prefetchQuery`), which any
+  `QueryClient` is, so `./utils` names TanStack Query nowhere, in its types
+  either. `QueryClientLike` is on `./utils` and both client entries.
 - **The next user never sees the last user's result as a placeholder.**
   TanStack keeps the query a mounted observer's placeholder is made from
   outside the cache, which quickdraw empties on another user's hello or

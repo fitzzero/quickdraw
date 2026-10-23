@@ -38,7 +38,10 @@ export const ROUTE_FILES = Object.freeze(["**/routes/**", "**/routes.*"]);
 /** Client code by path: React components and the web app. */
 export const CLIENT_FILES = Object.freeze(["**/*.tsx", "**/*.jsx", "**/apps/web/**"]);
 
-/** Client code by import: a file importing one of these modules (or a subpath of them). */
+/**
+ * Client code by import: a file importing one of these modules or a subpath
+ * of one (`@fitzzero/quickdraw-core/client/core`, the client without React).
+ */
 export const CLIENT_MODULES = Object.freeze([
   "@tanstack/react-query",
   "socket.io-client",
