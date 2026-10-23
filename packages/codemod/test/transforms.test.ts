@@ -10,7 +10,8 @@
 // schemas of one name are merged or renamed and an aliased one is written by
 // its declared name, a method object whose name its module or service file
 // binds already gets that name free (or another name, beside an exported
-// binding), and a second run changes nothing.
+// binding), a writer that takes the Prisma client from callers that all give
+// it the tracked one says so in its type, and a second run changes nothing.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -67,6 +68,7 @@ describe("the output on the 4.1 fixture app", () => {
       todoSchemas: 31,
       clientCalls: 8,
       wrappersDeleted: 3,
+      writersTyped: 3,
     });
     // the file an aggregator left empty, the wrappers, and the file of types only they imported
     expect(result.deleted.toSorted()).toEqual([
@@ -246,7 +248,7 @@ describe("a method object whose name its files bind already (task/methods/delega
 
   it("renames what the method module owns of the name: a local helper <name>Body, an import <name>Impl", () => {
     expect(delegates()).toContain(
-      "async function renameTaskBody(db: PrismaClient, id: string, title: string) {",
+      "async function renameTaskBody(db: Tracked<PrismaClient>, id: string, title: string) {",
     );
     expect(delegates()).toContain("const task = await renameTaskBody(db, input.id, input.title);");
     expect(delegates()).toContain('import { assignTask as assignTaskImpl } from "../rows.js";');
@@ -982,6 +984,143 @@ describe("a 4.x instance's members outside the services", () => {
     runCodemod({ root: copy });
     expect(readFileSync(join(copy, "apps/web/src/components/GlobalLabels.tsx"), "utf8")).toContain(
       `${MARKER} [client] labels is a 4.x LabelService instance, whose members (getRoomName here)`,
+    );
+  });
+});
+
+describe("a writer that takes the Prisma client (services/shared/writers.ts)", () => {
+  const writers = (): string => output.get("apps/api/src/services/shared/writers.ts") ?? "";
+
+  it("takes Tracked<PrismaClient> when every caller gives it the tracked client, whatever its parameter's name", () => {
+    // archiveProject gave it this.prisma, which is db now
+    expect(writers()).toContain(
+      "export async function removeProjectMembers(prisma: Tracked<PrismaClient>, projectId: string): Promise<void> {",
+    );
+    expect(output.get("apps/api/src/services/project.ts")).toContain(
+      "await removeProjectMembers(db, input.id);",
+    );
+    // a method module's local helper, which its handler gives the handler's db
+    expect(output.get("apps/api/src/services/task/methods/delegates.ts")).toContain(
+      'import type { Tracked } from "@fitzzero/quickdraw-core/prisma";',
+    );
+    expect(writers()).toContain(
+      'import type { Tracked, TrackedTransaction } from "@fitzzero/quickdraw-core/prisma";',
+    );
+  });
+
+  it("takes TrackedTransaction<...> when its 4.x type took a transaction's client, which stays inside", () => {
+    expect(writers()).toContain("  prisma: TrackedTransaction<Prisma.TransactionClient>,\n");
+  });
+
+  it("keeps its type when a caller gives it the untracked client, or a client the run cannot vouch for", () => {
+    // a test's seed gives it the app's own prisma
+    expect(writers()).toContain(
+      "export async function clearProjectAcl(db: PrismaClient, id: string): Promise<void> {",
+    );
+    expect(output.get("apps/api/src/services/shared/__tests__/seed.ts")).toContain(
+      "await clearProjectAcl(prisma, projectId);",
+    );
+    // handOver gives rows.ts's assignTask its own parameter, and nothing in the run calls handOver
+    const task = output.get("apps/api/src/services/task/index.ts") ?? "";
+    expect(task).toContain(
+      "export async function handOver(db: PrismaClient, id: string, userId: string)",
+    );
+    expect(output.get("apps/api/src/services/task/rows.ts")).toContain("  db: PrismaClient,\n");
+    // and a function that only reads keeps it too
+    expect(output.get("apps/api/src/services/task/rows.ts")).toContain(
+      "export async function countTasks(db: PrismaClient, projectId: string)",
+    );
+  });
+
+  it("passes a transaction's client on through the writers it calls, and leaves one used other than by a call", () => {
+    const variant = copyFixture("writers");
+    const edit = (file: string, from: string, to: string): void => {
+      const path = join(variant, file);
+      const text = readFileSync(path, "utf8");
+      expect(text, file).toContain(from);
+      writeFileSync(path, text.replace(from, to));
+    };
+    const shared = "apps/api/src/services/shared";
+    writeFileSync(
+      join(variant, `${shared}/batch.ts`),
+      [
+        'import type { PrismaClient } from "@project/db";',
+        'import { removeProjectMembers } from "./writers.js";',
+        "",
+        "export const archiveMany = async (prisma: PrismaClient, ids: string[]): Promise<void> => {",
+        "  for (const id of ids) {",
+        "    await removeProjectMembers(prisma, id);",
+        "  }",
+        "};",
+        "",
+        "export async function touchProject(prisma: PrismaClient, id: string): Promise<void> {",
+        "  await prisma.project.update({ where: { id }, data: {} });",
+        "}",
+        "",
+        "export const jobs = [touchProject];",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(variant, `${shared}/own-tracked.ts`),
+      [
+        'import type { PrismaClient } from "@project/db";',
+        "",
+        "// The app's own Tracked, which is not quickdraw's",
+        "export type Tracked<T> = T;",
+        "",
+        "export async function renameProjectRow(prisma: PrismaClient, id: string): Promise<void> {",
+        '  await prisma.project.update({ where: { id }, data: { name: "renamed" } });',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const project = "apps/api/src/services/project.ts";
+    edit(
+      project,
+      'import { clearProjectAcl, removeProjectMembers, writeProjectAcl } from "./shared/writers.js";',
+      [
+        'import { clearProjectAcl, writeProjectAcl } from "./shared/writers.js";',
+        'import { archiveMany, touchProject } from "./shared/batch.js";',
+        'import { renameProjectRow } from "./shared/own-tracked.js";',
+      ].join("\n"),
+    );
+    // the service gives archiveMany its client in archiveProject, and a transaction's in shareProject
+    edit(
+      project,
+      "      await removeProjectMembers(this.prisma, payload.id);",
+      [
+        "      await archiveMany(this.prisma, [payload.id]);",
+        "      await touchProject(this.prisma, payload.id);",
+        "      await renameProjectRow(this.prisma, payload.id);",
+      ].join("\n"),
+    );
+    edit(
+      project,
+      "          await writeProjectAcl(tx, payload.id, acl as unknown as Prisma.InputJsonValue);",
+      [
+        "          await writeProjectAcl(tx, payload.id, acl as unknown as Prisma.InputJsonValue);",
+        "          await archiveMany(tx, [payload.id]);",
+      ].join("\n"),
+    );
+    runCodemod({ root: variant });
+    const read = (file: string): string => readFileSync(join(variant, file), "utf8");
+    const batch = read(`${shared}/batch.ts`);
+    expect(batch).toContain(
+      "export const archiveMany = async (prisma: TrackedTransaction<PrismaClient>, ids: string[]): Promise<void> => {",
+    );
+    expect(batch).toContain(
+      'import type { TrackedTransaction } from "@fitzzero/quickdraw-core/prisma";',
+    );
+    // removeProjectMembers's one caller is archiveMany now, which takes a transaction's client
+    expect(read(`${shared}/writers.ts`)).toContain(
+      "export async function removeProjectMembers(prisma: TrackedTransaction<PrismaClient>, projectId: string): Promise<void> {",
+    );
+    // jobs holds touchProject, which a caller outside the run may call with any client
+    expect(batch).toContain("export async function touchProject(prisma: PrismaClient, id: string)");
+    // a file whose Tracked is its own keeps its writers' types
+    expect(read(`${shared}/own-tracked.ts`)).toContain(
+      "export async function renameProjectRow(prisma: PrismaClient, id: string)",
     );
   });
 });

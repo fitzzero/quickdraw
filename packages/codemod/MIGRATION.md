@@ -647,8 +647,14 @@ gets the tracked `db`, or a transaction's `tx`. `trackPrisma` returns
 type the parameter `Tracked<PrismaClient>`, or
 `TrackedTransaction<PrismaClient>` when the helper also runs inside
 `db.$transaction` (both from `@fitzzero/quickdraw-core/prisma`), and
-passing the untracked client is a type error. `no-untracked-write` reads
-that type, so the parameter may keep its name.
+passing the untracked client is a type error. The codemod types it so when
+every call it sees gives the helper the tracked client (`db`, a
+transaction's `tx`, or the parameter of another helper it types), and
+leaves it when a caller gives it anything else, when nothing in the app
+calls it (a job's entry point, say), when it is passed around rather than
+called, and when it only reads; the summary counts the helpers it typed.
+`no-untracked-write` reads that type, so the parameter may keep its name;
+it reads it only when the file imports it from quickdraw, under any name.
 
 ### `emitUpdate`, `emitCollection*` and `notifyCollections` are gone
 
