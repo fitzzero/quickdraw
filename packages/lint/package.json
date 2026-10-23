@@ -1,6 +1,6 @@
 {
   "name": "@fitzzero/quickdraw-lint",
-  "version": "5.1.2",
+  "version": "5.1.3",
   "description": "oxlint plugin, base config and baseline command for quickdraw apps",
   "keywords": [
     "lint",
