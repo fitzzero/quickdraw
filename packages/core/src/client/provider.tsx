@@ -5,9 +5,13 @@
 // `QueryClient` the hooks cache in and that client's invalidation
 // coordinator (`coordinator.ts`), and binds the connection and the
 // coordinator to the client it is given, so the client's `call`, `prefetch`
-// and `invalidate` use them too. Ported from 4.1's provider
-// (4.1 `src/client/QuickdrawProvider.tsx:223-437`), which held the socket
-// in React state and recreated it on every token change.
+// and `invalidate` use them too. It binds them and opens the connection in
+// layout effects, which run before every passive effect of a commit, so a
+// hook of the app's own that reads through the client's `call` from its
+// effects in the provider's first commit finds them; a read made during
+// render (`useSuspenseQuery`) runs before any effect. Ported from 4.1's
+// provider (4.1 `src/client/QuickdrawProvider.tsx:223-437`), which held the
+// socket in React state and recreated it on every token change.
 //
 // React's strict mode mounts effects twice. 4.1 guarded the socket with a ref
 // (4.1 `src/client/QuickdrawProvider.tsx:297-298`); here the connection is
@@ -177,13 +181,24 @@ function ConnectedProvider<Contracts extends ContractMap>(
     [queryClient],
   );
   const connection = useProviderConnection({ ...options, auth }, onProtocolMismatch);
-  React.useEffect(() => {
+  // Three layout effects, in this order: a commit runs every layout effect before any passive one,
+  // so the client is bound to an open connection before the children's passive effects, where
+  // TanStack starts a read. An app's own hook over a member's `call`, mounted in this provider's
+  // first commit, then reads (a passive effect of the provider runs after its children's).
+  React.useLayoutEffect(() => {
     // From now on each hello settles the cache for the user it names.
     sessionOf(connection, queryClient);
     // Before the socket connects: `qd:presence` frames can arrive before any hook asks.
     liveDataOf(connection, queryClient);
   }, [connection, queryClient]);
-  React.useEffect(() => connection.retain(), [connection]);
+  // Only on the client, after a commit: a server render, which shares the client between requests,
+  // never binds it, nor does a render React drops. Strict mode unbinds and binds it again before
+  // the children's passive effects run again, and a new provider binds as the old one unbinds.
+  React.useLayoutEffect(
+    () => bindConnection(client, connection, coordinator),
+    [client, connection, coordinator],
+  );
+  React.useLayoutEffect(() => connection.retain(), [connection]);
   // Disposed a tick after the provider unmounts or takes another `QueryClient`.
   React.useEffect(() => coordinator.retain(), [coordinator]);
   React.useEffect(() => {
@@ -201,10 +216,6 @@ function ConnectedProvider<Contracts extends ContractMap>(
     [connection, coordinator, client, jitterMs],
   );
   React.useEffect(() => refetchOnAccessChanges(connection, coordinator), [connection, coordinator]);
-  React.useEffect(
-    () => bindConnection(client, connection, coordinator),
-    [client, connection, coordinator],
-  );
   const value = React.useMemo(
     () => ({ connection, queryClient, coordinator }),
     [connection, queryClient, coordinator],
