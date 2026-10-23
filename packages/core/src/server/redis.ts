@@ -8,7 +8,9 @@
  * option; docs/deploying.md). When the subscribing connection comes back
  * after a drop, the node's clients are told to reconnect within 2 seconds,
  * so they catch up on what the node missed; a publish Valkey did not take
- * is logged rather than left unhandled (`cluster/adapterClients.ts`).
+ * is logged rather than left unhandled (`cluster/adapterClients.ts`). Once
+ * the adapter is set, the node asks the others for the hosts of their app
+ * rooms, as a node started with a cluster adapter does (`realtime/hosts.ts`).
  *
  * @example
  * ```typescript
@@ -33,6 +35,7 @@ import type { Logger } from "../contract/logger";
 import { consoleLogger } from "../contract/logger";
 import { watchAdapterClients } from "./cluster/adapterClients";
 import { deploymentOf } from "./cluster/deployment";
+import { seedRoomHosts } from "./realtime/hosts";
 import { isModuleNotFound, loadRedisPeers } from "./redisPeers";
 import type { QuickdrawIo } from "./transports/types";
 
@@ -195,6 +198,8 @@ export async function setupRedisAdapter(
     io.adapter(createAdapter(pubClient, subClient, { key }) as Parameters<typeof io.adapter>[0]);
     // When the subscription comes back, this node's clients catch up; a failed publish is logged.
     watchAdapterClients(io as unknown as QuickdrawIo, logger);
+    // The server started on its in-memory adapter: it asks for the room hosts the other nodes hold now.
+    seedRoomHosts(io);
 
     logger.info(`Redis adapter connected to ${host}:${port}`);
 

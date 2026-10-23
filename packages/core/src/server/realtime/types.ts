@@ -263,7 +263,10 @@ export interface RoomHosts {
     hooks: readonly HostLeaveHook[],
     run: (fn: (ctx: RunContext) => Promise<void>) => Promise<void>,
   ): void;
-  /** Listens for the other nodes' changes, answers their requests, and asks them once for theirs. */
+  /**
+   * Listens for the other nodes' changes, answers their requests, and asks
+   * them for theirs once its adapter can count this node (`hosts.ts`).
+   */
   listen(): void;
 }
 
