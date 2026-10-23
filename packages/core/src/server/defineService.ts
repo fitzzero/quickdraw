@@ -17,8 +17,8 @@
 //   `share`, and a method with `custom` access cannot `share: "all"`; at run
 //   time neither can a kit method whose result depends on who asks, and in
 //   development an app's `"all"` handler that reads `ctx.principal`,
-//   `ctx.services` or `ctx.mcp` warns `shared-principal`: a result shared
-//   across principals depends on the input only;
+//   `ctx.services`, `ctx.mcp` or `ctx.access` warns `shared-principal`: a
+//   result shared across principals depends on the input only;
 // - `kinds`, on a method and on the service, names kinds of the app's
 //   principal (`PrincipalKindOf`); that each narrows the list above it, and
 //   that a `"public"` method declares none, is checked at run time;
@@ -144,7 +144,7 @@ type ShareOptions<A> =
        * handler runs with the first caller's `ctx`, and every caller gets its
        * result, so a `"all"` result must depend on the input only: its
        * handler reads nothing of the caller (in development, reading
-       * `ctx.principal`, `ctx.services` or `ctx.mcp` warns
+       * `ctx.principal`, `ctx.services`, `ctx.mcp` or `ctx.access` warns
        * `[quickdraw:shared-principal]`, and a strict test app fails the
        * call). `"all"` is not allowed with `custom` access, nor on the kit
        * methods whose result depends on who asks (the read/write kit's

@@ -86,8 +86,8 @@ export const taskService = qd.defineService(task, {
 - `share: "all"` runs one handler for every caller, with the first caller's
   `ctx`, and gives every caller its result: use it only for a result that
   depends on the input alone. Its handler reads nothing of the caller
-  (`ctx.principal`, `ctx.services`, `ctx.mcp`, or a context field made from
-  them); in development a read of one of the first three warns
+  (`ctx.principal`, `ctx.services`, `ctx.mcp`, `ctx.access`, or a context
+  field made from them); in development a read of one of the first four warns
   `[quickdraw:shared-principal]`. It is refused with `custom` access and on
   the kit methods whose result depends on the caller (the read/write kit's
   `list` and `getMany`, `search`, the sharing kit's `listShares` and

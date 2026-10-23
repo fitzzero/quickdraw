@@ -133,6 +133,9 @@ export function contextFor(
     // call's `ctx.mcp`, through this dispatcher; their units of work join
     // this call's, so their writes flush with it.
     dispatch,
+    // `ctx.access`: the policies' levels and filters for this principal, with
+    // the grants the call runs with.
+    access: settings.policies,
     kit: {
       service: target.service,
       services: settings.registry.services,

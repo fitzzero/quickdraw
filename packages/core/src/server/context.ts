@@ -7,7 +7,7 @@
 import type { AnyContract } from "../contract/defineContract";
 import type { Logger } from "../contract/logger";
 import { QuickdrawError } from "../protocol/errors";
-import type { DispatcherAccess, PolicyEngine } from "./access/api";
+import type { ContextAccess, DispatcherAccess, PolicyEngine } from "./access/api";
 import { createCaller, type CallerFor } from "./caller";
 import type { Dispatch } from "./pipeline/pipeline";
 import type { ContextRooms, Presence } from "./realtime/types";
@@ -41,7 +41,7 @@ export interface TouchOptions {
  */
 export type ContextServices<T extends QuickdrawTypes = QuickdrawTypes> = CallerFor<T>;
 
-export type { ContextRooms, Presence };
+export type { ContextAccess, ContextRooms, Presence };
 
 /**
  * The fields of `ctx` the framework provides, whatever the app adds. `M` is
@@ -100,6 +100,15 @@ export interface BaseContext<P = Principal, M = McpContext> {
    * {@link ContextServices}.
    */
   readonly services: ContextServices;
+  /**
+   * The caller's levels on rows of the app's services, as the access forms
+   * count them (RFC 0003 section 4.3): `dispatcher.access` bound to
+   * `ctx.principal`, with the grants this call runs with. For a `custom`
+   * form that checks a row its key names only sometimes, or a parent its
+   * input names: `await ctx.access.can(project, input.projectId, "Moderate")`.
+   * See {@link ContextAccess}.
+   */
+  readonly access: ContextAccess;
   /**
    * App-defined rooms the calling socket joins and leaves (`join` answers
    * `false` for a call without a socket), and typed room events: `emit` and
@@ -228,10 +237,12 @@ export interface RoomOccupancy {
 /**
  * The per-call fields the dispatcher fills in. `touch` is the dispatcher's
  * (its tracked writes), `rooms` and `presence` its live data's, `dispatch`
- * its own dispatch function, which `ctx.services` calls through; a context
- * built without them gets a `touch` that does nothing, `rooms` that join
- * nothing and send nothing, a `presence` that sees nobody, and `services`
- * that throw `INTERNAL`. `kit` is kept beside the context, never on it.
+ * its own dispatch function, which `ctx.services` calls through, and
+ * `access` its policies, which `ctx.access` binds to the call's principal; a
+ * context built without them gets a `touch` that does nothing, `rooms` that
+ * join nothing and send nothing, a `presence` that sees nobody, and
+ * `services` and `access` that throw `INTERNAL`. `kit` is kept beside the
+ * context, never on it.
  */
 export type ContextFields = Pick<
   AnyContext,
@@ -240,6 +251,7 @@ export type ContextFields = Pick<
   Partial<Pick<AnyContext, "touch" | "rooms" | "presence">> & {
     readonly kit?: KitRuntime;
     readonly dispatch?: Dispatch;
+    readonly access?: Pick<PolicyEngine, "forCaller">;
   };
 
 const KIT_RUNTIMES = new WeakMap<object, KitRuntime>();
@@ -270,11 +282,8 @@ function withRuntime<Ctx extends object>(
 /** A signal that never aborts, for calls that cannot be cancelled. */
 export const NEVER_ABORTED: AbortSignal = new AbortController().signal;
 
-function notAvailable(member: string): QuickdrawError {
-  return new QuickdrawError(
-    "INTERNAL",
-    `${member} needs a dispatcher: it calls through the dispatcher that runs the method`,
-  );
+function notAvailable(member: string, why: string): QuickdrawError {
+  return new QuickdrawError("INTERNAL", `${member} needs a dispatcher: ${why}`);
 }
 
 function untracked(): void {
@@ -294,18 +303,27 @@ const INSPECTED = new Set([
   "nodeType",
 ]);
 
-function unavailable(member: string): ContextServices {
-  return new Proxy(Object.freeze({}), {
+/** A member of `ctx` that throws `INTERNAL` on use, for a context no dispatcher built. */
+function unavailable<T extends object>(member: string, why: string): T {
+  return new Proxy(Object.freeze({}) as T, {
     get(_target, key) {
       if (typeof key === "symbol" || INSPECTED.has(key)) {
         return undefined;
       }
-      throw notAvailable(`${member}.${key}`);
+      throw notAvailable(`${member}.${key}`, why);
     },
   });
 }
 
-const SERVICES: ContextServices = unavailable("ctx.services");
+const SERVICES = unavailable<ContextServices>(
+  "ctx.services",
+  "it calls through the dispatcher that runs the method",
+);
+
+const ACCESS = unavailable<ContextAccess>(
+  "ctx.access",
+  "it reads the access policies of the dispatcher that runs the method",
+);
 
 /** The `ctx.rooms` of a context no dispatcher built: no socket to join with, no server to send through. */
 const NO_ROOMS: ContextRooms = Object.freeze({
@@ -350,12 +368,13 @@ function servicesOf(
  * `extend`. The framework's fields win when the names collide.
  */
 export function createContext(fields: ContextFields, extend?: ContextExtender): AnyContext {
-  const { kit, dispatch, ...own } = fields;
+  const { kit, dispatch, access, ...own } = fields;
   const services = servicesOf(dispatch, own.principal, own.mcp);
   const base: AnyContext = Object.freeze({
     ...own,
     touch: own.touch ?? untracked,
     services: services?.(own.signal) ?? SERVICES,
+    access: access?.forCaller(own.principal) ?? ACCESS,
     rooms: own.rooms ?? NO_ROOMS,
     presence: own.presence ?? NO_PRESENCE,
   });
@@ -376,8 +395,15 @@ export function withSignal(ctx: AnyContext, signal: AbortSignal): AnyContext {
   return withRuntime(Object.freeze(next), KIT_RUNTIMES.get(ctx), services);
 }
 
-/** The members of `ctx` that say who the caller is. */
-export type CallerMember = "principal" | "services" | "mcp";
+/** The members of `ctx` that say who the caller is, or answer as them. */
+export type CallerMember = "principal" | "services" | "mcp" | "access";
+
+const CALLER_MEMBERS: ReadonlySet<PropertyKey> = new Set<CallerMember>([
+  "principal",
+  "services",
+  "mcp",
+  "access",
+]);
 
 /**
  * The same `ctx`, calling `onRead` each time code reads one of the members
@@ -392,8 +418,8 @@ export function watchCallerReads(
 ): AnyContext {
   const watched = new Proxy(ctx, {
     get(target, key, receiver) {
-      if (key === "principal" || key === "services" || key === "mcp") {
-        onRead(key);
+      if (CALLER_MEMBERS.has(key)) {
+        onRead(key as CallerMember);
       }
       return Reflect.get(target, key, receiver) as unknown;
     },

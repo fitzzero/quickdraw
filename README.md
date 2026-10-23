@@ -635,10 +635,10 @@ export const taskService = qd.defineService(task, {
   `share: "all"` across principals; `ttlMs` keeps a shared result. A
   `"all"` run's handler sees the first caller's `ctx` and every caller gets
   its result, so a result shared across principals must depend on the
-  input only: it never reads `ctx.principal`, `ctx.services`, `ctx.mcp` or
-  a context field made from them (in development, reading one of the first
-  three warns `[quickdraw:shared-principal]`; copying or logging the whole
-  `ctx` reads them too). `"all"` is refused with
+  input only: it never reads `ctx.principal`, `ctx.services`, `ctx.mcp`,
+  `ctx.access` or a context field made from them (in development, reading
+  one of the first four warns `[quickdraw:shared-principal]`; copying or
+  logging the whole `ctx` reads them too). `"all"` is refused with
   `custom` access and on the kit methods whose result depends on the caller
   (the read/write kit's `list` and `getMany`, `search`, the sharing kit's
   `listShares` and `listMembers`, the admin kit's `adminList` and
@@ -710,7 +710,7 @@ not exist or a malformed access list denies.
 <!-- example: apps/api/src/services/examples/access.ts#access -->
 
 ```ts
-import { anyOf, crud, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
+import { anyOf, crud, custom, inherit, jsonAcl, members } from "@fitzzero/quickdraw-core/server";
 
 export const projectService = qd.defineService(project, {
   // the Prisma model the rows live in
@@ -765,6 +765,18 @@ export const taskService = qd.defineService(task, {
       handler: ({ input, db }) =>
         db.task.update({ where: { id: input.id }, data: { status: input.status } }),
     },
+    assigned: {
+      // Read on the project the input names, asked through ctx.access; none named, the caller's own
+      access: custom(
+        async (ctx, input) =>
+          input.projectId === undefined || (await ctx.access.can(project, input.projectId, "Read")),
+      ),
+      handler: ({ input, ctx, db }) =>
+        db.task.findMany({
+          where: { assigneeId: ctx.principal.userId, projectId: input.projectId },
+          take: 100,
+        }),
+    },
   },
 });
 ```
@@ -777,7 +789,8 @@ export const taskService = qd.defineService(task, {
   `UNAUTHENTICATED`; a principal that fails gets `FORBIDDEN`. The levels,
   lowest first, are `Public`, `Read`, `Moderate` and `Admin`. A `custom`
   form replaces the row check, and a service-wide `Admin` grant skips it: a
-  check on the caller's claims is `claims` (below).
+  check on the caller's claims is `claims` (below), and one that needs the
+  caller's level on a row asks `ctx.access` (`assigned` above, and below).
 - `kinds`, beside `access`, says which kinds of principal
   (`principal.kind`) may call: `initQuickdraw({ kinds: ["user", "agent"] })`
   for every service the app defines, `defineService(contract, { kinds })`
@@ -867,6 +880,23 @@ export const taskService = qd.defineService(task, {
 - `server.dispatcher.access` gives the same answers to other code:
   `levelsFor(service, principal, ids)`, `accessWhere(service, principal, level)`
   (a `where` filter for `findMany`, or `"none"`) and `onAccessChanged(listener)`.
+- `ctx.access` gives them to a handler or a `custom` form, as the caller:
+  `levelsFor(service, ids)`, `can(service, id, level)` and
+  `where(service, level)` are those bound to `ctx.principal`, with the
+  grants the call runs with (a socket's, or those an in-process caller
+  loaded); `service` is a contract or a service name. A form can then check
+  a row no `{ entry }` or `{ scope }` form names: a parent the input
+  names, or a key that is optional, as in `assigned` above, which passes
+  without a project and needs Read on one it names. It counts levels as
+  `{ entry }` does: a service-wide `Admin` grant reaches every row (with
+  `adminBypass`), a row that is not found gives anyone else no level
+  (`can` is `false`), and an anonymous caller has none anywhere (an empty
+  map, `false`, `"none"`). A `custom` form is still no row check of the
+  method's own `id`: a method whose input has one needs `rowless: true`
+  beside it (above). Every method call has it, MCP and `ctx.services` calls
+  included, and so do the `ctx` the kits pass to their forms and callbacks;
+  a context no dispatcher built throws `INTERNAL` on its use, and `qd` has
+  none: a job asks `server.dispatcher.access`.
 - `createServer({ access: { cacheMs: 30_000 } })` keeps policy lookups across
   requests; tracked writes to the columns and membership tables the policies
   read evict them. Writes the tracked client cannot see are picked up only
@@ -4051,7 +4081,7 @@ start):
 | `tiered-field-in-output`   | a method's own output schema declares a field the contract tiers, which only projection outputs strip; raised when the server is made (for an output without JSON Schema, when a reply carries it)                        |
 | `resolver-without-reads`   | a service's policy is, or combines in `anyOf`, a `resolver` without `reads`, so no tracked write re-checks it; raised when the server is made                                                                             |
 | `untracked-access-model`   | a model a policy, a membership table or a `via` junction depends on has no `id` the write tracker can key its rows by, so no write to it revokes; checked when the server starts, logged as an error in every environment |
-| `shared-principal`         | the handler of a `share: "all"` run (an app's, not a kit's) read `ctx.principal`, `ctx.services` or `ctx.mcp`: the run has the first caller's, and every caller gets its result                                           |
+| `shared-principal`         | the handler of a `share: "all"` run (an app's, not a kit's) read `ctx.principal`, `ctx.services`, `ctx.mcp` or `ctx.access`: the run has the first caller's, and every caller gets its result                             |
 | `channel-without-requires` | a channel's contract declares no `requires` and its service no `access`, so every signed-in user may send it; raised when the server is made                                                                              |
 
 Updates and deletes by id inside an interactive transaction are not counted
