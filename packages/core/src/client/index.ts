@@ -10,60 +10,19 @@
 // helpers from `@fitzzero/quickdraw-core/utils`, which this entry re-exports
 // for client code.
 //
-// The layers: `createQuickdrawConnection`, `call`, the invalidation
-// coordinator and the overlay store are plain TypeScript, with no React and
-// no DOM, for React Native and Node clients; the provider and the typed
-// client's hooks sit on top.
+// The layers, none of which needs the DOM:
+// - `./client/core`: the connection, calls, the auth helpers, peer links and
+//   host mode, with ./utils; no React and no TanStack, for Node scripts,
+//   CLIs and workers, which import that entry instead of this one;
+// - the invalidation coordinator, the overlay store, the cache session and
+//   live data, still without React but on a TanStack `QueryClient`, for
+//   React Native and Node clients that keep one;
+// - the provider and the typed client's hooks, on top.
 
-// Isomorphic helpers, the HTTP server caller and the cache keys (also on ./utils).
-export * from "../utils";
-
-// The auth routes kit's browser side (sign in, sign out) and bearer-token
-// storage, which reads localStorage where there is one.
-export {
-  clearAuthToken,
-  getAuthToken,
-  setAuthToken,
-  authProviders,
-  signInUrl,
-  signOut,
-  signOutEverywhere,
-  type AuthProviderInfo,
-  type AuthRoutesTarget,
-  type SignInUrlOptions,
-} from "./auth";
-
-// The connection and calls, without React.
-export {
-  createQuickdrawConnection,
-  type ConnectionAuth,
-  type ConnectionRefusal,
-  type ConnectionState,
-  type ConnectionStatus,
-  type QuickdrawConnection,
-  type QuickdrawConnectionOptions,
-  type QuickdrawSocket,
-  type SocketClientOptions,
-} from "./connection";
-export { DEFAULT_BACKOFF_MS, type BackoffKind, type BackoffWindows } from "./backoff";
-export {
-  call,
-  callData,
-  isNotModified,
-  isUnknownOutcome,
-  shouldRetry,
-  type CallRequest,
-  type CallResult,
-} from "./call";
-export { reloadOncePerSession } from "./reload";
-export { newId } from "./newId";
-export type { JoinWait, TopicWatch } from "./watch";
-export {
-  DEFAULT_SUBSCRIPTION_LANE,
-  type LaneCallback,
-  type SubscriptionEvent,
-  type SubscriptionLane,
-} from "./lane";
+// The client without React or TanStack (also on ./client/core), the same
+// functions: the connection, calls, auth helpers, peer links, host mode and
+// everything on ./utils.
+export * from "./core";
 
 // Invalidation and optimistic overlays, without React.
 export {
@@ -126,45 +85,6 @@ export {
 } from "./live/streams";
 export type { EventBus, EventHandler } from "./live/events";
 export type { PresenceStore } from "./live/presence";
-// Peer links between two sockets of an app room, without React (RFC 0003
-// section 12.5): WebRTC data channels, or the server's relay when those
-// cannot form.
-export {
-  createPeerLink,
-  DEFAULT_ICE_SERVERS,
-  onPeerRequest,
-  type PeerClock,
-  type PeerCloseReason,
-  type PeerConnectionConfig,
-  type PeerIceServer,
-  type PeerLabel,
-  type PeerLink,
-  type PeerLinkEvents,
-  type PeerLinkLag,
-  type PeerLinkLagOptions,
-  type PeerLinkOptions,
-  type PeerLinkState,
-  type PeerLinkStats,
-  type PeerPath,
-  type PeerRequest,
-  type RelayMode,
-} from "./peer/index";
-// Host mode, without React (RFC 0003 section 12.5): a client serves a
-// contract's host-served channels and streams as the host of an app room.
-export {
-  defineHost,
-  hostOf,
-  onHostChange,
-  type Host,
-  type HostChannelContext,
-  type HostChannelHandler,
-  type HostDefinition,
-  type HostImplementation,
-  type HostListener,
-  type HostPeer,
-  type HostStream,
-  type HostStreamOptions,
-} from "./host/index";
 
 // The typed client and its provider.
 export { createQuickdrawClient } from "./createClient";

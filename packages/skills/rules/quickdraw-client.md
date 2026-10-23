@@ -213,10 +213,13 @@ loss })` lags the link's own messages both ways on its real path (`rel`
   `caller.task.get.prefetch(queryClient, input)` fills the keys the hooks
   read, for `dehydrate` and `HydrationBoundary`.
 - React Native uses the same client and provider (no DOM is needed).
-  React-free code (a Node script, a worker) makes a connection with
+  React-free code (a Node script, a CLI, a worker) imports
+  `@fitzzero/quickdraw-core/client/core`, which needs neither React nor
+  TanStack Query installed: it makes a connection with
   `createQuickdrawConnection({ url, auth })`, calls `open()`, and calls
-  `callData(connection, { service: "taskService", method: "get", input })`
-  from `./client`; `liveDataOf(connection, queryClient)` holds live rows.
+  `callData(connection, { service: "taskService", method: "get", input })`.
+  `./client` re-exports the same functions. Live rows need a TanStack
+  `QueryClient`: `liveDataOf(connection, queryClient)` from `./client`.
 - A client in another language (a Godot game, a native app) speaks the wire
   itself: `docs/protocol-v5.md` in the quickdraw repository is the
   specification, `examples/godot` a GDScript client written from it, and

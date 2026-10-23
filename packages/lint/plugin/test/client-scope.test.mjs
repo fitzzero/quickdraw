@@ -1,5 +1,6 @@
 // Which files the client rules check (`inClientScope` in ../lib/files.mjs):
 // a file importing TanStack Query, the Socket.IO client or quickdraw's client
+// (`./client`, or `./client/core` without React, a script's or a worker's)
 // is client code wherever oxlint runs from; the path globs (`files`, default
 // `**/*.tsx`, `**/*.jsx`, `**/apps/web/**`) add files on top. The review's
 // case, a hook in `apps/web/src/hooks/useTask.ts` linted from the app root and
@@ -36,6 +37,7 @@ const IMPORTS = [
   `import { useQueryClient } from "@tanstack/react-query";`,
   `import { io } from "socket.io-client";`,
   `import { useQuickdraw } from "@fitzzero/quickdraw-core/client";`,
+  `import { callData } from "@fitzzero/quickdraw-core/client/core";`,
   `import type { QueryClient } from "@tanstack/react-query/build/modern";`,
 ];
 

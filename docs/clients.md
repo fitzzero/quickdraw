@@ -25,11 +25,16 @@ what to do and what not to.
 
 ## 2. The React-free connection
 
-`createQuickdrawConnection({ url, auth })` from the same entry, with
-`call` and `callData` for calls and `liveDataOf(connection, queryClient)` for
-live rows and collections: the same handshake, backoff and reconnect as the
-hooks, without React. A React server component calls over HTTP instead,
-with `createServerCaller(contracts, { url, headers })` from
+`createQuickdrawConnection({ url, auth })` from
+`@fitzzero/quickdraw-core/client/core`, with `call` and `callData` for
+calls: the same handshake, backoff and reconnect as the hooks. That entry
+imports neither React nor TanStack Query, in its code or its types, so a
+Node script, a CLI or a worker installs only `socket.io-client`; it also
+holds peer links, host mode and the auth helpers, and `./client` re-exports
+all of it. Live rows and collections take a TanStack `QueryClient`:
+`liveDataOf(connection, queryClient)` from `./client`, still without React.
+A React server component calls over HTTP instead, with
+`createServerCaller(contracts, { url, headers })` from
 `@fitzzero/quickdraw-core/utils`. The README's "Server components and other
 runtimes" section shows both.
 
