@@ -348,7 +348,12 @@ const expectations = {
     client: false,
   },
   "./testing/prisma": {
-    symbols: ["createPrismaTestGlobalSetup", "openPgliteFromTemplate", "resetDatabase"],
+    symbols: [
+      "createPrismaTestGlobalSetup",
+      "openPgliteFromTemplate",
+      "resetDatabase",
+      "withSavepoints",
+    ],
     client: false,
   },
   "./testing/client": {

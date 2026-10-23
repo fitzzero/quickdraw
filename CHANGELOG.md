@@ -515,6 +515,19 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   over a real socket. Each call is still dispatched and recorded once, so
   budgets count it as before. Bound arguments and the MCP registry's hooks
   are tested through `registry.callMethod`.
+- **`withSavepoints` lets a nested transaction run on PGlite.** Prisma 7
+  runs `tx.$transaction(...)` inside an interactive transaction as a
+  savepoint, through the driver adapter's `createSavepoint`,
+  `rollbackToSavepoint` and `releaseSavepoint`, and refuses it on an
+  adapter without them, as `pglite-prisma-adapter` 0.7 is: an app's test of
+  code that nests transactions failed on PGlite while it passed on
+  PostgreSQL. `withSavepoints(factory)` on `./testing/prisma` wraps a
+  driver adapter factory so each transaction gets the three, running the
+  SQL `@prisma/adapter-pg` runs, which PGlite runs as PostgreSQL does:
+  `new PrismaClient({ adapter: withSavepoints(new PrismaPGlite(pglite)) })`.
+  An adapter with savepoints of its own keeps them, and every other member
+  of the factory is its own. Core's own test database uses the same
+  function.
 
 ### Lint
 
