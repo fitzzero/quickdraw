@@ -45,6 +45,12 @@ export function streamRoom(service: string, stream: string, scope?: string): str
   return scope === undefined ? `qd:s:${service}:${stream}` : `qd:s:${service}:${stream}:${scope}`;
 }
 
+/**
+ * The prefix every room {@link streamRoom} names starts with. The builder
+ * spells it out, since docs/protocol-v5.md is generated from its template.
+ */
+export const STREAM_ROOM_PREFIX = "qd:s:";
+
 /** The room every authenticated socket of a user joins: `user:{userId}`, as in 4.1. */
 export function userRoom(userId: string): string {
   return `user:${userId}`;

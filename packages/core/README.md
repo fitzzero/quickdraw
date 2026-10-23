@@ -2822,6 +2822,17 @@ export function logLine(taskId: string, line: string): void {
   qd.stream(task, "logs").push(taskId, { line });
 }
 
+// a job skips the work nobody watches: the feed's subscribers on every node
+export async function tailLogs(taskId: string, read: () => Promise<string[]>): Promise<void> {
+  if ((await qd.stream(task, "logs").subscribers(taskId)) > 0) {
+    const lines = await read();
+    qd.stream(task, "logs").pushMany(
+      taskId,
+      lines.map((line) => ({ line })),
+    );
+  }
+}
+
 export async function isOnline(userId: string): Promise<boolean> {
   // also ctx.presence and server.presence
   return await qd.presence.isOnline(userId);
@@ -2889,6 +2900,18 @@ export function TaskRoom({
   leaves the feed and gets
   `qd:revoked { kind: "stream", reason: "access", s, stream, scope? }`, and
   `useStream` shows `FORBIDDEN` until the next connect.
+- A job skips the work nobody watches (`tailLogs` above):
+  `await qd.stream(task, "logs").subscribers(taskId)` (`subscribers()` for
+  a global stream; also on `server.stream` and `dispatcher.stream`) is how
+  many sockets subscribe to the feed, on every node, anonymous ones
+  included: the sockets a push reaches. Behind a cluster adapter the other
+  nodes answer one request with a count each, never their sockets; an
+  answer that does not arrive within `cluster.timeoutMs` counts as 0
+  (warned at most once every 10 minutes), and so does a node of an earlier
+  version. `qd.rooms` refuses the stream rooms' reserved `qd:` names, and
+  Socket.IO's own rooms hold one node's sockets: count with `subscribers`.
+  A host-served stream's handle refuses it, as it refuses `push`: only the
+  host's client knows who subscribes.
 - A service's `streams: { <name>: { seed, validate } }` (type
   `StreamImplementation`) computes a stream's seed per subscriber, `seed: (scope, ctx) => items` (the current state,
   where the items that follow are deltas; on whichever node the subscriber

@@ -31,6 +31,7 @@ import {
   type ServerRooms,
   type StreamHandle,
   type StreamSeedContext,
+  type StreamSubscribersArgs,
 } from "../index";
 
 interface AppPrincipal extends Principal {
@@ -176,6 +177,18 @@ describe("the server", () => {
     // @ts-expect-error -- lobbyService has no stream "nope"
     qd.stream(lobby, "nope");
     expectTypeOf(dispatcher.presence).toEqualTypeOf<Presence>();
+  });
+
+  test("subscribers takes (scope) for a scoped stream, () for a global one, and resolves with a count", () => {
+    const logs = qd.stream(lobby, "logs");
+    expectTypeOf(logs.subscribers("room1")).toEqualTypeOf<Promise<number>>();
+    // @ts-expect-error -- a scoped stream needs its scope
+    void logs.subscribers();
+    expectTypeOf(qd.stream(lobby, "load").subscribers()).toEqualTypeOf<Promise<number>>();
+    // @ts-expect-error -- a global stream takes no scope
+    void qd.stream(lobby, "load").subscribers("room1");
+    expectTypeOf<StreamSubscribersArgs<typeof lobby, "logs">>().toEqualTypeOf<[scope: string]>();
+    expectTypeOf<StreamSubscribersArgs<typeof lobby, "load">>().toEqualTypeOf<[]>();
   });
 
   test("a stream's seed function gets its scope and the subscriber, and returns its items", () => {

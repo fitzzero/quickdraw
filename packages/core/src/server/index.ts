@@ -109,6 +109,7 @@ export type {
   StreamPushManyArgs,
   StreamSeed,
   StreamSeedContext,
+  StreamSubscribersArgs,
   StreamSubscriptions,
   StreamValidation,
 } from "./realtime/types";
