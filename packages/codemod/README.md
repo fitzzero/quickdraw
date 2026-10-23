@@ -142,6 +142,21 @@ It expects the quickdraw template's layout; the options move each part:
 ChatService(prisma)`, a parameter `pushService: PushService`) imports the
   object under an alias (`chatService as chatServiceDef`), so no output
   refers to itself.
+- **Writers that take the Prisma client.** A module function with a
+  parameter typed `PrismaClient` (or `Prisma.TransactionClient`) that
+  writes through it, or hands it to one that does, gets that type wrapped
+  once every caller the run sees gives it the tracked client:
+  `Tracked<PrismaClient>`, or `TrackedTransaction<...>` when a caller gives
+  it a transaction's `tx` or its 4.x type took one, imported from
+  `@fitzzero/quickdraw-core/prisma`. The tracked client is a handler's
+  `db`, the tracked `db` (where 4.x passed `this.prisma`), a client typed
+  with one of those types, a transaction on one, or the parameter of
+  another writer typed here. A writer a caller gives anything else keeps
+  its type, and so do one nothing in the run calls (an exported job's
+  helper: its callers are not the run's to vouch for), one passed around
+  rather than called, and one that only reads. Lint's `no-untracked-write`
+  reads the new type whatever the parameter's name; the summary counts the
+  writers typed.
 - **Every workspace package that depends on quickdraw** (the root
   `package.json`'s `workspaces`), not only shared, api and web: the
   database package's test helpers, say. An entry point that only moved is

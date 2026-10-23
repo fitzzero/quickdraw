@@ -1010,8 +1010,9 @@ export async function markStale(before: Date): Promise<number> {
   one (`db` is one too), and the untracked client passed to it is a type
   error. A helper typed `PrismaClient` takes either client. Both types are
   type-only, on `./prisma` and on the root export, so a shared package
-  names them without Prisma. `no-untracked-write` reads the type too: a
-  parameter so typed may be named `prisma`.
+  names them without Prisma. `no-untracked-write` reads the type too, when
+  the file imports it from quickdraw (under any name): a parameter, a
+  destructured binding or a class member so typed may be named `prisma`.
 
 <!-- example: apps/api/src/jobs/overdue.ts#helper -->
 

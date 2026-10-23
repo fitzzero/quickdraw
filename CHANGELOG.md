@@ -542,6 +542,21 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   and `no-nested-write` and `no-foreign-write` check them as `db`'s. A name
   in `clients` declared without such a type is still reported, and the
   rule's message says how to type a parameter given the tracked client.
+- **The write rules count quickdraw's `Tracked` alone, and read it on more
+  bindings.** A type named `Tracked` or `TrackedTransaction` counted
+  whatever declared it, so an app's own `type Tracked<C> = C` silenced
+  `no-untracked-write`. The type now counts when the file imports it from
+  `@fitzzero/quickdraw-core` or `@fitzzero/quickdraw-core/prisma`, under
+  any name (`import type { Tracked as T }`) or through a namespace import,
+  or through the file's own type alias of it; one of the app's own, or one
+  imported from another module, is not read. The rules also read it on a
+  destructured binding whose pattern's type gives it one (`{ db }: { db:
+Tracked<Db> }`, nested, with a default, or through the file's interface
+  or type alias), and on `this.<member>` its class declares so (`private
+readonly prisma: Tracked<Db>`, a private `#db`, or a constructor's
+  parameter property), whose writes `no-nested-write` and
+  `no-foreign-write` now check as `db`'s. The message names the module to
+  import the type from.
 - **`no-plain-error-refusal`** reports a plain error thrown to refuse
   credentials: `throw new Error(...)` (or another built-in error, with or
   without `new`) in a function given as `auth.authenticate` to
@@ -555,6 +570,23 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
 
 ### Codemod
 
+- **Writers that take the Prisma client are typed to take the tracked
+  one.** A module function with a parameter typed as the app's Prisma
+  client (`prisma: PrismaClient`, or `Prisma.TransactionClient`), which
+  writes through it or hands it to a function that does, kept its 4.x
+  type: the compiler took the untracked client there, and lint's
+  `no-untracked-write` reported its writes when the parameter was named
+  `prisma` (farseer's harness writers, whose every caller passed
+  `this.prisma`). When every call the run sees gives it the tracked client
+  (a handler's `db`, the tracked `db` the run imports where 4.x passed
+  `this.prisma`, a client typed `Tracked<...>`, a transaction's `tx` on one,
+  or the parameter of another writer typed here), the codemod wraps the
+  type: `Tracked<PrismaClient>`, or `TrackedTransaction<...>` when a caller
+  gives it a transaction's client or its 4.x type took one, imported from
+  `@fitzzero/quickdraw-core/prisma`. A writer a caller gives anything else
+  keeps its type, and so do one nothing in the run calls, one passed
+  around rather than called, and one that only reads. The summary counts
+  the writers typed.
 - **A method object no longer collides with a binding of its name.** A
   split service's method module wrote each method object under its
   method's name (`export const renameTask = ...`), and the service file

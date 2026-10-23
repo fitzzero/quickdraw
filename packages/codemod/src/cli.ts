@@ -137,7 +137,7 @@ function run(argv: readonly string[], output: Output): void {
   const lines = [
     `quickdraw-codemod v5${dryRun ? " (dry run: nothing written)" : ""}`,
     `  ${String(stats.services)} services, ${String(stats.methods)} methods (${String(stats.aggregatorsRemoved)} aggregator functions removed), ${String(stats.contracts)} contracts (${String(stats.schemasMoved)} schemas moved, ${String(stats.schemasMerged)} same-named copies merged, ${String(stats.schemasRenamed)} renamed, ${String(stats.todoSchemas)} todoSchema placeholders)`,
-    `  ${String(stats.clientCalls)} web files rewritten, ${String(stats.wrappersDeleted)} wrapper hooks deleted`,
+    `  ${String(stats.clientCalls)} web files rewritten, ${String(stats.wrappersDeleted)} wrapper hooks deleted, ${String(stats.writersTyped)} writers typed to take the tracked client`,
     `  ${dryRun ? "would change" : "changed"} ${String(result.changed.length)} files, ${dryRun ? "create" : "created"} ${String(result.created.length)}, ${dryRun ? "delete" : "deleted"} ${String(result.deleted.length)}`,
     `  ${String(result.items)} items to review${dryRun ? "" : `: see ${REPORT_FILE}`}`,
   ];

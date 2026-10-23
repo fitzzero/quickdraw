@@ -20,6 +20,8 @@ export interface Stats {
   todoSchemas: number;
   clientCalls: number;
   wrappersDeleted: number;
+  /** Module functions that write through a Prisma client parameter, typed to take the tracked client. */
+  writersTyped: number;
 }
 
 /** One run of the codemod. */
@@ -56,6 +58,7 @@ export function createContext(project: Project, layout: Layout): RunContext {
       todoSchemas: 0,
       clientCalls: 0,
       wrappersDeleted: 0,
+      writersTyped: 0,
     },
     created: new Set(),
     deleted: new Set(),

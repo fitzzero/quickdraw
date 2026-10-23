@@ -5,7 +5,9 @@
 // method's kind and moved schemas), then the services and every file that
 // used their classes, then the web app's hooks, all applied at once; then
 // the files the removed aggregators left empty and the wrapper hooks no call
-// uses any more go, and the 4.x API left over is marked.
+// uses any more go, and the 4.x API left over is marked. Last, on the
+// migrated code, the writers every caller gives the tracked client take it
+// by its type.
 
 import type { SourceFile } from "ts-morph";
 import { Work } from "./apply";
@@ -27,6 +29,7 @@ import {
   queriedMethods,
   removeAggregators,
   rewriteReferences,
+  typeHelperClients,
   writeClientInfra,
   writeContracts,
   writeServerInfra,
@@ -74,4 +77,7 @@ export function migrate(ctx: RunContext): void {
   const leftovers = new Work();
   markLeftovers(ctx, leftovers);
   leftovers.apply(jsFor(ctx));
+  const typed = new Work();
+  typeHelperClients(ctx, typed);
+  typed.apply(jsFor(ctx));
 }
