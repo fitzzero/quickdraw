@@ -7,8 +7,10 @@
 // channel's handler on messages checked as the server checks `qd:ch`
 // (`runtime.ts`), answers a subscribe with the feed's seed, and sends what
 // `host.stream(name).push(scope, item)` pushes to the feed's subscribers.
-// This client's own channels and feeds of the room reach it in process
-// (`links.ts`). One connection may serve several contracts in one room, one
+// This client's own channels and feeds of the room reach it over an
+// in-process link (`links.ts`, `local.ts`). Each peer comes with the host's
+// end of its link (`HostPeer.link`), whose `setLag` lags that peer, or the
+// host's own play. One connection may serve several contracts in one room, one
 // `serve` each: they share the room's links, and each message goes to the
 // contract of its service; a subscribe to a service none of them is
 // refused (`NOT_FOUND`).
@@ -84,7 +86,11 @@ export interface HostStream<Item> {
 /** A room served by its host's client. */
 export interface Host<C extends AnyContract> {
   readonly room: string;
-  /** The peers linked to the host now (this client too, while its own channels or feeds use the room). */
+  /**
+   * The peers linked to the host now, each with the host's end of its link
+   * (this client too, in process, while its own channels or feeds use the
+   * room).
+   */
   readonly peers: readonly HostPeer[];
   /** A host-served stream of the contract. */
   stream<K extends HostStreamName<C>>(name: K): HostStream<StreamItemOf<C, K>>;

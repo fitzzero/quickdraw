@@ -195,7 +195,9 @@ func _reconnected(client) -> void:
 ## A peer link with the harness's player "bo", who joins the world and offers
 ## one on "STEP peer" (test/godot.ts). Neither side has WebRTC, so the link
 ## runs on the relay: bo says hello on rel, the client says hello back, and bo
-## closes the link.
+## closes the link. The link plays over a lag of 200 ms each way (`set_lag`),
+## which holds bo's hello on its way in and the client's on its way out,
+## and changes no frame.
 func _peer(client) -> void:
 	var asked: Array = []
 	var on_request := func(room: String, from: String, user: String) -> void: asked.append([room, from, user])
@@ -205,15 +207,22 @@ func _peer(client) -> void:
 	check(await until(func() -> bool: return asked.size() == 1), "a peer's signal asks for a link")
 	check(asked[0][0] == "world:main" and asked[0][2] == "bo", "naming its room and its user")
 	var link = client.peer_link(asked[0][0], asked[0][1], false)
+	var linked_at := Time.get_ticks_msec()
+	link.set_lag(200)
+	check(link.lag_ms == 200.0 and link.lag_jitter == 0.0 and link.lag_loss == 0.0, "set_lag sets the link's lag")
 	var heard: Array = []
 	var reasons: Array = []
 	link.message.connect(func(label: String, data: Variant) -> void: heard.append([label, data]))
 	link.closed.connect(func(reason: String) -> void: reasons.append(reason))
 	check(await until(func() -> bool: return heard.size() == 1), "the peer's message arrives over the link")
+	check(Time.get_ticks_msec() - linked_at >= 200, "no sooner than the lag holds it on its way in")
 	check(link.path == "relay" and link.user_id == "bo", "which runs on the relay, naming the peer's user")
 	check(heard[0][0] == "rel" and heard[0][1].hi == "ada", "on rel, as its JSON value")
-	check(link.send("rel", {"hi": "bo"}), "a message to the peer goes")
+	var sent_at := Time.get_ticks_msec()
+	check(link.send("rel", {"hi": "bo"}) and link.sent == 0, "a message to the peer goes, held for the lag")
 	check(await until(func() -> bool: return reasons.size() == 1), "the peer closes the link")
+	check(Time.get_ticks_msec() - sent_at >= 200, "once the lag let the message go, 200 ms on")
+	check(link.sent == 1 and link.simulated_loss == 0, "counted as sent when it went")
 	check(reasons[0] == "bye" and link.state == "closed", "and the link closes with its bye")
 	client.peer_requested.disconnect(on_request)
 

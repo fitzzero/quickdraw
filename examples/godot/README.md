@@ -99,6 +99,16 @@ socket id), `user_id` (the peer's user, as the server named it), `sent`,
 `clock_now()` (the peer's clock in its milliseconds), `clock_offset`, `rtt`,
 `jitter` and `synced`. Its signals are `opened(path)`,
 `message(label, data)`, `state_changed(state, path)` and `closed(reason)`.
+
+`set_lag(ms, jitter, loss)` plays a link over a bad network, as the
+JavaScript client's `setLag` does: each message waits `ms` plus up to
+`jitter` milliseconds, both ways (the client hands it on in the first frame
+after), and a `"fast"` one is lost with probability `loss`, from 0 to 1
+(`simulated_loss` counts the app's; jitter and loss draw from `rng`).
+`"rel"` messages are never lost and keep their order. The clock's pings
+wait too, so `rtt` reads the lagged round trip; `set_lag(0)` ends it, and
+what is held goes on the next frame. `lag_ms`, `lag_jitter` and `lag_loss`
+read it. Nothing on the wire changes: the server never sees it.
 The server forwards a link's signals and relays its messages only between
 two players of the room, but what the peer sends is the peer's word: a game
 checks it as it would check any input.
@@ -189,8 +199,10 @@ and the one that sends must make the joining call
   `godot` on the PATH, or `GODOT=/path/to/Godot_v4.7.2-stable_linux.x86_64`):
   [`test/godot.ts`](test/godot.ts) starts the game server and runs the
   client headless in Godot through [`test/smoke.gd`](test/smoke.gd), whose
-  peer link it answers as the player "bo" offering one over the relay, and
-  whose host mode it answers with the world's host (`test/host.ts`). It
+  peer link it answers as the player "bo" offering one over the relay (the
+  script lags that link 200 ms each way, and checks that both hellos
+  waited), and whose host mode it answers with the world's host
+  (`test/host.ts`). It
   passes when the script's checks hold and the client wrote exactly the
   frames of `test/frames.ts`, its links' clock pings aside and a steer it
   sent again counted once. CI's `godot` job runs it with the official

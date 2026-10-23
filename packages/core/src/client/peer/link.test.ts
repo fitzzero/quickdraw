@@ -6,13 +6,14 @@
 // nothing open in time, a path that dropped after it opened, a channel that
 // closed with no bye, a side without WebRTC), every way a link closes (on
 // the direct path, the bye before the channels close), the limits `send`
-// keeps, the requests of peers without a link, and the clock. `peer.test.ts` runs links against a
-// real server.
+// keeps, the requests of peers without a link, the clock, and the lag
+// `setLag` simulates on either path (`lag.test.ts` runs its queue alone).
+// `peer.test.ts` runs links against a real server.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PeerSignalFrame } from "../../protocol/envelope";
 import { MAX_PEER_MESSAGE_BYTES } from "../../protocol/version";
-import { PING_MS, QUICK_PINGS, WATCHDOG_MS } from "./core";
+import { controlOf, PING_MS, QUICK_PINGS, WATCHDOG_MS } from "./core";
 import { DEFAULT_PEER_LIMITS, PENDING_MS } from "./hub";
 import {
   BYE_WAIT_MS,
@@ -28,6 +29,7 @@ import { DISCONNECTED_GRACE_MS, FAST_BACKLOG_BYTES } from "./rtc";
 import type { PeerLink, PeerLinkEvents } from "./types";
 import { createFakeNetwork, type FakeNetwork } from "./__tests__/fakeRtc";
 import { helloOf, Wire, type ConnectOptions, type FakeConnection } from "./__tests__/fakeWire";
+import { seeded } from "./__tests__/seeded";
 
 const ROOM = "match:1";
 
@@ -185,7 +187,7 @@ describe("the direct path", () => {
       [[1, 2], "fast"],
     ]);
     expect(seen.messages).toEqual([["hi ada", "rel"]]);
-    expect(link.stats).toEqual({ sent: 2, received: 1, dropped: 0 });
+    expect(link.stats).toEqual({ sent: 2, received: 1, dropped: 0, simulatedLoss: 0 });
     expect(ada.side.socket.sent.filter(([event]) => event === "qd:relay")).toEqual([]);
   });
 
@@ -599,7 +601,7 @@ describe("send", () => {
     const bo = player("bo");
     const link = offer(ada, bo);
     expect(link.send("rel", 1)).toBe(false);
-    expect(link.stats).toEqual({ sent: 0, received: 0, dropped: 1 });
+    expect(link.stats).toEqual({ sent: 0, received: 0, dropped: 1, simulatedLoss: 0 });
   });
 });
 
@@ -673,6 +675,166 @@ describe("requests", () => {
         createPeerLink(ada.side.connection, options as unknown as PeerLinkOptions),
       ).toThrow(TypeError);
     }
+  });
+});
+
+describe("the lag", () => {
+  /** A link from Ada to Bo on the direct path, and `opened`, which resolves with Bo's end once it is open. */
+  function direct() {
+    const bo = player("bo", { peerConnection: network.factory });
+    const link = offer(player("ada"), bo, { peerConnection: network.factory });
+    const opened = async (): Promise<PeerLink> => {
+      await pass();
+      return bo.accepted[0] as PeerLink;
+    };
+    return { link, opened };
+  }
+
+  it("holds each message both ways on the direct path, and the clock reads the lagged round trip", async () => {
+    const { link, opened } = direct();
+    // Set before the link opens: its first pings wait too.
+    link.setLag({ ms: 100 });
+    expect(link.lag).toEqual({ ms: 100, jitter: 0, loss: 0 });
+    const answer = await opened();
+    expect([link.path, answer.path]).toEqual(["direct", "direct"]);
+    await pass(2000);
+    // Both sides read the lagged side's round trip: 100 ms each way.
+    for (const side of [link, answer]) {
+      expect(side.clock.synced).toBe(true);
+      expect(side.clock.rtt).toBeGreaterThanOrEqual(200);
+      expect(side.clock.rtt).toBeLessThan(205);
+      expect(Math.abs(side.clock.offset)).toBeLessThan(5);
+    }
+    const there = record(answer);
+    const here = record(link);
+    expect(link.send("rel", "to bo")).toBe(true);
+    expect(answer.send("fast", "to ada")).toBe(true);
+    // Held, not sent yet.
+    expect(link.stats.sent).toBe(0);
+    await pass(99);
+    expect([there.messages, here.messages]).toEqual([[], []]);
+    await pass(2);
+    expect([there.messages, here.messages]).toEqual([[["to bo", "rel"]], [["to ada", "fast"]]]);
+    expect(link.stats).toEqual({ sent: 1, received: 1, dropped: 0, simulatedLoss: 0 });
+  });
+
+  it("lags a link on the relay the same way, and reads about none again after setLag(null)", async () => {
+    const ada = player("ada");
+    const bo = player("bo");
+    const link = offer(ada, bo);
+    link.setLag({ ms: 50 });
+    await pass(2000);
+    expect(link.path).toBe("relay");
+    expect(link.clock.rtt).toBeGreaterThanOrEqual(100);
+    expect(link.clock.rtt).toBeLessThan(105);
+    link.setLag(null);
+    expect(link.lag).toBe(null);
+    // `rtt` is smoothed: a pong moves it an eighth of the way.
+    await pass(PING_MS * 40);
+    expect(link.clock.rtt).toBeLessThan(5);
+  });
+
+  it("loses fast messages both ways at the rate asked, counting them apart from drops, and never rel ones", async () => {
+    const { link, opened } = direct();
+    const answer = await opened();
+    const there = record(answer);
+    const here = record(link);
+    link.setLag({ ms: 5, loss: 0.3, random: seeded(5) });
+    for (let n = 0; n < 500; n += 1) {
+      expect(link.send("fast", n)).toBe(true);
+      expect(link.send("rel", n)).toBe(true);
+    }
+    await pass(20);
+    const sentLost = link.stats.simulatedLoss;
+    const fast = there.messages.filter(([, label]) => label === "fast").length;
+    const rel = there.messages.filter(([, label]) => label === "rel").map(([data]) => data);
+    expect(rel).toEqual(Array.from({ length: 500 }, (_, n) => n));
+    expect(sentLost).toBeGreaterThan(110);
+    expect(sentLost).toBeLessThan(190);
+    expect(fast + sentLost).toBe(500);
+    expect(link.stats).toMatchObject({ sent: 1000 - sentLost, dropped: 0 });
+    // On their way in, too.
+    for (let n = 0; n < 500; n += 1) {
+      answer.send("fast", n);
+    }
+    await pass(20);
+    const heardLost = link.stats.simulatedLoss - sentLost;
+    expect(heardLost).toBeGreaterThan(110);
+    expect(here.messages.length + heardLost).toBe(500);
+    expect(answer.stats).toMatchObject({ sent: 500, simulatedLoss: 0 });
+  });
+
+  it("sends a held rel message the relay refused again, in order, and drops rel sent while it waits", async () => {
+    const peers = { ...DEFAULT_PEER_LIMITS, relayRate: 10, relayBurst: 8 };
+    const ada = player("ada", {}, { peers });
+    const bo = player("bo", {}, { peers });
+    const link = offer(ada, bo);
+    await pass();
+    const there = record(bo.accepted[0] as PeerLink);
+    link.setLag({ ms: 10 });
+    // The relay's budget, nine tenths of 10 a second and half the burst, takes a few.
+    for (let n = 0; n < 8; n += 1) {
+      expect(link.send("rel", n)).toBe(true);
+    }
+    await pass(20);
+    expect(there.messages.length).toBeLessThan(8);
+    expect(link.send("rel", "meanwhile")).toBe(false);
+    expect(link.stats).toMatchObject({ dropped: 1, simulatedLoss: 0 });
+    await pass(10_000);
+    expect(there.messages.map(([data]) => data)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(link.stats).toMatchObject({ sent: 8, dropped: 1 });
+    expect(link.send("rel", 8)).toBe(true);
+  });
+
+  it("lets what is held go on the next task, in order, once setLag(null) ends the lag", async () => {
+    const { link, opened } = direct();
+    const answer = await opened();
+    const there = record(answer);
+    link.setLag({ ms: 1000, jitter: 1000, random: seeded(6) });
+    for (let n = 0; n < 20; n += 1) {
+      link.send("rel", n);
+    }
+    link.setLag(null);
+    await pass(1);
+    expect(there.messages.map(([data]) => data)).toEqual(Array.from({ length: 20 }, (_, n) => n));
+    // Nothing held: the next goes at once, a channel's task later.
+    link.send("rel", "next");
+    await pass(1);
+    expect(there.messages.at(-1)).toEqual(["next", "rel"]);
+  });
+
+  it("holds host mode's messages too", async () => {
+    const { link, opened } = direct();
+    const answer = await opened();
+    const heard: unknown[] = [];
+    controlOf(answer)?.on((message) => heard.push(message));
+    link.setLag({ ms: 30 });
+    expect(controlOf(link)?.send("rel", [4, "gameService", "world", "w1"])).toBe(true);
+    await pass(29);
+    expect(heard).toEqual([]);
+    await pass(2);
+    expect(heard).toEqual([[4, "gameService", "world", "w1"]]);
+  });
+
+  it("refuses a lag out of range, reads all zeros as none, and does nothing once the link is closed", () => {
+    const link = offer(player("ada"), player("bo"));
+    for (const lag of [{ ms: -1 }, { jitter: Number.POSITIVE_INFINITY }, { loss: 1.5 }]) {
+      expect(() => {
+        link.setLag(lag);
+      }).toThrow(TypeError);
+    }
+    expect(() => {
+      link.setLag({ random: 0.5 } as never);
+    }).toThrow("PeerLink.setLag: random must be a function returning numbers from 0 to 1");
+    expect(() => {
+      link.setLag(150 as never);
+    }).toThrow("PeerLink.setLag: pass { ms, jitter, loss }, or null for none");
+    link.setLag({ ms: 0, jitter: 0, loss: 0 });
+    expect(link.lag).toBe(null);
+    link.setLag({ ms: 10 });
+    link.close();
+    link.setLag({ ms: 20 });
+    expect(link.lag).toEqual({ ms: 10, jitter: 0, loss: 0 });
   });
 });
 

@@ -150,8 +150,10 @@ two signed-in sockets of the room, and ends a player's links when they
 leave it, are taken out of it or disconnect. It never reads what a link
 carries: a game treats each message as untrusted input, and checks on the
 server whatever a client reports there. A link is the socket's, as a room
-is: open it again after every reconnect. The GDScript client has the same
-links (`peer_link`), on the relay where Godot has no WebRTC.
+is: open it again after every reconnect. A test or a bench plays a link
+over a bad network on its real path with `link.setLag({ ms, jitter, loss })`,
+which the server never sees. The GDScript client has the same links
+(`peer_link`, with `set_lag`), on the relay where Godot has no WebRTC.
 
 A room's host can serve a contract's channels and streams itself
 ([README: Host mode](../README.md#host-mode); the wire in
