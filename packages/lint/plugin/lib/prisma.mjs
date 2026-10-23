@@ -1,9 +1,12 @@
 // Recognizing database calls by shape. The tracked client is conventionally
 // named `db` (the handler argument, or the app's `trackPrisma(...)` client in
 // jobs), the client inside an interactive transaction `tx`, and the untracked
-// Prisma client `prisma`. Rules take the names as options.
+// Prisma client `prisma`. Rules take the names as options. A parameter or
+// variable this file declares with a tracked client's type
+// (`prisma: Tracked<Db>`) is the tracked client whatever its name: the
+// compiler refuses the untracked client there (`declaredTracked`).
 
-import { memberName, unwrap } from "./ast.mjs";
+import { memberName, resolveVariable, unwrap } from "./ast.mjs";
 
 /** Prisma model operations that write rows. */
 export const WRITE_METHODS = new Set([
@@ -39,6 +42,9 @@ export const TRACKED_CLIENTS = Object.freeze(["db", "tx"]);
 /** Every client name, tracked or not. */
 export const ALL_CLIENTS = Object.freeze(["db", "tx", "prisma"]);
 
+/** The types that hold a client to the tracked one: `@fitzzero/quickdraw-core`'s `Tracked<C>` and `TrackedTransaction<C>`. */
+export const TRACKED_TYPES = Object.freeze(["Tracked", "TrackedTransaction"]);
+
 /** The JSON Schema of a `clients` option. */
 export const CLIENTS_OPTION = Object.freeze({
   type: "array",
@@ -62,12 +68,62 @@ export function clientName(node, clients) {
   return undefined;
 }
 
+/** The name a type reference ends in: `Tracked` for `Tracked<Db>` and for `quickdraw.Tracked<Db>`. */
+function referenceName(name) {
+  if (name.type === "Identifier") {
+    return name.name;
+  }
+  return name.type === "TSQualifiedName" ? referenceName(name.right) : undefined;
+}
+
+/**
+ * Whether a type says the tracked client, by its text (the rule cannot see
+ * types): `Tracked<...>` or `TrackedTransaction<...>`, qualified or not, a
+ * union of only those, or an intersection with one.
+ */
+export function isTrackedType(type) {
+  switch (type?.type) {
+    case "TSTypeReference":
+      return TRACKED_TYPES.includes(referenceName(type.typeName));
+    case "TSUnionType":
+      return type.types.every(isTrackedType);
+    case "TSIntersectionType":
+      return type.types.some(isTrackedType);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Whether `node` names a parameter or variable this file declares with a
+ * tracked client's type (`prisma: Tracked<Db>`, `const client:
+ * TrackedTransaction<Db> = tx`): the compiler holds it to the tracked client,
+ * whatever it is named. A destructured binding, a member and a name declared
+ * elsewhere are not read.
+ */
+export function declaredTracked(context, node) {
+  const receiver = unwrap(node);
+  if (receiver?.type !== "Identifier") {
+    return false;
+  }
+  const definitions = resolveVariable(context, receiver)?.defs ?? [];
+  return (
+    definitions.length > 0 &&
+    definitions.every((definition) =>
+      isTrackedType(definition.name?.typeAnnotation?.typeAnnotation),
+    )
+  );
+}
+
 /**
  * A model operation on one of `clients`: `db.task.update(...)` gives
- * `{ client: "db", model: "task", method: "update", args }`. A computed
- * model (`db[name]`) and the client's own `$` methods are not model calls.
+ * `{ client: "db", model: "task", method: "update", args, receiver }`, the
+ * receiver being the client's node. A computed model (`db[name]`) and the
+ * client's own `$` methods are not model calls. Given the rule's `context`,
+ * a receiver declared with a tracked client's type counts as one of
+ * `clients` whatever its name (`declaredTracked`).
  */
-export function modelCall(node, clients) {
+export function modelCall(node, clients, context) {
   const call = unwrap(node);
   if (call?.type !== "CallExpression") {
     return undefined;
@@ -88,9 +144,12 @@ export function modelCall(node, clients) {
   if (model === undefined || model.startsWith("$")) {
     return undefined;
   }
-  const client = clientName(delegate.object, clients);
+  const receiver = unwrap(delegate.object);
+  const client =
+    clientName(receiver, clients) ??
+    (context !== undefined && declaredTracked(context, receiver) ? receiver.name : undefined);
   if (client === undefined) {
     return undefined;
   }
-  return { call, client, model, method, args: call.arguments };
+  return { call, client, model, method, args: call.arguments, receiver };
 }

@@ -3,10 +3,13 @@
 // script or webhook the app's `trackPrisma(...)` client inside `qd.run`.
 // This rule keeps the untracked Prisma client out of services, jobs and
 // routes: importing it from the app's database package, and writing through
-// a client named `prisma`. Reads through it are left alone.
+// a client named `prisma`. Reads through it are left alone, and so is a
+// write through a parameter or variable declared with a tracked client's
+// type (`prisma: Tracked<Db>`), whatever its name: the compiler refuses the
+// untracked client there.
 
 import { FILE_OPTIONS, SERVER_FILES, TEST_FILES, inScope, matchesAny } from "../lib/files.mjs";
-import { WRITE_METHODS, modelCall } from "../lib/prisma.mjs";
+import { WRITE_METHODS, declaredTracked, modelCall } from "../lib/prisma.mjs";
 
 const DEFAULT_MODULES = ["@project/db", "@prisma/client", "**/generated/prisma/client*"];
 const DEFAULT_CLIENTS = ["prisma"];
@@ -31,7 +34,8 @@ export default {
         "Use the handler's `db` argument; in a job, script or webhook, import the tracked client (`trackPrisma(...)`) and wrap its writes in `qd.run(() => ...)`.",
       untrackedWrite:
         "`{{ client }}.{{ model }}.{{ method }}()` writes through the untracked client, so subscribers never see this change. " +
-        "Write through the handler's `db` argument, or through the tracked client inside `qd.run(() => ...)`.",
+        "Write through the handler's `db` argument, or through the tracked client inside `qd.run(() => ...)`. " +
+        "A parameter or variable given the tracked client says so with its type, whatever its name: `Tracked<Db>`.",
     },
     schema: [
       {
@@ -46,7 +50,8 @@ export default {
           clients: {
             type: "array",
             items: { type: "string" },
-            description: "Names the untracked client goes by.",
+            description:
+              "Names the untracked client goes by; one declared with a tracked client's type (`Tracked<Db>`) is not it.",
           },
         },
         additionalProperties: false,
@@ -80,7 +85,11 @@ export default {
       },
       CallExpression(node) {
         const call = modelCall(node, clients);
-        if (call === undefined || !WRITE_METHODS.has(call.method)) {
+        if (
+          call === undefined ||
+          !WRITE_METHODS.has(call.method) ||
+          declaredTracked(context, call.receiver)
+        ) {
           return;
         }
         context.report({

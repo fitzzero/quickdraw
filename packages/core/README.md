@@ -968,6 +968,45 @@ export async function markStale(before: Date): Promise<number> {
 }
 ```
 
+- A helper that writes takes the tracked client by its type. `trackPrisma`
+  returns `Tracked<C>`: still a `C` wherever one is asked for, while the
+  untracked client is no `Tracked<C>`. Type the helper's client
+  `Tracked<PrismaClient>`, or `TrackedTransaction<PrismaClient>` when it
+  may also run inside `db.$transaction(async (tx) => ...)`, whose `tx` is
+  one (`db` is one too), and the untracked client passed to it is a type
+  error. A helper typed `PrismaClient` takes either client. Both types are
+  type-only, on `./prisma` and on the root export, so a shared package
+  names them without Prisma. `no-untracked-write` reads the type too: a
+  parameter so typed may be named `prisma`.
+
+<!-- example: apps/api/src/jobs/overdue.ts#helper -->
+
+```ts
+import type { TrackedTransaction } from "@fitzzero/quickdraw-core/prisma";
+import type { PrismaClient } from "@project/db";
+
+// takes the tracked client, or a transaction's: passing the untracked `prisma` is a type error
+export async function reopenStale(
+  client: TrackedTransaction<PrismaClient>,
+  projectId: string,
+): Promise<number> {
+  const { count } = await client.task.updateMany({
+    where: { projectId, status: "stale" },
+    data: { status: "open" },
+  });
+  return count;
+}
+
+export async function restoreProject(projectId: string): Promise<number> {
+  return await qd.run(() =>
+    db.$transaction(async (tx) => {
+      await tx.project.update({ where: { id: projectId }, data: { archived: false } });
+      return await reopenStale(tx, projectId);
+    }),
+  );
+}
+```
+
 - Not seen: the related rows of a nested write
   (`{ labels: { create: [...] } }`, which warns in development), raw SQL and
   database cascades. A foreign key a nested write sets on the written row
@@ -2620,13 +2659,14 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
 <!-- example: apps/api/src/services/kits/admin.ts#prepare -->
 
 ```ts
+import type { TrackedTransaction } from "@fitzzero/quickdraw-core/prisma";
 import { nextOrdinal } from "@fitzzero/quickdraw-core/server";
 import type { PrismaClient } from "@project/db";
 
 export const taskAdmin = admin.handlers(task, {
   editable: ["projectId", "title", "status"],
   // runs before each write, in its transaction: `db` is that transaction's tracked client
-  prepare: async (call, _ctx, db: PrismaClient) => {
+  prepare: async (call, _ctx, db: TrackedTransaction<PrismaClient>) => {
     if (call.method === "adminCreate" && call.data.projectId !== undefined) {
       // written over the caller's data, a read-only column too: the new task goes last
       return { ordinal: await nextOrdinal(db, "task", { projectId: call.data.projectId }) };
@@ -4426,22 +4466,22 @@ bunx @fitzzero/quickdraw-codemod v5 .
 
 ## Package exports
 
-| Export             | Holds                                                                                                                                                                                                                                           |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.`                | `defineContract`, `query`, `mutation`, `nullable`, `listOf`, `via`, the kits' contract halves, inference types, `QuickdrawError`, error codes, protocol types, room and topic names, `consoleLogger` and `createConsoleLogger`                  |
-| `./server`         | `initQuickdraw`, `createServer`, `createDispatcher`, `createHttpRouter`, policies, `custom`, the kits' handlers, `requireRow`, `nextOrdinal`, `storageOf`, dev warnings, the Redis adapter, the socket rate limiter, env and encryption helpers |
-| `./server/auth`    | `createAuthRoutes`, `socketAuth`, `bearerAuth`, `requireSession` and `sessionOf`, providers (`google`, `discord`, `mock`, `guest`), session stores, `issueSession`, `liveSession`, JWT, cookie and origin helpers                               |
-| `./server/express` | Express rate limits: `createAuthLimiter`, `createAuthStatusLimiter`, `createCallLimiter`, `createPublicApiLimiter`, `createWebhookLimiter`                                                                                                      |
-| `./server/mcp`     | `createMcpRegistry`, `describeTools`, `createMcpStdioServer`, `createMcpHttpRouter`, `bootstrapMcpServer`                                                                                                                                       |
-| `./server/otel`    | `otelOnCall`                                                                                                                                                                                                                                    |
-| `./prisma`         | `trackPrisma`, `storageOf`                                                                                                                                                                                                                      |
-| `./client`         | `createQuickdrawClient`, `QuickdrawProvider`, `useQuickdraw`, `usePresence`, `useAdminServices`, `createQuickdrawConnection`, `call`, `callData`, `liveDataOf`, the coordinator; everything in `./utils`                                        |
-| `./utils`          | `createServerCaller`, cache keys (`methodKey`, `entityKey`, `collectionKey`), formatting, navigation, `parseJWTPayload`                                                                                                                         |
-| `./parser`         | the JSON-only Socket.IO parser                                                                                                                                                                                                                  |
-| `./testing`        | `createTestApp`, `describeAccessMatrix`, `snapshotAccessMatrix`, `expectBudget`, `createRecordingSink`, `DevWarningError`                                                                                                                       |
-| `./testing/client` | `renderWithQuickdraw`, and everything in `./testing/mock`                                                                                                                                                                                       |
-| `./testing/mock`   | `createMockClient` alone, without Testing Library: for browser bundles such as Storybook                                                                                                                                                        |
-| `./testing/prisma` | test databases on PostgreSQL or PGlite                                                                                                                                                                                                          |
+| Export             | Holds                                                                                                                                                                                                                                                                        |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.`                | `defineContract`, `query`, `mutation`, `nullable`, `listOf`, `via`, the kits' contract halves, inference types, `QuickdrawError`, error codes, protocol types, room and topic names, `consoleLogger` and `createConsoleLogger`, the types `Tracked` and `TrackedTransaction` |
+| `./server`         | `initQuickdraw`, `createServer`, `createDispatcher`, `createHttpRouter`, policies, `custom`, the kits' handlers, `requireRow`, `nextOrdinal`, `storageOf`, dev warnings, the Redis adapter, the socket rate limiter, env and encryption helpers                              |
+| `./server/auth`    | `createAuthRoutes`, `socketAuth`, `bearerAuth`, `requireSession` and `sessionOf`, providers (`google`, `discord`, `mock`, `guest`), session stores, `issueSession`, `liveSession`, JWT, cookie and origin helpers                                                            |
+| `./server/express` | Express rate limits: `createAuthLimiter`, `createAuthStatusLimiter`, `createCallLimiter`, `createPublicApiLimiter`, `createWebhookLimiter`                                                                                                                                   |
+| `./server/mcp`     | `createMcpRegistry`, `describeTools`, `createMcpStdioServer`, `createMcpHttpRouter`, `bootstrapMcpServer`                                                                                                                                                                    |
+| `./server/otel`    | `otelOnCall`                                                                                                                                                                                                                                                                 |
+| `./prisma`         | `trackPrisma`, `storageOf`, the types `Tracked` and `TrackedTransaction`                                                                                                                                                                                                     |
+| `./client`         | `createQuickdrawClient`, `QuickdrawProvider`, `useQuickdraw`, `usePresence`, `useAdminServices`, `createQuickdrawConnection`, `call`, `callData`, `liveDataOf`, the coordinator; everything in `./utils`                                                                     |
+| `./utils`          | `createServerCaller`, cache keys (`methodKey`, `entityKey`, `collectionKey`), formatting, navigation, `parseJWTPayload`                                                                                                                                                      |
+| `./parser`         | the JSON-only Socket.IO parser                                                                                                                                                                                                                                               |
+| `./testing`        | `createTestApp`, `describeAccessMatrix`, `snapshotAccessMatrix`, `expectBudget`, `createRecordingSink`, `DevWarningError`                                                                                                                                                    |
+| `./testing/client` | `renderWithQuickdraw`, and everything in `./testing/mock`                                                                                                                                                                                                                    |
+| `./testing/mock`   | `createMockClient` alone, without Testing Library: for browser bundles such as Storybook                                                                                                                                                                                     |
+| `./testing/prisma` | test databases on PostgreSQL or PGlite                                                                                                                                                                                                                                       |
 
 The package also ships the `quickdraw-docs` command.
 

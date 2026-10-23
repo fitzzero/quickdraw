@@ -255,6 +255,22 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   grants now resets their self lists after re-authorizing them, so a list
   being revoked gets no `reset` first. Collections without `requires` are
   unchanged. `CollectionRequires` is on `./server`.
+- **`trackPrisma` returns `Tracked<C>`, a type the untracked client is
+  not.** The tracked client had the client's own type, so nothing told it
+  from the untracked one: a helper that writes could be handed the
+  untracked client, whose writes reach no subscriber, and lint could judge
+  a write only by its receiver's name. `Tracked<C>` is `C` with a mark, a
+  type only, with nothing at run time: still a `C` wherever one is asked
+  for, while the untracked client is no `Tracked<C>`. A helper typed
+  `client: Tracked<PrismaClient>` takes the tracked client and refuses the
+  untracked one at compile time. `TrackedTransaction<PrismaClient>` is the
+  type of `tx` in `db.$transaction(async (tx) => ...)`, a nested one's
+  too, and takes both `tx` and `db`, as does a kit callback's `db` (the
+  admin kit's `prepare`, say) annotated with it. `$transaction`'s array
+  form and options, the model delegates, what `$extends` added, a
+  handler's `db` and `initQuickdraw<{ db: typeof db }>` are unchanged, and
+  so is code that types the client `PrismaClient`. Both types are on
+  `./prisma` and on the root export, for a shared package without Prisma.
 
 ### Testing
 
@@ -268,6 +284,20 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   over a real socket. Each call is still dispatched and recorded once, so
   budgets count it as before. Bound arguments and the MCP registry's hooks
   are tested through `registry.callMethod`.
+
+### Lint
+
+- **The write rules read a tracked client's type.** `no-untracked-write`
+  reported every write through a client named `prisma`, so a helper whose
+  `prisma` parameter every caller filled with the tracked `db` was refused
+  (farseer's 5.0 migration), and renaming the parameter `db` silenced the
+  rule even for a caller passing the untracked client. A parameter or
+  variable declared `Tracked<...>` or `TrackedTransaction<...>` (qualified,
+  a union of only those, or an intersection with one) is now the tracked
+  client whatever its name: `no-untracked-write` leaves its writes alone,
+  and `no-nested-write` and `no-foreign-write` check them as `db`'s. A name
+  in `clients` declared without such a type is still reported, and the
+  rule's message says how to type a parameter given the tracked client.
 
 ### Codemod
 
