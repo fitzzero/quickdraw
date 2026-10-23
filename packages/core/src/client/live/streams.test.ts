@@ -43,7 +43,7 @@ function hosted() {
         heard.push(message);
       });
     },
-    createLocalLink,
+    { createLink: createLocalLink, controlOf },
   );
   fake.deliver("qd:host", [ROOM, "socket-ada"]);
   const send = (message: HostMessage): void => {

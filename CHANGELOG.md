@@ -66,6 +66,19 @@ All notable changes to this project will be documented in this file.
   otherwise. `docs/protocol-v5.md` describes the frames, the link messages
   and the timings for other clients. Its links take
   `set_lag(ms, jitter, loss)` too, drained each frame.
+- **An app loads the peer-link code only when it needs it.** Every typed
+  client reaches host mode, but not the peer links (WebRTC, the relay,
+  the lag simulator): host mode loads them as a chunk of their own once
+  the server's hello announces peer links (`createServer({ peers: true })`)
+  or at the first link to a room's host, so an open tab holds them before
+  a redeploy removes the chunk. With a bundler that splits dynamic imports
+  by module, an app whose server serves no peer links never downloads
+  them: a typical app's startup bundle (`createQuickdrawClient`,
+  `createQuickdrawConnection`, `QuickdrawProvider`) is about 6 KB gzipped
+  smaller with Vite (rollup or rolldown) and 4.5 KB with webpack. esbuild's
+  own code splitting keeps them at startup, since `./client` re-exports
+  `createPeerLink`, and costs about 1.4 KB more. An app that imports
+  `createPeerLink` or `defineHost` loads them at startup.
 
 ### Host mode
 
@@ -172,15 +185,6 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   screen typed through `AdminScreen` needed a cast to call it. A row panel
   shows the row `adminUpdate` or `adminCreate` returned with
   `admin.adminGet?.setData({ id: row.id }, row)`, with no new read.
-- **The peer-link code loads only when an app needs it.** `useChannel` and
-  `useStream` reach host mode for every contract, but not the peer-link
-  code (WebRTC, the relay and the lag simulator, about 7 KB gzipped): it
-  loads as a chunk of its own once the server's hello announces peer
-  links (`createServer({ peers: true })`), or at the first link to a
-  room's host. So an app whose server serves no peer links never
-  downloads it, and an open tab holds it before a redeploy removes the
-  chunk. An app that imports `createPeerLink` or `defineHost` keeps it in
-  its main bundle.
 
 ### Server
 

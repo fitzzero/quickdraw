@@ -3,14 +3,15 @@
 // over one set of links to the room's peers. It answers the room's link
 // requests (`onPeerRequest`: peers offer, the host answers) and takes the
 // host's own client over an in-process link (`registerLocalHost`, with
-// `local.ts`'s maker, which only a host loads). Each peer, either way, is
-// attached to every runtime with its link (`HostPeer.link`), and each of
-// its messages goes to the runtime of the message's service; a subscribe
-// to a service no runtime serves is refused (`NOT_FOUND`) by one that
-// does, within the peer's subscribe bucket there and through its way out,
-// so a peer's feed never waits on it and a peer cannot flood the host with
-// them. A peer is detached when its link closes. The last runtime's
-// removal stops it all: the links close, and no request is answered.
+// `local.ts`'s maker and `controlOf`, which only a host loads). Each peer,
+// either way, is attached to every runtime with its link
+// (`HostPeer.link`), and each of its messages goes to the runtime of the
+// message's service; a subscribe to a service no runtime serves is refused
+// (`NOT_FOUND`) by one that does, within the peer's subscribe bucket there
+// and through its way out, so a peer's feed never waits on it and a peer
+// cannot flood the host with them. A peer is detached when its link
+// closes. The last runtime's removal stops it all: the links close, and no
+// request is answered.
 //
 // React-free.
 
@@ -134,7 +135,7 @@ function open(
     (link) => {
       adopt(state, link, link.userId ?? "", () => undefined);
     },
-    createLocalLink,
+    { createLink: createLocalLink, controlOf },
   );
   return {
     add(service: string, runtime: HostRuntime): void {
