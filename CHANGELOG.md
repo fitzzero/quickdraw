@@ -193,6 +193,21 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   credentials await their hello, which a member's hooks hide: show its data
   only while `isKnown`. It is not on `./client/core`, which names no
   TanStack type.
+- **An app's own hook reads in the provider's first commit.**
+  `QuickdrawProvider` bound the typed client to its connection, and opened
+  the connection, in passive effects, which React runs after its
+  children's. A hook an app writes over a member's `key` and `call` (such
+  as TanStack's `useQuery` or `useInfiniteQuery`), mounted with the
+  provider, starts its read in its own passive effect, before either: it
+  failed `INTERNAL` ("needs a mounted `<QuickdrawProvider>`", then "Not
+  connected to the server"), which only TanStack's retry hid. The provider
+  now registers its cache session, binds the client and opens the
+  connection in layout effects, which run before every passive effect of
+  the commit, so that read is sent; strict mode and a new provider (another
+  `url`) keep it so. They still run only on the client, after a commit: a
+  server render, which shares the client between requests, binds nothing.
+  A read made during render (`useSuspenseQuery` in that first commit) runs
+  before any effect and still fails at first; TanStack's retry reads again.
 - **Behavior change: the admin kit's reads of rows default to
   `staleTime: 0`.** `adminList`, `adminGet` and `adminSubscribers` took the
   provider's five-minute `staleTime`, and their rows are not live, so an
