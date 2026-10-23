@@ -148,6 +148,8 @@ export async function authorizeStream(
     log: hub.logger,
     requestId: crypto.randomUUID(),
     transport: "socket",
+    // A custom form may ask about a row its scope names, as a method's does.
+    access: hub.policies,
   });
   const input = { scope: target.scope };
   await hub.access.authorize(form, {

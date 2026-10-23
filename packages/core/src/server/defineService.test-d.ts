@@ -14,14 +14,17 @@ import {
   inherit,
   initQuickdraw,
   owner,
+  type AccessFilter,
   type AnyService,
   type BaseContext,
   type Caller,
+  type ContextAccess,
   type HandlerContext,
   type MethodImplementation,
   type Principal,
   type PrincipalKindOf,
   type QuickdrawTypes,
+  type RowLevels,
   type Service,
 } from "./index";
 
@@ -714,6 +717,34 @@ describe("the in-process caller", () => {
           handler: async ({ input, ctx }) => {
             expectTypeOf(await ctx.services.anything?.method?.({})).toEqualTypeOf<unknown>();
             return { id: input.id, name: "" };
+          },
+        },
+      },
+    });
+  });
+
+  test("ctx.access asks the caller's levels on a handler's ctx and a custom form's, by contract or name", () => {
+    qd.defineService(task, {
+      ...rows,
+      methods: {
+        ...ok,
+        count: {
+          access: custom(async (ctx, input) => {
+            expectTypeOf(ctx.access).toEqualTypeOf<ContextAccess>();
+            const parent = await ctx.access.can(project, input.projectId, "Read");
+            const named = await ctx.access.can("projectService", input.projectId, "Moderate");
+            // @ts-expect-error -- a level is an access level
+            void ctx.access.can(project, input.projectId, "Owner");
+            return parent && named;
+          }),
+          handler: async ({ input, ctx }) => {
+            expectTypeOf(
+              await ctx.access.levelsFor(project, [input.projectId]),
+            ).toEqualTypeOf<RowLevels>();
+            expectTypeOf(await ctx.access.where(task, "Read")).toEqualTypeOf<AccessFilter>();
+            // @ts-expect-error -- levelsFor takes a list of ids
+            void ctx.access.levelsFor(project, input.projectId);
+            return 0;
           },
         },
       },
