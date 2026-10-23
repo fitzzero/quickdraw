@@ -260,15 +260,19 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   key that is optional), so the check moves out of the handler and into the
   form:
   `custom(async (ctx, input) => input.projectId === undefined || (await ctx.access.can(project, input.projectId, "Read")))`.
-  It counts levels as `{ entry }` does: a service-wide `Admin` reaches every
-  row, and anyone else has no level on a row that is not found. An anonymous
-  caller has none anywhere: an empty map, `false`, `"none"`. Every method
-  call's `ctx` has it, MCP and `ctx.services` calls included, and so does
-  the `ctx` the kits pass to their forms and callbacks; a context no
-  dispatcher built throws `INTERNAL` on its use, and `qd` has none. Reading
-  it in a `share: "all"` handler warns `shared-principal`. An app field
-  named `access` from `initQuickdraw({ context })` is now shadowed by the
-  framework's. `ContextAccess` is on `./server`.
+  A list such a form lets through without its key follows the row policy
+  only when its handler filters it: add `ctx.access.where(service, "Read")`
+  to the query with `AND`, as the README's and the access rule's example
+  does. `ctx.access` counts levels as `{ entry }` does: a service-wide
+  `Admin` reaches every row, and anyone else has no level on a row that is
+  not found. An anonymous caller has none anywhere: an empty map, `false`,
+  `"none"`. Every method call's `ctx` has it, MCP and `ctx.services` calls
+  included, and so does the `ctx` the kits pass to their forms and
+  callbacks; a context no dispatcher built throws `INTERNAL` on its use,
+  and `qd` has none. Reading it in a `share: "all"` handler warns
+  `shared-principal`. An app field named `access` from
+  `initQuickdraw({ context })` is now shadowed by the framework's.
+  `ContextAccess` is on `./server`.
 - **A collection can require a service grant.** `collections: { mine:
 { scopeAccess: "self", requires: { service: "Read" } } }` in
   `defineService` gives a list the grant its methods ask for: besides the
@@ -281,16 +285,9 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   below it, on any node, their sockets leave the scope with `qd:revoked`
   (`reason: "access"`) and get nothing more of it. A reload of a user's
   grants now resets their self lists after re-authorizing them, so a list
-  being revoked gets no `reset` first. Collections without `requires` are
-  unchanged. `CollectionRequires` is on `./server`.
-- **The `ctx.access` example lists only the rows its caller may read.**
-  Called without a project, the `assigned` method of the README and the
-  access rule listed every task assigned to the caller, in projects they
-  had left too. Its handler now adds `ctx.access.where(task, "Read")` to
-  the query with `AND`, as any list a `custom` form lets through without
-  its key must. The README's collections example no longer gives its self
-  list `requires`, a grant its methods do not ask for, so a member without
-  a service grant opens it.
+  being revoked gets no `reset` first. A self list whose methods ask for
+  no grant takes no `requires`, and collections without it are unchanged.
+  `CollectionRequires` is on `./server`.
 - **Breaking for types: `trackPrisma` returns `Tracked<C>`, a type the
   untracked client is not.** The tracked client had the client's own type,
   so nothing told it from the untracked one: a helper that writes could be

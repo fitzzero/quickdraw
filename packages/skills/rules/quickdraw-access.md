@@ -141,14 +141,16 @@ assigned: {
   grants again. `service` is a contract or a service name.
 - A list the form lets through without its key still follows the row
   policy: add `ctx.access.where(service, "Read")` to its `findMany` with
-  `AND` (`"none"` lists nothing). Never spread it into `where`: a filter on
-  the same column (`inherit`'s `projectId`) replaces the input's, and the
-  keyed list widens to every row the caller reads.
+  `AND` (`"none"` lists nothing). Never spread it into `where`: the filter
+  and the input share a column (`inherit`'s `projectId`), so whichever
+  comes last replaces the other. The filter's widens the keyed list to
+  every project the caller reads; the input's `undefined` drops the policy
+  from the list without a key.
 - Prefer a declared form when one says it: `{ entry: L }` for the method's
   own row, `{ scope: L, of, id }` for a parent whose key is always there.
   A `ctx.access` form counts a service-wide `Admin` grant on the service it
-  asks (the parent's), which `{ scope, of }` does not: it counts only one
-  on the method's own service. `custom` replaces the row check and a
+  asks (the parent's); `{ scope, of }` counts only one on the method's own
+  service. `custom` replaces the row check and a
   service-wide `Admin` grant skips it, so a method whose input has `id`
   still needs `rowless: true` beside it (below).
 - An anonymous caller has no level anywhere (`false`, an empty map,

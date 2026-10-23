@@ -272,6 +272,14 @@ describe("ctx.access", () => {
     await expect(cy.assigned({ projectId: board.p2 })).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
+    // bo reads P1 and P3: a list with a project holds that project's tasks alone.
+    const [t4] = await Promise.all([
+      h.prisma.task.create({ data: { projectId: board.p1, title: "T4", assigneeId: board.bo } }),
+      h.prisma.task.create({ data: { projectId: board.p3, title: "T3", assigneeId: board.bo } }),
+    ]);
+    expect(await app.as(as(board.bo)).taskService.assigned({ projectId: board.p1 })).toEqual([
+      expect.objectContaining({ id: t4.id }),
+    ]);
     // A service-wide Admin of the tasks reads every row: both of their own.
     const admin = app.as(as(board.cy, { taskService: "Admin" })).taskService;
     expect(sorted((await admin.assigned({})).map((task) => task.id))).toEqual(

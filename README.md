@@ -896,8 +896,10 @@ export const taskService = qd.defineService(task, {
   names, or a key that is optional, as in `assigned` above, which passes
   without a project and needs Read on one it names. Its handler adds
   `where(task, "Read")` to its query with `AND`, so a list without a
-  project still follows the row policy (a spread would replace the input's
-  `projectId` with the filter's own). `ctx.access` counts levels as
+  project still follows the row policy. Never spread the filter into
+  `where`: it and the input both set `projectId`, and whichever comes last
+  wins, widening a list with a project or dropping the policy from one
+  without. `ctx.access` counts levels as
   `{ entry }` does: a service-wide `Admin` grant reaches every row (with
   `adminBypass`), a row that is not found gives anyone else no level
   (`can` is `false`), and an anonymous caller has none anywhere (an empty
